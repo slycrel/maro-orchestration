@@ -549,6 +549,7 @@ class CloneSweepResult:
     removed_empty: list = field(default_factory=list)  # (clone, branch) — no unmerged work, removed
     preserved: list = field(default_factory=list)      # (clone, branch, reason) — dead owner, work KEPT
     skipped_live: list = field(default_factory=list)   # (clone, owner_pid) — owner still running
+    skipped_young: list = field(default_factory=list)  # (clone, owner_pid) — owner dead but within grace
     surfaced: list = field(default_factory=list)       # (clone, reason) — cannot decide, KEPT + logged
 
     def as_dict(self) -> dict:
@@ -557,6 +558,7 @@ class CloneSweepResult:
             "removed_empty": self.removed_empty,
             "preserved": self.preserved,
             "skipped_live": self.skipped_live,
+            "skipped_young": self.skipped_young,
             "surfaced": self.surfaced,
         }
 
@@ -637,7 +639,9 @@ def sweep_stranded_clones(
         except OSError:
             age = min_age_s + 1  # can't stat → don't let a stat error block recovery
         if age < min_age_s:
-            result.skipped_live.append((str(clone_path), owner_pid))  # too young; treat as live
+            # Owner dead but clone too young — wait out the grace before acting
+            # (guards against racing a just-provisioned clone / a fast resume).
+            result.skipped_young.append((str(clone_path), owner_pid))
             continue
 
         repo_dir = Path(str(meta.get("repo_dir") or ""))

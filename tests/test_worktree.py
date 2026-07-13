@@ -582,6 +582,7 @@ def test_sweep_respects_grace_window(repo):
     # Owner dead, but a large grace window makes it not-yet-eligible.
     res = sweep_stranded_clones(pid_alive=lambda p: False, min_age_s=3600)
     assert clone.path.is_dir()
+    assert str(clone.path) in _paths(res.skipped_young)
     assert not res.recovered and not res.removed_empty and not res.preserved
 
 
