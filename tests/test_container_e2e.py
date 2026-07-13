@@ -46,6 +46,16 @@ pytestmark = pytest.mark.skipif(
 _TIMEOUT = 120
 
 
+@pytest.fixture(autouse=True)
+def _neutralize_fence_filter(monkeypatch):
+    """These tests exercise real-docker mount MECHANICS on tmp_path dirs, which
+    live under the workspace/tempdir that build_mount_map hard-excludes. That
+    exclusion is a fence policy, separately unit-tested in test_container_exec;
+    neutralize it here so build_mount_map emits the tmp mounts under test. (Only
+    runs when the module isn't skipped, i.e. on a real-docker box.)"""
+    monkeypatch.setattr(ce, "_forbidden_mount_roots", lambda: [])
+
+
 def _run(inner_cmd, *, mounts, workdir, name=None):
     """Build the production docker-run vector and execute it."""
     name = name or f"maro-e2e-{uuid.uuid4().hex[:8]}"
@@ -67,8 +77,8 @@ def test_rw_mount_roundtrip_punctuation_path(tmp_path):
     paths (adversarial-review 2026-07-12 colon-safety) against real docker."""
     workdir = tmp_path / "weird path:with-colon"
     workdir.mkdir()
-    # cwd is auto-rw; forbidden filter off — E2E tests docker mechanics, not the fence.
-    mounts = ce.build_mount_map(str(workdir), forbidden_roots=[])
+    # cwd is auto-rw (the fence filter is neutralized by the autouse fixture).
+    mounts = ce.build_mount_map(str(workdir))
     _, r = _run(
         ["sh", "-lc", "echo hello-from-container > out.txt"],
         mounts=mounts, workdir=str(workdir),
@@ -86,7 +96,7 @@ def test_ro_mount_is_readonly_in_real_container(tmp_path):
     ref.mkdir()
     (ref / "given.txt").write_text("read me\n", encoding="utf-8")
 
-    mounts = ce.build_mount_map(str(workdir), ro_mounts=[str(ref)], forbidden_roots=[])
+    mounts = ce.build_mount_map(str(workdir), ro_mounts=[str(ref)])
     # read works
     _, r_read = _run(
         ["sh", "-lc", f"cat '{ref}/given.txt'"],
@@ -111,7 +121,7 @@ def test_ro_nested_under_rw_is_subsumed_to_rw(tmp_path):
     workdir = tmp_path / "work"
     (workdir / "sub").mkdir(parents=True)
     mounts = ce.build_mount_map(
-        str(workdir), ro_mounts=[str(workdir / "sub")], forbidden_roots=[]
+        str(workdir), ro_mounts=[str(workdir / "sub")]
     )
     _, r = _run(
         ["sh", "-lc", "echo nested > sub/nested.txt"],
@@ -126,7 +136,7 @@ def test_failed_container_leaves_no_stray(tmp_path):
     stranded-container sweep to find on a normal (non-SIGKILL) failure."""
     workdir = tmp_path / "work"
     workdir.mkdir()
-    mounts = ce.build_mount_map(str(workdir), forbidden_roots=[])
+    mounts = ce.build_mount_map(str(workdir))
     name, r = _run(
         ["sh", "-lc", "exit 7"],
         mounts=mounts, workdir=str(workdir), name=f"maro-e2e-fail-{uuid.uuid4().hex[:8]}",
