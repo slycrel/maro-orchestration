@@ -196,6 +196,114 @@ Green across the board is the *evidence*; it is not the flip.
 
 ---
 
+## 5a. Burn-in execution log — box-side, automatable portion (2026-07-13, Opus)
+
+What was actually run on the runtime box (`clawd@` Ubuntu, 2014 Mac Mini),
+covering everything that does NOT require the interactive `/login` that seeds
+the `maro-claude-auth` volume. The token-spending halves (dogfood goals, the
+hostile-goal acceptance probe) stay **BLOCKED on that human step** and are
+marked as such below rather than skipped silently.
+
+**Environment**
+- Docker **28.2.2** reachable (`docker version` server = 28.2.2).
+- Executor image **built**: `maro-executor:2.1.207` (702 MB, `node:22-slim` base).
+- **CLI pin reconfirmed — NO drift.** `npm view @anthropic-ai/claude-code
+  version` = `2.1.207`, exactly the `CLAUDE_CLI_VERSION` pin in
+  `src/container_exec.py` / `Dockerfile.executor`. No bump needed.
+- Baked toolset verified in-image: `git 2.39.5`, `python3 3.11.2`, `curl`,
+  `node`, `claude` (`claude --version` → `2.1.207 (Claude Code)`) — no auth.
+- `maro-doctor` (isolated env, `executor.container: on`, non-live):
+  `✓ Container executor (on) — docker 28.2.2` · `✓ Container image —
+  maro-executor:2.1.207` · `✗ Container auth volume — missing`. The single red
+  row IS the auth-volume blocker below.
+
+**Boot-tax delta (warm image, this box).** Median warm `docker run --rm
+maro-executor:2.1.207 …` wall time over 7 iters (image already resident):
+`true` → **794 ms** (min 700 / max 1192); `claude --version` → **799 ms**;
+`alpine true` baseline → 726 ms (so the 702 MB image adds only ~68 ms over a
+5 MB one — the cost is docker's fixed per-`run` namespace/overlay setup, not
+image size). **Finding worth Jeremy's eye:** the design predicted +100–300 ms
+warm-image (§8); on this 2014 hardware the per-`docker run` fixed tax is
+**~750–800 ms**, ~2.5–5× that band. Each worker executor step is one
+`docker run`, so this is a ~0.8 s/step floor added to the executor lane
+(utility/no-tools calls stay on the host by design, unaffected). No per-step
+multi-second cliff and no cold-pull stall observed (image warm). This is the
+*container-spin* overhead only; the *full* per-step delta over a host
+`claude -p` (CLI + context re-injection dominate) needs authenticated runs.
+
+**uid/gid friction — mechanism verified.** Real bind-mount write from a
+container run `--user $(id -u):$(id -g)` lands **operator-owned** on the host
+(`st_uid == getuid()`), not root/alien — the merge-back precondition. `id -u`
+inside the image under `--user` returns the host uid; `$HOME/.claude`
+(`/home/maro/.claude`) is writable under an arbitrary uid (Dockerfile chmod),
+so token refresh into the auth volume will work once it's seeded.
+
+**env-dependency surprises — none in the toolset.** The image carries exactly
+the tools worker transcripts use (git/python3/curl/node/claude). A *full* scan
+for "command not found" across real dogfood steps needs authenticated runs.
+
+**Mount fence — real bind mounts honor it.** New real-docker E2E tier
+(`tests/test_container_e2e.py`, 15 tests, skips cleanly with no daemon):
+`--mount …,readonly` blocks writes (host file byte-identical); rw mount writes
+land host-owned; a `:`-in-path bind mounts cleanly (why C2 switched off
+`-v host:host:mode`); `build_mount_map`'s real output fed to real docker makes
+cwd writable and a ro reference mount read-only; `--network none` shows only
+`lo` (no `eth*`) while `bridge` has `eth0`.
+
+**Container lifecycle + reaper — against real containers (not mocks).**
+`kill_container(name)` stops a live `maro-exec-…` container by name;
+`sweep_stranded_containers()` reaps a real container whose `maro.owner_pid`
+label names a **dead** PID, spares one whose owner is **alive**, and ignores an
+unlabeled same-prefix look-alike (the adversarial-review label-filter, proven
+live).
+
+**Stale-clone crash recovery — shipped (was a C3 residual).**
+`worktree.sweep_stranded_clones` (wired into `heartbeat.stranded_state_sweep`
+beside the container reaper) recovers work from scratch clones leaked by a
+crash between provision and finalize: owner-PID-alive → skip; dead owner →
+`merge_back_clone` and remove ONLY when the work provably reached the live repo
+(or never existed), else PRESERVE (branch kept, reason named); a clone with no
+trusted owner sidecar is SURFACED, never auto-removed. The owner breadcrumb
+lives OUTSIDE the container-mounted clone dir so a hostile worker can't redirect
+the host-side merge. 9 unit tests; deletion stays behind the one allowlisted
+`cleanup_clone` site (retention tripwire updated).
+
+**`sandbox.py` retirement — verified shipped (design §7).** `src/sandbox.py`,
+`tests/test_sandbox*.py`, every `from sandbox import`, the `maro sandbox` CLI,
+and the `maro-sandbox` entry point are all absent.
+
+### Go / no-go checklist — filled (2026-07-13)
+
+- [ ] **Dogfood goals under `container: on`, no regression** —
+      **BLOCKED: needs Jeremy's interactive `/login` to seed the
+      `maro-claude-auth` volume.** A real `claude -p` worker step in the
+      container can't authenticate until the volume is seeded. All non-token
+      machinery below is green, so this is the only gate between here and the
+      dogfood run.
+- [~] **Boot-tax delta low-hundreds-of-ms, no cliff** — **PARTIAL.** No
+      per-step cliff / cold-pull. But warm container-spin overhead measured at
+      **~794 ms median** on this box — above the low-hundreds band the design
+      predicted (a 2014-hardware finding for Jeremy). The full per-step delta
+      over a host `claude -p` needs authenticated runs → the rest is BLOCKED on
+      auth.
+- [~] **No uid/gid friction** — **PARTIAL / mechanism VERIFIED.** Container
+      `--user` writes are host-owned; `$HOME/.claude` writable under host uid.
+      The end-to-end "`ls -l` the merged-back files after a self-dev run" needs
+      an authenticated run → BLOCKED on auth.
+- [~] **No env-dependency surprise** — **PARTIAL / toolset VERIFIED.**
+      git/python3/curl/node/claude all present; `claude --version` runs. The
+      full "scan failed dogfood steps for command-not-found" needs authenticated
+      runs → BLOCKED on auth.
+- [ ] **Acceptance probe: fence-only leaks+SCAVENGE, container contains** —
+      **BLOCKED: needs Jeremy's interactive `/login`.** Both halves run a real
+      goal via `handle`; the container half needs the seeded auth volume. The
+      probe harness (`scripts/container-acceptance-probe.sh`) and the detection
+      half's unit pin (`test_artifact_check.py`) are ready.
+- [x] **`sandbox.py` retirement shipped** — VERIFIED absent (module, tests,
+      imports, CLI, entry point).
+
+---
+
 ## 6. The flip (Jeremy's call)
 
 With the evidence in hand, **Jeremy** decides two independent defaults:

@@ -7,6 +7,7 @@ drop work (branch preserved + named in the structured failure).
 """
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -464,108 +465,129 @@ def test_clone_merge_neutralizes_planted_hooks_and_exec_config(repo):
 
 
 # ---------------------------------------------------------------------------
-# Stranded scratch-clone detection (C4 residual) — SURFACE ONLY, never delete.
-#
-# The earlier reclaim-empty design was REJECTED by adversarial review (a scratch
-# clone is worker-controlled: no content check proves "empty", and running git
-# in it is host RCE). These tests pin the safe replacement: it surfaces stranded
-# clones, never deletes, and never runs git inside the clone.
+# Stale-clone sweep — recover-then-remove, retention-safe (C4).
+# A SIGKILL between provision and finalize leaks a whole-repo clone; the sweep
+# recovers any unmerged work and only removes clones whose owner is verifiably
+# dead AND whose work provably reached the live repo (or never existed).
 # ---------------------------------------------------------------------------
 
-def _age_clone(clone_path: Path, seconds_old: float) -> None:
-    """Backdate every mtime surface_stranded_clones looks at, so the clone reads
-    as older than the grace period regardless of when the test created it."""
-    import os, time
-    old = time.time() - seconds_old
-    for p in (clone_path, clone_path / ".git" / "HEAD", clone_path / ".git" / "index"):
-        if p.exists():
-            os.utime(p, (old, old))
+def _paths(entries):
+    """First element (the clone path) of each result tuple."""
+    return {e[0] for e in entries}
 
 
-def test_surface_reports_stranded_clone(repo):
-    """An aged leaked clone is surfaced with its path + derived branch — and
-    left ON DISK (nothing is deleted)."""
-    from worktree import provision_clone, surface_stranded_clones, _STRANDED_CLONE_GRACE_SECS
+def test_provision_writes_owner_sidecar_outside_the_clone(repo):
+    from worktree import provision_clone, _clone_sidecar_path, _read_clone_owner
 
-    clone = provision_clone(repo, "container", loop_id="loop-leak")
-    assert clone is not None and clone.path.is_dir()
-    _age_clone(clone.path, _STRANDED_CLONE_GRACE_SECS + 3600)
+    clone = provision_clone(repo, "container", loop_id="loop-sc")
+    assert clone is not None
+    sidecar = _clone_sidecar_path(clone.path)
+    # Sibling of the clone dir — NOT inside it, so the container-mounted clone
+    # cannot let a hostile worker tamper with the recovery breadcrumb.
+    assert sidecar.exists()
+    assert sidecar.parent == clone.path.parent
+    assert clone.path not in sidecar.parents
+    meta = _read_clone_owner(sidecar)
+    assert meta["owner_pid"] == os.getpid()
+    assert meta["repo_dir"] == str(repo)
+    assert meta["base_ref"] == "main"
+    assert meta["branch"] == clone.branch
+    # Invisible to the clone's own git (it lives outside the work tree), so it
+    # never gets swept into the worker's commits / merge-back.
+    assert _git(["status", "--porcelain"], clone.path).stdout.strip() == ""
 
-    res = surface_stranded_clones()
-    paths = [e["path"] for e in res["stranded"]]
-    assert str(clone.path) in paths
-    entry = next(e for e in res["stranded"] if e["path"] == str(clone.path))
-    assert entry["branch"] == "maro/loop-leak/container"
-    assert clone.path.exists()  # SURFACED, never deleted
+
+def test_cleanup_clone_removes_owner_sidecar(repo):
+    from worktree import provision_clone, cleanup_clone, _clone_sidecar_path
+
+    clone = provision_clone(repo, "container", loop_id="loop-cs")
+    sidecar = _clone_sidecar_path(clone.path)
+    assert sidecar.exists()
+    cleanup_clone(clone)
+    assert not clone.path.exists()
+    assert not sidecar.exists()
 
 
-def test_surface_never_deletes_even_empty_looking_clone(repo):
-    """RETENTION DECREE: even a clone that looks empty (clean tree, no commits)
-    is never auto-deleted — an untrusted clone's 'emptiness' can't be trusted,
-    so it is surfaced, not reclaimed."""
-    from worktree import provision_clone, surface_stranded_clones, _STRANDED_CLONE_GRACE_SECS
+def test_sweep_skips_live_owner(repo):
+    from worktree import provision_clone, sweep_stranded_clones
+
+    clone = provision_clone(repo, "container", loop_id="loop-live")
+    (clone.path / "wip.txt").write_text("in flight\n", encoding="utf-8")
+    res = sweep_stranded_clones(pid_alive=lambda p: True, min_age_s=0)
+    assert str(clone.path) in _paths(res.skipped_live)
+    assert clone.path.is_dir()  # a live run's clone is never touched
+    assert not res.recovered and not res.removed_empty and not res.preserved
+
+
+def test_sweep_recovers_dead_owner_work_then_removes(repo):
+    from worktree import provision_clone, sweep_stranded_clones, _clone_sidecar_path
+
+    clone = provision_clone(repo, "container", loop_id="loop-dead")
+    (clone.path / "recovered.txt").write_text("saved\n", encoding="utf-8")
+    res = sweep_stranded_clones(pid_alive=lambda p: False, min_age_s=0)
+    # Work merged into the LIVE repo before the clone was removed.
+    assert (repo / "recovered.txt").read_text(encoding="utf-8") == "saved\n"
+    assert not clone.path.exists()
+    assert not _clone_sidecar_path(clone.path).exists()
+    assert str(clone.path) in _paths(res.recovered)
+
+
+def test_sweep_removes_empty_dead_owner_clone(repo):
+    from worktree import provision_clone, sweep_stranded_clones
 
     clone = provision_clone(repo, "container", loop_id="loop-empty")
-    assert clone is not None
-    _age_clone(clone.path, _STRANDED_CLONE_GRACE_SECS + 3600)
-
-    res = surface_stranded_clones()
-    assert str(clone.path) in [e["path"] for e in res["stranded"]]
-    assert clone.path.exists()  # NOT deleted, despite looking empty
-    assert (clone.path / "base.txt").exists()
+    res = sweep_stranded_clones(pid_alive=lambda p: False, min_age_s=0)
+    # No unmerged work → provably safe to remove.
+    assert not clone.path.exists()
+    assert str(clone.path) in _paths(res.removed_empty)
 
 
-def test_surface_never_runs_git_inside_the_clone(repo):
-    """RCE regression: a worker-planted `core.fsmonitor` must never execute on
-    the host. surface_stranded_clones runs NO git inside the clone, so the trap
-    stays un-fired even after the clone is processed and surfaced."""
-    from worktree import provision_clone, surface_stranded_clones, _STRANDED_CLONE_GRACE_SECS
+def test_sweep_preserves_unmergeable_work(repo):
+    from worktree import provision_clone, sweep_stranded_clones
 
-    clone = provision_clone(repo, "container", loop_id="loop-evil-sweep")
-    assert clone is not None
-    marker = repo.parent / "SWEEP_PWNED"
-    # A worker with rw on the clone plants a fsmonitor that fires on any `git status`.
-    _git(["config", "--local", "core.fsmonitor", f"touch '{marker}'"], clone.path)
-    _age_clone(clone.path, _STRANDED_CLONE_GRACE_SECS + 3600)
+    clone = provision_clone(repo, "container", loop_id="loop-keep")
+    # Clone edits base.txt one way; the parent diverges → merge-back conflicts.
+    (clone.path / "base.txt").write_text("clone side\n", encoding="utf-8")
+    (repo / "base.txt").write_text("parent side\n", encoding="utf-8")
+    _git(["add", "-A"], repo)
+    assert _git(["commit", "-m", "diverge"], repo).returncode == 0
 
-    res = surface_stranded_clones()
-    assert str(clone.path) in [e["path"] for e in res["stranded"]]  # it WAS processed
-    assert not marker.exists(), "surface ran git inside the untrusted clone (host RCE)!"
-
-
-def test_surface_skips_recent_clone(repo):
-    """An in-flight / recent clone (within the grace window) is not surfaced."""
-    from worktree import provision_clone, surface_stranded_clones
-
-    clone = provision_clone(repo, "container", loop_id="loop-fresh")
-    assert clone is not None
-    res = surface_stranded_clones()  # no ageing — mtime is now
-    assert res["skipped_recent"] >= 1
-    assert str(clone.path) not in [e["path"] for e in res["stranded"]]
-    assert clone.path.exists()
+    res = sweep_stranded_clones(pid_alive=lambda p: False, min_age_s=0)
+    # Retention: unrecovered work is NEVER auto-removed.
+    assert clone.path.is_dir()
+    assert str(clone.path) in _paths(res.preserved)
+    # And the work is still reachable on the preserved branch in the live repo.
+    show = _git(["show", f"{clone.branch}:base.txt"], repo)
+    assert show.stdout == "clone side\n"
 
 
-def test_surface_warns_once_via_parent_marker(repo):
-    """The warning dedups via a `.surfaced` marker in the clone's PARENT (not
-    the worker-mounted clone), so a standing leak doesn't re-warn every tick."""
-    from worktree import provision_clone, surface_stranded_clones, _STRANDED_CLONE_GRACE_SECS
+def test_sweep_surfaces_sidecarless_clone_and_never_removes(repo):
+    from worktree import provision_clone, sweep_stranded_clones, _clone_sidecar_path
 
-    clone = provision_clone(repo, "container", loop_id="loop-mark")
-    assert clone is not None
-    _age_clone(clone.path, _STRANDED_CLONE_GRACE_SECS + 3600)
-
-    r1 = surface_stranded_clones()
-    marker = clone.path.parent / f".{clone.path.name}.surfaced"
-    assert marker.exists()  # dedup marker written outside the clone
-    # Still surfaced on subsequent calls (marker only silences the repeat warning).
-    r2 = surface_stranded_clones()
-    assert str(clone.path) in [e["path"] for e in r2["stranded"]]
-    assert str(clone.path) in [e["path"] for e in r1["stranded"]]
+    clone = provision_clone(repo, "container", loop_id="loop-nosc")
+    _clone_sidecar_path(clone.path).unlink()  # crash before the sidecar landed
+    (clone.path / "work.txt").write_text("orphan work\n", encoding="utf-8")
+    res = sweep_stranded_clones(pid_alive=lambda p: False, min_age_s=0)
+    # Without the trusted breadcrumb we can't prove ownership/unmerged state —
+    # retention forbids removal; surface for manual inspection.
+    assert clone.path.is_dir()
+    assert str(clone.path) in _paths(res.surfaced)
+    assert not res.recovered and not res.removed_empty
 
 
-def test_surface_no_worktrees_root_is_noop(workspace):
-    """No worktrees/ dir → empty summary, no error."""
-    from worktree import surface_stranded_clones
+def test_sweep_respects_grace_window(repo):
+    from worktree import provision_clone, sweep_stranded_clones
 
-    res = surface_stranded_clones()
-    assert res == {"stranded": [], "skipped_recent": 0}
+    clone = provision_clone(repo, "container", loop_id="loop-grace")
+    # Owner dead, but a large grace window makes it not-yet-eligible.
+    res = sweep_stranded_clones(pid_alive=lambda p: False, min_age_s=3600)
+    assert clone.path.is_dir()
+    assert str(clone.path) in _paths(res.skipped_young)
+    assert not res.recovered and not res.removed_empty and not res.preserved
+
+
+def test_sweep_empty_when_nothing_leaked(workspace):
+    from worktree import sweep_stranded_clones
+
+    res = sweep_stranded_clones(pid_alive=lambda p: False, min_age_s=0)
+    assert not res.acted()

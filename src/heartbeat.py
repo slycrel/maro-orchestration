@@ -459,21 +459,23 @@ def stranded_state_sweep(*, verbose: bool = False) -> dict:
     except Exception as exc:
         log.debug("sweep: stranded-container reap failed: %s", exc)
 
-    # Containerized executor (C4): SURFACE crash-leaked scratch clones for the
-    # operator. A SIGKILL between provision_clone and finalize leaks a whole-repo
-    # clone under worktrees/. Detection-only — it never auto-deletes and never
-    # runs git inside a worker-controlled clone (auto-reclaim of an untrusted
-    # clone is unsafe: it can't prove "empty" and running git in it is host RCE —
-    # adversarial review 2026-07-13). No-op when the self-dev clone lane is unused.
+    # Containerized self-dev (C3/C4): recover + reap scratch clones leaked by a
+    # crash between provision and finalize. Retention-safe — a clone is removed
+    # only when its owner PID is dead AND its work provably reached the live repo
+    # (or never existed); anything unrecovered is preserved and surfaced. No-op
+    # when the container lane is unused (no clones on disk).
     try:
-        from worktree import surface_stranded_clones
-        clone_report = surface_stranded_clones()
-        result["stranded_clones"] = clone_report.get("stranded", [])
-        if verbose and clone_report.get("stranded"):
-            print(f"[heartbeat] sweep: {len(clone_report['stranded'])} stranded scratch "
-                  f"clone(s) surfaced for manual review (never auto-deleted)", file=sys.stderr)
+        from worktree import sweep_stranded_clones
+        clone_sweep = sweep_stranded_clones(pid_alive=_pid_alive)
+        result["swept_clones"] = clone_sweep.as_dict()
+        if verbose and clone_sweep.acted():
+            print(f"[heartbeat] sweep: scratch clones — "
+                  f"{len(clone_sweep.recovered)} recovered, "
+                  f"{len(clone_sweep.removed_empty)} empty-removed, "
+                  f"{len(clone_sweep.preserved)} preserved, "
+                  f"{len(clone_sweep.surfaced)} surfaced", file=sys.stderr)
     except Exception as exc:
-        log.debug("sweep: stranded-clone surface failed: %s", exc)
+        log.debug("sweep: stranded-clone reap failed: %s", exc)
 
     return result
 
