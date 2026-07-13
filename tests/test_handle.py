@@ -1291,6 +1291,18 @@ class TestPersonaPrefix:
         assert r.forced_persona == "garrytan"
         assert r.model_tier == "power"
 
+    def test_garrytan_tracks_its_bundled_tier_separately(self):
+        # persona_bundled_tier lets a later explicit persona= override know
+        # this specific tier came attached to the persona it's replacing.
+        from handle import _apply_prefixes
+        r = _apply_prefixes("garrytan: analyze this market")
+        assert r.persona_bundled_tier == "power"
+
+    def test_generic_persona_prefix_has_no_bundled_tier(self):
+        from handle import _apply_prefixes
+        r = _apply_prefixes("persona:builder: do it")
+        assert r.persona_bundled_tier == ""
+
     def test_garrytan_effort_conflict_first_wins_and_warns(self, caplog):
         # garrytan: bundles model_tier="power" — an earlier effort: prefix
         # conflicts with it. The existing _apply_prefixes conflict-warning
@@ -1386,6 +1398,51 @@ class TestPersonaForcingIntegration:
         handle("persona:builder: do it", dry_run=True, force_lane="agenda", persona="critic")
         _, _pname, _pconf = mock_dispatch.call_args.args
         assert _pname == "critic"
+
+    def _latest_run_model(self, tmp_path):
+        import runs
+        root = runs.runs_root()
+        newest = max(
+            (d for d in root.iterdir() if d.is_dir()),
+            key=lambda d: d.stat().st_mtime,
+        )
+        meta = json.loads((newest / "metadata.json").read_text(encoding="utf-8"))
+        return meta.get("model")
+
+    def test_explicit_persona_override_drops_garrytans_bundled_tier(self, monkeypatch, tmp_path):
+        # adversarial-review finding (2026-07-13): overriding garrytan: via an
+        # explicit persona= kwarg swapped the persona but silently kept the
+        # power-tier bump garrytan: bundled with it, spending on the wrong
+        # tier under the caller's chosen (non-garrytan) persona. model= is
+        # resolved long before dry_run/adapter-building is even reached, so
+        # assert against the stamped run metadata rather than build_adapter.
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        handle("garrytan: do it", dry_run=True, force_lane="agenda", persona="critic")
+        assert self._latest_run_model(tmp_path) != "power"
+
+    def test_garrytans_bundled_tier_still_applies_when_not_overridden(self, monkeypatch, tmp_path):
+        # Companion to the above: garrytan:'s own power-tier bump must still
+        # apply when nothing overrides its persona.
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        handle("garrytan: do it", dry_run=True, force_lane="agenda")
+        assert self._latest_run_model(tmp_path) == "power"
+
+    def test_prefix_tier_outranks_configured_default_model_tier(self, monkeypatch, tmp_path):
+        # Bigger sibling of the finding above, caught while fixing it: this
+        # repo's own shipped user/CONFIG.md template (and this box's real
+        # workspace overlay) ship `default_model_tier: cheap` uncommented.
+        # The old ordering applied that config default to `model` BEFORE the
+        # prefix registry ever ran, and the prefix only applied "if model is
+        # None" — so a configured default_model_tier silently defeated every
+        # prefix's tier bump (effort:high, ultraplan:, team:, garrytan:) on
+        # any box using the shipped default, including this one, right now.
+        # A prefix is a deliberate per-request override and must win.
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        user_dir = tmp_path / "user"
+        user_dir.mkdir(parents=True, exist_ok=True)
+        (user_dir / "CONFIG.md").write_text("default_model_tier: cheap\n", encoding="utf-8")
+        handle("effort:high do it", dry_run=True, force_lane="agenda")
+        assert self._latest_run_model(tmp_path) == "power"
 
 
 # ---------------------------------------------------------------------------

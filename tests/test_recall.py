@@ -68,6 +68,21 @@ class TestDispatchSlice:
         assert len(r.prior_attempts) == 1
         assert r.prior_attempts[0].match == "near"
 
+    def test_persona_prefix_does_not_defeat_matching(self, monkeypatch, tmp_path):
+        # adversarial-review finding (2026-07-13): run-dir metadata.prompt is
+        # deliberately the RAW input (pre-prefix-strip), so a first attempt
+        # made with a persona prefix and a retry without one used to fall
+        # below the 0.9 near-match threshold on word-overlap alone, silently
+        # losing the retry's decision-prior context. Matching must strip
+        # known magic prefixes from both sides before comparing.
+        _setup(monkeypatch, tmp_path)
+        _make_run("persona:builder: deploy the widget service", status="stuck")
+        r = recall("deploy the widget service", slice="dispatch")
+        assert len(r.prior_attempts) == 1
+        assert r.prior_attempts[0].match == "exact"
+        # Raw prompt (with prefix) is still preserved for display.
+        assert r.prior_attempts[0].goal == "persona:builder: deploy the widget service"
+
     def test_out_of_window_excluded(self, monkeypatch, tmp_path):
         _setup(monkeypatch, tmp_path)
         goal = "rebuild the index"

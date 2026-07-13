@@ -304,6 +304,28 @@ def _normalize(text: str) -> str:
     return " ".join((text or "").lower().split())
 
 
+def _strip_for_match(text: str) -> str:
+    """Best-effort magic-prefix strip so goal-similarity matching isn't
+    polluted by prefixes like `persona:builder:` or `garrytan:`.
+
+    Run-dir metadata's `prompt` field is deliberately the RAW input (handle.py
+    persists it pre-strip for input-visibility reasons), so a prior run tried
+    as `persona:builder: deploy widget` and a retry of plain `deploy widget`
+    would otherwise diverge enough on word-overlap to miss the 0.9 near-match
+    threshold — silently defeating decision-prior retrieval for exactly the
+    retry case it exists to help (adversarial-review finding, 2026-07-13).
+    Stripping both sides here, at the matching boundary, fixes it regardless
+    of whether a given caller's `goal` argument happens to already be
+    stripped. Falls back to the raw text if handle's prefix parser is
+    unavailable — matching only degrades, it never breaks.
+    """
+    try:
+        from handle import _apply_prefixes
+        return _apply_prefixes(text).message
+    except Exception:
+        return text
+
+
 def _find_prior_attempts(goal: str, *, window_hours: float) -> List[PriorAttempt]:
     """Scan recent run dirs (mtime-ordered, capped) for goal matches."""
     from runs import runs_root
@@ -322,7 +344,8 @@ def _find_prior_attempts(goal: str, *, window_hours: float) -> List[PriorAttempt
         return []
 
     cutoff = datetime.now(timezone.utc) - timedelta(hours=window_hours)
-    goal_norm = _normalize(goal)
+    goal_stripped = _strip_for_match(goal)
+    goal_norm = _normalize(goal_stripped)
     attempts: List[PriorAttempt] = []
     for rd in dirs[:_METADATA_SCAN_CAP]:
         meta = _read_run_metadata(rd)
@@ -340,9 +363,10 @@ def _find_prior_attempts(goal: str, *, window_hours: float) -> List[PriorAttempt
         prompt = str(meta.get("prompt") or "")
         if not prompt:
             continue
-        if _normalize(prompt) == goal_norm:
+        prompt_stripped = _strip_for_match(prompt)
+        if _normalize(prompt_stripped) == goal_norm:
             match = "exact"
-        elif _text_similarity(prompt, goal) >= _NEAR_MATCH_THRESHOLD:
+        elif _text_similarity(prompt_stripped, goal_stripped) >= _NEAR_MATCH_THRESHOLD:
             match = "near"
         else:
             continue

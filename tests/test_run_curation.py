@@ -703,3 +703,27 @@ class TestPriorDecisionSurfacing:
         finalize_run("h0000q5", status="done")
         from run_curation import prior_decision_context
         assert prior_decision_context("uncurated goal") == ""
+
+
+class TestCuratorsOrdering:
+    """CURATORS' real dependency chain (adversarial-review finding,
+    2026-07-13) is enforced only by this list's literal order plus a comment
+    — curate_run() swallows every curator's exceptions, so a miner inserted
+    out of order doesn't error, it silently writes a card missing fields.
+    This test pins the order so that failure mode surfaces as a test break
+    instead of a stale run_card in production."""
+
+    def test_dependency_order_matches_documented_chain(self):
+        from run_curation import (
+            CURATORS, classify_outcome, inventory_assets, scrape_scripts,
+            flag_skill_candidate, rescue_partial, index_decision_prior,
+        )
+        names = [f.__name__ for f in CURATORS]
+        # classify_outcome sets success_class, read by flag_skill_candidate.
+        assert names.index(classify_outcome.__name__) < names.index(flag_skill_candidate.__name__)
+        # inventory_assets sets the inventory scrape_scripts reads.
+        assert names.index(inventory_assets.__name__) < names.index(scrape_scripts.__name__)
+        # scrape_scripts sets reusable_scripts, read by flag_skill_candidate.
+        assert names.index(scrape_scripts.__name__) < names.index(flag_skill_candidate.__name__)
+        # rescue_partial sets partial_rescue, read by index_decision_prior for resume_from.
+        assert names.index(rescue_partial.__name__) < names.index(index_decision_prior.__name__)

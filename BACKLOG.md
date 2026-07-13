@@ -13,6 +13,56 @@ Last reviewed: 2026-07-09 (decision-cleanup session with Jeremy: #19 thread-arch
 
 Ordered open work that matters. Top of the list is next.
 
+### R1. Adversarial-review batch-1 findings — architectural, deferred by design (2026-07-13)
+
+3-reviewer (Skeptic/Architect/Minimalist) pass over batch-1's merged diff
+(`d47bf22..HEAD`, 28 files). Two real, verified bugs from this pass were fixed
+live the same session (recall goal-key prefix pollution — `src/recall.py`
+`_strip_for_match`; garrytan power-tier leak on persona= override, plus a
+bigger sibling bug the fix surfaced — `default_model_tier` config silently
+defeating every prefix's tier bump, live on this box's own workspace config —
+both in `src/handle.py`; `_collect()` now raises instead of silently
+returning a truncated stream as success — `src/llm.py`). Regression tests
+added for all of it. The items below are real but cross-cutting/architectural
+per Jeremy's "document if large" instruction — not fixed live:
+
+- [ ] **Unify the magic-prefix mechanism.** `_PREFIX_REGISTRY` (fixed-string
+  entries) and `_PERSONA_PREFIX_RE` (a separate hardcoded regex branch for
+  `persona:<name>:`) are two parallel mechanisms for "the same kind of
+  thing" in `src/handle.py`. Architect + Minimalist both flagged this
+  independently. Fix: extend the registry to support pattern/capture-group
+  rules so there's one prefix-parsing abstraction, not two. Touches the
+  core of every magic prefix (`effort:`, `mode:thin`, `ralph:`, `team:`,
+  `garrytan:`, `persona:<name>:`) — wants a deliberate pass, not a
+  drive-by edit.
+- [ ] **`recall.py` ↔ `run_curation.py` bidirectional layer coupling.**
+  `run_curation.prior_decision_context()` lazily imports recall's private
+  `_find_prior_attempts`; `recall._strip_for_match()` (added this session)
+  now also lazily imports handle's private `_apply_prefixes`. Both are
+  runtime-safe (function-level imports, no import-time cycle) but the
+  write-side curation module reaching into the read-side's private matcher
+  — and now recall reaching into handle's private prefix parser too — is
+  an architecture smell compounding with each fix. Cleaner shape: extract
+  a neutral module (e.g. `prefixes.py` for prefix stripping, shared by
+  `handle.py` and `recall.py`; a neutral `decision_prior.py` for card
+  schema/load/format, shared by `recall.py` and `run_curation.py`).
+- [ ] **`CURATORS` dependency order has no structural enforcement**, only a
+  comment + a new ordering-assertion test (`tests/test_run_curation.py::TestCuratorsOrdering`,
+  added this session as a stopgap). `curate_run()` swallows every curator's
+  exceptions, so a future miner inserted out of order won't error — it'll
+  silently write a card missing fields, and only the ordering test would
+  catch it (and only if someone remembers to extend that test for the new
+  miner's dependency). Real fix: `provides`/`requires` metadata per curator
+  with a topological sort, not a hand-maintained list order.
+- [ ] **`skill_candidate` field has no consumer.** `flag_skill_candidate()`
+  (`src/run_curation.py`) writes `card["skill_candidate"]` on every
+  qualifying run; nothing reads it outside tests (Minimalist finding).
+  Advisory metadata with no promotion/review loop consuming it is
+  speculative machinery per this repo's own subtract-before-you-add
+  principle. Either wire a consumer (the natural one: evolver's skill-
+  promotion pass) or remove the field if it's still unconsumed next time
+  this area gets touched.
+
 ### C4-BOX. Container executor — box-side real-goal burn-in (2026-07-13, Jeremy runs on the runtime box)
 
 The container **mechanics** are burned in and green on the dev Mac (Docker

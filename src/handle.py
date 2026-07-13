@@ -73,6 +73,10 @@ class _PrefixResult:
     strict_mode: bool = False
     team_mode: bool = False
     forced_persona: str = ""   # if non-empty, override persona_for_goal selection
+    persona_bundled_tier: str = ""  # model_tier that arrived bundled with forced_persona
+    # (e.g. garrytan:'s power tier) — tracked separately from model_tier so an
+    # explicit persona= override that replaces the persona can also drop the
+    # tier bump it brought along, instead of silently keeping it.
 
 
 _PREFIX_REGISTRY: List[_PrefixRule] = [
@@ -146,6 +150,8 @@ def _apply_prefixes(message: str) -> _PrefixResult:
                         )
                     elif not result.forced_persona:
                         result.forced_persona = rule.persona
+                        if rule.model_tier:
+                            result.persona_bundled_tier = rule.model_tier
                 changed = True
                 lower = result.message.lower()  # re-check after strip
                 break  # restart registry scan after each match
@@ -801,18 +807,42 @@ def _handle_impl(
     except Exception as _run_dir_exc:
         log.debug("runs: create_run_dir failed: %s", _run_dir_exc)
 
-    # Apply user/CONFIG.md defaults (non-fatal — bad config never blocks a run)
+    # Apply magic prefix registry — strips all recognized prefixes in one pass.
+    # Runs BEFORE the user/CONFIG.md default_model_tier fallback below: a
+    # prefix is an explicit, per-request override (the whole point of typing
+    # `effort:high` or `garrytan:` is to deviate from whatever's configured),
+    # so it must outrank a passive config default, not lose to it. The
+    # previous order (config default applied first, prefix only applied "if
+    # model is None") meant a configured default_model_tier silently defeated
+    # every prefix's tier bump — live and currently active on this box, whose
+    # own user/CONFIG.md ships `default_model_tier: cheap` (adversarial-review
+    # finding, 2026-07-13).
+    _pfx = _apply_prefixes(message)
+    message = _pfx.message
+    # Explicit persona= wins over a prefix-forced persona (full precedence
+    # logic + registry validation happens later where PersonaRegistry is in
+    # scope) — but the model_tier floor below is resolved now, well before
+    # that. Without this check, overriding e.g. `garrytan:` via an explicit
+    # persona= kwarg would swap out the persona but silently keep the
+    # power-tier bump garrytan: bundled with it (adversarial-review finding,
+    # 2026-07-13). Mirror the precedence check early so the tier follows the
+    # persona that actually wins.
+    _persona_overridden_early = bool(
+        persona and persona.strip() and _pfx.forced_persona
+        and persona.strip().lower() != _pfx.forced_persona
+    )
+    if _pfx.model_tier and model is None and not (
+        _persona_overridden_early and _pfx.model_tier == _pfx.persona_bundled_tier
+    ):
+        model = _pfx.model_tier
+
+    # Apply user/CONFIG.md defaults (non-fatal — bad config never blocks a run).
+    # Fallback only: a prefix (above) or an explicit model= kwarg always wins.
     _cfg = _load_user_config()
     if model is None:
         _tier = _cfg.get("default_model_tier", "").strip().lower()
         if _tier in ("cheap", "mid", "power"):
             model = _tier
-
-    # Apply magic prefix registry — strips all recognized prefixes in one pass.
-    _pfx = _apply_prefixes(message)
-    message = _pfx.message
-    if _pfx.model_tier and model is None:
-        model = _pfx.model_tier
 
     # Unpack prefix flags into local names for backward compatibility
     # with the rest of this function (no other code changes needed below).

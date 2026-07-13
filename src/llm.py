@@ -462,9 +462,18 @@ class LLMAdapter:
                 return LLMResponse(content="".join(content_parts), tool_calls=tool_calls)
             else:
                 log.warning("LLMAdapter._collect: unknown StreamEvent kind %r — ignored", ev.kind)
-        # Defensive: a well-behaved iterator always ends in done/error. If it
-        # simply ran dry, return whatever accumulated rather than raising.
-        return LLMResponse(content="".join(content_parts), tool_calls=tool_calls)
+        # A well-behaved iterator always ends in done/error (both current
+        # adapters do). Running dry without a terminal event is exactly what
+        # a dropped socket or aborted parser would look like on a future real
+        # streaming adapter — silently returning the partial content_parts as
+        # a successful LLMResponse would hide that failure as a truncated-but-
+        # valid response (adversarial-review finding, 2026-07-13). Raise
+        # instead so the caller's normal error handling sees it.
+        raise RuntimeError(
+            "LLMAdapter._collect: stream exhausted without a done/error terminal "
+            f"event ({len(content_parts)} chunk(s), {len(tool_calls)} tool_call(s) "
+            "accumulated) — treat as a truncated/dropped stream, not success"
+        )
 
 
 # ---------------------------------------------------------------------------

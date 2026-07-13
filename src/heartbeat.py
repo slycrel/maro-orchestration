@@ -667,10 +667,16 @@ def run_heartbeat(
         try:
             _sw = stranded_state_sweep(verbose=verbose)
             if any(_sw.values()):
+                _clones = _sw.get("swept_clones") or {}
                 report.checks["stranded_sweep"] = (
                     f"recovered: tasks={len(_sw['recovered_tasks'])} "
                     f"doing={len(_sw['reverted_doing'])} "
-                    f"resumable={len(_sw['resumable_runs'])}"
+                    f"resumable={len(_sw['resumable_runs'])} "
+                    f"killed_containers={len(_sw.get('killed_containers') or [])} "
+                    f"clones(recovered={len(_clones.get('recovered', []))} "
+                    f"removed_empty={len(_clones.get('removed_empty', []))} "
+                    f"preserved={len(_clones.get('preserved', []))} "
+                    f"surfaced={len(_clones.get('surfaced', []))})"
                 )
         except Exception as _sw_exc:
             log.warning("stranded-state sweep failed: %s", _sw_exc)

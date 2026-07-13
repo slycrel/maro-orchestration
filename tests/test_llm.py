@@ -1818,15 +1818,16 @@ class TestCollectStreamEvents:
         with pytest.raises(RuntimeError, match="stream ended in error"):
             LLMAdapter._collect(_events())
 
-    def test_exhausted_iterator_without_terminal_event_returns_accumulated(self):
-        """Defensive fallback: a malformed iterator that never yields done/error
-        still returns whatever it accumulated instead of raising or hanging."""
+    def test_exhausted_iterator_without_terminal_event_raises(self):
+        """A malformed iterator that never yields done/error must raise, not
+        silently return a truncated-but-successful LLMResponse — that shape is
+        indistinguishable from a real dropped stream on a future adapter."""
         def _events():
             yield StreamEvent(kind="chunk", text="only ")
             yield StreamEvent(kind="chunk", text="chunks")
 
-        result = LLMAdapter._collect(_events())
-        assert result.content == "only chunks"
+        with pytest.raises(RuntimeError, match="exhausted without a done/error"):
+            LLMAdapter._collect(_events())
 
     def test_unknown_kind_is_ignored_not_fatal(self):
         def _events():
