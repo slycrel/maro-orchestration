@@ -1694,6 +1694,28 @@ class TestContainerExecutorWrap:
         assert captured["kw"]["mounts"] == [(str(tmp_path), "rw")]
         assert captured["kw"]["worker_env"].get("MARO_WORKER_RUN") == "1"
 
+    def test_run_subprocess_safe_mounts_run_rw_roots(self, monkeypatch, tmp_path):
+        """C3: the run-scoped extra rw roots (goal-declared / write-fence-allow)
+        flow through build_mount_map into the wrap alongside the cwd."""
+        from llm import _run_subprocess_safe, set_default_container_rw_roots
+        import container_exec as ce
+        cwd = tmp_path / "proj"; cwd.mkdir()
+        extra = tmp_path / "declared"; extra.mkdir()
+        captured = {}
+        def fake_build(inner_cmd, *, name, **kw):
+            captured["mounts"] = kw.get("mounts")
+            return ["true"]
+        monkeypatch.setattr(ce, "build_run_command", fake_build)
+        set_default_container_rw_roots([str(extra)])
+        try:
+            result = _run_subprocess_safe(
+                ["echo", "hi"], container_name="maro-exec-t-0",
+                cwd=str(cwd), timeout=10)
+        finally:
+            set_default_container_rw_roots(None)
+        assert result.returncode == 0
+        assert captured["mounts"] == [(str(cwd), "rw"), (str(extra), "rw")]
+
     def test_run_subprocess_safe_falls_back_to_host_without_cwd(self, monkeypatch):
         """A container was requested but there's no resolvable working dir to
         mount → run on the host rather than an empty container (no wrap)."""

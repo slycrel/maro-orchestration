@@ -233,7 +233,7 @@ def run_agent_loop(
         # Fall back to the goal-slug project dir — the same identity the scope
         # pass derives — and create it, since Popen raises on a missing cwd.
         try:
-            from llm import set_default_subprocess_cwd
+            from llm import set_default_subprocess_cwd, set_default_container_rw_roots
             if getattr(ctx, "run_worktree", None) is not None:
                 # busy_policy=worktree: the whole run works in its isolated
                 # worktree; loop_finalize merges back into the project dir.
@@ -241,7 +241,44 @@ def run_agent_loop(
             else:
                 _fence_dir = _project_dir_root() / (project or _goal_to_slug(ctx.goal))
             _fence_dir.mkdir(parents=True, exist_ok=True)
+
+            # Self-dev scratch clone (C3, CONTAINER_EXECUTOR_DESIGN §4): when this
+            # run's executor steps WILL be containerized and the fence dir is a git
+            # repo, the live repo is never mounted rw — clone it into a throwaway
+            # scratch, work the copy, merge back host-side at finalize. Off by
+            # default (executor.container off → container_run_active() is False),
+            # so a non-container run is byte-identical to before.
+            try:
+                import container_exec as _ce
+                if ctx.container_clone is None and _ce.container_run_active():
+                    import worktree as _wt
+                    if _wt.is_git_repo(_fence_dir):
+                        _clone = _wt.provision_clone(_fence_dir, "container", loop_id=ctx.loop_id)
+                        if _clone is not None:
+                            ctx.container_clone = _clone
+                            _fence_dir = _clone.path
+                            log.info("container self-dev: working in scratch clone %s (branch %s)",
+                                     _clone.path, _clone.branch)
+            except Exception as _cc_exc:
+                log.warning("container scratch-clone provision skipped: %s", _cc_exc)
+
             set_default_subprocess_cwd(str(_fence_dir))
+
+            # Container fence rw roots (C3): the goal's declared roots +
+            # validate.write_fence_allow join the container's writable mount set
+            # (the cwd is always rw). Host /tmp and the workspace root are
+            # deliberately NOT mounted (design §4). Read only in the container
+            # branch of _run_subprocess_safe.
+            try:
+                from artifact_check import goal_declared_roots as _gdr
+                from config import get as _cfg_get
+                _rw_roots = list(_gdr(ctx.goal))
+                for _r in (_cfg_get("validate.write_fence_allow", []) or []):
+                    if _r:
+                        _rw_roots.append(os.path.expanduser(str(_r)))
+                set_default_container_rw_roots(_rw_roots)
+            except Exception as _rw_exc:
+                log.debug("container rw-roots setup skipped: %s", _rw_exc)
             # In-fence scratch space (2026-07-04, Jeremy: "lean into /tmp... nice
             # to add a tmp scratch folder under the workspace"). /tmp is also
             # fence-allowed (artifact_check.fence_allow_roots); this one survives

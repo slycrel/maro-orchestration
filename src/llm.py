@@ -98,6 +98,27 @@ def default_subprocess_cwd(path: Optional[str]):
         _DEFAULT_SUBPROCESS_CWD.reset(token)
 
 
+# Run-scoped extra writable roots for the containerized executor (C3,
+# docs/CONTAINER_EXECUTOR_DESIGN.md §4). run_agent_loop assembles the goal's
+# declared roots + validate.write_fence_allow here so the container's mount map
+# mirrors the run's write fence (the cwd is always rw; host /tmp + the workspace
+# root are deliberately NOT mounted). Read only in the container branch of
+# _run_subprocess_safe; empty everywhere else. Analogous to _DEFAULT_SUBPROCESS_CWD.
+_DEFAULT_CONTAINER_RW_ROOTS: contextvars.ContextVar[Optional[list]] = contextvars.ContextVar(
+    "maro_default_container_rw_roots", default=None
+)
+
+
+def get_default_container_rw_roots() -> list:
+    """Run-scoped extra rw mount roots for containerized executor calls."""
+    return list(_DEFAULT_CONTAINER_RW_ROOTS.get() or [])
+
+
+def set_default_container_rw_roots(roots: Optional[list]) -> None:
+    """Set the run-scoped extra rw mount roots (pass None/empty to clear)."""
+    _DEFAULT_CONTAINER_RW_ROOTS.set(list(roots) if roots else None)
+
+
 # ---------------------------------------------------------------------------
 # Runaway cost circuit (BACKLOG #23e — mid-step granularity)
 # ---------------------------------------------------------------------------
@@ -795,14 +816,15 @@ def _run_subprocess_safe(cmd, *, input=None, timeout=600,
                 "_run_subprocess_safe: cwd %r is not a directory; inheriting parent cwd", cwd
             )
 
-    # Containerized executor (C2, docs/CONTAINER_EXECUTOR_DESIGN.md §2): the
-    # caller decides whether this call runs in a container (executor.container
+    # Containerized executor (C2/C3, docs/CONTAINER_EXECUTOR_DESIGN.md §2/§4):
+    # the caller decides whether this call runs in a container (executor.container
     # on/require + a worker executor step) and passes its name; we own the wrap
     # + kill path here so all the streaming/liveness/probe machinery below is
     # reused unchanged. The container sees only the -e vars we pass (host env is
-    # dropped by construction), the working dir bound rw at the same path, and
-    # any configured read-only reference mounts. Full fence-root translation +
-    # self-dev clone are C3.
+    # dropped by construction) and the fence-derived mount set: the working dir
+    # rw (a self-dev scratch clone when the fence dir is a repo), the run's
+    # goal-declared / write-fence-allow roots rw, and configured reference
+    # mounts ro. build_mount_map owns the translation (design §4 mount map).
     _container = None
     if container_name and not _cwd:
         # No resolvable working dir means no project mount to give the worker —
@@ -816,15 +838,18 @@ def _run_subprocess_safe(cmd, *, input=None, timeout=600,
         _worker_env = {k: child_env[k]
                        for k in ("MARO_WORKER_RUN", "MARO_ALLOW_MAIN_PUSH")
                        if k in child_env}
-        _mounts = [(_cwd, "rw")]
         # Configured read-only reference mounts (executor.container_extra_mounts).
+        _ro_mounts = []
         try:
             from config import get as _cfg_get
-            for _extra in (_cfg_get("executor.container_extra_mounts", []) or []):
-                if _extra and os.path.isdir(str(_extra)):
-                    _mounts.append((str(_extra), "ro"))
+            _ro_mounts = [str(x) for x in (_cfg_get("executor.container_extra_mounts", []) or []) if x]
         except Exception as _mnt_exc:
             log.debug("container_extra_mounts read failed (non-fatal): %s", _mnt_exc)
+        _mounts = _ce.build_mount_map(
+            _cwd,
+            rw_roots=get_default_container_rw_roots(),
+            ro_mounts=_ro_mounts,
+        )
         cmd = _ce.build_run_command(
             cmd, name=container_name, workdir=_cwd,
             mounts=_mounts, worker_env=_worker_env)

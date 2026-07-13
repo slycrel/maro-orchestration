@@ -2,8 +2,15 @@
 
 What to do next, in what order. Updated each session. Deferred ideas live in BACKLOG.md; completed phase history in docs/history/ROADMAP_ARCHIVE.md (ROADMAP.md is a stub). This file is the executable queue.
 
-Last updated: 2026-07-12 (Sonnet execution session: -5 #5 Verifier-synthesis
-Part B SHIPPED — B1 `Deliverable.shape` first-class field, B2
+Last updated: 2026-07-12 (Opus parallel session: **-5 #6 container-executor
+C3 SHIPPED** — fence→mount-map translation (`container_exec.build_mount_map`,
+pure + containment-aware dedup) + self-dev scratch-clone
+(`worktree.provision_clone`/`merge_back_clone` riding the serialized
+`_locked_merge`; live repo NEVER mounted rw — `--no-hardlinks` throwaway
+clone, host-side `git fetch` merge-back). Disjoint from Sonnet's
+routing/probe-synthesis; full suite green. C4 (burn-in + flip) is next,
+Jeremy-gated. See -5 #6.). Previous: 2026-07-12 (Sonnet execution session:
+-5 #5 Verifier-synthesis Part B SHIPPED — B1 `Deliverable.shape` first-class field, B2
 shape-conditional behavioral-probe MUST + waiver logging + timeout split,
 B3 probe-env hardening (never probe with cwd=None + majority-inconclusive
 confidence cap); live-verified with zero mocks against a real mid-tier
@@ -409,9 +416,22 @@ Truth anchor: GOAL_BRAIN.md Threads. History: docs/history/ROADMAP_ARCHIVE.md.
       label-filter; `not no_tools` over-capture → explicit `executor` gate;
       cached docker→per-call probe; retry/cross-process name collisions;
       cwd=None→host; `--mount` colon-safety). ~65 tests, docker fully mocked.
-      **C3 = mount map + self-dev clone** (fence-root→mount translation,
-      goal-declared rw, extra ro, scratch-clone merge-back riding
-      `worktree.py`) is next, Sonnet/Opus.
+      **C3 — mount map + self-dev clone — SHIPPED 2026-07-12 (Opus).**
+      `container_exec.build_mount_map` (pure, containment-aware) translates the
+      run's write fence → the docker mount list (cwd rw + goal-declared /
+      write-fence-allow rw + `container_extra_mounts` ro; host /tmp + workspace
+      root deliberately absent; missing rw roots skipped, never created), fed by
+      a run-scoped `llm.set_default_container_rw_roots` ContextVar. Self-dev:
+      when `container_run_active()` + the fence dir is a git repo, the live repo
+      is NEVER mounted rw — `worktree.provision_clone` (`--no-hardlinks`,
+      no shared object inode) → work the copy → `merge_back_clone` host-side via
+      `git fetch` + the SAME serialized `_locked_merge` extracted from
+      `merge_back` (conflict → branch kept). Rides the `run_worktree` seam
+      (`ctx.container_clone`, merged in finalize before worktree→project).
+      Deletions allowlisted in the retention tripwire. Tests: `TestBuildMountMap`
+      + `TestContainerRunActive` + clone round-trip/isolation/conflict + rw-roots
+      flow-through; full suite green. **C4 (burn-in + flip) is next — runtime
+      box, Jeremy adjudicates.**
    7. **Portable-learning chunks 1–4** (`docs/PORTABLE_LEARNING_DESIGN.md`
       §7, §8 ratified 2026-07-12) — 1.0 scope-decree item (g).
    8. Opportunistic riders: time-blindness first slice + perspective

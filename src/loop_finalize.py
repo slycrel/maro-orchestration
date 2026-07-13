@@ -321,6 +321,29 @@ def _build_result_and_finalize(
     if not ctx.dry_run and ctx.project:
         cleanup_step_artifacts(ctx.project, exclude_loop_id=ctx.loop_id)
 
+    # Containerized self-dev (C3, CONTAINER_EXECUTOR_DESIGN §4): merge the
+    # worker's scratch clone back into the fence repo FIRST — the clone's parent
+    # is the fence dir (a worktree path when busy_policy=worktree is also active,
+    # else the project dir), so clone→fence must land before any fence→project
+    # merge below. Same serialized semantics; conflict never drops work.
+    if getattr(ctx, "container_clone", None) is not None:
+        _clone = ctx.container_clone
+        try:
+            import worktree as _wtmod
+            _cmerge = _wtmod.merge_back_clone(_clone, message=f"container: run {ctx.loop_id}")
+            _wtmod.cleanup_clone(_clone, keep_on_failure=not _cmerge.ok)
+            if not _cmerge.ok:
+                log.warning("container scratch-clone merge failed: %s", _cmerge.detail)
+                if result.status == "done":
+                    result.status = "partial"
+                result.stuck_reason = (
+                    (result.stuck_reason + "; " if result.stuck_reason else "")
+                    + f"container clone merge failed — work preserved: {_cmerge.detail}"
+                )
+        except Exception as _cc_exc:
+            log.warning("container scratch-clone finalize error: %s", _cc_exc)
+        ctx.container_clone = None
+
     # busy_policy=worktree: merge the run's isolated worktree back into the
     # project checkout before releasing the slot. Conflict never drops work —
     # the branch is preserved and the run downgrades to "partial" naming it.

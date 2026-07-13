@@ -524,3 +524,112 @@ class TestDoctorContainerRows:
         out = capsys.readouterr().out
         assert "Container image" in out
         assert "Container auth volume" in out
+
+
+# ---------------------------------------------------------------------------
+# C3 — run-level container gate + fence → mount-map translation
+# ---------------------------------------------------------------------------
+
+class TestContainerRunActive:
+    """The run-level gate that decides whether to provision a self-dev scratch
+    clone. off (default) returns before any docker probe; on/require probe once."""
+
+    def test_off_returns_false_without_probing(self, monkeypatch):
+        monkeypatch.setattr(ce, "container_mode", lambda: "off")
+        def _boom():
+            raise AssertionError("docker_probe must not run when mode is off")
+        monkeypatch.setattr(ce, "docker_probe", _boom)
+        assert ce.container_run_active() is False
+
+    def test_on_with_docker_up_is_active(self, monkeypatch):
+        monkeypatch.setattr(ce, "container_mode", lambda: "on")
+        monkeypatch.setattr(ce, "docker_probe", lambda: (True, "docker 24"))
+        assert ce.container_run_active() is True
+
+    def test_on_with_docker_down_is_inactive(self, monkeypatch):
+        monkeypatch.setattr(ce, "container_mode", lambda: "on")
+        monkeypatch.setattr(ce, "docker_probe", lambda: (False, "no daemon"))
+        assert ce.container_run_active() is False
+
+    def test_require_with_docker_down_is_inactive_no_raise(self, monkeypatch):
+        # The run-level gate never raises — the per-call resolve_container_run
+        # owns the require-mode ContainerUnavailable contract.
+        monkeypatch.setattr(ce, "container_mode", lambda: "require")
+        monkeypatch.setattr(ce, "docker_probe", lambda: (False, "no daemon"))
+        assert ce.container_run_active() is False
+
+
+class TestBuildMountMap:
+    def test_cwd_only_is_single_rw_mount(self, tmp_path):
+        cwd = str(tmp_path)
+        assert ce.build_mount_map(cwd) == [(cwd, "rw")]
+
+    def test_cwd_mounted_verbatim_for_workdir_match(self, tmp_path):
+        # cwd must appear exactly as passed (the seam also passes it as `-w`).
+        cwd = str(tmp_path) + "/"  # trailing slash preserved on the cwd entry
+        out = ce.build_mount_map(cwd)
+        assert out[0] == (cwd, "rw")
+
+    def test_rw_root_added(self, tmp_path):
+        cwd = tmp_path / "proj"; cwd.mkdir()
+        extra = tmp_path / "data"; extra.mkdir()
+        out = ce.build_mount_map(str(cwd), rw_roots=[str(extra)])
+        assert (str(extra), "rw") in out
+        assert out[0] == (str(cwd), "rw")  # cwd first
+
+    def test_missing_rw_root_is_skipped_not_created(self, tmp_path):
+        cwd = tmp_path / "proj"; cwd.mkdir()
+        missing = tmp_path / "nope"
+        out = ce.build_mount_map(str(cwd), rw_roots=[str(missing)])
+        assert out == [(str(cwd), "rw")]
+        assert not missing.exists()  # pure — never created
+
+    def test_rw_root_equal_to_cwd_deduped(self, tmp_path):
+        cwd = tmp_path / "proj"; cwd.mkdir()
+        out = ce.build_mount_map(str(cwd), rw_roots=[str(cwd)])
+        assert out == [(str(cwd), "rw")]
+
+    def test_rw_root_nested_under_cwd_deduped(self, tmp_path):
+        cwd = tmp_path / "proj"; cwd.mkdir()
+        child = cwd / "sub"; child.mkdir()
+        out = ce.build_mount_map(str(cwd), rw_roots=[str(child)])
+        assert out == [(str(cwd), "rw")]
+
+    def test_normpath_dedups_against_cwd(self, tmp_path):
+        cwd = tmp_path / "proj"; cwd.mkdir()
+        weird = str(cwd) + "/../proj"  # normalizes to cwd
+        out = ce.build_mount_map(str(cwd), rw_roots=[weird])
+        assert out == [(str(cwd), "rw")]
+
+    def test_ro_mount_added(self, tmp_path):
+        cwd = tmp_path / "proj"; cwd.mkdir()
+        ref = tmp_path / "ref"; ref.mkdir()
+        out = ce.build_mount_map(str(cwd), ro_mounts=[str(ref)])
+        assert (str(ref), "ro") in out
+
+    def test_missing_ro_mount_skipped(self, tmp_path):
+        cwd = tmp_path / "proj"; cwd.mkdir()
+        out = ce.build_mount_map(str(cwd), ro_mounts=[str(tmp_path / "absent")])
+        assert out == [(str(cwd), "rw")]
+
+    def test_ro_nested_under_rw_parent_dropped(self, tmp_path):
+        # A rw parent already grants write (hence read) to the child — the ro
+        # mount is meaningless and dropped.
+        cwd = tmp_path / "proj"; cwd.mkdir()
+        child = cwd / "ref"; child.mkdir()
+        out = ce.build_mount_map(str(cwd), ro_mounts=[str(child)])
+        assert out == [(str(cwd), "rw")]
+
+    def test_rw_nested_under_ro_parent_kept(self, tmp_path):
+        # A ro parent does NOT cover a rw child — the nested rw mount stays.
+        parent = tmp_path / "ref"; parent.mkdir()
+        child = parent / "writable"; child.mkdir()
+        cwd = tmp_path / "proj"; cwd.mkdir()
+        out = ce.build_mount_map(str(cwd), rw_roots=[str(child)], ro_mounts=[str(parent)])
+        assert (str(child), "rw") in out
+        assert (str(parent), "ro") in out
+
+    def test_empty_and_none_entries_ignored(self, tmp_path):
+        cwd = tmp_path / "proj"; cwd.mkdir()
+        out = ce.build_mount_map(str(cwd), rw_roots=["", None], ro_mounts=[None, ""])
+        assert out == [(str(cwd), "rw")]

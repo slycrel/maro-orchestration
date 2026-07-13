@@ -322,3 +322,95 @@ def test_busy_policy_worktree_non_git_still_refuses(workspace, monkeypatch):
     finally:
         holder.kill()
         holder.communicate()
+
+
+# ---------------------------------------------------------------------------
+# Scratch-clone flow — self-development runs under the containerized executor
+# (docs/CONTAINER_EXECUTOR_DESIGN.md §4). Live repo is cloned into a throwaway
+# scratch the container edits; merge-back rides the same serialized semantics.
+# ---------------------------------------------------------------------------
+
+def test_provision_clone_non_git_returns_none(workspace):
+    from worktree import provision_clone
+
+    plain = workspace / "plain"
+    plain.mkdir()
+    assert provision_clone(plain, "container", loop_id="c1") is None
+
+
+def test_clone_roundtrip_merges_new_file_and_cleans_up(repo):
+    from worktree import provision_clone, merge_back_clone, cleanup_clone
+
+    clone = provision_clone(repo, "container", loop_id="loop-cc")
+    assert clone is not None
+    assert clone.path.is_dir()
+    assert clone.branch == "maro/loop-cc/container"
+    # A full, independent clone — the live repo's base file came along.
+    assert (clone.path / "base.txt").read_text(encoding="utf-8") == "base\n"
+
+    # Worker edits happen in the CLONE, never the live repo.
+    (clone.path / "work.txt").write_text("did work\n", encoding="utf-8")
+    assert not (repo / "work.txt").exists()
+
+    merge = merge_back_clone(clone)
+    assert merge.ok, merge.detail
+    assert (repo / "work.txt").read_text(encoding="utf-8") == "did work\n"
+
+    cleanup_clone(clone)
+    assert not clone.path.exists()  # scratch removed
+    branches = _git(["branch", "--list", clone.branch], repo).stdout
+    assert branches.strip() == ""  # fetched branch removed
+
+
+def test_clone_merge_no_changes_is_ok(repo):
+    from worktree import provision_clone, merge_back_clone, cleanup_clone
+
+    clone = provision_clone(repo, "container", loop_id="loop-noop")
+    assert clone is not None
+    merge = merge_back_clone(clone)
+    assert merge.ok
+    assert merge.detail == "no changes"
+    cleanup_clone(clone)
+
+
+def test_clone_never_shares_objects_with_parent(repo):
+    """--no-hardlinks: a commit in the clone is absent from the parent until
+    merge-back — no shared object inode the container could reach."""
+    from worktree import provision_clone
+
+    clone = provision_clone(repo, "container", loop_id="loop-iso")
+    assert clone is not None
+    (clone.path / "secret.txt").write_text("clone-only\n", encoding="utf-8")
+    _git(["add", "-A"], clone.path)
+    c = _git(["commit", "-m", "in clone"], clone.path)
+    assert c.returncode == 0, c.stderr
+    sha = _git(["rev-parse", "HEAD"], clone.path).stdout.strip()
+    # That commit object does not exist in the parent's store yet.
+    present = _git(["cat-file", "-e", sha], repo)
+    assert present.returncode != 0
+
+
+def test_clone_conflict_preserves_work_on_branch(repo):
+    from worktree import provision_clone, merge_back_clone, cleanup_clone
+
+    clone = provision_clone(repo, "container", loop_id="loop-conf")
+    assert clone is not None
+    # Clone edits base.txt one way (left as a leftover edit)...
+    (clone.path / "base.txt").write_text("edit from clone\n", encoding="utf-8")
+    # ...while the parent moves base.txt another way and commits on main.
+    (repo / "base.txt").write_text("edit from parent\n", encoding="utf-8")
+    _git(["add", "-A"], repo)
+    assert _git(["commit", "-m", "parent change"], repo).returncode == 0
+
+    merge = merge_back_clone(clone)
+    assert not merge.ok
+    assert merge.conflict
+    assert merge.branch == "maro/loop-conf/container"
+    # Parent checkout untouched by the aborted merge.
+    assert (repo / "base.txt").read_text(encoding="utf-8") == "edit from parent\n"
+    # Clone work preserved on the fetched branch.
+    show = _git(["show", f"{merge.branch}:base.txt"], repo)
+    assert show.stdout == "edit from clone\n"
+
+    cleanup_clone(clone, keep_on_failure=True)
+    assert clone.path.is_dir()  # kept for inspection

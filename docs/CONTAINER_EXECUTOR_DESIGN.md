@@ -343,14 +343,40 @@ No design coupling; noted so neither work stream blocks the other.
     `docker kill` in a long-lived process) — process-PID liveness can't tell it
     from the live owner's current container. Needs run-scoped liveness; a
     follow-on, low frequency (requires docker-kill itself to wedge).
-- **C3 — mount map + self-dev clone mode (Sonnet/Opus, 1 session):**
-  fence-root → mount translation incl. goal-declared rw, extra ro mounts,
-  uid/gid; the scratch-clone flow for repo-editing runs (repo ro →
-  clone-in-scratch at container start → host-side `git fetch` merge-back
-  riding `src/worktree.py`'s serialized-merge semantics). The clone
-  half touches merge-back semantics — lean Opus if in doubt. Tests:
-  translation-table units against fence fixtures + a clone/fetch round-trip
-  unit with a local fixture repo.
+- **C3 — mount map + self-dev clone mode — SHIPPED 2026-07-12 (Opus).**
+  Two halves, both dormant until `executor.container` is flipped on (C4):
+  - **Fence → mount translation.** `container_exec.build_mount_map(cwd, *,
+    rw_roots, ro_mounts)` (pure, containment-aware dedup: a rw parent covers a
+    ro child, a ro parent does NOT cover a rw child) turns the run's write
+    fence into the `docker run` mount list — cwd rw, goal-declared roots +
+    `validate.write_fence_allow` rw, `container_extra_mounts` ro. Host `/tmp`
+    and the workspace root are deliberately NOT mounted (§4). Missing rw roots
+    are SKIPPED, never created (a bind of a missing path would be root-owned);
+    the function mutates no filesystem. The run's extra rw roots ride a
+    ContextVar (`llm.set_default_container_rw_roots`, assembled by
+    `run_agent_loop` alongside the cwd bind — same pattern as
+    `_DEFAULT_SUBPROCESS_CWD`), read only in the container branch of
+    `_run_subprocess_safe`.
+  - **Self-dev scratch clone.** When a run's executor steps WILL be
+    containerized (`container_run_active()` — mode on/require + docker up) and
+    the fence dir is a git repo, the live repo is NEVER mounted rw:
+    `worktree.provision_clone` makes a `--no-hardlinks` throwaway clone (no
+    shared object inode), the run works the copy, and `merge_back_clone`
+    merges it back HOST-side via `git fetch` + the SAME serialized
+    `_locked_merge` core extracted from `merge_back` (conflict → branch kept,
+    never silent loss). Rides the `ctx.run_worktree` seam: provisioned in
+    `agent_loop` where cwd binds, merged in `loop_finalize` BEFORE the
+    worktree→project merge (clone→fence must land first when both are active),
+    field `ctx.container_clone`. `cleanup_clone` deletes the scratch only after
+    merge-back (allowlisted in the retention-decree tripwire).
+  Tests: `TestBuildMountMap` + `TestContainerRunActive` (translation table,
+  dedup, missing-path skip, run-gate) in `tests/test_container_exec.py`; clone
+  round-trip / no-changes / object-isolation / conflict-preservation in
+  `tests/test_worktree.py`; the rw-roots-flow-through in
+  `tests/test_llm.py`. Full suite green. Known limitation (documented in
+  `build_mount_map`): a goal-declared rw root that doesn't exist on the host is
+  skipped rather than created — the worker's writes there land in the
+  container's ephemeral fs; create it as the cwd or pre-create it.
 - **C4 — burn-in + flip (runtime box, Jeremy adjudicates):** run the
   standing dogfood goals under `container: on`; watch for env-dependency
   surprises, uid/gid friction, boot-tax delta; then decide box default and

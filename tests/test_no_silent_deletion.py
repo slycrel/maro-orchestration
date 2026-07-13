@@ -76,6 +76,14 @@ ALLOWED_DELETION_SITES = {
     ("task_store.py", "archive"):
         "move: task is written to the archive dir before the original "
         "(and its lock file) is unlinked",
+    ("worktree.py", "provision_clone"):
+        "ephemeral: removes the just-created scratch clone when its own "
+        "provisioning fails (branch checkout / clone error) — a throwaway "
+        "copy with no worker data yet, never a run/user artifact",
+    ("worktree.py", "cleanup_clone"):
+        "move: the containerized self-dev scratch clone is removed only after "
+        "merge_back_clone has merged its work into the live repo; on merge "
+        "failure keep_on_failure=True preserves both the clone and its branch",
 }
 
 _PATH_DELETION_ATTRS = {"unlink", "rmdir"}

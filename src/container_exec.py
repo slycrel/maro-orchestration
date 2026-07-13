@@ -394,6 +394,96 @@ def resolve_container_run(no_tools: bool, executor: bool) -> Optional[str]:
     return None
 
 
+def container_run_active() -> bool:
+    """Would THIS run's executor steps be containerized? Run-level gate for the
+    self-dev scratch-clone provisioning (design §4) — the per-call authority is
+    still resolve_container_run.
+
+    True only when the mode is on/require AND docker is up. `off` (the default)
+    returns before any probe, so a non-container run pays zero boot tax. In
+    require-mode with docker down this returns False (no clone provisioned) and
+    the run's first executor call raises ContainerUnavailable per the contract.
+    """
+    if container_mode() == "off":
+        return False
+    return docker_probe()[0]
+
+
+def _norm_path(p) -> str:
+    """normpath (NOT realpath): collapse `..`/`//` without resolving symlinks,
+    so a mount target still matches the `-w <workdir>` the seam passes."""
+    return os.path.normpath(str(p))
+
+
+def build_mount_map(
+    cwd: Optional[str],
+    *,
+    rw_roots: Optional[list] = None,
+    ro_mounts: Optional[list] = None,
+) -> list:
+    """Translate a run's write-fence into a docker mount list [(host_path, mode)].
+
+    The mount set mirrors what the fence lets the run WRITE, minus what the
+    design deliberately keeps out of the container (design §4):
+
+      - `cwd` (the fence/working dir, or the self-dev scratch clone) → **rw**,
+        mounted verbatim so `-w <cwd>` and the worker's relative writes resolve.
+      - `rw_roots` (goal-declared roots + `validate.write_fence_allow`) → **rw**.
+      - `ro_mounts` (`executor.container_extra_mounts`) → **ro**.
+      - The workspace root and host `/tmp` are NOT here — the orchestration is
+        never mounted, and the container gets its own ephemeral `/tmp`.
+
+    Pure (no filesystem mutation): a rw root that does NOT exist on the host is
+    skipped, not created — a bind mount of a missing path would have docker
+    create it root-owned. The fence still audits such a path; if the run must
+    write there, it exists as the cwd or the operator pre-creates it. Dedup is
+    containment-aware: a path already covered by an equal-or-broader mount of at
+    least the requested permission is dropped (a rw parent covers a ro child; a
+    ro parent does NOT cover a rw child, which stays as a nested rw mount).
+    """
+    mounts: list = []
+    seen: list = []  # (normpath, rank) — rw=2, ro=1
+
+    def _covered(np: str, rank: int) -> bool:
+        for q, qr in seen:
+            if qr >= rank and (np == q or np.startswith(q + os.sep)):
+                return True
+        return False
+
+    # cwd is always rw and always mounted verbatim (it is a validated dir the
+    # seam also passes as `-w`); dedup compares against its normalized form.
+    if cwd:
+        mounts.append((cwd, "rw"))
+        seen.append((_norm_path(cwd), 2))
+
+    for root in (rw_roots or []):
+        if not root:
+            continue
+        np = _norm_path(root)
+        if _covered(np, 2):
+            continue
+        if not os.path.isdir(np):
+            log.debug("container mount: rw root %s absent on host — skipped "
+                      "(fence still audits it; a mount needs a real dir)", np)
+            continue
+        mounts.append((np, "rw"))
+        seen.append((np, 2))
+
+    for ref in (ro_mounts or []):
+        if not ref:
+            continue
+        np = _norm_path(ref)
+        if _covered(np, 1):
+            continue
+        if not os.path.isdir(np):
+            log.debug("container mount: ro reference %s absent on host — skipped", np)
+            continue
+        mounts.append((np, "ro"))
+        seen.append((np, 1))
+
+    return mounts
+
+
 def build_run_command(
     inner_cmd: list,
     *,
