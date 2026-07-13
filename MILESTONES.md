@@ -3,8 +3,28 @@
 What to do next, in what order. Updated each session. Deferred ideas live in BACKLOG.md; completed phase history in docs/history/ROADMAP_ARCHIVE.md (ROADMAP.md is a stub). This file is the executable queue.
 
 Last updated: 2026-07-13 (Claude Code /goal backlog-clearing session,
-autonomous per standing directive: **-5 #6 container-executor C4 mechanics
-SHIPPED** — merged the Opus dev-Mac burn-in prep into main (3-way conflict:
+autonomous per standing directive, continued: **batch-2 `/adversarial-review`
+SHIPPED** over the five-subagent merge chunk below (#14/#17/#18-residual/#25/#10)
+— 3 codex reviewers (Skeptic/Architect/Minimalist) independently converged on
+the same root bug (`MARO_LLM_MAX_RETRIES` silently overriding the hosted-free
+adapters' deliberate `max_retries=0` fail-fast contract); fixed, plus two more
+confirmed findings (hosted-free latency breaker missing on non-HTTP failures,
+`resolve_run_dir` not resolving a resumed run's pre-resume `loop_id`); one
+(`maro resume` has no structural serialization against concurrent invocation)
+documented in BACKLOG rather than fixed — pre-existing, needs a lock-design
+call. Picked up BACKLOG's deferred low-severity item (i) (depth-cap tripwire
+test coupling) meaning to add one test; investigation found the actual gap
+is bigger: handle.py's two restart gates can never reach their own
+`MAX_RESTART_DEPTH` cap within a single call (each is a single `if`, not a
+loop), and the separate queue-based escalation-continuation path
+(`director.handle_escalation` → `task_store` → `handle_queue.handle_task`)
+has **no depth cap at all** — an LLM escalation that keeps choosing
+"continue" recurses without bound. Pinned with a known-gap test
+(`tests/test_escalation.py`), not fixed — design call on which layer owns
+the check. Also corrected a stale BACKLOG #22 bullet (blank-slate skill set
+draft list is fully resolved, nothing left to build). Full suite green
+(169 items) throughout. Previous: 2026-07-13 (same day: **-5 #6
+container-executor C4 mechanics SHIPPED** — merged the Opus dev-Mac burn-in prep into main (3-way conflict:
 `worktree.sweep_stranded_clones` supersedes the old surface-only detection,
 `tests/test_container_e2e.py` grew 4→15 real-docker tests, all pass live on
 this box); C4-BOX real-goal burn-in stays Jeremy-gated (see -5 #6, BACKLOG).
