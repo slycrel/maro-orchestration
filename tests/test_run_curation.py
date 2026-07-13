@@ -430,3 +430,276 @@ class TestSkillsLite:
         curate_run("h00000d9")
         assert degrade_skills_lite() == []
         assert (config.skills_dir() / "fetch_release_notes.md").is_file()
+
+
+# --- BACKLOG #0 miners (script scraper, skill scraper, partial rescue, -------
+# --- decision-prior indexer) -------------------------------------------------
+
+def _write_loop_log(rd, steps, *, stuck_reason=None, loop_id="loopLOG1"):
+    """Write a structured build/loop-<id>-log.json with per-step statuses.
+
+    `steps` is a list of (text, status) tuples; index starts at 1 (matches the
+    real loop ledger). inventory_assets reads step count from this file, and
+    rescue_partial / index_decision_prior read the structured steps.
+    """
+    log = {
+        "loop_id": loop_id,
+        "status": "partial" if stuck_reason else "done",
+        "stuck_reason": stuck_reason or "",
+        "steps": [
+            {"index": i, "text": text, "status": status,
+             "result_length": 10, "iteration": 1}
+            for i, (text, status) in enumerate(steps, start=1)
+        ],
+        "totals": {},
+    }
+    (rd / "build" / f"loop-{loop_id}-log.json").write_text(json.dumps(log))
+
+
+# A genuinely reusable tool: def + argparse + docstring, substantive length.
+_REUSABLE_SCRIPT = (
+    '"""Fetch and summarize a changelog for a repo."""\n'
+    "import argparse\n"
+    "\n"
+    "def summarize(path):\n"
+    "    with open(path) as fh:\n"
+    "        return fh.read()[:100]\n"
+    "\n"
+    "def main():\n"
+    "    ap = argparse.ArgumentParser()\n"
+    "    ap.add_argument('path')\n"
+    "    args = ap.parse_args()\n"
+    "    print(summarize(args.path))\n"
+    "\n"
+    "if __name__ == '__main__':\n"
+    "    main()\n"
+)
+# One-off glue: a single line hardcoded to a scratch path.
+_GLUE_SCRIPT = "print(open('/tmp/scratch.txt').read())\n"
+
+
+class TestScrapeScripts:
+    """Miner #2: judge captured scripts as reusable tools vs one-off glue,
+    recording the judgment on the card (static shape heuristic — no runtime
+    signal exists at curation time)."""
+
+    def test_reusable_script_flagged(self, workspace):
+        rd = _finish("h0000s1", "build a tool", "done", achieved=True)
+        (rd / "build" / "changelog_tool.py").write_text(_REUSABLE_SCRIPT)
+        card = curate_run("h0000s1")
+        rs = card["reusable_scripts"]
+        assert rs["n_reusable"] == 1
+        assert any(r["path"].endswith("changelog_tool.py") for r in rs["reusable"])
+        assert rs["reusable"][0]["score"] >= 3
+
+    def test_oneoff_glue_not_reusable(self, workspace):
+        rd = _finish("h0000s2", "glue", "done", achieved=True)
+        (rd / "build" / "glue.py").write_text(_GLUE_SCRIPT)
+        card = curate_run("h0000s2")
+        rs = card["reusable_scripts"]
+        assert rs["n_judged"] == 1
+        assert rs["n_reusable"] == 0
+
+    def test_no_scripts_no_field(self, workspace):
+        _finish("h0000s3", "no scripts", "done", achieved=True)
+        card = curate_run("h0000s3")
+        assert "reusable_scripts" not in card
+
+    def test_reusable_judgment_is_explained(self, workspace):
+        rd = _finish("h0000s4", "tool", "done", achieved=True)
+        (rd / "build" / "tool.py").write_text(_REUSABLE_SCRIPT)
+        card = curate_run("h0000s4")
+        reasons = card["reusable_scripts"]["reusable"][0]["reasons"]
+        assert any("function" in r for r in reasons)
+        assert any("CLI" in r or "args" in r for r in reasons)
+
+
+class TestFlagSkillCandidate:
+    """Miner #1: FLAG a skill-worthy successful run for the EXISTING pipeline
+    (extract_skills / synthesize_skill) or human review — never a second
+    promotion path."""
+
+    def test_reusable_script_success_flagged(self, workspace):
+        rd = _finish("h0000f1", "build tool", "done", achieved=True)
+        (rd / "build" / "tool.py").write_text(_REUSABLE_SCRIPT)
+        card = curate_run("h0000f1")
+        sc = card["skill_candidate"]
+        assert sc["flagged"] is True
+        assert any("reusable script" in r for r in sc["reasons"])
+        assert "not auto-promoted" in sc["note"]
+
+    def test_failed_run_not_flagged(self, workspace):
+        rd = _finish("h0000f2", "build tool", "stuck")
+        (rd / "build" / "tool.py").write_text(_REUSABLE_SCRIPT)
+        card = curate_run("h0000f2")
+        assert "skill_candidate" not in card
+
+    def test_done_not_achieved_not_flagged(self, workspace):
+        rd = _finish("h0000f5", "build tool", "done", achieved=False)
+        (rd / "build" / "tool.py").write_text(_REUSABLE_SCRIPT)
+        card = curate_run("h0000f5")
+        assert "skill_candidate" not in card
+
+    def test_multistep_procedure_flagged(self, workspace):
+        rd = _finish("h0000f3", "procedure", "done", achieved=True)
+        _write_loop_log(rd, [("s1", "done"), ("s2", "done"), ("s3", "done")])
+        card = curate_run("h0000f3")
+        assert card["skill_candidate"]["flagged"] is True
+        assert any("procedure" in r for r in card["skill_candidate"]["reasons"])
+
+    def test_trivial_success_not_flagged(self, workspace):
+        _finish("h0000f4", "trivial", "done", achieved=True)
+        card = curate_run("h0000f4")
+        assert "skill_candidate" not in card
+
+
+class TestRescuePartial:
+    """Miner #4: for a partial/incomplete run, record what completed + where it
+    stuck so a follow-up (or human) resumes instead of restarting cold."""
+
+    def test_partial_records_done_and_stuck(self, workspace):
+        rd = _finish("h0000r1", "big task", "partial")
+        _write_loop_log(
+            rd,
+            [("step one", "done"), ("step two", "done"), ("step three", "blocked")],
+            stuck_reason="API rate limited",
+        )
+        (rd / "artifact" / "report.md").write_text("partial deliverable")
+        card = curate_run("h0000r1")
+        pr = card["partial_rescue"]
+        assert pr["n_done"] == 2
+        assert pr["n_total"] == 3
+        assert pr["stuck_at"]["text"].startswith("step three")
+        assert pr["stuck_reason"] == "API rate limited"
+        assert any(a.endswith("report.md") for a in pr["artifacts"])
+        assert "resume from step 3" in pr["resume_hint"]
+
+    def test_success_run_no_rescue(self, workspace):
+        rd = _finish("h0000r2", "done task", "done", achieved=True)
+        _write_loop_log(rd, [("a", "done")])
+        card = curate_run("h0000r2")
+        assert "partial_rescue" not in card
+
+    def test_incomplete_status_gets_rescue(self, workspace):
+        # closure-demoted "incomplete" classifies as partial (existing behavior).
+        rd = _finish("h0000r3", "demoted", "incomplete", achieved=False)
+        _write_loop_log(rd, [("x", "done"), ("y", "blocked")],
+                        stuck_reason="blocked on auth")
+        card = curate_run("h0000r3")
+        assert card["success_class"] == "partial"
+        assert card["partial_rescue"]["n_done"] == 1
+
+
+class TestDecisionPriorIndex:
+    """Miner #3 (owner ask) WRITE half: distill a finished run into a compact,
+    retrieval-ready decision_prior on its card."""
+
+    def test_index_writes_prior(self, workspace):
+        rd = create_run_dir(
+            "h0000p1", prompt="deploy the service", lane="agenda", model="claude",
+            extra_metadata={"goal_achieved": False, "loop_ids": ["loopP1"],
+                            "goal_verdict_summary": "auth failed"})
+        finalize_run("h0000p1", status="stuck")
+        _write_loop_log(rd, [("configure", "done"), ("deploy", "blocked")])
+        card = curate_run("h0000p1")
+        dp = card["decision_prior"]
+        assert dp["outcome"] == "failed"
+        assert dp["goal"] == "deploy the service"
+        assert "configure" in dp["what_was_tried"]
+        assert dp["why"] == "auth failed"
+
+    def test_decision_prior_includes_run_lessons(self, workspace):
+        import memory_ledger
+        memory_ledger.record_outcome(
+            "teach me", "done", "did the thing",
+            lessons=["prefer rg over grep"], loop_id="loopP2", goal_achieved=True)
+        create_run_dir("h0000p2", prompt="teach me", lane="agenda", model="claude",
+                       extra_metadata={"goal_achieved": True, "loop_ids": ["loopP2"]})
+        finalize_run("h0000p2", status="done")
+        card = curate_run("h0000p2")
+        assert "prefer rg over grep" in card["decision_prior"]["lessons"]
+
+    def test_partial_prior_has_resume_from(self, workspace):
+        rd = _finish("h0000p3", "half done", "partial")
+        _write_loop_log(rd, [("a", "done"), ("b", "blocked")], stuck_reason="ran out")
+        card = curate_run("h0000p3")
+        assert card["decision_prior"]["resume_from"]
+        assert card["decision_prior"]["why"] == "ran out"
+
+    def test_success_prior_recorded(self, workspace):
+        rd = _finish("h0000p4", "shipped it", "done", achieved=True)
+        card = curate_run("h0000p4")
+        dp = card["decision_prior"]
+        assert dp["outcome"] == "success"
+        assert dp["goal_achieved"] is True
+
+
+class TestPriorDecisionSurfacing:
+    """Miner #3 READ half: recall() surfaces a prior attempt's decision_prior
+    into a re-attempt's context BEFORE it runs (RecallResult.prior_decisions).
+    This is the 'old task context available' Jeremy asked for on a retry."""
+
+    def test_recall_surfaces_prior_decision(self, workspace):
+        rd = create_run_dir(
+            "h0000q1", prompt="deploy the widget service", lane="agenda",
+            model="claude", extra_metadata={"goal_achieved": False,
+                                            "goal_verdict_summary": "missing API key"})
+        finalize_run("h0000q1", status="stuck")
+        _write_loop_log(rd, [("build image", "done"), ("push", "blocked")])
+        curate_run("h0000q1")
+        # Re-attempt the SAME goal: the prior brief must surface before it runs.
+        from recall import recall
+        rr = recall("deploy the widget service", slice="dispatch")
+        assert rr.prior_decisions
+        assert "h0000q1" in rr.prior_decisions
+        assert "missing API key" in rr.prior_decisions
+        # It rides the two injectable blocks the run actually consumes.
+        assert "Prior attempts at this goal" in rr.as_context_block()
+        assert "Prior attempts at this goal" in rr.as_loop_block()
+
+    def test_near_match_rephrase_surfaces(self, workspace):
+        # A rephrase (recall's >=0.9 word-overlap near-match) surfaces the prior
+        # too — the "rephrased re-attempt" case. Word reordering keeps the word
+        # set identical, clearing the threshold deterministically.
+        create_run_dir(
+            "h0000q4", prompt="summarize the quarterly sales report for finance",
+            lane="agenda", model="claude", extra_metadata={"goal_achieved": True})
+        finalize_run("h0000q4", status="done")
+        curate_run("h0000q4")
+        from run_curation import prior_decision_context
+        block = prior_decision_context(
+            "for finance summarize the quarterly sales report")
+        assert "h0000q4" in block
+
+    def test_standalone_prior_decision_context(self, workspace):
+        create_run_dir("h0000q2", prompt="rephrasable goal alpha", lane="agenda",
+                       model="claude", extra_metadata={"goal_achieved": True})
+        finalize_run("h0000q2", status="done")
+        curate_run("h0000q2")
+        from run_curation import prior_decision_context
+        assert "h0000q2" in prior_decision_context("rephrasable goal alpha")
+
+    def test_no_prior_no_surface(self, workspace):
+        from recall import recall
+        rr = recall("a totally novel goal never seen before", slice="dispatch")
+        assert rr.prior_decisions == ""
+
+    def test_current_run_self_excludes(self, workspace):
+        # A run that only matches itself must not surface itself: it has no
+        # card at read time (written at goal-END), and exclude_handle_id guards.
+        from runs import set_current_run_dir
+        rd = create_run_dir("h0000q3", prompt="self match goal", lane="agenda",
+                            model="claude")
+        set_current_run_dir(rd)
+        from recall import recall
+        rr = recall("self match goal", slice="dispatch")
+        assert rr.prior_decisions == ""
+
+    def test_uncurated_prior_no_card_no_surface(self, workspace):
+        # A prior attempt that was never curated has no run_card.json → no
+        # brief to surface (graceful, not an error).
+        create_run_dir("h0000q5", prompt="uncurated goal", lane="agenda",
+                       model="claude")
+        finalize_run("h0000q5", status="done")
+        from run_curation import prior_decision_context
+        assert prior_decision_context("uncurated goal") == ""

@@ -128,6 +128,12 @@ class RecallResult:
     failure_notes: str = ""
     learning_activity: str = ""
     playbook: str = ""
+    # Decision-prior briefs for prior attempts at THIS goal (run_curation
+    # miner #3): what each tried, why it ended, its lessons, resume pointer.
+    # Populated by recall() from the matched runs' run_card.json so a retry
+    # arrives warm; empty when no prior attempt has a curated card (the common
+    # case, and the reason a fresh goal costs nothing here).
+    prior_decisions: str = ""
     sources: Dict[str, Any] = field(default_factory=dict)
 
     def dispatch_signals(self, *, window_minutes: float = 60.0) -> Dict[str, Any]:
@@ -200,6 +206,11 @@ class RecallResult:
                 f"prior attempt failed the same way, change the approach or "
                 f"surface the blocker instead of retrying."
             )
+        # The detail behind that summary: what each prior attempt actually
+        # tried, why it ended, its lessons (run_curation miner #3). This is the
+        # "old task context available" Jeremy asked for on a retry.
+        if self.prior_decisions:
+            parts.append(self.prior_decisions)
         for block in (self.lessons, self.standing_rules, self.decisions, self.knowledge):
             if block:
                 parts.append(block)
@@ -222,6 +233,10 @@ class RecallResult:
                       self.learning_activity, self.playbook, self.knowledge):
             if block:
                 ctx = (ctx + "\n\n" + block) if ctx else block
+        # Prior-attempt decision briefs lead the loop's memory context — a
+        # re-attempt must see "approach X already failed here" before it plans.
+        if self.prior_decisions:
+            ctx = self.prior_decisions + ("\n\n" + ctx if ctx else "")
         return ctx
 
 
@@ -374,6 +389,27 @@ def recall(
     sources["prior_attempts"] = len(prior)
 
     result = RecallResult(thread=thread, prior_attempts=prior, sources=sources)
+
+    # Decision-prior briefs (run_curation miner #3): for each matched prior
+    # attempt, pull its curated run_card decision_prior (what it tried, why it
+    # ended, lessons, resume pointer) so a retry/rephrase arrives WARM, not
+    # cold. Reuses the exact+near match already computed above — no second
+    # similarity pass. The current run self-excludes (its card is written at
+    # goal-END, so it has none at read time); exclude_handle_id is defensive.
+    # Cheap: at most k local run_card.json reads, only when priors exist.
+    try:
+        from run_curation import format_prior_decisions
+        try:
+            from runs import current_handle_id
+            _exclude = current_handle_id() or ""
+        except Exception:
+            _exclude = ""
+        result.prior_decisions = format_prior_decisions(
+            prior, goal=goal, exclude_handle_id=_exclude, k=3)
+        if result.prior_decisions:
+            sources["prior_decisions"] = True
+    except Exception as exc:
+        log.debug("recall: prior-decision briefs failed: %s", exc)
 
     if slice in ("loop", "navigator"):
         # The eight loop-start memory substrates, relocated here from
