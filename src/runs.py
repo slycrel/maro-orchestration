@@ -111,6 +111,12 @@ def resolve_run_dir(ref: str) -> Optional[Path]:
             continue
         if meta.get("loop_id") == ref or meta.get("handle_id") == ref:
             return d
+        # A resumed run overwrites metadata.loop_id with the new attempt's
+        # id, so the crash-time loop_id the operator actually has in hand
+        # would otherwise become unresolvable — origin.resumed_from is where
+        # `maro resume` preserves it (see cli._cmd_resume).
+        if (meta.get("origin") or {}).get("resumed_from") == ref:
+            return d
     return None
 
 

@@ -526,3 +526,24 @@ def test_resolve_run_dir_by_handle_and_loop_id(workspace):
     # Unknown ref → None.
     assert resolve_run_dir("nope") is None
     assert resolve_run_dir("") is None
+
+
+def test_resolve_run_dir_by_pre_resume_loop_id(workspace):
+    """A resumed run overwrites metadata.loop_id with the new attempt's id
+    (see cli._cmd_resume) — the crash-time loop_id the operator actually has
+    in hand must still resolve via origin.resumed_from (adversarial-review
+    batch-2 finding, architect lens)."""
+    from runs import open_run, resolve_run_dir, stamp_run_metadata, set_current_run_dir
+    try:
+        rd = open_run(
+            "resumecase", prompt="g", lane="agenda",
+            origin={"source": "cli-resume", "resumed_from": "loopCRASHED"},
+        )
+        stamp_run_metadata({"loop_id": "loopRESUMED"})
+    finally:
+        set_current_run_dir(None)
+    # The new (post-resume) loop_id resolves directly.
+    assert resolve_run_dir("loopRESUMED") == rd
+    # The old (crash-time) loop_id — no longer metadata.loop_id — still
+    # resolves via the origin.resumed_from breadcrumb.
+    assert resolve_run_dir("loopCRASHED") == rd

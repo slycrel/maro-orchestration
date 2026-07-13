@@ -370,18 +370,25 @@ def _env_int(name: str, default: int) -> int:
 
 
 
-def _retry_complete(fn, *args, max_retries: int = 3, **kwargs) -> "LLMResponse":
+def _retry_complete(fn, *args, max_retries: Optional[int] = None, **kwargs) -> "LLMResponse":
     """Wrap an adapter .complete() call with retry on transient errors.
 
     Exponential backoff: 5s, 15s, 45s. Only retries on rate limits,
     server errors, and connection failures. Non-retryable errors propagate
     immediately.
 
-    `MARO_LLM_MAX_RETRIES` overrides the retry budget when set. This is useful
-    for unattended worker runs where fast failure is better than camping on a
-    rate limit for over a minute.
+    `max_retries=None` (the default) takes the env-tunable budget:
+    `MARO_LLM_MAX_RETRIES` overrides it when set, else 3. This is useful for
+    unattended worker runs where fast failure is better than camping on a
+    rate limit for over a minute. Callers that pass an explicit int (e.g.
+    the hosted-free adapters' deliberate `max_retries=0` fail-fast contract —
+    see GroqAdapter/GeminiAdapter in this file) get exactly that value, not
+    subject to the env override: an operator tuning paid-backend resilience
+    via the global knob must not silently reactivate exponential backoff on
+    a free-tier tier that's designed to fail fast on 429 instead.
     """
-    max_retries = _env_int("MARO_LLM_MAX_RETRIES", max_retries)
+    if max_retries is None:
+        max_retries = _env_int("MARO_LLM_MAX_RETRIES", 3)
     last_exc = None
     for attempt in range(max_retries + 1):
         try:

@@ -367,6 +367,11 @@ class _HostedFreeLadder(LLMAdapter):
                 last_exc = exc
                 continue
             except Exception as exc:
+                # A slow non-HTTP failure (timeout, connection reset) still
+                # pays the full latency tax — feed it through the same
+                # breaker as a slow success, else nothing ever skips this
+                # provider and every subsequent call repeats the same hang.
+                report_latency(name, int((time.monotonic() - _t0) * 1000))
                 log.info("hosted-free %s failed (%s) — trying next provider", name, exc)
                 last_exc = exc
                 continue

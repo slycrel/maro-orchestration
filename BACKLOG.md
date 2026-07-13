@@ -63,6 +63,74 @@ per Jeremy's "document if large" instruction — not fixed live:
   promotion pass) or remove the field if it's still unconsumed next time
   this area gets touched.
 
+### R2. Adversarial-review batch-2 findings — 3 fixed live, 1 architectural residual (2026-07-13)
+
+3-reviewer (Skeptic/Architect/Minimalist) pass over batch-2's merged diff
+(`1ecbec0..7fb1281` — BACKLOG #18-residual/#25/#10, 16 files). All three
+reviewers independently converged on the same root bug, which is the
+strongest signal any single review has produced this session. Three real
+bugs fixed live, regression tests added for all of it:
+
+- **`MARO_LLM_MAX_RETRIES` silently defeated the hosted-free fail-fast
+  contract** (all 3 lenses flagged this independently — highest-confidence
+  finding of the whole review). `_retry_complete()` (`src/llm.py`)
+  unconditionally re-read the env var and overwrote *any* caller-supplied
+  `max_retries`, including `GroqAdapter`/`GeminiAdapter`'s deliberate `0`
+  (BACKLOG #25's whole point: a rate-limited free tier should trip the
+  ladder's own breaker immediately, not camp on a 65s exponential backoff).
+  An operator setting that env var for unattended paid-backend resilience
+  would have silently reactivated backoff on the free tier too. Fixed:
+  `max_retries` now defaults to `None` (env-tunable), and an explicit
+  caller-supplied value bypasses the env override entirely — only the
+  *default* is env-tunable, not an explicit contract. Test:
+  `test_retry_complete_explicit_value_beats_env_override`.
+- **Hosted-free latency breaker never fired on non-HTTP failures**
+  (Architect). `_HostedFreeLadder.complete()` called `report_latency()`
+  only on success — a hung/erroring provider (timeout, connection reset)
+  paid the full latency tax on *every* subsequent call, since nothing ever
+  tripped its breaker to skip it. Fixed: the generic exception path now
+  reports elapsed time too, so a slow failure trips the same grace-then-trip
+  breaker as a slow success. Test:
+  `test_slow_non_http_failure_trips_latency_breaker`.
+- **`maro inspect-run <crash-time-loop-id>` broke after `maro resume`**
+  (Architect). Resuming stamps `metadata.json`'s `loop_id` with the *new*
+  attempt's id, overwriting the old one — but the old id is what the
+  operator actually has in hand from the crash message, and
+  `resolve_run_dir()` only matched the current scalar `loop_id`. Fixed:
+  the metadata scan also matches `origin.resumed_from`. Test:
+  `test_resolve_run_dir_by_pre_resume_loop_id`.
+
+One finding reviewed and accepted as low-risk, not fixed: **Minimalist**
+noted the per-model `local_max_tokens` floor table (BACKLOG #10) turns one
+box's empirical sweep into the default for every install sharing the same
+Ollama model tag, even though a different quantization/build behind the
+same tag could behave differently. Judged low-severity — worst case is a
+graceful escalation to the paid tier (not corruption), and there's already
+a documented per-install config override (`docs/LOCAL_VALIDATOR.md`).
+
+One finding is real but architectural, not fixed live (cross-cutting per
+Jeremy's "document if large" instruction):
+
+- [ ] **`maro resume` has no structural serialization against concurrent
+  invocation** (Skeptic, high + medium — two findings on the same root
+  cause). This predates batch-2 (the checkpoint/PID-liveness/status checks
+  in `cli._cmd_resume` and the plain `write_text()` metadata writes in
+  `src/runs.py` are all pre-existing; batch-2 only added `open_run`/
+  `close_run` wrapping around the existing resume flow, unchanged
+  concurrency posture). Concrete failure: two terminals run `maro resume
+  <same-loop>` after a crash; both pass the dead-PID/status checks before
+  either writes a new in-flight marker, both call `open_run()` on the same
+  `handle_id`, and both enter `run_agent_loop()` against the same remaining
+  steps — racing on `checkpoint.json`/`metadata.json`/reports/artifacts and
+  possibly duplicating external side effects. The Concurrency-hardening
+  arc's admission-gate pattern (flock held for run lifetime, `refused_busy`
+  naming the holder) is the obvious mechanism to reuse, but wiring it into
+  the interactive `maro resume` CLI path is a design decision (lock
+  granularity — per-loop_id? per-handle_id? — and whether a second resume
+  should refuse or queue) that deserves Jeremy's input given how `resume`
+  is actually used (human-triggered crash recovery, not normally
+  parallel-invoked) rather than a blind structural fix.
+
 ### C4-BOX. Container executor — box-side real-goal burn-in (2026-07-13, Jeremy runs on the runtime box)
 
 The container **mechanics** are burned in and green on the dev Mac (Docker

@@ -994,8 +994,28 @@ def test_retry_complete_respects_env_override(monkeypatch):
     monkeypatch.setenv("MARO_LLM_MAX_RETRIES", "0")
     monkeypatch.setattr("time.sleep", lambda s: None)
 
+    # No explicit max_retries -> takes the env-tunable default.
     with pytest.raises(RuntimeError, match="429"):
-        _retry_complete(_always_429, max_retries=3)
+        _retry_complete(_always_429)
+
+    assert len(calls) == 1
+
+
+def test_retry_complete_explicit_value_beats_env_override(monkeypatch):
+    """An explicit max_retries (e.g. hosted-free adapters' fail-fast 0) is
+    the caller's deliberate contract and must not be silently reactivated by
+    a global env knob meant for paid-backend resilience tuning."""
+    calls = []
+
+    def _always_429():
+        calls.append(1)
+        raise RuntimeError("429 Client Error")
+
+    monkeypatch.setenv("MARO_LLM_MAX_RETRIES", "3")
+    monkeypatch.setattr("time.sleep", lambda s: None)
+
+    with pytest.raises(RuntimeError, match="429"):
+        _retry_complete(_always_429, max_retries=0)
 
     assert len(calls) == 1
 

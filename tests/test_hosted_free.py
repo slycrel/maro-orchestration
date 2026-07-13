@@ -309,6 +309,35 @@ def test_latency_breaker_disabled_when_cap_zero(monkeypatch):
     assert hf.latency_guard_tripped("groq") == ""
 
 
+def test_slow_non_http_failure_trips_latency_breaker(monkeypatch):
+    """A hung/erroring provider (timeout, connection reset — not a 429) must
+    still feed the latency breaker, else nothing ever skips it and every
+    subsequent call repeats the same full timeout tax (adversarial-review
+    batch-2 finding, architect + minimalist + skeptic lenses all raised it)."""
+    monkeypatch.setenv("GROQ_API_KEY", "gsk-test")
+    monkeypatch.setattr("hosted_free._load_env", lambda: {})
+    monkeypatch.setattr("hosted_free.max_latency_ms", lambda: 100)
+
+    ticks = iter([0.0, 5.0, 5.0, 10.0])  # two (start, end) pairs, 5s each
+    monkeypatch.setattr("hosted_free.time.monotonic", lambda: next(ticks))
+
+    with patch("requests.post", side_effect=requests.exceptions.ConnectionError("boom")) as mock_post:
+        adapter = hf.build_hosted_free_adapter()
+
+        with pytest.raises(requests.exceptions.ConnectionError):
+            adapter.complete([LLMMessage("user", "hi")], max_tokens=10)
+        assert hf.latency_guard_tripped("groq") == ""  # grace on the first slow failure
+
+        with pytest.raises(requests.exceptions.ConnectionError):
+            adapter.complete([LLMMessage("user", "hi")], max_tokens=10)
+        assert hf.latency_guard_tripped("groq") != ""  # tripped on the second
+
+        # Third call: the breaker skips groq before it ever dials out again.
+        with pytest.raises(RuntimeError, match="rate-limited or slow"):
+            adapter.complete([LLMMessage("user", "hi")], max_tokens=10)
+        assert mock_post.call_count == 2
+
+
 def test_latency_tripped_provider_falls_over(monkeypatch):
     monkeypatch.setenv("GROQ_API_KEY", "gsk-test")
     monkeypatch.setenv("GEMINI_API_KEY", "gm-test")
