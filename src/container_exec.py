@@ -21,10 +21,16 @@ CI).
 
 from __future__ import annotations
 
+import itertools
+import logging
+import os
+import re
 import subprocess
-from typing import Tuple
+from typing import Callable, Optional, Tuple
 
 from config import get
+
+log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Constants — single source of truth for the image identity
@@ -259,3 +265,214 @@ on the host under the write-fence exactly as before.
 
 Reference: docs/CONTAINER_EXECUTOR_DESIGN.md.
 """
+
+
+# ===========================================================================
+# C2 — the wrap: containerize an executor call, kill by name, reap strays
+# ===========================================================================
+#
+# The decision ("should THIS call run in a container?") is made by the caller
+# that knows `no_tools` (llm.ClaudeSubprocessAdapter.complete); the wrapping +
+# kill path live at the `_run_subprocess_safe` seam (design §2) so every
+# hard-won behavior there (liveness, stream probe, payload-first rc) is reused
+# rather than forked. C2 ships a MINIMAL mount set (the working dir rw + the
+# auth volume); the full fence-root → mount translation and the self-dev
+# scratch-clone flow are C3.
+
+_KILL_TIMEOUT_S = 10
+_SWEEP_TIMEOUT_S = 10
+
+# Per-process monotonic sequence for unique container names under one PID
+# (in-process sibling workers share the PID; the seq disambiguates them).
+_seq_counter = itertools.count()
+
+# Docker availability is probed once per process and cached — it can't change
+# mid-run, and re-probing on every executor call would tax the boot budget the
+# container is already spending on (design §8). Tests reset via
+# reset_container_caches().
+_docker_cache: Optional[Tuple[bool, str]] = None
+_degrade_warned = False
+
+
+class ContainerUnavailable(RuntimeError):
+    """Raised when `executor.container: require` is set but docker can't run
+    the call — the `require` contract refuses rather than silently degrading."""
+
+
+def reset_container_caches() -> None:
+    """Clear the per-process docker-availability cache + degrade-warned latch.
+    Test hook (docker state can't actually change within a process)."""
+    global _docker_cache, _degrade_warned
+    _docker_cache = None
+    _degrade_warned = False
+
+
+def _docker_cached() -> Tuple[bool, str]:
+    global _docker_cache
+    if _docker_cache is None:
+        _docker_cache = docker_probe()
+    return _docker_cache
+
+
+def _current_loop_id() -> str:
+    """Best-effort owning-run id for the container name (design: maro-exec-
+    <loop_id>-<seq>). Falls back to the PID when no run dir is active."""
+    try:
+        from runs import current_handle_id
+        hid = current_handle_id()
+        if hid:
+            return str(hid)
+    except Exception:
+        pass
+    return f"pid{os.getpid()}"
+
+
+def container_name(loop_id: str, seq: int) -> str:
+    """Deterministic, docker-legal container name. Docker names must match
+    [a-zA-Z0-9][a-zA-Z0-9_.-]* — sanitize the loop id to be safe."""
+    safe = re.sub(r"[^a-zA-Z0-9_.-]", "-", str(loop_id))
+    return f"{NAME_PREFIX}{safe}-{seq}"
+
+
+def resolve_container_run(no_tools: bool) -> Optional[str]:
+    """Decide whether this executor call runs in a container; return its name
+    or None (host path). Raises ContainerUnavailable for require-mode + no docker.
+
+    Order (cheap checks first — mode 'off', the default, returns before any
+    docker probe): off / utility(no_tools) → host; docker up → container;
+    docker down → refuse (require) or degrade-with-one-warning (on).
+    """
+    global _degrade_warned
+    mode = container_mode()
+    if mode == "off" or no_tools:
+        return None
+    ok, reason = _docker_cached()
+    if ok:
+        return container_name(_current_loop_id(), next(_seq_counter))
+    if mode == "require":
+        raise ContainerUnavailable(
+            f"executor.container=require but docker is unavailable: {reason}"
+        )
+    # mode == "on": degrade to host/fence-only, but say so — once per process
+    # (docker availability is cached, so it won't flip back mid-run). SF-6:
+    # the difference between sandboxed and not must be visible.
+    if not _degrade_warned:
+        log.warning(
+            "executor.container=on but docker is unavailable (%s) — worker steps "
+            "run on the host under the write-fence, NOT containerized", reason
+        )
+        _degrade_warned = True
+    return None
+
+
+def build_run_command(
+    inner_cmd: list,
+    *,
+    name: str,
+    workdir: Optional[str] = None,
+    mounts: Optional[list] = None,
+    worker_env: Optional[dict] = None,
+    owner_pid: Optional[int] = None,
+    image: Optional[str] = None,
+    network: Optional[str] = None,
+) -> list:
+    """Wrap an inner `claude -p ...` command vector in `docker run` (design §2).
+
+    `mounts` is a list of (host_path, mode) with mode in {"rw","ro"}, each
+    bind-mounted at the SAME absolute path inside the container so `-w` and the
+    worker's relative writes resolve to the host dir. The auth volume + HOME are
+    always mounted so the baked CLI is logged in. An `owner_pid` label lets the
+    stranded-container sweep tell a live run's container from a crashed one's.
+    """
+    image = image or container_image()
+    network = network or str(get("executor.container_network", DEFAULT_NETWORK) or DEFAULT_NETWORK)
+    owner_pid = os.getpid() if owner_pid is None else owner_pid
+
+    # -i: pipe the prompt (fed on stdin by _run_subprocess_safe) into the
+    # container. --init: a real PID 1 that reaps zombies + forwards signals.
+    # --rm: no leftover container on normal exit (the sweep handles crashes).
+    cmd = ["docker", "run", "--rm", "-i", "--init", "--name", name]
+    if hasattr(os, "getuid"):
+        # Mounted files stay operator-owned (design §4 uid/gid).
+        cmd += ["--user", f"{os.getuid()}:{os.getgid()}"]
+    cmd += ["--label", f"maro.owner_pid={owner_pid}"]
+    for host_path, mode in (mounts or []):
+        cmd += ["-v", f"{host_path}:{host_path}:{mode}"]
+    # Auth volume + fixed HOME so the baked CLI finds its OAuth session.
+    cmd += ["-v", f"{AUTH_VOLUME}:{AUTH_MOUNT}", "-e", f"HOME={CONTAINER_HOME}"]
+    cmd += ["--network", network]
+    for key, val in (worker_env or {}).items():
+        cmd += ["-e", f"{key}={val}"]
+    if workdir:
+        cmd += ["-w", workdir]
+    cmd.append(image)
+    cmd.extend(inner_cmd)
+    return cmd
+
+
+def kill_container(name: str) -> None:
+    """`docker kill <name>` — best-effort. os.killpg kills the docker *client*,
+    not the container (design §2 kill path); this kills the container itself.
+    Swallows errors: the container may already be gone (--rm) or docker down."""
+    if not name:
+        return
+    try:
+        subprocess.run(
+            ["docker", "kill", name],
+            capture_output=True, text=True, timeout=_KILL_TIMEOUT_S,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError) as exc:
+        log.debug("docker kill %s failed (non-fatal): %s", name, exc)
+
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+        return True
+    except (ProcessLookupError, ValueError):
+        return False
+    except PermissionError:
+        return True
+
+
+def sweep_stranded_containers(pid_alive: Optional[Callable[[int], bool]] = None) -> list:
+    """Reap executor containers whose owning run process is dead.
+
+    A container survives its docker client being SIGKILL'd or the box crashing
+    (--rm only fires on clean container exit). We list running `maro-exec-*`
+    containers and kill only those whose `maro.owner_pid` label names a dead
+    PID — never a live run's in-flight container. Returns the names killed.
+    Wired into heartbeat.stranded_state_sweep. Docker absent → empty list.
+    """
+    alive = pid_alive or _pid_alive
+    try:
+        proc = subprocess.run(
+            ["docker", "ps", "--filter", f"name={NAME_PREFIX}",
+             "--format", '{{.Names}}\t{{.Label "maro.owner_pid"}}'],
+            capture_output=True, text=True, timeout=_SWEEP_TIMEOUT_S,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError) as exc:
+        log.debug("stranded-container sweep: docker ps failed (non-fatal): %s", exc)
+        return []
+    if proc.returncode != 0:
+        return []
+
+    killed = []
+    for line in (proc.stdout or "").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        parts = line.split("\t")
+        cname = parts[0].strip()
+        owner_raw = parts[1].strip() if len(parts) > 1 else ""
+        # Missing/garbage owner label → treat as stranded (a container we can't
+        # attribute to a live run is safer killed than left burning).
+        try:
+            owner_pid = int(owner_raw)
+            owner_live = alive(owner_pid)
+        except ValueError:
+            owner_live = False
+        if not owner_live:
+            kill_container(cname)
+            killed.append(cname)
+    return killed

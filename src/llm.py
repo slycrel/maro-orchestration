@@ -635,7 +635,7 @@ def _session_cpu_ticks(leader_pid: int) -> int:
 
 def _run_subprocess_safe(cmd, *, input=None, timeout=600,
                          liveness_timeout=None, poll_interval=2.0, cwd=None,
-                         stream_probe=None):
+                         stream_probe=None, container_name=None):
     """Run a subprocess in its own process group with streaming + liveness check.
 
     Streams the subprocess's stdout+stderr (merged) to a single temp file
@@ -795,6 +795,26 @@ def _run_subprocess_safe(cmd, *, input=None, timeout=600,
                 "_run_subprocess_safe: cwd %r is not a directory; inheriting parent cwd", cwd
             )
 
+    # Containerized executor (C2, docs/CONTAINER_EXECUTOR_DESIGN.md §2): the
+    # caller decides whether this call runs in a container (executor.container
+    # on/require + not a no_tools utility call) and passes its name; we own the
+    # wrap + kill path here so all the streaming/liveness/probe machinery below
+    # is reused unchanged. The container sees only the -e vars we pass (host env
+    # is dropped by construction) and the working dir bound rw at the same path.
+    # Full mount-map translation + self-dev clone are C3; this is the minimal
+    # runnable mount (working dir + auth volume).
+    _container = None
+    if container_name:
+        import container_exec as _ce
+        _worker_env = {k: child_env[k]
+                       for k in ("MARO_WORKER_RUN", "MARO_ALLOW_MAIN_PUSH")
+                       if k in child_env}
+        _mounts = [(_cwd, "rw")] if _cwd else []
+        cmd = _ce.build_run_command(
+            cmd, name=container_name, workdir=_cwd,
+            mounts=_mounts, worker_env=_worker_env)
+        _container = container_name
+
     proc = subprocess.Popen(
         cmd,
         stdin=stdin_f if stdin_f else subprocess.DEVNULL,
@@ -873,6 +893,10 @@ def _run_subprocess_safe(cmd, *, input=None, timeout=600,
             time.sleep(poll_interval)
 
         if kill_reason is not None:
+            # Kill the container BY NAME first — os.killpg kills the docker
+            # client, which does not reliably stop the container (§2 kill path).
+            if _container:
+                _ce.kill_container(_container)
             try: os.killpg(proc.pid, signal.SIGTERM)
             except OSError: pass
             try: proc.wait(timeout=2)
@@ -898,6 +922,8 @@ def _run_subprocess_safe(cmd, *, input=None, timeout=600,
     except subprocess.TimeoutExpired:
         raise
     except Exception:
+        if _container:
+            _ce.kill_container(_container)
         try: os.killpg(proc.pid, signal.SIGKILL)
         except OSError: pass
         _cleanup_files()
@@ -1245,13 +1271,25 @@ class ClaudeSubprocessAdapter(_JSONToolPromptMixin, LLMAdapter):
         # default (set by run_agent_loop) so non-executor agentic paths
         # (verify/quality_gate/pre_flight/refinement) don't leak to launch cwd.
         _cwd = kwargs.get("cwd") or get_default_subprocess_cwd()
+        # Containerized executor (C2, docs/CONTAINER_EXECUTOR_DESIGN.md): decide
+        # once whether this call runs in a container. Utility (no_tools) calls
+        # always stay on the host. require-mode without docker raises
+        # ContainerUnavailable (refuse loudly) — it propagates by design.
+        _container_name = None
+        try:
+            from container_exec import resolve_container_run
+        except ImportError:
+            resolve_container_run = None
+        if resolve_container_run is not None:
+            _container_name = resolve_container_run(no_tools)
         try:
             # stream_probe: in-flight runaway cost kill (no-op unless a cost
             # meter is armed). BudgetRunawayError from the probe propagates
             # past the TimeoutExpired conversion below by design.
             result = _run_subprocess_safe(
                 cmd, input=prompt, timeout=_timeout, cwd=_cwd,
-                stream_probe=_build_stream_cost_probe(model_str))
+                stream_probe=_build_stream_cost_probe(model_str),
+                container_name=_container_name)
         except subprocess.TimeoutExpired:
             raise RuntimeError(f"claude subprocess timed out after {_timeout}s")
         except FileNotFoundError:
@@ -1321,7 +1359,8 @@ class ClaudeSubprocessAdapter(_JSONToolPromptMixin, LLMAdapter):
                     try:
                         result = _run_subprocess_safe(
                             cmd, input=prompt, timeout=_timeout, cwd=_cwd,
-                            stream_probe=_build_stream_cost_probe(model_str))
+                            stream_probe=_build_stream_cost_probe(model_str),
+                            container_name=_container_name)
                     except subprocess.TimeoutExpired:
                         log.warning("rate limit retry timed out after %ds, will retry", _timeout)
                         continue

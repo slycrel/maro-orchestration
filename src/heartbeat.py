@@ -445,6 +445,20 @@ def stranded_state_sweep(*, verbose: bool = False) -> dict:
     except Exception as exc:
         log.debug("sweep: orphaned-checkpoint scan failed: %s", exc)
 
+    # Containerized executor (C2): reap executor containers whose owning run
+    # process is dead. A crashed/killed run leaves its --rm container running;
+    # the sweep kills only strays (dead owner PID), never a live run's in-flight
+    # container. No-op when docker is absent or the container lane is unused.
+    try:
+        from container_exec import sweep_stranded_containers
+        killed = sweep_stranded_containers(pid_alive=_pid_alive)
+        result["killed_containers"] = killed
+        if verbose and killed:
+            print(f"[heartbeat] sweep: killed {len(killed)} stranded "
+                  f"executor container(s): {', '.join(killed)}", file=sys.stderr)
+    except Exception as exc:
+        log.debug("sweep: stranded-container reap failed: %s", exc)
+
     return result
 
 

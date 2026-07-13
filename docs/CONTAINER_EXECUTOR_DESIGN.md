@@ -282,11 +282,29 @@ No design coupling; noted so neither work stream blocks the other.
   20 new tests (`tests/test_container_exec.py`, docker fully mocked — no CI
   docker dependency) + `container_exec` added to the py-modules census.
   Residual for C4: reconfirm/re-pin the CLI version when building on the box.
-- **C2 — the wrap (Opus, 1 session):** `_run_subprocess_safe` container
-  branch behind `executor.container`, named-container kill path,
-  stranded-container sweep line in the existing stranded-state sweep,
-  DEFAULTS rows. Tests: command-vector construction, kill-path, degradation
-  warning — docker mocked; this seam runs everything, treat it that way.
+- **C2 — the wrap — SHIPPED 2026-07-12 (Opus).**
+  `ClaudeSubprocessAdapter.complete` decides once per call whether to
+  containerize (`container_exec.resolve_container_run(no_tools)` — off/
+  no_tools → host; docker up → container; `on` + no docker → degrade to host
+  with one warning per process; `require` + no docker → raise
+  `ContainerUnavailable`, refuse) and threads a `container_name` into
+  `_run_subprocess_safe`, which owns the wrap (`build_run_command`:
+  `docker run --rm -i --init --name … --user uid:gid --label
+  maro.owner_pid=… -v <cwd>:<cwd>:rw -v maro-claude-auth:/home/maro/.claude
+  -e HOME=… -e MARO_WORKER_RUN=1 [MARO_ALLOW_MAIN_PUSH] --network … -w <cwd>
+  <image> <inner claude -p …>`) and the kill path (`docker kill <name>`
+  BEFORE `os.killpg` at both failure kill sites — killpg only reaps the
+  docker client). Stranded-container reaper wired into
+  `heartbeat.stranded_state_sweep`: kills running `maro-exec-*` whose
+  `maro.owner_pid` label names a dead PID — never a live run's in-flight
+  container (mirrors the sweep's existing PID-liveness discipline). Docker
+  probed once per process and cached (no per-call boot tax). All four
+  `executor.*` DEFAULTS rows already landed in C1. Minimal mount set (working
+  dir rw + auth volume); full fence-root translation + self-dev clone are C3.
+  25 new tests (command-vector construction, decision matrix off/on/require/
+  no_tools, kill-path, sweep by owner-PID liveness, degrade-warn-once — docker
+  fully mocked; the `_run_subprocess_safe` wrap + kill exercised end-to-end
+  against a real non-docker stand-in process).
 - **C3 — mount map + self-dev clone mode (Sonnet/Opus, 1 session):**
   fence-root → mount translation incl. goal-declared rw, extra ro mounts,
   uid/gid; the scratch-clone flow for repo-editing runs (repo ro →

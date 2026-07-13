@@ -229,6 +229,187 @@ class _FakeAdapter:
         return _FakeResp()
 
 
+# ===========================================================================
+# C2 — the wrap: decision, command construction, kill, stranded sweep
+# ===========================================================================
+
+@pytest.fixture(autouse=True)
+def _reset_container_caches():
+    ce.reset_container_caches()
+    yield
+    ce.reset_container_caches()
+
+
+class TestResolveContainerRun:
+    def _mode(self, monkeypatch, value):
+        monkeypatch.setattr(ce, "get", lambda k, d=None: value if k == "executor.container" else d)
+
+    def test_off_returns_none_without_probing_docker(self, monkeypatch):
+        self._mode(monkeypatch, "off")
+        probed = {"hit": False}
+        def probe():
+            probed["hit"] = True
+            return (True, "x")
+        monkeypatch.setattr(ce, "docker_probe", probe)
+        assert ce.resolve_container_run(no_tools=False) is None
+        assert probed["hit"] is False  # off short-circuits before any docker cost
+
+    def test_no_tools_stays_host_even_when_on(self, monkeypatch):
+        self._mode(monkeypatch, "on")
+        monkeypatch.setattr(ce, "docker_probe", lambda: (True, "docker 24"))
+        assert ce.resolve_container_run(no_tools=True) is None
+
+    def test_on_with_docker_returns_name(self, monkeypatch):
+        self._mode(monkeypatch, "on")
+        monkeypatch.setattr(ce, "docker_probe", lambda: (True, "docker 24"))
+        monkeypatch.setattr(ce, "_current_loop_id", lambda: "wily-glen")
+        name = ce.resolve_container_run(no_tools=False)
+        assert name and name.startswith("maro-exec-wily-glen-")
+
+    def test_on_without_docker_degrades_to_host_warning_once(self, monkeypatch, caplog):
+        self._mode(monkeypatch, "on")
+        monkeypatch.setattr(ce, "docker_probe", lambda: (False, "docker binary not found on PATH"))
+        with caplog.at_level("WARNING"):
+            assert ce.resolve_container_run(no_tools=False) is None
+            assert ce.resolve_container_run(no_tools=False) is None  # second call
+        warns = [r for r in caplog.records if "docker is unavailable" in r.message]
+        assert len(warns) == 1  # once per process (docker state is cached)
+
+    def test_require_without_docker_refuses(self, monkeypatch):
+        self._mode(monkeypatch, "require")
+        monkeypatch.setattr(ce, "docker_probe", lambda: (False, "docker binary not found on PATH"))
+        with pytest.raises(ce.ContainerUnavailable):
+            ce.resolve_container_run(no_tools=False)
+
+    def test_require_with_docker_returns_name(self, monkeypatch):
+        self._mode(monkeypatch, "require")
+        monkeypatch.setattr(ce, "docker_probe", lambda: (True, "docker 24"))
+        monkeypatch.setattr(ce, "_current_loop_id", lambda: "run1")
+        assert ce.resolve_container_run(no_tools=False).startswith("maro-exec-run1-")
+
+    def test_docker_probed_once_and_cached(self, monkeypatch):
+        self._mode(monkeypatch, "on")
+        calls = {"n": 0}
+        def probe():
+            calls["n"] += 1
+            return (True, "docker 24")
+        monkeypatch.setattr(ce, "docker_probe", probe)
+        monkeypatch.setattr(ce, "_current_loop_id", lambda: "r")
+        ce.resolve_container_run(no_tools=False)
+        ce.resolve_container_run(no_tools=False)
+        assert calls["n"] == 1  # per-process cache, not per-call
+
+
+class TestContainerName:
+    def test_prefix_and_seq(self):
+        assert ce.container_name("abc", 5) == "maro-exec-abc-5"
+
+    def test_sanitizes_illegal_chars(self):
+        n = ce.container_name("a/b c:d", 0)
+        assert n.startswith("maro-exec-")
+        for bad in ("/", " ", ":"):
+            assert bad not in n
+
+
+class TestBuildRunCommand:
+    def _build(self, monkeypatch, **overrides):
+        monkeypatch.setattr(ce, "get", lambda k, d=None: d)  # network default, image default
+        kw = dict(name="maro-exec-x-0", workdir="/w",
+                  mounts=[("/w", "rw"), ("/ref", "ro")],
+                  worker_env={"MARO_WORKER_RUN": "1", "MARO_ALLOW_MAIN_PUSH": "1"},
+                  owner_pid=4242)
+        kw.update(overrides)
+        return ce.build_run_command(["claude", "-p", "--verbose"], **kw)
+
+    def test_docker_run_skeleton(self, monkeypatch):
+        cmd = self._build(monkeypatch)
+        assert cmd[:6] == ["docker", "run", "--rm", "-i", "--init", "--name"]
+        assert cmd[6] == "maro-exec-x-0"
+
+    def test_bind_mounts_same_path_both_sides(self, monkeypatch):
+        cmd = self._build(monkeypatch)
+        assert "/w:/w:rw" in cmd
+        assert "/ref:/ref:ro" in cmd
+
+    def test_auth_volume_and_home(self, monkeypatch):
+        cmd = self._build(monkeypatch)
+        assert f"{ce.AUTH_VOLUME}:{ce.AUTH_MOUNT}" in cmd
+        assert f"HOME={ce.CONTAINER_HOME}" in cmd
+
+    def test_owner_pid_label(self, monkeypatch):
+        cmd = self._build(monkeypatch)
+        assert "maro.owner_pid=4242" in cmd
+
+    def test_worker_env_passed_through(self, monkeypatch):
+        cmd = self._build(monkeypatch)
+        assert "MARO_WORKER_RUN=1" in cmd
+        assert "MARO_ALLOW_MAIN_PUSH=1" in cmd
+
+    def test_workdir_flag(self, monkeypatch):
+        cmd = self._build(monkeypatch)
+        assert cmd[cmd.index("-w") + 1] == "/w"
+
+    def test_network_default(self, monkeypatch):
+        cmd = self._build(monkeypatch)
+        assert cmd[cmd.index("--network") + 1] == ce.DEFAULT_NETWORK
+
+    def test_image_then_inner_cmd_are_last(self, monkeypatch):
+        cmd = self._build(monkeypatch)
+        i = cmd.index(ce.DEFAULT_IMAGE)
+        assert cmd[i:] == [ce.DEFAULT_IMAGE, "claude", "-p", "--verbose"]
+
+
+class TestKillContainer:
+    def test_calls_docker_kill(self, monkeypatch):
+        store: dict = {}
+        monkeypatch.setattr(ce.subprocess, "run", _capturing_run(store, 0))
+        ce.kill_container("maro-exec-x-0")
+        assert store["cmd"] == ["docker", "kill", "maro-exec-x-0"]
+
+    def test_empty_name_is_noop(self, monkeypatch):
+        calls = {"n": 0}
+        def run(cmd, **kw):
+            calls["n"] += 1
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        monkeypatch.setattr(ce.subprocess, "run", run)
+        ce.kill_container("")
+        assert calls["n"] == 0
+
+    def test_swallows_missing_docker(self, monkeypatch):
+        def boom(cmd, **kw):
+            raise FileNotFoundError()
+        monkeypatch.setattr(ce.subprocess, "run", boom)
+        ce.kill_container("maro-exec-x-0")  # must not raise
+
+
+class TestSweepStrandedContainers:
+    def test_kills_only_dead_owner(self, monkeypatch):
+        ps_out = "maro-exec-a-0\t100\nmaro-exec-b-0\t200\n"
+        monkeypatch.setattr(ce.subprocess, "run", _fake_run(0, stdout=ps_out))
+        killed: list = []
+        monkeypatch.setattr(ce, "kill_container", lambda n: killed.append(n))
+        result = ce.sweep_stranded_containers(pid_alive=lambda p: p == 100)
+        assert result == ["maro-exec-b-0"]  # live owner 100 untouched
+        assert killed == ["maro-exec-b-0"]
+
+    def test_missing_owner_label_is_reaped(self, monkeypatch):
+        monkeypatch.setattr(ce.subprocess, "run", _fake_run(0, stdout="maro-exec-c-0\t\n"))
+        killed: list = []
+        monkeypatch.setattr(ce, "kill_container", lambda n: killed.append(n))
+        result = ce.sweep_stranded_containers(pid_alive=lambda p: True)
+        assert result == ["maro-exec-c-0"]  # unattributable → safer killed
+
+    def test_docker_absent_returns_empty(self, monkeypatch):
+        def boom(cmd, **kw):
+            raise FileNotFoundError()
+        monkeypatch.setattr(ce.subprocess, "run", boom)
+        assert ce.sweep_stranded_containers() == []
+
+    def test_docker_nonzero_returns_empty(self, monkeypatch):
+        monkeypatch.setattr(ce.subprocess, "run", _fake_run(1, stderr="daemon down"))
+        assert ce.sweep_stranded_containers() == []
+
+
 class TestDoctorContainerRows:
     def _fake_llm(self, monkeypatch):
         import llm

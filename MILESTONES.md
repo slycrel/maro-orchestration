@@ -11,10 +11,13 @@ adapter; full suite green (166 files / 5692 tests); design doc closed to
 `docs/history/2026-07-12-routing-and-probe-synthesis-design.md`; unblocks
 `docs/VERIFY_LEARN_ARC.md` V0; see -5 #5 for full detail). Previous:
 2026-07-12 (Opus parallel session, alongside Sonnet on -5 #4/#5
-routing/probe-synthesis: **-5 #6 container-executor C1 SHIPPED** — image +
-auth + doctor + the `src/container_exec.py` seam C2 extends; disjoint file
-set from routing/probe-synthesis, no conflict; see -5 #6. C2 = the wrap is
-next, Opus-tier.). Previous: 2026-07-12 (Sonnet execution session: -5 #4
+routing/probe-synthesis: **-5 #6 container-executor C1 + C2 SHIPPED** — C1
+image+auth+doctor, C2 the wrap (`complete()` decision → `_run_subprocess_safe`
+docker wrap + kill-by-name + stranded-container reaper); disjoint file set
+(`container_exec.py`/`llm.py`/`heartbeat.py`/`step_exec.py`/`workers.py` vs
+`intent.py`/`closure_verify.py`/`scope.py`); Codex adversarial review REJECT →
+9 findings fixed same session. C3 = mount map + self-dev clone is next. See
+-5 #6.). Previous: 2026-07-12 (Sonnet execution session: -5 #4
 Routing Part A SHIPPED — needs_live_data classifier signal + capability
 override close the Manti canonical-case routing gap, live-verified at 0.95
 confidence with no `--lane` force; see -5 #4 for full detail). Previous:
@@ -361,19 +364,25 @@ Truth anchor: GOAL_BRAIN.md Threads. History: docs/history/ROADMAP_ARCHIVE.md.
         the eventual full-BDD-loop pass that would actually resolve them
         (needs an LLM judge or a relevance signal neither exists today).
         No test/behavior changes this pass — comments only.
-   6. **Container executor — C1 SHIPPED 2026-07-12 (Opus); C2 → C3 → C4 next**
-      (`docs/CONTAINER_EXECUTOR_DESIGN.md`; C2 wants Opus; C4 = runtime-box
-      burn-in, Jeremy adjudicates the flip). Clears r2 blocker #4. **C1**
-      (image + auth + doctor) landed the *description* of the container with
-      no run wired through it: `deploy/docker/Dockerfile.executor` (CLI pin
-      `2.1.207`), `src/container_exec.py` (the seam C2 extends — constants,
-      config readers, mockable docker probes, operator instructions),
-      `maro-bootstrap container-setup`, mode-gated `doctor` rows (off/on/
-      require, loud degrade per SF-6; login probe on `--live`), DEFAULTS.md
-      `## Executor / sandboxing` (4 keys), stale root `Dockerfile`+
-      `docker-compose.yml` deleted. 20 tests, docker fully mocked. **C2 = the
-      wrap** (`_run_subprocess_safe` container branch, named-container kill
-      path, stranded-container sweep) is the next chunk, Opus-tier.
+   6. **Container executor — C1 + C2 SHIPPED 2026-07-12 (Opus); C3 → C4 next**
+      (`docs/CONTAINER_EXECUTOR_DESIGN.md`; C4 = runtime-box burn-in, Jeremy
+      adjudicates the flip). Clears r2 blocker #4. **C1** (image + auth +
+      doctor) landed the container's *description*: `Dockerfile.executor`
+      (CLI pin `2.1.207`), `src/container_exec.py` (the shared seam),
+      `maro-bootstrap container-setup`, mode-gated `doctor` rows, DEFAULTS.md
+      `## Executor / sandboxing` (4 keys), stale root docker artifacts deleted.
+      **C2** (the wrap) made it run: `complete()` decides per call
+      (`resolve_container_run` — off/no_tools→host, docker→container, `on`+no
+      docker→degrade w/ one warning, `require`+no docker→refuse) and threads
+      `container_name` into `_run_subprocess_safe`, which wraps the inner
+      `claude -p` in `docker run` (`build_run_command`) and kills by name
+      (`docker kill` before killpg — killpg only reaps the docker client).
+      Stranded-container reaper (dead `maro.owner_pid` label) wired into
+      `heartbeat.stranded_state_sweep`, never touching a live run's container.
+      Docker probed once/process (cached). Minimal mounts (cwd rw + auth vol).
+      45 tests total, docker fully mocked. **C3 = mount map + self-dev clone**
+      (fence-root→mount translation, goal-declared rw, extra ro, scratch-clone
+      merge-back riding `worktree.py`) is next, Sonnet/Opus.
    7. **Portable-learning chunks 1–4** (`docs/PORTABLE_LEARNING_DESIGN.md`
       §7, §8 ratified 2026-07-12) — 1.0 scope-decree item (g).
    8. Opportunistic riders: time-blindness first slice + perspective
