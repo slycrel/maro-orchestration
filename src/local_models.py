@@ -136,6 +136,86 @@ def escalation_target() -> str:
     return target if target in ("cheap", "council") else "cheap"
 
 
+_DEFAULT_LOCAL_MAX_TOKENS = 2048  # safety-net floor for unmeasured/reasoning models
+
+# Empirically-measured per-model floors (BACKLOG #10 deep-eval, 2026-07-13).
+# Real sweep on THIS box: 3 currently-installed ollama models (llama3.2:3b,
+# qwen-hermes:latest, qwen2.5-coder:3b) x 3 floors (128/256/2048) x 5 realistic
+# step-result payloads (a short confirmation, a medium research summary, a long
+# code-diff report, a vague/RETRY-shaped result, and a ~6000-char payload at
+# the local validator's own input_char_budget ceiling) = 45 real generation
+# calls, zero mocked. Result: 0 empty-content, 0 JSON-parse failures, 0
+# finish_reason="length" truncations, 100% decisive-local (confidence >=
+# min_certainty) at EVERY floor tried, for every model, on every payload.
+# Max output tokens observed across all 45 calls: 63 (`ollama show` also
+# confirms none of the 3 report a "thinking" capability — no <think> trace to
+# overrun). Latency was floor-invariant (20.8s-42.4s avg per model/floor cell;
+# the variance tracked box contention from concurrent agents that night, not
+# token-floor size — confirms the floor is a ceiling, not a cost dial). 256
+# is ~4x the observed max and is the value shipped below; it costs nothing
+# over 2048 in practice (generation stops at EOS either way) but keeps a
+# deliberately tight rather than arbitrary number in the failure-mode's honor.
+# The VibeThinker <think>-overrun this floor was originally built for
+# (BACKLOG #10, live 2026-06-21) does not reproduce on any model installed
+# today; VibeThinker itself was later dropped from this box (reasoning models
+# proved a CPU dead-end here). Kept as the generous default for whichever
+# model isn't in this table — e.g. a reasoning model reinstalled later.
+_MEASURED_MODEL_FLOORS = {
+    "llama3.2:3b": 256,
+    "qwen-hermes:latest": 256,
+    "qwen2.5-coder:3b": 256,
+}
+
+
+def _coerce_tokens(val, default: int) -> int:
+    try:
+        n = int(val)
+        return n if n > 0 else default
+    except (TypeError, ValueError):
+        return default
+
+
+def local_max_tokens_for(model: str) -> int:
+    """Per-model token floor for the local validator (BACKLOG #10).
+
+    `validate.local_max_tokens` accepts two shapes:
+      - a bare int (or numeric string) — one global floor for every local
+        model, exactly the pre-2026-07-13 behavior (fully backward compatible).
+        Always wins over the built-in per-model table below.
+      - a dict keyed by model id, e.g.
+        `{"llama3.2:3b": 256, "qwen2.5-coder:3b": 256, "default": 2048}`.
+        A model explicitly listed uses that value; a model not listed uses
+        the dict's own "default" key if present, else falls through to the
+        built-in table (below) the same as if nothing were configured.
+
+    With NO config override at all, unlisted-in-config models resolve
+    through `_MEASURED_MODEL_FLOORS` — the empirically-measured floors for
+    the models actually installed on this box today — falling back to the
+    generous `_DEFAULT_LOCAL_MAX_TOKENS` (2048) safety net for any model
+    that hasn't been measured (see the module-level comment above the
+    table for the real numbers this is based on).
+
+    Why per-model at all: the floor exists to protect *reasoning* models
+    (e.g. VibeThinker) whose `<think>` trace can consume the whole budget
+    before the JSON verdict, truncating `content` to empty (BACKLOG #10,
+    live 2026-06-21 finding). Plain instruct models never emit that trace.
+    Forcing every model to carry a 2048-token ceiling costs nothing in
+    correctness (ollama stops at EOS regardless) but a tight, measured floor
+    keeps a runaway/rambling call short instead of silently riding the
+    generous ceiling.
+    """
+    raw = _cfg("local_max_tokens", None)
+    if isinstance(raw, dict):
+        if model in raw:
+            return _coerce_tokens(raw[model], _DEFAULT_LOCAL_MAX_TOKENS)
+        if "default" in raw:
+            return _coerce_tokens(raw["default"], _DEFAULT_LOCAL_MAX_TOKENS)
+        return _MEASURED_MODEL_FLOORS.get(model, _DEFAULT_LOCAL_MAX_TOKENS)
+    if raw is not None:
+        return _coerce_tokens(raw, _DEFAULT_LOCAL_MAX_TOKENS)
+    return _MEASURED_MODEL_FLOORS.get(model, _DEFAULT_LOCAL_MAX_TOKENS)
+
+
 def idle_shutdown_secs() -> int:
     """Seconds of validation inactivity after which an orchestration-managed local
     server is reaped. 0 disables idle reaping (kept until process exit). The
@@ -305,10 +385,10 @@ class LocalValidatorAdapter(LLMAdapter):
         # <think> trace before the answer. The paid validation caller passes a
         # tiny budget (128) that's fine for non-reasoners but starves a reasoner
         # mid-thought, leaving `content` empty. Floor the budget so it finishes.
-        # Default floor 2048: live runs showed a reasoning model's <think> trace
-        # on a *real* (long) step result overruns 1024, truncating before the JSON
-        # verdict → empty content → spurious escalation. Tune per model in deep-eval.
-        self._min_tokens = int(_cfg("local_max_tokens", 2048) if min_tokens is None else min_tokens)
+        # Resolved per-model (BACKLOG #10) via `local_max_tokens_for()`: a dict
+        # config lets a measured-fast model use a tight floor while unmeasured
+        # or reasoning models keep the generous 2048 safety-net default.
+        self._min_tokens = int(local_max_tokens_for(model) if min_tokens is None else min_tokens)
 
     def complete(self, messages: List[LLMMessage], *, tools=None,
                  tool_choice: str = "auto", max_tokens: int = 256,

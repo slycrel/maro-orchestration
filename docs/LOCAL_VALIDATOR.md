@@ -97,7 +97,11 @@ validate:
   endpoint: ""                  # override; else derived from runtime
   min_certainty: 0.6            # below this, local verdict is UNDECIDED → escalate
   escalation: cheap             # cheap (one paid gate) | council (3-persona trio)
-  local_max_tokens: 2048        # OUTPUT ceiling; reasoning models need room for <think>
+  local_max_tokens: 2048        # OUTPUT ceiling; reasoning models need room for <think>.
+                                 # Can also be a dict keyed by model id with a "default"
+                                 # fallback, e.g. {llama3.2:3b: 256, default: 2048} — see
+                                 # "Per-model tuning" below. Omit entirely to use the
+                                 # built-in measured floors for models on this box.
   max_input_chars: 6000         # INPUT window the local validator sees of the result
   auto_verify: true             # default the ralph verify loop ON when a local
                                 # validator is available (free). false to opt out.
@@ -123,9 +127,39 @@ The validator has an **output** budget and an **input** window — don't conflat
 For **very large artifacts** (a multi-KB file), neither knob is ideal — stuffing
 the whole thing into context is wasteful. The right tool there is an *agentic
 verifier* that reads the artifact selectively (grep/read a temp file) rather than
-ingesting it wholesale. That's a tool-using validator, which a small specialist
-like VibeThinker is weak at — so it's queued as a deep-eval direction in
-`BACKLOG.md`, not the default path.
+ingesting it wholesale. That's a tool-using validator, which a small reasoning
+specialist (e.g. VibeThinker) is weak at — so it's queued as a deep-eval
+direction in `BACKLOG.md`, not the default path.
+
+### Per-model tuning (BACKLOG #10, 2026-07-13 measurement)
+
+`local_max_tokens` is per-model, not a single global number. `local_max_tokens_for(model)`
+(`src/local_models.py`) resolves it in this priority order:
+
+1. `validate.local_max_tokens` as a **dict** with the model explicitly listed →
+   that value.
+2. The dict's own `"default"` key, if present and the model isn't listed.
+3. `validate.local_max_tokens` as a **bare int/string** → that value, for every
+   model (the pre-2026-07-13 global-floor behavior — still fully supported).
+4. No config at all → the built-in, empirically-measured table for models
+   installed on this box (`_MEASURED_MODEL_FLOORS`), else the generous 2048
+   safety net for anything not in that table (an unmeasured or reasoning model).
+
+**Why 256, not 2048, for llama3.2:3b / qwen-hermes:latest / qwen2.5-coder:3b:**
+a real 45-call sweep (3 models x 3 floors [128/256/2048] x 5 realistic
+step-result payloads, including a ~6000-char payload at the input_char_budget
+ceiling and a vague/RETRY-shaped result) found **zero** empty-content
+verdicts, **zero** JSON-parse failures, and **zero** `finish_reason="length"`
+truncations at *any* floor for *any* of the three models — 100% decisive-local
+across the board. Max output tokens observed: 63. `ollama show` confirms none
+of the three report a "thinking" capability, so there's no `<think>` trace to
+overrun in the first place — the VibeThinker failure mode this floor exists
+for (BACKLOG #10, live 2026-06-21) simply doesn't apply to what's installed
+today. 256 gives ~4x margin over the observed max; it costs nothing over 2048
+in practice (a decisive model stops at EOS regardless of the ceiling) but is
+a deliberately-chosen number rather than an arbitrary one. If VibeThinker (or
+another reasoning model) comes back, it isn't in the table, so it gets the
+2048 safety net automatically — no config edit required.
 
 ### Auto-verify
 
@@ -272,7 +306,9 @@ instead — `ollama pull <coder-model>` and set `runtime: ollama`.
 
 ### Caveats
 - Reasoning models emit a `<think>` trace; `local_max_tokens` must be high
-  enough to reach the final JSON verdict. The adapter floors it (default 1024);
-  don't set it tiny or `content` comes back empty and every call escalates.
+  enough to reach the final JSON verdict. The adapter floors it (module
+  default 2048 for a model with no measured entry; see "Per-model tuning"
+  above) — don't set it tiny or `content` comes back empty and every call
+  escalates.
 - First call after `start` loads the model into memory (a few seconds); keep
   the server warm rather than starting per-validation.

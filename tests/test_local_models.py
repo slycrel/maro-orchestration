@@ -135,6 +135,102 @@ def test_adapter_enforces_token_floor(monkeypatch):
     assert cap["payload"]["max_tokens"] == 1024  # floored up so a reasoner can finish
 
 
+# --- per-model local_max_tokens (BACKLOG #10) --------------------------------
+
+def test_local_max_tokens_for_global_int_backward_compat(monkeypatch):
+    """A bare int applies to every model — the pre-2026-07-13 behavior."""
+    _set_cfg(monkeypatch, local_max_tokens=1024)
+    assert lm.local_max_tokens_for("llama3.2:3b") == 1024
+    assert lm.local_max_tokens_for("some-other-model") == 1024
+
+
+def test_local_max_tokens_for_default_when_unconfigured(monkeypatch):
+    _set_cfg(monkeypatch)
+    assert lm.local_max_tokens_for("anything") == 2048
+
+
+def test_local_max_tokens_for_measured_builtin_when_unconfigured(monkeypatch):
+    """No config override at all → the 3 models measured in the 2026-07-13
+    sweep (BACKLOG #10) get their empirically-tuned floor (256), not the
+    generous 2048 safety net reserved for unmeasured/reasoning models."""
+    _set_cfg(monkeypatch)
+    assert lm.local_max_tokens_for("llama3.2:3b") == 256
+    assert lm.local_max_tokens_for("qwen-hermes:latest") == 256
+    assert lm.local_max_tokens_for("qwen2.5-coder:3b") == 256
+    assert lm.local_max_tokens_for("mlx-community/VibeThinker-3B-8bit") == 2048
+
+
+def test_local_max_tokens_for_explicit_scalar_overrides_measured_builtin(monkeypatch):
+    """An explicit global scalar config always wins over the built-in table,
+    even for a model with a measured floor."""
+    _set_cfg(monkeypatch, local_max_tokens=4096)
+    assert lm.local_max_tokens_for("llama3.2:3b") == 4096
+
+
+def test_local_max_tokens_for_dict_default_key_overrides_measured_builtin(monkeypatch):
+    """A dict's own "default" key is explicit config too — it wins over the
+    built-in measured table for any model not itself listed in the dict."""
+    _set_cfg(monkeypatch, local_max_tokens={"some-other-model": 999, "default": 4096})
+    assert lm.local_max_tokens_for("llama3.2:3b") == 4096
+
+
+def test_local_max_tokens_for_dict_per_model(monkeypatch):
+    _set_cfg(monkeypatch, local_max_tokens={
+        "llama3.2:3b": 256, "qwen2.5-coder:3b": 256, "default": 2048,
+    })
+    assert lm.local_max_tokens_for("llama3.2:3b") == 256
+    assert lm.local_max_tokens_for("qwen2.5-coder:3b") == 256
+
+
+def test_local_max_tokens_for_dict_falls_back_to_dict_default(monkeypatch):
+    """A model not explicitly listed in the dict uses the dict's own "default"
+    key — this is how a newly-installed (unmeasured) model stays safe without
+    needing a config edit first."""
+    _set_cfg(monkeypatch, local_max_tokens={"qwen2.5-coder:3b": 256, "default": 1500})
+    assert lm.local_max_tokens_for("brand-new-reasoning-model") == 1500
+
+
+def test_local_max_tokens_for_dict_no_default_key_uses_module_default(monkeypatch):
+    _set_cfg(monkeypatch, local_max_tokens={"qwen2.5-coder:3b": 256})
+    assert lm.local_max_tokens_for("unlisted-model") == 2048
+
+
+def test_local_max_tokens_for_coerces_bad_values(monkeypatch):
+    _set_cfg(monkeypatch, local_max_tokens={"m1": "not-a-number", "default": 2048})
+    assert lm.local_max_tokens_for("m1") == 2048
+    _set_cfg(monkeypatch, local_max_tokens={"m1": -5, "default": 2048})
+    assert lm.local_max_tokens_for("m1") == 2048  # non-positive rejected
+    _set_cfg(monkeypatch, local_max_tokens={"m1": 0, "default": 2048})
+    assert lm.local_max_tokens_for("m1") == 2048
+    _set_cfg(monkeypatch, local_max_tokens="not-a-number")
+    assert lm.local_max_tokens_for("m1") == 2048  # scalar parse error → module default
+
+
+def test_local_max_tokens_for_string_int_coerced(monkeypatch):
+    _set_cfg(monkeypatch, local_max_tokens="512")
+    assert lm.local_max_tokens_for("m1") == 512
+    _set_cfg(monkeypatch, local_max_tokens={"m1": "512", "default": 2048})
+    assert lm.local_max_tokens_for("m1") == 512
+
+
+def test_adapter_resolves_min_tokens_per_model_when_not_overridden(monkeypatch):
+    """LocalValidatorAdapter with no explicit min_tokens uses the per-model
+    config resolver, not a single global floor."""
+    _set_cfg(monkeypatch, local_max_tokens={"fast-model": 256, "default": 2048})
+    a_fast = lm.LocalValidatorAdapter("fast-model", endpoint="http://x/v1", runtime="ollama")
+    a_other = lm.LocalValidatorAdapter("other-model", endpoint="http://x/v1", runtime="ollama")
+    assert a_fast._min_tokens == 256
+    assert a_other._min_tokens == 2048
+
+
+def test_adapter_explicit_min_tokens_still_overrides_per_model_config(monkeypatch):
+    """An explicit min_tokens kwarg (used throughout the existing test suite)
+    must keep bypassing config entirely, dict or not."""
+    _set_cfg(monkeypatch, local_max_tokens={"m": 256, "default": 2048})
+    a = lm.LocalValidatorAdapter("m", endpoint="http://x/v1", runtime="ollama", min_tokens=999)
+    assert a._min_tokens == 999
+
+
 def test_adapter_dead_endpoint_raises_failover_eligible(monkeypatch):
     def boom(*a, **k):
         raise urllib.error.URLError("connection refused")
