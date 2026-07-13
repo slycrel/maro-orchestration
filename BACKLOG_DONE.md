@@ -8,6 +8,92 @@ Last split: 2026-04-16 (session 34).
 
 ---
 
+### R1: Adversarial-review batch-1 findings — architectural residuals SHIPPED (2026-07-13)
+
+3-reviewer (Skeptic/Architect/Minimalist) pass over batch-1's merged diff
+(`d47bf22..HEAD`, 28 files). Two real, verified bugs from this pass were fixed
+live the same session (recall goal-key prefix pollution — `src/recall.py`
+`_strip_for_match`; garrytan power-tier leak on persona= override, plus a
+bigger sibling bug the fix surfaced — `default_model_tier` config silently
+defeating every prefix's tier bump, live on this box's own workspace config —
+both in `src/handle.py`; `_collect()` now raises instead of silently
+returning a truncated stream as success — `src/llm.py`). Regression tests
+added for all of it. The 4 items below were real but cross-cutting/
+architectural per Jeremy's "document if large" instruction — deferred, then
+shipped as a worktree-isolated parallel chunk later the same session:
+
+- [x] **Unify the magic-prefix mechanism.** SHIPPED 2026-07-13. Extracted a
+  neutral `src/prefixes.py`: `PrefixRule` now carries an optional compiled
+  `pattern` alongside the literal `prefix` string, and `apply_prefixes()` is
+  one scan loop that tries every rule (literal or pattern) in registry
+  order — the `persona:<name>:` capture-group rule is just the one pattern
+  rule, appended last so every literal rule still gets first crack at
+  matching, same ordering the old two-mechanism version enforced by
+  construction. `handle.py` re-exports `_PrefixRule`/`_PrefixResult`/
+  `_PREFIX_REGISTRY`/`_apply_prefixes` from `prefixes.py` under their
+  historical private names, so no call site or test changed. Pure refactor
+  — `tests/test_handle.py`, `tests/test_execution_modes.py`,
+  `tests/integration/test_integration.py`, `tests/regression/test_regression.py`
+  all pass unchanged.
+- [x] **`recall.py` ↔ `run_curation.py` bidirectional layer coupling.**
+  SHIPPED 2026-07-13. Two neutral modules extracted: `src/prefixes.py`
+  (prefix stripping — see above; `recall._strip_for_match()` now imports
+  `prefixes.strip_prefixes` instead of reaching into `handle._apply_prefixes`)
+  and `src/decision_prior.py` (decision-prior card schema: `make_decision_prior`,
+  `load_decision_prior`, `format_prior_decisions`, moved out of
+  `run_curation.py`). `run_curation.py` re-exports the three
+  `decision_prior` functions it still needs (its own CLI, `index_decision_prior`,
+  `prior_decision_context`) so its public surface is unchanged.
+  `recall.py`'s lazy import of `format_prior_decisions` now points at
+  `decision_prior`, not `run_curation` — recall.py no longer imports
+  `run_curation` at all, module-level or lazy. The one private name with no
+  natural home in a neutral module (`recall._find_prior_attempts`, which
+  `run_curation.prior_decision_context()` called) was renamed public
+  (`recall.find_prior_attempts`) instead — it's a legitimate cross-module
+  read, the private name just made it look worse than it was.
+- [x] **`CURATORS` dependency order has no structural enforcement.**
+  SHIPPED 2026-07-13. Each curator now declares a `CuratorSpec(fn, provides=(...),
+  requires=(...))`; `_topo_sort_curators()` (Kahn's algorithm, declaration-order
+  tie-break) derives `CURATORS` from `_CURATOR_SPECS` at import time instead
+  of trusting a hand-maintained list. A `requires` key nobody `provides`, or
+  a cycle, raises `RuntimeError` loudly at import — not buried inside
+  `curate_run()`'s per-curator try/except. `TestCuratorsOrdering` (the
+  existing stopgap) still passes unchanged (the derived order is byte-for-byte
+  the old hand-written order, since that order already respected the same
+  deps); new `TestCuratorTopoSort` in `tests/test_run_curation.py` exercises
+  the validator directly against a missing-provider spec and a cyclic spec.
+- [x] **`skill_candidate` field has no consumer.** SHIPPED 2026-07-13 —
+  **wired, not removed.** `skills/arch-quality-selfimprove.md` names this
+  exact gap ("New skill discovery from outcomes (extract_skills) is rare;
+  skills-lite covers only runs that deliberately author a skill .md"), and
+  `flag_skill_candidate()`'s own docstring already named `extract_skills` as
+  the intended consumer — removing the field would have thrown away a
+  signal the architecture doc says is missing, for no simplification (the
+  curator itself stays either way). It can't consume same-run: loop_finalize's
+  `_crystallize_and_synthesize()` calls `skills.extract_skills()` at
+  goal-end, BEFORE `run_curation.curate_run()` runs (curate_run fires later,
+  from `runs.close_run()` in handle.py's finally block). So the consumer is
+  a periodic catch-up sweep instead: `run_curation.find_unconsumed_skill_candidates()`
+  / `mark_skill_candidate_consumed()` (new) track which flagged runs a sweep
+  hasn't looked at yet (`consumed_at` stamp on the card, written via
+  `file_lock.locked_rmw` since this write can race a concurrent sweep, unlike
+  `curate_run`'s single-writer card creation); `evolver.promote_skill_candidates()`
+  (new, wired into `run_evolver()` via `scan_skill_candidates: bool = True`)
+  feeds unconsumed candidates through the *same* `skills.extract_skills()`
+  call loop_finalize already uses — one skill-crystallization code path, two
+  triggers into it, not a second promotion mechanism. "Consumed" means
+  "looked at," not "produced a skill" — extract_skills declining a
+  low-signal batch still marks the candidates consumed so they aren't
+  rescanned forever. No new config key (no speculative on/off knob beyond
+  the existing `scan_*` kwarg pattern every other `run_evolver` scan already
+  uses) — `docs/DEFAULTS.md` untouched. New tests in `tests/test_run_curation.py::TestSkillCandidateConsumer`
+  and `tests/test_evolver.py` (skill_candidate sweep section) cover: flagged
+  vs. unflagged runs, consumption round-trip, dry-run no-ops, extract_skills
+  declining/erroring (both still consume), and `run_evolver`'s
+  `scan_skill_candidates` on/off wiring.
+
+---
+
 ### BACKLOG #18: Project-loop lane escapes done≠achieved machinery — residual SHIPPED (2026-07-09 hermes trial → 2026-07-13 residual)
 
 Found driving Maro through Hermes-in-docker. Third-party harness invoked the
