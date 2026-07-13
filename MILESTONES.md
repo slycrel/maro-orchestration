@@ -2,7 +2,24 @@
 
 What to do next, in what order. Updated each session. Deferred ideas live in BACKLOG.md; completed phase history in docs/history/ROADMAP_ARCHIVE.md (ROADMAP.md is a stub). This file is the executable queue.
 
-Last updated: 2026-07-13 (Opus session: **-5 #6 container-executor C4 in
+Last updated: 2026-07-13 (Claude Code /goal backlog-clearing session,
+autonomous per standing directive: **-5 #6 container-executor C4 mechanics
+SHIPPED** — merged the Opus dev-Mac burn-in prep into main (3-way conflict:
+`worktree.sweep_stranded_clones` supersedes the old surface-only detection,
+`tests/test_container_e2e.py` grew 4→15 real-docker tests, all pass live on
+this box); C4-BOX real-goal burn-in stays Jeremy-gated (see -5 #6, BACKLOG).
+Five worktree-isolated subagents (each merged individually, full suite green,
+pushed) cleared: BACKLOG #14 (streaming-iterator `complete()` on the shared
+LLMAdapter base), #17 (goal search in `maro viz`), #18-residual (`runs/<id>`
+dir parity for the direct-CLI lane via shared `open_run`/`close_run` in
+`src/runs.py`), #25 (Groq/Gemini hosted-free adapters + Tier 1b in
+`step_exec.verify_step` — code-complete, inert without Jeremy's API keys),
+and #10 (`local_max_tokens_for(model)` resolver from a real 45-call
+empirical sweep). BACKLOG.md/BACKLOG_DONE.md reconciled to match (#10/#14/#18
+archived with full context, #22-residual + hist-r2-02 checked off). Batch-1
+`/adversarial-review` findings (prefix-tier leak, match-strip drift, silent
+stream truncation) fixed same session; batch-2 review over this chunk is
+next. Previous: 2026-07-13 (Opus session: **-5 #6 container-executor C4 in
 progress** — §7 sandbox.py **retired** (unwired prototype, −1670 LOC) + burn-in
 prep from the dev Mac: `docs/CONTAINER_BURN_IN.md` runbook +
 `scripts/container-acceptance-probe.sh` hostile-goal harness. What remains is
@@ -443,31 +460,34 @@ Truth anchor: GOAL_BRAIN.md Threads. History: docs/history/ROADMAP_ARCHIVE.md.
       disabled); stale rw-roots ContextVar; clone data-loss on branch-switch
       (HEAD-based merge-back) + silent-success; partial-clone leak. Residuals
       (host-git hardening is defense-in-depth, crash-leaked clones, comma paths,
-      real-docker E2E) documented for C4. Full suite green. **C4 (burn-in +
-      flip) — in progress 2026-07-13 (Opus):** §7 **sandbox.py retired**
-      (unwired prototype, −1670 LOC; `_DANGEROUS_PATTERNS` relocated to
-      run_curation; `maro sandbox` CLI + `sandbox-audit.jsonl` retired). Burn-in
-      prep landed from the dev Mac: **`docs/CONTAINER_BURN_IN.md`** (executable
-      runbook — preconditions → dogfood workload → boot-tax/uid-gid/env
-      watch-list → acceptance probe → go/no-go → the flip) + the hostile-goal
+      real-docker E2E) documented for C4. Full suite green. **C4 mechanics
+      SHIPPED 2026-07-13** (§ 7 **sandbox.py retired**, unwired prototype,
+      −1670 LOC; `_DANGEROUS_PATTERNS` relocated to run_curation; `maro sandbox`
+      CLI + `sandbox-audit.jsonl` retired; burn-in prep from the dev Mac:
+      **`docs/CONTAINER_BURN_IN.md`** executable runbook + the hostile-goal
       acceptance harness **`scripts/container-acceptance-probe.sh`**
-      (`plant`/`goal`/`check`/`clean`; deterministic parts self-tested — all
-      three verdicts incl. containment-failure→exit-1). **What remains is
-      box-side: run the workload against real docker, fill the go/no-go
-      checklist, and — Jeremy's call — flip** (box default + fresh-install
-      default). **Stale-clone DETECTION SHIPPED** (`worktree.surface_stranded_clones`,
-      heartbeat-wired): surfaces crash-leaked clones (path + branch + age) for
-      the operator, records them in the heartbeat result, warns once per clone.
-      It NEVER auto-deletes and NEVER runs git inside the clone — an earlier
-      reclaim-empty design was **REJECTED by adversarial review** (unanimous, 3
-      lenses): a worker-controlled clone can't be proven "empty" (ignored files,
-      other branches, rewritten origin refs all hide bytes) and running git in
-      it is host RCE (planted `core.fsmonitor`). Auto-reclaim would need a
-      hardened recover-then-remove (merge_back_clone rescues work first) — a
-      live-repo mutation from a heartbeat, Jeremy's call. **Real-docker E2E
-      scaffold SHIPPED** (`tests/test_container_e2e.py`, box-only skip-in-CI:
-      punctuation-path rw roundtrip, ro read-only, nested ro-under-rw subsume,
-      --rm failure cleanup).
+      [`plant`/`goal`/`check`/`clean`; deterministic parts self-tested]; then
+      merged into main same day by the Claude Code /goal session, resolving a
+      3-way conflict). **Stale-clone sweep SHIPPED** — the earlier
+      surface-only `worktree.surface_stranded_clones` was **superseded** by
+      `worktree.sweep_stranded_clones` (`CloneSweepResult`: recovered /
+      removed_empty / preserved / skipped_live / skipped_young / surfaced),
+      heartbeat-wired with a `stranded_sweep` report line surfacing all six
+      counts (the recovered/removed_empty/preserved counts were silently
+      swallowed in the first cut — fixed same merge). It still NEVER runs git
+      inside a worker-controlled clone (the RCE invariant from C3 holds
+      transitively via `merge_back_clone`'s existing sanitization) and only
+      ever removes a clone it can prove is genuinely empty post-merge-back —
+      the earlier blanket reclaim-empty design stays **REJECTED by
+      adversarial review** for anything it can't prove empty. **Real-docker
+      E2E tier SHIPPED for real** — `tests/test_container_e2e.py` grew from
+      the original 4-test scaffold to **15 tests**, box-only (skip-in-CI),
+      and all 15 pass live on this runtime box (docker reachable here, not
+      just the Mac) — no longer just a scaffold. **What remains is C4-BOX
+      (see BACKLOG.md): the real-goal burn-in itself** — `/login`'d
+      acceptance probe, dogfood no-regression run, go/no-go checklist, and
+      the flip — all explicitly Jeremy-gated (needs interactive OAuth +
+      spends tokens; not something an autonomous session should attempt).
    7. **Portable-learning chunks 1–4** (`docs/PORTABLE_LEARNING_DESIGN.md`
       §7, §8 ratified 2026-07-12) — 1.0 scope-decree item (g).
       **Chunk 1 — migration runbook + doctor checks — SHIPPED 2026-07-12
