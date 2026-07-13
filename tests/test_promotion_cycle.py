@@ -489,6 +489,44 @@ class TestRuleVerification:
             "confirmations": 1, "contradictions": 0, "promoted_at": "2026-01-01"})
         assert r.last_verified == ""
 
+    def test_standing_rule_imported_defaults_empty(self):
+        r = StandingRule.from_dict({
+            "rule_id": "x", "rule": "r", "source_lesson_id": "", "domain": "",
+            "confirmations": 1, "contradictions": 0, "promoted_at": "2026-01-01"})
+        assert r.imported == {}
+
+    def test_standing_rule_imported_round_trips(self):
+        # PORTABLE_LEARNING_DESIGN §3: an "imported" provenance stamp must be
+        # a declared field — rewrite-on-change (to_dict) round-trips through
+        # from_dict, and an undeclared key would be silently dropped on the
+        # first rewrite.
+        r = StandingRule(
+            rule_id="x", rule="r", source_lesson_id="", domain="",
+            confirmations=1, contradictions=0, promoted_at="2026-01-01",
+            imported={"imported_from": "pack-a", "pack": "pack-a@abcd1234"},
+        )
+        reloaded = StandingRule.from_dict(r.to_dict())
+        assert reloaded.imported == {"imported_from": "pack-a", "pack": "pack-a@abcd1234"}
+
+    def test_hypothesis_imported_defaults_empty(self):
+        h = Hypothesis.from_dict({
+            "hyp_id": "h1", "lesson": "l", "domain": "d",
+            "confirmations": 0, "contradictions": 0,
+            "source_lesson_ids": [], "first_seen": "2026-01-01", "last_seen": "2026-01-01",
+        })
+        assert h.imported == {}
+
+    def test_hypothesis_imported_round_trips(self):
+        h = Hypothesis(
+            hyp_id="h1", lesson="l", domain="d",
+            confirmations=0, contradictions=0,
+            source_lesson_ids=["imported:pack-a/rule-1"],
+            first_seen="2026-01-01", last_seen="2026-01-01",
+            imported={"imported_from": "pack-a", "original_trust": 0.9},
+        )
+        reloaded = Hypothesis.from_dict(h.to_dict())
+        assert reloaded.imported == {"imported_from": "pack-a", "original_trust": 0.9}
+
 
 class TestStaleRules:
     def test_fresh_rule_applies_unconditionally(self, tmp_path):

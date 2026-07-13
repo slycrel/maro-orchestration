@@ -1868,6 +1868,34 @@ class TestFindMatchingSkillsProjectIsolation:
         skill = dict_to_skill(d)
         assert skill.project == ""
 
+    def test_skill_imported_field_roundtrips_json(self):
+        """PORTABLE_LEARNING_DESIGN §3: imported provenance stamp persists
+        through skill_to_dict / dict_to_skill, not silently dropped."""
+        from skill_types import skill_to_dict, dict_to_skill, Skill
+        skill = Skill(
+            id="s1", name="n", description="d", trigger_patterns=["t"],
+            steps_template=["s"], source_loop_ids=[], created_at="2026-01-01",
+            imported={"imported_from": "pack-a", "claimed_use_count": 12,
+                      "claimed_success_rate": 0.9},
+        )
+        d = skill_to_dict(skill)
+        assert d["imported"] == {"imported_from": "pack-a", "claimed_use_count": 12,
+                                  "claimed_success_rate": 0.9}
+        restored = dict_to_skill(d)
+        assert restored.imported == {"imported_from": "pack-a", "claimed_use_count": 12,
+                                      "claimed_success_rate": 0.9}
+
+    def test_skill_imported_defaults_to_empty(self):
+        """Old skills loaded without an imported field default to {} (local)."""
+        from skill_types import dict_to_skill
+        d = {
+            "id": "s1", "name": "n", "description": "d", "trigger_patterns": [],
+            "steps_template": [], "source_loop_ids": [], "created_at": "2026-01-01",
+            # no "imported" key — simulates old serialized skill
+        }
+        skill = dict_to_skill(d)
+        assert skill.imported == {}
+
 
 class TestCullArchive:
     """Retention decree (2026-07-10): island culls archive, never delete."""

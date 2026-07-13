@@ -453,10 +453,46 @@ Truth anchor: GOAL_BRAIN.md Threads. History: docs/history/ROADMAP_ARCHIVE.md.
       self-heal catch-up/rebuild, then reports which happened — the check
       and the heal are the same action by design). 12 new tests
       (`test_doctor.py` — `TestScanConfigPaths` + 3 `TestRunDoctor`
-      additions); `docs/INDEX.md` row added; full suite green. Chunks 2–4
-      (provenance fields, `maro-pack export/seal`, `maro-pack
-      import/adopt`) are next, one session each per the design doc's own
-      slicing.
+      additions); `docs/INDEX.md` row added; full suite green.
+      **Chunk 2 — provenance fields + `scrub_identifiers()` — SHIPPED
+      2026-07-13 (Sonnet).** Pure-additive per the design doc's own framing
+      ("unblocks both following chunks"): added `imported: Dict[str, Any] =
+      field(default_factory=dict)` to the four rewrite-on-change dataclasses
+      named in §3's implementation caveat — `StandingRule`/`Hypothesis`
+      (`src/knowledge_lens.py`, hand-written `to_dict()` updated to include
+      the new key; `from_dict()` needed no change, its existing
+      declared-field filter already defaults absent keys via the dataclass
+      default), `TieredLesson` (`src/knowledge_web.py`, serializes via
+      `dataclasses.asdict()` everywhere — field addition alone was
+      sufficient), `Skill` (`src/skill_types.py`, `skill_to_dict()` /
+      `dict_to_skill()` module functions updated). The bug this closes:
+      without a declared field, an `imported` key stamped onto a raw row
+      would be silently dropped the first time any of these stores
+      rewrites itself — confirmed by reading `_rewrite_rules()` /
+      `_rewrite_hypotheses()` / `_rewrite_tiered_lessons()`, all of which
+      round-trip through `to_dict()`/`asdict()`, not the raw dict. Also
+      added `scrub_identifiers()` to `src/secret_scrub.py` (same module as
+      `scrub()`, per its own single-source-rule founding constraint):
+      redacts the caller's `$HOME` path + derived username + hostname with
+      stable tokens (`[HOME]`/`[USER]`/`[HOST]`, word-bounded so e.g.
+      username "jeremy" doesn't clobber "jeremyville"), plus a
+      caller-supplied deny-list (emails/handles) redacted to
+      `[REDACTED]` — deny-list is assembled by the exporter from config +
+      environment, nothing hardcoded here. Explicitly NOT anonymization —
+      mechanical redaction of *known* strings; the honesty framing from
+      §4 ("we do not claim mechanical anonymization... a pack is a letter,
+      you proofread letters") is preserved in the docstring for chunk 3 to
+      cite verbatim. 14 new tests (`tests/test_secret_scrub.py` — new
+      file, `TestScrub` baseline + `TestScrubIdentifiers`;
+      `tests/test_promotion_cycle.py` — 4 provenance round-trip tests for
+      `StandingRule`/`Hypothesis`; `tests/test_knowledge_web.py` — 2 for
+      `TieredLesson`; `tests/test_skills.py` — 2 for `Skill`). No new
+      config defaults introduced (provenance fields are structural, not a
+      runtime knob; `scrub_identifiers()`'s deny-list is caller-assembled,
+      not a config key) — nothing to register in `docs/DEFAULTS.md` this
+      chunk. Full suite green (168/168 files, incl. the new
+      `tests/test_secret_scrub.py`). Chunks 3–4 (`maro-pack export/seal`,
+      `maro-pack import/adopt`) are next.
    8. Opportunistic riders: time-blindness first slice + perspective
       end-user seat (BACKLOG Vision vehicles, sized 2026-07-12).
    9. **Verify→learn arc V1–V5** (`docs/VERIFY_LEARN_ARC.md`) — post-1.0 by

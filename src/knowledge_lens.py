@@ -56,6 +56,12 @@ class StandingRule:
                                     # from being applied/injected. Empty on rules
                                     # written before 2026-06-11; promoted_at is
                                     # the freshness fallback.
+    imported: Dict[str, Any] = field(default_factory=dict)  # provenance stamp for
+                                    # pack-imported rows (PORTABLE_LEARNING_DESIGN §3);
+                                    # empty on locally-originated rules. Must stay a
+                                    # declared field — rewrite-on-change round-trips
+                                    # through to_dict/from_dict and silently drops
+                                    # any undeclared key on first rewrite.
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -63,7 +69,7 @@ class StandingRule:
             "source_lesson_id": self.source_lesson_id, "domain": self.domain,
             "confirmations": self.confirmations, "contradictions": self.contradictions,
             "promoted_at": self.promoted_at, "last_applied": self.last_applied,
-            "last_verified": self.last_verified,
+            "last_verified": self.last_verified, "imported": self.imported,
         }
 
     @classmethod
@@ -82,6 +88,8 @@ class Hypothesis:
     source_lesson_ids: List[str]    # lessons that contributed
     first_seen: str
     last_seen: str
+    imported: Dict[str, Any] = field(default_factory=dict)  # provenance stamp for
+                                    # pack-imported rows; see StandingRule.imported.
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -89,6 +97,7 @@ class Hypothesis:
             "confirmations": self.confirmations, "contradictions": self.contradictions,
             "source_lesson_ids": self.source_lesson_ids,
             "first_seen": self.first_seen, "last_seen": self.last_seen,
+            "imported": self.imported,
         }
 
     @classmethod
@@ -96,6 +105,7 @@ class Hypothesis:
         return cls(**{k: d.get(k, v) for k, v in {
             "hyp_id": "", "lesson": "", "domain": "", "confirmations": 0,
             "contradictions": 0, "source_lesson_ids": [], "first_seen": "", "last_seen": "",
+            "imported": {},
         }.items()})
 
 

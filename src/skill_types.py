@@ -40,6 +40,10 @@ class Skill:
     variant_wins: int = 0            # A/B: times this variant was selected and step succeeded
     variant_losses: int = 0          # A/B: times this variant was selected and step failed
     project: str = ""                # project slug this skill belongs to; "" = global (all projects)
+    imported: dict = field(default_factory=dict)  # PORTABLE_LEARNING_DESIGN §3: provenance
+                                      # stamp for pack-imported skills; stats get moved to
+                                      # imported["claimed_use_count"]/["claimed_success_rate"]
+                                      # on import, local use_count/success_rate reset to 0/1.0.
 
 
 @dataclass
@@ -172,6 +176,7 @@ def skill_to_dict(skill: Skill) -> dict:
         "variant_wins": skill.variant_wins,
         "variant_losses": skill.variant_losses,
         "project": skill.project,
+        "imported": skill.imported,
     }
 
 
@@ -199,6 +204,7 @@ def dict_to_skill(d: dict) -> Skill:
         variant_wins=int(d.get("variant_wins", 0)),
         variant_losses=int(d.get("variant_losses", 0)),
         project=d.get("project", ""),
+        imported=d.get("imported", {}),
     )
 
 

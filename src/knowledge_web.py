@@ -90,6 +90,10 @@ class TieredLesson:
     evidence_sources: List[str] = field(default_factory=list)
     # Phase 59 NeMo S1: typed lesson taxonomy — "execution" | "planning" | "recovery" | "verification" | "cost"
     lesson_type: str = ""
+    # PORTABLE_LEARNING_DESIGN §3: provenance stamp for pack-imported rows; empty
+    # on locally-originated lessons. asdict()/filtered-reconstruction round-trip
+    # this automatically since it's a declared field.
+    imported: Dict[str, Any] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------

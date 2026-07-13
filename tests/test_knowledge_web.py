@@ -336,6 +336,26 @@ class TestLoadTieredLessons:
         result = load_tiered_lessons(tier=MemoryTier.MEDIUM)
         assert result == []
 
+    def test_imported_provenance_defaults_empty(self, tmp_path):
+        # Locally-originated lessons carry no provenance stamp.
+        _write_lesson_to_file(tmp_path, _make_lesson(lesson_id="local"))
+        result = load_tiered_lessons(tier=MemoryTier.MEDIUM)
+        assert result[0].imported == {}
+
+    def test_imported_provenance_round_trips(self, tmp_path):
+        # PORTABLE_LEARNING_DESIGN §3: an imported field stamped onto a
+        # TieredLesson must survive the asdict()-write / filtered-reconstruct
+        # round trip, not be silently dropped as an undeclared key.
+        tl = _make_lesson(lesson_id="imported-1")
+        tl.imported = {"imported_from": "polymarket-research-starter", "original_trust": 0.8}
+        _write_lesson_to_file(tmp_path, tl)
+        result = load_tiered_lessons(tier=MemoryTier.MEDIUM)
+        assert len(result) == 1
+        assert result[0].imported == {
+            "imported_from": "polymarket-research-starter",
+            "original_trust": 0.8,
+        }
+
     def test_load_filters_by_task_type(self, tmp_path):
         _write_lesson_to_file(tmp_path, _make_lesson(lesson_id="a", task_type="build"))
         _write_lesson_to_file(tmp_path, _make_lesson(lesson_id="b", task_type="research"))
