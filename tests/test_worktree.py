@@ -7,6 +7,7 @@ drop work (branch preserved + named in the structured failure).
 """
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -461,3 +462,131 @@ def test_clone_merge_neutralizes_planted_hooks_and_exec_config(repo):
     assert cfg.stdout.strip() == ""  # exec-capable config unset
     assert (repo / "work.txt").read_text(encoding="utf-8") == "work\n"  # work still merged
     cleanup_clone(clone)
+
+
+# ---------------------------------------------------------------------------
+# Stale-clone sweep — recover-then-remove, retention-safe (C4).
+# A SIGKILL between provision and finalize leaks a whole-repo clone; the sweep
+# recovers any unmerged work and only removes clones whose owner is verifiably
+# dead AND whose work provably reached the live repo (or never existed).
+# ---------------------------------------------------------------------------
+
+def _paths(entries):
+    """First element (the clone path) of each result tuple."""
+    return {e[0] for e in entries}
+
+
+def test_provision_writes_owner_sidecar_outside_the_clone(repo):
+    from worktree import provision_clone, _clone_sidecar_path, _read_clone_owner
+
+    clone = provision_clone(repo, "container", loop_id="loop-sc")
+    assert clone is not None
+    sidecar = _clone_sidecar_path(clone.path)
+    # Sibling of the clone dir — NOT inside it, so the container-mounted clone
+    # cannot let a hostile worker tamper with the recovery breadcrumb.
+    assert sidecar.exists()
+    assert sidecar.parent == clone.path.parent
+    assert clone.path not in sidecar.parents
+    meta = _read_clone_owner(sidecar)
+    assert meta["owner_pid"] == os.getpid()
+    assert meta["repo_dir"] == str(repo)
+    assert meta["base_ref"] == "main"
+    assert meta["branch"] == clone.branch
+    # Invisible to the clone's own git (it lives outside the work tree), so it
+    # never gets swept into the worker's commits / merge-back.
+    assert _git(["status", "--porcelain"], clone.path).stdout.strip() == ""
+
+
+def test_cleanup_clone_removes_owner_sidecar(repo):
+    from worktree import provision_clone, cleanup_clone, _clone_sidecar_path
+
+    clone = provision_clone(repo, "container", loop_id="loop-cs")
+    sidecar = _clone_sidecar_path(clone.path)
+    assert sidecar.exists()
+    cleanup_clone(clone)
+    assert not clone.path.exists()
+    assert not sidecar.exists()
+
+
+def test_sweep_skips_live_owner(repo):
+    from worktree import provision_clone, sweep_stranded_clones
+
+    clone = provision_clone(repo, "container", loop_id="loop-live")
+    (clone.path / "wip.txt").write_text("in flight\n", encoding="utf-8")
+    res = sweep_stranded_clones(pid_alive=lambda p: True, min_age_s=0)
+    assert str(clone.path) in _paths(res.skipped_live)
+    assert clone.path.is_dir()  # a live run's clone is never touched
+    assert not res.recovered and not res.removed_empty and not res.preserved
+
+
+def test_sweep_recovers_dead_owner_work_then_removes(repo):
+    from worktree import provision_clone, sweep_stranded_clones, _clone_sidecar_path
+
+    clone = provision_clone(repo, "container", loop_id="loop-dead")
+    (clone.path / "recovered.txt").write_text("saved\n", encoding="utf-8")
+    res = sweep_stranded_clones(pid_alive=lambda p: False, min_age_s=0)
+    # Work merged into the LIVE repo before the clone was removed.
+    assert (repo / "recovered.txt").read_text(encoding="utf-8") == "saved\n"
+    assert not clone.path.exists()
+    assert not _clone_sidecar_path(clone.path).exists()
+    assert str(clone.path) in _paths(res.recovered)
+
+
+def test_sweep_removes_empty_dead_owner_clone(repo):
+    from worktree import provision_clone, sweep_stranded_clones
+
+    clone = provision_clone(repo, "container", loop_id="loop-empty")
+    res = sweep_stranded_clones(pid_alive=lambda p: False, min_age_s=0)
+    # No unmerged work → provably safe to remove.
+    assert not clone.path.exists()
+    assert str(clone.path) in _paths(res.removed_empty)
+
+
+def test_sweep_preserves_unmergeable_work(repo):
+    from worktree import provision_clone, sweep_stranded_clones
+
+    clone = provision_clone(repo, "container", loop_id="loop-keep")
+    # Clone edits base.txt one way; the parent diverges → merge-back conflicts.
+    (clone.path / "base.txt").write_text("clone side\n", encoding="utf-8")
+    (repo / "base.txt").write_text("parent side\n", encoding="utf-8")
+    _git(["add", "-A"], repo)
+    assert _git(["commit", "-m", "diverge"], repo).returncode == 0
+
+    res = sweep_stranded_clones(pid_alive=lambda p: False, min_age_s=0)
+    # Retention: unrecovered work is NEVER auto-removed.
+    assert clone.path.is_dir()
+    assert str(clone.path) in _paths(res.preserved)
+    # And the work is still reachable on the preserved branch in the live repo.
+    show = _git(["show", f"{clone.branch}:base.txt"], repo)
+    assert show.stdout == "clone side\n"
+
+
+def test_sweep_surfaces_sidecarless_clone_and_never_removes(repo):
+    from worktree import provision_clone, sweep_stranded_clones, _clone_sidecar_path
+
+    clone = provision_clone(repo, "container", loop_id="loop-nosc")
+    _clone_sidecar_path(clone.path).unlink()  # crash before the sidecar landed
+    (clone.path / "work.txt").write_text("orphan work\n", encoding="utf-8")
+    res = sweep_stranded_clones(pid_alive=lambda p: False, min_age_s=0)
+    # Without the trusted breadcrumb we can't prove ownership/unmerged state —
+    # retention forbids removal; surface for manual inspection.
+    assert clone.path.is_dir()
+    assert str(clone.path) in _paths(res.surfaced)
+    assert not res.recovered and not res.removed_empty
+
+
+def test_sweep_respects_grace_window(repo):
+    from worktree import provision_clone, sweep_stranded_clones
+
+    clone = provision_clone(repo, "container", loop_id="loop-grace")
+    # Owner dead, but a large grace window makes it not-yet-eligible.
+    res = sweep_stranded_clones(pid_alive=lambda p: False, min_age_s=3600)
+    assert clone.path.is_dir()
+    assert not res.recovered and not res.removed_empty and not res.preserved
+
+
+def test_sweep_empty_when_nothing_leaked(workspace):
+    from worktree import sweep_stranded_clones
+
+    res = sweep_stranded_clones(pid_alive=lambda p: False, min_age_s=0)
+    assert not res.acted()

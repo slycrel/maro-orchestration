@@ -459,6 +459,24 @@ def stranded_state_sweep(*, verbose: bool = False) -> dict:
     except Exception as exc:
         log.debug("sweep: stranded-container reap failed: %s", exc)
 
+    # Containerized self-dev (C3/C4): recover + reap scratch clones leaked by a
+    # crash between provision and finalize. Retention-safe — a clone is removed
+    # only when its owner PID is dead AND its work provably reached the live repo
+    # (or never existed); anything unrecovered is preserved and surfaced. No-op
+    # when the container lane is unused (no clones on disk).
+    try:
+        from worktree import sweep_stranded_clones
+        clone_sweep = sweep_stranded_clones(pid_alive=_pid_alive)
+        result["swept_clones"] = clone_sweep.as_dict()
+        if verbose and clone_sweep.acted():
+            print(f"[heartbeat] sweep: scratch clones — "
+                  f"{len(clone_sweep.recovered)} recovered, "
+                  f"{len(clone_sweep.removed_empty)} empty-removed, "
+                  f"{len(clone_sweep.preserved)} preserved, "
+                  f"{len(clone_sweep.surfaced)} surfaced", file=sys.stderr)
+    except Exception as exc:
+        log.debug("sweep: stranded-clone reap failed: %s", exc)
+
     return result
 
 

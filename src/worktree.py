@@ -16,12 +16,15 @@ executing in place, byte-identical to pre-3b behavior.
 
 from __future__ import annotations
 
+import json
 import logging
+import os
 import shutil
 import subprocess
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 log = logging.getLogger("maro.worktree")
 
@@ -314,6 +317,60 @@ def merge_back(wt: Worktree, *, message: str = "") -> MergeResult:
 # and merge-back rides the same serialized `_locked_merge` as worktrees.
 # ---------------------------------------------------------------------------
 
+# Owner sidecar — the crash-recovery breadcrumb the stale-clone sweep keys on.
+# A SIGKILL between provision and finalize leaks a whole-repo clone under
+# worktrees/ with no in-memory ScratchClone to merge it back. The sidecar
+# records — HOST-side, at provision time — the trusted fields the sweep needs
+# to reconstruct that ScratchClone (owner PID for liveness, live repo, base ref,
+# branch). It lives as a SIBLING of the clone dir, NOT inside it: the container
+# mounts only the clone dir (the cwd), so a hostile worker can't tamper with the
+# sidecar to redirect the sweep's host-side merge at an arbitrary repo (the same
+# never-trust-worker-controlled-repo_dir invariant merge_back_clone already
+# holds by using the trusted in-memory ScratchClone, not the clone's .git).
+_OWNER_SIDECAR_SUFFIX = ".owner.json"
+
+
+def _clone_sidecar_path(clone_path) -> Path:
+    """Sibling manifest path for a clone dir: `<clone>.owner.json` (outside the
+    container-mounted clone dir, so the worker cannot write it)."""
+    p = Path(clone_path)
+    return p.with_name(p.name + _OWNER_SIDECAR_SUFFIX)
+
+
+def _write_clone_owner(clone: ScratchClone) -> None:
+    """Record the owner breadcrumb next to the clone (best-effort).
+
+    Written LAST, only after provisioning fully succeeds, so a failed
+    provision never leaves a sidecar to clean up. A write failure is non-fatal:
+    the clone still works; only the sweep loses its recovery metadata and will
+    fall back to surfacing (never auto-removing) the clone.
+    """
+    sidecar = _clone_sidecar_path(clone.path)
+    payload = {
+        "owner_pid": os.getpid(),
+        "repo_dir": str(clone.repo_dir),
+        "base_ref": clone.base_ref,
+        "branch": clone.branch,
+        "created": time.time(),
+    }
+    try:
+        from file_lock import atomic_write
+        atomic_write(sidecar, json.dumps(payload))
+    except Exception as exc:  # noqa: BLE001 — metadata write must never break a run
+        log.warning("scratch-clone owner sidecar write failed for %s: %s", clone.path, exc)
+
+
+def _read_clone_owner(sidecar: Path) -> Optional[dict]:
+    """Load a clone owner sidecar; None if absent/unreadable/malformed."""
+    try:
+        data = json.loads(Path(sidecar).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict) or "owner_pid" not in data:
+        return None
+    return data
+
+
 def provision_clone(project_dir, name: str, *, loop_id: str) -> Optional[ScratchClone]:
     """Clone `project_dir` into an isolated scratch checkout for one run.
 
@@ -376,8 +433,12 @@ def provision_clone(project_dir, name: str, *, loop_id: str) -> Optional[Scratch
         log.warning("scratch-clone provision error for %s: %s", repo_dir, exc)
         shutil.rmtree(clone_path, ignore_errors=True)
         return None
+    clone = ScratchClone(path=clone_path, branch=branch, repo_dir=repo_dir, base_ref=base_ref)
+    # Owner breadcrumb LAST — provisioning fully succeeded, so a leaked clone
+    # (crash before finalize) can be recovered by the stale-clone sweep.
+    _write_clone_owner(clone)
     log.info("scratch clone provisioned: %s on %s (base %s)", clone_path, branch, base_ref)
-    return ScratchClone(path=clone_path, branch=branch, repo_dir=repo_dir, base_ref=base_ref)
+    return clone
 
 
 def merge_back_clone(clone: ScratchClone, *, message: str = "") -> MergeResult:
@@ -439,7 +500,8 @@ def cleanup_clone(clone: ScratchClone, *, keep_on_failure: bool = False) -> None
     """Remove the scratch clone (and the branch fetched into the parent).
 
     keep_on_failure=True leaves both the clone dir and the fetched branch for
-    inspection — the failure detail names them, so nothing is lost.
+    inspection — the failure detail names them, so nothing is lost. The owner
+    sidecar is kept alongside a kept clone so a later sweep still recognizes it.
     """
     if keep_on_failure:
         log.warning(
@@ -455,6 +517,175 @@ def cleanup_clone(clone: ScratchClone, *, keep_on_failure: bool = False) -> None
     except (OSError, subprocess.SubprocessError) as exc:
         log.debug("scratch-clone branch delete failed: %s", exc)
     shutil.rmtree(clone.path, ignore_errors=True)
+    # Drop the owner breadcrumb alongside the now-removed clone (metadata only —
+    # the clone's work already merged back, or there was none).
+    _clone_sidecar_path(clone.path).unlink(missing_ok=True)
+
+
+# ---------------------------------------------------------------------------
+# Stale-clone sweep — recover-then-remove, retention-safe
+# (CONTAINER_EXECUTOR_DESIGN §9 C3 residual: "Crash-leaked scratch clones. A
+# SIGKILL between provision and finalize leaks a whole-repo clone under
+# worktrees/"). Rides heartbeat.stranded_state_sweep next to the container reap.
+# ---------------------------------------------------------------------------
+
+# Belt-and-suspenders grace: never touch a clone younger than this, even with a
+# dead owner PID — guards against racing a clone whose owning run is mid-startup
+# (PID briefly not yet visible) or a resume that just re-provisioned. Liveness is
+# authoritative; this only narrows the window further. Mirrors the heartbeat
+# stranded-run grace.
+_CLONE_SWEEP_GRACE_S = 15 * 60
+
+
+@dataclass
+class CloneSweepResult:
+    """Outcome of one stale-clone sweep — every clone lands in exactly one list.
+
+    Retention invariant: a clone is REMOVED only when its owner is verifiably
+    dead AND its work provably reached the live repo (merged) or provably never
+    existed ("no changes"). Every other outcome preserves the clone on disk.
+    """
+    recovered: list = field(default_factory=list)     # (clone, branch, merged_commit) — merged then removed
+    removed_empty: list = field(default_factory=list)  # (clone, branch) — no unmerged work, removed
+    preserved: list = field(default_factory=list)      # (clone, branch, reason) — dead owner, work KEPT
+    skipped_live: list = field(default_factory=list)   # (clone, owner_pid) — owner still running
+    surfaced: list = field(default_factory=list)       # (clone, reason) — cannot decide, KEPT + logged
+
+    def as_dict(self) -> dict:
+        return {
+            "recovered": self.recovered,
+            "removed_empty": self.removed_empty,
+            "preserved": self.preserved,
+            "skipped_live": self.skipped_live,
+            "surfaced": self.surfaced,
+        }
+
+    def acted(self) -> bool:
+        """Did the sweep do anything worth surfacing to the operator?"""
+        return bool(self.recovered or self.preserved or self.surfaced)
+
+
+def _pid_alive_default(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+        return True
+    except (ProcessLookupError, ValueError, OverflowError):
+        return False
+    except PermissionError:  # exists, owned by another user
+        return True
+
+
+def sweep_stranded_clones(
+    pid_alive: Optional[Callable[[int], bool]] = None,
+    *,
+    min_age_s: float = _CLONE_SWEEP_GRACE_S,
+) -> CloneSweepResult:
+    """Recover + reap scratch clones leaked by crashed self-dev runs.
+
+    For each clone under `worktrees/` carrying an owner sidecar:
+
+    - **owner PID alive** → skip (a live run owns it; never touch in-flight work);
+    - **owner dead, clone younger than `min_age_s`** → skip (grace);
+    - **owner dead, old enough** → reconstruct the trusted ScratchClone from the
+      sidecar and attempt `merge_back_clone` to RECOVER any unmerged work:
+        * merged / "no changes" → the work is provably safe → `cleanup_clone`
+          removes the throwaway;
+        * conflict / moved-base / dirty-base / error → the work is NOT recovered
+          → the clone is PRESERVED (branch kept, reason named) — retention wins.
+
+    A clone dir WITHOUT a readable sidecar is only SURFACED (logged), never
+    auto-removed: we can't prove whose it is or whether it holds unmerged work.
+    Removal happens solely through `cleanup_clone` (the one allowlisted deletion
+    site) after a provably-safe merge — this function deletes nothing directly.
+
+    `pid_alive` is injectable for tests; docker/worktrees absent → empty result.
+    """
+    alive = pid_alive or _pid_alive_default
+    result = CloneSweepResult()
+
+    root = _worktrees_root()
+    if not root.is_dir():
+        return result
+
+    now = time.time()
+    seen_dirs: set = set()
+
+    # Sidecar-carrying clones first (the recoverable ones).
+    for sidecar in sorted(root.glob(f"*/*{_OWNER_SIDECAR_SUFFIX}")):
+        clone_path = sidecar.with_name(sidecar.name[: -len(_OWNER_SIDECAR_SUFFIX)])
+        if not clone_path.is_dir():
+            # Orphan sidecar (clone already gone) — pure litter, no work at risk.
+            # Leave it (removing it would be a second, unnecessary deletion site);
+            # it is harmless and a future clone at the same path overwrites it.
+            log.debug("stale-clone sweep: orphan owner sidecar (no clone dir): %s", sidecar)
+            continue
+        seen_dirs.add(str(clone_path.resolve()))
+
+        meta = _read_clone_owner(sidecar)
+        if meta is None:
+            result.surfaced.append((str(clone_path), "unreadable owner sidecar"))
+            log.warning("stale-clone sweep: unreadable owner sidecar for %s — left for inspection", clone_path)
+            continue
+
+        owner_pid = meta.get("owner_pid")
+        if isinstance(owner_pid, int) and alive(owner_pid):
+            result.skipped_live.append((str(clone_path), owner_pid))
+            continue
+
+        try:
+            age = now - clone_path.stat().st_mtime
+        except OSError:
+            age = min_age_s + 1  # can't stat → don't let a stat error block recovery
+        if age < min_age_s:
+            result.skipped_live.append((str(clone_path), owner_pid))  # too young; treat as live
+            continue
+
+        repo_dir = Path(str(meta.get("repo_dir") or ""))
+        base_ref = meta.get("base_ref") or ""
+        branch = meta.get("branch") or f"maro/stale/{clone_path.name}"
+        if not repo_dir or not is_git_repo(repo_dir) or not base_ref:
+            result.surfaced.append((str(clone_path), f"live repo unresolved ({repo_dir}) — cannot merge back"))
+            log.warning("stale-clone sweep: %s owner dead but live repo %s unresolved — "
+                        "clone preserved for manual recovery", clone_path, repo_dir)
+            continue
+
+        clone = ScratchClone(path=clone_path, branch=branch, repo_dir=repo_dir, base_ref=base_ref)
+        log.info("stale-clone sweep: owner PID %s dead — attempting merge-back of %s (branch %s)",
+                 owner_pid, clone_path, branch)
+        try:
+            merge = merge_back_clone(clone, message=f"stale-clone recovery: {clone_path.name}")
+        except Exception as exc:  # noqa: BLE001 — never let one bad clone abort the sweep
+            result.preserved.append((str(clone_path), branch, f"merge-back error: {exc}"))
+            log.warning("stale-clone sweep: merge-back errored for %s — preserved: %s", clone_path, exc)
+            continue
+
+        if merge.ok and merge.detail == "no changes":
+            cleanup_clone(clone)
+            result.removed_empty.append((str(clone_path), branch))
+            log.info("stale-clone sweep: %s had no unmerged work — removed", clone_path)
+        elif merge.ok:
+            cleanup_clone(clone)
+            result.recovered.append((str(clone_path), branch, merge.merged_commit))
+            log.info("stale-clone sweep: recovered work from %s into %s (%s) — removed",
+                     clone_path, repo_dir, merge.merged_commit[:12])
+        else:
+            # Work NOT recovered — keep the clone + its branch, name the reason.
+            cleanup_clone(clone, keep_on_failure=True)
+            result.preserved.append((str(clone_path), branch, merge.detail))
+            log.warning("stale-clone sweep: could not merge %s back — preserved (branch %s): %s",
+                        clone_path, branch, merge.detail)
+
+    # Sidecar-less clone dirs (crashed before the sidecar landed, or pre-sweep
+    # leaks): SURFACE only. Without the trusted breadcrumb we can't prove
+    # ownership/liveness or safely target a merge — retention forbids removing.
+    for clone_dir in sorted(root.glob("*/*-clone")):
+        if not clone_dir.is_dir() or str(clone_dir.resolve()) in seen_dirs:
+            continue
+        result.surfaced.append((str(clone_dir), "no owner sidecar — cannot recover automatically"))
+        log.warning("stale-clone sweep: clone %s has no owner sidecar — left for manual inspection "
+                    "(cannot prove ownership or unmerged-work state)", clone_dir)
+
+    return result
 
 
 def cleanup(wt: Worktree, *, keep_on_failure: bool = False) -> None:

@@ -79,9 +79,10 @@ ALLOWED_DELETION_SITES = {
         "provisioning fails (branch checkout / clone error) — a throwaway "
         "copy with no worker data yet, never a run/user artifact",
     ("worktree.py", "cleanup_clone"):
-        "move: the containerized self-dev scratch clone is removed only after "
-        "merge_back_clone has merged its work into the live repo; on merge "
-        "failure keep_on_failure=True preserves both the clone and its branch",
+        "move: the containerized self-dev scratch clone (and its owner sidecar) "
+        "is removed only after merge_back_clone has merged its work into the "
+        "live repo; on merge failure keep_on_failure=True preserves the clone, "
+        "its branch, and the sidecar (so a later stale-clone sweep still finds it)",
     ("worktree.py", "_sanitize_untrusted_git"):
         "ephemeral: removes worker-planted .git/hooks from a throwaway scratch "
         "clone's control plane before host-side git runs against it (RCE "
