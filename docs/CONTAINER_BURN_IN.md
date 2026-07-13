@@ -51,6 +51,16 @@ Run on the runtime box (`clawd@` Ubuntu), from the repo root.
    2026-07-11 measurement, ~1.5s CLI + context re-injection per step). §3 below
    measures the container delta against it.
 
+4. **Functional smoke check.** Before spending tokens on real goals, prove the
+   mount plumbing works against real docker:
+   ```sh
+   PYTHONPATH=src python3 -m pytest tests/test_container_e2e.py -v
+   ```
+   These skip in CI (docker mocked) but run here: rw round-trip on a
+   punctuation-bearing path, ro mounts refusing writes, nested ro-under-rw
+   subsuming to rw, and `--rm` failure cleanup. All must pass before the
+   workload below.
+
 ---
 
 ## 2. What to run
