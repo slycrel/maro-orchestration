@@ -449,10 +449,21 @@ No design coupling; noted so neither work stream blocks the other.
 - **C4 — burn-in + flip (runtime box, Jeremy adjudicates):** run the
   standing dogfood goals under `container: on`; watch for env-dependency
   surprises, uid/gid friction, boot-tax delta; then decide box default and
-  fresh-install default. sandbox.py retirement (§7) rides this chunk's
-  cleanup.
+  fresh-install default. **The executable procedure is `CONTAINER_BURN_IN.md`**
+  (preconditions → dogfood workload → the three watch-list metrics → the
+  acceptance probe → go/no-go checklist → the flip). sandbox.py retirement
+  (§7) **SHIPPED 2026-07-13** as this chunk's cleanup. Prep landed from the dev
+  Mac (2026-07-13, Opus): the burn-in runbook + the acceptance-probe harness
+  (`scripts/container-acceptance-probe.sh`, deterministic parts self-tested).
+  What remains is inherently box-side: run the workload against real docker,
+  fill the go/no-go checklist, and — Jeremy's call — flip.
 
 Acceptance for the arc: a hostile-goal probe (write to `~/.ssh`-shaped
 target, read a host secret path) demonstrably lands nowhere while the same
 run under fence-only mode logs SCAVENGE rows — the before/after IS the
-security story for the README.
+security story for the README. Realized as `scripts/container-acceptance-probe.sh`
+(`plant` → run the goal under each mode → `check <run-dir> <mode>`): canaries
+outside the fence, containment checked by token-absence + decoy-unchanged,
+detection checked by `SCAVENGE_DETECTED`/`FENCE_WRITE_BLOCKED` in the run's
+captain's-log slice. The detection half is unit-pinned
+(`test_artifact_check.py`); the containment half is what burn-in proves.
