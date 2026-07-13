@@ -177,6 +177,44 @@ class TestLiveDataOverride:
         lane, _, _ = classify("what does HTTP 429 mean?", dry_run=True)
         assert lane == "now"
 
+    def test_llm_needs_live_data_flip_disabled_restores_now(self, monkeypatch):
+        """Adversarial-review finding, 2026-07-12: the heuristic path already
+        honored `now_lane.live_data_routing` (see
+        test_heuristic_live_data_flip_disabled_restores_now below) but the
+        LLM-classification override in classify() fired unconditionally,
+        contradicting docs/DEFAULTS.md's documented "flag OFF makes both
+        paths inert" contract. This confirms the LLM path is now gated too."""
+        import json
+        import config as _config
+
+        monkeypatch.setattr(
+            _config, "get",
+            lambda key, default=None: False if key == "now_lane.live_data_routing" else default,
+        )
+
+        class LiveDataAdapter:
+            class _Resp:
+                content = json.dumps({
+                    "lane": "now",
+                    "confidence": 0.85,
+                    "reason": "Quick factual lookup",
+                    "needs_live_data": True,
+                })
+                input_tokens = 10
+                output_tokens = 10
+                tool_calls = []
+
+            def complete(self, *args, **kwargs):
+                return self._Resp()
+
+        lane, conf, reason = classify(
+            "Where can I get non-ethanol gas in or around Manti, Utah?",
+            adapter=LiveDataAdapter(),
+        )
+        assert lane == "now"
+        assert conf == 0.85
+        assert reason == "Quick factual lookup"
+
     def test_heuristic_live_data_phrasing_routes_agenda_by_default(self):
         lane, _, _ = _heuristic_classify("what's the current BTC price?")
         assert lane == "agenda"

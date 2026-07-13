@@ -887,9 +887,14 @@ class TestDetectBehavioralGap:
         )
         assert self._call(scope=_FakeScope(), resolved_intent=intent) == ""
 
-    def test_runtime_shaped_deliverable_keeps_signal2_armed(self):
-        # slycrel-go shape: scope names a server expectation AND a deliverable
-        # is itself runtime-shaped — the downgrade must still fire.
+    def test_legacy_keyword_inference_keeps_signal2_armed(self):
+        # slycrel-go shape: scope names a server expectation and the
+        # deliverable's own name/description read as runtime (no declared
+        # `shape` passed to _intent() — this exercises the pre-B1 keyword
+        # fallback, NOT the declared-shape path. That path is covered by
+        # test_declared_runtime_shape_arms_signal2_without_keyword_hint below
+        # (adversarial-review finding, 2026-07-12: this test's original name
+        # implied it covered declared shape when it didn't).
         class _FakeScope:
             failure_modes = ["Server does not respond to /health under load"]
         intent = self._intent(
@@ -976,6 +981,50 @@ class TestDetectBehavioralGap:
             ("cmd/server/main.go", "HTTP server binary serving /ws and /static/"),
         )
         reason = self._call(scope=_FakeScope(), resolved_intent=intent)
+        assert reason
+
+    # -- Signal 3: declared shape="runtime" is authoritative on its own,
+    # independent of Signal 2's failure_mode keyword gate (adversarial-review
+    # finding, 2026-07-12: B2's MUST was prompt-only — a runtime-shaped
+    # deliverable with neutral failure_mode prose and no waiver could close
+    # with all-static checks and nothing would catch it) -------------------
+
+    def test_declared_runtime_shape_flags_with_no_scope_and_no_keyword_hint(self):
+        # No scope object at all, no failure_mode keyword — Signal 2 has
+        # nothing to corroborate against and would stay silent. Signal 3
+        # fires anyway because the declaration alone is authoritative.
+        intent = self._intent(("bin/tool", "the built CLI", "runtime"))
+        reason = self._call(summary="all checks passed", resolved_intent=intent)
+        assert reason
+
+    def test_declared_runtime_shape_flags_even_with_neutral_failure_mode(self):
+        # failure_modes text has no runtime keyword at all (Signal 2's own
+        # gate wouldn't arm) — Signal 3 doesn't depend on that gate.
+        class _FakeScope:
+            failure_modes = ["Incorrect output for empty input"]
+        intent = self._intent(("bin/tool", "the built CLI", "runtime"))
+        reason = self._call(summary="all checks passed", scope=_FakeScope(),
+                             resolved_intent=intent)
+        assert reason
+
+    def test_logged_waiver_suppresses_signal3_despite_declared_runtime_shape(self):
+        # The only legitimate escape from the MUST: a logged waiver.
+        intent = self._intent(("bin/tool", "the built CLI", "runtime"))
+        reason = self._call(
+            summary="all checks passed",
+            resolved_intent=intent,
+            behavioral_probe_waived="no runtime harness available in this sandbox",
+        )
+        assert reason == ""
+
+    def test_empty_waiver_string_does_not_suppress_signal3(self):
+        # A blank/whitespace waiver is not a logged waiver — must still flag.
+        intent = self._intent(("bin/tool", "the built CLI", "runtime"))
+        reason = self._call(
+            summary="all checks passed",
+            resolved_intent=intent,
+            behavioral_probe_waived="",
+        )
         assert reason
 
 
@@ -1978,9 +2027,12 @@ class TestVerifyGoalCompletion:
 
 
 class TestProbeEnvHardening:
-    """Tests for B3 probe-env hardening (docs/ROUTING_AND_PROBE_SYNTHESIS_
-    DESIGN.md Part B): never run a check with an unresolved cwd, and cap
-    confidence when a negative verdict rests mostly on environment noise.
+    """Tests for B3 probe-env hardening (docs/history/2026-07-12-routing-
+    and-probe-synthesis-design.md Part B): never run a check with an
+    unresolved cwd, and cap confidence when a negative verdict rests mostly
+    on environment noise AND no check cleanly failed (`_fail_count == 0`,
+    mirroring the `judged` tri-state gate — a clean fail is real evidence,
+    never noise, and must never be capped below the demotion threshold).
 
     Placed beside test_project_slug_fallback_resolves_project_dir (the
     existing cwd-fallback test) and test_empty_workspace_path_falls_back_
@@ -2057,12 +2109,17 @@ class TestProbeEnvHardening:
         assert result.checks_run == 1
         assert result.checks_passed == 1
 
-    def test_majority_inconclusive_caps_confidence_below_demotion_threshold(self, tmp_path):
-        """B3(b): one check cleanly fails (a real gap) but the other three
-        are environment noise (permission denied / not found) — majority-
-        inconclusive with a genuine failure present means `judged` stays
-        True, so without the cap a 0.9-confidence negative verdict would
-        trip handle.py's 0.7 status-demotion gate on noise, not signal."""
+    def test_real_fail_diluted_by_noise_is_not_capped(self, tmp_path):
+        """B3(b) is narrower than "majority inconclusive" alone: one check
+        cleanly failing is real, mechanical evidence — the tri-state exists
+        precisely so a clean fail is never mistaken for environment noise.
+        Capping this would suppress demotion for a verdict whose ONLY
+        decisive evidence unanimously says "fail", diluted only by unrelated
+        permission-denied noise — exactly the "verified-done beats
+        reported-done" case handle.py's demotion gate exists to protect
+        (adversarial-review finding, 2026-07-12: the original unconditional
+        cap masked this false-negative-suppression risk; this test used to
+        assert the cap fired here — that assertion was the bug)."""
         import subprocess
         from unittest.mock import MagicMock, patch
 
@@ -2094,7 +2151,50 @@ class TestProbeEnvHardening:
 
         assert result.complete is False
         assert result.judged is True  # a check DID cleanly fail
-        assert result.confidence < 0.7
+        assert result.confidence == 0.9  # NOT capped — the fail is real evidence
+
+    def test_pure_noise_negative_verdict_with_no_clean_fail_is_capped(self, tmp_path):
+        """The case B3(b) actually targets: zero checks cleanly failed (one
+        static pass, three permission-denied inconclusive), and the negative
+        verdict comes entirely from a deterministic self-contradiction
+        finding (Signal 1: the LLM's own summary admits runtime wasn't
+        exercised). No clean fail exists to serve as real evidence, so the
+        high LLM-reported confidence resting on mostly-noise probes must
+        still be capped below the demotion threshold."""
+        import subprocess
+        from unittest.mock import MagicMock, patch
+
+        adapter = MagicMock()
+        checks = [
+            {"description": "artifact exists", "command": "true"},
+            {"description": "no perm 1", "command": "x1"},
+            {"description": "no perm 2", "command": "x2"},
+            {"description": "no perm 3", "command": "x3"},
+        ]
+        verdict_data = {
+            "complete": True, "confidence": 0.9, "gaps": [],
+            "summary": "Gap: runtime validation was not performed.",
+        }
+        results = [
+            subprocess.CompletedProcess(args="true", returncode=0, stdout="", stderr=""),
+            subprocess.CompletedProcess(args="x1", returncode=126, stdout="",
+                                        stderr="permission denied"),
+            subprocess.CompletedProcess(args="x2", returncode=126, stdout="",
+                                        stderr="permission denied"),
+            subprocess.CompletedProcess(args="x3", returncode=126, stdout="",
+                                        stderr="permission denied"),
+        ]
+
+        with patch("closure_verify.extract_json", side_effect=[{"checks": checks}, verdict_data]):
+            with patch("closure_verify.content_or_empty", return_value="{}"):
+                with patch("subprocess.run", side_effect=results):
+                    result = verify_goal_completion(
+                        "build X", [], adapter, workspace_path=str(tmp_path),
+                    )
+
+        assert result.complete is False  # Signal 1 downgrade
+        assert result.judged is True  # exempt from the tri-state (self-contradiction)
+        assert result.confidence < 0.7  # capped — no clean fail backs the 0.9
         assert "environment reasons" in result.summary
 
     def test_minority_inconclusive_does_not_cap_confidence(self, tmp_path):
@@ -2506,6 +2606,52 @@ class TestClosureFalseNegativeRegressions:
         (tmp_path / "marker.txt").write_text("here")
         d = Deliverable(name="x", description="", preconditions=["~/marker.txt"])
         results = _run_precondition_preflight([d], cwd=str(tmp_path / "elsewhere"))
+        assert len(results) == 1
+        assert results[0]["passed"] is True
+
+    # -- B3(a) cwd=None hardening extended to preflight (adversarial-review
+    # finding, 2026-07-12: _run_precondition_preflight fell back to
+    # Path.cwd() — Maro's own launch directory — when cwd was unresolved,
+    # the same wrong-cwd bug class B3 fixed for planned checks but missed
+    # here) --------------------------------------------------------------
+
+    def test_preflight_relative_path_with_unresolved_cwd_is_inconclusive(self):
+        """A relative path-shaped precondition with cwd=None must never be
+        checked against Path.cwd() — mark it inconclusive/env_unresolved
+        instead of silently probing Maro's launch directory."""
+        from closure_verify import _run_precondition_preflight
+        from scope import Deliverable
+
+        d = Deliverable(name="x", description="", preconditions=["./schema.json"])
+        results = _run_precondition_preflight([d], cwd=None)
+        assert len(results) == 1
+        assert results[0]["passed"] is False
+        assert results[0]["outcome"] == "inconclusive"
+        assert results[0].get("env_unresolved") is True
+        assert "cwd unresolved" in results[0]["stderr"]
+
+    def test_preflight_absolute_path_unaffected_by_unresolved_cwd(self, tmp_path):
+        """Absolute paths are cwd-independent — cwd=None must not degrade
+        them to inconclusive."""
+        from closure_verify import _run_precondition_preflight
+        from scope import Deliverable
+
+        marker = tmp_path / "marker.txt"
+        marker.write_text("here")
+        d = Deliverable(name="x", description="", preconditions=[str(marker)])
+        results = _run_precondition_preflight([d], cwd=None)
+        assert len(results) == 1
+        assert results[0]["passed"] is True
+        assert results[0]["outcome"] == "pass"
+
+    def test_preflight_command_precondition_unaffected_by_unresolved_cwd(self):
+        """Command-shaped preconditions use shutil.which, which is
+        cwd-independent — cwd=None must not degrade them."""
+        from closure_verify import _run_precondition_preflight
+        from scope import Deliverable
+
+        d = Deliverable(name="x", description="", preconditions=["sh"])
+        results = _run_precondition_preflight([d], cwd=None)
         assert len(results) == 1
         assert results[0]["passed"] is True
 

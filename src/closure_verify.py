@@ -220,8 +220,14 @@ def _run_precondition_preflight(
 ) -> List[Dict[str, Any]]:
     """Mechanically pre-flight Deliverable.preconditions before closure plan runs.
 
-    For each command-shaped precondition: shutil.which → passed.
-    For each path-shaped precondition: Path(cwd or '.')/preq exists → passed.
+    For each command-shaped precondition: shutil.which → passed (cwd-independent,
+    runs regardless of whether cwd resolved).
+    For each path-shaped precondition: Path(cwd)/preq exists → passed. When cwd
+    didn't resolve, marked inconclusive/env_unresolved instead of falling back
+    to Path.cwd() — same B3(a) contract as the main check loop below: probing
+    Maro's own launch directory would produce a confident-looking but meaningless
+    pass/fail (adversarial-review finding, 2026-07-12: this preflight predated
+    B3(a)'s guard and had the exact wrong-cwd bug B3(a) was built to eliminate).
     Opaque preconditions are skipped (no synthetic check; the LLM still sees
     them in the deliverables block).
 
@@ -231,7 +237,7 @@ def _run_precondition_preflight(
     """
     import shutil
     out: List[Dict[str, Any]] = []
-    base = Path(cwd) if cwd else Path.cwd()
+    base = Path(cwd) if cwd else None
     for d in deliverables or []:
         _preqs = getattr(d, "preconditions", None) or []
         _name = getattr(d, "name", "") or "(unnamed deliverable)"
@@ -257,6 +263,17 @@ def _run_precondition_preflight(
                 # tilde path would otherwise resolve to base/"~/x" — a literal
                 # "~" directory that never exists.
                 _pp = Path(preq).expanduser()
+                if not _pp.is_absolute() and base is None:
+                    out.append({
+                        "description": f"precondition: {preq} (path for {_name})",
+                        "command": f"Path({preq!r}).exists",
+                        "modality": "preflight",
+                        "exit_code": -1, "stdout": "",
+                        "stderr": "cwd unresolved — precondition not checked",
+                        "passed": False, "outcome": "inconclusive",
+                        "env_unresolved": True,
+                    })
+                    continue
                 target = _pp if _pp.is_absolute() else (base / _pp).resolve()
                 passed = target.exists()
                 stderr = "" if passed else f"path `{preq}` does not exist"
@@ -672,8 +689,8 @@ def verify_goal_completion(
             if not cmd:
                 continue
             if cwd is None:
-                # B3(a) probe-env hardening (docs/ROUTING_AND_PROBE_SYNTHESIS_
-                # DESIGN.md Part B): the full cwd-resolution chain above
+                # B3(a) probe-env hardening (docs/history/2026-07-12-routing-
+                # and-probe-synthesis-design.md Part B): the full cwd-resolution chain above
                 # (workspace_path -> get_default_subprocess_cwd -> project
                 # dir) came up empty. Running here anyway would silently
                 # probe Maro's own launch directory instead of wherever the
@@ -816,6 +833,7 @@ def verify_goal_completion(
             modality_dist=modality_dist,
             scope=scope,
             resolved_intent=resolved_intent,
+            behavioral_probe_waived=behavioral_probe_waived,
         )
         diagnosis_gap_reason = _detect_diagnosis_gap(
             complete=complete,
@@ -889,22 +907,33 @@ def verify_goal_completion(
                 len(inconclusive_checks),
             )
 
-        # B3(b) probe-env hardening (docs/ROUTING_AND_PROBE_SYNTHESIS_DESIGN.md
+        # B3(b) probe-env hardening (docs/history/2026-07-12-routing-and-probe-synthesis-design.md
         # Part B): when most of what executed couldn't reach a clean answer
         # (missing tool, permission denied, timeout, verifier's own syntax
         # error — the _check_outcome inconclusive branches), that's the
-        # verifier's tooling failing, not evidence about the goal. Left
-        # uncapped, a high-confidence negative verdict resting mostly on
-        # environment noise trips handle.py's 0.7 status-demotion gate even
-        # when one check did cleanly fail (so `judged` above stays True and
-        # doesn't already protect it) — e.g. one real gap plus three
-        # permission-denied probes on unrelated checks shouldn't read as
-        # "0.85 confident this failed."
+        # verifier's tooling failing, not evidence about the goal. This is
+        # deliberately narrower than it first looks: it requires
+        # `_fail_count == 0`, mirroring the `judged` gate immediately above
+        # (same variable, same line: a clean fail is never environmental
+        # noise — that's the entire point of the pass/fail/inconclusive
+        # tri-state). A negative verdict that rests on heavy environmental
+        # noise PLUS a deterministic self-contradiction finding (behavioral
+        # or diagnosis gap, which can report high confidence with zero
+        # check-level fails) still gets capped below the demotion threshold.
+        # A negative verdict backed by even one check that cleanly failed
+        # does NOT get capped — that fail is real, mechanical evidence and
+        # must be allowed to demote (adversarial-review finding, 2026-07-12:
+        # the original unconditional form could suppress demotion for a
+        # verdict where the ONLY decisive evidence was a real failure,
+        # diluted by unrelated inconclusive noise — exactly the
+        # "verified-done beats reported-done" case this file exists to
+        # protect, not the environment-noise case B3(b) targets).
         if (
             not complete
             and checks_run
             and len(inconclusive_checks) > checks_run / 2
             and confidence >= 0.7
+            and _fail_count == 0
         ):
             confidence = 0.69
             _env_note = (
@@ -1090,12 +1119,21 @@ def _detect_behavioral_gap(
     modality_dist: Dict[str, int],
     scope=None,
     resolved_intent=None,
+    behavioral_probe_waived: str = "",
 ) -> str:
     """Return a non-empty reason string when complete=True contradicts evidence.
 
-    Two inference-shaped signals:
+    Three inference-shaped signals:
     1. The LLM's own summary/gaps admit runtime wasn't exercised (self-contradiction).
     2. Scope's failure_modes named runtime expectations but no behavioral probe ran.
+    3. A deliverable is declared `[shape: runtime]` (Part B B1) but no behavioral
+       probe ran and the plan didn't log a waiver — the MUST from B2 is prompt-only
+       otherwise (an adversarial-review finding, 2026-07-12: 3 independent reviewers
+       showed a `[shape: runtime]` deliverable with neutral failure-mode prose sails
+       through Signal 2's gate untouched, since Signal 2 requires failure_modes text
+       to hint at runtime BEFORE it ever consults declared shape). Skipped when
+       `behavioral_probe_waived` is non-empty — the plan's own honest waiver is the
+       designed escape hatch and this signal must not override it.
 
     Either fires only when `complete=True` AND modality_distribution has zero
     behavioral probes. The goal is to catch the precise slycrel-go pattern
@@ -1140,7 +1178,29 @@ def _detect_behavioral_gap(
         except Exception:
             pass
 
+    # Signal 3: a deliverable is declared runtime-shaped in its own right —
+    # this is authoritative (B1) and must not depend on failure_mode prose
+    # happening to mention it too. The waiver is the only legitimate escape.
+    if not behavioral_probe_waived and _any_declared_runtime_deliverable(resolved_intent):
+        return "a declared [shape: runtime] deliverable has no behavioral probe and no logged waiver"
+
     return ""
+
+
+def _any_declared_runtime_deliverable(resolved_intent) -> bool:
+    """True when at least one deliverable explicitly declares `shape == "runtime"`.
+
+    Unlike `_deliverables_corroborate_runtime`, this does NOT fall back to
+    keyword inference — it only looks at the explicit B1 declaration, since
+    it backs Signal 3's independent enforcement of the B2 MUST.
+    """
+    if resolved_intent is None:
+        return False
+    try:
+        delivs = getattr(resolved_intent, "deliverables", None) or []
+        return any(getattr(d, "shape", None) == "runtime" for d in delivs)
+    except Exception:
+        return False
 
 
 def _deliverables_corroborate_runtime(resolved_intent) -> bool:
@@ -1152,7 +1212,7 @@ def _deliverables_corroborate_runtime(resolved_intent) -> bool:
     document/data artifact — then an all-static probe set is the correct
     modality and a keyword hit in failure-mode prose is noise.
 
-    Declared `Deliverable.shape` (docs/ROUTING_AND_PROBE_SYNTHESIS_DESIGN.md
+    Declared `Deliverable.shape` (docs/history/2026-07-12-routing-and-probe-synthesis-design.md
     Part B) is authoritative when present — the LLM said what kind of
     artifact this is at scope time, no need to re-guess from prose. Only
     unshaped (legacy) deliverables fall back to the original keyword-regex

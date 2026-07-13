@@ -218,13 +218,16 @@ Truth anchor: GOAL_BRAIN.md Threads. History: docs/history/ROADMAP_ARCHIVE.md.
       `inconclusive`/`env_unresolved` without executing, so an unresolved
       cwd can't silently probe Maro's own launch directory and manufacture
       a confident wrong-directory verdict. (b) new confidence cap: when a
-      negative verdict has checks_run>0, >half of them inconclusive, and
-      confidence≥0.7, confidence is capped to 0.69 with a summary note —
-      targets the case the existing `judged=False` tri-state protection
-      doesn't cover (at least one check cleanly failed alongside the
-      environment noise, so `judged` stays True and handle.py's `≥0.7`
-      demotion gate was still live). "Environment reasons" reuses
-      `_check_outcome`'s existing inconclusive classification as-is
+      negative verdict has checks_run>0, >half of them inconclusive,
+      confidence≥0.7, AND `_fail_count==0` (no check cleanly failed —
+      narrowed post-adversarial-review, see below; originally shipped
+      without the fail-count guard), confidence is capped to 0.69 with a
+      summary note — mirrors the `judged=False` tri-state gate immediately
+      above it (same variable, same line: a clean fail is real mechanical
+      evidence, never environmental noise, so it must never be capped below
+      the demotion threshold; only a self-contradiction-driven downgrade
+      diluted by environment noise gets capped). "Environment reasons"
+      reuses `_check_outcome`'s existing inconclusive classification as-is
       (missing tool, permission denied, timeout, verifier-authored syntax
       error) rather than inventing a narrower subset — that taxonomy's own
       comment already frames every branch as "the verifier's own tooling
@@ -254,6 +257,80 @@ Truth anchor: GOAL_BRAIN.md Threads. History: docs/history/ROADMAP_ARCHIVE.md.
       2026-07-09 dogfood false-negatives (4/5 runs) going forward — the
       historical batch itself isn't retroactively re-verified, only new
       runs benefit.
+
+      **Adversarial review — second pass, combined Part A + Part B diff.**
+      Per Jeremy's standing "don't assume either pass caught everything"
+      instruction (see item 3's two-pass note above for the first
+      instance), the real `adversarial-review` skill (3 Codex reviewers —
+      Skeptic, Architect, Minimalist — "Large" tier, `src/closure_verify.py`
+      + `src/intent.py` + `src/scope.py` + their tests) ran against the
+      combined `f0c63a1`+`155e4d9` diff. **Verdict: PASS with mediums** (1
+      High, 2 Medium, 1 Low — all 3 reviewers converged on the same 3
+      substantive findings independently, 0 disagreement, 0 hallucinated
+      against live code — a positive deviation from this session's
+      historical ~30-50% adversarial-finding hallucination rate). All 4
+      code-bearing findings fixed same session:
+      - **[High] B2's MUST was prompt-only, not enforced** — a
+        `[shape: runtime]` deliverable with neutral failure-mode prose (no
+        server/process/http keyword) and no logged waiver could close with
+        only static checks and nothing would catch it; Signal 2's
+        deliverable-corroboration gate only ever fires after a scope
+        keyword hint arms it first. Fixed: new Signal 3 in
+        `_detect_behavioral_gap` (`_any_declared_runtime_deliverable`) —
+        an explicit `shape=="runtime"` declaration is authoritative on its
+        own, independent of Signal 2's keyword gate; the logged waiver
+        remains the only escape. 4 new tests.
+      - **[Medium] `now_lane.live_data_routing` didn't gate the LLM-path
+        override** — the heuristic fallback honored the flag, but
+        `classify()`'s primary LLM-path override fired unconditionally,
+        contradicting `docs/DEFAULTS.md`'s documented "flag OFF makes both
+        paths inert" contract. Fixed: same `_config_get(...)` gate added to
+        the LLM path. 1 new test (mirrors the existing heuristic-flip test).
+      - **[Medium] Precondition preflight leaked the B3(a) cwd=None fix** —
+        `_run_precondition_preflight` predated B3(a) and still fell back to
+        `Path.cwd()` (Maro's own launch dir) for relative path-shaped
+        preconditions when the verification cwd was unresolved — the exact
+        wrong-cwd bug class B3(a) exists to eliminate, just in a sibling
+        function B3(a) didn't touch. Fixed: same guard — relative paths
+        with unresolved cwd now synthesize `inconclusive`/`env_unresolved`
+        instead of probing the wrong directory; absolute paths and
+        command-shaped preconditions (cwd-independent) unaffected. 3 new
+        tests.
+      - **[Low] A test's name overclaimed coverage** — the Minimalist
+        (independently, Architect + Skeptic too) flagged
+        `test_runtime_shaped_deliverable_keeps_signal2_armed` as exercising
+        the pre-B1 keyword-inference path (no `shape=` passed to the test's
+        `_intent()` helper), not the declared-shape path its name implied —
+        it wouldn't have caught a regression in the thing it claimed to
+        cover. Renamed to `test_legacy_keyword_inference_keeps_signal2_armed`
+        with a docstring pointing at the real declared-shape test.
+      - **Not a code fix — reviewed and confirmed already-accepted scope:**
+        the heuristic fallback's `_LIVE_DATA_RE` only catches
+        `current/latest/today` phrasing, so a named-place availability ask
+        (the Manti canonical case itself) still falls through to NOW when
+        the LLM path is unavailable. The design doc's own DECISION marker
+        (line 70) explicitly scopes this as "a *small* lexical
+        approximation... only because it must work with no LLM" — not an
+        oversight. Added an in-code comment at `_LIVE_DATA_RE` citing the
+        decision and noting 3 independent reviewers still flagged it, so
+        the next reader doesn't rediscover the same non-bug.
+      - **Deliberate self-correction surfaced by this pass, not by a
+        reviewer:** narrowing the [Medium] confidence-cap trigger (item 5's
+        B3(b) above) to require `_fail_count==0` meant one of Part B's own
+        pre-existing tests
+        (`test_majority_inconclusive_caps_confidence_below_demotion_threshold`)
+        was asserting the now-corrected-away behavior — a real fail diluted
+        by unrelated inconclusive noise used to get capped below the
+        demotion threshold, silently protecting exactly the false-negative
+        masking risk this pass's own reasoning (prompted by re-reading the
+        Minimalist's concrete scenario, not a distinct finding) identified.
+        Rewritten into two tests: one confirming a real fail is never
+        capped, one confirming the genuine noise-only case (self-
+        contradiction downgrade, zero clean fails) still is.
+      11 new/updated tests total across the fix set (4 Signal 3, 1
+      live-data LLM-path flag, 3 preflight cwd=None, 1 test rename, 2
+      confidence-cap rewrite/addition); full suite green
+      (`bash scripts/test-safe.sh`) before commit.
    6. **Container executor — C1 SHIPPED 2026-07-12 (Opus); C2 → C3 → C4 next**
       (`docs/CONTAINER_EXECUTOR_DESIGN.md`; C2 wants Opus; C4 = runtime-box
       burn-in, Jeremy adjudicates the flip). Clears r2 blocker #4. **C1**

@@ -71,8 +71,11 @@ def classify(
     # on live/local data ("gas near Manti, Utah" — 2026-07-10, the canonical
     # simple-case failure) is mechanically un-answerable there — the model
     # falls back to a how-to-search list, the passenger-does-the-steps
-    # anti-pattern. See docs/ROUTING_AND_PROBE_SYNTHESIS_DESIGN.md Part A.
-    if lane == "now" and needs_live_data:
+    # anti-pattern. See docs/history/2026-07-12-routing-and-probe-synthesis-design.md
+    # Part A. Gated the same as the heuristic-path flip below (adversarial-review
+    # finding, 2026-07-12: this override fired unconditionally, contradicting
+    # DEFAULTS.md's documented "flag OFF makes both paths inert" contract).
+    if lane == "now" and needs_live_data and _config_get("now_lane.live_data_routing", True):
         return (
             "agenda",
             max(confidence, 0.8),
@@ -188,6 +191,17 @@ _NOW_PATTERNS = [
 # phrasing (Part A design doc), so under now_lane.live_data_routing (default
 # ON) this counts toward AGENDA, not NOW; the pre-existing NOW-leaning
 # behavior survives as the explicit opt-out.
+#
+# Deliberately narrow: this is a lexical approximation, not the real
+# semantic signal (that's needs_live_data on the LLM path — see classify()
+# above). Named-place availability asks like "where can I get non-ethanol
+# gas near Manti, Utah" don't match and still fall through to NOW here; the
+# design doc calls this out as an accepted residual gap of the no-LLM
+# fallback, not an oversight (docs/history/2026-07-12-routing-and-probe-
+# synthesis-design.md, DECISION at line 70: "The heuristic fallback ... gets
+# a *small* lexical approximation ... only because it must work with no
+# LLM"). Confirmed still-open by 3 independent adversarial reviewers,
+# 2026-07-12 — left as-is per that decision, not a bug to chase.
 _LIVE_DATA_RE = re.compile(
     r"\b(what('s| is) (the |a |an )?(current|latest|today'?s?))\b", re.I
 )
