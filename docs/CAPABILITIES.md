@@ -121,7 +121,7 @@ real phrasing beats cleaned-up phrasing.
 
 | Goal (as asked) | Success looks like | Exercises | Status |
 |---|---|---|---|
-| "Where can I get non-ethanol gas in or around Manti, Utah?" | 1–3 named stations w/ locations + confidence caveats, sourced | multi-source research, synthesis, stop criteria | `target` — content verified live 2026-07-10; routing fixed 2026-07-12 (naturally routes agenda, no forced lane); cost envelope still fails the contract, see canonical-case section |
+| "Where can I get non-ethanol gas in or around Manti, Utah?" | 1–3 named stations w/ locations + confidence caveats, sourced | multi-source research, synthesis, stop criteria | `target` — content verified live 2026-07-10; routing fixed 2026-07-12 (naturally routes agenda, no forced lane); cost envelope still fails the contract, see canonical-case section. Crystallized as `skills/errand_research.md` 2026-07-13 (BACKLOG #22) — not separately re-run this pass, same cost/time class as this case |
 | "What are the library hours in [town] this Saturday, and do I need an appointment for [service]?" | direct answer + source link, flags stale pages | freshness judgment, official-source preference | `target` |
 | "Compare the three cheapest ways to ship a 40lb box from Utah to Ohio this week." | small table, prices dated, winner recommended | structured comparison, quantitative extraction | `target` |
 | "Is [product] compatible with [other product]? People online seem to disagree." | verdict + why the disagreement exists | conflicting-source adjudication | `target` |
@@ -134,10 +134,10 @@ real phrasing beats cleaned-up phrasing.
 
 | Goal (as asked) | Success looks like | Exercises | Status |
 |---|---|---|---|
-| "Summarize this repo's commits since the last tag into an operator digest." | digest artifact, accurate counts, notable-change selection | tool use on local data, summarization judgment | `verified` (live batch 2026-07-10, changelog_digest — promoted to skills-lite) |
-| "Census this JSONL ledger: totals per day, anomalies flagged, two sentences of interpretation." | correct table + honest interpretation | deterministic computation + narrative honesty | `verified` (live batch 2026-07-10, step-costs census) |
-| "Read this design doc and write a one-page operator summary: what changed, what's left." | faithful compression, no invented claims | long-doc comprehension, fabrication resistance | `verified` (live batch 2026-07-10, RECONCILIATION summary) |
-| "Research [topic] and give me a decision brief: options, tradeoffs, your recommendation." | brief with a real recommendation, not an option table | research depth, opinionated synthesis | `target` |
+| "Summarize this repo's commits since the last tag into an operator digest." | digest artifact, accurate counts, notable-change selection | tool use on local data, summarization judgment | `verified` (live batch 2026-07-10, changelog_digest — promoted to skills-lite; promoted again 2026-07-13, BACKLOG #22, from workspace-only skills-lite into the repo default set — see blank-slate section, gap found+fixed) |
+| "Census this JSONL ledger: totals per day, anomalies flagged, two sentences of interpretation." | correct table + honest interpretation | deterministic computation + narrative honesty | `verified` (live batch 2026-07-10, step-costs census); covered by existing `skills/data_analysis.md` (generic schema/quality/distribution/interpretation shape matches the ask) — no new skill needed, see blank-slate section |
+| "Read this design doc and write a one-page operator summary: what changed, what's left." | faithful compression, no invented claims | long-doc comprehension, fabrication resistance | `verified` (live batch 2026-07-10, RECONCILIATION summary); crystallized as `skills/doc_summary.md` 2026-07-13 (BACKLOG #22), live-run same day (handle_id `b5d35f89`, `direct:` prefix, `skills/arch-quality-selfimprove.md` → `output/doc_summary_verify.md`, 58 lines/459 words — within cap). Manual spot-check found the summary faithful except one miss: its closing line claims "8 core modules" and lists 8 filenames, but the source's own File Map table has 9 rows — `skill_types.py` was silently dropped/undercounted. The skill's own step-5 spot-check gate should have caught this and didn't; flagging here rather than smoothing it over, per house discipline |
+| "Research [topic] and give me a decision brief: options, tradeoffs, your recommendation." | brief with a real recommendation, not an option table | research depth, opinionated synthesis | `target` — built as `skills/research_brief.md` 2026-07-13 (BACKLOG #22), not live-run this pass (same cost/time class as the Manti canonical case: a real decision brief needs live multi-source research, ~$1.50-2.50/15-25min per that case's own measurements) |
 | "Search Reddit/HN/X for first-person accounts of [phenomenon]; build a sourced catalog, verbatim quotes only." | concrete-instance entries w/ author+date+link, honest audit trail, rejects listed | social_search skill, filter-bar discipline, evidence-depth honesty | `verified` (run 692bd96f 2026-07-11, ai-failure-task-patterns) |
 | "Examine your own run [id] and propose what would make it faster, without cutting steps." | proposals with code-level premises, each premise verified before acting | self-analysis, verify-before-fix gate | `verified` shape (self-speedup dogfood 2026-07-11 — 4 proposals, 2 had false code premises caught in adjudication; the gate IS the use case) |
 
@@ -145,7 +145,7 @@ real phrasing beats cleaned-up phrasing.
 
 | Goal (as asked) | Success looks like | Exercises | Status |
 |---|---|---|---|
-| "Watch [site/feed] and tell me when [condition]." | fires on condition, silent otherwise, no re-notification spam | heartbeat-driven checks, state across runs | `target` (heartbeat + scheduler exist; needs a lived example) |
+| "Watch [site/feed] and tell me when [condition]." | fires on condition, silent otherwise, no re-notification spam | heartbeat-driven checks, state across runs | `target` (heartbeat + scheduler exist; needs a lived example) — built as `skills/watch_condition.md` 2026-07-13 (BACKLOG #22): checkpoint/notify-on-transition mechanics specified, but honestly verifying the no-repeat-fire/no-fire-on-tick-1 discipline needs a real condition to transition across 2+ time-separated ticks, which a single curation session can't fabricate |
 | "Each morning, digest of: [my feeds/ledgers], anything anomalous flagged." | short, substantive, skips no-news days | recurring synthesis, novelty detection | `target` |
 | "Track [market/price] and research any move bigger than X." | ledger-driven, compounds across runs | persistent-workspace pattern | `verified` shape (polymarket-edges workspace, 2026-06) |
 
@@ -208,7 +208,43 @@ HN-and-ChatGPT-heavy by data availability.
 The goal: a fresh `maro bootstrap` is *useful the same day*, before any
 learning has happened. That means shipping a small, curated skill/capability
 set — not everything we've ever promoted, but the ones that cover the catalog
-above. Draft target (to react to, not final):
+above.
+
+Selection principle: each pre-installed skill should be the crystallization
+of a catalog tier, so the shipped set and the test corpus verify each other.
+Anything not exercised by a catalog entry doesn't ship in the default set.
+
+**Curated 2026-07-13 (BACKLOG #22 residual).** The original draft target
+list (below, kept for history) said two entries "exist" without checking
+where. That check found a real gap: `changelog_digest` lived only in
+`~/.maro/workspace/skills/` — runtime state, not in git (see CLAUDE.md's
+workspace table) — so a fresh install never received it despite the catalog
+claiming it shipped. `code_review` checked out fine: it's a real
+`skills/code_review.md` file, git-reviewed, ships to every clone. Resolution
+per target, verified against a scratch empty workspace via `SkillLoader`
+(confirms each resolves from the repo alone, no workspace override needed):
+
+| Draft target | Resolution | Catalog-row status |
+|---|---|---|
+| errand-research | Built `skills/errand_research.md` | `target` — Tier 1 content-quality already live-verified (Manti Run 2/3); this skill file not separately re-run (cost/time class) |
+| research-brief | Built `skills/research_brief.md` | `target` — not live-run (same cost/time class); gathering mechanics it reuses are independently verified |
+| repo-digest | **Gap found + fixed**: promoted `skills/changelog_digest.md` from workspace-only skills-lite into the repo default set (content unchanged) | `verified` (2026-07-10 live batch; now actually ships) |
+| ledger-census | Covered by existing `skills/data_analysis.md` — no new file; the generic schema/quality/distribution/interpretation shape already matches this ask | `verified` (2026-07-10 live batch, step-costs census) |
+| doc-summary | Built `skills/doc_summary.md` | `verified` (with one flagged gap) — live-run 2026-07-13, see Tier 2 row for the run pointer and the file-count miss the spot-check should have caught |
+| watch-condition | Built `skills/watch_condition.md` | `target` — single-tick mechanics only; needs a real multi-tick example to verify the no-repeat-fire discipline |
+| code_review | Already shipped, checked — genuinely a repo file, not workspace-only | `verified` (graduated 2026-07-09) |
+
+Two build vs. reuse notes worth keeping: `web_research.md` and
+`deep_research.md` already existed and were considered for errand-research/
+research-brief, but neither encodes the specific disciplines those catalog
+rows need (the one-answer/no-narration/stop-when-good-enough UX contract for
+errand-research; the commit-to-a-recommendation-not-a-table rule for
+research-brief) — so those two are additive on top of the existing research
+skills, not duplicates. `data_analysis.md`, by contrast, already covers
+ledger-census on its face — no new file was worth adding just to rename it.
+
+<details>
+<summary>Original draft target list (2026-07-10, superseded by the table above)</summary>
 
 - **errand-research** — the Tier 1 contract: multi-source lookup → one
   sourced answer (the Manti case is its acceptance test)
@@ -219,9 +255,7 @@ above. Draft target (to react to, not final):
 - **watch-condition** — feed/site + condition → notify-on-fire
 - **code_review** — adversarial, evidence-gated (exists: graduated 2026-07-09)
 
-Selection principle: each pre-installed skill should be the crystallization
-of a catalog tier, so the shipped set and the test corpus verify each other.
-Anything not exercised by a catalog entry doesn't ship in the default set.
+</details>
 
 **Later (post-1.0, direction not design):** a shared, *trusted* skill
 directory instances can pull from — crowd-sourced or curated. Trust boundary
