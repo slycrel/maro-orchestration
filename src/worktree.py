@@ -457,6 +457,107 @@ def cleanup_clone(clone: ScratchClone, *, keep_on_failure: bool = False) -> None
     shutil.rmtree(clone.path, ignore_errors=True)
 
 
+# Stranded scratch-clone detection (C4 residual). A SIGKILL between
+# provision_clone and finalize's cleanup_clone leaks a whole-repo scratch clone
+# under worktrees/ that nothing else reclaims (`prune` handles git worktrees,
+# not these). `surface_stranded_clones` SURFACES those for the operator — it
+# never auto-deletes and never runs git inside the clone.
+#
+# Why detection-only, not auto-reclaim (adversarial review 2026-07-13, unanimous
+# REJECT of an earlier reclaim-empty design): a scratch clone is entirely
+# WORKER-CONTROLLED — its files, `.gitignore`/`.git/info/exclude`, `.git/refs`
+# and `.git/config` are all writable by a possibly prompt-injected container
+# worker. Two consequences make auto-reclaim unsafe:
+#   1. Running git against it to classify it executes planted config
+#      (core.fsmonitor, hooks, ...) on the HOST — the exact RCE that _git_hard /
+#      _sanitize_untrusted_git exist to stop.
+#   2. NO content check can prove "empty": ignored files, skip-worktree, data
+#      under .git, commits on another local branch, or a rewritten
+#      refs/remotes/origin all hide real worker bytes from `git status` /
+#      `rev-list`. Age is not ownership either — a live run can compute for >24h
+#      without touching a tracked path.
+# The only retention-safe action on an untrusted directory that MIGHT hold
+# unmerged work is to surface it and let the operator decide (retention decree,
+# 2026-07-10: "the system never decides it's clutter"). Auto-reclaiming disk
+# would require a hardened recover-then-remove (merge_back_clone, which already
+# sanitizes + rescues the work, then cleanup_clone) — a live-repo mutation from a
+# background heartbeat that is Jeremy's call, not a silent default.
+_STRANDED_CLONE_GRACE_SECS = 24 * 3600
+
+
+def _clone_mtime(clone_dir: Path) -> float:
+    """Newest mtime across the clone dir + its git HEAD/index (host-side stat
+    only — never runs git). HEAD/index move on every worker commit and
+    `git add`, so an in-flight or mid-finalize clone always reads recent even
+    when the checkout root's own mtime is stale."""
+    newest = 0.0
+    for p in (clone_dir, clone_dir / ".git" / "HEAD", clone_dir / ".git" / "index"):
+        try:
+            newest = max(newest, p.stat().st_mtime)
+        except OSError:
+            pass
+    return newest
+
+
+def surface_stranded_clones(*, grace_secs: int = _STRANDED_CLONE_GRACE_SECS) -> dict:
+    """Detect (never delete) crash-leaked scratch clones for operator review.
+
+    Scans `worktrees/*/*-clone`. A clone whose newest mtime is older than
+    `grace_secs` (age is a clone's only host-visible liveness signal, mirroring
+    heartbeat's no-PID stranded grace) is reported as stranded. Nothing is
+    deleted and NO git runs inside the worker-controlled clone; the branch name
+    (`maro/<loop_id>/<name>`) is derived from the host-side path, so the operator
+    can inspect the clone and merge its branch or remove it by hand.
+
+    Warns once per clone via a host-side `.surfaced` marker in the clone's PARENT
+    dir (which the container never mounts — the worker cannot forge or clear it),
+    so a standing leak doesn't re-warn on every heartbeat.
+
+    Returns {"stranded": [{"path","branch","age_hours"}], "skipped_recent": N}.
+    """
+    import time
+
+    root = _worktrees_root()
+    stranded: list = []
+    skipped = 0
+    if not root.exists():
+        return {"stranded": stranded, "skipped_recent": skipped}
+    now = time.time()
+    for loop_dir in sorted(root.iterdir()):
+        if not loop_dir.is_dir():
+            continue
+        for clone_dir in sorted(loop_dir.glob("*-clone")):
+            if not clone_dir.is_dir():
+                continue
+            try:
+                age = now - _clone_mtime(clone_dir)
+                if age < grace_secs:
+                    skipped += 1
+                    continue
+                name = clone_dir.name[:-len("-clone")] if clone_dir.name.endswith("-clone") else clone_dir.name
+                entry = {
+                    "path": str(clone_dir),
+                    "branch": f"maro/{loop_dir.name}/{name}",
+                    "age_hours": round(age / 3600.0, 1),
+                }
+                stranded.append(entry)
+                marker = loop_dir / f".{clone_dir.name}.surfaced"
+                if not marker.exists():
+                    log.warning(
+                        "stranded scratch clone (age %.0fh): %s (branch %s). Nothing "
+                        "auto-deleted — inspect it, merge its branch if it holds work, "
+                        "else remove it. See docs/CONTAINER_EXECUTOR_DESIGN.md §4.",
+                        entry["age_hours"], clone_dir, entry["branch"],
+                    )
+                    try:
+                        marker.write_text("surfaced\n", encoding="utf-8")
+                    except OSError:
+                        pass
+            except Exception as exc:
+                log.debug("stranded-clone surface skipped %s: %s", clone_dir, exc)
+    return {"stranded": stranded, "skipped_recent": skipped}
+
+
 def cleanup(wt: Worktree, *, keep_on_failure: bool = False) -> None:
     """Remove the worktree (and its branch on success).
 

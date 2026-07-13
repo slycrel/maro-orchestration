@@ -459,6 +459,22 @@ def stranded_state_sweep(*, verbose: bool = False) -> dict:
     except Exception as exc:
         log.debug("sweep: stranded-container reap failed: %s", exc)
 
+    # Containerized executor (C4): SURFACE crash-leaked scratch clones for the
+    # operator. A SIGKILL between provision_clone and finalize leaks a whole-repo
+    # clone under worktrees/. Detection-only — it never auto-deletes and never
+    # runs git inside a worker-controlled clone (auto-reclaim of an untrusted
+    # clone is unsafe: it can't prove "empty" and running git in it is host RCE —
+    # adversarial review 2026-07-13). No-op when the self-dev clone lane is unused.
+    try:
+        from worktree import surface_stranded_clones
+        clone_report = surface_stranded_clones()
+        result["stranded_clones"] = clone_report.get("stranded", [])
+        if verbose and clone_report.get("stranded"):
+            print(f"[heartbeat] sweep: {len(clone_report['stranded'])} stranded scratch "
+                  f"clone(s) surfaced for manual review (never auto-deleted)", file=sys.stderr)
+    except Exception as exc:
+        log.debug("sweep: stranded-clone surface failed: %s", exc)
+
     return result
 
 

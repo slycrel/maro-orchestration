@@ -7,8 +7,10 @@ progress** — §7 sandbox.py **retired** (unwired prototype, −1670 LOC) + bur
 prep from the dev Mac: `docs/CONTAINER_BURN_IN.md` runbook +
 `scripts/container-acceptance-probe.sh` hostile-goal harness. What remains is
 box-side: run the workload under real docker, fill the go/no-go checklist, and
-— Jeremy's call — flip. Stale-clone sweep + real-docker E2E scaffold still open.
-See -5 #6.). Previous: 2026-07-12 (Opus parallel session: **-5 #6
+— Jeremy's call — flip. Stale-clone detection SHIPPED (surface-only; the
+reclaim-empty design was REJECTED by adversarial review as unsafe on a
+worker-controlled clone — RCE + can't prove "empty"); real-docker E2E scaffold
+SHIPPED (box-only, skips in CI). See -5 #6.). Previous: 2026-07-12 (Opus parallel session: **-5 #6
 container-executor C3 SHIPPED** — fence→mount-map translation
 (`container_exec.build_mount_map`, pure + containment-aware dedup) + self-dev
 scratch-clone (`worktree.provision_clone`/`merge_back_clone` riding the
@@ -453,8 +455,19 @@ Truth anchor: GOAL_BRAIN.md Threads. History: docs/history/ROADMAP_ARCHIVE.md.
       three verdicts incl. containment-failure→exit-1). **What remains is
       box-side: run the workload against real docker, fill the go/no-go
       checklist, and — Jeremy's call — flip** (box default + fresh-install
-      default). Stale-clone sweep (recover-then-remove, retention-safe) +
-      real-docker E2E scaffold still open.
+      default). **Stale-clone DETECTION SHIPPED** (`worktree.surface_stranded_clones`,
+      heartbeat-wired): surfaces crash-leaked clones (path + branch + age) for
+      the operator, records them in the heartbeat result, warns once per clone.
+      It NEVER auto-deletes and NEVER runs git inside the clone — an earlier
+      reclaim-empty design was **REJECTED by adversarial review** (unanimous, 3
+      lenses): a worker-controlled clone can't be proven "empty" (ignored files,
+      other branches, rewritten origin refs all hide bytes) and running git in
+      it is host RCE (planted `core.fsmonitor`). Auto-reclaim would need a
+      hardened recover-then-remove (merge_back_clone rescues work first) — a
+      live-repo mutation from a heartbeat, Jeremy's call. **Real-docker E2E
+      scaffold SHIPPED** (`tests/test_container_e2e.py`, box-only skip-in-CI:
+      punctuation-path rw roundtrip, ro read-only, nested ro-under-rw subsume,
+      --rm failure cleanup).
    7. **Portable-learning chunks 1–4** (`docs/PORTABLE_LEARNING_DESIGN.md`
       §7, §8 ratified 2026-07-12) — 1.0 scope-decree item (g).
       **Chunk 1 — migration runbook + doctor checks — SHIPPED 2026-07-12
