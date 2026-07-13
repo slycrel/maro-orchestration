@@ -33,6 +33,7 @@ import uuid
 from typing import List, TYPE_CHECKING
 if TYPE_CHECKING:
     from conversation import ConversationChannel
+    from persona import PersonaRegistry
 
 log = logging.getLogger("maro.handle")
 from dataclasses import dataclass
@@ -94,6 +95,17 @@ _PREFIX_REGISTRY: List[_PrefixRule] = [
     _PrefixRule("garrytan:",    flag="",           model_tier="power", persona="garrytan"),
 ]
 
+# Generalized "run this AS <persona>" pattern (BACKLOG hist-r2-02). Unlike the
+# fixed-string rules above, the persona name is a variable captured out of the
+# message, so it can't live in _PREFIX_REGISTRY as an exact-string entry — it
+# gets its own regex. Only identity is forced this way (no model_tier bump);
+# garrytan: stays the dedicated shortcut for "identity + power tier" bundled
+# together, since that tier bump is a persona-specific tuning choice, not
+# something every persona should carry. See _resolve_forced_persona() for the
+# existence check (kept out of this function so it stays a pure string
+# transform with no registry import).
+_PERSONA_PREFIX_RE = re.compile(r"^persona:([a-z0-9][a-z0-9_+-]*):\s*", re.IGNORECASE)
+
 
 def _apply_prefixes(message: str) -> _PrefixResult:
     """Strip all recognized magic prefixes from `message` and return a _PrefixResult.
@@ -125,12 +137,53 @@ def _apply_prefixes(message: str) -> _PrefixResult:
                         result.model_tier = rule.model_tier
                 if rule.max_steps:
                     result.max_steps = rule.max_steps
-                if rule.persona and not result.forced_persona:
-                    result.forced_persona = rule.persona
+                if rule.persona:
+                    if result.forced_persona and result.forced_persona != rule.persona:
+                        import logging as _logging
+                        _logging.getLogger("maro.handle").warning(
+                            "conflicting forced personas: %r already set, ignoring %r (from prefix %r)",
+                            result.forced_persona, rule.persona, rule.prefix,
+                        )
+                    elif not result.forced_persona:
+                        result.forced_persona = rule.persona
                 changed = True
                 lower = result.message.lower()  # re-check after strip
                 break  # restart registry scan after each match
+        if not changed:
+            _pmatch = _PERSONA_PREFIX_RE.match(result.message)
+            if _pmatch:
+                _requested = _pmatch.group(1).lower()
+                if result.forced_persona and result.forced_persona != _requested:
+                    import logging as _logging
+                    _logging.getLogger("maro.handle").warning(
+                        "conflicting forced personas: %r already set, ignoring %r (from prefix 'persona:%s:')",
+                        result.forced_persona, _requested, _requested,
+                    )
+                elif not result.forced_persona:
+                    result.forced_persona = _requested
+                result.message = result.message[_pmatch.end():].lstrip()
+                changed = True
     return result
+
+
+def _resolve_forced_persona(requested: str, registry: "PersonaRegistry") -> "tuple[str, bool]":
+    """Validate a forced-persona request (from a prefix or the `persona=` kwarg).
+
+    Returns (name, honored). When `requested` is empty or doesn't match a real,
+    registered persona, honored=False and a warning is logged listing what IS
+    available — callers fall back to persona_for_goal() auto-selection rather
+    than silently producing no persona context (BACKLOG hist-r2-02: an unknown
+    forced persona must degrade gracefully, not crash or no-op quietly).
+    """
+    if not requested:
+        return "", False
+    if registry.load(requested) is not None:
+        return requested, True
+    log.warning(
+        "handle: forced persona %r not found — available: %s — falling back to auto-selection",
+        requested, ", ".join(registry.list()) or "(none)",
+    )
+    return "", False
 
 
 # ---------------------------------------------------------------------------
@@ -509,6 +562,7 @@ def handle(
     channel: Optional["ConversationChannel"] = None,
     prior_context: Optional[str] = None,
     origin: Optional[dict] = None,
+    persona: Optional[str] = None,
 ) -> HandleResult:
     """Process an incoming request through Maro's handle.
 
@@ -539,6 +593,7 @@ def handle(
             channel=channel,
             prior_context=prior_context,
             origin=origin,
+            persona=persona,
         )
         return result
     except Exception as _handle_exc:
@@ -663,6 +718,7 @@ def _handle_impl(
     channel: Optional["ConversationChannel"] = None,
     prior_context: Optional[str] = None,
     origin: Optional[dict] = None,
+    persona: Optional[str] = None,
 ) -> HandleResult:
     """Process an incoming request through Maro's handle.
 
@@ -682,6 +738,12 @@ def _handle_impl(
             (parent_handle_id, parent_loop_id, parent_goal, source, job_id).
             Stamped into the run-dir metadata so every run is traceable to the
             thread it serves. None for direct user input.
+        persona: Explicit forced-persona name (CLI --persona / programmatic
+            callers). Same effect as a `persona:<name>:` prefix in the message
+            text, but takes precedence over it when both are given (an explicit
+            argument beats freeform text — same precedence `model=` already has
+            over `effort:` prefixes). Unknown names degrade to normal
+            persona_for_goal() auto-selection; see _resolve_forced_persona().
 
     Returns:
         HandleResult with routing info and substantive result.
@@ -1256,19 +1318,34 @@ def _handle_impl(
             _loop_kwargs["step_callback"] = _step_cb
 
         # Persona injection: select best persona for goal and inject as ancestry_context_extra.
-        # forced_persona (from garrytan:, etc.) overrides auto-selection.
+        # forced_persona (from garrytan:, persona:<name>:, or the explicit persona=
+        # kwarg) overrides auto-selection — but only when the name resolves to a
+        # real, registered persona (_resolve_forced_persona). An unknown forced
+        # name degrades to normal persona_for_goal() auto-selection with a
+        # warning, rather than silently producing no persona context
+        # (BACKLOG hist-r2-02).
         _persona_ctx = ""
         try:
             from persona import persona_for_goal, PersonaRegistry, build_persona_system_prompt, record_persona_dispatch, _DEFAULT_PERSONA
             _preg = PersonaRegistry()
             _pconf = 1.0
-            if _pfx.forced_persona:
-                _pname = _pfx.forced_persona
-            else:
+            # Explicit persona= kwarg wins over a text-embedded prefix — same
+            # precedence model= already has over the effort: prefix group.
+            _requested_persona = _pfx.forced_persona
+            if persona and persona.strip():
+                _explicit_persona = persona.strip().lower()
+                if _requested_persona and _requested_persona != _explicit_persona:
+                    log.warning(
+                        "handle: explicit persona=%r overrides prefix-forced persona=%r",
+                        _explicit_persona, _requested_persona,
+                    )
+                _requested_persona = _explicit_persona
+            _pname, _forced_honored = _resolve_forced_persona(_requested_persona, _preg)
+            if not _forced_honored:
                 _pname, _pconf = persona_for_goal(message, registry=_preg, confidence_threshold=0.75)
             # Track dispatch for persona gap detection (evolver uses this)
             try:
-                _is_fallback = not _pfx.forced_persona and (
+                _is_fallback = not _forced_honored and (
                     _pconf < 0.75 or _pname == _DEFAULT_PERSONA
                 )
                 record_persona_dispatch(message, _pname, _pconf, is_fallback=_is_fallback)
@@ -1279,14 +1356,14 @@ def _handle_impl(
                     "persona": _pname,
                     "persona_confidence": round(_pconf, 3),
                     "persona_fallback": _is_fallback,
-                    "persona_forced": bool(_pfx.forced_persona),
+                    "persona_forced": _forced_honored,
                 })
             except Exception:
                 pass
             _pspec = _preg.load(_pname)
             if _pspec:
                 _persona_ctx = build_persona_system_prompt(_pspec, goal=message)
-                log.info("handle: persona=%s conf=%.2f forced=%s", _pname, _pconf, bool(_pfx.forced_persona))
+                log.info("handle: persona=%s conf=%.2f forced=%s", _pname, _pconf, _forced_honored)
         except Exception:
             pass
         _extra_ctx_parts = []
@@ -2369,6 +2446,7 @@ def main(argv=None):
     parser.add_argument("--repo", help="Path to target repo (auto-injects stack context into decompose)")
     parser.add_argument("--model", "-m", help="LLM model string")
     parser.add_argument("--lane", choices=["now", "agenda"], help="Force a specific lane")
+    parser.add_argument("--persona", help="Force a specific persona by name (same as a 'persona:<name>:' prefix in the message; unknown names fall back to auto-selection)")
     parser.add_argument("--dry-run", action="store_true", help="Simulate without API calls")
     parser.add_argument("--verbose", "-v", action="store_true", help="Print progress")
     parser.add_argument("--format", choices=["text", "json"], default="text")
@@ -2394,6 +2472,7 @@ def main(argv=None):
             force_lane=args.lane,
             dry_run=args.dry_run,
             verbose=args.verbose,
+            persona=args.persona,
         )
     except RuntimeError as e:
         # build_adapter() raises RuntimeError with an actionable, human-facing

@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
@@ -961,3 +962,47 @@ def test_cli_viz_search_no_matches(tmp_path):
     r = _run(tmp_path, "viz", "search", "--goal", "nothing-matches-this")
     assert r.returncode == 0
     assert "no matching runs" in r.stdout
+
+
+# ---------------------------------------------------------------------------
+# BACKLOG hist-r2-02: `maro handle --persona <name>` CLI parity with the
+# persona:<name>: prompt-prefix path
+# ---------------------------------------------------------------------------
+
+def test_cli_handle_persona_flag_threads_through(tmp_path):
+    """--persona is forwarded to handle.handle() as the `persona` kwarg —
+    same effect as typing a persona:<name>: prefix, but via a real CLI flag."""
+    import handle as _handle_mod
+
+    captured = {}
+
+    def _fake_handle(msg, **kwargs):
+        captured.update(kwargs)
+        return _handle_mod.HandleResult(
+            handle_id="test", lane="now", lane_confidence=1.0,
+            classification_reason="stub", message=msg, status="done", result="ok",
+        )
+
+    with patch("handle.handle", side_effect=_fake_handle):
+        r = _run(tmp_path, "handle", "do", "the", "thing", "--persona", "builder")
+    assert r.returncode == 0
+    assert captured.get("persona") == "builder"
+
+
+def test_cli_handle_without_persona_flag_passes_none(tmp_path):
+    """No --persona given -> handle() gets persona=None, not a missing kwarg."""
+    import handle as _handle_mod
+
+    captured = {}
+
+    def _fake_handle(msg, **kwargs):
+        captured.update(kwargs)
+        return _handle_mod.HandleResult(
+            handle_id="test", lane="now", lane_confidence=1.0,
+            classification_reason="stub", message=msg, status="done", result="ok",
+        )
+
+    with patch("handle.handle", side_effect=_fake_handle):
+        r = _run(tmp_path, "handle", "do", "the", "thing")
+    assert r.returncode == 0
+    assert captured.get("persona") is None

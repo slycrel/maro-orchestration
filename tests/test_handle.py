@@ -1222,6 +1222,173 @@ class TestApplyPrefixes:
 
 
 # ---------------------------------------------------------------------------
+# BACKLOG hist-r2-02: generalized "run this AS <persona>" prefix
+# ---------------------------------------------------------------------------
+
+class TestPersonaPrefix:
+    """Direct tests for the persona:<name>: prefix parsing in _apply_prefixes().
+
+    Parsing is deliberately dumb (no registry import, no existence check) —
+    see _resolve_forced_persona() below for the validation seam.
+    """
+
+    def test_persona_prefix_sets_forced_persona_and_strips_it(self):
+        from handle import _apply_prefixes
+        r = _apply_prefixes("persona:builder: fix the login bug")
+        assert r.message == "fix the login bug"
+        assert r.forced_persona == "builder"
+
+    def test_persona_prefix_case_insensitive_and_name_lowercased(self):
+        from handle import _apply_prefixes
+        r = _apply_prefixes("PERSONA:Builder: fix it")
+        assert r.forced_persona == "builder"
+        assert r.message == "fix it"
+
+    def test_persona_prefix_stacks_with_effort_persona_first(self):
+        from handle import _apply_prefixes
+        r = _apply_prefixes("persona:builder: effort:high fix it")
+        assert r.forced_persona == "builder"
+        assert r.model_tier == "power"
+        assert r.message == "fix it"
+
+    def test_persona_prefix_stacks_with_effort_effort_first(self):
+        from handle import _apply_prefixes
+        r = _apply_prefixes("effort:high persona:builder: fix it")
+        assert r.forced_persona == "builder"
+        assert r.model_tier == "power"
+        assert r.message == "fix it"
+
+    def test_persona_prefix_carries_no_model_tier_of_its_own(self):
+        # Unlike garrytan:, the generic prefix is identity-only — it must never
+        # set model_tier by itself (that stays garrytan:'s bundled shortcut).
+        from handle import _apply_prefixes
+        r = _apply_prefixes("persona:builder: fix it")
+        assert r.model_tier == ""
+
+    def test_bare_word_starting_with_persona_does_not_false_positive(self):
+        # "personal" starts with "persona" but has no colon right after it —
+        # must not be mistaken for the persona: prefix.
+        from handle import _apply_prefixes
+        r = _apply_prefixes("personal reasons aside, ship it")
+        assert r.forced_persona == ""
+        assert r.message == "personal reasons aside, ship it"
+
+    def test_first_persona_request_wins_when_stacked(self, caplog):
+        # Mirrors the "first wins" rule already used for model tiers — a
+        # second persona: (or garrytan:) request never overrides the first,
+        # and (also mirroring the model-tier conflict path) it's logged.
+        import logging
+        from handle import _apply_prefixes
+        with caplog.at_level(logging.WARNING, logger="maro.handle"):
+            r = _apply_prefixes("persona:builder: persona:critic: fix it")
+        assert r.forced_persona == "builder"
+        assert r.message == "fix it"
+        assert any("conflicting forced personas" in rec.message for rec in caplog.records)
+
+    def test_garrytan_shortcut_unaffected_by_generic_mechanism(self):
+        from handle import _apply_prefixes
+        r = _apply_prefixes("garrytan: analyze this market")
+        assert r.forced_persona == "garrytan"
+        assert r.model_tier == "power"
+
+    def test_garrytan_effort_conflict_first_wins_and_warns(self, caplog):
+        # garrytan: bundles model_tier="power" — an earlier effort: prefix
+        # conflicts with it. The existing _apply_prefixes conflict-warning
+        # logic (first prefix in the string wins) already covers this; this
+        # test just proves it for the persona-carrying rule specifically.
+        import logging
+        from handle import _apply_prefixes
+        with caplog.at_level(logging.WARNING, logger="maro.handle"):
+            r = _apply_prefixes("effort:low garrytan: analyze this market")
+        assert r.model_tier == "cheap"          # effort:low parsed first, wins
+        assert r.forced_persona == "garrytan"   # persona forcing is independent of the tier conflict
+        assert any("conflicting model tiers" in rec.message for rec in caplog.records)
+
+
+class TestResolveForcedPersona:
+    """Direct tests for _resolve_forced_persona() — the existence-validation
+    seam shared by garrytan:, persona:<name>:, and the persona= kwarg. Keeps
+    an unknown forced name from silently producing no persona context.
+    """
+
+    def _registry(self, tmp_path, names=("pm",)):
+        from persona import PersonaRegistry
+        for n in names:
+            (tmp_path / f"{n}.md").write_text(f"---\nname: {n}\nrole: {n.title()}\n---\nBody\n")
+        return PersonaRegistry(personas_dir=tmp_path)
+
+    def test_valid_persona_is_honored(self, tmp_path):
+        from handle import _resolve_forced_persona
+        registry = self._registry(tmp_path)
+        name, honored = _resolve_forced_persona("pm", registry)
+        assert (name, honored) == ("pm", True)
+
+    def test_unknown_persona_degrades_gracefully_and_warns(self, tmp_path, caplog):
+        import logging
+        from handle import _resolve_forced_persona
+        registry = self._registry(tmp_path)
+        with caplog.at_level(logging.WARNING, logger="maro.handle"):
+            name, honored = _resolve_forced_persona("not-a-real-persona", registry)
+        assert (name, honored) == ("", False)
+        assert any(
+            "not-a-real-persona" in rec.message and "not found" in rec.message
+            for rec in caplog.records
+        )
+
+    def test_empty_request_is_not_honored_and_does_not_warn(self, tmp_path, caplog):
+        import logging
+        from handle import _resolve_forced_persona
+        registry = self._registry(tmp_path)
+        with caplog.at_level(logging.WARNING, logger="maro.handle"):
+            name, honored = _resolve_forced_persona("", registry)
+        assert (name, honored) == ("", False)
+        assert not caplog.records
+
+
+class TestPersonaForcingIntegration:
+    """End-to-end through handle(): prefix / persona= kwarg -> validated forced
+    persona -> dispatch tracking. dry_run=True keeps this hermetic (no LLM
+    calls); the AGENDA persona-injection block runs regardless of dry_run.
+    """
+
+    def test_persona_prefix_routes_to_named_persona(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        import persona as _persona_mod
+        mock_dispatch = MagicMock()
+        monkeypatch.setattr(_persona_mod, "record_persona_dispatch", mock_dispatch)
+        handle("persona:builder: fix the login bug", dry_run=True, force_lane="agenda")
+        assert mock_dispatch.call_args is not None
+        _, _pname, _pconf = mock_dispatch.call_args.args
+        assert _pname == "builder"
+        assert mock_dispatch.call_args.kwargs.get("is_fallback") is False
+
+    def test_unknown_forced_persona_falls_back_to_auto_selection(self, monkeypatch, tmp_path, caplog):
+        import logging
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        import persona as _persona_mod
+        mock_dispatch = MagicMock()
+        monkeypatch.setattr(_persona_mod, "record_persona_dispatch", mock_dispatch)
+        with caplog.at_level(logging.WARNING, logger="maro.handle"):
+            handle("persona:not-a-real-persona: build something new", dry_run=True, force_lane="agenda")
+        assert mock_dispatch.call_args is not None
+        _, _pname, _pconf = mock_dispatch.call_args.args
+        assert _pname != "not-a-real-persona"  # fell back to a real, registered persona
+        assert any(
+            "not-a-real-persona" in rec.message and "not found" in rec.message
+            for rec in caplog.records
+        )
+
+    def test_explicit_persona_kwarg_overrides_prefix(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        import persona as _persona_mod
+        mock_dispatch = MagicMock()
+        monkeypatch.setattr(_persona_mod, "record_persona_dispatch", mock_dispatch)
+        handle("persona:builder: do it", dry_run=True, force_lane="agenda", persona="critic")
+        _, _pname, _pconf = mock_dispatch.call_args.args
+        assert _pname == "critic"
+
+
+# ---------------------------------------------------------------------------
 # Phase 58: pre_flight_review surfaced on LoopResult
 # ---------------------------------------------------------------------------
 

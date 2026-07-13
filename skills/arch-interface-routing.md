@@ -101,10 +101,11 @@ Prefixes mutate execution behavior without changing the goal text. Applied in ha
 | `strict:` | Higher quality thresholds |
 | `pipeline:` | DAG validation mode |
 | `team:` | Multi-worker coordination |
-| `garrytan:` | Force power tier + specific persona |
+| `garrytan:` | Force power tier + the garrytan persona (bundled shortcut) |
+| `persona:<name>:` | Force any registered persona by name (identity only, no tier bump) — `--persona` on `maro handle` does the same thing |
 | `mode:thin` | Route to factory_thin loop |
 
-Prefixes stack (non-exclusive) except effort levels (first wins). Registry in handle.py `_PREFIX_REGISTRY`.
+Prefixes stack (non-exclusive) except effort levels (first wins). Registry in handle.py `_PREFIX_REGISTRY`; `persona:<name>:` is a regex match next to it (variable name, can't be a fixed-string registry entry) — see `_apply_prefixes()`/`_resolve_forced_persona()`. Unknown persona names degrade to normal `persona_for_goal()` auto-selection with a logged warning, never a crash or a silent no-op. Conflicting forced-persona requests (like conflicting model tiers) log a warning and keep the first.
 
 ## Director (director.py)
 
