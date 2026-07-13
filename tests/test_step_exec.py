@@ -1186,3 +1186,104 @@ class TestRegistryToolDispatch:
         result = self._run_step(tmp_path, monkeypatch, "schema_only_tool")
         assert result["status"] == "blocked"
         assert "unrecognised tool" in result["stuck_reason"]
+
+
+# ---------------------------------------------------------------------------
+# verify_step's Tier 1b: hosted-free rung (BACKLOG #25)
+# ---------------------------------------------------------------------------
+
+class TestVerifyStepHostedFreeTier:
+    """Hosted-free (Groq/Gemini) rung wiring inside verify_step's ladder.
+
+    Real GroqAdapter/GeminiAdapter HTTP behavior is covered in
+    tests/test_hosted_free.py; these tests only check step_exec's own
+    wiring — that the tier is skipped when unavailable (regression net:
+    byte-identical paid path when GROQ_API_KEY/GEMINI_API_KEY are unset),
+    that a decisive hosted-free verdict short-circuits before paid, and
+    that an UNDECIDED hosted-free verdict escalates to paid same as the
+    local tier does.
+    """
+
+    def test_inert_when_hosted_free_unavailable(self, monkeypatch):
+        """No key configured (hosted_free.available() False): untouched paid path."""
+        from step_exec import verify_step
+        import hosted_free as hf
+        monkeypatch.setattr(hf, "available", lambda: False)
+
+        mock_va = MagicMock()
+        mock_va.verify_step.return_value = MagicMock(passed=True, reason="looks good", confidence=0.9)
+        with patch("verification_agent.VerificationAgent", return_value=mock_va):
+            out = verify_step("do the thing", "did the thing", MagicMock())
+
+        assert out["passed"] is True
+        assert "decision" not in out  # unescalated — hosted-free tier never engaged
+
+    def test_hosted_free_decisive_pass_skips_paid(self, monkeypatch):
+        """A confident hosted-free verdict returns immediately; paid is never called."""
+        from step_exec import verify_step
+        import hosted_free as hf
+
+        hosted_adapter = MagicMock()
+        hosted_adapter._active_provider = "groq"
+        hosted_adapter.model_key = "llama-3.1-8b-instant"
+        monkeypatch.setattr(hf, "available", lambda: True)
+        monkeypatch.setattr(hf, "build_hosted_free_adapter", lambda: hosted_adapter)
+        monkeypatch.setattr(hf, "min_certainty", lambda: 0.6)
+        monkeypatch.setattr(hf, "input_char_budget", lambda: 4000)
+
+        decisive_verdict = MagicMock(passed=True, reason="fine", confidence=0.95)
+        mock_va = MagicMock()
+        mock_va.verify_step.return_value = decisive_verdict
+
+        paid_adapter = MagicMock()
+        with patch("verification_agent.VerificationAgent", return_value=mock_va):
+            out = verify_step("do the thing", "did the thing", paid_adapter)
+
+        assert out["passed"] is True
+        assert out["decision"] == "HOSTED_FREE_PASS"
+        assert "groq" in out["source"]
+        paid_adapter.complete.assert_not_called()
+
+    def test_hosted_free_undecided_escalates_to_paid(self, monkeypatch):
+        """Low-confidence hosted-free verdict escalates; paid verdict wins."""
+        from step_exec import verify_step
+        import hosted_free as hf
+
+        hosted_adapter = MagicMock()
+        hosted_adapter._active_provider = "gemini"
+        hosted_adapter.model_key = "gemini-2.0-flash"
+        monkeypatch.setattr(hf, "available", lambda: True)
+        monkeypatch.setattr(hf, "build_hosted_free_adapter", lambda: hosted_adapter)
+        monkeypatch.setattr(hf, "min_certainty", lambda: 0.9)  # hard to clear -> UNDECIDED
+        monkeypatch.setattr(hf, "input_char_budget", lambda: 4000)
+
+        undecided_verdict = MagicMock(passed=True, reason="unsure", confidence=0.5)
+        paid_verdict = MagicMock(passed=True, reason="paid says fine", confidence=0.95)
+        mock_va = MagicMock()
+        mock_va.verify_step.side_effect = [undecided_verdict, paid_verdict]
+
+        paid_adapter = MagicMock()
+        with patch("verification_agent.VerificationAgent", return_value=mock_va):
+            out = verify_step("do the thing", "did the thing", paid_adapter)
+
+        assert out["passed"] is True
+        assert out["decision"] == "ESCALATED"
+        assert out["source"] == "paid"
+
+    def test_hosted_free_error_falls_through_to_paid(self, monkeypatch):
+        """build_hosted_free_adapter/verify raising is swallowed — paid path unaffected."""
+        from step_exec import verify_step
+        import hosted_free as hf
+
+        monkeypatch.setattr(hf, "available", lambda: True)
+        def _boom():
+            raise RuntimeError("boom")
+        monkeypatch.setattr(hf, "build_hosted_free_adapter", _boom)
+
+        mock_va = MagicMock()
+        mock_va.verify_step.return_value = MagicMock(passed=True, reason="fine", confidence=0.9)
+        with patch("verification_agent.VerificationAgent", return_value=mock_va):
+            out = verify_step("do the thing", "did the thing", MagicMock())
+
+        assert out["passed"] is True
+        assert "decision" not in out

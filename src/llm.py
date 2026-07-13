@@ -1959,15 +1959,27 @@ class OpenAICompatAdapter(LLMAdapter):
     endpoint. No SDK dependency — just requests. Subclasses set `backend`,
     `_resolve_backend_key` (the key passed to `resolve_model`), and may
     override `_extra_headers()` for endpoint-specific auth/routing headers.
+
+    `max_retries`: forwarded to `_retry_complete` (None = its own default of
+    3, same as before this parameter existed). Hosted-free validation-ladder
+    subclasses (GroqAdapter, GeminiAdapter — see hosted_free.py) pass 0: a
+    tight free-tier RPM budget makes a multi-attempt exponential backoff
+    (up to 65s) the wrong response to a 429 — a rate-limit-aware breaker one
+    layer up (hosted_free._HostedFreeLadder) should decide to skip the
+    provider instead, which needs the 429 to surface immediately, not after
+    this class's own retry ladder burns through it first.
     """
 
     backend = "openai"
     _resolve_backend_key = "openai"
 
-    def __init__(self, api_key: str, model: str = MODEL_CHEAP, base_url: str = "https://api.openai.com/v1"):
+    def __init__(self, api_key: str, model: str = MODEL_CHEAP,
+                 base_url: str = "https://api.openai.com/v1",
+                 max_retries: Optional[int] = None):
         self._api_key = api_key
         self.model_key = model
         self._base_url = base_url.rstrip("/")
+        self._max_retries = max_retries
 
     def _extra_headers(self) -> Dict[str, str]:
         return {}
@@ -2007,7 +2019,8 @@ class OpenAICompatAdapter(LLMAdapter):
             r = requests.post(f"{self._base_url}/chat/completions", headers=headers, json=payload, timeout=120)
             r.raise_for_status()
             return r
-        resp = _retry_complete(_do_request)
+        _retry_kwargs = {} if self._max_retries is None else {"max_retries": self._max_retries}
+        resp = _retry_complete(_do_request, **_retry_kwargs)
         data = resp.json()
 
         choice = data["choices"][0]
@@ -2060,6 +2073,63 @@ class OpenAIAdapter(OpenAICompatAdapter):
 
     backend = "openai"
     _resolve_backend_key = "openai"
+
+
+# ---------------------------------------------------------------------------
+# GroqAdapter / GeminiAdapter — hosted-free validation-ladder tier (BACKLOG #25)
+# ---------------------------------------------------------------------------
+# Zero-cost rung for non-agentic call classes (validation ladder, classify/
+# routing, cheap verification) — see hosted_free.py for the config, model-ID
+# resolution, and per-provider rate-limit/latency breakers that wire these
+# into step_exec.verify_step alongside local_models' local-model tier.
+#
+# Deliberately NOT in DEFAULT_BACKEND_ORDER / _KNOWN_BACKENDS / build_adapter:
+# these are free-tier helpers with tight RPM caps (Groq: 30 RPM / ~14.4K-1K
+# req/day depending on model; Gemini free: ~10 RPM), not general-purpose
+# execution backends — they must never be silently picked up by the paid
+# failover chain. `max_retries=0` (the class default here, not the base
+# class's) means a 429 surfaces immediately instead of burning
+# `_retry_complete`'s exponential backoff ladder — hosted_free.py's breaker
+# is what decides whether/when to try this provider again.
+#
+# Model IDs are NOT hardcoded in `_MODEL_MAP` on purpose (BACKLOG #25: "Model
+# churn is real — keep model IDs in config, not code", e.g. Kimi K2 removed
+# Mar 2026). `resolve_model()` passes an unrecognized backend/model pair
+# through unchanged (see its docstring), so hosted_free.py resolves the
+# actual model string from config and hands it straight to `model=` here.
+
+class GroqAdapter(OpenAICompatAdapter):
+    """HTTP adapter for Groq's OpenAI-compatible endpoint (free tier).
+
+    `GROQ_API_KEY` (env or credentials .env, same discovery contract as the
+    other backends) — absent key means callers simply never construct this
+    (see hosted_free.configured_providers()); the adapter itself has no
+    inert/no-op mode of its own, matching how AnthropicSDKAdapter/
+    OpenRouterAdapter/OpenAIAdapter behave without a key.
+    """
+
+    backend = "groq"
+    _resolve_backend_key = "groq"
+
+    def __init__(self, api_key: str, model: str, max_retries: Optional[int] = 0):
+        super().__init__(api_key, model, base_url="https://api.groq.com/openai/v1",
+                          max_retries=max_retries)
+
+
+class GeminiAdapter(OpenAICompatAdapter):
+    """HTTP adapter for Gemini's official OpenAI-compatible endpoint (free tier).
+
+    `GEMINI_API_KEY` (env or credentials .env). Same no-key-means-don't-build
+    contract as GroqAdapter.
+    """
+
+    backend = "gemini"
+    _resolve_backend_key = "gemini"
+
+    def __init__(self, api_key: str, model: str, max_retries: Optional[int] = 0):
+        super().__init__(api_key, model,
+                          base_url="https://generativelanguage.googleapis.com/v1beta/openai",
+                          max_retries=max_retries)
 
 
 # ---------------------------------------------------------------------------

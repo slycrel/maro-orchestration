@@ -139,6 +139,7 @@ py-modules = [
     "harness_optimizer",
     "heartbeat",
     "hooks",
+    "hosted_free",
     "hybrid_search",
     "injection_guard",
     "inspector",
