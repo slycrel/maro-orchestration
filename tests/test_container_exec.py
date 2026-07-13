@@ -8,6 +8,7 @@ docs/CONTAINER_EXECUTOR_DESIGN.md, C1 "no docker dependency in CI").
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -530,87 +531,102 @@ class TestDoctorContainerRows:
 # C3 — run-level container gate + fence → mount-map translation
 # ---------------------------------------------------------------------------
 
-class TestContainerRunActive:
-    """The run-level gate that decides whether to provision a self-dev scratch
-    clone. off (default) returns before any docker probe; on/require probe once."""
+def R(p):
+    """realpath — build_mount_map resolves symlinks, so expected paths must too."""
+    return os.path.realpath(str(p))
 
-    def test_off_returns_false_without_probing(self, monkeypatch):
+
+class TestContainerConfigured:
+    """The config-intent gate for self-dev clone provisioning — deliberately no
+    docker probe, so the decision can't race the daemon (adversarial-review A)."""
+
+    def test_off_is_not_configured(self, monkeypatch):
         monkeypatch.setattr(ce, "container_mode", lambda: "off")
-        def _boom():
-            raise AssertionError("docker_probe must not run when mode is off")
-        monkeypatch.setattr(ce, "docker_probe", _boom)
-        assert ce.container_run_active() is False
+        assert ce.container_configured() is False
 
-    def test_on_with_docker_up_is_active(self, monkeypatch):
+    def test_on_is_configured(self, monkeypatch):
         monkeypatch.setattr(ce, "container_mode", lambda: "on")
-        monkeypatch.setattr(ce, "docker_probe", lambda: (True, "docker 24"))
-        assert ce.container_run_active() is True
+        assert ce.container_configured() is True
 
-    def test_on_with_docker_down_is_inactive(self, monkeypatch):
-        monkeypatch.setattr(ce, "container_mode", lambda: "on")
-        monkeypatch.setattr(ce, "docker_probe", lambda: (False, "no daemon"))
-        assert ce.container_run_active() is False
-
-    def test_require_with_docker_down_is_inactive_no_raise(self, monkeypatch):
-        # The run-level gate never raises — the per-call resolve_container_run
-        # owns the require-mode ContainerUnavailable contract.
+    def test_require_is_configured(self, monkeypatch):
         monkeypatch.setattr(ce, "container_mode", lambda: "require")
-        monkeypatch.setattr(ce, "docker_probe", lambda: (False, "no daemon"))
-        assert ce.container_run_active() is False
+        assert ce.container_configured() is True
+
+    def test_does_not_probe_docker(self, monkeypatch):
+        monkeypatch.setattr(ce, "container_mode", lambda: "on")
+        def _boom():
+            raise AssertionError("container_configured must not probe docker")
+        monkeypatch.setattr(ce, "docker_probe", _boom)
+        assert ce.container_configured() is True
+
+
+class TestContainerSuppression:
+    def test_suppressed_run_stays_on_host(self, monkeypatch):
+        ce.reset_container_caches()
+        monkeypatch.setattr(ce, "get", lambda k, d=None: "on" if k == "executor.container" else d)
+        monkeypatch.setattr(ce, "docker_probe", lambda: (True, "docker 24"))
+        # Without suppression an executor call would containerize...
+        assert ce.resolve_container_run(no_tools=False, executor=True) is not None
+        # ...suppression forces host (never mounts the live repo rw).
+        ce.set_container_suppressed(True)
+        assert ce.resolve_container_run(no_tools=False, executor=True) is None
+        ce.reset_container_caches()  # also clears suppression
+        assert ce.container_suppressed() is False
 
 
 class TestBuildMountMap:
     def test_cwd_only_is_single_rw_mount(self, tmp_path):
-        cwd = str(tmp_path)
-        assert ce.build_mount_map(cwd) == [(cwd, "rw")]
+        cwd = tmp_path / "proj"; cwd.mkdir()
+        assert ce.build_mount_map(str(cwd)) == [(R(cwd), "rw")]
 
-    def test_cwd_mounted_verbatim_for_workdir_match(self, tmp_path):
-        # cwd must appear exactly as passed (the seam also passes it as `-w`).
-        cwd = str(tmp_path) + "/"  # trailing slash preserved on the cwd entry
-        out = ce.build_mount_map(cwd)
-        assert out[0] == (cwd, "rw")
+    def test_cwd_realpath_resolved_for_workdir_match(self, tmp_path):
+        # A symlinked cwd resolves to its target (what docker binds + -w names).
+        real = tmp_path / "real"; real.mkdir()
+        link = tmp_path / "link"; link.symlink_to(real)
+        out = ce.build_mount_map(str(link))
+        assert out == [(R(real), "rw")]
 
     def test_rw_root_added(self, tmp_path):
         cwd = tmp_path / "proj"; cwd.mkdir()
         extra = tmp_path / "data"; extra.mkdir()
         out = ce.build_mount_map(str(cwd), rw_roots=[str(extra)])
-        assert (str(extra), "rw") in out
-        assert out[0] == (str(cwd), "rw")  # cwd first
+        assert (R(extra), "rw") in out
+        assert out[0] == (R(cwd), "rw")  # cwd first
 
     def test_missing_rw_root_is_skipped_not_created(self, tmp_path):
         cwd = tmp_path / "proj"; cwd.mkdir()
         missing = tmp_path / "nope"
         out = ce.build_mount_map(str(cwd), rw_roots=[str(missing)])
-        assert out == [(str(cwd), "rw")]
+        assert out == [(R(cwd), "rw")]
         assert not missing.exists()  # pure — never created
 
     def test_rw_root_equal_to_cwd_deduped(self, tmp_path):
         cwd = tmp_path / "proj"; cwd.mkdir()
         out = ce.build_mount_map(str(cwd), rw_roots=[str(cwd)])
-        assert out == [(str(cwd), "rw")]
+        assert out == [(R(cwd), "rw")]
 
     def test_rw_root_nested_under_cwd_deduped(self, tmp_path):
         cwd = tmp_path / "proj"; cwd.mkdir()
         child = cwd / "sub"; child.mkdir()
         out = ce.build_mount_map(str(cwd), rw_roots=[str(child)])
-        assert out == [(str(cwd), "rw")]
+        assert out == [(R(cwd), "rw")]
 
     def test_normpath_dedups_against_cwd(self, tmp_path):
         cwd = tmp_path / "proj"; cwd.mkdir()
         weird = str(cwd) + "/../proj"  # normalizes to cwd
         out = ce.build_mount_map(str(cwd), rw_roots=[weird])
-        assert out == [(str(cwd), "rw")]
+        assert out == [(R(cwd), "rw")]
 
     def test_ro_mount_added(self, tmp_path):
         cwd = tmp_path / "proj"; cwd.mkdir()
         ref = tmp_path / "ref"; ref.mkdir()
         out = ce.build_mount_map(str(cwd), ro_mounts=[str(ref)])
-        assert (str(ref), "ro") in out
+        assert (R(ref), "ro") in out
 
     def test_missing_ro_mount_skipped(self, tmp_path):
         cwd = tmp_path / "proj"; cwd.mkdir()
         out = ce.build_mount_map(str(cwd), ro_mounts=[str(tmp_path / "absent")])
-        assert out == [(str(cwd), "rw")]
+        assert out == [(R(cwd), "rw")]
 
     def test_ro_nested_under_rw_parent_dropped(self, tmp_path):
         # A rw parent already grants write (hence read) to the child — the ro
@@ -618,7 +634,7 @@ class TestBuildMountMap:
         cwd = tmp_path / "proj"; cwd.mkdir()
         child = cwd / "ref"; child.mkdir()
         out = ce.build_mount_map(str(cwd), ro_mounts=[str(child)])
-        assert out == [(str(cwd), "rw")]
+        assert out == [(R(cwd), "rw")]
 
     def test_rw_nested_under_ro_parent_kept(self, tmp_path):
         # A ro parent does NOT cover a rw child — the nested rw mount stays.
@@ -626,10 +642,56 @@ class TestBuildMountMap:
         child = parent / "writable"; child.mkdir()
         cwd = tmp_path / "proj"; cwd.mkdir()
         out = ce.build_mount_map(str(cwd), rw_roots=[str(child)], ro_mounts=[str(parent)])
-        assert (str(child), "rw") in out
-        assert (str(parent), "ro") in out
+        assert (R(child), "rw") in out
+        assert (R(parent), "ro") in out
+
+    def test_dedup_is_order_independent(self, tmp_path):
+        # Child listed BEFORE its parent: the parent still subsumes the child.
+        cwd = tmp_path / "proj"; cwd.mkdir()
+        parent = tmp_path / "data"; parent.mkdir()
+        child = parent / "sub"; child.mkdir()
+        out = ce.build_mount_map(str(cwd), rw_roots=[str(child), str(parent)])
+        assert (R(parent), "rw") in out
+        assert (R(child), "rw") not in out
 
     def test_empty_and_none_entries_ignored(self, tmp_path):
         cwd = tmp_path / "proj"; cwd.mkdir()
         out = ce.build_mount_map(str(cwd), rw_roots=["", None], ro_mounts=[None, ""])
-        assert out == [(str(cwd), "rw")]
+        assert out == [(R(cwd), "rw")]
+
+    def test_comma_path_skipped(self, tmp_path):
+        cwd = tmp_path / "proj"; cwd.mkdir()
+        weird = tmp_path / "a,b"; weird.mkdir()
+        out = ce.build_mount_map(str(cwd), rw_roots=[str(weird)])
+        assert out == [(R(cwd), "rw")]  # comma path dropped (docker --mount CSV)
+
+    def test_workspace_root_is_forbidden(self, tmp_path, monkeypatch):
+        # A rw root that IS the workspace root is refused (orchestration mount).
+        ws = tmp_path / "ws"; ws.mkdir()
+        import config as cfg
+        monkeypatch.setattr(cfg, "workspace_root", lambda: ws)
+        cwd = tmp_path / "proj"; cwd.mkdir()
+        out = ce.build_mount_map(str(cwd), rw_roots=[str(ws)])
+        assert out == [(R(cwd), "rw")]
+
+    def test_workspace_ancestor_is_forbidden(self, tmp_path, monkeypatch):
+        # Mounting a PARENT of the workspace would expose it too.
+        ws = tmp_path / "home" / "ws"; ws.mkdir(parents=True)
+        import config as cfg
+        monkeypatch.setattr(cfg, "workspace_root", lambda: ws)
+        cwd = tmp_path / "proj"; cwd.mkdir()
+        out = ce.build_mount_map(str(cwd), rw_roots=[str(tmp_path / "home")])
+        assert out == [(R(cwd), "rw")]
+
+    def test_forbidden_roots_param_excludes_live_repo(self, tmp_path):
+        cwd = tmp_path / "clone"; cwd.mkdir()
+        repo = tmp_path / "live-repo"; repo.mkdir()
+        out = ce.build_mount_map(str(cwd), rw_roots=[str(repo)], forbidden_roots=[str(repo)])
+        assert (R(repo), "rw") not in out
+        assert out == [(R(cwd), "rw")]
+
+    def test_tmp_root_is_forbidden(self, tmp_path):
+        # Bare host /tmp must never be a mount; a specific subdir is fine.
+        cwd = tmp_path / "proj"; cwd.mkdir()
+        out = ce.build_mount_map(str(cwd), rw_roots=["/tmp"])
+        assert (R("/tmp"), "rw") not in out

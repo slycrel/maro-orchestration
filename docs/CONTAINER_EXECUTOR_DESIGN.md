@@ -357,9 +357,10 @@ No design coupling; noted so neither work stream blocks the other.
     `run_agent_loop` alongside the cwd bind — same pattern as
     `_DEFAULT_SUBPROCESS_CWD`), read only in the container branch of
     `_run_subprocess_safe`.
-  - **Self-dev scratch clone.** When a run's executor steps WILL be
-    containerized (`container_run_active()` — mode on/require + docker up) and
-    the fence dir is a git repo, the live repo is NEVER mounted rw:
+  - **Self-dev scratch clone.** When a run is configured to containerize
+    (`container_configured()` — mode on/require, no live docker probe so the
+    decision can't race the daemon) and the fence dir is a git repo, the live
+    repo is NEVER mounted rw:
     `worktree.provision_clone` makes a `--no-hardlinks` throwaway clone (no
     shared object inode), the run works the copy, and `merge_back_clone`
     merges it back HOST-side via `git fetch` + the SAME serialized
@@ -369,14 +370,66 @@ No design coupling; noted so neither work stream blocks the other.
     worktree→project merge (clone→fence must land first when both are active),
     field `ctx.container_clone`. `cleanup_clone` deletes the scratch only after
     merge-back (allowlisted in the retention-decree tripwire).
-  Tests: `TestBuildMountMap` + `TestContainerRunActive` (translation table,
-  dedup, missing-path skip, run-gate) in `tests/test_container_exec.py`; clone
-  round-trip / no-changes / object-isolation / conflict-preservation in
-  `tests/test_worktree.py`; the rw-roots-flow-through in
-  `tests/test_llm.py`. Full suite green. Known limitation (documented in
-  `build_mount_map`): a goal-declared rw root that doesn't exist on the host is
-  skipped rather than created — the worker's writes there land in the
-  container's ephemeral fs; create it as the cwd or pre-create it.
+  Tests: `TestBuildMountMap` + `TestContainerConfigured` + `TestContainerSuppression`
+  in `tests/test_container_exec.py`; clone round-trip / no-changes /
+  object-isolation / conflict / side-branch data-loss / hook-RCE-neutralization
+  in `tests/test_worktree.py`; the rw-roots-flow-through in `tests/test_llm.py`.
+
+  **Adversarial review (Codex, 3 lenses — Skeptic/Architect/Minimalist,
+  2026-07-13): REJECT with consensus; 6 finding-classes fixed same session.**
+  The mocked-docker suite couldn't see these — the review earned its cost again:
+  - **Fail-open live repo (findings A/M3/S2/A1).** Clone-provision failure — or
+    docker down at run setup but up by an executor call — left `_fence_dir` = the
+    LIVE repo, which the seam then mounted **rw**: the exact thing the clone
+    exists to prevent. Fixed: provisioning is gated on config intent
+    (`container_configured()`, no live probe — kills the timing race), and a
+    git-repo run with no clone **fails CLOSED** via a run-scoped
+    `container_exec.set_container_suppressed` kill switch (`resolve_container_run`
+    → host). A missing clone can never mount a live repo.
+  - **Doc-only exclusions (findings B/M2/S1/A2).** `build_mount_map` mounted
+    `/tmp`, the workspace root, the live repo, and symlink-escapes rw if present.
+    Fixed: every source is realpath-resolved (symlink escapes can't smuggle a
+    target past the filter) and hard-rejected if it is/contains the workspace
+    root, `/tmp`/tempdir, or a caller-supplied `forbidden_root` (the live repo of
+    a self-dev run is dropped from the rw set in `agent_loop`). The cwd is
+    exempt (the run's own dir; kept off the live repo upstream).
+  - **Host-git RCE in the attacker-writable clone (findings C/M1/A3).** Host-side
+    `git status/add/commit/fetch` against a clone whose `.git` a hostile worker
+    controls would execute planted `.git/hooks/*`, `filter.*.clean`,
+    `core.fsmonitor`, or `uploadpack.packObjectsHook` with host privileges —
+    defeating the fence. Fixed: `merge_back_clone` first `_sanitize_untrusted_git`
+    (removes hooks, strips exec-capable local config; the container has exited by
+    finalize so nothing races) and runs every clone-side git `_git_hard`
+    (`-c core.hooksPath=/dev/null -c core.fsmonitor=`). A regression test plants a
+    `pre-commit` hook + `core.fsmonitor` and asserts neither fires.
+  - **Stale run-scoped state (findings D/M4/S4/A4).** The rw-roots ContextVar
+    persisted across runs; a run whose setup raised could inherit a prior run's
+    authorized roots. Fixed: `agent_loop` resets the rw-roots var AND the
+    suppression flag to their empty/safe values FIRST, before anything can raise.
+  - **Clone data-loss / silent success (findings S3/A6).** A worker that switched
+    branches inside the container made `base_ref..clone.branch` show 0 → false
+    "no changes" → `cleanup_clone` deleted the only object store; a swallowed git
+    error did the same; a merge-back exception still reported `done`. Fixed:
+    merge-back keys on the clone's ACTUAL `HEAD` (not an assumed branch), every
+    git-command failure is a failure (never a silent "clean"), and a
+    finalize-time exception downgrades the run to `partial` naming the retained
+    clone.
+  - **Partial-clone leak (finding A5).** A failed `git clone` left a partial dir;
+    now cleaned. (Residual below.)
+
+  **Residuals (documented, for C4 burn-in / Jeremy):**
+  - **Host-git hardening is defense-in-depth, not a proof.** Sanitize + hardened
+    `-c` close the known git config-exec vectors (hooks, filters, fsmonitor,
+    packObjectsHook, aliases); a novel git-config RCE knob would need adding to
+    `_EXEC_CONFIG_KEYS`. The fully-airtight design is committing inside the
+    container so the host only ever fetches — revisit at C4 if burn-in warrants.
+  - **Crash-leaked scratch clones.** A SIGKILL between provision and finalize
+    leaks a whole-repo clone under `worktrees/` (no sweep yet; `prune` only
+    handles git worktrees). Low-frequency; a stale-clone sweep is a follow-on.
+  - **Comma-in-path mounts are skipped** (docker `--mount` CSV can't encode them);
+    a goal-declared rw root that doesn't exist on the host is skipped, not created.
+  - Real-docker E2E (punctuation paths, nested ro/rw, failure cleanup) is a C4
+    item — CI keeps docker mocked.
 - **C4 — burn-in + flip (runtime box, Jeremy adjudicates):** run the
   standing dogfood goals under `container: on`; watch for env-dependency
   surprises, uid/gid friction, boot-tax delta; then decide box default and

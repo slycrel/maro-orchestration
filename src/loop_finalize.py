@@ -341,7 +341,18 @@ def _build_result_and_finalize(
                     + f"container clone merge failed — work preserved: {_cmerge.detail}"
                 )
         except Exception as _cc_exc:
+            # A merge-back exception must NOT be reported as a clean 'done' — the
+            # worker's clone work never reached the fence. Downgrade and name the
+            # retained clone/branch so nothing is silently lost (adversarial-review
+            # 2026-07-13, finding A6). Leave the clone on disk (no cleanup here).
             log.warning("container scratch-clone finalize error: %s", _cc_exc)
+            if result.status == "done":
+                result.status = "partial"
+            result.stuck_reason = (
+                (result.stuck_reason + "; " if result.stuck_reason else "")
+                + f"container clone merge errored — work preserved in "
+                + f"{getattr(_clone, 'path', '?')} (branch {getattr(_clone, 'branch', '?')}): {_cc_exc}"
+            )
         ctx.container_clone = None
 
     # busy_policy=worktree: merge the run's isolated worktree back into the

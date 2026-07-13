@@ -21,11 +21,13 @@ CI).
 
 from __future__ import annotations
 
+import contextvars
 import itertools
 import logging
 import os
 import re
 import subprocess
+import tempfile
 import time
 from typing import Callable, Optional, Tuple
 
@@ -321,10 +323,31 @@ class ContainerUnavailable(RuntimeError):
     the call — the `require` contract refuses rather than silently degrading."""
 
 
+# Run-scoped kill switch: when a git-repo run's self-dev scratch clone could NOT
+# be provisioned, containerizing it would mount the LIVE repo rw (the exact thing
+# the clone exists to prevent). agent_loop sets this so resolve_container_run
+# fails CLOSED to host execution — never mounting a live repo in a container
+# (adversarial-review 2026-07-13, findings A/M3/S2/A1). A ContextVar so thread
+# fan-out inherits it; reset per run by agent_loop.
+_container_suppressed: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "maro_container_suppressed", default=False
+)
+
+
+def set_container_suppressed(on: bool = True) -> None:
+    """Force host execution for this run's executor calls (see _container_suppressed)."""
+    _container_suppressed.set(bool(on))
+
+
+def container_suppressed() -> bool:
+    return _container_suppressed.get()
+
+
 def reset_container_caches() -> None:
-    """Reset the degrade-warning throttle. Test hook."""
+    """Reset the degrade-warning throttle and the container kill switch. Test hook."""
     global _last_degrade_warn
     _last_degrade_warn = 0.0
+    _container_suppressed.set(False)
 
 
 def _current_loop_id() -> str:
@@ -374,6 +397,11 @@ def resolve_container_run(no_tools: bool, executor: bool) -> Optional[str]:
     mode = container_mode()
     if mode == "off":
         return None
+    if container_suppressed():
+        # A git-repo run whose scratch clone could not be provisioned: never
+        # containerize it, because its cwd is the LIVE repo and mounting that rw
+        # is the one thing the clone exists to prevent (fail closed to host).
+        return None
     ok, reason = docker_probe()  # fresh every call — honest degrade/refuse
     if ok:
         return container_name(_current_loop_id(), next(_seq_counter))
@@ -394,25 +422,45 @@ def resolve_container_run(no_tools: bool, executor: bool) -> Optional[str]:
     return None
 
 
-def container_run_active() -> bool:
-    """Would THIS run's executor steps be containerized? Run-level gate for the
-    self-dev scratch-clone provisioning (design §4) — the per-call authority is
-    still resolve_container_run.
+def container_configured() -> bool:
+    """Is the executor configured to containerize (mode on/require)?
 
-    True only when the mode is on/require AND docker is up. `off` (the default)
-    returns before any probe, so a non-container run pays zero boot tax. In
-    require-mode with docker down this returns False (no clone provisioned) and
-    the run's first executor call raises ContainerUnavailable per the contract.
+    Run-level gate for the self-dev scratch-clone provisioning (design §4).
+    Deliberately CONFIG-ONLY — no docker probe — so the provisioning decision
+    can't race a daemon coming up/down between setup and an executor call
+    (adversarial-review 2026-07-13, finding A): the clone is prepared on config
+    intent, and the per-call resolve_container_run remains the authority on
+    whether docker actually runs the call (degrading to host in the clone if the
+    daemon is down — harmless). off (default) → False, zero boot tax.
     """
-    if container_mode() == "off":
-        return False
-    return docker_probe()[0]
+    return container_mode() in ("on", "require")
 
 
-def _norm_path(p) -> str:
-    """normpath (NOT realpath): collapse `..`/`//` without resolving symlinks,
-    so a mount target still matches the `-w <workdir>` the seam passes."""
-    return os.path.normpath(str(p))
+def _forbidden_mount_roots() -> list:
+    """Absolute host roots that must NEVER be bind-mounted into an executor
+    container, realpath-resolved (design §4 "deliberately absent"): the
+    workspace root (mounts the orchestration — memory, config, secrets) and host
+    `/tmp`/tempdir (the container gets its own ephemeral /tmp). A candidate that
+    EQUALS or is an ANCESTOR of any of these is rejected — mounting `/`, `/home`,
+    or the workspace itself would expose the orchestration. (Descendants of the
+    workspace, e.g. a run's own scratch clone, are fine and not matched here.)"""
+    roots = []
+    try:
+        from config import workspace_root
+        roots.append(os.path.realpath(str(workspace_root())))
+    except Exception:
+        pass
+    for t in ("/tmp", tempfile.gettempdir()):
+        try:
+            roots.append(os.path.realpath(t))
+        except Exception:
+            pass
+    return roots
+
+
+def _is_ancestor_or_equal(candidate: str, other: str) -> bool:
+    """True if `candidate` == `other` or is an ancestor directory of it."""
+    return other == candidate or other.startswith(candidate.rstrip(os.sep) + os.sep)
 
 
 def build_mount_map(
@@ -420,66 +468,100 @@ def build_mount_map(
     *,
     rw_roots: Optional[list] = None,
     ro_mounts: Optional[list] = None,
+    forbidden_roots: Optional[list] = None,
 ) -> list:
     """Translate a run's write-fence into a docker mount list [(host_path, mode)].
 
     The mount set mirrors what the fence lets the run WRITE, minus what the
     design deliberately keeps out of the container (design §4):
 
-      - `cwd` (the fence/working dir, or the self-dev scratch clone) → **rw**,
-        mounted verbatim so `-w <cwd>` and the worker's relative writes resolve.
+      - `cwd` (the fence/working dir, or the self-dev scratch clone) → **rw**.
       - `rw_roots` (goal-declared roots + `validate.write_fence_allow`) → **rw**.
       - `ro_mounts` (`executor.container_extra_mounts`) → **ro**.
-      - The workspace root and host `/tmp` are NOT here — the orchestration is
-        never mounted, and the container gets its own ephemeral `/tmp`.
+      - The workspace root, host `/tmp`, and any caller-supplied `forbidden_roots`
+        (e.g. the live repo of a self-dev run) are HARD-EXCLUDED — the exclusion
+        is enforced here, not merely documented (adversarial-review 2026-07-13,
+        finding B): `run_agent_loop` could otherwise pass `/tmp` (via
+        `validate.write_fence_allow`) or a workspace/live-repo root straight
+        through to a rw bind.
+
+    Every source is realpath-resolved BEFORE the exclusion + containment checks,
+    so a symlink whose target is a forbidden/sensitive dir can't smuggle a mount
+    past the filter (docker resolves the symlink host-side anyway; the emitted
+    path is the resolved target, matching what actually gets bound and the `-w`
+    the seam derives the same way).
 
     Pure (no filesystem mutation): a rw root that does NOT exist on the host is
-    skipped, not created — a bind mount of a missing path would have docker
-    create it root-owned. The fence still audits such a path; if the run must
-    write there, it exists as the cwd or the operator pre-creates it. Dedup is
-    containment-aware: a path already covered by an equal-or-broader mount of at
-    least the requested permission is dropped (a rw parent covers a ro child; a
-    ro parent does NOT cover a rw child, which stays as a nested rw mount).
+    skipped, not created — a bind of a missing path would have docker create it
+    root-owned. A path containing a comma or newline is skipped (docker's
+    `--mount` CSV syntax can't encode it safely; better to drop than mis-mount).
+    Dedup is containment-aware and order-independent (sources sorted
+    shortest-first so a parent is placed before its children): a path already
+    covered by an equal-or-broader mount of at least the requested permission is
+    dropped (a rw parent covers a ro child; a ro parent does NOT cover a rw
+    child, which stays as a nested rw mount).
     """
-    mounts: list = []
-    seen: list = []  # (normpath, rank) — rw=2, ro=1
+    forbidden = list(_forbidden_mount_roots())
+    for f in (forbidden_roots or []):
+        if f:
+            try:
+                forbidden.append(os.path.realpath(str(f)))
+            except Exception:
+                pass
 
-    def _covered(np: str, rank: int) -> bool:
+    def _clean(p, *, check_forbidden: bool) -> Optional[str]:
+        rp = os.path.realpath(str(p))
+        if "," in rp or "\n" in rp:
+            log.warning("container mount: path %r contains a comma/newline docker "
+                        "--mount can't encode — skipped", rp)
+            return None
+        # The cwd is the run's own working dir (kept off the live repo by the
+        # scratch-clone / suppression logic upstream) — always mountable. The
+        # forbidden filter guards the EXTRA roots, where the reviewer's threat
+        # lives (write_fence_allow=/tmp, a goal naming the workspace/live repo).
+        if check_forbidden:
+            for bad in forbidden:
+                # Reject if the candidate IS or CONTAINS a forbidden root
+                # (mounting it would expose the orchestration/tmp). Descendants
+                # of a forbidden root are fine and not matched.
+                if _is_ancestor_or_equal(rp, bad):
+                    log.warning("container mount: %s is/contains a forbidden root %s — "
+                                "refused (design §4: orchestration/tmp never mounted)", rp, bad)
+                    return None
+        return rp
+
+    mounts: list = []
+    seen: list = []  # (realpath, rank) — rw=2, ro=1
+
+    def _covered(rp: str, rank: int) -> bool:
         for q, qr in seen:
-            if qr >= rank and (np == q or np.startswith(q + os.sep)):
+            if qr >= rank and _is_ancestor_or_equal(q, rp):
                 return True
         return False
 
-    # cwd is always rw and always mounted verbatim (it is a validated dir the
-    # seam also passes as `-w`); dedup compares against its normalized form.
-    if cwd:
-        mounts.append((cwd, "rw"))
-        seen.append((_norm_path(cwd), 2))
+    def _add(raw, mode: str, rank: int, *, require_dir: bool, check_forbidden: bool = True) -> None:
+        if not raw:
+            return
+        rp = _clean(raw, check_forbidden=check_forbidden)
+        if rp is None:
+            return
+        if _covered(rp, rank):
+            return
+        if require_dir and not os.path.isdir(rp):
+            log.debug("container mount: %s root %s absent on host — skipped", mode, rp)
+            return
+        mounts.append((rp, mode))
+        seen.append((rp, rank))
 
-    for root in (rw_roots or []):
-        if not root:
-            continue
-        np = _norm_path(root)
-        if _covered(np, 2):
-            continue
-        if not os.path.isdir(np):
-            log.debug("container mount: rw root %s absent on host — skipped "
-                      "(fence still audits it; a mount needs a real dir)", np)
-            continue
-        mounts.append((np, "rw"))
-        seen.append((np, 2))
-
-    for ref in (ro_mounts or []):
-        if not ref:
-            continue
-        np = _norm_path(ref)
-        if _covered(np, 1):
-            continue
-        if not os.path.isdir(np):
-            log.debug("container mount: ro reference %s absent on host — skipped", np)
-            continue
-        mounts.append((np, "ro"))
-        seen.append((np, 1))
+    # cwd first (rw); its realpath is what `-w` must also use. Exempt from the
+    # forbidden filter (it is the run's own working dir).
+    _add(cwd, "rw", 2, require_dir=False, check_forbidden=False)
+    # Sort extra roots shortest-first so a parent is seen before its children —
+    # makes containment dedup independent of caller input order.
+    for root in sorted((r for r in (rw_roots or []) if r), key=lambda p: len(os.path.realpath(str(p)))):
+        _add(root, "rw", 2, require_dir=True)
+    for ref in sorted((r for r in (ro_mounts or []) if r), key=lambda p: len(os.path.realpath(str(p)))):
+        _add(ref, "ro", 1, require_dir=True)
 
     return mounts
 

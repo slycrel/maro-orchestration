@@ -67,6 +67,66 @@ def _git(args: list, cwd: Path, *, timeout: int = _GIT_TIMEOUT_S) -> subprocess.
     )
 
 
+def _git_hard(args: list, cwd: Path, *, timeout: int = _GIT_TIMEOUT_S) -> subprocess.CompletedProcess:
+    """`_git` with hooks + fsmonitor disabled — for HOST-side git run against an
+    untrusted (worker-controlled) scratch clone. Command-line `-c` beats the
+    clone's own `.git/config`, so a planted `core.hooksPath`/`core.fsmonitor`
+    can't redirect execution (adversarial-review 2026-07-13, findings C/M1/A3)."""
+    return _git(["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=", *args],
+                cwd, timeout=timeout)
+
+
+# Local git config keys that can execute a command — a worker with rw on a
+# scratch clone's .git could plant these to run code on our host-side git.
+_EXEC_CONFIG_KEYS = {
+    "core.fsmonitor", "core.sshcommand", "core.pager", "core.editor",
+    "core.askpass", "core.hookspath", "uploadpack.packobjectshook",
+    "sequence.editor", "credential.helper",
+}
+
+
+def _sanitize_untrusted_git(work_dir: Path) -> None:
+    """Neutralize a worker-controlled clone's git control plane BEFORE any
+    host-side git command touches it (design §4; adversarial-review 2026-07-13,
+    findings C/M1/A3). By finalize the container has exited, so nothing races us.
+
+    Removes planted hooks and strips exec-capable local config (fsmonitor,
+    ssh/pager/editor, aliases which can be `!shell`, filter clean/smudge which
+    fire on `git add`, uploadpack.packObjectsHook which fires on the merge-back
+    `git fetch`, credential helpers, textconv). With the filter config gone, a
+    hostile in-tree `.gitattributes` referencing a filter is inert (no matching
+    driver). Belt-and-suspenders with _git_hard's command-line overrides.
+    """
+    gitdir = Path(work_dir) / ".git"
+    try:
+        shutil.rmtree(gitdir / "hooks", ignore_errors=True)
+    except OSError:
+        pass
+    try:
+        listing = _git(["config", "--local", "--list", "--name-only"], work_dir, timeout=15)
+    except (OSError, subprocess.SubprocessError):
+        return
+    if listing.returncode != 0:
+        return
+    for raw in listing.stdout.splitlines():
+        key = raw.strip()
+        k = key.lower()
+        if not k:
+            continue
+        if (k in _EXEC_CONFIG_KEYS
+                or k.startswith("filter.")
+                or k.startswith("alias.")
+                or k.endswith(".command")
+                or k.endswith(".process")
+                or k.endswith("hook")
+                or k.endswith(".textconv")
+                or k.endswith(".helper")):
+            try:
+                _git(["config", "--local", "--unset-all", key], work_dir, timeout=15)
+            except (OSError, subprocess.SubprocessError):
+                pass
+
+
 def is_git_repo(path: Path) -> bool:
     try:
         r = _git(["rev-parse", "--is-inside-work-tree"], Path(path), timeout=15)
@@ -135,31 +195,56 @@ def _merge_lock_path(repo_dir: Path) -> Path:
     return _worktrees_root() / f"merge-{key}"
 
 
-def _commit_leftovers(work_dir: Path, branch: str, base_ref: str, message: str) -> Optional[MergeResult]:
-    """Commit any uncommitted work in `work_dir` and report whether there's
-    anything to merge. Shared by worktree and scratch-clone merge-back.
+def _commit_dirty(work_dir: Path, branch: str, message: str, *, git=_git) -> Optional[MergeResult]:
+    """Commit any uncommitted work in `work_dir` to its CURRENT HEAD.
 
-    Returns a terminal MergeResult when the caller should stop — an autocommit
-    failure/error, or `ok=True "no changes"` when the branch is not ahead of
-    base — and None when there ARE commits to merge (proceed to the locked
-    merge). Never raises.
+    Returns a terminal MergeResult ONLY on failure (caller retains the source) —
+    every git-command failure is a failure, never silently treated as "clean" or
+    "no changes" (adversarial-review 2026-07-13, finding S3: a swallowed status
+    error could lead to deleting the only object store). None on success. `git`
+    lets the caller pass the hardened runner for an untrusted clone.
     """
     try:
-        r = _git(["status", "--porcelain"], work_dir, timeout=30)
-        if r.returncode == 0 and r.stdout.strip():
-            _git(["add", "-A"], work_dir)
-            c = _git(["commit", "-m", message or f"wt: {branch}"], work_dir)
+        r = git(["status", "--porcelain"], work_dir, timeout=30)
+        if r.returncode != 0:
+            return MergeResult(
+                ok=False, branch=branch,
+                detail=f"cannot read status; work preserved: {(r.stderr or r.stdout).strip()[:200]}",
+            )
+        if r.stdout.strip():
+            a = git(["add", "-A"], work_dir)
+            if a.returncode != 0:
+                return MergeResult(
+                    ok=False, branch=branch,
+                    detail=f"git add failed; work preserved: {(a.stderr or a.stdout).strip()[:200]}",
+                )
+            c = git(["commit", "-m", message or f"wt: {branch}"], work_dir)
             if c.returncode != 0:
                 return MergeResult(
                     ok=False, branch=branch,
                     detail=f"autocommit failed: {(c.stderr or c.stdout).strip()[:300]}",
                 )
-        # Nothing to merge at all? (no commits and clean tree)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return MergeResult(ok=False, branch=branch, detail=f"autocommit error: {exc}")
+    return None
+
+
+def _commit_leftovers(work_dir: Path, branch: str, base_ref: str, message: str) -> Optional[MergeResult]:
+    """Commit leftovers, then report whether `branch` is ahead of `base_ref`.
+
+    Returns a terminal MergeResult (autocommit failure, or `ok "no changes"`) or
+    None when there ARE commits to merge. Used by the worktree path, where the
+    worker stays on `branch`.
+    """
+    fail = _commit_dirty(work_dir, branch, message)
+    if fail is not None:
+        return fail
+    try:
         ahead = _git(["rev-list", "--count", f"{base_ref}..{branch}"], work_dir, timeout=30)
         if ahead.returncode == 0 and ahead.stdout.strip() == "0":
             return MergeResult(ok=True, branch=branch, detail="no changes")
     except (OSError, subprocess.SubprocessError) as exc:
-        return MergeResult(ok=False, branch=branch, detail=f"autocommit error: {exc}")
+        return MergeResult(ok=False, branch=branch, detail=f"ahead-check error: {exc}")
     return None
 
 
@@ -247,6 +332,18 @@ def provision_clone(project_dir, name: str, *, loop_id: str) -> Optional[Scratch
         log.warning("scratch-clone provision: cannot resolve HEAD of %s", repo_dir)
         return None
 
+    # The clone captures COMMITTED state only; warn if the source has
+    # uncommitted work (the worker won't see it, and merge-back later refuses a
+    # dirty parent) so the surprise is visible (adversarial-review 2026-07-13, S5).
+    try:
+        d = _git(["status", "--porcelain"], repo_dir, timeout=30)
+        if d.returncode == 0 and d.stdout.strip():
+            log.warning("scratch-clone: source %s has uncommitted changes — the clone "
+                        "sees only committed state and merge-back will refuse a dirty "
+                        "parent; commit or stash before a containerized self-dev run", repo_dir)
+    except (OSError, subprocess.SubprocessError):
+        pass
+
     safe_name = "".join(c if c.isalnum() or c in "-_." else "-" for c in name)[:60]
     branch = f"maro/{loop_id}/{safe_name}"
     clone_path = _worktrees_root() / loop_id / f"{safe_name}-clone"
@@ -258,6 +355,7 @@ def provision_clone(project_dir, name: str, *, loop_id: str) -> Optional[Scratch
                 "scratch-clone provision failed for %s: %s", repo_dir,
                 (r.stderr or r.stdout).strip()[:300],
             )
+            shutil.rmtree(clone_path, ignore_errors=True)  # drop any partial dest
             return None
         b = _git(["checkout", "-b", branch], clone_path)
         if b.returncode != 0:
@@ -285,19 +383,41 @@ def provision_clone(project_dir, name: str, *, loop_id: str) -> Optional[Scratch
 def merge_back_clone(clone: ScratchClone, *, message: str = "") -> MergeResult:
     """Merge a scratch clone's work back into the live repo, host-side.
 
-    Commits the worker's leftovers in the clone, then `git fetch`es the clone's
-    branch into the parent (separate object stores) and merges it under the same
-    per-repo lock as `merge_back`. Conflict/moved-base/dirty-base never drop
-    work — the branch is preserved and named in the failure.
+    Steps: (1) neutralize the worker-controlled clone's git control plane so our
+    host-side git can't be hijacked (findings C/M1/A3); (2) commit leftovers to
+    the clone's CURRENT HEAD; (3) resolve what to merge from that ACTUAL HEAD —
+    NOT an assumed branch name — so a worker that switched branches inside the
+    container isn't silently treated as "no changes" and deleted (finding S3);
+    (4) `git fetch` that commit into the parent and merge under the same per-repo
+    lock as `merge_back`. Conflict/moved-base/dirty-base never drop work — the
+    branch is preserved and named in the failure. All clone-side git runs
+    hardened (hooks/fsmonitor disabled).
     """
-    prep = _commit_leftovers(clone.path, clone.branch, clone.base_ref, message)
-    if prep is not None:
-        return prep
-    # Bring the clone's branch (and its objects) into the parent repo, then
-    # merge. The fetch creates the local branch ref `_locked_merge` merges.
+    _sanitize_untrusted_git(clone.path)
+
+    fail = _commit_dirty(clone.path, clone.branch, message, git=_git_hard)
+    if fail is not None:
+        return fail
+
+    head = _git_hard(["rev-parse", "HEAD"], clone.path, timeout=15)
+    if head.returncode != 0 or not head.stdout.strip():
+        return MergeResult(
+            ok=False, branch=clone.branch,
+            detail=f"cannot resolve clone HEAD; work preserved in {clone.path}",
+        )
+    head_sha = head.stdout.strip()
+
+    ahead = _git_hard(["rev-list", "--count", f"{clone.base_ref}..{head_sha}"], clone.path, timeout=30)
+    if ahead.returncode == 0 and ahead.stdout.strip() == "0":
+        return MergeResult(ok=True, branch=clone.branch, detail="no changes")
+    # ahead rc != 0 → uncertain: fall through and attempt the merge rather than
+    # declaring "no changes" (fail safe — never drop possibly-real work).
+
+    # Bring the clone's actual HEAD commit into the parent under the branch name,
+    # then merge. The fetch creates the local branch ref `_locked_merge` merges.
     try:
-        fetch = _git(
-            ["fetch", str(clone.path), f"{clone.branch}:{clone.branch}"],
+        fetch = _git_hard(
+            ["fetch", str(clone.path), f"{head_sha}:{clone.branch}"],
             clone.repo_dir,
         )
     except (OSError, subprocess.SubprocessError) as exc:

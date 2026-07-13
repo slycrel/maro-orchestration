@@ -845,13 +845,17 @@ def _run_subprocess_safe(cmd, *, input=None, timeout=600,
             _ro_mounts = [str(x) for x in (_cfg_get("executor.container_extra_mounts", []) or []) if x]
         except Exception as _mnt_exc:
             log.debug("container_extra_mounts read failed (non-fatal): %s", _mnt_exc)
+        # realpath so a symlinked cwd resolves to the same target build_mount_map
+        # binds and the exclusion filter checks (adversarial-review 2026-07-13):
+        # -w must name the path that actually exists inside the container.
+        _cwd_real = os.path.realpath(_cwd)
         _mounts = _ce.build_mount_map(
-            _cwd,
+            _cwd_real,
             rw_roots=get_default_container_rw_roots(),
             ro_mounts=_ro_mounts,
         )
         cmd = _ce.build_run_command(
-            cmd, name=container_name, workdir=_cwd,
+            cmd, name=container_name, workdir=_cwd_real,
             mounts=_mounts, worker_env=_worker_env)
         _container = container_name
 

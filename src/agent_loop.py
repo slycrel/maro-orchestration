@@ -234,6 +234,14 @@ def run_agent_loop(
         # pass derives — and create it, since Popen raises on a missing cwd.
         try:
             from llm import set_default_subprocess_cwd, set_default_container_rw_roots
+            import container_exec as _ce
+            # Reset run-scoped container state FIRST, before anything can raise —
+            # a resumed/sequential run in the same process/context must never
+            # inherit a prior run's suppression flag or authorized rw roots
+            # (adversarial-review 2026-07-13, finding D).
+            _ce.set_container_suppressed(False)
+            set_default_container_rw_roots([])
+
             if getattr(ctx, "run_worktree", None) is not None:
                 # busy_policy=worktree: the whole run works in its isolated
                 # worktree; loop_finalize merges back into the project dir.
@@ -243,32 +251,54 @@ def run_agent_loop(
             _fence_dir.mkdir(parents=True, exist_ok=True)
 
             # Self-dev scratch clone (C3, CONTAINER_EXECUTOR_DESIGN §4): when this
-            # run's executor steps WILL be containerized and the fence dir is a git
-            # repo, the live repo is never mounted rw — clone it into a throwaway
-            # scratch, work the copy, merge back host-side at finalize. Off by
-            # default (executor.container off → container_run_active() is False),
-            # so a non-container run is byte-identical to before.
+            # run is CONFIGURED to containerize (mode on/require — decided on
+            # config intent, NOT a live docker probe, so the decision can't race
+            # the daemon between here and an executor call) and the fence dir is a
+            # git repo, the live repo is never mounted rw — clone it into a
+            # throwaway scratch, work the copy, merge back host-side at finalize.
+            # If the clone can't be made, FAIL CLOSED: suppress containerization
+            # so the live repo is never mounted rw (adversarial-review 2026-07-13,
+            # findings A/M3/S2/A1). Off by default (mode off → skip entirely), so
+            # a non-container run is byte-identical to before.
+            _live_repo = None
             try:
-                import container_exec as _ce
-                if ctx.container_clone is None and _ce.container_run_active():
+                if ctx.container_clone is None and _ce.container_configured():
                     import worktree as _wt
                     if _wt.is_git_repo(_fence_dir):
-                        _clone = _wt.provision_clone(_fence_dir, "container", loop_id=ctx.loop_id)
+                        _live_repo = str(_fence_dir)
+                        _clone = None
+                        try:
+                            _clone = _wt.provision_clone(_fence_dir, "container", loop_id=ctx.loop_id)
+                        except Exception as _pc_exc:
+                            log.warning("container scratch-clone provision error: %s", _pc_exc)
                         if _clone is not None:
                             ctx.container_clone = _clone
                             _fence_dir = _clone.path
                             log.info("container self-dev: working in scratch clone %s (branch %s)",
                                      _clone.path, _clone.branch)
+                        else:
+                            _ce.set_container_suppressed(True)
+                            log.warning(
+                                "container self-dev: could not provision a scratch clone of %s — "
+                                "executor steps run on the HOST under the fence, NOT containerized "
+                                "(the live repo is never mounted rw)", _live_repo)
             except Exception as _cc_exc:
-                log.warning("container scratch-clone provision skipped: %s", _cc_exc)
+                log.warning("container scratch-clone setup skipped: %s", _cc_exc)
+                # Setup itself blew up while intending to containerize a git repo
+                # → fail closed rather than risk mounting the live repo rw.
+                if _live_repo is not None and ctx.container_clone is None:
+                    _ce.set_container_suppressed(True)
 
             set_default_subprocess_cwd(str(_fence_dir))
 
             # Container fence rw roots (C3): the goal's declared roots +
             # validate.write_fence_allow join the container's writable mount set
             # (the cwd is always rw). Host /tmp and the workspace root are
-            # deliberately NOT mounted (design §4). Read only in the container
-            # branch of _run_subprocess_safe.
+            # hard-excluded by build_mount_map (design §4); the live repo of a
+            # self-dev run is dropped here too so a goal that names its own repo
+            # path can't re-introduce it as a rw mount (adversarial-review
+            # 2026-07-13, finding B). Read only in the container branch of
+            # _run_subprocess_safe.
             try:
                 from artifact_check import goal_declared_roots as _gdr
                 from config import get as _cfg_get
@@ -276,6 +306,10 @@ def run_agent_loop(
                 for _r in (_cfg_get("validate.write_fence_allow", []) or []):
                     if _r:
                         _rw_roots.append(os.path.expanduser(str(_r)))
+                if _live_repo:
+                    _lr = os.path.realpath(_live_repo)
+                    _rw_roots = [r for r in _rw_roots
+                                 if os.path.realpath(str(r)) != _lr]
                 set_default_container_rw_roots(_rw_roots)
             except Exception as _rw_exc:
                 log.debug("container rw-roots setup skipped: %s", _rw_exc)

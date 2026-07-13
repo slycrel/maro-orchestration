@@ -422,16 +422,23 @@ Truth anchor: GOAL_BRAIN.md Threads. History: docs/history/ROADMAP_ARCHIVE.md.
       write-fence-allow rw + `container_extra_mounts` ro; host /tmp + workspace
       root deliberately absent; missing rw roots skipped, never created), fed by
       a run-scoped `llm.set_default_container_rw_roots` ContextVar. Self-dev:
-      when `container_run_active()` + the fence dir is a git repo, the live repo
+      when `container_configured()` + the fence dir is a git repo, the live repo
       is NEVER mounted rw — `worktree.provision_clone` (`--no-hardlinks`,
       no shared object inode) → work the copy → `merge_back_clone` host-side via
       `git fetch` + the SAME serialized `_locked_merge` extracted from
       `merge_back` (conflict → branch kept). Rides the `run_worktree` seam
       (`ctx.container_clone`, merged in finalize before worktree→project).
-      Deletions allowlisted in the retention tripwire. Tests: `TestBuildMountMap`
-      + `TestContainerRunActive` + clone round-trip/isolation/conflict + rw-roots
-      flow-through; full suite green. **C4 (burn-in + flip) is next — runtime
-      box, Jeremy adjudicates.**
+      Deletions allowlisted in the retention tripwire. **Codex adversarial
+      review (3 lenses) → REJECT with consensus; 6 finding-classes fixed same
+      session** — fail-open live-repo mount (clone-fail/docker-timing → fail
+      CLOSED via config-intent gate + `set_container_suppressed`); doc-only mount
+      exclusions (realpath + hard-reject workspace/tmp/live-repo); host-git RCE in
+      the attacker-writable clone (`_sanitize_untrusted_git` + hooks/fsmonitor
+      disabled); stale rw-roots ContextVar; clone data-loss on branch-switch
+      (HEAD-based merge-back) + silent-success; partial-clone leak. Residuals
+      (host-git hardening is defense-in-depth, crash-leaked clones, comma paths,
+      real-docker E2E) documented for C4. Full suite green. **C4 (burn-in +
+      flip) is next — runtime box, Jeremy adjudicates.**
    7. **Portable-learning chunks 1–4** (`docs/PORTABLE_LEARNING_DESIGN.md`
       §7, §8 ratified 2026-07-12) — 1.0 scope-decree item (g).
       **Chunk 1 — migration runbook + doctor checks — SHIPPED 2026-07-12

@@ -1691,7 +1691,7 @@ class TestContainerExecutorWrap:
         assert result.returncode == 0
         assert captured["inner"] == ["echo", "hi"]
         assert captured["name"] == "maro-exec-t-0"
-        assert captured["kw"]["mounts"] == [(str(tmp_path), "rw")]
+        assert captured["kw"]["mounts"] == [(os.path.realpath(str(tmp_path)), "rw")]
         assert captured["kw"]["worker_env"].get("MARO_WORKER_RUN") == "1"
 
     def test_run_subprocess_safe_mounts_run_rw_roots(self, monkeypatch, tmp_path):
@@ -1714,7 +1714,8 @@ class TestContainerExecutorWrap:
         finally:
             set_default_container_rw_roots(None)
         assert result.returncode == 0
-        assert captured["mounts"] == [(str(cwd), "rw"), (str(extra), "rw")]
+        assert captured["mounts"] == [
+            (os.path.realpath(str(cwd)), "rw"), (os.path.realpath(str(extra)), "rw")]
 
     def test_run_subprocess_safe_falls_back_to_host_without_cwd(self, monkeypatch):
         """A container was requested but there's no resolvable working dir to

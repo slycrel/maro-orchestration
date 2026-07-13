@@ -84,6 +84,10 @@ ALLOWED_DELETION_SITES = {
         "move: the containerized self-dev scratch clone is removed only after "
         "merge_back_clone has merged its work into the live repo; on merge "
         "failure keep_on_failure=True preserves both the clone and its branch",
+    ("worktree.py", "_sanitize_untrusted_git"):
+        "ephemeral: removes worker-planted .git/hooks from a throwaway scratch "
+        "clone's control plane before host-side git runs against it (RCE "
+        "hardening) — never run/user data",
 }
 
 _PATH_DELETION_ATTRS = {"unlink", "rmdir"}

@@ -414,3 +414,50 @@ def test_clone_conflict_preserves_work_on_branch(repo):
 
     cleanup_clone(clone, keep_on_failure=True)
     assert clone.path.is_dir()  # kept for inspection
+
+
+def test_clone_merges_work_committed_on_a_side_branch(repo):
+    """A worker that switches branches inside the container must NOT be treated
+    as 'no changes' and deleted — merge-back keys on the clone's actual HEAD."""
+    from worktree import provision_clone, merge_back_clone, cleanup_clone
+
+    clone = provision_clone(repo, "container", loop_id="loop-side")
+    assert clone is not None
+    _git(["checkout", "-b", "worker-side"], clone.path)
+    (clone.path / "side.txt").write_text("side work\n", encoding="utf-8")
+    _git(["add", "-A"], clone.path)
+    assert _git(["commit", "-m", "on side"], clone.path).returncode == 0
+
+    merge = merge_back_clone(clone)
+    assert merge.ok, merge.detail
+    assert (repo / "side.txt").read_text(encoding="utf-8") == "side work\n"
+    cleanup_clone(clone)
+
+
+def test_clone_merge_neutralizes_planted_hooks_and_exec_config(repo):
+    """A hostile worker's planted git hooks / exec-capable config must NOT run
+    on the host during merge-back (adversarial-review C/M1/A3)."""
+    from worktree import provision_clone, merge_back_clone, cleanup_clone
+
+    clone = provision_clone(repo, "container", loop_id="loop-evil")
+    assert clone is not None
+    marker = repo.parent / "PWNED"
+    hooks = clone.path / ".git" / "hooks"
+    hooks.mkdir(parents=True, exist_ok=True)
+    hook = hooks / "pre-commit"
+    hook.write_text(f"#!/bin/sh\ntouch '{marker}'\n", encoding="utf-8")
+    hook.chmod(0o755)
+    # Worker also plants an exec-capable config key.
+    _git(["config", "--local", "core.fsmonitor", f"touch '{marker}'"], clone.path)
+    # A dirty file so merge-back runs `git commit` (would fire pre-commit).
+    (clone.path / "work.txt").write_text("work\n", encoding="utf-8")
+
+    merge = merge_back_clone(clone)
+    assert merge.ok, merge.detail
+    # The core security assertion: nothing the worker planted executed on host.
+    assert not marker.exists(), "planted git hook/config executed on the host!"
+    assert not hook.exists()  # hooks dir stripped by sanitize
+    cfg = _git(["config", "--local", "--get", "core.fsmonitor"], clone.path)
+    assert cfg.stdout.strip() == ""  # exec-capable config unset
+    assert (repo / "work.txt").read_text(encoding="utf-8") == "work\n"  # work still merged
+    cleanup_clone(clone)
