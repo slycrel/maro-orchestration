@@ -439,9 +439,25 @@ No design coupling; noted so neither work stream blocks the other.
     packObjectsHook, aliases); a novel git-config RCE knob would need adding to
     `_EXEC_CONFIG_KEYS`. The fully-airtight design is committing inside the
     container so the host only ever fetches — revisit at C4 if burn-in warrants.
-  - **Crash-leaked scratch clones.** A SIGKILL between provision and finalize
-    leaks a whole-repo clone under `worktrees/` (no sweep yet; `prune` only
-    handles git worktrees). Low-frequency; a stale-clone sweep is a follow-on.
+  - **Crash-leaked scratch clones — DETECTION SHIPPED 2026-07-13.** A SIGKILL
+    between provision and finalize leaks a whole-repo clone under `worktrees/`.
+    `worktree.surface_stranded_clones` (heartbeat-wired) DETECTS clones older
+    than a 24h grace and surfaces them (path + derived branch + age) for the
+    operator; the heartbeat records them in `result["stranded_clones"]` and warns
+    once per clone (a `.surfaced` marker in the clone's PARENT, which the
+    container never mounts). **It never auto-deletes and never runs git inside
+    the clone.** An earlier reclaim-empty design was REJECTED by adversarial
+    review (unanimous, 3 lenses, 2026-07-13): a scratch clone is entirely
+    worker-controlled, so (1) running git against it to classify it executes
+    planted `.git/config` (`core.fsmonitor`, hooks) on the host — the exact RCE
+    `_git_hard`/`_sanitize_untrusted_git` exist to stop — and (2) NO content check
+    proves "empty" (ignored files, skip-worktree, data under `.git`, commits on
+    another branch, or a rewritten `refs/remotes/origin` all hide real bytes from
+    `git status`/`rev-list`), and age is not ownership. The retention-safe action
+    on an untrusted dir that MIGHT hold work is to surface, not delete. Automatic
+    disk reclaim would need a hardened recover-then-remove (`merge_back_clone`
+    rescues the work first, then `cleanup_clone`) — a background heartbeat
+    mutating the live repo, which is **Jeremy's call**, not a silent default.
   - **Comma-in-path mounts are skipped** (docker `--mount` CSV can't encode them);
     a goal-declared rw root that doesn't exist on the host is skipped, not created.
   - Real-docker E2E (punctuation paths, nested ro/rw, failure cleanup) is a C4

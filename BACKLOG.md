@@ -13,6 +13,29 @@ Last reviewed: 2026-07-09 (decision-cleanup session with Jeremy: #19 thread-arch
 
 Ordered open work that matters. Top of the list is next.
 
+### C4-BOX. Container executor — box-side real-goal burn-in (2026-07-13, Jeremy runs on the runtime box)
+
+The container **mechanics** are burned in and green on the dev Mac (Docker
+Desktop 23.0.5): image build + CLI pin, `tests/test_container_e2e.py` 4/4,
+containment, uid/gid, boot-tax ~360ms, C2 stranded-container reaper, doctor rows
+(recorded in `docs/CONTAINER_BURN_IN.md §0`). What can't be done off the box —
+because it needs a `/login`'d `maro-claude-auth` volume (interactive OAuth) and
+spends tokens — is the **real-goal** half. Jeremy runs this on the other machine:
+
+- [ ] **Full acceptance probe with a real goal** — `scripts/container-acceptance-probe.sh`
+  end-to-end: `/login` the auth volume, then a real goal under `executor.container: on`
+  vs fence-only, and `check` both. Expect: fence-only leaks + logs SCAVENGE;
+  container contains (token absent, decoy unchanged). This is the README security
+  before/after that a shell-only proxy can't fully stand in for.
+- [ ] **Dogfood no-regression run** — the standing dogfood goals under
+  `container: on`; same `status`/`goal_achieved` as their fence-only baseline,
+  correct artifacts. Watch env-dependency surprises + native-Linux bind-mount
+  uid/gid (Mac used VirtioFS) + the self-dev clone merge-back in a live run.
+- [ ] **Fill the `CONTAINER_BURN_IN.md §5` go/no-go checklist**, then **the flip**
+  (box default, then the higher-stakes fresh-install default) — Jeremy's call on
+  the evidence. Record in GOAL_BRAIN Decisions; mark C4 shipped in the design
+  doc §9 + MILESTONES. The full runbook is `docs/CONTAINER_BURN_IN.md`.
+
 ### -1. Purgatorio r2 graduates (2026-07-10 re-run; docs/audit-2026-07-r2/RECONCILIATION.md)
 
 All adversarially verified (41/42 confirmed). The two 1.0-blockers first:
