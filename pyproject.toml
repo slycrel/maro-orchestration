@@ -33,7 +33,6 @@ Issues = "https://github.com/slycrel/maro-orchestration/issues"
 telegram = ["requests>=2.28", "python-telegram-bot>=20.0"]
 slack = ["slack-sdk>=3.0"]
 gateway = ["websockets>=12.0"]
-sandbox = []
 memory = ["pyyaml>=6.0"]
 all = ["requests>=2.28", "pyyaml>=6.0", "websockets>=12.0", "slack-sdk>=3.0", "beautifulsoup4>=4.12"]
 dev = ["pytest>=7.0", "pytest-cov>=7.0", "requests>=2.28", "beautifulsoup4>=4.12", "pyflakes>=3.0"]
@@ -46,7 +45,6 @@ maro-handle = "handle:main"
 maro-enqueue = "handle:enqueue_main"
 maro-memory = "cli:_memory_main"
 maro-persona = "cli:_persona_main"
-maro-sandbox = "cli:_sandbox_main"
 maro-skills = "cli:_skills_main"
 maro-inspector = "inspector:main"
 maro-knowledge = "knowledge:main"
@@ -205,7 +203,6 @@ py-modules = [
     "run_curation",
     "runs",
     "runtime_tools",
-    "sandbox",
     "scheduler",
     "scope",
     "secret_scrub",

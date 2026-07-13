@@ -29,10 +29,16 @@ trust the commands you type. An LLM-driven shell with your permissions is the
 honest description.
 
 `src/sandbox.py` (static analysis, RLIMITs, soft network block, venv
-isolation) exists but is an **unwired prototype**: its only callers are the
-manual `maro sandbox` CLI subcommand (`src/cli.py:1764`), an off-by-default
-`sandboxed=` flag on the skill test runner (`src/skills.py:1664`), and its own
-tests. Nothing on the goal-execution path invokes it.
+isolation) used to sit here as an **unwired prototype** with no goal-execution
+caller. It was **retired in the container-executor arc** (C4 §7, 2026-07-13):
+a hardening module with zero live-path callers was documentation debt
+pretending to be defense. Its one real artifact — the `_DANGEROUS_PATTERNS`
+static-scan blocklist — moved to its actual consumer (`run_curation.py`, the
+skills-lite ingest scan); the `maro sandbox` CLI subcommand and the
+`sandbox-audit.jsonl` audit log retired with it. The containment layer it only
+gestured at is now delivered — opt-in — by the container executor
+(`docs/CONTAINER_EXECUTOR_DESIGN.md`), which is off by default, so the
+trusted-operator assumption above still describes the default posture.
 
 ### What the code does enforce today
 
@@ -139,11 +145,13 @@ forgiveness over permission.
 
 ## Honest inventory
 
-- `src/sandbox.py` — unwired prototype (see Part 1). Either wire it or
-  delete it in the container design pass; a hardening module with zero
-  runtime callers is documentation debt pretending to be defense.
-- `memory/sandbox-audit.jsonl` — only populated by manual `maro sandbox`
-  runs; not evidence of live-path sandboxing.
+- `src/sandbox.py` — **retired** in the container-executor arc (C4 §7,
+  2026-07-13). The "wire it or delete it" call from the previous revision was
+  resolved as delete; the real containment layer is now the opt-in container
+  executor (see Part 1). `_DANGEROUS_PATTERNS` moved to `run_curation.py`.
+- `memory/sandbox-audit.jsonl` — retired with `sandbox.py`; nothing writes it
+  anymore (it was only ever populated by manual `maro sandbox` runs, never
+  live-path sandboxing).
 - The previous version of this document claimed "every skill runs sandboxed"
   and network isolation per skill. Neither was true of the live path. This
   rewrite is the correction (Purgatorio cs-04, docs-01 / SF-6).

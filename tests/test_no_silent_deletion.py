@@ -67,8 +67,6 @@ ALLOWED_DELETION_SITES = {
         "ephemeral: drain lock file",
     ("run_curation.py", "prune_run"):
         "user-invoked: explicit `prune` CLI subcommand",
-    ("sandbox.py", "run_skill_sandboxed"):
-        "ephemeral: sandbox tmpdir",
     ("sheriff.py", "check_system_health"):
         "ephemeral: deletes its own just-written health-probe file",
     ("task_store.py", "_atomic_write"):

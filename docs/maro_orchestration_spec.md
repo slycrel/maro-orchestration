@@ -105,7 +105,6 @@ Three-tier recovery:
 
 - `memory/outcomes.jsonl` — per-run outcomes
 - `memory/heartbeat-log.jsonl` — heartbeat history
-- `memory/sandbox-audit.jsonl` — sandboxed skill execution audit
 - `projects/<slug>/DECISIONS.md` — per-project decision log
 - `memory/YYYY-MM-DD.md` — daily narrative log
 

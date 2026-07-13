@@ -54,20 +54,6 @@ def _append_outcome(mem: Path, goal: str = "task", status: str = "success") -> N
         f.write(line + "\n")
 
 
-def _append_audit(mem: Path, skill: str = "my-skill", success: bool = True) -> None:
-    from datetime import datetime, timezone
-    line = json.dumps({
-        "skill_name": skill,
-        "success": success,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "duration_ms": 42,
-        "network_blocked": True,
-        "static_safe": False,
-    })
-    with open(mem / "sandbox-audit.jsonl", "a") as f:
-        f.write(line + "\n")
-
-
 # ---------------------------------------------------------------------------
 # _read_loop_state
 # ---------------------------------------------------------------------------
@@ -139,36 +125,6 @@ def test_read_recent_outcomes_respects_limit(monkeypatch, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# _read_audit_tail
-# ---------------------------------------------------------------------------
-
-def test_read_audit_tail_empty_when_no_file(monkeypatch, tmp_path):
-    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
-    _ws(tmp_path)
-    assert observe._read_audit_tail() == []
-
-
-def test_read_audit_tail_returns_entries(monkeypatch, tmp_path):
-    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
-    mem = _ws(tmp_path)
-    for i in range(3):
-        _append_audit(mem, skill=f"skill-{i}")
-    entries = observe._read_audit_tail(limit=2)
-    assert len(entries) == 2
-
-
-def test_read_audit_tail_chronological_order(monkeypatch, tmp_path):
-    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
-    mem = _ws(tmp_path)
-    for i in range(3):
-        _append_audit(mem, skill=f"skill-{i}")
-    entries = observe._read_audit_tail(limit=3)
-    # Should be oldest-first (reversed from reversed tail)
-    assert entries[0]["skill_name"] == "skill-0"
-    assert entries[-1]["skill_name"] == "skill-2"
-
-
-# ---------------------------------------------------------------------------
 # print_* functions — smoke tests
 # ---------------------------------------------------------------------------
 
@@ -224,23 +180,6 @@ def test_print_recent_outcomes_with_data(monkeypatch, tmp_path, capsys):
     assert "kanji" in out
 
 
-def test_print_audit_tail_no_data(monkeypatch, tmp_path, capsys):
-    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
-    _ws(tmp_path)
-    observe.print_audit_tail()
-    out = capsys.readouterr().out
-    assert "none" in out or "audit" in out.lower()
-
-
-def test_print_audit_tail_with_data(monkeypatch, tmp_path, capsys):
-    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
-    mem = _ws(tmp_path)
-    _append_audit(mem, skill="my-skill")
-    observe.print_audit_tail()
-    out = capsys.readouterr().out
-    assert "my-skill" in out
-
-
 def test_print_memory_stats_no_memory(monkeypatch, tmp_path, capsys):
     monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
     _ws(tmp_path)
@@ -258,7 +197,6 @@ def test_print_snapshot_runs(monkeypatch, tmp_path, capsys):
     assert "Loop" in out
     assert "Heartbeat" in out
     assert "outcomes" in out.lower()
-    assert "audit" in out.lower()
     assert "Memory" in out
 
 
@@ -296,14 +234,6 @@ def test_main_outcomes_subcommand(monkeypatch, tmp_path, capsys):
     observe.main(["outcomes"])
     out = capsys.readouterr().out
     assert "Recent" in out or "outcomes" in out.lower() or "none" in out
-
-
-def test_main_audit_subcommand(monkeypatch, tmp_path, capsys):
-    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
-    _ws(tmp_path)
-    observe.main(["audit"])
-    out = capsys.readouterr().out
-    assert "audit" in out.lower() or "none" in out
 
 
 def test_main_memory_subcommand(monkeypatch, tmp_path, capsys):

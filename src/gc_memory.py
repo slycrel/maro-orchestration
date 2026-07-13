@@ -3,7 +3,6 @@
 Prevents unbounded disk growth from:
 - outcomes.jsonl accumulating indefinitely
 - tiered lessons staying below GC_THRESHOLD (already decayed below useful range)
-- sandbox-audit.jsonl growing without limit
 - Daily narrative logs (YYYY-MM-DD.md) older than retention window
 
 Usage:
@@ -28,7 +27,6 @@ from typing import List, Optional
 # ---------------------------------------------------------------------------
 
 DEFAULT_OUTCOMES_RETAIN_DAYS = 90      # keep outcomes for 90 days
-DEFAULT_AUDIT_RETAIN_ENTRIES = 1000    # keep last 1000 sandbox audit entries
 DEFAULT_NARRATIVE_RETAIN_DAYS = 180    # keep daily .md logs for 180 days
 
 
@@ -45,10 +43,6 @@ def _outcomes_path() -> Path:
     return _memory_dir() / "outcomes.jsonl"
 
 
-def _audit_path() -> Path:
-    return _memory_dir() / "sandbox-audit.jsonl"
-
-
 def _tiered_lessons_path(tier: str) -> Path:
     return _memory_dir() / tier / "lessons.jsonl"
 
@@ -62,9 +56,6 @@ class GCReport:
     outcomes_total: int = 0
     outcomes_removed: int = 0
     outcomes_retained: int = 0
-    audit_total: int = 0
-    audit_removed: int = 0
-    audit_retained: int = 0
     lessons_gc_removed: int = 0       # below GC_THRESHOLD
     narrative_logs_removed: int = 0
     bytes_freed: int = 0
@@ -76,7 +67,6 @@ class GCReport:
         status = "DRY RUN — " if self.dry_run else ""
         lines.append(f"{status}GC Summary")
         lines.append(f"  outcomes:   {self.outcomes_removed}/{self.outcomes_total} removed ({self.outcomes_retained} retained)")
-        lines.append(f"  audit:      {self.audit_removed}/{self.audit_total} removed ({self.audit_retained} retained)")
         lines.append(f"  lessons:    {self.lessons_gc_removed} below-threshold entries removed")
         lines.append(f"  narratives: {self.narrative_logs_removed} daily log(s) removed")
         if self.bytes_freed:
@@ -142,48 +132,6 @@ def _gc_outcomes(
         def _trim(old: str) -> str:
             kept = [l for l in old.splitlines() if l.strip() and l.strip() not in drop_set]
             return "\n".join(kept) + ("\n" if kept else "")
-
-        try:
-            locked_rmw(path, _trim)
-        except OSError:
-            return total, 0, 0
-        freed = original_size - path.stat().st_size
-
-    return total, removed, freed
-
-
-def _gc_audit(
-    retain_entries: int = DEFAULT_AUDIT_RETAIN_ENTRIES,
-    *,
-    dry_run: bool = True,
-) -> tuple[int, int, int]:
-    """Trim audit log to last N entries. Return (total, removed, freed_bytes)."""
-    path = _audit_path()
-    if not path.exists():
-        return 0, 0, 0
-
-    try:
-        lines = [l.strip() for l in path.read_text(encoding="utf-8").splitlines() if l.strip()]
-    except Exception:
-        return 0, 0, 0
-
-    total = len(lines)
-    if total <= retain_entries:
-        return total, 0, 0
-
-    keep = lines[-retain_entries:]
-    removed = total - len(keep)
-    freed = 0
-
-    if not dry_run:
-        # Recompute the tail-trim under the lock so appends landing during
-        # the scan are counted, not clobbered.
-        from file_lock import locked_rmw
-        original_size = path.stat().st_size
-
-        def _trim(old: str) -> str:
-            cur = [l.strip() for l in old.splitlines() if l.strip()]
-            return "\n".join(cur[-retain_entries:]) + ("\n" if cur else "")
 
         try:
             locked_rmw(path, _trim)
@@ -275,7 +223,6 @@ def _gc_narrative_logs(
 
 def run_gc(
     outcomes_retain_days: int = DEFAULT_OUTCOMES_RETAIN_DAYS,
-    audit_retain_entries: int = DEFAULT_AUDIT_RETAIN_ENTRIES,
     narrative_retain_days: int = DEFAULT_NARRATIVE_RETAIN_DAYS,
     *,
     dry_run: bool = True,
@@ -290,15 +237,6 @@ def run_gc(
         report.bytes_freed += freed
     except Exception as e:
         report.errors.append(f"outcomes GC failed: {e}")
-
-    try:
-        total, removed, freed = _gc_audit(retain_entries=audit_retain_entries, dry_run=dry_run)
-        report.audit_total = total
-        report.audit_removed = removed
-        report.audit_retained = total - removed
-        report.bytes_freed += freed
-    except Exception as e:
-        report.errors.append(f"audit GC failed: {e}")
 
     try:
         report.lessons_gc_removed = _gc_tiered_lessons(dry_run=dry_run)
@@ -332,7 +270,6 @@ def main(argv: list[str] | None = None) -> None:
     p_run.add_argument("--yes", "-y", action="store_true", help="Skip confirmation prompt")
     p_run.add_argument("--dry-run", action="store_true", help="Alias for status")
     p_run.add_argument("--outcomes-retain-days", type=int, default=DEFAULT_OUTCOMES_RETAIN_DAYS)
-    p_run.add_argument("--audit-retain-entries", type=int, default=DEFAULT_AUDIT_RETAIN_ENTRIES)
     p_run.add_argument("--narrative-retain-days", type=int, default=DEFAULT_NARRATIVE_RETAIN_DAYS)
 
     args = parser.parse_args(argv)
@@ -359,7 +296,6 @@ def main(argv: list[str] | None = None) -> None:
 
         report = run_gc(
             outcomes_retain_days=args.outcomes_retain_days,
-            audit_retain_entries=args.audit_retain_entries,
             narrative_retain_days=args.narrative_retain_days,
             dry_run=False,
         )

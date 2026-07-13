@@ -39,6 +39,35 @@ _FAIL_STATUSES = {"stuck", "error", "failed", "blocked"}
 # Asset extensions worth flagging as potentially-reusable scripts.
 _SCRIPT_EXTS = {".py", ".sh", ".js", ".ts", ".rb", ".go"}
 
+# Dangerous-pattern blocklist for the skills-lite static scan below. A
+# Python-code substring list — relocated here from the retired sandbox.py
+# (its only remaining consumer; container executor arc C4 §7, 2026-07-13).
+# Applied to code regions only, never prose (prose false-positives on
+# instructional text like "read the ledger with open(...)").
+_DANGEROUS_PATTERNS = [
+    "import os",
+    "import subprocess",
+    "__import__",
+    "eval(",
+    "exec(",
+    "open(",
+    "shutil",
+    "rmdir",
+    "unlink",
+    "system(",
+    "socket.connect",
+    "urllib.request",
+    "requests.get",
+    "requests.post",
+    "httpx.",
+    "aiohttp.",
+    "pickle.loads",
+    "marshal.loads",
+    "import ctypes",
+    "ctypes.",
+    "cffi.",
+]
+
 
 def _runs_root() -> Path:
     # Delegate to runs.runs_root so workspace resolution can't diverge.
@@ -369,18 +398,17 @@ def promote_skills_lite(rd: Path, meta: dict, card: dict) -> None:
             skipped.append({"file": rel, "name": name,
                             "reason": f"destination exists: {dest.name}"})
             continue
-        # Fail-closed static scan — same lane as sandbox.is_skill_safe, but
-        # scoped to the .md's CODE regions (fenced blocks + inline spans).
-        # _DANGEROUS_PATTERNS is a Python-code substring list; applied to
-        # prose it false-positives on instructional text ("read the ledger
-        # with open(...)" — batch-03, funnel_report specimen). Prose threats
-        # are prompt injection, which is the injection_guard gate below.
+        # Fail-closed static scan — scoped to the .md's CODE regions (fenced
+        # blocks + inline spans). _DANGEROUS_PATTERNS (module-level) is a
+        # Python-code substring list; applied to prose it false-positives on
+        # instructional text ("read the ledger with open(...)" — batch-03,
+        # funnel_report specimen). Prose threats are prompt injection, which is
+        # the injection_guard gate below.
         try:
-            from sandbox import _DANGEROUS_PATTERNS
             code_text = _code_regions(text)
             hit = next((p for p in _DANGEROUS_PATTERNS if p in code_text), None)
         except Exception:
-            hit = "sandbox patterns unavailable"
+            hit = "static scan unavailable"
         if hit:
             skipped.append({"file": rel, "name": name,
                             "reason": f"dangerous pattern: {hit!r}"})

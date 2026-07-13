@@ -314,7 +314,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_skill_test.add_argument("--generate", action="store_true", help="Generate new test cases from recent failures")
     p_skill_test.add_argument("--format", choices=["text", "json"], default="text")
 
-    # Phase 15: gateway + sandbox CLI subcommands
+    # Phase 15: gateway CLI subcommands
     p_gateway = sub.add_parser("gateway", help="OpenClaw gateway status and messaging (Phase 15)")
     gateway_sub = p_gateway.add_subparsers(dest="gateway_cmd", required=True)
 
@@ -324,20 +324,6 @@ def build_parser() -> argparse.ArgumentParser:
     p_gw_send.add_argument("message", nargs="+", help="Message text to send")
     p_gw_send.add_argument("--timeout", type=int, default=10, help="Send timeout in seconds (default: 10)")
     p_gw_send.add_argument("--format", choices=["text", "json"], default="text")
-
-    p_sandbox = sub.add_parser("sandbox", help="Skill sandbox isolation — test, audit, config (Phase 15+18)")
-    sandbox_sub = p_sandbox.add_subparsers(dest="sandbox_cmd", required=True)
-
-    p_sb_test = sandbox_sub.add_parser("test", help="Run sandboxed tests for a skill")
-    p_sb_test.add_argument("skill_id", help="Skill ID or name to test")
-    p_sb_test.add_argument("--generate", action="store_true", help="Generate new tests from recent failures before running")
-    p_sb_test.add_argument("--no-network-block", action="store_true", help="Disable soft network blocking (Phase 18)")
-    p_sb_test.add_argument("--venv", action="store_true", help="Use isolated venv per execution — slow, ~500ms (Phase 18)")
-    p_sb_test.add_argument("--format", choices=["text", "json"], default="text")
-    p_sb_audit = sandbox_sub.add_parser("audit", help="Show recent sandbox execution audit log (Phase 18)")
-    p_sb_audit.add_argument("--limit", type=int, default=20)
-    p_sb_audit.add_argument("--format", choices=["text", "json"], default="text")
-    sandbox_sub.add_parser("config", help="Show current sandbox hardening config defaults (Phase 18)")
 
     # Phase 17: Behavior-aligned skill router CLI
     p_router = sub.add_parser("router", help="Behavior-aligned skill router (Phase 17)")

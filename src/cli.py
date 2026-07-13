@@ -1843,96 +1843,6 @@ def _cmd_viz(args: argparse.Namespace) -> int:
     return fail("E_INTERNAL", "unknown command")
 
 
-def _cmd_sandbox(args: argparse.Namespace) -> int:
-    from sandbox import run_skill_tests_sandboxed, load_audit_log, SandboxConfig
-
-    sandbox_cmd = getattr(args, "sandbox_cmd", "test")
-
-    if sandbox_cmd == "audit":
-        entries = load_audit_log(limit=getattr(args, "limit", 20))
-        if getattr(args, "format", "text") == "json":
-            print(json.dumps(entries, indent=2))
-        else:
-            print(f"Sandbox audit log (last {len(entries)} entries):")
-            for e in entries:
-                safe_icon = "✓" if e.get("static_safe") else "✗"
-                net_icon = "N" if e.get("network_blocked") else " "
-                venv_icon = "V" if e.get("venv_isolated") else " "
-                res_icon = "R" if e.get("resource_limited") else " "
-                ok = "ok" if e.get("success") else ("t/o" if e.get("timed_out") else "fail")
-                print(f"  [{e.get('timestamp','')[:19]}] {ok:4s} [{safe_icon}{net_icon}{venv_icon}{res_icon}] "
-                      f"skill={e.get('skill_name','?')[:20]} exit={e.get('exit_code')} "
-                      f"{e.get('elapsed_ms')}ms  {e.get('output_preview','')[:50]}")
-        return 0
-
-    if sandbox_cmd == "config":
-        cfg = SandboxConfig()
-        print("Sandbox hardening defaults:")
-        print(f"  timeout_seconds:  {cfg.timeout_seconds}")
-        print(f"  max_cpu_seconds:  {cfg.max_cpu_seconds}  (RLIMIT_CPU)")
-        print(f"  max_file_size_mb: {cfg.max_file_size_mb}  (RLIMIT_FSIZE)")
-        print(f"  max_open_files:   {cfg.max_open_files}  (RLIMIT_NOFILE)")
-        print(f"  block_network:    {cfg.block_network}  (soft socket monkey-patch)")
-        print(f"  use_venv:         {cfg.use_venv}  (isolated venv, ~500ms overhead)")
-        print(f"  audit:            {cfg.audit}  (memory/sandbox-audit.jsonl)")
-        return 0
-
-    # sandbox_cmd == "test"
-    from skills import load_skills, generate_skill_tests, _load_skill_tests
-    skill_id = args.skill_id
-    generate = getattr(args, "generate", False)
-
-    all_skills = load_skills()
-    target_skill = next((s for s in all_skills if s.id == skill_id or s.name == skill_id), None)
-    if target_skill is None:
-        return fail("E_SKILL_NOT_FOUND", f"No skill with id or name {skill_id!r}")
-
-    sb_config = SandboxConfig(
-        block_network=not getattr(args, "no_network_block", False),
-        use_venv=getattr(args, "venv", False),
-    )
-
-    try:
-        if generate:
-            from attribution import load_attributions
-            attributions = load_attributions(limit=20)
-            failure_examples = [
-                a.raw_reason for a in attributions
-                if a.failed_skill == target_skill.name
-            ]
-            tests = generate_skill_tests(target_skill, failure_examples)
-            print(f"Generated {len(tests)} test case(s) for skill={target_skill.name!r}")
-        else:
-            tests = _load_skill_tests(skill_id)
-            if not tests:
-                tests = _load_skill_tests(target_skill.id)
-
-        if not tests:
-            print(f"No tests found for skill={target_skill.name!r}. Use --generate to create them.")
-            return 0
-
-        passed, total = run_skill_tests_sandboxed(target_skill, tests, config=sb_config)
-        net_label = " [network-blocked]" if sb_config.block_network else ""
-        venv_label = " [venv-isolated]" if sb_config.use_venv else ""
-        if getattr(args, "format", "text") == "json":
-            print(json.dumps({
-                "skill_id": target_skill.id,
-                "skill_name": target_skill.name,
-                "passed": passed,
-                "total": total,
-                "network_blocked": sb_config.block_network,
-                "venv_isolated": sb_config.use_venv,
-                "tests": [t.to_dict() for t in tests],
-            }, indent=2))
-        else:
-            print(f"Skill: {target_skill.name} (id={target_skill.id}) [sandboxed]{net_label}{venv_label}")
-            print(f"Tests: {total} | Passed: {passed}")
-            for t in tests:
-                print(f"  - [{t.input_description[:60]}] expect: {t.expected_keywords}")
-    except Exception as exc:
-        return fail("E_SANDBOX", str(exc))
-    return 0 if (not tests or passed == total) else 1
-
 # Phase 17: Behavior-aligned skill router CLI handlers
 # ---------------------------------------------------------------------------
 
@@ -2120,7 +2030,6 @@ _COMMAND_HANDLERS = {
     "skill-stats": _cmd_skill_stats,
     "skill-test": _cmd_skill_test,
     "gateway": _cmd_gateway,
-    "sandbox": _cmd_sandbox,
     "router": _cmd_router,
     "viz": _cmd_viz,
 }
@@ -2153,11 +2062,6 @@ def _memory_main() -> None:
 def _persona_main() -> None:
     import sys
     raise SystemExit(main(["persona"] + sys.argv[1:]))
-
-
-def _sandbox_main() -> None:
-    import sys
-    raise SystemExit(main(["sandbox"] + sys.argv[1:]))
 
 
 def _skills_main() -> None:

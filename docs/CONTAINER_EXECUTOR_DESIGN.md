@@ -240,14 +240,30 @@ visible (SF-6's whole lesson).
 > as its own evidence-driven follow-on, not in v1. `container_network: none`
 > exists from day one for offline-shaped goals.
 
-## 7. sandbox.py disposition
+## 7. sandbox.py disposition — RETIRED 2026-07-13 (Opus, C4 cleanup)
 
-Retire it in this arc (SECURITY_MODEL "Honest inventory": "wire it or delete
-it in the container design pass"). It hardens a stub that never executes
-real skill code (`sandbox.py:328-343`) and has zero live-path callers. Keep
-the one real consumer: `_DANGEROUS_PATTERNS` moves to its actual user
-(`run_curation.py:379` skills-lite scanning) or a small `static_scan.py`.
-The audit-log JSONL and `maro sandbox` CLI subcommand retire with it.
+Retired in this arc (SECURITY_MODEL "Honest inventory": "wire it or delete
+it in the container design pass" → resolved as **delete**). It hardened a stub
+that never executed real skill code and had zero live-path callers (verified:
+the only `from sandbox import` sites were `run_curation.py` for the pattern
+list and `cli.py` for the retiring subcommand; the `sandboxed=` flag on
+`skills.run_skill_tests` was a dead parameter no caller ever set). Retirement
+delivered:
+- `src/sandbox.py` deleted (536 LOC) + its two test files
+  (`test_sandbox.py`, `test_sandbox_hardening.py`, 774 LOC).
+- The one real consumer, `_DANGEROUS_PATTERNS`, moved to its actual user
+  `run_curation.py` (skills-lite ingest static scan) as a module-level
+  constant — no new module, no census entry.
+- `maro sandbox` CLI subcommand + `maro-sandbox` entry point + `sandbox`
+  extras group removed; py-modules census (`test_packaging.py`) follows.
+- The `sandbox-audit.jsonl` audit log retired with the writer: its readers
+  (`observe.py` audit tail + `maro-observe audit` subcommand) and its GC
+  (`gc_memory._gc_audit`) were removed — a subcommand that could only ever
+  print "none" on a fresh install is exactly the dead UX this cleanup sweeps.
+- Deletion tripwire allowlist (`test_no_silent_deletion.py`) drops the stale
+  `sandbox.py` entry; SECURITY_MODEL Part 1 + Honest-inventory and the spec's
+  observability list updated for currency.
+Full suite green; net −1670/+58 LOC.
 
 ## 8. Performance + session-reuse interplay
 

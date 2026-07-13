@@ -15,8 +15,6 @@ import gc_memory
 from gc_memory import (
     GCReport,
     DEFAULT_OUTCOMES_RETAIN_DAYS,
-    DEFAULT_AUDIT_RETAIN_ENTRIES,
-    _gc_audit,
     _gc_narrative_logs,
     _gc_outcomes,
     _gc_tiered_lessons,
@@ -39,13 +37,6 @@ def _write_outcome(mem: Path, days_ago: int = 0, status: str = "done") -> None:
     ts = (datetime.now(timezone.utc) - timedelta(days=days_ago)).isoformat()
     line = json.dumps({"goal": "test", "status": status, "recorded_at": ts})
     with open(mem / "outcomes.jsonl", "a") as f:
-        f.write(line + "\n")
-
-
-def _write_audit_entry(mem: Path) -> None:
-    ts = datetime.now(timezone.utc).isoformat()
-    line = json.dumps({"skill_name": "test", "success": True, "timestamp": ts})
-    with open(mem / "sandbox-audit.jsonl", "a") as f:
         f.write(line + "\n")
 
 
@@ -139,47 +130,6 @@ def test_gc_outcomes_keeps_all_recent(monkeypatch, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# _gc_audit
-# ---------------------------------------------------------------------------
-
-def test_gc_audit_empty(monkeypatch, tmp_path):
-    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
-    _mem_dir(tmp_path)
-    total, removed, freed = _gc_audit(dry_run=True)
-    assert total == 0
-
-
-def test_gc_audit_within_limit(monkeypatch, tmp_path):
-    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
-    mem = _mem_dir(tmp_path)
-    for _ in range(5):
-        _write_audit_entry(mem)
-    total, removed, freed = _gc_audit(retain_entries=10, dry_run=True)
-    assert total == 5
-    assert removed == 0
-
-
-def test_gc_audit_trims_to_limit(monkeypatch, tmp_path):
-    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
-    mem = _mem_dir(tmp_path)
-    for _ in range(15):
-        _write_audit_entry(mem)
-    total, removed, freed = _gc_audit(retain_entries=10, dry_run=True)
-    assert total == 15
-    assert removed == 5
-
-
-def test_gc_audit_live_trim(monkeypatch, tmp_path):
-    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
-    mem = _mem_dir(tmp_path)
-    for _ in range(15):
-        _write_audit_entry(mem)
-    _gc_audit(retain_entries=10, dry_run=False)
-    lines = (mem / "sandbox-audit.jsonl").read_text().splitlines()
-    assert len(lines) == 10
-
-
-# ---------------------------------------------------------------------------
 # _gc_narrative_logs
 # ---------------------------------------------------------------------------
 
@@ -268,7 +218,6 @@ def test_run_gc_summary_contains_sections(monkeypatch, tmp_path):
     report = run_gc(dry_run=True)
     summary = report.summary()
     assert "outcomes" in summary
-    assert "audit" in summary
     assert "lessons" in summary
     assert "narratives" in summary
     assert "DRY RUN" in summary

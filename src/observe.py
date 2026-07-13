@@ -1,11 +1,10 @@
 """Execution snapshot — Phase 23 / Phase 36 event stream.
 
-maro-observe              → full snapshot (loop state, heartbeat, recent outcomes, audit tail)
+maro-observe              → full snapshot (loop state, heartbeat, recent outcomes)
 maro-observe loop         → active goal / loop lock only
 maro-observe heartbeat    → heartbeat health only
 maro-observe projects     → per-project status at a glance (ACTIVE/STUCK/HEALTHY/UNKNOWN)
 maro-observe outcomes     → recent task outcomes
-maro-observe audit        → sandbox audit log tail
 maro-observe memory       → memory tier stats (same data as Stage 2 of maro-knowledge status)
 maro-observe events       → tail the live event stream (memory/events.jsonl)
 maro-observe watch        → periodic full-snapshot refresh (like `watch`)
@@ -55,10 +54,6 @@ def _events_path() -> Path:
     return _memory_dir() / "events.jsonl"
 
 
-def _audit_path() -> Path:
-    return _memory_dir() / "sandbox-audit.jsonl"
-
-
 def _diagnoses_path() -> Path:
     return _memory_dir() / "diagnoses.jsonl"
 
@@ -94,11 +89,6 @@ def _read_heartbeat() -> Dict[str, Any]:
 def _read_recent_outcomes(limit: int = 10) -> List[Dict[str, Any]]:
     from jsonl_utils import read_jsonl_tail
     return list(reversed(read_jsonl_tail(_outcomes_path(), limit=limit)))
-
-
-def _read_audit_tail(limit: int = 5) -> List[Dict[str, Any]]:
-    from jsonl_utils import read_jsonl_tail
-    return read_jsonl_tail(_audit_path(), limit=limit)
 
 
 def _read_recent_diagnoses(limit: int = 8) -> List[Dict[str, Any]]:
@@ -360,24 +350,6 @@ def print_recent_outcomes(limit: int = 10) -> None:
         print(f"  [{age:>8}]  {status:12}  {goal}")
 
 
-def print_audit_tail(limit: int = 5) -> None:
-    entries = _read_audit_tail(limit=limit)
-    print(f"Sandbox audit (last {min(limit, len(entries))})")
-    if not entries:
-        print("  none")
-        return
-    for e in entries:
-        ts = e.get("timestamp", "")
-        age = _age(ts) if ts else "?"
-        skill = e.get("skill_name", "?")
-        status = "OK" if e.get("success") else "FAIL"
-        duration = e.get("duration_ms")
-        dur_str = f"  {duration}ms" if duration is not None else ""
-        blocked = " [network-blocked]" if e.get("network_blocked") else ""
-        safe = " [safe=static]" if e.get("static_safe") else ""
-        print(f"  [{age:>8}]  {status:4}  {skill}{dur_str}{blocked}{safe}")
-
-
 def print_memory_stats() -> None:
     stats = _read_memory_stats()
     print("Memory")
@@ -493,7 +465,7 @@ def print_project_status(use_colour: bool = True) -> None:
 # Full snapshot
 # ---------------------------------------------------------------------------
 
-def print_snapshot(outcomes_limit: int = 10, audit_limit: int = 5) -> None:
+def print_snapshot(outcomes_limit: int = 10) -> None:
     loop = _read_loop_state()
     hb = _read_heartbeat()
 
@@ -509,12 +481,10 @@ def print_snapshot(outcomes_limit: int = 10, audit_limit: int = 5) -> None:
     print()
     print_recent_outcomes(limit=outcomes_limit)
     print()
-    print_audit_tail(limit=audit_limit)
-    print()
     print_memory_stats()
     print()
     print("──────────────────────────────────────────────────────")
-    print("Tip: maro-observe loop | heartbeat | projects | outcomes | audit | memory")
+    print("Tip: maro-observe loop | heartbeat | projects | outcomes | memory")
     print("     maro-knowledge status  for crystallization view")
 
 
@@ -617,7 +587,7 @@ def main(argv: list[str] | None = None) -> None:
     import argparse
     parser = argparse.ArgumentParser(
         prog="maro-observe",
-        description="Execution snapshot — loop state, heartbeat, outcomes, audit",
+        description="Execution snapshot — loop state, heartbeat, outcomes",
     )
     sub = parser.add_subparsers(dest="cmd")
     sub.add_parser("loop", help="Active goal / loop lock")
@@ -625,8 +595,6 @@ def main(argv: list[str] | None = None) -> None:
     sub.add_parser("projects", help="Per-project status board (ACTIVE/STUCK/OK)")
     p_out = sub.add_parser("outcomes", help="Recent task outcomes")
     p_out.add_argument("--limit", type=int, default=20, help="Number of outcomes (default: 20)")
-    p_audit = sub.add_parser("audit", help="Sandbox audit log tail")
-    p_audit.add_argument("--limit", type=int, default=10, help="Number of entries (default: 10)")
     sub.add_parser("memory", help="Memory tier stats")
     p_events = sub.add_parser("events", help="Live event stream tail (memory/events.jsonl)")
     p_events.add_argument("--limit", type=int, default=20, help="Number of events (default: 20)")
@@ -644,8 +612,6 @@ def main(argv: list[str] | None = None) -> None:
         print_project_status()
     elif args.cmd == "outcomes":
         print_recent_outcomes(limit=args.limit)
-    elif args.cmd == "audit":
-        print_audit_tail(limit=args.limit)
     elif args.cmd == "memory":
         print_memory_stats()
     elif args.cmd == "events":
