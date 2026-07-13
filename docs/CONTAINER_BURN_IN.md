@@ -22,6 +22,38 @@ everywhere until Jeremy says otherwise.
 
 ---
 
+## 0. Local pre-box validation (2026-07-13, Opus, Docker Desktop for Mac)
+
+The container **mechanics** were exercised against real docker (Docker Desktop
+23.0.5, arm64) before the box run, to de-risk the arc. All green:
+
+- **Image builds** — `Dockerfile.executor` builds clean; CLI pin `2.1.207`
+  installs and is still the current published version (`npm view` — C1 re-pin
+  residual confirmed, no drift).
+- **Mount mechanics** — `tests/test_container_e2e.py` **4/4 pass**: rw
+  round-trip on a colon+space path, ro mount refuses writes, nested ro-under-rw
+  subsumes to rw, `--rm` failure cleanup.
+- **Containment** — a host secret *outside* the mount set is unreachable from a
+  shell in the container (`No such file or directory`; a shell has strictly
+  more reach than the claude worker, so this bounds the worker too).
+- **uid/gid** — a container write (`--user <uid>:<gid>`) to the mounted workdir
+  lands host-side **owned by the invoking user, not root** (design §4 holds).
+- **boot-tax** — ~360 ms warm-image `docker run` overhead for a trivial command
+  (marginal against a ~1.5 s CLI step; a Mac number — the box baseline differs).
+- **C2 stranded-container reaper** — kills only a dead-owner `maro-exec-*`
+  (by `maro.owner_pid` label), spares a live-owner one.
+- **`maro-doctor`** container rows render correctly (docker/image/auth-volume).
+
+**What this does NOT cover — still box-side + token-spending:** a real GOAL
+through the claude CLI worker (needs `/login` + tokens), the full acceptance
+probe with an actual worker, env-dependency surprises from real steps, the
+self-dev clone merge-back in a live run, native-Linux bind-mount uid/gid (Mac
+uses VirtioFS), the dogfood no-regression comparison, and **the flip**. Note:
+Docker Desktop auto-creates the `maro-claude-auth` volume empty on any run, so
+doctor's "auth volume present" ✓ does not imply logged-in — `--live` checks that.
+
+---
+
 ## 1. Preconditions
 
 Run on the runtime box (`clawd@` Ubuntu), from the repo root.
