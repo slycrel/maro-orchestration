@@ -81,6 +81,39 @@ def run_dir(handle_id: str) -> Path:
     return runs_root() / f"{handle_id}-{nickname(handle_id)}"
 
 
+def resolve_run_dir(ref: str) -> Optional[Path]:
+    """Locate a per-run dir by handle_id (its dir-name prefix) or by a
+    loop_id / handle_id recorded in metadata.json. Returns the dir or None.
+
+    A handle_id resolves O(1): the dir is named ``<handle_id>-<nickname>``,
+    so ``run_dir(ref)`` is a direct hit. A loop_id — what ``maro run`` prints
+    and what BACKLOG #18 asks ``maro inspect-run`` to accept — has no such
+    deterministic mapping, so fall back to a metadata scan. Best-effort:
+    unreadable dirs are skipped, never raised.
+    """
+    if not ref:
+        return None
+    direct = run_dir(ref)
+    if direct.is_dir():
+        return direct
+    root = runs_root()
+    if not root.is_dir():
+        return None
+    for d in sorted(root.iterdir()):
+        if not d.is_dir():
+            continue
+        meta_path = d / "metadata.json"
+        if not meta_path.is_file():
+            continue
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if meta.get("loop_id") == ref or meta.get("handle_id") == ref:
+            return d
+    return None
+
+
 def create_run_dir(
     handle_id: str,
     *,
@@ -268,6 +301,106 @@ def finalize_run(
     except Exception:
         pass  # never block finalize on the audit artifact
     return rd
+
+
+# ---------------------------------------------------------------------------
+# Run lifecycle: the generic "own a run" open/close sequence.
+#
+# Every lane that owns a run (handle NOW/AGENDA, and — since BACKLOG #18 —
+# the `maro run`/`maro resume` CLI lane) does the same two things: at start,
+# create + pin the run-dir and capture start-of-run attribution; at end,
+# slice the log, snapshot the repo, stamp the terminal status, curate the
+# run_card, and re-render reports. These two helpers are that sequence, so
+# the lanes share one implementation instead of copy-pasting the primitive
+# calls. NOW-lane-specific work (persona resolution, dispatch classification,
+# notify-channel emits) stays at each call site — only the generic run-dir
+# mechanism lives here.
+# ---------------------------------------------------------------------------
+
+def open_run(
+    handle_id: str,
+    *,
+    prompt: str,
+    model: Optional[str] = None,
+    lane: Optional[str] = None,
+    repo_path: str = "",
+    origin: Optional[dict] = None,
+) -> Path:
+    """Create + pin the run-dir and arm start-of-run attribution capture.
+
+    Returns the run-dir path (already pinned as the current-run context, so
+    downstream artifact writers land in it). Callers wrap this in their own
+    try/except — a runs/ failure must never block the run. The environment
+    snapshot is best-effort here; the run-dir + pin are the load-bearing part.
+    """
+    rd = create_run_dir(
+        handle_id,
+        prompt=prompt,
+        lane=lane,
+        model=model,
+        extra_metadata={"origin": origin} if origin else None,
+    )
+    set_current_run_dir(rd)
+    record_log_offset(handle_id)
+    if repo_path:
+        record_repo_base(handle_id, repo_path)
+    try:
+        write_environment_snapshot(rd)
+    except Exception:
+        pass
+    return rd
+
+
+def close_run(
+    handle_id: str,
+    *,
+    status: str,
+    backend_error=None,
+) -> Optional[dict]:
+    """Finalize a run-dir and return its curated run_card (or None).
+
+    Slices the captain's-log window, snapshots the repo bundle, stamps the
+    terminal status (merging an actionable backend_error when present),
+    curates run_card.json, and re-renders the run's reports so downstream
+    tooling (`maro inspect-run`, `maro viz search`) can see the finished
+    run. Best-effort throughout — never raises. `backend_error` is a
+    classified BackendError-info object; only its actionable fields are
+    persisted.
+    """
+    try:
+        slice_log_for_run(handle_id)
+    except Exception:
+        pass
+    try:
+        snapshot_repo_bundle(handle_id)
+    except Exception:
+        pass
+    extra = None
+    if backend_error is not None:
+        try:
+            extra = {"backend_error": {
+                "error_class": backend_error.error_class,
+                "backend": backend_error.backend,
+                "user_action": backend_error.user_action,
+            }}
+        except Exception:
+            extra = None
+    try:
+        finalize_run(handle_id, status=status, extra=extra)
+    except Exception:
+        pass
+    card = None
+    try:
+        from run_curation import curate_run
+        card = curate_run(handle_id, status=status)
+    except Exception:
+        card = None
+    try:
+        from loop_report import write_reports_for_run_dir
+        write_reports_for_run_dir(run_dir(handle_id))
+    except Exception:
+        pass
+    return card
 
 
 # ---------------------------------------------------------------------------

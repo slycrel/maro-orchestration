@@ -299,11 +299,74 @@ def _cmd_finish(args: argparse.Namespace) -> int:
     return 0
 
 
+def _print_run_dir(rd, fmt: str) -> int:
+    """Render a runs.py per-run dir for `maro inspect-run` (BACKLOG #18).
+
+    The orch RunRecord store (`output/runs/<id>.json`) only covers the
+    legacy cycle lane. Runs owned by maro-handle and the `maro run`/`maro
+    resume` CLI lane live in `runs/<handle_id>-<nick>/` instead, so surface
+    their metadata + attribution here rather than E_RUN_NOT_FOUND."""
+    meta = {}
+    mp = rd / "metadata.json"
+    if mp.is_file():
+        try:
+            meta = json.loads(mp.read_text(encoding="utf-8"))
+        except Exception:
+            meta = {}
+    card = None
+    cp = rd / "run_card.json"
+    if cp.is_file():
+        try:
+            card = json.loads(cp.read_text(encoding="utf-8"))
+        except Exception:
+            card = None
+    attribution = {
+        "environment": (rd / "source" / "environment.json").is_file(),
+        "skills_manifest": (rd / "source" / "skills_manifest.jsonl").is_file(),
+        "captains_log_slice": (rd / "build" / "captains_log_slice.jsonl").is_file(),
+    }
+    if fmt == "json":
+        print(json.dumps({
+            "run_dir": str(rd),
+            "metadata": meta,
+            "run_card": card,
+            "attribution": attribution,
+        }, indent=2))
+    else:
+        print(f"run_dir={rd}")
+        print(f"handle_id={meta.get('handle_id', '')}")
+        if meta.get("loop_id"):
+            print(f"loop_id={meta['loop_id']}")
+        print(f"nickname={meta.get('nickname', '')}")
+        print(f"lane={meta.get('lane')}")
+        print(f"model={meta.get('model')}")
+        print(f"status={meta.get('status')}")
+        print(f"prompt={meta.get('prompt', '')}")
+        if "goal_achieved" in meta:
+            print(f"goal_achieved={meta['goal_achieved']}")
+        if meta.get("goal_verdict_summary"):
+            print(f"goal_verdict_summary={meta['goal_verdict_summary']}")
+        print(f"attribution.environment={attribution['environment']}")
+        print(f"attribution.skills_manifest={attribution['skills_manifest']}")
+        print(f"attribution.captains_log_slice={attribution['captains_log_slice']}")
+    return 0
+
+
 def _cmd_inspect_run(args: argparse.Namespace) -> int:
     try:
         run = load_run_record(args.run_id)
         summary = load_validation_summary(args.run_id)
     except FileNotFoundError:
+        # Not an orch RunRecord — fall back to the runs.py per-run dir
+        # (handle + `maro run`/`maro resume` lanes), resolvable by handle_id
+        # or loop_id. E_RUN_NOT_FOUND only when neither store has it.
+        try:
+            from runs import resolve_run_dir as _resolve_run_dir
+            _rd = _resolve_run_dir(args.run_id)
+        except Exception:
+            _rd = None
+        if _rd is not None:
+            return _print_run_dir(_rd, args.format)
         return fail("E_RUN_NOT_FOUND", args.run_id)
     salvage = _load_salvage_summary(run)
     payload = {
@@ -521,6 +584,23 @@ def _closure_verdict_pass(goal_str: str, result, *, dry_run: bool = False):
         )
     except Exception:
         pass
+    # BACKLOG #18 residual: the CLI lanes now own a run-dir, so stamp the
+    # verdict into its metadata too — `maro inspect-run` shows goal_achieved
+    # and run_curation folds it into run_card.json. No-op when no run-dir is
+    # pinned (the outcomes annotation above stays the loop-keyed source of
+    # truth either way), so the honesty-only unit tests are unaffected.
+    try:
+        from runs import stamp_run_metadata
+        _vf = {
+            "goal_verdict_confidence": float(_verdict.confidence),
+            "goal_verdict_source": ("closure" if _judged else "closure_unverifiable"),
+            "goal_verdict_summary": str(_verdict.summary)[:300],
+        }
+        if _judged:
+            _vf["goal_achieved"] = bool(_verdict.complete)
+        stamp_run_metadata(_vf)
+    except Exception:
+        pass
     # Status honesty: verified-done beats reported-done; unjudged verdicts
     # never demote.
     if (_judged and not _verdict.complete
@@ -536,6 +616,8 @@ def _closure_verdict_pass(goal_str: str, result, *, dry_run: bool = False):
 
 def _cmd_run(args: argparse.Namespace) -> int:
     import agent_loop as _al
+    import runs as _runs
+    import uuid as _uuid
     goal_str = " ".join(args.goal)
     # Wire up ancestry if --parent was specified
     if getattr(args, "parent", None):
@@ -549,21 +631,60 @@ def _cmd_run(args: argparse.Namespace) -> int:
         _parent_title = getattr(args, "parent_title", None) or args.parent
         _child_ancestry = create_child_ancestry(args.parent, _parent_title, _parent_dir)
         set_project_ancestry(_target_dir, _child_ancestry)
+
+    # BACKLOG #18 residual: own a run-dir on the direct-CLI lane too, so this
+    # run gets the same per-run attribution capture (environment snapshot,
+    # skills manifest, captains-log slice, run_card) as maro-handle and is
+    # visible to `maro inspect-run` / `maro viz search`. `runs.open_run` is
+    # the identical "own a run" sequence handle.py uses — no duplication.
+    handle_id = _uuid.uuid4().hex[:8]
+    _origin = {"source": "cli-run"}
+    if getattr(args, "parent", None):
+        _origin["parent_project"] = args.parent
+    _rd = None
     try:
-        result = _al.run_agent_loop(
-            goal_str,
-            project=args.project,
-            model=args.model,
-            max_steps=args.max_steps,
-            max_iterations=args.max_iterations,
-            dry_run=args.dry_run,
-            verbose=args.verbose,
+        _rd = _runs.open_run(
+            handle_id, prompt=goal_str, model=args.model, lane="agenda",
+            origin=_origin,
         )
-    except Exception as exc:
-        return fail("E_RUN", str(exc))
+    except Exception:
+        _rd = None
 
-    _verdict = _closure_verdict_pass(goal_str, result, dry_run=args.dry_run)
+    _status = "error"
+    result = None
+    try:
+        with _runs.scoped_run_dir(_rd):
+            try:
+                result = _al.run_agent_loop(
+                    goal_str,
+                    project=args.project,
+                    model=args.model,
+                    max_steps=args.max_steps,
+                    max_iterations=args.max_iterations,
+                    dry_run=args.dry_run,
+                    verbose=args.verbose,
+                )
+            except Exception as exc:
+                return fail("E_RUN", str(exc))
+            _status = result.status
+            # Stamp the loop_id so `maro inspect-run <loop_id>` / `maro resume`
+            # can resolve this run-dir by the id the command printed.
+            try:
+                _runs.stamp_run_metadata({"loop_id": result.loop_id})
+            except Exception:
+                pass
+            _verdict = _closure_verdict_pass(goal_str, result, dry_run=args.dry_run)
+            _status = result.status  # verdict may have demoted done→incomplete
+        return _emit_run_output(args, result, _verdict)
+    finally:
+        if _rd is not None:
+            try:
+                _runs.close_run(handle_id, status=_status)
+            except Exception:
+                pass
 
+
+def _emit_run_output(args, result, _verdict) -> int:
     _out = {
         "loop_id": result.loop_id,
         "project": result.project,
@@ -1976,27 +2097,58 @@ def _cmd_resume(args: argparse.Namespace) -> int:
              if ckpt.in_flight else ""))
 
     import agent_loop as _al
+    import runs as _runs
+    import uuid as _uuid
+    # BACKLOG #18 residual: own a run-dir for the resumed run too. Reuse the
+    # original run-dir when the checkpoint carries a handle_id (open_run is
+    # idempotent — started_at/prompt.txt are preserved); otherwise mint one so
+    # a loop_id-only checkpoint still gets attribution capture + inspectability.
+    handle_id = ckpt.handle_id or _uuid.uuid4().hex[:8]
+    _rd = None
     try:
-        result = _al.run_agent_loop(
-            ckpt.goal,
-            project=ckpt.project or None,
-            resume_from_loop_id=ckpt.loop_id,
-            verbose=args.verbose,
+        _rd = _runs.open_run(
+            handle_id, prompt=ckpt.goal, lane="agenda",
+            origin={"source": "cli-resume", "resumed_from": ckpt.loop_id},
         )
-    except Exception as exc:
-        return fail("E_RESUME", str(exc))
-    _verdict = _closure_verdict_pass(ckpt.goal, result)
-    _resume_out = {"loop_id": result.loop_id, "status": result.status,
-                   "resumed_from": ckpt.loop_id}
-    if _verdict is not None and _verdict.checks_run > 0 and getattr(_verdict, "judged", True):
-        _resume_out["goal_achieved"] = bool(_verdict.complete)
-    if args.format == "json":
-        print(json.dumps(_resume_out))
-    else:
-        print(f"[maro] resume finished: {result.status}")
-        if "goal_achieved" in _resume_out:
-            print(f"goal_achieved: {_resume_out['goal_achieved']}")
-    return 0 if result.status == "done" else 1
+    except Exception:
+        _rd = None
+    _status = "error"
+    result = None
+    try:
+        with _runs.scoped_run_dir(_rd):
+            try:
+                result = _al.run_agent_loop(
+                    ckpt.goal,
+                    project=ckpt.project or None,
+                    resume_from_loop_id=ckpt.loop_id,
+                    verbose=args.verbose,
+                )
+            except Exception as exc:
+                return fail("E_RESUME", str(exc))
+            _status = result.status
+            try:
+                _runs.stamp_run_metadata({"loop_id": result.loop_id})
+            except Exception:
+                pass
+            _verdict = _closure_verdict_pass(ckpt.goal, result)
+            _status = result.status
+        _resume_out = {"loop_id": result.loop_id, "status": result.status,
+                       "resumed_from": ckpt.loop_id}
+        if _verdict is not None and _verdict.checks_run > 0 and getattr(_verdict, "judged", True):
+            _resume_out["goal_achieved"] = bool(_verdict.complete)
+        if args.format == "json":
+            print(json.dumps(_resume_out))
+        else:
+            print(f"[maro] resume finished: {result.status}")
+            if "goal_achieved" in _resume_out:
+                print(f"goal_achieved: {_resume_out['goal_achieved']}")
+        return 0 if result.status == "done" else 1
+    finally:
+        if _rd is not None:
+            try:
+                _runs.close_run(handle_id, status=_status)
+            except Exception:
+                pass
 
 
 _COMMAND_HANDLERS = {
