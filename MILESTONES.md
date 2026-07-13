@@ -714,15 +714,31 @@ Truth anchor: GOAL_BRAIN.md Threads. History: docs/history/ROADMAP_ARCHIVE.md.
 0. **Substrate trial (OpenClaw → Maro → Telegram) — SHELVED** — *(Jeremy, 2026-07-01: "get the project where we can trial it for real with hermes or openclaw").* Substrate contract SHIPPED + live-verified 2026-07-01: notify hook (`notify.command`, run_completed/escalation, payload = run_card), uniform result retrieval (`run_result` + `maro-runs status|result`), escalation delivery (navigator dispatch-escalate + director surface both ping Telegram), `maro-notify-telegram` target, `deploy/openclaw/maro-dispatch.sh` symlinked into OpenClaw's scripts. E2E proven: dispatch script → enqueue → drain → run → run_card → Jeremy's Telegram DM (verified success-class goal). Docs: `docs/SUBSTRATE_INTEGRATION.md`. **Unattended hardening SHIPPED 2026-07-01:** budget gates (`budget.per_run_usd` default cost_budget + `budget.daily_usd` cross-run gate via `metrics.spend_today()`, refusal emits escalation notify; box config set 2.0/10.0), phantom `Step -1` root-caused + fixed (parallel batch discarded NEXT.md indices — threaded through, done items marked, display numbers by position; BACKLOG #2), drain-once contract (`enqueue --drain` → `drain_task_store(job_ids=...)`: a dispatch runs exactly what it enqueued, stale queued tasks can't piggyback). Also: user-config test-isolation hole closed (`MARO_USER_DIR`). **Delegation instruction SHIPPED 2026-07-01** (installed in `~/.openclaw/workspace/AGENTS.md`, canonical snippet in `deploy/openclaw/README.md`). **Burn-in COMPLETE 2026-07-02** — full record + adjudicated table in `docs/history/2026-07-02-burnin.md`. 14 dispatched goals over 4 batches; pipeline verdict: WORKS (12/14 delivered; controls behaved). Caught + fixed same-day, each re-proven live: closure cwd FN (ec4c1f3), inconclusive-as-failure FN + verdict prompt (9be749b), NOW-lane file-deliverable misroute (8ed0a09), skipped-closure FP (90b4d1b), cost-per-run join `loop_ids`→`total_cost_usd` (2989bb0). ~$2.45/day total, $0.10–0.60/goal. **Both open items RESOLVED 2026-07-02 (Jeremy):** model lane — accept the subscription contention (rate-limit stucks are an accepted operating cost; graceful degradation is the designed behavior); push guard — OpenClaw may push its own commits to main ("not (only) the job of orchestration"), guard stays scoped to MARO_WORKER_RUN. **Next:** (d) Hermes adapter — contract makes it cheap; steal-from-don't-migrate. **SHELVED 2026-07-04 (Jeremy): revisit ~next week.** *(2026-07-12 status: superseded by the 2026-07-09 Hermes decision — swap OpenClaw→Hermes as substrate when Jeremy gets the new machine; his call/timing. Not an open queue item until then.)*
 1. **Per-decision-class cutover** — *code shipped default-off, refined to per-MOVE granularity 2026-06-12.* `navigator.act_dispatch` + `act_confidence_floor` (0.9) + `act_moves` (default `["escalate"]`): escalate earned cutover (defers to human, 6/6 divergences right), close is opt-in (asserts resolution without running; probe-only evidence). Guard keeps first word; `NAVIGATOR_ACTED` audit event; `python3 -m navigator_shadow --agreement` is the evidence table. **Enable decision (23 live rows, 14/14 execute incl. 5/5 organic, all acting-move divergences synthetic probes): escalate ENABLED LIVE 2026-06-21** (Jeremy's call) — `navigator.act_dispatch: true`, `act_moves: [escalate]` in `~/.maro/workspace/config.yml`. Reversible: flip `act_dispatch` off. **MECHANISM PROVEN end-to-end 2026-06-21:** first `NAVIGATOR_ACTED` row written via the real enqueue→drain→`handle_task` path — a "$50k wire transfer" goal drew escalate 0.98, status=stuck/`navigator_escalate`, **no run dir spawned** (the run was prevented, deferred to human). Wiring is live and correct. Remaining is *passive organic accrual* — escalate firing on Poe's own self-generated goals during normal operation (the validation run was a deliberate trigger, not organic). Then → revisit close cutover once it has non-synthetic evidence. Closure decision class stays shadow-only (no live closure callsite yet). **DEFAULT ON 2026-07-08 (Jeremy's flip):** `act_dispatch` hardcoded default now `True` (escalate-only via `act_moves` default) — new installs get the cutover as this box runs it; opt out via `navigator.act_dispatch: false`. See `docs/DEFAULTS.md`.
 1.5. **Planning-depth shadow (thread-arch #5, DECIDED 2026-07-09 — see GOAL_BRAIN)** —
-   add a planning-depth judgment to the existing dispatch decide call (no new
-   LLM call; one new envelope field): default=plan, lighter shapes
-   (one-shot / thin-plan / **spawn-sub-goal** — the recursion decree makes
-   this a legal shape, not an enum afterthought) only on positive signals
-   (concrete deliverables/paths in the goal, recall-visible prior successful
-   same-family runs, NOW-shaped scope). Ships shadow-first: NAVIGATOR_DECIDED
-   records depth-judgment beside pipeline-actual; adjudicate like the
-   dumb-loop-audit rounds; per-move cutover when the agreement table earns
-   it. Size: roughly a blocked-step-round-2 chunk.
+   **SHIPPED 2026-07-13.** Adds a `planning_depth` judgment to the existing
+   dispatch `decide()` call — no new LLM call, one new envelope field
+   (`src/navigator.py`: `PLANNING_DEPTHS = {plan, one-shot, thin-plan,
+   spawn-sub-goal}`, default `"plan"`, fails closed on absent/malformed
+   values at parse time rather than through `validate_decision`'s hard-fail
+   contract — advisory shadow field, not core decision mechanics). Prompt
+   guidance for the lighter shapes (`src/navigator_prompt.py`
+   `PLANNING_DEPTH_ADDENDUM`) is judgment text, not a hardcoded signal
+   scorer: concrete deliverables/paths in the goal, recall-visible prior
+   successful same-family runs, NOW-shaped scope — inference, not taxonomy.
+   `spawn-sub-goal` shipped as a first-class value per the recursion decree.
+   Ships shadow-first via `navigator.shadow_planning_depth` (default
+   `False`, documented in `docs/DEFAULTS.md`) gating a `judge_planning_depth`
+   flag into `decide()`; wired only at `navigator_shadow.shadow_dispatch_live()`
+   per the decided dispatch-only scoping — `shadow_blocked_step_live()`
+   deliberately does not judge depth. `pipeline_actual.depth_equivalent`
+   records the constant `"plan"` baseline (the default autonomous dispatch
+   pipeline is always the full-plan pipeline today; `skip_if_simple` is
+   opt-in only via `telegram_listener.py`). Agreement tooling
+   (`analyze_planning_depth_agreement()`, extended `python3 -m
+   navigator_shadow --agreement`) mirrors the existing move-agreement table.
+   Full mechanism + rationale: `docs/NAVIGATOR_SCHEMA.md` "Planning-depth
+   shadow (wired 2026-07-13)". No cutover this chunk — same shadow-first
+   posture as dispatch-class before its own cutover; next step is
+   accumulating live rows for the per-move cutover discussion.
 1.6. **/loop trace (thread-arch #9 disposition)** — trace one real /loop
    session against the per-turn navigator model; close the question or
    escalate on actual friction found. Not a design item.

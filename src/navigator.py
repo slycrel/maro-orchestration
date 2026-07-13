@@ -39,6 +39,19 @@ CHILD_DISPOSITIONS = frozenset({"done", "abandoned", "absorbed"})
 # A made call — revisit against NAVIGATOR_DECIDED data.
 FORK_CHILD_CAP = 8
 
+# Planning-depth shadow (thread-arch #5, MILESTONES 1.5, decided 2026-07-09
+# GOAL_BRAIN Decisions "#5 planning-vs-Tesla-mode"). A second, independent
+# judgment riding the SAME envelope as the move — how much planning this
+# goal needs, not what to do next. "plan" (the normal/full pipeline) is the
+# default/prior; the lighter shapes fire only on positive evidence in the
+# navigator's judgment (prompt, not code — inference-not-taxonomy). Every
+# code path treats an absent or unrecognized value as "plan" — fail-closed
+# to the conservative default, same posture as the budget-gate coercion.
+# "spawn-sub-goal" is a legal shape by the 2026-07-09 recursion decree, not
+# an enum afterthought: it must never be dropped to make this set smaller.
+PLANNING_DEPTHS = frozenset({"plan", "one-shot", "thin-plan", "spawn-sub-goal"})
+DEFAULT_PLANNING_DEPTH = "plan"
+
 # Required payload keys per move (optional keys documented in the design doc).
 _REQUIRED_PAYLOAD: Dict[str, tuple] = {
     "extend": ("instruction", "expected_artifact"),
@@ -108,11 +121,18 @@ class NavigatorInput:
 class NavigatorDecision:
     """The single envelope every navigator turn returns, idunno included.
     reasoning is mandatory for every move — a decision without reasoning is
-    unlearnable-from."""
+    unlearnable-from.
+
+    planning_depth (thread-arch #5, MILESTONES 1.5): a second judgment riding
+    the same envelope — how much planning this goal needs, independent of
+    which move fires. Defaults to "plan" (the normal/full pipeline); see
+    PLANNING_DEPTHS. Shadow-only in this chunk — nothing reads it for control
+    flow yet, it rides NAVIGATOR_DECIDED beside pipeline-actual."""
     move: str
     reasoning: str
     confidence: float
     payload: Dict[str, Any] = field(default_factory=dict)
+    planning_depth: str = DEFAULT_PLANNING_DEPTH
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -120,6 +140,7 @@ class NavigatorDecision:
             "reasoning": self.reasoning,
             "confidence": self.confidence,
             "payload": dict(self.payload),
+            "planning_depth": self.planning_depth,
         }
 
     def payload_digest(self) -> Dict[str, Any]:
@@ -173,7 +194,13 @@ def _extract_json(text: str) -> Optional[dict]:
 def parse_decision(text: str) -> NavigatorDecision:
     """Parse LLM output into a NavigatorDecision. Shape errors raise
     DecisionParseError with a readable reason (the prompt-side retry message).
-    Semantic validity is validate_decision's job — parse, then validate."""
+    Semantic validity is validate_decision's job — parse, then validate.
+
+    planning_depth is deliberately NOT part of that hard-fail contract: it is
+    an advisory shadow field (MILESTONES 1.5), not core decision mechanics.
+    Absent, non-string, or unrecognized values fail closed to "plan" (the
+    conservative default) rather than raising — a malformed or missing depth
+    judgment must never block or retry the underlying move decision."""
     obj = _extract_json(text or "")
     if obj is None:
         raise DecisionParseError("no JSON object found in navigator output")
@@ -190,8 +217,12 @@ def parse_decision(text: str) -> NavigatorDecision:
     if not isinstance(payload, dict):
         raise DecisionParseError(
             f"payload must be an object, got {type(payload).__name__}")
+    planning_depth = str(obj.get("planning_depth") or "").strip().lower()
+    if planning_depth not in PLANNING_DEPTHS:
+        planning_depth = DEFAULT_PLANNING_DEPTH
     return NavigatorDecision(
         move=move, reasoning=reasoning, confidence=confidence, payload=payload,
+        planning_depth=planning_depth,
     )
 
 

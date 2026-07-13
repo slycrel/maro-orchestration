@@ -9,8 +9,10 @@ import pytest
 
 from navigator import (
     CHILD_DISPOSITIONS,
+    DEFAULT_PLANNING_DEPTH,
     FORK_CHILD_CAP,
     MOVES,
+    PLANNING_DEPTHS,
     ChildSummary,
     DecisionParseError,
     NavigatorDecision,
@@ -89,6 +91,72 @@ class TestParseDecision:
         with pytest.raises(DecisionParseError):
             parse_decision(
                 '{"move": "execute", "reasoning": "r", "confidence": "high"}')
+
+
+class TestPlanningDepthParsing:
+    """Thread-arch #5 (MILESTONES 1.5): planning_depth rides the same
+    envelope as move. It is advisory shadow data, not core decision
+    mechanics — absent or malformed values fail closed to "plan" rather
+    than raising, so a bad/missing depth judgment never blocks or retries
+    the underlying move decision (parse_decision's docstring)."""
+
+    def test_present_value_kept(self):
+        d = parse_decision(json.dumps({
+            "move": "execute", "reasoning": "r", "confidence": 0.6,
+            "planning_depth": "one-shot",
+        }))
+        assert d.planning_depth == "one-shot"
+
+    def test_spawn_sub_goal_is_legal_not_dropped(self):
+        """The 2026-07-09 recursion decree: spawn-sub-goal is a legal shape,
+        not an enum afterthought — it must parse through untouched."""
+        d = parse_decision(json.dumps({
+            "move": "extend", "reasoning": "r", "confidence": 0.5,
+            "planning_depth": "spawn-sub-goal",
+        }))
+        assert d.planning_depth == "spawn-sub-goal"
+        assert "spawn-sub-goal" in PLANNING_DEPTHS
+
+    def test_thin_plan_is_legal(self):
+        d = parse_decision(json.dumps({
+            "move": "execute", "reasoning": "r", "confidence": 0.7,
+            "planning_depth": "thin-plan",
+        }))
+        assert d.planning_depth == "thin-plan"
+
+    def test_case_normalized(self):
+        d = parse_decision(json.dumps({
+            "move": "execute", "reasoning": "r", "confidence": 0.7,
+            "planning_depth": "One-Shot",
+        }))
+        assert d.planning_depth == "one-shot"
+
+    def test_absent_field_defaults_to_plan(self):
+        d = parse_decision(json.dumps({
+            "move": "execute", "reasoning": "r", "confidence": 0.5,
+        }))
+        assert d.planning_depth == DEFAULT_PLANNING_DEPTH == "plan"
+
+    def test_malformed_value_fails_closed_to_plan(self):
+        """An unrecognized string must not raise DecisionParseError — the
+        move/confidence/payload core must still parse successfully."""
+        d = parse_decision(json.dumps({
+            "move": "execute", "reasoning": "r", "confidence": 0.5,
+            "planning_depth": "full-blown-mega-plan",
+        }))
+        assert d.planning_depth == "plan"
+        assert d.move == "execute"  # the core decision is unaffected
+
+    def test_non_string_value_fails_closed_to_plan(self):
+        d = parse_decision(json.dumps({
+            "move": "execute", "reasoning": "r", "confidence": 0.5,
+            "planning_depth": 7,
+        }))
+        assert d.planning_depth == "plan"
+
+    def test_default_on_direct_construction(self):
+        d = NavigatorDecision(move="execute", reasoning="r", confidence=0.5)
+        assert d.planning_depth == "plan"
 
 
 class TestValidateEnvelope:
@@ -257,4 +325,13 @@ class TestInstrumentationShapes:
         again = parse_decision(json.dumps(d.to_dict()))
         assert again.move == d.move
         assert again.payload == d.payload
+        assert again.planning_depth == d.planning_depth == "plan"
         assert validate_decision(again) == []
+
+    def test_to_dict_round_trips_non_default_planning_depth(self):
+        d = NavigatorDecision(move="execute", reasoning="r", confidence=0.6,
+                              payload={"instruction": "go"},
+                              planning_depth="thin-plan")
+        assert d.to_dict()["planning_depth"] == "thin-plan"
+        again = parse_decision(json.dumps(d.to_dict()))
+        assert again.planning_depth == "thin-plan"

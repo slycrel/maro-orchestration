@@ -13,11 +13,14 @@ from navigator_prompt import decide, render_input
 from navigator_shadow import input_from_run, replay_run, resolve_run_dir
 
 
-def _resp(move, reasoning="because", confidence=0.7, **payload):
-    return json.dumps({
+def _resp(move, reasoning="because", confidence=0.7, planning_depth=None, **payload):
+    obj = {
         "move": move, "reasoning": reasoning,
         "confidence": confidence, "payload": payload,
-    })
+    }
+    if planning_depth is not None:
+        obj["planning_depth"] = planning_depth
+    return json.dumps(obj)
 
 
 class _FakeAdapter:
@@ -178,6 +181,62 @@ class TestDecideTierChain:
         assert ctx["pipeline_actual"] == {"move_equivalent": "execute"}
         assert ctx["move"] == "execute"
         assert ctx["tier"] == "cheap"
+        # Thread-arch #5 (MILESTONES 1.5): always logged, defaults "plan"
+        # when the caller never opted into judge_planning_depth.
+        assert ctx["planning_depth"] == "plan"
+
+
+class TestPlanningDepthPrompt:
+    """decide(judge_planning_depth=...): the "no new LLM call, one new
+    envelope field" mechanism (thread-arch #5, MILESTONES 1.5) — off by
+    default so every existing caller's prompt is byte-identical; on, it
+    rides the SAME request, appending PLANNING_DEPTH_ADDENDUM to the system
+    prompt for that call only."""
+
+    def test_off_by_default_prompt_unchanged(self):
+        adapter = _FakeAdapter([_resp("execute", instruction="go")])
+        d, _ = decide(_nav_input(), tiers=["cheap"], adapter_factory=lambda t: adapter)
+        system_sent = adapter.calls[0][0].content
+        assert "planning_depth" not in system_sent
+        assert d.planning_depth == "plan"  # unjudged default
+
+    def test_on_appends_addendum_to_system_prompt(self):
+        adapter = _FakeAdapter([_resp("execute", instruction="go")])
+        decide(_nav_input(), tiers=["cheap"], adapter_factory=lambda t: adapter,
+               judge_planning_depth=True)
+        system_sent = adapter.calls[0][0].content
+        assert "planning_depth" in system_sent
+        # The recursion decree shape must be present, not dropped as an
+        # enum afterthought.
+        assert "spawn-sub-goal" in system_sent
+        assert "one-shot" in system_sent and "thin-plan" in system_sent
+
+    def test_on_captures_model_emitted_depth(self):
+        adapter = _FakeAdapter([_resp(
+            "extend", instruction="scope it", expected_artifact="scope.md",
+            planning_depth="thin-plan")])
+        d, _ = decide(_nav_input(), tiers=["cheap"], adapter_factory=lambda t: adapter,
+                      judge_planning_depth=True)
+        assert d.planning_depth == "thin-plan"
+
+    def test_no_second_llm_call(self):
+        """The mechanism is one more field on the SAME request — turning it
+        on must not add an adapter call."""
+        adapter = _FakeAdapter([_resp("execute", instruction="go")])
+        decide(_nav_input(), tiers=["cheap"], adapter_factory=lambda t: adapter,
+               judge_planning_depth=True)
+        assert len(adapter.calls) == 1
+
+    def test_malformed_model_output_defaults_without_retry_penalty(self):
+        """A garbage planning_depth from the model must not count as a
+        format failure — only move/confidence/payload are hard-fail
+        mechanics; planning_depth fails closed to "plan" at parse time."""
+        adapter = _FakeAdapter([_resp(
+            "execute", instruction="go", planning_depth="mega-ultra-plan")])
+        d, meta = decide(_nav_input(), tiers=["cheap"], adapter_factory=lambda t: adapter,
+                         judge_planning_depth=True)
+        assert d.planning_depth == "plan"
+        assert meta["format_failures"] == 0
 
 
 def _make_run(tmp_workspace_run, handle_id, goal, status, started_iso, ended_iso=None):
@@ -365,6 +424,68 @@ class TestShadowDispatchLive:
             )
         assert built == ["mid"]
 
+    def test_planning_depth_off_by_default(self):
+        """navigator.shadow_planning_depth defaults False — a clean install
+        gets no depth judgment even with dispatch shadow/act on (thread-arch
+        #5, MILESTONES 1.5): the returned decision carries the unjudged
+        default and pipeline_actual carries no depth_equivalent."""
+        from unittest.mock import patch
+        from navigator_shadow import shadow_dispatch_live
+        events = []
+        with patch("config.get",
+                   side_effect=self._cfg({"navigator.shadow_dispatch": True})), \
+             patch("captains_log.log_event",
+                   side_effect=lambda et, **kw: events.append((et, kw))):
+            decision = shadow_dispatch_live(
+                self.GOAL,
+                adapter_factory=lambda t: _FakeAdapter(
+                    [_resp("execute", instruction="go")]),
+            )
+        assert decision.planning_depth == "plan"
+        ctx = [kw for et, kw in events if et == "NAVIGATOR_DECIDED"][0]["context"]
+        assert "depth_equivalent" not in ctx["pipeline_actual"]
+
+    def test_planning_depth_shadow_enabled_records_depth_equivalent(self):
+        from unittest.mock import patch
+        from navigator_shadow import shadow_dispatch_live
+        events = []
+        with patch("config.get", side_effect=self._cfg({
+                "navigator.shadow_dispatch": True,
+                "navigator.shadow_planning_depth": True})), \
+             patch("captains_log.log_event",
+                   side_effect=lambda et, **kw: events.append((et, kw))):
+            decision = shadow_dispatch_live(
+                self.GOAL,
+                adapter_factory=lambda t: _FakeAdapter([_resp(
+                    "extend", instruction="scope it", expected_artifact="scope.md",
+                    planning_depth="thin-plan")]),
+            )
+        assert decision.planning_depth == "thin-plan"
+        ctx = [kw for et, kw in events if et == "NAVIGATOR_DECIDED"][0]["context"]
+        assert ctx["pipeline_actual"]["depth_equivalent"] == "plan"
+        assert ctx["planning_depth"] == "thin-plan"
+
+    def test_planning_depth_gate_prompts_the_model(self):
+        from unittest.mock import patch
+        from navigator_shadow import shadow_dispatch_live
+        adapter = _FakeAdapter([_resp("execute", instruction="go")])
+        with patch("config.get", side_effect=self._cfg({
+                "navigator.shadow_dispatch": True,
+                "navigator.shadow_planning_depth": True})):
+            shadow_dispatch_live(self.GOAL, adapter_factory=lambda t: adapter)
+        assert "planning_depth" in adapter.calls[0][0].content
+
+    def test_planning_depth_never_raises_when_decide_explodes(self):
+        from unittest.mock import patch
+        from navigator_shadow import shadow_dispatch_live
+        with patch("config.get", side_effect=self._cfg({
+                "navigator.shadow_dispatch": True,
+                "navigator.shadow_planning_depth": True})), \
+             patch("navigator_prompt.decide",
+                   side_effect=RuntimeError("decide blew up")):
+            result = shadow_dispatch_live(self.GOAL)
+        assert result is None
+
 
 class TestShadowBlockedStepLive:
     """shadow_blocked_step_live: the dumb-loop audit priority-1 point.
@@ -420,6 +541,30 @@ class TestShadowBlockedStepLive:
         assert actual["heuristic_action"] == "redecompose"
         # the heuristic's signals ride along for adjudication.
         assert actual["retries"] == 2 and actual["sibling_fail_rate"] == 0.6
+
+    def test_does_not_judge_planning_depth(self):
+        """Thread-arch #5 (MILESTONES 1.5) is decided as a DISPATCH-only
+        judgment ('at the existing dispatch decide() call' — GOAL_BRAIN);
+        the blocked-step shadow must not request or record it, even with
+        every navigator flag on — no depth_equivalent, no addendum in the
+        prompt sent to the model."""
+        from unittest.mock import patch
+        from navigator_shadow import shadow_blocked_step_live
+        events = []
+        adapter = _FakeAdapter([_resp(
+            "extend", instruction="do it", expected_artifact="thing.md")])
+        with patch("config.get", side_effect=self._cfg({
+                "navigator.shadow_blocked_step": True,
+                "navigator.shadow_planning_depth": True})), \
+             patch("captains_log.log_event",
+                   side_effect=lambda et, **kw: events.append((et, kw))):
+            shadow_blocked_step_live(
+                self.GOAL, heuristic_action="retry",
+                adapter_factory=lambda t: adapter,
+            )
+        ctx = [kw for et, kw in events if et == "NAVIGATOR_DECIDED"][0]["context"]
+        assert "depth_equivalent" not in ctx["pipeline_actual"]
+        assert "planning_depth" not in adapter.calls[0][0].content
 
     def test_stuck_maps_to_close_and_failed_status(self):
         from unittest.mock import patch
@@ -513,3 +658,66 @@ class TestAnalyzeLiveAgreement:
         ]
         s = analyze_live_agreement(events)
         assert s["live_rows"] == 1
+
+
+class TestAnalyzePlanningDepthAgreement:
+    """analyze_planning_depth_agreement: the same per-class-cutover shape as
+    analyze_live_agreement, applied to thread-arch #5 (MILESTONES 1.5) —
+    'adjudication/agreement-table tooling should follow the same shape as
+    python3 -m navigator_shadow --agreement' (the decided design)."""
+
+    def _event(self, planning_depth, *, depth_equivalent="plan", live=True,
+               conf=0.9, goal="g", move="execute"):
+        pa = {"move_equivalent": move, "live": live}
+        if depth_equivalent is not None:
+            pa["depth_equivalent"] = depth_equivalent
+        return {
+            "event_type": "NAVIGATOR_DECIDED",
+            "timestamp": "2026-07-12T00:00:00+00:00",
+            "context": {
+                "move": move, "confidence": conf, "tier": "cheap",
+                "planning_depth": planning_depth,
+                "input_digest": {"goal_preview": goal},
+                "pipeline_actual": pa,
+            },
+        }
+
+    def test_rows_without_depth_equivalent_excluded(self):
+        """A live dispatch row where the depth shadow was OFF must not count
+        — its planning_depth is an unjudged default, not data."""
+        from navigator_shadow import analyze_planning_depth_agreement
+        events = [
+            self._event("plan", depth_equivalent=None),
+            self._event("plan"),
+        ]
+        s = analyze_planning_depth_agreement(events)
+        assert s["live_rows"] == 1
+
+    def test_plan_agrees_lighter_shapes_diverge(self):
+        from navigator_shadow import analyze_planning_depth_agreement
+        events = [
+            self._event("plan"),
+            self._event("plan"),
+            self._event("one-shot", goal="read config.yml and report its keys"),
+            self._event("spawn-sub-goal", goal="make me rich"),
+        ]
+        s = analyze_planning_depth_agreement(events)
+        assert s["live_rows"] == 4
+        assert s["by_depth"]["plan"] == {"agree": 2, "diverge": 0}
+        assert s["by_depth"]["one-shot"] == {"agree": 0, "diverge": 1}
+        assert s["by_depth"]["spawn-sub-goal"] == {"agree": 0, "diverge": 1}
+        assert s["agreements"] == 2
+        assert len(s["divergences"]) == 2
+        previews = {d["goal_preview"] for d in s["divergences"]}
+        assert "make me rich" in previews
+
+    def test_non_live_events_ignored(self):
+        from navigator_shadow import analyze_planning_depth_agreement
+        events = [
+            self._event("plan", live=False),
+            {"event_type": "CLOSURE_VERDICT", "context": {}},
+            self._event("thin-plan"),
+        ]
+        s = analyze_planning_depth_agreement(events)
+        assert s["live_rows"] == 1
+        assert s["by_depth"]["thin-plan"] == {"agree": 0, "diverge": 1}
