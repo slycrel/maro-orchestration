@@ -13,10 +13,13 @@ list without touching the hook. Shipped miners: classification, asset
 inventory, result excerpt, spend transparency, skills-lite promotion, and the
 four BACKLOG #0 miners — script scraper (`scrape_scripts`), skill scraper
 (`flag_skill_candidate`), partial-run rescue (`rescue_partial`), and the
-decision-prior indexer (`index_decision_prior`). The decision-prior indexer's
-read half (`format_prior_decisions` / `prior_decision_context`) is surfaced
-through `recall()` into a re-attempt's context BEFORE it starts, so a retried
-or rephrased goal arrives warm instead of cold.
+decision-prior indexer (`index_decision_prior`). The decision-prior card
+schema and its read half (`format_prior_decisions` / `load_decision_prior`)
+live in the neutral `decision_prior.py` (shared with recall.py — see that
+module's docstring); `prior_decision_context` here is a standalone
+convenience wrapper combining recall's matching with that formatting. Either
+way the result is surfaced through `recall()` into a re-attempt's context
+BEFORE it starts, so a retried or rephrased goal arrives warm instead of cold.
 
 This is an adornment on the run-dir plan, not a new subsystem. Capture is
 default-on; turn it off with MARO_RECORD=0 / config record.enabled=false (see
@@ -33,8 +36,23 @@ from __future__ import annotations
 
 import json
 import shutil
+from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
+
+# Decision-prior card schema (shape + load/format) lives in the neutral
+# decision_prior.py — shared with recall.py, which surfaces the formatted
+# briefs into a re-attempt's context. Re-exported here under their historical
+# names so existing call sites (this module's own CLI, prior_decision_context
+# below) and any external `run_curation.<name>` access keep working
+# (adversarial-review R1 batch-1 finding #2).
+from decision_prior import (
+    make_decision_prior,
+    load_decision_prior,
+    format_prior_decisions,
+    _DECISION_TRIED_CHARS,
+    _DECISION_LESSON_CAP,
+)
 
 _SUCCESS_STATUSES = {"done", "complete", "completed"}
 # "incomplete" = closure demoted a finished run (work ended, goal not met) —
@@ -741,9 +759,9 @@ def rescue_partial(rd: Path, meta: dict, card: dict) -> None:
 
 
 # --- decision-prior indexer (miner #3, the owner ask) ------------------------
-
-_DECISION_LESSON_CAP = 5
-_DECISION_TRIED_CHARS = 400
+# Schema constants (_DECISION_LESSON_CAP, _DECISION_TRIED_CHARS) live in
+# decision_prior.py now (imported above) — this section builds the dict via
+# make_decision_prior(), it doesn't own the shape.
 
 
 def _run_lessons(meta: dict) -> List[str]:
@@ -812,102 +830,24 @@ def index_decision_prior(rd: Path, meta: dict, card: dict) -> None:
                or why or _be_action or excerpt[-300:])
     why = str(why or "")[:400]
 
-    prior = {
-        "handle_id": card.get("handle_id"),
-        "goal": card.get("goal", ""),
-        "outcome": cls,
-        "goal_achieved": card.get("goal_achieved"),
-        "when": card.get("started_at"),
-        "what_was_tried": what_was_tried,
-        "why": why,
-        "lessons": _run_lessons(meta),
-    }
-    if card.get("partial_rescue"):
-        prior["resume_from"] = card["partial_rescue"].get("resume_hint")
-    card["decision_prior"] = prior
+    card["decision_prior"] = make_decision_prior(
+        handle_id=card.get("handle_id"),
+        goal=card.get("goal", ""),
+        outcome=cls,
+        goal_achieved=card.get("goal_achieved"),
+        when=card.get("started_at"),
+        what_was_tried=what_was_tried,
+        why=why,
+        lessons=_run_lessons(meta),
+        resume_from=(card.get("partial_rescue") or {}).get("resume_hint"),
+    )
 
 
 # --- decision-prior READ side (surfaced into the next run via recall) --------
-
-def load_decision_prior(handle_id: str) -> Optional[dict]:
-    """Read a finished run's decision-prior brief from its run_card.json.
-
-    Falls back to a thin brief synthesized from the card's classification +
-    result excerpt for runs curated before the indexer existed (no backfill
-    needed). None when the run has no card at all (uncurated / pruned) — which
-    is exactly why the CURRENT run self-excludes: its card is written at
-    goal-END, so at read time (goal-start) it has none.
-    """
-    rd = _run_dir_for(handle_id)
-    if rd is None:
-        return None
-    cp = rd / "run_card.json"
-    if not cp.is_file():
-        return None
-    try:
-        card = json.loads(cp.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
-    dp = card.get("decision_prior")
-    if isinstance(dp, dict):
-        return dp
-    return {
-        "handle_id": card.get("handle_id", handle_id),
-        "goal": card.get("goal", ""),
-        "outcome": card.get("success_class"),
-        "goal_achieved": card.get("goal_achieved"),
-        "when": card.get("started_at"),
-        "what_was_tried": (card.get("result_excerpt") or "")[:_DECISION_TRIED_CHARS],
-        "why": card.get("goal_verdict_summary") or "",
-        "lessons": [],
-    }
-
-
-def format_prior_decisions(attempts, *, goal: str = "",
-                           exclude_handle_id: str = "", k: int = 3,
-                           max_chars: int = 1000) -> str:
-    """Render up to k prior attempts' decision-priors as one injectable block.
-
-    `attempts` are recall.PriorAttempt-shaped (only `.handle_id` is required;
-    dicts also accepted). Only attempts with a loadable card contribute — the
-    current run has no card yet at read time, so it self-excludes;
-    exclude_handle_id is belt-and-suspenders. Empty string when no prior has a
-    usable brief. This is the READ half of miner #3; recall() calls it so a
-    re-attempt of the same/rephrased goal arrives warm."""
-    briefs: List[str] = []
-    seen: set = set()
-    for a in (attempts or []):
-        if isinstance(a, dict):
-            hid = a.get("handle_id")
-        else:
-            hid = getattr(a, "handle_id", None)
-        if not hid or hid == exclude_handle_id or hid in seen:
-            continue
-        seen.add(hid)
-        dp = load_decision_prior(hid)
-        if not dp:
-            continue
-        outcome = dp.get("outcome") or "?"
-        when = (dp.get("when") or "")[:10]
-        line = f"- [{outcome} {when} · {hid}] tried: {dp.get('what_was_tried') or '?'}"
-        why = (dp.get("why") or "").strip()
-        if why and outcome != "success":
-            line += f". Why it ended: {why}"
-        lessons = dp.get("lessons") or []
-        if lessons:
-            line += ". Lessons: " + "; ".join(lessons[:3])
-        if dp.get("resume_from"):
-            line += f". Resume: {dp['resume_from']}"
-        briefs.append(line)
-        if len(briefs) >= k:
-            break
-    if not briefs:
-        return ""
-    block = ("## Prior attempts at this goal — read before planning\n"
-             + "\n".join(briefs)
-             + "\nDo not repeat an approach that already failed the same way; "
-               "build on what worked, resume a partial, or change the approach.")
-    return block[:max_chars]
+# load_decision_prior / format_prior_decisions live in decision_prior.py now
+# (imported at the top of this module) — this is just where the write side
+# (index_decision_prior above) and the standalone convenience wrapper below
+# live.
 
 
 def prior_decision_context(goal: str, *, window_hours: float = 24.0,
@@ -918,29 +858,135 @@ def prior_decision_context(goal: str, *, window_hours: float = 24.0,
 
     recall() calls format_prior_decisions() directly on the attempts it already
     computed; this convenience wrapper is for callers/tests that hold only the
-    goal text. Lazy import of recall keeps the two modules cycle-free."""
+    goal text. Calls recall's public find_prior_attempts() (adversarial-review
+    R1 batch-1 finding #2 — this used to reach into recall's private
+    _find_prior_attempts). Lazy import of recall keeps the two modules
+    cycle-free."""
     try:
-        from recall import _find_prior_attempts
-        attempts = _find_prior_attempts(goal, window_hours=window_hours)
+        from recall import find_prior_attempts
+        attempts = find_prior_attempts(goal, window_hours=window_hours)
     except Exception:
         return ""
     return format_prior_decisions(attempts, goal=goal,
                                   exclude_handle_id=exclude_handle_id, k=k)
 
 
-# Ordered registry. Append future miners here; the hook never changes.
-# Order carries data deps: spend_transparency + promote_skills_lite read
-# success_class/total_cost_usd (classify_outcome). The BACKLOG #0 miners chain
-# further: scrape_scripts reads inventory (inventory_assets); flag_skill_candidate
-# reads reusable_scripts (scrape_scripts) + success_class; rescue_partial reads
-# inventory + success_class; index_decision_prior reads all of the above incl.
-# partial_rescue, so it runs LAST.
-CURATORS = [classify_outcome, inventory_assets, excerpt_result, spend_transparency,
-            promote_skills_lite,
-            scrape_scripts,          # #2 script scraper
-            flag_skill_candidate,    # #1 skill scraper (flag, not a 2nd promotion path)
-            rescue_partial,          # #4 partial-run rescue
-            index_decision_prior]    # #3 decision-prior indexer (owner ask)
+# --- dependency-ordered registry (adversarial-review R1 batch-1 finding #3) --
+#
+# The old CURATORS list was a hand-maintained order plus a comment describing
+# the data deps it encoded — nothing enforced that the list actually matched
+# the comment, and curate_run() swallows every curator's exceptions, so a
+# future miner inserted out of order wouldn't error, it would silently write
+# a card missing fields. CuratorSpec makes each curator declare its card-key
+# contract (`provides` / `requires`); _topo_sort_curators derives the
+# execution order from that graph instead of trusting the list order, and
+# raises at IMPORT TIME — not buried inside curate_run's per-curator
+# try/except — when the graph is broken (a cycle, or a `requires` key no
+# curator provides). tests/test_run_curation.py::TestCuratorsOrdering pins
+# the resulting order; TestCuratorTopoSort exercises the validator directly
+# against deliberately-broken specs.
+
+
+@dataclass(frozen=True)
+class CuratorSpec:
+    """One curator's declared data contract.
+
+    `provides`: card keys this curator writes.
+    `requires`: card keys this curator reads that some OTHER curator must
+    have written first — every key here must appear in some other spec's
+    `provides`, or the graph is invalid (see _topo_sort_curators).
+    """
+    fn: Any
+    provides: tuple = ()
+    requires: tuple = ()
+
+    @property
+    def name(self) -> str:
+        return self.fn.__name__
+
+
+_CURATOR_SPECS: List[CuratorSpec] = [
+    CuratorSpec(classify_outcome,
+                provides=("success_class", "status", "goal_achieved",
+                          "goal_verdict_summary", "total_cost_usd")),
+    CuratorSpec(inventory_assets, provides=("inventory", "mineable")),
+    CuratorSpec(excerpt_result, provides=("result_excerpt", "result_path")),
+    CuratorSpec(spend_transparency, provides=("spend_transparency",),
+                requires=("success_class", "total_cost_usd")),
+    CuratorSpec(promote_skills_lite, provides=("skills_lite",),
+                requires=("success_class",)),
+    CuratorSpec(scrape_scripts,              # #2 script scraper
+                provides=("reusable_scripts",), requires=("inventory",)),
+    CuratorSpec(flag_skill_candidate,         # #1 skill scraper (flag, not a 2nd promotion path)
+                provides=("skill_candidate",),
+                requires=("success_class", "reusable_scripts", "inventory", "skills_lite")),
+    CuratorSpec(rescue_partial,               # #4 partial-run rescue
+                provides=("partial_rescue",), requires=("success_class", "inventory")),
+    CuratorSpec(index_decision_prior,         # #3 decision-prior indexer (owner ask)
+                provides=("decision_prior",),
+                requires=("success_class", "inventory", "result_excerpt", "partial_rescue")),
+]
+
+
+def _topo_sort_curators(specs: List[CuratorSpec]) -> List[Any]:
+    """Kahn's-algorithm topological sort over the provides/requires graph.
+
+    Raises RuntimeError when a `requires` key has no provider anywhere in the
+    registry, or when the graph has a cycle — loudly, at call time (this
+    module calls it once at import), never silently. Ties (curators with no
+    ordering constraint between them) are broken by declaration order in
+    `specs`, so this is a strict refinement of that list, not an arbitrary
+    reordering — the resulting order matches the old hand-maintained list
+    exactly, because that list already respected the same dependencies.
+    """
+    by_name = {spec.name: spec for spec in specs}
+    order_index = {spec.name: i for i, spec in enumerate(specs)}
+
+    provider_of: Dict[str, str] = {}
+    for spec in specs:
+        for key in spec.provides:
+            provider_of[key] = spec.name
+
+    edges: Dict[str, set] = {spec.name: set() for spec in specs}
+    indegree: Dict[str, int] = {spec.name: 0 for spec in specs}
+    for spec in specs:
+        for key in spec.requires:
+            producer = provider_of.get(key)
+            if producer is None:
+                raise RuntimeError(
+                    f"run_curation: curator {spec.name!r} requires {key!r}, "
+                    f"which no registered curator provides"
+                )
+            if producer == spec.name or spec.name in edges[producer]:
+                continue
+            edges[producer].add(spec.name)
+            indegree[spec.name] += 1
+
+    available = sorted(
+        (name for name, d in indegree.items() if d == 0),
+        key=lambda n: order_index[n],
+    )
+    ordered_names: List[str] = []
+    while available:
+        available.sort(key=lambda n: order_index[n])
+        name = available.pop(0)
+        ordered_names.append(name)
+        for consumer in edges[name]:
+            indegree[consumer] -= 1
+            if indegree[consumer] == 0:
+                available.append(consumer)
+
+    if len(ordered_names) != len(specs):
+        cyclic = sorted(set(by_name) - set(ordered_names))
+        raise RuntimeError(
+            f"run_curation: CURATORS dependency graph has a cycle involving: {cyclic}"
+        )
+    return [by_name[name].fn for name in ordered_names]
+
+
+# Append future miners to _CURATOR_SPECS (with their provides/requires), not
+# to this list directly — CURATORS is DERIVED, not the source of truth.
+CURATORS: List[Any] = _topo_sort_curators(_CURATOR_SPECS)
 
 
 def curate_run(handle_id: str, status: Optional[str] = None,
@@ -1015,6 +1061,94 @@ def prune_run(handle_id: str) -> bool:
         return False
     shutil.rmtree(rd)
     return True
+
+
+# --- skill_candidate consumer (adversarial-review R1 batch-1 finding #4) ---
+#
+# flag_skill_candidate (above) writes card["skill_candidate"] at goal-end, but
+# nothing outside tests ever read it — the field was pure advisory exhaust.
+# WIRED, not removed: arch-quality-selfimprove.md names this exact gap ("New
+# skill discovery from outcomes (extract_skills) is rare; skills-lite covers
+# only runs that deliberately author a skill .md") and flag_skill_candidate's
+# own docstring already names extract_skills as the intended consumer. It
+# can't consume same-run, though — loop_finalize's _crystallize_and_synthesize
+# calls skills.extract_skills() at goal-end, BEFORE curate_run runs (curate_run
+# fires later, from runs.close_run() in handle.py's finally block), so the
+# flag postdates the one call site that could act on it that same run. A
+# separate periodic pass (evolver.promote_skill_candidates, wired into
+# run_evolver) is the consumer instead: it scans past runs' unconsumed flags
+# and feeds them through the SAME extract_skills() call loop_finalize uses,
+# so there's still exactly one skill-crystallization code path, just two
+# triggers into it (same-run best-effort, plus this catch-up sweep for runs
+# that got flagged after the fact — e.g. scrape_scripts finding a reusable
+# script loop_finalize didn't know about yet).
+def find_unconsumed_skill_candidates(limit: int = 20) -> List[dict]:
+    """Curated runs flagged as skill candidates that no consumer has acted on
+    yet (no `consumed_at` stamp — see mark_skill_candidate_consumed). Newest
+    first. Best-effort: unreadable/malformed cards are skipped, not raised."""
+    root = _runs_root()
+    if not root.is_dir():
+        return []
+    out: List[dict] = []
+    for d in root.iterdir():
+        if not d.is_dir():
+            continue
+        cp = d / "run_card.json"
+        if not cp.is_file():
+            continue
+        try:
+            card = json.loads(cp.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        sc = card.get("skill_candidate")
+        if isinstance(sc, dict) and sc.get("flagged") and not sc.get("consumed_at"):
+            out.append(card)
+    out.sort(key=lambda c: c.get("started_at") or "", reverse=True)
+    return out[:limit]
+
+
+def mark_skill_candidate_consumed(handle_id: str) -> bool:
+    """Stamp a run's skill_candidate block as consumed so a later sweep never
+    reprocesses it. Called after a consumer (successfully or not) has acted
+    on the candidate — consumption is "looked at", not "produced a skill";
+    extract_skills itself may still decline given a small/low-signal batch.
+
+    Uses file_lock.locked_rmw (read-modify-write under flock) rather than the
+    plain write curate_run uses for a brand-new card: this write targets an
+    ALREADY-CURATED run's card from a separate process (the periodic sweep),
+    potentially concurrent with another sweep, so lost-update protection
+    matters here in a way it doesn't for curate_run's single-writer,
+    written-once-at-goal-end card.
+    """
+    rd = _run_dir_for(handle_id)
+    if rd is None:
+        return False
+    cp = rd / "run_card.json"
+    if not cp.is_file():
+        return False
+
+    from datetime import datetime, timezone
+    from file_lock import locked_rmw
+
+    marked = {"ok": False}
+
+    def _stamp(old_text: str) -> str:
+        try:
+            card = json.loads(old_text) if old_text else {}
+        except ValueError:
+            return old_text
+        sc = card.get("skill_candidate")
+        if not isinstance(sc, dict):
+            return old_text
+        sc["consumed_at"] = datetime.now(timezone.utc).isoformat()
+        marked["ok"] = True
+        return json.dumps(card, indent=2)
+
+    try:
+        locked_rmw(cp, _stamp)
+    except Exception:
+        return False
+    return marked["ok"]
 
 
 def main(argv=None):

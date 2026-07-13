@@ -349,6 +349,92 @@ def run_statistical_scans(
     return suggestions
 
 
+def promote_skill_candidates(*, adapter=None, dry_run: bool = False,
+                              limit: int = 5, verbose: bool = False) -> int:
+    """Catch-up sweep for run_curation.flag_skill_candidate's advisory flag.
+
+    Adversarial-review R1 batch-1 finding #4: `card["skill_candidate"]` had
+    no consumer outside tests. WIRED, not removed — arch-quality-selfimprove
+    names this exact gap ("skills-lite covers only runs that deliberately
+    author a skill .md"; outcome-driven extract_skills discovery is rare),
+    and flag_skill_candidate's own docstring already names extract_skills as
+    the intended consumer. It can't be same-run (loop_finalize calls
+    extract_skills at goal-end, BEFORE run_curation.curate_run runs — see
+    run_curation.py's "skill_candidate consumer" section for the full
+    ordering), so this is a periodic catch-up pass instead: it feeds
+    unconsumed flags through the SAME extract_skills() call loop_finalize
+    uses, so there's one skill-crystallization code path with two triggers
+    into it, not a second promotion mechanism.
+
+    Returns the number of new skills saved this call (0 covers: no
+    candidates, dry_run, or extract_skills itself declining a low-signal
+    batch — all non-error outcomes for a heuristic pass).
+    """
+    try:
+        from run_curation import find_unconsumed_skill_candidates, mark_skill_candidate_consumed
+        from skills import extract_skills
+    except Exception:
+        return 0
+
+    try:
+        candidates = find_unconsumed_skill_candidates(limit=limit)
+    except Exception:
+        candidates = []
+    if not candidates:
+        return 0
+
+    if verbose:
+        print(f"[evolver] skill_candidate sweep: {len(candidates)} unconsumed", file=sys.stderr)
+
+    # extract_skills' own candidate filter is an EXACT match on
+    # status == "done" (see skills.py) — not goal_achieved, not
+    # success_class — so this is hardcoded to what it actually checks
+    # rather than passed through from the card's own (possibly differently
+    # spelled) status field.
+    outcomes = []
+    for card in candidates:
+        if card.get("success_class") not in ("success", "done-unverified"):
+            continue
+        reasons = (card.get("skill_candidate") or {}).get("reasons") or []
+        outcomes.append({
+            "outcome_id": card.get("handle_id"),
+            "goal": card.get("goal", ""),
+            "task_type": card.get("lane", ""),
+            "status": "done",
+            "goal_achieved": card.get("goal_achieved"),
+            "summary": card.get("result_excerpt") or "; ".join(reasons),
+        })
+
+    n_saved = 0
+    if outcomes and not dry_run:
+        try:
+            if adapter is None:
+                adapter = build_adapter(model=MODEL_MID)
+            saved = extract_skills(outcomes, adapter)
+            n_saved = len(saved or [])
+            if verbose and n_saved:
+                print(f"[evolver] skill_candidate sweep: {n_saved} skill(s) promoted", file=sys.stderr)
+            log.info("evolver skill_candidate_sweep candidates=%d saved=%d", len(outcomes), n_saved)
+        except Exception as exc:
+            log.debug("promote_skill_candidates: extract_skills failed (non-fatal): %s", exc)
+
+    # Mark every CONSIDERED candidate consumed regardless of whether
+    # extract_skills chose to promote it — consumed means "looked at", not
+    # "produced a skill" (see mark_skill_candidate_consumed's docstring);
+    # extract_skills declining a small/low-signal batch isn't a reason to
+    # re-scan the same runs forever.
+    if not dry_run:
+        for card in candidates:
+            hid = card.get("handle_id")
+            if hid:
+                try:
+                    mark_skill_candidate_consumed(hid)
+                except Exception:
+                    pass
+
+    return n_saved
+
+
 def run_evolver(
     *,
     outcomes_window: int = 50,
@@ -365,6 +451,7 @@ def run_evolver(
     scan_suggestion_calibration: bool = True,
     scan_persona_gaps: bool = True,
     scan_harness_friction: bool = True,
+    scan_skill_candidates: bool = True,
 ) -> EvolverReport:
     """Run one meta-evolution cycle.
 
@@ -641,6 +728,19 @@ def run_evolver(
             log.debug("evolver graduation_pass: new_suggestions=%d", _grad_count)
         except Exception as _grad_exc:
             log.debug("graduation pass failed (non-fatal): %s", _grad_exc)
+
+    # skill_candidate catch-up sweep (adversarial-review R1 batch-1 finding
+    # #4) — flag_skill_candidate flags runs at curate_run time; this feeds
+    # any still-unconsumed flags through extract_skills so they don't sit
+    # unread forever. Reuses this cycle's adapter (already built for the LLM
+    # analysis above) instead of constructing a second one.
+    if scan_skill_candidates:
+        try:
+            _sc_saved = promote_skill_candidates(adapter=adapter, dry_run=dry_run, verbose=verbose)
+            if _sc_saved and verbose:
+                print(f"[evolver] skill_candidate_sweep: {_sc_saved} skill(s) promoted", file=sys.stderr)
+        except Exception as _sc_exc:
+            log.debug("skill_candidate sweep failed (non-fatal): %s", _sc_exc)
 
     # FunSearch island model — anti-monoculture selection pressure on skill pool
     try:

@@ -284,6 +284,160 @@ def test_run_evolver_load_outcomes_failure():
 
 
 # ---------------------------------------------------------------------------
+# skill_candidate catch-up sweep (adversarial-review R1 batch-1 finding #4)
+# ---------------------------------------------------------------------------
+#
+# run_curation.flag_skill_candidate writes card["skill_candidate"] but had no
+# consumer outside tests. WIRED (not removed) — evolver.promote_skill_
+# candidates is the consumer: a periodic sweep feeding unconsumed flags
+# through the same skills.extract_skills() call loop_finalize already uses at
+# goal-end (it can't consume same-run — curate_run runs AFTER loop_finalize's
+# extract_skills call). See run_curation.py's "skill_candidate consumer"
+# section and evolver.promote_skill_candidates' docstring for the full
+# rationale.
+
+_SC_REUSABLE_SCRIPT = (
+    '"""Fetch and summarize a changelog for a repo."""\n'
+    "import argparse\n"
+    "\n"
+    "def summarize(path):\n"
+    "    with open(path) as fh:\n"
+    "        return fh.read()[:100]\n"
+    "\n"
+    "def main():\n"
+    "    ap = argparse.ArgumentParser()\n"
+    "    ap.add_argument('path')\n"
+    "    args = ap.parse_args()\n"
+    "    print(summarize(args.path))\n"
+    "\n"
+    "if __name__ == '__main__':\n"
+    "    main()\n"
+)
+
+
+def _sc_flagged_run(handle_id):
+    """Create + curate a run flag_skill_candidate marks as a candidate — a
+    done+achieved run with a reusable script (run_curation's
+    _judge_script_reusability heuristics)."""
+    from runs import create_run_dir, finalize_run
+    from run_curation import curate_run
+
+    rd = create_run_dir(handle_id, prompt="build a tool", lane="now", model="claude",
+                        extra_metadata={"goal_achieved": True})
+    finalize_run(handle_id, status="done")
+    (rd / "build").mkdir(exist_ok=True)
+    (rd / "build" / "tool.py").write_text(_SC_REUSABLE_SCRIPT)
+    card = curate_run(handle_id)
+    assert card is not None and (card.get("skill_candidate") or {}).get("flagged") is True
+    return rd
+
+
+def test_promote_skill_candidates_no_candidates_returns_zero():
+    from evolver import promote_skill_candidates
+    assert promote_skill_candidates(adapter=MagicMock(), dry_run=False, verbose=False) == 0
+
+
+def test_promote_skill_candidates_saves_skill_and_marks_consumed():
+    from evolver import promote_skill_candidates
+    from run_curation import find_unconsumed_skill_candidates
+    from skills import Skill
+
+    _sc_flagged_run("h0e00001")
+    assert any(c["handle_id"] == "h0e00001" for c in find_unconsumed_skill_candidates())
+
+    fake_skill = Skill(id="s1", name="new-skill", description="d",
+                        trigger_patterns=["x"], steps_template=["a"],
+                        source_loop_ids=[], created_at="2026-07-13T00:00:00+00:00")
+    with patch("skills.extract_skills", return_value=[fake_skill]) as mock_extract:
+        n = promote_skill_candidates(adapter=MagicMock(), dry_run=False, verbose=False)
+
+    assert n == 1
+    mock_extract.assert_called_once()
+    outcomes_arg = mock_extract.call_args[0][0]
+    # Hardcoded to what extract_skills' own filter checks, not passed
+    # through from the card's own (possibly differently-spelled) status.
+    assert outcomes_arg[0]["status"] == "done"
+    assert not any(c["handle_id"] == "h0e00001" for c in find_unconsumed_skill_candidates())
+
+
+def test_promote_skill_candidates_dry_run_neither_saves_nor_consumes():
+    from evolver import promote_skill_candidates
+    from run_curation import find_unconsumed_skill_candidates
+    from skills import Skill
+
+    _sc_flagged_run("h0e00002")
+    fake_skill = Skill(id="s2", name="new-skill-2", description="d",
+                        trigger_patterns=["x"], steps_template=["a"],
+                        source_loop_ids=[], created_at="2026-07-13T00:00:00+00:00")
+    with patch("skills.extract_skills", return_value=[fake_skill]) as mock_extract:
+        n = promote_skill_candidates(adapter=MagicMock(), dry_run=True, verbose=False)
+
+    assert n == 0
+    mock_extract.assert_not_called()
+    assert any(c["handle_id"] == "h0e00002" for c in find_unconsumed_skill_candidates())
+
+
+def test_promote_skill_candidates_extract_declines_still_consumes():
+    """extract_skills returning [] (declining a low-signal batch) is not an
+    error — the candidate is still marked consumed so it isn't rescanned
+    forever (mark_skill_candidate_consumed means 'looked at', not 'produced
+    a skill')."""
+    from evolver import promote_skill_candidates
+    from run_curation import find_unconsumed_skill_candidates
+
+    _sc_flagged_run("h0e00003")
+    with patch("skills.extract_skills", return_value=[]):
+        n = promote_skill_candidates(adapter=MagicMock(), dry_run=False, verbose=False)
+
+    assert n == 0
+    assert not any(c["handle_id"] == "h0e00003" for c in find_unconsumed_skill_candidates())
+
+
+def test_promote_skill_candidates_extract_exception_is_non_fatal():
+    from evolver import promote_skill_candidates
+    from run_curation import find_unconsumed_skill_candidates
+
+    _sc_flagged_run("h0e00004")
+    with patch("skills.extract_skills", side_effect=RuntimeError("boom")):
+        n = promote_skill_candidates(adapter=MagicMock(), dry_run=False, verbose=False)
+
+    assert n == 0
+    # Still consumed — a bad LLM call shouldn't cause the sweep to keep
+    # retrying the same run indefinitely.
+    assert not any(c["handle_id"] == "h0e00004" for c in find_unconsumed_skill_candidates())
+
+
+def test_run_evolver_wires_skill_candidate_sweep():
+    """run_evolver's scan_skill_candidates=True (the default) calls the
+    sweep; scan_skill_candidates=False (next test) skips it entirely."""
+    from run_curation import find_unconsumed_skill_candidates
+
+    _sc_flagged_run("h0e00005")
+    outcomes = [_make_outcome()] * 5
+    with patch("evolver.load_outcomes", return_value=outcomes), \
+         patch("evolver._llm_analyze", return_value=([], [])), \
+         patch("evolver.scan_outcomes_for_signals", return_value=[]), \
+         patch("skills.extract_skills", return_value=[]):
+        run_evolver(dry_run=False, verbose=False, notify=False,
+                    scan_skill_candidates=True)
+    assert not any(c["handle_id"] == "h0e00005" for c in find_unconsumed_skill_candidates())
+
+
+def test_run_evolver_skill_candidate_sweep_can_be_disabled():
+    from run_curation import find_unconsumed_skill_candidates
+
+    _sc_flagged_run("h0e00006")
+    outcomes = [_make_outcome()] * 5
+    with patch("evolver.load_outcomes", return_value=outcomes), \
+         patch("evolver._llm_analyze", return_value=([], [])), \
+         patch("evolver.scan_outcomes_for_signals", return_value=[]):
+        run_evolver(dry_run=False, verbose=False, notify=False,
+                    scan_skill_candidates=False)
+    # Sweep never ran — candidate still unconsumed.
+    assert any(c["handle_id"] == "h0e00006" for c in find_unconsumed_skill_candidates())
+
+
+# ---------------------------------------------------------------------------
 # CLI integration
 # ---------------------------------------------------------------------------
 

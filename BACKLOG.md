@@ -26,42 +26,75 @@ returning a truncated stream as success — `src/llm.py`). Regression tests
 added for all of it. The items below are real but cross-cutting/architectural
 per Jeremy's "document if large" instruction — not fixed live:
 
-- [ ] **Unify the magic-prefix mechanism.** `_PREFIX_REGISTRY` (fixed-string
-  entries) and `_PERSONA_PREFIX_RE` (a separate hardcoded regex branch for
-  `persona:<name>:`) are two parallel mechanisms for "the same kind of
-  thing" in `src/handle.py`. Architect + Minimalist both flagged this
-  independently. Fix: extend the registry to support pattern/capture-group
-  rules so there's one prefix-parsing abstraction, not two. Touches the
-  core of every magic prefix (`effort:`, `mode:thin`, `ralph:`, `team:`,
-  `garrytan:`, `persona:<name>:`) — wants a deliberate pass, not a
-  drive-by edit.
-- [ ] **`recall.py` ↔ `run_curation.py` bidirectional layer coupling.**
-  `run_curation.prior_decision_context()` lazily imports recall's private
-  `_find_prior_attempts`; `recall._strip_for_match()` (added this session)
-  now also lazily imports handle's private `_apply_prefixes`. Both are
-  runtime-safe (function-level imports, no import-time cycle) but the
-  write-side curation module reaching into the read-side's private matcher
-  — and now recall reaching into handle's private prefix parser too — is
-  an architecture smell compounding with each fix. Cleaner shape: extract
-  a neutral module (e.g. `prefixes.py` for prefix stripping, shared by
-  `handle.py` and `recall.py`; a neutral `decision_prior.py` for card
-  schema/load/format, shared by `recall.py` and `run_curation.py`).
-- [ ] **`CURATORS` dependency order has no structural enforcement**, only a
-  comment + a new ordering-assertion test (`tests/test_run_curation.py::TestCuratorsOrdering`,
-  added this session as a stopgap). `curate_run()` swallows every curator's
-  exceptions, so a future miner inserted out of order won't error — it'll
-  silently write a card missing fields, and only the ordering test would
-  catch it (and only if someone remembers to extend that test for the new
-  miner's dependency). Real fix: `provides`/`requires` metadata per curator
-  with a topological sort, not a hand-maintained list order.
-- [ ] **`skill_candidate` field has no consumer.** `flag_skill_candidate()`
-  (`src/run_curation.py`) writes `card["skill_candidate"]` on every
-  qualifying run; nothing reads it outside tests (Minimalist finding).
-  Advisory metadata with no promotion/review loop consuming it is
-  speculative machinery per this repo's own subtract-before-you-add
-  principle. Either wire a consumer (the natural one: evolver's skill-
-  promotion pass) or remove the field if it's still unconsumed next time
-  this area gets touched.
+- [x] **Unify the magic-prefix mechanism.** SHIPPED 2026-07-13. Extracted a
+  neutral `src/prefixes.py`: `PrefixRule` now carries an optional compiled
+  `pattern` alongside the literal `prefix` string, and `apply_prefixes()` is
+  one scan loop that tries every rule (literal or pattern) in registry
+  order — the `persona:<name>:` capture-group rule is just the one pattern
+  rule, appended last so every literal rule still gets first crack at
+  matching, same ordering the old two-mechanism version enforced by
+  construction. `handle.py` re-exports `_PrefixRule`/`_PrefixResult`/
+  `_PREFIX_REGISTRY`/`_apply_prefixes` from `prefixes.py` under their
+  historical private names, so no call site or test changed. Pure refactor
+  — `tests/test_handle.py`, `tests/test_execution_modes.py`,
+  `tests/integration/test_integration.py`, `tests/regression/test_regression.py`
+  all pass unchanged.
+- [x] **`recall.py` ↔ `run_curation.py` bidirectional layer coupling.**
+  SHIPPED 2026-07-13. Two neutral modules extracted: `src/prefixes.py`
+  (prefix stripping — see above; `recall._strip_for_match()` now imports
+  `prefixes.strip_prefixes` instead of reaching into `handle._apply_prefixes`)
+  and `src/decision_prior.py` (decision-prior card schema: `make_decision_prior`,
+  `load_decision_prior`, `format_prior_decisions`, moved out of
+  `run_curation.py`). `run_curation.py` re-exports the three
+  `decision_prior` functions it still needs (its own CLI, `index_decision_prior`,
+  `prior_decision_context`) so its public surface is unchanged.
+  `recall.py`'s lazy import of `format_prior_decisions` now points at
+  `decision_prior`, not `run_curation` — recall.py no longer imports
+  `run_curation` at all, module-level or lazy. The one private name with no
+  natural home in a neutral module (`recall._find_prior_attempts`, which
+  `run_curation.prior_decision_context()` called) was renamed public
+  (`recall.find_prior_attempts`) instead — it's a legitimate cross-module
+  read, the private name just made it look worse than it was.
+- [x] **`CURATORS` dependency order has no structural enforcement.**
+  SHIPPED 2026-07-13. Each curator now declares a `CuratorSpec(fn, provides=(...),
+  requires=(...))`; `_topo_sort_curators()` (Kahn's algorithm, declaration-order
+  tie-break) derives `CURATORS` from `_CURATOR_SPECS` at import time instead
+  of trusting a hand-maintained list. A `requires` key nobody `provides`, or
+  a cycle, raises `RuntimeError` loudly at import — not buried inside
+  `curate_run()`'s per-curator try/except. `TestCuratorsOrdering` (the
+  existing stopgap) still passes unchanged (the derived order is byte-for-byte
+  the old hand-written order, since that order already respected the same
+  deps); new `TestCuratorTopoSort` in `tests/test_run_curation.py` exercises
+  the validator directly against a missing-provider spec and a cyclic spec.
+- [x] **`skill_candidate` field has no consumer.** SHIPPED 2026-07-13 —
+  **wired, not removed.** `skills/arch-quality-selfimprove.md` names this
+  exact gap ("New skill discovery from outcomes (extract_skills) is rare;
+  skills-lite covers only runs that deliberately author a skill .md"), and
+  `flag_skill_candidate()`'s own docstring already named `extract_skills` as
+  the intended consumer — removing the field would have thrown away a
+  signal the architecture doc says is missing, for no simplification (the
+  curator itself stays either way). It can't consume same-run: loop_finalize's
+  `_crystallize_and_synthesize()` calls `skills.extract_skills()` at
+  goal-end, BEFORE `run_curation.curate_run()` runs (curate_run fires later,
+  from `runs.close_run()` in handle.py's finally block). So the consumer is
+  a periodic catch-up sweep instead: `run_curation.find_unconsumed_skill_candidates()`
+  / `mark_skill_candidate_consumed()` (new) track which flagged runs a sweep
+  hasn't looked at yet (`consumed_at` stamp on the card, written via
+  `file_lock.locked_rmw` since this write can race a concurrent sweep, unlike
+  `curate_run`'s single-writer card creation); `evolver.promote_skill_candidates()`
+  (new, wired into `run_evolver()` via `scan_skill_candidates: bool = True`)
+  feeds unconsumed candidates through the *same* `skills.extract_skills()`
+  call loop_finalize already uses — one skill-crystallization code path, two
+  triggers into it, not a second promotion mechanism. "Consumed" means
+  "looked at," not "produced a skill" — extract_skills declining a
+  low-signal batch still marks the candidates consumed so they aren't
+  rescanned forever. No new config key (no speculative on/off knob beyond
+  the existing `scan_*` kwarg pattern every other `run_evolver` scan already
+  uses) — `docs/DEFAULTS.md` untouched. New tests in `tests/test_run_curation.py::TestSkillCandidateConsumer`
+  and `tests/test_evolver.py` (skill_candidate sweep section) cover: flagged
+  vs. unflagged runs, consumption round-trip, dry-run no-ops, extract_skills
+  declining/erroring (both still consume), and `run_evolver`'s
+  `scan_skill_candidates` on/off wiring.
 
 ### R2. Adversarial-review batch-2 findings — 3 fixed live, 1 architectural residual (2026-07-13)
 
