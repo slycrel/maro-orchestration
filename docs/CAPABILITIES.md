@@ -82,7 +82,7 @@ token_explosion introspection flagged worker re-read churn). A passenger in
 a car wants this in ~1–3 min for cents.
 
 **Run 4 — routing gap closed (2026-07-12, Routing Part A,
-`docs/ROUTING_AND_PROBE_SYNTHESIS_DESIGN.md`):** `intent.classify()` gained a
+`docs/history/2026-07-12-routing-and-probe-synthesis-design.md`):** `intent.classify()` gained a
 `needs_live_data` schema field (LLM path) + a config-gated heuristic flip
 (no-LLM path) that route a live-data ask to AGENDA *before* any NOW call is
 attempted, instead of relying on post-hoc self-verdict demotion. Live-verified

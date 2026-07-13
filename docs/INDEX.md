@@ -39,8 +39,8 @@ BACKLOG, VISION, CLAUDE, README…) are living by definition and carry no frontm
 | Intent resolution / "what does done mean"? | `INTENT_RESOLUTION_DESIGN.md` (partially shipped) |
 | Portable/shareable learning — migration + learning packs (1.0 item (g))? | `PORTABLE_LEARNING_DESIGN.md` (dormant-design; §8 RATIFIED 2026-07-12 — implementation queued) |
 | Containerized executor (arch-r2-01, 1.0 blocker #4)? | `CONTAINER_EXECUTOR_DESIGN.md` (dormant-design; chunks C1–C4 queued in MILESTONES) |
-| Verify→learn — the next arc after 1.0 (thread-arch #6)? | `VERIFY_LEARN_ARC.md` (dormant-design; hard dependency: probe-env hardening B3) |
-| Live-data routing signal + probe-synthesis first slice? | `ROUTING_AND_PROBE_SYNTHESIS_DESIGN.md` (dormant-design; Manti canonical case is the acceptance) |
+| Verify→learn — the next arc after 1.0 (thread-arch #6)? | `VERIFY_LEARN_ARC.md` (dormant-design; hard dependency probe-env hardening B3 SATISFIED 2026-07-12) |
+| Live-data routing signal + probe-synthesis first slice? | `docs/history/2026-07-12-routing-and-probe-synthesis-design.md` (record — BOTH PARTS SHIPPED 2026-07-12; Manti canonical case is the acceptance) |
 | Handing work to less-capable implementing models? | `IMPLEMENTATION_HANDOFF.md` (written at the 2026-07-12 Fable transition) |
 | Scope/constraint orchestration (Phase 65, PAUSED)? | `CONSTRAINT_ORCHESTRATION_DESIGN.md` + `_REVIEW` + `_AUDIT` |
 | Thread architecture reframe? | `THREAD_ARCHITECTURE.md` (dormant; navigator subset shipped) |

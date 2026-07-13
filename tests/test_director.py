@@ -859,7 +859,14 @@ class TestDetectBehavioralGap:
     def _intent(*deliverables):
         from scope import Deliverable, ResolvedIntent
         ri = ResolvedIntent()
-        ri.deliverables = [Deliverable(name=n, description=d) for n, d in deliverables]
+        # Each item is (name, description) or (name, description, shape).
+        ri.deliverables = [
+            Deliverable(
+                name=t[0], description=t[1],
+                shape=(t[2] if len(t) > 2 else None),
+            )
+            for t in deliverables
+        ]
         return ri
 
     def test_document_only_deliverables_suppress_prose_keyword_hit(self):
@@ -908,6 +915,67 @@ class TestDetectBehavioralGap:
             summary="Gap: runtime validation was not performed.",
             resolved_intent=intent,
         )
+        assert reason
+
+    # -- declared Deliverable.shape (Part B, B1) takes precedence over the
+    # keyword-regex inference above ---------------------------------------
+
+    def test_declared_document_shape_suppresses_keyword_hit(self):
+        # Description contains a runtime-ish word ("server") but the LLM
+        # explicitly declared this deliverable a document — the declaration
+        # wins over the keyword hit, unlike the unshaped fd483efb case which
+        # had to rely on "no deliverable matches" to suppress.
+        class _FakeScope:
+            failure_modes = ["Server does not respond to /health under load"]
+        intent = self._intent(
+            ("docs/server-runbook.md", "server operations runbook", "document"),
+        )
+        assert self._call(scope=_FakeScope(), resolved_intent=intent) == ""
+
+    def test_declared_data_shape_suppresses_keyword_hit(self):
+        class _FakeScope:
+            failure_modes = ["Server does not respond to /health under load"]
+        intent = self._intent(
+            ("data/server-metrics.json", "per-server latency index", "data"),
+        )
+        assert self._call(scope=_FakeScope(), resolved_intent=intent) == ""
+
+    def test_declared_runtime_shape_arms_signal2_without_keyword_hint(self):
+        # Deliverable name/description have no runtime keywords at all —
+        # only the declared shape says this is runtime. Signal 2 must still
+        # fire (the scope failure mode still needs its own runtime hint to
+        # reach the corroboration check at all — that's Signal 2's first
+        # gate, unrelated to what's under test here).
+        class _FakeScope:
+            failure_modes = ["Server does not respond to /health under load"]
+        intent = self._intent(
+            ("cmd/opaque-binary", "the built artifact", "runtime"),
+        )
+        reason = self._call(scope=_FakeScope(), resolved_intent=intent)
+        assert reason
+        assert "scope" in reason.lower()
+
+    def test_mixed_shapes_runtime_deliverable_still_arms_signal2(self):
+        # One document, one runtime — any runtime-shaped deliverable is
+        # enough to keep the signal armed.
+        class _FakeScope:
+            failure_modes = ["Server does not respond to /health under load"]
+        intent = self._intent(
+            ("docs/notes.md", "planning notes", "document"),
+            ("cmd/server/main.go", "HTTP server binary", "runtime"),
+        )
+        reason = self._call(scope=_FakeScope(), resolved_intent=intent)
+        assert reason
+
+    def test_unshaped_deliverable_falls_back_to_keyword_inference(self):
+        # No shape declared at all — original keyword-regex behavior stands,
+        # confirming B1 didn't change the legacy/unshaped path.
+        class _FakeScope:
+            failure_modes = ["Server does not respond to /health under load"]
+        intent = self._intent(
+            ("cmd/server/main.go", "HTTP server binary serving /ws and /static/"),
+        )
+        reason = self._call(scope=_FakeScope(), resolved_intent=intent)
         assert reason
 
 
@@ -1794,6 +1862,270 @@ class TestVerifyGoalCompletion:
         assert result.complete is False
         assert result.confidence >= 0.6
         assert any("decomposition_too_broad" in gap for gap in result.gaps)
+
+    # -- B2: shape-conditional MUST + waiver logging + timeout split -------
+
+    def test_plan_prompt_surfaces_deliverable_shape(self, tmp_path):
+        """The closure-plan LLM call must see each deliverable's declared
+        shape, not just name/description/preconditions — it's what lets the
+        MUST-behavioral-probe rule (Part B, B2) actually bind."""
+        from unittest.mock import MagicMock, patch
+        from scope import Deliverable, ResolvedIntent, ScopeSet
+
+        adapter = MagicMock()
+        captured = []
+        def _complete(messages, **kwargs):
+            captured.append(messages)
+            return MagicMock()
+        adapter.complete.side_effect = _complete
+
+        ri = ResolvedIntent(
+            scope=ScopeSet(raw_text=""),
+            deliverables=[
+                Deliverable(name="cmd/server/main.go", description="server",
+                            shape="runtime"),
+            ],
+            raw_text="",
+        )
+
+        with patch("closure_verify.extract_json",
+                   side_effect=[{"checks": []}, {"complete": True}]):
+            with patch("closure_verify.content_or_empty", return_value="{}"):
+                verify_goal_completion(
+                    "build X", [], adapter,
+                    workspace_path=str(tmp_path), resolved_intent=ri,
+                )
+
+        plan_user_msg = captured[0][1].content
+        assert "[shape: runtime]" in plan_user_msg
+
+    def test_plan_system_prompt_interpolates_timeout(self, tmp_path):
+        """The __TIMEOUT_PER_CHECK__ placeholder must be replaced with the
+        real timeout_per_check value — not leak as a literal token — so the
+        softened behavioral-probe budget the prompt advertises matches what
+        subprocess.run actually enforces."""
+        from unittest.mock import MagicMock, patch
+
+        adapter = MagicMock()
+        captured = []
+        def _complete(messages, **kwargs):
+            captured.append(messages)
+            return MagicMock()
+        adapter.complete.side_effect = _complete
+
+        with patch("closure_verify.extract_json",
+                   side_effect=[{"checks": []}, {"complete": True}]):
+            with patch("closure_verify.content_or_empty", return_value="{}"):
+                verify_goal_completion(
+                    "build X", [], adapter,
+                    workspace_path=str(tmp_path), timeout_per_check=45,
+                )
+
+        plan_system_msg = captured[0][0].content
+        assert "__TIMEOUT_PER_CHECK__" not in plan_system_msg
+        assert "45" in plan_system_msg
+
+    def test_behavioral_probe_waived_logged_to_closure_verdict(self, tmp_path):
+        """When the plan LLM waives the required behavioral probe, the reason
+        must reach the CLOSURE_VERDICT captain's-log event — otherwise a
+        waived probe is indistinguishable from one nobody thought to run."""
+        from unittest.mock import MagicMock, patch
+
+        adapter = MagicMock()
+        checks = [{"description": "config parses", "command": "true"}]
+        plan_data = {"checks": checks,
+                     "behavioral_probe_waived": "no port available in this sandbox"}
+        verdict_data = {"complete": True, "confidence": 0.9, "gaps": [], "summary": "ok"}
+
+        captured = {}
+        def _spy_log_event(*args, **kwargs):
+            captured["kwargs"] = kwargs
+            return {}
+
+        with patch("closure_verify.extract_json", side_effect=[plan_data, verdict_data]):
+            with patch("closure_verify.content_or_empty", return_value="{}"):
+                with patch("captains_log.log_event", side_effect=_spy_log_event):
+                    verify_goal_completion(
+                        "build X", [], adapter, workspace_path=str(tmp_path),
+                    )
+
+        ctx = captured.get("kwargs", {}).get("context", {})
+        assert ctx.get("behavioral_probe_waived") == "no port available in this sandbox"
+
+    def test_behavioral_probe_waived_empty_when_absent(self, tmp_path):
+        """No waiver in the plan response -> empty string logged, not None
+        or a missing key (keeps the captain's-log field shape stable)."""
+        from unittest.mock import MagicMock, patch
+
+        adapter = MagicMock()
+        checks = [{"description": "config parses", "command": "true"}]
+        verdict_data = {"complete": True, "confidence": 0.9, "gaps": [], "summary": "ok"}
+
+        captured = {}
+        def _spy_log_event(*args, **kwargs):
+            captured["kwargs"] = kwargs
+            return {}
+
+        with patch("closure_verify.extract_json", side_effect=[{"checks": checks}, verdict_data]):
+            with patch("closure_verify.content_or_empty", return_value="{}"):
+                with patch("captains_log.log_event", side_effect=_spy_log_event):
+                    verify_goal_completion(
+                        "build X", [], adapter, workspace_path=str(tmp_path),
+                    )
+
+        ctx = captured.get("kwargs", {}).get("context", {})
+        assert ctx.get("behavioral_probe_waived") == ""
+
+
+class TestProbeEnvHardening:
+    """Tests for B3 probe-env hardening (docs/ROUTING_AND_PROBE_SYNTHESIS_
+    DESIGN.md Part B): never run a check with an unresolved cwd, and cap
+    confidence when a negative verdict rests mostly on environment noise.
+
+    Placed beside test_project_slug_fallback_resolves_project_dir (the
+    existing cwd-fallback test) and test_empty_workspace_path_falls_back_
+    to_run_scoped_cwd — same subsystem, same cwd-resolution contract.
+    """
+
+    def test_unresolved_cwd_marks_checks_inconclusive_without_running(self, monkeypatch):
+        """When workspace_path, the run-scoped ContextVar, and the project
+        dir all come up empty, checks must not silently execute against
+        Maro's own launch cwd — they must be marked inconclusive instead."""
+        from unittest.mock import MagicMock, patch
+        import llm as llm_mod
+
+        token = llm_mod._DEFAULT_SUBPROCESS_CWD.set(None)
+        try:
+            adapter = MagicMock()
+            checks = [{"description": "artifact exists", "command": "test -f thing.txt"}]
+            verdict_data = {"complete": True, "confidence": 0.9, "gaps": [], "summary": "ok"}
+            with patch("subprocess.run") as run:
+                with patch("closure_verify.extract_json",
+                           side_effect=[{"checks": checks}, verdict_data]):
+                    with patch("closure_verify.content_or_empty", return_value="{}"):
+                        result = verify_goal_completion("build thing", [], adapter)
+                run.assert_not_called()
+        finally:
+            llm_mod._DEFAULT_SUBPROCESS_CWD.reset(token)
+
+        assert result.checks_run == 1
+        assert result.checks_passed == 0
+        assert result.inconclusive_count == 1
+
+    def test_unresolved_cwd_downgrades_false_positive_to_inconclusive(self, monkeypatch):
+        """The concrete false-negative pattern this fixes: an unresolved cwd
+        used to mean the check ran somewhere arbitrary and produced a
+        confident-looking pass or fail. Now it must not be counted as
+        completion evidence — the positive-evidence rule flips complete to
+        False and the verdict stays honest (unjudged), not wrongly blessed."""
+        from unittest.mock import MagicMock, patch
+        import llm as llm_mod
+
+        token = llm_mod._DEFAULT_SUBPROCESS_CWD.set(None)
+        try:
+            adapter = MagicMock()
+            checks = [{"description": "artifact exists", "command": "test -f thing.txt"}]
+            verdict_data = {"complete": True, "confidence": 0.95, "gaps": [], "summary": "ok"}
+            with patch("subprocess.run"):
+                with patch("closure_verify.extract_json",
+                           side_effect=[{"checks": checks}, verdict_data]):
+                    with patch("closure_verify.content_or_empty", return_value="{}"):
+                        result = verify_goal_completion("build thing", [], adapter)
+        finally:
+            llm_mod._DEFAULT_SUBPROCESS_CWD.reset(token)
+
+        assert result.complete is False
+        assert result.judged is False
+
+    def test_resolved_cwd_runs_checks_normally(self, tmp_path):
+        """Sanity: a resolved cwd must still execute checks for real — B3(a)
+        only changes behavior when cwd is genuinely unresolved."""
+        from unittest.mock import MagicMock, patch
+
+        adapter = MagicMock()
+        (tmp_path / "thing.txt").write_text("built")
+        checks = [{"description": "artifact exists", "command": "test -f thing.txt"}]
+        verdict_data = {"complete": True, "confidence": 0.9, "gaps": [], "summary": "ok"}
+
+        with patch("closure_verify.extract_json",
+                   side_effect=[{"checks": checks}, verdict_data]):
+            with patch("closure_verify.content_or_empty", return_value="{}"):
+                result = verify_goal_completion(
+                    "build thing", [], adapter, workspace_path=str(tmp_path),
+                )
+
+        assert result.checks_run == 1
+        assert result.checks_passed == 1
+
+    def test_majority_inconclusive_caps_confidence_below_demotion_threshold(self, tmp_path):
+        """B3(b): one check cleanly fails (a real gap) but the other three
+        are environment noise (permission denied / not found) — majority-
+        inconclusive with a genuine failure present means `judged` stays
+        True, so without the cap a 0.9-confidence negative verdict would
+        trip handle.py's 0.7 status-demotion gate on noise, not signal."""
+        import subprocess
+        from unittest.mock import MagicMock, patch
+
+        adapter = MagicMock()
+        checks = [
+            {"description": "real gap", "command": "false"},
+            {"description": "no perm 1", "command": "x1"},
+            {"description": "no perm 2", "command": "x2"},
+            {"description": "no perm 3", "command": "x3"},
+        ]
+        verdict_data = {"complete": False, "confidence": 0.9,
+                        "gaps": ["artifact missing"], "summary": "not delivered"}
+        results = [
+            subprocess.CompletedProcess(args="false", returncode=1, stdout="", stderr=""),
+            subprocess.CompletedProcess(args="x1", returncode=126, stdout="",
+                                        stderr="permission denied"),
+            subprocess.CompletedProcess(args="x2", returncode=126, stdout="",
+                                        stderr="permission denied"),
+            subprocess.CompletedProcess(args="x3", returncode=126, stdout="",
+                                        stderr="permission denied"),
+        ]
+
+        with patch("closure_verify.extract_json", side_effect=[{"checks": checks}, verdict_data]):
+            with patch("closure_verify.content_or_empty", return_value="{}"):
+                with patch("subprocess.run", side_effect=results):
+                    result = verify_goal_completion(
+                        "build X", [], adapter, workspace_path=str(tmp_path),
+                    )
+
+        assert result.complete is False
+        assert result.judged is True  # a check DID cleanly fail
+        assert result.confidence < 0.7
+        assert "environment reasons" in result.summary
+
+    def test_minority_inconclusive_does_not_cap_confidence(self, tmp_path):
+        """Guard against over-triggering: when inconclusive checks are the
+        minority, the LLM's stated confidence must pass through unchanged."""
+        import subprocess
+        from unittest.mock import MagicMock, patch
+
+        adapter = MagicMock()
+        checks = [
+            {"description": "real gap", "command": "false"},
+            {"description": "real gap 2", "command": "false2"},
+            {"description": "no perm", "command": "x1"},
+        ]
+        verdict_data = {"complete": False, "confidence": 0.85,
+                        "gaps": ["artifact missing"], "summary": "not delivered"}
+        results = [
+            subprocess.CompletedProcess(args="false", returncode=1, stdout="", stderr=""),
+            subprocess.CompletedProcess(args="false2", returncode=1, stdout="", stderr=""),
+            subprocess.CompletedProcess(args="x1", returncode=126, stdout="",
+                                        stderr="permission denied"),
+        ]
+
+        with patch("closure_verify.extract_json", side_effect=[{"checks": checks}, verdict_data]):
+            with patch("closure_verify.content_or_empty", return_value="{}"):
+                with patch("subprocess.run", side_effect=results):
+                    result = verify_goal_completion(
+                        "build X", [], adapter, workspace_path=str(tmp_path),
+                    )
+
+        assert result.confidence == 0.85
 
 
 # ---------------------------------------------------------------------------

@@ -1,8 +1,18 @@
 ---
-status: dormant-design
+status: record
 ---
 
 # Routing live-data signal + verifier-synthesis first slice
+
+> **STATUS: BOTH PARTS SHIPPED 2026-07-12.** Part A (needs-live-data routing
+> signal) and Part B (B1 Deliverable.shape, B2 shape-conditional MUST +
+> waiver logging, B3 probe-env hardening) all landed the same session this
+> design was written in. Closed to history rather than kept as a
+> `dormant-design` doc since there's no remaining open chunk — see
+> MILESTONES.md `-5` #4/#5 for the shipped implementation detail (exact
+> line numbers below may have drifted; the design intent and DECISION
+> markers are what's durable here). `docs/VERIFY_LEARN_ARC.md` V0's stated
+> hard dependency (B3) is now satisfied.
 
 **Status:** design pass, written 2026-07-12 (Fable-handoff session). No code
 changed by this pass. Two sibling gaps with one root — *the system's judgment

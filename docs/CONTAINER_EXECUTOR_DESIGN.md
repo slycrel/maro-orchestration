@@ -40,7 +40,7 @@ Explicitly NOT in the first slice:
   verifier-authored shell) — a different trust story (we authored the
   command, not the worker); containerizing them is a natural follow-on once
   the executor image exists, but rides the probe-env hardening chunk
-  (`docs/ROUTING_AND_PROBE_SYNTHESIS_DESIGN.md` B3), not this one.
+  (`docs/history/2026-07-12-routing-and-probe-synthesis-design.md` B3), not this one.
 - **CodexCLIAdapter** (`src/llm.py:1463`): same seam, same wrap applies
   later; out of default backend order today, out of scope now.
 

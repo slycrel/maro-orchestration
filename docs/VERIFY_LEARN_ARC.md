@@ -113,13 +113,14 @@ any future consumer:
 | Judged, conf < 0.7 | Directional only — may flavor lesson framing (already does, memory.py:274-277), never gates crystallization or counts in V2 windows. |
 | `done-unverified` (verdict absent) | Neutral — present state, keep. |
 | `closure_unverifiable` (`judged=False`, verifier-own failure) | **Excluded** from all learning consumers and V2 windows. |
-| Environment-error-capped verdicts (ships with probe-env hardening, `ROUTING_AND_PROBE_SYNTHESIS_DESIGN.md` B3) | Excluded, same as unverifiable. |
+| Environment-error-capped verdicts (shipped via probe-env hardening, `docs/history/2026-07-12-routing-and-probe-synthesis-design.md` B3) | Excluded, same as unverifiable. |
 
-**Hard dependency, sequencing-critical:** B3 probe-env hardening ships
-*before* any V2 verdict-window logic goes live. The 4/5 dogfood
-false-negative rate means today's verdict stream would teach the verifier's
-cwd bugs as behavioral regressions. The done-vs-achieved caveat ("re-run at
-organic n≈30") is the calibration gate.
+**Hard dependency, sequencing-critical — SATISFIED 2026-07-12:** B3
+probe-env hardening shipped before any V2 verdict-window logic goes live.
+The 4/5 dogfood false-negative rate meant the pre-B3 verdict stream would
+have taught the verifier's cwd bugs as behavioral regressions. The
+done-vs-achieved caveat ("re-run at organic n≈30") is still the calibration
+gate for V2 itself.
 
 ## 5. The navigator half (#6 proper — "how the navigator improves")
 
@@ -156,8 +157,9 @@ A/B flag in one chunk (`navigator.lesson_inject`, shadow-comparable like
 
 ## 7. Chunks (sized for handoff; order matters)
 
-- **V0 (pre-arc, rides ROUTING_AND_PROBE_SYNTHESIS B3):** probe-env
-  hardening — the verdict stream must be honest before anything consumes it.
+- **V0 (pre-arc) — SHIPPED 2026-07-12** (`docs/history/2026-07-12-routing-and-probe-synthesis-design.md`
+  B3): probe-env hardening — the verdict stream is now honest before
+  anything downstream consumes it.
 - **V1 — expectation stamping (Sonnet):** schema field + template
   expectations + generation-prompt field + DEFAULTS rows. Tests: row-shape
   units.

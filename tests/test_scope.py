@@ -417,6 +417,59 @@ def test_deliverable_to_markdown_line_roundtrips():
 
 
 # ---------------------------------------------------------------------------
+# Deliverable.shape (docs/ROUTING_AND_PROBE_SYNTHESIS_DESIGN.md Part B, "probe
+# honesty" — B1: declare artifact kind at scope time instead of inferring it
+# from keyword hits in prose at closure time)
+# ---------------------------------------------------------------------------
+
+def test_parse_deliverable_line_with_shape():
+    d = _parse_deliverable_line(
+        "cmd/server/main.go: HTTP server binary [preconditions: Go] [shape: runtime]"
+    )
+    assert d.name == "cmd/server/main.go"
+    assert d.description == "HTTP server binary"
+    assert d.preconditions == ["Go"]
+    assert d.shape == "runtime"
+
+
+def test_parse_deliverable_line_shape_before_preconditions():
+    # Annotations may appear in either order.
+    d = _parse_deliverable_line(
+        "notes.md: written summary [shape: document] [preconditions: none]"
+    )
+    assert d.shape == "document"
+    assert d.description == "written summary"
+
+
+def test_parse_deliverable_line_shape_only():
+    d = _parse_deliverable_line("ledger.json [shape: data]")
+    assert d.name == "ledger.json"
+    assert d.shape == "data"
+
+
+def test_parse_deliverable_line_no_shape_annotation_is_none():
+    d = _parse_deliverable_line("docs/ARCHITECTURE.md: architecture notes")
+    assert d.shape is None
+
+
+def test_parse_deliverable_line_unrecognized_shape_value_is_none():
+    # An unrecognized value is dropped rather than trusted blindly.
+    d = _parse_deliverable_line("thing.txt: a thing [shape: banana]")
+    assert d.shape is None
+
+
+def test_deliverable_to_markdown_line_includes_shape():
+    d = Deliverable(name="a.go", description="b c", shape="runtime")
+    line = d.to_markdown_line()
+    assert "shape: runtime" in line
+
+
+def test_deliverable_to_markdown_line_omits_shape_when_none():
+    d = Deliverable(name="a.go", description="b c")
+    assert "shape:" not in d.to_markdown_line()
+
+
+# ---------------------------------------------------------------------------
 # ResolvedIntent
 # ---------------------------------------------------------------------------
 
@@ -451,6 +504,32 @@ def test_parse_resolved_intent_markdown_captures_all_sections():
     assert intent.deliverables[0].name == "cmd/server/main.go"
     assert "Go toolchain" in intent.deliverables[0].preconditions
     assert intent.deliverables[2].preconditions == []  # no annotation on 3rd
+
+
+_RESPONSE_WITH_SHAPED_DELIVERABLES = """## Failure Modes
+- server hangs
+
+## In Scope
+- server
+
+## Out of Scope
+- auth
+
+## Deliverables
+- cmd/server/main.go: HTTP server binary [preconditions: Go] [shape: runtime]
+- docs/README.md: usage notes [shape: document]
+- data/index.json: search index [shape: data]
+- unshaped.txt: no shape declared
+"""
+
+
+def test_parse_resolved_intent_markdown_captures_shape():
+    intent = _parse_resolved_intent_markdown(_RESPONSE_WITH_SHAPED_DELIVERABLES)
+    shapes = {d.name: d.shape for d in intent.deliverables}
+    assert shapes["cmd/server/main.go"] == "runtime"
+    assert shapes["docs/README.md"] == "document"
+    assert shapes["data/index.json"] == "data"
+    assert shapes["unshaped.txt"] is None
 
 
 def test_parse_resolved_intent_markdown_empty_input():

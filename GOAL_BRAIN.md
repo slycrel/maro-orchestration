@@ -1959,7 +1959,7 @@ Sample: the 2026-05-13..17 window of `~/.maro/workspace/runs/` (478 dirs total;
   Jeremy's at C4), `docs/VERIFY_LEARN_ARC.md` (next-arc-after-1.0 brief;
   changes get expectation-at-birth → verdict-at-cadence → auto-revert with
   symmetric authority; hard dependency = probe-env hardening B3),
-  `docs/ROUTING_AND_PROBE_SYNTHESIS_DESIGN.md` (needs_live_data classifier
+  `docs/history/2026-07-12-routing-and-probe-synthesis-design.md` (needs_live_data classifier
   signal — the classifier prompt's own BTC example teaches the Manti
   misroute; Deliverable.shape + shape-conditional behavioral-probe MUST +
   cwd=None hole closed). Ordered execution queue = MILESTONES -5;
@@ -2226,3 +2226,23 @@ Dormant (deliberately parked, not dropped):
   llm.py child_env) is documented in docs/MODEL_ROUTE_EXPLORATION.md and
   can be activated later with one config knob + one $8-19 sub. Groq/Gemini
   free tiers are green-lit as the hosted-free small-LLM rung (BACKLOG 25).
+- **2026-07-12 (same session, execution)** — Routing + probe-synthesis
+  design (`docs/history/2026-07-12-routing-and-probe-synthesis-design.md`)
+  **BOTH PARTS SHIPPED**, all `DECISION (provisional)` markers resolved
+  into code: **Part A** — `needs_live_data` is an LLM-schema field (not a
+  regex), capability override applies to interactive AND task paths,
+  `now_lane.live_data_routing` defaults **ON** even fresh-install (differs
+  from `escalate_on_not_achieved`'s default-OFF — this flag prevents a
+  doomed NOW call rather than re-running a completed one); Manti canonical
+  case now routes AGENDA naturally, no `--lane` force. **Part B** —
+  `Deliverable.shape` ships as **three** values (`document | runtime |
+  data`, not two — a queried dataset is distinct from prose); behavioral
+  probes become a shape-conditional **MUST** (was "prefer"), waivable only
+  via a logged `behavioral_probe_waived` reason; probes never execute with
+  `cwd=None` (synthesize honest `inconclusive`/`env_unresolved` instead);
+  majority-inconclusive-with-confidence≥0.7 caps confidence to 0.69 so the
+  verifier's own tooling failure can't trip handle.py's 0.7 demotion gate.
+  The full BDD red-green loop stays explicitly deferred (B1–B3 are the
+  honest-measurement prerequisite, not the synthesis loop itself). Both
+  live-verified with zero mocks; full suite green (166 files / 5692 tests).
+  Unblocks `docs/VERIFY_LEARN_ARC.md` V0's stated hard dependency.

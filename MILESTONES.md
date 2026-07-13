@@ -2,7 +2,15 @@
 
 What to do next, in what order. Updated each session. Deferred ideas live in BACKLOG.md; completed phase history in docs/history/ROADMAP_ARCHIVE.md (ROADMAP.md is a stub). This file is the executable queue.
 
-Last updated: 2026-07-12 (Sonnet execution session: -5 #4 Routing Part A
+Last updated: 2026-07-12 (Sonnet execution session: -5 #5 Verifier-synthesis
+Part B SHIPPED — B1 `Deliverable.shape` first-class field, B2
+shape-conditional behavioral-probe MUST + waiver logging + timeout split,
+B3 probe-env hardening (never probe with cwd=None + majority-inconclusive
+confidence cap); live-verified with zero mocks against a real mid-tier
+adapter; full suite green (166 files / 5692 tests); design doc closed to
+`docs/history/2026-07-12-routing-and-probe-synthesis-design.md`; unblocks
+`docs/VERIFY_LEARN_ARC.md` V0; see -5 #5 for full detail). Previous:
+2026-07-12 (Sonnet execution session: -5 #4 Routing Part A
 SHIPPED — needs_live_data classifier signal + capability override close the
 Manti canonical-case routing gap, live-verified at 0.95 confidence with no
 `--lane` force; see -5 #4 for full detail). Previous: 2026-07-12 (git-history
@@ -167,8 +175,80 @@ Truth anchor: GOAL_BRAIN.md Threads. History: docs/history/ROADMAP_ARCHIVE.md.
       failure surfaced by the run: `docs/history/2026-07-12-git-history-
       privacy-scan.md` had `status: history` (invalid) instead of `status:
       record`, from the parallel git-history-scrub session; one-line fix.
-   5. **Probe-synthesis B1 → B2 → B3** (same doc, Part B; B3 wants Opus and
-      is ALSO the verify→learn arc's hard dependency V0).
+   5. **Probe-synthesis B1 → B2 → B3 — SHIPPED 2026-07-12**
+      (`docs/history/2026-07-12-routing-and-probe-synthesis-design.md` Part
+      B — "probe honesty"; the closure design doc closed to history the
+      same session both its parts shipped). Executed by Sonnet directly
+      (not delegated to Opus as the doc's chunk-sizing suggested — same
+      continuity call as Part A, live-verified below to confirm the
+      simpler-model call didn't cost correctness).
+      **B1** (`src/scope.py`): `Deliverable.shape: Optional[str]` —
+      `document | runtime | data`, three values not two (a queried
+      dataset/ledger is distinct from prose). `[shape: ...]` bullet
+      annotation parsed in `_parse_deliverable_line` (parallel to
+      `[preconditions: ...]`, either order, unrecognized values dropped
+      rather than trusted); `_SCOPE_SYSTEM` prompt teaches the annotation +
+      worked example. `closure_verify._deliverables_corroborate_runtime`
+      now consults declared shape FIRST (`runtime` arms Signal 2 even with
+      no keyword hint in prose; `document`/`data` suppress a prose keyword
+      hit outright) and only falls back to the original keyword-regex
+      inference for legacy/unshaped deliverables. Shape also surfaces in
+      the closure-plan prompt's deliverables block.
+      **B2** (`_CLOSURE_PLAN_SYSTEM`): item 4 rewritten from "prefer" to a
+      shape-conditional MUST — any `[shape: runtime]` deliverable requires
+      ≥1 behavioral probe (http/ws/process/browser), waivable only by
+      setting `"behavioral_probe_waived": "<reason>"` in the plan JSON,
+      which now flows into the `CLOSURE_VERDICT` captain's-log event beside
+      `modality_distribution` (empty string when nothing was waived, not a
+      missing key). The `<15s` speed rule was a prompt/code disagreement
+      the design doc flagged (code already allowed `timeout_per_check`,
+      default 30s) — split into static-checks-stay-`<15s` vs.
+      behavioral-probes-get-the-real-budget, interpolated via a
+      `__TIMEOUT_PER_CHECK__` token replace (not `.format()`, which would
+      collide with the JSON schema's literal braces in the same string).
+      **B3** (`verify_goal_completion`): (a) the check-execution loop no
+      longer runs `subprocess.run(cwd=None)` when the full cwd-resolution
+      chain (workspace_path → run-scoped ContextVar → project-slug dir)
+      comes up empty — every planned check is instead marked
+      `inconclusive`/`env_unresolved` without executing, so an unresolved
+      cwd can't silently probe Maro's own launch directory and manufacture
+      a confident wrong-directory verdict. (b) new confidence cap: when a
+      negative verdict has checks_run>0, >half of them inconclusive, and
+      confidence≥0.7, confidence is capped to 0.69 with a summary note —
+      targets the case the existing `judged=False` tri-state protection
+      doesn't cover (at least one check cleanly failed alongside the
+      environment noise, so `judged` stays True and handle.py's `≥0.7`
+      demotion gate was still live). "Environment reasons" reuses
+      `_check_outcome`'s existing inconclusive classification as-is
+      (missing tool, permission denied, timeout, verifier-authored syntax
+      error) rather than inventing a narrower subset — that taxonomy's own
+      comment already frames every branch as "the verifier's own tooling
+      failed," so no new classifier was needed.
+      **Tests:** `tests/test_scope.py` (+9: annotation parsing incl.
+      either-order/shape-only/unrecognized-value/markdown-listener);
+      `tests/test_director.py` `TestDetectBehavioralGap` (+6: declared
+      shape overriding/arming the keyword inference), `TestVerifyGoalCompletion`
+      (+4: plan prompt carries shape, timeout token interpolation, waiver
+      logged / logged-empty), new `TestProbeEnvHardening` (+5, beside the
+      existing cwd-fallback tests: unresolved cwd never executes,
+      false-positive downgrades to honest-unjudged, resolved cwd unaffected,
+      majority-inconclusive caps confidence, minority-inconclusive does
+      not). **Acceptance verified live** (real mid-tier adapter, no mocks):
+      a `[shape: runtime]` server deliverable that was actually a
+      print-only stub produced 2 checks including a real HTTP probe against
+      it (the MUST firing, not just "prefer") and correctly verdicted
+      incomplete; a genuinely unresolved cwd (no workspace_path, no
+      ContextVar, no project) produced 3 inconclusive/`env_unresolved`
+      checks and an honest `judged=False, confidence=0.1` "verification
+      could not run" verdict instead of a false pass or false fail. Full
+      suite green (`bash scripts/test-safe.sh`: 166 files, same count as
+      Part A — B1–B3 tests landed in the existing `test_scope.py` /
+      `test_director.py`, no new files; 5692 individual tests collected
+      repo-wide) before commit. Unblocks `docs/VERIFY_LEARN_ARC.md` V0 (its
+      stated hard dependency) and clears the wrong-cwd class of the
+      2026-07-09 dogfood false-negatives (4/5 runs) going forward — the
+      historical batch itself isn't retroactively re-verified, only new
+      runs benefit.
    6. **Container executor C1 → C2 → C3 → C4**
       (`docs/CONTAINER_EXECUTOR_DESIGN.md`; C2 wants Opus; C4 = runtime-box
       burn-in, Jeremy adjudicates the flip). Clears r2 blocker #4.

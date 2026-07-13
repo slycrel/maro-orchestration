@@ -60,7 +60,16 @@ Your job is to do three things, in order:
 3. **Deliverable map**: list the concrete, checkable artifacts that must exist for the goal to be done.
    Files, commits, processes, endpoints — things someone else could point at afterward and say
    "yes, this is what we asked for." Include known preconditions (tools, dependencies, services)
-   inline using the format `[preconditions: X, Y]`. 2-6 items.
+   inline using the format `[preconditions: X, Y]`. Also classify what KIND of artifact each one
+   is using `[shape: document|runtime|data]`:
+   - `document` — a file meant to be read (docs, reports, config, source that isn't itself run
+     as a service in this goal).
+   - `runtime` — something that runs and can be exercised: a server, CLI, endpoint, websocket,
+     background process, UI flow. Verifying this later requires actually running/hitting it, not
+     just checking it exists.
+   - `data` — a dataset, ledger, or index that's queried for content (not read like prose and
+     not "run" like a program).
+   2-6 items.
 
 Output FORMAT — plain markdown with exactly these four headings:
 
@@ -78,8 +87,8 @@ Output FORMAT — plain markdown with exactly these four headings:
 - <...>
 
 ## Deliverables
-- <artifact name>: <one-line description> [preconditions: <tool or dep>, <...>]
-- <artifact name>: <description> [preconditions: <...>]
+- <artifact name>: <one-line description> [preconditions: <tool or dep>, <...>] [shape: <document|runtime|data>]
+- <artifact name>: <description> [preconditions: <...>] [shape: <...>]
 - <...>
 
 Be specific. "Add error handling" is not a failure mode. "If the WebSocket
@@ -87,7 +96,7 @@ connection drops mid-game, session state is lost" is. Same for scope:
 "Support WebSocket reconnection with session recovery" is concrete;
 "Handle errors well" is not. Same for deliverables: "cmd/server/main.go:
 HTTP server binary serving /ws and /static/ [preconditions: Go toolchain,
-gorilla/websocket]" is concrete; "working server" is not.
+gorilla/websocket] [shape: runtime]" is concrete; "working server" is not.
 """
 
 
@@ -131,6 +140,9 @@ class ScopeSet:
 # Deliverable + ResolvedIntent
 # ---------------------------------------------------------------------------
 
+_VALID_SHAPES = frozenset({"document", "runtime", "data"})
+
+
 @dataclass
 class Deliverable:
     """A concrete artifact the goal implies, with any known preconditions.
@@ -141,17 +153,28 @@ class Deliverable:
     to exist — used by closure's pre-flight to short-circuit INCONCLUSIVE
     verdicts rather than silent pass-throughs (see BACKLOG: closure
     silent-verification bug).
+    `shape` (docs/ROUTING_AND_PROBE_SYNTHESIS_DESIGN.md Part B, "probe
+    honesty") declares what kind of artifact this is, so closure can decide
+    whether a behavioral probe is *required* instead of inferring it from
+    keyword hits in prose. Three values, not two: "data" (a dataset/ledger/
+    index probed by content queries) is distinct from "document" — a
+    static grep against it is the right modality, unlike a "runtime"
+    deliverable (server/CLI/endpoint) which needs a behavioral probe.
+    None when the LLM didn't declare one (legacy/unshaped) — callers fall
+    back to keyword-regex inference in that case.
     """
     name: str
     description: str = ""
     preconditions: List[str] = field(default_factory=list)
+    shape: Optional[str] = None
 
     def to_markdown_line(self) -> str:
         pre = ""
         if self.preconditions:
             pre = f" [preconditions: {', '.join(self.preconditions)}]"
+        shape = f" [shape: {self.shape}]" if self.shape else ""
         desc = f": {self.description}" if self.description else ""
-        return f"- {self.name}{desc}{pre}"
+        return f"- {self.name}{desc}{pre}{shape}"
 
 
 @dataclass
@@ -236,24 +259,38 @@ def _split_sections(text: str) -> dict:
 
 # `[preconditions: X, Y, Z]` — trailing annotation in deliverable bullets.
 _PRECONDITIONS_RE = re.compile(r"\[preconditions?:\s*(.+?)\s*\]", re.IGNORECASE)
+# `[shape: document|runtime|data]` — trailing annotation, parallel to
+# preconditions. See Deliverable.shape docstring for the three-value split.
+_SHAPE_RE = re.compile(r"\[shape:\s*(.+?)\s*\]", re.IGNORECASE)
 
 
 def _parse_deliverable_line(item: str) -> Deliverable:
     """Parse a single deliverable bullet into a Deliverable.
 
-    Format: `<name>: <description> [preconditions: X, Y]`
+    Format: `<name>: <description> [preconditions: X, Y] [shape: runtime]`
     - `name:` is the split point; if absent, the whole string is the name.
-    - The preconditions annotation can appear at the end of the description.
-    - Tolerates missing description, missing preconditions, or either alone.
+    - The preconditions/shape annotations can appear at the end of the
+      description, in either order.
+    - Tolerates missing description, missing preconditions/shape, or any
+      subset alone.
+    - An unrecognized shape value (not document/runtime/data) is dropped —
+      treated the same as no annotation, since a value we can't classify
+      against isn't worth pretending to trust.
     """
     if not item:
         return Deliverable(name="")
-    # Extract preconditions first so they don't pollute the description.
+    # Extract preconditions/shape first so they don't pollute the description.
     preconditions: List[str] = []
     m = _PRECONDITIONS_RE.search(item)
     if m:
         pre_raw = m.group(1)
         preconditions = [p.strip() for p in pre_raw.split(",") if p.strip()]
+        item = (item[:m.start()] + item[m.end():]).strip()
+    shape: Optional[str] = None
+    m = _SHAPE_RE.search(item)
+    if m:
+        _shape_raw = m.group(1).strip().lower()
+        shape = _shape_raw if _shape_raw in _VALID_SHAPES else None
         item = (item[:m.start()] + item[m.end():]).strip()
     # Split name: description.
     if ":" in item:
@@ -262,8 +299,9 @@ def _parse_deliverable_line(item: str) -> Deliverable:
             name=name.strip(),
             description=desc.strip(),
             preconditions=preconditions,
+            shape=shape,
         )
-    return Deliverable(name=item.strip(), preconditions=preconditions)
+    return Deliverable(name=item.strip(), preconditions=preconditions, shape=shape)
 
 
 def _parse_scope_markdown(text: str) -> ScopeSet:

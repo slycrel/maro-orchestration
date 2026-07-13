@@ -216,10 +216,9 @@ crowd-sourced or not)."
     (incomplete). Task-path only (self-verdict scope); force_lane wins.
     Interactive NOW still skips the self-verdict entirely (raw-speed
     contract) — the interactive routing gap remains the classifier
-    needs-live-data signal. **That signal DESIGNED 2026-07-12 →
-    `docs/ROUTING_AND_PROBE_SYNTHESIS_DESIGN.md` Part A** (`needs_live_data`
-    schema field + capability override, 8ed0a09 template; queued in
-    MILESTONES -5).
+    needs-live-data signal. **That signal SHIPPED 2026-07-12 →
+    `docs/history/2026-07-12-routing-and-probe-synthesis-design.md` Part A** (`needs_live_data`
+    schema field + capability override, 8ed0a09 template; see MILESTONES -5).
   - **Qix-cuts decompose shape (taste/discretion in planning, NOT a new
     lane):** 0–4 cheap narrowing steps that shrink the space (chain
     prior → locations → verify 2-3 candidates), then bounded work inside;
@@ -1061,12 +1060,12 @@ See `docs/CONSTRAINT_ORCHESTRATION_DESIGN.md` + `docs/CONSTRAINT_ORCHESTRATION_R
 
 ### Verifier synthesis as a deliverable (scope's other half)
 
-**First real slice DESIGNED 2026-07-12 →
-`docs/ROUTING_AND_PROBE_SYNTHESIS_DESIGN.md` Part B** (Deliverable.shape,
+**First real slice SHIPPED 2026-07-12 →
+`docs/history/2026-07-12-routing-and-probe-synthesis-design.md` Part B** (Deliverable.shape,
 shape-conditional behavioral-probe MUST with logged waiver, probe-env
-hardening incl. the cwd=None residual; chunks B1–B3 in MILESTONES -5). The
+hardening incl. the cwd=None residual; chunks B1–B3, see MILESTONES -5). The
 full BDD red-green loop below stays deferred until the honest-measurement
-prerequisites ship — this entry remains the long-arc record.
+prerequisites ship (now satisfied) — this entry remains the long-arc record.
 
 - [ ] **Verifier synthesis phase.** Dream-level: orchestrator builds its own verifier when none exists, rather than degrading to LLM judgment or failing as "hard." Framing: BDD + TDD. Scope declares Given/When/Then (what must be true for "done"). Execution includes a mandatory red-green pair: synthesize an executable probe, break the code on purpose to confirm it catches the failure, fix the code, probe goes green. The probe is a first-class checked-in artifact.
 

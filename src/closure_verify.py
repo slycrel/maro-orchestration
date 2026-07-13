@@ -45,11 +45,23 @@ _CLOSURE_PLAN_SYSTEM = textwrap.dedent("""\
        (probe: does it actually respond?), at starting (probe: does it handle a
        real request?), or at integration (probe: does the documented client path
        work?). Let the work steer the check.
-    4. Prefer at least one behavioral/runtime probe when the work summary suggests
-       a running artifact, service, CLI, endpoint, websocket, or UI flow. Static
-       file/grep checks are useful, but they are not enough by themselves if the
-       claimed success depends on runtime behavior. If runtime probing is impossible
-       here, say that by skipping the check rather than faking a static substitute.
+    4. Behavioral probes: when any deliverable above is tagged [shape: runtime]
+       (a server, CLI, endpoint, websocket, background process, or UI flow),
+       your plan MUST include at least one behavioral probe that actually
+       exercises it (http/ws/process/browser — not just a static file check).
+       This is not a preference — a runtime-shaped deliverable "verified" only
+       by a static check (file exists, code compiles) is unverified.
+       You may skip the behavioral probe ONLY when it is genuinely impossible
+       in this environment (no port available, requires external credentials
+       or network access, no display for a browser probe, etc.) — say so
+       explicitly by setting "behavioral_probe_waived" in your JSON response
+       to the specific reason. Do not waive it because it's inconvenient, and
+       do not fake a static substitute and call the deliverable checked.
+       When no deliverable is tagged runtime (or none were declared), still
+       prefer at least one behavioral/runtime probe whenever the work summary
+       suggests a running artifact, service, CLI, endpoint, websocket, or UI
+       flow — but this softer case has no waiver requirement; skipping it is a
+       normal judgment call, not something to explain.
        Cheap scaffolding is encouraged when it makes runtime probing mechanical, for
        example:
        - start a server in background with cleanup: `tmp=$(mktemp); (python app.py >$tmp 2>&1 &) ; pid=$!; trap 'kill $pid' EXIT; sleep 2; curl -fsS http://127.0.0.1:8000/health`
@@ -67,8 +79,13 @@ _CLOSURE_PLAN_SYSTEM = textwrap.dedent("""\
       over the whole file (e.g. `grep -qiE 'urgent|deadline' file`) to
       position/format-specific pipelines — numbered-list or quote-prefix
       assumptions break on tables and code fences and fail work that is fine.
-    - Commands must be fast (<15s), safe (read-only or self-cleaning), and exit 0
-      on success. Wrap background processes with `timeout` and always clean up PIDs.
+    - Static checks (grep, file existence, compile-only) must be fast (<15s).
+      Behavioral probes (server start, websocket handshake, CLI invocation)
+      may take up to __TIMEOUT_PER_CHECK__s if they need brief startup time —
+      that's the actual execution budget, use it rather than cutting a probe
+      short. All checks must be safe (read-only or self-cleaning) and exit 0
+      on success. Wrap background processes with `timeout` and always clean
+      up PIDs.
     - Prefer robust checks over brittle string-matching theater. If a grep pattern
       would be sensitive to log formatting or harmless wording changes, prefer a
       stronger structural predicate (for example `jq`, exact JSON field checks,
@@ -81,7 +98,8 @@ _CLOSURE_PLAN_SYSTEM = textwrap.dedent("""\
       that failure mode rather than fabricate a weak check.
 
     Respond with JSON only:
-    {"checks": [{"failure_mode": "...", "description": "...", "command": "..."}]}
+    {"checks": [{"failure_mode": "...", "description": "...", "command": "..."}],
+     "behavioral_probe_waived": "<reason — only when skipping a REQUIRED behavioral probe for a runtime-shaped deliverable; omit or empty string otherwise>"}
 """).strip()
 
 _CLOSURE_VERDICT_SYSTEM = textwrap.dedent("""\
@@ -578,11 +596,14 @@ def verify_goal_completion(
                 _name = getattr(d, "name", "") or ""
                 _desc = getattr(d, "description", "") or ""
                 _preq = getattr(d, "preconditions", None) or []
+                _shape = getattr(d, "shape", None)
                 _line = f"- {_name}"
                 if _desc:
                     _line += f": {_desc}"
                 if _preq:
                     _line += f" [preconditions: {', '.join(_preq)}]"
+                if _shape:
+                    _line += f" [shape: {_shape}]"
                 _lines.append(_line)
             _deliverables_block = (
                 "Deliverables committed when planning (verify each was built):\n"
@@ -611,9 +632,12 @@ def verify_goal_completion(
         ) if _inventory else ""
 
         # Phase 1: generate verification plan
+        _closure_plan_system = _CLOSURE_PLAN_SYSTEM.replace(
+            "__TIMEOUT_PER_CHECK__", str(timeout_per_check)
+        )
         plan_resp = adapter.complete(
             [
-                LLMMessage("system", _CLOSURE_PLAN_SYSTEM),
+                LLMMessage("system", _closure_plan_system),
                 LLMMessage("user",
                     f"Goal: {goal}\n\n"
                     f"Working directory: {workspace_path or '(unspecified)'}\n\n"
@@ -629,6 +653,9 @@ def verify_goal_completion(
         plan_data = extract_json(content_or_empty(plan_resp), dict,
                                  log_tag="director.closure_plan")
         checks = safe_list(plan_data.get("checks") if plan_data else None, element_type=dict)
+        behavioral_probe_waived = safe_str(
+            plan_data.get("behavioral_probe_waived", "") if plan_data else ""
+        )
 
         if not checks:
             # Research/writing goal — no executable checks, skip
@@ -643,6 +670,24 @@ def verify_goal_completion(
             cmd = safe_str(check.get("command", ""))
             modality = _classify_probe_modality(cmd)
             if not cmd:
+                continue
+            if cwd is None:
+                # B3(a) probe-env hardening (docs/ROUTING_AND_PROBE_SYNTHESIS_
+                # DESIGN.md Part B): the full cwd-resolution chain above
+                # (workspace_path -> get_default_subprocess_cwd -> project
+                # dir) came up empty. Running here anyway would silently
+                # probe Maro's own launch directory instead of wherever the
+                # executor actually wrote — a confident-looking but
+                # meaningless pass/fail. Mark it honestly inconclusive
+                # instead of running it somewhere arbitrary.
+                check_results.append({
+                    "description": desc, "command": cmd,
+                    "modality": modality,
+                    "exit_code": -1, "stdout": "",
+                    "stderr": "cwd unresolved — check not run",
+                    "passed": False, "outcome": "inconclusive",
+                    "env_unresolved": True,
+                })
                 continue
             try:
                 proc = subprocess.run(
@@ -844,6 +889,33 @@ def verify_goal_completion(
                 len(inconclusive_checks),
             )
 
+        # B3(b) probe-env hardening (docs/ROUTING_AND_PROBE_SYNTHESIS_DESIGN.md
+        # Part B): when most of what executed couldn't reach a clean answer
+        # (missing tool, permission denied, timeout, verifier's own syntax
+        # error — the _check_outcome inconclusive branches), that's the
+        # verifier's tooling failing, not evidence about the goal. Left
+        # uncapped, a high-confidence negative verdict resting mostly on
+        # environment noise trips handle.py's 0.7 status-demotion gate even
+        # when one check did cleanly fail (so `judged` above stays True and
+        # doesn't already protect it) — e.g. one real gap plus three
+        # permission-denied probes on unrelated checks shouldn't read as
+        # "0.85 confident this failed."
+        if (
+            not complete
+            and checks_run
+            and len(inconclusive_checks) > checks_run / 2
+            and confidence >= 0.7
+        ):
+            confidence = 0.69
+            _env_note = (
+                f"{len(inconclusive_checks)}/{checks_run} verification probe(s) "
+                f"were inconclusive for environment reasons (missing tool, "
+                f"permission denied, verifier syntax error, timeout) rather "
+                f"than goal reasons — confidence capped below the demotion "
+                f"threshold."
+            )
+            summary = f"{summary} {_env_note}" if summary else _env_note
+
         verdict = ClosureVerdict(
             complete=complete,
             confidence=confidence,
@@ -889,6 +961,7 @@ def verify_goal_completion(
                     "gaps": [str(g)[:200] for g in gaps[:5]],
                     "scope_supplied": scope is not None,
                     "modality_distribution": modality_dist,
+                    "behavioral_probe_waived": behavioral_probe_waived,
                     "inconclusive_count": len(inconclusive_checks),
                     "judged": judged,
                     "behavioral_gap_downgrade": behavioral_gap_reason or "",
@@ -1074,10 +1147,16 @@ def _deliverables_corroborate_runtime(resolved_intent) -> bool:
     """True when the deliverables leave the runtime-expectation hint credible.
 
     Returns True (keep Signal 2 armed) when there are no deliverables to
-    consult, or when at least one deliverable's name/description is itself
-    runtime-shaped. Returns False only when deliverables exist and every one
-    is a plain document/data artifact — then an all-static probe set is the
-    correct modality and a keyword hit in failure-mode prose is noise.
+    consult, or when at least one deliverable is runtime-shaped. Returns
+    False only when deliverables exist and every one is a plain
+    document/data artifact — then an all-static probe set is the correct
+    modality and a keyword hit in failure-mode prose is noise.
+
+    Declared `Deliverable.shape` (docs/ROUTING_AND_PROBE_SYNTHESIS_DESIGN.md
+    Part B) is authoritative when present — the LLM said what kind of
+    artifact this is at scope time, no need to re-guess from prose. Only
+    unshaped (legacy) deliverables fall back to the original keyword-regex
+    inference against name/description.
     """
     if resolved_intent is None:
         return True
@@ -1086,6 +1165,11 @@ def _deliverables_corroborate_runtime(resolved_intent) -> bool:
         if not delivs:
             return True
         for d in delivs:
+            shape = getattr(d, "shape", None)
+            if shape == "runtime":
+                return True
+            if shape in ("document", "data"):
+                continue
             text = f"{getattr(d, 'name', '')} {getattr(d, 'description', '')}"
             if _RUNTIME_FAILURE_MODE_HINT.search(text):
                 return True
