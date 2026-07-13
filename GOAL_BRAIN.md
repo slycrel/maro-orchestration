@@ -2318,3 +2318,35 @@ Dormant (deliberately parked, not dropped):
   behavior rides on top of sub-goal spawning, it doesn't replace the
   prerequisite that sub-goals can spawn at all. Queued in BACKLOG under
   "Vision / Deferred" pending that scoping pass.
+
+- **2026-07-13 (thread-arch #9 disposition — /loop trace, CLOSED, not a
+  design item per GOAL_BRAIN 2026-07-09)** — Traced real `/loop` sessions
+  against the per-turn seam the navigator inherits when it goes per-turn
+  (`_record_loop_decision` / Phase 64 `adaptive_execution`, today staffed
+  by the director — see `loop_post_step.py:_record_loop_decision`
+  docstring). Searched all ~700 run dirs in `~/.maro/workspace/runs/` for
+  fired mid-loop director decisions; found the seam is exercised rarely
+  (`adaptive_execution` defaults **False**, documented dormant/not-started
+  in `docs/DEFAULTS.md` — the flag exists so the seam is visible, per that
+  doc's own words). Two historical runs (330763a4-cobalt-alder 07-02,
+  69f3c689-azure-quartz 06-26) did exercise it and both surfaced the same
+  real bug: `director_evaluate`'s stuck-trigger returned the literal
+  reasoning `"evaluation skipped"` — but tracing 330763a4's
+  `loop-d9331fb0-log.json` showed the true cause was `claude rate-limited
+  after 6 retries`, i.e. the evaluation was **attempted and failed**, not
+  deliberately skipped. Root cause: `director_evaluate` (src/director.py)
+  reused one `DirectorDecision` object for both the deliberate
+  dry_run/no-adapter no-op path AND the catch-all `except Exception`
+  fallback, collapsing "intentionally not evaluated" and "evaluation
+  crashed (e.g. rate-limit)" into the same misleading label — exactly the
+  kind of masked-failure signal that would poison the navigator's future
+  per-turn judgment once it inherits this seam. **Fixed same session**
+  (Sonnet-safe, mechanical, no design call): split into `_continue`
+  ("evaluation skipped") vs `_continue_on_error` ("evaluation failed —
+  treated as continue"); `tests/test_director.py::TestDirectorEvaluate`
+  pins both reasoning strings + their distinctness. **Disposition: CLOSED.**
+  The per-turn navigator-model concept itself is sound and doesn't need
+  Jeremy's design input — the one class of friction found was a plain bug
+  in the (dormant, off-by-default) seam it will inherit, now fixed. No
+  further action; `adaptive_execution` stays dormant per its own decree,
+  un-gating it is a separate, already-tracked non-goal.

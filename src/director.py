@@ -1438,6 +1438,7 @@ def director_evaluate(
         dry_run:  skip LLM call and return continue
     """
     _continue = DirectorDecision(action="continue", reasoning="evaluation skipped")
+    _continue_on_error = DirectorDecision(action="continue", reasoning="evaluation failed — treated as continue")
 
     if dry_run or adapter is None:
         return _continue
@@ -1528,7 +1529,7 @@ def director_evaluate(
 
     except Exception:
         log.debug("director_evaluate error — returning continue", exc_info=True)
-        return _continue
+        return _continue_on_error
 
 
 # ---------------------------------------------------------------------------

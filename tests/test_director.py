@@ -2374,11 +2374,13 @@ class TestDirectorEvaluate:
         ctx = _eval_ctx()
         result = director_evaluate("goal", ctx, "step_threshold", None, dry_run=True)
         assert result.action == "continue"
+        assert result.reasoning == "evaluation skipped"
 
     def test_none_adapter_returns_continue(self):
         ctx = _eval_ctx()
         result = director_evaluate("goal", ctx, "verify_failure", None)
         assert result.action == "continue"
+        assert result.reasoning == "evaluation skipped"
 
     def test_llm_returns_continue(self):
         from unittest.mock import MagicMock, patch
@@ -2541,6 +2543,12 @@ class TestDirectorEvaluate:
 
         result = director_evaluate("build X", ctx, "verify_failure", adapter)
         assert result.action == "continue"
+        # thread-arch #9 trace (2026-07-13): a real /loop session showed this
+        # reasoning collapsed into the same "evaluation skipped" text as the
+        # deliberate dry_run/no-adapter no-op, masking a live LLM failure
+        # (rate-limit) as an intentional skip. Must stay distinct.
+        assert result.reasoning != "evaluation skipped"
+        assert "evaluation skipped" not in result.reasoning
 
 
 class TestDetectNextLedgerGap:
