@@ -84,21 +84,52 @@ maro-import --source /path/to/other/workspace --label docker-trial
   merges into live files automatically — pass `--include-curated` to copy
   it into `imports/<label>/` for manual (or evolver) review. Curated
   artifacts stop at quarantine until reviewed and adopted; `maro-pack`
-  (§3, §7 of the design doc) is the eventual one-command path for both
-  import styles, not shipped yet.
+  (§3, §7 of the design doc) is the one-command path for sharing a
+  *curated, reviewed subset* rather than a whole-workspace merge — export
+  and seal are shipped (below), import/adopt are next.
 - Machine state (`config.yml`, `jobs.json`, task store, heartbeat, secrets,
   locks, `correspondence.db`) is never touched by `maro-import` — it only
   moves learning, not process state.
 
 Same-owner merges (this is you, consolidating your own boxes) carry no
-trust demotion — `maro-import` is trust-neutral by design. A future
-`maro-pack import` (not yet shipped) is the trust-demoting path for
-someone else's pack.
+trust demotion — `maro-import` is trust-neutral by design. `maro-pack
+import` (not yet shipped) will be the trust-demoting path for someone
+else's pack.
+
+## Sharing a curated learning pack (`maro-pack`)
+
+Producing a pack is shipped (`src/pack.py`, chunk 3 of the design doc's §7
+slicing). Gathers Class C (standing rules, hypotheses, long-tier lessons,
+skill records) + Class A (`skills/*.md`, `personas/*.md`) from a workspace,
+scrubs every string (`secret_scrub.scrub()` for secret-shaped strings +
+`scrub_identifiers()` for this machine's `$HOME`/username/hostname + a
+config+environment deny-list), and writes an unsealed
+`<name>.maropack.tar.gz` plus a loose `<name>.REVIEW.md` for a human to
+actually read before sealing:
+
+```bash
+maro-pack export polymarket-research-starter --label "polymarket edges, 2026-07"
+# read the printed REVIEW.md path, then:
+maro-pack seal output/packs/polymarket-research-starter.maropack.tar.gz
+maro-pack inspect output/packs/polymarket-research-starter.maropack.tar.gz
+```
+
+Opt-in flags: `--include-medium` (medium-tier lessons), `--include-knowledge`
+(knowledge nodes/edges), `--include-playbook`, `--include-runs <id>`
+(repeatable). Raw runs are excluded by default — a pack is curated, not a
+backup. **Honesty framing (preserve verbatim in any UI copy):** the sharing
+guarantee is mechanical scrub for secret-shaped strings + mechanical
+redaction of known local identifiers + a mandatory human review gate — this
+is not mechanical anonymization. A pack is a letter; you proofread letters.
+
+`maro-pack import`/`adopt` (the receiving side — trust demotion, quarantine,
+adopt) are not shipped yet.
 
 ## Not yet built
 
-- `maro-pack export/seal/import/adopt` — the curated-learning sharing
-  lifecycle (trust demotion, provenance, scrub, quarantine → adopt). See
-  `docs/PORTABLE_LEARNING_DESIGN.md` §2b–§4, §7 chunks 2–4.
+- `maro-pack import/adopt` — the receiving half of the curated-learning
+  sharing lifecycle (trust demotion per §3's arrival-trust table, format
+  version check, quarantine → adopt). See `docs/PORTABLE_LEARNING_DESIGN.md`
+  §3, §7 chunk 4.
 - Signing/identity, richer identifier scrub, imported-skill A/B before
   adoption — explicitly deferred post-1.0 (§7.5 of the design doc).

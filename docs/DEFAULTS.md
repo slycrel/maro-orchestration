@@ -48,6 +48,7 @@ missing here fails the suite, so this table can't silently rot.
 | `recall.dispatch_guard` | `True` | Stops a failing goal from being re-dispatched in a tight loop (the Apr "stale mission shortcircuit" bug class). Flip OFF only when deliberately stress-testing retry behavior. |
 | `recall.dispatch_inject` | `True` | Injects the dispatch recall slice (prior outcomes/lessons for similar goals) into goal handling. Read-side of the memory system at the dispatch seam. Flip OFF → every dispatch is amnesiac; the 2026-05-17 "same goal ran 25× in 35min" class returns. |
 | `recall.guard_attempts` / `recall.guard_window_minutes` | `3` / `60` | The guard's budget: 3 dispatches per hour per goal. Widen for legitimately retry-heavy workloads. |
+| `pack.export_denylist` | `[]` | Extra emails/handles `maro-pack export` redacts to `[REDACTED]` via `secret_scrub.scrub_identifiers()`, on top of auto-derived ones (`$EMAIL`/`$GIT_AUTHOR_EMAIL`/`$GIT_COMMITTER_EMAIL`, `git config user.email`) — PORTABLE_LEARNING_DESIGN.md §4: the deny-list is assembled from config + environment, never hardcoded. Empty by default; a fresh install redacts only what it can auto-derive. This is one of two scrub guarantees behind a pack (the other is secret-shaped `scrub()`) — neither claims mechanical anonymization; the mandatory human review gate (`REVIEW.md` / `maro-pack seal`) is the real backstop. |
 
 ## Governance & safety (decision-carrying — don't flip casually)
 

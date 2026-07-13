@@ -498,8 +498,48 @@ Truth anchor: GOAL_BRAIN.md Threads. History: docs/history/ROADMAP_ARCHIVE.md.
       runtime knob; `scrub_identifiers()`'s deny-list is caller-assembled,
       not a config key) — nothing to register in `docs/DEFAULTS.md` this
       chunk. Full suite green (168/168 files, incl. the new
-      `tests/test_secret_scrub.py`). Chunks 3–4 (`maro-pack export/seal`,
-      `maro-pack import/adopt`) are next.
+      `tests/test_secret_scrub.py`).
+      **Chunk 3 — `maro-pack export` + `seal` — SHIPPED 2026-07-13
+      (Sonnet).** New `src/pack.py` (+ `maro-pack` entry point in
+      `pyproject.toml`, both `[project.scripts]` and the flat-module
+      `py-modules` census — `tests/test_packaging.py` catches drift on
+      either). `export` gathers Class C (skill records, standing rules,
+      hypotheses, long-tier lessons — medium-tier/knowledge/playbook/runs
+      all opt-in per §2b) + Class A (`skills/*.md`, `personas/*.md`) from a
+      workspace, applies `secret_scrub.scrub()` then the chunk-2
+      `scrub_identifiers()` to every string, and writes an UNSEALED
+      `<name>.maropack.tar.gz` (`pack.json` v1 + `REVIEW.md` +
+      `artifacts/<workspace-relative-path>`) plus a loose
+      `<name>.REVIEW.md` companion — the actual thing a human reads, since
+      nobody should have to untar an archive to review it. Empty JSONL
+      artifacts (e.g. a young workspace with zero standing rules yet) are
+      skipped rather than shipped as noise. `seal` requires an explicit
+      confirmation (interactive prompt or `--yes`; refuses on unreadable
+      stdin, e.g. captured test runs) and stamps `review.human_reviewed`
+      + `reviewed_at` + `review_manifest_sha256` — the hash is taken from
+      the loose `REVIEW.md` companion if present (so pre-seal human edits
+      count), then the archive is rewritten with the stamped manifest;
+      re-hashing the archived `REVIEW.md` later against the stamped value
+      is how chunk 4's import will detect post-seal tampering. `inspect`
+      (read-only manifest dump) shipped alongside as a low-cost companion
+      to export/seal, not separately scheduled but cheap enough to include.
+      One new config default: `pack.export_denylist` (`[]`) — extra
+      emails/handles to redact, layered on top of auto-derived
+      `$EMAIL`/`$GIT_AUTHOR_EMAIL`/`$GIT_COMMITTER_EMAIL`/`git config
+      user.email` (§4: "assembled from config + environment, never
+      hardcoded"), registered in `docs/DEFAULTS.md`. Honesty framing from
+      §4 preserved verbatim in the module docstring, `REVIEW.md` header,
+      and `docs/MIGRATION.md`'s new "Sharing a curated learning pack"
+      section: mechanical scrub + mechanical identifier redaction + a
+      mandatory human review gate — not mechanical anonymization; a pack
+      is a letter, you proofread letters. 29 new tests
+      (`tests/test_pack.py` — manifest shape, default vs. opt-in artifact
+      inclusion, secret + identifier scrubbing, sha256 integrity, seal
+      confirm/refuse/tamper-detection plumbing, CLI export→seal→inspect
+      round trip). `docs/INDEX.md` + `docs/MIGRATION.md` updated. Full
+      suite green. Chunk 4 (`maro-pack import`/`adopt` — the receiving
+      half: format check, trust demotion per §3's arrival-trust table,
+      collision rules, quarantine + adopt) is next.
    8. Opportunistic riders: time-blindness first slice + perspective
       end-user seat (BACKLOG Vision vehicles, sized 2026-07-12).
    9. **Verify→learn arc V1–V5** (`docs/VERIFY_LEARN_ARC.md`) — post-1.0 by
