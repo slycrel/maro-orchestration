@@ -331,6 +331,36 @@ Truth anchor: GOAL_BRAIN.md Threads. History: docs/history/ROADMAP_ARCHIVE.md.
       live-data LLM-path flag, 3 preflight cwd=None, 1 test rename, 2
       confidence-cap rewrite/addition); full suite green
       (`bash scripts/test-safe.sh`) before commit.
+
+      **Adversarial review — third pass, scoped to the pass-2 fix commit.**
+      Jeremy asked whether the pass-2 fixes themselves were worth
+      reviewing; scoped to 1 Codex reviewer (Skeptic lens only — the fix
+      diff is small/Medium-tier and the riskiest content is one judgment
+      call, not structural or complexity concerns Architect/Minimalist
+      would target) against commit `0621417` alone. Found 2 real, verified
+      findings — both symmetric risks in the exact mechanisms pass 2 just
+      changed, judged as accepted residual risk rather than further code
+      changes (a fix would either require new verifier-LLM-judgment scope
+      or reintroduce the external-taxonomy anti-pattern this file's own
+      docstrings warn against — both out of scope for B1-B3):
+      - Signal 3's waiver check (and the pre-existing B2 waiver convention
+        it reuses) validates only that `behavioral_probe_waived` is
+        non-empty, never its content — a pretextual waiver bypasses the
+        MUST as easily as a genuine one. Pre-existing since Part B shipped,
+        not introduced by pass 2; Signal 3 inherited the same convention.
+      - The pass-2 B3(b) narrowing (`_fail_count == 0`) trusts ANY clean
+        `outcome=="fail"` as real evidence, but a fail only proves a check
+        executed cleanly, not that the check was relevant/well-written — a
+        brittle irrelevant check now uncaps the cap exactly like a
+        meaningful one would. Judged acceptable on an explicit
+        asymmetric-cost argument (over-eager demotion costs one bounded
+        `closure_restart`; a wrongly-suppressed real failure silently
+        poisons `goal_achieved` — the worse failure mode this file exists
+        to prevent). Both documented in-code at their exact decision points
+        and captured in BACKLOG "Verifier synthesis as a deliverable" for
+        the eventual full-BDD-loop pass that would actually resolve them
+        (needs an LLM judge or a relevance signal neither exists today).
+        No test/behavior changes this pass — comments only.
    6. **Container executor — C1 SHIPPED 2026-07-12 (Opus); C2 → C3 → C4 next**
       (`docs/CONTAINER_EXECUTOR_DESIGN.md`; C2 wants Opus; C4 = runtime-box
       burn-in, Jeremy adjudicates the flip). Clears r2 blocker #4. **C1**

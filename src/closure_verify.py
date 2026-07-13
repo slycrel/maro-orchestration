@@ -922,12 +922,31 @@ def verify_goal_completion(
         # check-level fails) still gets capped below the demotion threshold.
         # A negative verdict backed by even one check that cleanly failed
         # does NOT get capped — that fail is real, mechanical evidence and
-        # must be allowed to demote (adversarial-review finding, 2026-07-12:
+        # must be allowed to demote (adversarial-review pass 2, 2026-07-12:
         # the original unconditional form could suppress demotion for a
         # verdict where the ONLY decisive evidence was a real failure,
         # diluted by unrelated inconclusive noise — exactly the
         # "verified-done beats reported-done" case this file exists to
         # protect, not the environment-noise case B3(b) targets).
+        #
+        # Accepted residual risk (adversarial-review pass 3, 2026-07-12,
+        # scoped skeptic review of this exact narrowing): `outcome == "fail"`
+        # only proves a check executed cleanly and returned a boolean
+        # negative — it does NOT prove the check itself was a *relevant*,
+        # well-written test of the goal. A single brittle/irrelevant check
+        # (e.g. a bad grep pattern the plan LLM wrote) diluted by unrelated
+        # inconclusive noise now exempts the cap and can demote at full
+        # confidence, same as a genuinely meaningful fail would. This is the
+        # mirror image of the risk pass 2 fixed, and it's not mechanically
+        # resolvable with only pass/fail/inconclusive counts — telling a
+        # relevant fail from an irrelevant one needs either an LLM judge or
+        # a check-to-deliverable relevance signal, neither of which exists
+        # today (both are the kind of scope B1-B3's own design doc
+        # explicitly deferred alongside the full BDD red-green loop).
+        # Deliberately left as-is: an over-eager demotion here costs one
+        # bounded closure_restart cycle (MAX_RESTART_DEPTH caps it); a
+        # wrongly-suppressed real failure costs a silently-poisoned
+        # goal_achieved record — the asymmetry favors trusting fails.
         if (
             not complete
             and checks_run
@@ -1181,6 +1200,20 @@ def _detect_behavioral_gap(
     # Signal 3: a deliverable is declared runtime-shaped in its own right —
     # this is authoritative (B1) and must not depend on failure_mode prose
     # happening to mention it too. The waiver is the only legitimate escape.
+    #
+    # Accepted residual risk (adversarial-review pass 3, 2026-07-12): only
+    # presence is checked, not content — any non-empty string suppresses
+    # this signal, so a pretextual waiver ("static compile proves it")
+    # bypasses the MUST exactly as well as a genuine one
+    # ("no runtime harness available in this sandbox"). Judging whether a
+    # waiver's stated reason is actually a legitimate environmental
+    # impossibility needs either an LLM judge or a keyword taxonomy of
+    # "acceptable excuses" — the former is new verifier-LLM scope, the
+    # latter is the external-taxonomy anti-pattern this whole function
+    # exists to avoid (see docstring above). Both are out of scope for B1-B3
+    # ("honest-measurement prerequisites"); the design doc's own DECISION
+    # defers exactly this class of judgment alongside the full BDD
+    # red-green loop. Left as-is, not silently patched with a fragile check.
     if not behavioral_probe_waived and _any_declared_runtime_deliverable(resolved_intent):
         return "a declared [shape: runtime] deliverable has no behavioral probe and no logged waiver"
 

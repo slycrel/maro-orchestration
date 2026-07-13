@@ -1067,6 +1067,28 @@ hardening incl. the cwd=None residual; chunks B1–B3, see MILESTONES -5). The
 full BDD red-green loop below stays deferred until the honest-measurement
 prerequisites ship (now satisfied) — this entry remains the long-arc record.
 
+Two residual gaps surfaced by adversarial-review pass 3 (2026-07-12, scoped
+skeptic pass on the pass-2 fix commit `0621417`) — both judged real,
+in-scope for the full BDD loop below, not for B1-B3, and documented in-code
+rather than fixed with a fragile heuristic:
+- [ ] **Waiver content isn't judged, only presence.** `behavioral_probe_waived`
+  suppresses the B2 MUST (`closure_verify._detect_behavioral_gap` Signal 3)
+  on ANY non-empty string — a pretextual waiver ("static compile proves it")
+  bypasses it exactly as well as a genuine one. Needs an LLM judge (new
+  verifier-LLM scope) or would otherwise require the external-taxonomy
+  approach this function's own docstring says to avoid. See
+  `closure_verify.py` Signal 3 comment.
+- [ ] **A "fail" outcome isn't checked for relevance, only cleanliness.**
+  B3(b)'s confidence cap (narrowed in pass 2 to exempt any clean
+  `outcome=="fail"` from capping) can't distinguish a real, meaningful
+  failure from a brittle/irrelevant check the plan LLM wrote badly — both
+  now uncap the same way. Mechanically irreducible with only
+  pass/fail/inconclusive counts; needs a check-to-deliverable relevance
+  signal that doesn't exist today. Accepted per an explicit asymmetric-cost
+  argument (over-eager demotion costs one bounded `closure_restart`; a
+  wrongly-suppressed real failure silently poisons `goal_achieved`) — see
+  `closure_verify.py` B3(b) comment.
+
 - [ ] **Verifier synthesis phase.** Dream-level: orchestrator builds its own verifier when none exists, rather than degrading to LLM judgment or failing as "hard." Framing: BDD + TDD. Scope declares Given/When/Then (what must be true for "done"). Execution includes a mandatory red-green pair: synthesize an executable probe, break the code on purpose to confirm it catches the failure, fix the code, probe goes green. The probe is a first-class checked-in artifact.
 
   Motivation: slycrel-go "done" run (loop `bd9b581c`, 2026-04-16, 1.55M tokens, status=done) passed `go build` while nothing exercised the binary. Three real bugs (`atomicWrite` race, silent `os.Executable` error, ignored write errors) survived untouched — caught only by the follow-up `identify-and-fix-the-3` review run. Scope alone would have named the gap; a synthesized probe would have closed it.
