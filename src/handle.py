@@ -45,131 +45,20 @@ from typing import Any, Dict, List, Optional
 # ---------------------------------------------------------------------------
 # Magic prefix registry
 # ---------------------------------------------------------------------------
-# Each prefix mutates execution without changing the goal text.
-# The registry defines all prefixes centrally — adding a new prefix requires
-# one entry here, not scattered startswith() chains scattered through handle().
-
-@dataclass
-class _PrefixRule:
-    prefix: str           # exact lowercase prefix string (including trailing : or space)
-    flag: str             # attribute name on _PrefixResult to set True
-    model_tier: str = ""  # if non-empty, override model to this tier (cheap/mid/power)
-    max_steps: int = 0    # if > 0, override max_steps to this value
-    persona: str = ""     # if non-empty, force this persona name (overrides persona_for_goal)
-
-
-@dataclass
-class _PrefixResult:
-    """Result of applying the prefix registry to a message."""
-    message: str          # cleaned message with all prefixes stripped
-    model_tier: str = ""  # model tier override (empty = no override)
-    max_steps: int = 0    # max_steps override (0 = no override)
-    thin_mode: bool = False
-    btw_mode: bool = False
-    ultraplan_mode: bool = False
-    direct_mode: bool = False
-    ralph_mode: bool = False
-    pipeline_mode: bool = False
-    strict_mode: bool = False
-    team_mode: bool = False
-    forced_persona: str = ""   # if non-empty, override persona_for_goal selection
-    persona_bundled_tier: str = ""  # model_tier that arrived bundled with forced_persona
-    # (e.g. garrytan:'s power tier) — tracked separately from model_tier so an
-    # explicit persona= override that replaces the persona can also drop the
-    # tier bump it brought along, instead of silently keeping it.
-
-
-_PREFIX_REGISTRY: List[_PrefixRule] = [
-    # effort: overrides model tier; exclusive per level (first match wins)
-    _PrefixRule("effort:low",   flag="",           model_tier="cheap"),
-    _PrefixRule("effort:mid",   flag="",           model_tier="mid"),
-    _PrefixRule("effort:high",  flag="",           model_tier="power"),
-    # execution mode modifiers
-    _PrefixRule("mode:thin",    flag="thin_mode"),
-    _PrefixRule("btw:",         flag="btw_mode"),
-    _PrefixRule("ultraplan:",   flag="ultraplan_mode", model_tier="power", max_steps=12),
-    _PrefixRule("direct:",      flag="direct_mode"),
-    # quality / behavior modifiers (non-exclusive — can stack)
-    _PrefixRule("ralph:",       flag="ralph_mode"),
-    _PrefixRule("verify:",      flag="ralph_mode"),   # alias for ralph:
-    _PrefixRule("pipeline:",    flag="pipeline_mode"),
-    _PrefixRule("strict:",      flag="strict_mode"),
-    _PrefixRule("team:",        flag="team_mode",  model_tier="mid"),
-    # forced persona shortcuts
-    _PrefixRule("garrytan:",    flag="",           model_tier="power", persona="garrytan"),
-]
-
-# Generalized "run this AS <persona>" pattern (BACKLOG hist-r2-02). Unlike the
-# fixed-string rules above, the persona name is a variable captured out of the
-# message, so it can't live in _PREFIX_REGISTRY as an exact-string entry — it
-# gets its own regex. Only identity is forced this way (no model_tier bump);
-# garrytan: stays the dedicated shortcut for "identity + power tier" bundled
-# together, since that tier bump is a persona-specific tuning choice, not
-# something every persona should carry. See _resolve_forced_persona() for the
-# existence check (kept out of this function so it stays a pure string
-# transform with no registry import).
-_PERSONA_PREFIX_RE = re.compile(r"^persona:([a-z0-9][a-z0-9_+-]*):\s*", re.IGNORECASE)
-
-
-def _apply_prefixes(message: str) -> _PrefixResult:
-    """Strip all recognized magic prefixes from `message` and return a _PrefixResult.
-
-    Prefixes are matched case-insensitively and stripped in registry order.
-    Multiple prefixes can stack (e.g. "strict: pipeline: do the thing").
-    The effort: group is exclusive (first level wins); all others accumulate.
-
-    This replaces nine separate startswith() blocks scattered through handle().
-    """
-    result = _PrefixResult(message=message)
-    changed = True
-    while changed:
-        changed = False
-        lower = result.message.lower()
-        for rule in _PREFIX_REGISTRY:
-            if lower.startswith(rule.prefix):
-                result.message = result.message[len(rule.prefix):].lstrip()
-                if rule.flag:
-                    setattr(result, rule.flag, True)
-                if rule.model_tier:
-                    if result.model_tier and result.model_tier != rule.model_tier:
-                        import logging as _logging
-                        _logging.getLogger("maro.handle").warning(
-                            "conflicting model tiers: %r already set, ignoring %r (from prefix %r)",
-                            result.model_tier, rule.model_tier, rule.prefix,
-                        )
-                    elif not result.model_tier:
-                        result.model_tier = rule.model_tier
-                if rule.max_steps:
-                    result.max_steps = rule.max_steps
-                if rule.persona:
-                    if result.forced_persona and result.forced_persona != rule.persona:
-                        import logging as _logging
-                        _logging.getLogger("maro.handle").warning(
-                            "conflicting forced personas: %r already set, ignoring %r (from prefix %r)",
-                            result.forced_persona, rule.persona, rule.prefix,
-                        )
-                    elif not result.forced_persona:
-                        result.forced_persona = rule.persona
-                        if rule.model_tier:
-                            result.persona_bundled_tier = rule.model_tier
-                changed = True
-                lower = result.message.lower()  # re-check after strip
-                break  # restart registry scan after each match
-        if not changed:
-            _pmatch = _PERSONA_PREFIX_RE.match(result.message)
-            if _pmatch:
-                _requested = _pmatch.group(1).lower()
-                if result.forced_persona and result.forced_persona != _requested:
-                    import logging as _logging
-                    _logging.getLogger("maro.handle").warning(
-                        "conflicting forced personas: %r already set, ignoring %r (from prefix 'persona:%s:')",
-                        result.forced_persona, _requested, _requested,
-                    )
-                elif not result.forced_persona:
-                    result.forced_persona = _requested
-                result.message = result.message[_pmatch.end():].lstrip()
-                changed = True
-    return result
+# Each prefix mutates execution without changing the goal text. The registry
+# (one mechanism for both literal-string prefixes and the persona:<name>:
+# capture-group prefix — adversarial-review R1 batch-1 finding #1) lives in
+# prefixes.py, a neutral module recall.py also imports directly instead of
+# reaching into handle's private internals (finding #2). Re-exported here
+# under their historical private names so every existing call site and test
+# in this file (and the handful of tests that import them from `handle`)
+# keeps working unchanged.
+from prefixes import (
+    PrefixRule as _PrefixRule,
+    PrefixResult as _PrefixResult,
+    PREFIX_REGISTRY as _PREFIX_REGISTRY,
+    apply_prefixes as _apply_prefixes,
+)
 
 
 def _resolve_forced_persona(requested: str, registry: "PersonaRegistry") -> "tuple[str, bool]":

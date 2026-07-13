@@ -553,6 +553,65 @@ class TestFlagSkillCandidate:
         assert "skill_candidate" not in card
 
 
+class TestSkillCandidateConsumer:
+    """Adversarial-review R1 batch-1 finding #4: skill_candidate had no
+    consumer outside tests. WIRED (not removed) — find_unconsumed_skill_
+    candidates / mark_skill_candidate_consumed are the run_curation-side
+    half of the catch-up sweep; evolver.promote_skill_candidates (tested in
+    test_evolver.py) is the actual consumer that calls them."""
+
+    def test_flagged_run_is_unconsumed(self, workspace):
+        from run_curation import find_unconsumed_skill_candidates
+        rd = _finish("h0000u1", "build tool", "done", achieved=True)
+        (rd / "build" / "tool.py").write_text(_REUSABLE_SCRIPT)
+        curate_run("h0000u1")
+        found = find_unconsumed_skill_candidates()
+        assert any(c["handle_id"] == "h0000u1" for c in found)
+
+    def test_unflagged_run_not_returned(self, workspace):
+        from run_curation import find_unconsumed_skill_candidates
+        _finish("h0000u2", "trivial", "done", achieved=True)
+        curate_run("h0000u2")
+        found = find_unconsumed_skill_candidates()
+        assert not any(c["handle_id"] == "h0000u2" for c in found)
+
+    def test_mark_consumed_removes_from_unconsumed(self, workspace):
+        from run_curation import find_unconsumed_skill_candidates, mark_skill_candidate_consumed
+        rd = _finish("h0000u3", "build tool", "done", achieved=True)
+        (rd / "build" / "tool.py").write_text(_REUSABLE_SCRIPT)
+        curate_run("h0000u3")
+        assert any(c["handle_id"] == "h0000u3" for c in find_unconsumed_skill_candidates())
+        assert mark_skill_candidate_consumed("h0000u3") is True
+        assert not any(c["handle_id"] == "h0000u3" for c in find_unconsumed_skill_candidates())
+        # The stamp is durable — a fresh read of the card shows it too.
+        card = json.loads((rd / "run_card.json").read_text())
+        assert card["skill_candidate"]["consumed_at"]
+
+    def test_mark_consumed_unknown_handle_returns_false(self, workspace):
+        from run_curation import mark_skill_candidate_consumed
+        assert mark_skill_candidate_consumed("nonexistent") is False
+
+    def test_mark_consumed_no_candidate_returns_false(self, workspace):
+        from run_curation import mark_skill_candidate_consumed
+        _finish("h0000u4", "trivial", "done", achieved=True)
+        curate_run("h0000u4")
+        assert mark_skill_candidate_consumed("h0000u4") is False
+
+    def test_unconsumed_newest_first(self, workspace):
+        from run_curation import find_unconsumed_skill_candidates
+        rd1 = _finish("h0000u5", "build tool a", "done", achieved=True)
+        (rd1 / "build" / "tool.py").write_text(_REUSABLE_SCRIPT)
+        curate_run("h0000u5")
+        rd2 = _finish("h0000u6", "build tool b", "done", achieved=True)
+        (rd2 / "build" / "tool.py").write_text(_REUSABLE_SCRIPT)
+        curate_run("h0000u6")
+        found = find_unconsumed_skill_candidates()
+        ids = [c["handle_id"] for c in found if c["handle_id"] in ("h0000u5", "h0000u6")]
+        # started_at ties possible in a fast test — just confirm both present,
+        # ordering is exercised by started_at sort shared with list_runs.
+        assert set(ids) == {"h0000u5", "h0000u6"}
+
+
 class TestRescuePartial:
     """Miner #4: for a partial/incomplete run, record what completed + where it
     stuck so a follow-up (or human) resumes instead of restarting cold."""
@@ -727,3 +786,65 @@ class TestCuratorsOrdering:
         assert names.index(scrape_scripts.__name__) < names.index(flag_skill_candidate.__name__)
         # rescue_partial sets partial_rescue, read by index_decision_prior for resume_from.
         assert names.index(rescue_partial.__name__) < names.index(index_decision_prior.__name__)
+
+
+class TestCuratorTopoSort:
+    """The real fix behind TestCuratorsOrdering above (adversarial-review R1
+    batch-1 finding #3): CURATORS is now DERIVED from each curator's declared
+    provides/requires via _topo_sort_curators, not a hand-maintained list a
+    comment merely describes. These tests exercise the derivation directly —
+    a broken graph must fail loudly (raise), never silently produce a
+    plausible-looking-but-wrong order."""
+
+    def test_real_registry_has_no_cycle_and_matches_documented_order(self):
+        from run_curation import _CURATOR_SPECS, _topo_sort_curators, CURATORS
+        # Re-running the real derivation is idempotent and matches the
+        # module-level CURATORS computed at import time.
+        assert _topo_sort_curators(_CURATOR_SPECS) == CURATORS
+
+    def test_missing_provider_raises(self):
+        from run_curation import CuratorSpec, _topo_sort_curators
+
+        def a(run_dir, meta, card):
+            pass
+
+        def b(run_dir, meta, card):
+            pass
+
+        specs = [
+            CuratorSpec(a, provides=("x",)),
+            CuratorSpec(b, provides=("y",), requires=("nobody_provides_this",)),
+        ]
+        with pytest.raises(RuntimeError, match="nobody_provides_this"):
+            _topo_sort_curators(specs)
+
+    def test_cycle_raises(self):
+        from run_curation import CuratorSpec, _topo_sort_curators
+
+        def a(run_dir, meta, card):
+            pass
+
+        def b(run_dir, meta, card):
+            pass
+
+        specs = [
+            CuratorSpec(a, provides=("x",), requires=("y",)),
+            CuratorSpec(b, provides=("y",), requires=("x",)),
+        ]
+        with pytest.raises(RuntimeError, match="cycle"):
+            _topo_sort_curators(specs)
+
+    def test_independent_curators_keep_declaration_order(self):
+        # No requires at all between two specs → tie-break is declaration
+        # order, so the sort is a strict refinement of the input list, not
+        # an arbitrary reshuffle.
+        from run_curation import CuratorSpec, _topo_sort_curators
+
+        def first(run_dir, meta, card):
+            pass
+
+        def second(run_dir, meta, card):
+            pass
+
+        specs = [CuratorSpec(first, provides=("a",)), CuratorSpec(second, provides=("b",))]
+        assert _topo_sort_curators(specs) == [first, second]

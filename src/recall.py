@@ -316,18 +316,26 @@ def _strip_for_match(text: str) -> str:
     retry case it exists to help (adversarial-review finding, 2026-07-13).
     Stripping both sides here, at the matching boundary, fixes it regardless
     of whether a given caller's `goal` argument happens to already be
-    stripped. Falls back to the raw text if handle's prefix parser is
-    unavailable — matching only degrades, it never breaks.
+    stripped. Uses the neutral prefixes.py module (shared with handle.py, not
+    a reach into its private internals — adversarial-review R1 batch-1
+    finding #2) and falls back to the raw text on any error — matching only
+    degrades, it never breaks.
     """
     try:
-        from handle import _apply_prefixes
-        return _apply_prefixes(text).message
+        from prefixes import strip_prefixes
+        return strip_prefixes(text)
     except Exception:
         return text
 
 
-def _find_prior_attempts(goal: str, *, window_hours: float) -> List[PriorAttempt]:
-    """Scan recent run dirs (mtime-ordered, capped) for goal matches."""
+def find_prior_attempts(goal: str, *, window_hours: float) -> List[PriorAttempt]:
+    """Scan recent run dirs (mtime-ordered, capped) for goal matches.
+
+    Public (renamed from `_find_prior_attempts`, adversarial-review R1
+    batch-1 finding #2): run_curation.prior_decision_context() calls this as
+    a legitimate cross-module read, not a reach into recall's private
+    internals — the old private name made that reach look worse than it is.
+    """
     from runs import runs_root
     from memory_ledger import _text_similarity
 
@@ -406,7 +414,7 @@ def recall(
     sources["thread_source"] = thread.source if thread else ""
 
     try:
-        prior = _find_prior_attempts(goal, window_hours=window_hours)
+        prior = find_prior_attempts(goal, window_hours=window_hours)
     except Exception as exc:
         log.debug("recall: prior-attempt scan failed: %s", exc)
         prior = []
@@ -421,8 +429,11 @@ def recall(
     # similarity pass. The current run self-excludes (its card is written at
     # goal-END, so it has none at read time); exclude_handle_id is defensive.
     # Cheap: at most k local run_card.json reads, only when priors exist.
+    # format_prior_decisions lives in the neutral decision_prior.py, not
+    # run_curation.py (adversarial-review R1 batch-1 finding #2 — this used
+    # to reach into the write-side curation module for read-side formatting).
     try:
-        from run_curation import format_prior_decisions
+        from decision_prior import format_prior_decisions
         try:
             from runs import current_handle_id
             _exclude = current_handle_id() or ""
