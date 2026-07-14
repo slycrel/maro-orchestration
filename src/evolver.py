@@ -102,10 +102,19 @@ Respond ONLY with a JSON object in this format:
       "target": "all|research|build|ops|agenda|now",
       "suggestion": "specific improvement text",
       "failure_pattern": "what pattern motivated this",
-      "confidence": 0.0-1.0
+      "confidence": 0.0-1.0,
+      "expected_signal": [
+        {"metric": "failure_class_rate|stuck_rate|cost_per_run|<other observable>",
+         "class": "the failure class this should reduce, if applicable",
+         "direction": "down|up"}
+      ]
     }
   ]
 }
+
+expected_signal declares which observable this specific change should move and
+which direction, so it can be checked later against what actually happened.
+Omit it (or leave the list empty) if you can't name a concrete observable.
 
 Be specific and actionable. Suggest at most 5 improvements total. If there are no clear patterns
 (e.g., too few outcomes), return {"failure_patterns": [], "suggestions": []}.
@@ -561,6 +570,7 @@ def run_evolver(
                 failure_pattern=raw.get("failure_pattern", ""),
                 confidence=safe_float(raw.get("confidence"), default=0.5, min_val=0.0, max_val=1.0),
                 outcomes_analyzed=len(outcomes),
+                expected_signal=safe_list(raw.get("expected_signal", []), element_type=dict),
             ))
         except Exception:
             pass

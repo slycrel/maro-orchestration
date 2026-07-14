@@ -56,6 +56,27 @@ def test_suggestion_roundtrip():
     assert restored.suggestion_id == s.suggestion_id
     assert restored.confidence == 0.8
     assert restored.applied_manually is False
+    assert restored.expected_signal == []
+
+
+def test_suggestion_expected_signal_roundtrip():
+    """VERIFY_LEARN_ARC V1 row shape: expected_signal survives to_dict/from_dict."""
+    s = Suggestion(
+        suggestion_id="abc-01",
+        category="observation",
+        target="all",
+        suggestion="text",
+        failure_pattern="pattern",
+        confidence=0.7,
+        outcomes_analyzed=5,
+        expected_signal=[{"metric": "failure_class_rate", "class": "retry_churn", "direction": "down"}],
+    )
+    d = s.to_dict()
+    assert d["expected_signal"] == [
+        {"metric": "failure_class_rate", "class": "retry_churn", "direction": "down"}
+    ]
+    restored = Suggestion.from_dict(d)
+    assert restored.expected_signal == s.expected_signal
 
 
 def test_evolver_report_summary_skipped():
@@ -296,6 +317,47 @@ def test_run_evolver_generates_suggestions():
     assert len(report.suggestions) == 1
     assert report.suggestions[0].category == "prompt_tweak"
     mock_save.assert_called_once()
+
+
+def test_run_evolver_passes_through_llm_expected_signal():
+    """VERIFY_LEARN_ARC V1: an LLM-authored suggestion that declares
+    expected_signal must reach the stored Suggestion unchanged."""
+    outcomes = [_make_outcome()] * 10
+    raw_suggestions = [
+        {"category": "prompt_tweak", "target": "all",
+         "suggestion": "Be concise", "failure_pattern": "verbose output",
+         "confidence": 0.8,
+         "expected_signal": [{"metric": "cost_per_run", "direction": "down"}]}
+    ]
+    with patch("evolver.load_outcomes", return_value=outcomes), \
+         patch("evolver._llm_analyze", return_value=([], raw_suggestions)), \
+         patch("evolver.scan_outcomes_for_signals", return_value=[]), \
+         patch("evolver.scan_calibration_log", return_value=[]), \
+         patch("evolver.scan_step_costs", return_value=[]), \
+         patch("evolver._save_suggestions"):
+        report = run_evolver(dry_run=False, verbose=False, notify=False)
+
+    assert report.suggestions[0].expected_signal == [
+        {"metric": "cost_per_run", "direction": "down"}
+    ]
+
+
+def test_run_evolver_defaults_expected_signal_when_llm_omits_it():
+    outcomes = [_make_outcome()] * 10
+    raw_suggestions = [
+        {"category": "prompt_tweak", "target": "all",
+         "suggestion": "Be concise", "failure_pattern": "verbose output",
+         "confidence": 0.8}
+    ]
+    with patch("evolver.load_outcomes", return_value=outcomes), \
+         patch("evolver._llm_analyze", return_value=([], raw_suggestions)), \
+         patch("evolver.scan_outcomes_for_signals", return_value=[]), \
+         patch("evolver.scan_calibration_log", return_value=[]), \
+         patch("evolver.scan_step_costs", return_value=[]), \
+         patch("evolver._save_suggestions"):
+        report = run_evolver(dry_run=False, verbose=False, notify=False)
+
+    assert report.suggestions[0].expected_signal == []
 
 
 def test_run_evolver_saves_suggestions(tmp_path):

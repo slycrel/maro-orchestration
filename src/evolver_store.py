@@ -53,6 +53,13 @@ class Suggestion:
     applied: bool = False
     applied_at: str = ""  # ISO timestamp stamped by apply_suggestion()
     applied_manually: bool = False  # V2 authority provenance; additive only
+    # VERIFY_LEARN_ARC V1: which observable this change expects to move, and
+    # which direction — e.g. [{"metric": "failure_class_rate", "class": "retry_churn",
+    # "direction": "down"}]. Declared at generation time (statically by graduation
+    # templates, or by the LLM proposer); absent/empty means no expectation was
+    # declared. Read-time interpretation (a class-neutral fallback pair, cadence
+    # verdict rendering) is V2's job, not this field's — this is capture only.
+    expected_signal: List[dict] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
@@ -67,6 +74,7 @@ class Suggestion:
             "applied": self.applied,
             "applied_at": self.applied_at,
             "applied_manually": self.applied_manually,
+            "expected_signal": self.expected_signal,
         }
 
     @classmethod

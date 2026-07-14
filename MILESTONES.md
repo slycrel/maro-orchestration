@@ -2,7 +2,21 @@
 
 What to do next, in what order. Updated each session. Deferred ideas live in BACKLOG.md; completed phase history in docs/history/ROADMAP_ARCHIVE.md (ROADMAP.md is a stub). This file is the executable queue.
 
-Last updated: 2026-07-14 (continuation checkpoint — stale sandbox-stub backlog
+Last updated: 2026-07-14 (/goal catch-up session — EXT-AUDIT-2 residual
+SHIPPED: `_stamp_verdict_tracked` quarantines deferred learning per-loop_id
+when a closure/provenance/post-escalation verdict stamp write-fails or raises,
+instead of silently falling back to unjudged; closure-restart boundary was
+already fail-closed and untouched; 10 new tests, archived to BACKLOG_DONE.md.
+Same session, VERIFY_LEARN_ARC **V1 — expectation stamping SHIPPED**: `Suggestion.
+expected_signal` (additive, empty-default), all 9 graduation templates declare
+`{"metric": "failure_class_rate", "class": <own key>, "direction": "down"}`
+derived from their own dict key, `_EVOLVER_SYSTEM` teaches the LLM proposer the
+same field (optional). Deliberately did not touch the ~7 other Suggestion-
+emitting scanners — the "class-neutral fallback pair" for rows without one is
+V2's read-time trust-policy job, not V1's write-time one. 8 new row-shape unit
+tests; full suite green throughout. **V2 (cadence verdicts + auto-revert) is
+next** — see `docs/VERIFY_LEARN_ARC.md` §3/§7, judgment-heavy, sized for Opus.
+Previous checkpoint — stale sandbox-stub backlog
 decision RECONCILED: already resolved by C4 retirement (`69265f6`); open item
 archived and living/dormant design references corrected. The real replacement
 is the separately tracked container-executor burn-in, not skill-stub wiring.

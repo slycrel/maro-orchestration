@@ -2624,3 +2624,29 @@ Dormant (deliberately parked, not dropped):
   merged-`/usr` `/bin` symlink) and added missing `status: record`
   frontmatter to a Codex history doc. EXT-AUDIT-2 fully shipped; archived to
   BACKLOG_DONE.md.
+
+- **2026-07-14 (same session: VERIFY_LEARN_ARC V1 — expectation stamping
+  SHIPPED, the next arc after 1.0 per thread-arch #6)** — with the backlog
+  reconciled and the token reset approaching, picked up the first chunk of
+  `docs/VERIFY_LEARN_ARC.md` (dormant-design, hard dependency B3 satisfied
+  2026-07-12, no Jeremy-gated decision blocks V1 specifically — the two
+  provisional DECISION markers in the doc gate V2/V5, not V1).
+  `evolver_store.Suggestion` gains `expected_signal: List[dict]` (additive,
+  empty-default — every existing row/producer stays valid unchanged). All 9
+  `_GRADUATION_TEMPLATES` (graduation.py) now declare
+  `[{"metric": "failure_class_rate", "class": <own dict key>, "direction":
+  "down"}]`, derived once from the templates' own keys in a single loop so
+  the class name can never drift from the template it describes.
+  `_EVOLVER_SYSTEM` teaches the LLM proposer the same optional field;
+  `run_evolver()`'s raw-suggestion parse threads it through via
+  `safe_list(..., element_type=dict)`, the same sanitization every other
+  LLM-authored field already gets. Deliberately scoped OUT the ~7 other
+  `Suggestion`-emitting call sites (calibration/cost/canon/suggestion-
+  calibration/drift/signal/harness-friction/persona-gap scanners) — the
+  design doc's own "rows without one default to the class-neutral pair" is
+  V2's read-time trust-policy job, not something V1 should bake into every
+  producer now, before V2 has decided what that policy actually is. 8 new
+  row-shape unit tests (`tests/test_evolver.py`, `tests/test_graduation.py`);
+  full suite green (180/180 files) throughout. **V2 — cadence verdicts +
+  auto-revert — is next**, judgment-heavy (symmetric-authority revert
+  policy already provisionally decided in the doc §3), sized for Opus.

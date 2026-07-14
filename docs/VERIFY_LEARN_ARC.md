@@ -169,9 +169,27 @@ A/B flag in one chunk (`navigator.lesson_inject`, shadow-comparable like
 - **V0 (pre-arc) — SHIPPED 2026-07-12** (`docs/history/2026-07-12-routing-and-probe-synthesis-design.md`
   B3): probe-env hardening — the verdict stream is now honest before
   anything downstream consumes it.
-- **V1 — expectation stamping (Sonnet):** schema field + template
-  expectations + generation-prompt field + DEFAULTS rows. Tests: row-shape
-  units.
+- **V1 — expectation stamping — SHIPPED 2026-07-14 (Sonnet).** `Suggestion`
+  gains `expected_signal: List[dict]` (evolver_store.py), additive/empty-
+  default so every pre-existing row and producer stays valid unchanged. All 9
+  `_GRADUATION_TEMPLATES` declare `[{"metric": "failure_class_rate", "class":
+  <own key>, "direction": "down"}]`, derived once from the template dict's own
+  keys (graduation.py) so the class name can never drift from the template it
+  describes — threaded through `run_graduation()`'s entry dict. `_EVOLVER_SYSTEM`
+  teaches the LLM proposer the same field (optional; omit if no concrete
+  observable), and `run_evolver()`'s raw-suggestion parse passes it through via
+  `safe_list(..., element_type=dict)`, same sanitization as every other LLM-
+  authored field. No new config default — this is a data-schema addition, not
+  a runtime knob, so nothing to register in DEFAULTS.md; "DEFAULTS rows" in
+  this chunk's original sizing note turned out to mean the per-class default
+  values living in the templates themselves. Deliberately did NOT touch the
+  ~7 other `Suggestion`-emitting call sites (calibration/cost/canon/
+  suggestion-calibration/drift/signal/harness-friction/persona-gap scanners)
+  — the design's own "rows without one default to the class-neutral pair" is
+  a V2 (trust-policy/consumer) read-time concern, not a V1 write-time one;
+  stamping it onto every producer now would be presumptuous about a policy V2
+  hasn't decided yet. 8 new row-shape unit tests (`tests/test_evolver.py`,
+  `tests/test_graduation.py`); full suite green.
 - **V2 — cadence verdicts + auto-revert (Opus):** scan_evolver_impact
   promotion, verdict windows, symmetric-authority revert, notify + events.
   The judgment-heavy chunk. Tests: synthetic before/after windows, revert

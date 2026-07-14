@@ -41,7 +41,7 @@ BACKLOG, VISION, CLAUDE, README…) are living by definition and carry no frontm
 | How do I move a workspace to a new machine? | `MIGRATION.md` (living runbook; §7 chunk 1 SHIPPED 2026-07-12 — `maro-doctor` now checks config paths/stale state/index sync post-restore; chunks 3+4 SHIPPED 2026-07-13 — `maro-pack export`/`seal`/`import`/`adopt`, full lifecycle closed) |
 | Containerized executor (arch-r2-01, 1.0 blocker #4)? | `CONTAINER_EXECUTOR_DESIGN.md` (dormant-design; C1–C3 shipped, §7 sandbox retired 2026-07-13; C4 burn-in + flip is Jeremy's on box evidence) |
 | How do I burn in the container executor / run the security acceptance probe? | `CONTAINER_BURN_IN.md` (living runbook; box-side procedure + `scripts/container-acceptance-probe.sh`) |
-| Verify→learn — the next arc after 1.0 (thread-arch #6)? | `VERIFY_LEARN_ARC.md` (dormant-design; hard dependency probe-env hardening B3 SATISFIED 2026-07-12) |
+| Verify→learn — the next arc after 1.0 (thread-arch #6)? | `VERIFY_LEARN_ARC.md` (dormant-design; hard dependency probe-env hardening B3 SATISFIED 2026-07-12; V1 expectation-stamping SHIPPED 2026-07-14, V2-V5 open) |
 | Live-data routing signal + probe-synthesis first slice? | `docs/history/2026-07-12-routing-and-probe-synthesis-design.md` (record — BOTH PARTS SHIPPED 2026-07-12; Manti canonical case is the acceptance) |
 | Handing work to less-capable implementing models? | `IMPLEMENTATION_HANDOFF.md` (written at the 2026-07-12 Fable transition) |
 | Scope/constraint orchestration (Phase 65, PAUSED)? | `CONSTRAINT_ORCHESTRATION_DESIGN.md` + `_REVIEW` + `_AUDIT` |

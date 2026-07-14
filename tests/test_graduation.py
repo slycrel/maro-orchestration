@@ -251,6 +251,28 @@ class TestRunGraduation:
         assert "verify_pattern" in data
         assert len(data["verify_pattern"]) > 0
 
+    def test_suggestion_includes_expected_signal(self, tmp_path, monkeypatch):
+        """VERIFY_LEARN_ARC V1: every graduation template declares a
+        behavioral expectation naming its own failure class, so V2's future
+        cadence verdict has something concrete to check."""
+        sug_path = self._setup(tmp_path, monkeypatch, "retry_churn")
+        import graduation
+        graduation.run_graduation(min_count=3)
+        data = json.loads(sug_path.read_text().strip())
+        assert "expected_signal" in data
+        assert data["expected_signal"] == [
+            {"metric": "failure_class_rate", "class": "retry_churn", "direction": "down"}
+        ]
+
+    def test_every_template_declares_expected_signal(self):
+        """Row-shape unit: no template should be exempt from the V1 contract."""
+        import graduation
+        for fc, template in graduation._GRADUATION_TEMPLATES.items():
+            sig = template.get("expected_signal")
+            assert sig, f"{fc} template has no expected_signal"
+            assert sig[0]["class"] == fc
+            assert sig[0]["direction"] in ("up", "down")
+
 
 # ---------------------------------------------------------------------------
 # verify_graduation_rules

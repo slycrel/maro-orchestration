@@ -149,6 +149,18 @@ _GRADUATION_TEMPLATES: Dict[str, dict] = {
     },
 }
 
+# VERIFY_LEARN_ARC V1: every template's behavioral expectation is "this
+# failure class should occur less often once the fix lands" — derived from
+# the template's own key so the class name can never drift from
+# expected_signal's declaration. Set via setdefault so a future template can
+# still declare something more specific (e.g. a second tracked metric)
+# without this loop overwriting it.
+for _fc, _tmpl in _GRADUATION_TEMPLATES.items():
+    _tmpl.setdefault("expected_signal", [
+        {"metric": "failure_class_rate", "class": _fc, "direction": "down"},
+    ])
+del _fc, _tmpl
+
 
 # ---------------------------------------------------------------------------
 # Data model
@@ -329,6 +341,8 @@ def run_graduation(
         }
         if template.get("verify_pattern"):
             entry["verify_pattern"] = template["verify_pattern"]
+        if template.get("expected_signal"):
+            entry["expected_signal"] = template["expected_signal"]
         new_suggestions.append(entry)
 
         log.info("graduation: new candidate fc=%s count=%d confidence=%.2f",
