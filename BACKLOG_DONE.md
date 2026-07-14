@@ -8,6 +8,39 @@ Last split: 2026-04-16 (session 34).
 
 ---
 
+### First in-process consolidation long-gap policy — CLOSED, no amnesty (2026-07-14)
+
+The first live consolidation reported `decayed=38 promoted=0 gc=38` after
+roughly five weeks without a cycle. We considered capping effective decay days
+or granting a first-pass amnesty and rejected both after tracing the actual
+contract. MEDIUM decay is derived on every read from `last_reinforced`, not
+applied in a batch by consolidation. Normal injection already requires score
+`>=0.3`, above `GC_THRESHOLD=0.2`; by the time a lesson is GC-eligible it has
+already stopped reaching prompts. An amnesty on physical GC would leave stale
+dead-weight rows in the live file without restoring their utility.
+
+The retention decree changed the destructive part: decay GC now archives each
+record before removing it from the live tier, and `search_graveyard(...,
+resurrect=True)` can restore matching lessons. That is the appropriately
+scoped amnesty—per-lesson and evidence-triggered—so no blanket first-cycle
+exception was added.
+
+Two caveats keep this from becoming a false retrospective success claim:
+
+- The historical 38/38 event is confounded. Post-loop self-reflection was dead
+  for about six weeks via a swallowed `NameError`, and the pre-M1 decay path
+  had corrupted stores on rewrites. The steady-state policy is sound going
+  forward; that one dataset does not prove 38 organically unused lessons.
+- Archive preservation is data survival, not recall parity. Live MEDIUM recall
+  is task-scoped and ranked; archived resurrection uses coarser literal-keyword
+  matching from whole-goal recall and narrow prerequisite paths. Improving that
+  read side remains covered by the existing knowledge-web retrieval backlog,
+  rather than by weakening decay.
+
+Real Claude architecture review agreed with the no-amnesty decision and drove
+both caveats. Existing tests pin read-time decay, the injection floor,
+archive-before-drop, keyword resurrection, and same-day idempotence.
+
 ### Rolling reviewer-calibration metric — SHIPPED (2026-07-14)
 
 `scripts/probe-stats.sh` now scans `CLAIM_PROBED` events across the active

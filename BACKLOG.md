@@ -1420,14 +1420,6 @@ rather than fixed with a fragile heuristic:
     or evidence for a narrower activation rule. Do not hide that spend change
     behind a count-goal regex.
 
-### First in-process consolidation gc policy
-
-- [ ] **First in-process consolidation gc'd the whole MEDIUM lesson store** —
-  5 weeks of decay-age applied in one cycle (decayed 38, promoted 0, gc 38).
-  Arguably correct on stale data (M2 promotes at reinforcement time, LONG
-  survived: 22), but a gentler policy for long-gap catch-up (cap effective
-  decay-days? amnesty pass?) is worth considering before the store matters.
-
 ### Benchmark/eval missions need a read-only or scratch-dir fence
 
 - [ ] **A/B benchmark runs mutated the repo and each other (2026-07-08):**

@@ -2,7 +2,12 @@
 
 What to do next, in what order. Updated each session. Deferred ideas live in BACKLOG.md; completed phase history in docs/history/ROADMAP_ARCHIVE.md (ROADMAP.md is a stub). This file is the executable queue.
 
-Last updated: 2026-07-14 (continuation checkpoint — rolling reviewer
+Last updated: 2026-07-14 (continuation checkpoint — first-consolidation
+long-gap policy CLOSED with no amnesty: decay is already read-time state and
+GC-eligible lessons are below the live injection floor; archive+resurrection
+now protects evidence. Real Claude review required two caveats: the historical
+38/38 event was infra-confounded, and archived keyword recall is weaker than
+live ranked/task-scoped recall. Previous checkpoint — rolling reviewer
 calibration SHIPPED: `scripts/probe-stats.sh` compares current and prior
 archive-spanning `CLAIM_PROBED` windows, with honest missing-evidence buckets,
 verdict-retention/coverage rates, deltas, JSON, and eight deterministic
