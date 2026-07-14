@@ -1520,20 +1520,6 @@ These four are kept (not deleted) this triage pending verification against curre
   So #3 feeds #2. Keep global `min_certainty: 0.6`; revisit per-class only after the
   safe-class corpus is much larger. Full write-up: `docs/LOCAL_VALIDATOR.md`.
 
-### Sandbox hardening guards a stub, not real skill execution
-
-- [ ] **Sandbox executes a stub, not real skill code.** `src/sandbox.py`'s
-  536-line hardening stack (rlimits, venv isolation, network blocking, audit
-  log) runs a script that puts skill steps into *comments* and prints a
-  canned `"Executed skill: {name} on input: ..."` string — the hardening
-  protects a simulation, not live execution. `is_skill_safe`'s static-safety
-  verdict is recorded in the audit log but never gates anything. Decide:
-  build real skill execution to match the existing hardening, or shrink the
-  sandbox to match what it actually does. Revisit later — no immediate
-  action needed, hardening layers are well-built and may be intentional
-  groundwork for real execution. Source: refactor-plan architecture review
-  (docs/REFACTOR_PLAN.md), 2026-07-02.
-
 ### `orch.py` legacy loop — DEPRECATED 2026-07-09 → BACKLOG_DONE
 
 Jeremy confirmed `maro tick`/`loop`/`plan` unused → stderr deprecation

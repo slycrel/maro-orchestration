@@ -509,7 +509,7 @@ it's time. Proposed shape (module lists are illustrative, not final):
   harness_optimizer
 - **`src/observability/`** — inspector, introspect, observe (post
   dashboard-split), metrics
-- **`src/security/`** — sandbox, security, injection_guard, killswitch,
+- **`src/security/`** — security, injection_guard, killswitch,
   secret_scrub (kept tight and cohesive — sheriff and file_lock are not
   security code, see below)
 - **`src/llm/`** — llm split into adapters_api / adapters_subprocess / parse
@@ -551,8 +551,10 @@ and the doc/backlog updates for all nine.
    subpackage move. See BACKLOG.md "`orch.py`'s tick/loop engine is legacy;
    its path/bookkeeping layer is not" — still needs Jeremy to confirm the
    `maro tick`/`loop`/`plan` commands are actually unused before deprecating.
-2. **`sandbox.py`** — revisit later, no action now. See BACKLOG.md "Sandbox
-   hardening guards a stub, not real skill execution."
+2. **`sandbox.py` — RESOLVED 2026-07-13:** retired as an unwired simulation
+   during container-executor C4 (`69265f6`). Its only real pattern-list
+   consumer moved to `run_curation.py`; containment work now lives in
+   `container_exec.py`. See `docs/CONTAINER_EXECUTOR_DESIGN.md` §7.
 3. **MCP tool dispatch** — logged as a bug to clean up later. See BACKLOG.md
    "MCP tools registered/advertised but never dispatchable (bug)."
 4. **x-capture (Twitter) domain logic** — **not one bug, three uncoordinated
@@ -630,9 +632,10 @@ and the doc/backlog updates for all nine.
   `director.py`/`scheduler.py` get replaced. Nothing in this plan touches
   that timeline; several findings above note "independent of the navigator
   question" specifically to keep that boundary clear.
-- **Weakening any security check** — where `security.py`/`injection_guard.py`/
-  `sandbox.py` findings look redundant, the plan flags them as maintainer
-  questions, not removals.
+- **Weakening any security check** — where `security.py`/`injection_guard.py`
+  findings look redundant, the plan flags them as maintainer questions, not
+  removals. The later `sandbox.py` retirement removed an unwired simulation,
+  not a live-path check.
 
 ## Docs hygiene (small, do anytime)
 

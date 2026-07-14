@@ -6,6 +6,12 @@ status: dormant-design
 
 *Design note — Jeremy Stone, March 2026. Captures the "sapling to tree" concept for Poe's long-term learning architecture.*
 
+> **2026-07-14 status note:** Phase 18's `sandbox.py` never became the live
+> Stage-4 executor and was retired in container-executor C4 on 2026-07-13.
+> References below describe the March design assumption, not current runtime
+> behavior. Skills are prompt/instruction assets; optional execution
+> containment now belongs to `container_exec.py`.
+
 ---
 
 ## The Core Idea
@@ -93,7 +99,7 @@ The infrastructure exists through Stage 4:
 
 What's **missing**:
 
-1. **Stage 5 graduation path**: no mechanism for an established skill to graduate into a hardcoded conditional or data rule. Currently skills are always executed via sandbox subprocess even when they're deterministic.
+1. **Stage 5 graduation path**: no mechanism for an established skill to graduate into a hardcoded conditional or data rule. The March assumption that skills ran through a sandbox subprocess never became true; `sandbox.py` was later retired.
 
 2. **Model tier optimization**: no automatic detection of "this task type consistently succeeds at mid/cheap tier — stop using power." The persona system has `model_tier` but it's set statically at persona creation.
 
@@ -142,7 +148,7 @@ Jeremy is the gardener. The system surfaces candidates; the gardener decides wha
 | Phase 10 (skills) | Stage 4 entry: deterministic skills emerge from outcomes |
 | Phase 14 (attribution) | Failure attribution informs what should NOT graduate |
 | Phase 16 (tiered memory) | Formal Stage 2→3 path; canon candidates; skill tiers |
-| Phase 18 (sandbox) | Stage 4 hardening: skills executed safely |
+| Phase 18 (sandbox) | Historical prototype, retired 2026-07-13; not a live Stage-4 executor |
 | Future (Phase 22?) | Stage 5: established skills → rules; model tier auto-opt |
 
 ---

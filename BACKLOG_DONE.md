@@ -8,6 +8,21 @@ Last split: 2026-04-16 (session 34).
 
 ---
 
+### Sandbox-stub decision — superseded by retirement (2026-07-13; reconciled 2026-07-14)
+
+The open choice “wire real skill execution into `sandbox.py` or shrink it” was
+resolved by the container-executor C4 cleanup: delete the unwired simulation.
+Commit `69265f6` removed `src/sandbox.py`, both sandbox test modules, the
+`maro sandbox` CLI/entry point, its extras group, and the dead audit reader/GC
+surface; `_DANGEROUS_PATTERNS` moved to its only real consumer in
+`run_curation.py`. The replacement containment direction is the opt-in
+container executor, whose remaining real-goal/on-box burn-in stays separately
+tracked under C4-BOX. The stale open backlog entry and living refactor-plan
+references were reconciled after verifying the module, imports, tests, CLI,
+entry point, and audit writer are absent.
+
+---
+
 ### Batch-04 lesson-funnel intake measurement — SHIPPED (2026-07-14)
 
 The original “9 finalizations → 0 lessons extracted” observation was not a

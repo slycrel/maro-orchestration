@@ -2,7 +2,11 @@
 
 What to do next, in what order. Updated each session. Deferred ideas live in BACKLOG.md; completed phase history in docs/history/ROADMAP_ARCHIVE.md (ROADMAP.md is a stub). This file is the executable queue.
 
-Last updated: 2026-07-14 (continuation checkpoint — lesson-funnel intake
+Last updated: 2026-07-14 (continuation checkpoint — stale sandbox-stub backlog
+decision RECONCILED: already resolved by C4 retirement (`69265f6`); open item
+archived and living/dormant design references corrected. The real replacement
+is the separately tracked container-executor burn-in, not skill-stub wiring.
+Previous checkpoint — lesson-funnel intake
 measurement SHIPPED: durable per-outcome extraction state/counts, dry-run
 exclusion, completed-zero idempotency, archive-aware rolling text/JSON report,
 and honest historical unknowns. Live 30-day evidence is 3/3 unknown, so yield
