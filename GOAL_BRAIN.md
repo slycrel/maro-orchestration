@@ -2470,3 +2470,14 @@ Dormant (deliberately parked, not dropped):
   fallback and repeated immutable provider-map construction. All four accepted
   findings were fixed. Final full raw suite green (only the existing tarfile
   deprecation warnings; platform/integration skips expected).
+
+- **2026-07-13 (M1 continuation: safe-test wrapper now native on this Mac)** —
+  Closed the R5 `test-safe.sh` portability residual with a real full wrapper
+  run, not only unit simulation. Affinity is conditional on `taskset`; `nice`
+  remains universal; the repository venv wins over ambient Python; GNU-only
+  xargs flags are gone; chunk arguments stay quoted through Bash arrays; and
+  chunk discovery no longer scans the macOS temp tree. Three shell probes cover
+  taskset present/absent and CLI resource overrides. Claude Skeptic review
+  caught a first-pass ordering bug that made `--cores`/`--nice` ineffective;
+  fixed and regression-pinned. Final focused wrapper invocation green, and the
+  unchanged full `scripts/test-safe.sh --chunk 10000` completed successfully.

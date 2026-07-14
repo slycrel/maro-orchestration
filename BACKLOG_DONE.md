@@ -8,6 +8,22 @@ Last split: 2026-04-16 (session 34).
 
 ---
 
+### R5: `test-safe.sh` macOS portability — SHIPPED (2026-07-13)
+
+The resource-conscious test wrapper hard-required Linux `taskset`, selected an
+ambient Python instead of the repository virtualenv, used GNU-only `xargs -a`
+and `xargs -r`, and searched the entire macOS temp directory to discover its
+own chunk files. It could not start pytest on the M1.
+
+The wrapper now builds one post-argument-parse command prefix: `nice` always,
+plus `taskset` only when installed. It prefers `.venv/bin/python`, uses Bash
+arrays for safely quoted chunk arguments, discovers ordered split chunks by
+their direct glob, and uses BSD-compatible stale-process cleanup. Shell probes
+cover taskset-present, taskset-absent, and CLI resource overrides. A real
+unchanged `scripts/test-safe.sh --chunk 10000` run completed the full suite on
+macOS. Claude Skeptic review caught and fixed an initial ordering regression
+that made `--cores`/`--nice` no-ops.
+
 ### R5: Run-curation pure/maintenance boundary — SHIPPED (2026-07-13)
 
 Run curation mixed pure card construction with hidden, trust-bearing
