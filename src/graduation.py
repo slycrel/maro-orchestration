@@ -1,15 +1,16 @@
 """Phase 46: Self-Reflection — Intervention Graduation.
 
 Scans recent diagnoses for repeated failure patterns. When the same
-failure class appears 3+ times (default), proposes a permanent rule as
-a high-confidence suggestion that the evolver will auto-apply.
+failure class appears 3+ times (default), writes a pending suggestion for
+human review/application. Autonomous consumption awaits VERIFY_LEARN_ARC
+V1-V3; this module's verification is structural observability only.
 
 This closes the full self-reflection loop:
   observe (Phase 44) → classify → recover (Phase 45) → graduate (Phase 46)
 
 Usage:
     from graduation import run_graduation
-    count = run_graduation()                  # produces new suggestions if patterns found
+    count = run_graduation()                  # produces pending suggestions if patterns found
     count = run_graduation(dry_run=True)      # scan only, no writes
     candidates = scan_candidates(min_count=2) # inspect what would fire
 """
@@ -22,7 +23,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List
 
 log = logging.getLogger("maro.graduation")
 
@@ -181,6 +182,10 @@ def _suggestions_path() -> Path:
         return Path.cwd() / "memory" / "suggestions.jsonl"
 
 
+def _verification_state_path() -> Path:
+    return _suggestions_path().with_name("graduation-verification-state.json")
+
+
 # ---------------------------------------------------------------------------
 # Core functions
 # ---------------------------------------------------------------------------
@@ -256,7 +261,6 @@ def _already_proposed(failure_class: str, lookback: int = 200) -> bool:
             try:
                 d = json.loads(line)
                 fp = d.get("failure_pattern", "")
-                cat = d.get("category", "")
                 # graduation suggestions are tagged with "graduation:" in failure_pattern
                 if f"graduation:{failure_class}" in fp:
                     return True
@@ -277,7 +281,9 @@ def run_graduation(
 
     Each unique failure class that has appeared >= min_count times (and hasn't
     already been proposed) gets a new high-confidence Suggestion written to
-    suggestions.jsonl. The evolver picks these up and auto-applies on the next run.
+    suggestions.jsonl. These rows remain pending until a human applies them via
+    ``maro evolver apply``; autonomous consumption is deferred to the ordered
+    V1-V3 verify→learn arc.
 
     Returns: number of new suggestions written (0 on dry_run).
     """
@@ -377,8 +383,6 @@ def verify_graduation_rules(lookback: int = 200) -> List[dict]:
     Passed = exit code 0 AND non-empty stdout (the pattern found something).
     """
     import subprocess
-    import re
-
     path = _suggestions_path()
     if not path.exists():
         return []
@@ -388,7 +392,10 @@ def verify_graduation_rules(lookback: int = 200) -> List[dict]:
 
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
-        for line in lines[-lookback:]:
+        # Newest record wins if history contains more than one row for a
+        # failure class. Reverted/held/pending rows must never be described as
+        # live rule verification merely because they carry a verify_pattern.
+        for line in reversed(lines[-lookback:]):
             line = line.strip()
             if not line:
                 continue
@@ -399,7 +406,11 @@ def verify_graduation_rules(lookback: int = 200) -> List[dict]:
 
             fp = d.get("failure_pattern", "")
             verify_pattern = d.get("verify_pattern", "")
-            if not verify_pattern or not fp.startswith("graduation:"):
+            if (
+                not verify_pattern
+                or not fp.startswith("graduation:")
+                or d.get("applied") is not True
+            ):
                 continue
             fc = fp[len("graduation:"):]
             if fc in seen:
@@ -424,15 +435,175 @@ def verify_graduation_rules(lookback: int = 200) -> List[dict]:
                 output = str(exc)[:100]
 
             results.append({
+                "suggestion_id": d.get("suggestion_id", ""),
                 "failure_class": fc,
+                "category": d.get("category", ""),
+                "applied_manually": bool(d.get("applied_manually", False)),
+                "applied_at": d.get("applied_at", ""),
                 "verify_pattern": verify_pattern,
                 "passed": passed,
                 "output": output,
+                "structural_only": True,
             })
 
     except Exception as exc:
         log.debug("verify_graduation_rules: error reading suggestions: %s", exc)
 
+    return results
+
+
+def run_graduation_verification(
+    *, lookback: int = 200, notify: bool = False
+) -> List[dict]:
+    """Run cheap structural checks for applied graduations at evolver cadence.
+
+    This intentionally does **not** implement VERIFY_LEARN_ARC V3: failures
+    are observed and optionally notified, never auto-reverted or demoted.
+    Authority-aware revert and behavioral expectations require V1/V2 first.
+    """
+    results = verify_graduation_rules(lookback=lookback)
+    state_path = _verification_state_path()
+    if not results and not state_path.exists():
+        return results
+
+    # Cadence may be driven by heartbeat and finalization concurrently. Claim
+    # each event/notification under the shared lock, deliver outside it, then
+    # acknowledge success. Failed delivery clears its claim for the next
+    # cadence; a crashed claimant's lease expires after five minutes.
+    event_claims: List[tuple] = []
+    notify_claims: List[tuple] = []
+    claim_token = uuid.uuid4().hex
+    now_epoch = time.time()
+    identity_keys = ("suggestion_id", "applied_at", "passed")
+
+    try:
+        from file_lock import locked_rmw
+
+        def _update_state(old_text: str) -> str:
+            try:
+                old = json.loads(old_text) if old_text.strip() else {}
+                if not isinstance(old, dict):
+                    old = {}
+            except (json.JSONDecodeError, ValueError):
+                old = {}
+            current = {}
+            for result in results:
+                fc = result["failure_class"]
+                before = old.get(fc, {})
+                identity = {
+                    "suggestion_id": result.get("suggestion_id", ""),
+                    "applied_at": result.get("applied_at", ""),
+                    "passed": bool(result["passed"]),
+                }
+                same = all(before.get(key) == value for key, value in identity.items())
+                after = dict(before) if same else {
+                    **identity,
+                    "event_delivered": False,
+                    "notify_delivered": bool(result["passed"]),
+                }
+                after["checked_at"] = _now_iso()
+
+                def _claimable(kind: str) -> bool:
+                    if after.get(f"{kind}_delivered"):
+                        return False
+                    claimed_at = float(after.get(f"{kind}_claimed_at", 0) or 0)
+                    return not after.get(f"{kind}_claim") or now_epoch - claimed_at >= 300
+
+                if _claimable("event"):
+                    after["event_claim"] = claim_token
+                    after["event_claimed_at"] = now_epoch
+                    event_claims.append((result, claim_token))
+                if not result["passed"] and notify and _claimable("notify"):
+                    after["notify_claim"] = claim_token
+                    after["notify_claimed_at"] = now_epoch
+                    notify_claims.append((result, claim_token))
+                current[fc] = after
+            return json.dumps(current, indent=2, sort_keys=True) + "\n"
+
+        locked_rmw(state_path, _update_state)
+    except Exception as exc:
+        # Verification results remain available to the caller, but if durable
+        # dedup state cannot be established, suppress page/event side effects.
+        log.warning("graduation verification state update failed: %s", exc)
+        return results
+
+    event_successes = set()
+    for result, token in event_claims:
+        try:
+            from captains_log import log_event, GRADUATION_VERIFIED
+            log_event(
+                event_type=GRADUATION_VERIFIED,
+                subject=f"graduation:{result['failure_class']}",
+                summary=(
+                    f"Applied graduation structural check "
+                    f"{'passed' if result['passed'] else 'failed'}: "
+                    f"{result['failure_class']}"
+                ),
+                context=result,
+                raise_on_error=True,
+            )
+            event_successes.add((result["failure_class"], token))
+        except Exception as exc:
+            log.warning("graduation verification event delivery failed: %s", exc)
+
+    failures = [result for result, _token in notify_claims]
+    notify_successes = set()
+    if failures:
+        log.warning(
+            "graduation structural verification failed for applied rows: %s",
+            [result["failure_class"] for result in failures],
+        )
+        if notify:
+            try:
+                from telegram_listener import telegram_notify
+                lines = [
+                    "⚠️ Applied graduation structural check failed "
+                    "(not an automatic regression verdict):"
+                ]
+                lines.extend(
+                    f"• {result['failure_class']}: {result['output'][:120]}"
+                    for result in failures[:5]
+                )
+                if telegram_notify("\n".join(lines)):
+                    notify_successes.update(
+                        (result["failure_class"], token)
+                        for result, token in notify_claims
+                    )
+                else:
+                    log.warning("graduation verification notify was not delivered")
+            except Exception as exc:
+                log.warning("graduation verification notify failed: %s", exc)
+
+    # Acknowledge each successful delivery, and clear failed claims so the next
+    # cadence retries. Identity+token checks prevent an old claimant from
+    # acknowledging a newer transition.
+    try:
+        def _ack_state(old_text: str) -> str:
+            try:
+                state = json.loads(old_text) if old_text.strip() else {}
+                if not isinstance(state, dict):
+                    return old_text
+            except (json.JSONDecodeError, ValueError):
+                return old_text
+            for result, token in event_claims:
+                row = state.get(result["failure_class"], {})
+                if row.get("event_claim") == token:
+                    row.pop("event_claim", None)
+                    row.pop("event_claimed_at", None)
+                    if (result["failure_class"], token) in event_successes:
+                        row["event_delivered"] = True
+            for result, token in notify_claims:
+                row = state.get(result["failure_class"], {})
+                if row.get("notify_claim") == token:
+                    row.pop("notify_claim", None)
+                    row.pop("notify_claimed_at", None)
+                    if (result["failure_class"], token) in notify_successes:
+                        row["notify_delivered"] = True
+            return json.dumps(state, indent=2, sort_keys=True) + "\n"
+
+        locked_rmw(state_path, _ack_state)
+    except Exception as exc:
+        log.warning("graduation verification delivery acknowledgement failed: %s", exc)
     return results
 
 

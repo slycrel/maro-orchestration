@@ -47,6 +47,7 @@ from captains_log import (
     EVOLVER_GENERATED,
     EVOLVER_SKIPPED,
     GRADUATION_PROPOSED,
+    GRADUATION_VERIFIED,
     AUTO_RECOVERY,
     DIAGNOSIS,
     DECISION_RECORDED,
@@ -108,6 +109,16 @@ class TestLogEvent:
         assert "note" not in entry
         assert "loop_id" not in entry
         assert "related_ids" not in entry
+
+    def test_strict_delivery_surfaces_append_failure(self, monkeypatch):
+        monkeypatch.setattr("file_lock.locked_append", MagicMock(side_effect=OSError("disk full")))
+        with pytest.raises(OSError, match="disk full"):
+            log_event(
+                event_type=GRADUATION_VERIFIED,
+                subject="graduation:test",
+                summary="structural failure",
+                raise_on_error=True,
+            )
 
     def test_multiple_entries(self, _tmp_log):
         log_event(event_type=SKILL_PROMOTED, subject="a", summary="one")
@@ -261,6 +272,7 @@ class TestEventTypes:
         assert EVOLVER_GENERATED in EVENT_TYPES
         assert EVOLVER_SKIPPED in EVENT_TYPES
         assert GRADUATION_PROPOSED in EVENT_TYPES
+        assert GRADUATION_VERIFIED in EVENT_TYPES
         assert AUTO_RECOVERY in EVENT_TYPES
         assert DIAGNOSIS in EVENT_TYPES
         assert DECISION_RECORDED in EVENT_TYPES
@@ -285,7 +297,9 @@ class TestEventTypes:
         # +2 (2026-07-10): CUTS_DRAWN + BOUNDARY_EXPANDED — cuts-first
         # planning (Qix-cuts decree; planner.draw_cuts / loop_execute
         # boundary expansion).
-        assert len(EVENT_TYPES) == 60
+        # +1 (2026-07-14): GRADUATION_VERIFIED — applied-only structural
+        # verify_pattern result at evolver cadence (observe/notify, no revert).
+        assert len(EVENT_TYPES) == 61
 
     def test_previously_unregistered_events_in_set(self):
         from captains_log import EVOLVER_REVERTED, EVOLVER_VERIFY, PLAYBOOK_UPDATED

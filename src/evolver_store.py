@@ -52,6 +52,7 @@ class Suggestion:
     generated_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     applied: bool = False
     applied_at: str = ""  # ISO timestamp stamped by apply_suggestion()
+    applied_manually: bool = False  # V2 authority provenance; additive only
 
     def to_dict(self) -> dict:
         return {
@@ -65,6 +66,7 @@ class Suggestion:
             "generated_at": self.generated_at,
             "applied": self.applied,
             "applied_at": self.applied_at,
+            "applied_manually": self.applied_manually,
         }
 
     @classmethod
@@ -201,7 +203,25 @@ def list_pending_suggestions(limit: int = 20) -> List[Suggestion]:
     return pending[:limit]
 
 
-def _apply_suggestion_action(d: dict) -> None:
+def suggestion_is_applied(suggestion_id: str) -> bool:
+    """Read the durable post-gate state for one suggestion."""
+    p = _suggestions_path()
+    if not p.exists():
+        return False
+    try:
+        for line in p.read_text(encoding="utf-8").splitlines():
+            try:
+                row = json.loads(line)
+            except Exception:
+                continue
+            if row.get("suggestion_id") == suggestion_id:
+                return row.get("applied") is True
+    except OSError:
+        return False
+    return False
+
+
+def _apply_suggestion_action(d: dict) -> bool:
     """Execute the real-world effect of an approved suggestion.
 
     Called from apply_suggestion() after the test gate passes.  Each category
@@ -212,8 +232,9 @@ def _apply_suggestion_action(d: dict) -> None:
         new_guardrail  → append pattern to memory/dynamic-constraints.jsonl
         observation    → no-op (informational only)
 
-    Never raises — failures are logged to stderr and silently swallowed so
-    a bad suggestion never blocks the caller.
+    Never raises. Returns True only when the category's primary action
+    completed (including intentional observation no-ops); callers must not
+    stamp durable ``applied`` state on False.
     """
     category = d.get("category", "observation")
     suggestion_text = d.get("suggestion", "")
@@ -299,15 +320,18 @@ def _apply_suggestion_action(d: dict) -> None:
 
         elif category == "prompt_tweak":
             # Record as a tiered lesson so it gets injected into future prompts
-            if record_tiered_lesson is not None and MemoryTier is not None:
-                record_tiered_lesson(
-                    lesson_text=suggestion_text,
-                    task_type=target if target and target != "all" else "general",
-                    outcome="evolver_suggestion",
-                    source_goal=f"evolver-{suggestion_id}",
-                    tier=MemoryTier.MEDIUM,
-                    confidence=confidence,
-                )
+            if record_tiered_lesson is None or MemoryTier is None:
+                raise RuntimeError("tiered lesson writer unavailable")
+            recorded_lesson = record_tiered_lesson(
+                lesson_text=suggestion_text,
+                task_type=target if target and target != "all" else "general",
+                outcome="evolver_suggestion",
+                source_goal=f"evolver-{suggestion_id}",
+                tier=MemoryTier.MEDIUM,
+                confidence=confidence,
+            )
+            if getattr(recorded_lesson, "lesson_id", "") == "rejected":
+                raise RuntimeError("tiered lesson writer rejected the suggestion")
 
         elif category == "new_guardrail":
             # Append to dynamic-constraints.jsonl — loaded by constraint.py at runtime
@@ -325,36 +349,30 @@ def _apply_suggestion_action(d: dict) -> None:
             # Enqueue the suggested goal for execution on the next heartbeat tick.
             # Gated by evolver.auto_enqueue_signals (default False) — opt-in only.
             # When off, the suggestion is logged to playbook for human review.
-            try:
-                from config import get as _cfg_get
-                _auto_enqueue = _cfg_get("evolver.auto_enqueue_signals", False)
-                if _auto_enqueue:
-                    from handle import enqueue_goal as _enqueue_goal
-                    _job_id = _enqueue_goal(
-                        suggestion_text,
-                        reason=f"evolver signal ({target}): {suggestion_text[:80]}",
-                    )
-                    log.info(
-                        "evolver sub_mission enqueued job_id=%s confidence=%.2f",
-                        _job_id, confidence,
-                    )
-                else:
-                    # Not auto-enqueuing — record to playbook so the human can review
-                    try:
-                        from playbook import append_to_playbook
-                        append_to_playbook(
-                            f"[Signal] {suggestion_text[:200]}",
-                            section="Signals",
-                            source=f"evolver:{suggestion_id}",
-                        )
-                    except Exception:
-                        pass
-                    log.info(
-                        "evolver sub_mission held for review (auto_enqueue_signals=false): %s",
-                        suggestion_text[:80],
-                    )
-            except Exception as _sm_exc:
-                log.warning("evolver sub_mission action failed: %s", _sm_exc)
+            from config import get as _cfg_get
+            _auto_enqueue = _cfg_get("evolver.auto_enqueue_signals", False)
+            if _auto_enqueue:
+                from handle import enqueue_goal as _enqueue_goal
+                _job_id = _enqueue_goal(
+                    suggestion_text,
+                    reason=f"evolver signal ({target}): {suggestion_text[:80]}",
+                )
+                log.info(
+                    "evolver sub_mission enqueued job_id=%s confidence=%.2f",
+                    _job_id, confidence,
+                )
+            else:
+                # Not auto-enqueuing — record to playbook so the human can review
+                from playbook import append_to_playbook
+                append_to_playbook(
+                    f"[Signal] {suggestion_text[:200]}",
+                    section="Signals",
+                    source=f"evolver:{suggestion_id}",
+                )
+                log.info(
+                    "evolver sub_mission held for review (auto_enqueue_signals=false): %s",
+                    suggestion_text[:80],
+                )
 
         # observation: no action needed
 
@@ -387,8 +405,11 @@ def _apply_suggestion_action(d: dict) -> None:
             except Exception:
                 pass
 
+        return True
+
     except Exception as e:
         print(f"[evolver] _apply_suggestion_action({category}) failed: {e}", file=sys.stderr)
+        return False
 
 
 def apply_suggestion(suggestion_id: str, manual: bool = False) -> bool:
@@ -430,6 +451,13 @@ def apply_suggestion(suggestion_id: str, manual: bool = False) -> bool:
     if d is None:
         return False
 
+    # Re-applying a live row must be a no-op. Besides replaying the concrete
+    # mutation, a second apply could rewrite applied_manually and corrupt the
+    # authority provenance that later decides whether automatic revert is
+    # allowed.
+    if d.get("applied") is True:
+        return True
+
     guard_blocked = False
     # Injection guard: scan suggestion text before applying (fail-closed)
     try:
@@ -468,9 +496,11 @@ def apply_suggestion(suggestion_id: str, manual: bool = False) -> bool:
                 d["status"] = "gate_blocked"
                 d["block_reason"] = gate_result.get("block_reason", "test gate blocked mutation")
             else:
-                d["applied"] = True
-                d.pop("status", None)
-                _apply_suggestion_action(d)
+                d["applied"] = _apply_suggestion_action(d)
+                if d["applied"]:
+                    d.pop("status", None)
+                else:
+                    d["status"] = "action_failed"
         elif category == "new_guardrail":
             # Guardrails can permanently block execution paths. There is no
             # dev/prod split anymore (2026-07-10 decree: the system always
@@ -495,11 +525,14 @@ def apply_suggestion(suggestion_id: str, manual: bool = False) -> bool:
                     _should_apply = False
 
             if _should_apply:
-                d["applied"] = True
-                _apply_suggestion_action(d)
-                log.info("evolver: applied new_guardrail (%s): %s",
-                         "manual" if manual else "auto_apply on",
-                         d.get("suggestion", "")[:100])
+                d["applied"] = _apply_suggestion_action(d)
+                if d["applied"]:
+                    d.pop("status", None)
+                    log.info("evolver: applied new_guardrail (%s): %s",
+                             "manual" if manual else "auto_apply on",
+                             d.get("suggestion", "")[:100])
+                else:
+                    d["status"] = "action_failed"
             else:
                 d["applied"] = False
                 d["status"] = "held_for_review"
@@ -513,9 +546,12 @@ def apply_suggestion(suggestion_id: str, manual: bool = False) -> bool:
                          d.get("suggestion", "")[:100])
         elif category == "prompt_tweak":
             # Prompt tweaks are lower risk (just a lesson) but log prominently
-            d["applied"] = True
-            _apply_suggestion_action(d)
-            log.info("evolver: auto-applied prompt_tweak: %s", d.get("suggestion", "")[:100])
+            d["applied"] = _apply_suggestion_action(d)
+            if d["applied"]:
+                d.pop("status", None)
+                log.info("evolver: auto-applied prompt_tweak: %s", d.get("suggestion", "")[:100])
+            else:
+                d["status"] = "action_failed"
         elif category == "cost_optimization":
             # No executor exists yet — surface for human review instead of
             # silently marking applied. Previously fell through to else and
@@ -536,8 +572,11 @@ def apply_suggestion(suggestion_id: str, manual: bool = False) -> bool:
             log.info("evolver: crystallization held for human review: %s", d.get("suggestion", "")[:100])
         else:
             # observation, sub_mission, etc. — safe to apply
-            d["applied"] = True
-            _apply_suggestion_action(d)
+            d["applied"] = _apply_suggestion_action(d)
+            if d["applied"]:
+                d.pop("status", None)
+            else:
+                d["status"] = "action_failed"
         if d.get("applied"):
             # Apply timestamp lives HERE, not (only) in the captain's
             # log. scan_evolver_impact previously had to read
@@ -546,6 +585,7 @@ def apply_suggestion(suggestion_id: str, manual: bool = False) -> bool:
             # system function, which it must not be (captain's log =
             # visibility/data, THREAD_ARCHITECTURE.md).
             d["applied_at"] = datetime.now(timezone.utc).isoformat()
+            d["applied_manually"] = bool(manual)
 
     # Keyed merge under the lock: replace only this suggestion's line.
     # Suggestions appended/updated by concurrent processes between the

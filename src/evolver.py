@@ -50,6 +50,7 @@ from evolver_store import (
     Suggestion, EvolverReport,
     _suggestions_path, _dynamic_constraints_path,
     load_suggestions, _save_suggestions, list_pending_suggestions,
+    suggestion_is_applied,
     _apply_suggestion_action, apply_suggestion, revert_suggestion,
     _run_skill_test_gate, validate_skill_mutation, record_tiered_lesson, MemoryTier,
 )
@@ -513,6 +514,21 @@ def run_evolver(
     if verbose:
         print(f"[evolver] run_id={run_id} starting...", file=sys.stderr)
 
+    # VERIFY_LEARN_ARC V3 precursor: cheap structural checks for graduation
+    # suggestions that are actually applied. Observe/notify only — no revert
+    # or demotion until V1 expectations and V2 authority provenance/consumer
+    # exist. Run before the outcome-count early return so a quiet interval does
+    # not suppress verification on the cadence pass.
+    if not dry_run:
+        try:
+            from graduation import run_graduation_verification
+            run_graduation_verification(notify=notify)
+        except Exception as _grad_verify_exc:
+            log.warning(
+                "graduation structural verification failed non-fatally: %s",
+                _grad_verify_exc,
+            )
+
     # Load recent outcomes
     try:
         outcomes = load_outcomes(limit=outcomes_window)
@@ -669,7 +685,10 @@ def run_evolver(
             if s.applied:
                 continue
             if s.confidence >= 0.8:
-                if apply_suggestion(s.suggestion_id):
+                if (
+                    apply_suggestion(s.suggestion_id)
+                    and suggestion_is_applied(s.suggestion_id)
+                ):
                     auto_applied += 1
                     applied_ids.append(s.suggestion_id)
             elif 0.6 <= s.confidence < 0.8:
@@ -694,7 +713,10 @@ def run_evolver(
                         ),
                     )
                     if _advice and "yes" in _advice.lower().split()[:5]:
-                        if apply_suggestion(s.suggestion_id):
+                        if (
+                            apply_suggestion(s.suggestion_id)
+                            and suggestion_is_applied(s.suggestion_id)
+                        ):
                             auto_applied += 1
                             applied_ids.append(s.suggestion_id)
                             advisor_promoted += 1
@@ -1046,14 +1068,19 @@ def main() -> int:
                 if resp == "q":
                     break
                 if resp == "y":
-                    if apply_suggestion(s.suggestion_id, manual=True):
+                    processed = apply_suggestion(s.suggestion_id, manual=True)
+                    if processed and suggestion_is_applied(s.suggestion_id):
                         print(f"  Applied.")
                         applied += 1
                     else:
-                        print(f"  Apply failed (gate blocked or not found).")
+                        print("  Not applied (blocked, held, action failed, or not found).")
             print(f"\nApplied {applied} suggestion(s).")
         else:
-            applied = sum(1 for s in to_apply if apply_suggestion(s.suggestion_id, manual=True))
+            applied = 0
+            for s in to_apply:
+                processed = apply_suggestion(s.suggestion_id, manual=True)
+                if processed and suggestion_is_applied(s.suggestion_id):
+                    applied += 1
             print(f"Applied {applied}/{len(to_apply)} suggestions.")
         return 0
 

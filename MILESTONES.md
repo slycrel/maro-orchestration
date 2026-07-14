@@ -2,7 +2,14 @@
 
 What to do next, in what order. Updated each session. Deferred ideas live in BACKLOG.md; completed phase history in docs/history/ROADMAP_ARCHIVE.md (ROADMAP.md is a stub). This file is the executable queue.
 
-Last updated: 2026-07-14 (continuation checkpoint — first-consolidation
+Last updated: 2026-07-14 (continuation checkpoint — applied-only graduation
+structural verification SHIPPED as a safe VERIFY_LEARN_ARC V3 precursor:
+cadence events/optional notification, durable manual authority, and held-row
+accounting fixed. Multiple Claude adversarial passes additionally forced idempotent but
+retryable primary actions and claim/deliver/ack notification semantics. Full
+behavioral verdict/revert remains explicitly open
+because V1/V2 and an autonomous pending-graduation consumer do not exist.
+Previous checkpoint — first-consolidation
 long-gap policy CLOSED with no amnesty: decay is already read-time state and
 GC-eligible lessons are below the live injection floor; archive+resurrection
 now protects evidence. Real Claude review required two caveats: the historical

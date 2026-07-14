@@ -187,7 +187,7 @@ User-visible + prunable via
 **Where intent has drifted:**
 - **The verify→learn plumbing is closed; the learning input was dead until recently.** Evolver self-changes are verified via `_verify_post_apply()` (pytest after auto-apply, session 17). But the learning *input* — lesson extraction from runs — was silently dead until 2026-06-11: a `safe_list` bug dropped the typed lesson dicts the prompt produces, so verify→learn extracted nothing (fixed, commit `d088ca7`). It is now live-verified but only lightly exercised (~2 typed lessons from one real call). The open question is whether the full medium→long→standing-rule accretion actually fires on organic runtime, not just in tests.
 - **Inspector and evolver share almost no data structures.** Inspector produces friction signals; evolver reads outcomes. They should feed each other directly.
-- **Graduation templates exist but verification isn't automated.** `verify_graduation_rules()` exists but isn't called in the heartbeat loop.
+- **Graduation has automated structural checks, not behavioral verification.** Applied graduation rows are grep-checked at evolver cadence and failures are logged/notified. This does not prove behavior improved and does not revert or demote; that lifecycle remains VERIFY_LEARN_ARC V1–V3 work.
 - **Quality gate is comprehensive but expensive.** 5 passes × LLM calls. In practice, most runs skip the expensive passes. The gate degrades gracefully but this means the system runs mostly unreviewed.
 - **Skills circuit breaker works but skill creation doesn't.** Auto-promote/demote for *existing* skills works. But new skill discovery from successful outcomes is rare in practice.
 

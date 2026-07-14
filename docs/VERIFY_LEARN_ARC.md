@@ -4,10 +4,12 @@ status: dormant-design
 
 # Verify→learn arc — design brief
 
-**Status:** design brief, written 2026-07-12 (Fable-handoff session). This is
+**Status:** design brief, written 2026-07-12 (Fable-handoff session). A narrow
+applied-only structural-check precursor shipped 2026-07-14; it intentionally
+does not implement behavioral verdicts, revert, or demotion. This is
 the arc decreed "the next design arc after 1.0 (not folded into 1.0, not
 parked)" — thread-architecture decision #6, "how the navigator improves."
-No code changed by this pass. Judgment calls tagged `DECISION (provisional)`.
+The original design pass changed no code. Judgment calls tagged `DECISION (provisional)`.
 File:line references verified at commit ffff3f6.
 
 The two-things-conflated framing (CLAUDE.md): Maro-as-tool works today;
@@ -28,7 +30,7 @@ its "to build" layers 2–4 are largely built):
 | **Classify** | DONE | `introspect.diagnose_loop` (10-class taxonomy, cache-aware thresholds, introspect.py:225-453), lenses + aggregation, inspector friction signals (inspector.py:407-489). Wired at every finalize (loop_finalize.py:409-476). |
 | **Fix (propose)** | DONE, verdict-aware | evolver meta-cycle + 5 statistical scanners + graduation templates (≥3 occurrences → suggestion, graduation.py:188-367) + inspector findings — all write suggestions.jsonl. Lesson extraction is verdict-aware since data-r2-01 (defer → post-closure `finalize_deferred_learning`, loop_finalize.py:702-767). |
 | **Fix (apply)** | DONE, gated | `apply_suggestion` (evolver_store.py:394-577): injection-guard fail-closed; guardrails held for review unless `evolver.auto_apply`; skill mutations behind a real test gate; change_log.jsonl records before_state; `revert_suggestion` replays it. |
-| **VERIFY** | **THE GAP** | Three holes, precisely: (1) `_verify_post_apply` (evolver.py:688-808) verifies "the test suite is still green," not "the behavior improved" — a prompt tweak that makes runs worse passes it forever. (2) `scan_evolver_impact` (evolver.py:657-679) DOES compare before/after stuck-rates — and only **warns in logs**; nothing reverts. (3) `graduation.verify_graduation_rules` (graduation.py:370-436) is reachable ONLY via CLI `--verify` — graduated intervention rules go live with zero automatic verification. |
+| **VERIFY** | **THE GAP** | Three holes, precisely: (1) `_verify_post_apply` verifies "the test suite is still green," not "the behavior improved" — a prompt tweak that makes runs worse passes it forever. (2) `scan_evolver_impact` DOES compare before/after stuck-rates — and only **warns in logs**; nothing reverts. (3) Applied graduation rows now receive cheap automatic structural checks at evolver cadence, but those checks are explicitly not behavioral verdicts and never revert/demote. Graduation proposals are also written after the current evolver auto-apply pass and are not autonomously consumed by a later pass. |
 | **Learn** | Half-closed | Verdict-aware extraction shipped; but verdict *trust* is uncalibrated (§4) and nothing feeds verified-change outcomes back into proposal confidence beyond `_record_suggestion_outcomes`. |
 
 **The arc in one sentence: give applied changes the same lifecycle
@@ -101,6 +103,13 @@ demote-to-hypothesis (the refight shape), notify. This closes the "rules go
 live with zero automatic verification" hole with ~no new machinery — the
 function exists, the hook exists, they've just never met.
 
+**2026-07-14 precursor:** the function and cadence hook have now met for
+rows whose durable state is actually `applied=true`. Results emit
+`GRADUATION_VERIFIED`; failures may notify, but are labelled structural-only
+and never mutate state. Manual-apply provenance is persisted for the later
+authority policy. Full V3 remains sequenced after V1/V2 because the current
+templates do not carry behavioral expectations or a safe demotion target.
+
 ## 4. Verdict trust policy — which verdicts learning may consume
 
 One policy function (single source, like `secret_scrub`), consumed by
@@ -167,8 +176,9 @@ A/B flag in one chunk (`navigator.lesson_inject`, shadow-comparable like
   promotion, verdict windows, symmetric-authority revert, notify + events.
   The judgment-heavy chunk. Tests: synthetic before/after windows, revert
   fires only in the auto-applied band.
-- **V3 — graduation auto-verify (Sonnet):** wire the existing function into
-  the cadence pass + demote path + tests.
+- **V3 — graduation auto-verify (Sonnet):** applied-only structural cadence
+  wiring and manual provenance precursor shipped 2026-07-14. Still open:
+  behavioral verdict + authority-aware revert/demote, after V1/V2.
 - **V4 — divergence adjudication (Sonnet/Opus):** capped LLM pass +
   agreement-table breakdown.
 - **V5 — navigator lessons (Opus):** crystallize + inject + A/B flag,

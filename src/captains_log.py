@@ -78,6 +78,9 @@ EVOLVER_APPLIED = "EVOLVER_APPLIED"
 EVOLVER_GENERATED = "EVOLVER_GENERATED"
 EVOLVER_SKIPPED = "EVOLVER_SKIPPED"
 GRADUATION_PROPOSED = "GRADUATION_PROPOSED"
+# Structural verification of an applied graduation suggestion. This is a
+# grep-level liveness check, not the behavioral V3 verdict/revert lifecycle.
+GRADUATION_VERIFIED = "GRADUATION_VERIFIED"
 # Applied evolver suggestion rolled back (revert_suggestion). Context: suggestion_id, category, target.
 EVOLVER_REVERTED = "EVOLVER_REVERTED"
 # Post-apply verification (pytest after auto-apply, session 17 verify->learn).
@@ -183,6 +186,7 @@ EVENT_TYPES = {
     STANDING_RULE_CONTRADICTED, RULE_GRADUATED, RULE_DEMOTED, CANON_CANDIDATE,
     RULE_REFOUGHT, RULE_VERIFIED, LOG_ROTATED,
     EVOLVER_APPLIED, EVOLVER_GENERATED, EVOLVER_SKIPPED, GRADUATION_PROPOSED,
+    GRADUATION_VERIFIED,
     EVOLVER_REVERTED, EVOLVER_VERIFY, PLAYBOOK_UPDATED,
     AUTO_RECOVERY, DIAGNOSIS, INPUT_MISMATCH,
     DECISION_RECORDED, METACOGNITIVE_DECISION,
@@ -318,8 +322,15 @@ def log_event(
     note: Optional[str] = None,
     loop_id: Optional[str] = None,
     related_ids: Optional[List[str]] = None,
+    *,
+    raise_on_error: bool = False,
 ) -> Dict[str, Any]:
-    """Append a captain's log entry. Never raises on I/O failure."""
+    """Append a captain's log entry.
+
+    Normal observability callers remain best-effort. Delivery-sensitive
+    callers may set ``raise_on_error=True`` so their retry ledger is not
+    advanced after a failed append.
+    """
     if loop_id is None:
         loop_id = _current_loop_id.get()
     entry: Dict[str, Any] = {
@@ -344,6 +355,8 @@ def log_event(
         locked_append(path, json.dumps(entry))
     except Exception as exc:
         logger.warning("captains_log: write failed: %s", exc)
+        if raise_on_error:
+            raise
 
     _maybe_rotate()
     return entry

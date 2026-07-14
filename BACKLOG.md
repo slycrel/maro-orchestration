@@ -1125,13 +1125,18 @@ folds into this decision (see docs/INDEX.md note).
   generically detectable — the two known record-level deleters are the
   ones fixed above, pinned by unit tests.
 
-- [ ] **Smaller retention residuals** (from the same audit, decree-compatible
-  but same smell): `maro-memory gc` retention windows (outcomes retain-days,
-  narrative 180d) are system-chosen constants — could become user-config
-  keys with DEFAULTS rows; `graduation.verify_graduation_rules()` is
-  reachable only via the CLI `--verify` flag, so graduated intervention
-  rules go live with zero automatic verification (belongs to the
-  verify→learn arc).
+- [ ] **Graduation proposals have no autonomous consumer; full behavioral
+  verification remains VERIFY_LEARN_ARC V1–V3.** Graduation writes pending
+  suggestions after the current evolver auto-apply loop, and later evolver
+  runs do not consume prior pending rows. The live workspace has no
+  `graduation:` suggestions, so there is no organic evidence that this path
+  has ever made a rule live. The 2026-07-14 precursor safely checks only rows
+  already marked applied and records manual authority; it does not prove
+  improvement, revert, or demote. Templates currently mix observations,
+  lesson-like prompt tweaks, and gated guardrails rather than one durable
+  standing-rule type, and prompt tweaks lack a true rollback target. Starting
+  the full V1 expectation → V2 verdict/authority → V3 revert/demotion arc is
+  an owner-level scope decision, not an incidental wiring change.
 
 - [ ] **Design constraint, not a task: decay trust, never data.** Append-only
   evidence layer stays perfect (the computerization edge over human forgetting);

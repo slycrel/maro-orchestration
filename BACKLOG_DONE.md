@@ -8,6 +8,28 @@ Last split: 2026-04-16 (session 34).
 
 ---
 
+### Smaller retention residuals — resolved narrowly (2026-07-14)
+
+The memory GC windows remain explicit CLI policy (`--outcomes-retain-days`
+and `--narrative-retain-days`), so adding duplicate configuration keys was
+not justified by a correctness or safety gap. Graduation structural checks
+now run non-fatally at evolver cadence for durable `applied=true` rows, emit
+`GRADUATION_VERIFIED`, and optionally notify on failure while stating that the
+result is not a behavioral regression verdict. Pending, held, and reverted
+rows are excluded; newest durable state wins; manual-apply provenance is
+persisted for the later authority-aware design. Re-apply is idempotent so it
+cannot replay successful side effects or rewrite that authority; failed
+primary actions remain unapplied and retryable. Captain events and failure
+notifications use a locked claim/deliver/ack ledger: they fire only on durable
+state transitions, retry transient delivery failure, and prevent cadence spam.
+Held guardrails also no longer inflate `auto_applied` or enter post-mutation
+pytest verification.
+
+This does not claim VERIFY_LEARN_ARC V3 complete. The separate autonomous
+consumer and behavioral revert/demotion gap remains open in BACKLOG.md.
+
+---
+
 ### First in-process consolidation long-gap policy — CLOSED, no amnesty (2026-07-14)
 
 The first live consolidation reported `decayed=38 promoted=0 gc=38` after

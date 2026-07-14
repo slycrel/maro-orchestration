@@ -22,6 +22,7 @@ from evolver import (
     run_evolver,
     list_pending_suggestions,
     apply_suggestion,
+    suggestion_is_applied,
     _apply_suggestion_action,
     _dynamic_constraints_path,
     BusinessSignal,
@@ -54,6 +55,7 @@ def test_suggestion_roundtrip():
     restored = Suggestion.from_dict(d)
     assert restored.suggestion_id == s.suggestion_id
     assert restored.confidence == 0.8
+    assert restored.applied_manually is False
 
 
 def test_evolver_report_summary_skipped():
@@ -234,6 +236,23 @@ def test_run_evolver_skips_too_few_outcomes():
     assert "0 outcomes" in report.skip_reason
 
 
+def test_run_evolver_verifies_graduations_before_low_outcome_skip():
+    with patch("graduation.run_graduation_verification") as verify, \
+         patch("evolver.load_outcomes", return_value=[]):
+        report = run_evolver(
+            min_outcomes=3, dry_run=False, verbose=False, notify=True
+        )
+    assert report.skipped is True
+    verify.assert_called_once_with(notify=True)
+
+
+def test_run_evolver_dry_run_does_not_emit_graduation_verification():
+    with patch("graduation.run_graduation_verification") as verify, \
+         patch("evolver.load_outcomes", return_value=[]):
+        run_evolver(min_outcomes=3, dry_run=True, verbose=False)
+    verify.assert_not_called()
+
+
 def test_run_evolver_dry_run():
     outcomes = [_make_outcome()] * 10
     with patch("evolver.load_outcomes", return_value=outcomes), \
@@ -241,6 +260,22 @@ def test_run_evolver_dry_run():
         report = run_evolver(dry_run=True, verbose=False)
     assert report.outcomes_reviewed == 10
     assert report.skipped is False
+
+
+def test_apply_cli_counts_only_durable_applied_state(monkeypatch, capsys):
+    import evolver
+    suggestion = Suggestion(
+        suggestion_id="held-1", category="new_guardrail", target="all",
+        suggestion="review me", failure_pattern="x", confidence=0.9,
+        outcomes_analyzed=3,
+    )
+    monkeypatch.setattr("sys.argv", ["maro-evolver", "apply", "--all"])
+    monkeypatch.setattr(evolver, "list_pending_suggestions", lambda limit=50: [suggestion])
+    monkeypatch.setattr(evolver, "apply_suggestion", lambda sid, manual=True: True)
+    monkeypatch.setattr(evolver, "suggestion_is_applied", lambda sid: False)
+
+    assert evolver.main() == 0
+    assert "Applied 0/1 suggestions." in capsys.readouterr().out
 
 
 def test_run_evolver_generates_suggestions():
@@ -583,7 +618,65 @@ def test_apply_suggestion_stamps_applied_at(tmp_path):
     d = json.loads(path.read_text(encoding="utf-8").strip())
     assert d["applied"] is True
     assert d["applied_at"]
+    assert d["applied_manually"] is False
     datetime.fromisoformat(d["applied_at"])  # parseable, raises otherwise
+
+
+def test_apply_suggestion_persists_manual_authority(tmp_path):
+    path = tmp_path / "suggestions.jsonl"
+    s1 = Suggestion(suggestion_id="s1", category="observation", target="all",
+                    suggestion="test", failure_pattern="x", confidence=0.5,
+                    outcomes_analyzed=5, applied=False)
+    path.write_text(json.dumps(s1.to_dict()) + "\n", encoding="utf-8")
+
+    with patch("evolver_store._suggestions_path", return_value=path):
+        assert apply_suggestion("s1", manual=True) is True
+        assert suggestion_is_applied("s1") is True
+
+    d = json.loads(path.read_text(encoding="utf-8").strip())
+    assert d["applied_manually"] is True
+
+
+def test_reapply_is_idempotent_and_preserves_authority(tmp_path, monkeypatch):
+    path = tmp_path / "suggestions.jsonl"
+    s1 = Suggestion(suggestion_id="s1", category="observation", target="all",
+                    suggestion="test", failure_pattern="x", confidence=0.5,
+                    outcomes_analyzed=5, applied=False)
+    path.write_text(json.dumps(s1.to_dict()) + "\n", encoding="utf-8")
+    action = MagicMock(return_value=True)
+    monkeypatch.setattr("evolver_store._suggestions_path", lambda: path)
+    monkeypatch.setattr("evolver_store._apply_suggestion_action", action)
+
+    assert apply_suggestion("s1", manual=False) is True
+    first = json.loads(path.read_text(encoding="utf-8").strip())
+    assert apply_suggestion("s1", manual=True) is True
+    second = json.loads(path.read_text(encoding="utf-8").strip())
+
+    assert action.call_count == 1
+    assert second["applied_at"] == first["applied_at"]
+    assert second["applied_manually"] is False
+
+
+def test_failed_action_remains_retryable_and_unapplied(tmp_path, monkeypatch):
+    path = tmp_path / "suggestions.jsonl"
+    s1 = Suggestion(suggestion_id="s1", category="prompt_tweak", target="all",
+                    suggestion="test", failure_pattern="x", confidence=0.8,
+                    outcomes_analyzed=5, applied=False)
+    path.write_text(json.dumps(s1.to_dict()) + "\n", encoding="utf-8")
+    action = MagicMock(side_effect=[False, True])
+    monkeypatch.setattr("evolver_store._suggestions_path", lambda: path)
+    monkeypatch.setattr("evolver_store._apply_suggestion_action", action)
+
+    assert apply_suggestion("s1", manual=False) is True
+    failed = json.loads(path.read_text(encoding="utf-8").strip())
+    assert failed["applied"] is False
+    assert failed["status"] == "action_failed"
+
+    assert apply_suggestion("s1", manual=True) is True
+    retried = json.loads(path.read_text(encoding="utf-8").strip())
+    assert action.call_count == 2
+    assert retried["applied"] is True
+    assert retried["applied_manually"] is True
 
 
 def test_apply_suggestion_not_found(tmp_path):
@@ -1428,6 +1521,7 @@ def test_run_evolver_auto_applies_high_confidence(tmp_path, monkeypatch):
         return True
 
     monkeypatch.setattr("evolver.apply_suggestion", fake_apply)
+    monkeypatch.setattr("evolver.suggestion_is_applied", lambda sid: True)
     monkeypatch.setattr("evolver.load_outcomes", lambda limit=50: [MagicMock()] * 10)
     monkeypatch.setattr("evolver._llm_analyze", lambda outcomes, **kw: (
         ["pattern1"],
@@ -1444,6 +1538,32 @@ def test_run_evolver_auto_applies_high_confidence(tmp_path, monkeypatch):
     assert report.outcomes_reviewed == 10
     # Only the high-confidence suggestion should be auto-applied
     assert len(applied_ids) == 1
+
+
+def test_run_evolver_does_not_count_held_suggestion_as_applied(monkeypatch):
+    """A processed-but-held guardrail must not enter post-apply verification."""
+    from unittest.mock import MagicMock
+
+    monkeypatch.setattr("evolver.load_outcomes", lambda limit=50: [MagicMock()] * 3)
+    monkeypatch.setattr("evolver._llm_analyze", lambda outcomes, **kw: (
+        ["recurring unsafe action"],
+        [{
+            "category": "new_guardrail",
+            "target": "constraint",
+            "suggestion": "hold this rule for operator review",
+            "failure_pattern": "unsafe action",
+            "confidence": 0.9,
+        }],
+    ))
+    monkeypatch.setattr("evolver.apply_suggestion", lambda sid: True)
+    monkeypatch.setattr("evolver.suggestion_is_applied", lambda sid: False)
+    verify = MagicMock()
+    monkeypatch.setattr("evolver._verify_post_apply", verify)
+
+    report = run_evolver(dry_run=False, verbose=False, min_outcomes=1)
+
+    assert len(report.suggestions) == 1
+    verify.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

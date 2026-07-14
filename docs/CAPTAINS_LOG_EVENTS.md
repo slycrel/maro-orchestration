@@ -136,7 +136,8 @@ Written by `captains_log.log_event(...)`. Every entry has the four required fiel
 | `EVOLVER_SKIPPED` | evolver.py:1902 | run_id, outcomes_reviewed | An evolver cycle ran but produced nothing to apply. |
 | `EVOLVER_REVERTED` | evolver.py:664 | suggestion_id, category, target | An applied suggestion was rolled back. |
 | `EVOLVER_VERIFY` | evolver.py:2072 | run_id, auto_applied, passed, summary, reverted | Post-apply verification (pytest) ran on auto-applied changes. |
-| `GRADUATION_PROPOSED` | graduation.py:353 | category, confidence | A repeated failure-class diagnosis was proposed for graduation to a permanent fix. |
+| `GRADUATION_PROPOSED` | graduation.py:353 | category, confidence | A repeated failure-class diagnosis produced a pending intervention candidate. |
+| `GRADUATION_VERIFIED` | graduation.py | suggestion_id, failure_class, category, applied_manually, applied_at, verify_pattern, passed, output, structural_only | An applied graduation row's cheap structural check entered a new pass/fail or application state at evolver cadence. Repeated states are suppressed after successful delivery; failed delivery remains retryable. This is observability, not a behavioral regression verdict or automatic rollback. |
 | `PLAYBOOK_UPDATED` | playbook.py:235 | source, section | A line was appended to a playbook section (director's operational wisdom). |
 
 ### Recovery & diagnosis
