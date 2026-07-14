@@ -2775,3 +2775,17 @@ semantics, filtering, context caps, TSV safety, and CLI conflicts. Two real
 Claude reviewers found no high-severity defects; accepted sort-coverage,
 bounded-rendering, malformed-row, and flag-clarity findings were fixed, and
 follow-up review reported no remaining HIGH or MEDIUM findings.
+
+## Done-vs-achieved prospective measurement gate — completed 2026-07-14
+
+The open watch item still requires a manual artifact re-audit at organic n≈30,
+but reaching that gate is now measurable rather than another forensic project.
+Run and outcome records carry explicit `measurement_class` provenance
+(`organic`, `smoke`, `control`, `benchmark`), with normal work defaulting
+organic, synthetic CLI overrides, persisted dry-run exclusion, and `handle_id`
+deduplication across restarted loops. Legacy/missing labels remain unknown.
+`scripts/verdict-gap-stats.sh` reports the judged-organic counter and raw
+done/achieved split in text or JSON, labels raw verdicts as uncorrected, and
+refuses to count historical unknowns toward the gate. The active three-row
+ledger therefore reports 3 unknown / 0 organic / rate n/a, not a fabricated
+0% success rate.

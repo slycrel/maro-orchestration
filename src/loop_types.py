@@ -259,6 +259,10 @@ class LoopContext:
     loop_id: str = ""
     project: str = ""
     goal: str = ""
+    # Explicit top-level request provenance. These travel with the loop rather
+    # than being rediscovered from ambient run-dir context at finalize.
+    measurement_class: str = ""
+    handle_id: str = ""
 
     # Execution state
     step_outcomes: List[StepOutcome] = field(default_factory=list)

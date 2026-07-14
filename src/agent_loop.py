@@ -143,6 +143,8 @@ def run_agent_loop(
     parent_loop_id: Optional[str] = None,
     admission_wait_s: Optional[float] = None,  # seconds to poll a busy project slot; None = config (default: refuse immediately)
     defer_learning: bool = False,  # data-r2-01: caller runs closure + finalize_deferred_learning() afterwards — skip verdict-blind lesson extraction/crystallization at finalize
+    measurement_class: str = "",  # explicit organic/smoke/control/benchmark provenance; empty = unknown direct caller
+    handle_id: str = "",  # top-level request key; continuations reuse it for report dedup
     _recovery_in_progress: bool = False,  # internal: set by the Phase 45 auto-recovery re-run to prevent recursion
 ) -> LoopResult:
     """Run the autonomous loop for a goal.
@@ -195,6 +197,8 @@ def run_agent_loop(
         parent_loop_id=parent_loop_id,
         admission_wait_s=admission_wait_s,
         defer_learning=defer_learning,
+        measurement_class=measurement_class,
+        handle_id=handle_id,
     )
     if _early_return is not None:
         return _early_return
@@ -618,6 +622,8 @@ def run_agent_loop(
                         step_callback=step_callback,
                         parallel_fan_out=parallel_fan_out,
                         token_budget=token_budget,
+                        measurement_class=ctx.measurement_class,
+                        handle_id=ctx.handle_id,
                         _recovery_in_progress=True,
                     )
                     log.info("auto-recovery result: status=%s", result.status)

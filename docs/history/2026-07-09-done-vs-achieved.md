@@ -297,6 +297,35 @@ Recommended (recommendations only — no code changed in this pass):
 5. Re-run this analysis when the clean-era organic n reaches ~30; the
    corrected rate here rests on a 10-run slice with 2 confounds.
 
+### Prospective standing gate (shipped 2026-07-14)
+
+The original `organic` slice above was a manual classification over named
+handle IDs. It could not be turned into a standing metric honestly by matching
+words such as “haiku” or “impossible” in future goals. Run metadata and outcome
+rows therefore now carry an explicit `measurement_class`: normal production
+work defaults to `organic`; deliberate invocations can select `smoke`,
+`control`, or `benchmark`; historical missing labels remain `unknown`.
+
+`scripts/verdict-gap-stats.sh` reads the durable outcome ledger, excludes dry
+runs, collapses restart outcomes by `handle_id`, and marks the re-audit due only
+after 30 judged organic runs. Its rate is explicitly the **raw recorded verdict
+rate**, not the corrected success estimate produced by the artifact spot-audit
+in §6. When the gate becomes due, repeat that manual audit before changing the
+0.7 threshold or quoting a success rate.
+
+The newest outcome for a handle defines its current request state. In
+particular, if a budget-ceiling continuation follows a judged partial pass but
+has not itself received terminal closure judging, the request remains one
+`organic` run but is `unjudged` and cannot advance the gate. This is
+conservative by design. The separately backlogged lifecycle gap is to give
+direct continuation consumption terminal closure judging; counting the earlier
+partial verdict would bias the cohort toward false negatives.
+
+At instrumentation time the unified workspace held three legacy outcomes, all
+correctly reported `unknown`; the earlier n=10 corpus survives in this record
+but not in the reset active run/outcome store, so it is not added to the new
+counter by assertion.
+
 ---
 
 *Method note: read-only pass over `~/.maro/workspace/` and repo history;

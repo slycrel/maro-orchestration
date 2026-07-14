@@ -87,14 +87,23 @@ def handle_task(
             from llm import build_adapter, MODEL_CHEAP
             adapter = build_adapter(model=MODEL_CHEAP)
         _filtered_ctx = _handle_mod._context_firewall(_cont_ctx, depth=depth) if _cont_ctx else ""
-        return run_agent_loop(
-            _cont_goal,
-            adapter=adapter,
-            dry_run=dry_run,
-            verbose=verbose,
-            continuation_depth=depth,
-            ancestry_context_extra=_filtered_ctx,
-        )
+        _origin = Origin(task.get("origin") or {})
+        # This lane deliberately bypasses handle(), so carry top-level cohort
+        # identity explicitly and clear any stale run-dir left by an earlier
+        # task in the same drain batch. A continuation with no terminal
+        # closure remains an organic *unjudged* row, never a guessed result.
+        from runs import scoped_run_dir
+        with scoped_run_dir(None):
+            return run_agent_loop(
+                _cont_goal,
+                adapter=adapter,
+                dry_run=dry_run,
+                verbose=verbose,
+                continuation_depth=depth,
+                ancestry_context_extra=_filtered_ctx,
+                measurement_class=str(_origin.get("measurement_class") or ""),
+                handle_id=str(_origin.get("parent_handle_id") or ""),
+            )
 
     else:
         log.info("handle_task routing %s job_id=%s via handle()", source or "unknown", job_id)

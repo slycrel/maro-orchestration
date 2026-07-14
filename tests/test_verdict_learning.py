@@ -71,6 +71,19 @@ def test_record_outcome_unjudged_omits_verdict_keys(monkeypatch, tmp_path):
     assert "goal_achieved" not in row
     assert "goal_verdict_source" not in row
     assert "loop_id" not in row
+    assert "measurement_class" not in row
+    assert "handle_id" not in row
+
+
+def test_record_outcome_persists_measurement_and_run_dedup_keys(monkeypatch, tmp_path):
+    _setup(monkeypatch, tmp_path)
+    record_outcome(
+        "goal", "done", "summary",
+        measurement_class="organic", handle_id="handle-1",
+    )
+    row = _raw_rows()[-1]
+    assert row["measurement_class"] == "organic"
+    assert row["handle_id"] == "handle-1"
 
 
 def test_record_outcome_judged_false_writes_verdict(monkeypatch, tmp_path):

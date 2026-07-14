@@ -382,6 +382,8 @@ def reflect_and_record(
     goal_verdict_source: str = "",
     loop_id: str = "",
     defer_lessons: bool = False,
+    measurement_class: str = "",
+    handle_id: str = "",
 ) -> Outcome:
     """Reflect on a completed run and record the outcome + lessons.
 
@@ -405,6 +407,9 @@ def reflect_and_record(
                        once the closure verdict has been stamped on the row.
                        Requires loop_id (the join key the deferred extraction
                        uses to find the row).
+        measurement_class: Explicit organic/smoke/control/benchmark cohort
+                       label; empty means unknown, never inferred retroactively.
+        handle_id: Run-level key so restarted loop rows count as one run.
     """
     log.info("reflect_and_record goal=%r status=%s tokens=%d elapsed=%dms deferred=%s",
              goal[:60], status, tokens_in + tokens_out, elapsed_ms, defer_lessons)
@@ -472,6 +477,8 @@ def reflect_and_record(
         dry_run=dry_run,
         lesson_extraction_status="deferred" if defer_lessons else "completed",
         lesson_extraction_count=len(lessons),
+        measurement_class=measurement_class,
+        handle_id=handle_id,
     )
 
     _log_lesson_extraction(

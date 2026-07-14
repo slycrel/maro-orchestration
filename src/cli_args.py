@@ -6,6 +6,8 @@ from __future__ import annotations
 
 import argparse
 
+from ancestry import MEASUREMENT_CLASSES
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="orch", description="File-first orchestration CLI")
@@ -116,6 +118,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_handle.add_argument("--model", "-m", help="LLM model string")
     p_handle.add_argument("--lane", choices=["now", "agenda"], help="Force a specific lane")
     p_handle.add_argument("--persona", help="Force a specific persona by name (same as a 'persona:<name>:' prefix in the message; unknown names fall back to auto-selection)")
+    p_handle.add_argument("--measurement-class", choices=MEASUREMENT_CLASSES, default="organic", help="Success-measurement cohort provenance (default: organic)")
     p_handle.add_argument("--dry-run", action="store_true", help="Simulate without API calls")
     p_handle.add_argument("--verbose", "-v", action="store_true", help="Print progress")
     p_handle.add_argument("--format", choices=["text", "json"], default="text", help="Output format")
@@ -131,6 +134,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_run.add_argument("--dry-run", action="store_true", help="Simulate without API calls")
     p_run.add_argument("--verbose", "-v", action="store_true", help="Print progress")
     p_run.add_argument("--format", choices=["text", "json"], default="text", help="Output format")
+    p_run.add_argument("--measurement-class", choices=MEASUREMENT_CLASSES, default="organic", help="Success-measurement cohort provenance (default: organic)")
 
     p_resume = sub.add_parser(
         "resume",

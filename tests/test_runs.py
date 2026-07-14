@@ -438,6 +438,30 @@ def test_stamp_run_metadata_merges_without_clobbering(workspace):
         set_current_run_dir(None)
 
 
+def test_stamp_run_verdict_replaces_boolean_with_unjudged(workspace):
+    from runs import (
+        create_run_dir, set_current_run_dir, stamp_run_metadata,
+        stamp_run_verdict,
+    )
+    rd = create_run_dir("verdict1", prompt="build X")
+    set_current_run_dir(rd)
+    try:
+        stamp_run_metadata({"goal_achieved": True, "goal_verdict_source": "closure"})
+        stamp_run_verdict(
+            goal_achieved=None,
+            source="closure_unverifiable",
+            confidence=0.4,
+            summary="checks were inconclusive",
+        )
+        meta = json.loads((rd / "metadata.json").read_text())
+        assert "goal_achieved" not in meta
+        assert meta["goal_verdict_source"] == "closure_unverifiable"
+        assert meta["goal_verdict_confidence"] == 0.4
+        assert meta["goal_verdict_summary"] == "checks were inconclusive"
+    finally:
+        set_current_run_dir(None)
+
+
 def test_environment_snapshot_records_backend_order(workspace):
     from runs import create_run_dir, set_current_run_dir, write_environment_snapshot
     rd = create_run_dir("envtest3", prompt="p")
@@ -471,6 +495,20 @@ def test_open_run_creates_pins_and_captures(workspace):
         assert meta["lane"] == "agenda"
         assert meta["model"] == "mid"
         assert meta["origin"] == {"source": "cli-run"}
+    finally:
+        set_current_run_dir(None)
+
+
+def test_open_run_stamps_measurement_provenance_and_dry_run(workspace):
+    from runs import open_run, set_current_run_dir
+    try:
+        rd = open_run(
+            "measure1", prompt="synthetic canary", lane="agenda",
+            measurement_class="smoke", dry_run=True,
+        )
+        meta = json.loads((rd / "metadata.json").read_text())
+        assert meta["measurement_class"] == "smoke"
+        assert meta["dry_run"] is True
     finally:
         set_current_run_dir(None)
 

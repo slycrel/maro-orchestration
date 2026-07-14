@@ -443,6 +443,48 @@ def stamp_run_metadata(fields: dict) -> Optional[Path]:
         return None
 
 
+def stamp_run_verdict(
+    *,
+    goal_achieved: Optional[bool],
+    source: str,
+    confidence: float,
+    summary: str,
+) -> Optional[Path]:
+    """Replace the active run's latest goal verdict, preserving tri-state.
+
+    ``goal_achieved=None`` means the latest verifier was unable to judge the
+    goal.  In that case an earlier attempt's boolean must be removed rather
+    than inherited: the run metadata describes the delivered/latest attempt,
+    not the best-looking verdict seen anywhere in the handle.
+    """
+    try:
+        rd = current_run_dir()
+        if rd is None:
+            return None
+        meta_path = rd / "metadata.json"
+        existing: dict = {}
+        if meta_path.exists():
+            try:
+                existing = json.loads(meta_path.read_text(encoding="utf-8"))
+            except Exception:
+                existing = {}
+        existing.update({
+            "goal_verdict_source": source,
+            "goal_verdict_confidence": float(confidence),
+            "goal_verdict_summary": str(summary)[:300],
+        })
+        if goal_achieved is None:
+            existing.pop("goal_achieved", None)
+        else:
+            existing["goal_achieved"] = bool(goal_achieved)
+        index_run_dir(rd, existing)
+        from file_lock import atomic_write
+        atomic_write(meta_path, json.dumps(existing, indent=2, default=str))
+        return meta_path
+    except Exception:
+        return None
+
+
 def finalize_run(
     handle_id: str,
     *,
@@ -501,6 +543,8 @@ def open_run(
     lane: Optional[str] = None,
     repo_path: str = "",
     origin: Optional[Origin] = None,
+    measurement_class: Optional[str] = None,
+    dry_run: Optional[bool] = None,
 ) -> Path:
     """Create + pin the run-dir and arm start-of-run attribution capture.
 
@@ -509,12 +553,17 @@ def open_run(
     try/except — a runs/ failure must never block the run. The environment
     snapshot is best-effort here; the run-dir + pin are the load-bearing part.
     """
+    extra = {"origin": origin} if origin else {}
+    if measurement_class is not None:
+        extra["measurement_class"] = measurement_class
+    if dry_run is not None:
+        extra["dry_run"] = bool(dry_run)
     rd = create_run_dir(
         handle_id,
         prompt=prompt,
         lane=lane,
         model=model,
-        extra_metadata={"origin": origin} if origin else None,
+        extra_metadata=extra or None,
     )
     set_current_run_dir(rd)
     record_log_offset(handle_id)

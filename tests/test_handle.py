@@ -85,6 +85,32 @@ def test_handle_now_lane_dry_run(monkeypatch, tmp_path):
     assert result.lane == "now"
     assert result.status == "done"
     assert result.result != ""
+    from runs import run_dir
+    meta = json.loads((run_dir(result.handle_id) / "metadata.json").read_text())
+    assert meta["measurement_class"] == "organic"
+    assert meta["dry_run"] is True
+
+
+def test_handle_accepts_explicit_synthetic_measurement_class(monkeypatch, tmp_path):
+    _setup(monkeypatch, tmp_path)
+    result = handle(
+        "write a haiku", dry_run=True, force_lane="now",
+        measurement_class="smoke",
+    )
+    from runs import run_dir
+    meta = json.loads((run_dir(result.handle_id) / "metadata.json").read_text())
+    assert meta["measurement_class"] == "smoke"
+
+
+def test_handle_inherits_measurement_class_from_origin(monkeypatch, tmp_path):
+    _setup(monkeypatch, tmp_path)
+    result = handle(
+        "write a haiku", dry_run=True, force_lane="now",
+        origin={"source": "test-harness", "measurement_class": "smoke"},
+    )
+    from runs import run_dir
+    meta = json.loads((run_dir(result.handle_id) / "metadata.json").read_text())
+    assert meta["measurement_class"] == "smoke"
 
 
 def test_handle_now_forced(monkeypatch, tmp_path):
@@ -124,6 +150,11 @@ def test_handle_agenda_lane_dry_run(monkeypatch, tmp_path):
     assert result.status == "done"
     assert result.project is not None
     assert result.loop_result is not None
+    from memory import load_outcomes
+    outcome = load_outcomes(limit=1)[0]
+    assert outcome.measurement_class == "organic"
+    assert outcome.handle_id == result.handle_id
+    assert outcome.dry_run is True
 
 
 def test_handle_agenda_forced(monkeypatch, tmp_path):
@@ -2392,7 +2423,9 @@ class TestPostEscalateClosure:
         escalated = self._fake_loop_result(status="done", loop_id="lr-escalated")
         run_results = [initial, escalated]
 
+        run_calls = []
         def _fake_run(*args, **kwargs):
+            run_calls.append(kwargs.copy())
             return run_results.pop(0)
 
         verify_calls = []
@@ -2403,6 +2436,8 @@ class TestPostEscalateClosure:
         with patch("agent_loop.run_agent_loop", side_effect=_fake_run), \
              patch("intent.check_goal_clarity", return_value={"clear": True}), \
              patch("director.verify_goal_completion", side_effect=_fake_verify), \
+             patch("memory.annotate_outcome_verdict") as annotate_verdict, \
+             patch("loop_finalize.finalize_deferred_learning") as deferred_learning, \
              patch("llm.build_adapter", return_value=MagicMock()), \
              self._escalating_gate():
             handle("build X", force_lane="agenda", model="cheap", dry_run=False)
@@ -2414,6 +2449,23 @@ class TestPostEscalateClosure:
         second_loop_id = verify_calls[1].get("loop_id", "")
         assert second_loop_id == "lr-escalated", (
             f"post-escalate closure should target escalated loop_id, got {second_loop_id!r}"
+        )
+        assert len(run_calls) == 2
+        first_kwargs, escalated_kwargs = run_calls
+        assert escalated_kwargs["measurement_class"] == "organic"
+        assert escalated_kwargs["handle_id"] == first_kwargs["handle_id"]
+        assert escalated_kwargs["handle_id"]
+        assert escalated_kwargs["defer_learning"] is True
+        assert escalated_kwargs["parent_loop_id"] == "lr-initial"
+        annotate_verdict.assert_any_call(
+            "lr-escalated",
+            goal_achieved=True,
+            goal_verdict_source="closure",
+            goal_verdict_confidence=0.9,
+        )
+        assert any(
+            call.args and call.args[0].loop_id == "lr-escalated"
+            for call in deferred_learning.call_args_list
         )
 
     def test_post_escalate_closure_failure_does_not_break_delivery(
@@ -2450,6 +2502,38 @@ class TestPostEscalateClosure:
         assert call_count["n"] == 2
         assert result is not None
         assert result.status in ("done", "complete", "stuck", "partial", "restart")
+
+    def test_post_escalate_negative_verdict_demotes_delivered_result(
+        self, monkeypatch, tmp_path
+    ):
+        """The escalated attempt is what ships, so its judged closure—not
+        the superseded attempt's success—controls status and run metadata."""
+        self._setup(monkeypatch, tmp_path)
+        import runs as runs_mod
+
+        initial = self._fake_loop_result(status="done", loop_id="lr-initial")
+        escalated = self._fake_loop_result(status="done", loop_id="lr-escalated")
+        run_results = [initial, escalated]
+        closures = [
+            self._fake_closure(complete=True, confidence=0.9),
+            self._fake_closure(complete=False, confidence=0.95),
+        ]
+
+        with patch("agent_loop.run_agent_loop", side_effect=lambda *a, **k: run_results.pop(0)), \
+             patch("intent.check_goal_clarity", return_value={"clear": True}), \
+             patch("director.verify_goal_completion", side_effect=lambda *a, **k: closures.pop(0)), \
+             patch("llm.build_adapter", return_value=MagicMock()), \
+             patch("loop_finalize.finalize_deferred_learning"), \
+             self._escalating_gate():
+            result = handle("build X", force_lane="agenda", model="cheap", dry_run=False)
+
+        meta = json.loads(
+            (runs_mod.run_dir(result.handle_id) / "metadata.json").read_text()
+        )
+        assert result.status == "incomplete"
+        assert meta["goal_achieved"] is False
+        assert meta["goal_verdict_source"] == "closure"
+        assert meta["goal_verdict_confidence"] == 0.95
 
 
 # ---------------------------------------------------------------------------

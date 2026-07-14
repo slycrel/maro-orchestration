@@ -7,6 +7,11 @@ Read this at the start of every session. Update it as items are completed or new
 
 Last reviewed: 2026-07-14, eighteenth pass — lesson-funnel intake now has outcome-attributed deferred/completed/failed state, tiered-write counts, dry-run exclusion, and an archive-aware rolling report; the old empty-row “0 lessons” claim was unprovable and is corrected. Previous seventeenth pass: the captain's-log viewer residual shipped as a sortable per-event archive-spanning TSV/JSON slice and moved to BACKLOG_DONE after real Claude review. Previous sixteenth pass: the formal same-corpus M1 validator sweep selected VibeThinker-3B-4bit, rejected three smaller/alternate builds, and exposed/fixed an unsafe local certainty-threshold mismatch; only hardware-gated Linux/Ollama burn-in remains. Previous fifteenth pass: closure-rejected restart attempts are now verdict-stamped before replacement, and deterministic provenance failures outrank narrative closure passes; the closure-demotion residual moved to BACKLOG_DONE after real Claude review. Previous fourteenth pass: escalation-class notifications now carry the immediate originating run handle when one exists and an explicit blank legacy fallback; R4's final residual moved to BACKLOG_DONE. Previous thirteenth pass: the skill-candidate sweep now holds one fail-closed per-workspace flock across scan, paid extraction, and consumption; moved to BACKLOG_DONE and R3 residuals closed. Previous twelfth pass: one neutral learnability policy now serves curated run cards and raw outcome records; evolver no longer synthesizes fake success status; moved to BACKLOG_DONE. Previous eleventh pass: CuratorSpec runtime contracts now distinguish mandatory/optional outputs and dependencies, execute transactionally, and reject contract drift; moved to BACKLOG_DONE. Previous tenth pass: the R3 origin-dictionary residual shipped as one plain-JSON `Origin` TypedDict used across task/run/recall/thread boundaries; moved to BACKLOG_DONE. Previous ninth pass: PID-reuse-safe container/clone ownership shipped with Linux boot+start ticks and Darwin kernel microsecond timestamps; moved to BACKLOG_DONE. Previous eighth pass: durable O(1) run-reference index shipped with one-time legacy migration, exceptional fallback, import/prune maintenance, partial-migration state, and concurrency/corruption coverage; moved to BACKLOG_DONE. Previous seventh pass: `test-safe.sh` now runs its full chunked suite on macOS while preserving Linux affinity; moved to BACKLOG_DONE. Previous sixth pass: R5 run-curation side-effect boundary and runtime dependency semantics shipped and moved to BACKLOG_DONE; pure card construction is durably checkpointed before explicit maintenance. Previous fifth pass: R5 execution-fence setup now refuses visibly on mandatory cwd/policy failures, with five fault-injection tests; full suite green. Previous fourth pass: independent holistic review of the rolling 48-hour range `d717915e..8aa9876` added R5 (portable-pack review seal bypass reproduced end-to-end; pack import concurrency/global-routing breach; implicit hosted-free data egress + unenforced latency cap; run-curation atomicity/hidden-side-effect boundary; execution-fence setup fail-open). Canonical `pytest tests/ -q`, real-Docker container E2E, and `git diff --check` green. Previous same-day pass: session close (R4 final capstone adversarial-review across the ENTIRE day's changeset, `b2dc34d..HEAD`, run cross-model via the real `/adversarial-review` skill per the session's closing instruction: 3 more real bugs fixed live — enqueue-failure dead-chain now surfaces to the operator instead of silently completing, check-in payload off-by-one fixed [all 3 reviewers converged independently], skill-candidate consumed-on-crash bug fixed; 1 architectural residual documented [handle_id absent from escalation-class notify payloads, pre-existing, not a regression]; also closed out the one un-triaged batch-1 finding — navigator_shadow's analyze_live_agreement/analyze_planning_depth_agreement duplication, extracted shared _tabulate_agreement helper. Full suite green, 169/169, after every fix this session). Second pass same day (post-1.0 /goal session: recursion check-in + planning-depth shadow shipped, R1 architectural cleanup shipped, 1.6 /loop trace closed with evidence, knowledge-web read side traced and re-scoped — not built, real prerequisite gap found; R3 adversarial-review of all of the above — 5 bugs fixed live, 3 architectural residuals documented; #19/#20/#21 fully-shipped stubs archived to BACKLOG_DONE (content was already there or wholesale-done); #0's stale "mining passes TODO" bullet corrected — all 4 miners are shipped; -1's stale unchecked "Cosmetic sweep... SHIPPED" checkbox fixed; triaged the rest of the Actionable Stack — nothing else is both unblocked and ready without Jeremy's input). Previous same-day pass: #10, #14, #18 shipped and archived to BACKLOG_DONE; #17 trimmed to its O(all runs) residual; #22 residual (blank-slate skill set) and hist-r2-02 checked off; #25 code shipped, stays open pending Jeremy's API keys; container-executor C4 mechanics merged, C4-BOX real-goal burn-in stays Jeremy-gated. Previous: 2026-07-09 (decision-cleanup session with Jeremy: #19 thread-arch decisions all resolved + recursion decree recorded, intent-resolution A/B dropped, orch.py trio deprecated, host-check wired+scheduled — four entries → BACKLOG_DONE; fastembed lane confirmed stays-gated). Previous full triage: 2026-07-04.
 
+Current pass (2026-07-14, nineteenth): done-vs-achieved now has explicit
+prospective organic/smoke/control/benchmark provenance in run metadata and the
+durable outcome ledger, plus an honest n≈30 standing gate that keeps historical
+unknowns unknown.
+
 ---
 
 ## Actionable Stack
@@ -1483,6 +1488,31 @@ These four are kept (not deleted) this triage pending verification against curre
   environment-error signatures), not threshold tuning. Standing caveat: raw
   goal_achieved understates organic success ~20-30 points — don't feed it
   unadjusted into verify→learn; re-run at organic n≈30.
+  **Prospective gate shipped 2026-07-14:** normal `maro handle` / `maro run`
+  work now stamps `measurement_class=organic` into both run metadata and the
+  durable outcome row; synthetic callers can explicitly select `smoke`,
+  `control`, or `benchmark`, and dry runs are excluded. `handle_id` on the
+  outcome collapses restarted loops to one run. Run
+  `scripts/verdict-gap-stats.sh` (or `--json`) to see the n≈30 gate. It counts
+  only judged, explicitly-organic rows; missing/legacy labels remain unknown
+  and raw `goal_achieved` is named as an uncorrected verdict rate. Current
+  unified ledger: 3 unknown legacy rows, 0 prospective organic rows, gate not
+  due. The old n=10 hand-classified slice is historical evidence, not silently
+  carried into the new counter. Keep this item open only until the report says
+  the manual artifact re-audit is due.
+  **Tangential architecture finding (2026-07-14 adversarial review):**
+  `handle_task`'s budget-ceiling `loop_continuation` lane still calls
+  `run_agent_loop` directly, outside the normal run ownership + closure-verdict
+  lifecycle. This change now carries the parent handle/class explicitly, clears
+  stale ambient run context, and conservatively lets the newer continuation row
+  make the top-level request organic-but-unjudged. That prevents metric
+  contamination, but it also exposes the larger pre-existing gap: a successful
+  multi-pass continuation never receives the terminal closure verdict that
+  would let that request enter the judged cohort. Fix by giving continuation
+  consumption the shared run/closure lifecycle (not by teaching this report to
+  bless the earlier partial pass). This belongs with the dedicated
+  Verify→Learn/closure design arc; it is too large to smuggle into a stats
+  report.
 
 - [~] **`decomposition_too_broad` residual.** (verify before dropping) The cache-aware conversion (2026-06-22) removed the observed noise source; remaining open question is whether a step doing genuinely >200K *fresh* tokens on an otherwise-successful run should warn at all, or only when the loop also shows stress (blocked steps / budget exhaustion). Revisit only if a real fresh-heavy run flags spuriously. (Full block archived to BACKLOG_DONE; this is the residual watch-item.)
 

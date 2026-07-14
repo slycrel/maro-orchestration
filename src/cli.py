@@ -530,6 +530,7 @@ def _cmd_handle(args: argparse.Namespace) -> int:
             dry_run=args.dry_run,
             verbose=args.verbose,
             persona=getattr(args, "persona", None),
+            measurement_class=args.measurement_class,
         )
     except Exception as exc:
         return fail("E_HANDLE", str(exc))
@@ -647,6 +648,8 @@ def _cmd_run(args: argparse.Namespace) -> int:
         _rd = _runs.open_run(
             handle_id, prompt=goal_str, model=args.model, lane="agenda",
             origin=_origin,
+            measurement_class=args.measurement_class,
+            dry_run=args.dry_run,
         )
     except Exception:
         _rd = None
@@ -664,6 +667,8 @@ def _cmd_run(args: argparse.Namespace) -> int:
                     max_iterations=args.max_iterations,
                     dry_run=args.dry_run,
                     verbose=args.verbose,
+                    measurement_class=args.measurement_class,
+                    handle_id=handle_id,
                 )
             except Exception as exc:
                 return fail("E_RUN", str(exc))
@@ -2078,12 +2083,14 @@ def _cmd_resume(args: argparse.Namespace) -> int:
         except (ProcessLookupError, PermissionError, ValueError):
             pass
 
+    _measurement_class = ""
     if ckpt.handle_id:
         try:
             import json as _json
             from runs import run_dir
             meta = _json.loads((run_dir(ckpt.handle_id) / "metadata.json")
                                .read_text(encoding="utf-8"))
+            _measurement_class = str(meta.get("measurement_class") or "")
             if meta.get("status") == "done":
                 return fail("E_RESUME",
                             f"run {ckpt.handle_id} already finalized done")
@@ -2124,6 +2131,8 @@ def _cmd_resume(args: argparse.Namespace) -> int:
                     project=ckpt.project or None,
                     resume_from_loop_id=ckpt.loop_id,
                     verbose=args.verbose,
+                    measurement_class=_measurement_class,
+                    handle_id=handle_id,
                 )
             except Exception as exc:
                 return fail("E_RESUME", str(exc))

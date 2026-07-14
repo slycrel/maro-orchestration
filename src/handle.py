@@ -467,6 +467,7 @@ def handle(
     prior_context: Optional[str] = None,
     origin: Optional[Origin] = None,
     persona: Optional[str] = None,
+    measurement_class: Optional[str] = None,
 ) -> HandleResult:
     """Process an incoming request through Maro's handle.
 
@@ -498,6 +499,7 @@ def handle(
             prior_context=prior_context,
             origin=origin,
             persona=persona,
+            measurement_class=measurement_class,
         )
         return result
     except Exception as _handle_exc:
@@ -594,6 +596,7 @@ def _handle_impl(
     prior_context: Optional[str] = None,
     origin: Optional[Origin] = None,
     persona: Optional[str] = None,
+    measurement_class: Optional[str] = None,
 ) -> HandleResult:
     """Process an incoming request through Maro's handle.
 
@@ -619,6 +622,10 @@ def _handle_impl(
             argument beats freeform text — same precedence `model=` already has
             over `effort:` prefixes). Unknown names degrade to normal
             persona_for_goal() auto-selection; see _resolve_forced_persona().
+        measurement_class: Prospective cohort provenance for success-rate
+            measurement. Inherits an origin label when present; otherwise
+            normal work defaults organic. Synthetic callers must explicitly
+            choose smoke, control, or benchmark.
 
     Returns:
         HandleResult with routing info and substantive result.
@@ -629,6 +636,11 @@ def _handle_impl(
 
     handle_id = str(uuid.uuid4())[:8]
     started_at = time.monotonic()
+
+    from ancestry import normalize_measurement_class
+    measurement_class = normalize_measurement_class(
+        measurement_class or (origin or {}).get("measurement_class")
+    )
 
     if verbose:
         print(f"[maro:{handle_id}] handle: {message!r}", file=sys.stderr, flush=True)
@@ -665,6 +677,8 @@ def _handle_impl(
             model=model,
             repo_path=repo_path,
             origin=origin,
+            measurement_class=measurement_class,
+            dry_run=dry_run,
         )
     except Exception as _run_dir_exc:
         log.debug("runs: open_run failed: %s", _run_dir_exc)
@@ -896,6 +910,8 @@ def _handle_impl(
                         ("provenance" if outcome.get("provenance_missing") else "now_self_verdict")
                         if _now_judged else ""
                     ),
+                    measurement_class=measurement_class,
+                    handle_id=handle_id,
                 )
             except Exception:
                 pass  # outcome recording must never block the NOW response
@@ -1109,6 +1125,8 @@ def _handle_impl(
                     dry_run=dry_run,
                     verbose=verbose,
                     preset_steps=_pipe_steps,
+                    measurement_class=measurement_class,
+                    handle_id=handle_id,
                 )
                 return _loop_result_to_handle(
                     _pipe_result, handle_id=handle_id, message=message,
@@ -1129,6 +1147,8 @@ def _handle_impl(
                 dry_run=dry_run,
                 verbose=verbose,
                 parallel_fan_out=4,
+                measurement_class=measurement_class,
+                handle_id=handle_id,
             )
             return _loop_result_to_handle(
                 _team_result, handle_id=handle_id, message=message,
@@ -1146,6 +1166,8 @@ def _handle_impl(
                 adapter=adapter,
                 dry_run=dry_run,
                 verbose=verbose,
+                measurement_class=measurement_class,
+                handle_id=handle_id,
             )
             return _loop_result_to_handle(
                 _direct_result, handle_id=handle_id, message=message,
@@ -1170,6 +1192,8 @@ def _handle_impl(
             dry_run=dry_run,
             verbose=verbose,
             ralph_verify=_ralph_from_cfg or _ralph_prefix,
+            measurement_class=measurement_class,
+            handle_id=handle_id,
         )
         if _ultraplan_max_steps is not None:
             _loop_kwargs["max_steps"] = _ultraplan_max_steps
@@ -1958,16 +1982,25 @@ def _handle_impl(
                             print(f"[maro:{handle_id}] re-running with model={_next_tier}",
                                   file=sys.stderr, flush=True)
                         _escalated_adapter = build_adapter(model=_next_tier)
-                        loop_result = run_agent_loop(
-                            message,
-                            project=(project or loop_result.project or "") + "-escalated",
-                            model=_next_tier,
-                            adapter=_escalated_adapter,
-                            dry_run=False,
-                            verbose=verbose,
-                            loop_reason="quality_gate_escalate",
-                            parent_loop_id=getattr(loop_result, "loop_id", None),
-                        )
+                        _pre_escalation_loop_id = getattr(loop_result, "loop_id", None)
+                        _escalated_project = (
+                            project or getattr(loop_result, "project", "") or ""
+                        ) + "-escalated"
+                        # Preserve the normal run contract (measurement
+                        # provenance, handle identity, deferred learning,
+                        # callback/context, repo fence) while changing only
+                        # the fields intrinsic to an escalation retry.
+                        _escalate_kwargs = dict(_loop_kwargs)
+                        _escalate_kwargs.update({
+                            "project": _escalated_project,
+                            "model": _next_tier,
+                            "adapter": _escalated_adapter,
+                            "dry_run": False,
+                            "verbose": verbose,
+                            "loop_reason": "quality_gate_escalate",
+                            "parent_loop_id": _pre_escalation_loop_id,
+                        })
+                        loop_result = run_agent_loop(message, **_escalate_kwargs)
                         elapsed = int((time.monotonic() - started_at) * 1000)
                         if getattr(loop_result, "loop_id", ""):
                             _run_loop_ids.append(loop_result.loop_id)
@@ -2003,6 +2036,53 @@ def _handle_impl(
                                     loop_id=getattr(loop_result, "loop_id", "") or "",
                                     project=project or getattr(loop_result, "project", "") or "",
                                 )
+                                if (
+                                    _post_closure is not None
+                                    and _post_closure.checks_run > 0
+                                ):
+                                    _post_judged = getattr(_post_closure, "judged", True)
+                                    _post_source = (
+                                        "closure" if _post_judged
+                                        else "closure_unverifiable"
+                                    )
+                                    _post_achieved = (
+                                        bool(_post_closure.complete)
+                                        if _post_judged else None
+                                    )
+                                    try:
+                                        from memory import annotate_outcome_verdict as _aov_post
+                                        _aov_post(
+                                            getattr(loop_result, "loop_id", "") or "",
+                                            goal_achieved=_post_achieved,
+                                            goal_verdict_source=_post_source,
+                                            goal_verdict_confidence=float(
+                                                _post_closure.confidence
+                                            ),
+                                        )
+                                    except Exception:
+                                        pass
+                                    try:
+                                        from runs import stamp_run_verdict as _srv_post
+                                        _srv_post(
+                                            goal_achieved=_post_achieved,
+                                            source=_post_source,
+                                            confidence=float(_post_closure.confidence),
+                                            summary=str(_post_closure.summary),
+                                        )
+                                    except Exception:
+                                        pass
+                                    if (
+                                        _post_judged
+                                        and not _post_closure.complete
+                                        and _post_closure.confidence >= 0.7
+                                        and loop_result.status == "done"
+                                    ):
+                                        loop_result.status = "incomplete"
+                                        if loop_result.stuck_reason is None:
+                                            loop_result.stuck_reason = (
+                                                "post-escalate closure verification: "
+                                                f"{str(_post_closure.summary)[:300]}"
+                                            )
                                 if verbose and _post_closure is not None:
                                     print(
                                         f"[maro:{handle_id}] post-escalate closure: "
@@ -2012,6 +2092,24 @@ def _handle_impl(
                                     )
                             except Exception as _post_exc:
                                 log.debug("post-escalate closure failed: %s", _post_exc)
+                        # The copied loop contract intentionally keeps
+                        # defer_learning=True. Complete that contract after
+                        # the escalated verdict is available (or unjudged),
+                        # otherwise the shipped retry never extracts lessons.
+                        try:
+                            from loop_finalize import finalize_deferred_learning as _fdl_post
+                            _fdl_post(
+                                loop_result,
+                                adapter=_escalated_adapter,
+                                project=_escalated_project,
+                                dry_run=False,
+                                verbose=verbose,
+                            )
+                        except Exception as _post_dl_exc:
+                            log.warning(
+                                "post-escalate deferred learning failed for loop %s: %s",
+                                getattr(loop_result, "loop_id", ""), _post_dl_exc,
+                            )
             except Exception:
                 pass  # gate never blocks delivery of results
 
@@ -2362,6 +2460,8 @@ def main(argv=None):
     parser.add_argument("--model", "-m", help="LLM model string")
     parser.add_argument("--lane", choices=["now", "agenda"], help="Force a specific lane")
     parser.add_argument("--persona", help="Force a specific persona by name (same as a 'persona:<name>:' prefix in the message; unknown names fall back to auto-selection)")
+    from ancestry import MEASUREMENT_CLASSES
+    parser.add_argument("--measurement-class", choices=MEASUREMENT_CLASSES, default="organic", help="Success-measurement cohort provenance (default: organic)")
     parser.add_argument("--dry-run", action="store_true", help="Simulate without API calls")
     parser.add_argument("--verbose", "-v", action="store_true", help="Print progress")
     parser.add_argument("--format", choices=["text", "json"], default="text")
@@ -2388,6 +2488,7 @@ def main(argv=None):
             dry_run=args.dry_run,
             verbose=args.verbose,
             persona=args.persona,
+            measurement_class=args.measurement_class,
         )
     except RuntimeError as e:
         # build_adapter() raises RuntimeError with an actionable, human-facing

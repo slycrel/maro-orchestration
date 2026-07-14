@@ -2435,11 +2435,13 @@ def test_budget_ceiling_enqueues_continuation(monkeypatch, tmp_path):
 
     enqueued = {}
 
-    def _fake_enqueue(lane, source, reason, parent_job_id, continuation_depth=0):
+    def _fake_enqueue(lane, source, reason, parent_job_id, continuation_depth=0,
+                      origin=None):
         enqueued["lane"] = lane
         enqueued["source"] = source
         enqueued["reason"] = reason
         enqueued["depth"] = continuation_depth
+        enqueued["origin"] = origin
         return {"job_id": "cont-001"}
 
     from pre_flight import PlanReview
@@ -2455,6 +2457,8 @@ def test_budget_ceiling_enqueues_continuation(monkeypatch, tmp_path):
             max_steps=4,
             dry_run=False,
             continuation_depth=0,
+            measurement_class="benchmark",
+            handle_id="handle-root",
         )
 
     assert result.status in ("stuck", "done", "partial")
@@ -2463,6 +2467,8 @@ def test_budget_ceiling_enqueues_continuation(monkeypatch, tmp_path):
         assert "CONTINUATION" in enqueued["reason"]
         assert enqueued["lane"] == "agenda"
         assert enqueued["depth"] == 1  # depth incremented
+        assert enqueued["origin"]["measurement_class"] == "benchmark"
+        assert enqueued["origin"]["parent_handle_id"] == "handle-root"
 
 
 def test_budget_ceiling_escalates_at_depth_limit(monkeypatch, tmp_path):

@@ -303,6 +303,8 @@ def _build_result_and_finalize(
         failure_chain=failure_chain,
         recovery_steps=recovery_step_count,
         defer_learning=getattr(ctx, "defer_learning", False),
+        measurement_class=ctx.measurement_class,
+        handle_id=ctx.handle_id,
     )
 
     # Checkpoints are KEPT on completion (retention decree, 2026-07-10).
@@ -421,6 +423,8 @@ def _finalize_loop(
     failure_chain: Optional[List[str]] = None,
     recovery_steps: int = 0,
     defer_learning: bool = False,
+    measurement_class: str = "",
+    handle_id: str = "",
 ) -> None:
     """Run all post-loop side effects after the main execution loop ends.
 
@@ -568,6 +572,8 @@ def _finalize_loop(
             # data-r2-01: when the caller will run closure, a "done" run's
             # lessons wait for the verdict (extract_deferred_lessons).
             defer_lessons=defer_learning and loop_status == "done",
+            measurement_class=measurement_class,
+            handle_id=handle_id,
         )
         # Meta-Harness steal: persist step-level traces so the evolver proposer
         # sees full execution context, not just aggregate summaries.

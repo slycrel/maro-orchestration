@@ -32,6 +32,22 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, TypedDict
 
 
+MEASUREMENT_CLASSES = ("organic", "smoke", "control", "benchmark")
+
+
+def normalize_measurement_class(
+    value: Optional[str], *, default: str = "organic"
+) -> str:
+    """Validate prospective success-measurement provenance at its boundary."""
+    normalized = str(value or default).strip().lower()
+    if normalized not in MEASUREMENT_CLASSES:
+        raise ValueError(
+            "measurement_class must be one of: "
+            + ", ".join(sorted(MEASUREMENT_CLASSES))
+        )
+    return normalized
+
+
 # ---------------------------------------------------------------------------
 # Data model
 # ---------------------------------------------------------------------------
@@ -81,6 +97,7 @@ class Origin(TypedDict, total=False):
     resumed_from: str
     next_checkin_depth: int
     checkins_sent: int
+    measurement_class: str
     # Transport snapshot only. NavigatorDecision remains the authoritative
     # domain type; this field deliberately does not redeclare that contract.
     dispatch_navigator: Dict[str, Any]

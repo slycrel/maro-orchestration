@@ -214,6 +214,23 @@ def test_run_benchmark_dry_run_all_benchmarks():
         assert result.status == "pass"
 
 
+def test_live_benchmark_labels_run_as_benchmark(monkeypatch):
+    import eval as eval_mod
+    captured = {}
+
+    def fake_handle(goal, **kwargs):
+        captured.update(kwargs)
+        return type("Result", (), {
+            "result": "hello", "status": "done", "loop_result": None,
+            "tokens_in": 0, "tokens_out": 0,
+        })()
+
+    monkeypatch.setattr(eval_mod, "handle", fake_handle)
+    result = eval_mod.run_benchmark(BUILTIN_BENCHMARKS[0], dry_run=False)
+    assert result.status == "pass"
+    assert captured["measurement_class"] == "benchmark"
+
+
 # ---------------------------------------------------------------------------
 # run_eval dry_run
 # ---------------------------------------------------------------------------

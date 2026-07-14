@@ -507,8 +507,16 @@ class TestHandleTask:
             called["goal"] = goal
             called["depth"] = kw.get("continuation_depth", -1)
             called["ctx"] = kw.get("ancestry_context_extra", "")
+            called["measurement_class"] = kw.get("measurement_class", "")
+            called["handle_id"] = kw.get("handle_id", "")
+            from runs import current_run_dir
+            called["active_run_dir"] = current_run_dir()
             return _FakeLoopResult()
 
+        from runs import set_current_run_dir
+        stale = tmp_path / "runs" / "stale-parent"
+        stale.mkdir(parents=True)
+        set_current_run_dir(stale)
         with mock.patch("agent_loop.run_agent_loop", _fake_run_agent_loop):
             task = {
                 "job_id": "cont-t-001",
@@ -516,12 +524,22 @@ class TestHandleTask:
                 "reason": "CONTINUATION of: review auth module\n\nPass 2.\n\nRemaining:\n- step 3",
                 "continuation_depth": 2,
                 "status": "claimed",
+                "origin": {
+                    "parent_handle_id": "parent-123",
+                    "measurement_class": "control",
+                },
             }
             handle_task(task, dry_run=True)
 
         # Goal should be extracted cleanly — not the full blob
         assert called["goal"] == "review auth module"
         assert called["depth"] == 2
+        assert called["measurement_class"] == "control"
+        assert called["handle_id"] == "parent-123"
+        assert called["active_run_dir"] is None
+        from runs import current_run_dir
+        assert current_run_dir() == stale  # caller context restored, not consumed
+        set_current_run_dir(None)
         # Context block passed as ancestry_context_extra
         assert "Remaining" in called["ctx"] or "Pass 2" in called["ctx"]
 

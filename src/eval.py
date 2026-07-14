@@ -222,6 +222,7 @@ def run_benchmark(
             adapter=adapter,
             dry_run=False,
             verbose=verbose,
+            measurement_class="benchmark",
         )
         elapsed = int((time.monotonic() - t0) * 1000)
 

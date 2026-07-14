@@ -68,6 +68,11 @@ class Outcome:
     dry_run: bool = False            # excludes synthetic dry-run lessons from production funnel metrics
     lesson_extraction_status: str = ""  # "deferred" | "completed" | "failed" | legacy unknown
     lesson_extraction_count: int = 0
+    # Prospective cohort provenance for the done-vs-achieved re-audit.
+    # Empty/absent means pre-instrumentation unknown; never infer this from
+    # goal wording after the fact.
+    measurement_class: str = ""  # "organic" | "smoke" | "control" | "benchmark"
+    handle_id: str = ""          # durable run-level dedup key (restarts share it)
 
 
 @dataclass
@@ -334,6 +339,10 @@ def _verdict_row(obj: Any) -> Dict[str, Any]:
         row.pop("goal_verdict_confidence")
     if "loop_id" in row and not row["loop_id"]:
         row.pop("loop_id")
+    if "measurement_class" in row and not row["measurement_class"]:
+        row.pop("measurement_class")
+    if "handle_id" in row and not row["handle_id"]:
+        row.pop("handle_id")
     return row
 
 
@@ -357,6 +366,8 @@ def record_outcome(
     dry_run: bool = False,
     lesson_extraction_status: str = "",
     lesson_extraction_count: int = 0,
+    measurement_class: str = "",
+    handle_id: str = "",
 ) -> Outcome:
     """Record the outcome of a completed run.
 
@@ -378,6 +389,9 @@ def record_outcome(
                        post-closure verdict annotation find this row.
         dry_run: Persisted cohort exclusion; dry-run lessons are synthetic.
         lesson_extraction_status/count: Durable funnel and idempotency state.
+        measurement_class: Explicit done-vs-achieved cohort provenance. Empty
+                       means unknown; callers must not infer it from goal text.
+        handle_id: Run-level key used to collapse restarted loop outcomes.
     """
     import uuid
     from metrics import estimate_cost
@@ -403,6 +417,8 @@ def record_outcome(
         dry_run=bool(dry_run),
         lesson_extraction_status=lesson_extraction_status,
         lesson_extraction_count=max(0, int(lesson_extraction_count)),
+        measurement_class=measurement_class,
+        handle_id=handle_id,
     )
 
     # Append to outcomes ledger
