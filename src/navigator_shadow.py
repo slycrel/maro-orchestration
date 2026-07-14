@@ -47,6 +47,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from ancestry import Origin
 from navigator import NavigatorInput, WorkReport
 from recall import (
     PriorAttempt,
@@ -261,7 +262,7 @@ def replay_run(
 def shadow_dispatch_live(
     goal: str,
     *,
-    origin: Optional[Dict[str, Any]] = None,
+    origin: Optional[Origin] = None,
     recall_result: Optional[RecallResult] = None,
     pipeline_move: str = "execute",
     extra: Optional[Dict[str, Any]] = None,

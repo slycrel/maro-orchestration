@@ -15,6 +15,7 @@ from ancestry import (
     create_child_ancestry,
     get_project_ancestry,
     list_child_projects,
+    Origin,
     orch_ancestry,
     orch_impact,
     set_project_ancestry,
@@ -72,6 +73,21 @@ def test_project_ancestry_from_dict_empty():
     a = ProjectAncestry.from_dict({})
     assert a.parent_id is None
     assert a.ancestry == []
+
+
+def test_origin_is_a_plain_dict_and_copies_legacy_transport_keys():
+    base = {"source": "old", "legacy_extension": {"kept": True}}
+
+    origin = Origin(base)
+    origin["source"] = "new"
+    origin["parent_job_id"] = "job-1"
+
+    assert origin == {
+        "source": "new",
+        "legacy_extension": {"kept": True},
+        "parent_job_id": "job-1",
+    }
+    assert origin is not base
 
 
 # ---------------------------------------------------------------------------

@@ -41,6 +41,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from ancestry import Origin
+
 
 # ---------------------------------------------------------------------------
 # Magic prefix registry
@@ -463,7 +465,7 @@ def handle(
     verbose: bool = False,
     channel: Optional["ConversationChannel"] = None,
     prior_context: Optional[str] = None,
-    origin: Optional[dict] = None,
+    origin: Optional[Origin] = None,
     persona: Optional[str] = None,
 ) -> HandleResult:
     """Process an incoming request through Maro's handle.
@@ -590,7 +592,7 @@ def _handle_impl(
     verbose: bool = False,
     channel: Optional["ConversationChannel"] = None,
     prior_context: Optional[str] = None,
-    origin: Optional[dict] = None,
+    origin: Optional[Origin] = None,
     persona: Optional[str] = None,
 ) -> HandleResult:
     """Process an incoming request through Maro's handle.

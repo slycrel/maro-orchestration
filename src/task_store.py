@@ -20,6 +20,7 @@ import uuid
 from contextlib import contextmanager
 from typing import Any, Dict, List, Optional
 
+from ancestry import Origin
 from config import workspace_root as _workspace_root
 
 
@@ -57,7 +58,7 @@ def make_task(
     parent_job_id: str = "",
     blocked_by: Optional[List[str]] = None,
     continuation_depth: int = 0,
-    origin: Optional[Dict[str, Any]] = None,
+    origin: Optional[Origin] = None,
 ) -> Dict[str, Any]:
     now = utc_now()
     return {
@@ -75,7 +76,7 @@ def make_task(
         # parent_loop_id, parent_goal, ...). Without it a requeued plan step
         # arrives at handle() as a brand-new goal with no thread identity —
         # the fan-out failure traced in the 2026-06-10 goal-brain pressure test.
-        "origin": origin or {},
+        "origin": Origin(origin or {}),
         "timestamps": {
             "queued_at_utc": now,
             "claimed_at_utc": "",
@@ -159,7 +160,7 @@ def enqueue(
     blocked_by: Optional[List[str]] = None,
     job_id: Optional[str] = None,
     continuation_depth: int = 0,
-    origin: Optional[Dict[str, Any]] = None,
+    origin: Optional[Origin] = None,
 ) -> Dict[str, Any]:
     """Create a new task and write it to disk."""
     jid = job_id or new_job_id()

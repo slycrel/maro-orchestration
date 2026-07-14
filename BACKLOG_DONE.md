@@ -8,6 +8,25 @@ Last split: 2026-04-16 (session 34).
 
 ---
 
+### R3: Typed origin ancestry contract — SHIPPED (2026-07-13)
+
+Task, run, recall, navigator, and thread-brain paths previously passed an
+unshaped `dict` whose supported ancestry keys had to be inferred from scattered
+producers and consumers. `ancestry.Origin` now records the existing optional
+plain-JSON fields in one `TypedDict`; CLI starts/resumes, loop continuations,
+director/queue copies, and task creation all construct that same type, while
+public consumers accept it explicitly. Runtime storage remains an ordinary
+dictionary, and copied legacy keys remain intact for rolling compatibility.
+
+Three real Claude reviewers contested the first version: its custom merge
+helper had unused parameters and overwrite semantics incompatible with the
+queue's required `setdefault` behavior, and a nested navigator TypedDict
+duplicated the authoritative domain contract. Both abstractions were removed.
+The final design uses only `Origin(...)`'s native dict-compatible constructor;
+the navigator field is explicitly a transport snapshot. A focused follow-up
+review approved the simplification. Focused lineage/queue/run suites and the
+full suite passed.
+
 ### R5: PID-reuse-safe ephemeral ownership — SHIPPED (2026-07-13)
 
 Stale Docker containers and scratch clones recorded only an owner PID. If the

@@ -638,7 +638,8 @@ def _cmd_run(args: argparse.Namespace) -> int:
     # visible to `maro inspect-run` / `maro viz search`. `runs.open_run` is
     # the identical "own a run" sequence handle.py uses — no duplication.
     handle_id = _uuid.uuid4().hex[:8]
-    _origin = {"source": "cli-run"}
+    from ancestry import Origin
+    _origin = Origin(source="cli-run")
     if getattr(args, "parent", None):
         _origin["parent_project"] = args.parent
     _rd = None
@@ -2106,9 +2107,10 @@ def _cmd_resume(args: argparse.Namespace) -> int:
     handle_id = ckpt.handle_id or _uuid.uuid4().hex[:8]
     _rd = None
     try:
+        from ancestry import Origin
         _rd = _runs.open_run(
             handle_id, prompt=ckpt.goal, lane="agenda",
-            origin={"source": "cli-resume", "resumed_from": ckpt.loop_id},
+            origin=Origin(source="cli-resume", resumed_from=ckpt.loop_id),
         )
     except Exception:
         _rd = None

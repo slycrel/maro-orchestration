@@ -35,6 +35,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
+from ancestry import Origin
+
 log = logging.getLogger("recall")
 
 # Newest-first cap on run-dir metadata reads per recall() call. Keeps dispatch
@@ -247,7 +249,7 @@ def _read_run_metadata(rd) -> Optional[dict]:
         return None
 
 
-def _resolve_thread(origin: Optional[dict]) -> Optional[ThreadIdentity]:
+def _resolve_thread(origin: Optional[Origin]) -> Optional[ThreadIdentity]:
     """Walk origin ancestry through run metadata, immediate parent first."""
     if not origin:
         return None
@@ -395,7 +397,7 @@ def recall(
     goal: str,
     *,
     slice: str = "loop",
-    origin: Optional[dict] = None,
+    origin: Optional[Origin] = None,
     project: str = "",
     window_hours: float = 24.0,
 ) -> RecallResult:

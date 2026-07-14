@@ -39,6 +39,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional, Tuple, TYPE_CHECKING
 
+from ancestry import Origin
+
 if TYPE_CHECKING:
     from conversation import ConversationChannel
 
@@ -1080,7 +1082,7 @@ def _advance_origin_with_checkin(task, new_depth) -> tuple:
     - origin["next_checkin_depth"]: depth of the *next* check-in (first = 2)
     - origin["checkins_sent"]:      count so far, for cadence + summary
     """
-    origin = dict(task.get("origin") or {})
+    origin = Origin(task.get("origin") or {})
     next_checkin = origin.get("next_checkin_depth", _checkin_first_depth())
     should_fire = new_depth >= next_checkin
     if should_fire:

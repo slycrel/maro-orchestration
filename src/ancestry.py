@@ -29,7 +29,7 @@ from __future__ import annotations
 import json
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, Dict, List, Optional, TypedDict
 
 
 # ---------------------------------------------------------------------------
@@ -60,6 +60,30 @@ class ProjectAncestry:
     def from_dict(cls, d: dict) -> "ProjectAncestry":
         nodes = [AncestryNode(**n) for n in d.get("ancestry", [])]
         return cls(parent_id=d.get("parent_id"), ancestry=nodes)
+
+
+class Origin(TypedDict, total=False):
+    """Serialized lineage shared by task, run, recall, and thread metadata.
+
+    The shape remains a plain JSON dictionary on disk.  ``total=False`` is
+    intentional: root/user-created work has no parent, while continuations
+    acquire parent and recursion-cadence fields as they move through the
+    queue.
+    """
+
+    source: str
+    job_id: str
+    parent_job_id: str
+    parent_loop_id: str
+    parent_handle_id: str
+    parent_goal: str
+    parent_project: str
+    resumed_from: str
+    next_checkin_depth: int
+    checkins_sent: int
+    # Transport snapshot only. NavigatorDecision remains the authoritative
+    # domain type; this field deliberately does not redeclare that contract.
+    dispatch_navigator: Dict[str, Any]
 
 
 # ---------------------------------------------------------------------------

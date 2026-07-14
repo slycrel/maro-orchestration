@@ -2504,3 +2504,13 @@ Dormant (deliberately parked, not dropped):
   and cross-method false-delete bugs in the first design plus boot-ID drift and
   Darwin precision gaps; all fixed. Apple C/ctypes layouts match (136 bytes,
   start offsets 120/128) and a real M1 kernel call succeeded.
+
+- **2026-07-13 (M1 continuation: origin ancestry has one typed shape)** —
+  Closed the top R3 architectural residual without changing persistence:
+  `Origin` is a `total=False` TypedDict over the plain JSON keys already used
+  by task, run, recall, navigator, and thread-brain flows. Every origin creation
+  or queue-copy boundary now constructs it explicitly; legacy transport keys
+  survive dictionary copies. Three Claude lenses correctly rejected the first
+  custom merge helper (wrong semantics for queue defaults, speculative surface)
+  and duplicate nested navigator type; both were deleted. A follow-up reviewer
+  approved the smaller native `Origin(...)` design.

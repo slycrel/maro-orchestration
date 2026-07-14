@@ -29,6 +29,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from ancestry import Origin
+
 
 _ADJECTIVES = (
     "amber", "azure", "brisk", "calm", "clever", "cobalt", "crisp",
@@ -498,7 +500,7 @@ def open_run(
     model: Optional[str] = None,
     lane: Optional[str] = None,
     repo_path: str = "",
-    origin: Optional[dict] = None,
+    origin: Optional[Origin] = None,
 ) -> Path:
     """Create + pin the run-dir and arm start-of-run attribution capture.
 

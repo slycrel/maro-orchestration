@@ -33,6 +33,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from ancestry import Origin
+
 log = logging.getLogger("thread_brain")
 
 _FILENAME = "goal_brain.md"
@@ -56,7 +58,7 @@ def create_thread_brain(
     run_dir: Path,
     *,
     goal: str,
-    origin: Optional[dict] = None,
+    origin: Optional[Origin] = None,
 ) -> Optional[Path]:
     """Seed the thread's goal-brain. First call wins (same rule as
     prompt.txt) — re-creating a run dir must not clobber accreted state.

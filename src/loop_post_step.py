@@ -18,6 +18,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from ancestry import Origin
 from loop_types import LoopContext, StepOutcome, _orch, MAX_RESTART_DEPTH
 from loop_artifacts import _write_plan_manifest
 from loop_planning import _shape_steps
@@ -59,11 +60,11 @@ def _handle_budget_ceiling(
                 _parent_handle = _cur_hid() or ""
             except Exception:
                 _parent_handle = ""
-            _origin = {
-                "parent_loop_id": ctx.loop_id,
-                "parent_handle_id": _parent_handle,
-                "parent_goal": ctx.goal[:200],
-            }
+            _origin = Origin(
+                parent_loop_id=ctx.loop_id,
+                parent_handle_id=_parent_handle,
+                parent_goal=ctx.goal[:200],
+            )
             _done_count = sum(1 for s in step_outcomes if s.status == "done")
             _done_summary = "; ".join(
                 s.text[:80] for s in step_outcomes if s.status == "done"

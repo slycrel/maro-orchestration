@@ -20,6 +20,8 @@ import logging
 
 from typing import List, Optional
 
+from ancestry import Origin
+
 log = logging.getLogger("maro.handle")
 
 
@@ -99,7 +101,7 @@ def handle_task(
         # creator recorded one) plus queue-level identity. Without this, a
         # requeued goal arrives at handle() indistinguishable from fresh user
         # input (goal-brain pressure test, 2026-06-10, finding 1).
-        _origin = dict(task.get("origin") or {})
+        _origin = Origin(task.get("origin") or {})
         _origin.setdefault("source", source or "task_store")
         _origin.setdefault("job_id", job_id)
         if task.get("parent_job_id"):

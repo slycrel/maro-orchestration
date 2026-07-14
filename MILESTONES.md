@@ -2,7 +2,12 @@
 
 What to do next, in what order. Updated each session. Deferred ideas live in BACKLOG.md; completed phase history in docs/history/ROADMAP_ARCHIVE.md (ROADMAP.md is a stub). This file is the executable queue.
 
-Last updated: 2026-07-13 (M1 continuation checkpoint — R5 PID-reuse-safe
+Last updated: 2026-07-13 (M1 continuation checkpoint — R3 typed origin
+ancestry contract SHIPPED: one optional-field `Origin` TypedDict now spans
+task, run, recall, navigator, and thread-brain boundaries without changing the
+plain-JSON runtime format. Three-lens Claude review caused the custom merge
+helper and duplicate navigator payload type to be removed; follow-up approved.
+Previous checkpoint: R5 PID-reuse-safe
 ephemeral ownership SHIPPED: Docker labels and scratch-clone sidecars pair PID
 with portable kernel birth tokens; legacy/ambiguous state remains conservative.
 Critical cross-model false-deletion findings fixed; real Darwin ABI and M1
