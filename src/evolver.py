@@ -370,6 +370,33 @@ def promote_skill_candidates(*, adapter=None, dry_run: bool = False,
     candidates, dry_run, or extract_skills itself declining a low-signal
     batch — all non-error outcomes for a heuristic pass).
     """
+    if dry_run:
+        return _promote_skill_candidates_impl(
+            adapter=adapter, dry_run=True, limit=limit, verbose=verbose
+        )
+
+    # The read-unconsumed → paid extraction → mark-consumed transaction must
+    # have one process owner. A second manual/heartbeat/run-cadence evolver
+    # skips non-blockingly; the winner consumes successes, while extraction
+    # failures remain available for a later cycle. Lock infrastructure fails
+    # closed because duplicate LLM spend is the risk this boundary prevents.
+    try:
+        from proc_lock import hold_pidfile
+    except Exception as exc:
+        log.warning("skill_candidate sweep lock failed closed: %s", exc)
+        return 0
+    with hold_pidfile("skill-candidate-sweep", fail_open=False) as acquired:
+        if not acquired:
+            log.info("skill_candidate sweep skipped: another process owns it")
+            return 0
+        return _promote_skill_candidates_impl(
+            adapter=adapter, dry_run=False, limit=limit, verbose=verbose
+        )
+
+
+def _promote_skill_candidates_impl(*, adapter=None, dry_run: bool = False,
+                                   limit: int = 5, verbose: bool = False) -> int:
+    """Implementation; production caller owns the sweep lock; dry-run does not."""
     try:
         from run_curation import find_unconsumed_skill_candidates, mark_skill_candidate_consumed
         from skills import extract_skills

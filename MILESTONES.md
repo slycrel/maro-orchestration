@@ -2,7 +2,11 @@
 
 What to do next, in what order. Updated each session. Deferred ideas live in BACKLOG.md; completed phase history in docs/history/ROADMAP_ARCHIVE.md (ROADMAP.md is a stub). This file is the executable queue.
 
-Last updated: 2026-07-13 (M1 continuation checkpoint — R3 shared
+Last updated: 2026-07-13 (M1 continuation checkpoint — R3 skill-candidate
+sweep ownership SHIPPED: a fail-closed per-workspace flock now spans scan,
+paid extraction, and consumption; overlapping evolvers skip before reads while
+failed extraction remains retryable. Real cross-process test and Claude review
+approved after observability fixes. All R3 residuals are now closed. Previous checkpoint: R3 shared
 learnable-outcome policy SHIPPED: curated cards and raw ledger rows now use one
 neutral fail-closed predicate, and evolver no longer invents `status: done`.
 Three-lens Claude review moved the first version out of the semantically wrong

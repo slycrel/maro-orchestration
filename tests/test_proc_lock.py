@@ -11,6 +11,7 @@ ever touching Path.home().
 
 import sys
 import types
+from unittest.mock import patch
 
 import proc_lock
 
@@ -38,3 +39,16 @@ def test_pidfile_path_isolated_under_partial_config_stub(monkeypatch, tmp_path):
 
     assert str(p).startswith(str(tmp_path.resolve()))
     assert p.name == "heartbeat.pid"
+
+
+def test_pidfile_can_fail_closed_when_lock_storage_is_unavailable(caplog):
+    with patch("builtins.open", side_effect=OSError("read-only")):
+        with proc_lock.hold_pidfile("paid-work", fail_open=False) as acquired:
+            assert acquired is False
+    assert "skipping (fail-closed)" in caplog.text
+
+
+def test_pidfile_keeps_daemon_fail_open_default():
+    with patch("builtins.open", side_effect=OSError("read-only")):
+        with proc_lock.hold_pidfile("heartbeat") as acquired:
+            assert acquired is True

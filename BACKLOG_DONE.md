@@ -8,6 +8,25 @@ Last split: 2026-04-16 (session 34).
 
 ---
 
+### R3: Cross-process skill-candidate sweep ownership — SHIPPED (2026-07-13)
+
+Manual, heartbeat, and run-cadence evolvers could overlap the unconsumed-card
+scan, pay for duplicate `extract_skills` calls, then race to the same safe final
+write. The complete scan → extraction → consumption transaction now holds the
+per-workspace `skill-candidate-sweep` flock. A loser skips non-blockingly before
+even scanning; the winner consumes decisions, while extraction failures remain
+unconsumed for a later retry. Lock-storage failure is fail-closed for this paid
+path, while daemon pidfile callers retain their historical fail-open default.
+
+Two real Claude reviewers approved whole-sweep locking over claim-before (which
+would burn retryable candidates on transient failures). They found and fixed a
+misleading fail-closed log, an exception scope that mislabeled sweep-body
+failures, and weak paid-path test coverage. A real child process proves
+cross-process exclusion and bounded readiness; follow-up review approved. A
+process crash after successful extraction but before consumption can still
+repeat spend on restart; this pre-existing rare window is the deliberate cost
+of consume-after/retry-on-failure semantics, not a concurrency race.
+
 ### R3: Shared learnable-outcome policy — SHIPPED (2026-07-13)
 
 Skill extraction, run curation, and the candidate catch-up sweep previously

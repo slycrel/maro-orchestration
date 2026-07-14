@@ -62,6 +62,8 @@ def try_hold_pidfile(name: str):
     until process death (the kernel releases the flock). Returns an opaque
     handle to keep referenced, or None if a live holder exists. Environment
     errors degrade to a warning + a truthy sentinel (daemon still runs).
+    Paid/non-idempotent finite work should use ``hold_pidfile(...,
+    fail_open=False)`` instead.
     """
     path = pidfile_path(name)
     fh = None
@@ -89,13 +91,14 @@ def try_hold_pidfile(name: str):
 
 
 @contextlib.contextmanager
-def hold_pidfile(name: str) -> Generator[bool, None, None]:
+def hold_pidfile(name: str, *, fail_open: bool = True) -> Generator[bool, None, None]:
     """Hold <workspace>/run/<name>.pid exclusively for the with-block.
 
     Yields True if acquired (payload written, lock held until exit),
     False if a live holder exists. Never blocks. On environment errors
-    (read-only fs etc.) yields True unlocked with a warning — a broken
-    fs shouldn't stop the daemon, and the failure is loud in logs.
+    (read-only fs etc.) yields True unlocked with a warning by default — a
+    broken fs shouldn't stop a daemon. Callers protecting paid or
+    non-idempotent work may set ``fail_open=False`` to skip instead.
     """
     path = pidfile_path(name)
     fh = None
@@ -108,10 +111,11 @@ def hold_pidfile(name: str) -> Generator[bool, None, None]:
         yield False
         return
     except OSError as exc:
-        logger.warning("pidfile %s unavailable (%s) — proceeding UNLOCKED", path, exc)
+        action = "proceeding UNLOCKED" if fail_open else "skipping (fail-closed)"
+        logger.warning("pidfile %s unavailable (%s) — %s", path, exc, action)
         if fh is not None:
             fh.close()
-        yield True
+        yield fail_open
         return
 
     try:

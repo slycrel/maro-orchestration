@@ -2534,3 +2534,13 @@ Dormant (deliberately parked, not dropped):
   synthesizing `status: done`. Three Claude lenses found no live regression;
   their placement critique moved the helper from the unrelated decision-prior
   schema to its own leaf. Follow-up approved.
+
+- **2026-07-13 (M1 continuation: one owner for paid candidate sweep)** —
+  Manual, heartbeat, and run-cadence evolvers now serialize the full
+  unconsumed-card scan → `extract_skills` → consume transaction under one
+  per-workspace flock. Losers skip before scanning; lock-storage failure skips
+  fail-closed; dry-run remains unlocked; daemon singleton behavior remains
+  fail-open. A real child-process holder proves exclusion. Claude review chose
+  this over claim-before because extraction failures must remain retryable, and
+  fixed misleading lock diagnostics plus exception scope. Follow-up approved;
+  all R3 residuals are closed.

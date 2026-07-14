@@ -1,6 +1,9 @@
 """Tests for evolver.py — meta-evolution / self-improvement (§19)."""
 
 import json
+import os
+import select
+import subprocess
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -335,6 +338,51 @@ def _sc_flagged_run(handle_id):
 def test_promote_skill_candidates_no_candidates_returns_zero():
     from evolver import promote_skill_candidates
     assert promote_skill_candidates(adapter=MagicMock(), dry_run=False, verbose=False) == 0
+
+
+def test_promote_skill_candidates_skips_when_other_process_owns_sweep(tmp_path):
+    from evolver import promote_skill_candidates
+
+    src = str(Path(__file__).parent.parent / "src")
+    code = """
+import sys, time
+sys.path.insert(0, sys.argv[1])
+from proc_lock import hold_pidfile
+with hold_pidfile("skill-candidate-sweep", fail_open=False) as acquired:
+    print("HELD" if acquired else "REFUSED", flush=True)
+    if acquired:
+        time.sleep(10)
+"""
+    env = dict(os.environ)
+    env["PYTHONPATH"] = src
+    env["MARO_WORKSPACE"] = str(tmp_path)
+    proc = subprocess.Popen(
+        [sys.executable, "-c", code, src],
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        ready, _, _ = select.select([proc.stdout], [], [], 5)
+        assert ready, "lock-holder process did not report readiness within 5s"
+        assert proc.stdout.readline().strip() == "HELD"
+        with patch("run_curation.find_unconsumed_skill_candidates") as find:
+            assert promote_skill_candidates(adapter=MagicMock()) == 0
+        find.assert_not_called()
+    finally:
+        proc.kill()
+        proc.communicate()
+
+
+def test_promote_skill_candidates_lock_storage_failure_skips_before_scan():
+    from evolver import promote_skill_candidates
+
+    with patch("builtins.open", side_effect=OSError("read-only")), \
+         patch("run_curation.find_unconsumed_skill_candidates") as find:
+        assert promote_skill_candidates(adapter=MagicMock()) == 0
+
+    find.assert_not_called()
 
 
 def test_promote_skill_candidates_saves_skill_and_marks_consumed():
