@@ -2179,6 +2179,10 @@ class TestClosureRestart:
                 in_scope=["message echo"],
                 out_of_scope=["auth"],
                 raw_text="",
+                proxy_resolution={
+                    "interpretation": "Build an echo-only server.",
+                    "reason": "Echo is the narrowest useful reading.",
+                },
             ),
             deliverables=[Deliverable(name="output/echo.py", description="echo script")],
         )
@@ -2205,6 +2209,8 @@ class TestClosureRestart:
         assert "output/echo.py" in extra, (
             "resolved intent deliverables not injected"
         )
+        assert "Resolved interpretation (binding goal definition)" in extra
+        assert "Build an echo-only server." in extra
 
     def test_resolved_intent_not_injected_when_ab_skip_on(self, monkeypatch, tmp_path):
         """The control arm: scope_ab_skip=True generates but does NOT inject —

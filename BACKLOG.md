@@ -1416,6 +1416,18 @@ rather than fixed with a fragile heuristic:
   but closure verification inherits the executor's interpretation instead of
   pinning one. Resolved-intent/scope is the existing seam that should pin
   countable deliverables ("N = recursive count") before execution.
+  - **2026-07-14 partial fix:** resolved-intent now requires quantitative
+    deliverables to state their measurement boundary, renders any
+    director-proxy commitment as a binding goal definition for the planner,
+    and supplies the same commitment to both closure-plan and closure-verdict
+    calls. Regression coverage proves the interpretation survives all three
+    handoffs instead of becoming audit-only metadata.
+  - **Remaining activation decision:** `scope_generation` is deliberately
+    default-off because it adds an LLM call to every agenda run. The contract
+    is fixed when that experiment is active; preventing the original incident
+    on default configuration still needs either operator approval to enable it
+    or evidence for a narrower activation rule. Do not hide that spend change
+    behind a count-goal regex.
 
 ### First in-process consolidation gc policy
 

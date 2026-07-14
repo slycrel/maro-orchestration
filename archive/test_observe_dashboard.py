@@ -22,7 +22,10 @@ import observe_dashboard
 
 
 def _ws(tmp_path) -> Path:
-    mem = tmp_path / "prototypes" / "maro-orchestration" / "memory"
+    # MARO_WORKSPACE is the canonical workspace root: memory lives directly
+    # beneath it. The prototypes/maro-orchestration layout is retained only
+    # for legacy OPENCLAW_WORKSPACE/WORKSPACE_ROOT pins (orch_items.py).
+    mem = tmp_path / "memory"
     mem.mkdir(parents=True, exist_ok=True)
     return mem
 

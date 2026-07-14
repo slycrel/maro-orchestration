@@ -71,6 +71,13 @@ Your job is to do three things, in order:
      not "run" like a program).
    2-6 items.
 
+   For any quantitative result (a count, total, percentage, size, duration, or
+   similar measurement), the deliverable description MUST state the measurement
+   boundary and inclusion rule. For example: "recursive count of `*.md` under
+   docs/, including nested directories and excluding symlink targets" — never
+   just "markdown file count". Commit to one reasonable interpretation when the
+   goal leaves the boundary implicit; that definition is part of the deliverable.
+
 Output FORMAT — plain markdown with exactly these four headings:
 
 ## Failure Modes
@@ -197,6 +204,14 @@ class ResolvedIntent:
     def to_markdown(self) -> str:
         """Render the resolved intent as injectable markdown for planner context."""
         parts = []
+        resolution = self.scope.proxy_resolution or {}
+        interpretation = str(resolution.get("interpretation", "")).strip()
+        reason = str(resolution.get("reason", "")).strip()
+        if interpretation:
+            parts.append("## Resolved interpretation (binding goal definition)")
+            parts.append(f"- {interpretation}")
+            if reason:
+                parts.append(f"- Rationale: {reason}")
         if not self.scope.is_empty():
             parts.append(self.scope.to_markdown())
         if self.deliverables:

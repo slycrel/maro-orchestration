@@ -599,6 +599,25 @@ def verify_goal_completion(
                 + "\n\n"
             )
 
+    # Preserve a director-proxy commitment as a binding goal definition. The
+    # retry scope was generated against this interpretation and the planner saw
+    # it through ResolvedIntent.to_markdown(); closure must judge the same goal,
+    # not silently choose a fresh interpretation after execution.
+    _interpretation_block = ""
+    if resolved_intent is not None:
+        _ri_scope = getattr(resolved_intent, "scope", None)
+        _resolution = getattr(_ri_scope, "proxy_resolution", None) or {}
+        _interpretation = safe_str(_resolution.get("interpretation", "")).strip()
+        _interpretation_reason = safe_str(_resolution.get("reason", "")).strip()
+        if _interpretation:
+            _interpretation_block = (
+                "Resolved interpretation committed before planning "
+                "(binding; do not substitute another reading):\n"
+                f"- {_interpretation}\n"
+                + (f"- Rationale: {_interpretation_reason}\n" if _interpretation_reason else "")
+                + "\n"
+            )
+
     # Pull resolved-intent deliverables into the plan-call context.
     # The "did we build these?" half of docs/DRIVER_AND_WATCHER.md #4 —
     # closure now sees the same concrete deliverable map the planner saw,
@@ -659,6 +678,7 @@ def verify_goal_completion(
                     f"Goal: {goal}\n\n"
                     f"Working directory: {workspace_path or '(unspecified)'}\n\n"
                     f"{_inventory_block}"
+                    f"{_interpretation_block}"
                     f"{_scope_block}"
                     f"{_deliverables_block}"
                     f"Work done:\n{work_summary}"
@@ -791,6 +811,7 @@ def verify_goal_completion(
                 LLMMessage("system", _CLOSURE_VERDICT_SYSTEM),
                 LLMMessage("user",
                     f"Goal: {goal}\n\n"
+                    f"{_interpretation_block}"
                     f"Work done:\n{work_summary}\n"
                     f"{_ledger_block}\n"
                     f"Verification results:\n{results_text}"
@@ -1306,4 +1327,3 @@ def _detect_diagnosis_gap(
         f"loop diagnosis reported decomposition_too_broad{sev} "
         f"before closure, but no behavioral probe ran.{rec}"
     )
-

@@ -1563,6 +1563,46 @@ class TestVerifyGoalCompletion:
         user_msg = captured_messages[0][1].content
         assert "Deliverables committed when planning" not in user_msg
 
+    def test_proxy_interpretation_injected_into_plan_and_verdict(self, tmp_path):
+        """Closure must judge the exact interpretation committed before planning."""
+        from unittest.mock import MagicMock, patch
+        from scope import Deliverable, ResolvedIntent, ScopeSet
+
+        adapter = MagicMock()
+        captured_messages = []
+
+        def _complete(messages, **kwargs):
+            captured_messages.append(messages)
+            return MagicMock()
+
+        adapter.complete.side_effect = _complete
+        ri = ResolvedIntent(
+            scope=ScopeSet(proxy_resolution={
+                "interpretation": "Count markdown files recursively under docs/.",
+                "reason": "Nested documentation belongs to docs/.",
+            }),
+            deliverables=[Deliverable(
+                name="artifacts/summary.md",
+                description="recursive count of `*.md` under docs/",
+            )],
+        )
+        checks = [{"description": "count is recursive", "command": "true"}]
+        verdict = {"complete": True, "confidence": 0.9, "gaps": [], "summary": "ok"}
+
+        with patch("closure_verify.extract_json", side_effect=[{"checks": checks}, verdict]), \
+             patch("closure_verify.content_or_empty", return_value="{}"):
+            verify_goal_completion(
+                "count markdown files in docs", [], adapter,
+                workspace_path=str(tmp_path), resolved_intent=ri,
+            )
+
+        assert len(captured_messages) == 2
+        for messages in captured_messages:
+            user_msg = messages[1].content
+            assert "binding; do not substitute another reading" in user_msg
+            assert "Count markdown files recursively under docs/." in user_msg
+            assert "Nested documentation belongs to docs/." in user_msg
+
     def test_precondition_preflight_classifies_inputs(self):
         from director import _classify_precondition
         assert _classify_precondition("go") == "command"

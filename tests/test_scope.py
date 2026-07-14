@@ -560,6 +560,43 @@ def test_resolved_intent_to_markdown_renders_both_sections():
     assert "- a.go: the thing" in md
 
 
+def test_resolved_intent_to_markdown_renders_proxy_interpretation_as_binding():
+    intent = ResolvedIntent(
+        scope=ScopeSet(
+            failure_modes=["count uses a different traversal boundary"],
+            proxy_resolution={
+                "interpretation": "Count markdown files recursively under docs/.",
+                "reason": "Nested documentation is part of the requested directory.",
+            },
+        ),
+        deliverables=[
+            Deliverable(
+                name="artifacts/summary.md",
+                description="recursive `*.md` count under docs/, excluding symlink targets",
+            )
+        ],
+    )
+
+    md = intent.to_markdown()
+
+    assert "Resolved interpretation (binding goal definition)" in md
+    assert "Count markdown files recursively under docs/." in md
+    assert "Rationale: Nested documentation" in md
+    assert "recursive `*.md` count" in md
+
+
+def test_scope_prompt_requires_quantitative_measurement_boundary():
+    adapter = _FakeAdapter(response_text=_GOOD_MARKDOWN)
+
+    generate_scope("count markdown files", adapter)
+
+    system_msg = adapter.calls[0]["messages"][0].content
+    assert "quantitative result" in system_msg
+    assert "measurement" in system_msg
+    assert "boundary and inclusion rule" in system_msg
+    assert "including nested directories" in system_msg
+
+
 def test_resolved_intent_is_empty_when_neither_scope_nor_deliverables():
     assert ResolvedIntent().is_empty()
 
@@ -642,4 +679,3 @@ def test_generate_resolved_intent_carries_proxy_resolution():
     assert "interpretation" in intent.scope.proxy_resolution
     # And the deliverables from the retry response should be captured.
     assert len(intent.deliverables) == 3
-
