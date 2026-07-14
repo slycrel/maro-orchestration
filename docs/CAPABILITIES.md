@@ -18,11 +18,13 @@ Two things live here, deliberately together:
    set a fresh install should ship with, so day-one Maro is useful before it
    has learned anything.
 
-Why they're one doc: the lesson funnel and skill promotion only learn from
-*friction on real work* (the 2026-07-10 live batch proved a synthetic "write
-a haiku" batch teaches nothing — 9 runs, zero lessons, correctly). The
-example catalog is where real work gets captured so testing, learning, and
-the shipped skill set all pull from the same well.
+Why they're one doc: the lesson funnel and skill promotion are intended to
+learn from *friction on real work*. The 2026-07-10 synthetic “write a haiku”
+batch did not prove a zero-yield rate: its historical empty lesson lists were
+ambiguous. Outcome-attributed measurement shipped 2026-07-14 via
+`scripts/lesson-funnel-stats.sh`; synthetic dry runs are now explicitly
+excluded. The example catalog is where real work gets captured so testing,
+learning, and the shipped skill set all pull from the same well.
 
 **Grounding rule (house discipline: claimed ≠ probed):** every example marks
 whether it has actually been run. `verified` = ran end-to-end with the

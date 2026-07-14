@@ -65,6 +65,9 @@ class Outcome:
     goal_verdict_source: str = ""   # "closure" | "closure_unverifiable" | "provenance" | "now_self_verdict" | ""
     goal_verdict_confidence: Optional[float] = None  # closure judge confidence, when judged
     loop_id: str = ""               # join key to runs/*/metadata.json for post-closure annotation
+    dry_run: bool = False            # excludes synthetic dry-run lessons from production funnel metrics
+    lesson_extraction_status: str = ""  # "deferred" | "completed" | "failed" | legacy unknown
+    lesson_extraction_count: int = 0
 
 
 @dataclass
@@ -351,6 +354,9 @@ def record_outcome(
     goal_achieved: Optional[bool] = None,
     goal_verdict_source: str = "",
     loop_id: str = "",
+    dry_run: bool = False,
+    lesson_extraction_status: str = "",
+    lesson_extraction_count: int = 0,
 ) -> Outcome:
     """Record the outcome of a completed run.
 
@@ -370,6 +376,8 @@ def record_outcome(
                        "closure_unverifiable", "provenance", "now_self_verdict").
         loop_id: Loop id for this run, when known — the join key that lets the
                        post-closure verdict annotation find this row.
+        dry_run: Persisted cohort exclusion; dry-run lessons are synthetic.
+        lesson_extraction_status/count: Durable funnel and idempotency state.
     """
     import uuid
     from metrics import estimate_cost
@@ -392,6 +400,9 @@ def record_outcome(
         goal_achieved=goal_achieved,
         goal_verdict_source=goal_verdict_source,
         loop_id=loop_id,
+        dry_run=bool(dry_run),
+        lesson_extraction_status=lesson_extraction_status,
+        lesson_extraction_count=max(0, int(lesson_extraction_count)),
     )
 
     # Append to outcomes ledger
@@ -560,8 +571,9 @@ def annotate_outcome_lessons(loop_id: str, lessons: List[str]) -> bool:
 
     The agenda lane can defer lesson extraction past closure judging
     (data-r2-01) — the row is written at finalization with lessons=[], and
-    the verdict-aware extraction fills them in here. Same newest-row-wins +
-    locked_rmw semantics as annotate_outcome_verdict.
+    the verdict-aware extraction fills them in here. Completed-zero is also
+    stamped explicitly so a later finalize does not repay extraction. Same
+    newest-row-wins + locked_rmw semantics as annotate_outcome_verdict.
     """
     if not loop_id:
         return False
@@ -589,6 +601,8 @@ def annotate_outcome_lessons(loop_id: str, lessons: List[str]) -> bool:
             return old
         row = json.loads(lines[target_idx])
         row["lessons"] = list(lessons)
+        row["lesson_extraction_status"] = "completed"
+        row["lesson_extraction_count"] = len(lessons)
         lines[target_idx] = json.dumps(row)
         updated["hit"] = True
         return "\n".join(lines) + ("\n" if lines else "")
@@ -601,6 +615,39 @@ def annotate_outcome_lessons(loop_id: str, lessons: List[str]) -> bool:
         return False
     if not updated["hit"]:
         log.debug("annotate_outcome_lessons: no outcomes row with loop_id=%s", loop_id)
+    return updated["hit"]
+
+
+def annotate_outcome_extraction_failure(loop_id: str) -> bool:
+    """Durably mark a deferred extraction attempt failed and retryable."""
+    if not loop_id:
+        return False
+    path = _outcomes_path()
+    if not path.exists():
+        return False
+    updated = {"hit": False}
+
+    def _stamp(old: str) -> str:
+        lines = old.splitlines()
+        for i in range(len(lines) - 1, -1, -1):
+            try:
+                row = json.loads(lines[i])
+            except (json.JSONDecodeError, TypeError):
+                continue
+            if isinstance(row, dict) and row.get("loop_id") == loop_id:
+                row["lesson_extraction_status"] = "failed"
+                row["lesson_extraction_count"] = 0
+                lines[i] = json.dumps(row)
+                updated["hit"] = True
+                break
+        return "\n".join(lines) + ("\n" if lines else "")
+
+    from file_lock import locked_rmw
+    try:
+        locked_rmw(path, _stamp)
+    except OSError as exc:
+        log.warning("annotate_outcome_extraction_failure: rewrite failed for loop %s: %s", loop_id, exc)
+        return False
     return updated["hit"]
 
 

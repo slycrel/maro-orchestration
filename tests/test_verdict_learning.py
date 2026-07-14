@@ -48,6 +48,17 @@ def _raw_rows():
     ]
 
 
+def _extraction_events():
+    path = _memory_dir() / "captains_log.jsonl"
+    if not path.exists():
+        return []
+    return [
+        json.loads(line)
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip() and json.loads(line).get("event_type") == "LESSON_EXTRACTION"
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Write side: record_outcome tri-state serialization
 # ---------------------------------------------------------------------------
@@ -332,6 +343,11 @@ def test_reflect_defer_lessons_records_row_without_lessons(monkeypatch, tmp_path
     row = _raw_rows()[-1]
     assert row["lessons"] == []
     assert row["loop_id"] == "lp-d0"
+    assert row["dry_run"] is True
+    assert row["lesson_extraction_status"] == "deferred"
+    event = _extraction_events()[-1]
+    assert event["context"]["status"] == "deferred"
+    assert event["context"]["outcome_id"] == row["outcome_id"]
 
 
 def test_reflect_defer_without_loop_id_extracts_immediately(monkeypatch, tmp_path):
@@ -372,7 +388,70 @@ def test_extract_deferred_lessons_success_flavored_after_true_verdict(monkeypatc
                        loop_id="lp-d2", defer_lessons=True)
     annotate_outcome_verdict("lp-d2", goal_achieved=True, goal_verdict_source="closure")
     assert extract_deferred_lessons("lp-d2", dry_run=True) == 1
-    assert "succeeded" in _raw_rows()[-1]["lessons"][0]
+    row = _raw_rows()[-1]
+    assert "succeeded" in row["lessons"][0]
+    assert row["lesson_extraction_status"] == "completed"
+    assert row["lesson_extraction_count"] == 1
+    assert [event["context"]["status"] for event in _extraction_events()] == [
+        "deferred", "completed"
+    ]
+    assert _extraction_events()[-1]["context"]["extracted_count"] == 1
+
+
+def test_extract_deferred_lessons_failure_is_observable(monkeypatch, tmp_path):
+    _setup(monkeypatch, tmp_path)
+    import memory
+    reflect_and_record("goal", "done", "s", dry_run=True, loop_id="lp-fail",
+                       defer_lessons=True)
+    monkeypatch.setattr(memory, "extract_lessons_via_llm", lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("adapter down")))
+
+    with pytest.raises(RuntimeError, match="adapter down"):
+        memory.extract_deferred_lessons("lp-fail", dry_run=True)
+
+    event = _extraction_events()[-1]
+    assert event["context"]["status"] == "failed"
+    assert event["context"]["error"] == "adapter down"
+    assert _raw_rows()[-1]["lesson_extraction_status"] == "failed"
+
+
+def test_completed_zero_deferred_extraction_is_durably_idempotent(monkeypatch, tmp_path):
+    _setup(monkeypatch, tmp_path)
+    import memory
+    reflect_and_record("goal", "done", "s", dry_run=True, loop_id="lp-zero",
+                       defer_lessons=True)
+    calls = {"count": 0}
+
+    def _zero(*args, **kwargs):
+        calls["count"] += 1
+        return []
+
+    monkeypatch.setattr(memory, "extract_lessons_via_llm", _zero)
+    assert memory.extract_deferred_lessons("lp-zero", dry_run=False) == 0
+    assert memory.extract_deferred_lessons("lp-zero", dry_run=False) == 0
+    assert calls["count"] == 1
+    row = _raw_rows()[-1]
+    assert row["lessons"] == []
+    assert row["lesson_extraction_status"] == "completed"
+    assert row["lesson_extraction_count"] == 0
+
+
+def test_deferred_stamp_failure_never_emits_completed(monkeypatch, tmp_path):
+    _setup(monkeypatch, tmp_path)
+    import memory
+    import memory_ledger
+    reflect_and_record("goal", "done", "s", dry_run=True, loop_id="lp-stamp",
+                       defer_lessons=True)
+    monkeypatch.setattr(memory, "extract_lessons_via_llm", lambda *a, **kw: [("real lesson", "execution")])
+    monkeypatch.setattr(memory_ledger, "annotate_outcome_lessons", lambda *a, **kw: False)
+
+    with pytest.raises(RuntimeError, match="could not persist extracted lessons"):
+        memory.extract_deferred_lessons("lp-stamp", dry_run=False)
+
+    assert _extraction_events()[-1]["context"]["status"] == "failed"
+    assert all(
+        event["context"]["status"] != "completed"
+        for event in _extraction_events()
+    )
 
 
 def test_extract_deferred_lessons_idempotent(monkeypatch, tmp_path):

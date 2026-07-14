@@ -8,6 +8,29 @@ Last split: 2026-04-16 (session 34).
 
 ---
 
+### Batch-04 lesson-funnel intake measurement — SHIPPED (2026-07-14)
+
+The original “9 finalizations → 0 lessons extracted” observation was not a
+valid rate: historical `lessons: []` meant completed-zero, deferred, failed,
+or simply uninstrumented. New outcome rows persist `dry_run`, extraction state,
+and count; `LESSON_EXTRACTION` events add outcome attribution, immediate vs
+deferred mode, and tiered-write success/failure counts. Completed-zero is now
+a durable idempotency state, so it cannot repay the extraction LLM on a later
+finalize. Deferred completion is stamped on the outcome before downstream
+writes and never emitted when the stamp fails.
+
+`scripts/lesson-funnel-stats.sh` reports current/prior recorded-at cohorts,
+archive-spanning extraction events, instrumentation/completion/productive-yield
+rates, and tiered persistence in text or JSON. Legacy empty rows remain
+`unknown_not_instrumented`; synthetic dry-run placeholders are excluded. The
+live 30-day report currently has three outcomes, all historical unknowns, so
+the productive rate is honestly `n/a`, not 0%. No desired funnel target has
+yet been decreed; organic instrumented rows must accumulate before tuning
+promotion economics. Real Claude review found three state/ordering problems,
+all fixed; follow-up returned APPROVED.
+
+---
+
 ### Smaller retention residuals — resolved narrowly (2026-07-14)
 
 The memory GC windows remain explicit CLI policy (`--outcomes-retain-days`

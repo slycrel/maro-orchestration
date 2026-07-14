@@ -432,10 +432,12 @@ def reflect_and_record(
 
     # Auto-record each typed lesson to the tiered system (MEDIUM tier, k_samples=1 → 0.5 confidence)
     # This closes the loop: lesson_type is preserved from extraction → tiered storage → injection.
+    tiered_succeeded = 0
+    tiered_failed = 0
     if not dry_run and typed_lessons:
         for lesson_text, lesson_type in typed_lessons:
             try:
-                record_tiered_lesson(
+                recorded = record_tiered_lesson(
                     lesson_text=lesson_text,
                     task_type=task_type,
                     outcome=status,
@@ -444,8 +446,12 @@ def reflect_and_record(
                     k_samples=1,  # single extraction → 0.5 confidence (F5)
                     lesson_type=lesson_type,
                 )
+                if getattr(recorded, "lesson_id", "") == "rejected":
+                    tiered_failed += 1
+                else:
+                    tiered_succeeded += 1
             except Exception:
-                pass  # tiered recording must never block the main reflection path
+                tiered_failed += 1  # recording must never block reflection
 
     outcome = record_outcome(
         goal=goal,
@@ -463,6 +469,20 @@ def reflect_and_record(
         goal_achieved=goal_achieved,
         goal_verdict_source=goal_verdict_source,
         loop_id=loop_id,
+        dry_run=dry_run,
+        lesson_extraction_status="deferred" if defer_lessons else "completed",
+        lesson_extraction_count=len(lessons),
+    )
+
+    _log_lesson_extraction(
+        outcome_id=outcome.outcome_id,
+        loop_id=loop_id,
+        status="deferred" if defer_lessons else "completed",
+        extracted_count=len(lessons),
+        tiered_succeeded=tiered_succeeded,
+        tiered_failed=tiered_failed,
+        mode="deferred" if defer_lessons else "immediate",
+        dry_run=dry_run,
     )
 
     # K4: write path — outcomes update knowledge layer (non-blocking).
@@ -497,37 +517,104 @@ def extract_deferred_lessons(
 
     Returns the number of lessons recorded (0 = nothing to do or no row).
     """
-    from memory_ledger import load_outcome_by_loop_id, annotate_outcome_lessons
+    from memory_ledger import (
+        load_outcome_by_loop_id,
+        annotate_outcome_lessons,
+        annotate_outcome_extraction_failure,
+    )
 
     outcome = load_outcome_by_loop_id(loop_id)
     if outcome is None:
         log.debug("extract_deferred_lessons: no outcomes row for loop_id=%s", loop_id)
         return 0
-    if outcome.lessons:
+    if outcome.lessons or outcome.lesson_extraction_status == "completed":
         return 0  # already extracted — nothing was deferred (or already ran)
 
-    typed_lessons = extract_lessons_via_llm(
-        goal=outcome.goal,
-        status=outcome.status,
-        result_summary=outcome.summary,
-        task_type=outcome.task_type,
-        adapter=adapter,
-        dry_run=dry_run,
-        return_typed=True,
-        goal_achieved=outcome.goal_achieved,
-    )
+    try:
+        typed_lessons = extract_lessons_via_llm(
+            goal=outcome.goal,
+            status=outcome.status,
+            result_summary=outcome.summary,
+            task_type=outcome.task_type,
+            adapter=adapter,
+            dry_run=dry_run,
+            return_typed=True,
+            goal_achieved=outcome.goal_achieved,
+        )
+    except Exception as exc:
+        annotate_outcome_extraction_failure(loop_id)
+        _log_lesson_extraction(
+            outcome_id=outcome.outcome_id,
+            loop_id=loop_id,
+            status="failed",
+            extracted_count=0,
+            tiered_succeeded=0,
+            tiered_failed=0,
+            mode="deferred",
+            dry_run=outcome.dry_run or dry_run,
+            error=str(exc),
+        )
+        raise
     if not typed_lessons:
+        if not annotate_outcome_lessons(loop_id, []):
+            annotate_outcome_extraction_failure(loop_id)
+            error = "could not persist completed-zero extraction onto outcome row"
+            _log_lesson_extraction(
+                outcome_id=outcome.outcome_id,
+                loop_id=loop_id,
+                status="failed",
+                extracted_count=0,
+                tiered_succeeded=0,
+                tiered_failed=0,
+                mode="deferred",
+                dry_run=outcome.dry_run or dry_run,
+                error=error,
+            )
+            raise RuntimeError(error)
+        _log_lesson_extraction(
+            outcome_id=outcome.outcome_id,
+            loop_id=loop_id,
+            status="completed",
+            extracted_count=0,
+            tiered_succeeded=0,
+            tiered_failed=0,
+            mode="deferred",
+            dry_run=outcome.dry_run or dry_run,
+        )
         return 0
     lessons = [text for text, _ in typed_lessons]
     log.info("extract_deferred_lessons: %d lesson(s) for loop %s (verdict=%s)",
              len(lessons), loop_id, outcome.goal_achieved)
 
-    # Same recording fan-out as the finalize-time path (reflect_and_record +
-    # record_outcome), minus the row append — the row exists; stamp it instead.
+    # Stamp the outcome before any downstream fan-out. This is both the durable
+    # idempotency marker (including completed-zero above) and the authoritative
+    # cohort state for the funnel report.
+    if not annotate_outcome_lessons(loop_id, lessons):
+        annotate_outcome_extraction_failure(loop_id)
+        error = "could not persist extracted lessons onto outcome row"
+        _log_lesson_extraction(
+            outcome_id=outcome.outcome_id,
+            loop_id=loop_id,
+            status="failed",
+            extracted_count=len(lessons),
+            tiered_succeeded=0,
+            tiered_failed=0,
+            mode="deferred",
+            dry_run=outcome.dry_run or dry_run,
+            error=error,
+        )
+        raise RuntimeError(error)
+    outcome.lessons = lessons
+    outcome.lesson_extraction_status = "completed"
+    outcome.lesson_extraction_count = len(lessons)
+
+    # Same recording fan-out as the finalize-time path, minus row append.
+    tiered_succeeded = 0
+    tiered_failed = 0
     if not dry_run:
         for lesson_text, lesson_type in typed_lessons:
             try:
-                record_tiered_lesson(
+                recorded = record_tiered_lesson(
                     lesson_text=lesson_text,
                     task_type=outcome.task_type,
                     outcome=outcome.status,
@@ -536,8 +623,12 @@ def extract_deferred_lessons(
                     k_samples=1,
                     lesson_type=lesson_type,
                 )
+                if getattr(recorded, "lesson_id", "") == "rejected":
+                    tiered_failed += 1
+                else:
+                    tiered_succeeded += 1
             except Exception:
-                pass  # tiered recording must never block the deferred path
+                tiered_failed += 1  # recording must never block deferred delivery
     for lesson_text in lessons:
         if lesson_text.strip():
             _store_lesson(
@@ -548,8 +639,16 @@ def extract_deferred_lessons(
                 goal_achieved=outcome.goal_achieved,
                 goal_verdict_source=outcome.goal_verdict_source,
             )
-    annotate_outcome_lessons(loop_id, lessons)
-    outcome.lessons = lessons
+    _log_lesson_extraction(
+        outcome_id=outcome.outcome_id,
+        loop_id=loop_id,
+        status="completed",
+        extracted_count=len(lessons),
+        tiered_succeeded=tiered_succeeded,
+        tiered_failed=tiered_failed,
+        mode="deferred",
+        dry_run=outcome.dry_run or dry_run,
+    )
 
     if not dry_run:
         try:
@@ -559,6 +658,53 @@ def extract_deferred_lessons(
             pass  # knowledge write must never break the deferred path
 
     return len(lessons)
+
+
+def _log_lesson_extraction(
+    *,
+    outcome_id: str,
+    loop_id: str,
+    status: str,
+    extracted_count: int,
+    tiered_succeeded: int,
+    tiered_failed: int,
+    mode: str,
+    dry_run: bool,
+    error: str = "",
+) -> None:
+    """Emit one durable intake-funnel observation for an outcome.
+
+    Empty historical outcome lesson lists are ambiguous. Durable outcome state
+    now drives control/idempotency; this companion event adds tiered-write
+    counts and makes transitions inspectable. Newer events supersede older
+    event state for the same outcome.
+    """
+    try:
+        from captains_log import log_event, LESSON_EXTRACTION
+        context = {
+            "outcome_id": outcome_id,
+            "loop_id": loop_id,
+            "status": status,
+            "mode": mode,
+            "dry_run": bool(dry_run),
+            "extracted_count": max(0, int(extracted_count)),
+            "tiered_succeeded": max(0, int(tiered_succeeded)),
+            "tiered_failed": max(0, int(tiered_failed)),
+        }
+        if error:
+            context["error"] = error[:200]
+        log_event(
+            event_type=LESSON_EXTRACTION,
+            subject=outcome_id,
+            summary=(
+                f"Lesson extraction {status}: {extracted_count} extracted, "
+                f"{tiered_succeeded} tiered writes, {tiered_failed} failures"
+            ),
+            context=context,
+            loop_id=loop_id or None,
+        )
+    except Exception:
+        pass  # funnel observability must never break result delivery
 
 
 # ---------------------------------------------------------------------------

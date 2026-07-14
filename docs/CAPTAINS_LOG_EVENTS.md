@@ -112,6 +112,7 @@ Written by `captains_log.log_event(...)`. Every entry has the four required fiel
 | Event | Emitter(s) | `context` fields | When it fires |
 |-------|-----------|------------------|---------------|
 | `LESSON_RECORDED` | knowledge_web.py:267 | tier, task_type, confidence, lesson_type | A lesson was extracted from an outcome and stored in tiered memory. |
+| `LESSON_EXTRACTION` | memory.py | outcome_id, loop_id, status, mode, dry_run, extracted_count, tiered_succeeded, tiered_failed, error (failures only) | Per-outcome intake state for the rolling lesson-funnel report. Distinguishes deferred, completed-zero, failed, productive, and excluded dry-run extraction. |
 | `LESSON_REINFORCED` | knowledge_web.py:454 | tier, sessions_validated, score, promoted | An existing lesson was re-confirmed (and possibly promoted MEDIUM→LONG). |
 | `LESSON_DECAYED` | gc_memory.py:192 | tier, removed, remaining | Decay/GC removed lessons that fell below the retention score. |
 | `LESSON_RECOVERED` | *(none — see gaps)* | — | Intended: a decayed lesson was recovered. Not currently emitted. |

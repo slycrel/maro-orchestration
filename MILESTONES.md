@@ -2,7 +2,12 @@
 
 What to do next, in what order. Updated each session. Deferred ideas live in BACKLOG.md; completed phase history in docs/history/ROADMAP_ARCHIVE.md (ROADMAP.md is a stub). This file is the executable queue.
 
-Last updated: 2026-07-14 (continuation checkpoint — applied-only graduation
+Last updated: 2026-07-14 (continuation checkpoint — lesson-funnel intake
+measurement SHIPPED: durable per-outcome extraction state/counts, dry-run
+exclusion, completed-zero idempotency, archive-aware rolling text/JSON report,
+and honest historical unknowns. Live 30-day evidence is 3/3 unknown, so yield
+is `n/a`; real Claude follow-up APPROVED after persistence-order fixes.
+Previous checkpoint — applied-only graduation
 structural verification SHIPPED as a safe VERIFY_LEARN_ARC V3 precursor:
 cadence events/optional notification, durable manual authority, and held-row
 accounting fixed. Multiple Claude adversarial passes additionally forced idempotent but

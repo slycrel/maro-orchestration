@@ -36,6 +36,7 @@ from captains_log import (
     ISLAND_CULLED,
     LESSON_RECORDED,
     LESSON_REINFORCED,
+    LESSON_EXTRACTION,
     LESSON_DECAYED,
     HYPOTHESIS_CREATED,
     HYPOTHESIS_PROMOTED,
@@ -261,6 +262,7 @@ class TestEventTypes:
         assert ISLAND_CULLED in EVENT_TYPES
         assert LESSON_RECORDED in EVENT_TYPES
         assert LESSON_REINFORCED in EVENT_TYPES
+        assert LESSON_EXTRACTION in EVENT_TYPES
         assert LESSON_DECAYED in EVENT_TYPES
         assert HYPOTHESIS_CREATED in EVENT_TYPES
         assert HYPOTHESIS_PROMOTED in EVENT_TYPES
@@ -299,7 +301,9 @@ class TestEventTypes:
         # boundary expansion).
         # +1 (2026-07-14): GRADUATION_VERIFIED — applied-only structural
         # verify_pattern result at evolver cadence (observe/notify, no revert).
-        assert len(EVENT_TYPES) == 61
+        # +1 (2026-07-14): LESSON_EXTRACTION — outcome-attributed intake
+        # state/counts for an honest lesson-funnel denominator.
+        assert len(EVENT_TYPES) == 62
 
     def test_previously_unregistered_events_in_set(self):
         from captains_log import EVOLVER_REVERTED, EVOLVER_VERIFY, PLAYBOOK_UPDATED
