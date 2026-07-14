@@ -197,6 +197,7 @@ py-modules = [
     "prefixes",
     "prereq",
     "proc_lock",
+    "process_identity",
     "provenance",
     "quality_gate",
     "recall",

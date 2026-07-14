@@ -2493,3 +2493,14 @@ Dormant (deliberately parked, not dropped):
   invalidation from a leaf, scanner pollution, duplicate tie drift, concurrency
   proof, and retry-forever partial migration); all fixed and regression-pinned.
   Focused follow-up approved the revised marker/locking semantics.
+
+- **2026-07-13 (M1 continuation: PID reuse no longer defeats cleanup)** —
+  Closed the last R5 follow-up by pairing ephemeral owner PIDs with process
+  birth identity. Linux tokens bind boot ID + `/proc` start ticks; Darwin reads
+  microsecond start time from `libproc`; generic Unix `ps` fallback pins UTC/C.
+  Legacy/missing/unreadable identity remains conservative, but a live reused PID
+  with a mismatched birth token now enters the existing container reap or
+  retention-safe clone recovery path. Claude review caught critical cross-env
+  and cross-method false-delete bugs in the first design plus boot-ID drift and
+  Darwin precision gaps; all fixed. Apple C/ctypes layouts match (136 bytes,
+  start offsets 120/128) and a real M1 kernel call succeeded.

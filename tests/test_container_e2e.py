@@ -32,7 +32,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 import container_exec as ce
-from worktree import _pid_alive_default
+from process_identity import pid_alive
 
 
 # ---------------------------------------------------------------------------
@@ -106,7 +106,7 @@ def _dead_pid() -> int:
     """A PID that has definitely exited (reaped child). Skips on PID reuse."""
     p = subprocess.Popen(["sh", "-c", "exit 0"])
     p.wait()
-    if _pid_alive_default(p.pid):  # pragma: no cover — reuse is rare
+    if pid_alive(p.pid):  # pragma: no cover — reuse is rare
         pytest.skip("child PID was reused before assertion — retry")
     return p.pid
 

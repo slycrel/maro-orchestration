@@ -8,6 +8,30 @@ Last split: 2026-04-16 (session 34).
 
 ---
 
+### R5: PID-reuse-safe ephemeral ownership — SHIPPED (2026-07-13)
+
+Stale Docker containers and scratch clones recorded only an owner PID. If the
+OS reused that PID, cleanup treated the new process as the old live owner and
+leaked resources indefinitely.
+
+New ownership records pair PID with a hashed kernel process-birth token through
+the shared `process_identity.py` leaf. Linux uses boot ID plus `/proc` start
+ticks; Darwin uses `libproc`'s microsecond `proc_bsdinfo` start timestamp; other
+Unix systems use `ps lstart` under pinned UTC/C locale. Token acquisition is
+method-stable and fails conservative: legacy records, unavailable boot IDs, and
+unreadable live tokens remain protected. Docker labels and trusted clone
+sidecars now carry the token; mismatch proves PID reuse and allows the existing
+recover/cleanup path.
+
+Three-lens Claude review found and fixed two critical false-deletion paths:
+timezone/locale-dependent Darwin rendering and Linux switching token methods
+after transient `/proc` failure. It also found boot-ID instability, duplicate
+PID helpers, missing platform tests, and second-granularity Darwin tokens; all
+were fixed. Apple SDK C layout (136 bytes; offsets 120/128), ctypes layout, and
+a real M1 `libproc` call were verified directly. Tests cover reuse, live/dead,
+legacy/ambiguous ownership, Linux parsing/boot failure, pinned generic-Unix
+fallback, Darwin selection, and the real Darwin ABI.
+
 ### R5: Durable run-reference index — SHIPPED (2026-07-13)
 
 `resolve_run_dir(loop_id)` previously scanned every `runs/*/metadata.json` on

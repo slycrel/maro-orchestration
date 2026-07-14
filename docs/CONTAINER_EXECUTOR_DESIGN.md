@@ -306,14 +306,14 @@ No design coupling; noted so neither work stream blocks the other.
   `ContainerUnavailable`, refuse) and threads a `container_name` into
   `_run_subprocess_safe`, which owns the wrap (`build_run_command`:
   `docker run --rm -i --init --name … --user uid:gid --label
-  maro.owner_pid=… -v <cwd>:<cwd>:rw -v maro-claude-auth:/home/maro/.claude
+  maro.owner_pid=… --label maro.owner_start=… -v <cwd>:<cwd>:rw -v maro-claude-auth:/home/maro/.claude
   -e HOME=… -e MARO_WORKER_RUN=1 [MARO_ALLOW_MAIN_PUSH] --network … -w <cwd>
   <image> <inner claude -p …>`) and the kill path (`docker kill <name>`
   BEFORE `os.killpg` at both failure kill sites — killpg only reaps the
   docker client). Stranded-container reaper wired into
   `heartbeat.stranded_state_sweep`: kills running `maro-exec-*` whose
-  `maro.owner_pid` label names a dead PID — never a live run's in-flight
-  container (mirrors the sweep's existing PID-liveness discipline). Docker
+  owner PID is dead or its process-birth token proves PID reuse — never a live
+  run's in-flight container. Legacy/missing tokens remain conservative. Docker
   probed once per process and cached (no per-call boot tax). All four
   `executor.*` DEFAULTS rows already landed in C1. Minimal mount set (working
   dir rw + auth volume); full fence-root translation + self-dev clone are C3.

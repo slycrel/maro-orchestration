@@ -32,6 +32,7 @@ import time
 from typing import Callable, Optional, Tuple
 
 from config import get
+from process_identity import owner_is_current, pid_alive as process_pid_alive, process_start_token
 
 log = logging.getLogger(__name__)
 
@@ -582,8 +583,8 @@ def build_run_command(
     `mounts` is a list of (host_path, mode) with mode in {"rw","ro"}, each
     bind-mounted at the SAME absolute path inside the container so `-w` and the
     worker's relative writes resolve to the host dir. The auth volume + HOME are
-    always mounted so the baked CLI is logged in. An `owner_pid` label lets the
-    stranded-container sweep tell a live run's container from a crashed one's.
+    always mounted so the baked CLI is logged in. Owner PID + process-birth
+    labels let the stranded sweep distinguish a live owner from PID reuse.
 
     The inner command's argv[0] is reduced to its basename: the host-resolved
     claude path (e.g. /opt/homebrew/bin/claude) does not exist inside the image;
@@ -602,6 +603,9 @@ def build_run_command(
     # here (design §4 uid/gid; see _user_args).
     cmd = ["docker", "run", "--rm", "-i", "--init", "--name", name, *_user_args()]
     cmd += ["--label", f"maro.owner_pid={owner_pid}"]
+    owner_start = process_start_token(owner_pid)
+    if owner_start:
+        cmd += ["--label", f"maro.owner_start={owner_start}"]
     # --mount (not -v host:host:mode): colon-safe for host paths that legally
     # contain ':' (adversarial-review 2026-07-12).
     for host_path, mode in (mounts or []):
@@ -640,22 +644,16 @@ def kill_container(name: str) -> None:
         log.debug("docker kill %s failed (non-fatal): %s", name, exc)
 
 
-def _pid_alive(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-        return True
-    except (ProcessLookupError, ValueError):
-        return False
-    except PermissionError:
-        return True
-
-
-def sweep_stranded_containers(pid_alive: Optional[Callable[[int], bool]] = None) -> list:
+def sweep_stranded_containers(
+    pid_alive: Optional[Callable[[int], bool]] = None,
+    process_token: Optional[Callable[[int], Optional[str]]] = None,
+) -> list:
     """Reap executor containers whose owning run process is dead.
 
     A container survives its docker client being SIGKILL'd or the box crashing
     (--rm only fires on clean container exit). Ownership is decided by the
-    `maro.owner_pid` LABEL, never the name: we filter `docker ps` by that label
+    `maro.owner_pid` LABEL plus `maro.owner_start` when available, never the
+    name: we filter `docker ps` by the PID label
     (only containers WE launched carry it) AND require the `maro-exec-` name
     prefix, then kill only those whose owner PID is dead. A container without
     our label — or one merely matching the name substring — is NOT ours and is
@@ -667,11 +665,13 @@ def sweep_stranded_containers(pid_alive: Optional[Callable[[int], bool]] = None)
     liveness can't distinguish it from the live owner's current container;
     tracked for a run-scoped-liveness follow-on.
     """
-    alive = pid_alive or _pid_alive
+    alive = pid_alive or process_pid_alive
+    token_reader = process_token or process_start_token
     try:
         proc = subprocess.run(
             ["docker", "ps", "--filter", "label=maro.owner_pid",
-             "--format", '{{.Names}}\t{{.Label "maro.owner_pid"}}'],
+             "--format", '{{.Names}}\t{{.Label "maro.owner_pid"}}\t'
+                         '{{.Label "maro.owner_start"}}'],
             capture_output=True, text=True, timeout=_SWEEP_TIMEOUT_S,
         )
     except (FileNotFoundError, subprocess.TimeoutExpired, OSError) as exc:
@@ -688,6 +688,7 @@ def sweep_stranded_containers(pid_alive: Optional[Callable[[int], bool]] = None)
         parts = line.split("\t")
         cname = parts[0].strip()
         owner_raw = parts[1].strip() if len(parts) > 1 else ""
+        owner_start = parts[2].strip() if len(parts) > 2 else ""
         # Defense in depth: even among our-labelled containers, only touch ones
         # with our name prefix, and only when the owner PID parses and is dead.
         # An unparseable owner label => skip (never kill on ambiguity).
@@ -697,7 +698,8 @@ def sweep_stranded_containers(pid_alive: Optional[Callable[[int], bool]] = None)
             owner_pid = int(owner_raw)
         except ValueError:
             continue
-        if not alive(owner_pid):
+        if not owner_is_current(
+                owner_pid, owner_start, alive=alive, token_reader=token_reader):
             kill_container(cname)
             killed.append(cname)
     return killed

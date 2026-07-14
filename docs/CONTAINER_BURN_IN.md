@@ -40,8 +40,8 @@ The container **mechanics** were exercised against real docker (Docker Desktop
   lands host-side **owned by the invoking user, not root** (design §4 holds).
 - **boot-tax** — ~360 ms warm-image `docker run` overhead for a trivial command
   (marginal against a ~1.5 s CLI step; a Mac number — the box baseline differs).
-- **C2 stranded-container reaper** — kills only a dead-owner `maro-exec-*`
-  (by `maro.owner_pid` label), spares a live-owner one.
+- **C2 stranded-container reaper** — kills only a dead/reused-owner
+  `maro-exec-*` (PID + process-birth labels), spares a live-owner one.
 - **`maro-doctor`** container rows render correctly (docker/image/auth-volume).
 
 **What this does NOT cover — still box-side + token-spending:** a real GOAL
@@ -252,8 +252,8 @@ cwd writable and a ro reference mount read-only; `--network none` shows only
 
 **Container lifecycle + reaper — against real containers (not mocks).**
 `kill_container(name)` stops a live `maro-exec-…` container by name;
-`sweep_stranded_containers()` reaps a real container whose `maro.owner_pid`
-label names a **dead** PID, spares one whose owner is **alive**, and ignores an
+`sweep_stranded_containers()` reaps a real container whose owner PID is dead
+or reused, spares one whose PID + birth token still match, and ignores an
 unlabeled same-prefix look-alike (the adversarial-review label-filter, proven
 live).
 

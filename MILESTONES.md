@@ -2,7 +2,11 @@
 
 What to do next, in what order. Updated each session. Deferred ideas live in BACKLOG.md; completed phase history in docs/history/ROADMAP_ARCHIVE.md (ROADMAP.md is a stub). This file is the executable queue.
 
-Last updated: 2026-07-13 (M1 continuation checkpoint — R5 durable run-reference
+Last updated: 2026-07-13 (M1 continuation checkpoint — R5 PID-reuse-safe
+ephemeral ownership SHIPPED: Docker labels and scratch-clone sidecars pair PID
+with portable kernel birth tokens; legacy/ambiguous state remains conservative.
+Critical cross-model false-deletion findings fixed; real Darwin ABI and M1
+libproc call verified. Previous checkpoint: R5 durable run-reference
 index SHIPPED: hashed O(1) lookup, lock-serialized legacy migration, resumable
 fallback, explicit partial state, and import/prune/corruption/concurrency
 coverage. Three-lens Claude review findings fixed; follow-up approved. Previous

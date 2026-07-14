@@ -26,6 +26,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
 
+from process_identity import owner_is_current, pid_alive as process_pid_alive, process_start_token
+
 log = logging.getLogger("maro.worktree")
 
 _GIT_TIMEOUT_S = 120
@@ -321,8 +323,8 @@ def merge_back(wt: Worktree, *, message: str = "") -> MergeResult:
 # A SIGKILL between provision and finalize leaks a whole-repo clone under
 # worktrees/ with no in-memory ScratchClone to merge it back. The sidecar
 # records — HOST-side, at provision time — the trusted fields the sweep needs
-# to reconstruct that ScratchClone (owner PID for liveness, live repo, base ref,
-# branch). It lives as a SIBLING of the clone dir, NOT inside it: the container
+# to reconstruct that ScratchClone (owner PID + process birth for liveness,
+# live repo, base ref, branch). It lives as a SIBLING of the clone dir, NOT inside it: the container
 # mounts only the clone dir (the cwd), so a hostile worker can't tamper with the
 # sidecar to redirect the sweep's host-side merge at an arbitrary repo (the same
 # never-trust-worker-controlled-repo_dir invariant merge_back_clone already
@@ -348,6 +350,7 @@ def _write_clone_owner(clone: ScratchClone) -> None:
     sidecar = _clone_sidecar_path(clone.path)
     payload = {
         "owner_pid": os.getpid(),
+        "owner_start": process_start_token(os.getpid()),
         "repo_dir": str(clone.repo_dir),
         "base_ref": clone.base_ref,
         "branch": clone.branch,
@@ -567,26 +570,17 @@ class CloneSweepResult:
         return bool(self.recovered or self.preserved or self.surfaced)
 
 
-def _pid_alive_default(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-        return True
-    except (ProcessLookupError, ValueError, OverflowError):
-        return False
-    except PermissionError:  # exists, owned by another user
-        return True
-
-
 def sweep_stranded_clones(
     pid_alive: Optional[Callable[[int], bool]] = None,
     *,
     min_age_s: float = _CLONE_SWEEP_GRACE_S,
+    process_token: Optional[Callable[[int], Optional[str]]] = None,
 ) -> CloneSweepResult:
     """Recover + reap scratch clones leaked by crashed self-dev runs.
 
     For each clone under `worktrees/` carrying an owner sidecar:
 
-    - **owner PID alive** → skip (a live run owns it; never touch in-flight work);
+    - **owner PID + birth token match** → skip (never touch in-flight work);
     - **owner dead, clone younger than `min_age_s`** → skip (grace);
     - **owner dead, old enough** → reconstruct the trusted ScratchClone from the
       sidecar and attempt `merge_back_clone` to RECOVER any unmerged work:
@@ -602,7 +596,8 @@ def sweep_stranded_clones(
 
     `pid_alive` is injectable for tests; docker/worktrees absent → empty result.
     """
-    alive = pid_alive or _pid_alive_default
+    alive = pid_alive or process_pid_alive
+    token_reader = process_token or process_start_token
     result = CloneSweepResult()
 
     root = _worktrees_root()
@@ -630,7 +625,9 @@ def sweep_stranded_clones(
             continue
 
         owner_pid = meta.get("owner_pid")
-        if isinstance(owner_pid, int) and alive(owner_pid):
+        if isinstance(owner_pid, int) and owner_is_current(
+                owner_pid, meta.get("owner_start"), alive=alive,
+                token_reader=token_reader):
             result.skipped_live.append((str(clone_path), owner_pid))
             continue
 

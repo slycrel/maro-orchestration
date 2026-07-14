@@ -371,6 +371,11 @@ class TestBuildRunCommand:
         cmd = self._build(monkeypatch)
         assert "maro.owner_pid=4242" in cmd
 
+    def test_owner_start_label_when_available(self, monkeypatch):
+        monkeypatch.setattr(ce, "process_start_token", lambda pid: "birth-token")
+        cmd = self._build(monkeypatch)
+        assert "maro.owner_start=birth-token" in cmd
+
     def test_worker_env_passed_through(self, monkeypatch):
         cmd = self._build(monkeypatch)
         assert "MARO_WORKER_RUN=1" in cmd
@@ -433,6 +438,34 @@ class TestSweepStrandedContainers:
         result = ce.sweep_stranded_containers(pid_alive=lambda p: p == 100)
         assert result == ["maro-exec-b-0"]  # live owner 100 untouched
         assert killed == ["maro-exec-b-0"]
+
+    def test_kills_reused_pid_with_mismatched_birth_token(self, monkeypatch):
+        ps_out = "maro-exec-reused-0\t100\toriginal-birth\n"
+        monkeypatch.setattr(ce.subprocess, "run", _fake_run(0, stdout=ps_out))
+        killed: list = []
+        monkeypatch.setattr(ce, "kill_container", lambda n: killed.append(n))
+
+        result = ce.sweep_stranded_containers(
+            pid_alive=lambda p: True,
+            process_token=lambda p: "reused-birth",
+        )
+
+        assert result == ["maro-exec-reused-0"]
+        assert killed == result
+
+    def test_legacy_live_pid_without_birth_token_is_spared(self, monkeypatch):
+        ps_out = "maro-exec-legacy-0\t100\t\n"
+        monkeypatch.setattr(ce.subprocess, "run", _fake_run(0, stdout=ps_out))
+        killed: list = []
+        monkeypatch.setattr(ce, "kill_container", lambda n: killed.append(n))
+
+        result = ce.sweep_stranded_containers(
+            pid_alive=lambda p: True,
+            process_token=lambda p: "different-birth",
+        )
+
+        assert result == []
+        assert killed == []
 
     def test_missing_owner_label_is_skipped_not_killed(self, monkeypatch):
         # A container without a parseable owner label is NOT ours to reap —

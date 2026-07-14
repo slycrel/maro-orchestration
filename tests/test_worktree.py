@@ -7,6 +7,7 @@ drop work (branch preserved + named in the structured failure).
 """
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -489,6 +490,7 @@ def test_provision_writes_owner_sidecar_outside_the_clone(repo):
     assert clone.path not in sidecar.parents
     meta = _read_clone_owner(sidecar)
     assert meta["owner_pid"] == os.getpid()
+    assert meta["owner_start"]
     assert meta["repo_dir"] == str(repo)
     assert meta["base_ref"] == "main"
     assert meta["branch"] == clone.branch
@@ -517,6 +519,48 @@ def test_sweep_skips_live_owner(repo):
     assert str(clone.path) in _paths(res.skipped_live)
     assert clone.path.is_dir()  # a live run's clone is never touched
     assert not res.recovered and not res.removed_empty and not res.preserved
+
+
+def test_sweep_recovers_clone_when_pid_was_reused(repo):
+    from worktree import (
+        provision_clone, sweep_stranded_clones, _clone_sidecar_path,
+    )
+
+    clone = provision_clone(repo, "container", loop_id="loop-reused")
+    sidecar = _clone_sidecar_path(clone.path)
+    meta = json.loads(sidecar.read_text())
+    meta["owner_start"] = "original-birth"
+    sidecar.write_text(json.dumps(meta))
+
+    res = sweep_stranded_clones(
+        pid_alive=lambda p: True,
+        process_token=lambda p: "reused-birth",
+        min_age_s=0,
+    )
+
+    assert str(clone.path) in _paths(res.removed_empty)
+    assert not clone.path.exists()
+
+
+def test_sweep_spares_legacy_sidecar_with_live_pid(repo):
+    from worktree import (
+        provision_clone, sweep_stranded_clones, _clone_sidecar_path,
+    )
+
+    clone = provision_clone(repo, "container", loop_id="loop-legacy-owner")
+    sidecar = _clone_sidecar_path(clone.path)
+    meta = json.loads(sidecar.read_text())
+    meta.pop("owner_start")
+    sidecar.write_text(json.dumps(meta))
+
+    res = sweep_stranded_clones(
+        pid_alive=lambda p: True,
+        process_token=lambda p: "different-birth",
+        min_age_s=0,
+    )
+
+    assert str(clone.path) in _paths(res.skipped_live)
+    assert clone.path.exists()
 
 
 def test_sweep_recovers_dead_owner_work_then_removes(repo):
