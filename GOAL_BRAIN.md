@@ -2560,3 +2560,13 @@ Dormant (deliberately parked, not dropped):
   low-confidence passes, so the real certainty gate would escalate and save no
   paid call. Therefore 3B/4-bit remains the smallest model currently proven to
   deliver the benefit on this M1 Max.
+
+- **2026-07-14 (closure verdict precedence + restart ancestry)** — The final
+  attempt was verdict-aware, but a closure-rejected attempt that triggered a
+  restart remained unjudged `done`: attempt 2 replaced both `loop_result` and
+  `_closure` before attempt 1's outcome row was annotated. Rejected attempts
+  are now stamped false before crossing the restart boundary. Deterministic
+  provenance failure also outranks a positive closure narrative in metadata
+  and outcomes. Claude's stale-backlog audit found the restart hole and also
+  prevented premature closure of the local-model bake-off; one committed
+  apples-to-apples corpus remains the bar there.

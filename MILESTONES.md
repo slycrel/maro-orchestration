@@ -2,7 +2,12 @@
 
 What to do next, in what order. Updated each session. Deferred ideas live in BACKLOG.md; completed phase history in docs/history/ROADMAP_ARCHIVE.md (ROADMAP.md is a stub). This file is the executable queue.
 
-Last updated: 2026-07-13 (M1 continuation checkpoint — R4 escalation handle
+Last updated: 2026-07-14 (continuation checkpoint — closure verdict ancestry
+SHIPPED: every closure-rejected attempt is stamped false before restart, and
+deterministic provenance failure cannot be overwritten by a positive closure
+pass. Two end-to-end regressions plus real Claude Skeptic and follow-up review
+approved. The model bake-off remains open on one-corpus/Linux proof. Previous
+checkpoint: R4 escalation handle
 correlation SHIPPED: check-ins and surfaced queued escalations carry their
 typed immediate-parent handle, while live navigator deferrals use the active
 run handle and legacy/no-run paths remain explicitly blank. Focused tests and

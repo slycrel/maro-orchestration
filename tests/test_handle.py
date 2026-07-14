@@ -3104,10 +3104,10 @@ class TestClosureStatusHonesty:
         verdict.contested_claims = []
         return patch("quality_gate.run_quality_gate", return_value=verdict)
 
-    def _fake_loop_result(self, status="done"):
+    def _fake_loop_result(self, status="done", loop_id="test-lr"):
         from agent_loop import LoopResult, StepOutcome
         return LoopResult(
-            loop_id="test-lr", project="test-proj", goal="build X",
+            loop_id=loop_id, project="test-proj", goal="build X",
             status=status, stuck_reason=None,
             steps=[StepOutcome(index=0, text="step", status="done",
                                result="output", iteration=0)],
@@ -3161,6 +3161,67 @@ class TestClosureStatusHonesty:
             result = handle("build X", force_lane="agenda", dry_run=False)
 
         assert result.status == "done"
+
+    def test_restart_stamps_rejected_attempt_before_reverify(
+            self, monkeypatch, tmp_path):
+        """The closure verdict that triggers a restart belongs to attempt 1.
+        It must reach that attempt's outcome row before attempt 2 replaces the
+        in-memory closure value."""
+        self._setup(monkeypatch, tmp_path)
+        from memory import record_outcome
+
+        loop_ids = iter(("loop-rejected", "loop-recovered"))
+
+        def _fake_run(*args, **kwargs):
+            loop_id = next(loop_ids)
+            record_outcome("build X", "done", "summary", lessons=[], loop_id=loop_id)
+            return self._fake_loop_result(status="done", loop_id=loop_id)
+
+        verdicts = iter((
+            self._fake_closure(False, 0.9, gaps=["missing artifact"]),
+            self._fake_closure(True, 0.95),
+        ))
+        with patch("agent_loop.run_agent_loop", side_effect=_fake_run), \
+             patch("intent.check_goal_clarity", return_value={"clear": True}), \
+             patch("director.verify_goal_completion", side_effect=lambda *a, **k: next(verdicts)), \
+             self._no_quality_gate():
+            result = handle("build X", force_lane="agenda", dry_run=False)
+
+        from memory import load_outcomes
+        rows = {row.loop_id: row for row in load_outcomes(limit=10)}
+        assert result.status == "done"
+        assert rows["loop-rejected"].goal_achieved is False
+        assert rows["loop-rejected"].goal_verdict_source == "closure"
+        assert rows["loop-recovered"].goal_achieved is True
+
+    def test_provenance_failure_dominates_positive_closure(
+            self, monkeypatch, tmp_path):
+        """Deterministic missing-artifact evidence must not be overwritten by
+        a narrative closure PASS later in the same finalization."""
+        self._setup(monkeypatch, tmp_path)
+        from memory import record_outcome, load_outcomes
+        import runs as runs_mod
+
+        def _fake_run(*args, **kwargs):
+            record_outcome("build X", "done", "summary", lessons=[], loop_id="loop-prov")
+            return self._fake_loop_result(status="done", loop_id="loop-prov")
+
+        with patch("agent_loop.run_agent_loop", side_effect=_fake_run), \
+             patch("intent.check_goal_clarity", return_value={"clear": True}), \
+             patch("director.verify_goal_completion",
+                   return_value=self._fake_closure(True, 0.95)), \
+             patch("handle._provenance_missing", return_value=["report.md"]), \
+             self._no_quality_gate():
+            result = handle("build X", force_lane="agenda", dry_run=False)
+
+        meta = json.loads(
+            (runs_mod.run_dir(result.handle_id) / "metadata.json").read_text())
+        row = next(r for r in load_outcomes(limit=10) if r.loop_id == "loop-prov")
+        assert result.status == "incomplete"
+        assert meta["goal_achieved"] is False
+        assert meta["goal_verdict_source"] == "provenance"
+        assert row.goal_achieved is False
+        assert row.goal_verdict_source == "provenance"
 
     def test_demotion_fires_without_restart_when_disabled(self, monkeypatch, tmp_path):
         """closure_restart=False still demotes — honesty is not restart policy."""

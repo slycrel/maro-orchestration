@@ -1616,6 +1616,23 @@ def _handle_impl(
                 and _depth < MAX_RESTART_DEPTH
                 and loop_result.status == "done"  # only escalate from "done" — stuck/partial already know they're incomplete
             ):
+                # The first attempt's closure verdict is consumed as the
+                # restart trigger, then `_closure` is replaced by the second
+                # attempt's verdict below. Stamp the rejected attempt before
+                # crossing that boundary so a crash, successful retry, or
+                # failed retry cannot leave it looking like unjudged success
+                # to deferred learning and strategy scoring.
+                _superseded_loop_id = getattr(loop_result, "loop_id", "") or ""
+                try:
+                    from memory import annotate_outcome_verdict as _aov_superseded
+                    _aov_superseded(
+                        _superseded_loop_id,
+                        goal_achieved=False,
+                        goal_verdict_source="closure",
+                        goal_verdict_confidence=float(_closure.confidence),
+                    )
+                except Exception:
+                    pass
                 _gap_lines = "\n".join(f"- {g}" for g in _closure.gaps) or "(none specified)"
                 _closure_ctx = (
                     f"The previous run declared done, but closure verification found gaps.\n"
@@ -1679,6 +1696,7 @@ def _handle_impl(
             # never landed, means not-achieved — regardless of closure/narrative.
             # Works even when closure is None. Catches the false_pass a text-only
             # verdict can't see (shadow-eval n=42, 2026-06-24).
+            _provenance_failed = False
             if loop_result.status == "done":
                 _done_results = "\n\n".join(
                     s.result for s in loop_result.steps
@@ -1690,6 +1708,7 @@ def _handle_impl(
                     window_start=_run_window_start(loop_result.elapsed_ms),
                 )
                 if _prov_missing:
+                    _provenance_failed = True
                     log.info(
                         "provenance (agenda): claimed input/output(s) not found %s — demoted to incomplete",
                         _prov_missing,
@@ -1786,7 +1805,11 @@ def _handle_impl(
             # it — recording false would blame the goal for the verifier's
             # own failures (2026-07-09 dogfood batch: 4/5 known-good runs
             # false-negatived this way). Absence means "not judged".
-            if _closure is not None and _closure.checks_run > 0:
+            if (
+                _closure is not None
+                and _closure.checks_run > 0
+                and not _provenance_failed
+            ):
                 _judged = getattr(_closure, "judged", True)
                 try:
                     from runs import write_metadata as _wm_verdict

@@ -8,6 +8,19 @@ Last split: 2026-04-16 (session 34).
 
 ---
 
+### Closure verdicts reach every outcome attempt — SHIPPED (2026-07-14)
+
+Agenda finalization already annotated the final loop's `outcomes.jsonl` row and
+deferred lessons/skills until after closure, but a real Claude Skeptic found a
+surviving restart hole: the negative verdict that triggered closure restart was
+replaced in memory by attempt 2's verdict before attempt 1 was annotated.
+Rejected attempts are now stamped `goal_achieved=False` before the restart
+boundary, so a success, failure, or crash in the replacement cannot make them
+look like unjudged success. The same audit found and fixed verdict precedence:
+deterministic missing-artifact provenance now remains authoritative over a
+positive narrative closure pass. End-to-end tests inspect both metadata and the
+outcome ledger; focused Claude follow-up found no HIGH/MEDIUM issue.
+
 ### R4: Escalation notification handle correlation — SHIPPED (2026-07-13)
 
 `recursion_checkin` and surfaced task-store escalations now copy the typed
