@@ -5,13 +5,87 @@ Read this at the start of every session. Update it as items are completed or new
 
 **Completed items live in [BACKLOG_DONE.md](BACKLOG_DONE.md)** — move items there with their full context when they ship; that file is the archive of what we've already decided, tried, or superseded, and it's ingested by `dev-recall` for historical context.
 
-Last reviewed: 2026-07-13, third pass same day — session close (R4 final capstone adversarial-review across the ENTIRE day's changeset, `b2dc34d..HEAD`, run cross-model via the real `/adversarial-review` skill per the session's closing instruction: 3 more real bugs fixed live — enqueue-failure dead-chain now surfaces to the operator instead of silently completing, check-in payload off-by-one fixed [all 3 reviewers converged independently], skill-candidate consumed-on-crash bug fixed; 1 architectural residual documented [handle_id absent from escalation-class notify payloads, pre-existing, not a regression]; also closed out the one un-triaged batch-1 finding — navigator_shadow's analyze_live_agreement/analyze_planning_depth_agreement duplication, extracted shared _tabulate_agreement helper. Full suite green, 169/169, after every fix this session). Second pass same day (post-1.0 /goal session: recursion check-in + planning-depth shadow shipped, R1 architectural cleanup shipped, 1.6 /loop trace closed with evidence, knowledge-web read side traced and re-scoped — not built, real prerequisite gap found; R3 adversarial-review of all of the above — 5 fixed live, 3 architectural residuals documented; #19/#20/#21 fully-shipped stubs archived to BACKLOG_DONE (content was already there or wholesale-done); #0's stale "mining passes TODO" bullet corrected — all 4 miners are shipped; -1's stale unchecked "Cosmetic sweep... SHIPPED" checkbox fixed; triaged the rest of the Actionable Stack — nothing else is both unblocked and ready without Jeremy's input). Previous same-day pass: #10, #14, #18 shipped and archived to BACKLOG_DONE; #17 trimmed to its O(all runs) residual; #22 residual (blank-slate skill set) and hist-r2-02 checked off; #25 code shipped, stays open pending Jeremy's API keys; container-executor C4 mechanics merged, C4-BOX real-goal burn-in stays Jeremy-gated. Previous: 2026-07-09 (decision-cleanup session with Jeremy: #19 thread-arch decisions all resolved + recursion decree recorded, intent-resolution A/B dropped, orch.py trio deprecated, host-check wired+scheduled — four entries → BACKLOG_DONE; fastembed lane confirmed stays-gated). Previous full triage: 2026-07-04.
+Last reviewed: 2026-07-13, fourth pass same day — independent holistic review of the rolling 48-hour range `d717915e..8aa9876` added R5 (portable-pack review seal bypass reproduced end-to-end; pack import concurrency/global-routing breach; implicit hosted-free data egress + unenforced latency cap; run-curation atomicity/hidden-side-effect boundary; execution-fence setup fail-open). Canonical `pytest tests/ -q`, real-Docker container E2E, and `git diff --check` green. Previous same-day pass: session close (R4 final capstone adversarial-review across the ENTIRE day's changeset, `b2dc34d..HEAD`, run cross-model via the real `/adversarial-review` skill per the session's closing instruction: 3 more real bugs fixed live — enqueue-failure dead-chain now surfaces to the operator instead of silently completing, check-in payload off-by-one fixed [all 3 reviewers converged independently], skill-candidate consumed-on-crash bug fixed; 1 architectural residual documented [handle_id absent from escalation-class notify payloads, pre-existing, not a regression]; also closed out the one un-triaged batch-1 finding — navigator_shadow's analyze_live_agreement/analyze_planning_depth_agreement duplication, extracted shared _tabulate_agreement helper. Full suite green, 169/169, after every fix this session). Second pass same day (post-1.0 /goal session: recursion check-in + planning-depth shadow shipped, R1 architectural cleanup shipped, 1.6 /loop trace closed with evidence, knowledge-web read side traced and re-scoped — not built, real prerequisite gap found; R3 adversarial-review of all of the above — 5 fixed live, 3 architectural residuals documented; #19/#20/#21 fully-shipped stubs archived to BACKLOG_DONE (content was already there or wholesale-done); #0's stale "mining passes TODO" bullet corrected — all 4 miners are shipped; -1's stale unchecked "Cosmetic sweep... SHIPPED" checkbox fixed; triaged the rest of the Actionable Stack — nothing else is both unblocked and ready without Jeremy's input). Previous same-day pass: #10, #14, #18 shipped and archived to BACKLOG_DONE; #17 trimmed to its O(all runs) residual; #22 residual (blank-slate skill set) and hist-r2-02 checked off; #25 code shipped, stays open pending Jeremy's API keys; container-executor C4 mechanics merged, C4-BOX real-goal burn-in stays Jeremy-gated. Previous: 2026-07-09 (decision-cleanup session with Jeremy: #19 thread-arch decisions all resolved + recursion decree recorded, intent-resolution A/B dropped, orch.py trio deprecated, host-check wired+scheduled — four entries → BACKLOG_DONE; fastembed lane confirmed stays-gated). Previous full triage: 2026-07-04.
 
 ---
 
 ## Actionable Stack
 
 Ordered open work that matters. Top of the list is next.
+
+### R5. Independent holistic review of the rolling 48-hour changeset — 5 open findings (2026-07-13)
+
+Codex review of `git diff d717915e..8aa9876` (138 files, ~20k added
+lines), with architecture first and security, concurrency, correctness,
+operability, maintainability, canonical tests, and real-Docker E2E as the
+supporting lenses. These are open findings; no product code was changed in
+the review.
+
+- [ ] **HIGH — a sealed portable-learning pack can be modified after human
+  review and still import successfully** (`src/pack.py:368-410, 833-859`).
+  The seal hashes `REVIEW.md`, while artifact hashes live in the same mutable
+  `pack.json`; neither is authenticated outside the archive. Reproduced
+  end-to-end: seal a pack whose review contains `SAFE CONTENT`, replace the
+  artifact with `TAMPERED AFTER REVIEW`, update that artifact's sha256 in
+  `pack.json`, retain the original reviewed text, and `import_pack()` accepts
+  it. This invalidates the existing claim that the artifact-sha check detects
+  post-seal payload swaps. Fix direction depends on the threat model: for
+  adversarial integrity, sign a canonical manifest covering every artifact
+  with a key/signature outside the archive; for a local review workflow only,
+  bind the reviewed artifact-set digest at seal time and stop describing it as
+  post-seal tamper protection. Add the exact demonstrated swap as a regression
+  test.
+- [ ] **MEDIUM — portable import routes trust-bearing writes through a
+  process-global environment mutation and uses unlocked read/check/write
+  sequences** (`src/pack.py:715-793`). `_memory_dir_override()` temporarily
+  changes `MARO_MEMORY_DIR`; concurrent imports targeting different
+  workspaces can redirect one another's writes or restore the wrong value.
+  `CONFLICTS.md` and quarantine writes also bypass the repo's
+  `locked_rmw`/atomic-write rule, so concurrent imports can lose notes or
+  overwrite content. Fix direction: pass an explicit workspace/storage
+  context into memory writers; as an interim CLI-only containment, serialize
+  the whole override/import critical section and convert shared writes to
+  locked/atomic operations. Add a two-target threaded/process test.
+- [ ] **MEDIUM — merely having a Groq or Gemini credential implicitly opts
+  step results into third-party data egress, and the advertised latency cap
+  does not bound a call** (`src/hosted_free.py:83-90`,
+  `src/step_exec.py:1590-1628`, `src/llm.py:2025-2030`). Hosted-free defaults
+  enabled and is tried whenever either key exists, without an explicit
+  provider/data-egress choice. Its `max_latency_ms` breaker measures only
+  after completion, while the HTTP transport can block for 120 seconds.
+  Fix direction: make hosted-free egress explicitly opt-in (or introduce one
+  shared provider-egress policy) and thread a tier-specific request timeout
+  through `OpenAICompatAdapter` so the configured cap is enforceable.
+- [ ] **MEDIUM — run curation mixes pure card construction with hidden,
+  trust-bearing mutations behind blanket best-effort exception handling, then
+  writes the card non-atomically** (`src/run_curation.py:998-1028`; skills-lite
+  promotion at `src/run_curation.py:365-515`). A failed producer curator is
+  swallowed, dependent curators still run on missing fields, and the returned
+  card carries no structured record of failed/skipped miners. The same hook
+  also mutates the active skill overlay. Fix direction: split pure synchronous
+  card construction from explicit maintenance/promotion phases; record each
+  curator's `completed`/`failed`/`skipped_dependency` outcome; write
+  `run_card.json` atomically. This overlaps R3's declared-vs-actual
+  `CuratorSpec` residual but is broader: it is about runtime failure semantics
+  and side-effect ownership, not only spec drift.
+- [ ] **MEDIUM/LOW — the execution-fence setup boundary silently fails open**
+  (`src/agent_loop.py:235-323`). Project-dir creation, cwd ContextVar binding,
+  container scratch-clone setup, and rw-root policy now sit under one blanket
+  `except Exception: pass`; an unexpected failure can continue execution with
+  inherited cwd/stale policy despite the block's stated fence guarantee. Fix
+  direction: make the mandatory fence/cwd establishment fail visibly as an
+  error or stuck result; keep only genuinely optional adornments best-effort,
+  with narrow logged exceptions. Add fault-injection tests at directory
+  creation and cwd/policy binding.
+
+Architectural follow-on: the highest-change boundary modules are now
+`llm.py` (2,509 lines), `handle.py` (2,425), `step_exec.py` (1,766),
+`director.py` (1,615), `run_curation.py` (1,233), and `pack.py` (1,110).
+Continue the good neutral-leaf extraction pattern established by
+`prefixes.py` and `decision_prior.py`: explicit execution/storage contexts
+and phase-result contracts should be the next decomposition seam, rather than
+more ContextVars, environment overrides, and best-effort side effects inside
+the facades.
 
 ### R3. Adversarial-review of the recursion-checkin + R1 merge — 5 fixed live, 3 architectural residuals (2026-07-13)
 
