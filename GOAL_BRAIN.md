@@ -2587,3 +2587,15 @@ Dormant (deliberately parked, not dropped):
   become a decisive PASS; the local rung now uses `validate.min_certainty` for
   both boundaries. Claude Architect found the identical latent mismatch in the
   hosted-free rung; it now likewise uses `hosted_free.min_certainty`.
+
+- **2026-07-14 (captain's-log event viewer)** — Closed the old mismatch where
+  `maro-log --timeline` only aggregated counts despite the backlog asking for
+  a sortable event slice. `event_slice()` / `maro-log --events` now span active
+  and rotated JSONL and expose timestamp, event, loop, project slug, subject,
+  compact scalar key fields, and summary as TSV or JSONL; sorting precedes the
+  limit and supports every named identity field. No index or storage migration.
+  Real Claude Skeptic + Minimalist review found no high-severity defect and
+  caused full two-direction sort tripwires, context-priority/cap coverage,
+  post-limit detail computation, context-key sanitization, non-object JSONL
+  tolerance, centralized subject filtering, and explicit CLI conflict errors.
+  Follow-up review found no remaining HIGH or MEDIUM issue.

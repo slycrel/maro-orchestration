@@ -113,6 +113,9 @@ Make time a first-class dimension. The captain's log (14K+ events) and git commi
 
 - [x] `query_log()` — full-text search across all captain's log fields (summary, note, context values, related_ids). Date range filtering (since/until). Unlimited mode for full-history archaeology.
 - [x] `timeline()` — aggregate event counts by day or hour. Shows when failure patterns emerged and how event types shift over time.
+- [x] `event_slice()` + `maro-log --events` — bounded, sortable per-event view
+  (timestamp, event, loop, slug, compact key fields) across active + rotated
+  JSONL, with TSV and normalized JSONL output. No storage migration.
 - [x] `correlate_with_git()` — cross-reference captain's log events with git commits by timestamp (±N hours). Reveals what code changes landed around the time failures or improvements appeared.
 - [x] CLI: `poe-log "search term" --git --timeline` — all modes accessible from command line.
 

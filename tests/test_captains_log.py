@@ -18,6 +18,8 @@ from captains_log import (
     load_log,
     query_log,
     timeline,
+    event_slice,
+    render_event_slice,
     correlate_with_git,
     render_entry,
     render_log,
@@ -501,6 +503,11 @@ class TestQueryLog:
         assert len(entries) == 1
         assert entries[0]["event_type"] == "EVOLVER_APPLIED"
 
+    def test_query_with_subject_filter(self):
+        log_event(DIAGNOSIS, "alpha", "one")
+        log_event(DIAGNOSIS, "beta", "two")
+        assert [row["subject"] for row in query_log(subject="ALP")] == ["alpha"]
+
 
 class TestTimeline:
 
@@ -539,6 +546,150 @@ class TestTimeline:
 
         tl = timeline(bucket="hour")
         assert len(tl) == 2  # 08 and 09
+
+
+class TestEventSlice:
+
+    def test_normalizes_fields_and_compacts_context(self, _tmp_log):
+        _tmp_log.write_text(json.dumps({
+            "timestamp": "2026-04-10T08:00:00+00:00",
+            "event_type": "QUALITY_GATE_VERDICT",
+            "loop_id": "loop-1",
+            "subject": "gate",
+            "summary": "passed",
+            "context": {
+                "project": "alpha",
+                "confidence": 0.9,
+                "status": "done",
+                "nested": {"large": "payload"},
+                "long": "x" * 100,
+            },
+        }) + "\n")
+
+        rows = event_slice()
+        assert rows == [{
+            "timestamp": "2026-04-10T08:00:00+00:00",
+            "event_type": "QUALITY_GATE_VERDICT",
+            "loop_id": "loop-1",
+            "slug": "alpha",
+            "subject": "gate",
+            "summary": "passed",
+            "key_fields": {
+                "status": "done",
+                "confidence": 0.9,
+                "long": "x" * 77 + "...",
+            },
+        }]
+
+    def test_sorts_before_limiting_and_spans_archives(self, _tmp_log, tmp_path):
+        archive = tmp_path / "captains_log.20260101-000000.jsonl"
+        archive.write_text(json.dumps({
+            "timestamp": "2026-01-01T00:00:00+00:00",
+            "event_type": "Z_EVENT", "subject": "archived", "summary": "old",
+        }) + "\n")
+        _tmp_log.write_text("\n".join([
+            json.dumps({"timestamp": "2026-04-10T09:00:00+00:00",
+                        "event_type": "B_EVENT", "subject": "b", "summary": ""}),
+            json.dumps({"timestamp": "2026-04-10T10:00:00+00:00",
+                        "event_type": "A_EVENT", "subject": "a", "summary": ""}),
+        ]) + "\n")
+
+        rows = event_slice(sort_by="event_type", order="asc", limit=2)
+        assert [row["event_type"] for row in rows] == ["A_EVENT", "B_EVENT"]
+
+    @pytest.mark.parametrize("sort_by", ["timestamp", "loop_id", "slug"])
+    @pytest.mark.parametrize("order", ["asc", "desc"])
+    def test_every_promised_sort_key_in_both_directions(
+        self, _tmp_log, sort_by, order,
+    ):
+        entries = [
+            {"timestamp": "2026-04-10T08:00:00+00:00", "event_type": "E",
+             "loop_id": "loop-c", "subject": "one", "summary": "",
+             "context": {"project": "beta"}},
+            {"timestamp": "2026-04-10T10:00:00+00:00", "event_type": "E",
+             "loop_id": "loop-a", "subject": "two", "summary": "",
+             "context": {"project": "gamma"}},
+            {"timestamp": "2026-04-10T09:00:00+00:00", "event_type": "E",
+             "loop_id": "loop-b", "subject": "three", "summary": "",
+             "context": {"project": "alpha"}},
+        ]
+        _tmp_log.write_text("\n".join(json.dumps(row) for row in entries) + "\n")
+
+        values = [row[sort_by] for row in event_slice(sort_by=sort_by, order=order)]
+        assert values == sorted(values, reverse=(order == "desc"))
+
+    def test_key_field_priority_survives_six_field_cap(self, _tmp_log):
+        log_event(DIAGNOSIS, "priority", "summary", context={
+            "z": 1, "y": 2, "x": 3, "w": 4, "v": 5, "u": 6,
+            "confidence": 0.8, "action": "retry", "status": "stuck",
+        })
+        keys = list(event_slice()[0]["key_fields"])
+        assert keys == ["status", "action", "confidence", "u", "v", "w"]
+
+    def test_filters_subject_and_rejects_unknown_sort(self, _tmp_log):
+        log_event(DIAGNOSIS, "alpha", "one")
+        log_event(DIAGNOSIS, "beta", "two")
+        assert [row["subject"] for row in event_slice(subject="ALP")] == ["alpha"]
+        with pytest.raises(ValueError, match="unsupported event-slice sort"):
+            event_slice(sort_by="context")
+
+    def test_tsv_renderer_has_stable_columns_and_single_line_cells(self):
+        rendered = render_event_slice([{
+            "timestamp": "2026-01-01T00:00:00+00:00",
+            "event_type": "DIAGNOSIS",
+            "loop_id": "loop-1",
+            "slug": "alpha",
+            "subject": "multi\nline",
+            "summary": "one\ttwo",
+            "key_fields": {"sta\ttus": "stuck", "exit_code": 0, "passed": False},
+        }])
+        lines = rendered.splitlines()
+        assert len(lines) == 2
+        assert lines[0].split("\t") == [
+            "timestamp", "event_type", "loop_id", "slug", "subject",
+            "key_fields", "summary",
+        ]
+        assert lines[1].split("\t")[4:] == [
+            "multi line", "sta tus=stuck exit_code=0 passed=False", "one two",
+        ]
+
+    def test_valid_non_object_jsonl_rows_are_skipped(self, _tmp_log):
+        _tmp_log.write_text(
+            '[1, 2, 3]\n'
+            '{"timestamp":"2026-01-01T00:00:00+00:00",'
+            '"event_type":"DIAGNOSIS","subject":"valid","summary":"ok"}\n'
+        )
+        assert [row["subject"] for row in event_slice()] == ["valid"]
+
+    def test_cli_events_json_uses_requested_sort(self, monkeypatch, capsys):
+        log_event(DIAGNOSIS, "zeta", "later")
+        log_event(EVOLVER_APPLIED, "alpha", "earlier")
+        monkeypatch.setattr(
+            sys, "argv",
+            ["maro-log", "--events", "--json", "--sort", "event_type", "--order", "asc"],
+        )
+        from captains_log import main
+        main()
+        rows = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+        assert [row["event_type"] for row in rows] == ["DIAGNOSIS", "EVOLVER_APPLIED"]
+
+    def test_cli_rejects_events_with_aggregate_timeline(self, monkeypatch):
+        monkeypatch.setattr(sys, "argv", ["maro-log", "--events", "--timeline"])
+        from captains_log import main
+        with pytest.raises(SystemExit) as exc:
+            main()
+        assert exc.value.code == 2
+
+    def test_cli_query_mode_honors_subject(self, monkeypatch, capsys):
+        log_event(DIAGNOSIS, "alpha", "matching summary")
+        log_event(DIAGNOSIS, "beta", "matching summary")
+        monkeypatch.setattr(
+            sys, "argv", ["maro-log", "matching", "--subject", "alpha", "--json"],
+        )
+        from captains_log import main
+        main()
+        rows = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+        assert [row["subject"] for row in rows] == ["alpha"]
 
 
 class TestGitCorrelation:

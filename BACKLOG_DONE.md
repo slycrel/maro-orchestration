@@ -2652,3 +2652,17 @@ that could convert a local or hosted-free RETRY at confidence 0.60–0.74 into a
 decisive PASS.
 Apple Silicon verdict: use 3B/4-bit only as gated first-pass validation. Linux
 on-box burn-in remains separately hardware-gated in BACKLOG.
+
+## Captain's-log sortable event viewer — completed 2026-07-14
+
+`event_slice()` and `maro-log --events` now expose the per-event view the
+aggregate `--timeline` never provided: timestamp, event type, loop id, project
+slug, subject, compact scalar context fields, and summary. It spans active and
+rotated JSONL, sorts before limiting by timestamp/event/loop/slug/subject, and
+renders stable TSV or normalized JSONL without a storage migration. Readers now
+skip syntactically valid non-object JSONL rows as well as malformed lines.
+Focused tests cover every promised sort key in both directions, archive+limit
+semantics, filtering, context caps, TSV safety, and CLI conflicts. Two real
+Claude reviewers found no high-severity defects; accepted sort-coverage,
+bounded-rendering, malformed-row, and flag-clarity findings were fixed, and
+follow-up review reported no remaining HIGH or MEDIUM findings.

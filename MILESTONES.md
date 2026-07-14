@@ -2,7 +2,12 @@
 
 What to do next, in what order. Updated each session. Deferred ideas live in BACKLOG.md; completed phase history in docs/history/ROADMAP_ARCHIVE.md (ROADMAP.md is a stub). This file is the executable queue.
 
-Last updated: 2026-07-14 (continuation checkpoint — formal M1 local-validator
+Last updated: 2026-07-14 (continuation checkpoint — captain's-log event viewer
+SHIPPED: `maro-log --events` provides a sortable archive-spanning TSV/JSON
+slice over timestamp/event/loop/slug/key fields, preserving the existing
+aggregate `--timeline` and adding no storage migration. Two real Claude
+reviewers drove broader sort/cap/malformed-row/CLI coverage; follow-up found no
+remaining HIGH or MEDIUM issues. Previous checkpoint — formal M1 local-validator
 bake-off COMPLETE: one committed 14-case corpus replayed through four exact-
 protocol candidates. VibeThinker-3B-4bit alone achieved 14/14 with full
 decisive coverage and zero unsafe false-passes at 8.83s average; 1.5B, 8-bit,

@@ -16,7 +16,32 @@ An append-only, human-readable changelog of what the **learning system** decides
 
 - **File:** `~/.maro/workspace/memory/captains_log.jsonl` (one JSON object per line).
 - **Rotation:** size-gated, riding on `log_event` (no cron — the no-scheduler invariant). When the active file exceeds `captains_log.rotate_mb` (default 5), all but the most recent `captains_log.rotate_keep` (default 1000) entries move to a timestamped archive `captains_log.<stamp>.jsonl`. Data is never deleted. The rotation itself emits `LOG_ROTATED`.
-- **Readers:** the hot-path reader (`load_log`) reads the active file only; archaeology readers (`query_log`, `timeline`) span archives.
+- **Readers:** the hot-path reader (`load_log`) reads the active file only; archaeology readers (`query_log`, `timeline`, `event_slice`) span archives.
+
+### Human event viewer
+
+`maro-log --events` renders a bounded per-event TSV slice with timestamp,
+event type, loop id, project slug, subject, compact scalar context fields, and
+summary. It sorts the full matching history before applying `--limit`, so any
+supported sort returns the requested slice rather than reordering an arbitrary
+newest-N sample. Use `--json` for normalized JSONL output.
+
+```bash
+# Newest 20 events (default)
+maro-log --events
+
+# Sort a filtered historical slice
+maro-log --events --type CLOSURE --since 2026-07-01 \
+  --sort slug --order asc --limit 100
+
+# Machine-readable rows
+maro-log --events "budget" --sort timestamp --order desc --json
+```
+
+Supported sort fields are `timestamp`, `event_type`, `loop_id`, `slug`, and
+`subject`. The aggregate counts view remains `maro-log --timeline`; the two
+modes are intentionally distinct and mutually exclusive. Both span rotated
+archives without adding an index or storage migration.
 
 ## Entry schema
 

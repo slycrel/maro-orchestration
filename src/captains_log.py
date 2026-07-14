@@ -462,6 +462,8 @@ def load_log(
                 entry = json.loads(line)
             except json.JSONDecodeError:
                 continue
+            if not isinstance(entry, dict):
+                continue
 
             if since and entry.get("timestamp", "") < since:
                 continue
@@ -520,6 +522,7 @@ def query_log(
     since: Optional[str] = None,
     until: Optional[str] = None,
     event_type: Optional[str] = None,
+    subject: Optional[str] = None,
     limit: int = 100,
 ) -> List[Dict[str, Any]]:
     """Full-text search across all captain's log fields.
@@ -533,6 +536,7 @@ def query_log(
         since: ISO date (e.g. "2026-04-09"). Entries on or after.
         until: ISO date (e.g. "2026-04-11"). Entries strictly before.
         event_type: Filter by event type prefix.
+        subject: Substring match on the subject field.
         limit: Max results (0 = unlimited). Default 100.
 
     Returns:
@@ -556,6 +560,8 @@ def query_log(
                     entry = json.loads(line)
                 except json.JSONDecodeError:
                     continue
+                if not isinstance(entry, dict):
+                    continue
 
                 ts = entry.get("timestamp", "")
                 if since and ts < since:
@@ -563,6 +569,8 @@ def query_log(
                 if until and ts >= until:
                     continue
                 if event_type and not entry.get("event_type", "").startswith(event_type.upper()):
+                    continue
+                if subject and subject.lower() not in str(entry.get("subject", "")).lower():
                     continue
 
                 # Full-text match across all string fields
@@ -623,6 +631,8 @@ def timeline(
                     entry = json.loads(line)
                 except json.JSONDecodeError:
                     continue
+                if not isinstance(entry, dict):
+                    continue
 
                 ts = entry.get("timestamp", "")
                 if since and ts < since:
@@ -648,6 +658,155 @@ def timeline(
             "by_type": dict(counts.most_common()),
         })
     return result
+
+
+# ---------------------------------------------------------------------------
+# Event slice — bounded, sortable per-event timeline for human inspection
+# ---------------------------------------------------------------------------
+
+_EVENT_SLICE_SORTS = frozenset({
+    "timestamp", "event_type", "loop_id", "slug", "subject",
+})
+_KEY_FIELD_PRIORITY = (
+    "status", "action", "decision", "verdict", "confidence",
+)
+
+
+def _event_slug(entry: Dict[str, Any]) -> str:
+    context = entry.get("context") or {}
+    if not isinstance(context, dict):
+        context = {}
+    return str(
+        entry.get("slug")
+        or context.get("slug")
+        or context.get("project_slug")
+        or context.get("project")
+        or ""
+    )
+
+
+def _event_key_fields(entry: Dict[str, Any]) -> Dict[str, Any]:
+    """Select a compact deterministic context summary for the text viewer.
+
+    Full context remains available through the existing query `--json` path.
+    The event slice deliberately shows only scalar values so one nested payload
+    cannot turn a one-line timeline row into an unbounded dump.
+    """
+    context = entry.get("context") or {}
+    if not isinstance(context, dict):
+        return {}
+
+    def _compact(value: Any) -> Any:
+        if isinstance(value, str):
+            value = " ".join(value.split())
+            return value[:77] + "..." if len(value) > 80 else value
+        if value is None or isinstance(value, (bool, int, float)):
+            return value
+        return None
+
+    ordered = [key for key in _KEY_FIELD_PRIORITY if key in context]
+    ordered.extend(sorted(key for key in context if key not in ordered))
+    out: Dict[str, Any] = {}
+    for key in ordered:
+        if key in {"slug", "project_slug", "project", "loop_id"}:
+            continue
+        value = _compact(context[key])
+        if value is None and context[key] is not None:
+            continue
+        out[str(key)] = value
+        if len(out) >= 6:
+            break
+    return out
+
+
+def event_slice(
+    query: str = "",
+    *,
+    since: Optional[str] = None,
+    until: Optional[str] = None,
+    event_type: Optional[str] = None,
+    subject: Optional[str] = None,
+    limit: int = 20,
+    sort_by: str = "timestamp",
+    order: str = "desc",
+) -> List[Dict[str, Any]]:
+    """Return a sortable, bounded per-event timeline across active + archives.
+
+    Rows expose the inspection fields that matter most without requiring a
+    storage migration: timestamp, event type, loop id, project slug, subject,
+    summary, and a compact scalar context selection. Sorting happens before the
+    limit is applied, so `--sort event_type --limit N` is deterministic rather
+    than sorting an arbitrary newest-N subset. Arbitrary sorting necessarily
+    scans the full matching history; this is a human inspection path, not the
+    bounded dispatch hot path served by `load_log()`.
+    """
+    if sort_by not in _EVENT_SLICE_SORTS:
+        raise ValueError(f"unsupported event-slice sort: {sort_by}")
+    if order not in {"asc", "desc"}:
+        raise ValueError(f"unsupported event-slice order: {order}")
+
+    entries = query_log(
+        query,
+        since=since,
+        until=until,
+        event_type=event_type,
+        subject=subject,
+        limit=0,
+    )
+
+    pairs = [
+        ({
+            "timestamp": str(entry.get("timestamp") or ""),
+            "event_type": str(entry.get("event_type") or "UNKNOWN"),
+            "loop_id": str(entry.get("loop_id") or ""),
+            "slug": _event_slug(entry),
+            "subject": str(entry.get("subject") or ""),
+            "summary": str(entry.get("summary") or ""),
+        }, entry)
+        for entry in entries
+    ]
+    pairs.sort(
+        key=lambda pair: (
+            str(pair[0].get(sort_by, "")).lower(),
+            pair[0]["timestamp"],
+            pair[0]["event_type"],
+            pair[0]["subject"],
+        ),
+        reverse=(order == "desc"),
+    )
+    if limit > 0:
+        pairs = pairs[:limit]
+    rows = []
+    for row, entry in pairs:
+        row["key_fields"] = _event_key_fields(entry)
+        rows.append(row)
+    return rows
+
+
+def render_event_slice(rows: List[Dict[str, Any]]) -> str:
+    """Render normalized event rows as a shell- and spreadsheet-friendly TSV."""
+    def _cell(value: Any) -> str:
+        if value is None:
+            return ""
+        return " ".join(str(value).split()).replace("\t", " ")
+
+    header = "timestamp\tevent_type\tloop_id\tslug\tsubject\tkey_fields\tsummary"
+    lines = [header]
+    for row in rows:
+        key_fields = " ".join(
+            f"{_cell(key)}={_cell(value)}"
+            for key, value in (row.get("key_fields") or {}).items()
+        )
+        lines.append("\t".join([
+            _cell(row.get("timestamp")),
+            _cell(row.get("event_type")),
+            _cell(row.get("loop_id")),
+            _cell(row.get("slug")),
+            _cell(row.get("subject")),
+            key_fields,
+            _cell(row.get("summary")),
+        ]))
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -789,8 +948,42 @@ def main() -> None:
     parser.add_argument("--json", action="store_true", help="Output raw JSON instead of rendered text")
     parser.add_argument("--git", action="store_true", help="Show correlated git commits")
     parser.add_argument("--timeline", action="store_true", help="Show event count timeline")
+    parser.add_argument("--events", action="store_true",
+                        help="Show a sortable per-event timeline slice")
+    parser.add_argument("--sort", choices=sorted(_EVENT_SLICE_SORTS),
+                        help="Event-slice sort field (only with --events)")
+    parser.add_argument("--order", choices=("asc", "desc"),
+                        help="Event-slice sort order (only with --events; default: desc)")
 
     args = parser.parse_args()
+
+    if not args.events and (args.sort or args.order):
+        parser.error("--sort/--order require --events")
+    if args.events and args.git:
+        parser.error("--git is not available with --events; use normal query mode")
+    if args.events and args.timeline:
+        parser.error("--events and --timeline are mutually exclusive")
+
+    if args.events:
+        rows = event_slice(
+            args.query,
+            since=args.since,
+            until=args.until,
+            event_type=args.event_type,
+            subject=args.subject,
+            limit=args.limit,
+            sort_by=args.sort or "timestamp",
+            order=args.order or "desc",
+        )
+        if not rows:
+            print("No events found.")
+            return
+        if args.json:
+            for row in rows:
+                print(json.dumps(row, sort_keys=True))
+        else:
+            print(render_event_slice(rows))
+        return
 
     # Timeline mode
     if args.timeline:
@@ -810,6 +1003,7 @@ def main() -> None:
             since=args.since,
             until=args.until,
             event_type=args.event_type,
+            subject=args.subject,
             limit=args.limit,
         )
     else:
