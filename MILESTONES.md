@@ -2,7 +2,14 @@
 
 What to do next, in what order. Updated each session. Deferred ideas live in BACKLOG.md; completed phase history in docs/history/ROADMAP_ARCHIVE.md (ROADMAP.md is a stub). This file is the executable queue.
 
-Last updated: 2026-07-13 (M1 continuation checkpoint — R5 portable-import
+Last updated: 2026-07-13 (M1 continuation checkpoint — R5 run-curation runtime
+semantics SHIPPED: pure card construction is separated from explicit
+maintenance/promotion, dependency failures cause structured transitive skips,
+and the pure card is atomically durable before maintenance begins. Three-lens
+Claude adversarial review completed: four accepted findings fixed
+(shared metadata snapshot, maintenance provenance precondition, strict registry
+lookup, precomputed provider map). Final full raw suite green. Previous
+checkpoint: R5 portable-import
 concurrency residual SHIPPED: process-global `MARO_MEMORY_DIR` mutation replaced
 by an execution-scoped storage ContextVar, per-target import transaction lock,
 and locked/atomic quarantine writes; deterministic different-target and

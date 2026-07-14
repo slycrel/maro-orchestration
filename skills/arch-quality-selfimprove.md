@@ -92,7 +92,9 @@ Discovery, scoring, promotion/demotion with circuit breaker. Shared types (`Skil
   (`tier: skills-lite`) + a companion provisional Skill in skills.jsonl, so
   normal decay/circuit-breaker degradation applies; a tripped companion
   quarantines the .md to `skills/_quarantine/`. Human review gates only
-  ship-set/repo graduation. `run_curation.promote_skills_lite` /
+  ship-set/repo graduation. Promotion runs in run curation's explicit
+  maintenance phase, after the pure card has been persisted.
+  `run_curation.promote_skills_lite` /
   `degrade_skills_lite`, config `skills.lite_promotion` (default ON by
   decree — see docs/DEFAULTS.md).
 

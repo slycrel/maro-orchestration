@@ -60,7 +60,14 @@ def test_curate_records_failed_miners_and_writes_valid_card(workspace, monkeypat
         card["survived"] = True
 
     _finish("h00000cf", "build the thing", "done", achieved=True)
+    specs = [
+        run_curation.CuratorSpec(failed_curator),
+        run_curation.CuratorSpec(succeeding_curator),
+    ]
+    monkeypatch.setattr(run_curation, "_SPEC_BY_NAME", {s.name: s for s in specs})
+    monkeypatch.setattr(run_curation, "_PROVIDER_OF", {})
     monkeypatch.setattr(run_curation, "CURATORS", [failed_curator, succeeding_curator])
+    monkeypatch.setattr(run_curation, "MAINTENANCE", [])
     card = run_curation.curate_run("h00000cf")
 
     assert card["survived"] is True
@@ -68,8 +75,29 @@ def test_curate_records_failed_miners_and_writes_valid_card(workspace, monkeypat
     assert card["_curation"]["failed"] == [
         {"curator": "failed_curator", "error": "miner exploded"}
     ]
+    assert card["_curation"]["skipped_dependency"] == []
     on_disk = json.loads((runs.run_dir("h00000cf") / "run_card.json").read_text())
     assert on_disk == card
+
+
+def test_pure_card_is_durable_before_maintenance(workspace, monkeypatch):
+    import run_curation
+
+    _finish("h00000ce", "build the thing", "done", achieved=True)
+
+    def interrupted(card, run_dir, meta=None):
+        raise KeyboardInterrupt("process stopped between phases")
+
+    monkeypatch.setattr(run_curation, "maintain_run_card", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        run_curation.curate_run("h00000ce")
+
+    on_disk = json.loads(
+        (runs.run_dir("h00000ce") / "run_card.json").read_text()
+    )
+    assert on_disk["success_class"] == "success"
+    assert "_curation" in on_disk
+    assert "_maintenance" not in on_disk
 
 
 def test_classify_done_not_achieved(workspace):
@@ -305,6 +333,27 @@ class TestSkillsLite:
         assert comp[0].trigger_patterns == ["release notes", "changelog summary"]
         recs = load_skill_provenance("fetch_release_notes")
         assert recs and recs[0]["decision"] == "create"
+
+    def test_pure_card_build_does_not_promote(self, workspace):
+        import config
+        from run_curation import build_run_card
+
+        rd = self._run_with_artifact("h00000de")
+        card = build_run_card("h00000de", run_dir=rd)
+
+        assert card is not None
+        assert "skills_lite" not in card
+        assert "_maintenance" not in card
+        assert not (config.skills_dir() / "fetch_release_notes.md").exists()
+
+    def test_curate_records_separate_maintenance_phase(self, workspace):
+        self._run_with_artifact("h00000df")
+        card = curate_run("h00000df")
+
+        assert "promote_skills_lite" in card["_maintenance"]["completed"]
+        assert "flag_skill_candidate" in card["_maintenance"]["completed"]
+        assert card["_maintenance"]["failed"] == []
+        assert card["_maintenance"]["skipped_dependency"] == []
 
     def test_failed_run_promotes_nothing(self, workspace):
         import config
@@ -787,19 +836,18 @@ class TestPriorDecisionSurfacing:
 
 
 class TestCuratorsOrdering:
-    """CURATORS' real dependency chain (adversarial-review finding,
-    2026-07-13) is enforced only by this list's literal order plus a comment
-    — curate_run() swallows every curator's exceptions, so a miner inserted
-    out of order doesn't error, it silently writes a card missing fields.
-    This test pins the order so that failure mode surfaces as a test break
-    instead of a stale run_card in production."""
+    """The registry derives both phases from the declared dependency graph.
+
+    Pin the cross-phase ordering here so a contract regression surfaces as a
+    test failure rather than a plausible-looking incomplete card.
+    """
 
     def test_dependency_order_matches_documented_chain(self):
         from run_curation import (
-            CURATORS, classify_outcome, inventory_assets, scrape_scripts,
+            CURATORS, MAINTENANCE, classify_outcome, inventory_assets, scrape_scripts,
             flag_skill_candidate, rescue_partial, index_decision_prior,
         )
-        names = [f.__name__ for f in CURATORS]
+        names = [f.__name__ for f in CURATORS + MAINTENANCE]
         # classify_outcome sets success_class, read by flag_skill_candidate.
         assert names.index(classify_outcome.__name__) < names.index(flag_skill_candidate.__name__)
         # inventory_assets sets the inventory scrape_scripts reads.
@@ -819,10 +867,15 @@ class TestCuratorTopoSort:
     plausible-looking-but-wrong order."""
 
     def test_real_registry_has_no_cycle_and_matches_documented_order(self):
-        from run_curation import _CURATOR_SPECS, _topo_sort_curators, CURATORS
+        from run_curation import (
+            _CURATOR_SPECS, _topo_sort_curators, _ORDERED_CURATORS,
+            CURATORS, MAINTENANCE,
+        )
         # Re-running the real derivation is idempotent and matches the
-        # module-level CURATORS computed at import time.
-        assert _topo_sort_curators(_CURATOR_SPECS) == CURATORS
+        # module-level ordering computed at import time; phases partition it.
+        assert _topo_sort_curators(_CURATOR_SPECS) == _ORDERED_CURATORS
+        assert set(CURATORS).isdisjoint(MAINTENANCE)
+        assert set(CURATORS + MAINTENANCE) == set(_ORDERED_CURATORS)
 
     def test_missing_provider_raises(self):
         from run_curation import CuratorSpec, _topo_sort_curators
@@ -891,3 +944,96 @@ class TestCuratorTopoSort:
         ]
         with pytest.raises(RuntimeError, match="declared by both"):
             _topo_sort_curators(specs)
+
+    def test_dependency_on_later_phase_raises(self):
+        from run_curation import CuratorSpec, _topo_sort_curators
+
+        def maintenance(run_dir, meta, card):
+            pass
+
+        def curation(run_dir, meta, card):
+            pass
+
+        specs = [
+            CuratorSpec(maintenance, provides=("x",), phase="maintenance"),
+            CuratorSpec(curation, requires=("x",)),
+        ]
+        with pytest.raises(RuntimeError, match="later phase"):
+            _topo_sort_curators(specs)
+
+
+class TestCuratorDependencyOutcomes:
+    def test_maintenance_rejects_card_without_curation_provenance(self, workspace):
+        from run_curation import maintain_run_card
+
+        with pytest.raises(ValueError, match="complete _curation outcome"):
+            maintain_run_card({"success_class": "success"}, workspace)
+
+    def test_failed_producer_skips_dependents_but_not_independent_work(
+            self, workspace, monkeypatch):
+        import run_curation
+
+        def producer(rd, meta, card):
+            raise RuntimeError("producer failed")
+
+        def dependent(rd, meta, card):
+            card["should_not_run"] = True
+
+        def transitive(rd, meta, card):
+            card["also_should_not_run"] = True
+
+        def independent(rd, meta, card):
+            card["independent"] = True
+
+        specs = [
+            run_curation.CuratorSpec(producer, provides=("x",)),
+            run_curation.CuratorSpec(dependent, provides=("y",), requires=("x",)),
+            run_curation.CuratorSpec(transitive, requires=("y",)),
+            run_curation.CuratorSpec(independent),
+        ]
+        monkeypatch.setattr(run_curation, "_CURATOR_SPECS", specs)
+        monkeypatch.setattr(run_curation, "_SPEC_BY_NAME", {s.name: s for s in specs})
+        monkeypatch.setattr(
+            run_curation, "_PROVIDER_OF",
+            {key: s.name for s in specs for key in s.provides},
+        )
+        card = {}
+        outcome = run_curation._run_phase(
+            [producer, dependent, transitive, independent], workspace, {}, card
+        )
+
+        assert card == {"independent": True}
+        assert outcome["completed"] == ["independent"]
+        assert outcome["failed"] == [
+            {"curator": "producer", "error": "producer failed"}
+        ]
+        assert outcome["skipped_dependency"] == [
+            {"curator": "dependent", "dependencies": ["producer"]},
+            {"curator": "transitive", "dependencies": ["dependent"]},
+        ]
+
+    def test_completed_producer_may_omit_optional_key(self, workspace, monkeypatch):
+        import run_curation
+
+        def producer(rd, meta, card):
+            pass
+
+        def consumer(rd, meta, card):
+            card["consumer_ran"] = True
+
+        specs = [
+            run_curation.CuratorSpec(producer, provides=("optional",)),
+            run_curation.CuratorSpec(consumer, requires=("optional",)),
+        ]
+        monkeypatch.setattr(run_curation, "_CURATOR_SPECS", specs)
+        monkeypatch.setattr(run_curation, "_SPEC_BY_NAME", {s.name: s for s in specs})
+        monkeypatch.setattr(
+            run_curation, "_PROVIDER_OF",
+            {key: s.name for s in specs for key in s.provides},
+        )
+        card = {}
+        outcome = run_curation._run_phase([producer, consumer], workspace, {}, card)
+
+        assert card["consumer_ran"] is True
+        assert outcome["completed"] == ["producer", "consumer"]
+        assert outcome["skipped_dependency"] == []

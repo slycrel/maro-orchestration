@@ -7,13 +7,14 @@ passes can act on it — scrape reusable skills/scripts, feed decision priors in
 a similar or rephrased re-attempt, rescue a partial run before it went off the
 rails, or just surface history to the user (and prune it on request).
 
-Designed as a miner registry: `CURATORS` is an ordered list of pure functions
-`(run_dir, meta, card) -> None` that enrich the card; new miners append to the
-list without touching the hook. Shipped miners: classification, asset
-inventory, result excerpt, spend transparency, skills-lite promotion, and the
-four BACKLOG #0 miners — script scraper (`scrape_scripts`), skill scraper
-(`flag_skill_candidate`), partial-run rescue (`rescue_partial`), and the
-decision-prior indexer (`index_decision_prior`). The decision-prior card
+Designed as a two-phase registry. `CURATORS` contains synchronous card builders
+that only enrich the card; `MAINTENANCE` contains explicit trust-bearing work
+such as skills-lite promotion. Both use declared provides/requires contracts,
+and each action is recorded as completed, failed, or skipped because a producer
+failed. Shipped card builders: classification, asset inventory, result excerpt,
+spend transparency, script scraper, partial-run rescue, and decision-prior
+indexing. Maintenance ships skills-lite promotion and candidate flagging. The
+decision-prior card
 schema and its read half (`format_prior_decisions` / `load_decision_prior`)
 live in the neutral `decision_prior.py` (shared with recall.py — see that
 module's docstring); `prior_decision_context` here is a standalone
@@ -899,6 +900,7 @@ class CuratorSpec:
     fn: Any
     provides: tuple = ()
     requires: tuple = ()
+    phase: str = "curation"
 
     @property
     def name(self) -> str:
@@ -914,12 +916,13 @@ _CURATOR_SPECS: List[CuratorSpec] = [
     CuratorSpec(spend_transparency, provides=("spend_transparency",),
                 requires=("success_class", "total_cost_usd")),
     CuratorSpec(promote_skills_lite, provides=("skills_lite",),
-                requires=("success_class",)),
+                requires=("success_class",), phase="maintenance"),
     CuratorSpec(scrape_scripts,              # #2 script scraper
                 provides=("reusable_scripts",), requires=("inventory",)),
     CuratorSpec(flag_skill_candidate,         # #1 skill scraper (flag, not a 2nd promotion path)
                 provides=("skill_candidate",),
-                requires=("success_class", "reusable_scripts", "inventory", "skills_lite")),
+                requires=("success_class", "reusable_scripts", "inventory", "skills_lite"),
+                phase="maintenance"),
     CuratorSpec(rescue_partial,               # #4 partial-run rescue
                 provides=("partial_rescue",), requires=("success_class", "inventory")),
     CuratorSpec(index_decision_prior,         # #3 decision-prior indexer (owner ask)
@@ -943,7 +946,12 @@ def _topo_sort_curators(specs: List[CuratorSpec]) -> List[Any]:
     order_index = {spec.name: i for i, spec in enumerate(specs)}
 
     provider_of: Dict[str, str] = {}
+    phase_order = {"curation": 0, "maintenance": 1}
     for spec in specs:
+        if spec.phase not in phase_order:
+            raise RuntimeError(
+                f"run_curation: curator {spec.name!r} has unknown phase {spec.phase!r}"
+            )
         for key in spec.provides:
             existing = provider_of.get(key)
             if existing is not None and existing != spec.name:
@@ -962,6 +970,12 @@ def _topo_sort_curators(specs: List[CuratorSpec]) -> List[Any]:
                 raise RuntimeError(
                     f"run_curation: curator {spec.name!r} requires {key!r}, "
                     f"which no registered curator provides"
+                )
+            producer_spec = by_name[producer]
+            if phase_order[producer_spec.phase] > phase_order[spec.phase]:
+                raise RuntimeError(
+                    f"run_curation: curator {spec.name!r} in phase {spec.phase!r} "
+                    f"depends on {producer!r} in later phase {producer_spec.phase!r}"
                 )
             if producer == spec.name or spec.name in edges[producer]:
                 continue
@@ -990,9 +1004,138 @@ def _topo_sort_curators(specs: List[CuratorSpec]) -> List[Any]:
     return [by_name[name].fn for name in ordered_names]
 
 
-# Append future miners to _CURATOR_SPECS (with their provides/requires), not
-# to this list directly — CURATORS is DERIVED, not the source of truth.
-CURATORS: List[Any] = _topo_sort_curators(_CURATOR_SPECS)
+# Append future work to _CURATOR_SPECS (with its phase/provides/requires), not
+# to these lists directly — both phase lists are derived from the registry.
+_ORDERED_CURATORS: List[Any] = _topo_sort_curators(_CURATOR_SPECS)
+_SPEC_BY_NAME = {spec.name: spec for spec in _CURATOR_SPECS}
+_PROVIDER_OF = {
+    key: spec.name for spec in _CURATOR_SPECS for key in spec.provides
+}
+CURATORS: List[Any] = [
+    fn for fn in _ORDERED_CURATORS if _SPEC_BY_NAME[fn.__name__].phase == "curation"
+]
+MAINTENANCE: List[Any] = [
+    fn for fn in _ORDERED_CURATORS if _SPEC_BY_NAME[fn.__name__].phase == "maintenance"
+]
+
+
+def _outcome_statuses(outcome: dict) -> Dict[str, str]:
+    statuses = {name: "completed" for name in outcome.get("completed", [])}
+    statuses.update(
+        {item["curator"]: "failed" for item in outcome.get("failed", [])}
+    )
+    statuses.update(
+        {
+            item["curator"]: "skipped_dependency"
+            for item in outcome.get("skipped_dependency", [])
+        }
+    )
+    return statuses
+
+
+def _run_phase(curators: List[Any], rd: Path, meta: dict, card: dict,
+               prior_outcomes: Optional[List[dict]] = None) -> dict:
+    """Run one ordered phase and record failures plus dependency skips.
+
+    A completed producer may legitimately omit an optional card key; consumers
+    still run. Only a producer that failed, was skipped, or never ran blocks a
+    declared dependent.
+    """
+    outcome = {"completed": [], "failed": [], "skipped_dependency": []}
+    statuses: Dict[str, str] = {}
+    for prior in prior_outcomes or []:
+        statuses.update(_outcome_statuses(prior))
+    for curator in curators:
+        spec = _SPEC_BY_NAME[curator.__name__]
+        blocked = []
+        for key in spec.requires:
+            producer = _PROVIDER_OF[key]
+            if statuses.get(producer) != "completed":
+                blocked.append(producer)
+        if blocked:
+            dependencies = list(dict.fromkeys(blocked))
+            outcome["skipped_dependency"].append({
+                "curator": curator.__name__,
+                "dependencies": dependencies,
+            })
+            statuses[curator.__name__] = "skipped_dependency"
+            continue
+        try:
+            curator(rd, meta, card)
+            outcome["completed"].append(curator.__name__)
+            statuses[curator.__name__] = "completed"
+        except Exception as exc:
+            outcome["failed"].append({
+                "curator": curator.__name__, "error": str(exc)[:300],
+            })
+            statuses[curator.__name__] = "failed"
+    return outcome
+
+
+def _resolve_run(handle_id: str, status: Optional[str],
+                 run_dir: Optional[Path]) -> tuple:
+    rd = run_dir or _run_dir_for(handle_id)
+    if rd is None or not rd.is_dir():
+        return None, None
+    meta = _read_meta(rd)
+    if status:
+        meta.setdefault("status", status)
+    return rd, meta
+
+
+def _build_run_card(handle_id: str, rd: Path, meta: dict) -> dict:
+    card = {
+        "handle_id": handle_id,
+        "nickname": meta.get("nickname", ""),
+        "goal": meta.get("prompt", ""),
+        "lane": meta.get("lane"),
+        "model": meta.get("model"),
+        "started_at": meta.get("started_at"),
+        "ended_at": meta.get("ended_at"),
+    }
+    card["_curation"] = _run_phase(CURATORS, rd, meta, card)
+    return card
+
+
+def build_run_card(handle_id: str, status: Optional[str] = None,
+                   run_dir: Optional[Path] = None) -> Optional[dict]:
+    """Pure card-construction phase; does not write files or promote skills."""
+    try:
+        rd, meta = _resolve_run(handle_id, status, run_dir)
+        if rd is None:
+            return None
+        return _build_run_card(handle_id, rd, meta)
+    except Exception:
+        return None
+
+
+def maintain_run_card(card: dict, run_dir: Path,
+                      meta: Optional[dict] = None) -> dict:
+    """Run explicit maintenance/promotion work and annotate `card` in place.
+
+    The card must come from `build_run_card()` (or preserve its `_curation`
+    outcome when reloaded); maintenance dependency decisions are execution
+    provenance, not guesses based on whichever optional keys happen to exist.
+    """
+    curation = card.get("_curation")
+    outcome_keys = ("completed", "failed", "skipped_dependency")
+    if not isinstance(curation, dict) or any(
+            not isinstance(curation.get(key), list) for key in outcome_keys):
+        raise ValueError(
+            "maintain_run_card requires a card with a complete _curation outcome"
+        )
+    meta = meta if meta is not None else _read_meta(run_dir)
+    card["_maintenance"] = _run_phase(
+        MAINTENANCE, run_dir, meta, card, [curation]
+    )
+    return card
+
+
+def _write_run_card(rd: Path, card: dict) -> None:
+    from file_lock import atomic_write, locked_write
+    card_path = rd / "run_card.json"
+    with locked_write(card_path):
+        atomic_write(card_path, json.dumps(card, indent=2))
 
 
 def curate_run(handle_id: str, status: Optional[str] = None,
@@ -1002,33 +1145,15 @@ def curate_run(handle_id: str, status: Optional[str] = None,
     Best-effort: returns None and never raises on a missing/unreadable run.
     """
     try:
-        rd = run_dir or _run_dir_for(handle_id)
-        if rd is None or not rd.is_dir():
+        rd, meta = _resolve_run(handle_id, status, run_dir)
+        if rd is None:
             return None
-        meta = _read_meta(rd)
-        if status:
-            meta.setdefault("status", status)
-        card = {
-            "handle_id": handle_id,
-            "nickname": meta.get("nickname", ""),
-            "goal": meta.get("prompt", ""),
-            "lane": meta.get("lane"),
-            "model": meta.get("model"),
-            "started_at": meta.get("started_at"),
-            "ended_at": meta.get("ended_at"),
-        }
-        curation = {"completed": [], "failed": []}
-        for curator in CURATORS:
-            try:
-                curator(rd, meta, card)
-                curation["completed"].append(curator.__name__)
-            except Exception as exc:
-                curation["failed"].append({"curator": curator.__name__, "error": str(exc)[:300]})
-        card["_curation"] = curation
-        from file_lock import atomic_write, locked_write
-        card_path = rd / "run_card.json"
-        with locked_write(card_path):
-            atomic_write(card_path, json.dumps(card, indent=2))
+        card = _build_run_card(handle_id, rd, meta)
+        # Persist useful, side-effect-free curation before trust-bearing
+        # maintenance. A process interruption cannot erase the mined card.
+        _write_run_card(rd, card)
+        maintain_run_card(card, rd, meta)
+        _write_run_card(rd, card)
         return card
     except Exception:
         return None

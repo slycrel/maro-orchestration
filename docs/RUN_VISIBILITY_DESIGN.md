@@ -675,7 +675,8 @@ NOW runs on this box are in that class; all 189 now have reports.
 
 `loop_report.write_reports_for_run_dir(run_dir)` force re-renders every
 report in one run dir (loop + NOW) and rebuilds the index. handle.py's
-finalize calls it AFTER run_curation writes run_card.json, so the frozen
+finalize calls it AFTER run_curation writes the final, maintenance-enriched
+`run_card.json` (the pure card is atomically checkpointed first), so the frozen
 report picks up the verdict it couldn't have had at freeze time. Live-run
 measurement: ~220ms per finalize at 668 run dirs. The index rebuild is
 O(all runs) at every finalize — fine at this scale, revisit around ~10k

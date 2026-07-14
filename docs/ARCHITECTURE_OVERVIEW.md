@@ -47,13 +47,16 @@ Remaining: unify rung-4 loop-log excerpts with the full captured output; no
 historical backfill (forward-only by nature).
 
 **Post-goal curation (adornment).** A run is paid for; we don't discard it.
-`run_curation.curate_run` runs at goal-end (hooked in handle.py's finalize
-`finally`), writes `<run-dir>/run_card.json` classifying the outcome
+`run_curation.curate_run` runs at goal-end (through the shared run-lifecycle
+close hook). It first builds and atomically persists a side-effect-free card,
+then runs an explicit maintenance phase (including skills-lite promotion) and
+atomically persists the enriched card. Each phase records completed, failed,
+and dependency-skipped actions. The card classifies the outcome
 (success / done-not-achieved / done-unverified / partial / failed, done≠achieved
-aware) and inventorying what's mineable (calls, scripts, artifacts, steps). It's
-a miner registry — v0 ships classify + inventory; future passes (skill scraper,
-script scraper, decision-prior indexer, rephrased re-attempt hinter, partial
-rescue) append without touching the hook. User-visible + prunable via
+aware) and inventories what's mineable (calls, scripts, artifacts, steps). It's
+a phase-aware registry with declared provides/requires dependencies, so a
+failed producer skips its dependents without suppressing independent work.
+User-visible + prunable via
 `python3 -m run_curation list|show|curate|prune`. Off-switch is the same
 `record.enabled` (curation still runs but inventories nothing when capture is off).
 

@@ -8,6 +8,28 @@ Last split: 2026-04-16 (session 34).
 
 ---
 
+### R5: Run-curation pure/maintenance boundary — SHIPPED (2026-07-13)
+
+Run curation mixed pure card construction with hidden, trust-bearing
+skills-overlay mutation behind blanket best-effort handling. Failed producer
+curators were swallowed while dependents still ran, and the card did not
+distinguish dependency skips.
+
+`build_run_card()` now performs only side-effect-free card construction and
+records each curator as `completed`, `failed`, or `skipped_dependency`.
+Dependents skip only when a declared producer failed or was skipped; a
+successfully executed producer may legitimately omit an optional field.
+`maintain_run_card()` owns skills-lite promotion and candidate flagging as an
+explicit second phase. `curate_run()` atomically checkpoints the pure card
+before maintenance, then atomically writes the enriched result. Tests cover
+phase isolation, transitive skips, optional omissions, independent progress,
+and durability across an interruption between phases.
+
+Three-lens Claude adversarial review then tightened four edges: both phases now
+share one resolved metadata snapshot; standalone maintenance rejects cards
+without valid curation provenance; phase executors require registered actions;
+and the immutable provider map is computed once. The final full suite is green.
+
 ### BACKLOG #20: Subsystem archaeology — memory-vs-implementation divergence — ALL RESOLVED (2026-07-09, archived 2026-07-13)
 
 Jeremy's recollection diverged from the Purgatorio audit on four subsystems.

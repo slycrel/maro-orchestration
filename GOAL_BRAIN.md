@@ -2453,3 +2453,20 @@ Dormant (deliberately parked, not dropped):
   explicitly recorded as failed reviewers. Full direct suite green at 100%.
   Tangential finding: `scripts/test-safe.sh` hard-depends on Linux `taskset`
   and cannot start pytest on macOS; recorded in BACKLOG, raw venv suite used.
+
+- **2026-07-13 (M1 continuation: run-curation phase boundary closed)** — R5's
+  remaining curation residual shipped. `build_run_card()` is now an independently
+  callable side-effect-free phase; `maintain_run_card()` explicitly owns
+  skills-lite promotion and candidate flagging. Declared producer failures
+  propagate as structured `skipped_dependency` outcomes while independent work
+  continues; optional omitted fields do not masquerade as failures. The pure
+  card is lock-guarded and atomically checkpointed before maintenance, so an
+  interruption cannot discard paid-for classification and inventory work.
+  Focused regressions cover phase isolation, transitive skips, optional output,
+  and the inter-phase interruption boundary. Three real opposite-model Claude
+  reviewers completed. Architect and Skeptic independently found divergent
+  metadata snapshots; Skeptic also found the standalone maintenance API lacked
+  a provenance precondition; Minimalist found an unnecessary unregistered-action
+  fallback and repeated immutable provider-map construction. All four accepted
+  findings were fixed. Final full raw suite green (only the existing tarfile
+  deprecation warnings; platform/integration skips expected).
