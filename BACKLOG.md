@@ -1250,15 +1250,6 @@ looking for an AFK-friendly chore. Principles in `docs/CODING_NOTES.md`.
 
 - [ ] **Storage decision (deferred).** JSONL captain's log is fine for within-run analysis. Sqlite *indexer* on top (not replacement) is the right pattern when cross-run queries become routine — "median treat-vs-control delta across N runs," "all CLOSURE_VERDICT < 0.5 in last 30 days." Defer until we have a concrete query we keep wanting.
 
-### Rolling reviewer-calibration metric
-
-- [ ] **Rolling reviewer-calibration metric.** `scripts/probe-stats.sh`
-  scans last N days of captain's log, reports
-  `dismissed/validated/unprobed` rates for CLAIM_PROBED. Tells us if the
-  adversarial reviewer is getting more or less trustworthy over time —
-  the reason we built the grounding. (ITEM #3 — deferred; revisit after
-  more probe data accumulates.)
-
 ### Step-to-goal elevation
 
 - [ ] **Step-to-goal elevation.** When a step's elapsed time or token

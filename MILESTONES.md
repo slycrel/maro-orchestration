@@ -2,7 +2,14 @@
 
 What to do next, in what order. Updated each session. Deferred ideas live in BACKLOG.md; completed phase history in docs/history/ROADMAP_ARCHIVE.md (ROADMAP.md is a stub). This file is the executable queue.
 
-Last updated: 2026-07-14 (continuation checkpoint — captain's-log event viewer
+Last updated: 2026-07-14 (continuation checkpoint — rolling reviewer
+calibration SHIPPED: `scripts/probe-stats.sh` compares current and prior
+archive-spanning `CLAIM_PROBED` windows, with honest missing-evidence buckets,
+verdict-retention/coverage rates, deltas, JSON, and eight deterministic
+regressions. Retention is explicitly not reviewer accuracy because a nonzero
+exit may also mean a weak probe. Live
+60-day data has only six decisive rows, all dismissed, so it is signal to watch
+rather than a trend conclusion. Previous checkpoint — captain's-log event viewer
 SHIPPED: `maro-log --events` provides a sortable archive-spanning TSV/JSON
 slice over timestamp/event/loop/slug/key fields, preserving the existing
 aggregate `--timeline` and adding no storage migration. Two real Claude

@@ -8,6 +8,22 @@ Last split: 2026-04-16 (session 34).
 
 ---
 
+### Rolling reviewer-calibration metric — SHIPPED (2026-07-14)
+
+`scripts/probe-stats.sh` now scans `CLAIM_PROBED` events across the active
+captain's log and rotated archives, comparing the current N-day window with the
+immediately preceding one. It reports counts and rates for `validated`,
+`dismissed`, `unprobed`, `unrunnable`, and unknown statuses; reviewer-verdict
+retention (`validated / (validated + dismissed)`, explicitly not accuracy);
+decisive probe coverage; and
+current-minus-previous deltas. Empty denominators stay `n/a`/JSON `null`, ISO
+timestamps are normalized to UTC, malformed/non-object JSONL rows are skipped,
+and `--json`, `--log`, and replayable `--now` inputs support automation and
+tests. Live 60-day data produced six decisive rows (all dismissed), which is a
+useful warning but too small a sample for a trend claim. The metric measures
+the existing mechanical-probe contract; it does not solve the separately
+tracked check-relevance gap.
+
 ### Closure verdicts reach every outcome attempt — SHIPPED (2026-07-14)
 
 Agenda finalization already annotated the final loop's `outcomes.jsonl` row and

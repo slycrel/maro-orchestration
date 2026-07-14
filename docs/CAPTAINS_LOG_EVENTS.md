@@ -43,6 +43,31 @@ Supported sort fields are `timestamp`, `event_type`, `loop_id`, `slug`, and
 modes are intentionally distinct and mutually exclusive. Both span rotated
 archives without adding an index or storage migration.
 
+### Reviewer calibration
+
+`scripts/probe-stats.sh` turns `CLAIM_PROBED` events into a rolling calibration
+report. It compares the current N-day window with the immediately preceding
+window, spans rotated captain's-log archives, and exposes JSON for automation.
+
+```bash
+# Human report, current 30 days versus previous 30 days
+scripts/probe-stats.sh
+
+# Wider replay or machine-readable output
+scripts/probe-stats.sh --days 90 --json
+```
+
+`validated` means the probe returned nonzero and the producer retained the
+adversarial reviewer's verdict. That is **not confirmation**: the reviewer may
+be right, or the generated probe may itself be weak or broken. `dismissed`
+means a zero exit caused the producer to dismiss the reviewer objection. The
+reviewer verdict retention rate is `validated / (validated + dismissed)` and
+is explicitly not an accuracy score. `unprobed` and `unrunnable` remain
+separate missing-evidence categories. Rates with empty denominators render as
+`n/a`/`null`, not a synthetic zero. The report measures dispositions under the
+existing asymmetric probe contract, not whether each probe was relevant or
+well-formed.
+
 ## Entry schema
 
 Written by `captains_log.log_event(...)`. Every entry has the four required fields; the rest are present only when supplied.
@@ -137,7 +162,7 @@ Written by `captains_log.log_event(...)`. Every entry has the four required fiel
 | `SCOPE_PARSE_FAILED` | handle.py:1434 | goal_preview, raw_length, raw_preview | Scope generation returned output that failed to parse. |
 | `SCOPE_SKIPPED` | handle.py:1411 (goal_preview, reason); handle.py:1543 (goal_preview, reason, error) | *(varies by call site)* | Scoping was enabled but produced nothing (adapter error/None). Without this, the May-2026 rc=1 outage silently lost every run's scope. |
 | `CLOSURE_VERDICT` | director.py:1708 | goal_preview, complete, confidence, checks_run, checks_passed, gap_count, scope_supplied, modality_distribution, inconclusive_count, behavioral_gap_downgrade, next_ledger_divergence, diagnosis_failure_class, diagnosis_gap_downgrade, commands, summary | Closure completed its verification pass; the full per-check distribution + verdict. |
-| `CLAIM_PROBED` | quality_gate.py:565 | claim_preview, reviewer_verdict, final_verdict, probe_command, probe_status, probe_exit_code, probe_output_preview | Adversarial-review grounding: an individual claim was probed and reconciled. |
+| `CLAIM_PROBED` | claim_probe.py (`probe_contested_claims`) | claim_preview, reviewer_verdict, final_verdict, probe_command, probe_status, probe_exit_code, probe_output_preview | Adversarial-review grounding: an individual claim was probed and reconciled. |
 | `CLAIM_VERIFIER_OUTCOME` | agent_loop.py:1211 | step_idx, outcome, action, file_not_found, file_verified_count, symbol_not_found, symbol_verified_count | Per-step: file/symbol claims in a step result were verified and a downstream action taken. |
 
 ### Run transparency (loop lifecycle + quality gate)
