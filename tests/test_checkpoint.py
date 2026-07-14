@@ -41,6 +41,9 @@ class _FakeStepOutcome:
     elapsed_ms: int = 0
     iteration: int = 1
     confidence: str = ""
+    provider_cost_usd: float = 0.0
+    executor_session_id: str = ""
+    executor_session_resumed: bool = False
 
 
 def _make_checkpoint(tmp_path: Path, loop_id: str = "abc12345", n_completed: int = 2) -> Checkpoint:
@@ -108,6 +111,30 @@ class TestCheckpoint:
         c = Checkpoint(loop_id="x", goal="g", project="p", steps=steps, completed=completed)
         assert c.remaining_steps == []
 
+    def test_executor_session_round_trips(self):
+        state = {
+            "session_id": "11111111-1111-4111-8111-111111111111",
+            "signature": "a" * 64,
+            "turns": 2,
+        }
+        c = Checkpoint(
+            loop_id="loop-session", goal="g", project="p", steps=["a"],
+            completed=[], executor_session=state,
+        )
+
+        restored = Checkpoint.from_dict(c.to_dict())
+
+        assert restored.executor_session == state
+
+    def test_invalid_executor_session_is_discarded(self):
+        c = Checkpoint.from_dict({
+            "loop_id": "x", "goal": "g", "project": "p", "steps": [],
+            "completed": [],
+            "executor_session": {"session_id": "--resume-injected", "signature": "x"},
+        })
+
+        assert c.executor_session is None
+
     def test_is_complete_false(self):
         c = Checkpoint(loop_id="x", goal="g", project="p", steps=["a", "b"],
                        completed=[CompletedStep(index=1, text="a", status="done")])
@@ -157,6 +184,52 @@ class TestWriteAndLoad:
         assert c.loop_id == "loop2"
         assert c.goal == "goal"
         assert len(c.completed) == 1
+
+    def test_write_persists_clean_executor_session(self, tmp_path):
+        state = {
+            "session_id": "11111111-1111-4111-8111-111111111111",
+            "signature": "a" * 64,
+            "turns": 1,
+        }
+        write_checkpoint(
+            "loop-session", "goal", "proj", ["step"], [],
+            executor_session=state,
+        )
+
+        c = load_checkpoint("loop-session")
+
+        assert c.executor_session == state
+
+    def test_write_omits_executor_session_while_step_is_in_flight(self, tmp_path):
+        state = {
+            "session_id": "11111111-1111-4111-8111-111111111111",
+            "signature": "a" * 64,
+            "turns": 1,
+        }
+        write_checkpoint(
+            "loop-inflight", "goal", "proj", ["step"], [],
+            in_flight_index=1, executor_session=state,
+        )
+
+        c = load_checkpoint("loop-inflight")
+
+        assert c.in_flight is not None
+        assert c.executor_session is None
+
+    def test_write_persists_per_step_session_and_provider_cost(self, tmp_path):
+        outcome = _FakeStepOutcome(
+            index=1, text="step", status="done",
+            provider_cost_usd=0.123,
+            executor_session_id="session-1",
+            executor_session_resumed=True,
+        )
+        write_checkpoint("loop-cost", "goal", "proj", ["step"], [outcome])
+
+        completed = load_checkpoint("loop-cost").completed[0]
+
+        assert completed.provider_cost_usd == 0.123
+        assert completed.executor_session_id == "session-1"
+        assert completed.executor_session_resumed is True
 
     def test_load_missing_returns_none(self, tmp_path):
         assert load_checkpoint("nonexistent") is None

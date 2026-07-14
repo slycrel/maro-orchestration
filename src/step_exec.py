@@ -10,6 +10,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import hashlib
 import logging
 import os
 import re
@@ -823,6 +824,9 @@ def execute_step(
     ancestry_context: str = "",
     project_dir: str = "",
     shared_ctx: Optional[Dict[str, Any]] = None,
+    incremental_context: str = "",
+    executor_session: Optional[Dict[str, Any]] = None,
+    session_context_key: str = "",
 ) -> Dict[str, Any]:
     """Execute one step via the LLM. Returns outcome dict."""
     _step_t0 = time.monotonic()
@@ -980,6 +984,39 @@ def execute_step(
         f"{_long_lived_block}\n\n"
         f"Complete this step now. Call complete_step when done or flag_stuck if blocked."
     )
+    # When a compatible per-boundary Claude session is already live, all prior
+    # prompts, tool transcripts, and results are in that conversation. Send
+    # only the new step plus context that changed after the prior call. The
+    # adapter still receives `user_msg` as a full fail-fresh fallback.
+    _delta_context_parts = []
+    if completed_context:
+        _delta_context_parts.append(
+            "AUTHORITATIVE AUDITED PRIOR-STEP STATE (this supersedes any "
+            "earlier worker narration):\n" + completed_context[-1]
+        )
+    if incremental_context:
+        _delta_context_parts.append(
+            "NEW CONTEXT SINCE THE PRIOR STEP:\n" + incremental_context
+        )
+    _incremental_block = (
+        "\n\n" + "\n\n".join(_delta_context_parts)
+        if _delta_context_parts else ""
+    )
+    session_delta_msg = (
+        "Continue the same goal and bounded work segment.\n\n"
+        f"Current step ({step_num}/{total_steps}) [{_step_type}]: {step_text}"
+        f"{workspace_block}"
+        f"{artifacts_block}"
+        f"{prefetch_block}"
+        f"{_pipeline_block}"
+        f"{_artifact_block}"
+        f"{_long_lived_block}"
+        f"{_incremental_block}\n\n"
+        "Complete this step now. Call complete_step when done or flag_stuck if blocked."
+    )
+    _static_session_context_key = hashlib.sha256(
+        (session_context_key + "\n" + EXECUTE_SYSTEM).encode("utf-8")
+    ).hexdigest()
 
     # Detect steps that run external commands — give them a longer timeout.
     # Long-running steps: test suites, builds, installs.
@@ -1035,6 +1072,10 @@ def execute_step(
         # The agentic worker executor step — the only lane the container wraps
         # (executor.container on/require). See container_exec.resolve_container_run.
         _call_kwargs["executor"] = True
+        if executor_session is not None:
+            _call_kwargs["session_state"] = executor_session
+            _call_kwargs["session_delta_prompt"] = session_delta_msg
+            _call_kwargs["session_context_key"] = _static_session_context_key
         resp = adapter.complete(
             [
                 LLMMessage("system", EXECUTE_SYSTEM),
@@ -1086,6 +1127,9 @@ def execute_step(
                 "tokens_out": 0,
             }
 
+    _provider_cost_usd = safe_float(getattr(resp, "cost_usd", 0.0))
+    _executor_session_id = str(getattr(resp, "session_id", "") or "")
+    _executor_session_resumed = bool(getattr(resp, "session_resumed", False))
     _llm_elapsed = time.monotonic() - _llm_t0
     _tok = resp.input_tokens + resp.output_tokens
     _has_tool = bool(resp.tool_calls)
@@ -1118,6 +1162,12 @@ def execute_step(
                 _expanded_tools = _active_tools + _resolved_schemas
                 _ts_result_block = format_tool_search_result(_resolved_schemas)
                 try:
+                    # A changed tool contract cannot safely resume. Rotate the
+                    # segment explicitly and keep the expanded one-off call
+                    # stateless; otherwise it stores an expanded signature and
+                    # forces a second opaque rotation on the following step.
+                    if executor_session is not None:
+                        executor_session.clear()
                     resp = adapter.complete(
                         [
                             LLMMessage("system", EXECUTE_SYSTEM),
@@ -1131,6 +1181,17 @@ def execute_step(
                         temperature=0.3,
                         cwd=_call_kwargs.get("cwd"),
                         executor=True,  # same agentic step — containerize when on
+                        session_state=None,
+                    )
+                    _provider_cost_usd += safe_float(
+                        getattr(resp, "cost_usd", 0.0))
+                    _executor_session_id = (
+                        str(getattr(resp, "session_id", "") or "")
+                        or _executor_session_id
+                    )
+                    _executor_session_resumed = (
+                        _executor_session_resumed
+                        or bool(getattr(resp, "session_resumed", False))
                     )
                     _tok = resp.input_tokens + resp.output_tokens
                     _tool_name_used = resp.tool_calls[0].name if resp.tool_calls else None
@@ -1453,6 +1514,10 @@ def execute_step(
     _call_record = getattr(resp, "call_record", "")
     if _call_record and isinstance(_outcome, dict):
         _outcome.setdefault("call_record", _call_record)
+    if isinstance(_outcome, dict):
+        _outcome["provider_cost_usd"] = _provider_cost_usd
+        _outcome["executor_session_id"] = _executor_session_id[:8]
+        _outcome["executor_session_resumed"] = _executor_session_resumed
 
     return _outcome
 

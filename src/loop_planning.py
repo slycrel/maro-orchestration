@@ -120,6 +120,7 @@ def _preflight_checks(
     """
     # Session resume — load checkpoint and skip completed steps
     resume_completed: List[StepOutcome] = []
+    resume_executor_session: dict = {}
     if resume_from_loop_id:
         try:
             from checkpoint import load_checkpoint, resume_from as _resume_from
@@ -134,6 +135,12 @@ def _preflight_checks(
                         iteration=getattr(_cs, "iteration", 0),
                         tokens_in=_cs.tokens_in,
                         tokens_out=_cs.tokens_out,
+                        provider_cost_usd=float(
+                            getattr(_cs, "provider_cost_usd", 0.0) or 0.0),
+                        executor_session_id=str(
+                            getattr(_cs, "executor_session_id", "") or ""),
+                        executor_session_resumed=bool(
+                            getattr(_cs, "executor_session_resumed", False)),
                         elapsed_ms=_cs.elapsed_ms,
                         confidence=getattr(_cs, "confidence", ""),
                         injected_steps=list(getattr(_cs, "injected_steps", [])),
@@ -151,6 +158,13 @@ def _preflight_checks(
                 # crashed attempt already touched so it completes idempotently
                 # instead of blindly redoing (at-least-once contract).
                 _in_flight = getattr(_ckpt, "in_flight", None)
+                # A clean between-step checkpoint may resume the provider
+                # conversation. A mid-step crash may have partial external
+                # effects and an indeterminate conversation tail: force fresh.
+                if not _in_flight:
+                    _saved_session = getattr(_ckpt, "executor_session", None)
+                    if isinstance(_saved_session, dict):
+                        resume_executor_session = dict(_saved_session)
                 if _in_flight and steps:
                     _note = (f"[resume note: this step previously started at "
                              f"{_in_flight.get('started_at', '?')} and crashed "
@@ -299,6 +313,7 @@ def _preflight_checks(
 
     pf = {
         "resume_completed": resume_completed,
+        "resume_executor_session": resume_executor_session,
         "pf_review": pf_review,
         "clean_steps": clean_steps,
         "deps": deps,

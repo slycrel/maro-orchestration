@@ -44,7 +44,7 @@ from llm import (
 
 
 def _make_stream_output(result="ok", tool_events=None, input_tokens=100, output_tokens=50,
-                        rate_limit_status="allowed"):
+                        rate_limit_status="allowed", session_id="", cost_usd=0.0):
     """Build a claude -p --output-format stream-json NDJSON stream:
     system/init, a rate_limit_event, assistant+user pairs for each tool call,
     and the final result event (identical payload to the old --output-format
@@ -62,12 +62,16 @@ def _make_stream_output(result="ok", tool_events=None, input_tokens=100, output_
             {"type": "tool_result", "tool_use_id": tid,
              "is_error": te.get("is_error", False),
              "content": te.get("output", "")}]}}))
-    lines.append(json.dumps({
+    result_event = {
         "type": "result", "subtype": "success", "is_error": False, "result": result,
         "stop_reason": "end_turn",
         "usage": {"input_tokens": input_tokens, "cache_read_input_tokens": 0, "output_tokens": output_tokens},
         "modelUsage": {"claude-sonnet-4-6": {"inputTokens": input_tokens, "outputTokens": output_tokens}},
-    }))
+        "total_cost_usd": cost_usd,
+    }
+    if session_id:
+        result_event["session_id"] = session_id
+    lines.append(json.dumps(result_event))
     return "\n".join(lines)
 
 
@@ -459,6 +463,179 @@ def test_subprocess_complete_with_tool_call(monkeypatch):
     assert resp.tool_calls[0].name == "complete_step"
     assert resp.tool_calls[0].arguments["result"] == "research done"
     assert resp.content == ""
+
+
+def test_subprocess_segment_session_uses_delta_after_first_call(tmp_path):
+    adapter = ClaudeSubprocessAdapter()
+    state = {}
+    first = MagicMock(returncode=0, stdout=_make_stream_output(
+        "first", session_id="session-one", cost_usd=0.12), stderr="")
+    second = MagicMock(returncode=0, stdout=_make_stream_output(
+        "second", session_id="session-one"), stderr="")
+
+    with patch("llm._run_subprocess_safe", side_effect=[first, second]) as run:
+        first_response = adapter.complete(
+            [LLMMessage("user", "FULL FIRST PROMPT")],
+            executor=True, cwd=str(tmp_path), session_state=state,
+            session_delta_prompt="DELTA SECOND PROMPT",
+        )
+        response = adapter.complete(
+            [LLMMessage("user", "FULL SECOND FALLBACK")],
+            executor=True, cwd=str(tmp_path), session_state=state,
+            session_delta_prompt="DELTA SECOND PROMPT",
+        )
+
+    first_cmd = run.call_args_list[0].args[0]
+    second_cmd = run.call_args_list[1].args[0]
+    assert "--resume" not in first_cmd
+    assert "FULL FIRST PROMPT" in run.call_args_list[0].kwargs["input"]
+    assert second_cmd[second_cmd.index("--resume") + 1] == "session-one"
+    assert run.call_args_list[1].kwargs["input"] == "DELTA SECOND PROMPT"
+    assert state["session_id"] == "session-one"
+    assert state["turns"] == 2
+    assert first_response.cost_usd == 0.12
+    assert response.session_id == "session-one"
+    assert response.session_resumed is True
+    assert response.cost_usd == 0.0
+
+
+def test_subprocess_segment_session_config_change_starts_fresh(tmp_path):
+    adapter = ClaudeSubprocessAdapter()
+    state = {}
+    outputs = [
+        MagicMock(returncode=0, stdout=_make_stream_output(
+            "first", session_id="session-one"), stderr=""),
+        MagicMock(returncode=0, stdout=_make_stream_output(
+            "second", session_id="session-two"), stderr=""),
+    ]
+
+    with patch("llm._run_subprocess_safe", side_effect=outputs) as run:
+        adapter.complete(
+            [LLMMessage("user", "FIRST")], executor=True, cwd=str(tmp_path),
+            session_state=state, session_delta_prompt="DELTA",
+        )
+        adapter.complete(
+            [LLMMessage("user", "CHANGED CWD FULL")], executor=True,
+            cwd=str(tmp_path / "other"), session_state=state,
+            session_delta_prompt="DELTA",
+        )
+
+    assert "--resume" not in run.call_args_list[1].args[0]
+    assert "CHANGED CWD FULL" in run.call_args_list[1].kwargs["input"]
+    assert state["session_id"] == "session-two"
+
+
+def test_subprocess_segment_session_context_change_starts_fresh(tmp_path):
+    adapter = ClaudeSubprocessAdapter()
+    state = {}
+    outputs = [
+        MagicMock(returncode=0, stdout=_make_stream_output(
+            "first", session_id="session-one"), stderr=""),
+        MagicMock(returncode=0, stdout=_make_stream_output(
+            "second", session_id="session-two"), stderr=""),
+    ]
+
+    with patch("llm._run_subprocess_safe", side_effect=outputs) as run:
+        adapter.complete(
+            [LLMMessage("user", "FIRST")], executor=True, cwd=str(tmp_path),
+            session_state=state, session_delta_prompt="DELTA",
+            session_context_key="goal-and-persona-v1",
+        )
+        adapter.complete(
+            [LLMMessage("user", "CHANGED CONTEXT FULL")], executor=True,
+            cwd=str(tmp_path), session_state=state,
+            session_delta_prompt="DELTA",
+            session_context_key="goal-and-persona-v2",
+        )
+
+    assert "--resume" not in run.call_args_list[1].args[0]
+    assert "CHANGED CONTEXT FULL" in run.call_args_list[1].kwargs["input"]
+    assert state["session_id"] == "session-two"
+
+
+def test_subprocess_missing_segment_session_falls_back_full(tmp_path):
+    adapter = ClaudeSubprocessAdapter()
+    state = {}
+    first = MagicMock(returncode=0, stdout=_make_stream_output(
+        "first", session_id="session-one"), stderr="")
+    missing = MagicMock(
+        returncode=1,
+        stdout="No conversation found with session ID: session-one",
+        stderr="",
+    )
+    fallback = MagicMock(returncode=0, stdout=_make_stream_output(
+        "fallback", session_id="session-two"), stderr="")
+
+    with patch("llm._run_subprocess_safe",
+               side_effect=[first, missing, fallback]) as run:
+        adapter.complete(
+            [LLMMessage("user", "FIRST")], executor=True, cwd=str(tmp_path),
+            session_state=state, session_delta_prompt="DELTA",
+        )
+        response = adapter.complete(
+            [LLMMessage("user", "FULL FALLBACK")], executor=True,
+            cwd=str(tmp_path), session_state=state,
+            session_delta_prompt="DELTA",
+        )
+
+    assert len(run.call_args_list) == 3
+    assert "--resume" in run.call_args_list[1].args[0]
+    assert run.call_args_list[1].kwargs["input"] == "DELTA"
+    assert "--resume" not in run.call_args_list[2].args[0]
+    assert "FULL FALLBACK" in run.call_args_list[2].kwargs["input"]
+    assert response.content == "fallback"
+    assert state["session_id"] == "session-two"
+    assert response.session_resumed is False
+
+
+def test_subprocess_does_not_fallback_when_transcript_quotes_missing_marker(tmp_path):
+    adapter = ClaudeSubprocessAdapter()
+    state = {}
+    first = MagicMock(returncode=0, stdout=_make_stream_output(
+        "first", session_id="session-one"), stderr="")
+    executed_then_failed = MagicMock(
+        returncode=1,
+        stdout=json.dumps({
+            "type": "assistant",
+            "message": {"content": [{
+                "type": "text",
+                "text": "log says No conversation found with session ID: quoted",
+            }]},
+        }),
+        stderr="",
+    )
+
+    with patch("llm._run_subprocess_safe",
+               side_effect=[first, executed_then_failed]) as run:
+        adapter.complete(
+            [LLMMessage("user", "FIRST")], executor=True, cwd=str(tmp_path),
+            session_state=state, session_delta_prompt="DELTA",
+        )
+        with pytest.raises(RuntimeError):
+            adapter.complete(
+                [LLMMessage("user", "FULL MUST NOT REPLAY")], executor=True,
+                cwd=str(tmp_path), session_state=state,
+                session_delta_prompt="DELTA",
+            )
+
+    assert len(run.call_args_list) == 2
+
+
+def test_missing_session_boundary_accepts_zero_turn_structured_error():
+    from llm import _is_plain_missing_session_error
+
+    marker = "No conversation found with session ID: session-one"
+    structured = json.dumps({
+        "type": "result",
+        "subtype": "error_during_execution",
+        "is_error": True,
+        "num_turns": 0,
+        "total_cost_usd": 0,
+        "usage": {"input_tokens": 0, "output_tokens": 0},
+        "errors": [marker],
+    })
+
+    assert _is_plain_missing_session_error(marker + "\n" + structured)
 
 
 def test_subprocess_complete_failure(monkeypatch):

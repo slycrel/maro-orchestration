@@ -47,6 +47,7 @@ from __future__ import annotations
 
 import contextlib
 import contextvars
+import hashlib
 import json
 import logging
 import os
@@ -56,6 +57,8 @@ import textwrap
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Tuple
+
+from llm_parse import safe_float
 
 log = logging.getLogger("maro.llm")
 
@@ -255,12 +258,15 @@ class LLMResponse:
     input_tokens: int = 0          # total input volume, INCLUDING cache reads
     output_tokens: int = 0
     cache_read_tokens: int = 0     # portion of input_tokens served from cache (~0.1x cost)
+    cost_usd: float = 0.0          # provider-reported billed cost when available
     backend: str = ""
     # Real tools the inner agent actually invoked this call (subprocess agents
     # only; empty otherwise). Each entry: {name, input, output, is_error, id}.
     # This is ground truth for "did it really run X / write Y" — see
     # _parse_stream_json. Other adapters leave it empty and verifiers skip.
     tool_events: List[dict] = field(default_factory=list)
+    session_id: str = ""          # subprocess conversation identity, when exposed
+    session_resumed: bool = False  # this call used --resume (not a fresh fallback)
 
     @property
     def fresh_input_tokens(self) -> int:
@@ -1283,6 +1289,61 @@ def _extract_success_result(text: str) -> Optional[dict]:
     return None
 
 
+def _is_plain_missing_session_error(text: str) -> bool:
+    """True only for Claude CLI's pre-execution missing-session error.
+
+    The subprocess capture merges the full NDJSON transcript and stderr. A
+    substring search is unsafe because model/tool output can quote the same
+    phrase after already performing side effects. The live CLI failure is a
+    short plain-text diagnostic, optionally followed by one zero-turn,
+    zero-token structured error result. Require exactly that boundary shape
+    before a full-prompt retry is allowed.
+    """
+    raw = (text or "").strip()
+    if not raw or len(raw) > 3000:
+        return False
+    plain_lines = []
+    events = []
+    for line in raw.splitlines():
+        line = line.strip()
+        try:
+            parsed = json.loads(line)
+            if isinstance(parsed, dict):
+                events.append(parsed)
+                continue
+        except (json.JSONDecodeError, TypeError):
+            pass
+        plain_lines.append(line)
+
+    def _has_marker(value: Any) -> bool:
+        normalized = " ".join(str(value or "").lower().split())
+        if normalized.startswith("error:"):
+            normalized = normalized[6:].strip()
+        return normalized.startswith("no conversation found with session id")
+
+    if not plain_lines or not all(_has_marker(line) for line in plain_lines):
+        return False
+    if not events:
+        return True
+    if len(events) != 1:
+        return False
+    event = events[0]
+    usage = event.get("usage") or {}
+    errors = event.get("errors") or []
+    def _is_zero_number(value: Any) -> bool:
+        return isinstance(value, (int, float)) and not isinstance(value, bool) and value == 0
+    return bool(
+        event.get("type") == "result"
+        and event.get("subtype") == "error_during_execution"
+        and event.get("is_error") is True
+        and event.get("num_turns") == 0
+        and _is_zero_number(event.get("total_cost_usd"))
+        and _is_zero_number(usage.get("input_tokens"))
+        and _is_zero_number(usage.get("output_tokens"))
+        and errors and all(_has_marker(err) for err in errors)
+    )
+
+
 class _JSONToolPromptMixin:
     """Shared JSON-in-prompt tool-calling machinery for CLI subprocess adapters.
 
@@ -1383,8 +1444,10 @@ class ClaudeSubprocessAdapter(_JSONToolPromptMixin, LLMAdapter):
         # the only calls the container lane wraps. Everything else (verify,
         # quality-gate, refinement, planning, health probes) stays on the host
         # even with executor.container=on (see container_exec.resolve_container_run).
-        # Build the prompt text
-        prompt = self._build_prompt(messages, tools)
+        # Always retain the full standalone prompt. A compatible resumed
+        # executor session may send only the caller's delta, but an explicitly
+        # missing/evicted session falls back to this full prompt exactly once.
+        full_prompt = self._build_prompt(messages, tools)
 
         # Build command
         model_str = resolve_model("subprocess", self.model_key)
@@ -1434,6 +1497,70 @@ class ClaudeSubprocessAdapter(_JSONToolPromptMixin, LLMAdapter):
             resolve_container_run = None
         if resolve_container_run is not None:
             _container_name = resolve_container_run(no_tools, executor)
+
+        # Opt-in per-boundary executor session. The mutable state belongs to
+        # the loop/checkpoint, not this adapter instance (per-step model routing
+        # can construct a fresh adapter). Utility and container calls stay
+        # stateless. Compatibility includes every configuration dimension that
+        # changes what the resumed Claude Code session is allowed to do.
+        _session_state = kwargs.get("session_state")
+        _delta_prompt = kwargs.get("session_delta_prompt")
+        _session_active = (
+            isinstance(_session_state, dict)
+            and isinstance(_delta_prompt, str)
+            and bool(_delta_prompt)
+            and executor
+            and _container_name is None
+        )
+        _session_signature = ""
+        _resume_id = ""
+        _new_session_id = ""
+        _session_turns = 0
+        if _session_active:
+            try:
+                _tool_contract = [
+                    {"name": t.name, "description": t.description,
+                     "parameters": t.parameters}
+                    for t in (tools or [])
+                ]
+                _sig_payload = {
+                    "model": model_str,
+                    "cwd": str(Path(_cwd).resolve()) if _cwd else "",
+                    "no_tools": bool(no_tools),
+                    "executor": bool(executor),
+                    # Stable caller-owned goal/persona/ancestry identity. The
+                    # delta prompt intentionally omits these after call one,
+                    # so a changed execution charter must rotate the session.
+                    "context": str(kwargs.get("session_context_key") or ""),
+                    "permission_contract": {
+                        "skip_permissions": "--dangerously-skip-permissions" in cmd,
+                        "disallowed_tools": (
+                            cmd[cmd.index("--disallowedTools") + 1]
+                            if "--disallowedTools" in cmd else ""
+                        ),
+                        "tools_disabled": "--tools" in cmd,
+                    },
+                    "tools": _tool_contract,
+                }
+                _session_signature = hashlib.sha256(
+                    json.dumps(_sig_payload, sort_keys=True,
+                               separators=(",", ":")).encode("utf-8")
+                ).hexdigest()
+            except Exception:
+                _session_active = False
+            if _session_active:
+                if _session_state.get("signature") != _session_signature:
+                    _session_state.clear()
+                _resume_id = str(_session_state.get("session_id") or "")
+                try:
+                    _session_turns = max(0, int(_session_state.get("turns", 0)))
+                except (TypeError, ValueError):
+                    _session_turns = 0
+                _session_state["signature"] = _session_signature
+
+        prompt = _delta_prompt if _resume_id else full_prompt
+        if _resume_id:
+            cmd += ["--resume", _resume_id]
         try:
             # stream_probe: in-flight runaway cost kill (no-op unless a cost
             # meter is armed). BudgetRunawayError from the probe propagates
@@ -1446,6 +1573,31 @@ class ClaudeSubprocessAdapter(_JSONToolPromptMixin, LLMAdapter):
             raise RuntimeError(f"claude subprocess timed out after {_timeout}s")
         except FileNotFoundError:
             raise RuntimeError(f"claude binary not found at {self.claude_bin}")
+
+        # The CLI proves a missing/evicted session before executing the supplied
+        # prompt (live probe: rc=1, "No conversation found..."). Only that
+        # explicit no-execution shape is safe to retry automatically; ambiguous
+        # failures propagate so an externally-effectful step is never doubled.
+        if (_resume_id and result.returncode != 0
+                and _extract_success_result(result.stdout) is None
+                and _is_plain_missing_session_error(result.stdout)):
+            _session_state.clear()
+            _session_state["signature"] = _session_signature
+            _session_turns = 0
+            fresh_cmd = list(cmd)
+            resume_at = fresh_cmd.index("--resume")
+            del fresh_cmd[resume_at:resume_at + 2]
+            prompt = full_prompt
+            try:
+                result = _run_subprocess_safe(
+                    fresh_cmd, input=prompt, timeout=_timeout, cwd=_cwd,
+                    stream_probe=_build_stream_cost_probe(model_str),
+                    container_name=_container_name)
+            except subprocess.TimeoutExpired:
+                raise RuntimeError(f"claude subprocess timed out after {_timeout}s")
+            except FileNotFoundError:
+                raise RuntimeError(f"claude binary not found at {self.claude_bin}")
+            cmd = fresh_cmd
 
         # Payload-first: a non-zero exit with a complete success result on
         # stdout is a successful call (see _extract_success_result). This was
@@ -1576,7 +1728,29 @@ class ClaudeSubprocessAdapter(_JSONToolPromptMixin, LLMAdapter):
         # chunk/tool_call/done vocabulary and fold it into an LLMResponse
         # through the one shared driver every adapter's stream goes through
         # (BACKLOG #14 — see StreamEvent / LLMAdapter._collect above).
-        return self._collect(self._stream_events(result.stdout, tools=tools, rc_payload=_rc_payload))
+        if _session_active:
+            _session_result = _rc_payload or _parse_stream_json(result.stdout)["result"]
+            _new_session_id = (
+                str(_session_result.get("session_id") or "")
+                if isinstance(_session_result, dict) else ""
+            )
+            if _new_session_id:
+                _session_state["session_id"] = _new_session_id
+                _session_state["signature"] = _session_signature
+                _session_state["turns"] = _session_turns + 1
+            else:
+                _session_state.clear()
+        response = self._collect(
+            self._stream_events(result.stdout, tools=tools, rc_payload=_rc_payload))
+        if _session_active:
+            response.session_id = _new_session_id
+            response.session_resumed = bool(_resume_id and cmd.count("--resume"))
+            log.info(
+                "executor session call: %s session=%s",
+                "resumed" if response.session_resumed else "fresh",
+                _new_session_id[:8] if _new_session_id else "none",
+            )
+        return response
 
     def _stream_events(
         self, raw_output: str, *, tools: Optional[List[LLMTool]], rc_payload: Optional[dict] = None
@@ -1636,6 +1810,7 @@ class ClaudeSubprocessAdapter(_JSONToolPromptMixin, LLMAdapter):
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             cache_read_tokens=cache_read,
+            cost_usd=safe_float(data.get("total_cost_usd")),
             tool_events=tool_events,
             backend=self.backend,
         ))

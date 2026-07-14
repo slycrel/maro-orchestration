@@ -32,6 +32,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
@@ -112,6 +113,9 @@ class CompletedStep:
     tokens_in: int = 0
     tokens_out: int = 0
     elapsed_ms: int = 0
+    provider_cost_usd: float = 0.0
+    executor_session_id: str = ""
+    executor_session_resumed: bool = False
 
 
 @dataclass
@@ -129,6 +133,10 @@ class Checkpoint:
     # mid-step); absent ⇒ the next step never started. Cleared by the
     # post-step checkpoint write.
     in_flight: Optional[Dict[str, Any]] = None
+    # Opt-in Claude executor conversation for a clean between-step resume.
+    # Discarded whenever in_flight is present; adapter re-validates its config
+    # signature (model/cwd/tools/permissions) before using the ID.
+    executor_session: Optional[Dict[str, Any]] = None
 
     def __post_init__(self):
         if not self.timestamp:
@@ -166,6 +174,8 @@ class Checkpoint:
             d["handle_id"] = self.handle_id
         if self.in_flight:
             d["in_flight"] = self.in_flight
+        if self.executor_session:
+            d["executor_session"] = self.executor_session
         return d
 
     @classmethod
@@ -174,6 +184,24 @@ class Checkpoint:
             CompletedStep(**c) if isinstance(c, dict) else c
             for c in d.get("completed", [])
         ]
+        raw_session = d.get("executor_session")
+        executor_session = None
+        if isinstance(raw_session, dict):
+            session_id = raw_session.get("session_id")
+            signature = raw_session.get("signature")
+            turns = raw_session.get("turns", 0)
+            if (isinstance(session_id, str)
+                    and re.fullmatch(
+                        r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-"
+                        r"[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}", session_id)
+                    and isinstance(signature, str)
+                    and re.fullmatch(r"[0-9a-f]{64}", signature)
+                    and isinstance(turns, int) and 0 <= turns <= 1000):
+                executor_session = {
+                    "session_id": session_id,
+                    "signature": signature,
+                    "turns": turns,
+                }
         return cls(
             loop_id=d["loop_id"],
             goal=d["goal"],
@@ -184,6 +212,7 @@ class Checkpoint:
             parent_loop_id=d.get("parent_loop_id", ""),
             handle_id=d.get("handle_id", ""),
             in_flight=d.get("in_flight") or None,
+            executor_session=executor_session,
         )
 
 
@@ -200,6 +229,7 @@ def write_checkpoint(
     step_outcomes: List[Any],  # List[StepOutcome] — avoid circular import
     *,
     in_flight_index: Optional[int] = None,
+    executor_session: Optional[Dict[str, Any]] = None,
 ) -> None:
     """Write current loop progress to disk.
 
@@ -221,6 +251,9 @@ def write_checkpoint(
             BEFORE execution) so a mid-step crash is distinguishable from
             "next step never started". Post-step writes omit it, which
             clears the marker.
+        executor_session: Compatible clean between-step Claude session state.
+            It is retained beside the checkpoint, never treated as sufficient
+            without the adapter's configuration-signature check.
     """
     try:
         completed = [
@@ -232,6 +265,10 @@ def write_checkpoint(
                 tokens_in=getattr(s, "tokens_in", 0),
                 tokens_out=getattr(s, "tokens_out", 0),
                 elapsed_ms=getattr(s, "elapsed_ms", 0),
+                provider_cost_usd=float(getattr(s, "provider_cost_usd", 0.0) or 0.0),
+                executor_session_id=str(getattr(s, "executor_session_id", "") or ""),
+                executor_session_resumed=bool(
+                    getattr(s, "executor_session_resumed", False)),
             )
             for i, s in enumerate(step_outcomes)
         ]
@@ -251,6 +288,11 @@ def write_checkpoint(
             completed=completed,
             handle_id=_run_handle_id(rd_path) if rd_path else "",
             in_flight=in_flight,
+            # A mid-step crash has indeterminate provider state and may have
+            # partial side effects. Do not persist a resumable capability in
+            # an in-flight checkpoint; readers then cannot accidentally use it.
+            executor_session=(dict(executor_session or {}) or None)
+            if in_flight is None else None,
         )
         if rd_path is not None:
             rd_path.parent.mkdir(parents=True, exist_ok=True)

@@ -198,6 +198,10 @@ def _write_loop_log(
                     "iteration": s.iteration,
                     "tokens_in": s.tokens_in,
                     "tokens_out": s.tokens_out,
+                    "provider_cost_usd": getattr(s, "provider_cost_usd", 0.0),
+                    "executor_session_id": getattr(s, "executor_session_id", ""),
+                    "executor_session_resumed": getattr(
+                        s, "executor_session_resumed", False),
                     "elapsed_ms": s.elapsed_ms,
                     # rung-4 unification (BACKLOG #0): link the truncated view
                     # to the full byte-level capture when record-mode had one
@@ -213,6 +217,11 @@ def _write_loop_log(
                 "steps_blocked": sum(1 for s in steps if s.status == "blocked"),
                 "tokens_in": sum(s.tokens_in for s in steps),
                 "tokens_out": sum(s.tokens_out for s in steps),
+                "provider_cost_usd": sum(
+                    getattr(s, "provider_cost_usd", 0.0) for s in steps),
+                "executor_session_resumed_steps": sum(
+                    1 for s in steps
+                    if getattr(s, "executor_session_resumed", False)),
             },
         }
         path.write_text(json.dumps(payload, indent=2), encoding="utf-8")

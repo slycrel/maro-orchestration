@@ -429,6 +429,7 @@ def run_agent_loop(
 
         # Unpack pre-flight results into locals used by subsequent phases
         _resume_completed = _pf["resume_completed"]
+        _resume_executor_session = _pf["resume_executor_session"]
         _pf_review = _pf["pf_review"]
         _clean_steps = _pf["clean_steps"]
         _deps = _pf["deps"]
@@ -527,6 +528,7 @@ def run_agent_loop(
             _ex = _execute_main_loop(
                 ctx, steps, step_indices,
                 resume_completed=_resume_completed,
+                resume_executor_session=_resume_executor_session,
                 prereq_context=_prereq_context,
                 pf_review=_pf_review,
                 levels=_levels,

@@ -215,6 +215,7 @@ def _write_iteration_artifacts(
     start_ts: str,
     dead_ends_available: bool,
     update_dead_ends_fn=None,
+    executor_session: Optional[Dict[str, Any]] = None,
 ) -> bool:
     """Write checkpoint, manifest, dead ends, march of nines after each step.
 
@@ -225,7 +226,10 @@ def _write_iteration_artifacts(
     # Checkpoint
     try:
         from checkpoint import write_checkpoint as _write_ckpt
-        _write_ckpt(ctx.loop_id, ctx.goal, ctx.project or "", steps, step_outcomes)
+        _write_ckpt(
+            ctx.loop_id, ctx.goal, ctx.project or "", steps, step_outcomes,
+            executor_session=executor_session,
+        )
     except Exception as _exc:
         # Affects loop resumability — silent loss means a crashed loop can't restart.
         log.warning("checkpoint write failed for loop %s: %s", ctx.loop_id, _exc)
@@ -478,11 +482,16 @@ def _post_step_checks(
                             step_idx, _scan.signals)
                 step_result = _scan.sanitized
                 outcome["result"] = step_result
+                # The raw hostile content remains in a provider conversation
+                # even though the loop's downstream context is sanitized.
+                # A fresh next step is the only honest security boundary.
+                outcome["executor_session_tainted"] = "high-risk external content"
         except Exception as _exc:
             # Security: silent failure means external content passes unscanned
             # into downstream LLM context. Fail loudly so it's visible.
             log.error("security injection scan FAILED for step %d — external content may pass unsanitized: %s",
                       step_idx, _exc)
+            outcome["executor_session_tainted"] = "external-content scan failed"
 
     # Claim verifier on synthesis steps
     if step_status == "done" and step_result:

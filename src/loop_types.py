@@ -97,6 +97,7 @@ class StepOutcome:
     tokens_in: int = 0
     tokens_out: int = 0
     cache_read_tokens: int = 0   # subset of tokens_in served from cache (~0.1x cost)
+    provider_cost_usd: float = 0.0
     elapsed_ms: int = 0
     confidence: str = ""         # "strong" | "weak" | "inferred" | "unverified" | ""
     injected_steps: List[str] = field(default_factory=list)  # steps added mid-plan by this step
@@ -107,6 +108,8 @@ class StepOutcome:
                                  # ended_ts] instead of a cumulative-sum approximation that
                                  # silently absorbs inter-step overhead (ralph verify, hooks,
                                  # replans) into the wrong step's segment.
+    executor_session_id: str = ""
+    executor_session_resumed: bool = False
 
 
 def step_from_decompose(
@@ -119,10 +122,13 @@ def step_from_decompose(
     tokens_in: int = 0,
     tokens_out: int = 0,
     cache_read_tokens: int = 0,
+    provider_cost_usd: float = 0.0,
     elapsed_ms: int = 0,
     confidence: str = "unverified",
     injected_steps: Optional[List[str]] = None,
     call_record: str = "",
+    executor_session_id: str = "",
+    executor_session_resumed: bool = False,
     ended_ts: Optional[str] = None,
 ) -> StepOutcome:
     """Factory for StepOutcome — centralises defaults so inline construction sites stay DRY.
@@ -149,10 +155,13 @@ def step_from_decompose(
         tokens_in=tokens_in,
         tokens_out=tokens_out,
         cache_read_tokens=cache_read_tokens,
+        provider_cost_usd=provider_cost_usd,
         elapsed_ms=elapsed_ms,
         confidence=confidence,
         injected_steps=injected_steps if injected_steps is not None else [],
         call_record=call_record,
+        executor_session_id=executor_session_id,
+        executor_session_resumed=executor_session_resumed,
         ended_ts=ended_ts if ended_ts is not None else datetime.now(timezone.utc).isoformat(),
     )
 

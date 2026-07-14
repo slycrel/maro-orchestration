@@ -12,6 +12,7 @@ is reached.
 from __future__ import annotations
 
 import functools
+import hashlib
 import logging
 import sys
 import time
@@ -127,6 +128,7 @@ def _execute_main_loop(
     step_indices: List[int],
     *,
     resume_completed: List[StepOutcome],
+    resume_executor_session: Dict[str, Any],
     prereq_context: Dict[int, str],
     pf_review,
     levels,
@@ -198,6 +200,49 @@ def _execute_main_loop(
     _loop_shared_ctx = loop_shared_ctx
     _manifest_steps = manifest_steps
     _replan_count = replan_count
+
+    # Per-boundary Claude conversation reuse is an opt-in prototype. Parallel
+    # execution and dry runs stay stateless; container executor sessions are
+    # rejected again at the adapter seam. The dict is checkpointed after each
+    # clean step so a process crash between steps can recover it.
+    try:
+        from config import get as _session_cfg_get
+        _session_reuse_on = bool(_session_cfg_get("executor.session_reuse", False))
+    except Exception:
+        _session_reuse_on = False
+    _executor_session: Optional[Dict[str, Any]] = None
+    if _session_reuse_on and not dry_run and parallel_fan_out <= 0:
+        _executor_session = dict(resume_executor_session or {})
+    try:
+        _executor_session_max_turns = max(
+            1, int(_session_cfg_get("executor.session_max_turns", 6)))
+    except Exception:
+        _executor_session_max_turns = 6
+
+    def _executor_context_key() -> str:
+        # `goal` can be replaced by an operator interrupt. Recompute instead
+        # of snapshotting it so compatibility is structural, not dependent on
+        # every mutation path remembering a separate reset.
+        return hashlib.sha256(
+            (goal + "\n" + (_ancestry_context or "")).encode("utf-8")
+        ).hexdigest()
+
+    def _reset_executor_session(reason: str) -> None:
+        if _executor_session is not None and _executor_session:
+            log.info("executor session rotated: %s", reason)
+            _executor_session.clear()
+            # Rotation is a recovery boundary, not merely an in-memory hint.
+            # Persist it immediately so a crash before the next in-flight
+            # marker cannot resurrect the discarded provider conversation.
+            try:
+                from checkpoint import write_checkpoint as _rotation_ckpt
+                _rotation_ckpt(
+                    ctx.loop_id, goal, ctx.project or "", steps, step_outcomes,
+                    executor_session=_executor_session,
+                )
+            except Exception as _rotation_exc:
+                log.warning("executor session rotation checkpoint failed: %s",
+                            _rotation_exc)
 
     # Step 2: Execute each step in order (dynamic — interrupts may add/replace steps)
     # Pre-populate with any completed steps from a checkpoint resume
@@ -333,6 +378,7 @@ def _execute_main_loop(
         if _remaining_budget <= 2 and len(remaining_steps) > 1 and len(step_outcomes) >= 3:
             _done_count = sum(1 for s in step_outcomes if s.status == "done")
             if _done_count >= 2:
+                _reset_executor_session("budget-pressure plan replacement")
                 _synth_step = (
                     f"Synthesize the findings from the {_done_count} completed steps into "
                     f"a structured summary. Include: key findings, gaps or open questions, "
@@ -405,6 +451,7 @@ def _execute_main_loop(
                 )
                 if _bd_sub and _bd_sub != [_remainder_goal]:
                     _bd_sub = _shape_steps(_bd_sub, label="boundary-expand")
+                    _reset_executor_session("cuts boundary expanded")
                     remaining_steps[:0] = _bd_sub
                     remaining_indices[:0] = [-1] * len(_bd_sub)
                     log.info("boundary-expand: %r → %d step(s), %d finding(s) in context",
@@ -448,6 +495,7 @@ def _execute_main_loop(
                 _ms_sub = _ms_decompose(step_text, adapter, max_steps=5, allow_cuts=False)
                 if _ms_sub and len(_ms_sub) >= 2:
                     _ms_sub = _shape_steps(_ms_sub, label="milestone-expand")
+                    _reset_executor_session("milestone expanded")
                     remaining_steps[:0] = _ms_sub
                     remaining_indices[:0] = [-1] * len(_ms_sub)
                     log.info("milestone-aware: step %d %r → %d sub-steps",
@@ -598,6 +646,7 @@ def _execute_main_loop(
                 if _next_step_injected_context
                 else _prereq_for_step
             )
+        _step_incremental_context = _next_step_injected_context
         _step_ancestry = (
             (_ancestry_context + "\n\n" + _next_step_injected_context)
             if _next_step_injected_context
@@ -651,6 +700,12 @@ def _execute_main_loop(
             except Exception:
                 _artifact_check_on = False
 
+        if (_executor_session is not None
+                and int(_executor_session.get("turns", 0) or 0)
+                >= _executor_session_max_turns):
+            _reset_executor_session(
+                f"segment turn cap reached ({_executor_session_max_turns})")
+
         # In-flight marker, written BEFORE the step: a mid-step crash leaves
         # {index, started_at, pid} in the checkpoint so resume knows this step
         # may have partial side effects (vs. never started — the hermes goal-2
@@ -658,7 +713,8 @@ def _execute_main_loop(
         try:
             from checkpoint import write_checkpoint as _inflight_ckpt
             _inflight_ckpt(ctx.loop_id, ctx.goal, ctx.project or "",
-                           steps, step_outcomes, in_flight_index=step_idx)
+                           steps, step_outcomes, in_flight_index=step_idx,
+                           executor_session=_executor_session)
         except Exception as _if_exc:
             log.debug("in-flight checkpoint write failed (non-fatal): %s", _if_exc)
 
@@ -674,6 +730,9 @@ def _execute_main_loop(
             ancestry_context=_step_ancestry,
             project_dir=_proj_artifact_dir,
             shared_ctx=_loop_shared_ctx,
+            incremental_context=_step_incremental_context,
+            executor_session=_executor_session,
+            session_context_key=_executor_context_key(),
         )
         step_elapsed = int((time.monotonic() - step_start) * 1000)
 
@@ -1005,6 +1064,7 @@ def _execute_main_loop(
                         continue
                     elif _ae_decision.action == "adjust" and _ae_decision.revised_steps:
                         _ae_new = _ae_decision.revised_steps
+                        _reset_executor_session("director adjusted remaining steps")
                         remaining_steps[:] = _ae_new
                         remaining_indices[:] = [-1] * len(_ae_new)
                         stuck_streak = 0
@@ -1031,6 +1091,7 @@ def _execute_main_loop(
                                 ancestry_context=_ae_ancestry,
                             )
                             if _ae_replan_steps:
+                                _reset_executor_session("director replanned after stuck")
                                 remaining_steps[:] = _ae_replan_steps
                                 remaining_indices[:] = [-1] * len(_ae_replan_steps)
                                 ctx.director_replan_count += 1
@@ -1055,6 +1116,7 @@ def _execute_main_loop(
                                       _ae_replan_exc)
                     elif _ae_decision.action == "restart":
                         # Break with restart status — handle.py detects and re-runs
+                        _reset_executor_session("director restarted run")
                         _ae_restart_ctx = (
                             _ae_decision.restart_context or _ae_decision.reasoning
                         )
@@ -1199,8 +1261,11 @@ def _execute_main_loop(
                 scratchpad_lock=_scratchpad_lock,
                 step_model=getattr(_step_adapter, "model_key", None),
             )
+            if outcome.get("executor_session_tainted"):
+                _reset_executor_session(str(outcome["executor_session_tainted"]))
             _consecutive_max_timeouts = 0  # successful step — adapter is healthy
         else:
+            _reset_executor_session("step did not finish cleanly")
             _blk = BlockedStepContext(
                 step_text=step_text,
                 step_idx=step_idx,
@@ -1245,10 +1310,14 @@ def _execute_main_loop(
             tokens_in=outcome.get("tokens_in", 0),
             tokens_out=outcome.get("tokens_out", 0),
             cache_read_tokens=outcome.get("cache_read_tokens", 0),
+            provider_cost_usd=float(outcome.get("provider_cost_usd", 0.0) or 0.0),
             elapsed_ms=step_elapsed,
             confidence=outcome.get("confidence", ""),
             injected_steps=outcome.get("inject_steps", []),
             call_record=outcome.get("call_record", ""),
+            executor_session_id=outcome.get("executor_session_id", ""),
+            executor_session_resumed=bool(
+                outcome.get("executor_session_resumed", False)),
         ))
 
         # End-of-iteration artifacts: checkpoint, manifest, dead ends, march of nines
@@ -1257,6 +1326,7 @@ def _execute_main_loop(
             step_outcomes, steps, _manifest_steps, _replan_count, start_ts,
             dead_ends_available=_dead_ends_available,
             update_dead_ends_fn=_update_dead_ends if _dead_ends_available else None,
+            executor_session=_executor_session,
         )
         if _mon_alert:
             _march_of_nines_alert = True
@@ -1352,6 +1422,7 @@ def _execute_main_loop(
                     )
                     if _ae2_decision.action == "adjust" and _ae2_decision.revised_steps:
                         _ae2_new = _ae2_decision.revised_steps
+                        _reset_executor_session("director adjusted remaining steps")
                         remaining_steps[:] = _ae2_new
                         remaining_indices[:] = [-1] * len(_ae2_new)
                         log.info("adaptive [%s/adjust]: replaced %d steps — %s",
@@ -1379,6 +1450,7 @@ def _execute_main_loop(
                                 ancestry_context=_ae2_ancestry,
                             )
                             if _ae2_replan_steps:
+                                _reset_executor_session("director replanned")
                                 remaining_steps[:] = _ae2_replan_steps
                                 remaining_indices[:] = [-1] * len(_ae2_replan_steps)
                                 ctx.director_replan_count += 1
@@ -1400,6 +1472,7 @@ def _execute_main_loop(
                             log.debug("adaptive replan (%s) planner call failed: %s",
                                       _ae2_trigger, _ae2_replan_exc)
                     elif _ae2_decision.action == "restart":
+                        _reset_executor_session("director restarted run")
                         _ae2_restart_ctx = (
                             _ae2_decision.restart_context or _ae2_decision.reasoning
                         )
@@ -1449,6 +1522,7 @@ def _execute_main_loop(
         _next_step_injected_context = _step_injected_context
 
         # Kill switch, timeout, interrupt polling
+        _interrupts_before = interrupts_applied
         _intr_status, _intr_reason, goal, interrupts_applied, remaining_steps, remaining_indices = _check_loop_interrupts(
             ctx,
             remaining_steps=remaining_steps,
@@ -1458,6 +1532,8 @@ def _execute_main_loop(
             goal=goal,
             interrupts_applied=interrupts_applied,
         )
+        if interrupts_applied != _interrupts_before:
+            _reset_executor_session("operator interrupt changed run state")
         if _intr_status:
             loop_status = _intr_status
             stuck_reason = _intr_reason
@@ -1481,4 +1557,3 @@ def _execute_main_loop(
         "goal": goal,
         "max_iterations": max_iterations,
     }
-

@@ -99,6 +99,125 @@ class _ScheduleRunAdapter:
         )
 
 
+class _CaptureSessionAdapter:
+    model_key = "test"
+
+    def __init__(self):
+        self.kwargs = None
+
+    def complete(self, messages, **kwargs):
+        from llm import LLMResponse, ToolCall
+        self.kwargs = kwargs
+        return LLMResponse(
+            content="",
+            tool_calls=[ToolCall(
+                name="complete_step",
+                arguments={"result": "done", "summary": "done"},
+            )],
+            input_tokens=10,
+            output_tokens=5,
+            cost_usd=0.012,
+            session_id="session-1",
+            session_resumed=True,
+        )
+
+
+class _ToolSearchCostAdapter:
+    model_key = "test"
+
+    def __init__(self):
+        self.calls = []
+
+    def complete(self, messages, **kwargs):
+        from llm import LLMResponse, ToolCall
+        self.calls.append(kwargs)
+        if len(self.calls) == 1:
+            return LLMResponse(
+                content="",
+                tool_calls=[ToolCall(
+                    name="tool_search", arguments={"query": "demo"})],
+                cost_usd=0.1,
+                session_id="11111111-1111-4111-8111-111111111111",
+                session_resumed=True,
+            )
+        return LLMResponse(
+            content="",
+            tool_calls=[ToolCall(
+                name="complete_step",
+                arguments={"result": "done", "summary": "done"})],
+            cost_usd=0.2,
+        )
+
+
+def test_execute_step_supplies_full_fallback_and_incremental_session_prompt(tmp_path):
+    from step_exec import execute_step
+
+    adapter = _CaptureSessionAdapter()
+    state = {"session_id": "existing", "signature": "sig"}
+    outcome = execute_step(
+        goal="ship the report",
+        step_text="write the final section",
+        step_num=2,
+        total_steps=3,
+        completed_context=[
+            "older context that the session already holds",
+            "audited correction: claimed file does not exist",
+        ],
+        adapter=adapter,
+        tools=[],
+        project_dir=str(tmp_path),
+        incremental_context="validator requested one citation",
+        executor_session=state,
+        session_context_key="stable-charter",
+    )
+
+    assert outcome["status"] == "done"
+    assert outcome["executor_session_id"] == "session-"
+    assert outcome["executor_session_resumed"] is True
+    assert outcome["provider_cost_usd"] == 0.012
+    assert adapter.kwargs["session_state"] is state
+    assert len(adapter.kwargs["session_context_key"]) == 64
+    assert adapter.kwargs["session_context_key"] != "stable-charter"
+    delta = adapter.kwargs["session_delta_prompt"]
+    assert "write the final section" in delta
+    assert "validator requested one citation" in delta
+    assert "audited correction: claimed file does not exist" in delta
+    assert "older context that the session already holds" not in delta
+
+
+def test_execute_step_accumulates_tool_search_cost_and_rotates_session(
+        tmp_path, monkeypatch):
+    from step_exec import execute_step
+    import tool_search
+
+    monkeypatch.setattr(tool_search, "resolve_deferred_tools", lambda query: [{
+        "name": "demo_tool",
+        "description": "demo",
+        "parameters": {"type": "object", "properties": {}},
+    }])
+    adapter = _ToolSearchCostAdapter()
+    state = {"session_id": "existing", "signature": "sig", "turns": 1}
+
+    outcome = execute_step(
+        goal="use a deferred tool",
+        step_text="find and use the demo tool",
+        step_num=1,
+        total_steps=1,
+        completed_context=[],
+        adapter=adapter,
+        tools=[],
+        project_dir=str(tmp_path),
+        executor_session=state,
+        session_context_key="charter",
+    )
+
+    assert outcome["status"] == "done"
+    assert outcome["provider_cost_usd"] == pytest.approx(0.3)
+    assert outcome["executor_session_resumed"] is True
+    assert state == {}
+    assert adapter.calls[1]["session_state"] is None
+
+
 class TestScheduleRunTool:
     def test_schedule_run_daily(self, tmp_path, monkeypatch):
         monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
