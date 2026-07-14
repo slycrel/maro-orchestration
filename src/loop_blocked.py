@@ -676,8 +676,9 @@ def _navigator_act_blocked_step(
         # because the stop reason is a deferral, not a completion.
         try:
             from notify import emit as _notify_emit
+            from runs import current_handle_id as _current_handle_id
             _notify_emit("escalation", {
-                "handle_id": "",
+                "handle_id": _current_handle_id() or "",
                 "goal": goal,
                 "status": "stuck",
                 "summary": stuck_reason,

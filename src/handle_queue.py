@@ -60,8 +60,9 @@ def handle_task(
         if getattr(_esc, "action", "") == "surface" and not dry_run:
             try:
                 from notify import emit as _notify_emit
+                _task_origin = task.get("origin") or {}
                 _notify_emit("escalation", {
-                    "handle_id": "",
+                    "handle_id": str(_task_origin.get("parent_handle_id") or ""),
                     "goal": reason[:500],
                     "status": "surfaced",
                     "summary": getattr(_esc, "summary_for_user", ""),

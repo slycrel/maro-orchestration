@@ -2544,3 +2544,10 @@ Dormant (deliberately parked, not dropped):
   this over claim-before because extraction failures must remain retryable, and
   fixed misleading lock diagnostics plus exception scope. Follow-up approved;
   all R3 residuals are closed.
+
+- **2026-07-13 (M1 continuation: escalation handle correlation)** —
+  Escalation-class notifications identify the immediate originating run when
+  one exists: queued continuations carry typed `parent_handle_id`, and live
+  navigator deferrals read the scoped current handle. This is deliberately
+  correlation to the actual emitting/originating hop, not a new synthetic
+  root-thread identity. Legacy and pre-run paths keep an explicit blank.

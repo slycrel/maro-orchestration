@@ -2,7 +2,11 @@
 
 What to do next, in what order. Updated each session. Deferred ideas live in BACKLOG.md; completed phase history in docs/history/ROADMAP_ARCHIVE.md (ROADMAP.md is a stub). This file is the executable queue.
 
-Last updated: 2026-07-13 (M1 continuation checkpoint — R3 skill-candidate
+Last updated: 2026-07-13 (M1 continuation checkpoint — R4 escalation handle
+correlation SHIPPED: check-ins and surfaced queued escalations carry their
+typed immediate-parent handle, while live navigator deferrals use the active
+run handle and legacy/no-run paths remain explicitly blank. Focused tests and
+Claude follow-up review approved. Previous checkpoint: R3 skill-candidate
 sweep ownership SHIPPED: a fail-closed per-workspace flock now spans scan,
 paid extraction, and consumption; overlapping evolvers skip before reads while
 failed extraction remains retryable. Real cross-process test and Claude review

@@ -1048,6 +1048,7 @@ def _fire_checkin(task, new_depth, action, reasoning, summary_for_user, origin) 
             "it — no reply means keep going."
         )
         payload = {
+            "handle_id": str(origin.get("parent_handle_id") or ""),
             "blocking": False,  # distinguishes this from a park-the-goal escalation
             "goal": str(original_goal)[:400],
             "reason": str(original_goal)[:400],

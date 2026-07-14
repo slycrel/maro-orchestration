@@ -51,6 +51,7 @@ class TestActBlockedStep:
             lambda event_type=None, **kw: events.append((event_type, kw)))
         notes = []
         monkeypatch.setattr("notify.emit", lambda kind, payload: notes.append((kind, payload)))
+        monkeypatch.setattr("runs.current_handle_id", lambda: "handle-blocked-1")
         out = _lb._navigator_act_blocked_step(
             _nav(confidence=0.95), _forward_decision(),
             goal="g", step_text="s", step_idx=3, loop_id="abc123")
@@ -65,6 +66,7 @@ class TestActBlockedStep:
         assert acted["context"]["heuristic_action"] == "retry"
         assert notes and notes[0][0] == "escalation"
         assert notes[0][1]["point"] == "blocked_step"
+        assert notes[0][1]["handle_id"] == "handle-blocked-1"
 
     def test_below_floor_falls_through(self, monkeypatch):
         monkeypatch.setattr("config.get", _cfg({"navigator.act_blocked_step": True}))

@@ -140,6 +140,7 @@ class TestHandleEscalationWithLLM:
              mock.patch("notify.emit") as mock_emit:
             # depth already AT MAX_RESTART_DEPTH (loop_types.MAX_RESTART_DEPTH == 3)
             task = _make_escalation_task(depth=3)
+            task["origin"] = {"parent_handle_id": "handle-root-1"}
             result = handle_escalation(task, adapter=self._make_adapter("continue"))
 
         assert result.action == "continue"  # goal keeps running — never refused
@@ -149,6 +150,7 @@ class TestHandleEscalationWithLLM:
         event_type, payload = mock_emit.call_args.args[0], mock_emit.call_args.args[1]
         assert event_type == "recursion_checkin"
         assert payload["blocking"] is False
+        assert payload["handle_id"] == "handle-root-1"
 
     def test_checkin_does_not_fire_below_first_threshold(self, monkeypatch, tmp_path):
         # depth 0 -> new_depth 1 < first threshold (2): no check-in, origin
@@ -198,6 +200,9 @@ class TestHandleEscalationWithLLM:
         # Director's OWN escalation-decision text is reused (no 2nd LLM call)
         assert payload["reasoning"] == "test reasoning for continue"
         assert payload["summary_for_user"] == "test summary"
+        # Legacy tasks without typed origin ancestry remain valid and emit an
+        # explicit blank handle rather than omitting the payload field.
+        assert payload["handle_id"] == ""
         # Cadence advanced onto the carried origin
         assert enqueued["origin"]["checkins_sent"] == 1
 
@@ -534,11 +539,13 @@ class TestHandleTask:
         with mock.patch("task_store.enqueue", _boom_enqueue), \
              mock.patch("notify.emit") as mock_emit:
             task = _make_escalation_task(depth=1)  # any depth — checkin cadence irrelevant here
+            task["origin"] = {"parent_handle_id": "handle-root-2"}
             handle_task(task, adapter=_make_llm_adapter("continue"), dry_run=False)
 
         assert mock_emit.called
         event_name, payload = mock_emit.call_args[0][:2]
         assert event_name == "escalation"
+        assert payload["handle_id"] == "handle-root-2"
         assert payload["status"] == "surfaced"
         assert "task store down" in payload["summary"]
 

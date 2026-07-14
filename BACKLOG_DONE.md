@@ -8,6 +8,16 @@ Last split: 2026-04-16 (session 34).
 
 ---
 
+### R4: Escalation notification handle correlation — SHIPPED (2026-07-13)
+
+`recursion_checkin` and surfaced task-store escalations now copy the typed
+origin's immediate `parent_handle_id`; navigator escalations emitted inside a
+live run use `runs.current_handle_id()`. Legacy tasks and pre-run refusal paths
+retain an explicit empty string, preserving the hook environment contract.
+Focused tests cover all three live paths and the blank fallback. A real Claude
+Skeptic found the previously missed navigator path; the follow-up review found
+no HIGH/MEDIUM issues.
+
 ### R3: Cross-process skill-candidate sweep ownership — SHIPPED (2026-07-13)
 
 Manual, heartbeat, and run-cadence evolvers could overlap the unconsumed-card
