@@ -51,7 +51,9 @@ and locked/atomic quarantine writes; deterministic different-target and
 same-target thread races pass. Bonus M1 local-validator bake-off selected
 VibeThinker-3B-4bit as the Apple Silicon reference: 1.83 GB peak, 14/14 bounded
 eval, 8.2s exact-protocol average; 8-bit and 27B candidates rejected for this
-role. Cross-model adversarial review completed 1/3 lanes (Minimalist); its two
+role. A smallest-useful follow-up rejected 1.5B-4bit: 4/8 canonical cases and
+12.5s/call, with low-confidence outputs that escalate rather than save paid
+calls. Cross-model adversarial review completed 1/3 lanes (Minimalist); its two
 findings fixed, Skeptic/Architect timed out empty after 10m and are recorded as
 failed rather than approval. Full raw suite green; `test-safe.sh`'s Linux-only
 `taskset` wrapper captured in BACKLOG. Previous: 2026-07-13 (later same day — full-day /goal arc CLOSED: **1.5

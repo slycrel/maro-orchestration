@@ -2551,3 +2551,12 @@ Dormant (deliberately parked, not dropped):
   navigator deferrals read the scoped current handle. This is deliberately
   correlation to the actual emitting/originating hop, not a new synthetic
   root-thread identity. Legacy and pre-run paths keep an explicit blank.
+
+- **2026-07-13 (bonus follow-up: smallest useful M1 validator)** — The
+  1.5B/4-bit VibeThinker candidate was run through the same live eight-case
+  `VerificationAgent` protocol after Jeremy clarified that minimum useful size,
+  not maximum capability, is the goal. It used ~1.18 GB resident / 844 MB disk
+  but scored 4/8 and averaged 12.5s/call; all four negative cases were nominal
+  low-confidence passes, so the real certainty gate would escalate and save no
+  paid call. Therefore 3B/4-bit remains the smallest model currently proven to
+  deliver the benefit on this M1 Max.

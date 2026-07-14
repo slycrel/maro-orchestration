@@ -257,7 +257,7 @@ and the model's training signal matters more than its size.
 |-------|---------|-----------|----------|
 | `mlx-community/VibeThinker-3B-4bit` | MLX | ~1.8 GB | **Apple Silicon reference.** Best measured size/latency/quality trade on the M1 Max. |
 | `mlx-community/VibeThinker-3B-8bit` | MLX | ~3.4 GB | Same specialist at higher precision; measured slower here with no gain on the bounded eval. |
-| `mlx-community/VibeThinker-1.5B-mlx-4bit` | MLX | ~1.0 GB | For RAM-constrained boxes; weaker judge. |
+| `mlx-community/VibeThinker-1.5B-mlx-4bit` | MLX | ~1.2 GB resident / 844 MB disk | Runs comfortably, but failed the canonical judge eval; do not use for this role. |
 | a Qwen2.5-Coder / reasoning model via Ollama | Ollama | varies | Linux prod box; pick a coder/reasoning tune, not a chat model. |
 
 ### M1 Max measurement (2026-07-13)
@@ -270,14 +270,18 @@ protocol, not a raw chat prompt:
 | Candidate | Peak/model memory | Accuracy | Exact-protocol latency | Judgment |
 |---|---:|---:|---:|---|
 | VibeThinker-3B-4bit (MLX) | 1.83 GB | 14/14 across the canonical 8-case eval + 6 path/constraint cases | 8.2s average on the six-case run (4.8–13.4s) | **Use as local validator** |
+| VibeThinker-1.5B-4bit (MLX) | 1.18 GB resident / 844 MB disk | 4/8 canonical cases; every negative case returned nominal PASS at low confidence | 12.5s average over eight cases | Reject: the certainty gate escalates these outputs, so it saves no paid calls |
 | VibeThinker-3B-8bit (MLX) | 3.37 GB | 6/6 path/constraint cases | 16.5s average (6.5–30.5s) | No measured benefit; trips the 15s breaker |
 | Qwopus3.5-27B Q4_K_M (Ollama) | 17 GB model | 3/4 exact-protocol cases; the wrong-path case degraded to `verify skipped (error)` | 21.4s average; ~23s cold load | Reject for validation |
 
-The 4-bit result is strong but bounded: fourteen labeled examples prove the
+The 3B/4-bit result is strong but bounded: fourteen labeled examples prove the
 model is worth enabling behind the existing certainty, deterministic-provenance,
-and latency gates. They do **not** prove a 3B model should replace the main
-planner/executor. Keep local use narrow to first-pass validation; let hard or
-uncertain work escalate. The M1's three existing Ollama models occupy ~42 GB
+and latency gates. The follow-up 1.5B run establishes why the recommendation
+does not go smaller merely to minimize footprint: its low-confidence nominal
+passes would correctly escalate, but then the local call adds latency without
+avoiding paid work. These results do **not** prove a 3B model should replace the
+main planner/executor. Keep local use narrow to first-pass validation; let hard
+or uncertain work escalate. The M1's three existing Ollama models occupy ~42 GB
 on disk but are not configured in Maro and did not beat the 1.8 GB specialist
 for this job.
 
