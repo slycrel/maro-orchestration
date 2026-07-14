@@ -1554,7 +1554,11 @@ def verify_step(
             if local is not None:
                 from verification_agent import VerificationAgent
                 _t0 = time.monotonic()
-                lv = VerificationAgent(local, confidence_threshold=confidence_threshold,
+                # The same threshold must govern both RETRY interpretation and
+                # local decisiveness.  Otherwise a RETRY in the band between
+                # min_certainty and the paid threshold is converted to PASS,
+                # then immediately trusted as a decisive local verdict.
+                lv = VerificationAgent(local, confidence_threshold=_lm.min_certainty(),
                                        max_input_chars=_lm.input_char_budget()).verify_step(step_text, result)
                 _local_elapsed_ms = int((time.monotonic() - _t0) * 1000)
                 _lm.report_latency(_local_elapsed_ms)
@@ -1600,7 +1604,10 @@ def verify_step(
             if hosted is not None:
                 from verification_agent import VerificationAgent
                 _t0 = time.monotonic()
-                hv = VerificationAgent(hosted, confidence_threshold=confidence_threshold,
+                # As with the local rung, RETRY interpretation and decisive
+                # acceptance must share one boundary or an intermediate-
+                # confidence RETRY can become a trusted free-tier PASS.
+                hv = VerificationAgent(hosted, confidence_threshold=_hf.min_certainty(),
                                        max_input_chars=_hf.input_char_budget()).verify_step(step_text, result)
                 _hosted_elapsed_ms = int((time.monotonic() - _t0) * 1000)
                 _hosted_source = f"hosted_free:{getattr(hosted, '_active_provider', '') or '?'}:{getattr(hosted, 'model_key', '')}"

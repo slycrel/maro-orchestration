@@ -258,32 +258,47 @@ and the model's training signal matters more than its size.
 | `mlx-community/VibeThinker-3B-4bit` | MLX | ~1.8 GB | **Apple Silicon reference.** Best measured size/latency/quality trade on the M1 Max. |
 | `mlx-community/VibeThinker-3B-8bit` | MLX | ~3.4 GB | Same specialist at higher precision; measured slower here with no gain on the bounded eval. |
 | `mlx-community/VibeThinker-1.5B-mlx-4bit` | MLX | ~1.2 GB resident / 844 MB disk | Runs comfortably, but failed the canonical judge eval; do not use for this role. |
-| a Qwen2.5-Coder / reasoning model via Ollama | Ollama | varies | Linux prod box; pick a coder/reasoning tune, not a chat model. |
+| `qwen2.5-coder:3b` | Ollama | ~1.9 GB disk | Very fast, but rejected for validation after two unsafe false-passes on the shared corpus. |
 
-### M1 Max measurement (2026-07-13)
+### M1 Max measurement (2026-07-14)
 
 The earlier negative ROI data in this document came from a **2014 Mac mini
 running Ubuntu**, not this machine. A fresh measurement on the 10-core,
 64 GB M1 Max used Maro's real `LocalValidatorAdapter` + `VerificationAgent`
 protocol, not a raw chat prompt:
 
-| Candidate | Peak/model memory | Accuracy | Exact-protocol latency | Judgment |
-|---|---:|---:|---:|---|
-| VibeThinker-3B-4bit (MLX) | 1.83 GB | 14/14 across the canonical 8-case eval + 6 path/constraint cases | 8.2s average on the six-case run (4.8–13.4s) | **Use as local validator** |
-| VibeThinker-1.5B-4bit (MLX) | 1.18 GB resident / 844 MB disk | 4/8 canonical cases; every negative case returned nominal PASS at low confidence | 12.5s average over eight cases | Reject: the certainty gate escalates these outputs, so it saves no paid calls |
-| VibeThinker-3B-8bit (MLX) | 3.37 GB | 6/6 path/constraint cases | 16.5s average (6.5–30.5s) | No measured benefit; trips the 15s breaker |
-| Qwopus3.5-27B Q4_K_M (Ollama) | 17 GB model | 3/4 exact-protocol cases; the wrong-path case degraded to `verify skipped (error)` | 21.4s average; ~23s cold load | Reject for validation |
+Every row below was replayed at `validate.min_certainty: 0.6` through the
+production adapter and verifier against
+the same committed 14-case corpus (`tests/fixtures/validation_cases.json`; seven
+PASS and seven RETRY cases). Reproduce one row with
+`scripts/validator-bakeoff.py --model MODEL --endpoint URL`.
 
-The 3B/4-bit result is strong but bounded: fourteen labeled examples prove the
+| Candidate | Raw accuracy | Decisive coverage / accuracy | Unsafe decisive false-passes | Exact-protocol latency | Judgment |
+|---|---:|---:|---:|---:|---|
+| VibeThinker-3B-4bit (MLX, ~1.8 GB) | **14/14** | **14/14; 100% / 100%** | **0** | **8.83s average** | **Use as local validator** |
+| VibeThinker-1.5B-4bit (MLX, 844 MB disk) | 8/14 | 3/14; 21% / 100% | 0 | 14.43s average | Reject: too little useful coverage and slower than 3B/4-bit |
+| VibeThinker-3B-8bit (MLX, ~3.4 GB) | 12/14 | 13/14; 93% / 92% | 1 | 13.46s average | Reject: larger, slower, and less safe |
+| qwen2.5-coder:3b (Ollama, ~1.9 GB disk) | 12/14 | 14/14; 100% / 86% | 2 | **0.81s average** | Reject: fast but blessed a read-only violation and an explicitly failing test run |
+
+The 3B/4-bit result is strong but bounded: fourteen labeled examples show the
 model is worth enabling behind the existing certainty, deterministic-provenance,
 and latency gates. The follow-up 1.5B run establishes why the recommendation
 does not go smaller merely to minimize footprint: its low-confidence nominal
 passes would correctly escalate, but then the local call adds latency without
 avoiding paid work. These results do **not** prove a 3B model should replace the
 main planner/executor. Keep local use narrow to first-pass validation; let hard
-or uncertain work escalate. The M1's three existing Ollama models occupy ~42 GB
-on disk but are not configured in Maro and did not beat the 1.8 GB specialist
-for this job.
+or uncertain work escalate. The cached Ollama models occupy roughly 44 GB on
+disk but are not configured in Maro and did not beat the 1.8 GB specialist
+for this job. The old 2014 Ubuntu Mac mini remains a poor target: this verdict
+is specifically for Apple Silicon/MLX. A Linux/Ollama deployment still needs an
+on-box latency and safety replay before it is enabled there.
+
+These are single-sample point estimates from a small, temperature-0.1 corpus
+run, not a statistical proof of safety. In particular, zero unsafe passes among
+seven negative examples does not establish a zero real-world error rate. The
+gated live eval now refuses any sampled decisive false-pass, and production
+shadow telemetry remains the broader evidence source; rerun the corpus after
+model, prompt, runtime, or quantization changes.
 
 ## Hardware — can a "generally modern machine" run this?
 
@@ -292,7 +307,7 @@ Yes, for the 3B reference model on any reasonably current machine:
 - **RAM**: the 4-bit reference peaked at 1.83 GB on the M1 Max; 16 GB total RAM
   is comfortable and 8 GB is plausible for validator-only use.
 - **Apple Silicon (MLX)**: any M-series. On this M1 Max the 4-bit reference
-  averaged 8.2s per exact-protocol validation, competitive with the recorded
+  averaged 8.83s per exact-protocol validation, competitive with the recorded
   ~6.5s paid path while avoiding API cost and egress.
 - **Linux/x86 (Ollama)**: runs on CPU; a small GPU helps. Use a quantized
   build to keep memory and latency reasonable.

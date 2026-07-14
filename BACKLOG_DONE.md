@@ -2638,3 +2638,17 @@ targeted-hint pattern is now the standing mechanism for all three, and
 this saga is a candidate training/test goal.
 
 *(Moved from BACKLOG.md 2026-07-12 — all seven mechanisms shipped or accounted for; (b) re-scoped after finding liveness kill already existed.)*
+
+## Local-validator model bake-off — completed 2026-07-14
+
+Committed one balanced 14-case corpus and a reproducible exact-protocol runner,
+then replayed VibeThinker 1.5B/4-bit, 3B/4-bit, 3B/8-bit, and Ollama
+qwen2.5-coder:3b on the M1 Max. VibeThinker-3B-4bit was the only candidate with
+14/14 raw accuracy, 100% decisive coverage, and zero unsafe false-passes; it
+averaged 8.83s. The 1.5B model was slower and decisive on only 3/14, 8-bit was
+slower/larger with one unsafe pass, and Qwen was fast (0.81s) but produced two
+unsafe passes. The sweep also exposed and fixed production threshold mismatches
+that could convert a local or hosted-free RETRY at confidence 0.60–0.74 into a
+decisive PASS.
+Apple Silicon verdict: use 3B/4-bit only as gated first-pass validation. Linux
+on-box burn-in remains separately hardware-gated in BACKLOG.

@@ -1244,6 +1244,30 @@ class TestVerifyStepHostedFreeTier:
         assert "groq" in out["source"]
         paid_adapter.complete.assert_not_called()
 
+    def test_hosted_free_retry_uses_same_threshold_as_decisive_gate(self, monkeypatch):
+        """A RETRY that clears hosted min_certainty must remain a decisive fail."""
+        from step_exec import verify_step
+        import hosted_free as hf
+
+        response = MagicMock()
+        response.content = '{"verdict":"RETRY","reason":"incomplete","confidence":0.65}'
+        hosted_adapter = MagicMock()
+        hosted_adapter._active_provider = "groq"
+        hosted_adapter.model_key = "hosted-test"
+        hosted_adapter.complete.return_value = response
+        monkeypatch.setattr(hf, "available", lambda: True)
+        monkeypatch.setattr(hf, "build_hosted_free_adapter", lambda: hosted_adapter)
+        monkeypatch.setattr(hf, "min_certainty", lambda: 0.6)
+        monkeypatch.setattr(hf, "input_char_budget", lambda: 4000)
+
+        paid_adapter = MagicMock()
+        out = verify_step("finish the work", "partial result", paid_adapter)
+
+        assert out["passed"] is False
+        assert out["decision"] == "HOSTED_FREE_FAIL"
+        assert out["confidence"] == pytest.approx(0.65)
+        paid_adapter.complete.assert_not_called()
+
     def test_hosted_free_undecided_escalates_to_paid(self, monkeypatch):
         """Low-confidence hosted-free verdict escalates; paid verdict wins."""
         from step_exec import verify_step

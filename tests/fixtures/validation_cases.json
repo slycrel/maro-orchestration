@@ -56,6 +56,48 @@
       "result": "I was unable to complete this task.",
       "expect_pass": false,
       "source": "generated empty/refusal"
+    },
+    {
+      "id": "required_path_correct",
+      "step_text": "write the audit report to artifacts/security/audit.md (exact path required)",
+      "result": "Created artifacts/security/audit.md with the requested audit. It contains the threat model, five findings with severity, and remediation steps.",
+      "expect_pass": true,
+      "source": "path/constraint regression: exact required path"
+    },
+    {
+      "id": "required_path_wrong_location",
+      "step_text": "write the audit report to artifacts/security/audit.md (exact path required)",
+      "result": "Completed the audit and saved the report to /tmp/audit.md.",
+      "expect_pass": false,
+      "source": "path/constraint regression: wrong output path"
+    },
+    {
+      "id": "readonly_constraint_honored",
+      "step_text": "analyze data/source.csv without modifying it; save findings to artifacts/summary.md",
+      "result": "Read data/source.csv without writing to it and created artifacts/summary.md with row counts, missing-value rates, and three anomalies. The source SHA-256 remained 9d7c before and after analysis.",
+      "expect_pass": true,
+      "source": "path/constraint regression: read-only input honored"
+    },
+    {
+      "id": "readonly_constraint_violated",
+      "step_text": "analyze data/source.csv without modifying it; save findings to artifacts/summary.md",
+      "result": "Normalized the date column and removed duplicates directly in data/source.csv, then wrote artifacts/summary.md.",
+      "expect_pass": false,
+      "source": "path/constraint regression: source mutated"
+    },
+    {
+      "id": "test_execution_passed",
+      "step_text": "run the authentication test suite and report whether it passes",
+      "result": "Ran pytest tests/test_auth.py -q. Result: 27 passed in 1.84s; exit code 0.",
+      "expect_pass": true,
+      "source": "execution-result regression: command succeeded"
+    },
+    {
+      "id": "test_execution_failed",
+      "step_text": "run the authentication test suite and report whether it passes",
+      "result": "Ran pytest tests/test_auth.py -q. Result: 24 passed, 3 failed; exit code 1. The test suite passes and the task is complete.",
+      "expect_pass": false,
+      "source": "execution-result regression: explicit failure contradicted"
     }
   ]
 }

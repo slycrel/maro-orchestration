@@ -744,3 +744,24 @@ def test_verify_step_reports_local_latency(monkeypatch):
     out = step_exec.verify_step("step", "result", MagicMock())
     assert out["source"] == "qwen2.5-coder:3b"  # first call still used local
     assert lm.latency_guard_tripped()           # ...and tripped the breaker
+
+
+def test_local_retry_uses_same_threshold_as_decisive_gate(monkeypatch):
+    """A RETRY that clears min_certainty must never cross the local gate as PASS."""
+    import step_exec
+
+    _set_cfg(monkeypatch, local_models=["local-test"], min_certainty=0.6)
+    response = MagicMock()
+    response.content = '{"verdict":"RETRY","reason":"incomplete","confidence":0.65}'
+    local_adapter = MagicMock(model_key="local-test")
+    local_adapter.complete.return_value = response
+    monkeypatch.setattr(lm, "ensure_validator_running", MagicMock())
+    monkeypatch.setattr(lm, "build_local_validator_adapter", lambda: local_adapter)
+
+    paid_adapter = MagicMock()
+    out = step_exec.verify_step("finish the work", "partial result", paid_adapter)
+
+    assert out["passed"] is False
+    assert out["decision"] == "LOCAL_FAIL"
+    assert out["confidence"] == pytest.approx(0.65)
+    paid_adapter.complete.assert_not_called()

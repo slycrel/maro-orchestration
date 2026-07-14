@@ -2,11 +2,17 @@
 
 What to do next, in what order. Updated each session. Deferred ideas live in BACKLOG.md; completed phase history in docs/history/ROADMAP_ARCHIVE.md (ROADMAP.md is a stub). This file is the executable queue.
 
-Last updated: 2026-07-14 (continuation checkpoint — closure verdict ancestry
+Last updated: 2026-07-14 (continuation checkpoint — formal M1 local-validator
+bake-off COMPLETE: one committed 14-case corpus replayed through four exact-
+protocol candidates. VibeThinker-3B-4bit alone achieved 14/14 with full
+decisive coverage and zero unsafe false-passes at 8.83s average; 1.5B, 8-bit,
+and Ollama Qwen2.5-Coder-3B were rejected. The sweep also found and fixed the
+0.60–0.74 RETRY→decisive-PASS threshold gap. Only production-Linux on-box
+burn-in remains hardware-gated. Previous checkpoint — closure verdict ancestry
 SHIPPED: every closure-rejected attempt is stamped false before restart, and
 deterministic provenance failure cannot be overwritten by a positive closure
 pass. Two end-to-end regressions plus real Claude Skeptic and follow-up review
-approved. The model bake-off remains open on one-corpus/Linux proof. Previous
+approved. Previous
 checkpoint: R4 escalation handle
 correlation SHIPPED: check-ins and surfaced queued escalations carry their
 typed immediate-parent handle, while live navigator deferrals use the active

@@ -56,7 +56,11 @@ _SKIP_EVAL = pytest.mark.skipif(
 def test_local_validator_discriminates_good_from_bad():
     cases = _load_cases()
     adapter = lm.LocalValidatorAdapter(_MODEL, endpoint=_ENDPOINT)
-    va = VerificationAgent(adapter, confidence_threshold=0.75, max_input_chars=lm.input_char_budget())
+    va = VerificationAgent(
+        adapter,
+        confidence_threshold=lm.min_certainty(),
+        max_input_chars=lm.input_char_budget(),
+    )
 
     rows, correct = [], 0
     for c in cases:
@@ -64,27 +68,41 @@ def test_local_validator_discriminates_good_from_bad():
         got = verdict.passed
         ok = got == c["expect_pass"]
         correct += ok
-        rows.append((c["id"], c["expect_pass"], got, round(verdict.confidence, 2), ok))
+        rows.append((
+            c["id"], c["expect_pass"], got, round(verdict.confidence, 2), ok,
+            verdict.confidence >= lm.min_certainty(),
+        ))
 
     accuracy = correct / len(cases)
     print(f"\nlocal validator eval — model={_MODEL} accuracy={accuracy:.0%} ({correct}/{len(cases)})")
-    for cid, exp, got, conf, ok in rows:
+    for cid, exp, got, conf, ok, _decisive in rows:
         print(f"  [{'ok ' if ok else 'MISS'}] {cid:32s} expect_pass={exp!s:5s} got={got!s:5s} conf={conf}")
 
-    # No false PASS on a clearly-bad case is the most important property to guard.
-    false_pass = [r[0] for r in rows if r[1] is False and r[2] is True]
+    # A low-confidence nominal PASS escalates and is operationally safe. A bad
+    # case accepted at or above min_certainty is the regression that matters.
+    unsafe_false_pass = [
+        r[0] for r in rows
+        if r[1] is False and r[2] is True and r[5]
+    ]
+    assert unsafe_false_pass == [], (
+        f"validator produced unsafe decisive false-passes: {unsafe_false_pass}"
+    )
     assert accuracy >= _MIN_ACCURACY, (
-        f"validator accuracy {accuracy:.0%} < {_MIN_ACCURACY:.0%}; false-passes={false_pass}"
+        f"validator accuracy {accuracy:.0%} < {_MIN_ACCURACY:.0%}; "
+        f"unsafe_false_passes={unsafe_false_pass}"
     )
 
 
 def test_fixtures_are_balanced_and_wellformed():
     # Cheap, always-runs guard so the corpus itself can't silently rot.
     cases = _load_cases()
-    assert len(cases) >= 6
+    # Eight original task/result pairs plus six committed path, constraint,
+    # and execution-result cases form the shared bake-off corpus.
+    assert len(cases) >= 14
     pos = [c for c in cases if c["expect_pass"] is True]
     neg = [c for c in cases if c["expect_pass"] is False]
     assert pos and neg, "need both PASS and FAIL cases to test discrimination"
+    assert len(pos) == len(neg), "shared bake-off corpus must remain balanced"
     ids = [c["id"] for c in cases]
     assert len(ids) == len(set(ids)), "duplicate case ids"
     for c in cases:

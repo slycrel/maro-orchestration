@@ -2570,3 +2570,20 @@ Dormant (deliberately parked, not dropped):
   and outcomes. Claude's stale-backlog audit found the restart hole and also
   prevented premature closure of the local-model bake-off; one committed
   apples-to-apples corpus remains the bar there.
+
+- **2026-07-14 (formal smallest-useful M1 validator verdict)** — Committed the
+  previously missing six path/constraint/execution fixtures, creating one
+  balanced 14-case corpus, plus a reusable exact-production-protocol bake-off
+  runner. On the M1 Max: VibeThinker-3B-4bit scored 14/14 with 100% decisive
+  coverage, zero unsafe false-passes, and 8.83s average; 1.5B/4-bit was slower
+  and decisive on only 3/14; 3B/8-bit was larger/slower and unsafe once; Ollama
+  qwen2.5-coder:3b averaged 0.81s but unsafely blessed a read-only violation and
+  an explicit test failure. **Decision:** the linked 3B/4-bit MLX model is worth
+  using on this M1, narrowly as the gated first-pass validator, and is the
+  smallest candidate proven to preserve the benefit. The 2014 Ubuntu Mac mini
+  is not a viable inference target. Linux remains an on-box burn-in, not an
+  extrapolated claim. Tangential correctness fix: production used 0.60 for
+  local decisiveness but 0.75 to interpret RETRY, so confidence 0.60–0.74 could
+  become a decisive PASS; the local rung now uses `validate.min_certainty` for
+  both boundaries. Claude Architect found the identical latent mismatch in the
+  hosted-free rung; it now likewise uses `hosted_free.min_certainty`.
