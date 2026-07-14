@@ -2,7 +2,17 @@
 
 What to do next, in what order. Updated each session. Deferred ideas live in BACKLOG.md; completed phase history in docs/history/ROADMAP_ARCHIVE.md (ROADMAP.md is a stub). This file is the executable queue.
 
-Last updated: 2026-07-13 (later same day — full-day /goal arc CLOSED: **1.5
+Last updated: 2026-07-13 (M1 continuation checkpoint — R5 portable-import
+concurrency residual SHIPPED: process-global `MARO_MEMORY_DIR` mutation replaced
+by an execution-scoped storage ContextVar, per-target import transaction lock,
+and locked/atomic quarantine writes; deterministic different-target and
+same-target thread races pass. Bonus M1 local-validator bake-off selected
+VibeThinker-3B-4bit as the Apple Silicon reference: 1.83 GB peak, 14/14 bounded
+eval, 8.2s exact-protocol average; 8-bit and 27B candidates rejected for this
+role. Cross-model adversarial review completed 1/3 lanes (Minimalist); its two
+findings fixed, Skeptic/Architect timed out empty after 10m and are recorded as
+failed rather than approval. Full raw suite green; `test-safe.sh`'s Linux-only
+`taskset` wrapper captured in BACKLOG. Previous: 2026-07-13 (later same day — full-day /goal arc CLOSED: **1.5
 planning-depth shadow** and **1.6 /loop trace** below both SHIPPED/CLOSED,
 plus the recursive-goal check-in mechanism (director.handle_escalation) and
 R1 architectural cleanup (prefix registry unification, curator topo-sort,
@@ -683,8 +693,9 @@ Truth anchor: GOAL_BRAIN.md Threads. History: docs/history/ROADMAP_ARCHIVE.md.
       3-lens consensus, all confirmed real and fixed: `--target` wasn't
       honored by the trust-bearing writers (rules/hypotheses/lessons/skills
       wrote through global `$MARO_MEMORY_DIR` helpers, not the resolved
-      target — fixed via a `_memory_dir_override()` context manager scoping
-      the write loop); sealed-pack artifact *contents* were never
+      target — initially contained via `_memory_dir_override()`, then replaced
+      2026-07-13 with the concurrency-safe `memory_dir_context()` ContextVar
+      plus a per-target import transaction lock); sealed-pack artifact *contents* were never
       integrity-checked on import (only `REVIEW.md`'s hash was, so
       post-seal artifact tampering went undetected — fixed with per-
       artifact sha256 verification before any mutation); manifest

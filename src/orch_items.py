@@ -9,9 +9,11 @@ import os
 import re
 import time
 import uuid
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Callable, Iterable, List, Optional, Tuple
+from typing import Callable, Generator, Iterable, List, Optional, Tuple
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -35,6 +37,15 @@ X_CAPTURE_AUTH_MARKERS = [
 X_CAPTURE_RATE_LIMIT_MARKERS = ["429", "rate limit", "too many requests", "quota exceeded"]
 
 ITEM_RE = re.compile(r"^(?P<indent>\s*)-\s*\[(?P<state>[ xX~!])\]\s*(?P<text>.+?)\s*$")
+
+# Explicit, execution-scoped storage routing.  Unlike MARO_MEMORY_DIR this is
+# isolated between concurrent threads/tasks and cannot leak into subprocesses
+# or unrelated imports.  The environment variable remains a boundary-level
+# configuration option for CLI/tests; internal callers that need a temporary
+# target use memory_dir_context().
+_MEMORY_DIR_CONTEXT: ContextVar[Optional[Path]] = ContextVar(
+    "maro_memory_dir_context", default=None
+)
 
 
 # ---------------------------------------------------------------------------
@@ -190,12 +201,13 @@ def memory_dir() -> Path:
     """Canonical memory directory — used by memory.py, observe.py, gc_memory.py, router.py.
 
     Resolution order:
-      1. $MARO_MEMORY_DIR     (explicit override — tests use this)
-      2. config.memory_dir() (aligns with captains_log.py — honors MARO_WORKSPACE,
+      1. memory_dir_context() (explicit in-process storage context)
+      2. $MARO_MEMORY_DIR     (process-level override — tests use this)
+      3. config.memory_dir() (aligns with captains_log.py — honors MARO_WORKSPACE,
          defaults to ~/.maro/workspace/memory) — unless a LEGACY var is pinned
-      3. orch_root()/memory  (legacy pins: OPENCLAW_WORKSPACE/WORKSPACE_ROOT/
+      4. orch_root()/memory  (legacy pins: OPENCLAW_WORKSPACE/WORKSPACE_ROOT/
          MARO_ORCH_ROOT — and fallback for containers/CI)
-      4. cwd/memory          (last resort)
+      5. cwd/memory          (last resort)
 
     IMPORTANT: This must resolve to the SAME directory as config.memory_dir()
     so that captain's log, outcomes, lessons, and skills all live together.
@@ -205,6 +217,11 @@ def memory_dir() -> Path:
 
     Always creates the directory.  Never raises.
     """
+    scoped = _MEMORY_DIR_CONTEXT.get()
+    if scoped is not None:
+        scoped.mkdir(parents=True, exist_ok=True)
+        return scoped
+
     override = os.environ.get("MARO_MEMORY_DIR")
     if override:
         p = Path(override).expanduser().resolve()
@@ -230,6 +247,22 @@ def memory_dir() -> Path:
         fallback = Path.cwd() / "memory"
         fallback.mkdir(parents=True, exist_ok=True)
         return fallback
+
+
+@contextmanager
+def memory_dir_context(path: Path) -> Generator[Path, None, None]:
+    """Route memory helpers to ``path`` for this execution context only.
+
+    ContextVar scoping makes nested use restore correctly and keeps concurrent
+    imports targeting different workspaces isolated without mutating process
+    environment.  Callers pass the memory directory itself, not a workspace.
+    """
+    resolved = Path(path).expanduser().resolve()
+    token = _MEMORY_DIR_CONTEXT.set(resolved)
+    try:
+        yield resolved
+    finally:
+        _MEMORY_DIR_CONTEXT.reset(token)
 
 
 def projects_root() -> Path:

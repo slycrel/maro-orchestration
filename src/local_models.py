@@ -139,8 +139,9 @@ def escalation_target() -> str:
 _DEFAULT_LOCAL_MAX_TOKENS = 2048  # safety-net floor for unmeasured/reasoning models
 
 # Empirically-measured per-model floors (BACKLOG #10 deep-eval, 2026-07-13).
-# Real sweep on THIS box: 3 currently-installed ollama models (llama3.2:3b,
-# qwen-hermes:latest, qwen2.5-coder:3b) x 3 floors (128/256/2048) x 5 realistic
+# Real sweep on the 2014 Ubuntu Mac-mini burn-in box: 3 then-installed Ollama
+# models (llama3.2:3b, qwen-hermes:latest, qwen2.5-coder:3b) x 3 floors
+# (128/256/2048) x 5 realistic
 # step-result payloads (a short confirmation, a medium research summary, a long
 # code-diff report, a vague/RETRY-shaped result, and a ~6000-char payload at
 # the local validator's own input_char_budget ceiling) = 45 real generation

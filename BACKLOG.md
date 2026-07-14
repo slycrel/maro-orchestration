@@ -40,17 +40,15 @@ work remains explicit rather than being hidden behind a checkbox.
   artifact+manifest-hash swap. The docs now accurately call this a local
   consistency seal, not adversarial authenticity; external signatures remain
   the future answer if cross-party authorship is required.
-- [ ] **MEDIUM — portable import routes trust-bearing writes through a
-  process-global environment mutation and uses unlocked read/check/write
-  sequences** (`src/pack.py:715-793`). `_memory_dir_override()` temporarily
-  changes `MARO_MEMORY_DIR`; concurrent imports targeting different
-  workspaces can redirect one another's writes or restore the wrong value.
-  `CONFLICTS.md` and quarantine writes also bypass the repo's
-  `locked_rmw`/atomic-write rule, so concurrent imports can lose notes or
-  overwrite content. Fix direction: pass an explicit workspace/storage
-  context into memory writers; as an interim CLI-only containment, serialize
-  the whole override/import critical section and convert shared writes to
-  locked/atomic operations. Add a two-target threaded/process test.
+- [x] **MEDIUM — portable import routed trust-bearing writes through a
+  process-global environment mutation and used unlocked read/check/write
+  sequences** (`src/pack.py`). **Fixed 2026-07-13:** `orch_items.memory_dir_context()`
+  now supplies an execution-scoped `ContextVar` storage target without mutating
+  `MARO_MEMORY_DIR`; a per-target import gate serializes the full load/check/write
+  transaction; conflict notes use `locked_rmw`; quarantine files use
+  `locked_write` + `atomic_write`. Deterministic threaded regressions prove
+  different targets cannot redirect each other and same-target imports cannot
+  overlap their dedup decisions.
 - [x] **MEDIUM — merely having a Groq or Gemini credential implicitly opts
   step results into third-party data egress, and the advertised latency cap
   does not bound a call** (`src/hosted_free.py:83-90`,
@@ -112,6 +110,13 @@ Adversarial follow-ups:
   reuse** (`src/container_exec.py:653-703`, `src/worktree.py:632-635`). Pair
   owner PID with process start time, boot ID, or a run-scoped liveness token;
   current failure direction is retention/leakage, not false deletion.
+- [ ] **LOW — `scripts/test-safe.sh` cannot run on macOS** (found on the M1
+  Max 2026-07-13). Collection falls back correctly, but execution always wraps
+  pytest in Linux-only `taskset`, yielding `nice: taskset: No such file or
+  directory` before any test starts. Fix direction: make CPU affinity optional
+  when `taskset` is unavailable while retaining `nice`; add a shell-level probe
+  for both command shapes. The direct venv full suite passed on this host, so
+  this is wrapper portability, not a product-test failure.
 
 Architectural follow-on: the highest-change boundary modules are now
 `llm.py` (2,509 lines), `handle.py` (2,425), `step_exec.py` (1,766),

@@ -6,6 +6,9 @@ import io
 import json
 import sys
 import tarfile
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -363,6 +366,88 @@ def target_ws(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 class TestImportPack:
+    def test_concurrent_imports_to_different_targets_are_isolated(self, tmp_path, monkeypatch):
+        targets = [_make_workspace(tmp_path / "dst-a"), _make_workspace(tmp_path / "dst-b")]
+        packs = []
+        for index in range(2):
+            src = _make_workspace(tmp_path / f"src-{index}")
+            _write_jsonl(
+                src / "memory" / "standing_rules.jsonl",
+                [{"rule_id": f"r{index}", "rule": f"target-only-{index}", "domain": "ops"}],
+            )
+            packs.append(_export_and_seal(src, tmp_path / f"pack-{index}", name=f"pack-{index}"))
+
+        # Force both calls past storage-context setup before either writer
+        # resolves its path.  The former process-global env override routed
+        # both writes to whichever thread changed MARO_MEMORY_DIR last.
+        barrier = threading.Barrier(2)
+        original = pack_module._import_rules_as_hypotheses
+
+        def synchronized_import(*args, **kwargs):
+            barrier.wait(timeout=5)
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(pack_module, "_import_rules_as_hypotheses", synchronized_import)
+        monkeypatch.setenv("MARO_MEMORY_DIR", str(tmp_path / "ambient-memory"))
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            futures = [
+                pool.submit(import_pack, packs[i], label=f"label-{i}", target=targets[i])
+                for i in range(2)
+            ]
+            for future in futures:
+                future.result(timeout=10)
+
+        for index, target in enumerate(targets):
+            rows = [json.loads(line) for line in (target / "memory" / "hypotheses.jsonl").read_text().splitlines()]
+            assert [row["lesson"] for row in rows] == [f"target-only-{index}"]
+        assert not (tmp_path / "ambient-memory" / "hypotheses.jsonl").exists()
+
+    def test_concurrent_imports_to_same_target_serialize_dedup_decisions(
+        self, tmp_path, monkeypatch,
+    ):
+        target = _make_workspace(tmp_path / "dst")
+        src = _make_workspace(tmp_path / "src")
+        _write_jsonl(
+            src / "memory" / "standing_rules.jsonl",
+            [{"rule_id": "r1", "rule": "single imported rule", "domain": "ops"}],
+        )
+        pack_path = _export_and_seal(src, tmp_path / "pack")
+
+        start = threading.Barrier(2)
+        counter_lock = threading.Lock()
+        active = 0
+        max_active = 0
+        original = pack_module._import_rules_as_hypotheses
+
+        def observed_import(*args, **kwargs):
+            nonlocal active, max_active
+            with counter_lock:
+                active += 1
+                max_active = max(max_active, active)
+            try:
+                time.sleep(0.05)
+                return original(*args, **kwargs)
+            finally:
+                with counter_lock:
+                    active -= 1
+
+        def run(label):
+            start.wait(timeout=5)
+            return import_pack(pack_path, label=label, target=target)
+
+        monkeypatch.setattr(pack_module, "_import_rules_as_hypotheses", observed_import)
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            reports = [pool.submit(run, f"label-{index}") for index in range(2)]
+            reports = [future.result(timeout=10) for future in reports]
+
+        assert max_active == 1
+        rows = (target / "memory" / "hypotheses.jsonl").read_text().splitlines()
+        assert len(rows) == 1
+        outcomes = sorted(
+            report["rules_demoted_to_hypotheses"][0]["outcome"] for report in reports
+        )
+        assert outcomes == ["already_imported", "demoted_to_hypothesis"]
+
     def test_refuses_unsealed_pack_by_default(self, tmp_path, target_ws):
         src_ws = _make_workspace(tmp_path / "src")
         report = export_pack(name="p", label="src", workspace=src_ws, out_dir=tmp_path / "out", denylist=[])

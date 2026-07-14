@@ -28,7 +28,7 @@ import local_models as lm
 from verification_agent import VerificationAgent
 
 _FIXTURES = Path(__file__).parent / "fixtures" / "validation_cases.json"
-_MODEL = os.environ.get("MARO_VALIDATOR_EVAL_MODEL", "mlx-community/VibeThinker-3B-8bit")
+_MODEL = os.environ.get("MARO_VALIDATOR_EVAL_MODEL", "mlx-community/VibeThinker-3B-4bit")
 _ENDPOINT = os.environ.get("LOCAL_VALIDATOR_ENDPOINT", "http://127.0.0.1:8088/v1")
 # A small specialist won't be perfect; require clear majority-correct discrimination.
 _MIN_ACCURACY = float(os.environ.get("MARO_VALIDATOR_EVAL_MIN_ACC", "0.75"))

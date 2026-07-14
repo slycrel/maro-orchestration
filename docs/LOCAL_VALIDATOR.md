@@ -51,7 +51,7 @@ itself at run time (see **Lifecycle** below). No OS service.
 
 ```bash
 scripts/local-validator.sh setup                       # uv venv + mlx-lm (one-time)
-scripts/local-validator.sh pull mlx-community/VibeThinker-3B-8bit   # download the model
+scripts/local-validator.sh pull mlx-community/VibeThinker-3B-4bit   # download the model
 # no manual `start` needed — the loop spins it up on demand.
 # `start`/`stop`/`status` exist for dev (keep it warm across back-to-back runs).
 ```
@@ -60,7 +60,8 @@ scripts/local-validator.sh pull mlx-community/VibeThinker-3B-8bit   # download t
 
 ```bash
 ollama pull <model>        # e.g. a small reasoning/coder model
-# ollama is its own daemon and exposes /v1; orchestration does NOT manage it.
+# An external Ollama daemon is reused; when none is reachable and autostart is
+# enabled, Maro can launch/reap `ollama serve` for the run.
 ```
 
 ## Lifecycle (orchestration-managed, not an OS service)
@@ -78,7 +79,8 @@ server during nested/recovery calls, is left running.
 `ensure_validator_running()` does the work: it **reuses** any server already
 serving a configured model (ours, or one started with `local-validator.sh` —
 never duplicated), else **spins up** `mlx_lm.server` as a managed child and waits
-until ready. Only the **mlx** runtime is managed (Ollama runs its own daemon).
+until ready. Both **mlx** and **ollama** can be managed; an already-running
+external server is reused and never reaped by Maro.
 Opt out with `validate.autostart: false`.
 
 **Idle reaper (backstop).** For validations that happen outside a managed run,
@@ -92,7 +94,7 @@ only applies to ad-hoc/lazy use.
 validate:
   # 0..n local models, priority order. Empty/unset = paid validation (default).
   local_models:
-    - mlx-community/VibeThinker-3B-8bit
+    - mlx-community/VibeThinker-3B-4bit
   runtime: auto                 # auto | mlx | ollama
   endpoint: ""                  # override; else derived from runtime
   min_certainty: 0.6            # below this, local verdict is UNDECIDED → escalate
@@ -253,20 +255,41 @@ and the model's training signal matters more than its size.
 
 | Model | Backend | Footprint | Role fit |
 |-------|---------|-----------|----------|
-| `mlx-community/VibeThinker-3B-8bit` | MLX | ~3.4 GB | **Reference.** Verifiable-reasoning specialist (code/math). |
-| `mlx-community/VibeThinker-3B-4bit` | MLX | ~1.9 GB | Same model, smaller/faster, slightly lower fidelity. |
+| `mlx-community/VibeThinker-3B-4bit` | MLX | ~1.8 GB | **Apple Silicon reference.** Best measured size/latency/quality trade on the M1 Max. |
+| `mlx-community/VibeThinker-3B-8bit` | MLX | ~3.4 GB | Same specialist at higher precision; measured slower here with no gain on the bounded eval. |
 | `mlx-community/VibeThinker-1.5B-mlx-4bit` | MLX | ~1.0 GB | For RAM-constrained boxes; weaker judge. |
 | a Qwen2.5-Coder / reasoning model via Ollama | Ollama | varies | Linux prod box; pick a coder/reasoning tune, not a chat model. |
+
+### M1 Max measurement (2026-07-13)
+
+The earlier negative ROI data in this document came from a **2014 Mac mini
+running Ubuntu**, not this machine. A fresh measurement on the 10-core,
+64 GB M1 Max used Maro's real `LocalValidatorAdapter` + `VerificationAgent`
+protocol, not a raw chat prompt:
+
+| Candidate | Peak/model memory | Accuracy | Exact-protocol latency | Judgment |
+|---|---:|---:|---:|---|
+| VibeThinker-3B-4bit (MLX) | 1.83 GB | 14/14 across the canonical 8-case eval + 6 path/constraint cases | 8.2s average on the six-case run (4.8–13.4s) | **Use as local validator** |
+| VibeThinker-3B-8bit (MLX) | 3.37 GB | 6/6 path/constraint cases | 16.5s average (6.5–30.5s) | No measured benefit; trips the 15s breaker |
+| Qwopus3.5-27B Q4_K_M (Ollama) | 17 GB model | 3/4 exact-protocol cases; the wrong-path case degraded to `verify skipped (error)` | 21.4s average; ~23s cold load | Reject for validation |
+
+The 4-bit result is strong but bounded: fourteen labeled examples prove the
+model is worth enabling behind the existing certainty, deterministic-provenance,
+and latency gates. They do **not** prove a 3B model should replace the main
+planner/executor. Keep local use narrow to first-pass validation; let hard or
+uncertain work escalate. The M1's three existing Ollama models occupy ~42 GB
+on disk but are not configured in Maro and did not beat the 1.8 GB specialist
+for this job.
 
 ## Hardware — can a "generally modern machine" run this?
 
 Yes, for the 3B reference model on any reasonably current machine:
 
-- **RAM**: 8-bit 3B needs ~3.4 GB resident (4-bit ~1.9 GB). 16 GB total RAM is
-  comfortable; 8 GB works with the 4-bit quant.
-- **Apple Silicon (MLX)**: any M-series. Measured ~90 tok/s generation and
-  ~5–11 s per validation on an M1 (a full `<think>` + verdict). Free, but
-  slower than a Haiku call — the win is **token cost, not latency**.
+- **RAM**: the 4-bit reference peaked at 1.83 GB on the M1 Max; 16 GB total RAM
+  is comfortable and 8 GB is plausible for validator-only use.
+- **Apple Silicon (MLX)**: any M-series. On this M1 Max the 4-bit reference
+  averaged 8.2s per exact-protocol validation, competitive with the recorded
+  ~6.5s paid path while avoiding API cost and egress.
 - **Linux/x86 (Ollama)**: runs on CPU; a small GPU helps. Use a quantized
   build to keep memory and latency reasonable.
 - The model runs as a **separate process**, so it doesn't load any heavy deps
@@ -281,10 +304,10 @@ creates an isolated venv (Python 3.12) so it's independent of the system Python.
 # 1. one-time: create the runtime venv and install mlx-lm
 scripts/local-validator.sh setup
 
-# 2. download + warm the model (~3.4 GB on first run, cached afterward)
-scripts/local-validator.sh pull mlx-community/VibeThinker-3B-8bit
+# 2. download + warm the model (~1.8 GB on first run, cached afterward)
+scripts/local-validator.sh pull mlx-community/VibeThinker-3B-4bit
 
-# 3. start the server (defaults to VibeThinker-3B-8bit on :8088)
+# 3. start the server (defaults to VibeThinker-3B-4bit on :8088)
 scripts/local-validator.sh start
 
 # 4. confirm it's loaded
@@ -296,7 +319,7 @@ Then enable it in `~/.maro/workspace/config.yml`:
 
 ```yaml
 validate:
-  local_models: ["mlx-community/VibeThinker-3B-8bit"]
+  local_models: ["mlx-community/VibeThinker-3B-4bit"]
   runtime: mlx
 ```
 

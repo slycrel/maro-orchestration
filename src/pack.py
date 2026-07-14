@@ -58,7 +58,6 @@ Physical form: a single ``<name>.maropack.tar.gz`` containing:
 from __future__ import annotations
 
 import argparse
-import contextlib
 import hashlib
 import io
 import json
@@ -744,50 +743,48 @@ def _import_skill_records(content: str, *, pack_name: str, label: str, pack_tag:
     return results
 
 
-@contextlib.contextmanager
-def _memory_dir_override(ws: Path):
-    """Route trust-bearing writers (knowledge_lens/knowledge_web/skills — all
-    of which resolve their paths via the global orch_items.memory_dir(), not
-    a parameter) at ``ws``, so ``import_pack(..., target=ws)`` actually
-    writes hypotheses/lessons/skill records into ``ws`` instead of silently
-    falling back to this process's active workspace. No-op if ``ws`` is
-    already the active workspace."""
-    target_memory = str((ws / "memory").resolve())
-    prev = os.environ.get("MARO_MEMORY_DIR")
-    if prev is not None and str(Path(prev).expanduser().resolve()) == target_memory:
-        yield
-        return
-    os.environ["MARO_MEMORY_DIR"] = target_memory
-    try:
-        yield
-    finally:
-        if prev is None:
-            os.environ.pop("MARO_MEMORY_DIR", None)
-        else:
-            os.environ["MARO_MEMORY_DIR"] = prev
-
-
 def _quarantine_dir(ws: Path, label: str) -> Path:
     return ws / "imports" / label
 
 
 def _append_conflicts_note(ws: Path, label: str, kind: str, name: str, now: str) -> None:
+    from file_lock import locked_rmw
+
     path = _quarantine_dir(ws, label) / "CONFLICTS.md"
     line = f"- `{kind}/{name}` — local version differs; import kept in quarantine, local wins ({now})"
-    if path.exists():
-        if line in path.read_text(encoding="utf-8"):
-            return
-        with open(path, "a", encoding="utf-8") as f:
-            f.write(line + "\n")
-    else:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        header = (
-            f"# Conflicts — {label}\n\n"
-            "Same-name, different-content collisions between this pack's skills/"
-            "personas and local ones. Local always wins; these stay in quarantine "
-            "— adopt is editorial, not automatic.\n\n"
-        )
-        path.write_text(header + line + "\n", encoding="utf-8")
+    header = (
+        f"# Conflicts — {label}\n\n"
+        "Same-name, different-content collisions between this pack's skills/"
+        "personas and local ones. Local always wins; these stay in quarantine "
+        "— adopt is editorial, not automatic.\n\n"
+    )
+
+    def add_once(old: str) -> str:
+        if line in old.splitlines():
+            return old
+        return (old or header) + line + "\n"
+
+    locked_rmw(path, add_once)
+
+
+def _write_quarantine(path: Path, content: str) -> bool:
+    """Atomically write quarantined content if it differs.
+
+    Returns True when the requested content was already present.  The caller's
+    per-target import lock serializes policy decisions; the path lock also
+    protects this file from other Maro writers and makes the replacement
+    crash-safe.
+    """
+    from file_lock import atomic_write, locked_write
+
+    with locked_write(path):
+        try:
+            if path.read_text(encoding="utf-8") == content:
+                return True
+        except FileNotFoundError:
+            pass
+        atomic_write(path, content)
+    return False
 
 
 def _import_authored_md(ws: Path, kind: str, relpath: str, content: str, *,
@@ -802,28 +799,33 @@ def _import_authored_md(ws: Path, kind: str, relpath: str, content: str, *,
         if live_path.read_text(encoding="utf-8") == content:
             return {"name": name, "outcome": "skipped_identical"}
         if not dry_run:
-            quarantine_path.parent.mkdir(parents=True, exist_ok=True)
-            quarantine_path.write_text(content, encoding="utf-8")
+            _write_quarantine(quarantine_path, content)
             _append_conflicts_note(ws, label, kind, name, now)
         return {"name": name, "outcome": "conflict_quarantined"}
 
-    if quarantine_path.exists() and quarantine_path.read_text(encoding="utf-8") == content:
-        return {"name": name, "outcome": "already_quarantined"}
-
-    if not dry_run:
-        quarantine_path.parent.mkdir(parents=True, exist_ok=True)
-        quarantine_path.write_text(content, encoding="utf-8")
-    return {"name": name, "outcome": "quarantined"}
+    if dry_run:
+        already_present = (
+            quarantine_path.exists()
+            and quarantine_path.read_text(encoding="utf-8") == content
+        )
+    else:
+        already_present = _write_quarantine(quarantine_path, content)
+    return {
+        "name": name,
+        "outcome": "already_quarantined" if already_present else "quarantined",
+    }
 
 
 def _quarantine_single(ws: Path, label: str, relpath: str, content: str, dry_run: bool) -> Dict[str, Any]:
     path = _quarantine_dir(ws, label) / relpath
-    if path.exists() and path.read_text(encoding="utf-8") == content:
-        return {"path": relpath, "outcome": "already_quarantined"}
-    if not dry_run:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(content, encoding="utf-8")
-    return {"path": relpath, "outcome": "quarantined"}
+    if dry_run:
+        already_present = path.exists() and path.read_text(encoding="utf-8") == content
+    else:
+        already_present = _write_quarantine(path, content)
+    return {
+        "path": relpath,
+        "outcome": "already_quarantined" if already_present else "quarantined",
+    }
 
 
 def import_pack(
@@ -916,7 +918,15 @@ def import_pack(
         "quarantined": [], "quarantined_unknown": [],
     }
 
-    with _memory_dir_override(ws):
+    from file_lock import locked_write
+    from orch_items import memory_dir_context
+
+    # The scoped context prevents cross-target routing leaks.  The per-target
+    # gate makes each import's load/check/write decisions one transaction from
+    # the importer's perspective; individual stores retain their own locks for
+    # coordination with non-import writers.
+    import_gate = ws / "memory" / ".pack-import"
+    with locked_write(import_gate), memory_dir_context(ws / "memory"):
         for artifact in manifest.get("artifacts", []):
             cls = artifact.get("class", "")
             relpath = _artifact_relpath(artifact)
@@ -946,11 +956,11 @@ def import_pack(
                 report["quarantined_unknown"].append({
                     "class": cls, **_quarantine_single(ws, label, f"unknown/{relpath}", content, dry_run)})
 
-    if not dry_run:
-        from file_lock import locked_append
-        audit = ws / "memory" / "imports.jsonl"
-        audit.parent.mkdir(parents=True, exist_ok=True)
-        locked_append(audit, json.dumps({**report, "action": "pack_import"}))
+        if not dry_run:
+            from file_lock import locked_append
+            audit = ws / "memory" / "imports.jsonl"
+            audit.parent.mkdir(parents=True, exist_ok=True)
+            locked_append(audit, json.dumps({**report, "action": "pack_import"}))
 
     return report
 

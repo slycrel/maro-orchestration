@@ -21,7 +21,7 @@
 #   scripts/local-validator.sh status
 #   scripts/local-validator.sh stop
 #
-# Defaults: MODEL=mlx-community/VibeThinker-3B-8bit  PORT=8088
+# Defaults: MODEL=mlx-community/VibeThinker-3B-4bit  PORT=8088
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -30,7 +30,7 @@ PY="$VENV/bin/python"
 PIDFILE="${TMPDIR:-/tmp}/maro-local-validator.pid"
 LOGFILE="${TMPDIR:-/tmp}/maro-local-validator.log"
 
-MODEL="${2:-${LOCAL_VALIDATOR_MODEL:-mlx-community/VibeThinker-3B-8bit}}"
+MODEL="${2:-${LOCAL_VALIDATOR_MODEL:-mlx-community/VibeThinker-3B-4bit}}"
 PORT="${3:-${LOCAL_VALIDATOR_PORT:-8088}}"
 
 need_uv() { command -v uv >/dev/null 2>&1 || { echo "error: 'uv' not found — install from https://docs.astral.sh/uv/"; exit 1; }; }

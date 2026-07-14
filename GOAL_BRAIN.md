@@ -2424,3 +2424,32 @@ Dormant (deliberately parked, not dropped):
   direction-not-design items remain). No new chunk executed — manufacturing
   work here would violate "don't add for its own sake." Arc stays CLOSED;
   working tree confirmed clean, HEAD == origin/main (`06680e5`).
+
+- **2026-07-13 (M1 continuation: portable-import concurrency closed + local
+  validator target corrected)** — The R5 portable-import residual was genuinely
+  unblocked despite the prior queue summary: removed `_memory_dir_override()`'s
+  process-global `MARO_MEMORY_DIR` mutation; `orch_items.memory_dir_context()`
+  now routes trust-bearing writers with a ContextVar, and a per-target import
+  gate serializes load/check/write decisions. Conflict notes are locked RMW;
+  quarantine files are lock-guarded atomic replacements. Deterministic tests
+  prove two simultaneous different-target imports cannot redirect each other
+  and same-target imports cannot overlap/double-write. R5 item closed.
+  Jeremy's bonus ask clarified the local-model objective: the earlier negative
+  ROI experiment was on a **2014 Mac mini running Ubuntu**; on this 10-core,
+  64 GB M1 Max the target is **the smallest model that preserves the useful
+  validation benefit**, not maximum local capability. Live zero-API-spend bake-
+  off through the real adapter/protocol: VibeThinker-3B-4bit (MLX) peaked at
+  1.83 GB, scored 14/14 across the canonical 8-case eval plus 6 path/constraint
+  cases, and averaged 8.2s on the six-case run; 8-bit scored 6/6 but averaged
+  16.5s/3.37 GB and crossed the latency breaker; installed Qwopus3.5-27B Q4
+  averaged 21.4s and degraded the dangerous wrong-path case to
+  `verify skipped (error)`. **Decision:** 4-bit is the Apple Silicon reference
+  and is worth using as the gated first-pass validator; it does not replace the
+  planner/executor, and hard/uncertain work still escalates. Default script,
+  canonical eval, and living docs updated. Cross-model `/adversarial-review`
+  ran via Claude CLI: Minimalist completed with two accepted findings (stale
+  queue truth; discarded under-lock quarantine outcome), both fixed; Skeptic
+  and Architect produced no output/error in 10 minutes and were terminated,
+  explicitly recorded as failed reviewers. Full direct suite green at 100%.
+  Tangential finding: `scripts/test-safe.sh` hard-depends on Linux `taskset`
+  and cannot start pytest on macOS; recorded in BACKLOG, raw venv suite used.
