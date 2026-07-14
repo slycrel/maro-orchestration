@@ -576,8 +576,8 @@ def _closure_verdict_pass(goal_str: str, result, *, dry_run: bool = False):
         return _verdict
     _judged = getattr(_verdict, "judged", True)
     try:
-        from memory import annotate_outcome_verdict
-        annotate_outcome_verdict(
+        from memory import stamp_outcome_verdict
+        stamp_outcome_verdict(
             result.loop_id or "",
             goal_achieved=(bool(_verdict.complete) if _judged else None),
             goal_verdict_source=("closure" if _judged else "closure_unverifiable"),

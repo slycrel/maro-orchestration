@@ -22,7 +22,7 @@ from collections import Counter
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, date, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from llm_parse import extract_json, safe_list, content_or_empty
 
@@ -73,6 +73,26 @@ class Outcome:
     # goal wording after the fact.
     measurement_class: str = ""  # "organic" | "smoke" | "control" | "benchmark"
     handle_id: str = ""          # durable run-level dedup key (restarts share it)
+
+
+@dataclass(frozen=True)
+class OutcomeVerdictStampResult:
+    """Atomic outcome-verdict persistence result.
+
+    ``missing`` is a valid absence (there is no ledger evidence to protect),
+    while ``write_failed`` means a present/possibly-present row could not be
+    made honest.  Keeping those states distinct prevents callers from either
+    aborting useful recovery on absence or swallowing a persistence failure.
+    """
+
+    status: Literal["updated", "missing", "write_failed"]
+    attempts: int = 0
+    error: str = ""
+
+    def __bool__(self) -> bool:
+        """Forbid the ambiguous boolean idiom this result replaced."""
+        raise TypeError(
+            "OutcomeVerdictStampResult has no truth value; inspect .status")
 
 
 @dataclass
@@ -382,7 +402,7 @@ def record_outcome(
         goal_achieved: Tri-state goal verdict (done ≠ achieved): True/False when
                        a verdict exists at record time, None = unjudged (key is
                        omitted from the row). Agenda-lane verdicts land after
-                       closure via annotate_outcome_verdict(loop_id, ...).
+                       closure via stamp_outcome_verdict(loop_id, ...).
         goal_verdict_source: Where the verdict came from ("closure",
                        "closure_unverifiable", "provenance", "now_self_verdict").
         loop_id: Loop id for this run, when known — the join key that lets the
@@ -479,14 +499,15 @@ def _append_daily_log(outcome: Outcome):
             f.write(entry)
 
 
-def annotate_outcome_verdict(
+def stamp_outcome_verdict(
     loop_id: str,
     *,
     goal_achieved: Optional[bool],
     goal_verdict_source: str,
     goal_verdict_confidence: Optional[float] = None,
-) -> bool:
-    """Stamp a goal verdict onto the already-written outcomes row for loop_id.
+    max_attempts: int = 1,
+) -> OutcomeVerdictStampResult:
+    """Atomically stamp a verdict, distinguishing absence from write failure.
 
     The agenda lane records its outcome at loop finalization, but the closure
     verdict is judged afterwards (handle.py) — so the verdict has to land on
@@ -498,61 +519,81 @@ def annotate_outcome_verdict(
       an unverifiable closure must never erase a provenance-guard False.
     - goal_verdict_source / goal_verdict_confidence are always updated.
 
-    Rewrites outcomes.jsonl under the file lock (locked_rmw — safe against
-    concurrent appends). Returns True when a row was updated.
+    Rewrites outcomes.jsonl with a locked read + atomic publish, safe against
+    concurrent appends. The loop-id lookup and merge occur inside the same
+    critical section. ``max_attempts`` bounds idempotent retries after an
+    ``OSError``; a missing row is returned immediately and is never retried.
     """
     if not loop_id:
-        return False
+        return OutcomeVerdictStampResult("missing")
     path = _outcomes_path()
-    if not path.exists():
-        return False
 
-    updated = {"hit": False}
+    attempts = max(1, int(max_attempts))
+    from file_lock import atomic_write, locked_write
+    for attempt in range(1, attempts + 1):
+        updated = {"hit": False}
 
-    def _stamp(old: str) -> str:
-        lines = old.splitlines()
-        # Newest matching row wins — a restarted goal appends a fresh row per loop.
-        target_idx = None
-        for i in range(len(lines) - 1, -1, -1):
-            line = lines[i].strip()
-            if not line:
+        def _stamp(old: str) -> str:
+            lines = old.splitlines()
+            # Newest matching row wins — a restarted goal appends a fresh row per loop.
+            target_idx = None
+            for i in range(len(lines) - 1, -1, -1):
+                line = lines[i].strip()
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(row, dict) and row.get("loop_id") == loop_id:
+                    target_idx = i
+                    break
+            if target_idx is None:
+                return old
+            row = json.loads(lines[target_idx])
+            if goal_achieved is not None:
+                row["goal_achieved"] = bool(goal_achieved)
+            row["goal_verdict_source"] = goal_verdict_source
+            if goal_verdict_confidence is not None:
+                row["goal_verdict_confidence"] = float(goal_verdict_confidence)
+            lines[target_idx] = json.dumps(row)
+            updated["hit"] = True
+            return "\n".join(lines) + ("\n" if lines else "")
+
+        try:
+            # Read, locate, and publish under the same append-compatible lock.
+            # Unlike locked_rmw, this does not create/rewrite the ledger when
+            # the file or loop row is absent.
+            with locked_write(path):
+                try:
+                    old = path.read_text(encoding="utf-8")
+                except FileNotFoundError:
+                    return OutcomeVerdictStampResult(
+                        "missing", attempts=attempt)
+                new = _stamp(old)
+                if not updated["hit"]:
+                    log.debug(
+                        "stamp_outcome_verdict: no outcomes row with loop_id=%s",
+                        loop_id,
+                    )
+                    return OutcomeVerdictStampResult(
+                        "missing", attempts=attempt)
+                atomic_write(path, new)
+        except OSError as exc:
+            if attempt < attempts:
                 continue
-            try:
-                row = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(row, dict) and row.get("loop_id") == loop_id:
-                target_idx = i
-                break
-        if target_idx is None:
-            return old
-        row = json.loads(lines[target_idx])
-        if goal_achieved is not None:
-            row["goal_achieved"] = bool(goal_achieved)
-        row["goal_verdict_source"] = goal_verdict_source
-        if goal_verdict_confidence is not None:
-            row["goal_verdict_confidence"] = float(goal_verdict_confidence)
-        lines[target_idx] = json.dumps(row)
-        updated["hit"] = True
-        return "\n".join(lines) + ("\n" if lines else "")
+            log.warning(
+                "stamp_outcome_verdict: rewrite failed for loop %s after %d attempt(s): %s",
+                loop_id, attempt, exc,
+            )
+            return OutcomeVerdictStampResult(
+                "write_failed", attempts=attempt, error=str(exc))
+        return OutcomeVerdictStampResult("updated", attempts=attempt)
 
-    from file_lock import locked_rmw
-    try:
-        locked_rmw(path, _stamp)
-    except OSError as exc:
-        log.warning("annotate_outcome_verdict: rewrite failed for loop %s: %s", loop_id, exc)
-        return False
-    if not updated["hit"]:
-        log.debug("annotate_outcome_verdict: no outcomes row with loop_id=%s", loop_id)
-    return updated["hit"]
-
-
-def load_outcome_by_loop_id(
-    loop_id: str, *, strict: bool = False,
-) -> Optional[Outcome]:
+def load_outcome_by_loop_id(loop_id: str) -> Optional[Outcome]:
     """Load the NEWEST outcomes row matching loop_id, rehydrated as an Outcome.
 
-    Companion to annotate_outcome_verdict: the deferred-learning path
+    Companion to stamp_outcome_verdict: the deferred-learning path
     (data-r2-01) reads the row back post-closure to get the goal/summary
     context AND the verdict that was stamped onto it. Absent tri-state keys
     rehydrate to their dataclass defaults (goal_achieved=None = unjudged).
@@ -567,8 +608,6 @@ def load_outcome_by_loop_id(
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
     except OSError:
-        if strict:
-            raise
         return None
     for line in reversed(lines):
         line = line.strip()
@@ -592,8 +631,8 @@ def annotate_outcome_lessons(loop_id: str, lessons: List[str]) -> bool:
     The agenda lane can defer lesson extraction past closure judging
     (data-r2-01) — the row is written at finalization with lessons=[], and
     the verdict-aware extraction fills them in here. Completed-zero is also
-    stamped explicitly so a later finalize does not repay extraction. Same
-    newest-row-wins + locked_rmw semantics as annotate_outcome_verdict.
+    stamped explicitly so a later finalize does not repay extraction. Uses
+    the same newest-row-wins lookup rule as stamp_outcome_verdict.
     """
     if not loop_id:
         return False

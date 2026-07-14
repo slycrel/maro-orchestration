@@ -21,6 +21,11 @@ now distinguishes an absent row from a failed update, retries the idempotent
 write once, and fails closed before restart. Pending deferred rows are durable
 quarantine rather than success evidence; failed-stamp runs retain loop joins.
 
+Current pass (2026-07-14, twenty-second): verdict persistence now has one
+atomic typed result (`updated` / `missing` / `write_failed`), bounded retry at
+the ledger boundary, and no legacy boolean API. All writers use the shared
+seam; owner-facing delivery behavior on failures remains the open decision.
+
 ---
 
 ## Actionable Stack
@@ -38,10 +43,18 @@ the delivered-attempt path can ignore a false return and then finalize deferred
 learning, changing the row from `deferred` to `completed` while it remains
 unjudged. That defeats the pending-verdict quarantine for that separate path.
 
-- [ ] Design one shared verdict-persistence helper/result type for present,
+- [x] Design one shared verdict-persistence helper/result type for present,
   absent, updated, and write-failed outcomes, then apply it to all verdict
   writers without turning a legitimately absent optional memory row into a
-  user-goal failure.
+  user-goal failure. **Shipped 2026-07-14:** `OutcomeVerdictStampResult` and
+  `stamp_outcome_verdict()` perform lookup + atomic publish under one
+  append-compatible lock, bound idempotent retry, leave absent ledgers/rows
+  untouched, and replaced the boolean compatibility API across every caller.
+  Boolean coercion is forbidden so future callers cannot silently recreate the
+  old ambiguity. Three core Claude reviewers plus a Failure Operator bonus ran;
+  the initial CONTESTED verdict's accepted findings were fixed and a focused
+  Architect follow-up returned APPROVED. Evidence:
+  `docs/history/2026-07-14-verdict-persistence-contract.md`.
 - [ ] Define delivery semantics when the work is complete but its audit stamp
   cannot persist: user-visible warning vs process demotion, whether learning is
   skipped, and how repair converges. Cover false returns, exceptions, metadata

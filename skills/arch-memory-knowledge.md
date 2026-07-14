@@ -49,8 +49,9 @@ Loop completes
       (confidence 0.5-0.7 depending on k_samples)
     → Captain's log: LESSON_RECORDED event
 Closure judges the goal (handle.py, AFTER finalization)
-  → annotate_outcome_verdict(loop_id, goal_achieved, goal_verdict_source)
+  → stamp_outcome_verdict(loop_id, goal_achieved, goal_verdict_source)
     → stamps the verdict tri-state onto the already-written outcomes row
+    → returns updated / missing / write_failed (never use as a boolean)
       (SF-2, done ≠ achieved: True/False when judged, ABSENT key = unjudged;
        NOW lane records its self-verdict directly at record_outcome time)
 ```

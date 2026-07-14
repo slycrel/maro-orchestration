@@ -566,7 +566,7 @@ def _finalize_loop(
             recovery_steps=recovery_steps,
             # Verdict tri-state (SF-2): closure judging runs AFTER finalization
             # (handle.py), so the verdict is unknown here — the row is written
-            # unjudged with its loop_id, and annotate_outcome_verdict() stamps
+            # unjudged with its loop_id, and stamp_outcome_verdict() stamps
             # the verdict onto it once closure has judged.
             loop_id=loop_id,
             # data-r2-01: when the caller will run closure, a "done" run's
@@ -752,7 +752,7 @@ def finalize_deferred_learning(
     (data-r2-01: lessons + skills must not be extracted verdict-blind).
 
     Call AFTER the closure/provenance verdict has been stamped onto the
-    outcomes row (annotate_outcome_verdict). Two halves:
+    outcomes row (stamp_outcome_verdict). Two halves:
 
     - Lessons: extract_deferred_lessons() per loop — reads each row back,
       verdict included, and extracts failure-flavored lessons for a

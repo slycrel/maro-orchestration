@@ -479,7 +479,7 @@ bundle install*), and:
 
 Two asks — **both SHIPPED 2026-07-10**:
 - **(a) verdict parity:** `cli._closure_verdict_pass` runs the same
-  closure core (`verify_goal_completion` → `annotate_outcome_verdict` →
+  closure core (`verify_goal_completion` → `stamp_outcome_verdict` →
   demote done→incomplete on judged contradiction at conf ≥ 0.7, mirroring
   handle.py's status-honesty gate) on both `maro run` and `maro resume`.
   Honesty-only — no closure-restart machinery. When closure can't run (no

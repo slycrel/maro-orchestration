@@ -3,7 +3,7 @@
 Write side: outcomes/lessons rows carry the goal-verdict tri-state
 (goal_achieved True/False/ABSENT + goal_verdict_source), and the agenda
 lane's post-closure annotation stamps the verdict onto the already-written
-row via annotate_outcome_verdict(loop_id).
+row via stamp_outcome_verdict(loop_id).
 
 Read side: learning consumers prefer the verdict when present and treat
 absence as unjudged (weaker signal — never counted as success, never as
@@ -22,9 +22,10 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from memory import (
     Outcome,
+    OutcomeVerdictStampResult,
     record_outcome,
     load_outcomes,
-    annotate_outcome_verdict,
+    stamp_outcome_verdict,
     reflect_and_record,
     _memory_dir,
     _outcomes_path,
@@ -156,10 +157,10 @@ def test_annotate_stamps_newest_matching_row(monkeypatch, tmp_path):
     record_outcome("other goal", "done", "s", loop_id="lp-other")
     record_outcome("goal try 1", "done", "s", loop_id="lp-2")
     record_outcome("goal try 2 (restart)", "done", "s", loop_id="lp-2")
-    assert annotate_outcome_verdict(
+    assert stamp_outcome_verdict(
         "lp-2", goal_achieved=False, goal_verdict_source="closure",
         goal_verdict_confidence=0.9,
-    ) is True
+    ).status == "updated"
     rows = _raw_rows()
     # Newest lp-2 row got the verdict; the older lp-2 row and the other
     # loop's row are untouched.
@@ -173,10 +174,10 @@ def test_annotate_stamps_newest_matching_row(monkeypatch, tmp_path):
 def test_annotate_unverifiable_leaves_goal_achieved_absent(monkeypatch, tmp_path):
     _setup(monkeypatch, tmp_path)
     record_outcome("goal", "done", "s", loop_id="lp-3")
-    assert annotate_outcome_verdict(
+    assert stamp_outcome_verdict(
         "lp-3", goal_achieved=None, goal_verdict_source="closure_unverifiable",
         goal_verdict_confidence=0.4,
-    ) is True
+    ).status == "updated"
     row = _raw_rows()[-1]
     # Unjudged stays absent — closure_unverifiable is not a failure verdict.
     assert "goal_achieved" not in row
@@ -187,9 +188,9 @@ def test_annotate_none_preserves_existing_false(monkeypatch, tmp_path):
     _setup(monkeypatch, tmp_path)
     record_outcome("goal", "done", "s", loop_id="lp-4")
     # Provenance guard stamps a deterministic False ...
-    annotate_outcome_verdict("lp-4", goal_achieved=False, goal_verdict_source="provenance")
+    stamp_outcome_verdict("lp-4", goal_achieved=False, goal_verdict_source="provenance")
     # ... then an unverifiable closure verdict must not erase it.
-    annotate_outcome_verdict("lp-4", goal_achieved=None, goal_verdict_source="closure_unverifiable")
+    stamp_outcome_verdict("lp-4", goal_achieved=None, goal_verdict_source="closure_unverifiable")
     row = _raw_rows()[-1]
     assert row["goal_achieved"] is False
     assert row["goal_verdict_source"] == "closure_unverifiable"
@@ -199,18 +200,86 @@ def test_annotate_unknown_loop_returns_false(monkeypatch, tmp_path):
     _setup(monkeypatch, tmp_path)
     record_outcome("goal", "done", "s", loop_id="lp-5")
     before = _raw_rows()
-    assert annotate_outcome_verdict(
+    assert stamp_outcome_verdict(
         "lp-nope", goal_achieved=True, goal_verdict_source="closure",
-    ) is False
+    ).status == "missing"
     assert _raw_rows() == before
 
 
 def test_annotate_empty_loop_id_is_noop(monkeypatch, tmp_path):
     _setup(monkeypatch, tmp_path)
     record_outcome("goal", "done", "s")
-    assert annotate_outcome_verdict(
+    assert stamp_outcome_verdict(
         "", goal_achieved=True, goal_verdict_source="closure",
-    ) is False
+    ).status == "missing"
+
+
+def test_typed_stamp_distinguishes_updated_and_missing(monkeypatch, tmp_path):
+    _setup(monkeypatch, tmp_path)
+    record_outcome("goal", "done", "s", loop_id="lp-typed")
+
+    updated = stamp_outcome_verdict(
+        "lp-typed", goal_achieved=False, goal_verdict_source="closure")
+    missing = stamp_outcome_verdict(
+        "lp-absent", goal_achieved=False, goal_verdict_source="closure")
+
+    assert updated == OutcomeVerdictStampResult("updated", attempts=1)
+    assert missing == OutcomeVerdictStampResult("missing", attempts=1)
+
+
+def test_typed_stamp_forbids_ambiguous_boolean_coercion():
+    with pytest.raises(TypeError, match="inspect .status"):
+        bool(OutcomeVerdictStampResult("write_failed", attempts=1))
+
+
+def test_typed_stamp_missing_file_does_not_create_ledger(monkeypatch, tmp_path):
+    _setup(monkeypatch, tmp_path)
+    result = stamp_outcome_verdict(
+        "lp-absent", goal_achieved=False, goal_verdict_source="closure")
+
+    assert result == OutcomeVerdictStampResult("missing", attempts=1)
+    assert not _outcomes_path().exists()
+
+
+def test_typed_stamp_retries_oserror_then_converges(monkeypatch, tmp_path):
+    _setup(monkeypatch, tmp_path)
+    record_outcome("goal", "done", "s", loop_id="lp-retry")
+    from file_lock import atomic_write as real_atomic_write
+
+    calls = 0
+
+    def _flaky_atomic_write(path, content, encoding="utf-8"):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise OSError("transient lock failure")
+        return real_atomic_write(path, content, encoding=encoding)
+
+    monkeypatch.setattr("file_lock.atomic_write", _flaky_atomic_write)
+    result = stamp_outcome_verdict(
+        "lp-retry", goal_achieved=False, goal_verdict_source="closure",
+        max_attempts=2,
+    )
+
+    assert result == OutcomeVerdictStampResult("updated", attempts=2)
+    assert calls == 2
+
+
+def test_typed_stamp_reports_bounded_write_failure(monkeypatch, tmp_path):
+    _setup(monkeypatch, tmp_path)
+    record_outcome("goal", "done", "s", loop_id="lp-failed")
+
+    def _failed_atomic_write(path, content, encoding="utf-8"):
+        raise OSError("ledger unavailable")
+
+    monkeypatch.setattr("file_lock.atomic_write", _failed_atomic_write)
+    result = stamp_outcome_verdict(
+        "lp-failed", goal_achieved=False, goal_verdict_source="closure",
+        max_attempts=2,
+    )
+
+    assert result == OutcomeVerdictStampResult(
+        "write_failed", attempts=2, error="ledger unavailable")
 
 
 # ---------------------------------------------------------------------------
@@ -378,7 +447,7 @@ def test_extract_deferred_lessons_failure_flavored_after_false_verdict(monkeypat
     reflect_and_record("ship the report", "done", "s", dry_run=True,
                        loop_id="lp-d1", defer_lessons=True)
     # Closure judges AFTER finalize — stamp a False verdict, then extract.
-    annotate_outcome_verdict("lp-d1", goal_achieved=False, goal_verdict_source="closure")
+    stamp_outcome_verdict("lp-d1", goal_achieved=False, goal_verdict_source="closure")
     n = extract_deferred_lessons("lp-d1", dry_run=True)
     assert n == 1
     row = _raw_rows()[-1]
@@ -399,7 +468,7 @@ def test_extract_deferred_lessons_success_flavored_after_true_verdict(monkeypatc
     from memory import extract_deferred_lessons
     reflect_and_record("ship the report", "done", "s", dry_run=True,
                        loop_id="lp-d2", defer_lessons=True)
-    annotate_outcome_verdict("lp-d2", goal_achieved=True, goal_verdict_source="closure")
+    stamp_outcome_verdict("lp-d2", goal_achieved=True, goal_verdict_source="closure")
     assert extract_deferred_lessons("lp-d2", dry_run=True) == 1
     row = _raw_rows()[-1]
     assert "succeeded" in row["lessons"][0]
@@ -502,7 +571,7 @@ def test_finalize_deferred_learning_skips_skills_on_false_verdict(monkeypatch, t
     monkeypatch.setattr(loop_finalize, "_crystallize_and_synthesize",
                         lambda **kw: calls.append(kw))
     record_outcome("the goal", "done", "s", loop_id="lp-d4")
-    annotate_outcome_verdict("lp-d4", goal_achieved=False, goal_verdict_source="closure")
+    stamp_outcome_verdict("lp-d4", goal_achieved=False, goal_verdict_source="closure")
     loop_finalize.finalize_deferred_learning(_loop_result("lp-d4"))
     # Judged not-achieved: the run's pattern must NOT enter the skill library.
     assert calls == []
@@ -515,7 +584,7 @@ def test_finalize_deferred_learning_crystallizes_on_true_or_unjudged(monkeypatch
     monkeypatch.setattr(loop_finalize, "_crystallize_and_synthesize",
                         lambda **kw: calls.append(kw))
     record_outcome("the goal", "done", "s", loop_id="lp-d5")
-    annotate_outcome_verdict("lp-d5", goal_achieved=True, goal_verdict_source="closure")
+    stamp_outcome_verdict("lp-d5", goal_achieved=True, goal_verdict_source="closure")
     loop_finalize.finalize_deferred_learning(_loop_result("lp-d5"))
     record_outcome("the goal", "done", "s", loop_id="lp-d6")  # unjudged
     loop_finalize.finalize_deferred_learning(_loop_result("lp-d6"))
@@ -529,9 +598,9 @@ def test_finalize_deferred_learning_extracts_for_extra_loop_ids(monkeypatch, tmp
     monkeypatch.setattr(loop_finalize, "_crystallize_and_synthesize", lambda **kw: None)
     # A restarted handle: attempt 1 deferred, superseded; attempt 2 final.
     record_outcome("try 1", "done", "s", lessons=[], loop_id="lp-d7a")
-    annotate_outcome_verdict("lp-d7a", goal_achieved=False, goal_verdict_source="closure")
+    stamp_outcome_verdict("lp-d7a", goal_achieved=False, goal_verdict_source="closure")
     record_outcome("try 2", "done", "s", lessons=[], loop_id="lp-d7b")
-    annotate_outcome_verdict("lp-d7b", goal_achieved=True, goal_verdict_source="closure")
+    stamp_outcome_verdict("lp-d7b", goal_achieved=True, goal_verdict_source="closure")
     loop_finalize.finalize_deferred_learning(
         _loop_result("lp-d7b"), dry_run=True, extra_loop_ids=["lp-d7a"],
     )

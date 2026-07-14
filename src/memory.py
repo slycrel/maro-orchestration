@@ -52,13 +52,13 @@ log = logging.getLogger("maro.memory")
 # Re-exported here for backward compatibility — external code imports from memory.
 # ---------------------------------------------------------------------------
 from memory_ledger import (  # noqa: F401, E402
-    Outcome, Lesson, TaskLedgerEntry, CompressedBatch,
+    Outcome, OutcomeVerdictStampResult, Lesson, TaskLedgerEntry, CompressedBatch,
     _memory_dir, _outcomes_path, _lessons_path, _daily_path,
     _memory_index_path, _step_traces_path, _task_ledger_path,
     _compressed_outcomes_path, _text_similarity,
     append_task_ledger, load_task_ledger,
     record_step_trace, load_step_traces,
-    record_outcome, annotate_outcome_verdict, _append_daily_log,
+    record_outcome, stamp_outcome_verdict, _append_daily_log,
     annotate_outcome_lessons, load_outcome_by_loop_id,
     _INJECTION_PATTERNS, _lesson_looks_adversarial,
     _store_lesson, _rewrite_lessons_file,
@@ -399,7 +399,7 @@ def reflect_and_record(
         goal_achieved: Tri-state goal verdict when already known at reflection
                        time (True/False; None = unjudged → absent on the row).
                        Agenda-lane closure runs after finalization, so those
-                       verdicts land later via annotate_outcome_verdict(loop_id).
+                       verdicts land later via stamp_outcome_verdict(loop_id).
         goal_verdict_source: Provenance of the verdict when known.
         loop_id: This run's loop id — stored on the outcome row so the
                        post-closure verdict annotation can find it.

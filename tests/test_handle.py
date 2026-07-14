@@ -2436,7 +2436,7 @@ class TestPostEscalateClosure:
         with patch("agent_loop.run_agent_loop", side_effect=_fake_run), \
              patch("intent.check_goal_clarity", return_value={"clear": True}), \
              patch("director.verify_goal_completion", side_effect=_fake_verify), \
-             patch("memory.annotate_outcome_verdict") as annotate_verdict, \
+             patch("memory.stamp_outcome_verdict") as stamp_verdict, \
              patch("loop_finalize.finalize_deferred_learning") as deferred_learning, \
              patch("llm.build_adapter", return_value=MagicMock()), \
              self._escalating_gate():
@@ -2457,7 +2457,7 @@ class TestPostEscalateClosure:
         assert escalated_kwargs["handle_id"]
         assert escalated_kwargs["defer_learning"] is True
         assert escalated_kwargs["parent_loop_id"] == "lr-initial"
-        annotate_verdict.assert_any_call(
+        stamp_verdict.assert_any_call(
             "lr-escalated",
             goal_achieved=True,
             goal_verdict_source="closure",
@@ -3271,11 +3271,11 @@ class TestClosureStatusHonesty:
             self._fake_closure(False, 0.9, gaps=["missing artifact"]),
             self._fake_closure(True, 0.95),
         ))
-        from memory_ledger import annotate_outcome_verdict as _real_annotate
+        from memory_ledger import stamp_outcome_verdict as _real_stamp
         with patch("agent_loop.run_agent_loop", side_effect=_fake_run), \
              patch("intent.check_goal_clarity", return_value={"clear": True}), \
              patch("director.verify_goal_completion", side_effect=lambda *a, **k: next(verdicts)), \
-             patch("memory.annotate_outcome_verdict", wraps=_real_annotate), \
+             patch("memory.stamp_outcome_verdict", wraps=_real_stamp), \
              self._no_quality_gate():
             result = handle("build X", force_lane="agenda", dry_run=False)
 
@@ -3292,7 +3292,9 @@ class TestClosureStatusHonesty:
         """A persistence failure at the honesty boundary must not be swallowed
         or followed by a retry that leaves attempt 1 looking successful."""
         self._setup(monkeypatch, tmp_path)
-        from memory import record_outcome, load_outcomes
+        from memory import (
+            OutcomeVerdictStampResult, record_outcome, load_outcomes,
+        )
         from runs import run_dir
 
         calls = []
@@ -3305,10 +3307,14 @@ class TestClosureStatusHonesty:
             return self._fake_loop_result(status="done", loop_id="loop-rejected")
 
         _stamp_patch = (
-            patch("memory.annotate_outcome_verdict",
+            patch("memory.stamp_outcome_verdict",
                   side_effect=OSError("ledger lock failed"))
             if stamp_failure == "exception"
-            else patch("memory.annotate_outcome_verdict", return_value=False)
+            else patch(
+                "memory.stamp_outcome_verdict",
+                return_value=OutcomeVerdictStampResult(
+                    "write_failed", attempts=2, error="ledger lock failed"),
+            )
         )
         with patch("agent_loop.run_agent_loop", side_effect=_fake_run), \
              patch("intent.check_goal_clarity", return_value={"clear": True}), \
@@ -3323,7 +3329,8 @@ class TestClosureStatusHonesty:
                 if r.loop_id == "loop-rejected"]
         meta = json.loads((run_dir(result.handle_id) / "metadata.json").read_text())
         assert len(calls) == 1, "restart must be blocked until the verdict is durable"
-        assert stamp_mock.call_count == 2, "the idempotent stamp gets one bounded retry"
+        stamp_mock.assert_called_once()
+        assert stamp_mock.call_args.kwargs["max_attempts"] == 2
         assert meta["loop_ids"] == ["loop-rejected"]
         assert result.status == "incomplete"
         assert "negative verdict could not be persisted" in (result.result or "")
@@ -3349,20 +3356,31 @@ class TestClosureStatusHonesty:
             self._fake_closure(False, 0.9, gaps=["missing artifact"]),
             self._fake_closure(True, 0.95),
         ))
+        from memory_ledger import stamp_outcome_verdict as _real_stamp
+        stamp_results = []
+
+        def _observed_stamp(*args, **kwargs):
+            result = _real_stamp(*args, **kwargs)
+            stamp_results.append((args[0], result.status, kwargs))
+            return result
+
         with patch("agent_loop.run_agent_loop", side_effect=_fake_run), \
              patch("intent.check_goal_clarity", return_value={"clear": True}), \
              patch("director.verify_goal_completion",
                    side_effect=lambda *a, **k: next(verdicts)), \
-             patch("memory.annotate_outcome_verdict") as stamp_mock, \
+             patch("memory.stamp_outcome_verdict",
+                   side_effect=_observed_stamp), \
              self._no_quality_gate():
             result = handle("build X", force_lane="agenda", dry_run=False)
 
         assert len(calls) == 2
         assert result.status == "done"
-        # Only the delivered second attempt reaches the ordinary final-verdict
-        # stamp.  The absent superseded row is never treated as a write error.
-        assert stamp_mock.call_count == 1
-        assert stamp_mock.call_args.args[0] == "missing-row-2"
+        assert [(loop_id, status) for loop_id, status, _ in stamp_results] == [
+            ("missing-row-1", "missing"),
+            ("missing-row-2", "missing"),
+        ]
+        assert stamp_results[0][2]["max_attempts"] == 2
+        assert "max_attempts" not in stamp_results[1][2]
 
     def test_provenance_failure_dominates_positive_closure(
             self, monkeypatch, tmp_path):
@@ -3376,13 +3394,13 @@ class TestClosureStatusHonesty:
             record_outcome("build X", "done", "summary", lessons=[], loop_id="loop-prov")
             return self._fake_loop_result(status="done", loop_id="loop-prov")
 
-        from memory_ledger import annotate_outcome_verdict as _real_annotate
+        from memory_ledger import stamp_outcome_verdict as _real_stamp
         with patch("agent_loop.run_agent_loop", side_effect=_fake_run), \
              patch("intent.check_goal_clarity", return_value={"clear": True}), \
              patch("director.verify_goal_completion",
                    return_value=self._fake_closure(True, 0.95)), \
              patch("handle._provenance_missing", return_value=["report.md"]), \
-             patch("memory.annotate_outcome_verdict", wraps=_real_annotate), \
+             patch("memory.stamp_outcome_verdict", wraps=_real_stamp), \
              self._no_quality_gate():
             result = handle("build X", force_lane="agenda", dry_run=False)
 

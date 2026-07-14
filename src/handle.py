@@ -1662,38 +1662,27 @@ def _handle_impl(
                 # to deferred learning and strategy scoring.
                 _superseded_loop_id = getattr(loop_result, "loop_id", "") or ""
                 try:
-                    from memory import (
-                        annotate_outcome_verdict as _aov_superseded,
-                        load_outcome_by_loop_id as _load_superseded,
+                    from memory import stamp_outcome_verdict as _stamp_superseded
+                    _stamp_result = _stamp_superseded(
+                        _superseded_loop_id,
+                        goal_achieved=False,
+                        goal_verdict_source="closure",
+                        goal_verdict_confidence=float(_closure.confidence),
+                        max_attempts=2,
                     )
-                    # A loop-finalization memory failure is deliberately
-                    # non-fatal.  If it produced no row, there is no dishonest
-                    # evidence to protect and the recovery restart may proceed.
-                    # A present row, however, must carry the negative verdict.
-                    _superseded_row = _load_superseded(
-                        _superseded_loop_id, strict=True)
-                    _stamp_ok = _superseded_row is None
-                    _stamp_exc_seen = None
-                    if _superseded_row is not None:
-                        # The merge is loop-id keyed and idempotent.  One
-                        # bounded retry absorbs transient lock/write failures.
-                        for _stamp_attempt in range(2):
-                            try:
-                                _stamp_ok = _aov_superseded(
-                                    _superseded_loop_id,
-                                    goal_achieved=False,
-                                    goal_verdict_source="closure",
-                                    goal_verdict_confidence=float(_closure.confidence),
-                                )
-                            except Exception as _stamp_call_exc:
-                                _stamp_exc_seen = _stamp_call_exc
-                                _stamp_ok = False
-                            if _stamp_ok:
-                                break
-                    if not _stamp_ok:
-                        detail = (_stamp_exc_seen or
-                                  "outcomes row was present but not updated")
-                        raise RuntimeError(str(detail))
+                    # Missing means loop finalization produced no evidence to
+                    # protect, so recovery may proceed. Only a write failure
+                    # leaves a possibly dishonest row behind.
+                    if _stamp_result.status not in ("updated", "missing"):
+                        _failure_detail = (
+                            _stamp_result.error
+                            or "outcome verdict was not updated"
+                        )
+                        if _stamp_result.attempts:
+                            _failure_detail += (
+                                f" after {_stamp_result.attempts} attempt(s)")
+                        raise RuntimeError(
+                            _failure_detail)
                 except Exception as _stamp_exc:
                     # Fail closed at the restart boundary. The rejected run's
                     # outcome row cannot be trusted by deferred learning until
@@ -1858,8 +1847,8 @@ def _handle_impl(
                     # deterministic provenance verdict onto it so learning
                     # consumers see the failure, not just run metadata.
                     try:
-                        from memory import annotate_outcome_verdict as _aov_prov
-                        _aov_prov(
+                        from memory import stamp_outcome_verdict as _stamp_prov
+                        _stamp_prov(
                             getattr(loop_result, "loop_id", "") or "",
                             goal_achieved=False,
                             goal_verdict_source="provenance",
@@ -1963,8 +1952,8 @@ def _handle_impl(
                 # but leaves goal_achieved absent (and never overwrites a
                 # provenance False already stamped above).
                 try:
-                    from memory import annotate_outcome_verdict as _aov_closure
-                    _aov_closure(
+                    from memory import stamp_outcome_verdict as _stamp_closure
+                    _stamp_closure(
                         getattr(loop_result, "loop_id", "") or "",
                         goal_achieved=(bool(_closure.complete) if _judged else None),
                         goal_verdict_source=(
@@ -2133,8 +2122,8 @@ def _handle_impl(
                                         if _post_judged else None
                                     )
                                     try:
-                                        from memory import annotate_outcome_verdict as _aov_post
-                                        _aov_post(
+                                        from memory import stamp_outcome_verdict as _stamp_post
+                                        _stamp_post(
                                             getattr(loop_result, "loop_id", "") or "",
                                             goal_achieved=_post_achieved,
                                             goal_verdict_source=_post_source,

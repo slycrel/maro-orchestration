@@ -826,8 +826,8 @@ class TestClosureVerdictPass:
         monkeypatch.setattr(_director, "verify_goal_completion",
                             lambda *a, **kw: verdict)
         monkeypatch.setattr(
-            _memory, "annotate_outcome_verdict",
-            lambda loop_id, **kw: annotations.append((loop_id, kw)) or True)
+            _memory, "stamp_outcome_verdict",
+            lambda loop_id, **kw: annotations.append((loop_id, kw)))
 
     def test_judged_contradiction_demotes_done(self, monkeypatch):
         ann = []
