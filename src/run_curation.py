@@ -55,6 +55,7 @@ from decision_prior import (
     _DECISION_TRIED_CHARS,
     _DECISION_LESSON_CAP,
 )
+from outcome_policy import is_learnable_outcome
 
 _SUCCESS_STATUSES = {"done", "complete", "completed"}
 # "incomplete" = closure demoted a finished run (work ended, goal not met) —
@@ -383,7 +384,7 @@ def promote_skills_lite(rd: Path, meta: dict, card: dict) -> None:
     # Only runs whose process status finished cleanly and whose verdict didn't
     # say "didn't land" seed skills (done-not-achieved is exactly the run you
     # don't want to learn from).
-    if card.get("success_class") not in ("success", "done-unverified"):
+    if not is_learnable_outcome(card):
         return
 
     from skill_loader import _parse_frontmatter, _slugify, _FRONTMATTER_RE, skill_loader as _loader
@@ -693,7 +694,7 @@ def flag_skill_candidate(rd: Path, meta: dict, card: dict) -> None:
     Auto-injects nothing — the flag is advisory."""
     # Same gate extract_skills uses: only clean finishes not judged unachieved
     # (done ≠ achieved) — never crystallize from a run that didn't land.
-    if card.get("success_class") not in ("success", "done-unverified"):
+    if not is_learnable_outcome(card):
         return
     # An authored .md already promoted via skills-lite is the stronger signal —
     # don't double-flag it as a heuristic candidate.

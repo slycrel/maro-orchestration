@@ -189,6 +189,7 @@ py-modules = [
     "orch",
     "orch_bridges",
     "orch_items",
+    "outcome_policy",
     "pack",
     "persona",
     "planner",

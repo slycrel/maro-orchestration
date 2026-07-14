@@ -354,9 +354,8 @@ def test_promote_skill_candidates_saves_skill_and_marks_consumed():
     assert n == 1
     mock_extract.assert_called_once()
     outcomes_arg = mock_extract.call_args[0][0]
-    # Hardcoded to what extract_skills' own filter checks, not passed
-    # through from the card's own (possibly differently-spelled) status.
-    assert outcomes_arg[0]["status"] == "done"
+    assert outcomes_arg[0]["success_class"] == "success"
+    assert "status" not in outcomes_arg[0]
     assert not any(c["handle_id"] == "h0e00001" for c in find_unconsumed_skill_candidates())
 
 

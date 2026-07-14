@@ -386,21 +386,20 @@ def promote_skill_candidates(*, adapter=None, dry_run: bool = False,
     if verbose:
         print(f"[evolver] skill_candidate sweep: {len(candidates)} unconsumed", file=sys.stderr)
 
-    # extract_skills' own candidate filter is an EXACT match on
-    # status == "done" (see skills.py) — not goal_achieved, not
-    # success_class — so this is hardcoded to what it actually checks
-    # rather than passed through from the card's own (possibly differently
-    # spelled) status field.
+    # Preserve the curated classification. extract_skills shares the same
+    # learnability predicate and accepts this card-derived shape directly;
+    # do not synthesize a fake raw-outcome status.
     outcomes = []
+    from outcome_policy import is_learnable_outcome
     for card in candidates:
-        if card.get("success_class") not in ("success", "done-unverified"):
+        if not is_learnable_outcome(card):
             continue
         reasons = (card.get("skill_candidate") or {}).get("reasons") or []
         outcomes.append({
             "outcome_id": card.get("handle_id"),
             "goal": card.get("goal", ""),
             "task_type": card.get("lane", ""),
-            "status": "done",
+            "success_class": card.get("success_class"),
             "goal_achieved": card.get("goal_achieved"),
             "summary": card.get("result_excerpt") or "; ".join(reasons),
         })

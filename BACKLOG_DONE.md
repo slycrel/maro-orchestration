@@ -8,6 +8,23 @@ Last split: 2026-04-16 (session 34).
 
 ---
 
+### R3: Shared learnable-outcome policy — SHIPPED (2026-07-13)
+
+Skill extraction, run curation, and the candidate catch-up sweep previously
+used parallel success taxonomies. Evolver bridged them by rewriting curated
+cards into fake raw outcomes with `status: done`. The neutral
+`outcome_policy.is_learnable_outcome()` now accepts both real representations:
+curated `success_class` cards and raw `status`/`goal_achieved` ledger rows.
+Curated classification wins and unknown/empty classes fail closed.
+
+Run curation, evolver, and `skills.extract_skills` call the same predicate;
+evolver preserves `success_class` and no longer manufactures status. Three
+real Claude reviewers found no live behavior regression. Architect correctly
+rejected the first placement in `decision_prior.py`, which owns a different
+schema; the policy moved to its own leaf module. Skeptic's proposed fallback
+from an empty curated class to raw status was rejected as unsafe and pinned by
+tests. Focused follow-up review approved the final placement and precedence.
+
 ### R3: Runtime-honest curator contracts — SHIPPED (2026-07-13)
 
 `CuratorSpec` declarations previously ordered curators but did not verify that

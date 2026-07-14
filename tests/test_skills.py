@@ -344,6 +344,24 @@ def test_extract_skills_only_successes(monkeypatch, tmp_path):
     assert extracted == []
 
 
+def test_extract_skills_accepts_curated_success_class(monkeypatch, tmp_path):
+    _setup_workspace(monkeypatch, tmp_path)
+    outcomes = [
+        {"goal": "curated success", "success_class": "success", "summary": "landed"},
+        {"goal": "curated failure", "success_class": "failed", "summary": "did not land"},
+    ]
+
+    extracted = extract_skills(outcomes, _ExtractMockAdapter())
+
+    assert extracted
+
+    rejected = extract_skills(
+        [{"goal": "curated failure", "success_class": "failed"}],
+        _ExtractMockAdapter(),
+    )
+    assert rejected == []
+
+
 # ---------------------------------------------------------------------------
 # increment_use
 # ---------------------------------------------------------------------------

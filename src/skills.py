@@ -256,10 +256,8 @@ def extract_skills(outcomes: List[dict], adapter) -> List[Skill]:
     # crystallize skills from runs judged goal-NOT-achieved (done ≠ achieved);
     # verified-achieved runs are the strongest examples and go first, unjudged
     # done runs are the weaker fallback (absence means "not judged").
-    candidates = [
-        o for o in outcomes
-        if o.get("status") == "done" and o.get("goal_achieved") is not False
-    ]
+    from outcome_policy import is_learnable_outcome
+    candidates = [o for o in outcomes if is_learnable_outcome(o)]
     candidates.sort(key=lambda o: o.get("goal_achieved") is not True)  # judged-True first, stable
     successes = candidates[:20]
     if not successes:

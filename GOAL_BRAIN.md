@@ -2524,3 +2524,13 @@ Dormant (deliberately parked, not dropped):
   Claude reviewers found the first pass's ambient-presence check, overwrite
   blind spot, shallow rollback, and optional-require ambiguity; all were fixed,
   and focused follow-up approved.
+
+- **2026-07-13 (M1 continuation: one learnability policy, no fake outcome)** —
+  `outcome_policy.is_learnable_outcome` now owns the successful-learning gate
+  for both curated run cards and raw ledger outcomes. Curated classification
+  takes precedence and fails closed if unknown; raw historical rows retain the
+  exact `done`/not-explicitly-unachieved behavior. Run curation, skills, and
+  evolver share it, and evolver passes the real `success_class` instead of
+  synthesizing `status: done`. Three Claude lenses found no live regression;
+  their placement critique moved the helper from the unrelated decision-prior
+  schema to its own leaf. Follow-up approved.

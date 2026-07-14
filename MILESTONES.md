@@ -2,7 +2,11 @@
 
 What to do next, in what order. Updated each session. Deferred ideas live in BACKLOG.md; completed phase history in docs/history/ROADMAP_ARCHIVE.md (ROADMAP.md is a stub). This file is the executable queue.
 
-Last updated: 2026-07-13 (M1 continuation checkpoint — R3 runtime-honest
+Last updated: 2026-07-13 (M1 continuation checkpoint — R3 shared
+learnable-outcome policy SHIPPED: curated cards and raw ledger rows now use one
+neutral fail-closed predicate, and evolver no longer invents `status: done`.
+Three-lens Claude review moved the first version out of the semantically wrong
+decision-prior module; focused follow-up approved. Previous checkpoint: R3 runtime-honest
 curator contracts SHIPPED: mandatory/optional outputs and dependencies are
 distinct, every curator runs against an isolated card transaction, and only a
 validated delta commits. Claude review found and fixed overwrite blindness,
