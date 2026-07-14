@@ -1,3 +1,7 @@
+---
+status: record
+---
+
 # Verdict-persistence contract checkpoint — 2026-07-14
 
 ## Intent

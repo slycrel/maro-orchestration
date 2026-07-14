@@ -3862,3 +3862,203 @@ class TestClosureUnjudgedVerdict:
         assert meta.get("goal_achieved") is False
         assert meta.get("goal_verdict_source") == "closure"
         assert hr.status == "incomplete"
+
+
+class TestVerdictStampFailureQuarantine:
+    """EXT-AUDIT-2 residual: the ordinary delivered closure stamp, the
+    provenance stamp, and the post-escalation stamp used independent
+    best-effort calls that silently swallowed write_failed/exceptions —
+    unlike the closure-restart boundary's fail-closed `_stamp_superseded`.
+    A swallowed failure left the row reading back as unjudged, which
+    `finalize_deferred_learning` treats as permission to crystallize skills
+    and extract success-flavored lessons — defeating the pending-verdict
+    quarantine for any path other than the restart boundary.
+
+    Decision (delivery semantics): the delivered result is never withheld
+    or changed by a stamp failure — only the closure-restart boundary can
+    still refuse, because it hasn't delivered anything yet. Everywhere
+    else, a write_failed/exception is a process-demotion of *learning*,
+    not of the result: log.error for operator visibility, a run-metadata
+    breadcrumb for audit, and the loop_id is quarantined out of both lesson
+    extraction and skill crystallization rather than falling back to the
+    unjudged default.
+    """
+
+    def _setup(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        _stub_build_adapter(monkeypatch)
+
+    @staticmethod
+    def _no_quality_gate():
+        verdict = MagicMock()
+        verdict.escalate = False
+        verdict.contested_claims = []
+        return patch("quality_gate.run_quality_gate", return_value=verdict)
+
+    def _fake_loop_result(self, status="done", loop_id="test-lr"):
+        from agent_loop import LoopResult, StepOutcome
+        return LoopResult(
+            loop_id=loop_id, project="test-proj", goal="build X",
+            status=status, stuck_reason=None,
+            steps=[StepOutcome(index=0, text="step", status="done",
+                               result="output", iteration=0)],
+        )
+
+    def _fake_closure(self, complete, confidence, gaps=None, checks_run=2):
+        from director import ClosureVerdict
+        return ClosureVerdict(
+            complete=complete, confidence=confidence,
+            gaps=gaps or [], summary="verified",
+            checks_run=checks_run, checks_passed=(checks_run if complete else 0),
+        )
+
+    # -- direct unit coverage of the shared helper --------------------------
+
+    def test_stamp_verdict_tracked_quarantines_on_write_failed(self, monkeypatch):
+        from handle import _stamp_verdict_tracked
+        from memory import OutcomeVerdictStampResult
+        import runs as runs_mod
+
+        breadcrumbs = []
+        monkeypatch.setattr(runs_mod, "stamp_run_metadata",
+                             lambda fields: breadcrumbs.append(fields))
+        unstamped: set = set()
+        _stamp_verdict_tracked(
+            lambda: OutcomeVerdictStampResult(
+                "write_failed", attempts=2, error="ledger lock failed"),
+            loop_id="lp-x", label="closure", unstamped_loop_ids=unstamped,
+        )
+        assert unstamped == {"lp-x"}
+        assert breadcrumbs[0]["goal_verdict_stamp_failed"] is True
+        assert breadcrumbs[0]["goal_verdict_stamp_failed_label"] == "closure"
+        assert breadcrumbs[0]["goal_verdict_stamp_failed_loop_id"] == "lp-x"
+        assert "ledger lock failed" in breadcrumbs[0]["goal_verdict_stamp_failed_detail"]
+
+    def test_stamp_verdict_tracked_quarantines_on_exception(self, monkeypatch):
+        from handle import _stamp_verdict_tracked
+        import runs as runs_mod
+
+        breadcrumbs = []
+        monkeypatch.setattr(runs_mod, "stamp_run_metadata",
+                             lambda fields: breadcrumbs.append(fields))
+        unstamped: set = set()
+
+        def _raise():
+            raise OSError("disk full")
+        _stamp_verdict_tracked(
+            _raise, loop_id="lp-y", label="provenance",
+            unstamped_loop_ids=unstamped,
+        )
+        assert unstamped == {"lp-y"}
+        assert "disk full" in breadcrumbs[0]["goal_verdict_stamp_failed_detail"]
+
+    def test_stamp_verdict_tracked_leaves_missing_and_updated_alone(self, monkeypatch):
+        from handle import _stamp_verdict_tracked
+        from memory import OutcomeVerdictStampResult
+        import runs as runs_mod
+
+        breadcrumbs = []
+        monkeypatch.setattr(runs_mod, "stamp_run_metadata",
+                             lambda fields: breadcrumbs.append(fields))
+        unstamped: set = set()
+        _stamp_verdict_tracked(
+            lambda: OutcomeVerdictStampResult("missing"),
+            loop_id="lp-m", label="closure", unstamped_loop_ids=unstamped,
+        )
+        _stamp_verdict_tracked(
+            lambda: OutcomeVerdictStampResult("updated", attempts=1),
+            loop_id="lp-u", label="closure", unstamped_loop_ids=unstamped,
+        )
+        assert unstamped == set()
+        assert breadcrumbs == []
+
+    # -- end-to-end wiring through handle() ----------------------------------
+
+    def test_closure_stamp_failure_quarantines_deferred_learning(
+            self, monkeypatch, tmp_path):
+        """A judged not-achieved closure verdict whose stamp write fails must
+        not silently let deferred learning fall back to treating the loop as
+        unjudged (which would crystallize/extract as if it had succeeded)."""
+        self._setup(monkeypatch, tmp_path)
+        from memory import record_outcome, load_outcomes, OutcomeVerdictStampResult
+        import runs as runs_mod
+        import loop_finalize
+        import memory as memory_mod
+
+        crystallize_calls = []
+        monkeypatch.setattr(loop_finalize, "_crystallize_and_synthesize",
+                             lambda **kw: crystallize_calls.append(kw))
+        lesson_calls = []
+        monkeypatch.setattr(memory_mod, "extract_deferred_lessons",
+                             lambda *a, **kw: lesson_calls.append(a))
+
+        def _fake_run(*args, **kwargs):
+            record_outcome("build X", "done", "summary", lessons=[],
+                            loop_id="loop-stampfail")
+            return self._fake_loop_result(status="done", loop_id="loop-stampfail")
+
+        # confidence 0.5 is below both the restart (0.6) and demotion (0.7)
+        # thresholds, so this exercises the ordinary per-loop closure stamp,
+        # not the closure-restart boundary's own (already fail-closed) path.
+        with patch("agent_loop.run_agent_loop", side_effect=_fake_run), \
+             patch("intent.check_goal_clarity", return_value={"clear": True}), \
+             patch("director.verify_goal_completion",
+                   return_value=self._fake_closure(False, 0.5, gaps=["gap"])), \
+             patch("memory.stamp_outcome_verdict",
+                   return_value=OutcomeVerdictStampResult(
+                       "write_failed", attempts=2, error="ledger lock failed")), \
+             self._no_quality_gate():
+            result = handle("build X", force_lane="agenda", dry_run=False)
+
+        row = next(r for r in load_outcomes(limit=10) if r.loop_id == "loop-stampfail")
+        meta = json.loads(
+            (runs_mod.run_dir(result.handle_id) / "metadata.json").read_text())
+        assert result.status == "done", "a stamp failure must not change what was delivered"
+        assert row.goal_achieved is None, "stamp genuinely failed — no side-channel success"
+        assert crystallize_calls == [], (
+            "must not crystallize a loop whose not-achieved verdict didn't persist")
+        assert lesson_calls == [], (
+            "must not extract lessons for a loop whose verdict didn't persist")
+        assert meta["goal_verdict_stamp_failed"] is True
+        assert meta["goal_verdict_stamp_failed_label"] == "closure"
+        assert meta["goal_verdict_stamp_failed_loop_id"] == "loop-stampfail"
+
+    def test_provenance_stamp_failure_quarantines_deferred_learning(
+            self, monkeypatch, tmp_path):
+        """Same quarantine contract on the deterministic provenance-guard
+        stamp path, not just the closure stamp."""
+        self._setup(monkeypatch, tmp_path)
+        from memory import record_outcome, load_outcomes, OutcomeVerdictStampResult
+        import runs as runs_mod
+        import loop_finalize
+
+        crystallize_calls = []
+        monkeypatch.setattr(loop_finalize, "_crystallize_and_synthesize",
+                             lambda **kw: crystallize_calls.append(kw))
+
+        def _fake_run(*args, **kwargs):
+            record_outcome("build X", "done", "summary", lessons=[],
+                            loop_id="loop-provfail")
+            return self._fake_loop_result(status="done", loop_id="loop-provfail")
+
+        with patch("agent_loop.run_agent_loop", side_effect=_fake_run), \
+             patch("intent.check_goal_clarity", return_value={"clear": True}), \
+             patch("director.verify_goal_completion",
+                   return_value=self._fake_closure(True, 0.95)), \
+             patch("handle._provenance_missing", return_value=["report.md"]), \
+             patch("memory.stamp_outcome_verdict",
+                   return_value=OutcomeVerdictStampResult(
+                       "write_failed", attempts=1, error="ledger lock failed")), \
+             self._no_quality_gate():
+            result = handle("build X", force_lane="agenda", dry_run=False)
+
+        row = next(r for r in load_outcomes(limit=10) if r.loop_id == "loop-provfail")
+        meta = json.loads(
+            (runs_mod.run_dir(result.handle_id) / "metadata.json").read_text())
+        assert result.status == "incomplete", "provenance demotion itself is unaffected"
+        assert row.goal_achieved is None, "stamp genuinely failed — no side-channel success"
+        assert crystallize_calls == [], (
+            "must not crystallize a loop whose provenance-failure verdict didn't persist")
+        assert meta["goal_verdict_stamp_failed"] is True
+        assert meta["goal_verdict_stamp_failed_label"] == "provenance"
+        assert meta["goal_verdict_stamp_failed_loop_id"] == "loop-provfail"

@@ -13,7 +13,7 @@ import logging
 import sys
 import time
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
 from loop_types import LoopContext, LoopResult, StepOutcome, _orch, _project_dir_root
 from loop_artifacts import _write_loop_log, _write_plan_manifest
@@ -747,6 +747,7 @@ def finalize_deferred_learning(
     dry_run: bool = False,
     verbose: bool = False,
     extra_loop_ids: Optional[List[str]] = None,
+    unstamped_loop_ids: Optional[Iterable[str]] = None,
 ) -> None:
     """Run the learning that finalize deferred, now that closure has judged
     (data-r2-01: lessons + skills must not be extracted verdict-blind).
@@ -767,17 +768,32 @@ def finalize_deferred_learning(
     restarts) — they get lesson extraction only; their steps are gone and
     they were superseded, so no skill writes.
 
+    unstamped_loop_ids (EXT-AUDIT-2 residual): loops whose closure/provenance
+    verdict was judged but whose stamp_outcome_verdict() write failed or
+    raised. The on-disk row for these may still read back as unjudged,
+    absent, or stale, so both lesson extraction and skill crystallization
+    are skipped entirely for them — durable quarantine, the same posture as
+    the judged-False skip below, rather than letting a persistence gap fall
+    back to "unjudged" permissiveness.
+
     Never raises — deferred learning must not break result delivery.
     """
     loop_id = getattr(loop_result, "loop_id", "") or ""
+    _unstamped = set(unstamped_loop_ids or ())
     try:
         from memory import extract_deferred_lessons
         for _lid in [*(extra_loop_ids or []), loop_id]:
-            if _lid:
-                try:
-                    extract_deferred_lessons(_lid, adapter=adapter, dry_run=dry_run)
-                except Exception as _dl_exc:
-                    log.warning("deferred lesson extraction failed for loop %s: %s", _lid, _dl_exc)
+            if not _lid:
+                continue
+            if _lid in _unstamped:
+                log.info(
+                    "deferred lesson extraction skipped — loop %s verdict "
+                    "stamp failed, quarantined pending reconciliation", _lid)
+                continue
+            try:
+                extract_deferred_lessons(_lid, adapter=adapter, dry_run=dry_run)
+            except Exception as _dl_exc:
+                log.warning("deferred lesson extraction failed for loop %s: %s", _lid, _dl_exc)
     except Exception as _imp_exc:
         log.warning("deferred lesson extraction unavailable: %s", _imp_exc)
 
@@ -785,6 +801,11 @@ def finalize_deferred_learning(
     # Provenance demotion already downgraded status from "done", so a
     # provenance-failed run never reaches the skill branch via status alone.
     if dry_run or getattr(loop_result, "status", "") != "done" or not step_outcomes:
+        return
+    if loop_id in _unstamped:
+        log.info(
+            "deferred skill crystallization skipped — loop %s verdict "
+            "stamp failed, quarantined pending reconciliation", loop_id)
         return
     try:
         from memory_ledger import load_outcome_by_loop_id

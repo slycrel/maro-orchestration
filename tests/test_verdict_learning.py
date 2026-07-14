@@ -607,3 +607,51 @@ def test_finalize_deferred_learning_extracts_for_extra_loop_ids(monkeypatch, tmp
     rows = {r["loop_id"]: r for r in _raw_rows()}
     assert "failed" in rows["lp-d7a"]["lessons"][0]
     assert "succeeded" in rows["lp-d7b"]["lessons"][0]
+
+
+def test_finalize_deferred_learning_skips_skills_for_unstamped_loop(monkeypatch, tmp_path):
+    """EXT-AUDIT-2 residual: a loop whose verdict stamp failed must be
+    quarantined out of skill crystallization even though the on-disk row
+    still reads back as unjudged (the pre-fix permissive case)."""
+    _setup(monkeypatch, tmp_path)
+    import loop_finalize
+    calls = []
+    monkeypatch.setattr(loop_finalize, "_crystallize_and_synthesize",
+                        lambda **kw: calls.append(kw))
+    record_outcome("the goal", "done", "s", loop_id="lp-d8")  # unjudged on disk
+    loop_finalize.finalize_deferred_learning(
+        _loop_result("lp-d8"), unstamped_loop_ids={"lp-d8"},
+    )
+    assert calls == []
+
+
+def test_finalize_deferred_learning_skips_lessons_for_unstamped_loop(monkeypatch, tmp_path):
+    _setup(monkeypatch, tmp_path)
+    import loop_finalize
+    import memory
+    extract_calls = []
+    monkeypatch.setattr(memory, "extract_deferred_lessons",
+                        lambda *a, **kw: extract_calls.append(a))
+    record_outcome("the goal", "done", "s", loop_id="lp-d9")
+    loop_finalize.finalize_deferred_learning(
+        _loop_result("lp-d9"), dry_run=True, unstamped_loop_ids=["lp-d9"],
+    )
+    assert extract_calls == []
+
+
+def test_finalize_deferred_learning_unstamped_only_quarantines_named_loop(monkeypatch, tmp_path):
+    """extra_loop_ids still get extraction when they aren't the unstamped one —
+    quarantine is per-loop_id, not all-or-nothing for the handle."""
+    _setup(monkeypatch, tmp_path)
+    import loop_finalize
+    monkeypatch.setattr(loop_finalize, "_crystallize_and_synthesize", lambda **kw: None)
+    record_outcome("try 1", "done", "s", lessons=[], loop_id="lp-d10a")
+    stamp_outcome_verdict("lp-d10a", goal_achieved=False, goal_verdict_source="closure")
+    record_outcome("try 2", "done", "s", lessons=[], loop_id="lp-d10b")
+    loop_finalize.finalize_deferred_learning(
+        _loop_result("lp-d10b"), dry_run=True,
+        extra_loop_ids=["lp-d10a"], unstamped_loop_ids={"lp-d10b"},
+    )
+    rows = {r["loop_id"]: r for r in _raw_rows()}
+    assert "failed" in rows["lp-d10a"]["lessons"][0]
+    assert "lessons" not in rows["lp-d10b"] or not rows["lp-d10b"]["lessons"]

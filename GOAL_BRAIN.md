@@ -2599,3 +2599,28 @@ Dormant (deliberately parked, not dropped):
   post-limit detail computation, context-key sanitization, non-object JSONL
   tolerance, centralized subject filtering, and explicit CLI conflict errors.
   Follow-up review found no remaining HIGH or MEDIUM issue.
+
+- **2026-07-14 (EXT-AUDIT-2 residual: delivery semantics for a failed verdict
+  stamp)** — Session opened via `/goal` to reconcile Codex's overnight
+  backlog work before the weekly token reset; found EXT-AUDIT-2's second
+  checkbox still open. Decision: a `stamp_outcome_verdict()` write failure or
+  exception is a demotion of *learning*, never of the delivered result — only
+  the closure-restart boundary can still refuse, because it hasn't delivered
+  anything yet (`_stamp_superseded`, already fail-closed). Everywhere else
+  (ordinary closure stamp, provenance stamp, post-escalation stamp), the new
+  `_stamp_verdict_tracked()` helper in `handle.py` logs the failure, stamps a
+  `goal_verdict_stamp_failed*` run-metadata breadcrumb, and adds the loop_id
+  to `unstamped_loop_ids`, which `finalize_deferred_learning()` now threads
+  through to skip both lesson extraction and skill crystallization for that
+  loop_id regardless of what the row reads back as — durable quarantine
+  instead of falling back to "unjudged" permissiveness. Rejected a
+  user-facing channel warning and a new captains_log event type as scope
+  creep beyond the residual. 10 new regression tests
+  (`tests/test_handle.py::TestVerdictStampFailureQuarantine`,
+  `tests/test_verdict_learning.py`); full suite green. Same session also
+  fixed two environment-fragile assumptions Codex's "portable test-safe.sh"
+  commit introduced (a hardcoded `.venv/bin/python` path that doesn't exist
+  on this box, and a fake-PATH isolation trick defeated by this Ubuntu box's
+  merged-`/usr` `/bin` symlink) and added missing `status: record`
+  frontmatter to a Codex history doc. EXT-AUDIT-2 fully shipped; archived to
+  BACKLOG_DONE.md.

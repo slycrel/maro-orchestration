@@ -32,34 +32,6 @@ seam; owner-facing delivery behavior on failures remains the open decision.
 
 Ordered open work that matters. Top of the list is next.
 
-### EXT-AUDIT-2. Unify verdict-persistence policy across delivered and escalated attempts
-
-The closure-rejection boundary now has an explicit absent/update-failed split,
-bounded retry, durable pending-verdict quarantine, and operator-visible failure.
-An opposite-model architectural review found that the ordinary delivered
-closure stamp (`handle.py` after the restart block), provenance stamp, and
-post-escalation stamp still use independent best-effort calls. In particular,
-the delivered-attempt path can ignore a false return and then finalize deferred
-learning, changing the row from `deferred` to `completed` while it remains
-unjudged. That defeats the pending-verdict quarantine for that separate path.
-
-- [x] Design one shared verdict-persistence helper/result type for present,
-  absent, updated, and write-failed outcomes, then apply it to all verdict
-  writers without turning a legitimately absent optional memory row into a
-  user-goal failure. **Shipped 2026-07-14:** `OutcomeVerdictStampResult` and
-  `stamp_outcome_verdict()` perform lookup + atomic publish under one
-  append-compatible lock, bound idempotent retry, leave absent ledgers/rows
-  untouched, and replaced the boolean compatibility API across every caller.
-  Boolean coercion is forbidden so future callers cannot silently recreate the
-  old ambiguity. Three core Claude reviewers plus a Failure Operator bonus ran;
-  the initial CONTESTED verdict's accepted findings were fixed and a focused
-  Architect follow-up returned APPROVED. Evidence:
-  `docs/history/2026-07-14-verdict-persistence-contract.md`.
-- [ ] Define delivery semantics when the work is complete but its audit stamp
-  cannot persist: user-visible warning vs process demotion, whether learning is
-  skipped, and how repair converges. Cover false returns, exceptions, metadata
-  failure, and post-escalation paths.
-
 ### R5. Independent holistic + adversarial review of the rolling 48-hour changeset (2026-07-13)
 
 Codex review of `git diff d717915e..8aa9876` (138 files, ~20k added
@@ -678,14 +650,20 @@ crowd-sourced or not)."
     injection refusals and the first checker mishandled fenced JSON. Reproducer,
     raw-output location, caveats, and decision are in
     `docs/history/2026-07-14-session-reuse-spike.md`.
-  - [ ] **Per-boundary session-reuse production prototype.** The spike says
-    this is worth the effort; it does not make blind per-run `--resume` safe.
-    Prototype one boundary segment with durable session identity/fresh fallback,
-    exact model/persona/cwd/worktree/permission/tool-config compatibility,
-    preserved per-step transcripts + cost/provenance/verification, forced
-    rotation at expansion/replan boundaries, and discard-on-confusion/failure.
-    Re-run a real expansion-bearing dogfood goal against fresh-session control
-    before changing the default.
+  - [x] **Per-boundary session-reuse production prototype — SHIPPED 2026-07-14,
+    decision KEEP OFF.** Prototyped with durable session identity/fresh
+    fallback, exact model/persona/cwd/worktree/permission/tool-config
+    compatibility, preserved per-step transcripts + cost/provenance/
+    verification, forced rotation at expansion/replan boundaries, and
+    discard-on-confusion/failure, then adversarially reviewed and hardened
+    (missing-session fallback marker sanitization, audited-prior-state deltas,
+    hostile-content rotation, checkpoint shape validation). Two counterbalanced
+    fixed-Sonnet real-goal runs: correctness tied (4/4 both arms), cost 27.9%
+    lower in the treatment (n=1, not yet a repeatable result) but no executor
+    speed benefit and 5.7% slower end-to-end. `executor.session_reuse` stays
+    **default off** — a cost hypothesis, not a demonstrated latency win.
+    Decision + protocol + hardening detail:
+    `docs/history/2026-07-14-session-reuse-prototype.md`.
   - **Self-speedup run adjudicated 2026-07-11 (fd483efb-stout-ember,
     $1.14, 47min, 7 steps + 4 ranked proposals + a genuinely good
     adversarial self-verification that caught its own 65s double-count).

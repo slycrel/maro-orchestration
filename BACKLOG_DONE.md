@@ -8,6 +8,53 @@ Last split: 2026-04-16 (session 34).
 
 ---
 
+### EXT-AUDIT-2. Unify verdict-persistence policy across delivered and escalated attempts — SHIPPED (2026-07-14)
+
+The closure-rejection boundary already had an explicit absent/update-failed
+split, bounded retry, durable pending-verdict quarantine, and operator-visible
+failure. An opposite-model architectural review found that the ordinary
+delivered closure stamp (`handle.py` after the restart block), provenance
+stamp, and post-escalation stamp still used independent best-effort calls —
+the delivered-attempt path could ignore a false return and finalize deferred
+learning, changing the row from `deferred` to `completed` while it remained
+unjudged, defeating the pending-verdict quarantine for that separate path.
+
+**Part 1 — shared verdict-persistence type.** `OutcomeVerdictStampResult` and
+`stamp_outcome_verdict()` perform lookup + atomic publish under one
+append-compatible lock, bound idempotent retry, leave absent ledgers/rows
+untouched, and replaced the boolean compatibility API across every caller.
+Boolean coercion is forbidden (`__bool__` raises `TypeError`) so future
+callers cannot silently recreate the old ambiguity. Three core Claude
+reviewers plus a Failure Operator bonus ran; the initial CONTESTED verdict's
+accepted findings were fixed and a focused Architect follow-up returned
+APPROVED. Evidence: `docs/history/2026-07-14-verdict-persistence-contract.md`.
+
+**Part 2 — delivery semantics when the stamp can't persist.** Decision: the
+delivered result is never withheld or changed by a stamp failure — only the
+closure-restart boundary can still refuse, since it hasn't delivered anything
+yet (`_stamp_superseded`, already fail-closed pre-existing behavior).
+Everywhere else (ordinary closure stamp, provenance stamp, post-escalation
+stamp), a `write_failed` result or a raised exception is a process demotion
+of *learning*, not of the result: `log.error` for operator visibility, a
+`stamp_run_metadata` breadcrumb (`goal_verdict_stamp_failed*`) for audit, and
+the loop_id is added to a per-call `unstamped_loop_ids` set threaded through
+to `finalize_deferred_learning()`, which skips both lesson extraction and
+skill crystallization for those loop_ids regardless of what the row reads
+back as — durable quarantine rather than falling back to "unjudged"
+permissiveness. New shared helper `_stamp_verdict_tracked()` in `handle.py`.
+Rejected: a user-facing channel warning and a new captains_log event type —
+judged scope creep beyond the residual; the metadata breadcrumb plus
+log.error is sufficient operator visibility for a learning-only demotion.
+
+10 new regression tests: `tests/test_handle.py::TestVerdictStampFailureQuarantine`
+(direct `_stamp_verdict_tracked` coverage for write_failed/exception/missing/
+updated, plus end-to-end closure-path and provenance-path integration tests)
+and 3 new tests in `tests/test_verdict_learning.py` (`finalize_deferred_learning`
+with `unstamped_loop_ids`, including the per-loop_id — not all-or-nothing —
+quarantine scope). Full suite green (180/180) after the change.
+
+---
+
 ### Sandbox-stub decision — superseded by retirement (2026-07-13; reconciled 2026-07-14)
 
 The open choice “wire real skill execution into `sandbox.py` or shrink it” was

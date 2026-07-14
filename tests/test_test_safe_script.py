@@ -19,6 +19,8 @@ def _probe(tmp_path: Path, *, with_taskset: bool,
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     log = tmp_path / "commands.log"
+    fake_python = tmp_path / "python"
+    _write_fake(fake_python, "exit 0\n")
     _write_fake(
         fake_bin / "nice",
         'printf "nice:%s\\n" "$*" >> "$TEST_SAFE_LOG"\nexit 0\n',
@@ -30,8 +32,16 @@ def _probe(tmp_path: Path, *, with_taskset: bool,
             'printf "taskset:%s\\n" "$*" >> "$TEST_SAFE_LOG"\nexit 0\n',
         )
     env = os.environ.copy()
-    # /bin supplies dirname and bash but, on Linux, excludes /usr/bin/taskset.
-    env.update({"PATH": f"{fake_bin}:/bin", "TEST_SAFE_LOG": str(log)})
+    # PATH is ONLY fake_bin: dirname is faked explicitly (absolute exec) and
+    # python is forced via TEST_PYTHON, so no other PATH entry is needed for
+    # this code path. This matters because on merged-/usr Linux (e.g. Ubuntu),
+    # /bin is a symlink to /usr/bin — including it here would leak the host's
+    # real taskset into "taskset unavailable" probes.
+    env.update({
+        "PATH": str(fake_bin),
+        "TEST_SAFE_LOG": str(log),
+        "TEST_PYTHON": str(fake_python),
+    })
     result = subprocess.run(
         ["/bin/bash", "scripts/test-safe.sh", *options,
          "tests/test_run_curation.py"],
@@ -42,6 +52,7 @@ def _probe(tmp_path: Path, *, with_taskset: bool,
         check=False,
     )
     result.command_log = log.read_text(encoding="utf-8")
+    result.fake_python = str(fake_python)
     return result
 
 
@@ -51,7 +62,7 @@ def test_test_safe_uses_nice_without_taskset(tmp_path):
     assert result.returncode == 0, result.stderr
     assert "taskset unavailable" in result.stderr
     assert result.command_log == (
-        f"nice:-n 15 {ROOT}/.venv/bin/python -m pytest "
+        f"nice:-n 15 {result.fake_python} -m pytest "
         "tests/test_run_curation.py --tb=short -q\n"
     )
 
@@ -62,7 +73,7 @@ def test_test_safe_adds_affinity_when_taskset_exists(tmp_path):
     assert result.returncode == 0, result.stderr
     assert "cores=0,1, nice=15" in result.stderr
     assert result.command_log == (
-        f"nice:-n 15 taskset -c 0,1 {ROOT}/.venv/bin/python -m pytest "
+        f"nice:-n 15 taskset -c 0,1 {result.fake_python} -m pytest "
         "tests/test_run_curation.py --tb=short -q\n"
     )
 
@@ -77,6 +88,6 @@ def test_test_safe_cli_resource_overrides_reach_command(tmp_path):
     assert result.returncode == 0, result.stderr
     assert "cores=2,3, nice=7" in result.stderr
     assert result.command_log == (
-        f"nice:-n 7 taskset -c 2,3 {ROOT}/.venv/bin/python -m pytest "
+        f"nice:-n 7 taskset -c 2,3 {result.fake_python} -m pytest "
         "tests/test_run_curation.py --tb=short -q\n"
     )
