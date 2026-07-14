@@ -2481,3 +2481,15 @@ Dormant (deliberately parked, not dropped):
   caught a first-pass ordering bug that made `--cores`/`--nice` ineffective;
   fixed and regression-pinned. Final focused wrapper invocation green, and the
   unchanged full `scripts/test-safe.sh --chunk 10000` completed successfully.
+
+- **2026-07-13 (M1 continuation: bounded run-reference lookup)** — Replaced
+  `resolve_run_dir`'s O(all runs) metadata scan with hashed per-reference files
+  outside the scanned `runs/` namespace. Existing workspaces migrate once under
+  a global lock; healthy unknown refs remain bounded afterward. Incomplete
+  migration state retains historical availability without repeating the full
+  rewrite, and storage failures retain the legacy fallback. Metadata publication
+  is atomic and index-first; imports and pruning maintain mappings explicitly.
+  Three Claude lenses found six material edges (torn metadata reads, global
+  invalidation from a leaf, scanner pollution, duplicate tie drift, concurrency
+  proof, and retry-forever partial migration); all fixed and regression-pinned.
+  Focused follow-up approved the revised marker/locking semantics.

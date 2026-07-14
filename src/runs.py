@@ -15,9 +15,8 @@ runs can be referenced in conversation without copy-pasting UUIDs.
 ~50 adjectives × ~50 nouns ≈ 2500 combinations — unique-enough for
 local use, memorable, greppable.
 
-This module is intentionally tiny: nickname() + create_run_dir() +
-write_metadata(). Wiring agent_loop / scope writers to land in the
-run-dir is incremental and lives at each call site.
+This module owns the run lifecycle, current-run routing, and durable reference
+index used to resolve handle/loop/resume IDs without scanning every run.
 """
 from __future__ import annotations
 
@@ -81,15 +80,181 @@ def run_dir(handle_id: str) -> Path:
     return runs_root() / f"{handle_id}-{nickname(handle_id)}"
 
 
+_RUN_INDEX_DIR = ".run-ref-index-v1"
+_RUN_INDEX_MARKER = ".migrated"
+
+
+def _index_dir(root: Optional[Path] = None) -> Path:
+    runs = root or runs_root()
+    return runs.parent / _RUN_INDEX_DIR
+
+
+def _index_entry_path(ref: str, root: Optional[Path] = None) -> Path:
+    digest = hashlib.sha256(ref.encode("utf-8")).hexdigest()
+    return _index_dir(root) / f"{digest}.json"
+
+
+def _metadata_refs(meta: dict) -> set:
+    refs = {str(meta.get("handle_id") or ""), str(meta.get("loop_id") or "")}
+    origin = meta.get("origin") if isinstance(meta.get("origin"), dict) else {}
+    refs.add(str(origin.get("resumed_from") or ""))
+    return {ref for ref in refs if ref}
+
+
+def _write_index_entry(ref: str, rd: Path) -> None:
+    from file_lock import atomic_write, locked_write
+    path = _index_entry_path(ref, rd.parent)
+    payload = json.dumps({"ref": ref, "run_dir": rd.name}, sort_keys=True)
+    with locked_write(path):
+        try:
+            existing = json.loads(path.read_text(encoding="utf-8"))
+            existing_name = existing.get("run_dir")
+            if (existing.get("ref") == ref
+                    and isinstance(existing_name, str)
+                    and Path(existing_name).name == existing_name
+                    and (rd.parent / existing_name).is_dir()
+                    and existing_name <= rd.name):
+                # Preserve historical scan semantics for duplicate refs: the
+                # alphabetically-first live directory wins.
+                return
+        except (FileNotFoundError, json.JSONDecodeError, OSError,
+                AttributeError, TypeError, ValueError):
+            pass
+        atomic_write(path, payload)
+
+
+def invalidate_run_index(root: Optional[Path] = None) -> None:
+    """Force one legacy metadata migration on the next indexed lookup."""
+    from file_lock import locked_write
+    marker = _index_dir(root) / _RUN_INDEX_MARKER
+    with locked_write(marker):
+        try:
+            marker.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def index_run_dir(rd: Path, meta: Optional[dict] = None) -> None:
+    """Best-effort publication of one run's durable reference mappings."""
+    try:
+        if meta is None:
+            meta = json.loads((rd / "metadata.json").read_text(encoding="utf-8"))
+        for ref in _metadata_refs(meta):
+            _write_index_entry(ref, rd)
+    except Exception:
+        # If a published metadata mutation could not be indexed, make the next
+        # miss rebuild history rather than silently making that run unreachable.
+        try:
+            invalidate_run_index(rd.parent)
+        except Exception:
+            pass
+
+
+def remove_run_index(rd: Path, meta: Optional[dict] = None) -> None:
+    """Remove known mappings for a run being pruned (stale hits also self-heal)."""
+    try:
+        if meta is None:
+            meta = json.loads((rd / "metadata.json").read_text(encoding="utf-8"))
+    except Exception:
+        meta = {}
+    from file_lock import locked_write
+    for ref in _metadata_refs(meta):
+        path = _index_entry_path(ref, rd.parent)
+        try:
+            with locked_write(path):
+                current = json.loads(path.read_text(encoding="utf-8"))
+                if current.get("run_dir") == rd.name:
+                    path.unlink()
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            continue
+
+
+def _scan_legacy_run_dirs(root: Path):
+    """Yield legacy metadata for the one-time index migration."""
+    for d in sorted(root.iterdir()):
+        if not d.is_dir() or d.name.startswith("."):
+            continue
+        try:
+            meta = json.loads((d / "metadata.json").read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        yield d, meta
+
+
+def _legacy_run_dir(ref: str, root: Path) -> Optional[Path]:
+    for rd, meta in _scan_legacy_run_dirs(root):
+        if ref in _metadata_refs(meta):
+            return rd
+    return None
+
+
+def _migration_complete(marker: Path) -> bool:
+    try:
+        state = json.loads(marker.read_text(encoding="utf-8"))
+        return bool(state.get("complete", True))
+    except Exception:
+        return False
+
+
+def _ensure_run_index(root: Path) -> bool:
+    from file_lock import atomic_write, locked_write
+    marker = _index_dir(root) / _RUN_INDEX_MARKER
+    if marker.is_file():
+        return _migration_complete(marker)
+    with locked_write(marker):
+        if marker.is_file():
+            return _migration_complete(marker)
+        failed = 0
+        for rd, meta in _scan_legacy_run_dirs(root):
+            for ref in _metadata_refs(meta):
+                try:
+                    _write_index_entry(ref, rd)
+                except Exception:
+                    failed += 1
+        complete = failed == 0
+        atomic_write(marker, json.dumps({
+            "version": 1,
+            "complete": complete,
+            "failed_entries": failed,
+        }))
+        return complete
+
+
+def _indexed_run_dir(ref: str, root: Path) -> Optional[Path]:
+    path = _index_entry_path(ref, root)
+    if not path.is_file():
+        return None
+    try:
+        entry = json.loads(path.read_text(encoding="utf-8"))
+        name = entry.get("run_dir")
+        if entry.get("ref") != ref or not isinstance(name, str) or Path(name).name != name:
+            raise ValueError("invalid run-index entry")
+        candidate = root / name
+        if candidate.is_dir():
+            return candidate
+        raise ValueError("indexed run directory is missing")
+    except (json.JSONDecodeError, ValueError, OSError, AttributeError, TypeError):
+        try:
+            path.unlink()
+        except OSError:
+            pass
+        # Repair only this reference. A stale/corrupt leaf must not invalidate
+        # the global migration marker and force unrelated misses through a
+        # second O(all runs) rebuild.
+        legacy = _legacy_run_dir(ref, root)
+        if legacy is not None:
+            _write_index_entry(ref, legacy)
+        return legacy
+
+
 def resolve_run_dir(ref: str) -> Optional[Path]:
     """Locate a per-run dir by handle_id (its dir-name prefix) or by a
     loop_id / handle_id recorded in metadata.json. Returns the dir or None.
 
-    A handle_id resolves O(1): the dir is named ``<handle_id>-<nickname>``,
-    so ``run_dir(ref)`` is a direct hit. A loop_id — what ``maro run`` prints
-    and what BACKLOG #18 asks ``maro inspect-run`` to accept — has no such
-    deterministic mapping, so fall back to a metadata scan. Best-effort:
-    unreadable dirs are skipped, never raised.
+    Handle IDs resolve directly from the deterministic directory name. Other
+    references use a hashed, per-reference durable index. The first lookup on
+    an older workspace performs one lock-guarded metadata migration; misses
+    after that are bounded and never make older resumable runs unreachable.
     """
     if not ref:
         return None
@@ -99,25 +264,22 @@ def resolve_run_dir(ref: str) -> Optional[Path]:
     root = runs_root()
     if not root.is_dir():
         return None
-    for d in sorted(root.iterdir()):
-        if not d.is_dir():
-            continue
-        meta_path = d / "metadata.json"
-        if not meta_path.is_file():
-            continue
-        try:
-            meta = json.loads(meta_path.read_text(encoding="utf-8"))
-        except Exception:
-            continue
-        if meta.get("loop_id") == ref or meta.get("handle_id") == ref:
-            return d
-        # A resumed run overwrites metadata.loop_id with the new attempt's
-        # id, so the crash-time loop_id the operator actually has in hand
-        # would otherwise become unresolvable — origin.resumed_from is where
-        # `maro resume` preserves it (see cli._cmd_resume).
-        if (meta.get("origin") or {}).get("resumed_from") == ref:
-            return d
-    return None
+    try:
+        indexed = _indexed_run_dir(ref, root)
+        if indexed is not None:
+            return indexed
+        complete = _ensure_run_index(root)
+        indexed = _indexed_run_dir(ref, root)
+        if indexed is not None or complete:
+            return indexed
+        # A best-effort migration recorded failed entries. Preserve historical
+        # reachability without repeating the whole rewrite pass on every call.
+        return _legacy_run_dir(ref, root)
+    except Exception:
+        # Index storage is an optimization, not a new availability dependency.
+        # A read-only/corrupt/lock-starved index degrades to the historical
+        # scan; healthy steady-state misses remain O(1).
+        return _legacy_run_dir(ref, root)
 
 
 def create_run_dir(
@@ -241,7 +403,12 @@ def write_metadata(
         if k not in meta or meta[k] is None:
             meta[k] = v
 
-    meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+    # Publish lookup refs first: a crash between the two writes may expose a
+    # mapping slightly early, but cannot make an otherwise-finished loop
+    # unreachable. Index failure invalidates the migration marker for repair.
+    index_run_dir(rd, meta)
+    from file_lock import atomic_write
+    atomic_write(meta_path, json.dumps(meta, indent=2))
     return meta_path
 
 
@@ -266,8 +433,9 @@ def stamp_run_metadata(fields: dict) -> Optional[Path]:
         for k, v in fields.items():
             if v is not None:
                 existing[k] = v
-        meta_path.write_text(json.dumps(existing, indent=2, default=str),
-                             encoding="utf-8")
+        index_run_dir(rd, existing)
+        from file_lock import atomic_write
+        atomic_write(meta_path, json.dumps(existing, indent=2, default=str))
         return meta_path
     except Exception:
         return None

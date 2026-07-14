@@ -46,6 +46,14 @@ otherwise unreachable: you cannot replay a call whose prompt you never kept.
 Remaining: unify rung-4 loop-log excerpts with the full captured output; no
 historical backfill (forward-only by nature).
 
+**Run references.** Handle IDs map directly to deterministic run-directory
+names. Loop IDs and pre-resume IDs use hashed leaves in the workspace
+`.run-ref-index-v1/`, giving bounded steady-state lookup without capping history.
+Existing metadata migrates once under a lock; incomplete migration or index
+storage failure retains the legacy scan as an availability fallback. The index
+is derived state maintained on metadata publication, workspace import, and
+prune; `metadata.json` remains authoritative evidence.
+
 **Post-goal curation (adornment).** A run is paid for; we don't discard it.
 `run_curation.curate_run` runs at goal-end (through the shared run-lifecycle
 close hook). It first builds and atomically persists a side-effect-free card,

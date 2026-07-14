@@ -8,6 +8,28 @@ Last split: 2026-04-16 (session 34).
 
 ---
 
+### R5: Durable run-reference index — SHIPPED (2026-07-13)
+
+`resolve_run_dir(loop_id)` previously scanned every `runs/*/metadata.json` on
+every non-handle lookup. A hard cap would have made older resumable runs
+unreachable, so lookup now uses hashed per-reference files in the workspace
+`.run-ref-index-v1/` directory. Healthy hits and post-migration misses are O(1).
+
+The first lookup on an old workspace performs one lock-serialized migration.
+An explicit incomplete marker preserves legacy fallback when individual index
+leaves cannot be written without retrying the entire migration forever.
+Metadata publishes handle, loop, and `origin.resumed_from` refs before its
+atomic replacement; workspace imports publish copied runs; prune removes known
+mappings; stale/corrupt leaves repair only their own ref. Duplicate refs retain
+the old alphabetically-first resolution. Tests prove bounded hits/misses,
+legacy/resume migration, corruption/staleness repair, partial failure,
+exceptional fallback, import/prune behavior, and concurrent first lookup.
+
+Three-lens Claude review found and fixed torn metadata publication, global
+marker invalidation from one stale leaf, scanner pollution from placing the
+index inside `runs/`, duplicate tie-break drift, missing concurrency proof, and
+retry-forever partial migration. A focused follow-up review approved the fixes.
+
 ### R5: `test-safe.sh` macOS portability — SHIPPED (2026-07-13)
 
 The resource-conscious test wrapper hard-required Linux `taskset`, selected an

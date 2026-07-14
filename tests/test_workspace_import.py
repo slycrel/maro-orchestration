@@ -47,6 +47,29 @@ def test_runs_copied_if_absent_with_provenance(tmp_path):
     assert not (copied / "metadata.json.lock").exists()
 
 
+def test_imported_run_references_are_indexed_after_prior_migration(
+        tmp_path, monkeypatch):
+    import runs
+
+    src = _mk_workspace(tmp_path / "src", runs=["aaaa1111-imported"])
+    dst = _mk_workspace(tmp_path / "dst")
+    source_meta = src / "runs" / "aaaa1111-imported" / "metadata.json"
+    source_meta.write_text(json.dumps({
+        "handle_id": "aaaa1111",
+        "loop_id": "loopIMPORTED",
+    }))
+    monkeypatch.setenv("MARO_WORKSPACE", str(dst))
+    # Complete migration before the copy to prove import does not depend on a
+    # future full rescan.
+    assert runs.resolve_run_dir("missing-before-import") is None
+
+    run_import(src, dst, "trial-x")
+
+    assert runs.resolve_run_dir("loopIMPORTED") == (
+        dst / "runs" / "aaaa1111-imported"
+    )
+
+
 def test_existing_runs_never_overwritten(tmp_path):
     src = _mk_workspace(tmp_path / "src", runs=["cccc3333-shared"])
     dst = _mk_workspace(tmp_path / "dst", runs=["cccc3333-shared"])

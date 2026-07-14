@@ -67,6 +67,15 @@ ALLOWED_DELETION_SITES = {
         "ephemeral: drain lock file",
     ("run_curation.py", "prune_run"):
         "user-invoked: explicit `prune` CLI subcommand",
+    ("runs.py", "invalidate_run_index"):
+        "ephemeral: removes only the derived migration marker so metadata can "
+        "rebuild the disposable run-reference index",
+    ("runs.py", "remove_run_index"):
+        "ephemeral: removes derived reference leaves for a user-pruned run; "
+        "the run deletion itself remains gated by run_curation.prune_run",
+    ("runs.py", "_indexed_run_dir"):
+        "ephemeral: removes one corrupt/stale derived reference leaf before "
+        "repairing it from retained metadata",
     ("sheriff.py", "check_system_health"):
         "ephemeral: deletes its own just-written health-probe file",
     ("task_store.py", "_atomic_write"):

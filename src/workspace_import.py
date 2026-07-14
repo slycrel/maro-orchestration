@@ -84,6 +84,10 @@ def import_runs(source: Path, target: Path, label: str, dry_run: bool) -> Dict:
             (dest / "imported_from.json").write_text(
                 json.dumps(marker, indent=2) + "\n"
             )
+            # A target may already have completed its one-time legacy index
+            # migration; publish copied run references explicitly.
+            from runs import index_run_dir
+            index_run_dir(dest)
         copied.append(run_dir.name)
     return {"copied": copied, "skipped_existing": skipped}
 

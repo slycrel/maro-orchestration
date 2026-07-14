@@ -547,3 +547,177 @@ def test_resolve_run_dir_by_pre_resume_loop_id(workspace):
     # The old (crash-time) loop_id — no longer metadata.loop_id — still
     # resolves via the origin.resumed_from breadcrumb.
     assert resolve_run_dir("loopCRASHED") == rd
+
+
+def test_indexed_loop_lookup_never_scans_metadata(workspace, monkeypatch):
+    import runs as runs_mod
+    from runs import open_run, resolve_run_dir, stamp_run_metadata, set_current_run_dir
+
+    try:
+        rd = open_run("indexedcase", prompt="g")
+        stamp_run_metadata({"loop_id": "loopINDEXED"})
+    finally:
+        set_current_run_dir(None)
+
+    def no_scan(root):
+        raise AssertionError("indexed lookup scanned legacy metadata")
+
+    monkeypatch.setattr(runs_mod, "_scan_legacy_run_dirs", no_scan)
+    assert resolve_run_dir("loopINDEXED") == rd
+
+
+def test_legacy_lookup_migrates_once_then_unknown_misses_are_bounded(
+        workspace, monkeypatch):
+    import runs as runs_mod
+    from runs import resolve_run_dir
+
+    root = workspace / "runs"
+    legacy = root / "legacy-layout"
+    legacy.mkdir(parents=True)
+    (legacy / "metadata.json").write_text(json.dumps({
+        "handle_id": "legacyhandle",
+        "loop_id": "loopLEGACY",
+        "origin": {"resumed_from": "loopBEFORE"},
+    }))
+
+    assert resolve_run_dir("loopLEGACY") == legacy
+    assert resolve_run_dir("loopBEFORE") == legacy
+    assert (runs_mod._index_dir(root) / runs_mod._RUN_INDEX_MARKER).is_file()
+
+    def no_scan(root):
+        raise AssertionError("post-migration miss scanned legacy metadata")
+
+    monkeypatch.setattr(runs_mod, "_scan_legacy_run_dirs", no_scan)
+    assert resolve_run_dir("unknown-loop") is None
+
+
+def test_corrupt_index_entry_repairs_from_legacy_metadata(workspace):
+    import runs as runs_mod
+    from runs import open_run, resolve_run_dir, stamp_run_metadata, set_current_run_dir
+
+    try:
+        rd = open_run("repaircase", prompt="g")
+        stamp_run_metadata({"loop_id": "loopREPAIR"})
+    finally:
+        set_current_run_dir(None)
+    entry = runs_mod._index_entry_path("loopREPAIR")
+    entry.write_text("not-json")
+
+    assert resolve_run_dir("loopREPAIR") == rd
+    assert json.loads(entry.read_text())["run_dir"] == rd.name
+
+
+def test_stale_index_entry_is_removed(workspace):
+    import shutil
+    import runs as runs_mod
+    from runs import open_run, resolve_run_dir, stamp_run_metadata, set_current_run_dir
+
+    try:
+        rd = open_run("stalecase", prompt="g")
+        stamp_run_metadata({"loop_id": "loopSTALE"})
+    finally:
+        set_current_run_dir(None)
+    entry = runs_mod._index_entry_path("loopSTALE")
+    shutil.rmtree(rd)
+
+    assert resolve_run_dir("loopSTALE") is None
+    assert not entry.exists()
+
+
+def test_index_failure_falls_back_to_legacy_scan(workspace, monkeypatch):
+    import runs as runs_mod
+    from runs import resolve_run_dir
+
+    root = workspace / "runs"
+    legacy = root / "fallback-layout"
+    legacy.mkdir(parents=True)
+    (legacy / "metadata.json").write_text(json.dumps({
+        "loop_id": "loopFALLBACK",
+    }))
+
+    def index_failed(root):
+        raise OSError("index unavailable")
+
+    monkeypatch.setattr(runs_mod, "_ensure_run_index", index_failed)
+    assert resolve_run_dir("loopFALLBACK") == legacy
+
+
+def test_partial_migration_does_not_repeat_or_drop_failed_ref(
+        workspace, monkeypatch):
+    import runs as runs_mod
+    from runs import resolve_run_dir
+
+    root = workspace / "runs"
+    legacy = root / "partial-layout"
+    legacy.mkdir(parents=True)
+    (legacy / "metadata.json").write_text(json.dumps({
+        "handle_id": "partialhandle",
+        "loop_id": "loopPARTIALINDEX",
+    }))
+    real_write = runs_mod._write_index_entry
+    attempts = {"count": 0}
+
+    def fail_loop_ref(ref, rd):
+        attempts["count"] += 1
+        if ref == "loopPARTIALINDEX":
+            raise OSError("index leaf unavailable")
+        real_write(ref, rd)
+
+    monkeypatch.setattr(runs_mod, "_write_index_entry", fail_loop_ref)
+    assert resolve_run_dir("loopPARTIALINDEX") == legacy
+    first_attempts = attempts["count"]
+    assert first_attempts > 0
+    marker = runs_mod._index_dir(root) / runs_mod._RUN_INDEX_MARKER
+    assert json.loads(marker.read_text())["complete"] is False
+
+    # The missing ref still uses its legacy availability fallback, but the
+    # O(all runs) index rewrite does not repeat indefinitely.
+    assert resolve_run_dir("loopPARTIALINDEX") == legacy
+    assert attempts["count"] == first_attempts
+
+
+def test_legacy_duplicate_ref_preserves_alphabetical_first_match(workspace):
+    from runs import resolve_run_dir
+
+    root = workspace / "runs"
+    first = root / "aaa-first"
+    second = root / "zzz-second"
+    for rd in (first, second):
+        rd.mkdir(parents=True)
+        (rd / "metadata.json").write_text(json.dumps({
+            "loop_id": "loopDUPLICATE",
+        }))
+
+    assert resolve_run_dir("loopDUPLICATE") == first
+
+
+def test_concurrent_first_lookup_runs_one_migration(workspace, monkeypatch):
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+    import runs as runs_mod
+
+    root = workspace / "runs"
+    rd = root / "legacy-concurrent"
+    rd.mkdir(parents=True)
+    (rd / "metadata.json").write_text(json.dumps({"loop_id": "loopCONCURRENT"}))
+    original_scan = runs_mod._scan_legacy_run_dirs
+    entered = threading.Event()
+    release = threading.Event()
+    scans = {"count": 0}
+
+    def held_scan(scan_root):
+        scans["count"] += 1
+        entered.set()
+        assert release.wait(timeout=5)
+        yield from original_scan(scan_root)
+
+    monkeypatch.setattr(runs_mod, "_scan_legacy_run_dirs", held_scan)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(runs_mod._ensure_run_index, root)
+        assert entered.wait(timeout=5)
+        second = pool.submit(runs_mod._ensure_run_index, root)
+        assert not second.done()
+        release.set()
+        assert first.result(timeout=5) is True
+        assert second.result(timeout=5) is True
+    assert scans["count"] == 1

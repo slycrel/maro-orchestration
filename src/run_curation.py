@@ -1196,6 +1196,8 @@ def prune_run(handle_id: str) -> bool:
     rd = _run_dir_for(handle_id)
     if rd is None or not rd.is_dir():
         return False
+    from runs import remove_run_index
+    remove_run_index(rd)
     shutil.rmtree(rd)
     return True
 

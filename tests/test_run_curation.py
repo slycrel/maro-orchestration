@@ -199,10 +199,18 @@ def test_list_runs_synthesizes_uncurated(workspace):
 
 
 def test_prune_removes_run_dir(workspace):
+    import runs as runs_mod
+
     rd = _finish("h0000011", "g", "done", achieved=True)
+    set_current_run_dir(rd)
+    runs.stamp_run_metadata({"loop_id": "loopPRUNE"})
+    set_current_run_dir(None)
+    entry = runs_mod._index_entry_path("loopPRUNE")
+    assert entry.is_file()
     assert rd.is_dir()
     assert prune_run("h0000011") is True
     assert not rd.is_dir()
+    assert not entry.exists()
 
 
 def test_prune_missing_returns_false(workspace):
