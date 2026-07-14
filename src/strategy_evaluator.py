@@ -248,8 +248,9 @@ def evaluate_strategy(
 
     # Score each outcome
     scored: List[Tuple[float, Any, float]] = []
+    from outcome_policy import is_verdict_pending
     for outcome, sim in zip(outcomes, similarities):
-        if sim < SIMILARITY_THRESHOLD:
+        if sim < SIMILARITY_THRESHOLD or is_verdict_pending(outcome):
             continue
         status_wt = _outcome_weight(outcome)
         weight = sim * status_wt

@@ -2820,3 +2820,34 @@ rejected: `mkdir(exist_ok=False)` refuses existing live or dangling symlinks,
 and retained partial evidence must remain refused rather than be reused or
 silently deleted. A focused Skeptic follow-up then returned **APPROVED**, with
 no concrete HIGH or MEDIUM correctness defect remaining.
+
+## Closure-rejection honesty stamp fails closed — completed 2026-07-14
+
+An external opposite-model audit found that the closure-restart boundary
+swallowed exceptions while stamping the rejected attempt
+`goal_achieved=False`. The real seam was broader: the ledger helper also
+returns `False` for missing rows and write failures, and the caller ignored
+that result. A present row could therefore survive as unjudged success evidence
+while a replacement loop ran. A missing row is importantly different: the
+non-fatal finalization failure left no evidence capable of misleading readers.
+
+`handle.py` now preflights row presence, permits recovery when no row exists,
+and gives a present row's idempotent verdict merge one bounded retry. Repeated
+exceptions or false returns refuse the closure restart, demote the process
+result to `incomplete`, record `closure_stamp_failed` metadata with the
+`loop_ids` join, emit an operator-visible exact reason, and return before
+deferred learning. The pre-existing durable `lesson_extraction_status=deferred`
+state now acts as quarantine: learning, strategy evaluation, inspector delight,
+and memory-context readers do not treat an unjudged deferred row as success.
+
+Fault-injection coverage exercises both exceptions and false returns after an
+actual deferred row is written and proves: exactly two bounded stamp attempts,
+only one loop, an incomplete returned handle, a quarantined unjudged row, and
+repairable run metadata. A separate absent-row test proves that a tolerated
+memory-finalization failure does not suppress the closure recovery loop.
+
+The first three-persona opposite-model pass rejected the initial draft. Its
+substantive findings drove the absent/error split, durable quarantine,
+`loop_ids` preservation, checked metadata writes, exact operator reason, and
+false-return coverage. A broader delivered-attempt persistence inconsistency is
+tracked separately as EXT-AUDIT-2 rather than hidden by this boundary fix.

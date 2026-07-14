@@ -273,6 +273,14 @@ def test_inspect_session_delight_signals():
     assert "task_completed_successfully" in sq.delight_signals
 
 
+def test_inspect_session_pending_verdict_is_not_success():
+    outcome = _make_outcome(status="done", summary="Task completed successfully.")
+    outcome["lesson_extraction_status"] = "deferred"
+    sq = inspect_session(outcome, adapter=None)
+    assert "task_completed_successfully" not in sq.delight_signals
+    assert sq.overall_quality != "good"
+
+
 def test_inspect_session_no_delight_if_stuck():
     outcome = _make_outcome(status="stuck", summary="Failed to complete.")
     sq = inspect_session(outcome, adapter=None)

@@ -130,7 +130,9 @@ def bootstrap_context(*, max_outcomes: int = 5, max_lessons: int = 10) -> str:
         for o in outcomes[:max_outcomes]:
             # Verdict-preferred (SF-2): judged goal-not-achieved renders as a
             # failure even when the loop finished.
-            icon = "✓" if (o.status == "done" and o.goal_achieved is not False) else "✗"
+            from outcome_policy import is_verdict_pending
+            icon = ("?" if is_verdict_pending(o) else
+                    ("✓" if (o.status == "done" and o.goal_achieved is not False) else "✗"))
             verdict_note = " [goal NOT achieved]" if o.goal_achieved is False else ""
             parts.append(f"- {icon} {o.goal[:60]} ({o.task_type}, {o.recorded_at[:10]}){verdict_note}: {o.summary[:80]}")
 

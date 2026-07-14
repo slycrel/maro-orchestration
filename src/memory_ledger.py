@@ -547,7 +547,9 @@ def annotate_outcome_verdict(
     return updated["hit"]
 
 
-def load_outcome_by_loop_id(loop_id: str) -> Optional[Outcome]:
+def load_outcome_by_loop_id(
+    loop_id: str, *, strict: bool = False,
+) -> Optional[Outcome]:
     """Load the NEWEST outcomes row matching loop_id, rehydrated as an Outcome.
 
     Companion to annotate_outcome_verdict: the deferred-learning path
@@ -565,6 +567,8 @@ def load_outcome_by_loop_id(loop_id: str) -> Optional[Outcome]:
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
     except OSError:
+        if strict:
+            raise
         return None
     for line in reversed(lines):
         line = line.strip()
@@ -1270,7 +1274,9 @@ def load_outcomes_with_context(
         for o in recent:
             # Verdict-preferred (SF-2): judged goal-not-achieved renders as a
             # failure even though the loop finished.
-            icon = "\u2713" if (o.status == "done" and o.goal_achieved is not False) else "\u2717"
+            from outcome_policy import is_verdict_pending
+            icon = ("?" if is_verdict_pending(o) else
+                    ("\u2713" if (o.status == "done" and o.goal_achieved is not False) else "\u2717"))
             verdict_note = " [goal NOT achieved]" if o.goal_achieved is False else ""
             parts.append(f"- {icon} {o.goal[:60]} ({o.task_type}, {o.recorded_at[:10]}){verdict_note}: {o.summary[:80]}")
 

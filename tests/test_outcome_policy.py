@@ -15,6 +15,7 @@ from outcome_policy import is_learnable_outcome
         ({"success_class": "", "status": "done"}, False),
         ({"status": "done", "goal_achieved": True}, True),
         ({"status": "done"}, True),
+        ({"status": "done", "lesson_extraction_status": "deferred"}, False),
         ({"status": "done", "goal_achieved": False}, False),
         ({"status": "stuck", "goal_achieved": True}, False),
     ],

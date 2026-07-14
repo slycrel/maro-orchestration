@@ -1662,15 +1662,84 @@ def _handle_impl(
                 # to deferred learning and strategy scoring.
                 _superseded_loop_id = getattr(loop_result, "loop_id", "") or ""
                 try:
-                    from memory import annotate_outcome_verdict as _aov_superseded
-                    _aov_superseded(
-                        _superseded_loop_id,
-                        goal_achieved=False,
-                        goal_verdict_source="closure",
-                        goal_verdict_confidence=float(_closure.confidence),
+                    from memory import (
+                        annotate_outcome_verdict as _aov_superseded,
+                        load_outcome_by_loop_id as _load_superseded,
                     )
-                except Exception:
-                    pass
+                    # A loop-finalization memory failure is deliberately
+                    # non-fatal.  If it produced no row, there is no dishonest
+                    # evidence to protect and the recovery restart may proceed.
+                    # A present row, however, must carry the negative verdict.
+                    _superseded_row = _load_superseded(
+                        _superseded_loop_id, strict=True)
+                    _stamp_ok = _superseded_row is None
+                    _stamp_exc_seen = None
+                    if _superseded_row is not None:
+                        # The merge is loop-id keyed and idempotent.  One
+                        # bounded retry absorbs transient lock/write failures.
+                        for _stamp_attempt in range(2):
+                            try:
+                                _stamp_ok = _aov_superseded(
+                                    _superseded_loop_id,
+                                    goal_achieved=False,
+                                    goal_verdict_source="closure",
+                                    goal_verdict_confidence=float(_closure.confidence),
+                                )
+                            except Exception as _stamp_call_exc:
+                                _stamp_exc_seen = _stamp_call_exc
+                                _stamp_ok = False
+                            if _stamp_ok:
+                                break
+                    if not _stamp_ok:
+                        detail = (_stamp_exc_seen or
+                                  "outcomes row was present but not updated")
+                        raise RuntimeError(str(detail))
+                except Exception as _stamp_exc:
+                    # Fail closed at the restart boundary. The rejected run's
+                    # outcome row cannot be trusted by deferred learning until
+                    # its negative verdict is durable, so do not spawn a retry
+                    # or continue into learning/quality paths that could score
+                    # the verdict-less `done` row as success.
+                    _stamp_reason = (
+                        "closure rejected the completed attempt, but its negative "
+                        f"verdict could not be persisted: {_stamp_exc}"
+                    )
+                    log.error("handle: refusing closure restart — %s", _stamp_reason)
+                    loop_result.status = "incomplete"
+                    loop_result.stuck_reason = _stamp_reason
+                    try:
+                        from runs import stamp_run_metadata as _stamp_failed_meta
+                        _meta_path = _stamp_failed_meta({
+                            "goal_achieved": False,
+                            "goal_verdict_source": "closure_stamp_failed",
+                            "goal_verdict_confidence": float(_closure.confidence),
+                            "goal_verdict_summary": _stamp_reason[:300],
+                            "loop_ids": list(_run_loop_ids),
+                        })
+                        if _meta_path is None:
+                            raise RuntimeError("active run metadata was not updated")
+                    except Exception as _meta_exc:
+                        log.error(
+                            "handle: closure stamp failure metadata also failed: %s",
+                            _meta_exc,
+                        )
+                    if channel is not None:
+                        try:
+                            channel.emit("error", text=_stamp_reason)
+                        except Exception:
+                            pass
+                    return _loop_result_to_handle(
+                        loop_result,
+                        handle_id=handle_id,
+                        message=message,
+                        confidence=confidence,
+                        reason=reason,
+                        started_at=started_at,
+                        project=project,
+                        extra_text=(
+                            "\n\n⚠️ Closure restart refused: " + _stamp_reason
+                        ),
+                    )
                 _gap_lines = "\n".join(f"- {g}" for g in _closure.gaps) or "(none specified)"
                 _closure_ctx = (
                     f"The previous run declared done, but closure verification found gaps.\n"

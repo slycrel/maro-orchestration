@@ -16,11 +16,36 @@ Current pass (2026-07-14, twentieth): benchmark/eval cells now reserve
 collision-resistant per-cell projects or retained direct-Director workspaces,
 so repeated experiments cannot inherit the launch repo or earlier artifacts.
 
+Current pass (2026-07-14, twenty-first): closure-rejection verdict persistence
+now distinguishes an absent row from a failed update, retries the idempotent
+write once, and fails closed before restart. Pending deferred rows are durable
+quarantine rather than success evidence; failed-stamp runs retain loop joins.
+
 ---
 
 ## Actionable Stack
 
 Ordered open work that matters. Top of the list is next.
+
+### EXT-AUDIT-2. Unify verdict-persistence policy across delivered and escalated attempts
+
+The closure-rejection boundary now has an explicit absent/update-failed split,
+bounded retry, durable pending-verdict quarantine, and operator-visible failure.
+An opposite-model architectural review found that the ordinary delivered
+closure stamp (`handle.py` after the restart block), provenance stamp, and
+post-escalation stamp still use independent best-effort calls. In particular,
+the delivered-attempt path can ignore a false return and then finalize deferred
+learning, changing the row from `deferred` to `completed` while it remains
+unjudged. That defeats the pending-verdict quarantine for that separate path.
+
+- [ ] Design one shared verdict-persistence helper/result type for present,
+  absent, updated, and write-failed outcomes, then apply it to all verdict
+  writers without turning a legitimately absent optional memory row into a
+  user-goal failure.
+- [ ] Define delivery semantics when the work is complete but its audit stamp
+  cannot persist: user-visible warning vs process demotion, whether learning is
+  skipped, and how repair converges. Cover false returns, exceptions, metadata
+  failure, and post-escalation paths.
 
 ### R5. Independent holistic + adversarial review of the rolling 48-hour changeset (2026-07-13)
 

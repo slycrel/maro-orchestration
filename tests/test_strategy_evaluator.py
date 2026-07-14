@@ -23,13 +23,17 @@ from strategy_evaluator import (
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _make_outcome(goal, status, outcome_id=None, summary="", lessons=None):
+def _make_outcome(
+    goal, status, outcome_id=None, summary="", lessons=None,
+    lesson_extraction_status="",
+):
     return SimpleNamespace(
         outcome_id=outcome_id or f"oc-{goal[:8]}",
         goal=goal,
         status=status,
         summary=summary,
         lessons=lessons or [],
+        lesson_extraction_status=lesson_extraction_status,
     )
 
 
@@ -124,6 +128,16 @@ class TestEvaluateStrategyNoOutcomes:
             _make_outcome("bake cookies with chocolate", "done"),
         ]
         report = evaluate_strategy("trade options on crypto market", outcomes=outcomes)
+        assert report.verdict == "UNCERTAIN"
+
+    def test_pending_deferred_verdict_is_not_scored_as_success(self):
+        outcomes = [_make_outcome(
+            "search web market data", "done",
+            lesson_extraction_status="deferred",
+        )]
+        report = evaluate_strategy("search web market data", outcomes=outcomes)
+        assert report.above_threshold == 0
+        assert report.done_count == 0
         assert report.verdict == "UNCERTAIN"
         assert report.above_threshold == 0
 

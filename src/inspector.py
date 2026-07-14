@@ -564,8 +564,11 @@ def inspect_session(outcome: dict, adapter=None) -> SessionQuality:
     # aligned the narrative reads; unjudged keeps the alignment-based
     # heuristic (weaker signal, not a verified success).
     achieved = outcome.get("goal_achieved")
+    from outcome_policy import is_verdict_pending
+    verdict_pending = is_verdict_pending(outcome)
     delight_signals: List[str] = []
-    if status == "done" and alignment_score >= _ALIGNMENT_GOOD and achieved is not False:
+    if (status == "done" and alignment_score >= _ALIGNMENT_GOOD
+            and achieved is not False and not verdict_pending):
         delight_signals.append("task_completed_successfully")
     if achieved is True:
         delight_signals.append("goal_verified_achieved")
@@ -582,6 +585,8 @@ def inspect_session(outcome: dict, adapter=None) -> SessionQuality:
     # but didn't deliver. Capped at "fair" (not "poor": closure verdicts are
     # noisy on build goals, 2026-07-09 dogfood).
     if achieved is False and overall_quality == "good":
+        overall_quality = "fair"
+    if verdict_pending and overall_quality == "good":
         overall_quality = "fair"
 
     # LLM inspector notes (brief, optional)

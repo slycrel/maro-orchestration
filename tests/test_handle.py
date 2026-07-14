@@ -3271,9 +3271,11 @@ class TestClosureStatusHonesty:
             self._fake_closure(False, 0.9, gaps=["missing artifact"]),
             self._fake_closure(True, 0.95),
         ))
+        from memory_ledger import annotate_outcome_verdict as _real_annotate
         with patch("agent_loop.run_agent_loop", side_effect=_fake_run), \
              patch("intent.check_goal_clarity", return_value={"clear": True}), \
              patch("director.verify_goal_completion", side_effect=lambda *a, **k: next(verdicts)), \
+             patch("memory.annotate_outcome_verdict", wraps=_real_annotate), \
              self._no_quality_gate():
             result = handle("build X", force_lane="agenda", dry_run=False)
 
@@ -3283,6 +3285,84 @@ class TestClosureStatusHonesty:
         assert rows["loop-rejected"].goal_achieved is False
         assert rows["loop-rejected"].goal_verdict_source == "closure"
         assert rows["loop-recovered"].goal_achieved is True
+
+    @pytest.mark.parametrize("stamp_failure", ("exception", "false"))
+    def test_restart_refuses_when_rejected_attempt_stamp_fails(
+            self, monkeypatch, tmp_path, stamp_failure):
+        """A persistence failure at the honesty boundary must not be swallowed
+        or followed by a retry that leaves attempt 1 looking successful."""
+        self._setup(monkeypatch, tmp_path)
+        from memory import record_outcome, load_outcomes
+        from runs import run_dir
+
+        calls = []
+
+        def _fake_run(*args, **kwargs):
+            calls.append(kwargs.copy())
+            record_outcome(
+                "build X", "done", "summary", lessons=[],
+                loop_id="loop-rejected", lesson_extraction_status="deferred")
+            return self._fake_loop_result(status="done", loop_id="loop-rejected")
+
+        _stamp_patch = (
+            patch("memory.annotate_outcome_verdict",
+                  side_effect=OSError("ledger lock failed"))
+            if stamp_failure == "exception"
+            else patch("memory.annotate_outcome_verdict", return_value=False)
+        )
+        with patch("agent_loop.run_agent_loop", side_effect=_fake_run), \
+             patch("intent.check_goal_clarity", return_value={"clear": True}), \
+             patch("director.verify_goal_completion",
+                   return_value=self._fake_closure(
+                       False, 0.9, gaps=["missing artifact"])), \
+             _stamp_patch as stamp_mock, \
+             self._no_quality_gate():
+            result = handle("build X", force_lane="agenda", dry_run=False)
+
+        rows = [r for r in load_outcomes(limit=10)
+                if r.loop_id == "loop-rejected"]
+        meta = json.loads((run_dir(result.handle_id) / "metadata.json").read_text())
+        assert len(calls) == 1, "restart must be blocked until the verdict is durable"
+        assert stamp_mock.call_count == 2, "the idempotent stamp gets one bounded retry"
+        assert meta["loop_ids"] == ["loop-rejected"]
+        assert result.status == "incomplete"
+        assert "negative verdict could not be persisted" in (result.result or "")
+        assert rows and rows[-1].goal_achieved is None
+        assert rows[-1].lesson_extraction_status == "deferred"
+        assert meta["goal_achieved"] is False
+        assert meta["goal_verdict_source"] == "closure_stamp_failed"
+
+    def test_restart_proceeds_when_finalization_wrote_no_outcome_row(
+            self, monkeypatch, tmp_path):
+        """No row is distinct from a failed update: there is no dishonest
+        evidence to quarantine, so closure recovery remains available."""
+        self._setup(monkeypatch, tmp_path)
+
+        calls = []
+
+        def _fake_run(*args, **kwargs):
+            calls.append(kwargs.copy())
+            return self._fake_loop_result(
+                status="done", loop_id=f"missing-row-{len(calls)}")
+
+        verdicts = iter((
+            self._fake_closure(False, 0.9, gaps=["missing artifact"]),
+            self._fake_closure(True, 0.95),
+        ))
+        with patch("agent_loop.run_agent_loop", side_effect=_fake_run), \
+             patch("intent.check_goal_clarity", return_value={"clear": True}), \
+             patch("director.verify_goal_completion",
+                   side_effect=lambda *a, **k: next(verdicts)), \
+             patch("memory.annotate_outcome_verdict") as stamp_mock, \
+             self._no_quality_gate():
+            result = handle("build X", force_lane="agenda", dry_run=False)
+
+        assert len(calls) == 2
+        assert result.status == "done"
+        # Only the delivered second attempt reaches the ordinary final-verdict
+        # stamp.  The absent superseded row is never treated as a write error.
+        assert stamp_mock.call_count == 1
+        assert stamp_mock.call_args.args[0] == "missing-row-2"
 
     def test_provenance_failure_dominates_positive_closure(
             self, monkeypatch, tmp_path):
@@ -3296,11 +3376,13 @@ class TestClosureStatusHonesty:
             record_outcome("build X", "done", "summary", lessons=[], loop_id="loop-prov")
             return self._fake_loop_result(status="done", loop_id="loop-prov")
 
+        from memory_ledger import annotate_outcome_verdict as _real_annotate
         with patch("agent_loop.run_agent_loop", side_effect=_fake_run), \
              patch("intent.check_goal_clarity", return_value={"clear": True}), \
              patch("director.verify_goal_completion",
                    return_value=self._fake_closure(True, 0.95)), \
              patch("handle._provenance_missing", return_value=["report.md"]), \
+             patch("memory.annotate_outcome_verdict", wraps=_real_annotate), \
              self._no_quality_gate():
             result = handle("build X", force_lane="agenda", dry_run=False)
 
