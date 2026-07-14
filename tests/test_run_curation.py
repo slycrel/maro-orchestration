@@ -62,7 +62,7 @@ def test_curate_records_failed_miners_and_writes_valid_card(workspace, monkeypat
     _finish("h00000cf", "build the thing", "done", achieved=True)
     specs = [
         run_curation.CuratorSpec(failed_curator),
-        run_curation.CuratorSpec(succeeding_curator),
+        run_curation.CuratorSpec(succeeding_curator, provides=("survived",)),
     ]
     monkeypatch.setattr(run_curation, "_SPEC_BY_NAME", {s.name: s for s in specs})
     monkeypatch.setattr(run_curation, "_PROVIDER_OF", {})
@@ -969,6 +969,22 @@ class TestCuratorTopoSort:
         with pytest.raises(RuntimeError, match="later phase"):
             _topo_sort_curators(specs)
 
+    def test_required_dependency_cannot_target_optional_output(self):
+        from run_curation import CuratorSpec, _topo_sort_curators
+
+        def producer(run_dir, meta, card):
+            pass
+
+        def consumer(run_dir, meta, card):
+            pass
+
+        specs = [
+            CuratorSpec(producer, optional_provides=("maybe",)),
+            CuratorSpec(consumer, requires=("maybe",)),
+        ]
+        with pytest.raises(RuntimeError, match="declares it optional"):
+            _topo_sort_curators(specs)
+
 
 class TestCuratorDependencyOutcomes:
     def test_maintenance_rejects_card_without_curation_provenance(self, workspace):
@@ -997,13 +1013,13 @@ class TestCuratorDependencyOutcomes:
             run_curation.CuratorSpec(producer, provides=("x",)),
             run_curation.CuratorSpec(dependent, provides=("y",), requires=("x",)),
             run_curation.CuratorSpec(transitive, requires=("y",)),
-            run_curation.CuratorSpec(independent),
+            run_curation.CuratorSpec(independent, provides=("independent",)),
         ]
         monkeypatch.setattr(run_curation, "_CURATOR_SPECS", specs)
         monkeypatch.setattr(run_curation, "_SPEC_BY_NAME", {s.name: s for s in specs})
         monkeypatch.setattr(
             run_curation, "_PROVIDER_OF",
-            {key: s.name for s in specs for key in s.provides},
+            {key: s.name for s in specs for key in s.output_keys},
         )
         card = {}
         outcome = run_curation._run_phase(
@@ -1030,14 +1046,19 @@ class TestCuratorDependencyOutcomes:
             card["consumer_ran"] = True
 
         specs = [
-            run_curation.CuratorSpec(producer, provides=("optional",)),
-            run_curation.CuratorSpec(consumer, requires=("optional",)),
+            run_curation.CuratorSpec(
+                producer, optional_provides=("optional",)
+            ),
+            run_curation.CuratorSpec(
+                consumer, provides=("consumer_ran",),
+                optional_requires=("optional",)
+            ),
         ]
         monkeypatch.setattr(run_curation, "_CURATOR_SPECS", specs)
         monkeypatch.setattr(run_curation, "_SPEC_BY_NAME", {s.name: s for s in specs})
         monkeypatch.setattr(
             run_curation, "_PROVIDER_OF",
-            {key: s.name for s in specs for key in s.provides},
+            {key: s.name for s in specs for key in s.output_keys},
         )
         card = {}
         outcome = run_curation._run_phase([producer, consumer], workspace, {}, card)
@@ -1045,3 +1066,49 @@ class TestCuratorDependencyOutcomes:
         assert card["consumer_ran"] is True
         assert outcome["completed"] == ["producer", "consumer"]
         assert outcome["skipped_dependency"] == []
+
+    @pytest.mark.parametrize("mode", ["missing_required", "undeclared_write"])
+    def test_contract_violation_fails_curator_and_rolls_back_card(
+            self, workspace, monkeypatch, mode):
+        import run_curation
+
+        def broken(rd, meta, card):
+            if mode == "undeclared_write":
+                card["surprise"] = True
+
+        spec = run_curation.CuratorSpec(broken, provides=("promised",))
+        monkeypatch.setattr(run_curation, "_SPEC_BY_NAME", {spec.name: spec})
+        monkeypatch.setattr(run_curation, "_PROVIDER_OF", {"promised": spec.name})
+        card = {"existing": True}
+
+        outcome = run_curation._run_phase([broken], workspace, {}, card)
+
+        assert card == {"existing": True}
+        assert outcome["completed"] == []
+        assert outcome["failed"][0]["curator"] == "broken"
+        expected = (
+            "wrote undeclared keys ['surprise']"
+            if mode == "undeclared_write"
+            else "did not write required keys ['promised']"
+        )
+        assert expected in outcome["failed"][0]["error"]
+
+    def test_overwrite_is_undeclared_and_nested_mutation_rolls_back(
+            self, workspace, monkeypatch):
+        import run_curation
+
+        def broken(rd, meta, card):
+            card["owner_key"] = "clobbered"
+            card["nested"]["items"].append("leaked")
+
+        spec = run_curation.CuratorSpec(broken)
+        monkeypatch.setattr(run_curation, "_SPEC_BY_NAME", {spec.name: spec})
+        monkeypatch.setattr(run_curation, "_PROVIDER_OF", {})
+        card = {"owner_key": "original", "nested": {"items": []}}
+
+        outcome = run_curation._run_phase([broken], workspace, {}, card)
+
+        assert card == {"owner_key": "original", "nested": {"items": []}}
+        assert "wrote undeclared keys ['nested', 'owner_key']" in (
+            outcome["failed"][0]["error"]
+        )

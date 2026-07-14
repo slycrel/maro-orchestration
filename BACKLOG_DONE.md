@@ -8,6 +8,24 @@ Last split: 2026-04-16 (session 34).
 
 ---
 
+### R3: Runtime-honest curator contracts — SHIPPED (2026-07-13)
+
+`CuratorSpec` declarations previously ordered curators but did not verify that
+runtime behavior matched the declared card-key contract. Specs now distinguish
+mandatory from conditional outputs (`provides` / `optional_provides`) and
+presence requirements from ordering-only dependencies (`requires` /
+`optional_requires`). The graph rejects mandatory consumers of optional
+outputs.
+
+Each curator executes against an isolated deep copy of the card. Its complete
+before/after delta must contain every mandatory output and no undeclared write,
+overwrite, deletion, or nested mutation; only a validated result is committed.
+A failure therefore cannot leak partial card state, and dependent curators skip
+from structured provenance as before. Two real Claude reviewers found and fixed
+ambient-presence authorship checks, overwrite blindness, shallow rollback, and
+optional-dependency ambiguity. Focused follow-up review approved; regressions
+cover every failure mode plus legitimate optional omission.
+
 ### R3: Typed origin ancestry contract — SHIPPED (2026-07-13)
 
 Task, run, recall, navigator, and thread-brain paths previously passed an

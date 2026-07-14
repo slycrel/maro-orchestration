@@ -2,7 +2,12 @@
 
 What to do next, in what order. Updated each session. Deferred ideas live in BACKLOG.md; completed phase history in docs/history/ROADMAP_ARCHIVE.md (ROADMAP.md is a stub). This file is the executable queue.
 
-Last updated: 2026-07-13 (M1 continuation checkpoint — R3 typed origin
+Last updated: 2026-07-13 (M1 continuation checkpoint — R3 runtime-honest
+curator contracts SHIPPED: mandatory/optional outputs and dependencies are
+distinct, every curator runs against an isolated card transaction, and only a
+validated delta commits. Claude review found and fixed overwrite blindness,
+ambient authorship checks, shallow rollback, and optional-dependency ambiguity;
+follow-up approved. Previous checkpoint: R3 typed origin
 ancestry contract SHIPPED: one optional-field `Origin` TypedDict now spans
 task, run, recall, navigator, and thread-brain boundaries without changing the
 plain-JSON runtime format. Three-lens Claude review caused the custom merge

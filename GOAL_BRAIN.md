@@ -2514,3 +2514,13 @@ Dormant (deliberately parked, not dropped):
   custom merge helper (wrong semantics for queue defaults, speculative surface)
   and duplicate nested navigator type; both were deleted. A follow-up reviewer
   approved the smaller native `Origin(...)` design.
+
+- **2026-07-13 (M1 continuation: curator declarations are executable
+  contracts)** — Split mandatory/optional producer outputs and consumer
+  dependencies, then made each curator invocation transactional: it mutates an
+  isolated deep copy, its full delta is checked for missing or undeclared work,
+  and only a valid result commits. This catches new keys, overwrites, deletes,
+  and nested mutations while preserving conditional-output semantics. Two
+  Claude reviewers found the first pass's ambient-presence check, overwrite
+  blind spot, shallow rollback, and optional-require ambiguity; all were fixed,
+  and focused follow-up approved.

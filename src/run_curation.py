@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import json
 import shutil
+from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -892,19 +893,31 @@ def prior_decision_context(goal: str, *, window_hours: float = 24.0,
 class CuratorSpec:
     """One curator's declared data contract.
 
-    `provides`: card keys this curator writes.
-    `requires`: card keys this curator reads that some OTHER curator must
-    have written first — every key here must appear in some other spec's
-    `provides`, or the graph is invalid (see _topo_sort_curators).
+    `provides`: card keys every successful invocation must write.
+    `optional_provides`: card keys this curator may write when applicable.
+    `requires`: card keys this curator expects to be present; each must be a
+    required output of another curator.
+    `optional_requires`: ordering dependencies whose producer may legitimately
+    omit the key; the consumer must read these defensively.
     """
     fn: Any
     provides: tuple = ()
+    optional_provides: tuple = ()
     requires: tuple = ()
+    optional_requires: tuple = ()
     phase: str = "curation"
 
     @property
     def name(self) -> str:
         return self.fn.__name__
+
+    @property
+    def output_keys(self) -> tuple:
+        return self.provides + self.optional_provides
+
+    @property
+    def dependency_keys(self) -> tuple:
+        return self.requires + self.optional_requires
 
 
 _CURATOR_SPECS: List[CuratorSpec] = [
@@ -912,22 +925,26 @@ _CURATOR_SPECS: List[CuratorSpec] = [
                 provides=("success_class", "status", "goal_achieved",
                           "goal_verdict_summary", "total_cost_usd")),
     CuratorSpec(inventory_assets, provides=("inventory", "mineable")),
-    CuratorSpec(excerpt_result, provides=("result_excerpt", "result_path")),
-    CuratorSpec(spend_transparency, provides=("spend_transparency",),
+    CuratorSpec(excerpt_result,
+                optional_provides=("result_excerpt", "result_path")),
+    CuratorSpec(spend_transparency, optional_provides=("spend_transparency",),
                 requires=("success_class", "total_cost_usd")),
-    CuratorSpec(promote_skills_lite, provides=("skills_lite",),
+    CuratorSpec(promote_skills_lite, optional_provides=("skills_lite",),
                 requires=("success_class",), phase="maintenance"),
     CuratorSpec(scrape_scripts,              # #2 script scraper
-                provides=("reusable_scripts",), requires=("inventory",)),
+                optional_provides=("reusable_scripts",), requires=("inventory",)),
     CuratorSpec(flag_skill_candidate,         # #1 skill scraper (flag, not a 2nd promotion path)
-                provides=("skill_candidate",),
-                requires=("success_class", "reusable_scripts", "inventory", "skills_lite"),
+                optional_provides=("skill_candidate",),
+                requires=("success_class", "inventory"),
+                optional_requires=("reusable_scripts", "skills_lite"),
                 phase="maintenance"),
     CuratorSpec(rescue_partial,               # #4 partial-run rescue
-                provides=("partial_rescue",), requires=("success_class", "inventory")),
+                optional_provides=("partial_rescue",),
+                requires=("success_class", "inventory")),
     CuratorSpec(index_decision_prior,         # #3 decision-prior indexer (owner ask)
                 provides=("decision_prior",),
-                requires=("success_class", "inventory", "result_excerpt", "partial_rescue")),
+                requires=("success_class", "inventory"),
+                optional_requires=("result_excerpt", "partial_rescue")),
 ]
 
 
@@ -952,7 +969,7 @@ def _topo_sort_curators(specs: List[CuratorSpec]) -> List[Any]:
             raise RuntimeError(
                 f"run_curation: curator {spec.name!r} has unknown phase {spec.phase!r}"
             )
-        for key in spec.provides:
+        for key in spec.output_keys:
             existing = provider_of.get(key)
             if existing is not None and existing != spec.name:
                 raise RuntimeError(
@@ -964,7 +981,7 @@ def _topo_sort_curators(specs: List[CuratorSpec]) -> List[Any]:
     edges: Dict[str, set] = {spec.name: set() for spec in specs}
     indegree: Dict[str, int] = {spec.name: 0 for spec in specs}
     for spec in specs:
-        for key in spec.requires:
+        for key in spec.dependency_keys:
             producer = provider_of.get(key)
             if producer is None:
                 raise RuntimeError(
@@ -972,6 +989,11 @@ def _topo_sort_curators(specs: List[CuratorSpec]) -> List[Any]:
                     f"which no registered curator provides"
                 )
             producer_spec = by_name[producer]
+            if key in spec.requires and key not in producer_spec.provides:
+                raise RuntimeError(
+                    f"run_curation: curator {spec.name!r} requires {key!r}, "
+                    f"but provider {producer!r} declares it optional"
+                )
             if phase_order[producer_spec.phase] > phase_order[spec.phase]:
                 raise RuntimeError(
                     f"run_curation: curator {spec.name!r} in phase {spec.phase!r} "
@@ -1009,7 +1031,7 @@ def _topo_sort_curators(specs: List[CuratorSpec]) -> List[Any]:
 _ORDERED_CURATORS: List[Any] = _topo_sort_curators(_CURATOR_SPECS)
 _SPEC_BY_NAME = {spec.name: spec for spec in _CURATOR_SPECS}
 _PROVIDER_OF = {
-    key: spec.name for spec in _CURATOR_SPECS for key in spec.provides
+    key: spec.name for spec in _CURATOR_SPECS for key in spec.output_keys
 }
 CURATORS: List[Any] = [
     fn for fn in _ORDERED_CURATORS if _SPEC_BY_NAME[fn.__name__].phase == "curation"
@@ -1048,7 +1070,7 @@ def _run_phase(curators: List[Any], rd: Path, meta: dict, card: dict,
     for curator in curators:
         spec = _SPEC_BY_NAME[curator.__name__]
         blocked = []
-        for key in spec.requires:
+        for key in spec.dependency_keys:
             producer = _PROVIDER_OF[key]
             if statuses.get(producer) != "completed":
                 blocked.append(producer)
@@ -1060,8 +1082,33 @@ def _run_phase(curators: List[Any], rd: Path, meta: dict, card: dict,
             })
             statuses[curator.__name__] = "skipped_dependency"
             continue
+        # Curators are plugin-like execution boundaries: their behavior is
+        # input-dependent, so registry checks alone cannot prove the declared
+        # output contract. Run against an isolated JSON-like snapshot and
+        # publish only after the runtime delta validates.
+        before = deepcopy(card)
+        working = deepcopy(card)
         try:
-            curator(rd, meta, card)
+            curator(rd, meta, working)
+            all_keys = set(before) | set(working)
+            changed = {
+                key for key in all_keys
+                if key not in before or key not in working
+                or before[key] != working[key]
+            }
+            undeclared = sorted(changed - set(spec.output_keys))
+            missing = sorted(set(spec.provides) - changed)
+            if undeclared or missing:
+                details = []
+                if undeclared:
+                    details.append(f"wrote undeclared keys {undeclared}")
+                if missing:
+                    details.append(f"did not write required keys {missing}")
+                raise RuntimeError(
+                    f"curator contract violation: {'; '.join(details)}"
+                )
+            card.clear()
+            card.update(working)
             outcome["completed"].append(curator.__name__)
             statuses[curator.__name__] = "completed"
         except Exception as exc:
