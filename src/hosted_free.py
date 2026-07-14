@@ -13,14 +13,15 @@ plugs them in as an ADDITIONAL rung of the validation ladder, alongside
 Design mirrors `local_models.py` on purpose (same shape the codebase already
 knows how to reason about):
 
-  * **Detect-and-use-if-present.** No `GROQ_API_KEY`/`GEMINI_API_KEY` in env
-    or the credentials `.env` → `configured_providers()` returns `[]` and
-    `build_hosted_free_adapter()` returns `None`. The whole module is inert
-    by default — callers fall back to the paid path exactly as if this file
-    didn't exist.
+  * **Explicit opt-in.** `validate.hosted_free.enabled` defaults false. When
+    enabled, no `GROQ_API_KEY`/`GEMINI_API_KEY` in env or the credentials
+    `.env` → `configured_providers()` returns `[]` and the module stays inert.
+    A credential alone is not treated as consent to send step output.
 
-  * **Latency breaker**, same semantics as `local_models.latency_guard_tripped`
-    / `report_latency`: a provider slower than `max_latency_ms()` trips a
+  * **Transport timeout + latency breaker**, with the request timeout derived
+    from `max_latency_ms()` and breaker semantics matching
+    `local_models.latency_guard_tripped` / `report_latency`: a provider slower
+    than `max_latency_ms()` trips a
     per-provider, per-process breaker (with a cold-start grace pass on the
     very first call) so a bad network day doesn't tax every subsequent step.
 
@@ -81,10 +82,10 @@ def _cfg(key: str, default):
 
 
 def hosted_free_enabled() -> bool:
-    """Master switch. Even when True, an unset API key still makes the
-    corresponding provider a no-op — this only lets an operator force the
-    tier off without touching env vars."""
-    val = _cfg("enabled", True)
+    """Explicit egress opt-in; an unset API key still makes the tier inert."""
+    # A credential proves authentication, not consent to send step output to
+    # another provider. External validation is therefore explicit opt-in.
+    val = _cfg("enabled", False)
     if isinstance(val, str):
         return val.strip().lower() not in ("false", "0", "no", "off")
     return bool(val)
@@ -148,6 +149,12 @@ def max_latency_ms() -> int:
         return max(0, int(_cfg("max_latency_ms", 20000)))
     except (TypeError, ValueError):
         return 20000
+
+
+def request_timeout_s() -> float:
+    """Hard transport timeout for a hosted-free request."""
+    cap = max_latency_ms()
+    return cap / 1000.0 if cap else 120.0
 
 
 def rate_limit_default_cooldown_s() -> float:
@@ -354,7 +361,9 @@ class _HostedFreeLadder(LLMAdapter):
             self._active_provider = name
             _t0 = time.monotonic()
             try:
-                resp = adapter.complete(messages, **kwargs)
+                call_kwargs = dict(kwargs)
+                call_kwargs.setdefault("request_timeout_s", request_timeout_s())
+                resp = adapter.complete(messages, **call_kwargs)
             except requests.exceptions.HTTPError as exc:
                 status = exc.response.status_code if exc.response is not None else None
                 if status == 429:

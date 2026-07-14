@@ -1298,6 +1298,17 @@ class TestPersonaPrefix:
         r = _apply_prefixes("garrytan: analyze this market")
         assert r.persona_bundled_tier == "power"
 
+    def test_explicit_effort_tier_is_not_mislabeled_as_persona_bundled(self):
+        from handle import _apply_prefixes
+        r = _apply_prefixes("effort:high garrytan: analyze this market")
+        assert r.model_tier == "power"
+        assert r.persona_bundled_tier == ""
+
+    def test_strip_prefixes_does_not_warn_about_recall_only_conflicts(self, caplog):
+        from prefixes import strip_prefixes
+        assert strip_prefixes("effort:low effort:high remember this") == "remember this"
+        assert not caplog.records
+
     def test_generic_persona_prefix_has_no_bundled_tier(self):
         from handle import _apply_prefixes
         r = _apply_prefixes("persona:builder: do it")
@@ -1419,6 +1430,16 @@ class TestPersonaForcingIntegration:
         monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
         handle("garrytan: do it", dry_run=True, force_lane="agenda", persona="critic")
         assert self._latest_run_model(tmp_path) != "power"
+
+    def test_explicit_effort_survives_persona_override(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        handle(
+            "effort:high garrytan: do it",
+            dry_run=True,
+            force_lane="agenda",
+            persona="critic",
+        )
+        assert self._latest_run_model(tmp_path) == "power"
 
     def test_garrytans_bundled_tier_still_applies_when_not_overridden(self, monkeypatch, tmp_path):
         # Companion to the above: garrytan:'s own power-tier bump must still

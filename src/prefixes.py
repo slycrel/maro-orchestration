@@ -115,7 +115,7 @@ PREFIX_REGISTRY: List[PrefixRule] = [
 ]
 
 
-def apply_prefixes(message: str) -> PrefixResult:
+def apply_prefixes(message: str, *, warn_conflicts: bool = True) -> PrefixResult:
     """Strip all recognized magic prefixes from `message` and return a PrefixResult.
 
     Prefixes are matched case-insensitively and stripped in registry order.
@@ -134,11 +134,12 @@ def apply_prefixes(message: str) -> PrefixResult:
                     continue
                 requested = m.group(1).lower()
                 if result.forced_persona and result.forced_persona != requested:
-                    log.warning(
-                        "conflicting forced personas: %r already set, ignoring %r "
-                        "(from prefix 'persona:%s:')",
-                        result.forced_persona, requested, requested,
-                    )
+                    if warn_conflicts:
+                        log.warning(
+                            "conflicting forced personas: %r already set, ignoring %r "
+                            "(from prefix 'persona:%s:')",
+                            result.forced_persona, requested, requested,
+                        )
                 elif not result.forced_persona:
                     result.forced_persona = requested
                 result.message = result.message[m.end():].lstrip()
@@ -149,25 +150,29 @@ def apply_prefixes(message: str) -> PrefixResult:
             result.message = result.message[len(rule.prefix):].lstrip()
             if rule.flag:
                 setattr(result, rule.flag, True)
+            rule_set_model_tier = False
             if rule.model_tier:
                 if result.model_tier and result.model_tier != rule.model_tier:
-                    log.warning(
-                        "conflicting model tiers: %r already set, ignoring %r (from prefix %r)",
-                        result.model_tier, rule.model_tier, rule.prefix,
-                    )
+                    if warn_conflicts:
+                        log.warning(
+                            "conflicting model tiers: %r already set, ignoring %r (from prefix %r)",
+                            result.model_tier, rule.model_tier, rule.prefix,
+                        )
                 elif not result.model_tier:
                     result.model_tier = rule.model_tier
+                    rule_set_model_tier = True
             if rule.max_steps:
                 result.max_steps = rule.max_steps
             if rule.persona:
                 if result.forced_persona and result.forced_persona != rule.persona:
-                    log.warning(
-                        "conflicting forced personas: %r already set, ignoring %r (from prefix %r)",
-                        result.forced_persona, rule.persona, rule.prefix,
-                    )
+                    if warn_conflicts:
+                        log.warning(
+                            "conflicting forced personas: %r already set, ignoring %r (from prefix %r)",
+                            result.forced_persona, rule.persona, rule.prefix,
+                        )
                 elif not result.forced_persona:
                     result.forced_persona = rule.persona
-                    if rule.model_tier:
+                    if rule_set_model_tier:
                         result.persona_bundled_tier = rule.model_tier
             changed = True
             break  # restart registry scan after each match
@@ -180,4 +185,4 @@ def strip_prefixes(text: str) -> str:
     The shape recall.py wants at the matching boundary (it only cares about
     the text, not the parsed flags) — see recall._strip_for_match.
     """
-    return apply_prefixes(text).message
+    return apply_prefixes(text, warn_conflicts=False).message

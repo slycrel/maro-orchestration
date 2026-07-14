@@ -26,11 +26,14 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 import hosted_free as hf
 from llm import GroqAdapter, GeminiAdapter, LLMMessage, LLMResponse
 
+_real_hosted_free_enabled = hf.hosted_free_enabled
+
 
 @pytest.fixture(autouse=True)
-def _reset_hosted_free_state():
+def _reset_hosted_free_state(monkeypatch):
     """Every test gets a clean breaker/latency-report slate."""
     hf.reset_cache()
+    monkeypatch.setattr(hf, "hosted_free_enabled", lambda: True)
     yield
     hf.reset_cache()
 
@@ -45,6 +48,19 @@ def test_inert_when_no_keys_configured(monkeypatch):
     monkeypatch.setattr("hosted_free._load_env", lambda: {})
     assert hf.configured_providers() == []
     assert hf.available() is False
+    assert hf.build_hosted_free_adapter() is None
+
+
+def test_default_requires_explicit_opt_in(monkeypatch):
+    monkeypatch.setattr(hf, "_cfg", lambda key, default: default)
+    assert _real_hosted_free_enabled() is False
+
+
+def test_api_key_alone_does_not_enable_egress(monkeypatch):
+    monkeypatch.setenv("GROQ_API_KEY", "gsk-test")
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.setattr(hf, "_cfg", lambda key, default: default)
+    monkeypatch.setattr(hf, "hosted_free_enabled", _real_hosted_free_enabled)
     assert hf.build_hosted_free_adapter() is None
 
 
@@ -163,6 +179,7 @@ def test_successful_completion_via_groq(monkeypatch):
     assert adapter.model_key == "llama-3.1-8b-instant"
     mock_post.assert_called_once()
     assert "api.groq.com" in mock_post.call_args[0][0]
+    assert mock_post.call_args.kwargs["timeout"] == pytest.approx(hf.max_latency_ms() / 1000)
 
 
 def test_successful_completion_via_gemini(monkeypatch):

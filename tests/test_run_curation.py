@@ -50,6 +50,28 @@ def test_curate_writes_run_card(workspace):
     assert card["success_class"] == "success"
 
 
+def test_curate_records_failed_miners_and_writes_valid_card(workspace, monkeypatch):
+    import run_curation
+
+    def failed_curator(rd, meta, card):
+        raise RuntimeError("miner exploded")
+
+    def succeeding_curator(rd, meta, card):
+        card["survived"] = True
+
+    _finish("h00000cf", "build the thing", "done", achieved=True)
+    monkeypatch.setattr(run_curation, "CURATORS", [failed_curator, succeeding_curator])
+    card = run_curation.curate_run("h00000cf")
+
+    assert card["survived"] is True
+    assert card["_curation"]["completed"] == ["succeeding_curator"]
+    assert card["_curation"]["failed"] == [
+        {"curator": "failed_curator", "error": "miner exploded"}
+    ]
+    on_disk = json.loads((runs.run_dir("h00000cf") / "run_card.json").read_text())
+    assert on_disk == card
+
+
 def test_classify_done_not_achieved(workspace):
     _finish("h0000002", "g", "done", achieved=False)
     card = curate_run("h0000002")

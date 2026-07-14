@@ -1017,12 +1017,18 @@ def curate_run(handle_id: str, status: Optional[str] = None,
             "started_at": meta.get("started_at"),
             "ended_at": meta.get("ended_at"),
         }
+        curation = {"completed": [], "failed": []}
         for curator in CURATORS:
             try:
                 curator(rd, meta, card)
-            except Exception:
-                pass  # one bad miner must not sink the card
-        (rd / "run_card.json").write_text(json.dumps(card, indent=2))
+                curation["completed"].append(curator.__name__)
+            except Exception as exc:
+                curation["failed"].append({"curator": curator.__name__, "error": str(exc)[:300]})
+        card["_curation"] = curation
+        from file_lock import atomic_write, locked_write
+        card_path = rd / "run_card.json"
+        with locked_write(card_path):
+            atomic_write(card_path, json.dumps(card, indent=2))
         return card
     except Exception:
         return None

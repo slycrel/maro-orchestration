@@ -22,10 +22,10 @@ Export flow: export -> scrub -> human review -> seal.
     REVIEW.md + artifacts/) plus a loose ``<name>.REVIEW.md`` companion for
     a human to actually read.
   * ``seal`` stamps ``review.human_reviewed: true`` + ``reviewed_at`` +
-    ``review_manifest_sha256`` (the sha256 of the REVIEW.md a human read —
-    from the loose companion if present, so edits before sealing count)
-    into pack.json and rewrites the archive. Refuses without an explicit
-    confirmation (interactive prompt or ``--yes``).
+    hashes of the REVIEW.md and its canonical artifact metadata+payload set.
+    The payload digest is embedded in REVIEW.md as a local consistency check.
+    This is not a signature or proof of who authored the archive. Refuses
+    without an explicit confirmation (interactive prompt or ``--yes``).
 
 Import flow: import (trust demotion) -> adopt (explicit promotion).
 
@@ -110,6 +110,28 @@ def _sha256_file(path: Path) -> str:
     return h.hexdigest()
 
 
+def _payload_sha256(artifacts: List[Dict[str, Any]], files: Dict[str, bytes]) -> str:
+    """Canonical digest of reviewed artifact metadata, paths, and payloads."""
+    h = hashlib.sha256()
+    by_path = {str(a.get("path", "")): a for a in artifacts}
+    for path in sorted(by_path):
+        metadata = json.dumps(
+            by_path[path], sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+        ).encode("utf-8")
+        raw = files[path]
+        h.update(str(len(metadata)).encode("ascii"))
+        h.update(b"\0")
+        h.update(metadata)
+        h.update(b"\0")
+        h.update(path.encode("utf-8"))
+        h.update(b"\0")
+        h.update(str(len(raw)).encode("ascii"))
+        h.update(b"\0")
+        h.update(raw)
+        h.update(b"\0")
+    return h.hexdigest()
+
+
 def _resolve_workspace(workspace: Optional[Path]) -> Path:
     if workspace is not None:
         return Path(workspace).expanduser().resolve()
@@ -173,6 +195,7 @@ def build_manifest(*, name: str, label: str, artifacts: List[Dict[str, Any]]) ->
             "human_reviewed": False,
             "reviewed_at": None,
             "review_manifest_sha256": None,
+            "review_payload_sha256": None,
         },
         "trust_policy": "demote-to-hypothesis",
     }
@@ -390,11 +413,21 @@ def seal_pack(pack_path: Path, *, confirmed: bool) -> Dict[str, Any]:
 
     companion = _review_companion_path(pack_path)
     review_text = companion.read_text(encoding="utf-8") if companion.exists() else archived_review
+    payload_sha = _payload_sha256(manifest.get("artifacts", []), artifact_bytes)
+    marker = f"Reviewed payload SHA-256: `{payload_sha}`"
+    old_marker = "\n\n---\n\nReviewed payload SHA-256: `"
+    marker_at = review_text.rfind(old_marker)
+    if marker_at >= 0 and review_text[marker_at + len(old_marker):].strip().endswith("`"):
+        review_text = review_text[:marker_at]
+    # The digest lives in the human-reviewed artifact as well as pack.json.
+    # A payload+manifest swap that retains the reviewed copy therefore fails.
+    review_text = review_text.rstrip() + f"\n\n---\n\n{marker}\n"
 
     manifest["review"] = {
         "human_reviewed": True,
         "reviewed_at": _now_iso(),
         "review_manifest_sha256": _sha256_text(review_text),
+        "review_payload_sha256": payload_sha,
     }
 
     with tarfile.open(pack_path, "w:gz") as tar:
@@ -837,18 +870,29 @@ def import_pack(
             for a in manifest.get("artifacts", [])
         }
 
-    expected_hash = review.get("review_manifest_sha256")
-    if expected_hash and _sha256_text(archived_review) != expected_hash:
-        raise SystemExit(
-            "import refused: REVIEW.md in the archive does not match the sealed "
-            "hash — possible post-seal tampering"
-        )
+    if review.get("human_reviewed"):
+        expected_hash = review.get("review_manifest_sha256")
+        if not expected_hash or _sha256_text(archived_review) != expected_hash:
+            raise SystemExit(
+                "import refused: REVIEW.md in the archive does not match the sealed "
+                "hash — possible post-seal tampering"
+            )
 
-    # The seal only binds REVIEW.md's hash — verify every artifact's own
-    # declared sha256 too, or a sealed pack's payload could be swapped after
-    # the human read REVIEW.md while the seal itself still checks out
-    # (prove-it-works: the review gate is worthless if what ships isn't what
-    # was reviewed). Fail closed on missing or mismatched hashes.
+        expected_payload = review.get("review_payload_sha256")
+        marker = f"Reviewed payload SHA-256: `{expected_payload}`" if expected_payload else ""
+        actual_payload = _payload_sha256(
+            manifest.get("artifacts", []),
+            {k: v.encode("utf-8") for k, v in artifact_bytes.items()},
+        )
+        if (not expected_payload or marker not in archived_review
+                or actual_payload != expected_payload):
+            raise SystemExit(
+                "import refused: archived artifacts do not match the payload digest "
+                "embedded in the human-reviewed REVIEW.md"
+            )
+
+    # Independently verify every artifact's declared sha256 too. Fail closed
+    # on missing or mismatched hashes even for --allow-unreviewed imports.
     for a in manifest.get("artifacts", []):
         p = a.get("path", "")
         declared = a.get("sha256")

@@ -13,16 +13,17 @@ Last reviewed: 2026-07-13, fourth pass same day — independent holistic review 
 
 Ordered open work that matters. Top of the list is next.
 
-### R5. Independent holistic review of the rolling 48-hour changeset — 5 open findings (2026-07-13)
+### R5. Independent holistic + adversarial review of the rolling 48-hour changeset (2026-07-13)
 
 Codex review of `git diff d717915e..8aa9876` (138 files, ~20k added
 lines), with architecture first and security, concurrency, correctness,
 operability, maintainability, canonical tests, and real-Docker E2E as the
-supporting lenses. These are open findings; no product code was changed in
-the review.
+supporting lenses. The initial review changed no product code. The contained
+fixes marked below were implemented after the adversarial pass; architectural
+work remains explicit rather than being hidden behind a checkbox.
 
-- [ ] **HIGH — a sealed portable-learning pack can be modified after human
-  review and still import successfully** (`src/pack.py:368-410, 833-859`).
+- [x] **HIGH — the local-review seal failed to bind the reviewed payload while
+  claiming post-review tamper detection** (`src/pack.py:368-410, 833-859`).
   The seal hashes `REVIEW.md`, while artifact hashes live in the same mutable
   `pack.json`; neither is authenticated outside the archive. Reproduced
   end-to-end: seal a pack whose review contains `SAFE CONTENT`, replace the
@@ -34,7 +35,11 @@ the review.
   with a key/signature outside the archive; for a local review workflow only,
   bind the reviewed artifact-set digest at seal time and stop describing it as
   post-seal tamper protection. Add the exact demonstrated swap as a regression
-  test.
+  test. **Fixed 2026-07-13:** the reviewed copy now embeds a canonical digest
+  covering artifact metadata, paths, and bytes; import rejects the reproduced
+  artifact+manifest-hash swap. The docs now accurately call this a local
+  consistency seal, not adversarial authenticity; external signatures remain
+  the future answer if cross-party authorship is required.
 - [ ] **MEDIUM — portable import routes trust-bearing writes through a
   process-global environment mutation and uses unlocked read/check/write
   sequences** (`src/pack.py:715-793`). `_memory_dir_override()` temporarily
@@ -46,7 +51,7 @@ the review.
   context into memory writers; as an interim CLI-only containment, serialize
   the whole override/import critical section and convert shared writes to
   locked/atomic operations. Add a two-target threaded/process test.
-- [ ] **MEDIUM — merely having a Groq or Gemini credential implicitly opts
+- [x] **MEDIUM — merely having a Groq or Gemini credential implicitly opts
   step results into third-party data egress, and the advertised latency cap
   does not bound a call** (`src/hosted_free.py:83-90`,
   `src/step_exec.py:1590-1628`, `src/llm.py:2025-2030`). Hosted-free defaults
@@ -56,6 +61,9 @@ the review.
   Fix direction: make hosted-free egress explicitly opt-in (or introduce one
   shared provider-egress policy) and thread a tier-specific request timeout
   through `OpenAICompatAdapter` so the configured cap is enforceable.
+  **Fixed 2026-07-13:** explicit opt-in now defaults OFF and the configured
+  latency ceiling is the HTTP transport timeout, with docs and regression
+  coverage for both boundaries.
 - [ ] **MEDIUM — run curation mixes pure card construction with hidden,
   trust-bearing mutations behind blanket best-effort exception handling, then
   writes the card non-atomically** (`src/run_curation.py:998-1028`; skills-lite
@@ -68,6 +76,9 @@ the review.
   `run_card.json` atomically. This overlaps R3's declared-vs-actual
   `CuratorSpec` residual but is broader: it is about runtime failure semantics
   and side-effect ownership, not only spec drift.
+  **Partial 2026-07-13:** miner failures are now recorded structurally in the
+  card and the card is lock-guarded + atomically replaced. Dependency skips
+  and the pure-card/maintenance phase split remain open.
 - [ ] **MEDIUM/LOW — the execution-fence setup boundary silently fails open**
   (`src/agent_loop.py:235-323`). Project-dir creation, cwd ContextVar binding,
   container scratch-clone setup, and rw-root policy now sit under one blanket
@@ -77,6 +88,23 @@ the review.
   error or stuck result; keep only genuinely optional adornments best-effort,
   with narrow logged exceptions. Add fault-injection tests at directory
   creation and cwd/policy binding.
+
+Adversarial follow-ups:
+
+- [x] **LOW — prefix provenance was inferred from equal tier values**, so
+  `effort:high garrytan:` plus an explicit persona override could discard the
+  user's explicit effort tier (`src/prefixes.py`, `src/handle.py`). Fixed by
+  tracking whether the persona rule itself supplied the tier; regression added.
+- [x] **LOW — recall-only prefix stripping emitted dispatch conflict warnings.**
+  `strip_prefixes()` now uses a quiet parse mode; dispatch parsing still warns.
+- [ ] **LOW — loop-id resolution performs an unbounded, name-sorted metadata
+  scan** (`src/runs.py:102-113`). Do not paper this over with a hard cap that
+  makes older resumable runs unreachable; add a durable loop-id-to-run index
+  (and migration/fallback for existing runs), then keep lookup bounded.
+- [ ] **LOW — stale container/worktree cleanup can leak resources after PID
+  reuse** (`src/container_exec.py:653-703`, `src/worktree.py:632-635`). Pair
+  owner PID with process start time, boot ID, or a run-scoped liveness token;
+  current failure direction is retention/leakage, not false deletion.
 
 Architectural follow-on: the highest-change boundary modules are now
 `llm.py` (2,509 lines), `handle.py` (2,425), `step_exec.py` (1,766),
@@ -512,8 +540,9 @@ All adversarially verified (41/42 confirmed). The two 1.0-blockers first:
 
 **Code SHIPPED 2026-07-13** (`src/hosted_free.py` + `GroqAdapter`/`GeminiAdapter`
 in `src/llm.py`, wired into `step_exec.verify_step` as Tier 1b between local
-and paid). Fully inert with no key set — the only thing left is Jeremy
-creating `GROQ_API_KEY`/`GEMINI_API_KEY` and confirming the free-tier RPM
+and paid). Fully inert unless explicitly enabled, and inert with no key set —
+the only thing left is Jeremy setting `validate.hosted_free.enabled: true`,
+creating `GROQ_API_KEY`/`GEMINI_API_KEY`, and confirming the free-tier RPM
 numbers below still hold against the live endpoints (they were verified
 2026-07-12 from research, not yet from a real call). See BACKLOG_DONE for
 implementation detail once keys are live and this has a real-traffic pass.

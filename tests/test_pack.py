@@ -55,7 +55,8 @@ class TestBuildManifest:
         assert m["name"] == "n"
         assert m["origin"]["label"] == "l"
         assert m["origin"]["scrubber_version"] == 1
-        assert m["review"] == {"human_reviewed": False, "reviewed_at": None, "review_manifest_sha256": None}
+        assert m["review"] == {"human_reviewed": False, "reviewed_at": None,
+                               "review_manifest_sha256": None, "review_payload_sha256": None}
         assert m["trust_policy"] == "demote-to-hypothesis"
 
 
@@ -267,10 +268,11 @@ class TestSealPack:
         edited = companion.read_text(encoding="utf-8") + "\n<!-- reviewer note -->\n"
         companion.write_text(edited, encoding="utf-8")
         manifest = seal_pack(pack_path, confirmed=True)
-        assert manifest["review"]["review_manifest_sha256"] == pack_module._sha256_text(edited)
         with tarfile.open(pack_path, "r:gz") as tar:
             archived = tar.extractfile("REVIEW.md").read().decode("utf-8")
-        assert archived == edited
+        assert manifest["review"]["review_manifest_sha256"] == pack_module._sha256_text(archived)
+        assert archived.startswith(edited.rstrip())
+        assert "Reviewed payload SHA-256:" in archived
 
 
 # ---------------------------------------------------------------------------
@@ -295,7 +297,8 @@ class TestDefaultDenylist:
 # Import / adopt fixtures
 # ---------------------------------------------------------------------------
 
-def _rewrite_pack(pack_path: Path, *, manifest_updates: dict = None, review_text: str = None) -> None:
+def _rewrite_pack(pack_path: Path, *, manifest_updates: dict = None,
+                  review_text: str = None, artifact_updates: dict = None) -> None:
     with tarfile.open(pack_path, "r:gz") as tar:
         manifest = json.loads(tar.extractfile("pack.json").read().decode("utf-8"))
         cur_review = tar.extractfile("REVIEW.md").read().decode("utf-8")
@@ -303,6 +306,8 @@ def _rewrite_pack(pack_path: Path, *, manifest_updates: dict = None, review_text
         artifact_bytes = {n: tar.extractfile(n).read() for n in member_names}
     if manifest_updates:
         manifest.update(manifest_updates)
+    if artifact_updates:
+        artifact_bytes.update(artifact_updates)
     new_review = review_text if review_text is not None else cur_review
     with tarfile.open(pack_path, "w:gz") as tar:
         pack_module._add_tar_text(tar, "pack.json", json.dumps(manifest, indent=2) + "\n")
@@ -333,6 +338,9 @@ def _add_artifact(pack_path: Path, *, cls: str, relpath: str, content: str) -> N
             info.size = len(data)
             info.mtime = 0
             tar.addfile(info, io.BytesIO(data))
+    # This helper is building a newly reviewed fixture, not simulating an
+    # attacker. Re-seal so the reviewed payload digest covers the added row.
+    seal_pack(pack_path, confirmed=True)
 
 
 def _export_and_seal(src_ws: Path, tmp_path: Path, *, name="src-pack", **export_kwargs) -> Path:
@@ -380,6 +388,22 @@ class TestImportPack:
         pack_path = _export_and_seal(src_ws, tmp_path)
         _rewrite_pack(pack_path, review_text="tampered content, hash won't match")
         with pytest.raises(SystemExit):
+            import_pack(pack_path, label="l", target=target_ws)
+
+    def test_refuses_payload_and_manifest_hash_swap_that_retains_review(self, tmp_path, target_ws):
+        src_ws = _make_workspace(tmp_path / "src")
+        (src_ws / "skills" / "s.md").write_text("SAFE CONTENT", encoding="utf-8")
+        pack_path = _export_and_seal(src_ws, tmp_path)
+        manifest = read_pack_manifest(pack_path)
+        artifact = manifest["artifacts"][0]
+        tampered = "TAMPERED AFTER REVIEW"
+        artifact["sha256"] = pack_module._sha256_text(tampered)
+        _rewrite_pack(
+            pack_path,
+            manifest_updates={"artifacts": manifest["artifacts"]},
+            artifact_updates={artifact["path"]: tampered.encode("utf-8")},
+        )
+        with pytest.raises(SystemExit, match="payload digest"):
             import_pack(pack_path, label="l", target=target_ws)
 
     def test_standing_rule_demoted_to_hypothesis(self, tmp_path, target_ws):

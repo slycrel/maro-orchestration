@@ -2022,8 +2022,10 @@ class OpenAICompatAdapter(LLMAdapter):
             ]
             payload["tool_choice"] = tool_choice
 
+        request_timeout = float(kwargs.get("request_timeout_s", 120))
+
         def _do_request():
-            r = requests.post(f"{self._base_url}/chat/completions", headers=headers, json=payload, timeout=120)
+            r = requests.post(f"{self._base_url}/chat/completions", headers=headers, json=payload, timeout=request_timeout)
             r.raise_for_status()
             return r
         _retry_kwargs = {} if self._max_retries is None else {"max_retries": self._max_retries}

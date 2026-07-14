@@ -134,7 +134,7 @@ Rationale:
     {"class": "lessons",    "path": "artifacts/memory/long/lessons.jsonl", "rows": 41, "sha256": "..."},
     {"class": "rules",      "path": "artifacts/memory/standing_rules.jsonl", "rows": 6, "sha256": "..."}
   ],
-  "review": {"human_reviewed": true, "reviewed_at": "...", "review_manifest_sha256": "..."},
+  "review": {"human_reviewed": true, "reviewed_at": "...", "review_manifest_sha256": "...", "review_payload_sha256": "..."},
   "trust_policy": "demote-to-hypothesis"
 }
 ```
@@ -289,8 +289,13 @@ Concretely:
      *were* redacted highlighted — the human reads what will actually ship.
    - The pack is written **unsealed** (`review.human_reviewed: false`).
      `maro-pack seal` (or `export --seal` after an interactive confirmation)
-     stamps `human_reviewed: true` + `reviewed_at` + the sha256 of the
-     reviewed `REVIEW.md`, so post-review tampering is detectable.
+     stamps `human_reviewed: true` + `reviewed_at`, hashes the reviewed
+     `REVIEW.md`, and embeds a canonical artifact-metadata-and-payload digest
+     in that reviewed copy. Import rejects payload/manifest drift from the
+     retained reviewed copy. This is a local review consistency seal, **not a
+     cryptographic signature or author identity**: an adversary able to
+     replace the entire archive and reviewed copy can recompute every hash.
+     Cross-party authenticity would require an external key/signature.
    - `maro-pack import` **refuses unsealed packs** by default;
      `--allow-unreviewed` exists for self-to-self transfers.
 3. **Migration is exempt** from scrubbing entirely (same owner, secrets are
