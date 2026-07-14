@@ -809,6 +809,23 @@ class TestPriorDecisionSurfacing:
             "for finance summarize the quarterly sales report")
         assert "h0000q4" in block
 
+    def test_same_project_semantic_rephrase_surfaces(self, workspace):
+        create_run_dir(
+            "h0000q6", prompt="investigate stale prices in the market feed",
+            lane="agenda", model="claude",
+            extra_metadata={"goal_achieved": False,
+                            "project": "polymarket-edges"})
+        finalize_run("h0000q6", status="stuck")
+        curate_run("h0000q6")
+
+        from run_curation import prior_decision_context
+        block = prior_decision_context(
+            "find another useful trading signal",
+            project="polymarket-edges",
+        )
+
+        assert "h0000q6" in block
+
     def test_standalone_prior_decision_context(self, workspace):
         create_run_dir("h0000q2", prompt="rephrasable goal alpha", lane="agenda",
                        model="claude", extra_metadata={"goal_achieved": True})

@@ -70,7 +70,7 @@ class PriorAttempt:
     handle_id: str       # run-dir linkage
     status: str          # done | stuck | error | ...
     when: str            # ISO timestamp
-    match: str           # "exact" | "near" (similarity >= 0.9)
+    match: str           # "exact" | "near" (>= 0.9) | "project"
 
 @dataclass
 class ThreadIdentity:
@@ -87,6 +87,7 @@ class RecallResult:
     standing_rules: str                   #   inject_* formatting verbatim —
     decisions: str                        #   they are already prompt-shaped
     knowledge: str
+    project_artifacts: str                # bounded path inventory, no contents
     sources: dict                         # instrumentation: per-substrate counts + ms
 
     def as_context_block(self) -> str: ...      # one injectable string, sized cap
@@ -105,6 +106,7 @@ def recall(goal: str, *,
 |---|---|---|---|
 | origin ancestry → ThreadIdentity (runs/ metadata) | ✓ | ✓ (pass-through) | ✓ |
 | prior attempts (outcomes.jsonl + runs/ recent window) | ✓ | ✓ | ✓ |
+| same-project family match + persistent artifact paths | ✓ | ✓ | ✓ |
 | tiered lessons (`inject_lessons_for_task`) | — | ✓ | ✓ |
 | standing rules (`inject_standing_rules`) | — | ✓ | ✓ |
 | decisions (`inject_decisions`) | — | ✓ | ✓ |
@@ -113,7 +115,15 @@ def recall(goal: str, *,
 | correspondence graph walk (Mage v1) | — | — | ✓ |
 
 Dispatch is deliberately thin — identity + history only, no LLM calls, pure local
-file reads, fast enough to run on every task dequeue. The loop slice (live since
+file reads, fast enough to run on every task dequeue. Project identity is a
+deterministic family key: a rephrased goal explicitly routed to (or literally
+naming) the same project matches prior runs even when word overlap is low. Recall
+also lists a bounded, newest-first set of durable root/artifact paths (the scan
+itself is capped at 200 entries; rendering at 12 paths / 600 characters) so the
+planner can inspect and reuse prior side-quest products; it does not inject their
+potentially large or untrusted contents. Project-less semantic family inference remains intentionally
+unbuilt rather than weakening the lexical threshold and cross-contaminating goals.
+The loop slice (live since
 2026-06-11) is `_build_loop_context`'s eight memory substrates behind the seam —
 the table above predates the relocation; the full set is lessons, standing rules,
 decisions, graveyard, failure notes, learning activity (captain's-log bridge),

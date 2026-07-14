@@ -854,20 +854,27 @@ def index_decision_prior(rd: Path, meta: dict, card: dict) -> None:
 
 
 def prior_decision_context(goal: str, *, window_hours: float = 24.0,
-                           k: int = 3, exclude_handle_id: str = "") -> str:
+                           k: int = 3, exclude_handle_id: str = "",
+                           project: str = "") -> str:
     """Standalone entry point: detect a retry/rephrase of `goal` (reusing
     recall's similarity match — exact + near, 0.9 threshold) and return the
     matched attempts' decision-priors as one injectable block.
 
     recall() calls format_prior_decisions() directly on the attempts it already
     computed; this convenience wrapper is for callers/tests that hold only the
-    goal text. Calls recall's public find_prior_attempts() (adversarial-review
+    goal text (and, when supplied, its persistent project-family key). Calls
+    recall's public find_prior_attempts() (adversarial-review
     R1 batch-1 finding #2 — this used to reach into recall's private
     _find_prior_attempts). Lazy import of recall keeps the two modules
     cycle-free."""
     try:
         from recall import find_prior_attempts
-        attempts = find_prior_attempts(goal, window_hours=window_hours)
+        attempts = find_prior_attempts(
+            goal,
+            window_hours=window_hours,
+            project=project,
+            exclude_handle_id=exclude_handle_id,
+        )
     except Exception:
         return ""
     return format_prior_decisions(attempts, goal=goal,

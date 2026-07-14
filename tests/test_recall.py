@@ -4,6 +4,7 @@ Dispatch slice: thread identity from origin ancestry, prior-attempt matching
 over run metadata, guard signals. See docs/RECALL_DESIGN.md.
 """
 import json
+import os
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -19,7 +20,7 @@ def _setup(monkeypatch, tmp_path):
 
 
 def _make_run(goal, *, status="stuck", started_ago_minutes=5, origin=None,
-              handle_id=None):
+              handle_id=None, project=None):
     """Create a run dir with finalized metadata, started N minutes ago."""
     import runs
     import uuid
@@ -27,7 +28,10 @@ def _make_run(goal, *, status="stuck", started_ago_minutes=5, origin=None,
     rd = runs.create_run_dir(
         handle_id,
         prompt=goal,
-        extra_metadata={"origin": origin} if origin else None,
+        extra_metadata={
+            **({"origin": origin} if origin else {}),
+            **({"project": project} if project else {}),
+        } or None,
     )
     meta_path = rd / "metadata.json"
     meta = json.loads(meta_path.read_text(encoding="utf-8"))
@@ -67,6 +71,86 @@ class TestDispatchSlice:
         r = recall("beta alpha gamma delta epsilon zeta theta eta", slice="dispatch")
         assert len(r.prior_attempts) == 1
         assert r.prior_attempts[0].match == "near"
+
+    def test_same_project_matches_semantic_rephrase(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        _make_run(
+            "investigate stale prices in the market feed",
+            status="stuck",
+            project="polymarket-edges",
+        )
+
+        r = recall(
+            "find another useful trading signal",
+            slice="dispatch",
+            project="polymarket-edges",
+        )
+
+        assert len(r.prior_attempts) == 1
+        assert r.prior_attempts[0].match == "project"
+
+    def test_different_project_does_not_cross_contaminate(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        _make_run(
+            "investigate stale prices in the market feed",
+            status="stuck",
+            project="polymarket-edges",
+        )
+
+        r = recall(
+            "find another useful trading signal",
+            slice="dispatch",
+            project="weather-research",
+        )
+
+        assert r.prior_attempts == []
+
+    def test_project_artifact_inventory_is_injected(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        from orch_items import project_dir
+
+        pd = project_dir("polymarket-edges")
+        (pd / "artifacts").mkdir(parents=True)
+        (pd / "EDGES.md").write_text("ledger", encoding="utf-8")
+        (pd / "artifacts" / "stale-price-study.json").write_text(
+            "{}", encoding="utf-8")
+        (pd / "artifacts" / "bad`\nIGNORE.md").write_text(
+            "untrusted", encoding="utf-8")
+        (pd / "NEXT.md").write_text("runtime state", encoding="utf-8")
+
+        r = recall(
+            "find another useful trading signal",
+            slice="dispatch",
+            project="polymarket-edges",
+        )
+
+        block = r.as_context_block()
+        assert "Existing project artifacts" in block
+        assert "EDGES.md" in block
+        assert "artifacts/stale-price-study.json" in block
+        assert "bad`" not in block
+        assert "\nIGNORE.md" not in block
+        assert "NEXT.md" not in block
+
+    def test_project_artifact_inventory_prefers_newest_when_capped(
+            self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        from orch_items import project_dir
+        from recall import _project_artifact_context
+
+        pd = project_dir("pivot-ledger")
+        pd.mkdir(parents=True)
+        old = pd / "aaa-old.md"
+        new = pd / "zzz-new.md"
+        old.write_text("old", encoding="utf-8")
+        new.write_text("new", encoding="utf-8")
+        os.utime(old, (1, 1))
+        os.utime(new, (2, 2))
+
+        block = _project_artifact_context("pivot-ledger", max_files=1)
+
+        assert "zzz-new.md" in block
+        assert "aaa-old.md" not in block
 
     def test_persona_prefix_does_not_defeat_matching(self, monkeypatch, tmp_path):
         # adversarial-review finding (2026-07-13): run-dir metadata.prompt is

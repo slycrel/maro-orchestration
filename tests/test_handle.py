@@ -3455,6 +3455,30 @@ class TestProjectlessDispatchFence:
 
         assert calls and calls[0].get("project") == "my-proj"
 
+    def test_resolved_project_is_stamped_and_given_to_dispatch_recall(
+            self, monkeypatch, tmp_path):
+        self._setup(monkeypatch, tmp_path)
+        from unittest.mock import MagicMock, patch
+        from agent_loop import _goal_to_slug
+
+        goal = "summarize the incident timeline"
+        resolved = _goal_to_slug(goal)
+        recalled = MagicMock()
+        recalled.as_context_block.return_value = ""
+
+        with patch("agent_loop.run_agent_loop",
+                   return_value=self._fake_loop_result(status="done")), \
+             patch("intent.check_goal_clarity", return_value={"clear": True}), \
+             patch("recall.recall", return_value=recalled) as recall_call, \
+             self._no_quality_gate():
+            result = handle(goal, force_lane="agenda", dry_run=False)
+
+        recall_call.assert_called_once_with(
+            goal, slice="dispatch", origin=None, project=resolved)
+        from runs import run_dir
+        meta = json.loads((run_dir(result.handle_id) / "metadata.json").read_text())
+        assert meta["project"] == resolved
+
 
 class TestNamedProjectBinding:
     """A project-less goal that literally names an existing project directory

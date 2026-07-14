@@ -96,7 +96,7 @@ class PriorAttempt:
     handle_id: str
     status: str          # done | stuck | error | unknown (never finalized)
     when: str            # started_at, ISO-8601
-    match: str           # "exact" | "near"
+    match: str           # "exact" | "near" | "project"
     # Judged goal verdict from run metadata (SF-2): True/False when a verdict
     # exists, None = unjudged — done ≠ achieved.
     goal_achieved: Optional[bool] = None
@@ -136,6 +136,10 @@ class RecallResult:
     # arrives warm; empty when no prior attempt has a curated card (the common
     # case, and the reason a fresh goal costs nothing here).
     prior_decisions: str = ""
+    # Bounded filename inventory from the persistent project directory.  The
+    # planner gets paths to inspect/reuse, never file contents (which may be
+    # large or untrusted).
+    project_artifacts: str = ""
     sources: Dict[str, Any] = field(default_factory=dict)
 
     def dispatch_signals(self, *, window_minutes: float = 60.0) -> Dict[str, Any]:
@@ -186,6 +190,8 @@ class RecallResult:
                 f"(handle {self.thread.parent_handle_id or '?'}, "
                 f"via {self.thread.source})."
             )
+        if self.project_artifacts:
+            parts.append(self.project_artifacts)
         if self.prior_attempts:
             by_status: Dict[str, int] = {}
             for a in self.prior_attempts:
@@ -239,6 +245,8 @@ class RecallResult:
         # re-attempt must see "approach X already failed here" before it plans.
         if self.prior_decisions:
             ctx = self.prior_decisions + ("\n\n" + ctx if ctx else "")
+        if self.project_artifacts:
+            ctx = self.project_artifacts + ("\n\n" + ctx if ctx else "")
         return ctx
 
 
@@ -330,7 +338,13 @@ def _strip_for_match(text: str) -> str:
         return text
 
 
-def find_prior_attempts(goal: str, *, window_hours: float) -> List[PriorAttempt]:
+def find_prior_attempts(
+    goal: str,
+    *,
+    window_hours: float,
+    project: str = "",
+    exclude_handle_id: str = "",
+) -> List[PriorAttempt]:
     """Scan recent run dirs (mtime-ordered, capped) for goal matches.
 
     Public (renamed from `_find_prior_attempts`, adversarial-review R1
@@ -361,6 +375,9 @@ def find_prior_attempts(goal: str, *, window_hours: float) -> List[PriorAttempt]
         meta = _read_run_metadata(rd)
         if not meta:
             continue
+        handle_id = str(meta.get("handle_id") or rd.name.split("-", 1)[0])
+        if exclude_handle_id and handle_id == exclude_handle_id:
+            continue
         started = meta.get("started_at") or ""
         try:
             when = datetime.fromisoformat(started)
@@ -378,12 +395,16 @@ def find_prior_attempts(goal: str, *, window_hours: float) -> List[PriorAttempt]
             match = "exact"
         elif _text_similarity(prompt_stripped, goal_stripped) >= _NEAR_MATCH_THRESHOLD:
             match = "near"
+        elif project and str(meta.get("project") or "") == project:
+            # A caller-selected persistent project is a stronger, cheaper
+            # family key than guessing semantic similarity from a rephrase.
+            match = "project"
         else:
             continue
         _ga = meta.get("goal_achieved")
         attempts.append(PriorAttempt(
             goal=prompt,
-            handle_id=str(meta.get("handle_id") or rd.name.split("-", 1)[0]),
+            handle_id=handle_id,
             status=str(meta.get("status") or "unknown"),
             when=started,
             match=match,
@@ -391,6 +412,110 @@ def find_prior_attempts(goal: str, *, window_hours: float) -> List[PriorAttempt]
         ))
     attempts.sort(key=lambda a: a.when, reverse=True)
     return attempts
+
+
+def _project_artifact_context(
+    project: str,
+    *,
+    max_files: int = 12,
+    max_chars: int = 600,
+    max_scan_entries: int = 200,
+) -> str:
+    """Return a bounded path inventory for a persistent project.
+
+    Runtime bookkeeping is omitted.  File contents are deliberately not read:
+    recall tells the planner what prior work exists, and normal tool access is
+    then responsible for inspecting only the files relevant to the new goal.
+    """
+    if not project:
+        return ""
+    try:
+        from itertools import islice
+        from orch_items import projects_root
+
+        root = projects_root().resolve()
+        pd = (root / project).resolve()
+        if pd == root or root not in pd.parents or not pd.is_dir():
+            return ""
+
+        ignored = {
+            "NEXT.md", "DONE.md", "ancestry.json", ".loop.lock",
+            ".admission.lock", "project.json",
+        }
+        candidates = []
+        scanned = 0
+
+        def _consider(p) -> None:
+            nonlocal scanned
+            scanned += 1
+            if (p.is_file() and p.name not in ignored
+                    and not p.name.startswith(".")):
+                try:
+                    candidates.append((p.stat().st_mtime, p.relative_to(pd).as_posix()))
+                except OSError:
+                    pass
+
+        # Project-root ledgers/reports plus the conventional artifact tree are
+        # the durable products. Avoid recursively walking scratch/build dirs.
+        # The scan itself, not merely the rendered output, is hard-bounded.
+        root_entries = sorted(
+            islice(pd.iterdir(), max_scan_entries),
+            key=lambda item: item.name.lower(),
+        )
+        for p in root_entries:
+            if scanned >= max_scan_entries:
+                break
+            _consider(p)
+        artifacts = pd / "artifacts"
+        pending = [artifacts] if artifacts.is_dir() else []
+        while pending and scanned < max_scan_entries:
+            directory = pending.pop()
+            try:
+                entries = sorted(
+                    islice(directory.iterdir(), max_scan_entries - scanned),
+                    key=lambda item: item.name.lower(),
+                    reverse=True,
+                )
+            except OSError:
+                continue
+            for p in entries:
+                if scanned >= max_scan_entries:
+                    break
+                if p.is_dir() and not p.is_symlink() and not p.name.startswith("."):
+                    scanned += 1
+                    pending.append(p)
+                else:
+                    _consider(p)
+        # Fresh pivots are more useful than alphabetically early stale ones;
+        # path is a stable tie-breaker for equal/coarse mtimes.
+        candidates.sort(key=lambda item: (-item[0], item[1].lower()))
+        paths = [path for _, path in candidates[:max_files]]
+        if not paths:
+            return ""
+        # Filenames are user-controlled on Unix.  Keep them inert in the
+        # prompt: strip control characters/Markdown delimiters and cap each.
+        import re
+        safe_project = re.sub(r"[\x00-\x1f\x7f`]", "_", project)[:100]
+        safe_paths = [
+            re.sub(r"[\x00-\x1f\x7f`]", "_", path)[:100]
+            for path in paths
+        ]
+        prefix = (
+            "## Existing project artifacts — inspect/reuse before creating replacements\n"
+            f"Project `{safe_project}` already contains: "
+        )
+        suffix = ". These are path hints, not verified contents."
+        shown = []
+        for path in safe_paths:
+            candidate = ", ".join([*shown, f"`{path}`"])
+            if len(prefix) + len(candidate) + len(suffix) > max_chars:
+                break
+            shown.append(f"`{path}`")
+        if not shown:
+            return ""
+        return prefix + ", ".join(shown) + suffix
+    except Exception:
+        return ""
 
 
 def recall(
@@ -416,13 +541,27 @@ def recall(
     sources["thread_source"] = thread.source if thread else ""
 
     try:
-        prior = find_prior_attempts(goal, window_hours=window_hours)
+        from runs import current_handle_id
+        _exclude = current_handle_id() or ""
+    except Exception:
+        _exclude = ""
+
+    try:
+        prior = find_prior_attempts(
+            goal,
+            window_hours=window_hours,
+            project=project,
+            exclude_handle_id=_exclude,
+        )
     except Exception as exc:
         log.debug("recall: prior-attempt scan failed: %s", exc)
         prior = []
     sources["prior_attempts"] = len(prior)
 
     result = RecallResult(thread=thread, prior_attempts=prior, sources=sources)
+    result.project_artifacts = _project_artifact_context(project)
+    if result.project_artifacts:
+        sources["project_artifacts"] = True
 
     # Decision-prior briefs (run_curation miner #3): for each matched prior
     # attempt, pull its curated run_card decision_prior (what it tried, why it
@@ -436,11 +575,6 @@ def recall(
     # to reach into the write-side curation module for read-side formatting).
     try:
         from decision_prior import format_prior_decisions
-        try:
-            from runs import current_handle_id
-            _exclude = current_handle_id() or ""
-        except Exception:
-            _exclude = ""
         result.prior_decisions = format_prior_decisions(
             prior, goal=goal, exclude_handle_id=_exclude, k=3)
         if result.prior_decisions:

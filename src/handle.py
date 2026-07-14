@@ -1107,6 +1107,19 @@ def _handle_impl(
                 log.warning("mode:thin failed, falling back to Mode 2: %s", _thin_exc)
                 # Fall through to run_agent_loop below
 
+        # Resolve persistent identity once for every full AGENDA shape.  It is
+        # both the loop fence and the deterministic goal-family key used by
+        # recall: a semantic rephrase explicitly routed to the same project
+        # must inherit prior decisions/artifact paths without an embedding or
+        # another LLM call.  Stamp it before recall so the next run can join
+        # this one even though metadata was opened before lane classification.
+        _agenda_project = project or _default_project_for(message)
+        try:
+            from runs import stamp_run_metadata as _stamp_project_metadata
+            _stamp_project_metadata({"project": _agenda_project})
+        except Exception:
+            pass
+
         # pipeline: prefix — user specifies explicit steps as "step1 | step2 | step3".
         # Bypasses LLM decomposition entirely; runs the given steps in order.
         if _pipeline_prefix:
@@ -1119,7 +1132,7 @@ def _handle_impl(
                     print(f"[maro] pipeline: {len(_pipe_steps)} steps: {_pipe_steps}", file=sys.stderr, flush=True)
                 _pipe_result = run_agent_loop(
                     _pipe_raw,
-                    project=project,
+                    project=_agenda_project,
                     model=model,
                     adapter=adapter,
                     dry_run=dry_run,
@@ -1141,7 +1154,7 @@ def _handle_impl(
                 print("[maro] team: dag execution mode (parallel_fan_out=4)", file=sys.stderr, flush=True)
             _team_result = run_agent_loop(
                 _pfx.message,
-                project=project,
+                project=_agenda_project,
                 model=model,
                 adapter=adapter,
                 dry_run=dry_run,
@@ -1161,7 +1174,7 @@ def _handle_impl(
         if _direct_mode:
             _direct_result = run_agent_loop(
                 message,
-                project=project,
+                project=_agenda_project,
                 model=model,
                 adapter=adapter,
                 dry_run=dry_run,
@@ -1185,7 +1198,7 @@ def _handle_impl(
         # different project dirs. `project` itself stays as-given: routing
         # checks above and HandleResult report what the caller asked for.
         _loop_kwargs: dict = dict(
-            project=project or _default_project_for(message),
+            project=_agenda_project,
             repo_path=repo_path,
             model=model,
             adapter=adapter,
@@ -1322,6 +1335,7 @@ def _handle_impl(
                 from recall import recall as _recall_fn
                 _recall_block = _recall_fn(
                     message, slice="dispatch", origin=origin,
+                    project=_agenda_project,
                 ).as_context_block()
                 if _recall_block:
                     _extra_ctx_parts.append(_recall_block)

@@ -699,6 +699,9 @@ crowd-sourced or not)."
   (car questions, mid-session asks). Real phrasing carries the ambiguity
   synthetic goals launder out; this is also the organic corpus the lesson
   funnel needs (batch-04's answer lives here, not in synthetic batches).
+  Latest capture: Jeremy's M1/2014-mini local-LLM viability ask (2026-07-14),
+  now a verified Tier-2 row in `docs/CAPABILITIES.md` backed by the formal
+  same-corpus bake-off.
 - [x] **Blank-slate pre-installed set (design → curate) — DONE, stale
   bullet corrected 2026-07-13.** All 7 draft targets resolved per the
   curated table in `docs/CAPABILITIES.md` §"Blank-slate capability target":
@@ -784,6 +787,13 @@ write fence — shipped arc") and `docs/BOUNDED_WORKSPACE.md`.
   `validate.write_fence: false`, see docs/DEFAULTS.md). Reads stay
   unrestricted by design (logged, not blocked); a read-restricting mode
   remains possible if scavenge read rows ever show real contamination.
+  **Evidence refresh 2026-07-14:** searched the unified workspace, run slices,
+  repo experiment output, committed corpus, and pre-unification workspace
+  locations. No `SCAVENGE_DETECTED` / `FENCE_WRITE_BLOCKED` row or recorded
+  `cp`/`mv`/`sed -i` miss survives. The only concrete historical evasion is
+  run `668e46d1`'s `cd` + relative redirect, already fixed and regression-pinned
+  in `TestScavengeCwdDrift`. Leave this residual evidence-gated; do not add
+  speculative shell parsing until a real missed transcript lands.
 
 ### 17. Run-visibility residuals (2026-07-09 real-data review)
 
@@ -1238,6 +1248,17 @@ persisting `resolved_intent.md`. Side-quest orchestration remains open.
   neither detects nor feeds prior side-quest artifacts back as context. The
   `polymarket-edges` ledger pattern (project_polymarket_edges.md memory) is
   the proof of value; generalize that.)
+  **Deterministic project-family reuse shipped 2026-07-14:** every full AGENDA
+  run now persists its resolved project in run metadata; dispatch/loop recall
+  treats the same project as a family match even when the rephrase has low word
+  overlap, and injects a bounded inventory of durable project/artifact paths so
+  the planner can inspect and reuse prior side-quest products. Literal project
+  names (for example `polymarket-edges`) already bind project-less dispatches
+  through `_match_existing_project`. No LLM or embedding call was added.
+  **Residual:** a rephrase that neither supplies nor names the old project still
+  mints a new goal slug and cannot be safely joined semantically. Keep this item
+  open for an evidence-backed family resolver; do not lower the 0.9 Jaccard
+  threshold and risk unrelated-project context contamination.
 
 ### Modular refactoring (AFK-friendly chunks, queued 2026-04-18) — deferred chunks
 
