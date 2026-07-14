@@ -261,8 +261,10 @@ def run_agent_loop(
             # findings A/M3/S2/A1). Off by default (mode off → skip entirely), so
             # a non-container run is byte-identical to before.
             _live_repo = None
+            _container_intended = False
             try:
-                if ctx.container_clone is None and _ce.container_configured():
+                _container_intended = _ce.container_configured()
+                if ctx.container_clone is None and _container_intended:
                     import worktree as _wt
                     if _wt.is_git_repo(_fence_dir):
                         _live_repo = str(_fence_dir)
@@ -286,7 +288,7 @@ def run_agent_loop(
                 log.warning("container scratch-clone setup skipped: %s", _cc_exc)
                 # Setup itself blew up while intending to containerize a git repo
                 # → fail closed rather than risk mounting the live repo rw.
-                if _live_repo is not None and ctx.container_clone is None:
+                if _container_intended and ctx.container_clone is None:
                     _ce.set_container_suppressed(True)
 
             set_default_subprocess_cwd(str(_fence_dir))
@@ -310,17 +312,89 @@ def run_agent_loop(
                     _lr = os.path.realpath(_live_repo)
                     _rw_roots = [r for r in _rw_roots
                                  if os.path.realpath(str(r)) != _lr]
-                set_default_container_rw_roots(_rw_roots)
             except Exception as _rw_exc:
-                log.debug("container rw-roots setup skipped: %s", _rw_exc)
-            # In-fence scratch space (2026-07-04, Jeremy: "lean into /tmp... nice
-            # to add a tmp scratch folder under the workspace"). /tmp is also
-            # fence-allowed (artifact_check.fence_allow_roots); this one survives
-            # reboots and stays inspectable next to the run's other state.
+                # Root discovery is optional enrichment. An empty list leaves
+                # only the already-bound cwd writable, which is the safe fallback.
+                log.warning("container rw-roots discovery failed; using cwd only: %s", _rw_exc)
+                _rw_roots = []
+            # Binding the safe fallback is mandatory: swallowing a setter
+            # failure here could retain a previous run's writable-root policy.
+            set_default_container_rw_roots(_rw_roots)
+        except Exception as _fence_exc:
+            _fence_msg = (
+                f"execution fence setup failed: "
+                f"{type(_fence_exc).__name__}: {_fence_exc}"
+            )
+            log.error("loop refused before decomposition — %s", _fence_msg)
+
+            # Nothing agentic has run yet, so any clone/worktree created during
+            # admission/fence setup is safe to remove without a merge-back.
+            if getattr(ctx, "container_clone", None) is not None:
+                try:
+                    import worktree as _wtmod
+                    _wtmod.cleanup_clone(ctx.container_clone)
+                    ctx.container_clone = None
+                except Exception as _cleanup_exc:
+                    log.warning("execution fence scratch-clone cleanup failed: %s", _cleanup_exc)
+            if getattr(ctx, "run_worktree", None) is not None:
+                try:
+                    import worktree as _wtmod
+                    _wtmod.cleanup(ctx.run_worktree)
+                    _wtmod.prune(ctx.run_worktree.repo_dir)
+                    ctx.run_worktree = None
+                except Exception as _cleanup_exc:
+                    log.warning("execution fence worktree cleanup failed: %s", _cleanup_exc)
+
+            # Best-effort neutralization for later non-loop calls in the same
+            # process; the refusal itself does not depend on these succeeding.
+            for _neutralize, _label in (
+                (lambda: set_default_subprocess_cwd(None), "subprocess cwd"),
+                (lambda: set_default_container_rw_roots([]), "rw-root policy"),
+                (lambda: _ce.set_container_suppressed(True), "container suppression"),
+            ):
+                try:
+                    _neutralize()
+                except Exception as _neutralize_exc:
+                    log.warning(
+                        "execution fence refusal could not neutralize %s: %s",
+                        _label, _neutralize_exc,
+                    )
+            try:
+                if getattr(ctx, "project_slot", None) is not None:
+                    ctx.project_slot.release()
+                    ctx.project_slot = None
+            except Exception as _release_exc:
+                log.warning("execution fence refusal project-slot release failed: %s", _release_exc)
+            try:
+                from interrupt import clear_loop_running
+                clear_loop_running()
+            except Exception as _release_exc:
+                log.warning("execution fence refusal running-state clear failed: %s", _release_exc)
+            try:
+                from observe import write_event as _write_event
+                _write_event(
+                    "loop_done", goal=ctx.goal, project=ctx.project or "",
+                    loop_id=ctx.loop_id, status="stuck", detail=_fence_msg,
+                )
+            except Exception:
+                pass
+            return LoopResult(
+                loop_id=ctx.loop_id,
+                goal=ctx.goal,
+                project=ctx.project or "",
+                steps=[],
+                status="stuck",
+                stuck_reason=_fence_msg,
+                elapsed_ms=int((time.monotonic() - ctx.started_at) * 1000),
+            )
+
+        # In-fence scratch space is an inspectability convenience, not part of
+        # the cwd/policy safety boundary. Keep it best-effort and visible.
+        try:
             from config import workspace_root as _ws_root
             (_ws_root() / "tmp").mkdir(parents=True, exist_ok=True)
-        except Exception:
-            pass
+        except Exception as _scratch_exc:
+            log.warning("workspace scratch directory setup skipped: %s", _scratch_exc)
 
         def _resolve_tools() -> list:
             """Re-query tool registry on each call to pick up runtime-registered tools."""
