@@ -631,6 +631,23 @@ crowd-sourced or not)."
     we add that to the backlog for investigation instead of an add-on
     to this session") — pick up as its own measured spike, not as a
     rider on other work.
+    **Measured spike completed 2026-07-14:** two valid counterbalanced
+    five-step Haiku runs, with arm/per-run cache isolation and 10/10
+    correctness in each arm, cut wall time 31.6% (49.861s fresh → 34.124s
+    resumed) and spend 75.0% ($0.915716 → $0.228808). Steps 2–5 were 38.0%
+    faster after the context-bearing first call. The failed initial protocol
+    is retained rather than laundered: loaded wording triggered prompt-
+    injection refusals and the first checker mishandled fenced JSON. Reproducer,
+    raw-output location, caveats, and decision are in
+    `docs/history/2026-07-14-session-reuse-spike.md`.
+  - [ ] **Per-boundary session-reuse production prototype.** The spike says
+    this is worth the effort; it does not make blind per-run `--resume` safe.
+    Prototype one boundary segment with durable session identity/fresh fallback,
+    exact model/persona/cwd/worktree/permission/tool-config compatibility,
+    preserved per-step transcripts + cost/provenance/verification, forced
+    rotation at expansion/replan boundaries, and discard-on-confusion/failure.
+    Re-run a real expansion-bearing dogfood goal against fresh-session control
+    before changing the default.
   - **Self-speedup run adjudicated 2026-07-11 (fd483efb-stout-ember,
     $1.14, 47min, 7 steps + 4 ranked proposals + a genuinely good
     adversarial self-verification that caught its own 65s double-count).
