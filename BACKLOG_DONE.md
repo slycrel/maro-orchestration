@@ -2789,3 +2789,34 @@ done/achieved split in text or JSON, labels raw verdicts as uncorrected, and
 refuses to count historical unknowns toward the gate. The active three-row
 ledger therefore reports 3 unknown / 0 organic / rate n/a, not a fabricated
 0% success rate.
+
+## Benchmark/eval per-cell isolation — completed 2026-07-14
+
+The 2026-07-08 worker-slice A/B had a contaminated m3 mission: direct Director
+workers inherited the repo cwd, wrote monitoring files there, later cells read
+those artifacts, and one worker committed/pushed. Repeating normal `eval.py`
+benchmarks also reused the same goal-derived project. Both harness shapes now
+share a structural convention in `benchmark_isolation.py`: readable identities
+are bound to digests of the raw run/cell IDs, directory reservation is atomic
+and fail-closed, and a collision raises `BenchmarkCellExistsError` naming the
+identity and retained path.
+
+Normal handle evals reserve one fresh Maro project per report cell and record
+its workspace in `BenchmarkResult`; generated flywheel evals do the same.
+`worker_slice_ab.py` binds every direct-Director cell to a fresh retained
+workspace through the subprocess-cwd ContextVar and records that path in its
+row. Evidence is deliberately retained under Maro's no-silent-deletion decree;
+it is never called temporary scratch. Tests cover sanitized/truncated identity
+collisions, duplicate refusal, context restoration, cross-cell absence, eval
+parameter propagation, and the real direct-Director boundary.
+
+Adversarial review used three real Claude lenses. The initial parallel launch
+stalled for Skeptic/Architect, while Minimalist completed and found that only
+the direct-Director half was truly fail-closed. That finding was accepted and
+fixed with atomic project reservation. A bounded Architect retry approved the
+hardened design. The Skeptic retry's only accepted point was opaque collision
+diagnostics; typed explicit errors fixed it. Its symlink/stale-state claims were
+rejected: `mkdir(exist_ok=False)` refuses existing live or dangling symlinks,
+and retained partial evidence must remain refused rather than be reused or
+silently deleted. A focused Skeptic follow-up then returned **APPROVED**, with
+no concrete HIGH or MEDIUM correctness defect remaining.

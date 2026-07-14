@@ -214,8 +214,9 @@ def test_run_benchmark_dry_run_all_benchmarks():
         assert result.status == "pass"
 
 
-def test_live_benchmark_labels_run_as_benchmark(monkeypatch):
+def test_live_benchmark_labels_run_as_benchmark(monkeypatch, tmp_path):
     import eval as eval_mod
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
     captured = {}
 
     def fake_handle(goal, **kwargs):
@@ -229,6 +230,46 @@ def test_live_benchmark_labels_run_as_benchmark(monkeypatch):
     result = eval_mod.run_benchmark(BUILTIN_BENCHMARKS[0], dry_run=False)
     assert result.status == "pass"
     assert captured["measurement_class"] == "benchmark"
+    assert captured["project"].startswith("benchmark-")
+    assert result.workspace
+
+
+def test_live_benchmark_repetitions_use_distinct_projects(monkeypatch, tmp_path):
+    import eval as eval_mod
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    projects = []
+
+    def fake_handle(goal, **kwargs):
+        projects.append(kwargs["project"])
+        return type("Result", (), {
+            "result": "hello", "status": "done", "loop_result": None,
+            "tokens_in": 0, "tokens_out": 0,
+        })()
+
+    monkeypatch.setattr(eval_mod, "handle", fake_handle)
+    eval_mod.run_benchmark(BUILTIN_BENCHMARKS[0], dry_run=False)
+    eval_mod.run_benchmark(BUILTIN_BENCHMARKS[0], dry_run=False)
+    assert len(set(projects)) == 2
+
+
+def test_run_eval_shares_run_identity_but_not_cell_projects(monkeypatch):
+    import eval as eval_mod
+    calls = []
+
+    def fake_run(benchmark, **kwargs):
+        calls.append((
+            benchmark["id"], kwargs["eval_run_id"], kwargs["eval_cell_id"],
+        ))
+        return BenchmarkResult(
+            benchmark_id=benchmark["id"], goal=benchmark["goal"],
+            status="pass", score=1.0, response="ok", elapsed_ms=1,
+            tokens_used=0,
+        )
+
+    monkeypatch.setattr(eval_mod, "run_benchmark", fake_run)
+    report = eval_mod.run_eval(dry_run=False)
+    assert {run_id for _, run_id, _ in calls} == {report.run_id}
+    assert len({cell_id for _, _, cell_id in calls}) == len(calls)
 
 
 # ---------------------------------------------------------------------------

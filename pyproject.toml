@@ -97,6 +97,7 @@ py-modules = [
     "attribution",
     "autonomy",
     "backend_benchmark",
+    "benchmark_isolation",
     "background",
     "boot_protocol",
     "bootstrap",

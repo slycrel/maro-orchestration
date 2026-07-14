@@ -41,8 +41,16 @@ MISSIONS = [
 ]
 
 
-def run_arm(directive: str, slice_on: bool, dry_run: bool) -> dict:
+def run_arm(
+    directive: str,
+    slice_on: bool,
+    dry_run: bool,
+    *,
+    batch_id: str,
+    cell_id: str,
+) -> dict:
     import director
+    from benchmark_isolation import benchmark_project_slug, benchmark_workspace
 
     orig_get = director.config_get
 
@@ -54,10 +62,27 @@ def run_arm(directive: str, slice_on: bool, dry_run: bool) -> dict:
     if slice_on:
         director.config_get = patched
     try:
-        t0 = time.time()
-        result = director.run_director(directive, dry_run=dry_run,
-                                       verbose=False)
-        elapsed = round(time.time() - t0, 1)
+        # Direct Director calls do not own a loop project/cwd. Bind every
+        # experiment cell to a fresh retained workspace so workers cannot
+        # mutate the launch repo or consume another cell's artifacts.
+        with benchmark_workspace(batch_id, cell_id) as cell_workspace:
+            t0 = time.time()
+            try:
+                result = director.run_director(
+                    directive,
+                    project=benchmark_project_slug(batch_id, cell_id),
+                    dry_run=dry_run,
+                    verbose=False,
+                )
+            except Exception as exc:
+                # The failed cell is evidence too. Preserve its workspace
+                # pointer instead of letting main() collapse the row to a bare
+                # exception with no way to inspect partial artifacts.
+                return {
+                    "status": f"error: {exc}",
+                    "workspace": str(cell_workspace),
+                }
+            elapsed = round(time.time() - t0, 1)
     finally:
         director.config_get = orig_get
 
@@ -79,6 +104,7 @@ def run_arm(directive: str, slice_on: bool, dry_run: bool) -> dict:
             for r in result.worker_results
         ],
         "log_path": result.log_path,
+        "workspace": str(cell_workspace),
     }
 
 
@@ -92,13 +118,21 @@ def main() -> int:
 
     OUT.parent.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(timezone.utc).isoformat()
+    batch_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S-%fZ")
 
     for rep in range(opts.reps):
       for mission_id, directive in MISSIONS:
         for arm, slice_on in (("A-off", False), ("B-on", True)):
             print(f"=== {mission_id} arm {arm} rep {rep + 1} ===", flush=True)
+            cell_id = f"{mission_id}-rep-{rep + 1}-{arm}"
             try:
-                row = run_arm(directive, slice_on, opts.dry_run)
+                row = run_arm(
+                    directive,
+                    slice_on,
+                    opts.dry_run,
+                    batch_id=batch_id,
+                    cell_id=cell_id,
+                )
             except Exception as exc:
                 row = {"status": f"error: {exc}"}
             row.update({"mission": mission_id, "arm": arm, "rep": rep + 1,

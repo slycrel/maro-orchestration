@@ -12,6 +12,10 @@ prospective organic/smoke/control/benchmark provenance in run metadata and the
 durable outcome ledger, plus an honest n≈30 standing gate that keeps historical
 unknowns unknown.
 
+Current pass (2026-07-14, twentieth): benchmark/eval cells now reserve
+collision-resistant per-cell projects or retained direct-Director workspaces,
+so repeated experiments cannot inherit the launch repo or earlier artifacts.
+
 ---
 
 ## Actionable Stack
@@ -1426,19 +1430,12 @@ rather than fixed with a fragile heuristic:
     or evidence for a narrower activation rule. Do not hide that spend change
     behind a count-goal regex.
 
-### Benchmark/eval missions need a read-only or scratch-dir fence
+### Benchmark/eval mission isolation — DONE 2026-07-14 → BACKLOG_DONE
 
-- [ ] **A/B benchmark runs mutated the repo and each other (2026-07-08):**
-  the m3-host-monitoring §7 mission ("design a monitoring checklist") was
-  interpreted by workers as *write repo files* — later runs found earlier
-  runs' artifacts ("already scaffolded"), contaminating 4 of 16 cells with
-  cross-run carryover, and one worker committed+pushed to main (which is
-  how the dead-hooks bug surfaced — silver lining, but not a pattern).
-  Benchmark harnesses should either phrase missions read-only, point
-  goal-declared paths at per-run scratch dirs, or set the write fence to
-  reject repo writes for eval-tagged runs. Decide the seam when the next
-  eval batch is designed; record in the A/B record's m3 caveat
-  (`docs/history/2026-07-08-worker-slice-ab.md`).
+The measurement-class work supplied a reliable benchmark boundary. Normal
+eval cells now own fresh projects; the direct-Director worker-slice harness
+owns fresh retained workspaces. Full evidence and the historical m3 caveat are
+archived in BACKLOG_DONE and `docs/history/2026-07-08-worker-slice-ab.md`.
 
 ### host-check.sh alerting — DONE 2026-07-09 → BACKLOG_DONE
 

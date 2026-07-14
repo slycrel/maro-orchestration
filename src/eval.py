@@ -93,6 +93,7 @@ class BenchmarkResult:
     elapsed_ms: int
     tokens_used: int
     failure_reason: Optional[str] = None
+    workspace: Optional[str] = None
 
 
 @dataclass
@@ -135,6 +136,7 @@ class EvalReport:
                     "elapsed_ms": r.elapsed_ms,
                     "tokens_used": r.tokens_used,
                     "failure_reason": r.failure_reason,
+                    "workspace": r.workspace,
                 }
                 for r in self.results
             ],
@@ -170,6 +172,8 @@ def run_benchmark(
     adapter=None,
     dry_run: bool = False,
     verbose: bool = False,
+    eval_run_id: Optional[str] = None,
+    eval_cell_id: Optional[str] = None,
 ) -> BenchmarkResult:
     """Run a single benchmark.
 
@@ -178,6 +182,9 @@ def run_benchmark(
         adapter: Optional LLM adapter.
         dry_run: Return canned result without calling LLM.
         verbose: Print progress.
+        eval_run_id: Shared identity for cells in one eval report.
+        eval_cell_id: Unique identity within that report; duplicate identities
+            refuse rather than reuse an existing project.
 
     Returns:
         BenchmarkResult with pass/fail status and score.
@@ -201,7 +208,8 @@ def run_benchmark(
             tokens_used=0,
         )
 
-    # Run through handle()
+    # Run through handle(). Every live cell gets a fresh project identity;
+    # repeated benchmark goals must never see artifacts from an earlier cell.
     if handle is None:
         return BenchmarkResult(
             benchmark_id=benchmark_id,
@@ -214,8 +222,17 @@ def run_benchmark(
             failure_reason="handle module not available",
         )
 
+    from benchmark_isolation import reserve_benchmark_project
+
+    _cell_run_id = eval_run_id or uuid.uuid4().hex[:8]
+    _cell_id = eval_cell_id or f"{uuid.uuid4().hex[:8]}-{benchmark_id}"
+    _workspace: Optional[str] = None
     t0 = time.monotonic()
     try:
+        _project, _project_path = reserve_benchmark_project(
+            _cell_run_id, _cell_id,
+        )
+        _workspace = str(_project_path)
         result = handle(
             goal,
             force_lane=lane,
@@ -223,6 +240,7 @@ def run_benchmark(
             dry_run=False,
             verbose=verbose,
             measurement_class="benchmark",
+            project=_project,
         )
         elapsed = int((time.monotonic() - t0) * 1000)
 
@@ -251,6 +269,7 @@ def run_benchmark(
             elapsed_ms=elapsed,
             tokens_used=result.tokens_in + result.tokens_out,
             failure_reason=failure_reason,
+            workspace=_workspace,
         )
     except Exception as exc:
         elapsed = int((time.monotonic() - t0) * 1000)
@@ -263,6 +282,7 @@ def run_benchmark(
             elapsed_ms=elapsed,
             tokens_used=0,
             failure_reason=str(exc),
+            workspace=_workspace,
         )
 
 
@@ -301,11 +321,17 @@ def run_eval(
         to_run = [b for b in BUILTIN_BENCHMARKS if b["id"] in benchmarks]
 
     results: List[BenchmarkResult] = []
-    for b in to_run:
+    for _cell_num, b in enumerate(to_run, 1):
         if verbose:
             import sys
             print(f"[eval] running {b['id']}...", file=sys.stderr, flush=True)
-        result = run_benchmark(b, dry_run=dry_run, verbose=verbose)
+        result = run_benchmark(
+            b,
+            dry_run=dry_run,
+            verbose=verbose,
+            eval_run_id=run_id,
+            eval_cell_id=f"{_cell_num:03d}-{b['id']}",
+        )
         results.append(result)
 
     elapsed = int((time.monotonic() - t0) * 1000)
@@ -953,8 +979,15 @@ def run_eval_flywheel(
         if verbose:
             print(f"[eval-flywheel] running {len(generated_evals)} generated evals...",
                   file=_sys.stderr, flush=True)
-        for ge in generated_evals:
-            result = run_benchmark(ge.benchmark, dry_run=dry_run, verbose=verbose)
+        _generated_run_id = f"generated-{uuid.uuid4().hex[:8]}"
+        for _cell_num, ge in enumerate(generated_evals, 1):
+            result = run_benchmark(
+                ge.benchmark,
+                dry_run=dry_run,
+                verbose=verbose,
+                eval_run_id=_generated_run_id,
+                eval_cell_id=f"{_cell_num:03d}-{ge.eval_id}",
+            )
             passed = score_generated_eval(result, ge)
             gen_results.append((ge, passed))
 

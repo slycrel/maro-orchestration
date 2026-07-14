@@ -110,3 +110,20 @@ done" twice. Slice cost is ~300 tokens/worker — orders below observed deltas.
 **Recommend flipping `memory.worker_slice` to ON.** Flag flip is Jeremy's
 call; until then it stays OFF. Re-measure after flip via captains-log
 WORKER_SLICE_INJECTED + goal outcomes on organic (non-benchmark) runs.
+
+## Isolation retrofit (2026-07-14)
+
+The m3 caveat above is now structurally prevented for future repetitions.
+`scripts/worker_slice_ab.py` gives every `(batch, mission, rep, arm)` cell a
+collision-resistant retained workspace under the normal Maro output root and
+scopes every Director/worker subprocess to it. A duplicate cell identity
+refuses instead of consuming old files, and the JSONL row records the workspace
+for inspection. The Director log remains separately linked by `log_path`.
+
+The same convention now covers the main `eval.py` harness: each builtin or
+generated cell atomically reserves a fresh Maro project before `handle()` runs,
+and the resulting `BenchmarkResult.workspace` makes its artifacts traceable.
+These directories are retained experimental evidence under the project's
+no-silent-deletion rule, not ephemeral scratch. Raw run/cell identities carry
+short digests so sanitization (`A/B` versus `A B`) and truncation cannot merge
+otherwise distinct cells.
