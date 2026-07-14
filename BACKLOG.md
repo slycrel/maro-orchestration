@@ -26,13 +26,22 @@ atomic typed result (`updated` / `missing` / `write_failed`), bounded retry at
 the ledger boundary, and no legacy boolean API. All writers use the shared
 seam; owner-facing delivery behavior on failures remains the open decision.
 
+Current pass (2026-07-14, twenty-third, `/goal` catch-up session): the
+owner-facing delivery-behavior decision from pass twenty-two is now made and
+shipped — EXT-AUDIT-2 archived to BACKLOG_DONE.md in full. R5 confirmed fully
+checked off and its header now says so, matching R2/R3/R4. VERIFY_LEARN_ARC
+V1 (expectation stamping) also shipped this session as the next-arc-after-1.0
+opener; see `docs/VERIFY_LEARN_ARC.md` and GOAL_BRAIN Decisions 2026-07-14.
+Nothing else in the Actionable Stack was both unblocked and ready without
+Jeremy's input.
+
 ---
 
 ## Actionable Stack
 
 Ordered open work that matters. Top of the list is next.
 
-### R5. Independent holistic + adversarial review of the rolling 48-hour changeset (2026-07-13)
+### R5. Independent holistic + adversarial review of the rolling 48-hour changeset (2026-07-13) — all residuals closed
 
 Codex review of `git diff d717915e..8aa9876` (138 files, ~20k added
 lines), with architecture first and security, concurrency, correctness,
