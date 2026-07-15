@@ -2836,3 +2836,38 @@ Dormant (deliberately parked, not dropped):
   review's truth findings: Phase 65's reliable A/B signal is plan compression,
   not the confounded clean-run ratio; Manti evidence is attributed separately
   to Runs 2/3/4; fresh-default count ambiguity remains an explicit cost posture.
+
+- **2026-07-14 (Jeremy: "Let's fire the ~75 calls; no worries on my end") —
+  adjudication FIRED on the box.** The spend gate the V4/V5 entry left pending is
+  now spent, by Jeremy's call. All 71 backlogged divergences judged in one manual
+  `--adjudicate --max 100` pass (CLI path bypasses the OFF `adjudicate_divergences`
+  cadence gate by design): **61 navigator_right / 10 pipeline_right / 0
+  both_defensible** — the real (not smoke-judge) verdict is that the navigator was
+  right to diverge **86%** of the time. The 10 navigator-wrong cases cluster into
+  (A) over-cautious escalate/close on trivially-tryable dispatch goals and (B)
+  blocked_step retry/bail instead of extend; the 3× blocked_step execute→extend
+  cluster crystallized the **first V5 lesson**. Re-run is idempotent (71 already-
+  adjudicated, 0 re-spend). `navigator.adjudicate_divergences` cadence gate stays
+  OFF (this was a one-shot operator clear, not standing autonomous spend).
+- **2026-07-14 (Jeremy: "let's do an adversarial review on the other work") —
+  V4/V5 review done, hardened (commit b47767c).** Codex ×3 (opposite model,
+  per the adversarial-review skill) over `e792768`+`8349b7c`. Verdict CONTESTED —
+  real findings, none blocking (evidence-only, gated OFF; empirically 0 div_key
+  collisions in the 71 rows, events.jsonl 2.8 MB). **Fixed 4:** B honest
+  persistence (raise_on_error + count-only-on-durable-write + `write_failed`
+  counter — a swallowed write no longer reads as backlog-cleared), C atomic
+  lessons rewrite (tmp+os.replace), D2 undatable-diagnosis drops counted+logged
+  (no-silent-caps decree), F NAVIGATOR_ADJUDICATED registered in EVENT_TYPES.
+  **Deferred 4 with rationale (BACKLOG R6):** A div_key second-precision collision
+  (the goal_preview fix retroactively invalidates all 71 existing div_keys →
+  strands the verdicts + re-spend; 0 live collisions so not worth it — revisit
+  only under concurrency, with a key migration); G check-then-write concurrency
+  race (gated-off, manual, worst-case wasted cheap calls — a flock is heavier than
+  the path warrants); D1 `read_jsonl_tail` whole-file read (latent at 2.8 MB,
+  caller self-extinguishes; fix belongs in shared `jsonl_utils`); E lesson-preview
+  anchoring (let the default-off `lesson_inject` A/B measure it). **Lead judgment
+  rejected H** (materialized-view-vs-on-demand — deliberate hot-path choice;
+  crash-safety sub-point covered by fix C). **One decision now surfaced to Jeremy:
+  enable `navigator.lesson_inject`?** Review-cleared + reversible + shadow-marked,
+  but it feeds ONE lesson into a *live-acting* navigator (escalate-acting on since
+  2026-06-21), so it's cutover-adjacent → his call, recommended-but-held.
