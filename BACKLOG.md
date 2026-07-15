@@ -86,6 +86,24 @@ as misleading open work.
 
 Ordered open work that matters. Top of the list is next.
 
+### SP. Session-protocol arc — two-box Hermes dispatch, interactive goals, effort UX (OPENED 2026-07-15, Jeremy)
+
+The umbrella for the next big lane; full skeleton + stance decrees in
+**`docs/SESSION_PROTOCOL_DESIGN.md`** (iterate there; decree record in
+GOAL_BRAIN Decisions 2026-07-15). New box arrives 2026-07-16 → Hermes on it as
+a real end-user interface dispatching to Maro here. Staged: prove ssh/tailscale
+dispatch slice first (enqueue from box B, run_card back), then effort+consent →
+live progress query → next-pending-step injection (seam refactor first) →
+clarification loop. Pre-box actionable now: **§6 seam inventory** (where
+step-context is assembled; what a typed, provenance-stamped injection input
+needs). Parallel, box-independent: tier-up test goals (flagship: the 5–6yr
+Telegram trading-channel corpus → backtested strategy, research-only —
+CAPABILITIES.md Tier 5). Related standing items it touches: escalation channel
+(1.0 (a) — the substrate go-between decree IS msg-4's foundation), portable
+learning (promoted: the data layer that makes "active orchestrator" a runtime
+fact), container-on posture for network-sourced goals (revisit at Hermes
+go-live).
+
 ### R6. VERIFY_LEARN_ARC V4/V5 adversarial review — 4 fixed live, 4 deferred (2026-07-14)
 
 Codex ×3 (Skeptic/Architect/Minimalist) over `e792768` (V3 dates) + `8349b7c`

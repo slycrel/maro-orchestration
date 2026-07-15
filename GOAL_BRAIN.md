@@ -2130,6 +2130,39 @@ Sample: the 2026-05-13..17 window of `~/.maro/workspace/runs/` (478 dirs total;
   `executor.container_run_scratch: false` (default `True`, DEFAULTS.md). Verified
   unit + real-docker (unbound `/tmp` gone in step 2; bound scratch persists).
 
+- **2026-07-15 (Jeremy — session-protocol arc opened + a batch of stance
+  decrees; skeleton in `docs/SESSION_PROTOCOL_DESIGN.md`, iterate there):**
+  a second 2014 Mac Mini arrives 2026-07-16 — Hermes goes on it as a real
+  end-user interface dispatching to Maro on this box (part product research:
+  "kicking the tires as an end user"). Decrees from the planning conversation:
+  **(1) Topology is not a decision** — "it shouldn't matter if the hermes box
+  and this box eventually converge… persisting that data or using it in an
+  alternate location isn't making a hard decision, it's just the working/active
+  orchestrator." Active orchestrator = runtime fact; portable learning is the
+  enabling data layer (promoted in priority accordingly). Future horizon named,
+  not scheduled: forking entire goal runs / parallelizing multiples against one
+  goal ("alternate timeline"), and mid-run goal mutation ("a separate maze exit").
+  **(2) Spend UX = effort language, not dollars** — "that's going to take a lot
+  of work" signals elevated spend; natural-language override; ranges/bounds
+  opt-in only; dollar figures rot as model economics shift. **(3) 1.0 relabeled
+  "initial public release"** — later, not imminent, NOT a gate for work
+  (0.8.0 on PyPI was exactly this intent); moving bar accepted for now.
+  **(4) Git-history personal-data blocker resolved via the history rewrite;
+  PyPI publish DONE at 0.8.0** (both Jeremy, this session — closes the two
+  Jeremy-gated 1.0 items as previously framed). **(5) iMessage worth
+  attempting** (Hermes/channel side — Mac hardware now exists); Telegram
+  fallback if awful. **(6) Modular multi-layer posture** — named contract
+  edges, improve within layers or along edges ("a larger multi-layer system,
+  even if it's all 'an app' overall"). **(7) Interactive lane adopted but not
+  first** — seam refactor precedes it; design center = inject additional
+  information into the *next pending step* alongside step results ("different
+  but the same as an undetermined run or failure retry"). **(8) Split-brain
+  memory (Hermes vs Maro) parked** as phantom sidequest. Transport stance:
+  SSH one-shots v0, tailscale as fabric, no public ports/HTTP daemon (goal
+  dispatch = code execution). Flagship scale-up test goal captured in
+  CAPABILITIES.md: the 5–6yr Telegram trading-channel corpus → strategy
+  (research deliverable only, no trade execution).
+
 ## Threads (system-maintained — nothing leaves this list silently)
 
 Active:
