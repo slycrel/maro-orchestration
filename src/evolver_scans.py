@@ -842,11 +842,11 @@ def _loop_ts_index(limit: int = 50000) -> "Dict[str, str]":
     disk. Bounded to the last ``limit`` events (comfortably covers the last
     ``_load_dated_diagnoses`` window, since loops emit only a handful each).
 
-    Note (adversarial-review D1): ``read_jsonl_tail`` reads the whole file before
-    applying ``limit``, so on a multi-GB ``events.jsonl`` this would be a heavy
-    read. Latent, not live: the caller fires lazily and only for pre-stamp
-    diagnoses, so it self-extinguishes as ``recorded_at``-stamped rows age in. If
-    ``events.jsonl`` ever grows large, swap in a byte-bounded tail read (BACKLOG).
+    Note (adversarial-review D1, fixed 2026-07-15): ``read_jsonl_tail`` used to
+    read the whole file before applying ``limit``, which would have been a
+    heavy read on a multi-GB ``events.jsonl``. It now does a byte-bounded
+    backwards read internally (see ``jsonl_utils.py``), so this call site
+    needed no change.
     """
     try:
         from orch_items import memory_dir

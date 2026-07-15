@@ -125,10 +125,16 @@ D2 undatable-diagnosis drops now counted + logged (no-silent-caps); F
   wins (no corruption). A full flock across load→judge→write is heavier than the
   gated-off, low-frequency, evidence-only path warrants. Add a lock only if the
   cadence gate is turned on AND an operator also runs `--adjudicate`.
-- **D1 — `read_jsonl_tail` reads the whole file before applying `limit`.** Real for a
+- [x] **D1 — `read_jsonl_tail` reads the whole file before applying `limit`.** Real for a
   multi-GB `events.jsonl`; latent here (2.8 MB, caller self-extinguishes as
   `recorded_at` rows age in). Fix = byte-bounded tail read in `jsonl_utils` (shared;
   do it as its own change, not folded into this arc).
+  **SHIPPED 2026-07-15:** `_iter_lines_reverse` backwards chunked read
+  (64 KiB, test-shrinkable), stops at `limit` valid records; both paths now
+  binary + per-line decode. Adversarial review (fuzz vs old semantics, 0
+  mismatches; live concurrent-append probe clean) caught the first cut's
+  full-scan branch returning `[]` on one crash-torn multi-byte line —
+  fixed same pass, pinned in `test_undecodable_line_skipped_in_full_scan`.
 - **E — lesson_text embeds truncated goal previews (anchoring risk).** Behind the
   default-OFF `lesson_inject` A/B whose shadow marker measures exactly this — let the
   A/B tell us before pre-optimizing the prompt.
