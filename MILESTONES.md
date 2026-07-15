@@ -2,7 +2,28 @@
 
 What to do next, in what order. Updated each session. Deferred ideas live in BACKLOG.md; completed phase history in docs/history/ROADMAP_ARCHIVE.md (ROADMAP.md is a stub). This file is the executable queue.
 
-Last updated: 2026-07-14 (VERIFY_LEARN_ARC **V3 — graduation behavioral
+Last updated: 2026-07-14 (VERIFY_LEARN_ARC **V4 + V5 SHIPPED** — the navigator
+half of thread decision #6, closing the whole arc). **V4 (divergence
+adjudication):** at evolver cadence, un-adjudicated NAVIGATOR_DECIDED divergences
+(navigator move ≠ pipeline) get a capped, cheap-tier LLM verdict (navigator_right
+/ pipeline_right / both_defensible), appended append-only as `NAVIGATOR_ADJUDICATED`
+and joined back into `python3 -m navigator_shadow --agreement` as an `adjudicated`
+breakdown — the cutover-evidence surface, now standing instead of by-hand.
+Gated OFF by default (LLM spend; `navigator.adjudicate_divergences`), CLI
+`--adjudicate`; proven end-to-end on the box's 71 live divergences. **V5
+(navigator lessons):** `pipeline_right` clusters (navigator-wrong shapes, ≥3
+same-shape) crystallize into corrective navigator lessons (`navigator_lessons.jsonl`,
+a derived view over the append-only adjudications) injected into `decide()` via
+the worker-slice recall seam — A/B flag `navigator.lesson_inject` (default off),
+`lessons_injected` marker on the decision row for shadow-comparison. Both ride the
+existing cadence hook (no daemon); nothing is acted on/reverted (evidence only);
+per-move cutover stays Jeremy's call. Knobs in DEFAULTS.md; 19 tests. Also this
+session: **V3 dates hardening** — the class path's time axis now recovers
+1274/1277 real diagnoses via an events-log join (`_loop_ts_index`), no longer
+dormant. **The verify→learn arc (thread decision #6) is now fully closed.**
+See `docs/VERIFY_LEARN_ARC.md` §5/§7.
+
+Previous checkpoint — 2026-07-14 (VERIFY_LEARN_ARC **V3 — graduation behavioral
 auto-verify SHIPPED**, the Opus chunk following Jeremy's "buildable now" call).
 Applied graduation rows already flowed into V2's cadence verify — but on the
 class-neutral *global* stuck-rate, in which a single failure class is noise, so

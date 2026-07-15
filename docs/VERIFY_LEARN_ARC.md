@@ -1,19 +1,21 @@
 ---
-status: dormant-design
+status: living
 ---
 
 # Verify→learn arc — design brief
 
-**Status:** design brief, written 2026-07-12 (Fable-handoff session). V1
-(expectation stamping), V2 (cadence verdicts + authority-aware auto-revert), and
-V3 (graduation behavioral auto-verify — per-class failure_class_rate verdicts)
-all SHIPPED 2026-07-14 — the applied-change verify→learn loop is now closed for
-both the evolver-suggestion and graduation lanes (see §7 for what each chunk
-landed). V4–V5 (navigator divergence adjudication, navigator lessons) remain
-open — the navigator half of #6. This is the arc decreed "the next design arc
-after 1.0 (not folded into 1.0, not parked)" — thread-architecture decision #6,
-"how the navigator improves." Judgment calls tagged `DECISION (provisional)`.
-File:line references from the original design pass verified at commit ffff3f6.
+**Status:** design brief, written 2026-07-12 (Fable-handoff session). **The
+whole arc SHIPPED 2026-07-14.** V1 (expectation stamping), V2 (cadence verdicts
++ authority-aware auto-revert), and V3 (graduation behavioral auto-verify —
+per-class failure_class_rate verdicts) closed the applied-change verify→learn
+loop for both the evolver-suggestion and graduation lanes; V4 (navigator
+divergence adjudication) and V5 (navigator lessons) closed the navigator half of
+#6 — divergences are LLM-adjudicated at cadence and navigator-wrong clusters
+crystallize into lessons injected back into `decide()`. See §7 for what each
+chunk landed. This was the arc decreed "the next design arc after 1.0 (not
+folded into 1.0, not parked)" — thread-architecture decision #6, "how the
+navigator improves." Judgment calls tagged `DECISION (provisional)`. File:line
+references from the original design pass verified at commit ffff3f6.
 
 The two-things-conflated framing (CLAUDE.md): Maro-as-tool works today;
 Maro-as-self-improving-system is "infrastructure 80% built; verify→learn
@@ -160,24 +162,26 @@ have taught the verifier's cwd bugs as behavioral regressions. The
 done-vs-achieved caveat ("re-run at organic n≈30") is still the calibration
 gate for V2 itself.
 
-## 5. The navigator half (#6 proper — "how the navigator improves")
+## 5. The navigator half (#6 proper — "how the navigator improves") — SHIPPED
 
-The agreement table earns cutovers; what's missing is the table *learning*:
+The agreement table earns cutovers; what was missing was the table *learning*.
+V4/V5 closed it (2026-07-14; see §7 for the landed detail):
 
-**V4 — divergence adjudication at cadence.** Un-adjudicated
-NAVIGATOR_DECIDED divergences get an LLM adjudication pass (cheap tier,
-capped per cycle) in the same cadence hook: navigator-right /
-pipeline-right / both-defensible, appended beside the row (append-only).
-Consumer in the same chunk: the `--agreement` table grows a
-`adjudicated` breakdown — the evidence surface Jeremy already uses for
-cutover calls (dumb-loop-audit rounds, done by hand today, become standing).
+**V4 — divergence adjudication at cadence (SHIPPED).** Un-adjudicated
+NAVIGATOR_DECIDED divergences get a capped, cheap-tier LLM adjudication pass in
+the evolver cadence hook: navigator_right / pipeline_right / both_defensible,
+appended append-only as a `NAVIGATOR_ADJUDICATED` row (joined by `div_key`).
+Consumer in the same chunk: the `--agreement` table grew an `adjudicated`
+breakdown — the evidence surface Jeremy already uses for cutover calls
+(dumb-loop-audit rounds, done by hand, now standing).
 
-**V5 — navigator lessons, consumer-first.** Adjudicated
-navigator-wrong-pattern clusters (≥3 same-shape, the graduation threshold)
-crystallize as navigator-scoped lessons injected into `decide()`'s prompt
-context — the same injection seam worker slices use. Lesson + injection +
-A/B flag in one chunk (`navigator.lesson_inject`, shadow-comparable like
-`memory.worker_slice` was).
+**V5 — navigator lessons, consumer-first (SHIPPED).** Adjudicated
+navigator-wrong-pattern clusters (`pipeline_right`, ≥3 same-shape — the
+graduation threshold) crystallize as navigator-scoped lessons injected into
+`decide()`'s prompt context via the same seam worker slices use. Lesson +
+injection + A/B flag landed in one chunk (`navigator.lesson_inject`,
+shadow-comparable like `memory.worker_slice` was, via the `lessons_injected`
+marker on the decision row).
 
 > **DECISION (provisional):** per-move cutover decisions themselves stay
 > human (Jeremy's) — this arc makes the evidence cheaper and standing, it
@@ -282,11 +286,35 @@ A/B flag in one chunk (`navigator.lesson_inject`, shadow-comparable like
   diagnoses already on disk, so the class path is live on the historical ledger,
   not dormant waiting for post-V3 rows to accrue. 13 tests
   (`test_evolver.py::TestVerifyClassSignal`, `test_introspect.py`).
-- **V4 — divergence adjudication (Sonnet/Opus):** capped LLM pass +
-  agreement-table breakdown.
-- **V5 — navigator lessons (Opus):** crystallize + inject + A/B flag,
-  worker-slice-A/B methodology reused.
-- **Trust policy function** rides V2 (its first consumer) — consumer-first.
+- **V4 — divergence adjudication (Opus) — SHIPPED 2026-07-14.** At evolver
+  cadence (no daemon), `adjudicate_navigator_divergences()` (navigator_shadow.py)
+  takes un-adjudicated NAVIGATOR_DECIDED divergences (navigator move ≠ pipeline
+  move_equivalent), runs a capped, cheap-tier LLM pass, and appends an
+  append-only `NAVIGATOR_ADJUDICATED` row per verdict (navigator_right /
+  pipeline_right / both_defensible), joined to its divergence by a stable
+  `div_key`. **Consumer in the same chunk:** `analyze_live_agreement()` grows an
+  `adjudicated` breakdown and attaches each verdict to its divergence row, so
+  `python3 -m navigator_shadow --agreement` — the surface Jeremy already uses for
+  cutover calls — now shows adjudication standing instead of by-hand. Nothing is
+  acted on/reverted (evidence only). Idempotent (already-adjudicated rows
+  skipped), capped per cycle. Gated OFF by default (`navigator.adjudicate_divergences`
+  — an LLM spend, no silent cost for strangers; this box opts in). CLI:
+  `--adjudicate [--dry-run]`. Knobs: `adjudicate_max_per_cycle` (5),
+  `adjudicate_tier` ("cheap"). Proven end-to-end on the box's 71 live
+  divergences. 8 tests.
+- **V5 — navigator lessons (Opus) — SHIPPED 2026-07-14.**
+  `crystallize_navigator_lessons()` clusters `pipeline_right` adjudications
+  (the navigator-wrong shapes) by `(point, move, pipeline)` and materializes a
+  corrective navigator lesson for each cluster at/above the graduation threshold
+  (≥3 same-shape) into `navigator_lessons.jsonl` (a derived view over the
+  append-only adjudications — full rewrite, recomputable, so it never loses
+  evidence). **Consumer in the same chunk:** `decide()` injects those lessons
+  into its prompt via the same recall-style seam worker slices use — no new
+  model call, gated by the A/B flag `navigator.lesson_inject` (default off). The
+  NAVIGATOR_DECIDED row records `lessons_injected`, so `--agreement` can compare
+  move-agreement with vs without injection (worker-slice A/B methodology).
+  Crystallization refreshes at cadence right after adjudication. 11 tests.
+- **Trust policy function** rode V2 (its first consumer) — consumer-first.
 
 Acceptance for the arc: one full organic cycle observable in the ledgers —
 a friction class diagnosed, a change proposed and applied, its expectation

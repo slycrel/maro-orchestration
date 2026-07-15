@@ -170,6 +170,14 @@ NAVIGATOR_DECIDED = "NAVIGATOR_DECIDED"
 # this is the audit trail that the navigator owned the call.
 NAVIGATOR_ACTED = "NAVIGATOR_ACTED"
 
+# VERIFY_LEARN_ARC V4: one per navigator/pipeline divergence that got an LLM
+# adjudication (navigator_right / pipeline_right / both_defensible). Append-only
+# beside the NAVIGATOR_DECIDED row it judges (joined by a divergence key); the
+# --agreement table reads these to grow an `adjudicated` breakdown, and V5
+# clusters navigator_right verdicts into navigator-scoped lessons. Evidence
+# only; nothing reads it for control flow.
+NAVIGATOR_ADJUDICATED = "NAVIGATOR_ADJUDICATED"
+
 # Validation shadow-eval (BACKLOG: local-vs-paid agreement harness). One per
 # validated step while `validate.shadow_eval` is on: the local (free) verdict and
 # the paid verdict on the same result, tagged by step class. Decide-only evidence

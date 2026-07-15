@@ -721,3 +721,305 @@ class TestAnalyzePlanningDepthAgreement:
         s = analyze_planning_depth_agreement(events)
         assert s["live_rows"] == 1
         assert s["by_depth"]["thin-plan"] == {"agree": 0, "diverge": 1}
+
+
+# ---------------------------------------------------------------------------
+# VERIFY_LEARN_ARC V4 — navigator divergence adjudication
+# ---------------------------------------------------------------------------
+
+def _decided(move, pipeline, *, ts="2026-06-12T00:00:00+00:00", conf=0.9,
+             goal="g", point="dispatch", reasoning="because"):
+    """A live NAVIGATOR_DECIDED event (dispatch by default)."""
+    return {
+        "event_type": "NAVIGATOR_DECIDED",
+        "timestamp": ts,
+        "context": {
+            "move": move, "confidence": conf, "tier": "cheap",
+            "reasoning": reasoning,
+            "input_digest": {"goal_preview": goal},
+            "pipeline_actual": {"move_equivalent": pipeline, "live": True,
+                                "point": point},
+        },
+    }
+
+
+class _VerdictAdapter:
+    """Returns a scripted adjudication JSON per call, repeating the last."""
+    def __init__(self, verdicts):
+        self.verdicts = list(verdicts)
+        self.calls = 0
+
+    def complete(self, messages, **kwargs):
+        self.calls += 1
+        v = self.verdicts.pop(0) if len(self.verdicts) > 1 else self.verdicts[0]
+
+        class R:
+            content = v
+        return R()
+
+
+def _verdict_json(verdict, rationale="r"):
+    return json.dumps({"verdict": verdict, "rationale": rationale})
+
+
+class TestAdjudicatedAgreementTable:
+    """analyze_live_agreement(events, adjudications=...): the V4 consumer — each
+    divergence gets its verdict attached and the table grows an `adjudicated`
+    breakdown."""
+
+    def test_verdicts_attach_and_breakdown_counts(self):
+        from navigator_shadow import analyze_live_agreement, _divergence_key
+        events = [
+            _decided("execute", "execute"),               # agree
+            _decided("escalate", "execute", goal="a"),    # divergence 1
+            _decided("close", "extend", goal="b"),        # divergence 2 (unadjudicated)
+        ]
+        # Adjudicate only the first divergence.
+        from navigator_shadow import analyze_live_agreement as _ala
+        div1_key = _divergence_key({"timestamp": "2026-06-12T00:00:00",
+                                    "point": "dispatch", "move": "escalate",
+                                    "pipeline": "execute"})
+        adj = {div1_key: {"verdict": "navigator_right", "rationale": "r"}}
+        s = analyze_live_agreement(events, adjudications=adj)
+        assert s["adjudicated"]["navigator_right"] == 1
+        assert s["adjudicated"]["unadjudicated"] == 1
+        # verdict is attached to the right divergence row
+        for d in s["divergences"]:
+            if d["move"] == "escalate":
+                assert d["adjudication"] == "navigator_right"
+            else:
+                assert d["adjudication"] is None
+
+    def test_no_adjudications_all_unadjudicated(self):
+        from navigator_shadow import analyze_live_agreement
+        s = analyze_live_agreement([_decided("escalate", "execute")])
+        assert s["adjudicated"]["unadjudicated"] == 1
+        assert s["divergences"][0]["adjudication"] is None
+
+
+class TestAdjudicateDivergences:
+    """adjudicate_navigator_divergences: the capped, cheap-tier LLM pass that
+    writes append-only NAVIGATOR_ADJUDICATED rows (V4)."""
+
+    def _run(self, monkeypatch, events, adapter, *, max_per_cycle=5, dry_run=False):
+        import navigator_shadow as ns
+        monkeypatch.setattr(ns, "_load_navigator_events", lambda: events)
+        written = []
+        monkeypatch.setattr(
+            captains_log, "log_event",
+            lambda etype, **kw: written.append((etype, kw)))
+        result = ns.adjudicate_navigator_divergences(
+            "test", max_per_cycle=max_per_cycle, tier="cheap",
+            dry_run=dry_run, adapter_factory=lambda t: adapter)
+        return result, written
+
+    def test_adjudicates_divergences_and_writes_rows(self, monkeypatch):
+        import navigator_shadow as ns
+        events = [
+            _decided("execute", "execute"),                 # agree — skipped
+            _decided("escalate", "execute", goal="a"),      # divergence
+        ]
+        adapter = _VerdictAdapter([_verdict_json("navigator_right")])
+        result, written = self._run(monkeypatch, events, adapter)
+        assert result["adjudicated"] == 1
+        assert result["verdicts"]["navigator_right"] == 1
+        assert len(written) == 1
+        etype, kw = written[0]
+        assert etype == "NAVIGATOR_ADJUDICATED"
+        ctx = kw["context"]
+        assert ctx["verdict"] == "navigator_right"
+        # div_key joins back to the divergence row
+        div = [d for d in ns.analyze_live_agreement(events)["divergences"]][0]
+        assert ctx["div_key"] == ns._divergence_key(div)
+
+    def test_already_adjudicated_are_skipped(self, monkeypatch):
+        import navigator_shadow as ns
+        div_event = _decided("escalate", "execute", goal="a")
+        div = ns.analyze_live_agreement([div_event])["divergences"][0]
+        prior = {
+            "event_type": "NAVIGATOR_ADJUDICATED",
+            "timestamp": "2026-06-12T01:00:00+00:00",
+            "context": {"div_key": ns._divergence_key(div),
+                        "verdict": "pipeline_right"},
+        }
+        adapter = _VerdictAdapter([_verdict_json("navigator_right")])
+        result, written = self._run(monkeypatch, [div_event, prior], adapter)
+        assert result["already_adjudicated"] == 1
+        assert result["adjudicated"] == 0
+        assert written == []            # no new LLM call, no new row
+
+    def test_cap_limits_llm_calls(self, monkeypatch):
+        events = [_decided("escalate", "execute", goal=f"g{i}",
+                           ts=f"2026-06-12T00:0{i}:00+00:00") for i in range(5)]
+        adapter = _VerdictAdapter([_verdict_json("both_defensible")])
+        result, written = self._run(monkeypatch, events, adapter, max_per_cycle=2)
+        assert result["divergences_total"] == 5
+        assert result["adjudicated"] == 2
+        assert len(written) == 2
+
+    def test_unparseable_verdict_is_skipped_not_stored(self, monkeypatch):
+        events = [_decided("escalate", "execute", goal="a")]
+        adapter = _VerdictAdapter(["not json at all"])
+        result, written = self._run(monkeypatch, events, adapter)
+        assert result["adjudicated"] == 0
+        assert result["skipped_no_verdict"] == 1
+        assert written == []
+
+    def test_invalid_verdict_value_is_skipped(self, monkeypatch):
+        events = [_decided("escalate", "execute", goal="a")]
+        adapter = _VerdictAdapter([_verdict_json("navigator_is_god")])
+        result, written = self._run(monkeypatch, events, adapter)
+        assert result["adjudicated"] == 0
+        assert result["skipped_no_verdict"] == 1
+        assert written == []
+
+    def test_dry_run_renders_without_persisting(self, monkeypatch):
+        events = [_decided("escalate", "execute", goal="a")]
+        adapter = _VerdictAdapter([_verdict_json("pipeline_right")])
+        result, written = self._run(monkeypatch, events, adapter, dry_run=True)
+        assert result["adjudicated"] == 1
+        assert result["dry_run"] is True
+        assert written == []            # nothing persisted
+
+
+# ---------------------------------------------------------------------------
+# VERIFY_LEARN_ARC V5 — navigator lessons (crystallize + inject)
+# ---------------------------------------------------------------------------
+
+def _adjudicated(verdict, move, pipeline, *, point="dispatch", goal="g", i=0):
+    """A NAVIGATOR_ADJUDICATED event carrying a verdict for a divergence."""
+    return {
+        "event_type": "NAVIGATOR_ADJUDICATED",
+        "timestamp": f"2026-06-12T00:0{i}:00+00:00",
+        "context": {
+            "div_key": f"k{verdict}{move}{pipeline}{point}{i}",
+            "verdict": verdict, "point": point, "move": move,
+            "pipeline": pipeline, "goal_preview": goal,
+        },
+    }
+
+
+class TestCrystallizeNavigatorLessons:
+    """crystallize_navigator_lessons: cluster pipeline_right adjudications by
+    shape (point, move, pipeline); ≥3 same-shape becomes a lesson."""
+
+    def _run(self, monkeypatch, tmp_path, events):
+        import navigator_shadow as ns
+        monkeypatch.setattr(ns, "_load_navigator_events", lambda: events)
+        monkeypatch.setattr(ns, "_navigator_lessons_path",
+                            lambda: tmp_path / "navigator_lessons.jsonl")
+        return ns.crystallize_navigator_lessons(), ns
+
+    def test_three_same_shape_pipeline_right_becomes_a_lesson(self, monkeypatch, tmp_path):
+        events = [_adjudicated("pipeline_right", "escalate", "execute", i=i)
+                  for i in range(3)]
+        result, ns = self._run(monkeypatch, tmp_path, events)
+        assert result["lessons"] == 1
+        lessons = ns.load_navigator_lessons()
+        assert len(lessons) == 1
+        assert "escalate" in lessons[0] and "execute" in lessons[0]
+
+    def test_below_threshold_no_lesson(self, monkeypatch, tmp_path):
+        events = [_adjudicated("pipeline_right", "escalate", "execute", i=i)
+                  for i in range(2)]
+        result, ns = self._run(monkeypatch, tmp_path, events)
+        assert result["lessons"] == 0
+        assert ns.load_navigator_lessons() == []
+
+    def test_navigator_right_and_both_defensible_excluded(self, monkeypatch, tmp_path):
+        # Only pipeline_right (navigator-wrong) clusters crystallize into
+        # corrective lessons.
+        events = ([_adjudicated("navigator_right", "escalate", "execute", i=i)
+                   for i in range(4)]
+                  + [_adjudicated("both_defensible", "close", "execute", i=10 + i)
+                     for i in range(4)])
+        result, ns = self._run(monkeypatch, tmp_path, events)
+        assert result["lessons"] == 0
+
+    def test_distinct_shapes_cluster_separately(self, monkeypatch, tmp_path):
+        events = ([_adjudicated("pipeline_right", "escalate", "execute", i=i)
+                   for i in range(3)]
+                  + [_adjudicated("pipeline_right", "close", "extend",
+                                  point="blocked_step", i=10 + i)
+                     for i in range(3)])
+        result, ns = self._run(monkeypatch, tmp_path, events)
+        assert result["lessons"] == 2
+
+    def test_rewrite_reflects_only_current_clusters(self, monkeypatch, tmp_path):
+        import navigator_shadow as ns
+        path = tmp_path / "navigator_lessons.jsonl"
+        monkeypatch.setattr(ns, "_navigator_lessons_path", lambda: path)
+        # First: one cluster crystallizes.
+        monkeypatch.setattr(ns, "_load_navigator_events",
+                            lambda: [_adjudicated("pipeline_right", "escalate", "execute", i=i)
+                                     for i in range(3)])
+        ns.crystallize_navigator_lessons()
+        assert len(ns.load_navigator_lessons()) == 1
+        # Then: evidence no longer supports it → the view rewrites to empty
+        # (derived, not append-only), never a stale lesson.
+        monkeypatch.setattr(ns, "_load_navigator_events", lambda: [])
+        ns.crystallize_navigator_lessons()
+        assert ns.load_navigator_lessons() == []
+
+
+class TestNavigatorLessonInjection:
+    """decide(navigator.lesson_inject): the V5 consumer — navigator lessons are
+    injected into the decide prompt (same seam worker slices use), off by
+    default, and the NAVIGATOR_DECIDED row records whether injection was on."""
+
+    def _patch_flag(self, monkeypatch, on, lessons):
+        import config
+        import navigator_shadow as ns
+        real = config.get
+        monkeypatch.setattr(
+            config, "get",
+            lambda k, d=None: on if k == "navigator.lesson_inject" else real(k, d))
+        monkeypatch.setattr(ns, "load_navigator_lessons", lambda *a, **k: lessons)
+
+    def test_off_by_default_no_injection(self, monkeypatch):
+        adapter = _FakeAdapter([_resp("execute", instruction="go")])
+        # flag defaults off; load should never even be consulted
+        _, meta = decide(_nav_input(), tiers=["cheap"],
+                         adapter_factory=lambda t: adapter)
+        user_sent = adapter.calls[0][1].content
+        assert "Lessons from past adjudicated divergences" not in user_sent
+        assert meta["lessons_injected"] == 0
+
+    def test_on_injects_lessons_into_prompt(self, monkeypatch):
+        self._patch_flag(monkeypatch, True,
+                         ["When you chose 'escalate' ... prefer 'execute'."])
+        adapter = _FakeAdapter([_resp("execute", instruction="go")])
+        _, meta = decide(_nav_input(), tiers=["cheap"],
+                         adapter_factory=lambda t: adapter)
+        user_sent = adapter.calls[0][1].content
+        assert "Lessons from past adjudicated divergences" in user_sent
+        assert "prefer 'execute'" in user_sent
+        assert meta["lessons_injected"] == 1
+
+    def test_on_but_no_lessons_is_a_noop(self, monkeypatch):
+        self._patch_flag(monkeypatch, True, [])
+        adapter = _FakeAdapter([_resp("execute", instruction="go")])
+        _, meta = decide(_nav_input(), tiers=["cheap"],
+                         adapter_factory=lambda t: adapter)
+        assert "Lessons from past adjudicated divergences" not in adapter.calls[0][1].content
+        assert meta["lessons_injected"] == 0
+
+    def test_injection_recorded_on_decision_row(self, monkeypatch):
+        self._patch_flag(monkeypatch, True, ["lesson A", "lesson B"])
+        events = []
+        monkeypatch.setattr(captains_log, "log_event",
+                            lambda etype, **kw: events.append((etype, kw)))
+        decide(_nav_input(), tiers=["cheap"],
+               adapter_factory=lambda t: _FakeAdapter([_resp("execute", instruction="go")]))
+        etype, kw = events[0]
+        assert etype == "NAVIGATOR_DECIDED"
+        assert kw["context"]["lessons_injected"] == 2
+
+    def test_no_marker_when_injection_off(self, monkeypatch):
+        events = []
+        monkeypatch.setattr(captains_log, "log_event",
+                            lambda etype, **kw: events.append((etype, kw)))
+        decide(_nav_input(), tiers=["cheap"],
+               adapter_factory=lambda t: _FakeAdapter([_resp("execute", instruction="go")]))
+        # off path: no lessons_injected key on the row (kept sparse)
+        assert "lessons_injected" not in events[0][1]["context"]

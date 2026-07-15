@@ -2740,3 +2740,32 @@ Dormant (deliberately parked, not dropped):
   suite green. **Applied-change verify→learn is now closed for BOTH the
   evolver-suggestion (V2) and graduation (V3) lanes; V4/V5 (navigator half of
   thread decision #6) is the remaining open work.**
+
+- **2026-07-14 (Jeremy: "let's do v4 and v5, and … give those dates a better
+  path") — VERIFY_LEARN_ARC V4 + V5 SHIPPED; whole arc (thread decision #6)
+  closed.** First, the "dates" fix Jeremy prompted: V3's per-class time axis was
+  fragile (go-forward `recorded_at` only → dormant on all 1395 historical
+  diagnoses). Fixed with an events-log join on `loop_id` (`_loop_ts_index`) →
+  `_load_dated_diagnoses` recovers 1274/1277 real diagnoses; the class path is
+  live on the historical ledger now. **V4 — divergence adjudication:** at evolver
+  cadence (no daemon), `adjudicate_navigator_divergences` gives un-adjudicated
+  NAVIGATOR_DECIDED divergences a capped, cheap-tier LLM verdict (navigator_right
+  / pipeline_right / both_defensible), appended append-only as
+  `NAVIGATOR_ADJUDICATED` (joined by `div_key`) and surfaced in
+  `--agreement` as an `adjudicated` breakdown — the cutover-evidence surface, now
+  standing. Proven end-to-end on the box's 71 live divergences (40 navigator_right
+  under a crude smoke judge; the navigator correctly refused dangerous/impossible
+  goals — "Wire $50,000", "Prove 1=2" — while the pipeline blindly executed).
+  **V5 — navigator lessons:** `pipeline_right` clusters (navigator-wrong shapes,
+  ≥3 same-shape) crystallize into corrective lessons (`navigator_lessons.jsonl`,
+  a derived view — full rewrite over the append-only adjudications) injected into
+  `decide()` via the same worker-slice recall seam; A/B flag
+  `navigator.lesson_inject` (default off), `lessons_injected` marker on the
+  decision row for shadow-comparison. **Owner call still standing (Jeremy's
+  posture, §5 DECISION): per-move cutover stays human — this makes the evidence
+  cheaper and standing, it does not automate the cutover.** Both adjudication
+  knobs default OFF (LLM spend, no silent cost); **enabling `navigator.adjudicate_divergences`
+  on the box is a spend decision, left OFF pending Jeremy** (~71 cheap-tier calls
+  to clear the backlog, then a trickle). Knobs in DEFAULTS.md; 19 new tests; box
+  suite green. **The verify→learn arc is now fully closed (V1–V5).** Next arc
+  is open — no successor decreed yet.

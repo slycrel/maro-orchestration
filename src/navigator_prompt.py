@@ -241,6 +241,7 @@ def _log_decision(
     shadow: bool,
     pipeline_actual: Optional[Dict[str, Any]],
     escalated_via: str = "",
+    lessons_injected: int = 0,
 ) -> None:
     try:
         from captains_log import log_event, NAVIGATOR_DECIDED
@@ -262,6 +263,10 @@ def _log_decision(
             # caller opted into the depth addendum.
             "planning_depth": decision.planning_depth,
         }
+        # V5 A/B marker: whether navigator-lesson injection was active for this
+        # decision, so --agreement can compare move-agreement with vs without.
+        if lessons_injected:
+            ctx["lessons_injected"] = lessons_injected
         if pipeline_actual is not None:
             ctx["pipeline_actual"] = pipeline_actual
         if escalated_via:
@@ -312,8 +317,31 @@ def decide(
 
     system_prompt = SYSTEM_PROMPT + (PLANNING_DEPTH_ADDENDUM if judge_planning_depth else "")
     user_msg = render_input(nav_input)
+
+    # VERIFY_LEARN_ARC V5: inject navigator-scoped lessons — recurring shapes
+    # where an adjudicator judged the pipeline's call better than the
+    # navigator's (crystallize_navigator_lessons). Same injection seam worker
+    # slices use (a recall-style block appended to the decide prompt); no extra
+    # model call. A/B flag, default off (navigator.lesson_inject).
+    lessons_injected = 0
+    try:
+        from config import get as config_get
+        if config_get("navigator.lesson_inject", False):
+            from navigator_shadow import load_navigator_lessons  # lazy: import cycle
+            lessons = load_navigator_lessons()
+            if lessons:
+                user_msg += (
+                    "\n\n## Lessons from past adjudicated divergences\n"
+                    "Recurring cases where a judge found the pipeline's call "
+                    "better than yours — advisory, not binding:\n"
+                    + "\n".join(f"- {lesson}" for lesson in lessons))
+                lessons_injected = len(lessons)
+    except Exception:
+        pass
+
     confusions: List[str] = []
-    meta: Dict[str, Any] = {"tiers_tried": [], "format_failures": 0}
+    meta: Dict[str, Any] = {"tiers_tried": [], "format_failures": 0,
+                            "lessons_injected": lessons_injected}
 
     for tier in tiers:
         prompt = user_msg
@@ -347,7 +375,8 @@ def decide(
             if candidate is not None and not problems:
                 decision = candidate
                 _log_decision(nav_input, decision, tier=tier, elapsed_ms=elapsed,
-                              shadow=shadow, pipeline_actual=pipeline_actual)
+                              shadow=shadow, pipeline_actual=pipeline_actual,
+                              lessons_injected=lessons_injected)
                 break
             meta["format_failures"] += 1
             feedback = (
@@ -394,5 +423,5 @@ def decide(
     meta["escalated_via"] = "idunno_chain"
     _log_decision(nav_input, decision, tier=top, elapsed_ms=0,
                   shadow=shadow, pipeline_actual=pipeline_actual,
-                  escalated_via="idunno_chain")
+                  escalated_via="idunno_chain", lessons_injected=lessons_injected)
     return decision, meta

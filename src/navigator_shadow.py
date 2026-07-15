@@ -42,10 +42,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+
+log = logging.getLogger("navigator")
 
 from ancestry import Origin
 from navigator import NavigatorInput, WorkReport
@@ -505,7 +508,32 @@ def _tabulate_agreement(
     return tables, divergences, agreements
 
 
-def analyze_live_agreement(events: List[Dict[str, Any]]) -> Dict[str, Any]:
+# VERIFY_LEARN_ARC V4: the adjudication verdict vocabulary. A divergence is not
+# an error — it is a disagreement between the navigator (LLM policy) and the
+# pipeline (current heuristic), and either side may be right.
+ADJ_VERDICTS = ("navigator_right", "pipeline_right", "both_defensible")
+
+
+def _divergence_key(row: Dict[str, Any]) -> str:
+    """Deterministic join key for a divergence row and its adjudication.
+
+    Derived from the fields a NAVIGATOR_DECIDED divergence and its
+    NAVIGATOR_ADJUDICATED record both carry identically: the second-precision
+    timestamp plus the decision point and the two moves that disagreed. Stable
+    across reads (so we never re-adjudicate) and effectively unique — two
+    distinct divergences would have to share a wall-clock second AND the same
+    point/move/pipeline, at which point they are the same decision.
+    """
+    import hashlib
+    raw = "|".join(str(row.get(k, "")) for k in
+                   ("timestamp", "point", "move", "pipeline"))
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
+
+
+def analyze_live_agreement(
+    events: List[Dict[str, Any]],
+    adjudications: Optional[Dict[str, Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
     """Tabulate live NAVIGATOR_DECIDED rows into per-move agreement counts —
     the cutover evidence (NAVIGATOR_SCHEMA.md analysis query, structured).
 
@@ -513,6 +541,11 @@ def analyze_live_agreement(events: List[Dict[str, Any]]) -> Dict[str, Any]:
     escalate/close against a pipeline guard_refused counts as agreement-in-kind
     (both refused the run). Everything else is a divergence row, returned
     verbatim for adjudication — divergence is eval data, not an error.
+
+    When ``adjudications`` (a ``div_key -> record`` map, VERIFY_LEARN_ARC V4) is
+    given, each divergence gets its verdict attached (``d["adjudication"]``) and
+    the result grows an ``adjudicated`` breakdown counting the verdicts — the
+    surface Jeremy uses for cutover calls, now standing instead of by-hand.
     """
     rows = []
     for e in events:
@@ -529,6 +562,7 @@ def analyze_live_agreement(events: List[Dict[str, Any]]) -> Dict[str, Any]:
             "tier": c.get("tier"),
             "pipeline": pa.get("move_equivalent"),
             "point": pa.get("point") or "dispatch",
+            "reasoning": str(c.get("reasoning", ""))[:600],
             "goal_preview": str(
                 (c.get("input_digest") or {}).get("goal_preview", ""))[:80],
         })
@@ -543,12 +577,24 @@ def analyze_live_agreement(events: List[Dict[str, Any]]) -> Dict[str, Any]:
         {"by_move": lambda r: r["move"], "by_point": lambda r: r["point"]},
         _agree,
     )
+    adj = adjudications or {}
+    breakdown = {v: 0 for v in ADJ_VERDICTS}
+    breakdown["unadjudicated"] = 0
+    for d in divergences:
+        rec = adj.get(_divergence_key(d))
+        verdict = (rec or {}).get("verdict")
+        d["adjudication"] = verdict
+        if verdict in breakdown:
+            breakdown[verdict] += 1
+        else:
+            breakdown["unadjudicated"] += 1
     return {
         "live_rows": len(rows),
         "by_move": tables["by_move"],
         "by_point": tables["by_point"],
         "agreements": agreements,
         "divergences": divergences,
+        "adjudicated": breakdown,
     }
 
 
@@ -602,9 +648,10 @@ def analyze_planning_depth_agreement(events: List[Dict[str, Any]]) -> Dict[str, 
     }
 
 
-def _analyze_main(json_out: bool) -> int:
-    """--agreement mode: read the workspace captain's log (active + rotated
-    archives) and print the live-agreement table."""
+def _load_navigator_events() -> List[Dict[str, Any]]:
+    """Read all NAVIGATOR_DECIDED + NAVIGATOR_ADJUDICATED rows from the workspace
+    captain's log (active + rotated archives), chronological. Shared by the
+    --agreement table and the V4 adjudication pass so both see one source."""
     try:
         from captains_log import _log_path  # type: ignore
         base = _log_path().parent
@@ -614,7 +661,7 @@ def _analyze_main(json_out: bool) -> int:
     for p in sorted(base.glob("captains_log*.jsonl")):
         try:
             for line in p.read_text(encoding="utf-8").splitlines():
-                if "NAVIGATOR_DECIDED" not in line:
+                if "NAVIGATOR_DECIDED" not in line and "NAVIGATOR_ADJUDICATED" not in line:
                     continue
                 try:
                     events.append(json.loads(line))
@@ -622,7 +669,260 @@ def _analyze_main(json_out: bool) -> int:
                     continue
         except Exception:
             continue
-    summary = analyze_live_agreement(events)
+    return events
+
+
+def _load_adjudications(events: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    """Build ``div_key -> adjudication record`` from NAVIGATOR_ADJUDICATED rows.
+    Last write wins (a re-adjudication supersedes), so the map reflects the
+    current verdict for each divergence."""
+    out: Dict[str, Dict[str, Any]] = {}
+    for e in events:
+        if e.get("event_type") != "NAVIGATOR_ADJUDICATED":
+            continue
+        c = e.get("context") or {}
+        key = c.get("div_key")
+        if key:
+            out[str(key)] = c
+    return out
+
+
+def _adjudicate_one(row: Dict[str, Any], adapter) -> Optional[Dict[str, str]]:
+    """LLM adjudication of a single divergence. Returns
+    ``{"verdict": <ADJ_VERDICTS>, "rationale": <one line>}`` or None if the
+    model produced nothing usable (skip — never store a garbage verdict)."""
+    from navigator_prompt import _complete
+    from llm_parse import extract_json
+    system = (
+        "You adjudicate a disagreement about what a running autonomous agent "
+        "should do next. Two decision-makers disagreed: the NAVIGATOR (an LLM "
+        "policy) and the PIPELINE (the current hard-coded heuristic). Neither is "
+        "presumed correct. Decide which call was better for THIS situation, or "
+        "whether both are defensible.\n\n"
+        "Reply with ONE JSON object and nothing else:\n"
+        '{"verdict": "navigator_right" | "pipeline_right" | "both_defensible", '
+        '"rationale": "<one sentence>"}'
+    )
+    user = (
+        f"Decision point: {row.get('point', 'dispatch')}\n"
+        f"Goal: {row.get('goal_preview', '')}\n"
+        f"NAVIGATOR chose: {row.get('move')} "
+        f"(confidence {row.get('confidence')})\n"
+        f"  navigator reasoning: {row.get('reasoning', '') or '(none recorded)'}\n"
+        f"PIPELINE did: {row.get('pipeline')}\n\n"
+        "Which was the better call?"
+    )
+    try:
+        raw = _complete(adapter, system, user, max_tokens=300)
+    except Exception:
+        return None
+    obj = extract_json(raw)
+    if not isinstance(obj, dict):
+        return None
+    verdict = str(obj.get("verdict", "")).strip()
+    if verdict not in ADJ_VERDICTS:
+        return None
+    return {"verdict": verdict, "rationale": str(obj.get("rationale", ""))[:300]}
+
+
+def adjudicate_navigator_divergences(
+    run_id: str = "",
+    *,
+    max_per_cycle: Optional[int] = None,
+    tier: Optional[str] = None,
+    dry_run: bool = False,
+    adapter_factory: Optional[Any] = None,
+    verbose: bool = False,
+) -> Dict[str, Any]:
+    """VERIFY_LEARN_ARC V4: adjudicate un-adjudicated navigator/pipeline
+    divergences with a capped, cheap-tier LLM pass. Append-only — each verdict
+    is a NAVIGATOR_ADJUDICATED row keyed to the divergence it judges; nothing
+    is reverted or acted on. Rides the evolver cadence hook (no daemon).
+
+    Returns a summary dict. ``dry_run`` renders verdicts without persisting them.
+    """
+    from config import get as config_get
+    if max_per_cycle is None:
+        max_per_cycle = int(config_get("navigator.adjudicate_max_per_cycle", 5))
+    if tier is None:
+        tier = str(config_get("navigator.adjudicate_tier", "cheap"))
+
+    events = _load_navigator_events()
+    existing = _load_adjudications(events)
+    summary = analyze_live_agreement(events, adjudications=existing)
+    divergences = summary["divergences"]
+    todo = [d for d in divergences if not d.get("adjudication")]
+    result: Dict[str, Any] = {
+        "divergences_total": len(divergences),
+        "already_adjudicated": len(divergences) - len(todo),
+        "adjudicated": 0,
+        "skipped_no_verdict": 0,
+        "verdicts": {v: 0 for v in ADJ_VERDICTS},
+        "dry_run": dry_run,
+    }
+    if not todo:
+        return result
+
+    factory = adapter_factory
+    if factory is None:
+        from navigator_prompt import _default_adapter_factory
+        factory = _default_adapter_factory
+    try:
+        adapter = factory(tier)
+    except Exception as exc:
+        log.warning("navigator adjudication: no adapter for tier %s: %s", tier, exc)
+        result["error"] = f"no adapter for tier {tier}"
+        return result
+
+    for d in todo[:max_per_cycle]:
+        verdict = _adjudicate_one(d, adapter)
+        if verdict is None:
+            result["skipped_no_verdict"] += 1
+            continue
+        result["adjudicated"] += 1
+        result["verdicts"][verdict["verdict"]] += 1
+        if verbose or dry_run:
+            print(f"  {d['timestamp']} [{d.get('point','dispatch')}] "
+                  f"{d['move']} vs {d['pipeline']} -> {verdict['verdict']}: "
+                  f"{verdict['rationale']}")
+        if dry_run:
+            continue
+        try:
+            from captains_log import log_event, NAVIGATOR_ADJUDICATED
+            log_event(
+                NAVIGATOR_ADJUDICATED,
+                subject="navigator",
+                summary=f"adjudicated {d['move']} vs {d['pipeline']} "
+                        f"({d.get('point','dispatch')}): {verdict['verdict']}",
+                context={
+                    "div_key": _divergence_key(d),
+                    "verdict": verdict["verdict"],
+                    "rationale": verdict["rationale"],
+                    "tier": tier,
+                    "run_id": run_id,
+                    # human-readable echo of the judged divergence (debuggability)
+                    "timestamp": d["timestamp"],
+                    "point": d.get("point", "dispatch"),
+                    "move": d["move"],
+                    "pipeline": d["pipeline"],
+                    "goal_preview": d.get("goal_preview", ""),
+                },
+            )
+        except Exception:
+            pass
+    # Refresh the materialized navigator-lesson view from the current
+    # adjudications (V5). Cheap (clustering, no LLM) and only ever consumed when
+    # navigator.lesson_inject is on, but kept fresh whenever adjudications move.
+    if not dry_run:
+        try:
+            crystallize_navigator_lessons()
+        except Exception as _cryst_exc:
+            log.debug("navigator lesson crystallization failed (non-fatal): %s", _cryst_exc)
+    return result
+
+
+# ---------------------------------------------------------------------------
+# VERIFY_LEARN_ARC V5 — navigator lessons (crystallize adjudicated
+# navigator-wrong clusters, inject into decide())
+# ---------------------------------------------------------------------------
+
+def _navigator_lessons_path() -> Path:
+    try:
+        from orch_items import memory_dir
+        return memory_dir() / "navigator_lessons.jsonl"
+    except Exception:
+        return Path.home() / ".maro" / "workspace" / "memory" / "navigator_lessons.jsonl"
+
+
+def _lesson_text(point: str, move: str, pipeline: str, count: int,
+                 examples: List[str]) -> str:
+    """One navigator lesson: a recurring shape where the navigator was
+    adjudicated wrong and the pipeline's call was the better one."""
+    where = "" if point == "dispatch" else f" at the {point} decision"
+    eg = "; ".join(e for e in examples if e)[:200]
+    tail = f" (e.g. {eg})" if eg else ""
+    return (f"When you chose '{move}'{where} and the pipeline instead did "
+            f"'{pipeline}', a judge found the pipeline's call better {count}× — "
+            f"prefer '{pipeline}' for this shape unless the situation clearly "
+            f"differs{tail}.")
+
+
+def crystallize_navigator_lessons(min_count: int = 3) -> Dict[str, Any]:
+    """VERIFY_LEARN_ARC V5: cluster ``pipeline_right`` adjudications by shape
+    (point, navigator move, pipeline move) and materialize a navigator lesson
+    for every cluster at/above the graduation threshold (≥3 same-shape). The
+    lessons file is a derived view (full rewrite) over the append-only
+    adjudication evidence — recomputable, so rewriting it never loses data.
+    Returns a small summary.
+    """
+    events = _load_navigator_events()
+    adj = _load_adjudications(events)
+    clusters: Dict[tuple, Dict[str, Any]] = {}
+    for rec in adj.values():
+        if rec.get("verdict") != "pipeline_right":
+            continue
+        key = (rec.get("point", "dispatch"), rec.get("move"), rec.get("pipeline"))
+        slot = clusters.setdefault(key, {"count": 0, "examples": []})
+        slot["count"] += 1
+        gp = rec.get("goal_preview")
+        if gp and len(slot["examples"]) < 3:
+            slot["examples"].append(str(gp))
+    lessons = []
+    for (point, move, pipeline), slot in clusters.items():
+        if slot["count"] < min_count:
+            continue
+        lessons.append({
+            "point": point, "navigator_move": move, "pipeline_move": pipeline,
+            "count": slot["count"], "examples": slot["examples"],
+            "lesson": _lesson_text(point, move, pipeline, slot["count"],
+                                   slot["examples"]),
+        })
+    lessons.sort(key=lambda l: l["count"], reverse=True)
+    path = _navigator_lessons_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        # Full rewrite of the materialized view (not append) — it is derived
+        # from the adjudication evidence and must reflect only current clusters.
+        path.write_text(
+            "".join(json.dumps(l) + "\n" for l in lessons), encoding="utf-8")
+    except Exception:
+        pass
+    return {"clusters": len(clusters), "lessons": len(lessons)}
+
+
+def load_navigator_lessons(limit: int = 8) -> List[str]:
+    """Decide-time consumer (V5): the materialized navigator lesson texts,
+    most-supported first, capped. Cheap — reads only the small derived view,
+    not the raw logs. Empty list if none / disabled / unreadable."""
+    path = _navigator_lessons_path()
+    if not path.exists():
+        return []
+    out: List[str] = []
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                d = json.loads(line)
+            except Exception:
+                continue
+            text = d.get("lesson")
+            if text:
+                out.append(str(text))
+            if len(out) >= limit:
+                break
+    except Exception:
+        return []
+    return out
+
+
+def _analyze_main(json_out: bool) -> int:
+    """--agreement mode: read the workspace captain's log (active + rotated
+    archives) and print the live-agreement table."""
+    events = _load_navigator_events()
+    adjudications = _load_adjudications(events)
+    summary = analyze_live_agreement(events, adjudications=adjudications)
     depth_summary = analyze_planning_depth_agreement(events)
     if json_out:
         print(json.dumps({"moves": summary, "planning_depth": depth_summary}, indent=2))
@@ -635,12 +935,20 @@ def _analyze_main(json_out: bool) -> int:
     print("by navigator move:")
     for move, s in sorted(summary["by_move"].items()):
         print(f"  {move:10s} agree={s['agree']:3d} diverge={s['diverge']:3d}")
+    adjb = summary.get("adjudicated", {})
+    if any(adjb.get(v) for v in ADJ_VERDICTS):
+        print("adjudicated divergences (VERIFY_LEARN_ARC V4):")
+        for v in ADJ_VERDICTS:
+            print(f"  {v:16s} {adjb.get(v, 0):3d}")
+        print(f"  {'unadjudicated':16s} {adjb.get('unadjudicated', 0):3d}")
     if summary["divergences"]:
         print("divergences (adjudicate each — divergence is eval data):")
         for d in summary["divergences"]:
+            verdict = d.get("adjudication")
+            tag = f" -> {verdict}" if verdict else ""
             print(f"  {d['timestamp']} [{d.get('point','dispatch')}] "
                   f"{d['move']}({d['confidence']}) "
-                  f"vs {d['pipeline']} | {d['goal_preview']}")
+                  f"vs {d['pipeline']}{tag} | {d['goal_preview']}")
     if depth_summary["live_rows"]:
         print(f"\nplanning-depth shadow rows: {depth_summary['live_rows']} "
               f"(agreements {depth_summary['agreements']}) "
@@ -663,6 +971,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--agreement", action="store_true",
                         help="tabulate live NAVIGATOR_DECIDED agreement per move "
                              "(the per-class cutover evidence) and exit")
+    parser.add_argument("--adjudicate", action="store_true",
+                        help="LLM-adjudicate un-adjudicated divergences "
+                             "(VERIFY_LEARN_ARC V4); with --json/--dry-run to preview")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="with --adjudicate: render verdicts without persisting")
+    parser.add_argument("--max", type=int, default=None,
+                        help="with --adjudicate: cap divergences judged this run")
     parser.add_argument("--point", choices=("dispatch", "closure", "both"),
                         default="dispatch")
     parser.add_argument("--tiers", default="",
@@ -670,10 +985,24 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--json", action="store_true", help="emit JSON lines")
     args = parser.parse_args(argv)
 
+    if args.adjudicate:
+        result = adjudicate_navigator_divergences(
+            run_id="cli", max_per_cycle=args.max,
+            dry_run=args.dry_run, verbose=not args.json)
+        if args.json:
+            print(json.dumps(result, indent=2))
+        else:
+            print(f"divergences: {result['divergences_total']} "
+                  f"({result['already_adjudicated']} already adjudicated); "
+                  f"this run: {result['adjudicated']} judged, "
+                  f"{result['skipped_no_verdict']} skipped "
+                  f"{'(dry-run)' if result['dry_run'] else ''}")
+            print(f"  verdicts: {result['verdicts']}")
+        return 0
     if args.agreement:
         return _analyze_main(args.json)
     if not args.runs:
-        parser.error("runs required unless --agreement")
+        parser.error("runs required unless --agreement/--adjudicate")
 
     points = ("dispatch", "closure") if args.point == "both" else (args.point,)
     tiers = [t.strip() for t in args.tiers.split(",") if t.strip()] or None

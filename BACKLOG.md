@@ -57,7 +57,16 @@ its `recorded_at` stamp or an events-log join on `loop_id` (`_loop_ts_index`,
 ~99% coverage), so the class path is live on the historical ledger, not dormant.
 The applied-change verify→learn loop is now closed for BOTH the
 evolver-suggestion (V2) and graduation (V3) lanes.
-**Navigator-side V4/V5 remain the open half of thread decision #6.**
+**Navigator-side V4/V5 SHIPPED 2026-07-14 — the arc (thread decision #6) is now
+fully closed.** V4: divergences LLM-adjudicated at cadence (navigator_right /
+pipeline_right / both_defensible), appended append-only and surfaced in
+`--agreement` as an `adjudicated` breakdown; gated OFF (`navigator.adjudicate_divergences`),
+proven on the box's 71 live divergences. V5: `pipeline_right` clusters (≥3
+same-shape) crystallize into corrective navigator lessons injected into `decide()`
+via the worker-slice seam; A/B flag `navigator.lesson_inject` (default off).
+Per-move cutover stays Jeremy's call (this makes the evidence standing, not the
+cutover automatic). Enabling adjudication on the box is a spend decision (the one
+remaining owner call) — left OFF pending Jeremy.
 
 ---
 

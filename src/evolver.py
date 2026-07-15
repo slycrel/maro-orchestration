@@ -843,6 +843,25 @@ def run_evolver(
         except Exception as _verify_exc:
             log.debug("evolver cadence verdict pass failed (non-fatal): %s", _verify_exc)
 
+    # VERIFY_LEARN_ARC V4: adjudicate navigator/pipeline divergences (the
+    # navigator half of thread decision #6). Capped, cheap-tier LLM pass; rides
+    # the same cadence hook (no daemon). Append-only — verdicts feed the
+    # --agreement table and V5's lesson clustering; nothing is acted on here.
+    # Gated OFF by default (an LLM spend per cadence — no silent cost for
+    # strangers); this box opts in via navigator.adjudicate_divergences.
+    if not dry_run:
+        try:
+            from config import get as _cfg_get
+            if _cfg_get("navigator.adjudicate_divergences", False):
+                from navigator_shadow import adjudicate_navigator_divergences
+                _adj = adjudicate_navigator_divergences(run_id, verbose=verbose)
+                if verbose and _adj.get("adjudicated"):
+                    print(f"[evolver] navigator adjudication: "
+                          f"{_adj['adjudicated']} judged {_adj['verdicts']}",
+                          file=sys.stderr)
+        except Exception as _adj_exc:
+            log.debug("evolver navigator adjudication pass failed (non-fatal): %s", _adj_exc)
+
     return report
 
 
