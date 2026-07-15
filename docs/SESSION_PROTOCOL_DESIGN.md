@@ -305,6 +305,14 @@ refactor must make append-vs-consume explicit or it will reintroduce this
 class of bug. **Resolved by the v1 ship:** contributors only ever
 `append()`/`extend()`; `drain()` at the merge point is the sole consumer —
 the assignment that doubled as consume/clear no longer exists.
+*Follow-up (2026-07-15, adversarial review of the ship):* since the merge
+point only runs when another step executes, both director-escalate sites now
+gate the channel ask on `remaining_steps` (don't solicit a reply at the
+final step boundary that nothing will drain — and note the stuck-trigger
+`continue` does NOT retry the popped step, so its reply has the same
+next-step-only consumer), and anything still pending when the loop exits
+drains into a warning + `loop [exit]: undelivered_context` decision line
+instead of vanishing.
 
 **Also true:** continuation crosses the process boundary as a parsed reason
 *string* (`handle.py:~2422`) — typed payloads won't survive it without

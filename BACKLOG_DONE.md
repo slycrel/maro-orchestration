@@ -8,6 +8,61 @@ Last split: 2026-04-16 (session 34).
 
 ---
 
+### Director-escalate reply solicited on the run's final step went nowhere — SHIPPED (2026-07-15)
+
+**Source:** adversarial review of the escalate-clobber fix (2026-07-15,
+pre-existing bug): neither director-escalate site considered
+`remaining_steps`, so the director could ask the user a question after the
+last step — the channel round-trip completed, the reply merged into
+next-step context, and the loop exited without consuming it. User answered;
+answer dropped. Mattered more once msg-4 (clarification round-trip) makes
+channel questions routine.
+
+**Shipped:** both escalate sites in `loop_execute.py` (stuck trigger +
+verify/threshold trigger) gate the channel ASK on `remaining_steps` being
+non-empty — suppression logs and records an `escalate_suppressed` decision
+line (question preserved), flow treated as continue. Writer refuted the
+task brief's asymmetry hypothesis with a code trace, and the adversarial
+reviewer CONFIRMED it empirically (live probe, 4 executions, no 5th):
+the stuck-escalate `continue` does NOT retry the popped step — retry-with-
+reinsert lives only in `loop_blocked`, which that `continue` skips — so
+both sites share the identical next-step-only consumer test. Per-site
+comments document this. Belt-and-braces: records still in
+`ctx.pending_context` at the single loop-exit point (final-step hook
+output, replies cut short by a stop) drain into a warning with provenance
++ a `loop [exit]: undelivered_context` decision line (LoopResult has no
+context/notes field — the decision log is the existing mechanism;
+`_record_loop_decision` never raises and truncates at 160 chars).
+
+**Adversarial review record:** verdict SHIP_AS_IS, one confirmed minor →
+accepted as KNOWN-GAP with pin test
+(`test_known_gap_escalate_suppressed_despite_queued_interrupt`): the gate
+reads `remaining_steps` BEFORE the same boundary's interrupt poll, so an
+additive interrupt queued at the final boundary inserts a step that could
+have consumed the reply after the ask was already suppressed (HEAD asked
+and delivered in that window). Bounded: end state otherwise identical,
+question preserved in the decision record; closing it means reordering
+boundary semantics — accept-not-close per the pin-test convention.
+Probed-OK: A/B parity vs HEAD at both sites (HEAD asked-and-dropped,
+live-reproduced); exit-drain catches the stop-interrupt drop path and the
+max_iterations head-break funnels through the same single exit; no
+post-loop reader of pending_context (restarts get fresh ledgers); gates
+independently pinned via mutation testing (each disabled gate fails
+exactly its own test; inversion fails all). Residual noted: an escalate
+with steps remaining but `iteration >= max_iterations` still asks — the
+exit-drain records the reply; rare, not fixed to keep the change minimal.
+Reviewer test tightenings applied: mid-run stuck test now pins exec
+count == 4 and reply-in-NEXT-step (the no-retry claim itself); caplog
+logger name fixed to "maro.loop".
+
+**Side find, BACKLOG'd (pre-existing, confirmed on HEAD):** the stuck
+branch's `continue` also drops the step's own execution outcome from
+`step_outcomes` — 4 executions → 3 recorded steps; a final step ending
+this way vanishes from a `done` run's record. Status-integrity family.
+
+**Tests:** test_agent_loop.py 199 (5 new incl. the known-gap pin),
+test_interrupt.py 38.
+
 ### §6 injection-seam refactor v1 — SHIPPED (2026-07-15)
 
 **Source:** SESSION_PROTOCOL_DESIGN.md §6/§6a (Jeremy's "inject additional

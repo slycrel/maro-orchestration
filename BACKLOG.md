@@ -115,18 +115,16 @@ learning (promoted: the data layer that makes "active orchestrator" a runtime
 fact), container-on posture for network-sourced goals (revisit at Hermes
 go-live).
 
-- [ ] **Director-escalate reply solicited on the run's final step goes
-  nowhere** (adversarial review of the clobber fix, 2026-07-15, pre-existing):
-  `_ae2_fire` doesn't consider `remaining_steps`, so the director can ask the
-  user a question after the last step — the channel round-trip completes, the
-  reply merges into next-step context, and the loop exits without consuming
-  it. User answered; answer dropped. Matters more once msg-4 (clarification
-  round-trip) makes channel questions routine. Fix direction: gate the
-  escalate branch on `remaining_steps` (don't ask what you can't use), or
-  surface the reply into the run result/closure context. Related micro-wart,
-  same review: hook output from a stuck/blocked step's `_post_step_checks` is
-  dropped on the paths that `continue` past the carry-forward — low value,
-  note only.
+- [ ] **Stuck-block escalate/continue drops the step's own outcome from the
+  run record** (adversarial review 2026-07-15, PRE-EXISTING — reproduced
+  identically on HEAD): when the stuck trigger fires and the director says
+  continue or escalate, the `continue` at the stuck branch skips the
+  `step_outcomes` append — the 3rd execution silently disappears from the
+  run record (4 executions → 3 recorded steps), and a run whose FINAL step
+  ends this way reports `status="done"` with the stuck step absent.
+  Status-integrity adjacent (done≠achieved family). Fix direction: append a
+  stuck-status outcome before the `continue`, mirroring what loop_blocked's
+  branches do.
 
 ### R6. VERIFY_LEARN_ARC V4/V5 adversarial review — 4 fixed live, 4 deferred (2026-07-14)
 

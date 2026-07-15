@@ -3584,6 +3584,322 @@ def test_adaptive_escalate_reply_reaches_next_step(monkeypatch, tmp_path):
     )
 
 
+def _patch_adaptive_execution_on(monkeypatch):
+    """Turn the adaptive_execution flag on without touching other config."""
+    import config as _cfg_mod
+    _orig_cfg_get = _cfg_mod.get
+
+    def _patched_cfg_get(key, default=None):
+        if key == "adaptive_execution":
+            return True
+        return _orig_cfg_get(key, default)
+
+    monkeypatch.setattr(_cfg_mod, "get", _patched_cfg_get)
+
+
+def _capture_loop_decisions(monkeypatch):
+    """Capture _record_loop_decision calls made from loop_execute."""
+    import loop_execute as _le
+    calls = []
+
+    def _fake_record(source, trigger, action, reasoning=""):
+        calls.append((source, trigger, action, reasoning))
+        return True
+
+    monkeypatch.setattr(_le, "_record_loop_decision", _fake_record)
+    return calls
+
+
+class _CountingChannel:
+    def __init__(self, reply="use approach B"):
+        self.questions = []
+        self._reply = reply
+
+    def ask(self, question):
+        self.questions.append(question)
+        return self._reply
+
+
+class _ExecCaptureAdapter(_DryRunAdapter):
+    """_DryRunAdapter that records every execution prompt it receives."""
+
+    def __init__(self):
+        self.exec_user_msgs = []
+
+    def complete(self, messages, *, tools=None, tool_choice="auto", **kwargs):
+        if tools and tool_choice == "required":
+            user_content = next(
+                (m.content for m in reversed(messages) if m.role == "user"), ""
+            )
+            self.exec_user_msgs.append(user_content)
+        return super().complete(
+            messages, tools=tools, tool_choice=tool_choice, **kwargs)
+
+
+def test_adaptive_escalate_suppressed_at_final_step_boundary(monkeypatch, tmp_path):
+    """A verify/threshold director-escalate AFTER the run's final step must not
+    ask the channel: the reply's only consumer is the next step's merge-point
+    drain, and there is no next step (BACKLOG, adversarial review 2026-07-15).
+    The loop completes normally and a decision line records the suppression.
+    """
+    _setup_workspace(monkeypatch, tmp_path)
+    _patch_adaptive_execution_on(monkeypatch)
+    _decisions = _capture_loop_decisions(monkeypatch)
+
+    from director import DirectorDecision
+    import director as _dm
+
+    def _fake_eval(goal, eval_ctx, trigger, adapter, *, dry_run=False):
+        return DirectorDecision(
+            action="escalate",
+            reasoning="need direction",
+            user_question="Which approach should I take?",
+        )
+
+    monkeypatch.setattr(_dm, "director_evaluate", _fake_eval)
+
+    _channel = _CountingChannel()
+    adapter = _ExecCaptureAdapter()
+    # Exactly 5 steps: the step_threshold trigger (every 5 steps) fires for
+    # the first time right after the FINAL step, with remaining_steps empty.
+    result = run_agent_loop(
+        "five part goal ending exactly on the director check boundary",
+        adapter=adapter,
+        dry_run=False,
+        channel=_channel,
+        preset_steps=[f"Perform part {i} of the work" for i in range(1, 6)],
+    )
+    assert result.status == "done"
+    assert len(result.steps) == 5
+    assert not _channel.questions, (
+        "director escalate at the final step boundary must not solicit the "
+        "user — the reply would have no consumer"
+    )
+    assert any(
+        d[2] == "escalate_suppressed" and d[1] in ("step_threshold", "verify_failure")
+        for d in _decisions
+    ), f"suppressed escalate not recorded in decisions: {_decisions}"
+
+
+def test_known_gap_escalate_suppressed_despite_queued_interrupt(monkeypatch, tmp_path):
+    """KNOWN-GAP (adversarial review 2026-07-15; BACKLOG SP-arc note): the
+    escalate gate reads remaining_steps BEFORE the same boundary's interrupt
+    poll. An additive interrupt queued at the final step boundary inserts a
+    new step that COULD have consumed the reply — but the ask was already
+    suppressed. Accepted: end state is otherwise identical (interrupt step
+    runs, question preserved in the decision record), the window needs an
+    escalate at exactly the final boundary with an interrupt pending in the
+    same iteration, and closing it means reordering boundary semantics.
+    This test pins the accepted behavior; if it fails because the channel
+    WAS asked, the gap got fixed — move the ask-delivery assertion in from
+    the reviewer's probe and retire this pin."""
+    _setup_workspace(monkeypatch, tmp_path)
+    _patch_adaptive_execution_on(monkeypatch)
+    _decisions = _capture_loop_decisions(monkeypatch)
+
+    from director import DirectorDecision
+    from interrupt import InterruptQueue
+    import director as _dm
+
+    def _fake_eval(goal, eval_ctx, trigger, adapter, *, dry_run=False):
+        return DirectorDecision(
+            action="escalate",
+            reasoning="need direction",
+            user_question="Which approach should I take?",
+        )
+
+    monkeypatch.setattr(_dm, "director_evaluate", _fake_eval)
+
+    q = InterruptQueue(queue_path=tmp_path / "interrupts.jsonl")
+    posted = []
+
+    def _post_additive_after_step_5(step_num, step_text, summary, status):
+        if step_num == 5 and not posted:
+            posted.append(True)
+            q.post("also check the backup restore path",
+                   source="test", intent="additive")
+
+    _channel = _CountingChannel()
+    adapter = _ExecCaptureAdapter()
+    result = run_agent_loop(
+        "five part goal with an interrupt landing on the final boundary",
+        adapter=adapter,
+        dry_run=False,
+        channel=_channel,
+        interrupt_queue=q,
+        preset_steps=[f"Perform part {i} of the work" for i in range(1, 6)],
+        step_callback=_post_additive_after_step_5,
+    )
+    assert result.status == "done"
+    # The interrupt-inserted step ran...
+    assert result.interrupts_applied == 1
+    assert any(
+        "backup restore path" in msg for msg in adapter.exec_user_msgs
+    ), adapter.exec_user_msgs
+    # ...but the ask was suppressed even though that step could have
+    # consumed the reply — the accepted gap.
+    assert not _channel.questions, (
+        "channel was asked: the gate now sees post-poll remaining_steps — "
+        "the known gap is fixed; retire this pin per its docstring"
+    )
+    assert any(d[2] == "escalate_suppressed" for d in _decisions), _decisions
+
+
+def test_stuck_escalate_suppressed_on_final_step(monkeypatch, tmp_path):
+    """The stuck-trigger escalate has the SAME consumer test as the
+    verify/threshold site: its `continue` does NOT retry the popped stuck
+    step (retry-with-hint lives in loop_blocked, which never runs after that
+    branch), so on the final step a reply would be dropped un-read — the
+    question must be suppressed there too.
+    """
+    _setup_workspace(monkeypatch, tmp_path)
+    _patch_adaptive_execution_on(monkeypatch)
+    _decisions = _capture_loop_decisions(monkeypatch)
+
+    from director import DirectorDecision
+    import director as _dm
+
+    def _fake_eval(goal, eval_ctx, trigger, adapter, *, dry_run=False):
+        return DirectorDecision(
+            action="escalate",
+            reasoning="stuck on repeats",
+            user_question="Should I keep repeating this?",
+        )
+
+    monkeypatch.setattr(_dm, "director_evaluate", _fake_eval)
+
+    _channel = _CountingChannel()
+    adapter = _ExecCaptureAdapter()
+    # Three IDENTICAL steps: same step text + same "done" status trips the
+    # stuck detector (streak of 3) on the 3rd — and final — step, with
+    # remaining_steps already empty.
+    result = run_agent_loop(
+        "goal with three identical repeating parts",
+        adapter=adapter,
+        dry_run=False,
+        channel=_channel,
+        preset_steps=["Inspect the ledger contents once more"] * 3,
+    )
+    assert result.status == "done"
+    assert not _channel.questions, (
+        "stuck-trigger escalate on the final step must not solicit the user "
+        "— its continue abandons the stuck step, so nothing consumes a reply"
+    )
+    assert any(
+        d[1] == "stuck" and d[2] == "escalate_suppressed" for d in _decisions
+    ), f"suppressed stuck escalate not recorded in decisions: {_decisions}"
+
+
+def test_stuck_escalate_midrun_reply_reaches_next_step(monkeypatch, tmp_path):
+    """Mid-run, the stuck-trigger escalate must still ask: the reply's
+    consumer is the next remaining step's merge-point drain. Proves the
+    final-step gate keys on remaining_steps, not on the trigger."""
+    _setup_workspace(monkeypatch, tmp_path)
+    _patch_adaptive_execution_on(monkeypatch)
+
+    from director import DirectorDecision
+    import director as _dm
+
+    _eval_count = [0]
+
+    def _fake_eval(goal, eval_ctx, trigger, adapter, *, dry_run=False):
+        _eval_count[0] += 1
+        if _eval_count[0] == 1:
+            return DirectorDecision(
+                action="escalate",
+                reasoning="stuck on repeats",
+                user_question="Should I try the alternate data source?",
+            )
+        return DirectorDecision(action="continue", reasoning="ok")
+
+    monkeypatch.setattr(_dm, "director_evaluate", _fake_eval)
+
+    _channel = _CountingChannel(reply="yes, switch to the alternate source")
+    adapter = _ExecCaptureAdapter()
+    # Stuck trips on the 3rd identical step; one distinct step remains to
+    # consume the reply.
+    result = run_agent_loop(
+        "goal with repeats then a distinct closing part",
+        adapter=adapter,
+        dry_run=False,
+        channel=_channel,
+        preset_steps=["Inspect the ledger contents once more"] * 3
+        + ["Assemble the closing summary of the ledger review"],
+    )
+    assert result.status == "done"
+    assert _channel.questions, "mid-run stuck escalate should still ask"
+    # Exactly 4 executions (3 repeats + closing step): the stuck-escalate
+    # continue does NOT retry the popped step — pins the no-retry claim the
+    # final-step gate rests on (adversarial review 2026-07-15).
+    assert len(adapter.exec_user_msgs) == 4, adapter.exec_user_msgs
+    _reply_msgs = [
+        msg for msg in adapter.exec_user_msgs
+        if "yes, switch to the alternate source" in msg
+    ]
+    assert _reply_msgs, (
+        "mid-run stuck escalate reply never reached the next step's prompt"
+    )
+    # ...and its consumer is the NEXT (distinct) step, not a same-step retry.
+    assert all(
+        "Assemble the closing summary" in msg for msg in _reply_msgs
+    ), _reply_msgs
+
+
+def test_undelivered_pending_context_surfaced_at_loop_exit(monkeypatch, tmp_path, caplog):
+    """Contributions still pending when the loop exits (e.g. post-step hook
+    output from the FINAL step) must not vanish silently: the loop logs a
+    warning with provenance and records a decision line (belt-and-braces for
+    every drop path, adversarial review 2026-07-15)."""
+    import logging
+    _setup_workspace(monkeypatch, tmp_path)
+    _decisions = _capture_loop_decisions(monkeypatch)
+
+    from hooks import Hook, HookRegistry, SCOPE_STEP, TYPE_NOTIFICATION
+
+    registry = HookRegistry(config_path=tmp_path / "hooks.json")
+    registry.register(Hook(
+        id="test-step-note",
+        name="Step Note",
+        scope=SCOPE_STEP,
+        hook_type=TYPE_NOTIFICATION,
+        prompt_template="remember the follow-up item after this step",
+        fire_on="after",
+    ))
+
+    adapter = _ExecCaptureAdapter()
+    with caplog.at_level(logging.WARNING, logger="maro.loop"):
+        result = run_agent_loop(
+            "two part goal with a step hook attached",
+            adapter=adapter,
+            dry_run=False,
+            hook_registry=registry,
+            preset_steps=[
+                "Gather the two required inputs",
+                "Assemble the combined output",
+            ],
+        )
+    assert result.status == "done"
+    # Sanity: the hook vehicle works mid-run — step 1's injection reached
+    # step 2's prompt via the merge-point drain.
+    assert any(
+        "remember the follow-up item" in msg for msg in adapter.exec_user_msgs[1:]
+    ), "hook contribution never reached the next step's prompt"
+    # The FINAL step's hook contribution had no next step: it must surface
+    # as a decision line with hook provenance instead of dropping silently.
+    _exit_records = [
+        d for d in _decisions
+        if d[0] == "loop" and d[1] == "exit" and d[2] == "undelivered_context"
+    ]
+    assert _exit_records, (
+        f"undelivered final-step hook context not recorded at loop exit: {_decisions}"
+    )
+    assert "hook" in _exit_records[0][3], _exit_records[0][3]
+    assert any(
+        "undelivered context contribution" in rec.getMessage()
+        for rec in caplog.records
+    ), "loop exit warning with provenance not logged"
+
+
 def test_loop_projectless_run_still_fences_cwd(monkeypatch, tmp_path):
     """BACKLOG #1 (3rd repro): a run with no project must not execute with the
     inherited launch cwd — the ambient subprocess cwd falls back to the

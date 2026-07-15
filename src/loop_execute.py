@@ -1138,7 +1138,35 @@ def _execute_main_loop(
                         break
                     elif _ae_decision.action == "escalate":
                         _ae_question = _ae_decision.user_question or _ae_decision.reasoning
-                        if ctx.channel is not None:
+                        # Per-site consumer check (adversarial review
+                        # 2026-07-15): a reply's ONLY consumer is the next
+                        # iteration's merge-point drain. Despite appearances,
+                        # this branch does NOT retry the stuck step — the
+                        # step was popped at the loop head and the `continue`
+                        # below abandons it and moves on to the NEXT
+                        # remaining step (the retry-with-hint machinery lives
+                        # in loop_blocked._process_blocked_step, which never
+                        # runs after this `continue`). So the consumer test
+                        # here is the same as at the verify/threshold site:
+                        # if remaining_steps is empty, the loop exits at the
+                        # `while` check and an answered question would be
+                        # dropped un-read. Don't ask what nothing can use —
+                        # record why and treat as continue for flow.
+                        if not remaining_steps:
+                            log.info(
+                                "adaptive [stuck/escalate]: suppressed — "
+                                "director wanted to escalate at the final "
+                                "step boundary but no step remains to "
+                                "consume a reply; treating as continue. "
+                                "Question was: %s", _ae_question[:150],
+                            )
+                            _record_loop_decision(
+                                "director", "stuck", "escalate_suppressed",
+                                "escalate requested at final step boundary — "
+                                "no remaining step to consume a user reply; "
+                                "question not sent: " + _ae_question[:100],
+                            )
+                        elif ctx.channel is not None:
                             try:
                                 _ae_reply = ctx.channel.ask(_ae_question)
                                 if _ae_reply:
@@ -1504,7 +1532,33 @@ def _execute_main_loop(
                         _ae2_question = (
                             _ae2_decision.user_question or _ae2_decision.reasoning
                         )
-                        if ctx.channel is not None:
+                        # Per-site consumer check (adversarial review
+                        # 2026-07-15): a reply's ONLY consumer is the next
+                        # iteration's merge-point drain. This site runs at
+                        # the bottom of the loop body with the current step
+                        # already popped and processed, so when
+                        # remaining_steps is empty the `while` exits before
+                        # any drain — the user would answer and the answer
+                        # would be appended to the ledger and dropped
+                        # un-read. Don't ask what nothing can use — record
+                        # why and treat as continue for flow (fall through
+                        # with no state change).
+                        if not remaining_steps:
+                            log.info(
+                                "adaptive [%s/escalate]: suppressed — "
+                                "director wanted to escalate at the final "
+                                "step boundary but no step remains to "
+                                "consume a reply; treating as continue. "
+                                "Question was: %s",
+                                _ae2_trigger, _ae2_question[:150],
+                            )
+                            _record_loop_decision(
+                                "director", _ae2_trigger, "escalate_suppressed",
+                                "escalate requested at final step boundary — "
+                                "no remaining step to consume a user reply; "
+                                "question not sent: " + _ae2_question[:100],
+                            )
+                        elif ctx.channel is not None:
                             try:
                                 _ae2_reply = ctx.channel.ask(_ae2_question)
                                 if _ae2_reply:
@@ -1555,6 +1609,29 @@ def _execute_main_loop(
             loop_status = _intr_status
             stuck_reason = _intr_reason
             break
+
+    # Belt-and-braces (adversarial review 2026-07-15): the merge-point drain
+    # only runs when another step executes, so anything still pending when
+    # the loop exits — hook output from the final step, an escalate reply
+    # that slipped past the per-site gates, a blocked-retry re-arm cut short
+    # by max_iterations — would otherwise vanish silently. LoopResult has no
+    # context/notes field to carry these, so surface them where the loop
+    # already records its decisions: a warning with provenance plus a
+    # decision-log line (same mechanism as the director decisions above).
+    _undelivered = _pending_context.drain()
+    if _undelivered:
+        _und_sources = ", ".join(r.source for r in _undelivered)
+        log.warning(
+            "loop exit with %d undelivered context contribution(s) [%s] — "
+            "no further step will consume them; recorded to the decision log",
+            len(_undelivered), _und_sources,
+        )
+        _record_loop_decision(
+            "loop", "exit", "undelivered_context",
+            f"{len(_undelivered)} pending contribution(s) left at loop exit "
+            f"(sources: {_und_sources}): "
+            + " | ".join(r.text[:60] for r in _undelivered),
+        )
 
     return {
         "step_outcomes": step_outcomes,
