@@ -209,6 +209,7 @@ py-modules = [
     "router",
     "rules",
     "run_curation",
+    "run_lease",
     "runs",
     "runtime_tools",
     "scheduler",

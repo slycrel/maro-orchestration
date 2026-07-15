@@ -52,6 +52,11 @@ ALLOWED_DELETION_SITES = {
         "user-invoked: the user clearing their own kill switch",
     ("llm.py", "_run_subprocess_safe"):
         "ephemeral: temp prompt file for subprocess adapter",
+    ("run_lease.py", "acquire_run_lease"):
+        "ephemeral: removes the empty lease file this same call just "
+        "created when flock fails (a present-unheld lease reads as "
+        "'owner dead' to probes — leaving it is an active wrong answer); "
+        "never touches an existing holder's file (size==0 guard)",
     ("llm.py", "_cleanup_files"):
         "ephemeral: temp prompt files for subprocess adapter",
     ("loop_finalize.py", "cleanup_step_artifacts"):
