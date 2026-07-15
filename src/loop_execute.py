@@ -1015,6 +1015,44 @@ def _execute_main_loop(
             last_action = action_key
 
         if stuck_streak >= 2:  # 3rd repeat
+            def _append_stuck_step_outcome() -> None:
+                """Record the just-executed (stuck-flagged) step before any
+                `continue` that skips the normal step_outcomes append at the
+                bottom of the loop body (BACKLOG 2026-07-15, done≠achieved
+                family): without this the 3rd execution silently vanishes
+                from the run record, and a run whose FINAL step exits via one
+                of these paths reports done with that step absent — the
+                honesty machinery (closure verification, report,
+                introspection) can't see a step that isn't in the record.
+                status="blocked" matches the terminal stuck append below:
+                executed, flagged no-progress, not completed — even when the
+                raw step_status was "done" (identical done steps trip the
+                detector too; a 3rd identical "done" is repetition, not new
+                progress). Full outcome fields carried per the 2026-07-08
+                review note in loop_blocked.py (dropping call_record/
+                cache_read_tokens/confidence breaks the report's per-step
+                detail-link promise). Paths that fall through to the terminal
+                stuck append below must NOT call this — double-record.
+                """
+                step_outcomes.append(step_from_decompose(
+                    step_text, item_index,
+                    status="blocked",
+                    result=step_result,
+                    iteration=iteration,
+                    tokens_in=outcome.get("tokens_in", 0),
+                    tokens_out=outcome.get("tokens_out", 0),
+                    cache_read_tokens=outcome.get("cache_read_tokens", 0),
+                    provider_cost_usd=float(
+                        outcome.get("provider_cost_usd", 0.0) or 0.0),
+                    elapsed_ms=step_elapsed,
+                    confidence=outcome.get("confidence", ""),
+                    injected_steps=list(outcome.get("inject_steps", [])),
+                    call_record=outcome.get("call_record", ""),
+                    executor_session_id=outcome.get("executor_session_id", ""),
+                    executor_session_resumed=bool(
+                        outcome.get("executor_session_resumed", False)),
+                ))
+
             # Phase 64 Phase A: adaptive execution — director evaluates before stuck advisor
             try:
                 from config import get as _ae_cfg_get
@@ -1066,6 +1104,7 @@ def _execute_main_loop(
                         stuck_streak = 0
                         log.info("adaptive [stuck/continue]: resetting streak — %s",
                                  _ae_decision.reasoning[:100])
+                        _append_stuck_step_outcome()
                         continue
                     elif _ae_decision.action == "adjust" and _ae_decision.revised_steps:
                         _ae_new = _ae_decision.revised_steps
@@ -1078,6 +1117,7 @@ def _execute_main_loop(
                         if verbose:
                             print(f"[maro] adaptive adjust (stuck): {len(_ae_new)} steps — "
                                   f"{_ae_decision.reasoning[:60]}", file=sys.stderr, flush=True)
+                        _append_stuck_step_outcome()
                         continue
                     elif _ae_decision.action == "replan":
                         try:
@@ -1115,6 +1155,7 @@ def _execute_main_loop(
                                         f"{_ae_decision.reasoning[:60]}",
                                         file=sys.stderr, flush=True,
                                     )
+                                _append_stuck_step_outcome()
                                 continue
                         except Exception as _ae_replan_exc:
                             log.debug("adaptive replan (stuck) planner call failed: %s",
@@ -1184,6 +1225,7 @@ def _execute_main_loop(
                             log.info("adaptive [stuck/escalate]: no channel — "
                                      "logging question: %s", _ae_question[:150])
                         stuck_streak = 0
+                        _append_stuck_step_outcome()
                         continue
                 except Exception as _ae_exc:
                     log.debug("adaptive execution (stuck trigger) error: %s", _ae_exc)

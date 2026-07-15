@@ -115,16 +115,20 @@ learning (promoted: the data layer that makes "active orchestrator" a runtime
 fact), container-on posture for network-sourced goals (revisit at Hermes
 go-live).
 
-- [ ] **Stuck-block escalate/continue drops the step's own outcome from the
-  run record** (adversarial review 2026-07-15, PRE-EXISTING — reproduced
-  identically on HEAD): when the stuck trigger fires and the director says
-  continue or escalate, the `continue` at the stuck branch skips the
-  `step_outcomes` append — the 3rd execution silently disappears from the
-  run record (4 executions → 3 recorded steps), and a run whose FINAL step
-  ends this way reports `status="done"` with the stuck step absent.
-  Status-integrity adjacent (done≠achieved family). Fix direction: append a
-  stuck-status outcome before the `continue`, mirroring what loop_blocked's
-  branches do.
+- [ ] **Stuck advisor block is dead code** (pre-existing; discovered by the
+  stuck-outcome adversarial review 2026-07-15 — the fix itself shipped, see
+  BACKLOG_DONE): `_ctx_summary` in `loop_execute.py` (~:1236) calls
+  `o_s.get('status','?')` on StepOutcome dataclass objects → AttributeError
+  → swallowed by the broad `except Exception` below (~:1257) →
+  `advisor_call` never executes. Net effect: the adaptive-off stuck lane
+  (the "(b)" advisor continue) has silently never run — with
+  `adaptive_execution` OFF, stuck always goes terminal. The code fix is
+  trivial (`o_s.status`), but shipping it ACTIVATES a never-run LLM call on
+  stuck paths — behavior activation, not a bugfix. **DECISION-FLAGGED for
+  Jeremy**: fix + enable, fix + config-gate, or delete the block
+  (narrow-except feedback applies either way). Fold in the same-family
+  residual: director `restart` break still drops the stuck step's outcome
+  record (the shipped helper covers the four continue-shaped exits only).
 
 ### R6. VERIFY_LEARN_ARC V4/V5 adversarial review — 4 fixed live, 4 deferred (2026-07-14)
 

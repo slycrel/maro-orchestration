@@ -8,6 +8,47 @@ Last split: 2026-04-16 (session 34).
 
 ---
 
+### Stuck-block exits dropped the stuck step's own outcome from the run record — SHIPPED (2026-07-15)
+
+**Source:** side find of the escalate-gate adversarial review (2026-07-15,
+PRE-EXISTING — reproduced identically on HEAD): every exit from the
+`stuck_streak >= 2` block skipped the `step_outcomes` append — the stuck
+execution silently disappeared from the run record (4 executions → 3
+recorded steps), and a run whose FINAL step ended that way reported
+`status="done"` with the step entirely absent. Status-integrity adjacent
+(done≠achieved family): the honesty machinery can't see a step that isn't
+in the record.
+
+**Shipped:** `_append_stuck_step_outcome()` helper in `loop_execute.py`,
+called on all four director exits from the stuck block — continue,
+adjust-with-revised-steps, replan-success (placed AFTER
+`planner.decompose` so a decompose failure doesn't double-count via the
+terminal path), and the shared escalate continue (asked / suppressed /
+no-channel). The stuck execution records as status="blocked" (outcome
+vocabulary is done|blocked|skipped) with full outcome fields per the
+loop_blocked 2026-07-08 detail-link note. Run-level verdict mechanically
+unchanged — loop_status is never recomputed from step_outcomes;
+quality_gate reviews done-steps only; closure_verify iterates all steps
+and now SEES the stuck step (the intended honesty effect).
+
+**Adversarial review record:** verdict SHIP_AS_IS. Confirmed LOW (test
+gap): mutation testing showed the adjust and replan call sites survived
+the full 202-test file — closed post-review with 2 pin tests adapted from
+the reviewer's probe scenarios
+(`test_stuck_adjust_with_revised_steps_records_stuck_step_outcome`,
+`test_stuck_replan_success_records_stuck_step_outcome`); both mutants
+re-verified killed (disable the call site → exactly that test fails →
+restore). 5 pin tests total (also: mid-run 4→4 with reply-in-next-step,
+final-step done-run-with-step-present, plain director-continue).
+Confirmed INFO (discovery, pre-existing): the stuck advisor block is DEAD
+CODE — `_ctx_summary` calls `.get()` on StepOutcome dataclass objects →
+AttributeError swallowed by the broad except below it → `advisor_call`
+never executes, so the adaptive-off "(b)" advisor lane cannot fire.
+BACKLOG'd as its own item (decision-flagged: fixing it activates a
+never-run LLM lane). Residual (same family, noted not fixed): director
+`restart` break still drops the record; the originally-suspected
+advisor-"(b)" residual is void — that lane is the dead code above.
+
 ### Director-escalate reply solicited on the run's final step went nowhere — SHIPPED (2026-07-15)
 
 **Source:** adversarial review of the escalate-clobber fix (2026-07-15,

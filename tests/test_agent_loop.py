@@ -3845,6 +3845,249 @@ def test_stuck_escalate_midrun_reply_reaches_next_step(monkeypatch, tmp_path):
     ), _reply_msgs
 
 
+def test_stuck_escalate_midrun_records_stuck_step_outcome(monkeypatch, tmp_path):
+    """The stuck-escalate `continue` must not drop the just-executed step from
+    the run record (BACKLOG 2026-07-15, done≠achieved family): 4 executions →
+    4 recorded steps, the stuck one present with status "blocked" (same as the
+    terminal stuck append), and NO double-count — the stuck-block append and
+    the normal bottom-of-loop append never both fire for one execution."""
+    _setup_workspace(monkeypatch, tmp_path)
+    _patch_adaptive_execution_on(monkeypatch)
+
+    from director import DirectorDecision
+    import director as _dm
+
+    _eval_count = [0]
+
+    def _fake_eval(goal, eval_ctx, trigger, adapter, *, dry_run=False):
+        _eval_count[0] += 1
+        if _eval_count[0] == 1:
+            return DirectorDecision(
+                action="escalate",
+                reasoning="stuck on repeats",
+                user_question="Should I try the alternate data source?",
+            )
+        return DirectorDecision(action="continue", reasoning="ok")
+
+    monkeypatch.setattr(_dm, "director_evaluate", _fake_eval)
+
+    _channel = _CountingChannel(reply="yes, switch to the alternate source")
+    adapter = _ExecCaptureAdapter()
+    result = run_agent_loop(
+        "goal with repeats then a distinct closing part",
+        adapter=adapter,
+        dry_run=False,
+        channel=_channel,
+        preset_steps=["Inspect the ledger contents once more"] * 3
+        + ["Assemble the closing summary of the ledger review"],
+    )
+    assert result.status == "done"
+    assert len(adapter.exec_user_msgs) == 4, adapter.exec_user_msgs
+    # Every execution is in the record — exactly one record per execution
+    # (== also proves no double-append on the 3 normal-path steps).
+    assert len(result.steps) == 4, [
+        (s.text[:40], s.status) for s in result.steps
+    ]
+    assert [s.status for s in result.steps] == [
+        "done", "done", "blocked", "done"
+    ], [(s.text[:40], s.status) for s in result.steps]
+    # The stuck record is the 3rd repeat itself, with its fields carried.
+    _stuck = result.steps[2]
+    assert _stuck.text == "Inspect the ledger contents once more"
+    assert _stuck.ended_ts, "stuck-step record must carry a real ended_ts"
+
+
+def test_stuck_on_final_step_records_outcome_in_run_record(monkeypatch, tmp_path):
+    """A run whose FINAL step exits via the stuck-escalate(suppressed)
+    `continue` used to report status="done" with that step entirely absent
+    from the run record — the worst shape of the drop (the honesty machinery
+    can't see a step that isn't in the record). The final execution must be
+    recorded as "blocked". Run-level status stays "done": loop_status is not
+    recomputed from step_outcomes (verified: quality_gate reviews done-steps
+    only, finalize only logs blocked counts) — the record now merely lets
+    closure verification see the step."""
+    _setup_workspace(monkeypatch, tmp_path)
+    _patch_adaptive_execution_on(monkeypatch)
+    _decisions = _capture_loop_decisions(monkeypatch)
+
+    from director import DirectorDecision
+    import director as _dm
+
+    def _fake_eval(goal, eval_ctx, trigger, adapter, *, dry_run=False):
+        return DirectorDecision(
+            action="escalate",
+            reasoning="stuck on repeats",
+            user_question="Should I keep repeating this?",
+        )
+
+    monkeypatch.setattr(_dm, "director_evaluate", _fake_eval)
+
+    _channel = _CountingChannel()
+    adapter = _ExecCaptureAdapter()
+    result = run_agent_loop(
+        "goal with three identical repeating parts",
+        adapter=adapter,
+        dry_run=False,
+        channel=_channel,
+        preset_steps=["Inspect the ledger contents once more"] * 3,
+    )
+    # Run-level status unchanged by the fix (mechanically "done", as before).
+    assert result.status == "done"
+    # The final (stuck, suppressed-escalate) execution is IN the record now.
+    assert len(adapter.exec_user_msgs) == 3, adapter.exec_user_msgs
+    assert len(result.steps) == 3, [
+        (s.text[:40], s.status) for s in result.steps
+    ]
+    assert [s.status for s in result.steps] == ["done", "done", "blocked"]
+    assert result.steps[-1].text == "Inspect the ledger contents once more"
+    assert any(
+        d[1] == "stuck" and d[2] == "escalate_suppressed" for d in _decisions
+    ), _decisions
+
+
+def test_stuck_director_continue_records_stuck_step_outcome(monkeypatch, tmp_path):
+    """Same record guarantee when the director answers the stuck evaluation
+    with continue (not escalate): the `continue` branch also skipped the
+    append. 4 executions → 4 records, stuck one "blocked", no double-count."""
+    _setup_workspace(monkeypatch, tmp_path)
+    _patch_adaptive_execution_on(monkeypatch)
+
+    from director import DirectorDecision
+    import director as _dm
+
+    def _fake_eval(goal, eval_ctx, trigger, adapter, *, dry_run=False):
+        return DirectorDecision(action="continue", reasoning="push on")
+
+    monkeypatch.setattr(_dm, "director_evaluate", _fake_eval)
+
+    _channel = _CountingChannel()
+    adapter = _ExecCaptureAdapter()
+    result = run_agent_loop(
+        "goal with repeats then a distinct closing part",
+        adapter=adapter,
+        dry_run=False,
+        channel=_channel,
+        preset_steps=["Inspect the ledger contents once more"] * 3
+        + ["Assemble the closing summary of the ledger review"],
+    )
+    assert result.status == "done"
+    assert not _channel.questions, "director said continue — nothing to ask"
+    assert len(adapter.exec_user_msgs) == 4, adapter.exec_user_msgs
+    assert len(result.steps) == 4, [
+        (s.text[:40], s.status) for s in result.steps
+    ]
+    assert [s.status for s in result.steps] == [
+        "done", "done", "blocked", "done"
+    ], [(s.text[:40], s.status) for s in result.steps]
+
+
+def test_stuck_adjust_with_revised_steps_records_stuck_step_outcome(
+    monkeypatch, tmp_path
+):
+    """Same record guarantee on the stuck-adjust exit: when the director
+    answers the stuck evaluation with adjust + non-empty revised_steps, the
+    stuck execution must still land in the run record as "blocked" before
+    the revised steps take over (adversarial review 2026-07-15: this helper
+    site survived mutation testing unpinned)."""
+    _setup_workspace(monkeypatch, tmp_path)
+    _patch_adaptive_execution_on(monkeypatch)
+
+    from director import DirectorDecision
+    import director as _dm
+
+    _eval_count = [0]
+
+    def _fake_eval(goal, eval_ctx, trigger, adapter, *, dry_run=False):
+        _eval_count[0] += 1
+        if _eval_count[0] == 1:
+            return DirectorDecision(
+                action="adjust",
+                reasoning="repeats going nowhere — tighten the plan",
+                revised_steps=["Assemble the revised closing summary"],
+            )
+        return DirectorDecision(action="continue", reasoning="ok")
+
+    monkeypatch.setattr(_dm, "director_evaluate", _fake_eval)
+
+    _channel = _CountingChannel()
+    adapter = _ExecCaptureAdapter()
+    result = run_agent_loop(
+        "goal with repeats then an adjusted closing part",
+        adapter=adapter,
+        dry_run=False,
+        channel=_channel,
+        preset_steps=["Inspect the ledger contents once more"] * 3
+        + ["Assemble the closing summary of the ledger review"],
+    )
+    assert result.status == "done"
+    assert len(adapter.exec_user_msgs) == 4, adapter.exec_user_msgs
+    assert len(result.steps) == 4, [
+        (s.text[:40], s.status) for s in result.steps
+    ]
+    assert [s.status for s in result.steps] == [
+        "done", "done", "blocked", "done"
+    ], [(s.text[:40], s.status) for s in result.steps]
+    # The stuck record is the repeated step; the 4th execution is the
+    # director's revised step, not the original closing step.
+    assert result.steps[2].text == "Inspect the ledger contents once more"
+    assert "revised closing summary" in result.steps[-1].text
+
+
+def test_stuck_replan_success_records_stuck_step_outcome(monkeypatch, tmp_path):
+    """Same record guarantee on the stuck-replan(success) exit: the stuck
+    execution must be appended BEFORE the re-decompose replaces the plan
+    (adversarial review 2026-07-15: helper site after planner.decompose
+    survived mutation testing unpinned)."""
+    _setup_workspace(monkeypatch, tmp_path)
+    _patch_adaptive_execution_on(monkeypatch)
+
+    import planner
+
+    monkeypatch.setattr(
+        planner,
+        "decompose",
+        lambda *a, **kw: ["Wrap up by producing the final consolidated answer"],
+    )
+
+    from director import DirectorDecision
+    import director as _dm
+
+    _eval_count = [0]
+
+    def _fake_eval(goal, eval_ctx, trigger, adapter, *, dry_run=False):
+        _eval_count[0] += 1
+        if _eval_count[0] == 1:
+            return DirectorDecision(
+                action="replan",
+                reasoning="fresh approach",
+                new_approach="try another angle",
+            )
+        return DirectorDecision(action="continue", reasoning="ok")
+
+    monkeypatch.setattr(_dm, "director_evaluate", _fake_eval)
+
+    _channel = _CountingChannel()
+    adapter = _ExecCaptureAdapter()
+    result = run_agent_loop(
+        "goal with repeats then a replanned finish",
+        adapter=adapter,
+        dry_run=False,
+        channel=_channel,
+        preset_steps=["Inspect the ledger contents once more"] * 3
+        + ["Assemble the closing summary of the ledger review"],
+    )
+    assert result.status == "done"
+    assert len(adapter.exec_user_msgs) == 4, adapter.exec_user_msgs
+    assert len(result.steps) == 4, [
+        (s.text[:40], s.status) for s in result.steps
+    ]
+    assert [s.status for s in result.steps] == [
+        "done", "done", "blocked", "done"
+    ], [(s.text[:40], s.status) for s in result.steps]
+    assert result.steps[2].text == "Inspect the ledger contents once more"
+    assert "final consolidated answer" in result.steps[-1].text
+
+
 def test_undelivered_pending_context_surfaced_at_loop_exit(monkeypatch, tmp_path, caplog):
     """Contributions still pending when the loop exits (e.g. post-step hook
     output from the FINAL step) must not vanish silently: the loop logs a
