@@ -490,6 +490,22 @@ def _pid_alive(pid: int) -> bool:
         return True
 
 
+def _lease_owner_alive(loop_id: str):
+    """Run-lease probe (see run_lease module): the first owner-evidence tier.
+
+    True → loop process alive (a lease is held for the loop's whole
+    lifetime, so "between steps" counts — the blind spot pid heuristics
+    have). False → lease present but unheld: owner provably dead, stronger
+    than any (possibly recycled) pid. None → pre-lease checkpoint or
+    unreadable lease dir: fall back to pid heuristics.
+    """
+    try:
+        from run_lease import probe_owner_alive
+        return probe_owner_alive(loop_id or "")
+    except ImportError:
+        return None
+
+
 # Backfill grace: a run younger than this is never touched even with a dead
 # recorded PID (startup races, PID-file lag). Old enough to be safe, short
 # enough that the runs index stops lying within one heartbeat or two.
@@ -544,20 +560,34 @@ def _backfill_stranded_run_cards(*, verbose: bool = False) -> list:
                 continue
             pid = int(meta.get("pid") or 0)
             last_seen = started_raw
+            ckpt_loop_id = ""
             ckpt_path = rd / "build" / "checkpoint.json"
             if ckpt_path.exists():
                 try:
                     ckpt = _json.loads(ckpt_path.read_text(encoding="utf-8"))
+                    ckpt_loop_id = str(ckpt.get("loop_id") or "")
                     if not pid:
                         pid = int((ckpt.get("in_flight") or {}).get("pid", 0) or 0)
                     last_seen = datetime.fromtimestamp(
                         ckpt_path.stat().st_mtime, tz=timezone.utc).isoformat()
                 except Exception:
                     pass
-            if pid:
-                if _pid_alive(pid):
-                    continue  # owner still running
-            elif age_secs < _STRANDED_NO_PID_AGE_SECS:
+            # Run-lease first (see _lease_owner_alive): True → owner alive
+            # (between-steps counts) → don't stamp. False means "no loop
+            # holds this lease" — NOT "the process is dead": the lease is
+            # released at loop finalize, and the same process then spends
+            # minutes in closure judging / the quality gate before close_run
+            # stamps a status (adversarial review 2026-07-15 reproduced the
+            # false stamp live). So lease-False must still be corroborated
+            # by a dead metadata pid before overriding; it only replaces the
+            # no-pid age wait. None → the existing metadata-pid /
+            # in_flight-pid / age tiers unchanged.
+            _lease = _lease_owner_alive(ckpt_loop_id)
+            if _lease is True:
+                continue  # owner still running (holds its run lease)
+            if pid and _pid_alive(pid):
+                continue  # owner process still running (closure window etc.)
+            if _lease is None and not pid and age_secs < _STRANDED_NO_PID_AGE_SECS:
                 continue  # no owner evidence — wait for unambiguous age
             meta["status"] = "stranded"
             meta["ended_at"] = meta.get("ended_at") or last_seen
@@ -588,9 +618,20 @@ def _find_resumable_runs() -> list:
     for ckpt in ckpts:
         if ckpt.is_complete():
             continue
-        pid = int((ckpt.in_flight or {}).get("pid", 0) or 0)
-        if pid and _alive(pid):
-            continue  # still running
+        # Run-lease first: held → owner alive even between steps (when the
+        # checkpoint carries no in_flight pid at all); present-unheld →
+        # the LOOP is done, but the run's owner process may still be alive
+        # in the closure/quality-gate window (lease releases at loop
+        # finalize, status stamps at close_run) — corroborate with the run
+        # metadata pid below; absent → pre-lease checkpoint, in_flight pid
+        # heuristic unchanged.
+        _lease = _lease_owner_alive(ckpt.loop_id)
+        if _lease is True:
+            continue  # owner alive
+        if _lease is None:
+            pid = int((ckpt.in_flight or {}).get("pid", 0) or 0)
+            if pid and _alive(pid):
+                continue  # still running
         # run finalized? (legacy-dir checkpoints have no handle_id — treat
         # unlinked checkpoints as stale history, not resumable)
         if not ckpt.handle_id:
@@ -603,6 +644,9 @@ def _find_resumable_runs() -> list:
             # stay resumable; anything else (done/stuck/error) is finalized.
             if meta.get("status") and meta.get("status") != "stranded":
                 continue
+            _meta_pid = int(meta.get("pid") or 0)
+            if _meta_pid and _alive(_meta_pid):
+                continue  # owner process alive (e.g. mid-closure) — not stranded
         except Exception:
             continue
         out.append({

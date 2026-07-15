@@ -351,6 +351,7 @@ class LoopContext:
     loop_timeout_secs: Optional[float] = None
     repo_path: str = ""  # optional target repo path for stack context injection
     project_slot: Optional[Any] = None  # held admission slot (interrupt.ProjectSlot); released at finalize
+    run_lease: Optional[Any] = None  # held run-lifetime lease (run_lease.RunLease); released at finalize
     run_worktree: Optional[Any] = None  # busy_policy=worktree isolation (worktree.Worktree); merged at finalize
     container_clone: Optional[Any] = None  # containerized self-dev scratch clone (worktree.ScratchClone); merged at finalize
 

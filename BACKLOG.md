@@ -454,7 +454,7 @@ Jeremy's "document if large" instruction):
   work, and emits default-on/durable `resume_refused_busy`. Evidence:
   `docs/history/2026-07-14-audit-delivery-and-resume-admission.md`.
 
-- [ ] **`maro resume` still relies on checkpoint `in_flight.pid` to distinguish
+- [x] **`maro resume` still relies on checkpoint `in_flight.pid` to distinguish
   a stranded run from an original loop that is alive between steps.** The new
   per-run lock deliberately serializes resume-vs-resume, the owner-approved
   scope; the original `run_agent_loop` process does not hold that lock. After a
@@ -463,6 +463,20 @@ Jeremy's "document if large" instruction):
   this needs a shared run-lifetime lease (and reconciliation with project
   admission), not a local CLI lock extension. Found by the 2026-07-14
   adversarial follow-up; keep separate from the shipped resume-vs-resume fix.
+  **SHIPPED 2026-07-15:** `src/run_lease.py` — per-loop flock (ProjectSlot
+  pattern), acquired in loop_init, released at loop finalize,
+  kernel-released on death; probed (True/False/None) by `maro resume` and
+  both heartbeat sweeps; no config knob (correctness, not policy).
+  Adversarial review: fd-inheritance leak empirically clean (PEP 446 +
+  close_fds), probe/acquire race unreachable, sanitization single-sourced;
+  its one confirmed MED — lease releases at LOOP finalize but the owner
+  process lives on through the closure/quality-gate window, so lease-False
+  falsely read as "process dead" — fixed by corroborating with run-metadata
+  pid liveness in all three consumers before treating a run as stranded.
+  Tradeoff accepted: a recycled-alive metadata pid delays stamping/resume
+  until that pid exits (fail-closed; heartbeat retries). Lease files are
+  never unlinked (retention posture, ~200 B/run); sub-loop last-writer-wins
+  checkpoint probing is covered by the same pid corroboration.
 
 ### C4-BOX. Container executor — box-side real-goal burn-in (2026-07-13, Jeremy runs on the runtime box)
 

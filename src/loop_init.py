@@ -334,6 +334,20 @@ def _initialize_loop(
     except ImportError as _gate_exc:
         log.debug("admission gate unavailable: %s", _gate_exc)
 
+    # Run-lifetime lease: a per-loop flock held from here until process
+    # death. Checkpoints only carry an in_flight pid while a step executes,
+    # so a healthy loop BETWEEN steps is invisible to pid heuristics — the
+    # held lease is the liveness evidence `maro resume` and the heartbeat
+    # stranded sweep trust instead. Unconditional (projectless runs too);
+    # fs problems degrade ungated inside acquire_run_lease, never refusing
+    # work (see run_lease module docstring).
+    try:
+        from run_lease import acquire_run_lease
+        ctx.run_lease = acquire_run_lease(
+            ctx.loop_id, handle_id=ctx.handle_id, goal=goal)
+    except ImportError as _lease_exc:
+        log.debug("run lease unavailable: %s", _lease_exc)
+
     # Advertise this loop as running so other interfaces can route interrupts.
     # The slot above owns the per-project lockfile; this writes only the
     # global informational one (project="" keeps set_loop_running off it).

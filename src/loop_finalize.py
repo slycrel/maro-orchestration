@@ -389,6 +389,12 @@ def _build_result_and_finalize(
     except Exception as _slot_exc:
         log.debug("project slot release failed: %s", _slot_exc)
     try:
+        if getattr(ctx, "run_lease", None) is not None:
+            ctx.run_lease.release()
+            ctx.run_lease = None
+    except Exception as _lease_exc:
+        log.debug("run lease release failed: %s", _lease_exc)
+    try:
         from interrupt import clear_loop_running
         clear_loop_running()
     except Exception as _lock_exc:

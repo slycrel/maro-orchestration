@@ -2222,15 +2222,35 @@ def _cmd_resume(args: argparse.Namespace) -> int:
             f"{ckpt.resumed_to_loop_id or 'a newer loop'}",
         )
 
-    pid = int((ckpt.in_flight or {}).get("pid", 0) or 0)
-    if pid:
-        try:
-            os.kill(pid, 0)
-            _resume_lock.close()
-            return fail("E_RESUME",
-                        f"loop {ckpt.loop_id} appears to still be running (pid {pid})")
-        except (ProcessLookupError, PermissionError, ValueError):
-            pass
+    # Run-lease probe — strictly stronger owner evidence than the in-flight
+    # pid. Checkpoints only carry a pid mid-step, so a healthy loop BETWEEN
+    # steps looks dead to the pid check; the run lease (a flock held for the
+    # loop's lifetime, kernel-released on death) does not have that blind
+    # spot. True → owner alive, refuse. False → no loop holds the lease —
+    # SKIP the in-flight pid check (a recycled live pid must not block a
+    # legitimate resume), but the owner process can still be alive in the
+    # post-loop closure window, so the run metadata pid is corroborated
+    # below. None → pre-lease checkpoint, fall back to today's heuristic.
+    try:
+        from run_lease import probe_owner_alive
+        _lease_alive = probe_owner_alive(ckpt.loop_id)
+    except ImportError:
+        _lease_alive = None
+    if _lease_alive is True:
+        _resume_lock.close()
+        return fail("E_RESUME",
+                    f"loop {ckpt.loop_id} appears to still be running "
+                    f"(holds its run lease)")
+    if _lease_alive is None:
+        pid = int((ckpt.in_flight or {}).get("pid", 0) or 0)
+        if pid:
+            try:
+                os.kill(pid, 0)
+                _resume_lock.close()
+                return fail("E_RESUME",
+                            f"loop {ckpt.loop_id} appears to still be running (pid {pid})")
+            except (ProcessLookupError, PermissionError, ValueError):
+                pass
 
     _measurement_class = ""
     _resume_model = None
@@ -2246,6 +2266,23 @@ def _cmd_resume(args: argparse.Namespace) -> int:
                 _resume_lock.close()
                 return fail("E_RESUME",
                             f"run {ckpt.handle_id} already finalized done")
+            # Closure-window guard: the loop's lease releases at loop
+            # finalize, but the owner process then runs closure judging /
+            # the quality gate for minutes before close_run stamps a
+            # status. A live run-owner pid means "not stranded" no matter
+            # what the lease probe said.
+            if not meta.get("status"):
+                _owner_pid = int(meta.get("pid") or 0)
+                if _owner_pid:
+                    try:
+                        os.kill(_owner_pid, 0)
+                        _resume_lock.close()
+                        return fail(
+                            "E_RESUME",
+                            f"run {ckpt.handle_id} owner (pid {_owner_pid}) "
+                            f"is still running — likely finishing closure")
+                    except (ProcessLookupError, PermissionError, ValueError):
+                        pass
         except FileNotFoundError:
             pass
         except Exception:

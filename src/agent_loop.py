@@ -370,6 +370,12 @@ def run_agent_loop(
             except Exception as _release_exc:
                 log.warning("execution fence refusal project-slot release failed: %s", _release_exc)
             try:
+                if getattr(ctx, "run_lease", None) is not None:
+                    ctx.run_lease.release()
+                    ctx.run_lease = None
+            except Exception as _release_exc:
+                log.warning("execution fence refusal run-lease release failed: %s", _release_exc)
+            try:
                 from interrupt import clear_loop_running
                 clear_loop_running()
             except Exception as _release_exc:
