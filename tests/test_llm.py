@@ -927,6 +927,180 @@ def test_run_subprocess_safe_liveness_spares_cpu_busy_silent_process():
     assert result.returncode == 0, f"unexpected rc: out={result.stdout!r}"
 
 
+# --- _session_cpu_ticks hybrid CPU source (2026-07-15) --------------------
+# ps's `time` column is whole seconds; the /proc fast path reads clock ticks
+# (~10ms) so the CPU-liveness rescue works with sub-second liveness windows.
+
+def test_parse_proc_stat_cpu_ticks_real_format_line():
+    """Parser extracts utime+stime from a real-format /proc/<pid>/stat line."""
+    from llm import _parse_proc_stat_cpu_ticks
+
+    # Captured from a live Linux /proc, utime/stime (fields 14/15) set to
+    # known values 5 and 7 — everything else verbatim.
+    line = (
+        "1224462 (head) R 1224460 1224462 1224460 0 -1 4194304 98 0 0 0 "
+        "5 7 0 0 20 0 1 0 213023265 8499200 448 18446744073709551615 "
+        "104765427822592 104765427844993 140721450435232 0 0 0 0 0 0 0 0 0 "
+        "17 2 0 0 0 0 0 104765427858032 104765427859608 104766462259200 "
+        "140721450439196 140721450439220 140721450439220 140721450442730 0"
+    )
+    assert _parse_proc_stat_cpu_ticks(line) == 12
+
+
+def test_parse_proc_stat_cpu_ticks_evil_comm():
+    """Comm containing spaces and parens must not shift field numbering."""
+    from llm import _parse_proc_stat_cpu_ticks
+
+    # Field 2 (comm) is `((my evil) comm)` — split-after-LAST-')' is the
+    # only safe parse; utime=7, stime=3 land at indices 11/12 after it.
+    line = (
+        "12345 ((my evil) comm) R 1 12345 12345 0 -1 4194304 98 0 0 0 "
+        "7 3 0 0 20 0 1 0 111 222 333"
+    )
+    assert _parse_proc_stat_cpu_ticks(line) == 10
+
+
+@pytest.mark.skipif(not os.path.isdir("/proc"), reason="requires Linux /proc")
+def test_parse_proc_stat_cpu_ticks_live_self():
+    """The parser handles this process's own live /proc stat line."""
+    from llm import _parse_proc_stat_cpu_ticks
+
+    with open("/proc/self/stat") as f:
+        ticks = _parse_proc_stat_cpu_ticks(f.read())
+    assert isinstance(ticks, int) and ticks >= 0
+
+
+def test_session_cpu_ticks_proc_converts_ticks_to_centiseconds(monkeypatch, tmp_path):
+    """Fake /proc tree: ticks are converted to centiseconds via SC_CLK_TCK,
+    and per-pid garbage (malformed stat, non-numeric entries) is skipped."""
+    import llm
+
+    stat_dir = tmp_path / "4242"
+    stat_dir.mkdir()
+    (stat_dir / "stat").write_text(
+        "4242 ((my evil) comm) R 1 4242 4242 0 -1 4194304 98 0 0 0 "
+        "7 3 0 0 20 0 1 0 111 222 333"
+    )
+    bad_dir = tmp_path / "4243"          # malformed stat → skipped
+    bad_dir.mkdir()
+    (bad_dir / "stat").write_text("garbage with no paren")
+    (tmp_path / "cpuinfo").write_text("")  # non-numeric entry → skipped
+
+    monkeypatch.setattr(llm, "_PROC_PATH", tmp_path)
+    monkeypatch.setattr(os, "getsid", lambda pid: 4242 if pid == 4242 else -1)
+
+    clk_tck = os.sysconf("SC_CLK_TCK")
+    assert llm._session_cpu_ticks_proc(4242) == (7 + 3) * 100 // clk_tck
+
+
+@pytest.mark.skipif(not os.path.isdir("/proc"), reason="requires Linux /proc")
+def test_session_cpu_ticks_proc_sub_second_resolution():
+    """The /proc path sees CPU accumulate inside a 0.3s window — the
+    resolution claim that ps's 1-second `time` column cannot honor."""
+    import subprocess as sp
+    import time
+    from llm import _session_cpu_ticks_proc
+
+    child = sp.Popen(
+        ["python3", "-c",
+         "import time\nt=time.time()\nwhile time.time()-t<2: pass"],
+        start_new_session=True,
+        stdout=sp.DEVNULL, stderr=sp.DEVNULL,
+    )
+    try:
+        first = _session_cpu_ticks_proc(child.pid)
+        time.sleep(0.35)
+        second = _session_cpu_ticks_proc(child.pid)
+    finally:
+        child.kill()
+        child.wait()
+    assert second > first, f"no CPU advance in 0.35s window: {first} -> {second}"
+
+
+def test_session_cpu_ticks_falls_back_to_ps_without_proc(monkeypatch, tmp_path):
+    """When /proc is absent (macOS), _session_cpu_ticks uses the ps path."""
+    import subprocess as sp
+    import llm
+
+    monkeypatch.setattr(llm, "_PROC_PATH", tmp_path / "no-such-proc")
+
+    captured = {}
+
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        # Own pid so the real os.getsid() session check passes.
+        return sp.CompletedProcess(cmd, 0, stdout=f"{os.getpid()}  1:02.34\n", stderr="")
+
+    monkeypatch.setattr(sp, "run", fake_run)
+
+    leader = os.getsid(os.getpid())
+    assert llm._session_cpu_ticks(leader) == 6234
+    assert captured["cmd"][0] == "ps"
+    assert "pid=,time=" in " ".join(captured["cmd"])
+
+
+def test_session_cpu_ticks_proc_counts_non_utf8_comm(monkeypatch, tmp_path):
+    """A comm holding invalid UTF-8 must still be counted (adversarial review
+    2026-07-15): the kernel truncates comm to 15 BYTES, so a multibyte
+    process name splits mid-character — strict decoding turned that into a
+    UnicodeDecodeError (a ValueError) swallowed by the per-pid skip, making
+    exactly the watched process invisible to the CPU-liveness rescue."""
+    import llm
+
+    stat_dir = tmp_path / "4242"
+    stat_dir.mkdir()
+    (stat_dir / "stat").write_bytes(
+        b"4242 (\xd0\xbc\xd0\xbe\xd0\xb4\xd0\xb5\xd0\xbb\xd1\x8c\xd1\x81\xd0) "
+        b"R 1 4242 4242 0 -1 4194304 98 0 0 0 "
+        b"7 3 0 0 20 0 1 0 111 222 333"
+    )
+
+    monkeypatch.setattr(llm, "_PROC_PATH", tmp_path)
+    monkeypatch.setattr(os, "getsid", lambda pid: 4242 if pid == 4242 else -1)
+
+    clk_tck = os.sysconf("SC_CLK_TCK")
+    assert llm._session_cpu_ticks_proc(4242) == (7 + 3) * 100 // clk_tck
+
+
+def test_session_cpu_ticks_sweep_failure_falls_back_to_ps(monkeypatch, tmp_path):
+    """With /proc PRESENT, a sweep-level failure (bad SC_CLK_TCK) must still
+    reach the ps fallback — pins the except-Exception seam in
+    _session_cpu_ticks, which the /proc-absent fallback test never enters."""
+    import subprocess as sp
+    import llm
+
+    monkeypatch.setattr(llm, "_PROC_PATH", tmp_path)  # real dir → branch entered
+    monkeypatch.setattr(os, "sysconf", lambda name: -1)
+
+    captured = {}
+
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        return sp.CompletedProcess(cmd, 0, stdout=f"{os.getpid()}  0:01.00\n", stderr="")
+
+    monkeypatch.setattr(sp, "run", fake_run)
+
+    leader = os.getsid(os.getpid())
+    assert llm._session_cpu_ticks(leader) == 100
+    assert captured["cmd"][0] == "ps"
+
+
+def test_session_cpu_ticks_total_failure_returns_zero(monkeypatch, tmp_path):
+    """No /proc AND ps unavailable → 0 (signal disabled, never raises) —
+    the degradation contract _run_subprocess_safe relies on."""
+    import subprocess as sp
+    import llm
+
+    monkeypatch.setattr(llm, "_PROC_PATH", tmp_path / "no-such-proc")
+
+    def raising_run(cmd, **kwargs):
+        raise FileNotFoundError("ps: command not found")
+
+    monkeypatch.setattr(sp, "run", raising_run)
+
+    assert llm._session_cpu_ticks(os.getsid(os.getpid())) == 0
+
+
 def test_run_subprocess_safe_liveness_env_var_override(monkeypatch):
     """MARO_LIVENESS_TIMEOUT env var overrides the default liveness window."""
     from llm import _run_subprocess_safe

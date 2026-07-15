@@ -717,8 +717,65 @@ def _parse_ps_cpu_time(s: str) -> float:
     return days * 86400 + hh * 3600 + mm * 60 + ss
 
 
+# Seam for tests: point the /proc fast path somewhere else (or nowhere) to
+# force the ps fallback. Production value is always the real /proc.
+_PROC_PATH = Path("/proc")
+
+
+def _parse_proc_stat_cpu_ticks(stat_line: str) -> int:
+    """Extract utime+stime (in clock ticks) from a /proc/<pid>/stat line.
+
+    Field 2 (comm) is parenthesized and may itself contain spaces and
+    parentheses — e.g. ``123 ((my evil) comm) R ...`` — so naive
+    whitespace-splitting misnumbers everything after it. Per proc(5) the
+    safe parse is: split after the LAST ``)`` in the line; the remaining
+    fields start at state (field 3), so utime (field 14) is index 11 and
+    stime (field 15) is index 12.
+
+    Raises ValueError/IndexError on malformed input (caller skips the pid).
+    """
+    rest = stat_line[stat_line.rindex(")") + 1:].split()
+    return int(rest[11]) + int(rest[12])
+
+
+def _session_cpu_ticks_proc(leader_pid: int) -> int:
+    """Linux /proc fast path for _session_cpu_ticks (centiseconds).
+
+    Sums utime+stime clock ticks across every pid whose session is
+    leader_pid, converted to centiseconds via the real SC_CLK_TCK (usually
+    100/s, but kernels can be configured otherwise). Clock ticks give
+    ~10ms resolution — the whole point vs ps's 1-second `time` column.
+
+    Per-pid failures (proc vanished mid-read, permission, ESRCH from
+    getsid, malformed stat line) are skipped silently. Sweep-level
+    failures (no /proc listing, bad SC_CLK_TCK) raise so the caller can
+    fall back to ps.
+    """
+    clk_tck = os.sysconf("SC_CLK_TCK")
+    if clk_tck <= 0:
+        raise OSError(f"unusable SC_CLK_TCK: {clk_tck}")
+    total_ticks = 0
+    for entry in os.listdir(_PROC_PATH):
+        if not entry.isdigit():
+            continue
+        try:
+            if os.getsid(int(entry)) != leader_pid:
+                continue
+            # errors="replace": comm is truncated to 15 BYTES by the kernel,
+            # so a multibyte process name can split mid-character — strict
+            # decoding would UnicodeDecodeError (a ValueError) into the
+            # per-pid skip and make that process invisible to the rescue.
+            # Everything after comm's ")" terminator is ASCII, so
+            # replacement chars in comm are inert to the parse.
+            stat_line = (_PROC_PATH / entry / "stat").read_text(errors="replace")
+            total_ticks += _parse_proc_stat_cpu_ticks(stat_line)
+        except (ValueError, OSError, IndexError):
+            continue
+    return total_ticks * 100 // clk_tck
+
+
 def _session_cpu_ticks(leader_pid: int) -> int:
-    """Sum CPU time (~centiseconds) for every process in leader_pid's session.
+    """Sum CPU time (centiseconds) for every process in leader_pid's session.
 
     Secondary liveness signal: a silent-but-computing subprocess (e.g. a
     local LLM mid-inference) won't advance its output file's mtime but
@@ -736,10 +793,29 @@ def _session_cpu_ticks(leader_pid: int) -> int:
     macOS's BSD ps turns out to mean something else and does NOT equal the
     session leader's own pid the way it does on Linux.
 
+    2026-07-15: hybrid. The ps-only version traded away resolution: ps's
+    `time` column is whole seconds, so the rescue only fired when session
+    CPU crossed an integer-second boundary inside a liveness window — with
+    `liveness_timeout` < ~1s the signal was effectively dead on an idle box
+    (BACKLOG "CPU-liveness rescue is second-granularity blind"). Now: on
+    Linux, read /proc/<pid>/stat utime+stime directly (clock ticks, ~10ms
+    resolution); if /proc is absent (macOS) or the sweep fails, fall back
+    to the 2026-07-08 ps implementation unchanged — the portability fix is
+    preserved.
+
+    Unit contract: returns an int in centiseconds regardless of source
+    (ticks converted via SC_CLK_TCK; ps seconds * 100). Callers only
+    compare successive values for increase, but the unit stays honest.
+
     Best-effort: any per-proc read/parse failure is skipped silently.
-    Returns 0 on total failure (`ps` unavailable), which disables the
-    signal — same degradation contract as before.
+    Returns 0 on total failure (no /proc AND `ps` unavailable), which
+    disables the signal — same degradation contract as before.
     """
+    if _PROC_PATH.is_dir():
+        try:
+            return _session_cpu_ticks_proc(leader_pid)
+        except Exception:
+            pass  # sweep-level failure → ps fallback below
     try:
         out = subprocess.run(
             ["ps", "-eo", "pid=,time="],
@@ -992,11 +1068,12 @@ def _run_subprocess_safe(cmd, *, input=None, timeout=600,
     last_mtime = 0.0           # file mtime we've already credited
     # Skip the CPU baseline if the process has already exited — the loop
     # below breaks on its first poll without ever using last_cpu for a
-    # comparison, so computing it here is wasted work (and, since 2026-07-08,
-    # spawns a nested `ps` subprocess — see _session_cpu_ticks — that tests
-    # globally monkeypatching subprocess.Popen to fake a fast-completing
-    # process would otherwise intercept, clobbering their captured kwargs
-    # from the real Popen call above).
+    # comparison, so computing it here is wasted work (and, on the macOS
+    # `ps` fallback path of _session_cpu_ticks, spawns a nested `ps`
+    # subprocess that tests globally monkeypatching subprocess.Popen to
+    # fake a fast-completing process would otherwise intercept, clobbering
+    # their captured kwargs from the real Popen call above; the Linux
+    # /proc path spawns nothing, but the skip stays for both reasons).
     last_cpu = 0 if proc.poll() is not None else _session_cpu_ticks(proc.pid)
     kill_reason = None
     kill_exc = None            # probe-ordered kill carries its own exception

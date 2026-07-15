@@ -122,27 +122,6 @@ go-live).
   dropped on the paths that `continue` past the carry-forward — low value,
   note only.
 
-### CPU-liveness rescue is second-granularity blind — test fails on an IDLE box (diagnosed 2026-07-15)
-
-- [ ] `test_run_subprocess_safe_liveness_spares_cpu_busy_silent_process`
-  was written off as a "load flake" (2026-07-14) — the mechanism is the
-  opposite. `_session_cpu_ticks` (`src/llm.py:720`) reads `ps -eo time=`,
-  which has **1-second resolution**; the liveness window is 0.3s in the
-  test (and sub-tick windows are possible in prod configs). The CPU-rescue
-  only fires if cumulative session CPU crosses an integer-second boundary
-  *inside* a window. On a loaded box the `ps` subprocess itself takes
-  ~0.3-0.5s and stretches the effective window past the boundary → passes;
-  idle box → `ps` returns in ~50ms → kill at ~0.35s before any crossing →
-  deterministic fail (reproduced at 73a5b5a, pre-dating 2026-07-15 work).
-  Real-world impact: a silent-but-computing subprocess (local-model
-  inference — the exact case the signal protects) can be killed during its
-  first CPU-second whenever `liveness_timeout < ~1s + ps latency`. Fix
-  direction: hybrid CPU source — `/proc/<pid>/stat` utime+stime (jiffies,
-  10ms resolution) when /proc exists, `ps` fallback for macOS (do NOT
-  regress the 2026-07-08 portability fix); or a first-window grace of one
-  full ps-tick. Test stays red until fixed — it is honestly pinning a real
-  hole, not flaking.
-
 ### R6. VERIFY_LEARN_ARC V4/V5 adversarial review — 4 fixed live, 4 deferred (2026-07-14)
 
 Codex ×3 (Skeptic/Architect/Minimalist) over `e792768` (V3 dates) + `8349b7c`

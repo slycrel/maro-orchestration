@@ -8,6 +8,49 @@ Last split: 2026-04-16 (session 34).
 
 ---
 
+### CPU-liveness rescue was second-granularity blind — SHIPPED (2026-07-15)
+
+**Source:** `test_run_subprocess_safe_liveness_spares_cpu_busy_silent_process`
+was written off as a "load flake" (2026-07-14) — the mechanism was the
+opposite. `_session_cpu_ticks` (`src/llm.py`) read `ps -eo time=`, which has
+**1-second resolution**; the liveness window is 0.3s in the test (and
+sub-tick windows are possible in prod configs). The CPU-rescue only fired if
+cumulative session CPU crossed an integer-second boundary *inside* a window.
+Loaded box → slow `ps` stretched the window → passed; idle box →
+deterministic kill at ~0.35s (reproduced at 73a5b5a). Real-world impact: a
+silent-but-computing subprocess (local-model inference — the exact case the
+signal protects) could be killed during its first CPU-second whenever
+`liveness_timeout < ~1s + ps latency`.
+
+**Fix:** hybrid CPU source. On Linux, `_session_cpu_ticks_proc` sums
+`/proc/<pid>/stat` utime+stime (clock ticks, ~10ms resolution) over
+`os.getsid(pid) == leader_pid`, converted to centiseconds via SC_CLK_TCK;
+parse splits after the LAST `)` so comm names with spaces/parens can't shift
+field numbering; `read_text(errors="replace")` because the kernel truncates
+comm to 15 *bytes* and a mid-character multibyte split would otherwise
+UnicodeDecodeError into the per-pid skip. `/proc` absent (macOS) or
+sweep-level failure → the 2026-07-08 `ps` implementation unchanged
+(portability fix preserved); 0 on total failure still disables the signal.
+Side benefit: ~17x faster per poll on this box (0.7ms pure-syscall sweep vs
+12.4ms forked ps).
+
+**Adversarial review record (empirical-refutation reviewer):** verdict
+FIX_FIRST. Confirmed MED — strict-UTF-8 `read_text()` made any process with
+a byte-truncated multibyte comm invisible to the sweep (live repro: Cyrillic
+binary name → 0 ticks forever → the watched process itself would be
+liveness-killed; a Linux regression vs ps). Fixed with `errors="replace"` +
+regression pin. Confirmed LOW — stale nested-`ps` comment in
+`_run_subprocess_safe`'s baseline-skip rationale; reworded. Probed-OK (all
+empirical): hostile comm shapes incl. trailing `)`/newline/`(x) (y)`,
+pid-vanish races, zombies, fallback byte-fidelity vs HEAD across
+ps-missing/garbage/rc1/timeout, dead-child tick monotonicity (same in both
+paths; `cur > last` unaffected), multithreaded burner aggregation,
+SC_CLK_TCK 250/1000 conversion, resolution test 3/3 under 2-core
+saturation. Review test gaps shipped: sweep-failure→ps-fallback pin
+(sysconf -1 with /proc present), total-failure→0 degradation pin,
+non-UTF-8-comm regression pin. tests/test_llm.py 156 passed; the pinning
+test passes 3/3 consecutive on an idle box (was deterministic-fail).
+
 ### Container `/tmp` cross-step persistence (C4-BOX burn-in follow-up) — SHIPPED (2026-07-15)
 
 **Source:** C4-BOX burn-in finding #3 (`docs/CONTAINER_BURN_IN.md` §5b). Each
