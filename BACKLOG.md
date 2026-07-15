@@ -434,19 +434,35 @@ not just the Mac). What can't be done off the box —
 because it needs a `/login`'d `maro-claude-auth` volume (interactive OAuth) and
 spends tokens — is the **real-goal** half. Jeremy runs this on the other machine:
 
-- [ ] **Full acceptance probe with a real goal** — `scripts/container-acceptance-probe.sh`
-  end-to-end: `/login` the auth volume, then a real goal under `executor.container: on`
-  vs fence-only, and `check` both. Expect: fence-only leaks + logs SCAVENGE;
-  container contains (token absent, decoy unchanged). This is the README security
-  before/after that a shell-only proxy can't fully stand in for.
-- [ ] **Dogfood no-regression run** — the standing dogfood goals under
-  `container: on`; same `status`/`goal_achieved` as their fence-only baseline,
-  correct artifacts. Watch env-dependency surprises + native-Linux bind-mount
-  uid/gid (Mac used VirtioFS) + the self-dev clone merge-back in a live run.
-- [ ] **Fill the `CONTAINER_BURN_IN.md §5` go/no-go checklist**, then **the flip**
-  (box default, then the higher-stakes fresh-install default) — Jeremy's call on
-  the evidence. Record in GOAL_BRAIN Decisions; mark C4 shipped in the design
-  doc §9 + MILESTONES. The full runbook is `docs/CONTAINER_BURN_IN.md`.
+**RUN 2026-07-15 (Fable 5) — burn-in executed, two mount findings fixed live.**
+See `docs/CONTAINER_BURN_IN.md §5b`. Auth volume seeded; CLI pin 2.1.207→2.1.210.
+
+- [x] **Full acceptance probe with a real goal** — done, with a twist: the worker
+  **refused** the hostile goal (good second layer), making the *behavioral* probe
+  inconclusive on containment. Added `container-acceptance-probe.sh structural`, a
+  deterministic real-docker containment proof (T2 declared-out-of-scope + T1
+  un-declared) → **CONTAINED**. This is now the criterion of record.
+- [x] **Dogfood no-regression run** — 3 corpus goals ran concurrently under
+  `container: on`; honesty machinery fired identically to host mode; the
+  `done/achieved` goal's deliverable verified on disk (`clawd:clawd`). Two stuck
+  honestly. Found+fixed **finding #1** (file-shaped fence roots weren't mounted)
+  and **finding #2** (containment gap: goal-declared host paths outside the
+  workspace were mounted rw — `build_mount_map` now whitelists to workspace
+  subtree + `validate.write_fence_allow`).
+- [x] **Fill the `CONTAINER_BURN_IN.md §5` go/no-go checklist** — done (§5b). **The
+  flip stays Jeremy's**: box left `container: off` overnight (fix makes it strictly
+  safer; off is conservative pending his read), fresh-install default unchanged.
+  C4 mechanics + burn-in evidence complete; mark C4 shipped in design §9 + MILESTONES
+  once Jeremy flips.
+
+**Follow-up (new, 2026-07-15, non-blocking):**
+- [ ] **Container `/tmp` is ephemeral per step** — by design each executor step
+  gets a fresh container `/tmp`, so cross-step scratch written there vanishes.
+  Workers that treat `/tmp` as a persistent scratchpad across steps silently lose
+  it. Candidate: bind a per-run host scratch dir (e.g. `<run>/scratch`) at the
+  container `/tmp` so scratch survives within a run while staying off the host
+  `/tmp`. Measure whether real transcripts actually rely on cross-step `/tmp`
+  before building. Surfaced by the C4-BOX burn-in.
 
 ### -1. Purgatorio r2 graduates (2026-07-10 re-run; docs/audit-2026-07-r2/RECONCILIATION.md)
 

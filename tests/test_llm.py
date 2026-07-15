@@ -1912,6 +1912,10 @@ class TestContainerExecutorWrap:
         flow through build_mount_map into the wrap alongside the cwd."""
         from llm import _run_subprocess_safe, set_default_container_rw_roots
         import container_exec as ce
+        import config as cfg
+        # Both cwd and the declared root live under tmp_path — put the container
+        # write scope there so the goal-declared root is in-scope (C4-BOX 2026-07-15).
+        monkeypatch.setattr(cfg, "workspace_root", lambda: tmp_path)
         cwd = tmp_path / "proj"; cwd.mkdir()
         extra = tmp_path / "declared"; extra.mkdir()
         captured = {}

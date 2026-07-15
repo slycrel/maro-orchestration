@@ -2093,6 +2093,30 @@ Sample: the 2026-05-13..17 window of `~/.maro/workspace/runs/` (478 dirs total;
   evidence, consolidate redundant scalar examples and repeated expensive
   setup, and judge reductions by honest full-lane behavior, runtime, and
   coverage—not by the raw number of test functions.
+- **2026-07-15 (C4-BOX burn-in run + container containment finding — Jeremy:
+  "do both"):** the containerized-executor C4 burn-in ran on the box (auth
+  volume seeded via interactive `/login`; CLI pin bumped 2.1.207→2.1.210). A
+  3-goal concurrency batch under `container: on` ran clean — honesty machinery
+  (ralph-verify, adversarial `DISMISSED_BY_PROBE`, done≠achieved) fired
+  identically to host mode, uid/gid `clawd:clawd`, ~0.8 s/step boot-tax with no
+  cliff. The burn-in surfaced **two real mount findings, both fixed + re-verified
+  live**: (1) file-shaped fence roots were silently dropped from the mount map
+  (`_mountable_rw_dir` parent-translation); (2) **a containment gap** — a goal
+  that *declares* a host-secret path outside the workspace got it bind-mounted rw
+  (real `docker cat` printed the canary), because the design trusts goal-declared
+  roots and the forbidden list is a blacklist. Jeremy's call: **do both** — (a)
+  **tighten mounts** (`build_mount_map` now whitelists rw mounts to the workspace
+  subtree + explicit `validate.write_fence_allow`, drops the rest loudly; fails
+  closed) and (b) **reword the probe** (new `container-acceptance-probe.sh
+  structural` — deterministic containment proof independent of model behavior,
+  since the worker *refused* the hostile goal and the behavioral probe was
+  inconclusive). Post-fix structural probe: **CONTAINED** against real docker for
+  both declared-out-of-scope (T2) and un-declared (T1) paths. Container suite 95
+  green, real-docker e2e 15 green. **Box left `container: off` overnight** (the
+  fix makes it strictly safer, but off is the conservative state pending Jeremy's
+  read); flipping box→on is his one-line call, and the fresh-install default
+  stays off regardless (`docs/CONTAINER_BURN_IN.md` §5b/§6). Follow-up (BACKLOG):
+  container `/tmp` is ephemeral per step — candidate per-run host scratch bind.
 
 ## Threads (system-maintained — nothing leaves this list silently)
 

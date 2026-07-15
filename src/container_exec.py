@@ -46,7 +46,7 @@ log = logging.getLogger(__name__)
 # this as a build-arg default — re-pin by editing this constant and rebuilding
 # with the command `maro-bootstrap container-setup` prints. Confirm the
 # current published version with `npm view @anthropic-ai/claude-code version`.
-CLAUDE_CLI_VERSION = "2.1.207"
+CLAUDE_CLI_VERSION = "2.1.210"
 
 # Default executor image tag. Encodes the CLI pin (design §3: "image version
 # is auditable"). Override via `executor.container_image`.
@@ -464,12 +464,53 @@ def _is_ancestor_or_equal(candidate: str, other: str) -> bool:
     return other == candidate or other.startswith(candidate.rstrip(os.sep) + os.sep)
 
 
+def _container_write_scope_roots() -> list:
+    """Realpath'd host roots UNDER which a goal-declared rw mount is allowed —
+    the containment whitelist (C4-BOX burn-in finding, 2026-07-15).
+
+    The forbidden list (`_forbidden_mount_roots`) is a blacklist: it keeps the
+    orchestration and `/tmp` out, but it cannot enumerate every sensitive host
+    path. A hostile *goal* that names an absolute path outside the workspace
+    (`~/.ssh/authorized_keys`, a host secret file) would otherwise ride
+    `goal_declared_roots` straight into an rw bind — the container reads/writes
+    the host secret, defeating containment. So a goal-declared rw root is
+    mounted only when it falls WITHIN one of these scopes:
+
+      - the workspace subtree (its descendants — the run's project/output dirs,
+        self-dev scratch clones; the workspace root ITSELF stays forbidden), and
+      - each explicit `validate.write_fence_allow` root — the operator's
+        deliberate escape hatch for a legitimate out-of-workspace target.
+
+    Anything else a goal declares is dropped LOUDLY in `build_mount_map` rather
+    than mounted. `cwd` (the run's own working dir) and configured `ro` reference
+    mounts (`executor.container_extra_mounts`) are operator-trusted and exempt.
+    Fails CLOSED: an unreadable workspace/config yields a narrower scope (fewer
+    mounts), never a broader one."""
+    roots: list = []
+    try:
+        from config import workspace_root
+        roots.append(os.path.realpath(str(workspace_root())))
+    except Exception:
+        pass
+    try:
+        for r in (get("validate.write_fence_allow", []) or []):
+            if r:
+                try:
+                    roots.append(os.path.realpath(os.path.expanduser(str(r))))
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    return roots
+
+
 def build_mount_map(
     cwd: Optional[str],
     *,
     rw_roots: Optional[list] = None,
     ro_mounts: Optional[list] = None,
     forbidden_roots: Optional[list] = None,
+    write_scope_roots: Optional[list] = None,
 ) -> list:
     """Translate a run's write-fence into a docker mount list [(host_path, mode)].
 
@@ -477,7 +518,8 @@ def build_mount_map(
     design deliberately keeps out of the container (design §4):
 
       - `cwd` (the fence/working dir, or the self-dev scratch clone) → **rw**.
-      - `rw_roots` (goal-declared roots + `validate.write_fence_allow`) → **rw**.
+      - `rw_roots` (goal-declared roots + `validate.write_fence_allow`) → **rw**,
+        but ONLY those within the write scope (see below).
       - `ro_mounts` (`executor.container_extra_mounts`) → **ro**.
       - The workspace root, host `/tmp`, and any caller-supplied `forbidden_roots`
         (e.g. the live repo of a self-dev run) are HARD-EXCLUDED — the exclusion
@@ -485,6 +527,18 @@ def build_mount_map(
         finding B): `run_agent_loop` could otherwise pass `/tmp` (via
         `validate.write_fence_allow`) or a workspace/live-repo root straight
         through to a rw bind.
+
+    **Write scope (containment whitelist, C4-BOX burn-in 2026-07-15).** The
+    forbidden list is a blacklist and cannot name every sensitive host path, so
+    a goal-declared rw root is additionally required to fall WITHIN the write
+    scope — the workspace subtree plus each explicit `validate.write_fence_allow`
+    root (`write_scope_roots`, read from config when not injected). A hostile
+    *goal* that names a host secret outside the workspace (`~/.ssh/...`, a
+    credentials file) is therefore DROPPED loudly rather than mounted — closing
+    the containment gap the burn-in's acceptance probe surfaced (a goal that
+    declares its own target defeated both fence detection and container
+    containment). `cwd` and `ro_mounts` are operator-trusted and scope-exempt;
+    only goal-declared rw roots are scoped.
 
     Every source is realpath-resolved BEFORE the exclusion + containment checks,
     so a symlink whose target is a forbidden/sensitive dir can't smuggle a mount
@@ -494,7 +548,12 @@ def build_mount_map(
 
     Pure (no filesystem mutation): a rw root that does NOT exist on the host is
     skipped, not created — a bind of a missing path would have docker create it
-    root-owned. A path containing a comma or newline is skipped (docker's
+    root-owned. A FILE-shaped rw root (the fence authorizes exact paths, so
+    goals legally name files) is translated to its immediate parent directory —
+    one level, only when that parent already exists — because single-file binds
+    detach on atomic-rename writes; an untranslatable root is dropped with a
+    warning, never silently (C4-BOX burn-in finding, 2026-07-14). A path
+    containing a comma or newline is skipped (docker's
     `--mount` CSV syntax can't encode it safely; better to drop than mis-mount).
     Dedup is containment-aware and order-independent (sources sorted
     shortest-first so a parent is placed before its children): a path already
@@ -509,6 +568,15 @@ def build_mount_map(
                 forbidden.append(os.path.realpath(str(f)))
             except Exception:
                 pass
+
+    # Containment whitelist: a goal-declared rw root must live within one of
+    # these scopes (workspace subtree + explicit write_fence_allow) or it is
+    # dropped — the blacklist above can't enumerate every host secret path.
+    scope = list(write_scope_roots) if write_scope_roots is not None \
+        else _container_write_scope_roots()
+
+    def _in_write_scope(rp: str) -> bool:
+        return any(_is_ancestor_or_equal(s, rp) for s in scope)
 
     def _clean(p, *, check_forbidden: bool) -> Optional[str]:
         rp = os.path.realpath(str(p))
@@ -549,17 +617,56 @@ def build_mount_map(
         if _covered(rp, rank):
             return
         if require_dir and not os.path.isdir(rp):
-            log.debug("container mount: %s root %s absent on host — skipped", mode, rp)
+            log.debug("container mount: %s root %s is not an existing directory "
+                      "on the host — skipped", mode, rp)
             return
         mounts.append((rp, mode))
         seen.append((rp, rank))
 
+    def _mountable_rw_dir(raw) -> Optional[str]:
+        # Fence rw roots may be file-shaped: _in_fence authorizes an exact
+        # path (`p == r`), so a goal naming files works fence-only but a
+        # docker bind needs a directory (single-file binds silently detach on
+        # atomic-rename writes — exactly what code-editing workers do).
+        # Translate a file root — existing, or declared-but-not-yet-created —
+        # to its immediate parent, ONE level only and only when that parent
+        # already exists as a dir (binding a missing source would have docker
+        # create it root-owned). Never walk further up: a missing parent means
+        # the declared path has no mountable home and is dropped LOUDLY —
+        # a silent drop here is how burn-in goal 585f95f2 saw an "absent"
+        # directory that existed on the host (C4-BOX finding, 2026-07-14).
+        rp = os.path.realpath(str(raw))
+        if os.path.isdir(rp):
+            return rp
+        parent = os.path.dirname(rp)
+        if os.path.isdir(parent):
+            return parent
+        log.warning("container mount: rw root %s has no existing directory to "
+                    "mount (parent %s absent) — dropped; the container will "
+                    "not see this goal-declared path", rp, parent)
+        return None
+
     # cwd first (rw); its realpath is what `-w` must also use. Exempt from the
     # forbidden filter (it is the run's own working dir).
     _add(cwd, "rw", 2, require_dir=False, check_forbidden=False)
-    # Sort extra roots shortest-first so a parent is seen before its children —
-    # makes containment dedup independent of caller input order.
-    for root in sorted((r for r in (rw_roots or []) if r), key=lambda p: len(os.path.realpath(str(p)))):
+    # Translate file-shaped roots to their parent dir first, then sort
+    # shortest-first so a parent is seen before its children — makes
+    # containment dedup independent of caller input order.
+    _rw_dirs = []
+    for root in (rw_roots or []):
+        if not root:
+            continue
+        translated = _mountable_rw_dir(root)
+        if not translated:
+            continue
+        if not _in_write_scope(translated):
+            log.warning("container mount: rw root %s is outside the container "
+                        "write scope (workspace subtree + validate.write_fence_allow) "
+                        "— refused; add it to validate.write_fence_allow to mount it "
+                        "(C4-BOX containment whitelist, 2026-07-15)", translated)
+            continue
+        _rw_dirs.append(translated)
+    for root in sorted(set(_rw_dirs), key=len):
         _add(root, "rw", 2, require_dir=True)
     for ref in sorted((r for r in (ro_mounts or []) if r), key=lambda p: len(os.path.realpath(str(p)))):
         _add(ref, "ro", 1, require_dir=True)

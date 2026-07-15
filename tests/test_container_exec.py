@@ -619,9 +619,65 @@ class TestContainerSuppression:
 
 
 class TestBuildMountMap:
+    @pytest.fixture(autouse=True)
+    def _scope_defaults_to_tmp(self, tmp_path, monkeypatch):
+        # Containment whitelist (C4-BOX 2026-07-15): a goal-declared rw root is
+        # mounted only within the workspace subtree + write_fence_allow. These
+        # tests build rw roots under tmp_path, so default the workspace scope to
+        # tmp_path — the scope filter is then transparent and each test exercises
+        # its intended translation/dedup/forbidden behavior. Tests that assert a
+        # scope/forbidden rejection override workspace_root or pass
+        # write_scope_roots explicitly.
+        import config as cfg
+        monkeypatch.setattr(cfg, "workspace_root", lambda: tmp_path)
+
     def test_cwd_only_is_single_rw_mount(self, tmp_path):
         cwd = tmp_path / "proj"; cwd.mkdir()
         assert ce.build_mount_map(str(cwd)) == [(R(cwd), "rw")]
+
+    def test_rw_root_outside_write_scope_dropped(self, tmp_path, monkeypatch):
+        # THE containment fix: a goal that declares a host path OUTSIDE the
+        # workspace subtree (and not in write_fence_allow) gets it dropped, not
+        # mounted — the acceptance-probe scenario in miniature. Without this, a
+        # hostile goal naming ~/.ssh or a secret file would ride goal_declared_roots
+        # straight into an rw bind.
+        import config as cfg
+        ws = tmp_path / "ws"; ws.mkdir()
+        monkeypatch.setattr(cfg, "workspace_root", lambda: ws)
+        monkeypatch.setattr(ce, "get", lambda k, d=None: d)  # no write_fence_allow
+        cwd = ws / "run"; cwd.mkdir()
+        secret = tmp_path / "host-secret"; secret.mkdir()
+        (secret / "token.txt").write_text("s")
+        out = ce.build_mount_map(str(cwd), rw_roots=[str(secret / "token.txt")])
+        assert out == [(R(cwd), "rw")]
+        assert all("host-secret" not in p for p, _ in out)
+
+    def test_rw_root_in_write_fence_allow_kept(self, tmp_path, monkeypatch):
+        # The explicit escape hatch: an out-of-workspace root listed in
+        # validate.write_fence_allow IS mounted (operator opt-in).
+        import config as cfg
+        ws = tmp_path / "ws"; ws.mkdir()
+        monkeypatch.setattr(cfg, "workspace_root", lambda: ws)
+        allowed = tmp_path / "allowed"; allowed.mkdir()
+        monkeypatch.setattr(
+            ce, "get",
+            lambda k, d=None: [str(allowed)] if k == "validate.write_fence_allow" else d)
+        cwd = ws / "run"; cwd.mkdir()
+        target = allowed / "data"; target.mkdir()
+        out = ce.build_mount_map(str(cwd), rw_roots=[str(target)])
+        assert (R(target), "rw") in out
+
+    def test_write_scope_roots_param_injects_scope(self, tmp_path):
+        # The injectable param: a root under an injected scope is kept; one
+        # outside every scope is dropped.
+        cwd = tmp_path / "run"; cwd.mkdir()
+        inside = tmp_path / "scope" / "data"; inside.mkdir(parents=True)
+        outside = tmp_path / "elsewhere"; outside.mkdir()
+        out = ce.build_mount_map(
+            str(cwd), rw_roots=[str(inside), str(outside)],
+            write_scope_roots=[str(tmp_path / "scope"), str(cwd)])
+        assert (R(inside), "rw") in out
+        assert all("elsewhere" not in p for p, _ in out)
 
     def test_cwd_realpath_resolved_for_workdir_match(self, tmp_path):
         # A symlinked cwd resolves to its target (what docker binds + -w names).
@@ -637,12 +693,57 @@ class TestBuildMountMap:
         assert (R(extra), "rw") in out
         assert out[0] == (R(cwd), "rw")  # cwd first
 
-    def test_missing_rw_root_is_skipped_not_created(self, tmp_path):
+    def test_missing_rw_root_mounts_existing_parent_not_created(self, tmp_path):
+        # A declared-but-not-yet-created path ("write the report to X") gets
+        # its existing parent mounted so the worker can create it — but the
+        # missing path itself is never created host-side (purity holds).
         cwd = tmp_path / "proj"; cwd.mkdir()
-        missing = tmp_path / "nope"
+        data = tmp_path / "data"; data.mkdir()
+        missing = data / "report.md"
+        out = ce.build_mount_map(str(cwd), rw_roots=[str(missing)])
+        assert (R(data), "rw") in out
+        assert all(p != R(missing) for p, _ in out)
+        assert not missing.exists()  # pure — never created
+
+    def test_rw_root_with_missing_parent_is_dropped(self, tmp_path):
+        # No existing directory within ONE level → dropped (loudly), never
+        # walked further up and never created.
+        cwd = tmp_path / "proj"; cwd.mkdir()
+        missing = tmp_path / "nodir" / "report.md"
         out = ce.build_mount_map(str(cwd), rw_roots=[str(missing)])
         assert out == [(R(cwd), "rw")]
-        assert not missing.exists()  # pure — never created
+        assert not missing.parent.exists()
+
+    def test_file_rw_root_mounts_parent_dir(self, tmp_path):
+        # The fence authorizes exact file paths; the mount translation binds
+        # the file's parent dir (single-file binds detach on atomic renames).
+        # C4-BOX burn-in finding 2026-07-14 (run 585f95f2).
+        cwd = tmp_path / "proj"; cwd.mkdir()
+        data = tmp_path / "data"; data.mkdir()
+        f = data / "input.txt"; f.write_text("x")
+        out = ce.build_mount_map(str(cwd), rw_roots=[str(f)])
+        assert (R(data), "rw") in out
+        assert all(p != R(f) for p, _ in out)
+
+    def test_multiple_file_roots_same_dir_dedup_to_one_mount(self, tmp_path):
+        cwd = tmp_path / "proj"; cwd.mkdir()
+        data = tmp_path / "data"; data.mkdir()
+        a = data / "a.py"; a.write_text("x")
+        b = data / "b.json"; b.write_text("y")
+        out = ce.build_mount_map(str(cwd), rw_roots=[str(a), str(b), str(data / "new.json")])
+        assert out.count((R(data), "rw")) == 1
+        assert len(out) == 2  # cwd + the one shared parent
+
+    def test_file_root_translation_still_respects_forbidden(self, tmp_path, monkeypatch):
+        # A file root whose parent IS (or contains) a forbidden root must not
+        # smuggle that parent in via translation.
+        ws = tmp_path / "ws"; ws.mkdir()
+        import config as cfg
+        monkeypatch.setattr(cfg, "workspace_root", lambda: ws)
+        cwd = tmp_path / "proj"; cwd.mkdir()
+        deep_file = tmp_path / "ws-sibling.txt"  # parent = tmp_path, contains ws
+        out = ce.build_mount_map(str(cwd), rw_roots=[str(deep_file)])
+        assert out == [(R(cwd), "rw")]
 
     def test_rw_root_equal_to_cwd_deduped(self, tmp_path):
         cwd = tmp_path / "proj"; cwd.mkdir()

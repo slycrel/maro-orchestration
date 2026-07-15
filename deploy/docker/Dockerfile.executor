@@ -21,7 +21,7 @@ FROM node:22-slim
 
 # Default kept in sync with src/container_exec.py:CLAUDE_CLI_VERSION; the
 # build command always passes it explicitly, so this is only a fallback.
-ARG CLAUDE_CLI_VERSION=2.1.207
+ARG CLAUDE_CLI_VERSION=2.1.210
 
 # Toolset worker transcripts actually use: git (clone/commit), python3
 # (scripts), curl (fetches). coreutils ships in the debian base.
