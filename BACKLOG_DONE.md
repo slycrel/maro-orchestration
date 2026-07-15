@@ -8,6 +8,23 @@ Last split: 2026-04-16 (session 34).
 
 ---
 
+### recall() loop-slice lesson icon ignored the verdict (SF-2 family) — SHIPPED (2026-07-15)
+
+**Source:** pre-existing divergence surfaced by the age-stamp adversarial
+review (2026-07-15): `recall.py`'s loop-slice lesson render used
+`✓ if outcome == "done"` while `memory.inject_lessons_for_task` had the
+verdict-preferred rule (`goal_achieved is False` ⇒ ✗, SF-2 comment). Net:
+the PRIMARY decompose lesson path showed a success checkmark for lessons
+from runs judged goal-not-achieved; only the degraded fallback path
+rendered honestly.
+
+**Shipped:** copied the verdict-preferred icon expression across (with the
+SF-2 comment); pinned by
+`test_recall.py::TestLoopSlice::test_loop_slice_icon_is_verdict_preferred`
+(done-but-not-achieved ⇒ ✗, done-and-achieved ⇒ ✓, same recall). One-line
+fix applied directly — the adversarial verification was the review that
+found it (claim re-verified against both render sites before fixing).
+
 ### Stuck-block exits dropped the stuck step's own outcome from the run record — SHIPPED (2026-07-15)
 
 **Source:** side find of the escalate-gate adversarial review (2026-07-15,

@@ -605,7 +605,12 @@ def recall(
                 _age_stamped_any = False
                 _lines = ["## Lessons from Prior Runs (apply these)"]
                 for _l in _lessons:
-                    _icon = "✓" if _l.outcome == "done" else "✗"
+                    # Verdict-preferred (SF-2): a lesson from a run judged
+                    # goal-not-achieved is a failure lesson even though the
+                    # run's process status was "done" (same rule as
+                    # memory.inject_lessons_for_task).
+                    _icon = ("✗" if getattr(_l, "goal_achieved", None) is False
+                             else ("✓" if _l.outcome == "done" else "✗"))
                     _suffix = (age_suffix(getattr(_l, "recorded_at", "") or "")
                                if _stamp_ages else "")
                     if _suffix:

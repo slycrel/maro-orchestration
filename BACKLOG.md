@@ -130,14 +130,6 @@ go-live).
   residual: director `restart` break still drops the stuck step's outcome
   record (the shipped helper covers the four continue-shaped exits only).
 
-- [ ] **recall() loop-slice lesson icon ignores the verdict (SF-2 family)**
-  (pre-existing; surfaced by the age-stamp adversarial review 2026-07-15):
-  `recall.py:~609` renders `✓ if outcome == "done"` while
-  `memory.py:~178`'s same render is verdict-preferred (`goal_achieved is
-  False` ⇒ ✗, with the SF-2 comment). Net: the PRIMARY decompose lesson
-  path shows a success checkmark for lessons from runs judged
-  goal-not-achieved; only the degraded fallback path renders honestly.
-  Fix = copy the one-line verdict-preferred icon expression across.
 
 ### R6. VERIFY_LEARN_ARC V4/V5 adversarial review — 4 fixed live, 4 deferred (2026-07-14)
 

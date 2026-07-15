@@ -323,6 +323,35 @@ class TestLoopSlice:
     def test_as_loop_block_empty_when_nothing_known(self):
         assert RecallResult(thread=None, prior_attempts=[]).as_loop_block() == ""
 
+    def test_loop_slice_icon_is_verdict_preferred(self, monkeypatch, tmp_path):
+        """SF-2: a lesson from a run judged goal-not-achieved renders ✗ in
+        the loop slice even though its process status was "done" — same rule
+        as memory.inject_lessons_for_task. Pre-fix the primary decompose
+        lesson path showed a success checkmark for verdict-failed runs
+        (age-stamp adversarial review 2026-07-15)."""
+        _setup(monkeypatch, tmp_path)
+        import memory
+
+        class _DoneButNotAchieved:
+            outcome = "done"
+            goal_achieved = False
+            lesson = "narrated success without the artifact landing"
+
+        class _DoneAndAchieved:
+            outcome = "done"
+            goal_achieved = True
+            lesson = "verified the artifact before claiming done"
+
+        monkeypatch.setattr(
+            memory, "load_lessons",
+            lambda **kw: [_DoneButNotAchieved(), _DoneAndAchieved()]
+            if kw.get("task_type") == "agenda" else [])
+
+        r = recall("any goal", slice="loop")
+
+        assert "- ✗ narrated success without the artifact landing" in r.lessons
+        assert "- ✓ verified the artifact before claiming done" in r.lessons
+
     def test_lessons_cited_stamp_in_event(self, monkeypatch, tmp_path):
         _setup(monkeypatch, tmp_path)
         import memory
