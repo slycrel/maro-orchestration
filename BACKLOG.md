@@ -41,12 +41,16 @@ suggestions (confirmed→calibrate, degraded-self→auto-revert,
 degraded-human→review queue, inconclusive→extend/park), trust policy §4 live
 via `verdict_trust()`, and a dead-on-production `recorded_at` window bug fixed
 en route; see `docs/VERIFY_LEARN_ARC.md` and GOAL_BRAIN Decisions 2026-07-14.
-V3 was inspected after those landings and is **deferred by owner decision**:
-it is a design item, not merely a large implementation, because graduation
-templates do not yet carry behavioral expectations or a safe authority-aware
-demotion target. Navigator-side V4/V5 remain separate future candidates.
-Nothing else in the Actionable Stack was both unblocked and ready without
-Jeremy's input.
+V3 was inspected after those landings; Jeremy adjudicated 2026-07-14 that it
+is **buildable now, not decision-blocked** — the two "must define first"
+prerequisites already shipped (V1's `expected_signal` = the behavioral
+expectation; V2's symmetric-authority + `behavioral` revert = the safe
+demotion target), and V2's verify path is category-agnostic. Remaining is
+build: wire graduation's pending rows into apply→verify, reuse the
+class-neutral stuck-rate fallback for the missing timestamped-diagnosis
+metric, keep rules advisor-gated (held-for-review) so nothing auto-applies.
+Navigator-side V4/V5 remain separate future candidates. (Codex's earlier
+"deferred by owner decision / design dependency" framing was superseded here.)
 
 ---
 
@@ -1234,8 +1238,13 @@ folds into this decision (see docs/INDEX.md note).
   currently mix observations, lesson-like prompt tweaks, and gated guardrails
   rather than one durable standing-rule type, and prompt tweaks lack a true
   rollback target (V2 reverts config/gate rows cleanly; a prose prompt tweak
-  has no crisp revert target). V3 — graduation auto-apply + behavioral
-  auto-verify + demote — is the remaining owner-level scope decision.
+  has no crisp revert target — but V2's `behavioral` flag already routes those
+  to surface-for-review rather than a false revert). V3 — graduation
+  auto-apply-then-verify + demote — is **buildable now, not decision-blocked**
+  (Jeremy 2026-07-14): reuse V1 `expected_signal` + V2 authority-aware revert,
+  reuse the class-neutral stuck-rate fallback for the absent timestamped-
+  diagnosis metric, and keep graduation rules advisor-gated (held-for-review)
+  so the verify→demote loop ships without ever auto-applying a standing rule.
 
 - [ ] **Design constraint, not a task: decay trust, never data.** Append-only
   evidence layer stays perfect (the computerization edge over human forgetting);

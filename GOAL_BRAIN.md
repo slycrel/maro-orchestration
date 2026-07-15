@@ -2683,3 +2683,27 @@ Dormant (deliberately parked, not dropped):
   *behavioral* auto-verify + demote — its structural precursor already shipped
   2026-07-14; V1+V2 were its stated prerequisites, now present) or V4/V5 (the
   navigator-side half). Neither is Jeremy-gated by an open DECISION marker.
+
+- **2026-07-14 (Jeremy) — V3 is BUILDABLE NOW, not decision-blocked.** Codex,
+  working in parallel, documented an "Owner decision 2026-07-14: defer full V3 —
+  design dependency" in `docs/VERIFY_LEARN_ARC.md`. Jeremy reviewed and
+  overrode: *"Agree with your assessment and proposal; buildable now."* The two
+  prerequisites Codex framed as "must define first" already shipped this day —
+  the behavioral expectation a graduated rule carries IS V1's `expected_signal`
+  (all 9 templates declare `failure_class_rate ↓`), and the authority-aware,
+  crash-safe demotion target IS V2's symmetric-authority revert plus the
+  `behavioral` flag (real undo vs. un-revertable append-only → surface-for-
+  review). V2's verify path is already category-agnostic, so an applied
+  graduation row flows through it today. What remains for V3 is **build, not
+  decision**: (a) wire graduation's *pending* rows into the apply→verify
+  lifecycle (nothing autonomously applies `graduation:` rows today); (b) reuse
+  V2's class-neutral stuck-rate fallback for the `failure_class_rate` metric
+  (timestamped diagnoses still don't exist) or add diagnosis timestamps. The one
+  genuine owner call is narrow and has a no-meeting-needed safe default: **keep
+  graduation rules advisor-gated (held-for-review, like guardrails)** so V3 ships
+  the full verify→demote loop without ever auto-applying a standing rule. Doc,
+  MILESTONES, and BACKLOG reframed from "deferred/design-dependency" to
+  "buildable now" in the same chunk. (Also this session: V2 adversarial-review
+  hardening SHIPPED 584b902 — bounded windows, `behavioral`-flagged honest
+  reverts, authority re-check, baseline floor, impact-gate fix; reconciled clean
+  with Codex's parallel audit/admission commits, box-safe suite green at 181.)

@@ -108,14 +108,27 @@ function exists, the hook exists, they've just never met.
 **2026-07-14 precursor:** the function and cadence hook have now met for
 rows whose durable state is actually `applied=true`. Results emit
 `GRADUATION_VERIFIED`; failures may notify, but are labelled structural-only
-and never mutate state. Manual-apply provenance is persisted for the later
-authority policy. Full V3 remains sequenced after V1/V2 because the current
-templates do not carry behavioral expectations or a safe demotion target.
+and never mutate state. Manual-apply provenance is persisted for the
+authority policy.
 
-**Owner decision 2026-07-14:** defer full V3. This is a design dependency, not
-merely a large build: define the behavioral expectation carried by a graduated
-rule and the authority-aware, crash-safe demotion target before enabling state
-mutation. The shipped structural-only cadence remains in place meanwhile.
+**Owner decision 2026-07-14 (Jeremy):** V3 is **buildable now** — not a design
+dependency. Both prerequisites Codex named as "must define first" already
+shipped: the *behavioral expectation* a graduated rule carries is exactly V1's
+`expected_signal` (all 9 templates declare `failure_class_rate ↓`), and the
+*authority-aware, crash-safe demotion target* is V2's symmetric-authority
+revert plus the `behavioral` flag (real undo vs. un-revertable append-only →
+surface-for-review). V2's verify path is already category-agnostic, so an
+applied graduation row flows through it today. What remains is **build, not
+decision**: (a) wire graduation's *pending* rows into the apply→verify
+lifecycle (nothing autonomously applies `graduation:` rows today, so V2 never
+sees them); (b) the `failure_class_rate` metric wants timestamped diagnoses
+that don't exist — reuse V2's class-neutral stuck-rate fallback, or add
+diagnosis timestamps (small, additive). The one genuine owner call is narrow —
+whether a graduated standing-rule may cross the auto-apply threshold — and its
+**safe default needs no meeting: keep graduation rules advisor-gated
+(held-for-review, like guardrails)**, so V3 ships the full verify→demote loop
+without ever auto-applying a rule. The structural-only cadence stays in place
+until the build lands.
 
 ## 4. Verdict trust policy — which verdicts learning may consume
 
@@ -242,9 +255,13 @@ A/B flag in one chunk (`navigator.lesson_inject`, shadow-comparable like
   auto-revert can't fire off a 3-sample baseline; (e) `scan_evolver_impact`'s
   insufficient-data gate fixed (`and`→`or`: each window needs the minimum).
   6 more regression-lock tests.
-- **V3 — graduation auto-verify (Sonnet):** applied-only structural cadence
-  wiring and manual provenance precursor shipped 2026-07-14. Still open:
-  behavioral verdict + authority-aware revert/demote, after V1/V2.
+- **V3 — graduation auto-verify (Opus-sized, BUILDABLE NOW per Jeremy
+  2026-07-14):** applied-only structural cadence wiring + manual provenance
+  precursor shipped 2026-07-14. Open work is *build, not decision* (V1's
+  `expected_signal` + V2's authority-aware `behavioral` revert already supply
+  both prerequisites): wire graduation's pending rows into apply→verify, reuse
+  the class-neutral stuck-rate fallback for the missing timestamped-diagnosis
+  metric, keep rules advisor-gated (held-for-review) so nothing auto-applies.
 - **V4 — divergence adjudication (Sonnet/Opus):** capped LLM pass +
   agreement-table breakdown.
 - **V5 — navigator lessons (Opus):** crystallize + inject + A/B flag,

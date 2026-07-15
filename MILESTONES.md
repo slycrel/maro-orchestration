@@ -21,10 +21,21 @@ DEFAULTS.md (`evolver.verify_cadence_verdicts` default ON — safety mechanism,
 only reverts what the system applied; `verify_min_post_apply`=10,
 `verify_max_extensions`=3, `verify_delta_threshold`=0.05). Operator surface
 `maro evolver verify [--apply]`. 17 new tests; both acceptance legs (one
-confirm AND one degrade→revert with calibration) exercised. **Next: V3**
-(graduation *behavioral* auto-verify + demote — the structural precursor
-shipped 2026-07-14; needs V1/V2, now present) or V4/V5 (navigator half). See
-`docs/VERIFY_LEARN_ARC.md` §5/§7.
+confirm AND one degrade→revert with calibration) exercised. **Adversarial-review
+hardening SHIPPED same day (584b902, 3 Codex reviewers):** bounded post-apply
+window (no later-regression bleed → spurious revert), honest reverts (additive
+`behavioral` flag → un-revertable/append-only degradations surface blocking as
+`degraded_revert_failed`, never falsely "reverted"), authority re-check before
+the irreversible revert, baseline floor `max(3,min//2)`, `scan_evolver_impact`
+`and`→`or` gate; 6 regression-lock tests; reconciled clean with Codex's parallel
+audit/admission work, full box-safe suite green (181). **Next: V3 — BUILDABLE
+NOW, not decision-blocked (Jeremy 2026-07-14):** the two "define first"
+prerequisites already shipped (V1 `expected_signal` + V2 authority-aware
+`behavioral` revert), V2's verify path is category-agnostic. Remaining is build
+— wire graduation's pending rows into apply→verify, reuse the class-neutral
+stuck-rate fallback for the absent timestamped-diagnosis metric, keep rules
+advisor-gated (held-for-review) so nothing auto-applies. Or V4/V5 (navigator
+half). See `docs/VERIFY_LEARN_ARC.md` §3/§7.
 Previous checkpoint — /goal catch-up session — EXT-AUDIT-2 residual
 SHIPPED: `_stamp_verdict_tracked` quarantines deferred learning per-loop_id
 when a closure/provenance/post-escalation verdict stamp write-fails or raises,
@@ -49,8 +60,9 @@ structural verification SHIPPED as a safe VERIFY_LEARN_ARC V3 precursor:
 cadence events/optional notification, durable manual authority, and held-row
 accounting fixed. Multiple Claude adversarial passes additionally forced idempotent but
 retryable primary actions and claim/deliver/ack notification semantics. Full
-behavioral verdict/revert remains explicitly open
-because V1/V2 and an autonomous pending-graduation consumer do not exist.
+behavioral verdict/revert was open here pending V1/V2 — both now SHIPPED
+2026-07-14, so V3 is buildable (see top checkpoint); the only remaining piece
+is an autonomous pending-graduation consumer + metric substrate.
 Previous checkpoint — first-consolidation
 long-gap policy CLOSED with no amnesty: decay is already read-time state and
 GC-eligible lessons are below the live injection floor; archive+resurrection
