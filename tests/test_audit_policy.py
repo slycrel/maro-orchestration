@@ -16,7 +16,7 @@ def test_success_or_absent_row_allows_learning(monkeypatch, status):
         lambda *a, **kw: OutcomeVerdictStampResult(status=status, attempts=1),
     )
     metadata = []
-    monkeypatch.setattr(runs, "stamp_run_metadata", lambda fields: metadata.append(fields))
+    monkeypatch.setattr(runs, "stamp_run_audit_failure", lambda fields: metadata.append(fields))
 
     result = persist_delivered_outcome_verdict(
         "loop-a", goal_achieved=True, goal_verdict_source="closure")
@@ -38,7 +38,7 @@ def test_write_failure_warns_skips_learning_and_records_repair(monkeypatch):
     )
     metadata = []
     monkeypatch.setattr(
-        runs, "stamp_run_metadata",
+        runs, "stamp_run_audit_failure",
         lambda fields: (metadata.append(fields), Path("metadata.json"))[1],
     )
 
@@ -68,7 +68,7 @@ def test_stamp_exception_and_metadata_failure_are_both_visible(monkeypatch):
         memory, "stamp_outcome_verdict",
         lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("ledger offline")),
     )
-    monkeypatch.setattr(runs, "stamp_run_metadata", lambda fields: None)
+    monkeypatch.setattr(runs, "stamp_run_audit_failure", lambda fields: None)
 
     result = persist_delivered_outcome_verdict(
         "loop-c", goal_achieved=True, goal_verdict_source="closure")
@@ -89,7 +89,7 @@ def test_warning_is_emitted_to_channel(monkeypatch):
         lambda *a, **kw: OutcomeVerdictStampResult(
             status="write_failed", attempts=1, error="readonly"),
     )
-    monkeypatch.setattr(runs, "stamp_run_metadata", lambda fields: Path("meta"))
+    monkeypatch.setattr(runs, "stamp_run_audit_failure", lambda fields: Path("meta"))
 
     class Channel:
         events = []

@@ -94,9 +94,9 @@ def persist_delivered_outcome_verdict(
     }
     metadata_persisted = False
     try:
-        from runs import stamp_run_metadata
+        from runs import stamp_run_audit_failure
 
-        path = stamp_run_metadata({
+        path = stamp_run_audit_failure({
             "audit_incomplete": True,
             "audit_repair_required": True,
             "audit_failure_source": "outcome_verdict_stamp",

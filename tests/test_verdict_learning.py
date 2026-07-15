@@ -496,6 +496,23 @@ def test_extract_deferred_lessons_failure_is_observable(monkeypatch, tmp_path):
     assert _raw_rows()[-1]["lesson_extraction_status"] == "failed"
 
 
+def test_deferred_adapter_failure_is_strict_by_default(monkeypatch, tmp_path):
+    _setup(monkeypatch, tmp_path)
+    import memory
+    reflect_and_record("goal", "done", "s", dry_run=True, loop_id="lp-adapter",
+                       defer_lessons=True)
+
+    class BrokenAdapter:
+        def complete(self, messages, **kwargs):
+            raise RuntimeError("provider unavailable")
+
+    with pytest.raises(RuntimeError, match="provider unavailable"):
+        memory.extract_deferred_lessons(
+            "lp-adapter", adapter=BrokenAdapter(), dry_run=False)
+
+    assert _raw_rows()[-1]["lesson_extraction_status"] == "failed"
+
+
 def test_completed_zero_deferred_extraction_is_durably_idempotent(monkeypatch, tmp_path):
     _setup(monkeypatch, tmp_path)
     import memory

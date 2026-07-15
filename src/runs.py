@@ -370,47 +370,44 @@ def write_metadata(
 ) -> Path:
     """Write/refresh metadata.json. Preserves started_at if already set."""
     meta_path = rd / "metadata.json"
-    started_at: Optional[str] = None
-    existing: dict = {}
-    if meta_path.exists():
+
+    def _merge(old: str) -> str:
         try:
-            existing = json.loads(meta_path.read_text(encoding="utf-8"))
-            started_at = existing.get("started_at")
+            existing = json.loads(old) if old else {}
         except Exception:
             existing = {}
-    if not started_at:
-        started_at = datetime.now(timezone.utc).isoformat()
+        if not isinstance(existing, dict):
+            existing = {}
+        meta = {
+            "handle_id": handle_id,
+            "nickname": nickname(handle_id),
+            "prompt": prompt,
+            "lane": lane,
+            "model": model,
+            "started_at": existing.get("started_at")
+                or datetime.now(timezone.utc).isoformat(),
+            "ended_at": ended_at,
+            "status": status,
+            # Owner PID: lets the stranded-run sweep tell "owner died before
+            # finalize" (SIGTERM runs no finally — specimen 51b09271) from
+            # "still running" without age guesswork. First writer wins.
+            "pid": existing.get("pid") or os.getpid(),
+        }
+        if extra:
+            # Caller-supplied keys merge in but don't override the core set.
+            for k, v in extra.items():
+                meta.setdefault(k, v)
+        # Preserve prior keys (e.g. ended_at from an earlier finalize call).
+        for k, v in existing.items():
+            if k not in meta or meta[k] is None:
+                meta[k] = v
+        # Publish lookup refs before metadata, preserving the crash-order
+        # contract while the metadata snapshot remains lock-stable.
+        index_run_dir(rd, meta)
+        return json.dumps(meta, indent=2, default=str)
 
-    meta = {
-        "handle_id": handle_id,
-        "nickname": nickname(handle_id),
-        "prompt": prompt,
-        "lane": lane,
-        "model": model,
-        "started_at": started_at,
-        "ended_at": ended_at,
-        "status": status,
-        # Owner PID: lets the stranded-run sweep tell "owner died before
-        # finalize" (SIGTERM runs no finally — specimen 51b09271) from
-        # "still running" without age guesswork. First writer wins.
-        "pid": existing.get("pid") or os.getpid(),
-    }
-    if extra:
-        # Caller-supplied keys merge in but don't override the core set.
-        for k, v in extra.items():
-            meta.setdefault(k, v)
-    # Preserve any prior keys not in the core set (e.g. ended_at written
-    # by an earlier finalize call when the current call doesn't supply it).
-    for k, v in existing.items():
-        if k not in meta or meta[k] is None:
-            meta[k] = v
-
-    # Publish lookup refs first: a crash between the two writes may expose a
-    # mapping slightly early, but cannot make an otherwise-finished loop
-    # unreachable. Index failure invalidates the migration marker for repair.
-    index_run_dir(rd, meta)
-    from file_lock import atomic_write
-    atomic_write(meta_path, json.dumps(meta, indent=2))
+    from file_lock import locked_rmw
+    locked_rmw(meta_path, _merge)
     return meta_path
 
 
@@ -426,18 +423,66 @@ def stamp_run_metadata(fields: dict) -> Optional[Path]:
         if rd is None or not fields:
             return None
         meta_path = rd / "metadata.json"
-        existing: dict = {}
-        if meta_path.exists():
+        def _merge(old: str) -> str:
             try:
-                existing = json.loads(meta_path.read_text(encoding="utf-8"))
+                existing = json.loads(old) if old else {}
             except Exception:
                 existing = {}
-        for k, v in fields.items():
-            if v is not None:
-                existing[k] = v
-        index_run_dir(rd, existing)
-        from file_lock import atomic_write
-        atomic_write(meta_path, json.dumps(existing, indent=2, default=str))
+            if not isinstance(existing, dict):
+                existing = {}
+            for k, v in fields.items():
+                if v is not None:
+                    existing[k] = v
+            index_run_dir(rd, existing)
+            return json.dumps(existing, indent=2, default=str)
+
+        from file_lock import locked_rmw
+        locked_rmw(meta_path, _merge)
+        return meta_path
+    except Exception:
+        return None
+
+
+def stamp_run_audit_failure(fields: dict) -> Optional[Path]:
+    """Append/upsert one loop's audit repair while preserving other loops.
+
+    ``audit_repairs`` is the canonical multi-loop queue. ``audit_repair``
+    remains the latest-record compatibility view for older readers.
+    """
+    try:
+        rd = current_run_dir()
+        repair = fields.get("audit_repair")
+        if rd is None or not isinstance(repair, dict):
+            return None
+        meta_path = rd / "metadata.json"
+        def _merge(old: str) -> str:
+            try:
+                existing = json.loads(old) if old else {}
+            except Exception:
+                existing = {}
+            if not isinstance(existing, dict):
+                existing = {}
+            repairs = existing.get("audit_repairs")
+            repairs = list(repairs) if isinstance(repairs, list) else []
+            legacy = existing.get("audit_repair")
+            if isinstance(legacy, dict) and not repairs:
+                repairs.append(legacy)
+            loop_id = repair.get("loop_id")
+            repairs = [
+                item for item in repairs
+                if not isinstance(item, dict) or item.get("loop_id") != loop_id
+            ]
+            repairs.append(dict(repair))
+            for k, v in fields.items():
+                if v is not None:
+                    existing[k] = v
+            existing["audit_repairs"] = repairs
+            existing["audit_repair"] = dict(repair)
+            index_run_dir(rd, existing)
+            return json.dumps(existing, indent=2, default=str)
+
+        from file_lock import locked_rmw
+        locked_rmw(meta_path, _merge)
         return meta_path
     except Exception:
         return None
@@ -462,24 +507,27 @@ def stamp_run_verdict(
         if rd is None:
             return None
         meta_path = rd / "metadata.json"
-        existing: dict = {}
-        if meta_path.exists():
+        def _merge(old: str) -> str:
             try:
-                existing = json.loads(meta_path.read_text(encoding="utf-8"))
+                existing = json.loads(old) if old else {}
             except Exception:
                 existing = {}
-        existing.update({
-            "goal_verdict_source": source,
-            "goal_verdict_confidence": float(confidence),
-            "goal_verdict_summary": str(summary)[:300],
-        })
-        if goal_achieved is None:
-            existing.pop("goal_achieved", None)
-        else:
-            existing["goal_achieved"] = bool(goal_achieved)
-        index_run_dir(rd, existing)
-        from file_lock import atomic_write
-        atomic_write(meta_path, json.dumps(existing, indent=2, default=str))
+            if not isinstance(existing, dict):
+                existing = {}
+            existing.update({
+                "goal_verdict_source": source,
+                "goal_verdict_confidence": float(confidence),
+                "goal_verdict_summary": str(summary)[:300],
+            })
+            if goal_achieved is None:
+                existing.pop("goal_achieved", None)
+            else:
+                existing["goal_achieved"] = bool(goal_achieved)
+            index_run_dir(rd, existing)
+            return json.dumps(existing, indent=2, default=str)
+
+        from file_lock import locked_rmw
+        locked_rmw(meta_path, _merge)
         return meta_path
     except Exception:
         return None

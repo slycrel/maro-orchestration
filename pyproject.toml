@@ -95,6 +95,7 @@ py-modules = [
     "ancestry",
     "artifact_check",
     "attribution",
+    "audit_repair",
     "audit_policy",
     "autonomy",
     "backend_benchmark",

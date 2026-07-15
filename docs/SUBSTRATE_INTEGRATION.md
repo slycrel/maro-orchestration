@@ -63,6 +63,7 @@ Every submission gets a run-dir: `$MARO_WORKSPACE/runs/<handle_id>-<nickname>/`.
 maro-runs status <handle_id>    # {status, goal_achieved, lane, started/ended}
 maro-runs list                  # recent runs, one line each
 maro-runs show <handle_id>      # full run_card.json (see below)
+maro-runs repair-audits [handle-or-loop]  # converge audit-incomplete runs
 ```
 
 Files, if you'd rather read than shell out:

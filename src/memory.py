@@ -215,6 +215,7 @@ def extract_lessons_via_llm(
     dry_run: bool = False,
     return_typed: bool = False,
     goal_achieved: Optional[bool] = None,
+    raise_on_failure: bool = False,
 ) -> "List":
     """Use LLM to extract generalizable lessons from a completed run.
 
@@ -329,6 +330,8 @@ def extract_lessons_via_llm(
             raw = extract_json(content_or_empty(resp), list, log_tag="memory.extract_lessons")
             return _parse_typed(raw)
         except Exception:
+            if raise_on_failure:
+                raise
             return []
 
     typed = _one_sample()
@@ -512,6 +515,7 @@ def extract_deferred_lessons(
     *,
     adapter=None,
     dry_run: bool = False,
+    raise_on_failure: bool = True,
 ) -> int:
     """Run the lesson extraction that reflect_and_record(defer_lessons=True)
     skipped — now that the closure/provenance verdict has been stamped onto
@@ -549,6 +553,7 @@ def extract_deferred_lessons(
             dry_run=dry_run,
             return_typed=True,
             goal_achieved=outcome.goal_achieved,
+            raise_on_failure=raise_on_failure,
         )
     except Exception as exc:
         annotate_outcome_extraction_failure(loop_id)

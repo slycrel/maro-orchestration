@@ -686,8 +686,12 @@ marker) — no other control flow hangs off the log.
 - Thread Architecture (navigator/thread reframe) is **sketched, not implemented** —
   `THREAD_ARCHITECTURE.md` on branch `arch/thread-navigator`, 9 open questions.
   Basis: 2026-04-27 conversation doc + session-40 audit.
-- Phase 65 (constraint orchestration) is **paused**; its minimum experiment shipped
-  2026-04-23 as `src/scope.py` + ResolvedIntent. Basis: session-38 delta audit.
+- Phase 65's single-persona scope/ResolvedIntent MVE was **live on the audited
+  runtime box** from 2026-07-09; fresh installs and this currently unconfigured
+  M1 dev host remain OFF for spend. The deeper multi-persona, enforcement, and
+  activation design remains deferred. The 2026-04-22 six-run A/B's reliable
+  signal was plan compression; its clean-run ratio was recovery-confounded.
+  Basis: DEFAULTS.md + Purgatorio arch-01/02 reconciliation.
 - Heartbeat systemd service exists but is not enabled/running (session-40 audit).
   CORRECTION 2026-07-09 (Purgatorio arch-06): the "heartbeat runs in-process when
   the app runs" claim that used to live here was FALSE — no heartbeat invocation
@@ -2176,7 +2180,9 @@ Active:
 Dormant (deliberately parked, not dropped):
 - Thread Architecture implementation (`arch/thread-navigator`) — parked pending
   goal-brain sequencing; fix-in-place arc takes precedence.
-- Phase 65 constraint orchestration — paused 2026-04-23.
+- Phase 65 deeper constraint-orchestration expansion — deferred; the
+  single-persona ResolvedIntent MVE was enabled on the audited runtime box in
+  2026-07-09, while this unconfigured M1 and fresh installs remain OFF.
 - Mage correspondence memory — v1 sketch exists (typed-edge graph walk, sympathy
   weights); downstream of recall() shape.
 - Backlogged repairs: 10 pre-existing test failures; fragile fail-safes in
@@ -2769,3 +2775,43 @@ Dormant (deliberately parked, not dropped):
   to clear the backlog, then a trickle). Knobs in DEFAULTS.md; 19 new tests; box
   suite green. **The verify→learn arc is now fully closed (V1–V5).** Next arc
   is open — no successor decreed yet.
+
+- **2026-07-14 (audit repair convergence + truth cleanup, superseding stale
+  same-day queue claims)** — The owner-approved `AUDIT INCOMPLETE` delivery
+  policy now has a bounded consumer. `maro-runs repair-audits
+  [handle-or-loop]` and the existing autonomy/evolver cadence validate and
+  replay exact stored per-loop verdict patches, then finalize only each named
+  outcome row's deferred lesson/knowledge extraction. One workspace pidfile prevents
+  duplicate paid work; a durable `surface_pending` checkpoint lets a crash
+  resume run-card/report refresh without replaying verdict or learning.
+  Malformed joins, missing rows, stamp failures, and adapter failures remain
+  quarantined. Skill crystallization is intentionally not fabricated because
+  the required `StepOutcome` inputs are not durable in the repair record.
+  This also supersedes the earlier delivery note's rejected user-facing
+  warning: Jeremy's later explicit decision is preserve delivery **with a
+  prominent warning and exact repair metadata**.
+
+  The same current-truth pass resolves three stale queue surfaces. Manti Run 3
+  (`5126986b`) completed cleanly at 6 steps / 16m43s / $1.52 / closure 0.95;
+  only its 1–3 minute/cents envelope remains open. Phase 65's six-run A/B did
+  run and selected plan compression (8 versus 15–40 steps); the single-persona
+  MVE was live on the audited runtime box while this unconfigured M1 and fresh
+  installs remain OFF for spend, and deeper design stays deferred. The
+  count-files interpretation contract is shipped and its activation posture is
+  decided (explicit runtime opt-in, default and this M1 OFF), so it moved
+  to BACKLOG_DONE rather than retaining a fake activation blocker.
+
+  The six-persona opposite-model review rejected the reconciler's first draft
+  and materially changed the landing. Accepted blockers: directory-mtime
+  retry churn could starve good records; the loop join failed open when absent;
+  live runs and multi-loop audit failures could clear the wrong quarantine;
+  run metadata could disagree with the repaired ledger; and existing metadata
+  writers did not honor the repair lock. The final design scans finalized runs
+  fairly by persisted attempt time, requires the loop join, stores a canonical
+  per-loop queue, fences each update by loop+recorded_at, aligns the latest
+  repaired verdict into run metadata, and moves all run-metadata mutations to
+  locked RMW. Invalid/missing rows stop automatic retry immediately; other
+  failures cap at five while retaining manual quarantine. Also corrected the
+  review's truth findings: Phase 65's reliable A/B signal is plan compression,
+  not the confounded clean-run ratio; Manti evidence is attributed separately
+  to Runs 2/3/4; fresh-default count ambiguity remains an explicit cost posture.

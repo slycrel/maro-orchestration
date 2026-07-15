@@ -23,6 +23,15 @@ session: **V3 dates hardening** — the class path's time axis now recovers
 dormant. **The verify→learn arc (thread decision #6) is now fully closed.**
 See `docs/VERIFY_LEARN_ARC.md` §5/§7.
 
+Previous checkpoint — audit-incomplete convergence + backlog truth pass.
+`maro-runs repair-audits [handle-or-loop]` and the existing autonomy/evolver
+cadence consume exact per-loop repair records, replay verdicts, finalize only
+the named row's deferred lesson/knowledge extraction, and clear quarantine
+only after siblings converge. One workspace lock serializes sweeps; fair
+ordering and failure caps prevent starvation/unbounded spend; all run-metadata
+writers share locked RMW. See
+`docs/history/2026-07-14-audit-delivery-and-resume-admission.md`.
+
 Previous checkpoint — 2026-07-14 (VERIFY_LEARN_ARC **V3 — graduation behavioral
 auto-verify SHIPPED**, the Opus chunk following Jeremy's "buildable now" call).
 Applied graduation rows already flowed into V2's cadence verify — but on the
@@ -97,9 +106,9 @@ structural verification SHIPPED as a safe VERIFY_LEARN_ARC V3 precursor:
 cadence events/optional notification, durable manual authority, and held-row
 accounting fixed. Multiple Claude adversarial passes additionally forced idempotent but
 retryable primary actions and claim/deliver/ack notification semantics. Full
-behavioral verdict/revert was open here pending V1/V2 — both now SHIPPED
-2026-07-14, so V3 is buildable (see top checkpoint); the only remaining piece
-is an autonomous pending-graduation consumer + metric substrate.
+behavioral verdict/revert was open here pending V1/V2; V1–V5 subsequently
+shipped 2026-07-14 (see top checkpoints), so this historical precursor is
+closed rather than an active queue item.
 Previous checkpoint — first-consolidation
 long-gap policy CLOSED with no amnesty: decay is already read-time state and
 GC-eligible lessons are below the live injection floor; archive+resurrection

@@ -592,6 +592,33 @@ def test_run_evolver_bg_happy_path():
     assert heartbeat._evolver_active is False
 
 
+def test_run_evolver_bg_reconciles_pending_audits(monkeypatch):
+    import heartbeat
+    heartbeat._evolver_active = True
+    repaired = MagicMock(items=(), unresolved=0)
+    with patch("audit_repair.reconcile_pending_audits", return_value=repaired) as repair, \
+         patch("evolver.run_evolver") as evolver:
+        _run_evolver_bg(dry_run=False, verbose=False)
+    repair.assert_called_once()
+    assert callable(repair.call_args.kwargs["adapter_factory"])
+    evolver.assert_called_once()
+    assert heartbeat._evolver_active is False
+
+
+def test_run_evolver_bg_logs_audit_sweep_crash(caplog):
+    import heartbeat
+    heartbeat._evolver_active = True
+    with caplog.at_level("ERROR", logger="maro.heartbeat"), \
+         patch("audit_repair.reconcile_pending_audits",
+               side_effect=RuntimeError("repair scan corrupt")), \
+         patch("evolver.run_evolver") as evolver:
+        _run_evolver_bg(dry_run=False, verbose=False)
+
+    assert "audit repair sweep crashed: repair scan corrupt" in caplog.text
+    evolver.assert_called_once()
+    assert heartbeat._evolver_active is False
+
+
 def test_run_inspector_bg_clears_flag():
     import heartbeat
     heartbeat._inspector_active = True

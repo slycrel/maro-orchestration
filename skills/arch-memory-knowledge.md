@@ -54,7 +54,19 @@ Closure judges the goal (handle.py, AFTER finalization)
     → returns updated / missing / write_failed (never use as a boolean)
       (SF-2, done ≠ achieved: True/False when judged, ABSENT key = unjudged;
        NOW lane records its self-verdict directly at record_outcome time)
+  → if a delivered stamp write fails, audit_policy quarantines that loop's
+    deferred learning and appends its exact idempotent patch to audit_repairs
+  → audit_repair later replays only that patch and named row's deferred
+    lesson/knowledge extraction (manual CLI or autonomy/evolver cadence)
 ```
+
+Audit repair never synthesizes a missing outcome or reconstructs skill
+crystallization: the latter needs ephemeral `StepOutcome` inputs that are not
+in the repair record. A workspace lock serializes paid extraction and a
+`surface_pending` metadata checkpoint makes derived-card refresh crash-safe.
+Multi-loop runs keep one record per loop; run-level quarantine clears only
+after every sibling repair completes. Automatic failures are bounded and leave
+manual quarantine visible rather than spending forever.
 
 **Verdict tri-state convention (SF-2 / data-02):** `goal_achieved` on an
 outcomes/lessons row is True/False only when a verdict exists; an unjudged

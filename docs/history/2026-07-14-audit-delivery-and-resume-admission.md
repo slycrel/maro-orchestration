@@ -33,9 +33,9 @@ and `maro resume`.
   earlier attempts in the same handle may still extract their own lessons.
 - On failure, active run metadata records `audit_incomplete`,
   `audit_repair_required`, all loop joins, and the exact intended verdict plus
-  stamp error. A future/manual reconciler can replay that idempotent patch;
-  until then the outcome row remains `deferred` and existing pending-verdict
-  policy excludes it from learning and success scoring.
+  stamp error. The reconciler described below replays that idempotent patch;
+  until it succeeds, the outcome row remains `deferred` and existing
+  pending-verdict policy excludes it from learning and success scoring.
 - If repair metadata also cannot persist, that second failure is included in
   the user-visible warning rather than silently claimed as recoverable.
 
@@ -75,6 +75,51 @@ live-original detection gap needs a run-lifetime lease shared with
 `run_agent_loop`; it remains explicit in BACKLOG rather than being hidden under
 this checkpoint.
 
+## Audit repair reconciler
+
+`maro-runs repair-audits [handle-or-loop] [--limit N]` consumes exact
+per-loop records from the canonical `audit_repairs` queue (`audit_repair`
+remains the latest-record compatibility view) under one workspace-wide
+nonblocking pidfile. The same
+finite sweep runs before the evolver on an autonomy-enabled heartbeat cadence
+(up to three records); there is no new daemon or timer. A busy manual/background
+sweep skips immediately. Lock-store failure is surfaced separately and never
+permits overlapping paid work.
+
+Each record is treated as untrusted persisted input. The reconciler validates
+kind, a required non-empty loop join, boolean/null verdict, non-empty source, and finite 0..1
+confidence before calling the typed idempotent stamp seam. Missing outcome rows,
+write failures, malformed records, and unavailable adapters remain quarantined
+with durable transition/failure status instead of being guessed or fabricated.
+Invalid/missing records stop automatic retry immediately; other failures stop
+after five automatic attempts and require an explicit targeted retry, preventing
+an unattended LLM-spend loop. An exhausted sibling keeps the run quarantined
+and sets the run-level status to `manual_required`; a later loop that repaired
+successfully still aligns the latest delivered verdict in run metadata and the
+sweep reports the unresolved manual state rather than false success. Fair
+scheduling uses persisted attempt time, not
+run-directory mtime, so failed metadata rewrites cannot starve other records.
+
+After verdict persistence, only the named outcome row resumes deferred lesson
+and knowledge extraction. The real cheap-tier adapter is created lazily, so a
+verdict-only repair makes no LLM call and an adapter failure stays retryable.
+Skill crystallization is deliberately not reconstructed: it depends on
+ephemeral `StepOutcome` values that the repair record does not durably retain.
+Inventing them would violate the audit's evidence boundary.
+
+Only finalized runs are eligible. Multiple failed loops in one run remain
+separate: completing one cannot clear a sibling's quarantine, and the latest
+delivered loop's repaired verdict is merged into run metadata before the
+classification card is refreshed. All metadata writers share the same locked
+RMW boundary, so a live writer cannot clobber the repair transition.
+
+Completion uses a crash-safe `surface_pending` checkpoint: first the ledger and
+learning are durable, then run metadata clears quarantine and marks derived
+surface work pending, then classification-only run-card refresh and static
+reports run, finally metadata records `completed`. A retry from that checkpoint
+does not replay verdict or learning. Classification refresh never re-runs
+trust-bearing run-curation maintenance such as skill promotion.
+
 ## Verification
 
 Fault-injection coverage includes typed false returns, exceptions, absent rows,
@@ -89,5 +134,9 @@ replay and handle-wide over-quarantine; both were fixed with source consumption
 and per-loop learning suppression. The final Skeptic pass verified both fixes
 and caught a consume-failure status snapshot ordering bug; JSON output and run
 metadata now share the fail-closed `incomplete` status, with regression coverage.
-Automated repair convergence remains an explicit backlog follow-up; the shipped
-owner decision is durable repair metadata, not a queue.
+The subsequent reconciler pass added fault coverage for idempotent repeat,
+learning/backend failure, no-adapter refusal, verdict failure, missing outcomes,
+cross-run metadata, crash recovery at `surface_pending`, targeted loop lookup,
+CLI status/exit behavior, malformed reconciliation history, live-run exclusion,
+poison-record fairness, multi-loop quarantine, run-metadata verdict alignment,
+and corrupt-card rebuilding.

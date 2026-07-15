@@ -32,6 +32,7 @@ CLI:
     python3 -m run_curation show <handle_id>
     python3 -m run_curation curate <handle_id>
     python3 -m run_curation prune <handle_id> [--yes]
+    python3 -m run_curation repair-audits [handle-or-loop] [--limit N]
 """
 from __future__ import annotations
 
@@ -1219,6 +1220,43 @@ def curate_run(handle_id: str, status: Optional[str] = None,
         return None
 
 
+def refresh_run_card_classification(
+    handle_id: str, *, run_dir: Optional[Path] = None,
+) -> Optional[dict]:
+    """Refresh pure curation fields without replaying maintenance.
+
+    Audit repair changes verdict health and deferred lessons, both consumed by
+    curation (classification and decision priors). Rebuild all pure curators,
+    then merge over the existing card so maintenance-only promotion state and
+    other extensions survive. Trust-bearing maintenance never re-runs.
+    """
+    rd, meta = _resolve_run(handle_id, None, run_dir)
+    if rd is None:
+        return None
+    rebuilt = _build_run_card(handle_id, rd, meta)
+    card_path = rd / "run_card.json"
+    if not card_path.is_file():
+        _write_run_card(rd, rebuilt)
+        return rebuilt
+
+    from file_lock import locked_rmw
+    refreshed = {"card": None}
+
+    def _merge(old: str) -> str:
+        try:
+            card = json.loads(old)
+        except (ValueError, TypeError):
+            card = {}
+        if not isinstance(card, dict):
+            card = {}
+        card.update(deepcopy(rebuilt))
+        refreshed["card"] = card
+        return json.dumps(card, indent=2)
+
+    locked_rmw(card_path, _merge)
+    return refreshed["card"]
+
+
 # --- user-facing surface (visible + prunable) ------------------------------
 
 def list_runs(limit: int = 50) -> List[dict]:
@@ -1372,7 +1410,8 @@ def mark_skill_candidate_consumed(handle_id: str) -> bool:
 
 def main(argv=None):
     import argparse
-    ap = argparse.ArgumentParser(description="Curate/list/prune recorded runs")
+    ap = argparse.ArgumentParser(
+        description="Curate, inspect, prune, or repair recorded runs")
     sub = ap.add_subparsers(dest="cmd", required=True)
     pl = sub.add_parser("list"); pl.add_argument("--limit", type=int, default=50)
     ps = sub.add_parser("show"); ps.add_argument("handle_id")
@@ -1380,6 +1419,13 @@ def main(argv=None):
     pr = sub.add_parser("result"); pr.add_argument("handle_id")
     pc = sub.add_parser("curate"); pc.add_argument("handle_id")
     pp = sub.add_parser("prune"); pp.add_argument("handle_id"); pp.add_argument("--yes", action="store_true")
+    pa = sub.add_parser(
+        "repair-audits",
+        help="retry quarantined verdict audits and their deferred learning",
+    )
+    pa.add_argument("handle_ref", nargs="?", default="")
+    pa.add_argument("--limit", type=int, default=10)
+    pa.add_argument("--json", action="store_true")
     args = ap.parse_args(argv)
 
     if args.cmd == "list":
@@ -1419,6 +1465,33 @@ def main(argv=None):
             print("refusing to prune without --yes")
             return 1
         print("pruned" if prune_run(args.handle_id) else "not found")
+    elif args.cmd == "repair-audits":
+        from audit_repair import reconcile_pending_audits
+
+        def _adapter_factory():
+            from llm import MODEL_CHEAP, build_adapter
+            return build_adapter(model=MODEL_CHEAP)
+
+        repaired = reconcile_pending_audits(
+            handle_ref=args.handle_ref,
+            limit=max(1, args.limit),
+            adapter_factory=_adapter_factory,
+        )
+        payload = repaired.to_dict()
+        if args.json:
+            print(json.dumps(payload, indent=2))
+        else:
+            print(
+                f"audit repair: {payload['status']} "
+                f"repaired={payload['repaired']} unresolved={payload['unresolved']}"
+            )
+            for item in repaired.items:
+                detail = f" — {item.detail}" if item.detail else ""
+                print(f"  {item.handle_id} {item.loop_id}: {item.status}{detail}")
+        if repaired.status in ("busy", "unavailable"):
+            return 2
+        if repaired.status == "not_found" or repaired.unresolved:
+            return 1
     return 0
 
 

@@ -8,6 +8,42 @@ Last split: 2026-04-16 (session 34).
 
 ---
 
+### Audit repair reconciler — SHIPPED (2026-07-14)
+
+`audit_repair_required` is now a finite durable workflow rather than a warning
+with no consumer. `maro-runs repair-audits [handle-or-loop]` and the existing
+autonomy/evolver cadence replay exact validated per-loop outcome-verdict
+patches, retry only each named row's deferred lesson/knowledge extraction with
+a real cheap-tier adapter, refresh classification/report surfaces, and clear
+the quarantine only after every sibling loop converges. A workspace-wide
+nonblocking pidfile prevents duplicate paid extraction; all metadata writers
+share locked RMW. `surface_pending` makes crashes after ledger/learning writes
+resume without replaying either. Fair scheduling plus automatic-failure caps
+prevent poison records and unbounded spend. Malformed/cross-run records remain
+quarantined under an explicit `manual_required` status; repaired latest-loop
+metadata is still surfaced without falsely releasing that sibling quarantine.
+Missing outcome rows are never fabricated.
+Skill crystallization is not replayed because its ephemeral `StepOutcome` input
+is not durably recoverable.
+Evidence: `docs/history/2026-07-14-audit-delivery-and-resume-admission.md`.
+
+### "Count the files" closure scope — CONTRACT SHIPPED, POSTURE DECIDED (2026-07-14)
+
+The original ambiguous goal produced two defensible counts (top-level 45,
+recursive 80), while both closure passes claimed a uniquely verified answer.
+ResolvedIntent now requires quantitative deliverables to state a measurement
+boundary, makes the director-proxy commitment binding for planning, and feeds
+the identical commitment to closure-plan and closure-verdict calls. Regression
+coverage pins all three handoffs. Activation is also decided rather than left
+as a phantom blocker: the audited runtime box opted into `scope_generation`
+with injection; fresh installs and this currently unconfigured M1 remain OFF
+because it adds an LLM call. Therefore a default install can still encounter an ambiguous quantitative goal
+without this extra contract; that is an explicit cost posture, not a claim of
+global prevention. A narrower automatic heuristic is deferred until evidence
+supports one—no count-goal regex and no silent global spend change.
+
+---
+
 ### EXT-AUDIT-2. Unify verdict-persistence policy across delivered and escalated attempts — SHIPPED (2026-07-14)
 
 The closure-rejection boundary already had an explicit absent/update-failed

@@ -68,6 +68,18 @@ Per-move cutover stays Jeremy's call (this makes the evidence standing, not the
 cutover automatic). Enabling adjudication on the box is a spend decision (the one
 remaining owner call) — left OFF pending Jeremy.
 
+Current pass (2026-07-14, twenty-fourth): audit-incomplete delivery now
+converges through an idempotent, crash-resumable reconciler. A manual
+`maro-runs repair-audits [handle-or-loop]` surface and the existing
+autonomy/evolver cadence replay exact per-loop persisted verdicts, finalize
+only each named row's deferred lesson/knowledge extraction, then refresh
+derived run surfaces and clear quarantine after sibling loops converge. One
+workspace lock prevents overlapping paid extraction; stable ordering and
+failure caps prevent starvation and unattended spend. The same truth pass
+corrected the live Manti, Phase 65, and
+count-files records; shipped items moved to BACKLOG_DONE rather than remaining
+as misleading open work.
+
 ---
 
 ## Actionable Stack
@@ -381,15 +393,6 @@ Jeremy's "document if large" instruction):
   admission), not a local CLI lock extension. Found by the 2026-07-14
   adversarial follow-up; keep separate from the shipped resume-vs-resume fix.
 
-- [ ] **Automate convergence for `audit_repair_required` metadata.** The
-  approved/shipped policy retains the exact idempotent verdict patch, keeps the
-  outcome row quarantined, and warns the owner; no background or CLI reconciler
-  consumes that record yet. A future repair command/sweep should reapply the
-  verdict, finalize only the repaired row's deferred learning, clear the audit
-  flags, and remain safe under repeat/crash. This is intentionally recorded as
-  follow-on automation rather than falsely expanding the approved “persist
-  repair metadata when possible” decision into an unreviewed queue.
-
 ### C4-BOX. Container executor — box-side real-goal burn-in (2026-07-13, Jeremy runs on the runtime box)
 
 The container **mechanics** are burned in and green on the dev Mac (Docker
@@ -615,9 +618,8 @@ crowd-sourced or not)."
   list" Jeremy asked for above. Found and fixed a real gap in the
   process: `changelog_digest` existed only in the live workspace and had
   never actually shipped to fresh installs.
-- [ ] **Manti follow-ups (2026-07-10, Jeremy adjudicated the NOW answer
-  "an abject failure... Siri for about 15 years"; decreed NO new errand
-  lane):**
+- [ ] **Manti cost-envelope residual (routing, answer quality, cuts-first,
+  and boot-tax mechanics shipped; Jeremy decreed NO new errand lane):**
   - **NOW self-verdict must catch non-answers:** "the goal asked *where*,
     the answer contains no *where*" → not-achieved. The model's own "I
     don't have real-time access" admission is the cheapest signal. Today
@@ -667,10 +669,13 @@ crowd-sourced or not)."
     evidence attachment (2830f48 — the run was false-negatived by a
     literal `grep 'Station Name'` against a `| Rank | Station |` header)
     and the ladder latency breaker (4957448, validate.local_max_latency_ms).
-    Clean re-run (fresh project `manti-clean-rerun`, no artifact reuse)
-    in flight same evening — pre-breaker code, so its envelope still
-    carries the ladder tax; treat it as clean-cost baseline for plan
-    shape, and the NEXT run as the breaker A/B.
+    **Clean post-fix Run 3 completed 2026-07-11 (`5126986b`):** 6 steps,
+    16m43s, $1.52, status done; its own closure reported 0.95, 5/5 checks,
+    and zero gaps. This closes the stale “in flight” envelope record. Evidence
+    attribution stays separate: Run 2 established content quality, Run 3 the
+    post-fix cost/time envelope, and Run 4 (2026-07-12) the routing fix. The
+    promised ~1–3 min/cents envelope remains open. Canonical measurements live
+    in `docs/CAPABILITIES.md`.
   - **Micro-step boot tax (next envelope lever, found in 8177541b):**
     10 of 11 steps averaged ~35s each and several were read-only
     micro-steps ("Read artifacts/source-log.txt...") — each step pays a
@@ -1023,8 +1028,8 @@ Direction, not design. Doors already built when this gets a session:
   still produced, nothing ingested. Cheap when wanted.
 - **The scanning/auto-upgrade half** is the verify→learn arc's
   expectation→verdict→demote lifecycle pointed at learned artifacts —
-  VERIFY_LEARN_ARC.md V2 (cadence verdicts + auto-revert, SHIPPED
-  2026-07-14) and V3 (graduation auto-verify, next) are the seed
+  VERIFY_LEARN_ARC.md V2 (cadence verdicts + auto-revert) and V3
+  (graduation class-specific auto-verify), both SHIPPED 2026-07-14, are the seed
   machinery; the virus-scanner
   analogy's "constant maintenance" is exactly why it must ride existing
   cadence hooks, never a daemon.
@@ -1397,13 +1402,18 @@ looking for an AFK-friendly chore. Principles in `docs/CODING_NOTES.md`.
   wait for heartbeat signal to tell us *which* steps actually need this
   before building.
 
-### Phase 65 — Constraint/Premise Orchestration (MVE implemented, dormant)
+### Phase 65 — Constraint/Premise Orchestration (MVE live here; deeper expansion deferred)
 
-See `docs/CONSTRAINT_ORCHESTRATION_DESIGN.md` + `docs/CONSTRAINT_ORCHESTRATION_REVIEW.md`. **Status 2026-07-04:** the MVE shipped — `scope.py` inversion behind `scope_generation` / `scope_ab_skip` config flags, both default OFF (handle.py), PAUSED by Jeremy 2026-04-23. Items below are the review's sharp findings; three of the original blockers are resolved by how the MVE shipped, the rest stay open for any expansion beyond the dormant MVE.
+See `docs/CONSTRAINT_ORCHESTRATION_DESIGN.md` + `docs/CONSTRAINT_ORCHESTRATION_REVIEW.md`. **Current truth 2026-07-14:** the MVE shipped behind `scope_generation` (fresh-install default OFF because it adds an LLM call). The runtime box audited in July explicitly opted in and injected ResolvedIntent from 2026-07-09; this M1 dev host currently has no Maro config and therefore remains OFF. The 2026-04-22 six-run A/B's reliable signal was plan compression, and the old runtime control-only configuration was corrected 2026-07-09. `scope_ab_skip` remains only as an experiment control and should be unset in real configs. Items below are the still-open design questions for expansion beyond the single-persona MVE.
 
 - [x] ~~BLOCKER: Autonomous-path behavior.~~ Resolved as shipped: no gate — scope output is logged and used as planner context, exactly the "log for post-hoc review, continue, no gate" default this blocker recommended.
-- [x] ~~BLOCKER: A/B mechanism.~~ Resolved as shipped: `scope_ab_skip` flag is the A/B capability (run goals both ways). Note: capability exists; the actual A/B measurement has not been run.
-- [ ] **BLOCKER: Cost ceiling.** Largely covered since: per-run + daily budget gates shipped 2026-07-01 (`budget.per_run_usd` / `budget.daily_usd`). Residual question is only whether scope-generation calls need their own sub-budget; probably not — verify before expanding Phase 65.
+- [x] ~~BLOCKER: A/B mechanism.~~ Resolved as a mechanism and actually run:
+  the 2026-04-22 A/B used 3 inject + 3 control goals. Its reliable primary
+  signal was plan compression (8 steps versus 15–40). The apparent 3/3 versus
+  1/3 clean-run gap was confounded by recovery bugs in two long control plans,
+  so closure-quality improvement remains under-tested and is not claimed here.
+  `scope_ab_skip` survives only to reproduce a control arm.
+- [x] ~~BLOCKER: Cost ceiling.~~ Resolved for the MVE by the per-run + daily budget gates shipped 2026-07-01 (`budget.per_run_usd` / `budget.daily_usd`). Reconsider a scope-specific sub-budget only if Phase 65 expands into multiple calls/personas; it is not a live blocker today.
 - [ ] **Gate heuristic.** Design's "AGENDA goals above N words" is wrong (short goals often benefit most, long ones often don't). Needs an actual judgment signal — possibly complexity classifier, or "use for goals with ≥3 deliverables."
 - [x] ~~Triad vs. single persona.~~ Resolved as shipped: single persona, per the review's recommendation. Triad remains unvalidated and should stay out unless ablation shows different constraint lines (next bullet).
 - [ ] **Persona content vs. costumes.** Design assumes personas produce genuinely different perspectives. Current `persona.py` is largely system-prompt overrides + skeptic modifier. Validate that PM/engineer/architect personas *actually* draw different inversion lines (not just prompt flavor) before investing in triad.
@@ -1535,28 +1545,6 @@ rather than fixed with a fragile heuristic:
   proof. This residual is hardware-gated: choose a Linux candidate, replay with
   `scripts/validator-bakeoff.py`, and require zero unsafe decisive false-passes
   plus warm latency under the configured breaker before enabling it.
-
-### "Count the files" closure scope
-
-- [ ] **"Count the files" closure blessed two different answers** — same goal,
-  loop 1 counted 45 (docs/ top-level), gate-escalated loop 2 counted 80
-  (recursive); *both* closure verdicts called their count "correct and
-  verified". Ground truth: both defensible readings of an ambiguous goal —
-  but closure verification inherits the executor's interpretation instead of
-  pinning one. Resolved-intent/scope is the existing seam that should pin
-  countable deliverables ("N = recursive count") before execution.
-  - **2026-07-14 partial fix:** resolved-intent now requires quantitative
-    deliverables to state their measurement boundary, renders any
-    director-proxy commitment as a binding goal definition for the planner,
-    and supplies the same commitment to both closure-plan and closure-verdict
-    calls. Regression coverage proves the interpretation survives all three
-    handoffs instead of becoming audit-only metadata.
-  - **Remaining activation decision:** `scope_generation` is deliberately
-    default-off because it adds an LLM call to every agenda run. The contract
-    is fixed when that experiment is active; preventing the original incident
-    on default configuration still needs either operator approval to enable it
-    or evidence for a narrower activation rule. Do not hide that spend change
-    behind a count-goal regex.
 
 ### Benchmark/eval mission isolation — DONE 2026-07-14 → BACKLOG_DONE
 

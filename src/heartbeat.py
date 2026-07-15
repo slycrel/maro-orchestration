@@ -819,6 +819,32 @@ def _run_evolver_bg(*, dry_run: bool = False, verbose: bool = False,
     """Run evolver in background thread. Clears flag in finally."""
     global _evolver_active
     try:
+        if not dry_run:
+            try:
+                from audit_repair import reconcile_pending_audits
+                repair = reconcile_pending_audits(
+                    limit=3,
+                    adapter_factory=lambda: (
+                        build_adapter(model=MODEL_CHEAP)
+                        if build_adapter is not None else None
+                    ),
+                )
+                if repair.status == "unavailable" or repair.unresolved:
+                    log.error(
+                        "audit repair unresolved: status=%s unresolved=%d error=%s",
+                        repair.status, repair.unresolved, repair.error,
+                    )
+                if verbose and repair.items:
+                    print(
+                        f"[heartbeat] audit repair: "
+                        f"repaired={len(repair.items) - repair.unresolved} "
+                        f"unresolved={repair.unresolved}",
+                        file=sys.stderr,
+                    )
+            except Exception as exc:
+                log.exception("audit repair sweep crashed: %s", exc)
+                if verbose:
+                    print(f"[heartbeat] audit repair failed: {exc}", file=sys.stderr)
         from evolver import run_evolver
         run_evolver(dry_run=dry_run, verbose=verbose, notify=escalate, min_outcomes=5)
     except Exception as e:

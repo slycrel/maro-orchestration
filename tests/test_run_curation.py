@@ -17,7 +17,13 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 import runs
 from runs import create_run_dir, finalize_run, set_current_run_dir, record_llm_call
-from run_curation import curate_run, list_runs, prune_run, classify_outcome
+from run_curation import (
+    classify_outcome,
+    curate_run,
+    list_runs,
+    prune_run,
+    refresh_run_card_classification,
+)
 
 
 @pytest.fixture
@@ -123,6 +129,16 @@ def test_classify_audit_incomplete_never_as_success(workspace):
     assert card["audit_incomplete"] is True
     from outcome_policy import is_learnable_outcome
     assert is_learnable_outcome(card) is False
+
+
+def test_classification_refresh_rebuilds_corrupt_card(workspace):
+    rd = _finish("h0000bad", "g", "done", achieved=False)
+    (rd / "run_card.json").write_text("not json")
+
+    card = refresh_run_card_classification("h0000bad", run_dir=rd)
+
+    assert card["success_class"] == "done-not-achieved"
+    assert json.loads((rd / "run_card.json").read_text()) == card
 
 
 def test_classify_failed(workspace):
