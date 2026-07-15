@@ -30,10 +30,16 @@ Current pass (2026-07-14, twenty-third, `/goal` catch-up session): the
 owner-facing delivery-behavior decision from pass twenty-two is now made and
 shipped — EXT-AUDIT-2 archived to BACKLOG_DONE.md in full. R5 confirmed fully
 checked off and its header now says so, matching R2/R3/R4. VERIFY_LEARN_ARC
-V1 (expectation stamping) also shipped this session as the next-arc-after-1.0
-opener; see `docs/VERIFY_LEARN_ARC.md` and GOAL_BRAIN Decisions 2026-07-14.
-Nothing else in the Actionable Stack was both unblocked and ready without
-Jeremy's input.
+V1 (expectation stamping) shipped this session as the next-arc-after-1.0
+opener, and **V2 (cadence verdicts + auto-revert) shipped the same day** —
+`verify_applied_suggestions()` closes the VERIFY gap for evolver-applied
+suggestions (confirmed→calibrate, degraded-self→auto-revert,
+degraded-human→review queue, inconclusive→extend/park), trust policy §4 live
+via `verdict_trust()`, and a dead-on-production `recorded_at` window bug fixed
+en route; see `docs/VERIFY_LEARN_ARC.md` and GOAL_BRAIN Decisions 2026-07-14.
+Next queued arc item is V3 (graduation behavioral auto-verify + demote) or the
+navigator-side V4/V5 — neither Jeremy-gated. Nothing else in the Actionable
+Stack was both unblocked and ready without Jeremy's input.
 
 ---
 
@@ -966,8 +972,9 @@ Direction, not design. Doors already built when this gets a session:
   still produced, nothing ingested. Cheap when wanted.
 - **The scanning/auto-upgrade half** is the verify→learn arc's
   expectation→verdict→demote lifecycle pointed at learned artifacts —
-  VERIFY_LEARN_ARC.md V2 (cadence verdicts + auto-revert) and V3
-  (graduation auto-verify) are the seed machinery; the virus-scanner
+  VERIFY_LEARN_ARC.md V2 (cadence verdicts + auto-revert, SHIPPED
+  2026-07-14) and V3 (graduation auto-verify, next) are the seed
+  machinery; the virus-scanner
   analogy's "constant maintenance" is exactly why it must ride existing
   cadence hooks, never a daemon.
 - **Trust boundaries already on record:** imports arrive contested
@@ -1182,18 +1189,22 @@ folds into this decision (see docs/INDEX.md note).
   generically detectable — the two known record-level deleters are the
   ones fixed above, pinned by unit tests.
 
-- [ ] **Graduation proposals have no autonomous consumer; full behavioral
-  verification remains VERIFY_LEARN_ARC V1–V3.** Graduation writes pending
-  suggestions after the current evolver auto-apply loop, and later evolver
-  runs do not consume prior pending rows. The live workspace has no
-  `graduation:` suggestions, so there is no organic evidence that this path
-  has ever made a rule live. The 2026-07-14 precursor safely checks only rows
-  already marked applied and records manual authority; it does not prove
-  improvement, revert, or demote. Templates currently mix observations,
-  lesson-like prompt tweaks, and gated guardrails rather than one durable
-  standing-rule type, and prompt tweaks lack a true rollback target. Starting
-  the full V1 expectation → V2 verdict/authority → V3 revert/demotion arc is
-  an owner-level scope decision, not an incidental wiring change.
+- [ ] **Graduation proposals still have no autonomous consumer; graduation-
+  specific behavioral verification remains VERIFY_LEARN_ARC V3.** V1
+  (expectation stamping) and V2 (cadence verdicts + auto-revert) both SHIPPED
+  2026-07-14: `verify_applied_suggestions()` now renders a behavioral verdict
+  on any *applied* suggestion and confirms / auto-reverts / queues-for-review /
+  parks it, with the symmetric-authority policy and trust filtering live. What
+  remains open is the graduation-specific front half: graduation writes pending
+  suggestions after the evolver auto-apply loop, and later evolver runs do not
+  *apply* prior pending `graduation:` rows autonomously — so V2's verify path
+  never sees them. The live workspace still has no `graduation:` suggestions,
+  so there's no organic evidence this path has ever made a rule live. Templates
+  currently mix observations, lesson-like prompt tweaks, and gated guardrails
+  rather than one durable standing-rule type, and prompt tweaks lack a true
+  rollback target (V2 reverts config/gate rows cleanly; a prose prompt tweak
+  has no crisp revert target). V3 — graduation auto-apply + behavioral
+  auto-verify + demote — is the remaining owner-level scope decision.
 
 - [ ] **Design constraint, not a task: decay trust, never data.** Append-only
   evidence layer stays perfect (the computerization edge over human forgetting);

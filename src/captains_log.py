@@ -87,6 +87,12 @@ EVOLVER_REVERTED = "EVOLVER_REVERTED"
 # Post-apply verification (pytest after auto-apply, session 17 verify->learn).
 # Context: run_id, auto_applied, passed, summary, reverted.
 EVOLVER_VERIFY = "EVOLVER_VERIFY"
+# Behavioral cadence verdict on an applied change (VERIFY_LEARN_ARC V2): the
+# expected signal's before/after windows were compared and a terminal verdict
+# rendered. Distinct from EVOLVER_VERIFY (test-green) — this is "did behavior
+# actually improve". Context: suggestion_id, category, verdict, action,
+# stuck_rate_before, stuck_rate_after, n_after, applied_manually.
+EVOLVER_VERDICT = "EVOLVER_VERDICT"
 
 # Playbook (director's operational wisdom) maintenance: a line was appended to
 # a playbook section. Context: source, section.
@@ -188,7 +194,7 @@ EVENT_TYPES = {
     RULE_REFOUGHT, RULE_VERIFIED, LOG_ROTATED,
     EVOLVER_APPLIED, EVOLVER_GENERATED, EVOLVER_SKIPPED, GRADUATION_PROPOSED,
     GRADUATION_VERIFIED,
-    EVOLVER_REVERTED, EVOLVER_VERIFY, PLAYBOOK_UPDATED,
+    EVOLVER_REVERTED, EVOLVER_VERIFY, EVOLVER_VERDICT, PLAYBOOK_UPDATED,
     AUTO_RECOVERY, DIAGNOSIS, INPUT_MISMATCH,
     DECISION_RECORDED, METACOGNITIVE_DECISION,
     CUTS_DRAWN, BOUNDARY_EXPANDED,

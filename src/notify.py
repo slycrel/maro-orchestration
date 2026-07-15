@@ -49,8 +49,16 @@ log = logging.getLogger("notify")
 # goal keeps running) — docs/RECURSIVE_CHECKIN_DESIGN.md. Default-on for the
 # same away-from-keyboard reason: the user should get a chance to redirect or
 # stop a goal that's now several passes deep.
+# self_improvement_verdict: a V2 cadence verdict acted on an applied change
+# (VERIFY_LEARN_ARC §3). Two shapes, told apart by the `blocking` field:
+#   blocking=False → the system auto-reverted a degraded change it had applied
+#                    itself (FYI: it cleaned up its own mess).
+#   blocking=True  → a HUMAN-applied change degraded and was NOT auto-reverted
+#                    (authority asymmetry) — it sits in the review queue.
+# Default-on for the same away-from-keyboard reason as the other escalation
+# classes: a headless box's notify channel is the only surface the user sees.
 DEFAULT_EVENTS = ["run_completed", "escalation", "backend_actionable",
-                  "stranded_run", "recursion_checkin"]
+                  "stranded_run", "recursion_checkin", "self_improvement_verdict"]
 
 # The event types that are notify-worthy AND easy to miss with no
 # notify.command lane configured (run_completed already has a durable home
@@ -63,7 +71,7 @@ DEFAULT_EVENTS = ["run_completed", "escalation", "backend_actionable",
 # class; consumers tell it apart from a park-the-goal escalation by its
 # explicit `"blocking": False` payload field.
 ESCALATION_FILE_EVENTS = {"escalation", "backend_actionable", "stranded_run",
-                          "recursion_checkin"}
+                          "recursion_checkin", "self_improvement_verdict"}
 
 
 def _config_get(key: str, default):

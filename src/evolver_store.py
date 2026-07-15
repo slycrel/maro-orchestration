@@ -60,6 +60,21 @@ class Suggestion:
     # declared. Read-time interpretation (a class-neutral fallback pair, cadence
     # verdict rendering) is V2's job, not this field's — this is capture only.
     expected_signal: List[dict] = field(default_factory=list)
+    # VERIFY_LEARN_ARC V2: cadence-verdict lifecycle state, stamped by
+    # verify_applied_suggestions() at evolver cadence. All additive/empty-
+    # default so every pre-V2 row rehydrates unchanged.
+    #   verified_at      — ISO stamp when a TERMINAL verdict was rendered
+    #                      (confirmed / unverifiable / degraded). Empty = still
+    #                      pending; the cadence pass keeps re-examining it.
+    #   verify_verdict   — "confirmed" | "degraded" | "degraded_needs_review"
+    #                      | "unverifiable". The behavioral verdict, distinct
+    #                      from `applied` (a reverted row is applied=False AND
+    #                      verify_verdict="degraded").
+    #   verify_extensions— cadence passes that rendered inconclusive before a
+    #                      terminal verdict; parks as unverifiable past the cap.
+    verified_at: str = ""
+    verify_verdict: str = ""
+    verify_extensions: int = 0
 
     def to_dict(self) -> dict:
         return {
@@ -75,6 +90,9 @@ class Suggestion:
             "applied_at": self.applied_at,
             "applied_manually": self.applied_manually,
             "expected_signal": self.expected_signal,
+            "verified_at": self.verified_at,
+            "verify_verdict": self.verify_verdict,
+            "verify_extensions": self.verify_extensions,
         }
 
     @classmethod
@@ -773,6 +791,64 @@ def revert_suggestion(suggestion_id: str) -> dict:
 
     log.info("revert_suggestion id=%s category=%s: %s", suggestion_id, category, detail)
     return {"reverted": True, "category": category, "detail": detail}
+
+
+def stamp_verification(
+    suggestion_id: str,
+    *,
+    verdict: Optional[str] = None,
+    verified_at: Optional[str] = None,
+    extensions: Optional[int] = None,
+) -> bool:
+    """Durably record VERIFY_LEARN_ARC V2 cadence-verdict state on a suggestion.
+
+    Keyed-merge write under the lock (same discipline as apply_suggestion):
+    suggestions appended/updated by concurrent finalizations between read and
+    write are preserved. Only the fields explicitly passed are updated:
+
+        verdict     → verify_verdict (terminal label, or interim "" cleared)
+        verified_at → the terminal stamp; pass a truthy ISO string to mark the
+                      row TERMINAL (no longer re-examined). Leave None for an
+                      interim inconclusive re-check so the row stays pending.
+        extensions  → verify_extensions counter (absolute value, not a delta).
+
+    Never touches `applied` — a degraded row is reverted (applied=False) by
+    revert_suggestion; the verdict is a separate, orthogonal stamp. Returns
+    True if the row was found and rewritten.
+    """
+    p = _suggestions_path()
+    if not p.exists():
+        return False
+
+    found = {"hit": False}
+
+    def _merge(old: str) -> str:
+        out = []
+        for line in old.splitlines():
+            s = line.strip()
+            if not s:
+                continue
+            try:
+                d = json.loads(s)
+            except Exception:
+                out.append(s)
+                continue
+            if d.get("suggestion_id") == suggestion_id:
+                found["hit"] = True
+                if verdict is not None:
+                    d["verify_verdict"] = verdict
+                if verified_at is not None:
+                    d["verified_at"] = verified_at
+                if extensions is not None:
+                    d["verify_extensions"] = int(extensions)
+                out.append(json.dumps(d))
+            else:
+                out.append(s)
+        return "\n".join(out) + "\n" if out else ""
+
+    from file_lock import locked_rmw
+    locked_rmw(p, _merge)
+    return found["hit"]
 
 
 def _run_skill_test_gate(suggestion_dict: dict) -> Optional[dict]:

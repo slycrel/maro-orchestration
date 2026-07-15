@@ -52,6 +52,7 @@ from evolver_store import (
     load_suggestions, _save_suggestions, list_pending_suggestions,
     suggestion_is_applied,
     _apply_suggestion_action, apply_suggestion, revert_suggestion,
+    stamp_verification,
     _run_skill_test_gate, validate_skill_mutation, record_tiered_lesson, MemoryTier,
 )
 
@@ -66,6 +67,7 @@ from evolver_scans import (
     scan_canon_candidates,
     _record_suggestion_outcomes, scan_suggestion_outcomes,
     EvolverImpactRecord, scan_evolver_impact, format_impact_summary,
+    verify_applied_suggestions,
 )
 
 # Skill rewrite/synthesis/maintenance — extracted to skill_lifecycle.py.
@@ -825,29 +827,18 @@ def run_evolver(
     except Exception as _island_exc:
         log.debug("island cycle failed (non-fatal): %s", _island_exc)
 
-    # Longitudinal impact check: warn if any recently-applied suggestions show degraded verdict.
-    # Provides evidence for the verify→learn loop — not just "tests pass" but "behavior improved."
+    # VERIFY_LEARN_ARC V2: cadence verdicts + authority-aware auto-revert.
+    # The longitudinal impact check is no longer warn-only — applied changes
+    # now get the same lifecycle discipline lessons already have: an expectation
+    # at birth (V1), a verdict at cadence, and demotion (revert) when
+    # contradicted. Rides this cadence hook; no daemon. Confirmed changes feed
+    # confidence calibration; degraded self-applied changes are reverted; a
+    # human-applied change that degrades is surfaced, never overridden.
     if not dry_run:
         try:
-            _impact_limit = max(5, len(applied_ids) + 2)
-            _impact_records = scan_evolver_impact(lookback_hours=48, lookahead_hours=48, limit=_impact_limit)
-            _degraded = [r for r in _impact_records if r.verdict == "degraded"]
-            if _degraded:
-                log.warning(
-                    "evolver impact_check: %d suggestion(s) show DEGRADED stuck rate — "
-                    "consider reviewing or reverting: %s",
-                    len(_degraded),
-                    [r.suggestion_id for r in _degraded],
-                )
-                if verbose:
-                    for r in _degraded:
-                        print(
-                            f"[evolver] impact_check: degraded suggestion {r.suggestion_id} "
-                            f"({r.category}): stuck {r.stuck_rate_before:.0%}→{r.stuck_rate_after:.0%}",
-                            file=sys.stderr,
-                        )
-        except Exception as _impact_exc:
-            log.debug("evolver impact check failed (non-fatal): %s", _impact_exc)
+            verify_applied_suggestions(run_id, verbose=verbose)
+        except Exception as _verify_exc:
+            log.debug("evolver cadence verdict pass failed (non-fatal): %s", _verify_exc)
 
     return report
 
@@ -1027,6 +1018,14 @@ def main() -> int:
     impact_p.add_argument("--lookahead", type=int, default=24, help="Hours after apply event to sample (default 24)")
     impact_p.add_argument("--limit", type=int, default=10, help="Max apply events to analyze (default 10)")
 
+    # VERIFY_LEARN_ARC V2 cadence verdicts — inspect (dry-run) or run for real.
+    verify_p = subparsers.add_parser(
+        "verify",
+        help="Render cadence verdicts on applied changes (VERIFY_LEARN_ARC V2)")
+    verify_p.add_argument(
+        "--apply", action="store_true",
+        help="Actually stamp/revert/park (default is dry-run: report only)")
+
     args = parser.parse_args()
 
     if args.cmd == "impact":
@@ -1036,6 +1035,24 @@ def main() -> int:
             limit=args.limit,
         )
         print(format_impact_summary(records))
+        return 0
+
+    if args.cmd == "verify":
+        summary = verify_applied_suggestions(
+            "cli", dry_run=not args.apply, verbose=True)
+        if not summary.get("enabled", True):
+            print("Cadence verdicts disabled (evolver.verify_cadence_verdicts=false).")
+            return 0
+        mode = "APPLIED" if args.apply else "dry-run (use --apply to act)"
+        print(
+            f"Cadence verdicts [{mode}]: "
+            f"{summary.get('confirmed', 0)} confirmed, "
+            f"{summary.get('reverted', 0)} reverted, "
+            f"{summary.get('review_queued', 0)} review-queued, "
+            f"{summary.get('unverifiable', 0)} unverifiable, "
+            f"{summary.get('pending', 0)} pending "
+            f"(of {summary.get('candidates', 0)} applied-unverified)."
+        )
         return 0
 
     if args.cmd == "list" or args.cmd is None:

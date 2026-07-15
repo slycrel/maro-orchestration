@@ -34,7 +34,17 @@ from evolver import (
     scan_evolver_impact,
     format_impact_summary,
     EvolverImpactRecord,
+    verify_applied_suggestions,
+    stamp_verification,
 )
+from memory_ledger import (
+    verdict_trust,
+    VERDICT_TRUST_FULL,
+    VERDICT_TRUST_DIRECTIONAL,
+    VERDICT_TRUST_NEUTRAL,
+    VERDICT_TRUST_EXCLUDED,
+)
+from evolver_scans import _outcome_ts, _verify_counts
 
 
 # ---------------------------------------------------------------------------
@@ -3178,3 +3188,281 @@ class TestEvolverCadenceTick:
         (tmp_path / "evolver_cadence.json").write_text("not json{{{")
         assert self._tick(tmp_path, monkeypatch, 3) is False
         assert self._count(tmp_path) == 1
+
+
+# ---------------------------------------------------------------------------
+# VERIFY_LEARN_ARC §4 — verdict trust policy
+# ---------------------------------------------------------------------------
+
+class _FO:
+    """Fake outcome — dataclass-shaped, carries the fields the trust policy reads."""
+    def __init__(self, recorded_at="2026-05-01T11:00:00+00:00", status="done",
+                 goal_achieved=None, goal_verdict_source="",
+                 goal_verdict_confidence=None):
+        self.recorded_at = recorded_at
+        self.status = status
+        self.goal_achieved = goal_achieved
+        self.goal_verdict_source = goal_verdict_source
+        self.goal_verdict_confidence = goal_verdict_confidence
+
+
+class TestVerdictTrust:
+    def test_unjudged_is_neutral(self):
+        assert verdict_trust(_FO(goal_achieved=None)) == VERDICT_TRUST_NEUTRAL
+
+    def test_judged_high_confidence_is_full(self):
+        o = _FO(goal_achieved=False, goal_verdict_source="closure",
+                goal_verdict_confidence=0.9)
+        assert verdict_trust(o) == VERDICT_TRUST_FULL
+
+    def test_judged_low_confidence_is_directional(self):
+        o = _FO(goal_achieved=True, goal_verdict_source="closure",
+                goal_verdict_confidence=0.5)
+        assert verdict_trust(o) == VERDICT_TRUST_DIRECTIONAL
+
+    def test_closure_unverifiable_is_excluded(self):
+        o = _FO(goal_achieved=None, goal_verdict_source="closure_unverifiable")
+        assert verdict_trust(o) == VERDICT_TRUST_EXCLUDED
+
+    def test_judged_without_confidence_is_full(self):
+        # Deterministic provenance guard / NOW self-verdict carry no confidence
+        # but are authoritative — not directional.
+        o = _FO(goal_achieved=False, goal_verdict_source="provenance")
+        assert verdict_trust(o) == VERDICT_TRUST_FULL
+
+    def test_accepts_dict_rows(self):
+        assert verdict_trust({"status": "done"}) == VERDICT_TRUST_NEUTRAL
+        assert verdict_trust(
+            {"goal_achieved": False, "goal_verdict_source": "closure_unverifiable"}
+        ) == VERDICT_TRUST_EXCLUDED
+
+
+class TestVerifyCounts:
+    def test_directional_and_excluded_dropped_from_denominator(self):
+        outcomes = [
+            _FO(status="done"),                                              # neutral, pass
+            _FO(status="stuck"),                                             # neutral, fail
+            _FO(goal_achieved=False, goal_verdict_source="closure",
+                goal_verdict_confidence=0.9),                               # full, fail
+            _FO(goal_achieved=True, goal_verdict_source="closure",
+                goal_verdict_confidence=0.5),                               # directional -> dropped
+            _FO(goal_achieved=None, goal_verdict_source="closure_unverifiable"),  # excluded -> dropped
+        ]
+        counted, failing = _verify_counts(outcomes)
+        assert counted == 3           # two neutral + one full; directional+excluded dropped
+        assert failing == 2           # the stuck neutral + the judged-False full
+
+    def test_outcome_ts_prefers_recorded_at(self):
+        # The bug that made the warn path dead: real Outcomes carry recorded_at,
+        # not created_at. _outcome_ts must read recorded_at first.
+        o = _FO(recorded_at="2026-05-01T11:00:00+00:00")
+        assert _outcome_ts(o) is not None
+        # created_at-only shape (test fakes, legacy) still parses.
+        class OldShape:
+            created_at = "2026-05-01T11:00:00+00:00"
+        assert _outcome_ts(OldShape()) is not None
+
+
+# ---------------------------------------------------------------------------
+# VERIFY_LEARN_ARC V2 — cadence verdicts + authority-aware auto-revert
+# ---------------------------------------------------------------------------
+
+_T_APPLY = "2026-05-01T12:00:00+00:00"
+
+
+def _mk_sug(sid, *, applied=True, applied_manually=False, applied_at=_T_APPLY,
+            category="prompt_tweak", verified_at="", verify_extensions=0):
+    return Suggestion(
+        suggestion_id=sid, category=category, target="all",
+        suggestion="tweak text", failure_pattern="x", confidence=0.9,
+        outcomes_analyzed=10, applied=applied, applied_at=applied_at,
+        applied_manually=applied_manually, verified_at=verified_at,
+        verify_extensions=verify_extensions,
+    )
+
+
+def _write_suggestions(*sugs):
+    from orch_items import memory_dir
+    p = memory_dir() / "suggestions.jsonl"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text("\n".join(json.dumps(s.to_dict()) for s in sugs) + "\n",
+                 encoding="utf-8")
+    return p
+
+
+def _write_change_log(sid, category="prompt_tweak", before_state=None):
+    """A change_log entry so revert_suggestion can find before_state."""
+    from orch_items import memory_dir
+    p = memory_dir() / "change_log.jsonl"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with p.open("a", encoding="utf-8") as f:
+        f.write(json.dumps({
+            "ts": "2026-05-01T12:00:00+00:00",
+            "suggestion_id": sid, "category": category, "target": "all",
+            "confidence": 0.9, "suggestion_text": "tweak text",
+            "before_state": before_state or {"type": "lesson_add"},
+        }) + "\n")
+
+
+def _read_sug(sid):
+    from orch_items import memory_dir
+    p = memory_dir() / "suggestions.jsonl"
+    for line in p.read_text(encoding="utf-8").splitlines():
+        d = json.loads(line)
+        if d.get("suggestion_id") == sid:
+            return d
+    return None
+
+
+def _read_outcome_calibration(sid):
+    from orch_items import memory_dir
+    p = memory_dir() / "suggestion_outcomes.jsonl"
+    if not p.exists():
+        return []
+    rows = [json.loads(l) for l in p.read_text(encoding="utf-8").splitlines() if l.strip()]
+    return [r for r in rows if r.get("suggestion_id") == sid]
+
+
+def _read_escalations():
+    from config import workspace_root
+    p = workspace_root() / "output" / "escalations.jsonl"
+    if not p.exists():
+        return []
+    return [json.loads(l) for l in p.read_text(encoding="utf-8").splitlines() if l.strip()]
+
+
+def _outcomes(before_stuck, after_stuck, *, n=10):
+    """n before + n after outcomes; `*_stuck` of each window are stuck."""
+    out = []
+    for i in range(n):
+        out.append(_FO(recorded_at=f"2026-05-01T11:{i:02d}:00+00:00",
+                       status="stuck" if i < before_stuck else "done"))
+    for i in range(n):
+        out.append(_FO(recorded_at=f"2026-05-01T13:{i:02d}:00+00:00",
+                       status="stuck" if i < after_stuck else "done"))
+    return out
+
+
+class TestVerifyAppliedSuggestions:
+    def test_confirmed_stamps_and_calibrates(self):
+        _write_suggestions(_mk_sug("s-ok"))
+        # stuck-rate 60% -> 0% : moved the expected direction (down) -> confirmed
+        outs = _outcomes(before_stuck=6, after_stuck=0)
+        with patch("evolver_scans.load_outcomes", return_value=outs):
+            summary = verify_applied_suggestions("run1", min_post_apply=10)
+        assert summary["confirmed"] == 1
+        row = _read_sug("s-ok")
+        assert row["verify_verdict"] == "confirmed"
+        assert row["verified_at"]           # terminal stamp
+        assert row["applied"] is True       # confirmed changes stay applied
+        cal = _read_outcome_calibration("s-ok")
+        assert cal and cal[0]["verified"] is True
+
+    def test_degraded_self_applied_auto_reverts(self):
+        _write_suggestions(_mk_sug("s-bad", applied_manually=False))
+        _write_change_log("s-bad")
+        # stuck-rate 0% -> 80% : rose past threshold -> degraded
+        outs = _outcomes(before_stuck=0, after_stuck=8)
+        with patch("evolver_scans.load_outcomes", return_value=outs):
+            summary = verify_applied_suggestions("run2", min_post_apply=10)
+        assert summary["reverted"] == 1
+        assert summary["review_queued"] == 0
+        row = _read_sug("s-bad")
+        assert row["applied"] is False              # auto-reverted
+        assert row["verify_verdict"] == "degraded"
+        assert row["verified_at"]
+        cal = _read_outcome_calibration("s-bad")
+        assert cal and cal[0]["verified"] is False
+        esc = [e for e in _read_escalations()
+               if e.get("event_type") == "self_improvement_verdict"]
+        assert esc and esc[-1]["action"] == "reverted"
+        assert esc[-1]["blocking"] is False         # self-heal, non-blocking
+
+    def test_degraded_human_applied_is_review_queued_not_reverted(self):
+        _write_suggestions(_mk_sug("s-human", applied_manually=True))
+        _write_change_log("s-human")
+        outs = _outcomes(before_stuck=0, after_stuck=8)
+        with patch("evolver_scans.load_outcomes", return_value=outs):
+            summary = verify_applied_suggestions("run3", min_post_apply=10)
+        assert summary["review_queued"] == 1
+        assert summary["reverted"] == 0
+        row = _read_sug("s-human")
+        assert row["applied"] is True                       # NEVER auto-reverted
+        assert row["verify_verdict"] == "degraded_needs_review"
+        assert row["verified_at"]
+        esc = [e for e in _read_escalations()
+               if e.get("event_type") == "self_improvement_verdict"]
+        assert esc and esc[-1]["action"] == "review_required"
+        assert esc[-1]["blocking"] is True                  # human must decide
+
+    def test_inconclusive_extends_then_parks_unverifiable(self):
+        _write_suggestions(_mk_sug("s-flat"))
+        # Only 2 post-apply outcomes -> below min_post_apply=10 -> inconclusive
+        outs = _outcomes(before_stuck=3, after_stuck=1, n=2)
+        with patch("evolver_scans.load_outcomes", return_value=outs):
+            s1 = verify_applied_suggestions("r", min_post_apply=10, max_extensions=3)
+            assert s1["pending"] == 1
+            assert _read_sug("s-flat")["verify_extensions"] == 1
+            assert _read_sug("s-flat")["verified_at"] == ""   # still pending
+            s2 = verify_applied_suggestions("r", min_post_apply=10, max_extensions=3)
+            assert s2["pending"] == 1
+            assert _read_sug("s-flat")["verify_extensions"] == 2
+            s3 = verify_applied_suggestions("r", min_post_apply=10, max_extensions=3)
+        assert s3["unverifiable"] == 1
+        row = _read_sug("s-flat")
+        assert row["verify_verdict"] == "unverifiable"
+        assert row["verified_at"]                             # terminal
+        assert row["verify_extensions"] == 3
+
+    def test_already_verified_rows_are_skipped(self):
+        _write_suggestions(_mk_sug("s-done", verified_at="2026-05-01T12:30:00+00:00"))
+        outs = _outcomes(before_stuck=6, after_stuck=0)
+        with patch("evolver_scans.load_outcomes", return_value=outs):
+            summary = verify_applied_suggestions("r", min_post_apply=10)
+        assert summary["candidates"] == 0
+
+    def test_unstamped_applied_row_is_skipped_not_parked(self):
+        _write_suggestions(_mk_sug("s-legacy", applied_at=""))
+        outs = _outcomes(before_stuck=6, after_stuck=0)
+        with patch("evolver_scans.load_outcomes", return_value=outs):
+            summary = verify_applied_suggestions("r", min_post_apply=10)
+        assert summary["skipped_no_stamp"] == 1
+        assert _read_sug("s-legacy")["verified_at"] == ""    # untouched
+
+    def test_dry_run_writes_nothing(self):
+        _write_suggestions(_mk_sug("s-dry"))
+        outs = _outcomes(before_stuck=6, after_stuck=0)
+        with patch("evolver_scans.load_outcomes", return_value=outs):
+            summary = verify_applied_suggestions("r", min_post_apply=10, dry_run=True)
+        assert summary["confirmed"] == 1                     # would confirm
+        row = _read_sug("s-dry")
+        assert row["verified_at"] == ""                      # but nothing written
+        assert row["verify_verdict"] == ""
+
+    def test_disabled_by_config_skips(self, monkeypatch):
+        import config
+        real_get = config.get
+        monkeypatch.setattr(
+            config, "get",
+            lambda k, d=None: False if k == "evolver.verify_cadence_verdicts" else real_get(k, d),
+        )
+        _write_suggestions(_mk_sug("s-x"))
+        with patch("evolver_scans.load_outcomes", return_value=_outcomes(6, 0)):
+            summary = verify_applied_suggestions("r")
+        assert summary["enabled"] is False
+
+    def test_excluded_verdicts_do_not_count_as_post_apply_evidence(self):
+        """A window of unverifiable (verifier-own-failure) outcomes must not
+        reach the min_post_apply bar — it should stay inconclusive, never
+        confirm a change off a verifier-cwd-bug stream."""
+        _write_suggestions(_mk_sug("s-cwd"))
+        outs = [_FO(recorded_at=f"2026-05-01T11:{i:02d}:00+00:00", status="done")
+                for i in range(10)]
+        # 12 post-apply outcomes, ALL excluded (closure_unverifiable)
+        outs += [_FO(recorded_at=f"2026-05-01T13:{i:02d}:00+00:00", status="done",
+                     goal_verdict_source="closure_unverifiable")
+                 for i in range(12)]
+        with patch("evolver_scans.load_outcomes", return_value=outs):
+            summary = verify_applied_suggestions("r", min_post_apply=10, max_extensions=3)
+        assert summary["confirmed"] == 0
+        assert summary["pending"] == 1        # inconclusive: no trusted post-apply data

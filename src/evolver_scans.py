@@ -13,13 +13,23 @@ from __future__ import annotations
 
 import json
 import logging
+import math
+import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from llm_parse import extract_json, safe_float, safe_list, content_or_empty
 
-from evolver_store import Suggestion, load_suggestions
+from evolver_store import (
+    Suggestion, load_suggestions, revert_suggestion, stamp_verification,
+)
+from memory_ledger import (
+    verdict_trust,
+    VERDICT_TRUST_FULL,
+    VERDICT_TRUST_DIRECTIONAL,
+    VERDICT_TRUST_EXCLUDED,
+)
 
 log = logging.getLogger("maro.evolver")
 
@@ -763,6 +773,55 @@ class EvolverImpactRecord:
     verdict: str                  # "improved" | "degraded" | "neutral" | "insufficient_data"
 
 
+def _outcome_ts(o: Any) -> Optional[datetime]:
+    """Parsed recorded timestamp for an outcome (dataclass row OR dict).
+
+    Real ``Outcome`` objects carry ``recorded_at``; the impact tests and some
+    synthetic shapes use ``created_at`` / ``timestamp``. Prefer the real field
+    first — reading only ``created_at``/``timestamp`` silently excluded every
+    production outcome from every window, so the longitudinal impact/warn path
+    was dead on real data until this was fixed (VERIFY_LEARN_ARC V2, 2026-07-14).
+    """
+    if isinstance(o, dict):
+        ts = o.get("recorded_at") or o.get("created_at") or o.get("timestamp") or ""
+    else:
+        ts = (getattr(o, "recorded_at", None) or getattr(o, "created_at", None)
+              or getattr(o, "timestamp", None) or "")
+    if not ts:
+        return None
+    try:
+        return datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+
+def _verify_counts(outcomes: List[Any]) -> "tuple[int, int]":
+    """Trust-filtered ``(counted, failing)`` for a window (VERIFY_LEARN_ARC §4).
+
+    Directional (low-confidence) and excluded (unverifiable / env-capped)
+    verdicts are dropped from BOTH the denominator and the failing tally — a
+    verifier's own failure must never read as a behavioral regression. A
+    counted outcome is failing when it stuck, or when a full-trust verdict
+    judged the goal unachieved (done ≠ achieved).
+    """
+    counted = 0
+    failing = 0
+    for o in outcomes:
+        bucket = verdict_trust(o)
+        if bucket in (VERDICT_TRUST_EXCLUDED, VERDICT_TRUST_DIRECTIONAL):
+            continue
+        counted += 1
+        if isinstance(o, dict):
+            status = o.get("status", "done")
+            achieved = o.get("goal_achieved")
+        else:
+            status = getattr(o, "status", "done")
+            achieved = getattr(o, "goal_achieved", None)
+        if status == "stuck" or (bucket == VERDICT_TRUST_FULL and achieved is False):
+            failing += 1
+    return counted, failing
+
+
 def scan_evolver_impact(
     *,
     lookback_hours: int = 24,
@@ -849,26 +908,10 @@ def scan_evolver_impact(
             return []
         results = []
         for o in _outcomes_cache:
-            ts = getattr(o, "created_at", None) or getattr(o, "timestamp", None) or ""
-            t_o = _parse_iso(ts) if ts else None
+            t_o = _outcome_ts(o)
             if t_o and t_from <= t_o < t_to:
                 results.append(o)
         return results
-
-    def _is_failing(o: Any) -> bool:
-        # Verdict-preferred (SF-2): a judged goal_achieved=False run counts as
-        # failing even when it completed (done ≠ achieved); unjudged done does
-        # not (absence means "not judged", not "failed").
-        return (
-            getattr(o, "status", "done") == "stuck"
-            or getattr(o, "goal_achieved", None) is False
-        )
-
-    def _stuck_rate(outcomes: List[Any]) -> float:
-        if not outcomes:
-            return float("nan")
-        n_stuck = sum(1 for o in outcomes if _is_failing(o))
-        return n_stuck / len(outcomes)
 
     records: List[EvolverImpactRecord] = []
     for rec in apply_records:
@@ -883,10 +926,12 @@ def scan_evolver_impact(
         outcomes_before = _outcomes_for_window(t_apply, lookback_hours, 0)
         outcomes_after = _outcomes_for_window(t_apply, 0, lookahead_hours)
 
-        n_before = len(outcomes_before)
-        n_after = len(outcomes_after)
-        sr_before = _stuck_rate(outcomes_before)
-        sr_after = _stuck_rate(outcomes_after)
+        # Trust-filtered counts (VERIFY_LEARN_ARC §4): unverifiable / env-capped
+        # and low-confidence verdicts are dropped from the denominator.
+        n_before, stuck_before = _verify_counts(outcomes_before)
+        n_after, stuck_after = _verify_counts(outcomes_after)
+        sr_before = (stuck_before / n_before) if n_before else float("nan")
+        sr_after = (stuck_after / n_after) if n_after else float("nan")
 
         if n_before < min_outcomes and n_after < min_outcomes:
             verdict = "insufficient_data"
@@ -908,9 +953,9 @@ def scan_evolver_impact(
             category=category,
             applied_at=applied_at_str,
             outcomes_before=n_before,
-            stuck_before=sum(1 for o in outcomes_before if _is_failing(o)),
+            stuck_before=stuck_before,
             outcomes_after=n_after,
-            stuck_after=sum(1 for o in outcomes_after if _is_failing(o)),
+            stuck_after=stuck_after,
             stuck_rate_before=sr_before,
             stuck_rate_after=sr_after,
             delta=delta,  # NaN for insufficient_data — callers check math.isnan()
@@ -950,3 +995,282 @@ def format_impact_summary(records: List[EvolverImpactRecord]) -> str:
                 f"(Δ{_delta_str})"
             )
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# VERIFY_LEARN_ARC V2 — cadence verdicts + authority-aware auto-revert
+# ---------------------------------------------------------------------------
+
+def _classify_cadence_verdict(
+    n_before: int,
+    n_after: int,
+    sr_before: float,
+    sr_after: float,
+    *,
+    min_post_apply: int,
+    min_baseline: int,
+    delta_threshold: float,
+) -> str:
+    """Render a V2 cadence verdict from trust-filtered before/after windows.
+
+    Returns "confirmed" | "degraded" | "inconclusive". The expected direction
+    for every stamped change is "stuck-rate down" (graduation templates declare
+    failure_class_rate↓; the class-neutral fallback is the same shape), so:
+      moved down past the threshold      → confirmed
+      rose  up   past the threshold      → degraded
+      no directional movement, or too
+      little post-apply/baseline data    → inconclusive (extend, then park)
+    """
+    import math
+    if n_after < min_post_apply:
+        return "inconclusive"          # not enough post-apply evidence yet
+    if n_before < min_baseline:
+        return "inconclusive"          # no baseline to compare against
+    if math.isnan(sr_before) or math.isnan(sr_after):
+        return "inconclusive"
+    delta = sr_after - sr_before
+    if delta <= -delta_threshold:
+        return "confirmed"             # stuck-rate fell — the expected direction
+    if delta >= delta_threshold:
+        return "degraded"              # stuck-rate rose — contradicted
+    return "inconclusive"              # flat: expected movement, saw none
+
+
+def verify_applied_suggestions(
+    run_id: str = "",
+    *,
+    dry_run: bool = False,
+    verbose: bool = False,
+    min_post_apply: Optional[int] = None,
+    max_extensions: Optional[int] = None,
+    delta_threshold: Optional[float] = None,
+    now_iso: Optional[str] = None,
+) -> dict:
+    """VERIFY_LEARN_ARC V2: cadence verdicts + authority-aware auto-revert.
+
+    Walks every applied suggestion that has not yet reached a terminal verdict,
+    compares the class-neutral stuck-rate before/after its apply (count-based
+    windows, trust-filtered per §4), and drives the lifecycle:
+
+      confirmed    → stamp verified_at + verify_verdict="confirmed"; record a
+                     positive calibration outcome (feeds scan_suggestion_outcomes,
+                     so sources whose changes keep confirming earn confidence).
+      degraded     → symmetric-authority action (§3 DECISION):
+                       auto-applied (applied_manually=False) → revert_suggestion
+                         + EVOLVER_VERDICT event + non-blocking notify + negative
+                         calibration. verify_verdict="degraded".
+                       human-applied (applied_manually=True)  → NEVER auto-reverted;
+                         verify_verdict="degraded_needs_review", terminal stamp,
+                         BLOCKING notify to the review queue + negative calibration.
+      inconclusive → bump verify_extensions; re-examined next cadence. Past
+                     max_extensions passes → park verify_verdict="unverifiable"
+                     (terminal). An honest unverifiable beats an eternal pending.
+
+    The metric evaluated is the class-neutral stuck-rate pair — the design's
+    declared fallback. expected_signal (V1) is recorded and surfaced but a
+    failure_class_rate window needs timestamped diagnoses, which do not exist
+    yet; evaluating what we can and parking the rest as unverifiable is honest.
+
+    No LLM calls; rides the evolver cadence hook (no daemon). dry_run renders
+    and logs but writes nothing. Returns a summary dict of counts.
+    """
+    from config import get as _cfg_get
+
+    if not bool(_cfg_get("evolver.verify_cadence_verdicts", True)):
+        return {"enabled": False, "skipped": "disabled"}
+
+    if min_post_apply is None:
+        min_post_apply = int(_cfg_get("evolver.verify_min_post_apply", 10) or 10)
+    if max_extensions is None:
+        max_extensions = int(_cfg_get("evolver.verify_max_extensions", 3) or 3)
+    if delta_threshold is None:
+        delta_threshold = float(_cfg_get("evolver.verify_delta_threshold", 0.05) or 0.05)
+    min_baseline = min(3, min_post_apply)
+
+    summary = {
+        "enabled": True, "candidates": 0, "confirmed": 0, "reverted": 0,
+        "review_queued": 0, "unverifiable": 0, "pending": 0, "skipped_no_stamp": 0,
+    }
+
+    if load_outcomes is None:
+        return {**summary, "skipped": "no_outcomes_loader"}
+    try:
+        cache = load_outcomes(limit=5000)
+    except Exception as exc:
+        log.debug("verify_applied_suggestions: load_outcomes failed: %s", exc)
+        return {**summary, "skipped": "load_failed"}
+
+    # Precompute (timestamp, outcome) once, ascending — reused per candidate.
+    dated = []
+    for o in cache or []:
+        t_o = _outcome_ts(o)
+        if t_o is not None:
+            dated.append((t_o, o))
+    dated.sort(key=lambda pair: pair[0])
+
+    try:
+        suggestions = load_suggestions(limit=1000)
+    except Exception as exc:
+        log.debug("verify_applied_suggestions: load_suggestions failed: %s", exc)
+        return {**summary, "skipped": "load_failed"}
+
+    candidates = [
+        s for s in suggestions
+        if s.applied and not getattr(s, "verified_at", "")
+    ]
+    summary["candidates"] = len(candidates)
+    if not candidates:
+        return summary
+
+    now = now_iso or datetime.now(timezone.utc).isoformat()
+
+    def _parse_iso(ts: str) -> Optional[datetime]:
+        try:
+            return datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+        except Exception:
+            return None
+
+    for s in candidates:
+        try:
+            t_apply = _parse_iso(getattr(s, "applied_at", "") or "")
+            if t_apply is None:
+                # A legacy applied row with no stamp can't be windowed — leave
+                # it (don't force-park; there's nothing to compare).
+                summary["skipped_no_stamp"] += 1
+                continue
+
+            before = [o for (t, o) in dated if t < t_apply][-min_post_apply:]
+            after = [o for (t, o) in dated if t >= t_apply]
+            n_before, stuck_before = _verify_counts(before)
+            n_after, stuck_after = _verify_counts(after)
+            sr_before = (stuck_before / n_before) if n_before else float("nan")
+            sr_after = (stuck_after / n_after) if n_after else float("nan")
+
+            verdict = _classify_cadence_verdict(
+                n_before, n_after, sr_before, sr_after,
+                min_post_apply=min_post_apply, min_baseline=min_baseline,
+                delta_threshold=delta_threshold,
+            )
+
+            manual = bool(getattr(s, "applied_manually", False))
+            _rates = {
+                "stuck_rate_before": None if math.isnan(sr_before) else round(sr_before, 3),
+                "stuck_rate_after": None if math.isnan(sr_after) else round(sr_after, 3),
+                "n_before": n_before, "n_after": n_after,
+            }
+
+            if verdict == "confirmed":
+                if not dry_run:
+                    stamp_verification(s.suggestion_id, verdict="confirmed", verified_at=now)
+                    _record_suggestion_outcomes([s.suggestion_id], True, run_id)
+                    _log_verdict_event(s, "confirmed", "confirmed", manual, _rates)
+                summary["confirmed"] += 1
+
+            elif verdict == "degraded" and manual:
+                # Authority asymmetry: a human applied it — surface, never revert.
+                if not dry_run:
+                    stamp_verification(s.suggestion_id, verdict="degraded_needs_review", verified_at=now)
+                    _record_suggestion_outcomes([s.suggestion_id], False, run_id)
+                    _log_verdict_event(s, "degraded", "review_required", manual, _rates)
+                    _notify_verdict(s, "review_required", blocking=True, rates=_rates)
+                summary["review_queued"] += 1
+
+            elif verdict == "degraded":
+                # System applied it — clean up its own mess (revert).
+                if not dry_run:
+                    rv = revert_suggestion(s.suggestion_id)
+                    stamp_verification(s.suggestion_id, verdict="degraded", verified_at=now)
+                    _record_suggestion_outcomes([s.suggestion_id], False, run_id)
+                    _log_verdict_event(
+                        s, "degraded", "reverted", manual,
+                        {**_rates, "reverted": bool(rv.get("reverted"))},
+                    )
+                    _notify_verdict(s, "reverted", blocking=False,
+                                    rates={**_rates, "reverted": bool(rv.get("reverted"))})
+                summary["reverted"] += 1
+
+            else:  # inconclusive
+                ext = int(getattr(s, "verify_extensions", 0)) + 1
+                if ext >= max_extensions:
+                    if not dry_run:
+                        stamp_verification(s.suggestion_id, verdict="unverifiable",
+                                           verified_at=now, extensions=ext)
+                        _log_verdict_event(s, "unverifiable", "parked", manual, _rates)
+                    summary["unverifiable"] += 1
+                else:
+                    if not dry_run:
+                        stamp_verification(s.suggestion_id, extensions=ext)
+                    summary["pending"] += 1
+        except Exception as exc:
+            log.debug("verify_applied_suggestions: candidate %s failed: %s",
+                      getattr(s, "suggestion_id", "?"), exc)
+
+    if verbose:
+        print(
+            f"[evolver] verify→learn cadence: {summary['confirmed']} confirmed, "
+            f"{summary['reverted']} reverted, {summary['review_queued']} review-queued, "
+            f"{summary['unverifiable']} unverifiable, {summary['pending']} pending "
+            f"(of {summary['candidates']} applied-unverified)",
+            file=sys.stderr, flush=True,
+        )
+    log.info(
+        "verify_applied_suggestions run_id=%s candidates=%d confirmed=%d reverted=%d "
+        "review_queued=%d unverifiable=%d pending=%d",
+        run_id, summary["candidates"], summary["confirmed"], summary["reverted"],
+        summary["review_queued"], summary["unverifiable"], summary["pending"],
+    )
+    return summary
+
+
+def _log_verdict_event(s: Suggestion, verdict: str, action: str,
+                       manual: bool, rates: dict) -> None:
+    """Captain's-log EVOLVER_VERDICT event for one cadence verdict."""
+    try:
+        from captains_log import log_event, EVOLVER_VERDICT
+        log_event(
+            event_type=EVOLVER_VERDICT,
+            subject=s.suggestion_id,
+            summary=(
+                f"Cadence verdict {verdict} ({action}) for {s.category} "
+                f"'{s.target}': stuck {rates.get('stuck_rate_before')}→"
+                f"{rates.get('stuck_rate_after')} over {rates.get('n_after')} post-apply runs."
+            ),
+            context={
+                "suggestion_id": s.suggestion_id, "category": s.category,
+                "verdict": verdict, "action": action, "applied_manually": manual,
+                **rates,
+            },
+        )
+    except Exception:
+        pass
+
+
+def _notify_verdict(s: Suggestion, action: str, *, blocking: bool, rates: dict) -> None:
+    """Fire a self_improvement_verdict notification (durable escalation file)."""
+    try:
+        from notify import emit as _emit
+        if action == "reverted":
+            reason = (
+                f"Auto-reverted a degraded self-applied change ({s.category} "
+                f"'{s.target}'): stuck-rate rose {rates.get('stuck_rate_before')}→"
+                f"{rates.get('stuck_rate_after')}. The system cleaned up its own mess."
+            )
+        else:
+            reason = (
+                f"A human-applied change ({s.category} '{s.target}') degraded "
+                f"behavior (stuck {rates.get('stuck_rate_before')}→"
+                f"{rates.get('stuck_rate_after')}) and was NOT auto-reverted "
+                f"(authority asymmetry). Review: revert or keep."
+            )
+        _emit("self_improvement_verdict", {
+            "suggestion_id": s.suggestion_id,
+            "category": s.category,
+            "target": s.target,
+            "action": action,
+            "blocking": blocking,
+            "reason": reason,
+            "summary": reason,
+            **rates,
+        })
+    except Exception:
+        pass

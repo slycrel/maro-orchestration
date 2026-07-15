@@ -2,7 +2,30 @@
 
 What to do next, in what order. Updated each session. Deferred ideas live in BACKLOG.md; completed phase history in docs/history/ROADMAP_ARCHIVE.md (ROADMAP.md is a stub). This file is the executable queue.
 
-Last updated: 2026-07-14 (/goal catch-up session — EXT-AUDIT-2 residual
+Last updated: 2026-07-14 (VERIFY_LEARN_ARC **V2 — cadence verdicts +
+auto-revert SHIPPED**, the judgment-heavy Opus chunk). At each evolver cadence,
+`verify_applied_suggestions()` renders a behavioral verdict on every
+applied-but-unverified change (class-neutral stuck-rate, count-based
+before/after windows keyed to each row's `applied_at`, trust-filtered) and acts:
+**confirmed** → stamp + feed confidence calibration; **degraded self-applied** →
+auto-revert + `EVOLVER_VERDICT` event + non-blocking notify; **degraded
+human-applied** → surfaced to the review queue (blocking notify), NEVER
+auto-reverted (symmetric-authority §3 decision); **inconclusive** → extend, park
+`unverifiable` after 3. Trust policy (§4) shipped as first consumer:
+`verdict_trust()` in memory_ledger.py (single source) → `closure_unverifiable`/
+env-capped + low-confidence verdicts never count in a window. **Prerequisite
+bug fixed same chunk:** `scan_evolver_impact` windowed on `created_at`/
+`timestamp` but real `Outcome`s carry `recorded_at` — the warn path had been
+dead on production data; `_outcome_ts` now prefers `recorded_at`. Knobs in
+DEFAULTS.md (`evolver.verify_cadence_verdicts` default ON — safety mechanism,
+only reverts what the system applied; `verify_min_post_apply`=10,
+`verify_max_extensions`=3, `verify_delta_threshold`=0.05). Operator surface
+`maro evolver verify [--apply]`. 17 new tests; both acceptance legs (one
+confirm AND one degrade→revert with calibration) exercised. **Next: V3**
+(graduation *behavioral* auto-verify + demote — the structural precursor
+shipped 2026-07-14; needs V1/V2, now present) or V4/V5 (navigator half). See
+`docs/VERIFY_LEARN_ARC.md` §5/§7.
+Previous checkpoint — /goal catch-up session — EXT-AUDIT-2 residual
 SHIPPED: `_stamp_verdict_tracked` quarantines deferred learning per-loop_id
 when a closure/provenance/post-escalation verdict stamp write-fails or raises,
 instead of silently falling back to unjudged; closure-restart boundary was
@@ -11,11 +34,7 @@ Same session, VERIFY_LEARN_ARC **V1 — expectation stamping SHIPPED**: `Suggest
 expected_signal` (additive, empty-default), all 9 graduation templates declare
 `{"metric": "failure_class_rate", "class": <own key>, "direction": "down"}`
 derived from their own dict key, `_EVOLVER_SYSTEM` teaches the LLM proposer the
-same field (optional). Deliberately did not touch the ~7 other Suggestion-
-emitting scanners — the "class-neutral fallback pair" for rows without one is
-V2's read-time trust-policy job, not V1's write-time one. 8 new row-shape unit
-tests; full suite green throughout. **V2 (cadence verdicts + auto-revert) is
-next** — see `docs/VERIFY_LEARN_ARC.md` §3/§7, judgment-heavy, sized for Opus.
+same field (optional). 8 new row-shape unit tests.
 Previous checkpoint — stale sandbox-stub backlog
 decision RECONCILED: already resolved by C4 retirement (`69265f6`); open item
 archived and living/dormant design references corrected. The real replacement

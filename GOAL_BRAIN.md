@@ -2647,6 +2647,39 @@ Dormant (deliberately parked, not dropped):
   V2's read-time trust-policy job, not something V1 should bake into every
   producer now, before V2 has decided what that policy actually is. 8 new
   row-shape unit tests (`tests/test_evolver.py`, `tests/test_graduation.py`);
-  full suite green (180/180 files) throughout. **V2 — cadence verdicts +
-  auto-revert — is next**, judgment-heavy (symmetric-authority revert
-  policy already provisionally decided in the doc §3), sized for Opus.
+  full suite green (180/180 files) throughout.
+
+- **2026-07-14 (same session: VERIFY_LEARN_ARC V2 — cadence verdicts +
+  auto-revert SHIPPED, the judgment-heavy Opus chunk)** — the VERIFY gap for
+  evolver-applied suggestions is now closed. At each evolver cadence,
+  `verify_applied_suggestions()` (evolver_scans.py) renders a *behavioral*
+  verdict on every applied-but-unverified `Suggestion`: it builds count-based
+  before/after windows keyed to each row's `applied_at`, computes a
+  class-neutral stuck-rate pair, and classifies confirmed / degraded /
+  inconclusive. **confirmed** → `stamp_verification(verdict="confirmed")` +
+  feed the confidence calibrator True; **degraded self-applied** → auto-revert
+  (`revert_suggestion`) + `EVOLVER_VERDICT` captain's-log event + non-blocking
+  `self_improvement_verdict` notify + calibrate False; **degraded
+  human-applied** → stamp `degraded_needs_review` + BLOCKING notify to the
+  review queue, **never auto-reverted** (this is the symmetric-authority §3
+  decision made concrete: the system may undo only what the system applied);
+  **inconclusive** → bump `verify_extensions`, park `unverifiable` after
+  `evolver.verify_max_extensions` (3). Trust policy (§4) shipped as the first
+  consumer: `verdict_trust()` lives in memory_ledger.py as the single source
+  (accepts an `Outcome` OR a dict) — `closure_unverifiable`/env-capped outcomes
+  are `excluded`, judged-below-0.7-confidence are `directional`, both dropped
+  from a window's denominator so a self-verdict can never grade its own change.
+  **Prerequisite production bug fixed in the same chunk:** `scan_evolver_impact`
+  (and thus the entire old warn path) windowed on `created_at`/`timestamp`, but
+  real `Outcome`s carry `recorded_at` — it had been silently dead on production
+  data. `_outcome_ts` now prefers `recorded_at`. Config knobs (DEFAULTS.md):
+  `evolver.verify_cadence_verdicts` default **ON** (justified — it is a safety
+  mechanism that only ever reverts what the system itself auto-applied),
+  `verify_min_post_apply`=10, `verify_max_extensions`=3,
+  `verify_delta_threshold`=0.05. Operator surface `maro evolver verify
+  [--apply]` (dry-run by default). 17 new tests; both acceptance legs (one
+  confirm, one degrade→revert-with-calibration) exercised; full box-safe suite
+  green. Design doc §1/§7 marked V2 SHIPPED. **Next: V3** (graduation
+  *behavioral* auto-verify + demote — its structural precursor already shipped
+  2026-07-14; V1+V2 were its stated prerequisites, now present) or V4/V5 (the
+  navigator-side half). Neither is Jeremy-gated by an open DECISION marker.

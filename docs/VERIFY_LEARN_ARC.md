@@ -4,13 +4,15 @@ status: dormant-design
 
 # Verify→learn arc — design brief
 
-**Status:** design brief, written 2026-07-12 (Fable-handoff session). A narrow
-applied-only structural-check precursor shipped 2026-07-14; it intentionally
-does not implement behavioral verdicts, revert, or demotion. This is
-the arc decreed "the next design arc after 1.0 (not folded into 1.0, not
-parked)" — thread-architecture decision #6, "how the navigator improves."
-The original design pass changed no code. Judgment calls tagged `DECISION (provisional)`.
-File:line references verified at commit ffff3f6.
+**Status:** design brief, written 2026-07-12 (Fable-handoff session). V1
+(expectation stamping) and V2 (cadence verdicts + authority-aware auto-revert)
+both SHIPPED 2026-07-14 — the applied-change verify→learn loop is now closed for
+the evolver-suggestion lane (see §7 for what each chunk landed). V3–V5
+(graduation behavioral auto-verify, navigator divergence adjudication,
+navigator lessons) remain open. This is the arc decreed "the next design arc
+after 1.0 (not folded into 1.0, not parked)" — thread-architecture decision #6,
+"how the navigator improves." Judgment calls tagged `DECISION (provisional)`.
+File:line references from the original design pass verified at commit ffff3f6.
 
 The two-things-conflated framing (CLAUDE.md): Maro-as-tool works today;
 Maro-as-self-improving-system is "infrastructure 80% built; verify→learn
@@ -30,7 +32,7 @@ its "to build" layers 2–4 are largely built):
 | **Classify** | DONE | `introspect.diagnose_loop` (10-class taxonomy, cache-aware thresholds, introspect.py:225-453), lenses + aggregation, inspector friction signals (inspector.py:407-489). Wired at every finalize (loop_finalize.py:409-476). |
 | **Fix (propose)** | DONE, verdict-aware | evolver meta-cycle + 5 statistical scanners + graduation templates (≥3 occurrences → suggestion, graduation.py:188-367) + inspector findings — all write suggestions.jsonl. Lesson extraction is verdict-aware since data-r2-01 (defer → post-closure `finalize_deferred_learning`, loop_finalize.py:702-767). |
 | **Fix (apply)** | DONE, gated | `apply_suggestion` (evolver_store.py:394-577): injection-guard fail-closed; guardrails held for review unless `evolver.auto_apply`; skill mutations behind a real test gate; change_log.jsonl records before_state; `revert_suggestion` replays it. |
-| **VERIFY** | **THE GAP** | Three holes, precisely: (1) `_verify_post_apply` verifies "the test suite is still green," not "the behavior improved" — a prompt tweak that makes runs worse passes it forever. (2) `scan_evolver_impact` DOES compare before/after stuck-rates — and only **warns in logs**; nothing reverts. (3) Applied graduation rows now receive cheap automatic structural checks at evolver cadence, but those checks are explicitly not behavioral verdicts and never revert/demote. Graduation proposals are also written after the current evolver auto-apply pass and are not autonomously consumed by a later pass. |
+| **VERIFY** | **CLOSING (V2 shipped 2026-07-14)** | Hole (2) is fixed for the suggestion lane: `scan_evolver_impact`'s before/after comparison is no longer warn-only — `verify_applied_suggestions()` renders per-change verdicts at cadence and **reverts** degraded self-applied changes (§3/§7). Hole (1) stands by design — `_verify_post_apply` remains the orthogonal "tests still green" gate, distinct from the behavioral verdict. Hole (3), graduation *behavioral* auto-verify + demote, is still open (V3); applied graduation rows get only the cheap structural check today. |
 | **Learn** | Half-closed | Verdict-aware extraction shipped; but verdict *trust* is uncalibrated (§4) and nothing feeds verified-change outcomes back into proposal confidence beyond `_record_suggestion_outcomes`. |
 
 **The arc in one sentence: give applied changes the same lifecycle
@@ -190,10 +192,35 @@ A/B flag in one chunk (`navigator.lesson_inject`, shadow-comparable like
   stamping it onto every producer now would be presumptuous about a policy V2
   hasn't decided yet. 8 new row-shape unit tests (`tests/test_evolver.py`,
   `tests/test_graduation.py`); full suite green.
-- **V2 — cadence verdicts + auto-revert (Opus):** scan_evolver_impact
-  promotion, verdict windows, symmetric-authority revert, notify + events.
-  The judgment-heavy chunk. Tests: synthetic before/after windows, revert
-  fires only in the auto-applied band.
+- **V2 — cadence verdicts + auto-revert — SHIPPED 2026-07-14 (Opus).**
+  `verify_applied_suggestions()` (evolver_scans.py) rides the existing evolver
+  cadence hook — no daemon. It walks every `applied` suggestion without a
+  terminal `verified_at`, compares the class-neutral stuck-rate over count-based
+  before/after windows keyed to each row's own `applied_at`, and drives the
+  lifecycle: **confirmed** → stamp `verified_at`/`verify_verdict` + feed
+  `_record_suggestion_outcomes` (positive calibration); **degraded** →
+  symmetric-authority action — self-applied (`applied_manually=False`) is
+  `revert_suggestion`'d + `EVOLVER_VERDICT` event + non-blocking notify, a
+  human-applied row is stamped `degraded_needs_review` and surfaced to the
+  escalation queue (blocking notify) but **never** auto-reverted; **inconclusive**
+  → bump `verify_extensions`, park `unverifiable` past the cap. The trust
+  policy (§4) shipped with it as its first consumer: `verdict_trust()` in
+  memory_ledger.py (single source), consumed via `_verify_counts` so
+  `closure_unverifiable`/env-capped and low-confidence verdicts never count in
+  a window. **Prerequisite bug fixed in the same chunk:** `scan_evolver_impact`
+  windowed on `created_at`/`timestamp`, but real `Outcome`s carry
+  `recorded_at` — so the warn path had been dead on production data (only test
+  fakes matched). `_outcome_ts` now prefers `recorded_at`. Knobs (all in
+  DEFAULTS.md): `evolver.verify_cadence_verdicts` (default ON — a *safety*
+  mechanism, only reverts what the system itself applied), `verify_min_post_apply`
+  (10), `verify_max_extensions` (3), `verify_delta_threshold` (0.05). Operator
+  surface: `maro evolver verify [--apply]` (dry-run by default). The metric is
+  the class-neutral stuck-rate pair (the declared fallback); `failure_class_rate`
+  windows still need timestamped diagnoses, which don't exist — evaluating what
+  we can and parking the rest as `unverifiable` is honest. 17 new tests
+  (trust buckets, `_verify_counts`, every verdict/authority path, the
+  recorded_at regression, disabled-skip, dry-run). Both acceptance legs —
+  one confirm AND one degrade→revert with calibration feedback — exercised.
 - **V3 — graduation auto-verify (Sonnet):** applied-only structural cadence
   wiring and manual provenance precursor shipped 2026-07-14. Still open:
   behavioral verdict + authority-aware revert/demote, after V1/V2.

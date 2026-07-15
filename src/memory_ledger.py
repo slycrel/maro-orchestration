@@ -75,6 +75,74 @@ class Outcome:
     handle_id: str = ""          # durable run-level dedup key (restarts share it)
 
 
+# ---------------------------------------------------------------------------
+# Verdict trust policy (VERIFY_LEARN_ARC §4) — single source
+# ---------------------------------------------------------------------------
+
+# Trust buckets, in a fixed vocabulary so consumers can pattern-match without
+# re-deriving the policy. See docs/VERIFY_LEARN_ARC.md §4.
+VERDICT_TRUST_FULL = "full"                # judged True/False, conf >= floor, not env-capped
+VERDICT_TRUST_DIRECTIONAL = "directional"  # judged but low-confidence — may flavor, never gate/count
+VERDICT_TRUST_NEUTRAL = "neutral"          # verdict absent (done-unverified) — present state, keep
+VERDICT_TRUST_EXCLUDED = "excluded"        # verifier's-own-failure / env-capped — trust nothing
+
+# The confidence floor below which a judged verdict is directional-only. This
+# is the same 0.7 the closure machinery was built around (done-vs-achieved
+# analysis, 2026-07-09); NOT a tunable — a lower bar would let the verifier's
+# own low-confidence guesses gate learning.
+VERDICT_CONFIDENCE_FLOOR = 0.7
+
+
+def verdict_trust(outcome: Any) -> str:
+    """Classify how much a run's goal-verdict may be trusted by learning.
+
+    The single policy function (VERIFY_LEARN_ARC §4), consumed by V2 cadence
+    windows, deferred-lesson extraction, and skill crystallization gates.
+    Accepts an Outcome dataclass OR a plain dict row (ledger rehydration).
+
+    Returns one of VERDICT_TRUST_{FULL,DIRECTIONAL,NEUTRAL,EXCLUDED}:
+
+      full        — judged True/False, confidence >= floor, no env-error cap.
+                    The tri-state the machinery was built for.
+      directional — judged but confidence < floor. May flavor lesson framing;
+                    never gates crystallization or counts in a V2 window.
+      neutral     — verdict absent (goal_achieved None / done-unverified).
+                    Present state, keep — absence means "not judged", not "failed".
+      excluded    — closure_unverifiable (verifier's own failure) or an
+                    environment-error-capped verdict. Excluded from ALL learning
+                    consumers: a verifier-cwd bug must not be taught as a regression.
+    """
+    def _get(key, default=None):
+        if isinstance(outcome, dict):
+            return outcome.get(key, default)
+        return getattr(outcome, key, default)
+
+    source = str(_get("goal_verdict_source", "") or "")
+    # closure_unverifiable = the verifier failed to reach a verdict (its own
+    # cwd/env bug, a timeout, a probe that could not run). Environment-error
+    # caps fold into this source today; if a distinct source value is ever
+    # introduced it should be excluded here too.
+    if source == "closure_unverifiable":
+        return VERDICT_TRUST_EXCLUDED
+
+    achieved = _get("goal_achieved", None)
+    if achieved is None:
+        # Unjudged — a dict row omits the key entirely when None (never null).
+        return VERDICT_TRUST_NEUTRAL
+
+    conf = _get("goal_verdict_confidence", None)
+    # A judged verdict with no confidence attached (deterministic provenance
+    # guard, NOW self-verdict) is authoritative — only an *explicit* low
+    # confidence downgrades to directional.
+    if conf is not None:
+        try:
+            if float(conf) < VERDICT_CONFIDENCE_FLOOR:
+                return VERDICT_TRUST_DIRECTIONAL
+        except (TypeError, ValueError):
+            pass
+    return VERDICT_TRUST_FULL
+
+
 @dataclass(frozen=True)
 class OutcomeVerdictStampResult:
     """Atomic outcome-verdict persistence result.
