@@ -3494,6 +3494,96 @@ def test_adaptive_adjust_source_pattern_absent():
     )
 
 
+def test_adaptive_escalate_reply_reaches_next_step(monkeypatch, tmp_path):
+    """A user's reply to a verify/threshold director-escalate must reach the
+    next step's prompt.
+
+    Bug (2026-07-15 seam inventory): the stuck-trigger escalate survives via
+    `continue`, but the verify_failure/step_threshold escalate wrote
+    _next_step_injected_context and then fell through to the carry-forward
+    assignment (`_next_step_injected_context = _step_injected_context`),
+    which silently clobbered the reply. The channel round-trip happened —
+    the user answered — and the answer never entered any prompt.
+    """
+    _setup_workspace(monkeypatch, tmp_path)
+
+    from director import DirectorDecision
+    import config as _cfg_mod
+
+    _orig_cfg_get = _cfg_mod.get
+
+    def _patched_cfg_get(key, default=None):
+        if key == "adaptive_execution":
+            return True
+        return _orig_cfg_get(key, default)
+
+    monkeypatch.setattr(_cfg_mod, "get", _patched_cfg_get)
+
+    # 6 steps so the step_threshold trigger (every 5 steps) fires mid-run,
+    # with at least one step left to receive the injected reply.
+    class _SixStepAdapter(_DryRunAdapter):
+        def __init__(self):
+            self.exec_user_msgs = []
+
+        def complete(self, messages, *, tools=None, tool_choice="auto", **kwargs):
+            user_content = next(
+                (m.content for m in reversed(messages) if m.role == "user"), ""
+            )
+            if ("decompose" in user_content.lower()
+                    or "concrete steps" in user_content.lower()):
+                from llm import LLMResponse
+                steps = [f"Perform part {i} of the work" for i in range(1, 7)]
+                return LLMResponse(
+                    content=json.dumps(steps), stop_reason="end_turn",
+                    input_tokens=50, output_tokens=30,
+                )
+            if tools and tool_choice == "required":
+                self.exec_user_msgs.append(user_content)
+            return super().complete(
+                messages, tools=tools, tool_choice=tool_choice, **kwargs)
+
+    _eval_count = [0]
+    import director as _dm
+
+    def _fake_eval(goal, eval_ctx, trigger, adapter, *, dry_run=False):
+        _eval_count[0] += 1
+        if _eval_count[0] == 1:
+            return DirectorDecision(
+                action="escalate",
+                reasoning="need direction",
+                user_question="Which approach should I take?",
+            )
+        return DirectorDecision(action="continue", reasoning="ok")
+
+    monkeypatch.setattr(_dm, "director_evaluate", _fake_eval)
+
+    class _FakeChannel:
+        def __init__(self):
+            self.questions = []
+
+        def ask(self, question):
+            self.questions.append(question)
+            return "use approach B with the smaller dataset"
+
+    _channel = _FakeChannel()
+    adapter = _SixStepAdapter()
+    result = run_agent_loop(
+        "six part goal exercising the escalate reply carry",
+        adapter=adapter,
+        dry_run=False,
+        channel=_channel,
+    )
+    assert result.status in ("done", "stuck", "error")
+    assert _channel.questions, "director escalate never reached the channel"
+    assert any(
+        "use approach B with the smaller dataset" in msg
+        for msg in adapter.exec_user_msgs
+    ), (
+        "escalate reply was clobbered before the next step prompt — "
+        "the carry-forward assignment must merge, not overwrite"
+    )
+
+
 def test_loop_projectless_run_still_fences_cwd(monkeypatch, tmp_path):
     """BACKLOG #1 (3rd repro): a run with no project must not execute with the
     inherited launch cwd — the ambient subprocess cwd falls back to the

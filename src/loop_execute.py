@@ -1360,6 +1360,12 @@ def _execute_main_loop(
         ctx.session_verify_failures = _session_verify_failures
         ctx.stuck_streak = stuck_streak
         ctx.steps_since_last_check += 1
+        # Escalate replies from this trigger can't write _next_step_injected_
+        # context directly: unlike the stuck trigger (which `continue`s), this
+        # path falls through to the carry-forward assignment below, which
+        # doubles as the consume/clear of the previous step's context and
+        # would silently drop the user's reply.
+        _escalate_reply_context = ""
         try:
             from config import get as _ae2_cfg_get
             _ae2_on = bool(_ae2_cfg_get("adaptive_execution", False))
@@ -1367,6 +1373,8 @@ def _execute_main_loop(
             _ae2_on = False
         if _ae2_on:
             _AE_K = 5  # step threshold between mandatory checks
+            # (test_adaptive_escalate_reply_reaches_next_step builds a 6-step
+            # plan around this value — update it if the threshold changes)
             _ae2_fire = (
                 ctx.session_verify_failures >= 2
                 or ctx.steps_since_last_check >= _AE_K
@@ -1495,7 +1503,7 @@ def _execute_main_loop(
                             try:
                                 _ae2_reply = ctx.channel.ask(_ae2_question)
                                 if _ae2_reply:
-                                    _next_step_injected_context = (
+                                    _escalate_reply_context = (
                                         f"Director asked: {_ae2_question}\n"
                                         f"User replied: {_ae2_reply}"
                                     )
@@ -1518,8 +1526,15 @@ def _execute_main_loop(
         if loop_status == "restart":
             break
 
-        # Carry injected context forward to next step
+        # Carry injected context forward to next step. This assignment is also
+        # the consume/clear of the previous step's injected context — merge the
+        # director-escalate reply in rather than letting it be overwritten.
         _next_step_injected_context = _step_injected_context
+        if _escalate_reply_context:
+            _next_step_injected_context = (
+                (_escalate_reply_context + "\n\n" + _step_injected_context).strip()
+                if _step_injected_context else _escalate_reply_context
+            )
 
         # Kill switch, timeout, interrupt polling
         _interrupts_before = interrupts_applied
