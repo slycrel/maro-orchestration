@@ -25,7 +25,7 @@ Run completes
   → Loop closes
 ```
 
-**Current reality:** The verify→learn *plumbing* is closed — session 17's `_verify_post_apply()` in evolver.py runs pytest after auto-applying suggestions, records outcome to memory_ledger and captain's log, and fires EVOLVER_VERIFY. But the learning *input* — lesson extraction from runs — was silently dead until 2026-06-11: a `safe_list` bug dropped the typed lesson dicts the prompt produces, so extraction returned `[]` on every real run (fixed, commit `d088ca7`). It is now live-verified but only lightly exercised (~2 typed lessons from one real call). The open question is whether the full medium→long→standing-rule accretion actually fires on organic runtime, not just in tests. Graduation verification and proactive lesson testing also remain open.
+**Current reality:** The verify→learn *plumbing* is closed — session 17's `_verify_post_apply()` in evolver.py runs pytest after auto-applying suggestions, records outcome to memory_ledger and captain's log, and fires EVOLVER_VERIFY. But the learning *input* — lesson extraction from runs — was silently dead until 2026-06-11: a `safe_list` bug dropped the typed lesson dicts the prompt produces, so extraction returned `[]` on every real run (fixed, commit `d088ca7`). It is now live-verified but only lightly exercised (~2 typed lessons from one real call). The open question is whether the full medium→long→standing-rule accretion actually fires on organic runtime, not just in tests. Graduation *behavioral* verification closed 2026-07-14 (VERIFY_LEARN_ARC V3 — per-class verdict + demote); proactive lesson testing remains open.
 
 ## Per-Run Quality (zoom in)
 
@@ -70,9 +70,9 @@ Suggestion types:
 Applied changes logged to change_log.jsonl with rollback snapshots.
 
 ### Graduation (graduation.py)
-Scans diagnoses.jsonl for repeated failure classes (≥3 occurrences). Promotes to permanent fixes using templates (8 failure classes covered). Each template has a verify_pattern (shell command).
+Scans diagnoses.jsonl for repeated failure classes (≥3 occurrences). Promotes to permanent fixes using templates (8 failure classes covered). Each template has a verify_pattern (shell command) AND (V1) an `expected_signal` declaring `failure_class_rate ↓`.
 
-**Gap:** verify_graduation_rules() exists but isn't called automatically.
+**Verify→demote (VERIFY_LEARN_ARC V3, shipped 2026-07-14):** applied graduation rows get a *behavioral* verdict at evolver cadence via `verify_applied_suggestions` — verdicted on their own `failure_class_rate` over timestamped-diagnosis windows (diagnoses gained a `recorded_at` stamp in V3), demoted under symmetric authority. Rules stay advisor-gated (human-applied → a degraded row surfaces for review, never auto-reverted). The `verify_graduation_rules()` structural grep IS called automatically (`run_graduation_verification` at cadence) but stays **pure observability** — a grep miss ≠ the applied lesson failed, so it never gates state.
 
 ### Skills (skills.py, ~2055 lines + skill_types.py)
 Discovery, scoring, promotion/demotion with circuit breaker. Shared types (`Skill`, `SkillStats`, `SkillTestCase`, `SkillMutationResult`, `compute_skill_hash`, `verify_skill_hash`, `skill_to_dict`, `dict_to_skill`) extracted to `src/skill_types.py` (session 17) to break circular import with evolver. `skills.py` re-exports for backward compat.
@@ -119,10 +119,10 @@ What's autonomous today:
 What requires humans:
 - ❌ Guardrails held for review (correct safety boundary)
 - ❌ No auto-enqueue of follow-up missions
-- ❌ Graduated rules not auto-verified in heartbeat
+- ✅ Graduated rules auto-verified at cadence (VERIFY_LEARN_ARC V3, 2026-07-14): applied graduation rows get a per-class behavioral verdict + demote (advisor-gated: degraded surfaces for review, never auto-reverted)
 - ❌ Inspector and evolver don't share data structures
 
-The infrastructure is ~90% built. Main remaining gaps are graduation auto-verification and inspector↔evolver data sharing.
+The infrastructure is ~90% built. Applied-change verify→learn is now closed for both the evolver-suggestion (V2) and graduation (V3) lanes; remaining gaps are the navigator half (V4/V5) and inspector↔evolver data sharing.
 
 ## File Map
 

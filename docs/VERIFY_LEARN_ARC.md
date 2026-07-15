@@ -5,11 +5,12 @@ status: dormant-design
 # Verify→learn arc — design brief
 
 **Status:** design brief, written 2026-07-12 (Fable-handoff session). V1
-(expectation stamping) and V2 (cadence verdicts + authority-aware auto-revert)
-both SHIPPED 2026-07-14 — the applied-change verify→learn loop is now closed for
-the evolver-suggestion lane (see §7 for what each chunk landed). V3–V5
-(graduation behavioral auto-verify, navigator divergence adjudication,
-navigator lessons) remain open. This is the arc decreed "the next design arc
+(expectation stamping), V2 (cadence verdicts + authority-aware auto-revert), and
+V3 (graduation behavioral auto-verify — per-class failure_class_rate verdicts)
+all SHIPPED 2026-07-14 — the applied-change verify→learn loop is now closed for
+both the evolver-suggestion and graduation lanes (see §7 for what each chunk
+landed). V4–V5 (navigator divergence adjudication, navigator lessons) remain
+open — the navigator half of #6. This is the arc decreed "the next design arc
 after 1.0 (not folded into 1.0, not parked)" — thread-architecture decision #6,
 "how the navigator improves." Judgment calls tagged `DECISION (provisional)`.
 File:line references from the original design pass verified at commit ffff3f6.
@@ -32,7 +33,7 @@ its "to build" layers 2–4 are largely built):
 | **Classify** | DONE | `introspect.diagnose_loop` (10-class taxonomy, cache-aware thresholds, introspect.py:225-453), lenses + aggregation, inspector friction signals (inspector.py:407-489). Wired at every finalize (loop_finalize.py:409-476). |
 | **Fix (propose)** | DONE, verdict-aware | evolver meta-cycle + 5 statistical scanners + graduation templates (≥3 occurrences → suggestion, graduation.py:188-367) + inspector findings — all write suggestions.jsonl. Lesson extraction is verdict-aware since data-r2-01 (defer → post-closure `finalize_deferred_learning`, loop_finalize.py:702-767). |
 | **Fix (apply)** | DONE, gated | `apply_suggestion` (evolver_store.py:394-577): injection-guard fail-closed; guardrails held for review unless `evolver.auto_apply`; skill mutations behind a real test gate; change_log.jsonl records before_state; `revert_suggestion` replays it. |
-| **VERIFY** | **CLOSING (V2 shipped 2026-07-14)** | Hole (2) is fixed for the suggestion lane: `scan_evolver_impact`'s before/after comparison is no longer warn-only — `verify_applied_suggestions()` renders per-change verdicts at cadence and **reverts** degraded self-applied changes (§3/§7). Hole (1) stands by design — `_verify_post_apply` remains the orthogonal "tests still green" gate, distinct from the behavioral verdict. Hole (3), graduation *behavioral* auto-verify + demote, is still open (V3); applied graduation rows get only the cheap structural check today. |
+| **VERIFY** | **CLOSED for applied changes (V2+V3 shipped 2026-07-14)** | Hole (2) is fixed for the suggestion lane: `scan_evolver_impact`'s before/after comparison is no longer warn-only — `verify_applied_suggestions()` renders per-change verdicts at cadence and **reverts** degraded self-applied changes (§3/§7). Hole (3) is now closed too: an applied graduation row gets a *behavioral* verdict on its own `failure_class_rate` (V3), demoted under symmetric authority (human-applied → surfaced for review); the structural `verify_pattern` grep stays pure observability. Hole (1) stands by design — `_verify_post_apply` remains the orthogonal "tests still green" gate, distinct from the behavioral verdict. |
 | **Learn** | Half-closed | Verdict-aware extraction shipped; but verdict *trust* is uncalibrated (§4) and nothing feeds verified-change outcomes back into proposal confidence beyond `_record_suggestion_outcomes`. |
 
 **The arc in one sentence: give applied changes the same lifecycle
@@ -111,24 +112,30 @@ rows whose durable state is actually `applied=true`. Results emit
 and never mutate state. Manual-apply provenance is persisted for the
 authority policy.
 
-**Owner decision 2026-07-14 (Jeremy):** V3 is **buildable now** — not a design
-dependency. Both prerequisites Codex named as "must define first" already
-shipped: the *behavioral expectation* a graduated rule carries is exactly V1's
-`expected_signal` (all 9 templates declare `failure_class_rate ↓`), and the
-*authority-aware, crash-safe demotion target* is V2's symmetric-authority
-revert plus the `behavioral` flag (real undo vs. un-revertable append-only →
-surface-for-review). V2's verify path is already category-agnostic, so an
-applied graduation row flows through it today. What remains is **build, not
-decision**: (a) wire graduation's *pending* rows into the apply→verify
-lifecycle (nothing autonomously applies `graduation:` rows today, so V2 never
-sees them); (b) the `failure_class_rate` metric wants timestamped diagnoses
-that don't exist — reuse V2's class-neutral stuck-rate fallback, or add
-diagnosis timestamps (small, additive). The one genuine owner call is narrow —
-whether a graduated standing-rule may cross the auto-apply threshold — and its
-**safe default needs no meeting: keep graduation rules advisor-gated
-(held-for-review, like guardrails)**, so V3 ships the full verify→demote loop
-without ever auto-applying a rule. The structural-only cadence stays in place
-until the build lands.
+**Owner decision 2026-07-14 (Jeremy):** V3 was **buildable now** — not a design
+dependency — and **SHIPPED 2026-07-14**. Both prerequisites Codex named as
+"must define first" were already present: the *behavioral expectation* a
+graduated rule carries is V1's `expected_signal` (all 9 templates declare
+`failure_class_rate ↓`), and the *authority-aware, crash-safe demotion target*
+is V2's symmetric-authority revert plus the `behavioral` flag. V2's verify path
+was already category-agnostic, so an applied graduation row flowed through it —
+but on the class-neutral *global* stuck-rate, in which a single failure class's
+movement is noise, so graduation rows only ever parked `unverifiable`. **What
+V3 built:** `verify_applied_suggestions` now consumes a row's `expected_signal`
+and verdicts a `failure_class_rate` row on *that class's* rate over
+timestamped-diagnosis windows (self-falling-back to the stuck-rate when the
+class windows are thin — a sparse class parks honestly, never verdicts off
+noise). Diagnoses gained a `recorded_at` stamp (the one learning ledger with no
+time axis) so those windows exist; prospective — the class path is dormant
+until post-V3 diagnoses accrue, then activates itself. The confirmed/degraded →
+calibrate/demote lifecycle and symmetric authority are reused from V2 unchanged.
+**The owner call landed as its safe default:** graduation rules stay
+advisor-gated (a human applies them via `maro evolver apply`) — nothing
+auto-applies a standing rule — so a degraded graduation row takes the
+human-applied branch: surfaced for review, never auto-reverted. The structural
+`verify_pattern` check stays pure observability (`run_graduation_verification` /
+GRADUATION_VERIFIED) — a grep miss ≠ the applied lesson failed, so it must not
+gate state. Knob: `evolver.verify_use_class_signal` (default ON).
 
 ## 4. Verdict trust policy — which verdicts learning may consume
 
@@ -255,13 +262,21 @@ A/B flag in one chunk (`navigator.lesson_inject`, shadow-comparable like
   auto-revert can't fire off a 3-sample baseline; (e) `scan_evolver_impact`'s
   insufficient-data gate fixed (`and`→`or`: each window needs the minimum).
   6 more regression-lock tests.
-- **V3 — graduation auto-verify (Opus-sized, BUILDABLE NOW per Jeremy
-  2026-07-14):** applied-only structural cadence wiring + manual provenance
-  precursor shipped 2026-07-14. Open work is *build, not decision* (V1's
-  `expected_signal` + V2's authority-aware `behavioral` revert already supply
-  both prerequisites): wire graduation's pending rows into apply→verify, reuse
-  the class-neutral stuck-rate fallback for the missing timestamped-diagnosis
-  metric, keep rules advisor-gated (held-for-review) so nothing auto-applies.
+- **V3 — graduation auto-verify (Opus) — SHIPPED 2026-07-14.** The behavioral
+  verdict for an applied graduation row was already reachable via V2 — but on
+  the class-neutral global stuck-rate, on which a single class is noise, so
+  graduation rows only ever parked `unverifiable`. V3 makes the verdict
+  *resolve*: `verify_applied_suggestions` consumes the row's `expected_signal`
+  and verdicts a `failure_class_rate` row on that class's rate over
+  timestamped-diagnosis windows (diagnoses gained a `recorded_at` stamp;
+  self-falls-back to the stuck-rate when the class windows are thin). Lifecycle
+  + symmetric authority reused from V2 unchanged; rules stay advisor-gated
+  (human-applied → degraded surfaces for review, never auto-reverted — the
+  owner's safe default). Structural `verify_pattern` stays pure observability
+  (a grep miss ≠ the applied lesson failed). Knob
+  `evolver.verify_use_class_signal` (default ON). 10 new tests
+  (`test_evolver.py::TestVerifyClassSignal`, `test_introspect.py`); class path
+  is prospective (dormant until post-V3 diagnoses accrue).
 - **V4 — divergence adjudication (Sonnet/Opus):** capped LLM pass +
   agreement-table breakdown.
 - **V5 — navigator lessons (Opus):** crystallize + inject + A/B flag,

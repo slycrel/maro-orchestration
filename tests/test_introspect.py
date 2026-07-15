@@ -341,6 +341,26 @@ def test_save_and_load_diagnoses(tmp_path, monkeypatch):
     assert loaded[0].failure_class == "healthy"
 
 
+def test_save_diagnosis_stamps_recorded_at(tmp_path, monkeypatch):
+    # VERIFY_LEARN_ARC V3: diagnoses gain a persistence timestamp so per-class
+    # failure_class_rate windows have a time axis. Stamped at save if unset.
+    monkeypatch.setattr("introspect._diagnoses_path", lambda: tmp_path / "memory" / "diagnoses.jsonl")
+    diag = LoopDiagnosis(loop_id="ts01", failure_class="retry_churn", severity="warning")
+    assert diag.recorded_at == ""
+    save_diagnosis(diag)
+    loaded = load_diagnoses()
+    assert loaded[0].recorded_at            # non-empty ISO stamp
+    from datetime import datetime
+    datetime.fromisoformat(loaded[0].recorded_at)   # parses
+
+    # A caller-supplied stamp (backfill/replay) is respected, not overwritten.
+    fixed = LoopDiagnosis(loop_id="ts02", failure_class="healthy", severity="info",
+                          recorded_at="2026-01-01T00:00:00+00:00")
+    save_diagnosis(fixed)
+    row = [d for d in load_diagnoses() if d.loop_id == "ts02"][0]
+    assert row.recorded_at == "2026-01-01T00:00:00+00:00"
+
+
 # ---------------------------------------------------------------------------
 # diagnose_latest
 # ---------------------------------------------------------------------------

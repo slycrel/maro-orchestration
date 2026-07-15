@@ -822,6 +822,87 @@ def _verify_counts(outcomes: List[Any]) -> "tuple[int, int]":
     return counted, failing
 
 
+# ---------------------------------------------------------------------------
+# VERIFY_LEARN_ARC V3 — per-class failure-rate windows (graduation verdicts)
+# ---------------------------------------------------------------------------
+
+def _load_dated_diagnoses(limit: int = 5000) -> List["tuple[datetime, str]"]:
+    """Return ``(recorded_at, failure_class)`` for diagnoses that carry a time
+    stamp, ascending. Pre-V3 rows (no ``recorded_at``) are dropped — a class
+    rate can only be windowed for stamped rows, so the class-signal path stays
+    dormant until enough post-V3 diagnoses accrue, then activates itself.
+    """
+    try:
+        from orch_items import memory_dir
+        p = memory_dir() / "diagnoses.jsonl"
+    except Exception:
+        return []
+    if not p.exists():
+        return []
+    out: List["tuple[datetime, str]"] = []
+    try:
+        for line in p.read_text(encoding="utf-8").splitlines()[-limit:]:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                d = json.loads(line)
+            except Exception:
+                continue
+            ts = d.get("recorded_at") or ""
+            fc = d.get("failure_class") or ""
+            if not ts or not fc:
+                continue
+            try:
+                t = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+            except Exception:
+                continue
+            out.append((t, str(fc)))
+    except Exception:
+        return []
+    out.sort(key=lambda pair: pair[0])
+    return out
+
+
+def _expected_class(s: Any) -> Optional[str]:
+    """The failure class a suggestion's V1 ``expected_signal`` targets, if any.
+
+    Graduation templates declare ``[{"metric": "failure_class_rate", "class":
+    <fc>, "direction": "down"}]``. Returns that class so the cadence verdict can
+    measure the rate the change actually targets instead of the class-neutral
+    global stuck-rate (in which a single class's movement is noise). Returns
+    None for rows with no such expectation (they keep the stuck-rate metric).
+    """
+    sig = getattr(s, "expected_signal", None) or []
+    if not isinstance(sig, list):
+        return None
+    for item in sig:
+        if isinstance(item, dict) and item.get("metric") == "failure_class_rate":
+            cls = item.get("class")
+            if cls:
+                return str(cls)
+    return None
+
+
+def _class_rate_windows(
+    dated_diags: List["tuple[datetime, str]"], fc: str, t_apply: datetime, min_n: int,
+) -> "tuple[int, int, int, int]":
+    """Count-based per-class windows keyed to a change's apply time.
+
+    Symmetric to the stuck-rate windows: the last ``min_n`` stamped diagnoses
+    before apply, the FIRST ``min_n`` after. Returns
+    ``(n_before, hits_before, n_after, hits_after)`` where a hit is a diagnosis
+    of class ``fc``. The rate is hits/n — a fix should drive it down. Bounding
+    ``after`` (not "all diagnoses after") keeps a later, unrelated failure
+    cluster out of this row's verdict.
+    """
+    before = [c for (t, c) in dated_diags if t < t_apply][-min_n:]
+    after = [c for (t, c) in dated_diags if t >= t_apply][:min_n]
+    hb = sum(1 for c in before if c == fc)
+    ha = sum(1 for c in after if c == fc)
+    return len(before), hb, len(after), ha
+
+
 def scan_evolver_impact(
     *,
     lookback_hours: int = 24,
@@ -1047,6 +1128,7 @@ def verify_applied_suggestions(
     min_post_apply: Optional[int] = None,
     max_extensions: Optional[int] = None,
     delta_threshold: Optional[float] = None,
+    use_class_signal: Optional[bool] = None,
     now_iso: Optional[str] = None,
 ) -> dict:
     """VERIFY_LEARN_ARC V2: cadence verdicts + authority-aware auto-revert.
@@ -1074,10 +1156,18 @@ def verify_applied_suggestions(
                      max_extensions passes → park verify_verdict="unverifiable"
                      (terminal). An honest unverifiable beats an eternal pending.
 
-    The metric evaluated is the class-neutral stuck-rate pair — the design's
-    declared fallback. expected_signal (V1) is recorded and surfaced but a
-    failure_class_rate window needs timestamped diagnoses, which do not exist
-    yet; evaluating what we can and parking the rest as unverifiable is honest.
+    The metric evaluated is per-row (VERIFY_LEARN_ARC V3): a row that declares a
+    ``failure_class_rate`` expected_signal (graduation templates do) is verdicted
+    on that class's rate over timestamped-diagnosis windows — the metric it
+    actually targets; rows without one, or whose class windows are still thin,
+    use the class-neutral stuck-rate pair (the V2 fallback). This is what lets a
+    graduation verdict resolve at all: a single failure class barely moves the
+    global stuck-rate, so on that metric graduation rows only ever park
+    unverifiable. Diagnoses gained a ``recorded_at`` stamp in V3; the class path
+    is dormant until enough post-V3 diagnoses accrue, then activates itself.
+    Graduation rules stay advisor-gated (human-applied) per the owner call, so a
+    degraded graduation row takes the human-applied branch — surfaced for review,
+    never auto-reverted.
 
     No LLM calls; rides the evolver cadence hook (no daemon). dry_run renders
     and logs but writes nothing. Returns a summary dict of counts.
@@ -1093,6 +1183,13 @@ def verify_applied_suggestions(
         max_extensions = int(_cfg_get("evolver.verify_max_extensions", 3) or 3)
     if delta_threshold is None:
         delta_threshold = float(_cfg_get("evolver.verify_delta_threshold", 0.05) or 0.05)
+    # VERIFY_LEARN_ARC V3: consume a row's V1 expected_signal (per-class
+    # failure_class_rate) when timestamped-diagnosis windows support it. Default
+    # ON — strictly more accurate for graduation rows and self-falls-back to the
+    # class-neutral stuck-rate when the class data is thin, so it is never worse
+    # than V2. A knob only so the class path can be forced off for A/B or debug.
+    if use_class_signal is None:
+        use_class_signal = bool(_cfg_get("evolver.verify_use_class_signal", True))
     # Baseline floor: don't auto-revert off a statistically thin baseline. A hard
     # floor of 3 against a post-apply window of 10 lets a degraded verdict fire
     # from a 3-run baseline vs 10-run post — poor structural fit for a default-on
@@ -1129,6 +1226,11 @@ def verify_applied_suggestions(
             continue
         dated.append((t_o, o))
     dated.sort(key=lambda pair: pair[0])
+
+    # V3: timestamped diagnoses for the per-class rate path (loaded once, reused
+    # per candidate). Empty until post-V3 diagnoses accrue → the class path stays
+    # dormant and every row uses the class-neutral stuck-rate, exactly as in V2.
+    dated_diags = _load_dated_diagnoses() if use_class_signal else []
 
     try:
         # Newest-1000 window (load_suggestions convention). Applied-unverified
@@ -1177,6 +1279,24 @@ def verify_applied_suggestions(
             n_after, stuck_after = _verify_counts(after)
             sr_before = (stuck_before / n_before) if n_before else float("nan")
             sr_after = (stuck_after / n_after) if n_after else float("nan")
+            metric_label = "stuck_rate"
+
+            # V3: prefer the row's own expected_signal (per-class
+            # failure_class_rate) when BOTH windows have enough stamped-diagnosis
+            # data. This is what makes a graduation verdict resolve: a single
+            # failure class barely moves the global stuck-rate, so on that metric
+            # graduation rows only ever park unverifiable. On the class rate the
+            # change is measured against the class it targets. Falls back to the
+            # stuck-rate values above whenever the class windows are thin, so a
+            # sparse class is never verdicted off noise — it parks honestly.
+            fc = _expected_class(s) if use_class_signal else None
+            if fc:
+                cb, hb, ca, ha = _class_rate_windows(dated_diags, fc, t_apply, min_post_apply)
+                if ca >= min_post_apply and cb >= min_baseline:
+                    n_before, n_after = cb, ca
+                    sr_before = hb / cb
+                    sr_after = ha / ca
+                    metric_label = f"failure_class_rate:{fc}"
 
             verdict = _classify_cadence_verdict(
                 n_before, n_after, sr_before, sr_after,
@@ -1189,6 +1309,7 @@ def verify_applied_suggestions(
                 "stuck_rate_before": None if math.isnan(sr_before) else round(sr_before, 3),
                 "stuck_rate_after": None if math.isnan(sr_after) else round(sr_after, 3),
                 "n_before": n_before, "n_after": n_after,
+                "metric": metric_label,
             }
 
             if verdict == "confirmed":

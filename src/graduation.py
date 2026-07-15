@@ -2,8 +2,17 @@
 
 Scans recent diagnoses for repeated failure patterns. When the same
 failure class appears 3+ times (default), writes a pending suggestion for
-human review/application. Autonomous consumption awaits VERIFY_LEARN_ARC
-V1-V3; this module's verification is structural observability only.
+human review/application. Graduation rules stay advisor-gated (a human
+applies them via ``maro evolver apply``) per the VERIFY_LEARN_ARC V3 owner
+call — nothing here auto-applies a standing rule.
+
+This module's ``verify_pattern`` check is structural observability only (is
+the recommended code-level fix present?) — it never drives a verdict, because
+for observation/prompt_tweak graduations "apply" records a lesson, not a code
+edit, so a grep miss does not mean the change failed. The *behavioral* verdict
++ demote for an applied graduation row lives in VERIFY_LEARN_ARC V2/V3
+(``evolver_scans.verify_applied_suggestions``), which since V3 verdicts it on
+its own ``expected_signal`` (per-class failure_class_rate).
 
 This closes the full self-reflection loop:
   observe (Phase 44) → classify → recover (Phase 45) → graduate (Phase 46)
@@ -294,8 +303,8 @@ def run_graduation(
     Each unique failure class that has appeared >= min_count times (and hasn't
     already been proposed) gets a new high-confidence Suggestion written to
     suggestions.jsonl. These rows remain pending until a human applies them via
-    ``maro evolver apply``; autonomous consumption is deferred to the ordered
-    V1-V3 verify→learn arc.
+    ``maro evolver apply`` (advisor-gated by owner decision). Once applied they
+    flow into the V2/V3 cadence verify→demote loop like any other applied change.
 
     Returns: number of new suggestions written (0 on dry_run).
     """
@@ -471,9 +480,15 @@ def run_graduation_verification(
 ) -> List[dict]:
     """Run cheap structural checks for applied graduations at evolver cadence.
 
-    This intentionally does **not** implement VERIFY_LEARN_ARC V3: failures
-    are observed and optionally notified, never auto-reverted or demoted.
-    Authority-aware revert and behavioral expectations require V1/V2 first.
+    This is the *structural observability* layer only — it emits
+    GRADUATION_VERIFIED events (is the recommended code fix present in the
+    tree?) and optionally notifies, but never reverts or demotes. That is
+    deliberate: the grep is a weak signal for observation/prompt_tweak
+    graduations (applying them records a lesson, not a code edit), so it must
+    not gate state. The *behavioral* verify + demote for an applied graduation
+    row is VERIFY_LEARN_ARC V2/V3's job — ``verify_applied_suggestions`` renders
+    the per-class failure_class_rate verdict and, on degrade, surfaces a
+    human-applied row for review (never auto-reverts it, symmetric authority).
     """
     results = verify_graduation_rules(lookback=lookback)
     state_path = _verification_state_path()

@@ -2707,3 +2707,32 @@ Dormant (deliberately parked, not dropped):
   hardening SHIPPED 584b902 — bounded windows, `behavioral`-flagged honest
   reverts, authority re-check, baseline floor, impact-gate fix; reconciled clean
   with Codex's parallel audit/admission commits, box-safe suite green at 181.)
+
+- **2026-07-14 (Jeremy: "Let's do it") — VERIFY_LEARN_ARC V3 SHIPPED.** The
+  build following the "buildable now" call. Key realization while building: the
+  design's item (a) "wire graduation's pending rows into apply→verify" was
+  already true — an *applied* graduation row flows through V2's cadence verify —
+  but on the class-neutral *global* stuck-rate, in which a single failure class
+  is noise, so graduation rows only ever parked `unverifiable`. So V3's real
+  substance is the metric: `verify_applied_suggestions` now consumes a row's V1
+  `expected_signal` and verdicts a `failure_class_rate` row on *that class's*
+  rate over timestamped-diagnosis windows (self-falls-back to the stuck-rate
+  when class windows are thin → a sparse class parks honestly, never verdicts
+  off noise). Diagnoses gained a `recorded_at` stamp (`introspect.save_diagnosis`)
+  — they were the one learning ledger with no time axis (join to outcomes on
+  `loop_id` was ~99% lossy: 21/1277 on real data), and that absence was the
+  actual reason V2 fell back to class-neutral. Prospective: class path dormant
+  until post-V3 diagnoses accrue, then self-activates (same shape as V2 becoming
+  live organically). Lifecycle + symmetric authority reused from V2 unchanged.
+  **The one owner call landed as its safe default: graduation stays advisor-gated
+  — a human applies via `maro evolver apply`, nothing auto-applies a standing
+  rule → a degraded graduation row surfaces for review, never auto-reverted.**
+  Autonomous *apply* of graduation deliberately NOT built (owner posture, not a
+  gap). Structural `verify_pattern` grep kept as pure observability (a grep miss
+  ≠ the applied lesson failed — it must not gate state; this is why it stayed
+  observe-only, not a V1/V2 sequencing block as Codex had framed). Knob
+  `evolver.verify_use_class_signal` (DEFAULTS.md, default ON). 10 new tests
+  (`test_evolver.py::TestVerifyClassSignal` + `test_introspect.py`); box-safe
+  suite green. **Applied-change verify→learn is now closed for BOTH the
+  evolver-suggestion (V2) and graduation (V3) lanes; V4/V5 (navigator half of
+  thread decision #6) is the remaining open work.**

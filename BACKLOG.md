@@ -41,16 +41,21 @@ suggestions (confirmed→calibrate, degraded-self→auto-revert,
 degraded-human→review queue, inconclusive→extend/park), trust policy §4 live
 via `verdict_trust()`, and a dead-on-production `recorded_at` window bug fixed
 en route; see `docs/VERIFY_LEARN_ARC.md` and GOAL_BRAIN Decisions 2026-07-14.
-V3 was inspected after those landings; Jeremy adjudicated 2026-07-14 that it
-is **buildable now, not decision-blocked** — the two "must define first"
-prerequisites already shipped (V1's `expected_signal` = the behavioral
-expectation; V2's symmetric-authority + `behavioral` revert = the safe
-demotion target), and V2's verify path is category-agnostic. Remaining is
-build: wire graduation's pending rows into apply→verify, reuse the
-class-neutral stuck-rate fallback for the missing timestamped-diagnosis
-metric, keep rules advisor-gated (held-for-review) so nothing auto-applies.
-Navigator-side V4/V5 remain separate future candidates. (Codex's earlier
-"deferred by owner decision / design dependency" framing was superseded here.)
+**V3 (graduation behavioral auto-verify) SHIPPED the same day** after Jeremy's
+"buildable now" call (Codex's earlier "deferred / design-dependency" framing
+superseded): applied graduation rows already flowed into V2's cadence verify,
+but on the class-neutral global stuck-rate — noise for a single class, so they
+only ever parked `unverifiable`. V3 makes it resolve — `verify_applied_suggestions`
+consumes the row's `expected_signal` and verdicts a `failure_class_rate` row on
+*that class's* rate over timestamped-diagnosis windows (diagnoses gained a
+`recorded_at` stamp; self-falls-back to the stuck-rate when class windows are
+thin). Lifecycle + symmetric authority reused from V2; rules stay advisor-gated
+(human-applied → degraded surfaces for review, never auto-reverted — the owner's
+safe default); structural `verify_pattern` stays pure observability. Knob
+`evolver.verify_use_class_signal` (default ON); prospective (class path dormant
+until post-V3 diagnoses accrue). The applied-change verify→learn loop is now
+closed for BOTH the evolver-suggestion (V2) and graduation (V3) lanes.
+**Navigator-side V4/V5 remain the open half of thread decision #6.**
 
 ---
 
@@ -1224,27 +1229,23 @@ folds into this decision (see docs/INDEX.md note).
   generically detectable — the two known record-level deleters are the
   ones fixed above, pinned by unit tests.
 
-- [ ] **Graduation proposals still have no autonomous consumer; graduation-
-  specific behavioral verification remains VERIFY_LEARN_ARC V3.** V1
-  (expectation stamping) and V2 (cadence verdicts + auto-revert) both SHIPPED
-  2026-07-14: `verify_applied_suggestions()` now renders a behavioral verdict
-  on any *applied* suggestion and confirms / auto-reverts / queues-for-review /
-  parks it, with the symmetric-authority policy and trust filtering live. What
-  remains open is the graduation-specific front half: graduation writes pending
-  suggestions after the evolver auto-apply loop, and later evolver runs do not
-  *apply* prior pending `graduation:` rows autonomously — so V2's verify path
-  never sees them. The live workspace still has no `graduation:` suggestions,
-  so there's no organic evidence this path has ever made a rule live. Templates
-  currently mix observations, lesson-like prompt tweaks, and gated guardrails
-  rather than one durable standing-rule type, and prompt tweaks lack a true
-  rollback target (V2 reverts config/gate rows cleanly; a prose prompt tweak
-  has no crisp revert target — but V2's `behavioral` flag already routes those
-  to surface-for-review rather than a false revert). V3 — graduation
-  auto-apply-then-verify + demote — is **buildable now, not decision-blocked**
-  (Jeremy 2026-07-14): reuse V1 `expected_signal` + V2 authority-aware revert,
-  reuse the class-neutral stuck-rate fallback for the absent timestamped-
-  diagnosis metric, and keep graduation rules advisor-gated (held-for-review)
-  so the verify→demote loop ships without ever auto-applying a standing rule.
+- [x] **Graduation-specific behavioral verification (VERIFY_LEARN_ARC V3) —
+  SHIPPED 2026-07-14.** V1 (expectation stamping), V2 (cadence verdicts +
+  auto-revert), and V3 all landed the same day. `verify_applied_suggestions()`
+  now verdicts an applied graduation row on its *own* `failure_class_rate`
+  (per-class rate over timestamped-diagnosis windows — diagnoses gained a
+  `recorded_at` stamp), instead of the class-neutral global stuck-rate on which
+  a single class is noise (why graduation rows only ever parked `unverifiable`).
+  Falls back to the stuck-rate when class windows are thin. Lifecycle +
+  symmetric authority reused from V2; structural `verify_pattern` stays pure
+  observability. Knob `evolver.verify_use_class_signal` (default ON).
+  **Deliberately NOT built (owner call, Jeremy 2026-07-14): autonomous *apply*
+  of graduation rows.** Graduation stays advisor-gated — a human applies via
+  `maro evolver apply`; nothing auto-applies a standing rule, so a degraded
+  graduation row surfaces for review (never auto-reverted). This is a safety
+  posture, not a gap; revisit only if the auto-apply-threshold owner call
+  changes. (The live workspace still has no `graduation:` suggestions, so the
+  class path has no organic evidence yet — prospective by design.)
 
 - [ ] **Design constraint, not a task: decay trust, never data.** Append-only
   evidence layer stays perfect (the computerization edge over human forgetting);

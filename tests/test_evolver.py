@@ -44,7 +44,10 @@ from memory_ledger import (
     VERDICT_TRUST_NEUTRAL,
     VERDICT_TRUST_EXCLUDED,
 )
-from evolver_scans import _outcome_ts, _verify_counts
+from evolver_scans import (
+    _outcome_ts, _verify_counts,
+    _expected_class, _class_rate_windows, _load_dated_diagnoses,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -3574,3 +3577,141 @@ class TestVerifyAppliedSuggestions:
             summary = verify_applied_suggestions("r", min_post_apply=10, max_extensions=3)
         assert summary["confirmed"] == 0
         assert summary["pending"] == 1        # inconclusive: no trusted post-apply data
+
+
+# ---------------------------------------------------------------------------
+# VERIFY_LEARN_ARC V3 — per-class failure-rate verdicts for graduation rows
+# ---------------------------------------------------------------------------
+
+def _mk_grad_sug(sid, fc="retry_churn", *, applied_manually=False,
+                 category="new_guardrail", applied_at=_T_APPLY):
+    """A graduation-style suggestion carrying a V1 failure_class_rate signal."""
+    s = Suggestion(
+        suggestion_id=sid, category=category, target="all",
+        suggestion="tweak text", failure_pattern=f"graduation:{fc}",
+        confidence=0.9, outcomes_analyzed=10, applied=True, applied_at=applied_at,
+        applied_manually=applied_manually,
+        expected_signal=[{"metric": "failure_class_rate", "class": fc, "direction": "down"}],
+    )
+    return s
+
+
+def _write_diagnoses(rows):
+    """Append diagnosis dicts to memory/diagnoses.jsonl (the file V3 reads)."""
+    from orch_items import memory_dir
+    p = memory_dir() / "diagnoses.jsonl"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with p.open("a", encoding="utf-8") as f:
+        for r in rows:
+            f.write(json.dumps(r) + "\n")
+    return p
+
+
+def _diagnoses(fc, before_hits, after_hits, *, n=10):
+    """n before + n after diagnoses; `*_hits` of each window are class `fc`,
+    the rest are 'healthy'. Timestamps straddle _T_APPLY."""
+    rows = []
+    for i in range(n):
+        rows.append({"loop_id": f"b{i}", "recorded_at": f"2026-05-01T11:{i:02d}:00+00:00",
+                     "failure_class": fc if i < before_hits else "healthy"})
+    for i in range(n):
+        rows.append({"loop_id": f"a{i}", "recorded_at": f"2026-05-01T13:{i:02d}:00+00:00",
+                     "failure_class": fc if i < after_hits else "healthy"})
+    return rows
+
+
+class TestVerifyClassSignal:
+    """V3: graduation rows are verdicted on their own failure_class_rate, which
+    resolves cases where the class-neutral global stuck-rate would be flat."""
+
+    def test_expected_class_extracts_graduation_signal(self):
+        s = _mk_grad_sug("g", fc="token_explosion")
+        assert _expected_class(s) == "token_explosion"
+        # A row with no failure_class_rate signal returns None (keeps stuck-rate).
+        assert _expected_class(_mk_sug("plain")) is None
+
+    def test_class_rate_windows_are_count_bounded(self):
+        from datetime import datetime, timezone
+        t_apply = datetime.fromisoformat(_T_APPLY)
+        dated = [(datetime.fromisoformat(r["recorded_at"].replace("Z", "+00:00")),
+                  r["failure_class"]) for r in _diagnoses("retry_churn", 6, 1, n=10)]
+        dated.sort(key=lambda p: p[0])
+        cb, hb, ca, ha = _class_rate_windows(dated, "retry_churn", t_apply, 10)
+        assert (cb, hb, ca, ha) == (10, 6, 10, 1)   # 60% before, 10% after
+
+    def test_graduation_confirmed_on_class_rate_despite_flat_stuck_rate(self):
+        # Global stuck-rate is FLAT (0->0): the V2 metric would say inconclusive.
+        # The class rate for retry_churn falls 60%->0%: on its own signal the
+        # graduation confirms. This is the case V3 exists to resolve.
+        _write_suggestions(_mk_grad_sug("g-ok", fc="retry_churn"))
+        _write_diagnoses(_diagnoses("retry_churn", before_hits=6, after_hits=0))
+        outs = _outcomes(before_stuck=0, after_stuck=0)   # flat global stuck-rate
+        with patch("evolver_scans.load_outcomes", return_value=outs):
+            summary = verify_applied_suggestions("rc", min_post_apply=10)
+        assert summary["confirmed"] == 1
+        row = _read_sug("g-ok")
+        assert row["verify_verdict"] == "confirmed"
+        # The verdict event records which metric drove it.
+        cal = _read_outcome_calibration("g-ok")
+        assert cal and cal[0]["verified"] is True
+
+    def test_graduation_degraded_human_applied_surfaces_for_review(self):
+        # Class rate ROSE 0->80% (the fix backfired); the row is human-applied
+        # (advisor-gated owner default) so it is surfaced, never auto-reverted.
+        _write_suggestions(_mk_grad_sug("g-bad", fc="retry_churn", applied_manually=True))
+        _write_diagnoses(_diagnoses("retry_churn", before_hits=0, after_hits=8))
+        outs = _outcomes(before_stuck=0, after_stuck=0)   # flat global stuck-rate
+        with patch("evolver_scans.load_outcomes", return_value=outs):
+            summary = verify_applied_suggestions("rd", min_post_apply=10)
+        assert summary["review_queued"] == 1
+        assert summary["reverted"] == 0
+        row = _read_sug("g-bad")
+        assert row["applied"] is True                 # human authority: never auto-reverted
+        assert row["verify_verdict"] == "degraded_needs_review"
+        esc = [e for e in _read_escalations()
+               if e.get("event_type") == "self_improvement_verdict"]
+        assert esc and esc[-1]["blocking"] is True
+        assert esc[-1]["metric"] == "failure_class_rate:retry_churn"
+
+    def test_falls_back_to_stuck_rate_when_class_windows_thin(self):
+        # A graduation row whose class has NO timestamped diagnoses yet must not
+        # verdict off noise — it uses the stuck-rate (V2). Here the global
+        # stuck-rate degrades 0->80% on a self-applied guardrail -> auto-revert.
+        _write_suggestions(_mk_grad_sug("g-thin", fc="retry_churn", applied_manually=False))
+        _write_change_log("g-thin", category="new_guardrail",
+                          before_state={"type": "new_guardrail"})
+        _write_dynamic_constraint("g-thin")
+        # no diagnoses on disk -> class windows are empty -> fall back
+        outs = _outcomes(before_stuck=0, after_stuck=8)
+        with patch("evolver_scans.load_outcomes", return_value=outs):
+            summary = verify_applied_suggestions("rf", min_post_apply=10)
+        assert summary["reverted"] == 1               # stuck-rate degraded path fired
+        esc = [e for e in _read_escalations()
+               if e.get("event_type") == "self_improvement_verdict"]
+        assert esc and esc[-1]["metric"] == "stuck_rate"
+
+    def test_use_class_signal_off_forces_stuck_rate(self):
+        # Same data as the confirm test, but the knob is OFF: the class rate is
+        # ignored, the flat global stuck-rate governs -> inconclusive (pending).
+        _write_suggestions(_mk_grad_sug("g-off", fc="retry_churn"))
+        _write_diagnoses(_diagnoses("retry_churn", before_hits=6, after_hits=0))
+        outs = _outcomes(before_stuck=0, after_stuck=0)   # flat global stuck-rate
+        with patch("evolver_scans.load_outcomes", return_value=outs):
+            summary = verify_applied_suggestions(
+                "ro", min_post_apply=10, use_class_signal=False)
+        assert summary["confirmed"] == 0
+        assert summary["pending"] == 1
+
+    def test_plain_row_ignores_diagnoses(self):
+        # A row WITHOUT a failure_class_rate signal never consults diagnoses:
+        # class rate would say degraded, but the confirmed stuck-rate governs.
+        _write_suggestions(_mk_sug("p-plain"))
+        _write_diagnoses(_diagnoses("retry_churn", before_hits=0, after_hits=8))
+        outs = _outcomes(before_stuck=6, after_stuck=0)   # stuck-rate confirmed
+        with patch("evolver_scans.load_outcomes", return_value=outs):
+            summary = verify_applied_suggestions("rp", min_post_apply=10)
+        assert summary["confirmed"] == 1
+
+    def test_pre_v3_diagnoses_without_recorded_at_are_ignored(self):
+        _write_diagnoses([{"loop_id": "x", "failure_class": "retry_churn"}])  # no recorded_at
+        assert _load_dated_diagnoses() == []

@@ -2,7 +2,29 @@
 
 What to do next, in what order. Updated each session. Deferred ideas live in BACKLOG.md; completed phase history in docs/history/ROADMAP_ARCHIVE.md (ROADMAP.md is a stub). This file is the executable queue.
 
-Last updated: 2026-07-14 (VERIFY_LEARN_ARC **V2 — cadence verdicts +
+Last updated: 2026-07-14 (VERIFY_LEARN_ARC **V3 — graduation behavioral
+auto-verify SHIPPED**, the Opus chunk following Jeremy's "buildable now" call).
+Applied graduation rows already flowed into V2's cadence verify — but on the
+class-neutral *global* stuck-rate, in which a single failure class is noise, so
+they only ever parked `unverifiable`. V3 makes the verdict **resolve**:
+`verify_applied_suggestions` now consumes a row's V1 `expected_signal` and
+verdicts a `failure_class_rate` row on *that class's* rate over
+timestamped-diagnosis windows (self-falls-back to the stuck-rate when the class
+windows are thin → a sparse class parks honestly, never verdicts off noise).
+Diagnoses gained a `recorded_at` stamp — the one learning ledger with no time
+axis — so those windows exist (prospective: dormant until post-V3 diagnoses
+accrue). Confirmed/degraded → calibrate/demote lifecycle + symmetric authority
+reused from V2 unchanged. **Owner call landed as its safe default:** graduation
+rules stay advisor-gated (human applies via `maro evolver apply`; nothing
+auto-applies a standing rule) → a degraded graduation row is surfaced for
+review, never auto-reverted. Structural `verify_pattern` grep stays pure
+observability (a grep miss ≠ the applied lesson failed). Knob
+`evolver.verify_use_class_signal` (DEFAULTS.md, default ON). 10 new tests
+(`test_evolver.py::TestVerifyClassSignal`, `test_introspect.py`). **The
+applied-change verify→learn loop is now closed for BOTH the evolver-suggestion
+(V2) and graduation (V3) lanes; next is V4/V5 — the navigator half of thread
+decision #6.** See `docs/VERIFY_LEARN_ARC.md` §3/§7.
+Previous checkpoint — 2026-07-14 (VERIFY_LEARN_ARC **V2 — cadence verdicts +
 auto-revert SHIPPED**, the judgment-heavy Opus chunk). At each evolver cadence,
 `verify_applied_suggestions()` renders a behavioral verdict on every
 applied-but-unverified change (class-neutral stuck-rate, count-based
@@ -28,14 +50,7 @@ window (no later-regression bleed → spurious revert), honest reverts (additive
 `degraded_revert_failed`, never falsely "reverted"), authority re-check before
 the irreversible revert, baseline floor `max(3,min//2)`, `scan_evolver_impact`
 `and`→`or` gate; 6 regression-lock tests; reconciled clean with Codex's parallel
-audit/admission work, full box-safe suite green (181). **Next: V3 — BUILDABLE
-NOW, not decision-blocked (Jeremy 2026-07-14):** the two "define first"
-prerequisites already shipped (V1 `expected_signal` + V2 authority-aware
-`behavioral` revert), V2's verify path is category-agnostic. Remaining is build
-— wire graduation's pending rows into apply→verify, reuse the class-neutral
-stuck-rate fallback for the absent timestamped-diagnosis metric, keep rules
-advisor-gated (held-for-review) so nothing auto-applies. Or V4/V5 (navigator
-half). See `docs/VERIFY_LEARN_ARC.md` §3/§7.
+audit/admission work, full box-safe suite green (181).
 Previous checkpoint — /goal catch-up session — EXT-AUDIT-2 residual
 SHIPPED: `_stamp_verdict_tracked` quarantines deferred learning per-loop_id
 when a closure/provenance/post-escalation verdict stamp write-fails or raises,

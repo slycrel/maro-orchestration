@@ -525,11 +525,14 @@ def run_evolver(
     if verbose:
         print(f"[evolver] run_id={run_id} starting...", file=sys.stderr)
 
-    # VERIFY_LEARN_ARC V3 precursor: cheap structural checks for graduation
-    # suggestions that are actually applied. Observe/notify only — no revert
-    # or demotion until V1 expectations and V2 authority provenance/consumer
-    # exist. Run before the outcome-count early return so a quiet interval does
-    # not suppress verification on the cadence pass.
+    # Graduation STRUCTURAL observability (GRADUATION_VERIFIED events): cheap
+    # greps that report whether the recommended code fix is present. Observe/
+    # notify only — never reverts (a grep miss ≠ the applied lesson failed). The
+    # behavioral verdict + demote for applied graduation rows is the V2/V3
+    # verify_applied_suggestions() pass at the end of this function, which since
+    # V3 verdicts each row on its own expected_signal (per-class rate). Run
+    # before the outcome-count early return so a quiet interval does not suppress
+    # verification on the cadence pass.
     if not dry_run:
         try:
             from graduation import run_graduation_verification

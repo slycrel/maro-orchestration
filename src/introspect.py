@@ -131,6 +131,14 @@ class LoopDiagnosis:
     steps_blocked: int = 0
     steps_total: int = 0
     project: str = ""           # project slug — lets retrieval prioritize same-project history
+    # VERIFY_LEARN_ARC V3: wall-clock stamp at persistence. Diagnoses were the
+    # one learning ledger with no time axis (join to outcomes on loop_id was
+    # ~1% lossy), so a per-class failure_class_rate over before/after windows
+    # was uncomputable — the reason V2 fell back to the class-neutral stuck-rate
+    # for everything. Stamped at save time; additive/empty-default so every
+    # pre-V3 row rehydrates unchanged. Prospective: only rows written after this
+    # shipped carry it, so class-rate windows fill in as the system runs.
+    recorded_at: str = ""
 
     def summary(self) -> str:
         return (
@@ -153,6 +161,7 @@ class LoopDiagnosis:
             "steps_blocked": self.steps_blocked,
             "steps_total": self.steps_total,
             "project": self.project,
+            "recorded_at": self.recorded_at,
         }
 
 
@@ -469,6 +478,12 @@ def save_diagnosis(diag: LoopDiagnosis) -> None:
     """Append a diagnosis to memory/diagnoses.jsonl."""
     path = _diagnoses_path()
     path.parent.mkdir(parents=True, exist_ok=True)
+    # Stamp the persistence time here (not at construction) so the recorded_at
+    # reflects when the row hit the ledger — the axis V3's per-class windows
+    # sort on. Respect a caller-supplied value (e.g. a backfill/replay).
+    if not diag.recorded_at:
+        from datetime import datetime, timezone
+        diag.recorded_at = datetime.now(timezone.utc).isoformat()
     with path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(diag.to_dict()) + "\n")
 
