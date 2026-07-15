@@ -86,6 +86,35 @@ as misleading open work.
 
 Ordered open work that matters. Top of the list is next.
 
+### R6. VERIFY_LEARN_ARC V4/V5 adversarial review — 4 fixed live, 4 deferred (2026-07-14)
+
+Codex ×3 (Skeptic/Architect/Minimalist) over `e792768` (V3 dates) + `8349b7c`
+(V4/V5). Verdict CONTESTED — real findings, none blocking (evidence-only,
+adjudication gated OFF; empirically 0 div_key collisions in the 71 live rows,
+events.jsonl is 2.8 MB so the "OOM" read is trivial today). **Fixed live** (commit
+after this entry): B honest persistence (`raise_on_error=True`, count only on
+durable write, `write_failed` counter); C atomic lessons rewrite (tmp + os.replace);
+D2 undatable-diagnosis drops now counted + logged (no-silent-caps); F
+`NAVIGATOR_ADJUDICATED` registered in EVENT_TYPES. **Deferred residuals:**
+- **A — div_key second-precision collision.** Two same-second, same-(point,move,
+  pipeline), different-goal divergences collapse to one key. Fix (add goal_preview
+  to the key) is correct but retroactively invalidates all 71 existing div_keys —
+  stranding the verdicts (they'd re-adjudicate = re-spend + orphan rows). Zero live
+  collisions; evidence-only. Revisit only if adjudication ever runs concurrently
+  (then do it with a one-time key migration).
+- **G — check-then-write concurrency race (double-judge/double-spend).** Cadence
+  path gated OFF, CLI is manual; worst case = a few wasted cheap calls + last-write-
+  wins (no corruption). A full flock across load→judge→write is heavier than the
+  gated-off, low-frequency, evidence-only path warrants. Add a lock only if the
+  cadence gate is turned on AND an operator also runs `--adjudicate`.
+- **D1 — `read_jsonl_tail` reads the whole file before applying `limit`.** Real for a
+  multi-GB `events.jsonl`; latent here (2.8 MB, caller self-extinguishes as
+  `recorded_at` rows age in). Fix = byte-bounded tail read in `jsonl_utils` (shared;
+  do it as its own change, not folded into this arc).
+- **E — lesson_text embeds truncated goal previews (anchoring risk).** Behind the
+  default-OFF `lesson_inject` A/B whose shadow marker measures exactly this — let the
+  A/B tell us before pre-optimizing the prompt.
+
 ### R5. Independent holistic + adversarial review of the rolling 48-hour changeset (2026-07-13) — all residuals closed
 
 Codex review of `git diff d717915e..8aa9876` (138 files, ~20k added

@@ -757,6 +757,7 @@ def adjudicate_navigator_divergences(
         "already_adjudicated": len(divergences) - len(todo),
         "adjudicated": 0,
         "skipped_no_verdict": 0,
+        "write_failed": 0,
         "verdicts": {v: 0 for v in ADJ_VERDICTS},
         "dry_run": dry_run,
     }
@@ -779,14 +780,20 @@ def adjudicate_navigator_divergences(
         if verdict is None:
             result["skipped_no_verdict"] += 1
             continue
-        result["adjudicated"] += 1
-        result["verdicts"][verdict["verdict"]] += 1
         if verbose or dry_run:
             print(f"  {d['timestamp']} [{d.get('point','dispatch')}] "
                   f"{d['move']} vs {d['pipeline']} -> {verdict['verdict']}: "
                   f"{verdict['rationale']}")
         if dry_run:
+            result["adjudicated"] += 1
+            result["verdicts"][verdict["verdict"]] += 1
             continue
+        # Persist FIRST, count only after the append-only evidence row is durably
+        # written. Counting before persist (with log_event best-effort + a
+        # swallowing except) would report the backlog cleared while a silently
+        # failed write leaves the divergence to be re-judged + re-spent next run
+        # (adversarial-review finding B). raise_on_error surfaces the failure so
+        # we can count it instead of lying about it.
         try:
             from captains_log import log_event, NAVIGATOR_ADJUDICATED
             log_event(
@@ -807,9 +814,15 @@ def adjudicate_navigator_divergences(
                     "pipeline": d["pipeline"],
                     "goal_preview": d.get("goal_preview", ""),
                 },
+                raise_on_error=True,
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            log.warning("navigator adjudication: persist failed for %s: %s",
+                        _divergence_key(d), exc)
+            result["write_failed"] += 1
+            continue
+        result["adjudicated"] += 1
+        result["verdicts"][verdict["verdict"]] += 1
     # Refresh the materialized navigator-lesson view from the current
     # adjudications (V5). Cheap (clustering, no LLM) and only ever consumed when
     # navigator.lesson_inject is on, but kept fresh whenever adjudications move.
@@ -880,11 +893,17 @@ def crystallize_navigator_lessons(min_count: int = 3) -> Dict[str, Any]:
     lessons.sort(key=lambda l: l["count"], reverse=True)
     path = _navigator_lessons_path()
     try:
+        import os as _os
         path.parent.mkdir(parents=True, exist_ok=True)
         # Full rewrite of the materialized view (not append) — it is derived
         # from the adjudication evidence and must reflect only current clusters.
-        path.write_text(
-            "".join(json.dumps(l) + "\n" for l in lessons), encoding="utf-8")
+        # Write to a temp sibling + atomic rename so a crash or a concurrent
+        # writer can never leave decide() reading a half-truncated file
+        # (adversarial-review finding C).
+        body = "".join(json.dumps(l) + "\n" for l in lessons)
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        tmp.write_text(body, encoding="utf-8")
+        _os.replace(tmp, path)
     except Exception:
         pass
     return {"clusters": len(clusters), "lessons": len(lessons)}

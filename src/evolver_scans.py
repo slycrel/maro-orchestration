@@ -841,6 +841,12 @@ def _loop_ts_index(limit: int = 50000) -> "Dict[str, str]":
     survives events-log rotation, the index de-dormants everything already on
     disk. Bounded to the last ``limit`` events (comfortably covers the last
     ``_load_dated_diagnoses`` window, since loops emit only a handful each).
+
+    Note (adversarial-review D1): ``read_jsonl_tail`` reads the whole file before
+    applying ``limit``, so on a multi-GB ``events.jsonl`` this would be a heavy
+    read. Latent, not live: the caller fires lazily and only for pre-stamp
+    diagnoses, so it self-extinguishes as ``recorded_at``-stamped rows age in. If
+    ``events.jsonl`` ever grows large, swap in a byte-bounded tail read (BACKLOG).
     """
     try:
         from orch_items import memory_dir
@@ -884,6 +890,7 @@ def _load_dated_diagnoses(limit: int = 5000) -> List["tuple[datetime, str]"]:
         return []
     ts_index: "Dict[str, str]" = {}
     out: List["tuple[datetime, str]"] = []
+    dropped_no_ts = 0
     try:
         for line in p.read_text(encoding="utf-8").splitlines()[-limit:]:
             line = line.strip()
@@ -904,6 +911,12 @@ def _load_dated_diagnoses(limit: int = 5000) -> List["tuple[datetime, str]"]:
                     ts_index = _loop_ts_index()
                 ts = ts_index.get(d.get("loop_id") or "", "")
             if not ts:
+                # A real diagnosis (has a failure_class) we can't place on the
+                # time axis — no recorded_at stamp AND no joinable event (e.g.
+                # its loop aged out of the events-log tail). Excluded from the
+                # class signal; count + surface it rather than dropping silently
+                # (no-silent-caps decree; adversarial-review finding D2).
+                dropped_no_ts += 1
                 continue
             try:
                 t = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
@@ -912,6 +925,10 @@ def _load_dated_diagnoses(limit: int = 5000) -> List["tuple[datetime, str]"]:
             out.append((t, str(fc)))
     except Exception:
         return []
+    if dropped_no_ts:
+        log.info("dated-diagnosis load: %d/%d classed diagnoses excluded "
+                 "(no recorded_at stamp and no events-log join)",
+                 dropped_no_ts, dropped_no_ts + len(out))
     out.sort(key=lambda pair: pair[0])
     return out
 

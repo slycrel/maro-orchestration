@@ -3742,6 +3742,16 @@ class TestVerifyClassSignal:
         _write_diagnoses([{"loop_id": "orphan", "failure_class": "retry_churn"}])
         assert _load_dated_diagnoses() == []
 
+    def test_undatable_diagnosis_drop_is_logged_not_silent(self, caplog):
+        # Adversarial-review finding D2 / no-silent-caps decree: a classed
+        # diagnosis excluded for having no time axis must be counted + surfaced,
+        # never dropped without a trace.
+        import logging
+        _write_diagnoses([{"loop_id": "orphan", "failure_class": "retry_churn"}])
+        with caplog.at_level(logging.INFO, logger="maro.evolver"):
+            assert _load_dated_diagnoses() == []
+        assert any("excluded" in r.getMessage() for r in caplog.records)
+
     def test_recorded_at_stamp_wins_over_events_join(self):
         # A stamped row uses its own recorded_at even when an event ts also
         # exists — the durable stamp is authoritative (survives events rotation).

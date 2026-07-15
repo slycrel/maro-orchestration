@@ -305,7 +305,10 @@ class TestEventTypes:
         # state/counts for an honest lesson-funnel denominator.
         # +1 (2026-07-14): EVOLVER_VERDICT — behavioral cadence verdict on an
         # applied change (VERIFY_LEARN_ARC V2: confirm / revert / park).
-        assert len(EVENT_TYPES) == 63
+        # +1 (2026-07-14): NAVIGATOR_ADJUDICATED — divergence adjudication verdict
+        # (VERIFY_LEARN_ARC V4); defined but omitted from the set until the
+        # adversarial-review pass (finding F) completed the registry.
+        assert len(EVENT_TYPES) == 64
 
     def test_previously_unregistered_events_in_set(self):
         from captains_log import EVOLVER_REVERTED, EVOLVER_VERIFY, PLAYBOOK_UPDATED

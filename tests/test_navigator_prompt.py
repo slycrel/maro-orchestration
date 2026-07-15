@@ -881,6 +881,30 @@ class TestAdjudicateDivergences:
         assert result["dry_run"] is True
         assert written == []            # nothing persisted
 
+    def test_failed_write_is_not_counted_as_adjudicated(self, monkeypatch, tmp_path):
+        # Adversarial-review finding B: a swallowed persist failure must NOT be
+        # reported as adjudicated — otherwise the backlog reads as cleared while
+        # the divergence is silently re-judged (and re-spent) next run. The LLM
+        # was still called; honesty is about the *persisted* evidence, not the
+        # spend that already happened.
+        import navigator_shadow as ns
+        events = [_decided("escalate", "execute", goal="a")]
+        monkeypatch.setattr(ns, "_load_navigator_events", lambda: events)
+        monkeypatch.setattr(ns, "_navigator_lessons_path",
+                            lambda: tmp_path / "navigator_lessons.jsonl")
+
+        def _boom(etype, **kw):
+            raise OSError("disk full")
+        monkeypatch.setattr(captains_log, "log_event", _boom)
+        adapter = _VerdictAdapter([_verdict_json("navigator_right")])
+        result = ns.adjudicate_navigator_divergences(
+            "test", max_per_cycle=5, tier="cheap",
+            adapter_factory=lambda t: adapter)
+        assert result["adjudicated"] == 0
+        assert result["write_failed"] == 1
+        assert result["verdicts"]["navigator_right"] == 0
+        assert adapter.calls == 1        # spent, but not falsely counted
+
 
 # ---------------------------------------------------------------------------
 # VERIFY_LEARN_ARC V5 — navigator lessons (crystallize + inject)
@@ -960,6 +984,17 @@ class TestCrystallizeNavigatorLessons:
         monkeypatch.setattr(ns, "_load_navigator_events", lambda: [])
         ns.crystallize_navigator_lessons()
         assert ns.load_navigator_lessons() == []
+
+    def test_atomic_rewrite_leaves_no_tmp_sibling(self, monkeypatch, tmp_path):
+        # Adversarial-review finding C: the derived view is written via a temp
+        # sibling + atomic rename, so a reader never sees a half-truncated file
+        # and no stray .tmp is left behind after a successful crystallize.
+        events = [_adjudicated("pipeline_right", "escalate", "execute", i=i)
+                  for i in range(3)]
+        result, ns = self._run(monkeypatch, tmp_path, events)
+        assert result["lessons"] == 1
+        assert (tmp_path / "navigator_lessons.jsonl").exists()
+        assert list(tmp_path.glob("*.tmp")) == []
 
 
 class TestNavigatorLessonInjection:
