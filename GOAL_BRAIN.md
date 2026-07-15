@@ -2871,3 +2871,13 @@ Dormant (deliberately parked, not dropped):
   enable `navigator.lesson_inject`?** Review-cleared + reversible + shadow-marked,
   but it feeds ONE lesson into a *live-acting* navigator (escalate-acting on since
   2026-06-21), so it's cutover-adjacent → his call, recommended-but-held.
+- **2026-07-14 (Jeremy: "turn it on please") — `navigator.lesson_inject` ENABLED on
+  the box.** The V5 A/B flag is on in `~/.maro/workspace/config.yml` (runtime, not
+  git). Verified live end-to-end: `decide()` reads the flag true, the one crystallized
+  lesson (blocked_step execute→extend, from the 71-divergence pass) reaches the model
+  prompt as an advisory "## Lessons from past adjudicated divergences" block, and
+  `lessons_injected=1` is stamped on the NAVIGATOR_DECIDED row for shadow A/B. Caveat
+  on the record: ONE lesson feeding a live-acting navigator — RE-VERIFY by comparing
+  decision quality on rows with `lessons_injected`>0 vs =0 once more lessons accrue.
+  Revert = flip false. **V5 loop now closed end-to-end: adjudicate → crystallize →
+  inject → shadow-measure.**
