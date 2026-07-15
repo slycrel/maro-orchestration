@@ -96,13 +96,31 @@ dispatch slice first (enqueue from box B, run_card back), then effort+consent �
 live progress query → next-pending-step injection (seam refactor first) →
 clarification loop. Pre-box actionable now: **§6 seam inventory** (where
 step-context is assembled; what a typed, provenance-stamped injection input
-needs). Parallel, box-independent: tier-up test goals (flagship: the 5–6yr
+needs). **DONE 2026-07-15 → design doc §6a** (verdict: qualified one-seam;
+work list = typed contributions, parallel fan-out gap, context-only interrupt
+intent). Side find, fixed same day: verify/threshold director-escalate replies
+were clobbered by the carry-forward consume before reaching the next step
+(`loop_execute.py`, pinned by `test_adaptive_escalate_reply_reaches_next_step`).
+Parallel, box-independent: tier-up test goals (flagship: the 5–6yr
 Telegram trading-channel corpus → backtested strategy, research-only —
 CAPABILITIES.md Tier 5). Related standing items it touches: escalation channel
 (the substrate go-between decree IS msg-4's foundation), portable
 learning (promoted: the data layer that makes "active orchestrator" a runtime
 fact), container-on posture for network-sourced goals (revisit at Hermes
 go-live).
+
+- [ ] **Director-escalate reply solicited on the run's final step goes
+  nowhere** (adversarial review of the clobber fix, 2026-07-15, pre-existing):
+  `_ae2_fire` doesn't consider `remaining_steps`, so the director can ask the
+  user a question after the last step — the channel round-trip completes, the
+  reply merges into next-step context, and the loop exits without consuming
+  it. User answered; answer dropped. Matters more once msg-4 (clarification
+  round-trip) makes channel questions routine. Fix direction: gate the
+  escalate branch on `remaining_steps` (don't ask what you can't use), or
+  surface the reply into the run result/closure context. Related micro-wart,
+  same review: hook output from a stuck/blocked step's `_post_step_checks` is
+  dropped on the paths that `continue` past the carry-forward — low value,
+  note only.
 
 ### R6. VERIFY_LEARN_ARC V4/V5 adversarial review — 4 fixed live, 4 deferred (2026-07-14)
 

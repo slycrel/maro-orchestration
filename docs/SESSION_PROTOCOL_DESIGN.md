@@ -207,6 +207,81 @@ failure retry.
   Both honor the recursion decree (sub-goal spawning never foreclosed).
   Neither is scheduled. Injection (§6) is deliberately the minimal cousin.
 
+### 6a. Seam inventory (2026-07-15 — verified against source; line numbers drift)
+
+**Verdict: qualified yes — the sequential core loop already has one
+consumption seam.** Everything an in-loop injector wants to say to the next
+step funnels through one accumulator and one merge point:
+
+- **Accumulator:** `_next_step_injected_context` (`src/loop_execute.py:274`) —
+  a flat string. Contributors today: budget-pressure reminder (~399),
+  goal reorientation every 5 steps (~601), per-step prereq/graveyard
+  knowledge (~642), post-step hook output (`hooks.get_injected_context`,
+  carried at ~1522), blocked-retry hints (via `loop_blocked`), director-
+  escalate user replies (stuck trigger ~1140; verify/threshold trigger ~1498).
+- **Merge point:** `loop_execute.py:649-654` — the accumulator becomes both
+  `incremental_context` and an appended tail on `ancestry_context`, passed to
+  `execute_step`.
+- **Prompt build:** `step_exec.py` `execute_step` — single builder for all
+  loop-executed steps (`user_msg` ~975-986). The live-session variant
+  (`session_delta_msg` ~1005-1016) already renders incremental context as a
+  distinct labeled block ("NEW CONTEXT SINCE THE PRIOR STEP") — **that block
+  is the natural slot for an adjacent, provenance-stamped injection payload.**
+- **Delivery channel already exists:** the file-backed, process-safe
+  `InterruptQueue` (`src/interrupt.py`) is polled exactly once per step at the
+  loop boundary (`loop_execute.py:~1526` → `_check_loop_interrupts`). This IS
+  the LLM-TUI queue pattern (§6). But every non-stop intent today —
+  `additive`/`priority`/`corrective` — **mutates the plan or the goal**;
+  there is no context-only intent. (A separate typed-event path exists —
+  `post_typed_event` + `await:<kind>` steps — but it's pull-based and needs a
+  planned await step.)
+
+**What breaks "one seam" today (the refactor's actual work list):**
+
+1. The accumulator is an untyped flat string — no provenance, everything
+   concatenated. (§6 requires adjacency + provenance.)
+2. **Parallel fan-out bypasses it entirely** — all three paths in
+   `loop_parallel.py` call the same `execute_step` but never pass
+   `incremental_context` (~339-348, ~503-512). An injection would silently
+   miss fanned-out steps.
+3. Four re-entry shapes ride the *run-scoped* `ancestry_context_extra`
+   instead (set once at loop start, `loop_init.py:~367`): NOW→AGENDA
+   escalation-attach, undetermined-run continuation, director restart,
+   closure-gap restart. Cross-process, but same conceptual input.
+4. Checkpoint resume mutates the step *text* itself (`loop_planning.py:~185`
+   prepends a "[resume note: …]" to `steps[0]`) — a third pattern.
+5. The director/worker ticket lane assembles context separately
+   (`director.py:~449-490` → `workers.py:~248`), with the `memory.worker_slice`
+   off-⇒-byte-identical A/B contract living there.
+
+**Refactor shape (recommendation):** replace the flat string with a typed
+list of contribution records `{source, kind, text}` on the loop context;
+render as a provenance-labeled block in `execute_step` (the delta-block slot
+above), **empty ⇒ byte-identical prompts** (tests assert exact prompt shapes,
+e.g. `tests/test_agent_loop.py:~103`, and the worker-slice A/B contract
+depends on byte-identity). Delivery = a new context-only interrupt intent
+(`note`) that appends a contribution instead of touching steps/goal — it
+arrives at exactly the next-boundary point. Optionally fire
+`director_evaluate(trigger="injection")` at the same boundary so
+continue/adjust/replan stays an explicit decision (§6's decision-point
+requirement). Thread the list into the parallel batch paths to close gap 2.
+Keep the worker lane untouched in v1 (gap 5 is a lane, not a bug).
+
+**Semantics trap (found + fixed during this inventory):** the carry-forward
+assignment at `loop_execute.py:~1522` doubles as the *consume/clear* of the
+previous step's context. The verify/threshold director-escalate path wrote
+the user's reply into the accumulator and then fell through to that
+assignment — the reply was silently clobbered (the stuck-trigger path only
+survived because it `continue`s). Fixed 2026-07-15 (merge, not overwrite;
+pinned by `test_adaptive_escalate_reply_reaches_next_step`). The typed-list
+refactor must make append-vs-consume explicit or it will reintroduce this
+class of bug.
+
+**Also true:** continuation crosses the process boundary as a parsed reason
+*string* (`handle.py:~2422`) — typed payloads won't survive it without
+extending the task_store record. In-scope only if msg-3 injection needs to
+outlive a continuation.
+
 ## 7. Data layer / split brain
 
 - Portable learning is the mechanism-to-be: JSONL-truth stores, maro-import,
@@ -266,7 +341,8 @@ failure retry.
 ## 9. Sequencing
 
 1. **Now (pre-box):** this doc; iterate the skeleton. Seam inventory for §6
-   (where step-context is assembled today; what a typed injection input needs).
+   (where step-context is assembled today; what a typed injection input
+   needs). **DONE 2026-07-15 → §6a.**
 2. **Box lands (2026-07-16):** Hermes up on B (recipe: `~/claude/hermes-maro-trial/`
    + memory notes). Thinnest cross-box slice: enqueue from B over
    ssh/tailscale, run_card back on B. Prove the contract crosses the wire
