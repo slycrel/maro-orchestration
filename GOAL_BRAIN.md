@@ -2190,6 +2190,21 @@ Sample: the 2026-05-13..17 window of `~/.maro/workspace/runs/` (478 dirs total;
   user, both along-the-way and after-the-fact.** All folded into
   `docs/SESSION_PROTOCOL_DESIGN.md` (§5/§6/§7/§11/§12; open questions #1 and
   #6 answered — post-plan estimator; no persistent channel to start).
+- **2026-07-15 (Jeremy, third round — enrichment MVP + overnight work mode):**
+  **(1) Enrichment vs learning MVP = "we don't care":** dispatch requires the
+  goal, which is ASSUMED enriched; when the interface also has a distinct raw
+  user ask, pass it too (optional field). Nothing downstream is
+  enrichment-aware yet — the pair is captured data for later memory/
+  shared-memory work and for untangling achieved-vs-user-intent ("keep it
+  simple and we will have to refine later"). Closes SESSION_PROTOCOL open
+  question #8. **(2) Standing work pattern re-affirmed for autonomous
+  sessions:** backlog/milestone items via sub-agent code-writing
+  (Claude/Sonnet/Opus) → verify/test → adversarial-review → fix → commit
+  ("that pattern has served us well the past few days"); new-found work goes
+  to BACKLOG, flagged for a decision if needed, otherwise automatable like
+  any other item. Decision session tentatively the evening of 2026-07-15.
+  Overnight guardrails held by Claude: no container flip (Jeremy's
+  one-liner), no live-run spend batches — code work only.
 
 ## Threads (system-maintained — nothing leaves this list silently)
 

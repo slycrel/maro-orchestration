@@ -223,14 +223,19 @@ failure retry.
   literal, but there's no requirement there." Canonical example: *"where can I
   get fluffy's favorite food"* — Hermes knows fluffy is the user's cat and
   what the food is; a strict pass-through goal likely fails, the enriched one
-  ("find local suppliers of [brand] cat food near [town]") succeeds. So
-  dispatch (msg 0) carries the **enriched goal plus, ideally, the enrichment
-  itself as adjacent metadata** — same adjacency principle as §6: the run
-  should be able to see "user said X; interface added Y from its knowledge of
-  the user." That keeps two-author provenance honest: verification should
-  trace to what the *user* wanted, and a mis-enrichment (Hermes injects the
-  wrong cat's food) is a new failure mode we can only catch if the layers
-  stay distinguishable.
+  ("find local suppliers of [brand] cat food near [town]") succeeds.
+  **DECIDED (Jeremy 2026-07-15) — MVP is "we don't care":** the dispatch
+  payload requires the **goal, which is assumed enriched**; when the
+  interface also has a distinct raw user ask, it passes that too as an
+  **optional second field**. Nothing downstream is enrichment-aware in the
+  MVP — the goal is the goal for planning, execution, learning, and
+  verification. The optional raw ask is *captured data, not consumed
+  machinery*: it accumulates exactly the corpus later work needs (memory /
+  shared-memory shaping, and untangling "achieved the enriched goal" from
+  "got what the user wanted") without building any of that now. Two-author
+  provenance, mis-enrichment detection, user-intent-tracing verification:
+  all real, all far-reaching, all **deliberately deferred** — "keep it
+  simple and we will have to refine later."
 - **Inner-processing visibility is a first-class interest here** (Jeremy —
   "still more interested in" this than the memory question): capture the
   right metadata for **both audiences and both timeframes** — the system
@@ -316,11 +321,10 @@ long-horizon decompose:
    with one.** ssh+poll until a message type proves it can't carry it.
 7. When Hermes dispatch goes live, does box `container: on` become the
    standing posture for network-sourced goals? (Likely yes — decide then.)
-8. Enrichment metadata format (§7): does the dispatch payload carry
-   user-utterance + enrichment as separate fields from day one (cheap now,
-   honest forever), or does v0 dispatch stay a bare goal string and adjacency
-   arrives with msg 3's payload type? (Leaning: separate fields from day one —
-   it's the same adjacent-payload shape §6 needs anyway.)
+8. ~~Enrichment metadata format~~ **ANSWERED (Jeremy 2026-07-15): MVP = "we
+   don't care."** Goal required + assumed enriched; optional raw user-ask
+   field rides along when the interface has one; nothing downstream is
+   enrichment-aware yet (§7). Captured-not-consumed — refine later.
 
 ## 12. Related standing work (backlog cross-links)
 
