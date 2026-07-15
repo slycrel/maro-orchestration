@@ -455,14 +455,14 @@ See `docs/CONTAINER_BURN_IN.md §5b`. Auth volume seeded; CLI pin 2.1.207→2.1.
   C4 mechanics + burn-in evidence complete; mark C4 shipped in design §9 + MILESTONES
   once Jeremy flips.
 
-**Follow-up (new, 2026-07-15, non-blocking):**
-- [ ] **Container `/tmp` is ephemeral per step** — by design each executor step
-  gets a fresh container `/tmp`, so cross-step scratch written there vanishes.
-  Workers that treat `/tmp` as a persistent scratchpad across steps silently lose
-  it. Candidate: bind a per-run host scratch dir (e.g. `<run>/scratch`) at the
-  container `/tmp` so scratch survives within a run while staying off the host
-  `/tmp`. Measure whether real transcripts actually rely on cross-step `/tmp`
-  before building. Surfaced by the C4-BOX burn-in.
+**Follow-up (2026-07-15):**
+- [x] **Container `/tmp` was ephemeral per step — SHIPPED 2026-07-15.**
+  `build_run_command` binds a per-run host scratch dir (`<run_dir>/scratch`, on
+  the workspace subtree) at the container `/tmp` via `run_scratch_dir()`, so
+  cross-step scratch survives within a run while staying off the host `/tmp`.
+  Per-run (not step-named — a step-named dir would still lose it across steps).
+  Reversible: `executor.container_run_scratch: false`. Real-docker verified.
+  Moved to BACKLOG_DONE.md.
 
 ### -1. Purgatorio r2 graduates (2026-07-10 re-run; docs/audit-2026-07-r2/RECONCILIATION.md)
 

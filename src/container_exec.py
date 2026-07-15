@@ -674,6 +674,45 @@ def build_mount_map(
     return mounts
 
 
+def run_scratch_dir() -> Optional[str]:
+    """Per-run host scratch dir to bind at the container's `/tmp` so cross-step
+    scratch survives within a run (C4-BOX burn-in follow-up, 2026-07-15).
+
+    Each executor step is a fresh `--rm` container, so an unbound `/tmp` is
+    ephemeral *per step*: a worker that writes `/tmp/notes` in step 1 finds it
+    gone in step 2. We bind `<run_dir>/scratch` at `/tmp` instead — a single
+    dir stable across the run's (sequential) steps. It lives on the workspace
+    subtree (inside the containment write-scope), is owned by our uid (we create
+    it, the container runs `--user` as the same uid), and is retained with the
+    run per the data-retention decree (never auto-deleted — it becomes part of
+    the run's artifacts). Per-run, NOT per-step: a step-named dir would relocate
+    /tmp to the host but still lose it across steps, which is the whole bug.
+
+    Returns None — leaving /tmp ephemeral, unchanged — when there is no active
+    run dir (utility calls, tests), scratch is disabled
+    (`executor.container_run_scratch: false`), or provisioning fails. Reversible.
+    """
+    try:
+        if not get("executor.container_run_scratch", True):
+            return None
+    except Exception:
+        pass
+    try:
+        from runs import current_run_dir
+        rd = current_run_dir()
+    except Exception:
+        return None
+    if rd is None:
+        return None
+    try:
+        scratch = os.path.join(os.path.realpath(str(rd)), "scratch")
+        os.makedirs(scratch, exist_ok=True)
+        return scratch
+    except OSError as exc:
+        log.debug("run_scratch_dir: could not provision scratch (non-fatal): %s", exc)
+        return None
+
+
 def build_run_command(
     inner_cmd: list,
     *,
@@ -684,6 +723,7 @@ def build_run_command(
     owner_pid: Optional[int] = None,
     image: Optional[str] = None,
     network: Optional[str] = None,
+    scratch_dir: Optional[str] = None,
 ) -> list:
     """Wrap an inner `claude -p ...` command vector in `docker run` (design §2).
 
@@ -692,6 +732,11 @@ def build_run_command(
     worker's relative writes resolve to the host dir. The auth volume + HOME are
     always mounted so the baked CLI is logged in. Owner PID + process-birth
     labels let the stranded sweep distinguish a live owner from PID reuse.
+
+    `scratch_dir` (host path, from `run_scratch_dir()`) is bind-mounted at the
+    container's `/tmp` — the one mount that is NOT identity-mapped — so /tmp
+    scratch persists across a run's steps instead of vanishing with each --rm
+    container. None (the default) leaves /tmp ephemeral, as before.
 
     The inner command's argv[0] is reduced to its basename: the host-resolved
     claude path (e.g. /opt/homebrew/bin/claude) does not exist inside the image;
@@ -720,6 +765,13 @@ def build_run_command(
         if mode == "ro":
             spec += ",readonly"
         cmd += ["--mount", spec]
+    # Per-run scratch bound at the container's /tmp so scratch written to /tmp
+    # survives across a run's (sequential) steps — each --rm step otherwise gets
+    # a fresh ephemeral /tmp (C4-BOX burn-in follow-up 2026-07-15). Fixed
+    # container target /tmp (NOT identity-mapped like the fence binds above) so
+    # the worker's literal /tmp writes land in the on-host run scratch dir.
+    if scratch_dir:
+        cmd += ["--mount", f"type=bind,source={scratch_dir},target=/tmp"]
     # Auth volume + fixed HOME so the baked CLI finds its OAuth session.
     cmd += ["--mount", f"type=volume,source={AUTH_VOLUME},target={AUTH_MOUNT}",
             "-e", f"HOME={CONTAINER_HOME}"]

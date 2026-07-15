@@ -8,6 +8,34 @@ Last split: 2026-04-16 (session 34).
 
 ---
 
+### Container `/tmp` cross-step persistence (C4-BOX burn-in follow-up) — SHIPPED (2026-07-15)
+
+**Source:** C4-BOX burn-in finding #3 (`docs/CONTAINER_BURN_IN.md` §5b). Each
+executor step is a fresh `--rm` container, so an unbound container `/tmp` is
+ephemeral *per step*: a worker that writes `/tmp/notes` in step 1 finds it gone
+in step 2. Workers that treat `/tmp` as a persistent scratchpad silently lose it.
+
+**Fix:** `container_exec.run_scratch_dir()` resolves a per-run host scratch dir
+(`<run_dir>/scratch`, under `~/.maro/workspace/runs/…` — on the workspace
+subtree, so inside the C4-BOX containment write-scope) and `build_run_command`
+binds it at the container `/tmp` (the one mount that is NOT identity-mapped).
+Wired at the container branch of `llm._run_subprocess_safe`. Retained with the
+run per the data-retention decree (never auto-deleted — becomes a run artifact).
+
+**Why per-run, not step-named (Jeremy proposed "step-named mount"):** the bug is
+cross-step *persistence*; a per-step/step-named dir would relocate `/tmp` to the
+host but each step would still get its own dir and lose the prior step's scratch.
+Per-run is the fix that actually addresses the finding. Steps within a run are
+sequential, so a shared per-run dir has no intra-run race.
+
+**Reversible:** `executor.container_run_scratch: false` restores ephemeral
+per-step `/tmp` (documented in DEFAULTS.md; default `True`). None when there is
+no active run dir (utility calls, tests) → `/tmp` stays ephemeral, unchanged.
+
+**Verified:** unit (`TestRunScratchDir`, scratch-mount cases in
+`TestBuildRunCommand`), and real-docker (unbound `/tmp` gone in step 2; bound
+scratch persists across two `--rm` steps; host retains the file).
+
 ### Test-suite truth and reduction pass — SHIPPED (2026-07-14)
 
 Removed the global `not slow` filter that made plain pytest and the documented

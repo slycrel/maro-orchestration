@@ -395,11 +395,16 @@ container containment failed for that case.
    with real docker, asserts the secret is unreadable in both. Result:
    **`VERDICT: CONTAINED`**, exit 0.
 
-**Finding #3 (non-blocking) — container `/tmp` is ephemeral per step.** By
-design (§4: container gets its own `/tmp`), cross-step scratch written to `/tmp`
-does not survive to the next step's container. Workers that lean on `/tmp` as a
-scratchpad across steps see it vanish. Candidate follow-up: bind a per-run host
-scratch dir at the container `/tmp` (BACKLOG). Not a burn-in blocker.
+**Finding #3 (non-blocking) — container `/tmp` was ephemeral per step. FIXED
+2026-07-15.** By design (§4: container gets its own `/tmp`), cross-step scratch
+written to `/tmp` did not survive to the next step's `--rm` container, so workers
+that lean on `/tmp` as a scratchpad across steps saw it vanish. Fix: `build_run_command`
+now binds a per-run host scratch dir (`<run_dir>/scratch`, on the workspace
+subtree, retained with the run) at the container `/tmp` via `run_scratch_dir()`;
+per-run, not per-step (a step-named dir would relocate `/tmp` to the host but
+still lose it across steps — the actual bug). Reversible: `executor.container_run_scratch:
+false`. Real-docker verified: unbound `/tmp` gone in step 2, bound scratch
+persists. Not a burn-in blocker.
 
 ### Go / no-go checklist — filled (2026-07-15)
 

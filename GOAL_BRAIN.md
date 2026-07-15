@@ -2117,6 +2117,18 @@ Sample: the 2026-05-13..17 window of `~/.maro/workspace/runs/` (478 dirs total;
   read); flipping box→on is his one-line call, and the fresh-install default
   stays off regardless (`docs/CONTAINER_BURN_IN.md` §5b/§6). Follow-up (BACKLOG):
   container `/tmp` is ephemeral per step — candidate per-run host scratch bind.
+- **2026-07-15 (Jeremy: "fix the ephemeral /tmp with a step-named mount … do
+  what's already logged if that's better") — SHIPPED per-run, not step-named.**
+  Container `/tmp` no longer vanishes across a run's steps: `run_scratch_dir()`
+  provisions `<run_dir>/scratch` (on the workspace subtree → inside the C4-BOX
+  containment write-scope, retained with the run per the retention decree) and
+  `build_run_command` binds it at the container `/tmp` — the one mount that is
+  NOT identity-mapped. Took the *logged* per-run design over Jeremy's proposed
+  "step-named" (his own deferral): the bug is cross-step *persistence*, and a
+  per-step/step-named dir would relocate `/tmp` to the host but still lose it
+  each step. Steps within a run are sequential → no intra-run race. Reversible:
+  `executor.container_run_scratch: false` (default `True`, DEFAULTS.md). Verified
+  unit + real-docker (unbound `/tmp` gone in step 2; bound scratch persists).
 
 ## Threads (system-maintained — nothing leaves this list silently)
 

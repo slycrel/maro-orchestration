@@ -397,6 +397,48 @@ class TestBuildRunCommand:
         assert cmd[i:] == [ce.DEFAULT_IMAGE, "claude", "-p", "--verbose"]
         assert "/opt/homebrew/bin/claude" not in cmd
 
+    def test_scratch_dir_bound_at_container_tmp(self, monkeypatch):
+        # The per-run scratch dir is bound at /tmp (fixed target, NOT identity-
+        # mapped) so cross-step /tmp scratch persists within a run.
+        cmd = self._build(monkeypatch, scratch_dir="/ws/runs/abc-frog/scratch")
+        assert "type=bind,source=/ws/runs/abc-frog/scratch,target=/tmp" in cmd
+        # rw (no ,readonly) — the worker writes here.
+        assert "type=bind,source=/ws/runs/abc-frog/scratch,target=/tmp,readonly" not in cmd
+
+    def test_no_scratch_mount_when_scratch_dir_none(self, monkeypatch):
+        # No run dir → /tmp stays ephemeral (default), no bind added.
+        cmd = self._build(monkeypatch)  # scratch_dir defaults to None
+        assert not any(str(x).endswith("target=/tmp") for x in cmd)
+
+
+class TestRunScratchDir:
+    def test_provisions_scratch_under_run_dir(self, monkeypatch, tmp_path):
+        rd = tmp_path / "runs" / "abc-frog"
+        rd.mkdir(parents=True)
+        monkeypatch.setattr(ce, "get", lambda k, d=None: d)  # knob defaults True
+        import runs as _runs
+        monkeypatch.setattr(_runs, "current_run_dir", lambda: rd)
+        got = ce.run_scratch_dir()
+        assert got == str((rd / "scratch").resolve())
+        assert (rd / "scratch").is_dir()  # created
+
+    def test_none_when_no_active_run_dir(self, monkeypatch):
+        monkeypatch.setattr(ce, "get", lambda k, d=None: d)
+        import runs as _runs
+        monkeypatch.setattr(_runs, "current_run_dir", lambda: None)
+        assert ce.run_scratch_dir() is None
+
+    def test_disabled_by_config_knob(self, monkeypatch, tmp_path):
+        rd = tmp_path / "runs" / "abc-frog"
+        rd.mkdir(parents=True)
+        monkeypatch.setattr(
+            ce, "get",
+            lambda k, d=None: False if k == "executor.container_run_scratch" else d)
+        import runs as _runs
+        monkeypatch.setattr(_runs, "current_run_dir", lambda: rd)
+        assert ce.run_scratch_dir() is None
+        assert not (rd / "scratch").exists()  # not provisioned when off
+
 
 class TestKillContainer:
     def test_calls_docker_kill(self, monkeypatch):

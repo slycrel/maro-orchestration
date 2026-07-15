@@ -963,9 +963,13 @@ def _run_subprocess_safe(cmd, *, input=None, timeout=600,
             rw_roots=get_default_container_rw_roots(),
             ro_mounts=_ro_mounts,
         )
+        # Per-run scratch bound at container /tmp so cross-step scratch survives
+        # (C4-BOX follow-up); None when there is no active run dir → /tmp stays
+        # ephemeral, unchanged.
+        _scratch = _ce.run_scratch_dir()
         cmd = _ce.build_run_command(
             cmd, name=container_name, workdir=_cwd_real,
-            mounts=_mounts, worker_env=_worker_env)
+            mounts=_mounts, worker_env=_worker_env, scratch_dir=_scratch)
         _container = container_name
 
     proc = subprocess.Popen(
