@@ -41,9 +41,12 @@ suggestions (confirmed→calibrate, degraded-self→auto-revert,
 degraded-human→review queue, inconclusive→extend/park), trust policy §4 live
 via `verdict_trust()`, and a dead-on-production `recorded_at` window bug fixed
 en route; see `docs/VERIFY_LEARN_ARC.md` and GOAL_BRAIN Decisions 2026-07-14.
-Next queued arc item is V3 (graduation behavioral auto-verify + demote) or the
-navigator-side V4/V5 — neither Jeremy-gated. Nothing else in the Actionable
-Stack was both unblocked and ready without Jeremy's input.
+V3 was inspected after those landings and is **deferred by owner decision**:
+it is a design item, not merely a large implementation, because graduation
+templates do not yet carry behavioral expectations or a safe authority-aware
+demotion target. Navigator-side V4/V5 remain separate future candidates.
+Nothing else in the Actionable Stack was both unblocked and ready without
+Jeremy's input.
 
 ---
 

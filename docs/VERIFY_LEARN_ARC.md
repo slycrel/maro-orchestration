@@ -112,6 +112,11 @@ and never mutate state. Manual-apply provenance is persisted for the later
 authority policy. Full V3 remains sequenced after V1/V2 because the current
 templates do not carry behavioral expectations or a safe demotion target.
 
+**Owner decision 2026-07-14:** defer full V3. This is a design dependency, not
+merely a large build: define the behavioral expectation carried by a graduated
+rule and the authority-aware, crash-safe demotion target before enabling state
+mutation. The shipped structural-only cadence remains in place meanwhile.
+
 ## 4. Verdict trust policy — which verdicts learning may consume
 
 One policy function (single source, like `secret_scrub`), consumed by
