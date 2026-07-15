@@ -101,6 +101,12 @@ work list = typed contributions, parallel fan-out gap, context-only interrupt
 intent). Side find, fixed same day: verify/threshold director-escalate replies
 were clobbered by the carry-forward consume before reaching the next step
 (`loop_execute.py`, pinned by `test_adaptive_escalate_reply_reaches_next_step`).
+**Seam refactor v1 SHIPPED 2026-07-15** (see BACKLOG_DONE for the full
+adversarial-review record): typed `ContextContribution` ledger, `maro
+interrupt --intent note`, parallel-batch threading. Remaining §6a gaps
+(run-scoped `ancestry_context_extra` shapes, resume step-text mutation,
+worker lane) stay open in the design doc; `director_evaluate
+(trigger="injection")` is spend-gated → evening decision session.
 Parallel, box-independent: tier-up test goals (flagship: the 5–6yr
 Telegram trading-channel corpus → backtested strategy, research-only —
 CAPABILITIES.md Tier 5). Related standing items it touches: escalation channel

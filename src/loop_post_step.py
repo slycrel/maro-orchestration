@@ -385,9 +385,29 @@ def _check_loop_interrupts(
     # Interrupt polling
     if interrupt_queue is not None:
         try:
+            from interrupt import INTENT_NOTE
             pending = interrupt_queue.poll()
             for intr in pending:
                 interrupts_applied += 1
+                if intr.intent == INTENT_NOTE:
+                    # Context-only intent (§6 injection seam): append a
+                    # provenance-stamped contribution for the next step's
+                    # prompt. Touches nothing else — no steps, no goal, no
+                    # priority. Delivered at this once-per-step boundary only.
+                    _ledger = getattr(ctx, "pending_context", None)
+                    if _ledger is not None:
+                        _ledger.append("user_note", "note", intr.message)
+                    o.append_decision(ctx.project, [
+                        f"[loop:{ctx.loop_id}] interrupt(note) from {intr.source} "
+                        f"[injected mid-flight, context-only]: {intr.message[:60]}",
+                    ])
+                    if ctx.verbose:
+                        print(
+                            f"[maro] interrupt(note) from {intr.source}: "
+                            f"context queued for next step",
+                            file=sys.stderr, flush=True,
+                        )
+                    continue
                 new_remaining, goal, should_stop = apply_interrupt_fn(
                     intr, remaining_steps, goal
                 )

@@ -163,6 +163,25 @@ class TestClassifyIntentLLM:
         intent, _, _ = _classify_intent("cancel everything", adapter=mock_adapter)
         assert intent == "stop"
 
+    def test_llm_note_coerced_to_additive(self):
+        """note is explicit-only (--intent note): a free-text message the LLM
+        labels "note" is a plan-change request that would be silently
+        downgraded to context-only — coerce to additive instead
+        (adversarial review 2026-07-15)."""
+        from interrupt import _classify_intent
+        mock_adapter = MagicMock()
+        mock_resp = MagicMock()
+        mock_resp.content = json.dumps({
+            "intent": "note",
+            "new_steps": ["also check rate limits"],
+            "replacement_goal": None,
+        })
+        mock_adapter.complete.return_value = mock_resp
+        intent, steps, _ = _classify_intent(
+            "also check rate limits", adapter=mock_adapter)
+        assert intent == "additive"
+        assert "also check rate limits" in steps
+
     def test_llm_corrective(self):
         from interrupt import _classify_intent
         mock_adapter = MagicMock()

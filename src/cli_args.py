@@ -216,8 +216,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_interrupt = sub.add_parser("interrupt", help="Post an interrupt to a running agent loop")
     p_interrupt.add_argument("message", nargs="+", help="Interrupt message (natural language)")
     p_interrupt.add_argument("--source", default="cli", help="Source identifier (default: cli)")
-    p_interrupt.add_argument("--intent", choices=["additive", "corrective", "priority", "stop"],
-                                  help="Force a specific intent (skip LLM classification)")
+    p_interrupt.add_argument("--intent", choices=["additive", "corrective", "priority", "stop", "note"],
+                                  help="Force a specific intent (skip LLM classification). "
+                                       "'note' is context-only: injected into the next step's "
+                                       "prompt without touching steps or goal.")
     p_interrupt.add_argument("--status", action="store_true", help="Show running loop status instead")
     p_interrupt.add_argument("--format", choices=["text", "json"], default="text")
 

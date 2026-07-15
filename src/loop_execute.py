@@ -20,8 +20,10 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from loop_types import (
+    ContextContribution,
     LoopContext,
     StepOutcome,
+    render_contributions,
     step_from_decompose,
     _orch,
     _project_dir_root,
@@ -271,7 +273,12 @@ def _execute_main_loop(
     remaining_steps: List[str] = list(steps)
     remaining_indices: List[int] = list(step_indices)
     step_idx = 0  # global step counter (for numbering, includes injected steps)
-    _next_step_injected_context: str = ""  # Phase 11: injected context from previous step's hooks
+    # §6 injection seam: typed contributions bound for the next step's prompt.
+    # Contributors append to the ledger; the merge point below drains it
+    # exactly once per delivered step. _delivered_contributions keeps the
+    # batch the current step saw so the blocked-retry path can re-arm it.
+    _pending_context = ctx.pending_context
+    _delivered_contributions: List[ContextContribution] = []
     _march_of_nines_alert = False  # Phase 19: cumulative step success rate alert
     _step_retries: Dict[str, int] = {}  # roadblock resilience: retries per step text
     _error_fingerprints: Dict[str, List[str]] = {}  # Phase 62: error fingerprints per step text
@@ -402,11 +409,7 @@ def _execute_main_loop(
                     "Deliver the best synthesis possible from what you have. "
                     "Do NOT attempt new research — consolidate only."
                 )
-                _next_step_injected_context = (
-                    (_next_step_injected_context + "\n\n" + _budget_reminder).strip()
-                    if _next_step_injected_context
-                    else _budget_reminder
-                )
+                _pending_context.append("budget", "context", _budget_reminder)
 
         step_text = remaining_steps.pop(0)
         item_index = remaining_indices.pop(0) if remaining_indices else -1
@@ -606,11 +609,7 @@ def _execute_main_loop(
                 "Key constraints: target <500 tokens per step result; "
                 "never dump raw API output; use prior step data already in context."
             )
-            _next_step_injected_context = (
-                (_next_step_injected_context + "\n\n" + _reorient).strip()
-                if _next_step_injected_context
-                else _reorient
-            )
+            _pending_context.append("reorientation", "context", _reorient)
 
         # Context snowball observation — log size so degradation is visible, not silent.
         # Guideline: warn above 50K chars (rough proxy for ~12K tokens of accumulated context).
@@ -637,19 +636,18 @@ def _execute_main_loop(
             tier_order=_TIER_ORDER,
         )
 
-        # _next_step_injected is set by the previous iteration's hook run
         # Phase 27: merge per-step prereq context (graveyard / sub-loop acquired)
         _prereq_for_step = _prereq_context.get(step_idx, "")
         if _prereq_for_step:
-            _next_step_injected_context = (
-                (_next_step_injected_context + "\n\n" + _prereq_for_step).strip()
-                if _next_step_injected_context
-                else _prereq_for_step
-            )
-        _step_incremental_context = _next_step_injected_context
+            _pending_context.append("prereq", "context", _prereq_for_step)
+        # §6 merge point — the ONE consumption seam. Drain the pending
+        # contributions exactly once and render them provenance-labeled.
+        # Zero contributions ⇒ empty render ⇒ byte-identical prompts.
+        _delivered_contributions = _pending_context.drain()
+        _step_incremental_context = render_contributions(_delivered_contributions)
         _step_ancestry = (
-            (_ancestry_context + "\n\n" + _next_step_injected_context)
-            if _next_step_injected_context
+            (_ancestry_context + "\n\n" + _step_incremental_context)
+            if _step_incremental_context
             else _ancestry_context
         )
         # Invariant guard: if a compound step still reaches execution, recover
@@ -676,6 +674,13 @@ def _execute_main_loop(
                 )
                 remaining_steps[:0] = _parts
                 remaining_indices[:0] = [-1] * len(_parts)
+                # Re-arm the just-drained contributions: this continue skips
+                # execute_step, so without re-arming, everything pending at
+                # this boundary (operator notes, hook output, escalate
+                # replies) would be consumed without ever reaching a prompt
+                # (adversarial review 2026-07-15, HIGH). Mirrors the
+                # blocked-retry re-arm in loop_blocked.
+                _pending_context.extend(_delivered_contributions)
                 if verbose:
                     print(
                         f"[maro] step {step_idx}: recovered compound step by splitting into {len(_parts)} steps",
@@ -1137,9 +1142,10 @@ def _execute_main_loop(
                             try:
                                 _ae_reply = ctx.channel.ask(_ae_question)
                                 if _ae_reply:
-                                    _next_step_injected_context = (
+                                    _pending_context.append(
+                                        "escalate_reply", "reply",
                                         f"Director asked: {_ae_question}\n"
-                                        f"User replied: {_ae_reply}"
+                                        f"User replied: {_ae_reply}",
                                     )
                                     log.info("adaptive [stuck/escalate]: got user reply "
                                              "(%d chars)", len(_ae_reply))
@@ -1283,13 +1289,13 @@ def _execute_main_loop(
                 remaining_indices=remaining_indices,
                 manifest_steps=_manifest_steps,
                 error_fingerprints=_error_fingerprints,
-                next_step_injected_context=_next_step_injected_context,
+                delivered_contributions=_delivered_contributions,
                 consecutive_max_timeouts=_consecutive_max_timeouts,
                 max_consecutive_timeouts=_MAX_CONSECUTIVE_TIMEOUTS,
                 replan_count=_replan_count,
             )
             (_blk_flow, step_idx, _blk_status, _blk_reason,
-             _next_step_injected_context, _consecutive_max_timeouts,
+             _consecutive_max_timeouts,
              _blk_recovery_delta, _replan_count) = _process_blocked_step(ctx, _blk)
             _recovery_step_count += _blk_recovery_delta
             if _blk_flow == "continue":
@@ -1360,12 +1366,11 @@ def _execute_main_loop(
         ctx.session_verify_failures = _session_verify_failures
         ctx.stuck_streak = stuck_streak
         ctx.steps_since_last_check += 1
-        # Escalate replies from this trigger can't write _next_step_injected_
-        # context directly: unlike the stuck trigger (which `continue`s), this
-        # path falls through to the carry-forward assignment below, which
-        # doubles as the consume/clear of the previous step's context and
-        # would silently drop the user's reply.
-        _escalate_reply_context = ""
+        # Escalate replies append to the pending ledger like every other
+        # contributor. The old flat-string carry-forward assignment (which
+        # doubled as consume/clear and silently clobbered the reply on this
+        # fall-through path — fixed 2026-07-15) no longer exists: the only
+        # consumption is the merge-point drain above.
         try:
             from config import get as _ae2_cfg_get
             _ae2_on = bool(_ae2_cfg_get("adaptive_execution", False))
@@ -1503,9 +1508,10 @@ def _execute_main_loop(
                             try:
                                 _ae2_reply = ctx.channel.ask(_ae2_question)
                                 if _ae2_reply:
-                                    _escalate_reply_context = (
+                                    _pending_context.append(
+                                        "escalate_reply", "reply",
                                         f"Director asked: {_ae2_question}\n"
-                                        f"User replied: {_ae2_reply}"
+                                        f"User replied: {_ae2_reply}",
                                     )
                                     log.info("adaptive [%s/escalate]: got user reply "
                                              "(%d chars)", _ae2_trigger, len(_ae2_reply))
@@ -1526,15 +1532,11 @@ def _execute_main_loop(
         if loop_status == "restart":
             break
 
-        # Carry injected context forward to next step. This assignment is also
-        # the consume/clear of the previous step's injected context — merge the
-        # director-escalate reply in rather than letting it be overwritten.
-        _next_step_injected_context = _step_injected_context
-        if _escalate_reply_context:
-            _next_step_injected_context = (
-                (_escalate_reply_context + "\n\n" + _step_injected_context).strip()
-                if _step_injected_context else _escalate_reply_context
-            )
+        # Hook output from this step is one more contribution for the next
+        # step. Consumption happens only at the merge-point drain — nothing
+        # here clears or overwrites what other contributors appended.
+        if _step_injected_context:
+            _pending_context.append("hook", "context", _step_injected_context)
 
         # Kill switch, timeout, interrupt polling
         _interrupts_before = interrupts_applied

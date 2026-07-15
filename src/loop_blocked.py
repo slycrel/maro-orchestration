@@ -52,8 +52,12 @@ class BlockedStepContext:
     remaining_indices: List[int]
     manifest_steps: List[str]
     error_fingerprints: Dict[str, List[str]] = field(default_factory=dict)
+    # §6 injection seam: the contributions the failed step was delivered
+    # (drained at the merge point). The retry path re-arms these onto
+    # ctx.pending_context — appended, never assigned — so the retried step
+    # sees the same context plus the retry hint.
+    delivered_contributions: List[Any] = field(default_factory=list)
     # Loop-level scalars (in via init, out via tuple return)
-    next_step_injected_context: str = ""
     consecutive_max_timeouts: int = 0
     max_consecutive_timeouts: int = 3
     replan_count: int = 0
@@ -62,12 +66,13 @@ class BlockedStepContext:
 def _process_blocked_step(ctx: LoopContext, blk: BlockedStepContext) -> tuple:
     """Phase F11: Process a blocked step — retry, split, redecompose, or terminal.
 
-    Returns (flow: str, step_idx, loop_status, stuck_reason, next_step_injected_context,
+    Returns (flow: str, step_idx, loop_status, stuck_reason,
              consecutive_max_timeouts, recovery_step_count_delta, replan_count).
     flow is "continue" (retry/split/redecompose), "break" (adapter hung), or "normal" (terminal, fall through).
     Mutates blk.step_retries, blk.step_tier_overrides, blk.failure_chain,
     blk.step_outcomes, blk.remaining_steps/indices, blk.manifest_steps,
-    blk.error_fingerprints in place.
+    blk.error_fingerprints in place. Retry-path context for the next attempt
+    is appended to ctx.pending_context (§6 injection seam), never assigned.
     """
     from llm import MODEL_CHEAP, MODEL_MID, MODEL_POWER
 
@@ -89,7 +94,6 @@ def _process_blocked_step(ctx: LoopContext, blk: BlockedStepContext) -> tuple:
     remaining_steps = blk.remaining_steps
     remaining_indices = blk.remaining_indices
     manifest_steps = blk.manifest_steps
-    next_step_injected_context = blk.next_step_injected_context
     consecutive_max_timeouts = blk.consecutive_max_timeouts
     max_consecutive_timeouts = blk.max_consecutive_timeouts
     replan_count = blk.replan_count
@@ -209,11 +213,11 @@ def _process_blocked_step(ctx: LoopContext, blk: BlockedStepContext) -> tuple:
             if _decision.hint
             else _retry_reminder
         )
-        next_step_injected_context = (
-            (next_step_injected_context + "\n\n" + _hint_with_reminder).strip()
-            if next_step_injected_context
-            else _hint_with_reminder
-        )
+        # Re-arm what the failed step already saw, then append the hint —
+        # the retry must see the same context plus the hint. Append-only:
+        # the merge-point drain in loop_execute is the only consumer.
+        ctx.pending_context.extend(list(blk.delivered_contributions))
+        ctx.pending_context.append("blocked_retry", "context", _hint_with_reminder)
         remaining_steps.insert(0, step_text)
         remaining_indices.insert(0, item_index)
         step_idx -= 1
@@ -237,7 +241,7 @@ def _process_blocked_step(ctx: LoopContext, blk: BlockedStepContext) -> tuple:
             injected_steps=list(outcome.get("inject_steps", [])),
             call_record=outcome.get("call_record", ""),
         ))
-        return ("continue", step_idx, "", None, next_step_injected_context,
+        return ("continue", step_idx, "", None,
                 consecutive_max_timeouts, _recovery_delta, replan_count)
 
     elif _decision.redecompose:
@@ -264,6 +268,11 @@ def _process_blocked_step(ctx: LoopContext, blk: BlockedStepContext) -> tuple:
                 replan_count += 1
                 log.info("mid-loop re-decompose: step %d → %d sub-steps (replan #%d)",
                          step_idx, len(_sub_shaped), replan_count)
+                # Same re-arm as the retry branch: the replacement sub-steps
+                # must see what the failed step saw (pre-refactor, the flat
+                # string round-tripped through all three blocked branches —
+                # adversarial review 2026-07-15 caught this one narrowed).
+                ctx.pending_context.extend(list(blk.delivered_contributions))
                 if ctx.verbose:
                     print(
                         f"[maro] step {step_idx} re-decomposed into {len(_sub_shaped)} sub-steps "
@@ -286,7 +295,7 @@ def _process_blocked_step(ctx: LoopContext, blk: BlockedStepContext) -> tuple:
                     injected_steps=list(outcome.get("inject_steps", [])),
                     call_record=outcome.get("call_record", ""),
                 ))
-                return ("continue", step_idx, "", None, next_step_injected_context,
+                return ("continue", step_idx, "", None,
                         consecutive_max_timeouts, _recovery_delta, replan_count)
         except Exception as exc:
             log.warning("mid-loop re-decompose failed: %s — falling through to stuck", exc)
@@ -319,7 +328,7 @@ def _process_blocked_step(ctx: LoopContext, blk: BlockedStepContext) -> tuple:
                 if ctx.verbose:
                     print(f"[maro] adapter appears hung ({consecutive_max_timeouts} consecutive "
                           f"ceiling timeouts) — stopping loop", file=sys.stderr, flush=True)
-                return ("break", step_idx, "stuck", _stuck_reason, next_step_injected_context,
+                return ("break", step_idx, "stuck", _stuck_reason,
                         consecutive_max_timeouts, _recovery_delta, replan_count)
         else:
             consecutive_max_timeouts = 0
@@ -328,6 +337,9 @@ def _process_blocked_step(ctx: LoopContext, blk: BlockedStepContext) -> tuple:
             remaining_steps.insert(0, _new_step)
             remaining_indices.insert(0, -1)
         manifest_steps.extend(_split_shaped)
+        # Same re-arm as the retry branch — split halves must see the failed
+        # step's context (adversarial review 2026-07-15).
+        ctx.pending_context.extend(list(blk.delivered_contributions))
         replan_count += 1
         if ctx.verbose:
             print(
@@ -352,7 +364,7 @@ def _process_blocked_step(ctx: LoopContext, blk: BlockedStepContext) -> tuple:
             injected_steps=list(outcome.get("inject_steps", [])),
             call_record=outcome.get("call_record", ""),
         ))
-        return ("continue", step_idx, "", None, next_step_injected_context,
+        return ("continue", step_idx, "", None,
                 consecutive_max_timeouts, _recovery_delta, replan_count)
 
     # Terminal failure — reached when no branch returned (redecompose fallthrough, or
@@ -410,7 +422,7 @@ def _process_blocked_step(ctx: LoopContext, blk: BlockedStepContext) -> tuple:
             ctx.step_callback(step_idx, step_text, _stuck_reason or "blocked", "blocked")
         except Exception as _exc:
             log.debug("step_callback raised for stuck step %d: %s", step_idx, _exc)
-    return ("normal", step_idx, _loop_status, _stuck_reason, next_step_injected_context,
+    return ("normal", step_idx, _loop_status, _stuck_reason,
             consecutive_max_timeouts, _recovery_delta, replan_count)
 
 

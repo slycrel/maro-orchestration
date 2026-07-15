@@ -209,19 +209,37 @@ failure retry.
 
 ### 6a. Seam inventory (2026-07-15 — verified against source; line numbers drift)
 
+**SHIPPED 2026-07-15 (v1): gaps 1–2 + the `note` intent.** Typed
+contributions live in `src/loop_types.py` (`ContextContribution`,
+`ContributionLedger`, `render_contributions`): contributors append to
+`ctx.pending_context`, the merge point in `loop_execute.py` drains exactly
+once per step; parallel boundaries drain via
+`loop_parallel._drain_pending_context` (once per batch/fan-out); `maro
+interrupt --intent note` appends a context-only `user_note` contribution.
+Empty ledger ⇒ byte-identical prompts (pinned in `tests/test_agent_loop.py`).
+Adversarial review (same day, FIX_FIRST → fixed): every path that consumes
+without executing a prompt must re-arm — the compound-step invariant guard
+(`loop_execute.py`) and ALL THREE blocked branches (retry/redecompose/split
+in `loop_blocked.py`) re-append the drained batch; `note` is explicit-only
+(the LLM classifier coerces a "note" label to additive); per-record 32K cap
+in `ContributionLedger.append`.
+
 **Verdict: qualified yes — the sequential core loop already has one
 consumption seam.** Everything an in-loop injector wants to say to the next
 step funnels through one accumulator and one merge point:
 
-- **Accumulator:** `_next_step_injected_context` (`src/loop_execute.py:274`) —
-  a flat string. Contributors today: budget-pressure reminder (~399),
-  goal reorientation every 5 steps (~601), per-step prereq/graveyard
-  knowledge (~642), post-step hook output (`hooks.get_injected_context`,
-  carried at ~1522), blocked-retry hints (via `loop_blocked`), director-
-  escalate user replies (stuck trigger ~1140; verify/threshold trigger ~1498).
-- **Merge point:** `loop_execute.py:649-654` — the accumulator becomes both
-  `incremental_context` and an appended tail on `ancestry_context`, passed to
-  `execute_step`.
+- **Accumulator:** `ctx.pending_context` (`ContributionLedger` of typed
+  `{source, kind, text}` records; was flat-string
+  `_next_step_injected_context` pre-2026-07-15). Contributors today:
+  budget-pressure reminder (~399), goal reorientation every 5 steps (~601),
+  per-step prereq/graveyard knowledge (~642), post-step hook output
+  (`hooks.get_injected_context`, appended at ~1529), blocked-retry hints
+  (via `loop_blocked`, whose retry/redecompose/split branches all re-arm the
+  failed step's delivered records), director-escalate user replies (stuck trigger ~1140;
+  verify/threshold trigger ~1506), user notes (`interrupt --intent note`).
+- **Merge point:** `loop_execute.py:~650` — the ledger is drained once,
+  rendered (`render_contributions`), and becomes both `incremental_context`
+  and an appended tail on `ancestry_context`, passed to `execute_step`.
 - **Prompt build:** `step_exec.py` `execute_step` — single builder for all
   loop-executed steps (`user_msg` ~975-986). The live-session variant
   (`session_delta_msg` ~1005-1016) already renders incremental context as a
@@ -230,20 +248,23 @@ step funnels through one accumulator and one merge point:
 - **Delivery channel already exists:** the file-backed, process-safe
   `InterruptQueue` (`src/interrupt.py`) is polled exactly once per step at the
   loop boundary (`loop_execute.py:~1526` → `_check_loop_interrupts`). This IS
-  the LLM-TUI queue pattern (§6). But every non-stop intent today —
-  `additive`/`priority`/`corrective` — **mutates the plan or the goal**;
-  there is no context-only intent. (A separate typed-event path exists —
+  the LLM-TUI queue pattern (§6). `additive`/`priority`/`corrective`
+  **mutate the plan or the goal**; `note` (added 2026-07-15) is the
+  context-only intent — appends a `user_note` contribution, touches nothing
+  else, never auto-classified. (A separate typed-event path exists —
   `post_typed_event` + `await:<kind>` steps — but it's pull-based and needs a
   planned await step.)
 
 **What breaks "one seam" today (the refactor's actual work list):**
 
-1. The accumulator is an untyped flat string — no provenance, everything
-   concatenated. (§6 requires adjacency + provenance.)
-2. **Parallel fan-out bypasses it entirely** — all three paths in
-   `loop_parallel.py` call the same `execute_step` but never pass
-   `incremental_context` (~339-348, ~503-512). An injection would silently
-   miss fanned-out steps.
+1. ~~The accumulator is an untyped flat string — no provenance, everything
+   concatenated.~~ **SHIPPED 2026-07-15**: typed
+   `ContextContribution` records, rendered provenance-labeled
+   (`[source] text`) at the merge point.
+2. ~~**Parallel fan-out bypasses it entirely**~~ **SHIPPED 2026-07-15**:
+   batch and fan-out paths drain the ledger once per boundary and pass the
+   rendering as `incremental_context` + merged ancestry to every step in
+   the batch.
 3. Four re-entry shapes ride the *run-scoped* `ancestry_context_extra`
    instead (set once at loop start, `loop_init.py:~367`): NOW→AGENDA
    escalation-attach, undetermined-run continuation, director restart,
@@ -254,7 +275,8 @@ step funnels through one accumulator and one merge point:
    (`director.py:~449-490` → `workers.py:~248`), with the `memory.worker_slice`
    off-⇒-byte-identical A/B contract living there.
 
-**Refactor shape (recommendation):** replace the flat string with a typed
+**Refactor shape (recommendation — shipped as described 2026-07-15, two
+deltas):** replace the flat string with a typed
 list of contribution records `{source, kind, text}` on the loop context;
 render as a provenance-labeled block in `execute_step` (the delta-block slot
 above), **empty ⇒ byte-identical prompts** (tests assert exact prompt shapes,
@@ -266,6 +288,11 @@ arrives at exactly the next-boundary point. Optionally fire
 continue/adjust/replan stays an explicit decision (§6's decision-point
 requirement). Thread the list into the parallel batch paths to close gap 2.
 Keep the worker lane untouched in v1 (gap 5 is a lane, not a bug).
+*Deltas as shipped:* rendering happens loop-side (`render_contributions` at
+the drain points, feeding both the delta-block slot and the fresh-prompt
+ancestry tail — fresh prompts never see `incremental_context`, so
+`execute_step` is unchanged); `director_evaluate(trigger="injection")` was
+NOT built (spend-gated, pending Jeremy).
 
 **Semantics trap (found + fixed during this inventory):** the carry-forward
 assignment at `loop_execute.py:~1522` doubles as the *consume/clear* of the
@@ -275,7 +302,9 @@ assignment — the reply was silently clobbered (the stuck-trigger path only
 survived because it `continue`s). Fixed 2026-07-15 (merge, not overwrite;
 pinned by `test_adaptive_escalate_reply_reaches_next_step`). The typed-list
 refactor must make append-vs-consume explicit or it will reintroduce this
-class of bug.
+class of bug. **Resolved by the v1 ship:** contributors only ever
+`append()`/`extend()`; `drain()` at the merge point is the sole consumer —
+the assignment that doubled as consume/clear no longer exists.
 
 **Also true:** continuation crosses the process boundary as a parsed reason
 *string* (`handle.py:~2422`) — typed payloads won't survive it without

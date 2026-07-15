@@ -9,6 +9,11 @@ Interrupt intents:
     corrective — "Actually focus on Y instead" → replace remaining steps
     priority   — "First do Z" → prepend new steps before current
     stop       — "Stop" / "Halt" / "Cancel" → gracefully terminate loop
+    note       — context-only (§6 injection seam): the message is appended as
+                 a provenance-stamped contribution to the NEXT step's prompt.
+                 Touches nothing else — no steps, no goal, no priority.
+                 Explicit-intent only (post with intent="note"); free text is
+                 never auto-classified as a note.
 
 Usage (producer side — any interface):
     from interrupt import InterruptQueue
@@ -221,8 +226,11 @@ INTENT_ADDITIVE = "additive"
 INTENT_CORRECTIVE = "corrective"
 INTENT_PRIORITY = "priority"
 INTENT_STOP = "stop"
+# Context-only intent — consumed by _check_loop_interrupts as a pending-
+# context contribution (source="user_note"); never mutates steps or goal.
+INTENT_NOTE = "note"
 
-VALID_INTENTS = {INTENT_ADDITIVE, INTENT_CORRECTIVE, INTENT_PRIORITY, INTENT_STOP}
+VALID_INTENTS = {INTENT_ADDITIVE, INTENT_CORRECTIVE, INTENT_PRIORITY, INTENT_STOP, INTENT_NOTE}
 
 # Stop keywords that don't need LLM classification
 _STOP_KEYWORDS = frozenset({
@@ -472,7 +480,11 @@ def _classify_intent(
         d = extract_json(content_or_empty(resp), dict, log_tag="interrupt.classify_interrupt")
         if d:
             intent = d.get("intent", INTENT_ADDITIVE)
-            if intent not in VALID_INTENTS:
+            # note is explicit-only (--intent note): a free-text message the
+            # LLM labels "note" is a plan-change request downgraded to
+            # context-only, silently — coerce to additive instead
+            # (adversarial review 2026-07-15).
+            if intent not in VALID_INTENTS or intent == INTENT_NOTE:
                 intent = INTENT_ADDITIVE
             new_steps = [s for s in d.get("new_steps", []) if isinstance(s, str)]
             replacement_goal = d.get("replacement_goal") or None
@@ -506,7 +518,8 @@ def _classify_heuristic(message: str) -> tuple[str, List[str], Optional[str]]:
 
 def _extract_steps_heuristic(message: str, intent: str) -> tuple[List[str], Optional[str]]:
     """Extract steps from a message without LLM."""
-    if intent == INTENT_STOP:
+    if intent in (INTENT_STOP, INTENT_NOTE):
+        # stop carries no work; note is context-only — never a plan mutation
         return [], None
 
     # Simple: treat message as a single step
@@ -537,6 +550,12 @@ def apply_interrupt_to_steps(
     """
     if interrupt.intent == INTENT_STOP:
         return [], goal, True
+
+    if interrupt.intent == INTENT_NOTE:
+        # Context-only: the loop appends the message to pending step context
+        # in _check_loop_interrupts before this function is reached. Plan and
+        # goal are untouched by design.
+        return remaining_steps, goal, False
 
     if interrupt.intent == INTENT_ADDITIVE:
         new_steps = remaining_steps + interrupt.new_steps

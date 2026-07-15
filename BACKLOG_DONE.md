@@ -8,6 +8,60 @@ Last split: 2026-04-16 (session 34).
 
 ---
 
+### §6 injection-seam refactor v1 — SHIPPED (2026-07-15)
+
+**Source:** SESSION_PROTOCOL_DESIGN.md §6/§6a (Jeremy's "inject additional
+information into the next pending step" design center; seam inventory done
+same day). Scope: §6a gaps 1–2 + the context-only interrupt intent.
+
+**Shipped:** `loop_types.ContextContribution {source, kind, text}` +
+`ContributionLedger` at `ctx.pending_context` (append-only for contributors;
+`drain()` at the merge point is the sole consumer — makes the 2026-07-15
+escalate-clobber class structurally impossible); all six existing
+contributors migrated (budget, reorientation, prereq, hook, blocked_retry,
+escalate_reply); provenance-labeled rendering (`[source] text`) feeds both
+the session delta block and the fresh-prompt ancestry tail (loop-side
+render — `execute_step` unchanged, because fresh prompts never see
+`incremental_context`); `loop_parallel` drains once per batch/fan-out and
+forwards to every step; `maro interrupt --intent note` = context-only
+intent, delivered at the existing once-per-step boundary poll, decision-log
+provenance "[injected mid-flight, context-only]". Hard contract: empty
+ledger ⇒ byte-identical prompts (pinned; also verified empirically vs HEAD
+via worktree by the reviewer). NOT built: `director_evaluate
+(trigger="injection")` (spend-gated, Jeremy decision), worker lane, gaps
+3–4 (run-scoped shapes, resume step-text mutation).
+
+**Adversarial review record (empirical-refutation reviewer, FIX_FIRST → all
+fixed same pass):**
+- HIGH: the compound-step invariant guard drained the ledger then split +
+  `continue`d — every contribution at that boundary (acknowledged operator
+  note, hook output, escalate reply) silently destroyed; HEAD delivered the
+  flat string on this exact path. Reproduced end-to-end both trees (director
+  adjust inserting an unshaped compound step). Fix: re-arm before the
+  `continue`; pin test verified to fail without the fix.
+- MED: redecompose/timeout-split blocked branches lost the failed step's
+  context (HEAD round-tripped it through all three branches; first cut
+  narrowed to retry-only). Fix: re-arm in all three; pins added.
+- LOW: LLM classifier could label free text `note` (plan-change silently
+  downgraded to context-only). Fix: coerce to additive; note is
+  explicit-`--intent`-only.
+- LOW: no length cap — a 10MB note rendered 10MB into the prompt. Fix: 32K
+  per-record cap with logged truncation marker in `ContributionLedger.append`.
+- Probed-OK highlights: byte-identity empirically HEAD↔worktree (full run +
+  direct execute_step, fresh + session-delta); note cannot mutate
+  steps/goal through any intent consumer (poisoned-payload probe); no
+  LoopContext serialization anywhere (ledger crash-loss = HEAD parity);
+  8→7 tuple sole unpacker updated; session-reset-on-note still delivers via
+  ancestry; parallel no-double-drain/no-leak; loop-exit drops = HEAD parity.
+- Noticed for later: note interrupts trigger the generic executor session
+  reset (conservative; a note-only poll could skip it — micro-opt);
+  final-step contributions still go nowhere (pre-existing, already a
+  BACKLOG item under SP).
+
+**Tests:** test_agent_loop.py 194 (12 new), test_interrupt.py +1 classifier
+coercion, plus step_exec 93 / dag 12 / parallel_batch 5 / blocked_cutover 12
+green. Full test-safe.sh run before commit.
+
 ### CPU-liveness rescue was second-granularity blind — SHIPPED (2026-07-15)
 
 **Source:** `test_run_subprocess_safe_liveness_spares_cpu_busy_silent_process`

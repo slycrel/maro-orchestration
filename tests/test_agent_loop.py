@@ -4063,3 +4063,462 @@ def test_finalize_cadence_evolver_exception_is_nonfatal(monkeypatch, tmp_path):
     monkeypatch.setattr(evolver_mod, "run_evolver", boom)
     # must not raise — failures are logged, never fatal to finalization
     _finalize_for_cadence(dry_run=False)
+
+
+# ---------------------------------------------------------------------------
+# §6 injection seam — typed contributions (docs/SESSION_PROTOCOL_DESIGN.md §6a)
+# ---------------------------------------------------------------------------
+
+from loop_types import (
+    ContextContribution,
+    ContributionLedger,
+    render_contributions,
+)
+
+
+def test_render_contributions_empty_is_empty_string():
+    """HARD CONTRACT: zero contributions render to "" so prompts stay
+    byte-identical to the pre-seam flat-string behavior. Do NOT weaken this
+    pin — the worker-slice A/B contract depends on byte-identity discipline."""
+    assert render_contributions([]) == ""
+    ledger = ContributionLedger()
+    assert render_contributions(ledger.drain()) == ""
+    # whitespace-only appends are dropped, preserving the empty case
+    ledger.append("hook", "context", "   \n  ")
+    assert len(ledger) == 0
+    assert render_contributions(ledger.drain()) == ""
+
+
+def test_ledger_two_contributors_same_boundary_both_render():
+    """The escalate-reply clobber class (fixed 2026-07-15): two contributors
+    appending at the same boundary must BOTH survive to the render."""
+    ledger = ContributionLedger()
+    ledger.append("escalate_reply", "reply", "User replied: approach B")
+    ledger.append("hook", "context", "reviewer: watch the file size")
+    rendered = render_contributions(ledger.drain())
+    assert "[escalate_reply] User replied: approach B" in rendered
+    assert "[hook] reviewer: watch the file size" in rendered
+    # drained exactly once — nothing survives to the next boundary
+    assert len(ledger) == 0
+    assert render_contributions(ledger.drain()) == ""
+
+
+class _PromptCaptureAdapter:
+    """Records every complete() call's newest user message and kwargs."""
+
+    def __init__(self):
+        self.user_msgs = []
+        self.call_kwargs = []
+
+    def complete(self, messages, *, tools=None, tool_choice="auto", **kwargs):
+        self.user_msgs.append(
+            next((m.content for m in reversed(messages) if m.role == "user"), "")
+        )
+        self.call_kwargs.append(kwargs)
+        return LLMResponse(
+            content="",
+            stop_reason="tool_use",
+            tool_calls=[ToolCall(
+                name="complete_step",
+                arguments={"result": "ok", "summary": "ok"},
+            )],
+            input_tokens=10,
+            output_tokens=5,
+        )
+
+
+def test_execute_step_prompts_byte_identical_with_no_contributions():
+    """Empty incremental context ⇒ exact pre-seam prompt shapes for BOTH the
+    fresh user_msg and the live-session delta prompt (byte-identity pin)."""
+    adapter = _PromptCaptureAdapter()
+    outcome = _execute_step(
+        goal="byte identity goal",
+        step_text="do the byte identity thing",
+        step_num=1,
+        total_steps=1,
+        completed_context=[],
+        adapter=adapter,
+        tools=[],
+        incremental_context="",
+        executor_session={},  # forces session_delta_prompt to be built + passed
+    )
+    assert outcome["status"] == "done"
+    expected_user_msg = (
+        "Overall goal: byte identity goal\n\n"
+        "Current step (1/1) [general]: do the byte identity thing\n\n"
+        "Complete this step now. Call complete_step when done or flag_stuck if blocked."
+    )
+    assert adapter.user_msgs[0] == expected_user_msg
+    expected_delta = (
+        "Continue the same goal and bounded work segment.\n\n"
+        "Current step (1/1) [general]: do the byte identity thing\n\n"
+        "Complete this step now. Call complete_step when done or flag_stuck if blocked."
+    )
+    assert adapter.call_kwargs[0].get("session_delta_prompt") == expected_delta
+
+
+def test_note_interrupt_reaches_next_step_and_mutates_nothing(monkeypatch, tmp_path):
+    """A posted `note` interrupt is context-only: it reaches the NEXT step's
+    prompt provenance-labeled, and does not touch steps or goal."""
+    _setup_workspace(monkeypatch, tmp_path)
+    from interrupt import InterruptQueue
+
+    q = InterruptQueue(queue_path=tmp_path / "interrupts.jsonl")
+    q.post("the deadline moved to Friday", source="test", intent="note")
+
+    class _CaptureExecAdapter(_DryRunAdapter):
+        def __init__(self):
+            self.exec_user_msgs = []
+
+        def complete(self, messages, *, tools=None, tool_choice="auto", **kwargs):
+            user_content = next(
+                (m.content for m in reversed(messages) if m.role == "user"), "")
+            if tools and tool_choice == "required":
+                self.exec_user_msgs.append(user_content)
+            return super().complete(
+                messages, tools=tools, tool_choice=tool_choice, **kwargs)
+
+    adapter = _CaptureExecAdapter()
+    result = run_agent_loop(
+        "prepare a topic writeup for the note seam",
+        adapter=adapter,
+        dry_run=False,
+        interrupt_queue=q,
+    )
+    assert result.status == "done"
+    assert result.interrupts_applied == 1
+    # Goal untouched; plan untouched (the _DryRunAdapter plan is 3 steps and
+    # the note must not add, replace, or reprioritize any of them).
+    assert result.goal == "prepare a topic writeup for the note seam"
+    assert len(result.steps) == 3
+    assert all("deadline moved" not in s.text for s in result.steps)
+    # Delivered at the next boundary: not in step 1's prompt (posted before
+    # the run; the boundary poll runs AFTER each step), present afterwards.
+    assert "[user_note]" not in adapter.exec_user_msgs[0]
+    assert any(
+        "[user_note] the deadline moved to Friday" in m
+        for m in adapter.exec_user_msgs[1:]
+    ), adapter.exec_user_msgs
+
+
+def test_two_contributors_same_boundary_both_render_in_loop(monkeypatch, tmp_path):
+    """Two different contributors at the same boundary — a user note consumed
+    at the step-4 boundary poll plus the step-5 goal reorientation — must both
+    render in step 5's prompt, neither clobbered (the semantics-trap class)."""
+    _setup_workspace(monkeypatch, tmp_path)
+    from interrupt import InterruptQueue
+
+    q = InterruptQueue(queue_path=tmp_path / "interrupts.jsonl")
+
+    class _SixStepCaptureAdapter(_DryRunAdapter):
+        def __init__(self):
+            self.exec_user_msgs = []
+
+        def complete(self, messages, *, tools=None, tool_choice="auto", **kwargs):
+            user_content = next(
+                (m.content for m in reversed(messages) if m.role == "user"), "")
+            if ("decompose" in user_content.lower()
+                    or "concrete steps" in user_content.lower()):
+                steps = [f"Perform part {i} of the work" for i in range(1, 7)]
+                return LLMResponse(
+                    content=json.dumps(steps), stop_reason="end_turn",
+                    input_tokens=50, output_tokens=30,
+                )
+            if tools and tool_choice == "required":
+                self.exec_user_msgs.append(user_content)
+            return super().complete(
+                messages, tools=tools, tool_choice=tool_choice, **kwargs)
+
+    posted = []
+
+    def _post_note_after_step_4(step_num, step_text, summary, status):
+        if step_num == 4 and not posted:
+            posted.append(True)
+            q.post("budget approval came through", source="test", intent="note")
+
+    adapter = _SixStepCaptureAdapter()
+    result = run_agent_loop(
+        "six part goal exercising same boundary contributors",
+        adapter=adapter,
+        dry_run=False,
+        interrupt_queue=q,
+        step_callback=_post_note_after_step_4,
+    )
+    assert result.status == "done"
+    step5_msgs = [m for m in adapter.exec_user_msgs
+                  if "Perform part 5 of the work" in m]
+    assert step5_msgs, adapter.exec_user_msgs
+    assert any("[user_note] budget approval came through" in m
+               for m in step5_msgs), step5_msgs
+    assert any("[reorientation] GOAL REORIENTATION" in m
+               for m in step5_msgs), step5_msgs
+
+
+def test_parallel_batch_delivers_pending_once(monkeypatch, tmp_path):
+    """Pending contributions reach a parallel batch boundary exactly once:
+    the batch consumes them, and the following boundary gets nothing."""
+    _setup_workspace(monkeypatch, tmp_path)
+    import loop_parallel
+    from loop_types import LoopContext
+
+    captured = []
+
+    def _fake_run_steps_parallel(**kw):
+        captured.append(kw)
+        return [{"status": "done", "result": "r"} for _ in kw["steps"]]
+
+    monkeypatch.setattr(loop_parallel, "_run_steps_parallel",
+                        _fake_run_steps_parallel)
+
+    ctx = LoopContext(loop_id="x", project="", goal="g",
+                      ancestry_context="ANC")
+    ctx.pending_context.append("user_note", "note", "watch the deadline")
+
+    for _ in range(2):  # two consecutive batch boundaries
+        loop_parallel._run_parallel_batch(
+            ctx, "lead step", ["peer one"],
+            step_outcomes=[], completed_context=[],
+            remaining_steps=[], remaining_indices=[],
+            loop_shared_ctx={}, resolve_tools_fn=lambda: [],
+            parallel_fan_out=2, proj_artifact_dir="",
+            iteration=0, step_idx=0,
+        )
+
+    first, second = captured
+    assert first["incremental_context"] == "[user_note] watch the deadline"
+    assert first["ancestry_context"] == "ANC\n\n[user_note] watch the deadline"
+    # consumed once: nothing leaks into the following boundary
+    assert second["incremental_context"] == ""
+    assert second["ancestry_context"] == "ANC"
+    assert len(ctx.pending_context) == 0
+
+
+def test_run_steps_parallel_passes_incremental_to_every_step(monkeypatch, tmp_path):
+    """Every step in a fan-out batch sees the same rendered contributions."""
+    _setup_workspace(monkeypatch, tmp_path)
+    import loop_parallel
+
+    calls = []
+
+    def _fake_execute_step(**kw):
+        calls.append(kw)
+        return {"status": "done", "result": "r", "summary": "s",
+                "tokens_in": 1, "tokens_out": 1}
+
+    monkeypatch.setattr(loop_parallel, "_execute_step", _fake_execute_step)
+    outcomes = loop_parallel._run_steps_parallel(
+        goal="g", steps=["step a", "step b"], adapter=object(),
+        ancestry_context="ANC", tools=[], verbose=False, max_workers=2,
+        incremental_context="[user_note] watch the deadline",
+    )
+    assert len(outcomes) == 2
+    assert len(calls) == 2
+    assert all(c["incremental_context"] == "[user_note] watch the deadline"
+               for c in calls)
+    assert all(c["ancestry_context"] == "ANC" for c in calls)
+
+
+def test_blocked_retry_rearms_delivered_contributions(monkeypatch, tmp_path):
+    """A blocked-step retry re-delivers what the failed step saw plus the
+    retry hint — appended to the pending ledger, never assigned."""
+    _setup_workspace(monkeypatch, tmp_path)
+    import loop_blocked as _lb
+    from loop_types import LoopContext
+
+    monkeypatch.setattr(
+        _lb, "_handle_blocked_step",
+        lambda *a, **kw: _lb._BlockDecision(
+            retry=True, hint="try the smaller file",
+            loop_status="", stuck_reason=""),
+    )
+    ctx = LoopContext(loop_id="x", project="p", goal="g", dry_run=True)
+    blk = _lb.BlockedStepContext(
+        step_text="blocked step", step_idx=1, step_result="partial",
+        step_elapsed=10, outcome={"stuck_reason": "boom"}, item_index=-1,
+        iteration=1, step_adapter=None, step_retries={},
+        step_tier_overrides={}, failure_chain=[], step_outcomes=[],
+        remaining_steps=[], remaining_indices=[], manifest_steps=[],
+        delivered_contributions=[
+            ContextContribution("user_note", "note", "keep this")],
+    )
+    flow = _lb._process_blocked_step(ctx, blk)
+    assert flow[0] == "continue"
+    rendered = render_contributions(ctx.pending_context.drain())
+    assert "[user_note] keep this" in rendered
+    assert "[blocked_retry]" in rendered
+
+
+def _make_blocked_ctx(decision, monkeypatch):
+    """Drive _process_blocked_step with a forced decision and one delivered
+    contribution; return (ctx, blk, flow)."""
+    import loop_blocked as _lb
+    from loop_types import LoopContext
+
+    monkeypatch.setattr(_lb, "_handle_blocked_step", lambda *a, **kw: decision)
+    ctx = LoopContext(loop_id="x", project="p", goal="g", dry_run=True)
+    blk = _lb.BlockedStepContext(
+        step_text="blocked step", step_idx=1, step_result="partial",
+        step_elapsed=10, outcome={"stuck_reason": "boom"}, item_index=-1,
+        iteration=1, step_adapter=None, step_retries={},
+        step_tier_overrides={}, failure_chain=[], step_outcomes=[],
+        remaining_steps=[], remaining_indices=[], manifest_steps=[],
+        delivered_contributions=[
+            ContextContribution("user_note", "note", "keep this")],
+    )
+    flow = _lb._process_blocked_step(ctx, blk)
+    return ctx, blk, flow
+
+
+def test_blocked_redecompose_rearms_delivered_contributions(monkeypatch, tmp_path):
+    """The redecompose branch must carry the failed step's context to the
+    replacement sub-steps, same as retry (adversarial review 2026-07-15:
+    pre-refactor, the flat string round-tripped through all three blocked
+    branches; the first typed-ledger cut narrowed it to retry-only)."""
+    _setup_workspace(monkeypatch, tmp_path)
+    import loop_blocked as _lb
+    import planner
+
+    monkeypatch.setattr(
+        planner, "decompose",
+        lambda *a, **kw: ["sub-step alpha", "sub-step beta"])
+    ctx, blk, flow = _make_blocked_ctx(
+        _lb._BlockDecision(
+            retry=False, hint="", loop_status="", stuck_reason="",
+            redecompose=True, metacognitive_reason="finer"),
+        monkeypatch,
+    )
+    assert flow[0] == "continue"
+    assert blk.remaining_steps, "sub-steps were not inserted"
+    rendered = render_contributions(ctx.pending_context.drain())
+    assert "[user_note] keep this" in rendered
+
+
+def test_blocked_split_rearms_delivered_contributions(monkeypatch, tmp_path):
+    """The timeout-split branch must carry the failed step's context to the
+    split halves, same as retry (adversarial review 2026-07-15)."""
+    _setup_workspace(monkeypatch, tmp_path)
+    import loop_blocked as _lb
+
+    ctx, blk, flow = _make_blocked_ctx(
+        _lb._BlockDecision(
+            retry=False, hint="", loop_status="", stuck_reason="",
+            split_into=["first half", "second half"]),
+        monkeypatch,
+    )
+    assert flow[0] == "continue"
+    assert blk.remaining_steps == ["first half", "second half"]
+    rendered = render_contributions(ctx.pending_context.drain())
+    assert "[user_note] keep this" in rendered
+
+
+def test_ledger_append_caps_oversized_text():
+    """A single contribution cannot render unbounded text into a prompt —
+    oversized appends truncate with a marker (adversarial review 2026-07-15:
+    a 10MB --intent note rendered 10MB)."""
+    from loop_types import ContributionLedger
+
+    ledger = ContributionLedger()
+    ledger.append(
+        "user_note", "note", "A" * (ContributionLedger.MAX_TEXT_CHARS + 500))
+    rendered = render_contributions(ledger.drain())
+    assert len(rendered) <= ContributionLedger.MAX_TEXT_CHARS + 100
+    assert "…[truncated 500 chars]" in rendered
+
+
+def test_compound_guard_split_rearms_contributions(monkeypatch, tmp_path):
+    """Contributions drained at a boundary where the compound-step invariant
+    guard splits the step and `continue`s must be re-armed for the split
+    parts, not destroyed (adversarial review 2026-07-15, HIGH: an
+    acknowledged operator note / hook output vanished when director-adjust
+    inserted an unshaped compound step).
+
+    Recipe: a step-5 post-step hook contributes context; the director's
+    step_threshold evaluation at the same boundary adjusts the plan with an
+    unshaped compound step (real gap — director-adjust assigns revised_steps
+    without _shape_steps, which is why the guard exists). Next iteration
+    drains the ledger, the guard splits and continues — the hook context
+    must still reach an executed prompt."""
+    _setup_workspace(monkeypatch, tmp_path)
+
+    from director import DirectorDecision
+    import config as _cfg_mod
+
+    _orig_cfg_get = _cfg_mod.get
+
+    def _patched_cfg_get(key, default=None):
+        if key == "adaptive_execution":
+            return True
+        return _orig_cfg_get(key, default)
+
+    monkeypatch.setattr(_cfg_mod, "get", _patched_cfg_get)
+
+    class _SixStepCaptureAdapter(_DryRunAdapter):
+        def __init__(self):
+            self.exec_user_msgs = []
+
+        def complete(self, messages, *, tools=None, tool_choice="auto", **kwargs):
+            user_content = next(
+                (m.content for m in reversed(messages) if m.role == "user"), "")
+            if ("decompose" in user_content.lower()
+                    or "concrete steps" in user_content.lower()):
+                steps = [f"Perform part {i} of the work" for i in range(1, 7)]
+                return LLMResponse(
+                    content=json.dumps(steps), stop_reason="end_turn",
+                    input_tokens=50, output_tokens=30,
+                )
+            if tools and tool_choice == "required":
+                self.exec_user_msgs.append(user_content)
+            return super().complete(
+                messages, tools=tools, tool_choice=tool_choice, **kwargs)
+
+    _eval_count = [0]
+    import director as _dm
+
+    def _fake_eval(goal, eval_ctx, trigger, adapter, *, dry_run=False):
+        _eval_count[0] += 1
+        if _eval_count[0] == 1:
+            return DirectorDecision(
+                action="adjust", reasoning="tighten the plan",
+                revised_steps=[
+                    "Run the pytest suite and analyze failures in depth",
+                    "Write the final summary",
+                ],
+            )
+        return DirectorDecision(action="continue", reasoning="ok")
+
+    monkeypatch.setattr(_dm, "director_evaluate", _fake_eval)
+
+    import hooks as _hooks_mod
+    from hooks import HookResult, HookRegistry, SCOPE_STEP
+
+    _fired = []
+
+    def _fake_run_hooks(scope, context, registry=None, adapter=None,
+                        dry_run=False, fire_on=None):
+        if (scope == SCOPE_STEP
+                and "Perform part 5" in str(context.get("step", ""))
+                and not _fired):
+            _fired.append(True)
+            return [HookResult(
+                hook_id="t", hook_name="t", hook_type="notification",
+                scope=SCOPE_STEP, status="notification_sent",
+                injected_context="watch file sizes closely",
+            )]
+        return []
+
+    monkeypatch.setattr(_hooks_mod, "run_hooks", _fake_run_hooks)
+
+    adapter = _SixStepCaptureAdapter()
+    result = run_agent_loop(
+        "six part goal exercising the compound guard re-arm",
+        adapter=adapter,
+        dry_run=False,
+        hook_registry=HookRegistry(),
+    )
+    assert result.status == "done"
+    assert _fired, "step-5 hook never fired"
+    assert _eval_count[0] >= 1, "director evaluation never fired"
+    assert any(
+        "[hook] watch file sizes closely" in m
+        for m in adapter.exec_user_msgs
+    ), adapter.exec_user_msgs

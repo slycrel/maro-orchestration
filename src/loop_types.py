@@ -212,6 +212,97 @@ class LoopResult:
 
 
 # ---------------------------------------------------------------------------
+# Injection seam (§6, docs/SESSION_PROTOCOL_DESIGN.md) — typed "context for
+# the next step" contributions
+# ---------------------------------------------------------------------------
+
+@dataclass
+class ContextContribution:
+    """One provenance-stamped piece of context bound for the next step's prompt.
+
+    Replaces the flat-string `_next_step_injected_context` accumulator: every
+    in-loop injector (budget pressure, reorientation, prereq knowledge, hook
+    output, escalate replies, blocked-retry hints, user notes) appends one of
+    these instead of string-concatenating, so the prompt can label each piece
+    with where it came from.
+    """
+    source: str  # who contributed: "budget" | "reorientation" | "prereq" |
+                 # "hook" | "escalate_reply" | "blocked_retry" | "user_note" | ...
+    kind: str    # what it is: "context" | "reply" | "note"
+    text: str
+
+
+def render_contributions(records: List["ContextContribution"]) -> str:
+    """Render contributions as one provenance-labeled block.
+
+    HARD CONTRACT: an empty list renders to "" — zero contributions must
+    leave prompts byte-identical to the pre-seam behavior (tests pin exact
+    prompt shapes, and the memory.worker_slice A/B contract depends on
+    byte-identity discipline). Only the non-empty rendering may differ from
+    the old flat concatenation (the [source] labels are the point).
+    """
+    if not records:
+        return ""
+    return "\n\n".join(f"[{r.source}] {r.text}" for r in records)
+
+
+class ContributionLedger:
+    """Pending next-step context — the one injection seam (§6).
+
+    Consume semantics (explicit, by design — the 2026-07-15 escalate-reply
+    clobber came from an assignment that silently doubled as consume/clear):
+
+    - Contributors APPEND records. Never assign, never clear on behalf of
+      another contributor.
+    - The merge point (sequential: loop_execute merge into execute_step;
+      parallel: the batch boundary in loop_parallel) DRAINS the pending list
+      exactly once per delivery. drain() returns the delivered batch so
+      retry paths can explicitly re-arm (re-append) what the failed step
+      already saw.
+    """
+
+    def __init__(self) -> None:
+        self._pending: List[ContextContribution] = []
+
+    # Per-record ceiling: contributions render straight into the next step's
+    # prompt, and nothing upstream caps operator-supplied text (a 10MB
+    # `--intent note` would render 10MB — adversarial review 2026-07-15).
+    # 32K chars is far above any legitimate contributor today.
+    MAX_TEXT_CHARS = 32_000
+
+    def append(self, source: str, kind: str, text: str) -> None:
+        """Add one contribution. Empty/whitespace text is dropped; oversized
+        text is truncated (with a marker) at MAX_TEXT_CHARS."""
+        text = (text or "").strip()
+        if not text:
+            return
+        if len(text) > self.MAX_TEXT_CHARS:
+            dropped = len(text) - self.MAX_TEXT_CHARS
+            log.warning(
+                "contribution from %r truncated: %d chars over the %d cap",
+                source, dropped, self.MAX_TEXT_CHARS,
+            )
+            text = text[: self.MAX_TEXT_CHARS] + f"\n…[truncated {dropped} chars]"
+        self._pending.append(ContextContribution(source=source, kind=kind, text=text))
+
+    def extend(self, records: List[ContextContribution]) -> None:
+        """Re-arm previously drained records (e.g. blocked-step retry)."""
+        self._pending.extend(records)
+
+    def drain(self) -> List[ContextContribution]:
+        """Consume: return all pending records and clear the ledger."""
+        batch = self._pending
+        self._pending = []
+        return batch
+
+    def __bool__(self) -> bool:
+        return bool(self._pending)
+
+    def __len__(self) -> int:
+        return len(self._pending)
+
+
+# ---------------------------------------------------------------------------
 # Loop state machine types
 # ---------------------------------------------------------------------------
 
@@ -313,8 +404,9 @@ class LoopContext:
     recovery_step_count: int = 0
     consecutive_max_timeouts: int = 0
 
-    # Hooks & interrupts
-    next_step_injected_context: str = ""
+    # Hooks & interrupts — pending typed contributions for the next step's
+    # prompt (§6 injection seam). Contributors append; the merge point drains.
+    pending_context: ContributionLedger = field(default_factory=ContributionLedger)
     interrupts_applied: int = 0
 
     # Flags

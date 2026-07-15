@@ -10,11 +10,42 @@ import contextvars
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional
 
-from loop_types import LoopContext, LoopResult, StepOutcome, _orch, step_from_decompose
+from loop_types import (
+    LoopContext,
+    LoopResult,
+    StepOutcome,
+    _orch,
+    render_contributions,
+    step_from_decompose,
+)
 from loop_planning import _shape_steps
 from step_exec import execute_step as _execute_step
 
 log = logging.getLogger("maro.loop")
+
+
+def _drain_pending_context(ctx) -> tuple[str, str]:
+    """Consume ctx.pending_context for a parallel delivery boundary (§6).
+
+    Returns (incremental_context, ancestry_context): the provenance-labeled
+    rendering of the pending contributions and the batch ancestry with that
+    rendering appended — the same merge shape the sequential loop uses. The
+    batch is ONE boundary: every step in it sees the same rendered context,
+    and the drain consumes the records exactly once (they don't survive past
+    the batch, and they don't multiply per step).
+
+    Zero pending contributions ⇒ ("", ctx.ancestry_context) — byte-identical
+    prompts to the pre-seam behavior. getattr-defensive so test stubs without
+    a ledger keep working.
+    """
+    ancestry = getattr(ctx, "ancestry_context", "") or ""
+    ledger = getattr(ctx, "pending_context", None)
+    if ledger is None:
+        return "", ancestry
+    rendered = render_contributions(ledger.drain())
+    if not rendered:
+        return "", ancestry
+    return rendered, (ancestry + "\n\n" + rendered) if ancestry else rendered
 
 
 def _run_in_step_worktree(step_label: str, run_fn):
@@ -108,16 +139,20 @@ def _run_parallel_batch(
     if ctx.verbose:
         print(f"[maro] parallel batch: {len(_batch_steps)} steps at level", file=sys.stderr, flush=True)
 
+    # §6 injection seam: this batch is one delivery boundary — drain pending
+    # contributions once; every step in the batch sees the same rendering.
+    _batch_incremental, _batch_ancestry = _drain_pending_context(ctx)
     _batch_outcomes = _run_steps_parallel(
         goal=ctx.goal,
         steps=_batch_steps,
         adapter=ctx.adapter,
-        ancestry_context=ctx.ancestry_context,
+        ancestry_context=_batch_ancestry,
         tools=[LLMTool(**t) for t in resolve_tools_fn()],
         verbose=ctx.verbose,
         max_workers=min(parallel_fan_out, len(_batch_steps)),
         project_dir=proj_artifact_dir,
         shared_ctx=loop_shared_ctx,
+        incremental_context=_batch_incremental,
     )
 
     # Process batch outcomes
@@ -219,6 +254,9 @@ def _run_parallel_path(
     """
     from llm import LLMTool
 
+    # §6 injection seam: one delivery boundary for the whole fan-out (empty in
+    # practice today — nothing appends before Phase D — but structurally closed).
+    _fanout_incremental, _fanout_ancestry = _drain_pending_context(ctx)
     if use_dag:
         if ctx.verbose:
             print(
@@ -232,12 +270,13 @@ def _run_parallel_path(
             steps=clean_steps,
             deps=deps,
             adapter=ctx.adapter,
-            ancestry_context=ctx.ancestry_context,
+            ancestry_context=_fanout_ancestry,
             tools=[LLMTool(**t) for t in resolve_tools_fn()],
             verbose=ctx.verbose,
             max_workers=parallel_fan_out,
             project_dir=proj_fanout_dir,
             shared_ctx=loop_shared_ctx,
+            incremental_context=_fanout_incremental,
         )
         _fanout_step_texts = clean_steps
     else:
@@ -247,12 +286,13 @@ def _run_parallel_path(
             goal=ctx.goal,
             steps=steps,
             adapter=ctx.adapter,
-            ancestry_context=ctx.ancestry_context,
+            ancestry_context=_fanout_ancestry,
             tools=[LLMTool(**t) for t in resolve_tools_fn()],
             verbose=ctx.verbose,
             max_workers=parallel_fan_out,
             project_dir=proj_fanout_dir,
             shared_ctx=loop_shared_ctx,
+            incremental_context=_fanout_incremental,
         )
         _fanout_step_texts = steps
 
@@ -315,12 +355,17 @@ def _run_steps_parallel(
     max_workers: int,
     project_dir: str = "",
     shared_ctx: Optional[Dict[str, Any]] = None,
+    incremental_context: str = "",
 ) -> List[dict]:
     """Execute steps concurrently using ThreadPoolExecutor.
 
     Each step gets its own adapter instance (thread-safe: no shared state).
     completed_context is empty for all parallel steps (no inter-step dependencies
     by design — caller checked _steps_are_independent first).
+
+    incremental_context (§6 injection seam): the already-rendered pending
+    contributions for this boundary — the same string every step in the
+    batch receives (the caller drained the ledger once).
 
     Returns outcomes list in step-index order.
     """
@@ -348,6 +393,7 @@ def _run_steps_parallel(
             ancestry_context=ancestry_context,
             project_dir=project_dir,
             shared_ctx=shared_ctx,
+            incremental_context=incremental_context,
         ))
 
         # Post-step security scan — parallel fan-out skips the main loop's
@@ -448,6 +494,7 @@ def _run_steps_dag(
     max_workers: int,
     project_dir: str = "",
     shared_ctx: Optional[Dict[str, Any]] = None,
+    incremental_context: str = "",
 ) -> List[dict]:
     """Dep-aware parallel execution — semaphore-gated pool with auto-unblock.
 
@@ -512,6 +559,7 @@ def _run_steps_dag(
             ancestry_context=ancestry_context,
             project_dir=project_dir,
             shared_ctx=shared_ctx,
+            incremental_context=incremental_context,
         ))
         if verbose:
             status_label = outcome.get("status", "?")
