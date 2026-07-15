@@ -99,7 +99,7 @@ step-context is assembled; what a typed, provenance-stamped injection input
 needs). Parallel, box-independent: tier-up test goals (flagship: the 5–6yr
 Telegram trading-channel corpus → backtested strategy, research-only —
 CAPABILITIES.md Tier 5). Related standing items it touches: escalation channel
-(1.0 (a) — the substrate go-between decree IS msg-4's foundation), portable
+(the substrate go-between decree IS msg-4's foundation), portable
 learning (promoted: the data layer that makes "active orchestrator" a runtime
 fact), container-on posture for network-sourced goals (revisit at Hermes
 go-live).
@@ -484,7 +484,7 @@ See `docs/CONTAINER_BURN_IN.md §5b`. Auth volume seeded; CLI pin 2.1.207→2.1.
 
 ### -1. Purgatorio r2 graduates (2026-07-10 re-run; docs/audit-2026-07-r2/RECONCILIATION.md)
 
-All adversarially verified (41/42 confirmed). The two 1.0-blockers first:
+All adversarially verified (41/42 confirmed). The two blockers-at-the-time first (de-1.0 decree 2026-07-15: nothing is "1.0-blocked" anymore; open items stand on their own priority):
 
 - [x] **arch-r2-01 (blocker) — DESIGN SHIPPED 2026-07-12:**
   `docs/CONTAINER_EXECUTOR_DESIGN.md` (Fable-handoff session) — seam
@@ -878,7 +878,7 @@ crowd-sourced or not)."
   repo default set (gap found+fixed), ledger-census covered by existing
   `skills/data_analysis.md` (no new file needed), code_review already
   shipped. Nothing left to build against the draft list.
-- [ ] **(post-1.0, Vision)** Shared trusted skill directory + cross-instance
+- [ ] **(Vision)** Shared trusted skill directory + cross-instance
   learning share — see Vision section entry.
 
 ### 0. Test corpus — capture the missing layers (forward record-mode + full archive)
@@ -1070,7 +1070,7 @@ planner/navigator (a) stay vision — they must survive the kill-test
 ("would the same-tier model with identical context do this unprompted?")
 before earning machinery.
 
-### Learning-trust maintenance — "usage only" vs "learning" sessions (post-1.0 vision, 2026-07-12, Jeremy)
+### Learning-trust maintenance — "usage only" vs "learning" sessions (vision, 2026-07-12, Jeremy)
 
 Jeremy (closing the container-executor design conversation, verbatim —
 full quote in GOAL_BRAIN Decisions 2026-07-12): skill poisoning and
@@ -1103,19 +1103,19 @@ Direction, not design. Doors already built when this gets a session:
   `secret_scrub` + pack sealing cover the mechanical side; content-level
   export scanning is unaddressed and belongs to this item.
 
-### Shared trusted skill directory + cross-instance learning (post-1.0 vision, 2026-07-10, Jeremy)
+### Shared trusted skill directory + cross-instance learning (vision, 2026-07-10, Jeremy)
 
 "Maybe a shared and trusted directory to pull from at a later time,
 crowd-sourced or not" — the blank-slate pre-installed set (item 22) is the
 seed; sharing is the scale-out. Ties directly to "sharing learning across
-instances" as a post-1.0 feature: skills are the portable unit today
+instances" as a later feature: skills are the portable unit today
 (`maro-import` already merges with quarantine + provenance), lessons ride
 the same rails later. Trust boundary notes recorded in CAPABILITIES.md so
 we don't relearn them: a shared directory is a supply chain (cs-r2-01's
 threat model at internet scale) — provenance required, same
 injection/dangerous-pattern gates as skills-lite, imports arrive as
 reviewable candidates never auto-trusted. Direction, not design; wants its
-own pass when 1.0 ships.
+own pass when it ships publicly.
 
 **Refined 2026-07-11 (Jeremy, after the social_search arc):** "an opt-in
 brain for the users of this orchestration, to share knowledge and skills;
@@ -1129,7 +1129,7 @@ maro-graduated skills are shareable), and opt-in as a hard product
 stance — default is fully local. Trigger insight was the Reddit/X access
 recipes: platform-access knowledge is exactly the kind of
 expensive-to-discover, cheap-to-share, decays-over-time artifact a
-coordination brain is for. Still post-1.0; still direction, not design.
+coordination brain is for. Still later; still direction, not design.
 
 ### Post-Purgatorio decision batch (2026-07-09, Jeremy — quotes in GOAL_BRAIN Decisions)
 
@@ -1159,7 +1159,7 @@ coordination brain is for. Still post-1.0; still direction, not design.
   on the real workspace (no false-positive promotions on re-curation).
   SF-10 demand side: companion Skills enter the funnel with real
   trigger_patterns, so promotion pressure now has a source.
-- [ ] **Official scheduler/timer layer (post-1.0; auto-resume rides it).**
+- [ ] **Official scheduler/timer layer (later; auto-resume rides it — session-protocol arc raises its priority, see SP entry).**
   Jeremy: "maybe we need a more general official scheduler/timer that the
   user can hook into/see/manage if they wish." A visible, user-managed
   timer surface (list/inspect/disable) — coexists with the no-cron
@@ -1182,7 +1182,7 @@ coordination brain is for. Still post-1.0; still direction, not design.
   inject decision was already made on the 2026-04-22 evidence and shipped
   (SF-4 flip). Spend acknowledged, not silently forgotten; data stays on
   disk per the retention decree if a future analysis wants it.
-- [ ] **Knowledge-web read side: wire it properly (post-1.0, KEEP) — TRACED
+- [ ] **Knowledge-web read side: wire it properly (later, KEEP) — TRACED
   2026-07-13, premise was wrong, real prerequisite work identified before
   any read-side code can pay off.** Descoped from 1.0 docs (node store +
   BM25 is the honest claim) but explicitly kept: "I'd like to keep it on
@@ -1745,7 +1745,7 @@ BACKLOG_DONE.
   controls ever belong in the same surface. Needs product discussion first;
   static files are the answer until cross-run browsing becomes a real habit.
 
-### 1.0 install trial residuals (2026-07-09 docker clean-machine trial)
+### Install trial residuals (2026-07-09 docker clean-machine trial)
 
 First-ever install on a non-dev machine (debian-slim container, non-root, no
 keys). The blocker it found — pip installed ZERO modules (`packages.find`
@@ -1829,12 +1829,13 @@ none blocking:
   restart or explicit `reload=True` needed anywhere. Test:
   `test_cache_auto_invalidates_on_file_mtime_change` (`tests/test_config.py`).
 
-### 1.0 launch content + learning/sharing (Jeremy, 2026-07-09 — scope decree)
+### Initial-public-release launch content + learning/sharing (Jeremy, 2026-07-09 — scope decree; "1.0" relabeled 2026-07-15)
 
 Decree: "learning and sharing needs to be part of the official first
 release" (full quotes in GOAL_BRAIN Decisions 2026-07-09). Three items,
-also listed as MILESTONES -3 remaining (e)/(f)/(g). Sequencing: (e) runs
-after the current 1.0 remainders (a)–(d); (g) needs design before release.
+also listed as MILESTONES -3 (e)/(f)/(g) (arc closed 2026-07-15; items
+stand on their own). Sequencing constraint that survives the de-1.0 pass:
+(g) needs design sign-off before any public release.
 
 - [x] **(e) Default personas + skills — SHIPPED 2026-07-09** (survey:
   `docs/audit-2026-07/persona-skill-survey.md`; ship set: e0811c7 +
@@ -1883,7 +1884,7 @@ after the current 1.0 remainders (a)–(d); (g) needs design before release.
     report_synthesize, code_review) — 3 of 12 shipped skills are now
     Maro-built. Run 2's daily_brief is correct but not shippable in
     pure-markdown skill format (needs its sibling helper script) —
-    bundled-assets is an open design gap, noted for (g)/post-1.0.
+    bundled-assets is an open design gap, noted for (g)/later.
   - **28 substantive lessons crystallized** (lessons.jsonl 188→207 net
     of consolidation; all 28 verifiably dogfood-born — fixture-planting
     methodology, trigger-collision diffing, format-compliance
@@ -1966,8 +1967,9 @@ after the current 1.0 remainders (a)–(d); (g) needs design before release.
   complete/live/finalized; FS-diff since-crash context injected into the
   resumed step) + `maro-doctor --live` opt-in backend probes (fa8fe40).
   21 new tests (test_checkpoint_rundir, test_stranded_sweep).
-  **Auto-resume deliberately post-1.0** (box crash-loop history; manual
-  resume proves the path first). Original ask: Research + design pass on the errors an end user will
+  **Auto-resume deliberately deferred** (box crash-loop history; manual
+  resume proves the path first; the session-protocol arc raises its
+  priority — a dead run behind a network edge is invisible, see SP entry). Original ask: Research + design pass on the errors an end user will
   actually hit: token/rate limits, auth expiry (`/login`-class issues, key
   invalidation), context-window overruns, network blips — and
   **auto-resuming interrupted work**. "That seems like a sharp edge that

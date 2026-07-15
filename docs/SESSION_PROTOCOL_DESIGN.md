@@ -131,10 +131,20 @@ load-bearing rather than polish for the voice channel specifically.
 
 Sketch (iterate here):
 
-- **Internal:** an effort estimate at goal-admission time — pre-flight is the
-  natural home; the cuts-first planner + the ~68-run verdict corpus + Manti
-  envelope data ($2.47 → $1.52 post-fix) are the calibration inputs. Buckets,
-  not dollars: `quick / normal / involved / heavy` (names TBD).
+- **Internal:** the estimate comes **after the initial plan breakdown**
+  (Jeremy 2026-07-15 — answers open question #1): decompose/cuts-first
+  produces the plan, and the plan is what you estimate from (step count,
+  worker classes, probe evidence), calibrated against the run corpus + Manti
+  envelope data ($2.47 → $1.52 post-fix). Buckets, not dollars:
+  `quick / normal / involved / heavy` (names TBD).
+- **Latency masking (voice channel especially):** the plan-then-estimate
+  ordering costs seconds, and conversational UX already has the answer —
+  filler-with-content. "Let me think about this for a moment" buys the time
+  the initial plan breakdown needs; better still, a **clarifying question is
+  productive filler** — it buys the same seconds AND narrows scope while the
+  plan assembles (Jeremy: not new UX ideas, and that's the point — reuse the
+  known pattern). Protocol consequence: msg 4 (clarification) can fire
+  *during* plan assembly, not only after it.
 - **User-facing:** effort language only. "That'll take some real work — want
   me to go ahead?" Heavy goals get a consent round-trip (protocol msg #1);
   quick/normal proceed silently under the standing cap.
@@ -167,6 +177,20 @@ failure retry.
   side channel. Refactor goal: one seam where "context for the next step" is
   assembled (step results + brain slice + lessons + …), so an injected note is
   just one more, provenance-stamped, contributor.
+- **Refinements (Jeremy 2026-07-15, shape not implementation-dictate):**
+  - It's a **new status/injection type**, delivered at the *next available
+    processing step* — the LLM-TUI queue pattern (typed input isn't injected
+    into the in-flight turn; it waits for the next boundary). Same here: no
+    mid-step interruption semantics, ever.
+  - **Don't co-opt the existing plan.** The injection is metadata ON the run,
+    not a rewrite OF it: an **adjacent payload handled in tandem with the
+    regular step data**, so the step sees (prior results) + (injected note)
+    as distinct inputs with distinct provenance.
+  - It's a **decision point**, not just context: receiving an injection may
+    legitimately mean continue-unchanged / adjust-next-step / replan — the
+    same decision seam the director/navigator already owns at blocked steps.
+    Adjacency is what preserves the choice; folding it into the plan would
+    decide "adjust" implicitly, every time.
 - Provenance matters: an injected instruction is user-authority (it may
   legitimately redirect), but it must be *visible* in the transcript/thread
   brain as injected-mid-flight — the honesty machinery should never wonder
@@ -191,9 +215,33 @@ failure retry.
   workspaces (export→import is manual today). That's this arc's data chore,
   and it is what cashes the "topology is a runtime fact" stance.
 - Boundary for now: **Hermes owns conversational memory; Maro owns execution
-  learning.** No cross-pollination mechanism yet; phantom-sidequest status by
-  decree. First real bite likely: Hermes knows user preferences that should
-  shape goal scoping.
+  learning.** No store-level cross-pollination mechanism yet; phantom-
+  sidequest status by decree. But the boundary has a defined *flow* across it:
+- **Goal enrichment — the interface brain is the user's agent, not a
+  pass-through** (Jeremy 2026-07-15). There's already a translation layer
+  between what the user says and what the orchestrator is asked; "it could be
+  literal, but there's no requirement there." Canonical example: *"where can I
+  get fluffy's favorite food"* — Hermes knows fluffy is the user's cat and
+  what the food is; a strict pass-through goal likely fails, the enriched one
+  ("find local suppliers of [brand] cat food near [town]") succeeds. So
+  dispatch (msg 0) carries the **enriched goal plus, ideally, the enrichment
+  itself as adjacent metadata** — same adjacency principle as §6: the run
+  should be able to see "user said X; interface added Y from its knowledge of
+  the user." That keeps two-author provenance honest: verification should
+  trace to what the *user* wanted, and a mis-enrichment (Hermes injects the
+  wrong cat's food) is a new failure mode we can only catch if the layers
+  stay distinguishable.
+- **Inner-processing visibility is a first-class interest here** (Jeremy —
+  "still more interested in" this than the memory question): capture the
+  right metadata for **both audiences and both timeframes** — the system
+  consuming it along-the-way (navigator/director decisions, injection
+  handling) and the end user viewing it after-the-fact (what happened and
+  why), with both audiences occasionally crossing over (user peeks mid-run
+  via msg 2; the system re-reads history at resume). The run-visibility arc
+  (captain's log, thread brain, run cards, mini-reports) is the substrate;
+  what this arc adds is emitting it in a form the *interface brain* can
+  consume and narrate — msg 2 is a consumer view over existing recording,
+  not new recording.
 
 ## 8. Security posture
 
@@ -249,23 +297,55 @@ long-horizon decompose:
 
 ## 11. Open questions (the iteration surface)
 
-1. Effort estimator placement: pre-flight vs director vs intent-classifier —
-   who owns the estimate, and is it a cheap-tier LLM call or corpus stats?
+1. ~~Effort estimator placement~~ **ANSWERED (Jeremy 2026-07-15): post
+   initial-plan-breakdown** — estimate from the plan, not the raw goal (§5).
+   Residual: cheap-tier LLM call over the plan vs pure corpus stats — likely
+   stats first, LLM only if the buckets misfire.
 2. Consent-grant plumbing: where does a per-goal budget override live so the
    budget gate honors it without a standing config write?
 3. Progress query for a LIVE run: poll the captain's log/thread brain (cheap,
    staleness-tolerant) vs a run-side status summarizer (costs a call)?
 4. Injection semantics under parallel fan-out steps: next-pending is
    well-defined for sequential loops; for a parallel batch, inject into all,
-   next boundary, or director-only?
+   next boundary, or director-only? (The §6 decision-point framing suggests:
+   deliver to the director's next decision boundary, let IT fan out.)
 5. Learning-data sync: one-way (dev box → others) first? Conflict story when
    two workspaces both learned? (Probably: append-only JSONL merge + dedup by
    deterministic id — the memory-module design anticipated this.)
-6. Does anything in msg 1–4 force a persistent channel, or does ssh+poll
-   carry the whole protocol? (Suspicion: ssh+poll carries it further than it
-   has any right to.)
+6. ~~Persistent channel?~~ **ANSWERED (Jeremy 2026-07-15): no — don't start
+   with one.** ssh+poll until a message type proves it can't carry it.
 7. When Hermes dispatch goes live, does box `container: on` become the
    standing posture for network-sourced goals? (Likely yes — decide then.)
+8. Enrichment metadata format (§7): does the dispatch payload carry
+   user-utterance + enrichment as separate fields from day one (cheap now,
+   honest forever), or does v0 dispatch stay a bare goal string and adjacency
+   arrives with msg 3's payload type? (Leaning: separate fields from day one —
+   it's the same adjacent-payload shape §6 needs anyway.)
+
+## 12. Related standing work (backlog cross-links)
+
+Items elsewhere in BACKLOG/MILESTONES this arc touches — check before
+building each stage:
+
+- **Escalation channel** (formerly "1.0 item (a)") — the substrate go-between
+  decree (2026-07-12) + escalation file surface ARE msg 4's foundation.
+- **Run-visibility residuals** (BACKLOG #17) — msg 2 is a consumer over this
+  recording; residuals graduate from polish to protocol prerequisites.
+- **Backend-error resilience / auto-resume** (item (h); auto-resume
+  deliberately deferred) — cross-box dispatch raises the stakes: a dead run
+  behind a network edge is invisible unless resilience surfaces it.
+- **Official scheduler/timer layer** (deferred; auto-resume rides it) — same
+  reason.
+- **Director clarification design** (`project_director_clarification`:
+  ask-on-ambiguity, YOLO opt-out, user-level defaults) — msg 4 is its
+  transport; §5's clarify-during-planning is its new timing.
+- **Portable learning** (chunks 1–4 shipped; 8 provisional decisions await
+  Jeremy) — §7's sync flow is the next chunk when the arc needs it.
+- **Hosted-free small-LLM tier** (BACKLOG #25, awaiting API keys) — candidate
+  lane for cheap protocol chatter (effort phrasing, progress summaries) that
+  shouldn't burn the main quota.
+- **Time blindness** (Vision) — interactive sessions make "the system's sense
+  of elapsed time" user-visible; the filler-UX in §5 is a tiny first contact.
 
 ## Non-goals (for now, by decree or common sense)
 

@@ -2162,6 +2162,34 @@ Sample: the 2026-05-13..17 window of `~/.maro/workspace/runs/` (478 dirs total;
   dispatch = code execution). Flagship scale-up test goal captured in
   CAPABILITIES.md: the 5–6yr Telegram trading-channel corpus → strategy
   (research deliverable only, no trade execution).
+- **2026-07-15 (Jeremy, second round — de-1.0 pass + session-protocol design
+  refinements):** **(1) De-1.0 decree:** "1.0 was useful as something to work
+  toward" but became "an alternate form of prioritization that's
+  semi-unintended… 0.8 was the 1.0 bar… we did that work regardless of name,
+  and the line is being arbitrarily held now" → a pass REMOVED the 1.0 gating
+  line from all live surfaces (MILESTONES -3 arc closed, -4 blocker list
+  dissolved — SF-1 evolver production hours is the one survivor, standing on
+  its own; BACKLOG "post-1.0" labels → later/vision; historical names kept).
+  **(2) Effort estimator placement: post initial-plan-breakdown** — estimate
+  from the plan, not the raw goal; voice UX masks the planning latency with
+  filler-with-content ("let me think about this for a moment") and, better,
+  clarifying questions as productive filler (buy seconds AND narrow scope;
+  deliberately not-new UX patterns). **(3) Injection shape:** a NEW
+  status/injection type delivered at the next available processing step (the
+  LLM-TUI queue pattern); it must NOT co-opt the existing plan — an adjacent
+  payload handled in tandem with regular step data, and a *decision point*
+  (continue/adjust/replan), not merely context. Explicitly "not trying to
+  dictate implementation." **(4) Interface brain = the user's agent, not a
+  pass-through:** Hermes may inject meta-prompt information on the user's
+  behalf at goal construction ("where can I get fluffy's favorite food" only
+  works enriched with Hermes's knowledge that fluffy is the cat); dispatch
+  should carry user-utterance + enrichment distinguishably (two-author
+  provenance; mis-enrichment is a new failure mode). **(5)** Split brain
+  stays parked ("relatively clean"); Jeremy's stated priority interest is
+  **inner-processing visibility + metadata capture for both system and end
+  user, both along-the-way and after-the-fact.** All folded into
+  `docs/SESSION_PROTOCOL_DESIGN.md` (§5/§6/§7/§11/§12; open questions #1 and
+  #6 answered — post-plan estimator; no persistent channel to start).
 
 ## Threads (system-maintained — nothing leaves this list silently)
 
@@ -2226,6 +2254,15 @@ Active:
   acceptance probe, dogfood no-regression run, go/no-go checklist, the
   flip) — Jeremy-gated by design (needs interactive OAuth + spends
   tokens), tracked in BACKLOG.md as C4-BOX, not an autonomous-session task.
+  **CLOSED 2026-07-15 (de-1.0 decree):** v0.8.0 published to PyPI (Jeremy:
+  "0.8 was the 1.0 bar"); C4-BOX burn-in ran 2026-07-14/15 (only the flip
+  remains, Jeremy's one-liner); "1.0" relabeled "initial public release" —
+  later, deliberately unpinned, and no longer a prioritization line
+  anywhere (Jeremy: "we did that work regardless of name, and the line is
+  being arbitrarily held now" — MILESTONES/BACKLOG de-1.0 pass done this
+  date). Surviving open items stand under their own names: evolver
+  production hours (SF-1), auto-resume, install-trial residuals,
+  portable-learning decisions.
 - **Goal-brain sequencing: COMPLETE** (steps 1–5, 2026-06-10/11): artifact →
   pressure test → recall() → navigator schema → navigator prompt + shadow
   replay. Successor thread below.
