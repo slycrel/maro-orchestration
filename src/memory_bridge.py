@@ -29,8 +29,9 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+from dataclasses import replace
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from memory_port import MemoryItem, format_block
 from memory_sqlite import SqliteMemoryStore
@@ -280,6 +281,33 @@ def recall_for_worker(
         kinds=["lesson"],
         k=k,
     )
+
+
+def stamp_items_with_age(items: List[MemoryItem]) -> Tuple[List[MemoryItem], bool]:
+    """Time-blindness hook (a): suffix each recalled item with its lesson age
+    rendered from the stored `recorded_at` it carries in meta
+    ("(learned 2026-02-14 — 5 months ago)").
+
+    Returns (items, stamped_any). Flag off (`memory.age_stamps`, default
+    False) — or no item carrying a parseable timestamp — returns the input
+    list unchanged, so downstream formatting stays byte-identical (the same
+    off-path contract as memory.worker_slice).
+    """
+    from age_stamp import age_stamps_enabled, age_suffix
+
+    if not items or not age_stamps_enabled():
+        return items, False
+
+    stamped: List[MemoryItem] = []
+    stamped_any = False
+    for item in items:
+        suffix = age_suffix((item.meta or {}).get("recorded_at", ""))
+        if suffix:
+            stamped.append(replace(item, content=item.content + suffix))
+            stamped_any = True
+        else:
+            stamped.append(item)
+    return (stamped, True) if stamped_any else (items, False)
 
 
 def format_worker_memory_block(

@@ -289,6 +289,21 @@ class ContributionLedger:
         """Re-arm previously drained records (e.g. blocked-step retry)."""
         self._pending.extend(records)
 
+    def drop_source(self, source: str) -> int:
+        """Remove every pending record from `source`; return the count.
+
+        Exists for wall-clock-sensitive contributors (the "time" line): the
+        re-arm paths (compound-step split, blocked retry) replay delivered
+        batches verbatim — correct for every other source, but a replayed
+        elapsed-time claim is stale or duplicate by the next delivery. The
+        merge points call this unconditionally before appending a freshly
+        computed time line: recompute, never replay.
+        """
+        kept = [r for r in self._pending if r.source != source]
+        dropped = len(self._pending) - len(kept)
+        self._pending = kept
+        return dropped
+
     def drain(self) -> List[ContextContribution]:
         """Consume: return all pending records and clear the ledger."""
         batch = self._pending

@@ -593,19 +593,32 @@ def recall(
         lessons_cited: List[str] = []
         try:
             from memory import load_lessons, _MAX_LESSON_INJECT_CHARS
+            from age_stamp import age_stamps_enabled, age_suffix
             _lessons = load_lessons(task_type="agenda", query=goal, limit=3)
             if not _lessons:
                 _lessons = load_lessons(task_type="general", query=goal, limit=3)
             if _lessons:
+                # Time-blindness hook (a): age-stamp injected lessons from
+                # their stored timestamp (memory.age_stamps; flag off or
+                # timestamp absent renders byte-identically).
+                _stamp_ages = age_stamps_enabled()
+                _age_stamped_any = False
                 _lines = ["## Lessons from Prior Runs (apply these)"]
                 for _l in _lessons:
                     _icon = "✓" if _l.outcome == "done" else "✗"
-                    _lines.append(f"- {_icon} {_l.lesson}")
+                    _suffix = (age_suffix(getattr(_l, "recorded_at", "") or "")
+                               if _stamp_ages else "")
+                    if _suffix:
+                        _age_stamped_any = True
+                    _lines.append(f"- {_icon} {_l.lesson}{_suffix}")
                     lessons_cited.append(str(_l.lesson)[:120])
                 _text = "\n".join(_lines)
                 if len(_text) > _MAX_LESSON_INJECT_CHARS:
                     _text = _text[:_MAX_LESSON_INJECT_CHARS].rsplit("\n", 1)[0]
                 result.lessons = _text
+                if _age_stamped_any:
+                    # Rides into RECALL_PERFORMED via **sources below.
+                    sources["age_stamped"] = True
         except Exception:
             try:
                 from memory import inject_lessons_for_task

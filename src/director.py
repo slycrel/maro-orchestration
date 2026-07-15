@@ -427,7 +427,7 @@ def run_director(
     parent_goal_brain = ""
     if worker_slice_enabled:
         try:
-            from memory_bridge import ingest_lessons_to_store, recall_for_worker, format_worker_memory_block
+            from memory_bridge import ingest_lessons_to_store, recall_for_worker, format_worker_memory_block, stamp_items_with_age
             from memory_sqlite import SqliteMemoryStore
             from memory_bridge import _memory_store_path
 
@@ -458,24 +458,33 @@ def run_director(
         if worker_slice_enabled and worker_slice_store is not None:
             try:
                 items = recall_for_worker(ticket.task, thread_scope=worker_thread_scope, k=5, store=worker_slice_store)
+                # Time-blindness hook (a): age-stamp recalled items from their
+                # stored timestamps (memory.age_stamps; off/no-timestamp paths
+                # return the list unchanged — byte-identical injection).
+                items, age_stamped = stamp_items_with_age(items)
                 if items or parent_goal_brain:
                     memory_block = format_worker_memory_block(items, goal_brain=parent_goal_brain, max_chars=1200)
                     if memory_block:
                         # Prepend memory block to context (highest priority)
                         context = memory_block + ("\n\n" + context if context else "")
                         worker_slice_injected = True
+                        _slice_event_ctx = {
+                            "ticket_id": ticket.ticket_id,
+                            "worker_type": ticket.worker_type,
+                            "items_count": len(items),
+                            "thread_scope": worker_thread_scope,
+                            "goal_brain_included": bool(parent_goal_brain),
+                            "memory_block_len": len(memory_block),
+                        }
+                        # A/B observability: only injections that actually
+                        # stamped ages carry the field.
+                        if age_stamped:
+                            _slice_event_ctx["age_stamped"] = True
                         log_event(
                             "WORKER_SLICE_INJECTED",
                             subject=f"worker:{ticket.worker_type}",
                             summary=f"Injected {len(items)} recalled items",
-                            context={
-                                "ticket_id": ticket.ticket_id,
-                                "worker_type": ticket.worker_type,
-                                "items_count": len(items),
-                                "thread_scope": worker_thread_scope,
-                                "goal_brain_included": bool(parent_goal_brain),
-                                "memory_block_len": len(memory_block),
-                            },
+                            context=_slice_event_ctx,
                         )
             except Exception as exc:
                 log.warning("director: worker_slice recall failed for ticket %s: %s", ticket.ticket_id, exc)

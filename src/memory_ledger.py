@@ -886,6 +886,20 @@ def _rewrite_lessons_file(task_type: str, updated_lessons: List[Lesson]) -> None
     locked_rmw(path, _merge)
 
 
+def _lesson_from_row(d: dict) -> Lesson:
+    """Raw ledger row → Lesson. A row with no recorded_at key must load as
+    "" (absence preserved; parse_stored_ts("") is None → no age stamp) — the
+    field's default_factory would fabricate a load-time date for legacy rows,
+    and the rewrite paths (_rewrite_lessons_file via record_lesson
+    reinforcement, deduplicate_lessons) persist whatever was loaded. The
+    write path (record_lesson) still stamps genuinely new lessons at
+    creation."""
+    kwargs = {k: d[k] for k in Lesson.__dataclass_fields__ if k in d}
+    if "recorded_at" not in d:
+        kwargs["recorded_at"] = ""
+    return Lesson(**kwargs)
+
+
 def load_lessons(
     task_type: Optional[str] = None,
     outcome_filter: Optional[str] = None,
@@ -918,7 +932,7 @@ def load_lessons(
                 continue
             try:
                 d = json.loads(line)
-                l = Lesson(**{k: d[k] for k in Lesson.__dataclass_fields__ if k in d})
+                l = _lesson_from_row(d)
                 if task_type and l.task_type != task_type:
                     continue
                 if outcome_filter and l.outcome != outcome_filter:
@@ -1015,7 +1029,7 @@ def deduplicate_lessons(*, dry_run: bool = False) -> dict:
                 continue
             try:
                 d = json.loads(line)
-                l = Lesson(**{k: d[k] for k in Lesson.__dataclass_fields__ if k in d})
+                l = _lesson_from_row(d)
                 all_lessons.append(l)
             except Exception:
                 pass

@@ -130,6 +130,15 @@ go-live).
   residual: director `restart` break still drops the stuck step's outcome
   record (the shipped helper covers the four continue-shaped exits only).
 
+- [ ] **recall() loop-slice lesson icon ignores the verdict (SF-2 family)**
+  (pre-existing; surfaced by the age-stamp adversarial review 2026-07-15):
+  `recall.py:~609` renders `✓ if outcome == "done"` while
+  `memory.py:~178`'s same render is verdict-preferred (`goal_achieved is
+  False` ⇒ ✗, with the SF-2 comment). Net: the PRIMARY decompose lesson
+  path shows a success checkmark for lessons from runs judged
+  goal-not-achieved; only the degraded fallback path renders honestly.
+  Fix = copy the one-line verdict-preferred icon expression across.
+
 ### R6. VERIFY_LEARN_ARC V4/V5 adversarial review — 4 fixed live, 4 deferred (2026-07-14)
 
 Codex ×3 (Skeptic/Architect/Minimalist) over `e792768` (V3 dates) + `8349b7c`
@@ -1052,23 +1061,31 @@ a long session = time blindness inside one session), stale-source
 dissent handling in the Manti runs (the system already fights data
 staleness — this extends the fight to its own conversational state).
 
-**First slice — VEHICLE (added 2026-07-12 handoff audit; sized for a
-Sonnet/Opus session, no design pass needed):** hooks (d)+(a) only —
-surface timestamps that already exist into prompts. Concretely:
-(1) every injected lesson/recall item carries an age suffix rendered
-from its stored timestamp ("(learned 2026-02-14 — 5 months ago)") at
-the existing injection seams (memory_bridge worker slice, lesson
-injection in decompose, recall()); (2) step context gains one line of
-elapsed-time awareness when the gap is material ("previous step
-finished 42 minutes ago") from the run's own wall clock. Acceptance:
-byte-identical prompts when timestamps are absent (test-enforced, same
-pattern as `memory.worker_slice` off-path); a captains-log-visible A/B
-flag (`memory.age_stamps`, default OFF fresh installs per
-no-silent-change, ON this box after eyeball check); measured via the
-existing WORKER_SLICE_INJECTED / recall events growing an
-`age_stamped: true` field. Hooks (b) full elapsed-time model and (c)
-time-aware recall *ranking* stay in this vision entry — (c) especially
-must not ship as a silent relevance-formula change; it's a
+**First slice — SHIPPED 2026-07-15** (vehicle added 2026-07-12 handoff
+audit; hooks (d)+(a) only). What shipped: `src/age_stamp.py` +
+`memory.age_stamps` flag (hardcoded default OFF; byte-identical
+off-path test-enforced, worker_slice pattern); age suffixes at the
+three seams — worker slice (`memory_bridge.stamp_items_with_age` +
+director wiring), recall() loop slice, `inject_lessons_for_task` (the
+decompose seam turned out to BE recall()'s loop slice — seams b/c
+converge); `[time]` elapsed-gap line (≥10 min module constant) via the
+contribution ledger; `age_stamped: true` on WORKER_SLICE_INJECTED /
+RECALL_PERFORMED only-when-stamped. Adversarial review (FIX_FIRST →
+fixed same pass): legacy rows missing `recorded_at` no longer fabricate
+a load-time "learned today" stamp (absence preserved as `""` at BOTH
+raw-row loaders — dedup previously froze fabricated dates to disk);
+time contributions are recomputed-never-replayed
+(`ContributionLedger.drop_source` at both drain points — the re-arm
+paths replay every other source correctly); batch-boundary monotonic
+capture pinned (mutant killed); future timestamps render date-only, no
+"ago" claim. Eyeballed on real box data (273 lessons, all dated) →
+flag ON this box per the vehicle. Natural second slice: the graveyard
+block in recall() ("resurrected from decay") injects with no age.
+Hooks (b) full elapsed-time model — incl. cross-process resume gaps
+("this run was interrupted 3 days ago"; checkpoint knows
+`in_flight`/`started_at`, the monotonic capture is in-process only) —
+and (c) time-aware recall *ranking* stay in this vision entry — (c)
+especially must not ship as a silent relevance-formula change; it's a
 verify→learn-adjacent measurement question.
 
 ### Perspective / camera rotation — bringing the human lens functionally (2026-07-11, Jeremy)

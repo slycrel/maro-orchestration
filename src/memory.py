@@ -167,12 +167,19 @@ def inject_lessons_for_task(task_type: str, goal: str, max_lessons: int = 3) -> 
     if not lessons:
         return ""
 
+    # Time-blindness hook (a): flag-gated age suffix from the stored
+    # timestamp; absent/unparsable timestamps render byte-identically.
+    from age_stamp import age_stamps_enabled, age_suffix
+    _stamp_ages = age_stamps_enabled()
+
     lines = ["## Lessons from Prior Runs (apply these)"]
     for l in lessons:
         # Verdict-preferred (SF-2): a lesson from a run judged goal-not-achieved
         # is a failure lesson even though the run's process status was "done".
         icon = "✗" if getattr(l, "goal_achieved", None) is False else ("✓" if l.outcome == "done" else "✗")
-        lines.append(f"- {icon} {l.lesson}")
+        _suffix = (age_suffix(getattr(l, "recorded_at", "") or "")
+                   if _stamp_ages else "")
+        lines.append(f"- {icon} {l.lesson}{_suffix}")
     result = "\n".join(lines)
     if len(result) > _MAX_LESSON_INJECT_CHARS:
         result = result[:_MAX_LESSON_INJECT_CHARS].rsplit("\n", 1)[0]

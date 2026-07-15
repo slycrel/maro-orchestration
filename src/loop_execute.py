@@ -48,6 +48,13 @@ from step_exec import execute_step as _execute_step
 
 log = logging.getLogger("maro.loop")
 
+# Time-blindness hook (d) (BACKLOG vehicle, 2026-07-12): a wall-clock gap
+# between steps at or above this many seconds is surfaced into the next
+# step's prompt via the contribution ledger. Module constant, not a config
+# key — the vehicle fixed the threshold; only the feature flag
+# (memory.age_stamps) is configuration.
+_MATERIAL_STEP_GAP_SECONDS = 600
+
 
 def _select_step_adapter(
     ctx: LoopContext,
@@ -298,6 +305,10 @@ def _execute_main_loop(
     # replan that re-draws cuts gets one more boundary, but a pathological
     # plan can't loop expand-forever.
     _boundary_expansions: int = 0
+    # Time-blindness hook (d): monotonic clock at the previous step's
+    # completion — in-process gaps only; cross-process resume gaps are hook
+    # (b) territory, out of this slice's scope.
+    _prev_step_ended_monotonic: Optional[float] = None
 
     # Lazy import for injection scanning (security.py)
     try:
@@ -591,6 +602,10 @@ def _execute_main_loop(
                 total_cost_usd += _batch_est(_tin, _tout, model=getattr(ctx.adapter, "model_key", "") or None)
             except ImportError:
                 pass
+            # A batch boundary counts as a step end for the time-gap
+            # contributor — otherwise the next single step would report a
+            # gap measured from before the batch ran.
+            _prev_step_ended_monotonic = time.monotonic()
             continue  # Skip the single-step execution below
 
         iteration += 1
@@ -640,6 +655,27 @@ def _execute_main_loop(
         _prereq_for_step = _prereq_context.get(step_idx, "")
         if _prereq_for_step:
             _pending_context.append("prereq", "context", _prereq_for_step)
+        # Wall-clock claims are recomputed at every delivery, never replayed:
+        # a re-armed batch (compound split below, blocked retry) carries the
+        # previous delivery's [time] line — stale or duplicate by now. Drop
+        # any replayed one unconditionally (no-op when none) before deciding
+        # whether a fresh one applies.
+        _pending_context.drop_source("time")
+        # Time-blindness hook (d): the model cannot perceive elapsed time
+        # between prompts — surface a material wall-clock gap since the
+        # previous step ended. Rides the ledger, so flag off / no material
+        # gap appends nothing and prompts stay byte-identical
+        # (memory.age_stamps, default off).
+        if _prev_step_ended_monotonic is not None:
+            _step_gap_s = time.monotonic() - _prev_step_ended_monotonic
+            if _step_gap_s >= _MATERIAL_STEP_GAP_SECONDS:
+                from age_stamp import age_stamps_enabled as _age_stamps_on, \
+                    format_elapsed as _format_elapsed
+                if _age_stamps_on():
+                    _pending_context.append(
+                        "time", "context",
+                        f"Previous step finished {_format_elapsed(_step_gap_s)} ago.",
+                    )
         # §6 merge point — the ONE consumption seam. Drain the pending
         # contributions exactly once and render them provenance-labeled.
         # Zero contributions ⇒ empty render ⇒ byte-identical prompts.
@@ -740,6 +776,8 @@ def _execute_main_loop(
             session_context_key=_executor_context_key(),
         )
         step_elapsed = int((time.monotonic() - step_start) * 1000)
+        # Step end for the time-gap contributor at the merge point above.
+        _prev_step_ended_monotonic = time.monotonic()
 
         # Scavenging diagnostic (BACKLOG #1): flag out-of-fence file access from
         # the real tool transcript. Detection never changes step status; the

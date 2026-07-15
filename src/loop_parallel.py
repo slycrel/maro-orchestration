@@ -42,6 +42,11 @@ def _drain_pending_context(ctx) -> tuple[str, str]:
     ledger = getattr(ctx, "pending_context", None)
     if ledger is None:
         return "", ancestry
+    # Wall-clock claims never replay (ContributionLedger.drop_source): a
+    # re-armed [time] line is stale by the time a batch drains it. No fresh
+    # append here — a gap immediately before a batch stays unsurfaced by
+    # design (docs/DEFAULTS.md, memory.age_stamps row).
+    ledger.drop_source("time")
     rendered = render_contributions(ledger.drain())
     if not rendered:
         return "", ancestry
