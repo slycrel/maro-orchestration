@@ -3304,6 +3304,17 @@ def _write_change_log(sid, category="prompt_tweak", before_state=None):
         }) + "\n")
 
 
+def _write_dynamic_constraint(sid):
+    """A dynamic-constraints row that revert_suggestion(new_guardrail) can remove
+    — this makes the revert *behavioral* (actually undoes the change), unlike an
+    append-only prompt_tweak/lesson which only flips bookkeeping."""
+    from orch_items import memory_dir
+    p = memory_dir() / "dynamic-constraints.jsonl"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with p.open("a", encoding="utf-8") as f:
+        f.write(json.dumps({"source": f"evolver:{sid}", "pattern": "tweak text"}) + "\n")
+
+
 def _read_sug(sid):
     from orch_items import memory_dir
     p = memory_dir() / "suggestions.jsonl"
@@ -3359,13 +3370,19 @@ class TestVerifyAppliedSuggestions:
         assert cal and cal[0]["verified"] is True
 
     def test_degraded_self_applied_auto_reverts(self):
-        _write_suggestions(_mk_sug("s-bad", applied_manually=False))
-        _write_change_log("s-bad")
+        # new_guardrail + a matching dynamic constraint => revert_suggestion
+        # actually removes it (behavioral=True), so this exercises the true
+        # auto-revert path — not a bookkeeping-only "revert".
+        _write_suggestions(_mk_sug("s-bad", applied_manually=False, category="new_guardrail"))
+        _write_change_log("s-bad", category="new_guardrail",
+                          before_state={"type": "new_guardrail"})
+        _write_dynamic_constraint("s-bad")
         # stuck-rate 0% -> 80% : rose past threshold -> degraded
         outs = _outcomes(before_stuck=0, after_stuck=8)
         with patch("evolver_scans.load_outcomes", return_value=outs):
             summary = verify_applied_suggestions("run2", min_post_apply=10)
         assert summary["reverted"] == 1
+        assert summary["revert_failed"] == 0
         assert summary["review_queued"] == 0
         row = _read_sug("s-bad")
         assert row["applied"] is False              # auto-reverted
@@ -3377,6 +3394,46 @@ class TestVerifyAppliedSuggestions:
                if e.get("event_type") == "self_improvement_verdict"]
         assert esc and esc[-1]["action"] == "reverted"
         assert esc[-1]["blocking"] is False         # self-heal, non-blocking
+
+    def test_degraded_revert_failed_surfaces_for_review(self):
+        # System-applied + degraded, but revert cannot behaviorally undo it
+        # (no change_log entry at all -> revert_suggestion can't act). Must NOT
+        # be reported as reverted, must NOT go silently terminal-invisible: it
+        # stays applied (still live), stamps degraded_revert_failed, and is
+        # surfaced BLOCKING for manual repair.
+        _write_suggestions(_mk_sug("s-stuck", applied_manually=False))
+        # deliberately no _write_change_log / no constraint
+        outs = _outcomes(before_stuck=0, after_stuck=8)
+        with patch("evolver_scans.load_outcomes", return_value=outs):
+            summary = verify_applied_suggestions("run-rf", min_post_apply=10)
+        assert summary["revert_failed"] == 1
+        assert summary["reverted"] == 0
+        assert summary["review_queued"] == 0
+        row = _read_sug("s-stuck")
+        assert row["applied"] is True                       # still live — could not undo
+        assert row["verify_verdict"] == "degraded_revert_failed"
+        assert row["verified_at"]                            # terminal: don't retry forever
+        cal = _read_outcome_calibration("s-stuck")
+        assert cal and cal[0]["verified"] is False
+        esc = [e for e in _read_escalations()
+               if e.get("event_type") == "self_improvement_verdict"]
+        assert esc and esc[-1]["action"] == "revert_failed"
+        assert esc[-1]["blocking"] is True                  # a human must repair it
+
+    def test_append_only_degraded_is_not_falsely_reported_reverted(self):
+        # prompt_tweak is append-only: revert_suggestion flips bookkeeping but
+        # cannot undo the behavioral influence (behavioral=False). V2 must route
+        # it to revert_failed, never claim a clean revert (the F3 finding).
+        _write_suggestions(_mk_sug("s-prompt", applied_manually=False,
+                                   category="prompt_tweak"))
+        _write_change_log("s-prompt", category="prompt_tweak",
+                          before_state={"type": "lesson_add"})
+        outs = _outcomes(before_stuck=0, after_stuck=8)
+        with patch("evolver_scans.load_outcomes", return_value=outs):
+            summary = verify_applied_suggestions("run-po", min_post_apply=10)
+        assert summary["reverted"] == 0
+        assert summary["revert_failed"] == 1
+        assert _read_sug("s-prompt")["verify_verdict"] == "degraded_revert_failed"
 
     def test_degraded_human_applied_is_review_queued_not_reverted(self):
         _write_suggestions(_mk_sug("s-human", applied_manually=True))
@@ -3450,6 +3507,57 @@ class TestVerifyAppliedSuggestions:
         with patch("evolver_scans.load_outcomes", return_value=_outcomes(6, 0)):
             summary = verify_applied_suggestions("r")
         assert summary["enabled"] is False
+
+    def test_later_regression_does_not_bleed_into_an_old_rows_verdict(self):
+        # F1: the post-apply window is bounded to the FIRST min_post_apply trusted
+        # outcomes. A row that was clean right after apply must not be auto-reverted
+        # because a much-later, unrelated regression raised the global stuck-rate.
+        _write_suggestions(_mk_sug("s-old", applied_manually=False, category="new_guardrail"))
+        _write_change_log("s-old", category="new_guardrail",
+                          before_state={"type": "new_guardrail"})
+        _write_dynamic_constraint("s-old")
+        outs = []
+        # baseline: 10 stuck before apply (100%)
+        for i in range(10):
+            outs.append(_FO(recorded_at=f"2026-05-01T11:{i:02d}:00+00:00", status="stuck"))
+        # first 10 post-apply: all clean (0%) -> the change looks GOOD
+        for i in range(10):
+            outs.append(_FO(recorded_at=f"2026-05-01T13:{i:02d}:00+00:00", status="done"))
+        # a later, unrelated wave of 30 stuck runs
+        for i in range(30):
+            outs.append(_FO(recorded_at=f"2026-05-01T18:{i:02d}:00+00:00", status="stuck"))
+        with patch("evolver_scans.load_outcomes", return_value=outs):
+            summary = verify_applied_suggestions("r", min_post_apply=10)
+        assert summary["reverted"] == 0        # NOT dragged down by the later wave
+        assert summary["revert_failed"] == 0
+        assert summary["confirmed"] == 1       # judged on its own near-apply window
+        assert _read_sug("s-old")["applied"] is True
+
+    def test_thin_baseline_stays_inconclusive_not_degraded(self):
+        # F5: min_baseline = max(3, min_post_apply//2) = 5 for the default. A
+        # 3-run baseline is too thin to justify an auto-revert; the verdict must
+        # stay inconclusive (pending), never degrade off 3 samples.
+        _write_suggestions(_mk_sug("s-thin", applied_manually=False, category="new_guardrail"))
+        _write_change_log("s-thin", category="new_guardrail",
+                          before_state={"type": "new_guardrail"})
+        _write_dynamic_constraint("s-thin")
+        outs = []
+        for i in range(3):     # only 3 baseline outcomes, all clean
+            outs.append(_FO(recorded_at=f"2026-05-01T11:{i:02d}:00+00:00", status="done"))
+        for i in range(10):    # 10 post-apply, 8 stuck -> would read degraded on a full baseline
+            outs.append(_FO(recorded_at=f"2026-05-01T13:{i:02d}:00+00:00",
+                            status="stuck" if i < 8 else "done"))
+        with patch("evolver_scans.load_outcomes", return_value=outs):
+            summary = verify_applied_suggestions("r", min_post_apply=10)
+        assert summary["reverted"] == 0
+        assert summary["pending"] == 1
+        assert _read_sug("s-thin")["applied"] is True
+
+    def test_get_suggestion_reads_current_row(self):
+        from evolver_store import get_suggestion
+        _write_suggestions(_mk_sug("s-lookup"), _mk_sug("s-other"))
+        assert get_suggestion("s-lookup").suggestion_id == "s-lookup"
+        assert get_suggestion("missing") is None
 
     def test_excluded_verdicts_do_not_count_as_post_apply_evidence(self):
         """A window of unverifiable (verifier-own-failure) outcomes must not

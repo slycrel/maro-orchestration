@@ -214,6 +214,36 @@ def load_suggestions(limit: int = 20) -> List[Suggestion]:
     return list(reversed(suggestions))[:limit]
 
 
+def get_suggestion(suggestion_id: str) -> Optional[Suggestion]:
+    """Return the current on-disk row for one suggestion, or None if absent.
+
+    A single-row, uncapped lookup — unlike load_suggestions() this never drops
+    the row behind a newest-N window, and it re-reads current state (used by the
+    V2 auto-revert guard to re-confirm authority just before an irreversible
+    revert, so the decision isn't made off a stale snapshot).
+    """
+    p = _suggestions_path()
+    if not p.exists():
+        return None
+    try:
+        for line in p.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                d = json.loads(line)
+            except Exception:
+                continue
+            if d.get("suggestion_id") == suggestion_id:
+                try:
+                    return Suggestion.from_dict(d)
+                except Exception:
+                    return None
+    except Exception:
+        return None
+    return None
+
+
 def _save_suggestions(suggestions: List[Suggestion]) -> None:
     p = _suggestions_path()
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -664,7 +694,7 @@ def revert_suggestion(suggestion_id: str) -> dict:
 
     cl_path = memory_dir() / "change_log.jsonl"
     if not cl_path.exists():
-        return {"reverted": False, "category": "", "detail": "no change_log.jsonl found"}
+        return {"reverted": False, "behavioral": False, "category": "", "detail": "no change_log.jsonl found"}
 
     # Find the matching entry (most recent first)
     entries = []
@@ -681,12 +711,19 @@ def revert_suggestion(suggestion_id: str) -> dict:
             break
 
     if not match:
-        return {"reverted": False, "category": "", "detail": f"suggestion_id {suggestion_id} not found in change_log"}
+        return {"reverted": False, "behavioral": False, "category": "", "detail": f"suggestion_id {suggestion_id} not found in change_log"}
 
     category = match.get("category", "")
     before_state = match.get("before_state") or {}
     target = match.get("target", "")
     detail = ""
+    # `behavioral` = did we actually undo the change's effect on behavior, not
+    # just flip bookkeeping? True only for structural rollbacks (skill restore/
+    # remove, guardrail removal). Append-only categories (prompt_tweak/lesson)
+    # and the no-op `else` branch mark applied=False but leave the behavioral
+    # influence in place until it decays — callers that rely on a real undo
+    # (VERIFY_LEARN_ARC V2 auto-revert) must key off this, not `reverted`.
+    behavioral = False
 
     try:
         if category == "skill_pattern":
@@ -703,9 +740,10 @@ def revert_suggestion(suggestion_id: str) -> dict:
                         detail = f"restored description for skill '{s.name}'"
                         break
                 else:
-                    return {"reverted": False, "category": category,
+                    return {"reverted": False, "behavioral": False, "category": category,
                             "detail": f"skill '{target}' not found for rollback"}
                 _save_skills(skills)
+                behavioral = True
 
             elif state_type == "skill_create":
                 # Remove the created skill
@@ -714,8 +752,9 @@ def revert_suggestion(suggestion_id: str) -> dict:
                 if len(skills) < original_len:
                     _save_skills(skills)
                     detail = f"removed created skill '{target}'"
+                    behavioral = True
                 else:
-                    return {"reverted": False, "category": category,
+                    return {"reverted": False, "behavioral": False, "category": category,
                             "detail": f"skill '{target}' not found for removal"}
 
         elif category == "new_guardrail":
@@ -743,6 +782,7 @@ def revert_suggestion(suggestion_id: str) -> dict:
                 locked_rmw(dc_path, _drop_constraint)
                 if removed_flag["removed"]:
                     detail = "removed dynamic constraint"
+                    behavioral = True
                 else:
                     detail = "dynamic constraint not found (may have expired)"
 
@@ -753,7 +793,7 @@ def revert_suggestion(suggestion_id: str) -> dict:
             detail = f"no revert action for category '{category}'"
 
     except Exception as exc:
-        return {"reverted": False, "category": category, "detail": f"revert failed: {exc}"}
+        return {"reverted": False, "behavioral": False, "category": category, "detail": f"revert failed: {exc}"}
 
     # Mark suggestion as not applied (read + rewrite under the lock)
     try:
@@ -789,8 +829,9 @@ def revert_suggestion(suggestion_id: str) -> dict:
     except Exception:
         pass
 
-    log.info("revert_suggestion id=%s category=%s: %s", suggestion_id, category, detail)
-    return {"reverted": True, "category": category, "detail": detail}
+    log.info("revert_suggestion id=%s category=%s behavioral=%s: %s",
+             suggestion_id, category, behavioral, detail)
+    return {"reverted": True, "behavioral": behavioral, "category": category, "detail": detail}
 
 
 def stamp_verification(

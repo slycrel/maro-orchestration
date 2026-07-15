@@ -226,6 +226,22 @@ A/B flag in one chunk (`navigator.lesson_inject`, shadow-comparable like
   (trust buckets, `_verify_counts`, every verdict/authority path, the
   recorded_at regression, disabled-skip, dry-run). Both acceptance legs —
   one confirm AND one degrade→revert with calibration feedback — exercised.
+  **Adversarial-review hardening (same day, 3 Codex reviewers):**
+  (a) the post-apply window is now bounded to the FIRST `min_post_apply`
+  *trusted* outcomes (symmetric to the baseline) — an unbounded "all outcomes
+  after apply" let a later, unrelated regression bleed into an old row's
+  verdict and trigger a spurious auto-revert; (b) `revert_suggestion` now
+  returns an additive `behavioral` flag (True only when the change's effect was
+  actually undone — not for append-only prompt/lesson tweaks or a missing audit
+  trail). V2 keys off it: a degraded self-applied change whose revert could not
+  behaviorally undo it is stamped `degraded_revert_failed`, left live, and
+  surfaced **blocking** for manual repair — never falsely counted as reverted;
+  (c) an irreversible auto-revert re-reads the row (`get_suggestion`) to
+  re-confirm authority just before acting, so it can't fire off a stale
+  snapshot; (d) baseline floor raised to `max(3, min_post_apply//2)` so an
+  auto-revert can't fire off a 3-sample baseline; (e) `scan_evolver_impact`'s
+  insufficient-data gate fixed (`and`→`or`: each window needs the minimum).
+  6 more regression-lock tests.
 - **V3 — graduation auto-verify (Sonnet):** applied-only structural cadence
   wiring and manual provenance precursor shipped 2026-07-14. Still open:
   behavioral verdict + authority-aware revert/demote, after V1/V2.

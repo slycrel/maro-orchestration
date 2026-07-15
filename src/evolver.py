@@ -1048,6 +1048,7 @@ def main() -> int:
             f"Cadence verdicts [{mode}]: "
             f"{summary.get('confirmed', 0)} confirmed, "
             f"{summary.get('reverted', 0)} reverted, "
+            f"{summary.get('revert_failed', 0)} revert-failed, "
             f"{summary.get('review_queued', 0)} review-queued, "
             f"{summary.get('unverifiable', 0)} unverifiable, "
             f"{summary.get('pending', 0)} pending "

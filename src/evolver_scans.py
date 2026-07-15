@@ -22,7 +22,7 @@ from typing import Any, Dict, List, Optional
 from llm_parse import extract_json, safe_float, safe_list, content_or_empty
 
 from evolver_store import (
-    Suggestion, load_suggestions, revert_suggestion, stamp_verification,
+    Suggestion, load_suggestions, get_suggestion, revert_suggestion, stamp_verification,
 )
 from memory_ledger import (
     verdict_trust,
@@ -933,7 +933,10 @@ def scan_evolver_impact(
         sr_before = (stuck_before / n_before) if n_before else float("nan")
         sr_after = (stuck_after / n_after) if n_after else float("nan")
 
-        if n_before < min_outcomes and n_after < min_outcomes:
+        if n_before < min_outcomes or n_after < min_outcomes:
+            # EACH window needs the minimum (docstring: "Minimum outcomes in each
+            # window"). With `and`, a 1-sample baseline vs a full after-window
+            # would emit improved/degraded off a single run — misleading.
             verdict = "insufficient_data"
             delta = float("nan")
         elif math.isnan(sr_before) or math.isnan(sr_after):
@@ -1056,9 +1059,14 @@ def verify_applied_suggestions(
                      positive calibration outcome (feeds scan_suggestion_outcomes,
                      so sources whose changes keep confirming earn confidence).
       degraded     → symmetric-authority action (§3 DECISION):
-                       auto-applied (applied_manually=False) → revert_suggestion
-                         + EVOLVER_VERDICT event + non-blocking notify + negative
-                         calibration. verify_verdict="degraded".
+                       auto-applied (applied_manually=False) → revert_suggestion.
+                         If it behaviorally undid the change → verify_verdict=
+                         "degraded", EVOLVER_VERDICT event + non-blocking notify +
+                         negative calibration. If it could NOT (no audit trail,
+                         missing target, or an append-only change that only decays)
+                         → verify_verdict="degraded_revert_failed", terminal stamp
+                         but BLOCKING notify for manual repair (never falsely
+                         reported as reverted).
                        human-applied (applied_manually=True)  → NEVER auto-reverted;
                          verify_verdict="degraded_needs_review", terminal stamp,
                          BLOCKING notify to the review queue + negative calibration.
@@ -1085,11 +1093,17 @@ def verify_applied_suggestions(
         max_extensions = int(_cfg_get("evolver.verify_max_extensions", 3) or 3)
     if delta_threshold is None:
         delta_threshold = float(_cfg_get("evolver.verify_delta_threshold", 0.05) or 0.05)
-    min_baseline = min(3, min_post_apply)
+    # Baseline floor: don't auto-revert off a statistically thin baseline. A hard
+    # floor of 3 against a post-apply window of 10 lets a degraded verdict fire
+    # from a 3-run baseline vs 10-run post — poor structural fit for a default-on
+    # auto-reverting mechanism. Require at least half the post-apply window (still
+    # capped at min_post_apply so we never demand more baseline than post data).
+    min_baseline = min(min_post_apply, max(3, min_post_apply // 2))
 
     summary = {
         "enabled": True, "candidates": 0, "confirmed": 0, "reverted": 0,
-        "review_queued": 0, "unverifiable": 0, "pending": 0, "skipped_no_stamp": 0,
+        "revert_failed": 0, "review_queued": 0, "unverifiable": 0, "pending": 0,
+        "skipped_no_stamp": 0,
     }
 
     if load_outcomes is None:
@@ -1101,14 +1115,27 @@ def verify_applied_suggestions(
         return {**summary, "skipped": "load_failed"}
 
     # Precompute (timestamp, outcome) once, ascending — reused per candidate.
+    # Pre-filter to trusted-only (drop directional/excluded per §4) here so the
+    # count-based windows below are symmetric: a fixed count of *trusted* rows on
+    # each side. Without this, taking "all outcomes after apply" lets a later,
+    # unrelated regression bleed into an old row's after-window and trigger a
+    # spurious auto-revert (the window must stay keyed to this row's apply).
     dated = []
     for o in cache or []:
         t_o = _outcome_ts(o)
-        if t_o is not None:
-            dated.append((t_o, o))
+        if t_o is None:
+            continue
+        if verdict_trust(o) in (VERDICT_TRUST_EXCLUDED, VERDICT_TRUST_DIRECTIONAL):
+            continue
+        dated.append((t_o, o))
     dated.sort(key=lambda pair: pair[0])
 
     try:
+        # Newest-1000 window (load_suggestions convention). Applied-unverified
+        # rows are few and reach a terminal verdict within max_extensions
+        # cadences, so the live backlog stays small; an applied-unverified row
+        # older than 1000 newer suggestions would be missed. Acceptable at this
+        # box's scale — revisit the cap if suggestion volume ever approaches it.
         suggestions = load_suggestions(limit=1000)
     except Exception as exc:
         log.debug("verify_applied_suggestions: load_suggestions failed: %s", exc)
@@ -1139,8 +1166,13 @@ def verify_applied_suggestions(
                 summary["skipped_no_stamp"] += 1
                 continue
 
+            # Symmetric count-based windows keyed to THIS row's apply: the last
+            # min_post_apply trusted outcomes before, the FIRST min_post_apply
+            # trusted outcomes after. Bounding `after` (rather than taking all
+            # post-apply outcomes) keeps a later suggestion's regression out of
+            # this row's verdict. dated is already trusted-only, so len == count.
             before = [o for (t, o) in dated if t < t_apply][-min_post_apply:]
-            after = [o for (t, o) in dated if t >= t_apply]
+            after = [o for (t, o) in dated if t >= t_apply][:min_post_apply]
             n_before, stuck_before = _verify_counts(before)
             n_after, stuck_after = _verify_counts(after)
             sr_before = (stuck_before / n_before) if n_before else float("nan")
@@ -1176,18 +1208,51 @@ def verify_applied_suggestions(
                 summary["review_queued"] += 1
 
             elif verdict == "degraded":
-                # System applied it — clean up its own mess (revert).
+                # System applied it — try to undo its own mess. Re-read the row
+                # first: the candidate list was snapshotted before the loop, and
+                # an IRREVERSIBLE auto-revert must not fire off stale authority
+                # state. (Narrows, does not fully close, the TOCTOU — a true
+                # compare-and-swap inside the revert lock is deferred as
+                # over-built for a single-box cadence system with no concurrent
+                # human-apply path.)
+                fresh = get_suggestion(s.suggestion_id) or s
+                if getattr(fresh, "verified_at", "") or not getattr(fresh, "applied", True):
+                    # Already terminal / reverted by another pass — nothing to do.
+                    continue
+                if bool(getattr(fresh, "applied_manually", False)):
+                    # A human took authority since the snapshot — surface, never revert.
+                    if not dry_run:
+                        stamp_verification(s.suggestion_id, verdict="degraded_needs_review", verified_at=now)
+                        _record_suggestion_outcomes([s.suggestion_id], False, run_id)
+                        _log_verdict_event(s, "degraded", "review_required", True, _rates)
+                        _notify_verdict(s, "review_required", blocking=True, rates=_rates)
+                    summary["review_queued"] += 1
+                    continue
                 if not dry_run:
                     rv = revert_suggestion(s.suggestion_id)
-                    stamp_verification(s.suggestion_id, verdict="degraded", verified_at=now)
-                    _record_suggestion_outcomes([s.suggestion_id], False, run_id)
-                    _log_verdict_event(
-                        s, "degraded", "reverted", manual,
-                        {**_rates, "reverted": bool(rv.get("reverted"))},
-                    )
-                    _notify_verdict(s, "reverted", blocking=False,
-                                    rates={**_rates, "reverted": bool(rv.get("reverted"))})
-                summary["reverted"] += 1
+                    if rv.get("behavioral"):
+                        # The change's effect was actually undone.
+                        stamp_verification(s.suggestion_id, verdict="degraded", verified_at=now)
+                        _record_suggestion_outcomes([s.suggestion_id], False, run_id)
+                        _log_verdict_event(s, "degraded", "reverted", manual, {**_rates, "reverted": True})
+                        _notify_verdict(s, "reverted", blocking=False, rates={**_rates, "reverted": True})
+                        summary["reverted"] += 1
+                    else:
+                        # Could NOT behaviorally undo it: no audit trail, missing
+                        # target, or an append-only change that only decays. Don't
+                        # claim success and don't go silently terminal-invisible —
+                        # stamp terminal (so an impossible revert isn't retried every
+                        # cadence) but surface it BLOCKING for manual repair.
+                        stamp_verification(s.suggestion_id, verdict="degraded_revert_failed", verified_at=now)
+                        _record_suggestion_outcomes([s.suggestion_id], False, run_id)
+                        _log_verdict_event(s, "degraded", "revert_failed", manual,
+                                           {**_rates, "reverted": bool(rv.get("reverted")),
+                                            "revert_detail": rv.get("detail", "")})
+                        _notify_verdict(s, "revert_failed", blocking=True,
+                                        rates={**_rates, "revert_detail": rv.get("detail", "")})
+                        summary["revert_failed"] += 1
+                else:
+                    summary["reverted"] += 1
 
             else:  # inconclusive
                 ext = int(getattr(s, "verify_extensions", 0)) + 1
@@ -1208,16 +1273,18 @@ def verify_applied_suggestions(
     if verbose:
         print(
             f"[evolver] verify→learn cadence: {summary['confirmed']} confirmed, "
-            f"{summary['reverted']} reverted, {summary['review_queued']} review-queued, "
+            f"{summary['reverted']} reverted, {summary['revert_failed']} revert-failed, "
+            f"{summary['review_queued']} review-queued, "
             f"{summary['unverifiable']} unverifiable, {summary['pending']} pending "
             f"(of {summary['candidates']} applied-unverified)",
             file=sys.stderr, flush=True,
         )
     log.info(
         "verify_applied_suggestions run_id=%s candidates=%d confirmed=%d reverted=%d "
-        "review_queued=%d unverifiable=%d pending=%d",
+        "revert_failed=%d review_queued=%d unverifiable=%d pending=%d",
         run_id, summary["candidates"], summary["confirmed"], summary["reverted"],
-        summary["review_queued"], summary["unverifiable"], summary["pending"],
+        summary["revert_failed"], summary["review_queued"], summary["unverifiable"],
+        summary["pending"],
     )
     return summary
 
@@ -1254,6 +1321,14 @@ def _notify_verdict(s: Suggestion, action: str, *, blocking: bool, rates: dict) 
                 f"Auto-reverted a degraded self-applied change ({s.category} "
                 f"'{s.target}'): stuck-rate rose {rates.get('stuck_rate_before')}→"
                 f"{rates.get('stuck_rate_after')}. The system cleaned up its own mess."
+            )
+        elif action == "revert_failed":
+            reason = (
+                f"A degraded self-applied change ({s.category} '{s.target}') could "
+                f"NOT be auto-reverted ({rates.get('revert_detail', 'no behavioral rollback')}) "
+                f"— stuck-rate rose {rates.get('stuck_rate_before')}→"
+                f"{rates.get('stuck_rate_after')}. Manual repair needed: the change is "
+                f"still live."
             )
         else:
             reason = (
