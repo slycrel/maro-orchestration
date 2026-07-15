@@ -720,11 +720,19 @@ Truth anchor: GOAL_BRAIN.md Threads. History: docs/history/ROADMAP_ARCHIVE.md.
       E2E tier SHIPPED for real** — `tests/test_container_e2e.py` grew from
       the original 4-test scaffold to **15 tests**, box-only (skip-in-CI),
       and all 15 pass live on this runtime box (docker reachable here, not
-      just the Mac) — no longer just a scaffold. **What remains is C4-BOX
-      (see BACKLOG.md): the real-goal burn-in itself** — `/login`'d
-      acceptance probe, dogfood no-regression run, go/no-go checklist, and
-      the flip — all explicitly Jeremy-gated (needs interactive OAuth +
-      spends tokens; not something an autonomous session should attempt).
+      just the Mac) — no longer just a scaffold. **C4-BOX burn-in RAN
+      2026-07-14/15** (`docs/CONTAINER_BURN_IN.md` §5b): auth volume seeded,
+      CLI pin 2.1.207→2.1.210, a 3-goal concurrency batch under `container: on`
+      clean, go/no-go checklist filled. Surfaced + fixed live: file-shaped
+      fence roots dropped from the mount map (`_mountable_rw_dir`); a
+      **containment gap** (goal-declared host-secret path mounted rw) →
+      `build_mount_map` now whitelists rw mounts to the workspace subtree +
+      `write_fence_allow` (Jeremy: "do both" — tighten + reword probe to a
+      deterministic `structural` mode; verdict CONTAINED); container `/tmp`
+      ephemeral-per-step → per-run scratch bind (`run_scratch_dir`, 2026-07-15).
+      **All that remains is the flip itself** — box `container: off→on` and the
+      fresh-install default — explicitly Jeremy's call after reading §5b/§6.
+      The arc is otherwise complete.
    7. **Portable-learning chunks 1–4** (`docs/PORTABLE_LEARNING_DESIGN.md`
       §7, §8 ratified 2026-07-12) — 1.0 scope-decree item (g).
       **Chunk 1 — migration runbook + doctor checks — SHIPPED 2026-07-12
