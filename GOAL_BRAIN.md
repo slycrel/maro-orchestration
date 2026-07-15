@@ -2209,6 +2209,22 @@ Sample: the 2026-05-13..17 window of `~/.maro/workspace/runs/` (478 dirs total;
 ## Threads (system-maintained — nothing leaves this list silently)
 
 Active:
+- **Session-protocol arc (interactive lane + Hermes on the second box)**:
+  opened 2026-07-15 (three Decisions entries above; living design in
+  `docs/SESSION_PROTOCOL_DESIGN.md`). The seam refactor — the decreed
+  prerequisite for the interactive lane (decree 7, "seam refactor precedes
+  it") — SHIPPED 2026-07-15 as §6a v1: typed `ContributionLedger` (one
+  accumulator, one merge point, contributors-append/drain-consumes with
+  re-arm invariants on every consume-without-execute path), `maro interrupt
+  --intent note` context-only injection, parallel fan-out threading; plus
+  same-day companions: final-step escalate gate + loop-exit drain,
+  stuck-block step outcomes recorded (full adversarial-review records in
+  BACKLOG_DONE). Open on this thread: §6a gaps 3–4 (the four run-scoped
+  `ancestry_context_extra` re-entry shapes; checkpoint-resume step-text
+  mutation — run-scoped-vs-step-scoped semantics deliberately left for a
+  decision, not invented overnight), gap 5 worker lane (a lane, not a bug),
+  `director_evaluate(trigger="injection")` (spend-gated, pending Jeremy),
+  network/dispatch stages awaiting the second box (arrives 2026-07-16).
 - **Refactor plan (`docs/REFACTOR_PLAN.md`)**: opened 2026-07-02 off an
   architecture-review pass. Tiers 0–3 fully done and mainlined, including
   both `agent_loop.py`'s 10-file split (`242c4db`) and `evolver.py`'s
