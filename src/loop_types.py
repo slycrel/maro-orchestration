@@ -184,6 +184,11 @@ class LoopResult:
     # data-r2-01: carried out so deferred (post-closure) skill synthesis knows
     # whether this run started with no matching skill — the synthesis trigger.
     had_no_matching_skill: bool = False
+    # Direct CLI closure runs after loop finalization. These declared fields
+    # carry its audit decision to output/learning without an untyped side
+    # channel or making human-facing warning text the policy predicate.
+    audit_learning_allowed: bool = True
+    audit_incomplete_warning: str = ""
 
     def summary(self) -> str:
         done = sum(1 for s in self.steps if s.status == "done")

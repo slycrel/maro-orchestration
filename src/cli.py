@@ -575,16 +575,18 @@ def _closure_verdict_pass(goal_str: str, result, *, dry_run: bool = False):
     if _verdict is None or _verdict.checks_run <= 0:
         return _verdict
     _judged = getattr(_verdict, "judged", True)
-    try:
-        from memory import stamp_outcome_verdict
-        stamp_outcome_verdict(
-            result.loop_id or "",
-            goal_achieved=(bool(_verdict.complete) if _judged else None),
-            goal_verdict_source=("closure" if _judged else "closure_unverifiable"),
-            goal_verdict_confidence=float(_verdict.confidence),
-        )
-    except Exception:
-        pass
+    from audit_policy import persist_delivered_outcome_verdict
+    _audit = persist_delivered_outcome_verdict(
+        result.loop_id or "",
+        goal_achieved=(bool(_verdict.complete) if _judged else None),
+        goal_verdict_source=("closure" if _judged else "closure_unverifiable"),
+        goal_verdict_confidence=float(_verdict.confidence),
+        loop_ids=[result.loop_id] if result.loop_id else [],
+    )
+    if _audit.warning:
+        result.audit_incomplete_warning = _audit.warning
+        print(f"[maro] ⚠️ {_audit.warning}", file=sys.stderr)
+    result.audit_learning_allowed = _audit.learning_allowed
     # BACKLOG #18 residual: the CLI lanes now own a run-dir, so stamp the
     # verdict into its metadata too — `maro inspect-run` shows goal_achieved
     # and run_curation folds it into run_card.json. No-op when no run-dir is
@@ -613,6 +615,25 @@ def _closure_verdict_pass(goal_str: str, result, *, dry_run: bool = False):
                 f"closure verification: {str(_verdict.summary)[:300]}"
             )
     return _verdict
+
+
+def _finalize_cli_deferred_learning(result, *, adapter=None,
+                                    dry_run: bool = False,
+                                    verbose: bool = False) -> None:
+    """Complete direct-CLI learning only after its verdict audit is durable."""
+    if not getattr(result, "audit_learning_allowed", True):
+        return
+    try:
+        from loop_finalize import finalize_deferred_learning
+        finalize_deferred_learning(
+            result,
+            adapter=adapter,
+            project=getattr(result, "project", "") or "",
+            dry_run=dry_run,
+            verbose=verbose,
+        )
+    except Exception as exc:
+        print(f"[maro] deferred learning unavailable ({exc})", file=sys.stderr)
 
 
 def _cmd_run(args: argparse.Namespace) -> int:
@@ -656,9 +677,15 @@ def _cmd_run(args: argparse.Namespace) -> int:
 
     _status = "error"
     result = None
+    _learning_adapter = None
     try:
         with _runs.scoped_run_dir(_rd):
             try:
+                if not args.dry_run:
+                    from llm import build_adapter
+                    from conductor import assign_model_by_role
+                    _learning_adapter = build_adapter(
+                        model=args.model or assign_model_by_role("worker"))
                 result = _al.run_agent_loop(
                     goal_str,
                     project=args.project,
@@ -669,6 +696,8 @@ def _cmd_run(args: argparse.Namespace) -> int:
                     verbose=args.verbose,
                     measurement_class=args.measurement_class,
                     handle_id=handle_id,
+                    defer_learning=True,
+                    adapter=_learning_adapter,
                 )
             except Exception as exc:
                 return fail("E_RUN", str(exc))
@@ -676,10 +705,16 @@ def _cmd_run(args: argparse.Namespace) -> int:
             # Stamp the loop_id so `maro inspect-run <loop_id>` / `maro resume`
             # can resolve this run-dir by the id the command printed.
             try:
-                _runs.stamp_run_metadata({"loop_id": result.loop_id})
+                _runs.stamp_run_metadata({
+                    "loop_id": result.loop_id,
+                    "loop_ids": [result.loop_id] if result.loop_id else [],
+                })
             except Exception:
                 pass
             _verdict = _closure_verdict_pass(goal_str, result, dry_run=args.dry_run)
+            _finalize_cli_deferred_learning(
+                result, adapter=_learning_adapter,
+                dry_run=args.dry_run, verbose=args.verbose)
             _status = result.status  # verdict may have demoted done→incomplete
         return _emit_run_output(args, result, _verdict)
     finally:
@@ -708,6 +743,8 @@ def _emit_run_output(args, result, _verdict) -> int:
         if getattr(_verdict, "judged", True):
             _out["goal_achieved"] = bool(_verdict.complete)
         _out["goal_verdict_summary"] = str(_verdict.summary)[:300]
+    if getattr(result, "audit_incomplete_warning", ""):
+        _out["audit_incomplete_warning"] = result.audit_incomplete_warning
     if args.format == "json":
         print(json.dumps(_out, indent=2))
     else:
@@ -2048,42 +2085,155 @@ def _cmd_router(args: argparse.Namespace) -> int:
     return fail("E_INTERNAL", "unknown command")
 
 
+def _resume_lock_name(identity: str) -> str:
+    """Stable, path-safe admission-lock name for one resumable run."""
+    import hashlib
+    return "resume-" + hashlib.sha256(identity.encode("utf-8")).hexdigest()[:20]
+
+
+def _load_resume_checkpoint(ref: str):
+    """Resolve a loop/handle reference to its latest durable checkpoint."""
+    from checkpoint import load_checkpoint
+
+    ckpt = load_checkpoint(ref)
+    if ckpt is not None:
+        return ckpt
+    try:
+        import json as _json
+        from runs import run_dir
+        path = run_dir(ref) / "build" / "checkpoint.json"
+        ckpt_data = _json.loads(path.read_text(encoding="utf-8"))
+        from checkpoint import Checkpoint
+        return Checkpoint.from_dict(ckpt_data)
+    except Exception:
+        return None
+
+
 def _cmd_resume(args: argparse.Namespace) -> int:
     """Resume a crashed run from its checkpoint ((h) slice 3).
 
     Accepts a handle_id (resolves the run dir's checkpoint) or a loop_id.
     Refuses runs that finalized or whose owner PID is still alive.
     """
-    from checkpoint import load_checkpoint
-
     ref = args.run_id
-    ckpt = load_checkpoint(ref)
+    ckpt = _load_resume_checkpoint(ref)
     if ckpt is None:
-        # maybe a handle_id — look in that run dir directly
+        return fail("E_RESUME", f"no checkpoint found for {ref!r}")
+
+    # The run handle owns checkpoint/metadata/report/artifact state across a
+    # resume. Claim it before any liveness/status check so two terminals cannot
+    # both pass a TOCTOU window and duplicate the remaining side effects.
+    # Legacy checkpoints without a handle fall back to their loop id.
+    from proc_lock import acquire_pidfile, read_holder
+
+    _resume_identity = ckpt.handle_id or ckpt.loop_id or ref
+    _lock_name = _resume_lock_name(_resume_identity)
+    _acquired = acquire_pidfile(
+        _lock_name,
+        payload={
+            "handle_id": ckpt.handle_id or "",
+            "loop_id": ckpt.loop_id,
+            "resume_ref": ref,
+            "goal": ckpt.goal[:120],
+            "command": f"maro resume {ref}",
+        },
+    )
+    if _acquired.status != "acquired":
+        _holder = {}
+        if _acquired.status == "busy":
+            import time as _time
+            for _ in range(4):
+                _candidate = read_holder(_lock_name)
+                if _candidate:
+                    try:
+                        os.kill(int(_candidate.get("pid", 0)), 0)
+                        _holder = _candidate
+                        break
+                    except PermissionError:
+                        _holder = _candidate
+                        break
+                    except (ProcessLookupError, TypeError, ValueError):
+                        pass
+                _time.sleep(0.01)
+        if _acquired.status == "busy" and _holder:
+            _holder_label = (
+                f"pid {_holder.get('pid', '?')}, "
+                f"loop {_holder.get('loop_id', '?')}, "
+                f"started {_holder.get('started_at', '?')}"
+            )
+            _reason = (
+                f"resume for run {_resume_identity!r} refused immediately: "
+                f"another resume holds the admission lock ({_holder_label})"
+            )
+            _error_code = "E_RESUME_BUSY"
+            _event_type = "resume_refused_busy"
+            _status = "refused_busy"
+        elif _acquired.status == "busy":
+            _reason = (
+                f"resume for run {_resume_identity!r} refused immediately: "
+                "another resume holds the admission lock (holder details unavailable)"
+            )
+            _error_code = "E_RESUME_BUSY"
+            _event_type = "resume_refused_busy"
+            _status = "refused_busy"
+        else:
+            _reason = (
+                f"resume for run {_resume_identity!r} refused immediately: "
+                f"the admission lock is unavailable ({_acquired.error or 'unknown error'})"
+            )
+            _error_code = "E_RESUME_LOCK"
+            _event_type = "resume_lock_unavailable"
+            _status = "lock_unavailable"
         try:
-            import json as _json
-            from runs import run_dir
-            path = run_dir(ref) / "build" / "checkpoint.json"
-            ckpt_data = _json.loads(path.read_text(encoding="utf-8"))
-            from checkpoint import Checkpoint
-            ckpt = Checkpoint.from_dict(ckpt_data)
+            import notify as _notify
+            _notify.emit(_event_type, {
+                "handle_id": ckpt.handle_id or "",
+                "loop_id": ckpt.loop_id,
+                "resume_ref": ref,
+                "status": _status,
+                "reason": _reason,
+                "summary": _reason,
+                "holder": _holder,
+                "blocking": False,
+            })
         except Exception:
-            return fail("E_RESUME", f"no checkpoint found for {ref!r}")
+            pass
+        return fail(_error_code, _reason)
+
+    _resume_lock = _acquired.handle
+    # The first read selected the lock identity. Re-read under that lock so a
+    # resume that completed between selection and acquisition cannot leave us
+    # executing an older completed-step snapshot.
+    _fresh_ckpt = _load_resume_checkpoint(ref)
+    if _fresh_ckpt is None:
+        _resume_lock.close()
+        return fail("E_RESUME", f"checkpoint disappeared for {ref!r}")
+    ckpt = _fresh_ckpt
 
     if ckpt.is_complete():
+        _resume_lock.close()
         return fail("E_RESUME",
                     f"loop {ckpt.loop_id} completed all its steps — nothing to resume")
+    if ckpt.is_consumed():
+        _resume_lock.close()
+        return fail(
+            "E_RESUME",
+            f"loop {ckpt.loop_id} was already resumed successfully as "
+            f"{ckpt.resumed_to_loop_id or 'a newer loop'}",
+        )
 
     pid = int((ckpt.in_flight or {}).get("pid", 0) or 0)
     if pid:
         try:
             os.kill(pid, 0)
+            _resume_lock.close()
             return fail("E_RESUME",
                         f"loop {ckpt.loop_id} appears to still be running (pid {pid})")
         except (ProcessLookupError, PermissionError, ValueError):
             pass
 
     _measurement_class = ""
+    _resume_model = None
     if ckpt.handle_id:
         try:
             import json as _json
@@ -2091,7 +2241,9 @@ def _cmd_resume(args: argparse.Namespace) -> int:
             meta = _json.loads((run_dir(ckpt.handle_id) / "metadata.json")
                                .read_text(encoding="utf-8"))
             _measurement_class = str(meta.get("measurement_class") or "")
+            _resume_model = meta.get("model") or None
             if meta.get("status") == "done":
+                _resume_lock.close()
                 return fail("E_RESUME",
                             f"run {ckpt.handle_id} already finalized done")
         except FileNotFoundError:
@@ -2123,9 +2275,14 @@ def _cmd_resume(args: argparse.Namespace) -> int:
         _rd = None
     _status = "error"
     result = None
+    _learning_adapter = None
     try:
         with _runs.scoped_run_dir(_rd):
             try:
+                from llm import build_adapter
+                from conductor import assign_model_by_role
+                _learning_adapter = build_adapter(
+                    model=_resume_model or assign_model_by_role("worker"))
                 result = _al.run_agent_loop(
                     ckpt.goal,
                     project=ckpt.project or None,
@@ -2133,20 +2290,48 @@ def _cmd_resume(args: argparse.Namespace) -> int:
                     verbose=args.verbose,
                     measurement_class=_measurement_class,
                     handle_id=handle_id,
+                    defer_learning=True,
+                    adapter=_learning_adapter,
                 )
             except Exception as exc:
                 return fail("E_RESUME", str(exc))
             _status = result.status
             try:
-                _runs.stamp_run_metadata({"loop_id": result.loop_id})
+                _runs.stamp_run_metadata({
+                    "loop_id": result.loop_id,
+                    "loop_ids": [result.loop_id] if result.loop_id else [],
+                })
             except Exception:
                 pass
             _verdict = _closure_verdict_pass(ckpt.goal, result)
+            _finalize_cli_deferred_learning(
+                result, adapter=_learning_adapter, verbose=args.verbose)
             _status = result.status
+        # A successful resume has a new durable checkpoint/run record. Consume
+        # the source checkpoint so invoking the same legacy loop id again
+        # cannot replay its old remaining-step snapshot and duplicate effects.
+        if result.status == "done" and not ckpt.handle_id:
+            try:
+                from checkpoint import mark_checkpoint_consumed
+                if not mark_checkpoint_consumed(
+                        ckpt.loop_id, resumed_to_loop_id=result.loop_id):
+                    result.status = "incomplete"
+                    result.stuck_reason = (
+                        "resume completed, but the source checkpoint could not "
+                        "be marked consumed; refusing a success status because "
+                        "the old resume id could replay external effects"
+                    )
+            except Exception:
+                result.status = "incomplete"
+                result.stuck_reason = (
+                    "resume completed, but source-checkpoint consumption failed")
+        _status = result.status
         _resume_out = {"loop_id": result.loop_id, "status": result.status,
                        "resumed_from": ckpt.loop_id}
         if _verdict is not None and _verdict.checks_run > 0 and getattr(_verdict, "judged", True):
             _resume_out["goal_achieved"] = bool(_verdict.complete)
+        if getattr(result, "audit_incomplete_warning", ""):
+            _resume_out["audit_incomplete_warning"] = result.audit_incomplete_warning
         if args.format == "json":
             print(json.dumps(_resume_out))
         else:
@@ -2160,6 +2345,10 @@ def _cmd_resume(args: argparse.Namespace) -> int:
                 _runs.close_run(handle_id, status=_status)
             except Exception:
                 pass
+        try:
+            _resume_lock.close()
+        except Exception:
+            pass
 
 
 _COMMAND_HANDLERS = {

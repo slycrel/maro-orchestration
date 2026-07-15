@@ -31,27 +31,33 @@ APPROVED. Evidence: `docs/history/2026-07-14-verdict-persistence-contract.md`.
 
 **Part 2 — delivery semantics when the stamp can't persist.** Decision: the
 delivered result is never withheld or changed by a stamp failure — only the
-closure-restart boundary can still refuse, since it hasn't delivered anything
-yet (`_stamp_superseded`, already fail-closed pre-existing behavior).
-Everywhere else (ordinary closure stamp, provenance stamp, post-escalation
-stamp), a `write_failed` result or a raised exception is a process demotion
-of *learning*, not of the result: `log.error` for operator visibility, a
-`stamp_run_metadata` breadcrumb (`goal_verdict_stamp_failed*`) for audit, and
-the loop_id is added to a per-call `unstamped_loop_ids` set threaded through
-to `finalize_deferred_learning()`, which skips both lesson extraction and
-skill crystallization for those loop_ids regardless of what the row reads
-back as — durable quarantine rather than falling back to "unjudged"
-permissiveness. New shared helper `_stamp_verdict_tracked()` in `handle.py`.
-Rejected: a user-facing channel warning and a new captains_log event type —
-judged scope creep beyond the residual; the metadata breadcrumb plus
-log.error is sufficient operator visibility for a learning-only demotion.
+closure-restart boundary can still refuse, since it has not delivered anything
+yet. One shared owner-facing policy covers ordinary closure, deterministic
+provenance, post-quality-gate escalation, `maro run`, and `maro resume`.
+The owner receives a prominent `AUDIT INCOMPLETE` warning, deferred learning is
+quarantined per loop, and active run metadata retains the exact intended
+verdict, error, attempt count, and loop joins for idempotent repair. Existing
+flat `goal_verdict_stamp_failed*` breadcrumbs remain for compatibility. A
+missing optional outcome row stays an honest no-op; if repair metadata also
+fails, that second failure is explicit in the warning.
 
-10 new regression tests: `tests/test_handle.py::TestVerdictStampFailureQuarantine`
-(direct `_stamp_verdict_tracked` coverage for write_failed/exception/missing/
-updated, plus end-to-end closure-path and provenance-path integration tests)
-and 3 new tests in `tests/test_verdict_learning.py` (`finalize_deferred_learning`
-with `unstamped_loop_ids`, including the per-loop_id — not all-or-nothing —
-quarantine scope). Full suite green (180/180) after the change.
+Direct CLI lanes now defer learning until after closure, making quarantine
+effective. Fault tests cover false results, exceptions, absent rows, metadata
+failure, channel/CLI warning, ordinary and post-escalation suppression, and
+per-loop rather than handle-wide quarantine. Evidence:
+`docs/history/2026-07-14-audit-delivery-and-resume-admission.md` and
+`docs/history/2026-07-14-verdict-persistence-contract.md`.
+
+### Concurrent resume admission — SHIPPED (2026-07-14)
+
+The durable handle (legacy fallback: loop id) owns a fail-closed, nonblocking
+kernel lock for the full resume lifetime. A second terminal receives
+`E_RESUME_BUSY` immediately, names the live holder, performs no loop work, and
+emits a default-on durable notification. Lock infrastructure failure is a
+separate `E_RESUME_LOCK` refusal. A successful legacy resume marks its source
+checkpoint consumed instead of deleting retained history, preventing replay;
+unsuccessful or demoted resumes remain resumable. Evidence:
+`docs/history/2026-07-14-audit-delivery-and-resume-admission.md`.
 
 ---
 

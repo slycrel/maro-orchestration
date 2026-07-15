@@ -822,12 +822,19 @@ class TestClosureVerdictPass:
         import director as _director
         import llm as _llm
         import memory as _memory
+        from memory_ledger import OutcomeVerdictStampResult
         monkeypatch.setattr(_llm, "build_adapter", lambda **kw: object())
         monkeypatch.setattr(_director, "verify_goal_completion",
                             lambda *a, **kw: verdict)
         monkeypatch.setattr(
             _memory, "stamp_outcome_verdict",
-            lambda loop_id, **kw: annotations.append((loop_id, kw)))
+            lambda loop_id, **kw: (
+                annotations.append((loop_id, {
+                    key: value for key, value in kw.items()
+                    if key != "max_attempts"
+                })),
+                OutcomeVerdictStampResult(status="updated", attempts=1),
+            )[1])
 
     def test_judged_contradiction_demotes_done(self, monkeypatch):
         ann = []

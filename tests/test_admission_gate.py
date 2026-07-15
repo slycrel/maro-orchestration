@@ -261,6 +261,38 @@ def test_pidfile_second_holder_refused(workspace):
         assert third is True
 
 
+def test_typed_pidfile_acquire_distinguishes_busy_from_unavailable(
+        workspace, monkeypatch):
+    import errno
+    import fcntl
+    from proc_lock import acquire_pidfile
+
+    first = acquire_pidfile("typed-lock")
+    assert first.status == "acquired"
+    try:
+        assert acquire_pidfile("typed-lock").status == "busy"
+    finally:
+        first.handle.close()
+
+    monkeypatch.setattr(
+        fcntl, "flock",
+        lambda *a, **k: (_ for _ in ()).throw(
+            OSError(errno.ENOLCK, "no locks available")),
+    )
+    unavailable = acquire_pidfile("typed-lock-unavailable")
+    assert unavailable.status == "unavailable"
+    assert "no locks available" in unavailable.error
+
+
+def test_read_holder_rejects_non_object_json(workspace):
+    from proc_lock import pidfile_path, read_holder
+
+    path = pidfile_path("malformed-holder")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text('["not", "a", "holder"]')
+    assert read_holder("malformed-holder") is None
+
+
 def test_pidfile_cross_process(workspace):
     from proc_lock import hold_pidfile
 

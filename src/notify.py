@@ -21,7 +21,8 @@ to memory/events.jsonl via observe.write_event regardless, so a polling
 substrate can tail that instead. emit() never raises — notification must
 never affect the run outcome.
 
-The escalation-class events (escalation / backend_actionable / stranded_run
+The escalation-class events (escalation / backend_actionable / stranded_run /
+resume_refused_busy / resume_lock_unavailable
 — things a human might miss if no notify lane is wired up, or if it fails)
 additionally land in output/escalations.jsonl unconditionally
 (ESCALATION_FILE_EVENTS, escalations_path()) — a durable, easy-to-find file
@@ -58,7 +59,9 @@ log = logging.getLogger("notify")
 # Default-on for the same away-from-keyboard reason as the other escalation
 # classes: a headless box's notify channel is the only surface the user sees.
 DEFAULT_EVENTS = ["run_completed", "escalation", "backend_actionable",
-                  "stranded_run", "recursion_checkin", "self_improvement_verdict"]
+                  "stranded_run", "resume_refused_busy",
+                  "resume_lock_unavailable", "recursion_checkin",
+                  "self_improvement_verdict"]
 
 # The event types that are notify-worthy AND easy to miss with no
 # notify.command lane configured (run_completed already has a durable home
@@ -71,6 +74,7 @@ DEFAULT_EVENTS = ["run_completed", "escalation", "backend_actionable",
 # class; consumers tell it apart from a park-the-goal escalation by its
 # explicit `"blocking": False` payload field.
 ESCALATION_FILE_EVENTS = {"escalation", "backend_actionable", "stranded_run",
+                          "resume_refused_busy", "resume_lock_unavailable",
                           "recursion_checkin", "self_improvement_verdict"}
 
 

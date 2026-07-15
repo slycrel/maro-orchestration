@@ -39,6 +39,8 @@ def is_learnable_outcome(outcome: Mapping[str, Any]) -> bool:
     a recognized learnable class. Unknown/empty classifications fail closed;
     they never fall back to a possibly stale raw process status.
     """
+    if outcome.get("audit_incomplete") or outcome.get("audit_repair_required"):
+        return False
     if "success_class" in outcome:
         return outcome.get("success_class") in _LEARNABLE_SUCCESS_CLASSES
     return (

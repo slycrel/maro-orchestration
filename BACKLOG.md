@@ -28,7 +28,11 @@ seam; owner-facing delivery behavior on failures remains the open decision.
 
 Current pass (2026-07-14, twenty-third, `/goal` catch-up session): the
 owner-facing delivery-behavior decision from pass twenty-two is now made and
-shipped — EXT-AUDIT-2 archived to BACKLOG_DONE.md in full. R5 confirmed fully
+shipped — EXT-AUDIT-2 archived to BACKLOG_DONE.md in full. Delivered work is
+preserved with a prominent audit warning, its learning is quarantined, and an
+exact repair record is retained when possible. Concurrent `maro resume` now
+refuses immediately under a per-run kernel lock and emits an operator
+notification. R5 confirmed fully
 checked off and its header now says so, matching R2/R3/R4. VERIFY_LEARN_ARC
 V1 (expectation stamping) shipped this session as the next-arc-after-1.0
 opener, and **V2 (cadence verdicts + auto-revert) shipped the same day** —
@@ -319,7 +323,7 @@ a documented per-install config override (`docs/LOCAL_VALIDATOR.md`).
 One finding is real but architectural, not fixed live (cross-cutting per
 Jeremy's "document if large" instruction):
 
-- [ ] **`maro resume` has no structural serialization against concurrent
+- [x] **`maro resume` has no structural serialization against concurrent
   invocation** (Skeptic, high + medium — two findings on the same root
   cause). This predates batch-2 (the checkpoint/PID-liveness/status checks
   in `cli._cmd_resume` and the plain `write_text()` metadata writes in
@@ -337,7 +341,31 @@ Jeremy's "document if large" instruction):
   granularity — per-loop_id? per-handle_id? — and whether a second resume
   should refuse or queue) that deserves Jeremy's input given how `resume`
   is actually used (human-triggered crash recovery, not normally
-  parallel-invoked) rather than a blind structural fix.
+  parallel-invoked) rather than a blind structural fix. **Shipped 2026-07-14
+  after Jeremy's decision:** the durable handle (legacy fallback: loop id) now
+  owns a fail-closed, nonblocking flock for the full resume lifetime. A second
+  terminal gets `E_RESUME_BUSY` immediately, names the holder, performs no loop
+  work, and emits default-on/durable `resume_refused_busy`. Evidence:
+  `docs/history/2026-07-14-audit-delivery-and-resume-admission.md`.
+
+- [ ] **`maro resume` still relies on checkpoint `in_flight.pid` to distinguish
+  a stranded run from an original loop that is alive between steps.** The new
+  per-run lock deliberately serializes resume-vs-resume, the owner-approved
+  scope; the original `run_agent_loop` process does not hold that lock. After a
+  step, checkpoints clear `in_flight`, so a stale `stranded_run` notification
+  could prompt a resume while the original is healthy between steps. Closing
+  this needs a shared run-lifetime lease (and reconciliation with project
+  admission), not a local CLI lock extension. Found by the 2026-07-14
+  adversarial follow-up; keep separate from the shipped resume-vs-resume fix.
+
+- [ ] **Automate convergence for `audit_repair_required` metadata.** The
+  approved/shipped policy retains the exact idempotent verdict patch, keeps the
+  outcome row quarantined, and warns the owner; no background or CLI reconciler
+  consumes that record yet. A future repair command/sweep should reapply the
+  verdict, finalize only the repaired row's deferred learning, clear the audit
+  flags, and remain safe under repeat/crash. This is intentionally recorded as
+  follow-on automation rather than falsely expanding the approved “persist
+  repair metadata when possible” decision into an unreviewed queue.
 
 ### C4-BOX. Container executor — box-side real-goal burn-in (2026-07-13, Jeremy runs on the runtime box)
 

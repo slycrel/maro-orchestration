@@ -450,14 +450,7 @@ def _load_user_config() -> dict:
 
 
 def _breadcrumb_verdict_stamp_failure(loop_id: str, label: str, detail: str) -> None:
-    """Best-effort run-metadata note that a verdict stamp could not persist.
-
-    Advisory only — never raises, never blocks delivery. Distinct from the
-    closure-restart boundary's fail-closed refusal (`_stamp_failed_meta`
-    above): that path hasn't delivered a result yet and can still refuse the
-    retry, while this is a post-hoc breadcrumb for a result that already
-    shipped to the user.
-    """
+    """Best-effort compatibility breadcrumb for EXT-AUDIT-2 readers."""
     try:
         from runs import stamp_run_metadata
         stamp_run_metadata({
@@ -472,19 +465,11 @@ def _breadcrumb_verdict_stamp_failure(loop_id: str, label: str, detail: str) -> 
 
 def _stamp_verdict_tracked(stamp_call, *, loop_id: str, label: str,
                            unstamped_loop_ids: set) -> None:
-    """Run a ``stamp_outcome_verdict`` call, quarantining deferred learning
-    for this loop when the write cannot be trusted (EXT-AUDIT-2 residual).
+    """Compatibility seam for the first EXT-AUDIT-2 implementation.
 
-    A ``write_failed`` result — or any exception, which leaves persistence
-    equally unknown — means the outcomes row may still read back as
-    unjudged, absent, or stale. Deferred learning must not silently treat
-    that gap as permission to fall back to "unjudged": crystallizing skills
-    or extracting success-flavored lessons from a run that closure or the
-    provenance guard just judged NOT achieved (but couldn't record) would
-    defeat the pending-verdict quarantine this stamp exists to enforce.
-    ``missing`` is left untouched — it means there was no row to protect,
-    not a persistence failure — and callers that already handle their own
-    result (the closure-restart boundary) don't use this helper.
+    New delivered paths use :mod:`audit_policy` for owner-visible warnings and
+    exact repair metadata. This helper remains for callers/tests that use the
+    original learning-quarantine contract directly.
     """
     if not loop_id:
         return
@@ -499,14 +484,14 @@ def _stamp_verdict_tracked(stamp_call, *, loop_id: str, label: str,
         _breadcrumb_verdict_stamp_failure(loop_id, label, str(exc))
         return
     if result is not None and result.status == "write_failed":
-        _detail = result.error or "outcome verdict was not updated"
+        detail = result.error or "outcome verdict was not updated"
         log.error(
             "handle: %s verdict stamp failed for loop %s after %d attempt(s) "
             "— quarantining deferred learning: %s",
-            label, loop_id, result.attempts, _detail,
+            label, loop_id, result.attempts, detail,
         )
         unstamped_loop_ids.add(loop_id)
-        _breadcrumb_verdict_stamp_failure(loop_id, label, _detail)
+        _breadcrumb_verdict_stamp_failure(loop_id, label, detail)
 
 
 # ---------------------------------------------------------------------------
@@ -1612,12 +1597,8 @@ def _handle_impl(
         # key from a run to its step-costs entries. Written to metadata after
         # the restart blocks settle.
         _run_loop_ids = [loop_result.loop_id] if getattr(loop_result, "loop_id", "") else []
-        # Loops whose closure/provenance verdict was judged but could not be
-        # durably stamped (EXT-AUDIT-2 residual) — populated by
-        # _stamp_verdict_tracked, consumed by finalize_deferred_learning to
-        # quarantine lesson/skill learning rather than let the gap silently
-        # read back as "unjudged".
-        _unstamped_loop_ids: set = set()
+        _audit_warnings: List[str] = []
+        _audit_failed_loop_ids: set[str] = set()
 
         # Director restart: loop broke with restart status — re-run with restart context.
         # continuation_depth increment prevents infinite restart loops.
@@ -1912,21 +1893,18 @@ def _handle_impl(
                     # written at loop finalization, verdict-less — stamp the
                     # deterministic provenance verdict onto it so learning
                     # consumers see the failure, not just run metadata.
-                    _prov_loop_id = getattr(loop_result, "loop_id", "") or ""
-
-                    def _do_stamp_prov(_lid=_prov_loop_id):
-                        from memory import stamp_outcome_verdict as _stamp_fn
-                        return _stamp_fn(
-                            _lid,
-                            goal_achieved=False,
-                            goal_verdict_source="provenance",
-                        )
-                    _stamp_verdict_tracked(
-                        _do_stamp_prov,
-                        loop_id=_prov_loop_id,
-                        label="provenance",
-                        unstamped_loop_ids=_unstamped_loop_ids,
+                    from audit_policy import persist_delivered_outcome_verdict
+                    _prov_audit = persist_delivered_outcome_verdict(
+                        getattr(loop_result, "loop_id", "") or "",
+                        goal_achieved=False,
+                        goal_verdict_source="provenance",
+                        loop_ids=_run_loop_ids,
+                        channel=channel,
                     )
+                    if not _prov_audit.learning_allowed:
+                        _audit_warnings.append(_prov_audit.warning)
+                        _audit_failed_loop_ids.add(
+                            getattr(loop_result, "loop_id", "") or "")
 
             # Status honesty (agenda twin of _verify_now_outcome): when the
             # director's own verifier contradicts a declared "done" at high
@@ -2023,25 +2001,21 @@ def _handle_impl(
                 # unjudged (closure_unverifiable) verdict records its source
                 # but leaves goal_achieved absent (and never overwrites a
                 # provenance False already stamped above).
-                _closure_loop_id = getattr(loop_result, "loop_id", "") or ""
-
-                def _do_stamp_closure(_lid=_closure_loop_id, _judged=_judged,
-                                      _closure=_closure):
-                    from memory import stamp_outcome_verdict as _stamp_fn
-                    return _stamp_fn(
-                        _lid,
-                        goal_achieved=(bool(_closure.complete) if _judged else None),
-                        goal_verdict_source=(
-                            "closure" if _judged else "closure_unverifiable"
-                        ),
-                        goal_verdict_confidence=float(_closure.confidence),
-                    )
-                _stamp_verdict_tracked(
-                    _do_stamp_closure,
-                    loop_id=_closure_loop_id,
-                    label="closure",
-                    unstamped_loop_ids=_unstamped_loop_ids,
+                from audit_policy import persist_delivered_outcome_verdict
+                _closure_audit = persist_delivered_outcome_verdict(
+                    getattr(loop_result, "loop_id", "") or "",
+                    goal_achieved=(bool(_closure.complete) if _judged else None),
+                    goal_verdict_source=(
+                        "closure" if _judged else "closure_unverifiable"
+                    ),
+                    goal_verdict_confidence=float(_closure.confidence),
+                    loop_ids=_run_loop_ids,
+                    channel=channel,
                 )
+                if not _closure_audit.learning_allowed:
+                    _audit_warnings.append(_closure_audit.warning)
+                    _audit_failed_loop_ids.add(
+                        getattr(loop_result, "loop_id", "") or "")
 
         # data-r2-01: learning was deferred at loop finalize (defer_learning
         # above) — run it now that the closure/provenance verdict is stamped
@@ -2060,7 +2034,7 @@ def _handle_impl(
                 dry_run=dry_run,
                 verbose=verbose,
                 extra_loop_ids=[l for l in _run_loop_ids if l != _final_lid],
-                unstamped_loop_ids=_unstamped_loop_ids,
+                skip_loop_ids=list(_audit_failed_loop_ids),
             )
         except Exception as _dl_exc:
             log.warning("deferred learning failed for loop %s: %s",
@@ -2156,6 +2130,7 @@ def _handle_impl(
                         elapsed = int((time.monotonic() - started_at) * 1000)
                         if getattr(loop_result, "loop_id", ""):
                             _run_loop_ids.append(loop_result.loop_id)
+                        _post_audit_failed = False
                         _gate_note = f"\n\n✅ Quality gate escalated to {_next_tier} — re-run complete."
                         _contested_claims = []  # fresh run — don't append stale claims
 
@@ -2201,27 +2176,22 @@ def _handle_impl(
                                         bool(_post_closure.complete)
                                         if _post_judged else None
                                     )
-                                    _post_loop_id = getattr(loop_result, "loop_id", "") or ""
-
-                                    def _do_stamp_post(
-                                        _lid=_post_loop_id,
-                                        _achieved=_post_achieved,
-                                        _source=_post_source,
-                                        _confidence=_post_closure.confidence,
-                                    ):
-                                        from memory import stamp_outcome_verdict as _stamp_fn
-                                        return _stamp_fn(
-                                            _lid,
-                                            goal_achieved=_achieved,
-                                            goal_verdict_source=_source,
-                                            goal_verdict_confidence=float(_confidence),
-                                        )
-                                    _stamp_verdict_tracked(
-                                        _do_stamp_post,
-                                        loop_id=_post_loop_id,
-                                        label="post-escalation",
-                                        unstamped_loop_ids=_unstamped_loop_ids,
+                                    from audit_policy import persist_delivered_outcome_verdict
+                                    _post_audit = persist_delivered_outcome_verdict(
+                                        getattr(loop_result, "loop_id", "") or "",
+                                        goal_achieved=_post_achieved,
+                                        goal_verdict_source=_post_source,
+                                        goal_verdict_confidence=float(
+                                            _post_closure.confidence
+                                        ),
+                                        loop_ids=_run_loop_ids,
+                                        channel=channel,
                                     )
+                                    if not _post_audit.learning_allowed:
+                                        _post_audit_failed = True
+                                        _audit_warnings.append(_post_audit.warning)
+                                        _audit_failed_loop_ids.add(
+                                            getattr(loop_result, "loop_id", "") or "")
                                     try:
                                         from runs import stamp_run_verdict as _srv_post
                                         _srv_post(
@@ -2257,21 +2227,21 @@ def _handle_impl(
                         # defer_learning=True. Complete that contract after
                         # the escalated verdict is available (or unjudged),
                         # otherwise the shipped retry never extracts lessons.
-                        try:
-                            from loop_finalize import finalize_deferred_learning as _fdl_post
-                            _fdl_post(
-                                loop_result,
-                                adapter=_escalated_adapter,
-                                project=_escalated_project,
-                                dry_run=False,
-                                verbose=verbose,
-                                unstamped_loop_ids=_unstamped_loop_ids,
-                            )
-                        except Exception as _post_dl_exc:
-                            log.warning(
-                                "post-escalate deferred learning failed for loop %s: %s",
-                                getattr(loop_result, "loop_id", ""), _post_dl_exc,
-                            )
+                        if not _post_audit_failed:
+                            try:
+                                from loop_finalize import finalize_deferred_learning as _fdl_post
+                                _fdl_post(
+                                    loop_result,
+                                    adapter=_escalated_adapter,
+                                    project=_escalated_project,
+                                    dry_run=False,
+                                    verbose=verbose,
+                                )
+                            except Exception as _post_dl_exc:
+                                log.warning(
+                                    "post-escalate deferred learning failed for loop %s: %s",
+                                    getattr(loop_result, "loop_id", ""), _post_dl_exc,
+                                )
             except Exception:
                 pass  # gate never blocks delivery of results
 
@@ -2304,6 +2274,10 @@ def _handle_impl(
             _extra += f"\n\n---\n\n**⚠️ Adversarial review — contested claims:**\n{_claims_text}"
         if _gate_note:
             _extra += _gate_note
+        if _audit_warnings:
+            _extra += "\n\n---\n\n**⚠️ Audit incomplete:**\n" + "\n".join(
+                f"- {warning}" for warning in dict.fromkeys(_audit_warnings)
+            )
 
         return _loop_result_to_handle(
             loop_result, handle_id=handle_id, message=message,

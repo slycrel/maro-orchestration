@@ -155,9 +155,10 @@ the same root bug (`MARO_LLM_MAX_RETRIES` silently overriding the hosted-free
 adapters' deliberate `max_retries=0` fail-fast contract); fixed, plus two more
 confirmed findings (hosted-free latency breaker missing on non-HTTP failures,
 `resolve_run_dir` not resolving a resumed run's pre-resume `loop_id`); one
-(`maro resume` has no structural serialization against concurrent invocation)
-documented in BACKLOG rather than fixed — pre-existing, needs a lock-design
-call. Picked up BACKLOG's deferred low-severity item (i) (depth-cap tripwire
+pre-existing gap (`maro resume` lacked structural serialization) was documented
+for an owner decision, then shipped 2026-07-14 as a per-run nonblocking flock
+with immediate refusal and operator notification. Picked up BACKLOG's deferred
+low-severity item (i) (depth-cap tripwire
 test coupling) meaning to add one test; investigation found the actual gap
 is bigger: handle.py's two restart gates can never reach their own
 `MAX_RESTART_DEPTH` cap within a single call (each is a single `if`, not a

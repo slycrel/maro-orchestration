@@ -112,6 +112,19 @@ def test_classify_done_unverified(workspace):
     assert card["success_class"] == "done-unverified"
 
 
+def test_classify_audit_incomplete_never_as_success(workspace):
+    rd = create_run_dir(
+        "h00000ai", prompt="g", lane="agenda", model="claude",
+        extra_metadata={"goal_achieved": True, "audit_incomplete": True,
+                        "audit_repair_required": True})
+    finalize_run("h00000ai", status="done")
+    card = curate_run("h00000ai")
+    assert card["success_class"] == "success"
+    assert card["audit_incomplete"] is True
+    from outcome_policy import is_learnable_outcome
+    assert is_learnable_outcome(card) is False
+
+
 def test_classify_failed(workspace):
     _finish("h0000004", "g", "stuck")
     card = curate_run("h0000004")

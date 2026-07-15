@@ -332,6 +332,16 @@ def test_resume_runs_agent_loop(monkeypatch, tmp_path):
     (d / "ckpt_loophalf.json").write_text(json.dumps(ckpt))
 
     calls = {}
+    adapter = object()
+    learned = {}
+
+    import llm
+    monkeypatch.setattr(llm, "build_adapter", lambda **kw: adapter)
+    import loop_finalize
+    monkeypatch.setattr(
+        loop_finalize, "finalize_deferred_learning",
+        lambda result, **kw: learned.update(kw),
+    )
 
     def fake_loop(goal, **kw):
         calls["goal"] = goal
@@ -345,3 +355,169 @@ def test_resume_runs_agent_loop(monkeypatch, tmp_path):
     assert rc == 0
     assert calls["goal"] == "finish the thing"
     assert calls["resume_from_loop_id"] == "loophalf"
+    assert calls["defer_learning"] is True
+    assert calls["adapter"] is adapter
+    assert learned["adapter"] is adapter
+    consumed = cli._load_resume_checkpoint("loophalf")
+    assert consumed is not None and consumed.is_consumed()
+    assert consumed.resumed_to_loop_id == "loophalf"
+    from proc_lock import try_hold_pidfile
+    released = try_hold_pidfile(
+        cli._resume_lock_name("loophalf"), fail_open=False)
+    assert released is not None
+    released.close()
+
+
+def test_concurrent_resume_refuses_immediately_and_notifies(
+        monkeypatch, tmp_path, capsys):
+    import checkpoint as ckpt_module
+    import cli
+    import notify
+    from proc_lock import try_hold_pidfile
+
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+    d = tmp_path / "legacy"
+    d.mkdir()
+    monkeypatch.setattr(ckpt_module, "_checkpoint_dir", lambda: d)
+    ckpt = {
+        "loop_id": "loopbusy", "handle_id": "handle-busy", "goal": "finish",
+        "project": "", "steps": ["s1", "s2"],
+        "completed": [{"index": 1, "text": "s1", "status": "done",
+                       "result": "", "tokens_in": 0, "tokens_out": 0,
+                       "elapsed_ms": 0}],
+        "timestamp": "2026-07-09T00:00:00",
+        "in_flight": {"index": 2, "started_at": "2026-07-09T00:01:00",
+                      "pid": 999999999},
+    }
+    (d / "ckpt_loopbusy.json").write_text(json.dumps(ckpt))
+    holder = try_hold_pidfile(
+        cli._resume_lock_name("handle-busy"), fail_open=False,
+        payload={"handle_id": "handle-busy", "loop_id": "loopbusy"})
+    assert holder is not None
+    events = []
+    monkeypatch.setattr(notify, "emit",
+                        lambda event, payload: events.append((event, payload)) or True)
+    import agent_loop
+    monkeypatch.setattr(
+        agent_loop, "run_agent_loop",
+        lambda *a, **k: pytest.fail("busy resume must not enter the loop"),
+    )
+
+    try:
+        rc = cli.main(["resume", "loopbusy"])
+    finally:
+        holder.close()
+
+    assert rc != 0
+    assert "E_RESUME_BUSY" in capsys.readouterr().err
+    assert events and events[0][0] == "resume_refused_busy"
+    assert events[0][1]["status"] == "refused_busy"
+    assert events[0][1]["holder"]["handle_id"] == "handle-busy"
+
+
+def test_resume_lock_environment_failure_has_distinct_code_and_event(
+        monkeypatch, tmp_path, capsys):
+    import checkpoint as ckpt_module
+    import cli
+    import notify
+    import proc_lock
+
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+    d = tmp_path / "legacy"
+    d.mkdir()
+    monkeypatch.setattr(ckpt_module, "_checkpoint_dir", lambda: d)
+    ckpt = {
+        "loop_id": "looplockfail", "goal": "finish", "project": "",
+        "steps": ["s1", "s2"],
+        "completed": [{"index": 1, "text": "s1", "status": "done",
+                       "result": "", "tokens_in": 0, "tokens_out": 0,
+                       "elapsed_ms": 0}],
+        "timestamp": "2026-07-09T00:00:00",
+    }
+    (d / "ckpt_looplockfail.json").write_text(json.dumps(ckpt))
+    monkeypatch.setattr(
+        proc_lock, "acquire_pidfile",
+        lambda *a, **k: proc_lock.PidfileAcquireResult(
+            "unavailable", error="read-only filesystem"),
+    )
+    events = []
+    monkeypatch.setattr(notify, "emit",
+                        lambda event, payload: events.append((event, payload)) or True)
+
+    rc = cli.main(["resume", "looplockfail"])
+
+    assert rc != 0
+    assert "E_RESUME_LOCK" in capsys.readouterr().err
+    assert events[0][0] == "resume_lock_unavailable"
+    assert events[0][1]["status"] == "lock_unavailable"
+    assert events[0][1]["blocking"] is False
+
+
+def test_resume_reloads_checkpoint_after_admission(monkeypatch, tmp_path):
+    import cli
+    import agent_loop
+
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+
+    class FakeCheckpoint:
+        loop_id = "loopfresh"
+        handle_id = "handle-fresh"
+        goal = "finish"
+        project = ""
+        in_flight = None
+        completed = []
+        steps = ["s1"]
+
+        def __init__(self, complete):
+            self._complete = complete
+
+        def is_complete(self):
+            return self._complete
+
+    checkpoints = iter((FakeCheckpoint(False), FakeCheckpoint(True)))
+    monkeypatch.setattr(cli, "_load_resume_checkpoint",
+                        lambda ref: next(checkpoints))
+    monkeypatch.setattr(
+        agent_loop, "run_agent_loop",
+        lambda *a, **k: pytest.fail("fresh completed checkpoint must refuse"),
+    )
+
+    rc = cli.main(["resume", "loopfresh"])
+
+    assert rc != 0
+
+
+def test_resume_consume_failure_never_reports_done(monkeypatch, tmp_path, capsys):
+    import checkpoint as ckpt_module
+    import agent_loop
+    import cli
+    import llm
+
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+    d = tmp_path / "legacy"
+    d.mkdir()
+    monkeypatch.setattr(ckpt_module, "_checkpoint_dir", lambda: d)
+    ckpt = {
+        "loop_id": "loopconsume", "goal": "finish", "project": "",
+        "steps": ["s1", "s2"],
+        "completed": [{"index": 1, "text": "s1", "status": "done",
+                       "result": "", "tokens_in": 0, "tokens_out": 0,
+                       "elapsed_ms": 0}],
+        "timestamp": "2026-07-09T00:00:00",
+    }
+    (d / "ckpt_loopconsume.json").write_text(json.dumps(ckpt))
+    monkeypatch.setattr(llm, "build_adapter", lambda **kw: object())
+    monkeypatch.setattr(
+        agent_loop, "run_agent_loop",
+        lambda *a, **k: SimpleNamespace(
+            loop_id="loopnew", status="done", project="", steps=[]),
+    )
+    monkeypatch.setattr(ckpt_module, "mark_checkpoint_consumed",
+                        lambda *a, **k: False)
+
+    rc = cli.main(["resume", "loopconsume", "--format", "json"])
+
+    output = capsys.readouterr().out
+    payload = json.loads(output[output.index("{"):])
+    assert rc != 0
+    assert payload["status"] == "incomplete"

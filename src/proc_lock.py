@@ -22,6 +22,7 @@ import fcntl
 import json
 import logging
 import os
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Generator, Optional
@@ -52,19 +53,23 @@ def pidfile_path(name: str) -> Path:
 def read_holder(name: str) -> Optional[dict]:
     """Best-effort read of the current holder's payload (informational)."""
     try:
-        return json.loads(pidfile_path(name).read_text(encoding="utf-8"))
+        holder = json.loads(pidfile_path(name).read_text(encoding="utf-8"))
+        return holder if isinstance(holder, dict) else None
     except Exception:
         return None
 
 
-def try_hold_pidfile(name: str):
-    """Non-contextmanager variant for run-forever daemons: acquire and hold
-    until process death (the kernel releases the flock). Returns an opaque
-    handle to keep referenced, or None if a live holder exists. Environment
-    errors degrade to a warning + a truthy sentinel (daemon still runs).
-    Paid/non-idempotent finite work should use ``hold_pidfile(...,
-    fail_open=False)`` instead.
-    """
+@dataclass(frozen=True)
+class PidfileAcquireResult:
+    """Typed nonblocking acquisition result for finite critical sections."""
+
+    status: str  # acquired | busy | unavailable
+    handle: object = None
+    error: str = ""
+
+
+def acquire_pidfile(name: str, *, payload: Optional[dict] = None) -> PidfileAcquireResult:
+    """Acquire one pidfile lock without conflating contention and I/O failure."""
     path = pidfile_path(name)
     fh = None
     try:
@@ -72,22 +77,49 @@ def try_hold_pidfile(name: str):
         fh = open(path, "a+", encoding="utf-8")
         fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
-        fh.close()
-        return None
-    except OSError as exc:
-        logger.warning("pidfile %s unavailable (%s) — proceeding UNLOCKED", path, exc)
         if fh is not None:
             fh.close()
-        return object()
-    fh.seek(0)
-    fh.truncate()
-    fh.write(json.dumps({
+        return PidfileAcquireResult("busy")
+    except OSError as exc:
+        if fh is not None:
+            fh.close()
+        return PidfileAcquireResult("unavailable", error=str(exc))
+
+    holder = dict(payload or {})
+    holder.update({
         "name": name,
         "pid": os.getpid(),
         "started_at": datetime.now(timezone.utc).isoformat(),
-    }))
-    fh.flush()
-    return fh
+    })
+    try:
+        fh.seek(0)
+        fh.truncate()
+        fh.write(json.dumps(holder))
+        fh.flush()
+    except OSError as exc:
+        fh.close()
+        return PidfileAcquireResult("unavailable", error=str(exc))
+    return PidfileAcquireResult("acquired", handle=fh)
+
+
+def try_hold_pidfile(name: str, *, fail_open: bool = True,
+                     payload: Optional[dict] = None):
+    """Non-contextmanager variant for run-forever daemons: acquire and hold
+    until process death (the kernel releases the flock). Returns an opaque
+    handle to keep referenced, or None if a live holder exists. Environment
+    errors degrade to a warning + a truthy sentinel (daemon still runs) unless
+    ``fail_open=False``. ``payload`` adds caller-specific holder identity while
+    the lock layer retains its canonical name/pid/start fields.
+    """
+    acquired = acquire_pidfile(name, payload=payload)
+    if acquired.status == "busy":
+        return None
+    if acquired.status == "unavailable":
+        action = "proceeding UNLOCKED" if fail_open else "refusing (fail-closed)"
+        logger.warning("pidfile %s unavailable (%s) — %s",
+                       pidfile_path(name), acquired.error, action)
+        return object() if fail_open else None
+    return acquired.handle
 
 
 @contextlib.contextmanager

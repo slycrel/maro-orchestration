@@ -13,6 +13,8 @@ from outcome_policy import is_learnable_outcome
         ({"success_class": "uncurated", "status": "done"}, False),
         ({"success_class": None, "status": "done"}, False),
         ({"success_class": "", "status": "done"}, False),
+        ({"success_class": "success", "audit_incomplete": True}, False),
+        ({"success_class": "done-unverified", "audit_repair_required": True}, False),
         ({"status": "done", "goal_achieved": True}, True),
         ({"status": "done"}, True),
         ({"status": "done", "lesson_extraction_status": "deferred"}, False),

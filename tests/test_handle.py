@@ -2433,10 +2433,12 @@ class TestPostEscalateClosure:
             verify_calls.append(kwargs)
             return self._fake_closure(complete=True, confidence=0.9)
 
+        from memory_ledger import OutcomeVerdictStampResult
         with patch("agent_loop.run_agent_loop", side_effect=_fake_run), \
              patch("intent.check_goal_clarity", return_value={"clear": True}), \
              patch("director.verify_goal_completion", side_effect=_fake_verify), \
-             patch("memory.stamp_outcome_verdict") as stamp_verdict, \
+             patch("memory.stamp_outcome_verdict", return_value=
+                   OutcomeVerdictStampResult("updated", attempts=1)) as stamp_verdict, \
              patch("loop_finalize.finalize_deferred_learning") as deferred_learning, \
              patch("llm.build_adapter", return_value=MagicMock()), \
              self._escalating_gate():
@@ -2462,6 +2464,7 @@ class TestPostEscalateClosure:
             goal_achieved=True,
             goal_verdict_source="closure",
             goal_verdict_confidence=0.9,
+            max_attempts=2,
         )
         assert any(
             call.args and call.args[0].loop_id == "lr-escalated"
@@ -2534,6 +2537,42 @@ class TestPostEscalateClosure:
         assert meta["goal_achieved"] is False
         assert meta["goal_verdict_source"] == "closure"
         assert meta["goal_verdict_confidence"] == 0.95
+
+    def test_post_escalate_stamp_failure_warns_and_skips_retry_learning(
+            self, monkeypatch, tmp_path):
+        self._setup(monkeypatch, tmp_path)
+        from unittest.mock import patch, MagicMock
+        from memory_ledger import OutcomeVerdictStampResult
+
+        results = [
+            self._fake_loop_result(status="done", loop_id="lr-initial"),
+            self._fake_loop_result(status="done", loop_id="lr-escalated"),
+        ]
+        stamps = iter((
+            OutcomeVerdictStampResult("updated", attempts=1),
+            OutcomeVerdictStampResult(
+                "write_failed", attempts=2, error="ledger readonly"),
+        ))
+        with patch("agent_loop.run_agent_loop",
+                   side_effect=lambda *a, **k: results.pop(0)), \
+             patch("intent.check_goal_clarity", return_value={"clear": True}), \
+             patch("director.verify_goal_completion",
+                   return_value=self._fake_closure(True, 0.9)), \
+             patch("memory.stamp_outcome_verdict",
+                   side_effect=lambda *a, **k: next(stamps)), \
+             patch("loop_finalize.finalize_deferred_learning") as learning, \
+             patch("llm.build_adapter", return_value=MagicMock()), \
+             self._escalating_gate():
+            result = handle("build X", force_lane="agenda", model="cheap",
+                            dry_run=False)
+
+        assert result.status == "done"
+        assert "Audit incomplete" in result.result
+        assert "ledger readonly" in result.result
+        assert not any(
+            call.args and call.args[0].loop_id == "lr-escalated"
+            for call in learning.call_args_list
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -2730,6 +2769,7 @@ class TestNowStatusHonesty:
                     origin={"parent_handle_id": "abc", "source": "user_goal"},
                 )
         assert result.status == "done"
+
         from runs import run_dir
         meta = json.loads((run_dir(result.handle_id) / "metadata.json").read_text())
         assert meta["goal_achieved"] is True
@@ -3380,7 +3420,41 @@ class TestClosureStatusHonesty:
             ("missing-row-2", "missing"),
         ]
         assert stamp_results[0][2]["max_attempts"] == 2
-        assert "max_attempts" not in stamp_results[1][2]
+        assert stamp_results[1][2]["max_attempts"] == 2
+
+    def test_delivered_stamp_failure_preserves_result_and_skips_learning(
+            self, monkeypatch, tmp_path):
+        self._setup(monkeypatch, tmp_path)
+        from memory import record_outcome
+        from memory_ledger import OutcomeVerdictStampResult
+        from runs import run_dir
+
+        def _fake_run(*args, **kwargs):
+            record_outcome(
+                "build X", "done", "summary", lessons=[], loop_id="loop-delivered",
+                lesson_extraction_status="deferred")
+            return self._fake_loop_result(status="done", loop_id="loop-delivered")
+
+        with patch("agent_loop.run_agent_loop", side_effect=_fake_run), \
+             patch("intent.check_goal_clarity", return_value={"clear": True}), \
+             patch("director.verify_goal_completion",
+                   return_value=self._fake_closure(True, 0.95)), \
+             patch("memory.stamp_outcome_verdict", return_value=
+                   OutcomeVerdictStampResult(
+                       "write_failed", attempts=2, error="ledger readonly")), \
+             patch("loop_finalize.finalize_deferred_learning") as learning, \
+             self._no_quality_gate():
+            result = handle("build X", force_lane="agenda", dry_run=False)
+
+        meta = json.loads((run_dir(result.handle_id) / "metadata.json").read_text())
+        assert result.status == "done"
+        assert "Audit incomplete" in result.result
+        assert "ledger readonly" in result.result
+        learning.assert_called_once()
+        assert learning.call_args.kwargs["skip_loop_ids"] == ["loop-delivered"]
+        assert meta["audit_incomplete"] is True
+        assert meta["audit_repair_required"] is True
+        assert meta["audit_repair"]["loop_id"] == "loop-delivered"
 
     def test_provenance_failure_dominates_positive_closure(
             self, monkeypatch, tmp_path):

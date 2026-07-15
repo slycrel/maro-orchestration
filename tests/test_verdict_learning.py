@@ -655,3 +655,26 @@ def test_finalize_deferred_learning_unstamped_only_quarantines_named_loop(monkey
     rows = {r["loop_id"]: r for r in _raw_rows()}
     assert "failed" in rows["lp-d10a"]["lessons"][0]
     assert "lessons" not in rows["lp-d10b"] or not rows["lp-d10b"]["lessons"]
+
+
+def test_finalize_deferred_learning_quarantines_only_named_loop(monkeypatch, tmp_path):
+    _setup(monkeypatch, tmp_path)
+    import loop_finalize
+    monkeypatch.setattr(loop_finalize, "_crystallize_and_synthesize", lambda **kw: None)
+    record_outcome("safe earlier", "done", "s", lessons=[], loop_id="lp-safe",
+                   lesson_extraction_status="deferred")
+    stamp_outcome_verdict(
+        "lp-safe", goal_achieved=False, goal_verdict_source="closure")
+    record_outcome("audit failed", "done", "s", lessons=[], loop_id="lp-held",
+                   lesson_extraction_status="deferred")
+
+    loop_finalize.finalize_deferred_learning(
+        _loop_result("lp-held"), dry_run=True, extra_loop_ids=["lp-safe"],
+        skip_loop_ids=["lp-held"],
+    )
+
+    rows = {r["loop_id"]: r for r in _raw_rows()}
+    assert rows["lp-safe"]["lesson_extraction_status"] == "completed"
+    assert "failed" in rows["lp-safe"]["lessons"][0]
+    assert rows["lp-held"]["lesson_extraction_status"] == "deferred"
+    assert rows["lp-held"]["lessons"] == []

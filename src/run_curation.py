@@ -168,6 +168,8 @@ def classify_outcome(rd: Path, meta: dict, card: dict) -> None:
     """Set success_class from process status + the goal verdict (done≠achieved)."""
     status = (meta.get("status") or "").lower()
     achieved = meta.get("goal_achieved")  # may be absent = unverified
+    audit_incomplete = bool(
+        meta.get("audit_incomplete") or meta.get("audit_repair_required"))
     if status in _SUCCESS_STATUSES and achieved is True:
         cls = "success"
     elif status in _SUCCESS_STATUSES and achieved is False:
@@ -184,6 +186,8 @@ def classify_outcome(rd: Path, meta: dict, card: dict) -> None:
     card["status"] = status
     card["goal_achieved"] = achieved
     card["goal_verdict_summary"] = meta.get("goal_verdict_summary")
+    card["audit_incomplete"] = audit_incomplete
+    card["audit_repair_required"] = bool(meta.get("audit_repair_required"))
     # Cost-per-run via the loop_ids join key (absent on pre-2026-07-02 runs).
     try:
         import metrics as _metrics
@@ -931,7 +935,8 @@ class CuratorSpec:
 _CURATOR_SPECS: List[CuratorSpec] = [
     CuratorSpec(classify_outcome,
                 provides=("success_class", "status", "goal_achieved",
-                          "goal_verdict_summary", "total_cost_usd")),
+                          "goal_verdict_summary", "audit_incomplete",
+                          "audit_repair_required", "total_cost_usd")),
     CuratorSpec(inventory_assets, provides=("inventory", "mineable")),
     CuratorSpec(excerpt_result,
                 optional_provides=("result_excerpt", "result_path")),

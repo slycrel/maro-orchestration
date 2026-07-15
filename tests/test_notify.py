@@ -109,7 +109,10 @@ def _read_escalations():
     return [json.loads(l) for l in p.read_text().splitlines() if l.strip()]
 
 
-@pytest.mark.parametrize("event_type", ["escalation", "backend_actionable", "stranded_run"])
+@pytest.mark.parametrize("event_type", [
+    "escalation", "backend_actionable", "stranded_run",
+    "resume_refused_busy", "resume_lock_unavailable",
+])
 def test_emit_writes_escalation_file_for_escalation_class_events(workspace, monkeypatch, event_type):
     _configure_notify(monkeypatch, "")  # no notify lane configured at all
     emit(event_type, {"handle_id": "h3", "status": "stuck", "summary": "x"})

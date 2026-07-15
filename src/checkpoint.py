@@ -137,6 +137,10 @@ class Checkpoint:
     # Discarded whenever in_flight is present; adapter re-validates its config
     # signature (model/cwd/tools/permissions) before using the ID.
     executor_session: Optional[Dict[str, Any]] = None
+    # Successful legacy resume marks (rather than deletes) its source so the
+    # retained checkpoint remains inspectable but can never replay effects.
+    consumed_at: str = ""
+    resumed_to_loop_id: str = ""
 
     def __post_init__(self):
         if not self.timestamp:
@@ -159,6 +163,9 @@ class Checkpoint:
         """True if all steps have an outcome."""
         return len(self.completed) >= len(self.steps)
 
+    def is_consumed(self) -> bool:
+        return bool(self.consumed_at)
+
     def to_dict(self) -> Dict[str, Any]:
         d: Dict[str, Any] = {
             "loop_id": self.loop_id,
@@ -176,6 +183,9 @@ class Checkpoint:
             d["in_flight"] = self.in_flight
         if self.executor_session:
             d["executor_session"] = self.executor_session
+        if self.consumed_at:
+            d["consumed_at"] = self.consumed_at
+            d["resumed_to_loop_id"] = self.resumed_to_loop_id
         return d
 
     @classmethod
@@ -213,6 +223,8 @@ class Checkpoint:
             handle_id=d.get("handle_id", ""),
             in_flight=d.get("in_flight") or None,
             executor_session=executor_session,
+            consumed_at=str(d.get("consumed_at") or ""),
+            resumed_to_loop_id=str(d.get("resumed_to_loop_id") or ""),
         )
 
 
@@ -353,6 +365,28 @@ def load_checkpoint(loop_id: str) -> Optional[Checkpoint]:
             if ckpt is not None:
                 return ckpt
     return None
+
+
+def mark_checkpoint_consumed(loop_id: str, *, resumed_to_loop_id: str) -> bool:
+    """Retain but irrevocably consume a successful resume source checkpoint.
+
+    This is intentionally narrower than deletion: closure-demoted/stuck runs
+    keep resumable state, while a successful legacy resume cannot be invoked a
+    second time to replay the same external effects.
+    """
+    path = _checkpoint_path(loop_id)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if str(data.get("loop_id") or "") != loop_id:
+            return False
+        data["consumed_at"] = datetime.now(timezone.utc).isoformat()
+        data["resumed_to_loop_id"] = resumed_to_loop_id
+        from file_lock import atomic_write
+        atomic_write(path, json.dumps(data, indent=2))
+        return True
+    except Exception as exc:
+        log.error("checkpoint consume failed for %s: %s", loop_id, exc)
+        return False
 
 
 def delete_checkpoint(loop_id: str) -> None:
