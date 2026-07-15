@@ -45,6 +45,7 @@ def test_spend_today_sums_todays_entries(costs_path):
 
 
 def test_spend_today_empty_file(costs_path):
+    costs_path.write_text("", encoding="utf-8")
     assert spend_today() == 0.0
 
 

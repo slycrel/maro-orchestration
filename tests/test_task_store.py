@@ -463,6 +463,7 @@ class TestConcurrency:
         assert task["status"] == "claimed"
         assert task["claimed_by_pid"] == claimed[0][1]
 
+    @pytest.mark.slow
     def test_multiprocess_claim_race_only_one_winner(self, tmp_path):
         """Two real subprocesses race to claim. Only one succeeds.
 

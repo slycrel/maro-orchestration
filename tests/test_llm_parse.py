@@ -1,340 +1,224 @@
-"""Tests for llm_parse.py — LLM output parsing utilities.
+"""Behavioral matrices for the shared LLM-output parsing chokepoint.
 
-17 modules import from llm_parse. These tests ensure regressions
-are caught before they cascade across the codebase.
+These cases are intentionally grouped by public behavior.  The old suite had
+two files with the same utility classes and dozens of duplicate one-assertion
+tests; the matrices retain their distinct malformed/model-output cases without
+making every scalar example a separate test item.
 """
 
+from types import SimpleNamespace
+
 import pytest
+
 from llm_parse import (
+    _find_json_bounds,
+    content_or_empty,
     extract_json,
     safe_float,
-    safe_str,
     safe_list,
-    content_or_empty,
+    safe_str,
     strip_markdown_fences,
     strip_think_blocks,
-    _find_json_bounds,
 )
 
 
-# ---------------------------------------------------------------------------
-# strip_think_blocks
-# ---------------------------------------------------------------------------
-
-class TestStripThinkBlocks:
-    def test_no_think_block(self):
-        assert strip_think_blocks('{"a": 1}') == '{"a": 1}'
-
-    def test_closed_block_keeps_answer(self):
-        text = '<think>let me reason</think>\n{"passed": true}'
-        assert strip_think_blocks(text) == '{"passed": true}'
-
-    def test_decoy_json_inside_think_is_dropped(self):
-        # The real bug: a hypothetical verdict inside the trace must NOT win.
-        text = (
-            '<think>maybe {"passed": false, "confidence": 0.1}? '
-            'no, it actually passes.</think>\n'
-            '{"passed": true, "confidence": 0.9}'
-        )
-        assert strip_think_blocks(text) == '{"passed": true, "confidence": 0.9}'
-
-    def test_unclosed_block_drops_to_end(self):
-        # Budget-truncated trace, no verdict emitted → nothing to keep.
-        assert strip_think_blocks('<think>reasoning forever...') == ""
-
-    def test_attributes_on_tag(self):
-        text = '<think type="reasoning">x</think>{"a": 1}'
-        assert strip_think_blocks(text) == '{"a": 1}'
-
-    def test_case_insensitive(self):
-        assert strip_think_blocks('<THINK>x</THINK>{"a": 1}') == '{"a": 1}'
-
-    def test_empty_string(self):
-        assert strip_think_blocks("") == ""
-
-    def test_extract_json_ignores_decoy_in_think(self):
-        # End-to-end through the real chokepoint all callers use.
-        text = (
-            '<think>{"passed": false, "confidence": 0.0}</think>\n'
-            '```json\n{"passed": true, "confidence": 0.95}\n```'
-        )
-        assert extract_json(text, dict) == {"passed": True, "confidence": 0.95}
-
-
-# ---------------------------------------------------------------------------
-# strip_markdown_fences
-# ---------------------------------------------------------------------------
-
-class TestStripMarkdownFences:
-    def test_json_fence(self):
-        assert strip_markdown_fences('```json\n{"a": 1}\n```') == '{"a": 1}'
-
-    def test_bare_fence(self):
-        assert strip_markdown_fences('```\nhello\n```') == "hello"
-
-    def test_python_fence(self):
-        assert strip_markdown_fences('```python\nprint("hi")\n```') == 'print("hi")'
-
-    def test_no_fence(self):
-        assert strip_markdown_fences('{"a": 1}') == '{"a": 1}'
-
-    def test_whitespace_stripped(self):
-        assert strip_markdown_fences('  ```json\n{"a":1}\n```  ') == '{"a":1}'
-
-    def test_empty_string(self):
-        assert strip_markdown_fences("") == ""
-
-
-# ---------------------------------------------------------------------------
-# _find_json_bounds
-# ---------------------------------------------------------------------------
-
-class TestFindJsonBounds:
-    def test_simple_object(self):
-        assert _find_json_bounds('{"a": 1}', "{", "}") == (0, 8)
-
-    def test_nested_object(self):
-        s = '{"a": {"b": 1}}'
-        start, end = _find_json_bounds(s, "{", "}")
-        assert s[start:end] == s
-
-    def test_array(self):
-        assert _find_json_bounds("[1, 2, 3]", "[", "]") == (0, 9)
-
-    def test_leading_prose(self):
-        s = 'Here is the result: {"key": "val"}'
-        start, end = _find_json_bounds(s, "{", "}")
-        assert s[start:end] == '{"key": "val"}'
-
-    def test_no_brackets(self):
-        assert _find_json_bounds("no json here", "{", "}") == (-1, -1)
-
-    def test_unbalanced(self):
-        assert _find_json_bounds("{unclosed", "{", "}") == (-1, -1)
-
-    def test_nested_arrays(self):
-        s = "[[1, 2], [3, 4]]"
-        start, end = _find_json_bounds(s, "[", "]")
-        assert s[start:end] == s
-
-
-# ---------------------------------------------------------------------------
-# extract_json
-# ---------------------------------------------------------------------------
-
-class TestExtractJson:
-    def test_simple_dict(self):
-        assert extract_json('{"a": 1}') == {"a": 1}
-
-    def test_simple_list(self):
-        assert extract_json('[1, 2, 3]', list) == [1, 2, 3]
-
-    def test_none_returns_default_dict(self):
-        assert extract_json(None) == {}
-
-    def test_none_returns_default_list(self):
-        assert extract_json(None, list) == []
-
-    def test_empty_returns_default(self):
-        assert extract_json("") == {}
-
-    def test_fenced_json(self):
-        assert extract_json('```json\n{"key": "val"}\n```') == {"key": "val"}
-
-    def test_prose_around_json(self):
-        result = extract_json('Here is the answer: {"x": 42} Hope that helps!')
-        assert result == {"x": 42}
-
-    def test_type_mismatch_dict_expected_returns_default(self):
-        # Got a list but expected dict
-        assert extract_json("[1, 2]", dict) == {}
-
-    def test_unwrap_dict_with_steps_key(self):
-        """When expecting list but got dict, unwrap common keys."""
-        raw = '{"steps": ["a", "b"]}'
-        assert extract_json(raw, list) == ["a", "b"]
-
-    def test_unwrap_dict_with_items_key(self):
-        raw = '{"items": [1, 2, 3]}'
-        assert extract_json(raw, list) == [1, 2, 3]
-
-    def test_unwrap_dict_with_lessons_key(self):
-        raw = '{"lessons": ["lesson1"]}'
-        assert extract_json(raw, list) == ["lesson1"]
-
-    def test_unwrap_ignores_non_list_values(self):
-        raw = '{"steps": "not a list"}'
-        assert extract_json(raw, list) == []
-
-    def test_invalid_json_returns_default(self):
-        assert extract_json("{not valid json}") == {}
-
-    def test_nested_json(self):
-        raw = '{"outer": {"inner": [1, 2]}}'
-        result = extract_json(raw)
-        assert result["outer"]["inner"] == [1, 2]
-
-    def test_custom_default(self):
-        assert extract_json("garbage", dict, default={"fallback": True}) == {"fallback": True}
-
-    def test_log_tag_doesnt_crash(self):
-        # Just ensure log_tag param doesn't cause errors
-        assert extract_json('{"a": 1}', log_tag="test") == {"a": 1}
-        assert extract_json(None, log_tag="test") == {}
-
-    def test_alt_bracket_type(self):
-        """When expected dict but content has array, try array."""
-        result = extract_json("[1, 2]", dict)
-        # Should return default since types still don't match after parse
-        assert result == {}
-
-    def test_dict_expected_found_array_with_steps(self):
-        """Edge: expected dict, found array — no unwrapping possible."""
-        result = extract_json("[1, 2, 3]", dict)
-        assert result == {}
-
-
-# ---------------------------------------------------------------------------
-# safe_float
-# ---------------------------------------------------------------------------
-
-class TestSafeFloat:
-    def test_int(self):
-        assert safe_float(42) == 42.0
-
-    def test_float(self):
-        assert safe_float(3.14) == 3.14
-
-    def test_string_number(self):
-        assert safe_float("0.8") == 0.8
-
-    def test_none(self):
-        assert safe_float(None) == 0.0
-
-    def test_none_custom_default(self):
-        assert safe_float(None, default=0.5) == 0.5
-
-    def test_non_numeric_string(self):
-        assert safe_float("high") == 0.0
-
-    def test_empty_string(self):
-        assert safe_float("") == 0.0
-
-    def test_nan(self):
-        assert safe_float(float("nan")) == 0.0
-
-    def test_infinity(self):
-        assert safe_float(float("inf")) == 0.0
-
-    def test_neg_infinity(self):
-        assert safe_float(float("-inf")) == 0.0
-
-    def test_min_val(self):
-        assert safe_float(0.1, min_val=0.5) == 0.5
-
-    def test_max_val(self):
-        assert safe_float(0.9, max_val=0.5) == 0.5
-
-    def test_min_max_clamping(self):
-        assert safe_float(5.0, min_val=1.0, max_val=3.0) == 3.0
-        assert safe_float(-1.0, min_val=0.0, max_val=1.0) == 0.0
-
-    def test_bool_true(self):
-        assert safe_float(True) == 1.0
-
-    def test_bool_false(self):
-        assert safe_float(False) == 0.0
-
-
-# ---------------------------------------------------------------------------
-# safe_str
-# ---------------------------------------------------------------------------
-
-class TestSafeStr:
-    def test_string(self):
-        assert safe_str("hello") == "hello"
-
-    def test_none(self):
-        assert safe_str(None) == ""
-
-    def test_none_custom_default(self):
-        assert safe_str(None, default="fallback") == "fallback"
-
-    def test_int_converted(self):
-        assert safe_str(42) == "42"
-
-    def test_strips_whitespace(self):
-        assert safe_str("  hello  ") == "hello"
-
-    def test_max_len(self):
-        assert safe_str("hello world", max_len=5) == "hello"
-
-    def test_max_len_no_truncation_needed(self):
-        assert safe_str("hi", max_len=10) == "hi"
-
-    def test_list_converted(self):
-        assert safe_str([1, 2]) == "[1, 2]"
-
-
-# ---------------------------------------------------------------------------
-# safe_list
-# ---------------------------------------------------------------------------
-
-class TestSafeList:
-    def test_valid_list(self):
-        assert safe_list(["a", "b"]) == ["a", "b"]
-
-    def test_not_a_list(self):
-        assert safe_list("not a list") == []
-
-    def test_none(self):
-        assert safe_list(None) == []
-
-    def test_filters_wrong_types(self):
-        assert safe_list(["a", 1, "b"], element_type=str) == ["a", "b"]
-
-    def test_int_element_type(self):
-        assert safe_list([1, "two", 3], element_type=int) == [1, 3]
-
-    def test_max_items(self):
-        assert safe_list([1, 2, 3, 4, 5], element_type=int, max_items=3) == [1, 2, 3]
-
-    def test_empty_list(self):
-        assert safe_list([]) == []
-
-    def test_dict_is_not_list(self):
-        assert safe_list({"a": 1}) == []
-
-
-# ---------------------------------------------------------------------------
-# content_or_empty
-# ---------------------------------------------------------------------------
-
-class TestContentOrEmpty:
-    def test_with_content(self):
-        class FakeResp:
-            content = "hello world"
-        assert content_or_empty(FakeResp()) == "hello world"
-
-    def test_strips_whitespace(self):
-        class FakeResp:
-            content = "  padded  "
-        assert content_or_empty(FakeResp()) == "padded"
-
-    def test_none_content(self):
-        class FakeResp:
-            content = None
-        assert content_or_empty(FakeResp()) == ""
-
-    def test_missing_content_attr(self):
-        assert content_or_empty(object()) == ""
-
-    def test_empty_string_content(self):
-        class FakeResp:
-            content = ""
-        assert content_or_empty(FakeResp()) == ""
-
-    def test_int_content(self):
-        class FakeResp:
-            content = 42
-        assert content_or_empty(FakeResp()) == "42"
+def test_strip_think_blocks_matrix():
+    cases = [
+        ('{"a": 1}', '{"a": 1}'),
+        ('<think>reason</think>\n{"passed": true}', '{"passed": true}'),
+        (
+            '<think>maybe {"passed": false}? no</think>\n{"passed": true}',
+            '{"passed": true}',
+        ),
+        ('<think>reasoning forever...', ""),
+        ('<think type="reasoning">x</think>{"a": 1}', '{"a": 1}'),
+        ('<THINK>x</THINK>{"a": 1}', '{"a": 1}'),
+        ("", ""),
+    ]
+    for raw, expected in cases:
+        assert strip_think_blocks(raw) == expected, f"case={raw!r}"
+
+
+def test_extract_json_drops_reasoning_decoys_before_parsing():
+    raw = (
+        '<think>{"passed": false, "confidence": 0.0}</think>\n'
+        '```json\n{"passed": true, "confidence": 0.95}\n```'
+    )
+    assert extract_json(raw, dict) == {"passed": True, "confidence": 0.95}
+
+
+def test_strip_markdown_fences_matrix():
+    cases = [
+        ('```json\n{"a": 1}\n```', '{"a": 1}'),
+        ('```\nhello\n```', "hello"),
+        ('```python\nprint("hi")\n```', 'print("hi")'),
+        ('```json{"a": 1}```', '{"a": 1}'),
+        ('  ```json\n{"x": 2}\n```  ', '{"x": 2}'),
+        ('```json\n{\n  "a": 1,\n  "b": 2\n}\n```', '{\n  "a": 1,\n  "b": 2\n}'),
+        ('{"a": 1}', '{"a": 1}'),
+        ("", ""),
+        ("   ", ""),
+    ]
+    for raw, expected in cases:
+        assert strip_markdown_fences(raw) == expected, f"case={raw!r}"
+
+    incomplete = strip_markdown_fences('```json\n{"a": 1}')
+    assert '{"a": 1}' in incomplete
+
+
+def test_find_json_bounds_matrix():
+    cases = [
+        ('{"a": 1}', "{", "}", '{"a": 1}'),
+        ('{"a": {"b": 1}}', "{", "}", '{"a": {"b": 1}}'),
+        ("[1, 2, 3]", "[", "]", "[1, 2, 3]"),
+        ('Here: {"key": "val"}', "{", "}", '{"key": "val"}'),
+        ("[[1, 2], [3, 4]]", "[", "]", "[[1, 2], [3, 4]]"),
+    ]
+    for raw, opening, closing, expected in cases:
+        start, end = _find_json_bounds(raw, opening, closing)
+        assert raw[start:end] == expected, f"case={raw!r}"
+
+    assert _find_json_bounds("no json", "{", "}") == (-1, -1)
+    assert _find_json_bounds("{unclosed", "{", "}") == (-1, -1)
+
+
+def test_extract_json_dict_matrix():
+    cases = [
+        ('{"a": 1}', {"a": 1}),
+        ('```json\n{"key": "val"}\n```', {"key": "val"}),
+        ('Before {"x": 42} after', {"x": 42}),
+        ('{"outer": {"inner": [1, 2]}}', {"outer": {"inner": [1, 2]}}),
+        ('{"code": "if (x) { return y; }", "status": "ok"}',
+         {"code": "if (x) { return y; }", "status": "ok"}),
+        ('{"a": null, "b": 1}', {"a": None, "b": 1}),
+        ('{"step": 1} {"step": 2}', {"step": 1}),
+        (None, {}),
+        ("", {}),
+        ("   \n\t", {}),
+        ('{"a": 1,}', {}),
+        ('{"a": 1, "b": 2', {}),
+        ('{"result": "partial', {}),
+        ("no json here", {}),
+        ("Sorry, not enough information.", {}),
+        ('["item1", "item2"]', {}),
+        ('"just a string"', {}),
+        ("42", {}),
+    ]
+    for raw, expected in cases:
+        assert extract_json(raw, dict) == expected, f"case={raw!r}"
+
+    assert extract_json(None, dict, default={"fallback": True}) == {"fallback": True}
+    assert extract_json('{"a": 1}', log_tag="matrix") == {"a": 1}
+
+
+def test_extract_json_list_matrix():
+    cases = [
+        ('["a", "b"]', ["a", "b"]),
+        ('Before ["a", "b"] after', ["a", "b"]),
+        ('```json\n["a", "b"]\n```', ["a", "b"]),
+        ('{"lessons": ["lesson A"]}', ["lesson A"]),
+        ('{"steps": ["do this", "do that"]}', ["do this", "do that"]),
+        ('{"items": [1, 2]}', [1, 2]),
+        ('{"results": ["one", "two"]}', ["one", "two"]),
+        ('{"steps": "not a list"}', []),
+        ('[{"task": "research"}, {"task": "build"}]',
+         [{"task": "research"}, {"task": "build"}]),
+        ('[["a", "b"], ["c", "d"]]', [["a", "b"], ["c", "d"]]),
+        (None, []),
+        ("", []),
+        ("[]", []),
+        ('["a", "b",]', []),
+    ]
+    for raw, expected in cases:
+        assert extract_json(raw, list) == expected, f"case={raw!r}"
+
+    assert extract_json(None, list, default=["fallback"]) == ["fallback"]
+
+
+def test_safe_float_matrix():
+    cases = [
+        (42, 42.0),
+        (3.14, 3.14),
+        ("0.8", 0.8),
+        (None, 0.0),
+        ("", 0.0),
+        ("high", 0.0),
+        ("0.8 approx", 0.0),
+        (float("nan"), 0.0),
+        (float("inf"), 0.0),
+        (float("-inf"), 0.0),
+        ("NaN", 0.0),
+        (True, 1.0),
+        (False, 0.0),
+        (0, 0.0),
+        ("0", 0.0),
+    ]
+    for raw, expected in cases:
+        assert safe_float(raw) == pytest.approx(expected), f"case={raw!r}"
+
+    assert safe_float(None, default=0.5) == 0.5
+    assert safe_float("high", default=0.5) == 0.5
+    assert safe_float(-1, min_val=0) == 0
+    assert safe_float(2, max_val=1) == 1
+    assert safe_float(5, min_val=1, max_val=3) == 3
+
+
+def test_safe_str_matrix():
+    cases = [
+        ("hello", {}, "hello"),
+        (None, {}, ""),
+        (None, {"default": "fallback"}, "fallback"),
+        (42, {}, "42"),
+        ("  hello  ", {}, "hello"),
+        ("hello world", {"max_len": 5}, "hello"),
+        ("hi", {"max_len": 10}, "hi"),
+        ([1, 2], {}, "[1, 2]"),
+        ("", {}, ""),
+    ]
+    for raw, kwargs, expected in cases:
+        assert safe_str(raw, **kwargs) == expected, f"case={raw!r}"
+
+
+def test_safe_list_matrix():
+    cases = [
+        (["a", "b"], {}, ["a", "b"]),
+        ("not a list", {}, []),
+        (42, {}, []),
+        (None, {}, []),
+        ({"a": 1}, {}, []),
+        (["a", 1, "b"], {"element_type": str}, ["a", "b"]),
+        ([1, "two", 3], {"element_type": int}, [1, 3]),
+        ([1, 2, 3, 4], {"element_type": int, "max_items": 2}, [1, 2]),
+        ([{"x": 1}], {"element_type": dict}, [{"x": 1}]),
+        ([], {}, []),
+    ]
+    for raw, kwargs, expected in cases:
+        assert safe_list(raw, **kwargs) == expected, f"case={raw!r}"
+
+
+def test_content_or_empty_matrix():
+    cases = [
+        (SimpleNamespace(content="hello"), "hello"),
+        (SimpleNamespace(content="  padded  "), "padded"),
+        (SimpleNamespace(content=None), ""),
+        (SimpleNamespace(content=""), ""),
+        (SimpleNamespace(content="  \n\t"), ""),
+        (SimpleNamespace(content=42), "42"),
+        (object(), ""),
+    ]
+    for response, expected in cases:
+        assert content_or_empty(response) == expected
+
+
+def test_real_world_verdict_and_decompose_shapes():
+    verdict = extract_json(
+        '{"verdict": "PASS", "reason": "ok", "confidence": "0.85"}',
+        dict,
+    )
+    assert safe_float(
+        verdict.get("confidence"), default=0.5, min_val=0.0, max_val=1.0
+    ) == pytest.approx(0.85)
+    assert extract_json('{"steps": ["Step A", "Step B"]}', list) == [
+        "Step A",
+        "Step B",
+    ]

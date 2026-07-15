@@ -211,21 +211,19 @@ def _pid_terminated(pid: int) -> bool:
 # wait_background
 # ---------------------------------------------------------------------------
 
-@pytest.mark.slow
 def test_wait_background_completes(monkeypatch, tmp_path):
     """wait_background waits for a short command to finish."""
     _setup_workspace(monkeypatch, tmp_path)
     task = start_background("echo wait-test")
-    result = wait_background(task.id, timeout_seconds=10)
+    result = wait_background(task.id, timeout_seconds=10, poll_interval=0.05)
     assert result.status in ("done", "failed")  # short echo should complete
 
 
-@pytest.mark.slow
 def test_wait_background_timeout(monkeypatch, tmp_path):
     """wait_background returns status=timeout if command is too slow."""
     _setup_workspace(monkeypatch, tmp_path)
     task = start_background("sleep 60")
-    result = wait_background(task.id, timeout_seconds=2)
+    result = wait_background(task.id, timeout_seconds=0.2, poll_interval=0.05)
     assert result.status == "timeout"
     assert result.completed_at is not None
     try:
@@ -238,7 +236,7 @@ def test_wait_background_fast_command(monkeypatch, tmp_path):
     """wait_background with generous timeout → status=done for quick command."""
     _setup_workspace(monkeypatch, tmp_path)
     task = start_background("true")  # exits immediately with code 0
-    result = wait_background(task.id, timeout_seconds=15)
+    result = wait_background(task.id, timeout_seconds=15, poll_interval=0.05)
     assert result.status in ("done", "failed")
 
 
@@ -257,11 +255,22 @@ def test_cli_poe_background(monkeypatch, tmp_path, capsys):
 
 
 def test_cli_poe_background_wait(monkeypatch, tmp_path, capsys):
-    """maro-background --wait completes for a fast command."""
+    """maro-background --wait forwards its timeout to the wait seam."""
     _setup_workspace(monkeypatch, tmp_path)
+    import background
     import cli
+    waited = {}
+
+    def fake_wait(task_id, timeout_seconds=60):
+        waited.update(task_id=task_id, timeout_seconds=timeout_seconds)
+        task = background._load_task(task_id)
+        task.status = "done"
+        return task
+
+    monkeypatch.setattr(background, "wait_background", fake_wait)
     rc = cli.main(["background", "echo", "wait-test", "--wait", "--timeout", "10"])
     assert rc == 0
+    assert waited["timeout_seconds"] == 10
     out = capsys.readouterr().out
     assert "id=" in out
 

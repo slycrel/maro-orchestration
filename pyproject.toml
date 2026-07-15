@@ -248,7 +248,7 @@ maro_assets = ["skills/*.md", "personas/*.md"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
-addopts = "-q -m 'not slow'"
+addopts = "-q"
 markers = [
     "slow: tests that take >2s (agent loop integration, background waits, CLI subprocess)",
 ]

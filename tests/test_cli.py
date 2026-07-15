@@ -676,12 +676,11 @@ def test_cli_tick_review_timeout_blocks_and_records_trace(tmp_path):
 
 
 import pytest
-@pytest.mark.slow
 def test_cli_smoke_script(tmp_path):
     env = os.environ.copy()
     env["TMPDIR"] = str(tmp_path)
     r = subprocess.run(["bash", "scripts/smoke.sh"], cwd=ROOT, env=env, capture_output=True, text=True)
-    assert r.returncode == 0
+    assert r.returncode == 0, f"stdout={r.stdout}\nstderr={r.stderr}"
     assert "smoke=ok" in r.stdout
     assert "tick_run_id=" in r.stdout
 

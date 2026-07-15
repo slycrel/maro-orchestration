@@ -179,8 +179,11 @@ cd /home/clawd/claude/maro-orchestration
 python3 -m pytest tests/test_agent_loop.py -q
 
 # Tests — full suite (use this one — caps CPU to 2 cores + nice 15)
-# Runs in chunks of 1000 so progress is visible; won't tip over the box.
+# Runs in 40-file chunks so progress is visible; won't tip over the box.
 bash scripts/test-safe.sh
+
+# Fast feedback lane (explicitly skips @pytest.mark.slow)
+bash scripts/test-safe.sh --fast
 
 # Tests — full suite, raw (only when the box is idle / no TUI running)
 python3 -m pytest tests/ -q

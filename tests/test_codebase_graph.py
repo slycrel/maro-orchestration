@@ -285,23 +285,23 @@ class TestFindFilesForGoal:
 # Self-scan (integration smoke test)
 # ---------------------------------------------------------------------------
 
+@pytest.fixture(scope="class")
+def repo_graph():
+    root = str(Path(__file__).parent.parent)
+    return build_codebase_graph(root, max_files=150)
+
+
 class TestSelfScan:
     """Scan this repo and verify known structural facts."""
 
-    def test_llm_py_is_central(self):
-        root = str(Path(__file__).parent.parent)
-        g = build_codebase_graph(root, max_files=150)
-        assert g.error == ""
-        top10 = g.ranked_files[:10]
+    def test_llm_py_is_central(self, repo_graph):
+        assert repo_graph.error == ""
+        top10 = repo_graph.ranked_files[:10]
         assert any("llm.py" in r for r in top10), f"llm.py not in top10: {top10}"
 
-    def test_agent_loop_ranked_high(self):
-        root = str(Path(__file__).parent.parent)
-        g = build_codebase_graph(root, max_files=150)
-        top20 = g.ranked_files[:20]
+    def test_agent_loop_ranked_high(self, repo_graph):
+        top20 = repo_graph.ranked_files[:20]
         assert any("agent_loop.py" in r for r in top20)
 
-    def test_total_functions_reasonable(self):
-        root = str(Path(__file__).parent.parent)
-        g = build_codebase_graph(root, max_files=150)
-        assert g.total_functions > 100  # large codebase
+    def test_total_functions_reasonable(self, repo_graph):
+        assert repo_graph.total_functions > 100  # large codebase

@@ -8,6 +8,31 @@ Last split: 2026-04-16 (session 34).
 
 ---
 
+### Test-suite truth and reduction pass — SHIPPED (2026-07-14)
+
+Removed the global `not slow` filter that made plain pytest and the documented
+"full" runner incomplete. `test-safe.sh` now names full/fast explicitly and
+actually chunks its 181 collected files in groups of 40. The broken smoke test
+was migrated from the autonomous `run` command to the orchestration `cycle`
+surface, updated for canonical workspace artifact paths, and stopped invoking
+a live executive-summary model call during smoke.
+
+The duplicated `llm_parse` suites (166 items across two files) became 11
+behavioral matrices retaining their unique malformed, fenced, nested, typed,
+and real-world response cases. Timeout configuration is verified directly at
+the bridge seam rather than through a five-second process grace; mocked timeout
+time is virtual; real subprocess poll windows are short but relationally
+equivalent. Doctor baselines, codebase graphs, and symbol verification no
+longer repeat whole-repository work for each assertion. Background waits gained
+an explicit poll interval so tests do not pay the conservative CLI default.
+
+Measured result: 6333→6171 tests; old incomplete default 141s; raw honest-full
+117.8s; canonical five-chunk full 104.0s; slow-only 13.0s; coverage 78.04%
+against the 70% floor. Global workspace, credential, and authenticated-LLM
+guards remain intact.
+
+---
+
 ### Audit repair reconciler — SHIPPED (2026-07-14)
 
 `audit_repair_required` is now a finite durable workflow rather than a warning

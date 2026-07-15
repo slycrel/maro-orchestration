@@ -2,8 +2,21 @@
 
 What to do next, in what order. Updated each session. Deferred ideas live in BACKLOG.md; completed phase history in docs/history/ROADMAP_ARCHIVE.md (ROADMAP.md is a stub). This file is the executable queue.
 
-Last updated: 2026-07-14 (VERIFY_LEARN_ARC **V4 + V5 SHIPPED** — the navigator
-half of thread decision #6, closing the whole arc). **V4 (divergence
+Last updated: 2026-07-14 (test-suite truth + reduction pass SHIPPED). Pytest's
+global marker filter had made every claimed "full" run silently exclude the
+slow lane; `test-safe.sh` also advertised chunking while its 1000-file default
+produced one chunk. Full is now genuinely full, `--fast` is explicit, the safe
+runner uses five 40-file chunks, and the stale shell smoke follows the current
+`cycle`/workspace contract without making a live executive-summary call.
+Redundant parser suites collapsed into 11 behavioral matrices; repeated doctor,
+source-graph, symbol-scan, timeout, and subprocess waits now reuse work or use
+bounded test seams. Result: 6333→6171 tests, raw honest-full 117.8s versus the
+old incomplete-default 141s, canonical chunked full 104.0s, slow lane 13.0s,
+coverage 78.04% (70% floor). One duplicate budget test was also exposed as an
+empty-file setup bug and corrected. No isolation/credential guards weakened.
+
+Previous checkpoint — VERIFY_LEARN_ARC **V4 + V5 SHIPPED** — the navigator
+half of thread decision #6, closing the whole arc. **V4 (divergence
 adjudication):** at evolver cadence, un-adjudicated NAVIGATOR_DECIDED divergences
 (navigator move ≠ pipeline) get a capped, cheap-tier LLM verdict (navigator_right
 / pipeline_right / both_defensible), appended append-only as `NAVIGATOR_ADJUDICATED`

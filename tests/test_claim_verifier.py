@@ -290,24 +290,15 @@ class TestExtractSymbolClaims:
 # ---------------------------------------------------------------------------
 
 class TestVerifySymbolClaims:
-    def test_known_real_symbol_verified(self):
-        """A function that actually exists in src/ is verified."""
+    def test_mixed_real_and_missing_symbols_are_classified_in_one_scan(self):
         root = Path(__file__).parent.parent
-        # verify_file_claims definitely exists in claim_verifier.py
         report = verify_symbol_claims(
-            "The `verify_file_claims` function handles path checking.",
+            "The `verify_file_claims` function exists but "
+            "`xyzzy_frobnicate_banana` does not.",
             project_root=root,
         )
         assert "verify_file_claims" in report.verified
         assert "verify_file_claims" not in report.not_found
-
-    def test_nonexistent_symbol_not_found(self):
-        """A clearly made-up function name is flagged as not found."""
-        root = Path(__file__).parent.parent
-        report = verify_symbol_claims(
-            "The `xyzzy_frobnicate_banana` function was added.",
-            project_root=root,
-        )
         assert "xyzzy_frobnicate_banana" in report.not_found
 
     def test_empty_text_returns_empty_report(self):

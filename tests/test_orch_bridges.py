@@ -34,6 +34,7 @@ from orch_bridges import (
     command_execution_bridge,
     named_validation_bridge,
     session_execution_bridge,
+    worker_session_bridge,
     _default_validation_bridge,
     _default_execution_bridge,
 )
@@ -561,6 +562,19 @@ class TestWorkerSessionSpec:
         with pytest.raises(AttributeError):
             spec.command = "something else"
 
+    @patch("orch_bridges.session_execution_bridge")
+    @patch("orch_bridges.resolve_worker_session_spec")
+    def test_manifest_timeout_reaches_session_bridge(self, mock_resolve, mock_session):
+        expected_bridge = object()
+        mock_resolve.return_value = WorkerSessionSpec(
+            command="sleep 10",
+            timeout_seconds=0.25,
+        )
+        mock_session.return_value = expected_bridge
+
+        assert worker_session_bridge("slow") is expected_bridge
+        assert mock_session.call_args.kwargs["timeout_seconds"] == 0.25
+
 
 # ---------------------------------------------------------------------------
 # named_validation_bridge
@@ -738,6 +752,9 @@ class TestSessionExecutionBridge:
     @patch("orch_bridges.subprocess.Popen")
     def test_timeout_writes_logs_and_result_payload(self, mock_popen, mock_killpg, tmp_path, monkeypatch):
         monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+        clock = [0.0]
+        monkeypatch.setattr("orch_bridges.time.monotonic", lambda: clock[0])
+        monkeypatch.setattr("orch_bridges.time.sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds))
         proc = MagicMock()
         proc.pid = 12345
         proc.communicate.side_effect = [

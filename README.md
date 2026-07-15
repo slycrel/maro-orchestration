@@ -531,8 +531,9 @@ Use this when a worker needs nested artifact paths, injected environment variabl
 
 ```bash
 # Run tests (all LLM calls mocked)
-python3 -m pytest tests/ -q
-bash scripts/test-safe.sh    # full suite, CPU-throttled for shared boxes
+.venv/bin/python -m pytest tests/ -q
+bash scripts/test-safe.sh           # full suite, resource-conscious 40-file chunks
+bash scripts/test-safe.sh --fast    # skip tests explicitly marked slow
 
 # Dry-run (no LLM calls)
 python3 src/agent_loop.py "test goal" --dry-run --verbose

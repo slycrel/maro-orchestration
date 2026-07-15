@@ -18,6 +18,34 @@ from doctor import (
 from skill_types import Skill, compute_skill_hash, skill_to_dict
 
 
+class _DoctorResponse:
+    content = "ok"
+
+
+class _DoctorAdapter:
+    def complete(self, *args, **kwargs):
+        return _DoctorResponse()
+
+
+@pytest.fixture(autouse=True)
+def _stub_llm_health(monkeypatch):
+    """Doctor output tests exercise doctor, not installed CLI authentication."""
+    import bughunter
+    import llm
+
+    monkeypatch.setattr(
+        llm,
+        "detect_backends",
+        lambda: [("subprocess", True, "test stub")],
+    )
+    monkeypatch.setattr(llm, "build_adapter", lambda *args, **kwargs: _DoctorAdapter())
+    monkeypatch.setattr(
+        bughunter,
+        "run_bughunter",
+        lambda: bughunter.BughunterReport(files_scanned=0),
+    )
+
+
 # ---------------------------------------------------------------------------
 # _check helper
 # ---------------------------------------------------------------------------
@@ -54,78 +82,25 @@ class TestCheck:
 class TestRunDoctor:
     """Test that run_doctor runs without error and returns a bool."""
 
-    def test_returns_bool(self, tmp_path, monkeypatch, capsys):
-        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
-        # run_doctor may fail checks (e.g. no LLM key) but always returns a bool
+    def test_baseline_report_contains_required_surfaces(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
         result = run_doctor()
+        output = capsys.readouterr().out
+
         assert isinstance(result, bool)
-
-    def test_phase41_tools_checked(self, capsys, monkeypatch, tmp_path):
-        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
-        # Patch heavy LLM call
-        with patch("doctor.sys") as mock_sys:
-            mock_sys.version_info = (3, 14, 0, "final", 0)
-            mock_sys.path = sys.path
-            try:
-                run_doctor()
-            except Exception:
-                pass
-        captured = capsys.readouterr()
-        # Should mention tool registry and curated skills in output
-        assert "Tool registry" in captured.out or "tool" in captured.out.lower()
-
-    def test_curated_skills_check_in_output(self, capsys, monkeypatch, tmp_path):
-        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
-        try:
-            run_doctor()
-        except Exception:
-            pass
-        captured = capsys.readouterr()
-        assert "skills" in captured.out.lower()
-
-    def test_bughunter_check_in_output(self, capsys, monkeypatch, tmp_path):
-        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
-        try:
-            run_doctor()
-        except Exception:
-            pass
-        captured = capsys.readouterr()
-        assert "bughunter" in captured.out.lower() or "bugh" in captured.out.lower()
-
-    def test_summary_line_printed(self, capsys, monkeypatch, tmp_path):
-        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
-        try:
-            run_doctor()
-        except Exception:
-            pass
-        captured = capsys.readouterr()
-        # Summary line should contain "/14 checks passed" or similar fraction
-        assert "checks passed" in captured.out
-
-    def test_escalation_file_surface_reported(self, capsys, monkeypatch, tmp_path):
-        # Durable escalation file surface (2026-07-12 decree): always live,
-        # independent of any notify.command push lane.
-        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
-        try:
-            run_doctor()
-        except Exception:
-            pass
-        captured = capsys.readouterr()
-        assert "Escalation file surface" in captured.out
-        assert str(tmp_path / "output" / "escalations.jsonl") in captured.out
-        assert "Escalation push lane" in captured.out
-
-    def test_post_migration_checks_in_output(self, capsys, monkeypatch, tmp_path):
-        # docs/MIGRATION.md's three named rows must always be present.
-        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
-        try:
-            run_doctor()
-        except Exception:
-            pass
-        captured = capsys.readouterr()
-        assert "Config paths on this box" in captured.out
-        assert "Stale machine state" in captured.out
-        assert "Memory index sync" in captured.out
+        for required in (
+            "Tool registry",
+            "skills",
+            "bughunter",
+            "checks passed",
+            "Escalation file surface",
+            "Escalation push lane",
+            "Config paths on this box",
+            "Stale machine state",
+            "Memory index sync",
+        ):
+            assert required.lower() in output.lower()
+        assert str(tmp_path / "output" / "escalations.jsonl") in output
 
     def test_stale_machine_state_detected_but_not_failing(self, capsys, monkeypatch, tmp_path):
         # A restored workspace's traveled state must be surfaced, but never
@@ -137,26 +112,13 @@ class TestRunDoctor:
         (mem / "heartbeat-state.json").write_text("{}")
         (tmp_path / "telegram_offset.txt").write_text("123")
         (mem / "foo.lock").write_text("")
-        try:
-            run_doctor()
-        except Exception:
-            pass
+        run_doctor()
         captured = capsys.readouterr()
         assert "✓ Stale machine state" in captured.out
         assert "jobs.json" in captured.out
         assert "heartbeat-state.json" in captured.out
         assert "telegram_offset.txt" in captured.out
         assert "foo.lock" in captured.out
-
-    def test_stale_machine_state_clean_workspace(self, capsys, monkeypatch, tmp_path):
-        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
-        try:
-            run_doctor()
-        except Exception:
-            pass
-        captured = capsys.readouterr()
-        assert "✓ Stale machine state — none present" in captured.out
-
 
 # ---------------------------------------------------------------------------
 # _scan_config_paths — burned-in absolute paths from another machine

@@ -258,12 +258,20 @@ def poll_background(task_id: str) -> BackgroundTask:
     return task
 
 
-def wait_background(task_id: str, timeout_seconds: int = 60) -> BackgroundTask:
+def wait_background(
+    task_id: str,
+    timeout_seconds: float = 60,
+    *,
+    poll_interval: float = 2.0,
+) -> BackgroundTask:
     """Poll until a background task completes or timeout is reached.
 
     Args:
         task_id: Task ID returned by start_background.
         timeout_seconds: Maximum seconds to wait.
+        poll_interval: Seconds between status probes. Tests and interactive
+            callers may lower this without changing the CLI's conservative
+            polling default.
 
     Returns:
         BackgroundTask with final status. status="timeout" if exceeded.
@@ -273,7 +281,7 @@ def wait_background(task_id: str, timeout_seconds: int = 60) -> BackgroundTask:
         task = poll_background(task_id)
         if task.status != "running":
             return task
-        time.sleep(2)
+        time.sleep(poll_interval)
 
     # Timeout
     task = _load_task(task_id)

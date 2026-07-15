@@ -7,8 +7,9 @@ omit =
 
 [report]
 # Session 20 adversarial review finding 3.7: coverage was unmeasured. Current
-# baseline with these omits is ~73%. Set floor to 70% as a ratchet — tighten
-# over time, fail CI if coverage drops below this.
+# 2026-07-14 full-suite baseline with these omits is 78.04%. Keep the 70% floor
+# as a conservative ratchet while the flat-module refactor is still active;
+# tighten over time, and fail CI if coverage drops below this.
 fail_under = 70
 exclude_lines =
     pragma: no cover

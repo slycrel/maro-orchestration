@@ -378,34 +378,7 @@ def test_worker_session_bridge_manifest_command_list(monkeypatch, tmp_path):
     assert (artifact_root / "cmd.txt").read_text(encoding="utf-8") == "first"
 
 
-def test_worker_session_manifest_timeout_applies_without_cli_override(monkeypatch, tmp_path):
-    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
-    _mkproj(tmp_path, "demo", "- [ ] first\n", priority=3)
-
-    workers = tmp_path / "prototypes" / "maro-orchestration" / "workers"
-    workers.mkdir(parents=True)
-    manifest = workers / "slow.json"
-    manifest.write_text(
-        json.dumps(
-            {
-                "command": "sleep 1",
-                "timeout_seconds": 0.01,
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    tick = orch.run_tick(
-        "demo",
-        worker="slow",
-        execution=orch.worker_session_bridge("slow"),
-    )
-
-    assert tick is not None
-    assert tick.validation.status == "blocked"
-    assert tick.run.status == "blocked"
-
-
+@pytest.mark.slow
 def test_session_execution_bridge_timeout_kills_lingering_child_processes(monkeypatch, tmp_path):
     monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
     _mkproj(tmp_path, "demo", "- [ ] first\n", priority=3)

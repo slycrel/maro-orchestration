@@ -121,6 +121,19 @@ context, at best it's a slight tweak and we fix forward."*
 
 ## Compiled truth (system-maintained; basis noted per claim)
 
+**Test-suite truth + reduction pass SHIPPED 2026-07-14:** the project-wide
+`addopts` no longer silently removes `slow` tests from commands documented as
+full. `test-safe.sh` has explicit full/fast modes and real 40-file chunking;
+the stale smoke script uses `cycle`, resolves `~workspace/` artifacts, and
+keeps executive-summary LLM work out of smoke via `status --dry-run`.
+Behavioral consolidation removed duplicate parser suites and repeated expensive
+doctor/repository scans while preserving the workspace/credential/LLM safety
+fixtures. Verified current state: 6171 tests (from 6333), slow lane green in
+13.0s, raw honest-full green in 117.8s, canonical chunked full green in 104.0s,
+and 78.04% line coverage against the 70% floor. The old 141s baseline was
+incomplete because it omitted slow tests, so the new full result is both faster
+and strictly more honest.
+
 **BACKLOG #23 async-escape family closed (SHIPPED 2026-07-12, commits
 71f6e4f/f241cf0/a0b462b/2e24594; basis: 62 new tests + targeted suites
 green):** all seven mechanisms from the polymarket-edges r2–r4 saga.
@@ -2072,6 +2085,14 @@ Sample: the 2026-05-13..17 window of `~/.maro/workspace/runs/` (478 dirs total;
   OTHER clone (Ubuntu box + any session): `git fetch origin && git reset
   --hard origin/main` — do NOT pull/merge; ~1101/1114 SHAs changed so old
   local history is orphaned.** PyPI 0.8.0 unaffected (no SHA coupling).
+- **2026-07-14 (test-maintenance posture — Jeremy):** test count is not a
+  coverage goal. After observing that the suite kept growing, Jeremy approved
+  the whole cleanup and cited the earlier successful reduction from roughly
+  4500 tests / 10 minutes to 1500 / 2 minutes "with no meaningful loss of
+  coverage." Standing rule: retain distinct behavioral and safety-boundary
+  evidence, consolidate redundant scalar examples and repeated expensive
+  setup, and judge reductions by honest full-lane behavior, runtime, and
+  coverage—not by the raw number of test functions.
 
 ## Threads (system-maintained — nothing leaves this list silently)
 

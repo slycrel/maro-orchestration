@@ -42,6 +42,8 @@ from llm import (
     _stringify_tool_result,
 )
 
+FAST_POLL = 0.02
+
 
 def _make_stream_output(result="ok", tool_events=None, input_tokens=100, output_tokens=50,
                         rate_limit_status="allowed", session_id="", cost_usd=0.0):
@@ -427,6 +429,7 @@ def test_run_subprocess_safe_honors_cwd(tmp_path):
         ["python3", "-c", "import os; print(os.getcwd())"],
         timeout=30,
         cwd=str(tmp_path),
+        poll_interval=FAST_POLL,
     )
     assert result.returncode == 0
     assert str(tmp_path.resolve()) in result.stdout
@@ -440,6 +443,7 @@ def test_run_subprocess_safe_ignores_missing_cwd(tmp_path):
         ["python3", "-c", "print('ran')"],
         timeout=30,
         cwd=missing,
+        poll_interval=FAST_POLL,
     )
     assert result.returncode == 0
     assert "ran" in result.stdout
@@ -832,7 +836,7 @@ def test_run_subprocess_safe_returns_completed_process():
 
     result = _run_subprocess_safe(
         ["sh", "-c", "printf hello; printf oops >&2"],
-        input="", timeout=10,
+        input="", timeout=10, poll_interval=FAST_POLL,
     )
     assert isinstance(result, sp.CompletedProcess)
     assert result.returncode == 0
@@ -849,7 +853,8 @@ def test_run_subprocess_safe_walltime_timeout_kills_and_raises():
     with pytest.raises(sp.TimeoutExpired) as exc_info:
         _run_subprocess_safe(
             ["sh", "-c", "sleep 10"],
-            input="", timeout=1, liveness_timeout=0,
+            input="", timeout=0.25, liveness_timeout=0,
+            poll_interval=FAST_POLL,
         )
     reason = getattr(exc_info.value, "maro_kill_reason", "")
     assert "wall-clock" in reason
@@ -864,7 +869,8 @@ def test_run_subprocess_safe_walltime_preserves_partial_output():
     with pytest.raises(sp.TimeoutExpired) as exc_info:
         _run_subprocess_safe(
             ["sh", "-c", script],
-            input="", timeout=2, liveness_timeout=0,
+            input="", timeout=0.5, liveness_timeout=0,
+            poll_interval=FAST_POLL,
         )
     assert (exc_info.value.output or "").startswith("partial")
 
@@ -877,7 +883,7 @@ def test_run_subprocess_safe_liveness_kills_silent_process():
     with pytest.raises(sp.TimeoutExpired) as exc_info:
         _run_subprocess_safe(
             ["sh", "-c", "sleep 10"],
-            input="", timeout=60, liveness_timeout=2, poll_interval=0.2,
+            input="", timeout=60, liveness_timeout=0.5, poll_interval=0.05,
         )
     reason = getattr(exc_info.value, "maro_kill_reason", "")
     assert "liveness" in reason
@@ -887,11 +893,11 @@ def test_run_subprocess_safe_liveness_spares_chatty_process():
     """A process that emits regularly does NOT trip the liveness timeout."""
     from llm import _run_subprocess_safe
 
-    # Emits every 0.3s for ~1.5s — below the 2s liveness window every time.
-    script = "for i in 1 2 3 4 5; do printf 'x'; sleep 0.3; done"
+    # Emits every 0.1s for ~0.5s — below the liveness window every time.
+    script = "for i in 1 2 3 4 5; do printf 'x'; sleep 0.1; done"
     result = _run_subprocess_safe(
         ["sh", "-c", script],
-        input="", timeout=10, liveness_timeout=2, poll_interval=0.2,
+        input="", timeout=10, liveness_timeout=0.3, poll_interval=0.05,
     )
     assert result.returncode == 0
     assert result.stdout == "xxxxx"
@@ -906,17 +912,17 @@ def test_run_subprocess_safe_liveness_spares_cpu_busy_silent_process():
     """
     from llm import _run_subprocess_safe
 
-    # Busy-loop for ~3s with zero stdout/stderr. Liveness is 1s, so a naive
-    # output-only liveness check would kill this at ~1s. The CPU signal
+    # Busy-loop for ~1s with zero stdout/stderr. Liveness is 0.3s, so a naive
+    # output-only liveness check would kill this early. The CPU signal
     # must rescue it.
     script = (
         "python3 -c 'import time; t=time.time();\n"
         "x=0\n"
-        "while time.time()-t<3: x+=1'"
+        "while time.time()-t<1: x+=1'"
     )
     result = _run_subprocess_safe(
         ["sh", "-c", script],
-        input="", timeout=10, liveness_timeout=1, poll_interval=0.2,
+        input="", timeout=10, liveness_timeout=0.3, poll_interval=0.05,
     )
     assert result.returncode == 0, f"unexpected rc: out={result.stdout!r}"
 
@@ -942,7 +948,7 @@ def test_run_subprocess_safe_stdin_passed_through():
 
     result = _run_subprocess_safe(
         ["sh", "-c", "cat"],
-        input="payload-data\n", timeout=10,
+        input="payload-data\n", timeout=10, poll_interval=FAST_POLL,
     )
     assert result.returncode == 0
     assert result.stdout == "payload-data\n"
@@ -955,7 +961,7 @@ def test_run_subprocess_safe_no_stdin_uses_devnull():
     # `cat` with no stdin sees EOF immediately → exit 0, no output.
     result = _run_subprocess_safe(
         ["sh", "-c", "cat"],
-        input=None, timeout=5,
+        input=None, timeout=5, poll_interval=FAST_POLL,
     )
     assert result.returncode == 0
     assert result.stdout == ""
@@ -965,7 +971,10 @@ def test_run_subprocess_safe_updates_current_step_symlink():
     """During a run, /tmp/maro-current-step.log is created/updated as a symlink."""
     from llm import _run_subprocess_safe
 
-    _run_subprocess_safe(["sh", "-c", "printf ok"], input="", timeout=5)
+    _run_subprocess_safe(
+        ["sh", "-c", "printf ok"], input="", timeout=5,
+        poll_interval=FAST_POLL,
+    )
     # The stdout temp file gets deleted on cleanup, so the symlink dangles
     # after completion — that's by design. Just verify the link exists.
     assert os.path.islink("/tmp/maro-current-step.log")
@@ -984,7 +993,10 @@ def test_run_subprocess_safe_symlink_disabled_by_env(monkeypatch):
             pass
 
     monkeypatch.setenv("MARO_CURRENT_STEP_SYMLINK", "0")
-    _run_subprocess_safe(["sh", "-c", "printf ok"], input="", timeout=5)
+    _run_subprocess_safe(
+        ["sh", "-c", "printf ok"], input="", timeout=5,
+        poll_interval=FAST_POLL,
+    )
 
     after_target = None
     if os.path.islink("/tmp/maro-current-step.log"):
@@ -1005,7 +1017,10 @@ def test_run_subprocess_safe_cleans_temp_files():
     before = set(
         glob.glob(f"{tmpdir}/tmp*.out") + glob.glob(f"{tmpdir}/tmp*.stdin")
     )
-    _run_subprocess_safe(["sh", "-c", "printf done"], input="ignored", timeout=5)
+    _run_subprocess_safe(
+        ["sh", "-c", "printf done"], input="ignored", timeout=5,
+        poll_interval=FAST_POLL,
+    )
     after = set(
         glob.glob(f"{tmpdir}/tmp*.out") + glob.glob(f"{tmpdir}/tmp*.stdin")
     )
@@ -1885,7 +1900,7 @@ class TestContainerExecutorWrap:
         monkeypatch.setattr(ce, "build_run_command", fake_build)
         result = _run_subprocess_safe(
             ["echo", "hi"], container_name="maro-exec-t-0",
-            cwd=str(tmp_path), timeout=10)
+            cwd=str(tmp_path), timeout=10, poll_interval=FAST_POLL)
         assert result.returncode == 0
         assert captured["inner"] == ["echo", "hi"]
         assert captured["name"] == "maro-exec-t-0"
@@ -1908,7 +1923,7 @@ class TestContainerExecutorWrap:
         try:
             result = _run_subprocess_safe(
                 ["echo", "hi"], container_name="maro-exec-t-0",
-                cwd=str(cwd), timeout=10)
+                cwd=str(cwd), timeout=10, poll_interval=FAST_POLL)
         finally:
             set_default_container_rw_roots(None)
         assert result.returncode == 0
@@ -1926,7 +1941,8 @@ class TestContainerExecutorWrap:
             return ["true"]
         monkeypatch.setattr(ce, "build_run_command", fake_build)
         result = _run_subprocess_safe(
-            ["echo", "hi"], container_name="maro-exec-t-0", cwd=None, timeout=10)
+            ["echo", "hi"], container_name="maro-exec-t-0", cwd=None,
+            timeout=10, poll_interval=FAST_POLL)
         assert result.returncode == 0
         assert called["built"] is False  # never wrapped — ran echo on the host
 
@@ -1946,7 +1962,8 @@ class TestContainerExecutorWrap:
         with pytest.raises(sp.TimeoutExpired):
             _run_subprocess_safe(
                 ["echo", "x"], container_name="maro-exec-k-0",
-                cwd=str(tmp_path), timeout=1, liveness_timeout=0, poll_interval=0.05)
+                cwd=str(tmp_path), timeout=0.25, liveness_timeout=0,
+                poll_interval=FAST_POLL)
         assert killed == ["maro-exec-k-0"]
 
 

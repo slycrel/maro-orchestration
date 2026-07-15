@@ -500,8 +500,19 @@ class TestSweepStrandedContainers:
 
 class TestDoctorContainerRows:
     def _fake_llm(self, monkeypatch):
+        import bughunter
         import llm
+        monkeypatch.setattr(
+            llm,
+            "detect_backends",
+            lambda: [("subprocess", True, "test stub")],
+        )
         monkeypatch.setattr(llm, "build_adapter", lambda *a, **k: _FakeAdapter())
+        monkeypatch.setattr(
+            bughunter,
+            "run_bughunter",
+            lambda: bughunter.BughunterReport(files_scanned=0),
+        )
 
     def test_off_shows_single_info_row(self, monkeypatch, tmp_path, capsys):
         monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))

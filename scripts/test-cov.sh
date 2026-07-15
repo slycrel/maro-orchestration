@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Coverage test runner for openclaw-orchestration.
+# Coverage test runner for maro-orchestration.
 #
 # Measures line coverage over src/ and fails if below the floor set in
-# .coveragerc (currently 70%). The baseline after session 20.5 is ~73%;
+# .coveragerc (currently 70%). The 2026-07-14 full-suite baseline is 78.04%;
 # the floor is a ratchet — tighten it upward as coverage improves.
 #
 # Usage:
@@ -18,6 +18,12 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
+if [[ -x "$ROOT_DIR/.venv/bin/python" ]]; then
+    PYTHON="$ROOT_DIR/.venv/bin/python"
+else
+    PYTHON="python3"
+fi
+
 HTML=""
 TARGET="tests/"
 while [[ $# -gt 0 ]]; do
@@ -30,7 +36,7 @@ done
 
 # Run with coverage. --cov-fail-under is read from .coveragerc but we pass
 # it explicitly here so it's obvious when the floor is being enforced.
-exec python3 -m pytest "$TARGET" \
+exec "$PYTHON" -m pytest "$TARGET" \
     --ignore=tests/integration \
     --cov=src \
     --cov-report=term-missing:skip-covered \
