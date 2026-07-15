@@ -3607,6 +3607,17 @@ def _write_diagnoses(rows):
     return p
 
 
+def _write_events(rows):
+    """Append event dicts to memory/events.jsonl (the loop_id->ts join source)."""
+    from orch_items import memory_dir
+    p = memory_dir() / "events.jsonl"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with p.open("a", encoding="utf-8") as f:
+        for r in rows:
+            f.write(json.dumps(r) + "\n")
+    return p
+
+
 def _diagnoses(fc, before_hits, after_hits, *, n=10):
     """n before + n after diagnoses; `*_hits` of each window are class `fc`,
     the rest are 'healthy'. Timestamps straddle _T_APPLY."""
@@ -3712,6 +3723,30 @@ class TestVerifyClassSignal:
             summary = verify_applied_suggestions("rp", min_post_apply=10)
         assert summary["confirmed"] == 1
 
-    def test_pre_v3_diagnoses_without_recorded_at_are_ignored(self):
-        _write_diagnoses([{"loop_id": "x", "failure_class": "retry_churn"}])  # no recorded_at
+    def test_pre_v3_diagnoses_recover_their_date_from_the_events_log(self):
+        # A pre-V3 diagnosis (no recorded_at) is NOT lost: its loop_id joins to
+        # events.jsonl, so its time coordinate comes from the latest event ts for
+        # that loop. This is what de-dormants the class path on historical data.
+        _write_diagnoses([{"loop_id": "L1", "failure_class": "retry_churn"}])
+        _write_events([
+            {"loop_id": "L1", "ts": "2026-05-01T09:00:00+00:00"},
+            {"loop_id": "L1", "ts": "2026-05-01T09:05:00+00:00"},  # latest wins
+        ])
+        dated = _load_dated_diagnoses()
+        assert len(dated) == 1
+        assert dated[0][1] == "retry_churn"
+        assert dated[0][0].isoformat() == "2026-05-01T09:05:00+00:00"
+
+    def test_diagnosis_with_neither_stamp_nor_event_is_dropped(self):
+        # Only a row with no recorded_at AND no joinable event has no time axis.
+        _write_diagnoses([{"loop_id": "orphan", "failure_class": "retry_churn"}])
         assert _load_dated_diagnoses() == []
+
+    def test_recorded_at_stamp_wins_over_events_join(self):
+        # A stamped row uses its own recorded_at even when an event ts also
+        # exists — the durable stamp is authoritative (survives events rotation).
+        _write_diagnoses([{"loop_id": "L2", "recorded_at": "2026-05-01T13:00:00+00:00",
+                           "failure_class": "retry_churn"}])
+        _write_events([{"loop_id": "L2", "ts": "2026-05-01T09:00:00+00:00"}])
+        dated = _load_dated_diagnoses()
+        assert dated[0][0].isoformat() == "2026-05-01T13:00:00+00:00"

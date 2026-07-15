@@ -826,11 +826,54 @@ def _verify_counts(outcomes: List[Any]) -> "tuple[int, int]":
 # VERIFY_LEARN_ARC V3 — per-class failure-rate windows (graduation verdicts)
 # ---------------------------------------------------------------------------
 
+def _loop_ts_index(limit: int = 50000) -> "Dict[str, str]":
+    """Map ``loop_id -> latest event ts`` from events.jsonl.
+
+    The diagnosis ledger has no time axis of its own (V3 added a go-forward
+    ``recorded_at`` stamp, but every pre-V3 row lacks it). The events log,
+    however, carries ``loop_id`` + ``ts`` on ~99% of rows, and a diagnosis's
+    ``loop_id`` joins to it — so the diagnosis moment is recoverable from the
+    events stream even for historical rows. We key on the *latest* event ts for
+    a loop (its finalize ≈ when the diagnosis is written) rather than the first,
+    so the coordinate lands at diagnosis time, not loop start.
+
+    This is the durable-but-derivable half of the pair: the written stamp
+    survives events-log rotation, the index de-dormants everything already on
+    disk. Bounded to the last ``limit`` events (comfortably covers the last
+    ``_load_dated_diagnoses`` window, since loops emit only a handful each).
+    """
+    try:
+        from orch_items import memory_dir
+        p = memory_dir() / "events.jsonl"
+    except Exception:
+        return {}
+    if not p.exists():
+        return {}
+    idx: "Dict[str, str]" = {}
+    try:
+        from jsonl_utils import read_jsonl_tail
+        for e in read_jsonl_tail(p, limit=limit):
+            lid = e.get("loop_id") or ""
+            ts = e.get("ts") or e.get("timestamp") or ""
+            if not lid or not ts:
+                continue
+            prev = idx.get(lid)
+            if prev is None or str(ts) > prev:
+                idx[lid] = str(ts)
+    except Exception:
+        return {}
+    return idx
+
+
 def _load_dated_diagnoses(limit: int = 5000) -> List["tuple[datetime, str]"]:
-    """Return ``(recorded_at, failure_class)`` for diagnoses that carry a time
-    stamp, ascending. Pre-V3 rows (no ``recorded_at``) are dropped — a class
-    rate can only be windowed for stamped rows, so the class-signal path stays
-    dormant until enough post-V3 diagnoses accrue, then activates itself.
+    """Return ``(when, failure_class)`` per diagnosis, ascending.
+
+    Each diagnosis's time coordinate comes from its own ``recorded_at`` stamp
+    (V3, go-forward) when present, else from the events-log join
+    (``_loop_ts_index`` on ``loop_id``) — so the class-signal path works on the
+    full historical ledger, not just diagnoses written after V3. A row is
+    dropped only when *neither* source yields a timestamp (no stamp AND no
+    joinable event), which is rare (~1% on real data).
     """
     try:
         from orch_items import memory_dir
@@ -839,6 +882,7 @@ def _load_dated_diagnoses(limit: int = 5000) -> List["tuple[datetime, str]"]:
         return []
     if not p.exists():
         return []
+    ts_index: "Dict[str, str]" = {}
     out: List["tuple[datetime, str]"] = []
     try:
         for line in p.read_text(encoding="utf-8").splitlines()[-limit:]:
@@ -849,9 +893,17 @@ def _load_dated_diagnoses(limit: int = 5000) -> List["tuple[datetime, str]"]:
                 d = json.loads(line)
             except Exception:
                 continue
-            ts = d.get("recorded_at") or ""
             fc = d.get("failure_class") or ""
-            if not ts or not fc:
+            if not fc:
+                continue
+            ts = d.get("recorded_at") or ""
+            if not ts:
+                # Fall back to the events-log join. Build the index lazily —
+                # only pay for it when at least one row actually needs it.
+                if not ts_index:
+                    ts_index = _loop_ts_index()
+                ts = ts_index.get(d.get("loop_id") or "", "")
+            if not ts:
                 continue
             try:
                 t = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
@@ -1163,8 +1215,10 @@ def verify_applied_suggestions(
     use the class-neutral stuck-rate pair (the V2 fallback). This is what lets a
     graduation verdict resolve at all: a single failure class barely moves the
     global stuck-rate, so on that metric graduation rows only ever park
-    unverifiable. Diagnoses gained a ``recorded_at`` stamp in V3; the class path
-    is dormant until enough post-V3 diagnoses accrue, then activates itself.
+    unverifiable. Each diagnosis's time coordinate comes from its go-forward
+    ``recorded_at`` stamp (V3) or, failing that, the events-log join on
+    ``loop_id`` (``_loop_ts_index``) — so the class path is live on the full
+    historical ledger, not dormant waiting for new diagnoses to accrue.
     Graduation rules stay advisor-gated (human-applied) per the owner call, so a
     degraded graduation row takes the human-applied branch — surfaced for review,
     never auto-reverted.
@@ -1227,9 +1281,11 @@ def verify_applied_suggestions(
         dated.append((t_o, o))
     dated.sort(key=lambda pair: pair[0])
 
-    # V3: timestamped diagnoses for the per-class rate path (loaded once, reused
-    # per candidate). Empty until post-V3 diagnoses accrue → the class path stays
-    # dormant and every row uses the class-neutral stuck-rate, exactly as in V2.
+    # V3: dated diagnoses for the per-class rate path (loaded once, reused per
+    # candidate). Each row's time comes from its recorded_at stamp or the
+    # events-log join, so this is populated from the full historical ledger, not
+    # just post-V3 rows. A class with too few dated diagnoses still self-falls
+    # back to the class-neutral stuck-rate per row (exactly as in V2).
     dated_diags = _load_dated_diagnoses() if use_class_signal else []
 
     try:

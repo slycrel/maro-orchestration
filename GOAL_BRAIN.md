@@ -2718,12 +2718,16 @@ Dormant (deliberately parked, not dropped):
   `expected_signal` and verdicts a `failure_class_rate` row on *that class's*
   rate over timestamped-diagnosis windows (self-falls-back to the stuck-rate
   when class windows are thin → a sparse class parks honestly, never verdicts
-  off noise). Diagnoses gained a `recorded_at` stamp (`introspect.save_diagnosis`)
-  — they were the one learning ledger with no time axis (join to outcomes on
-  `loop_id` was ~99% lossy: 21/1277 on real data), and that absence was the
-  actual reason V2 fell back to class-neutral. Prospective: class path dormant
-  until post-V3 diagnoses accrue, then self-activates (same shape as V2 becoming
-  live organically). Lifecycle + symmetric authority reused from V2 unchanged.
+  off noise). The diagnosis ledger had no time axis of its own, which was the
+  actual reason V2 fell back to class-neutral. V3 gives each diagnosis a date two
+  ways: a go-forward `recorded_at` stamp (`introspect.save_diagnosis`) AND — the
+  fix Jeremy prompted ("give those dates a better path; seems fragile") — an
+  events-log join on `loop_id` (`_loop_ts_index`). The earlier "~99% lossy join"
+  note was against the *outcomes* log (only 21/1277 carry `loop_id`); the
+  **events** log carries `loop_id`+`ts` on ~99% of rows, so `_load_dated_diagnoses`
+  recovers 1274/1277 real diagnoses. The class path is therefore live on the full
+  historical ledger, not dormant waiting for post-V3 rows. Lifecycle + symmetric
+  authority reused from V2 unchanged.
   **The one owner call landed as its safe default: graduation stays advisor-gated
   — a human applies via `maro evolver apply`, nothing auto-applies a standing
   rule → a degraded graduation row surfaces for review, never auto-reverted.**

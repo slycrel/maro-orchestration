@@ -125,9 +125,11 @@ V3 built:** `verify_applied_suggestions` now consumes a row's `expected_signal`
 and verdicts a `failure_class_rate` row on *that class's* rate over
 timestamped-diagnosis windows (self-falling-back to the stuck-rate when the
 class windows are thin — a sparse class parks honestly, never verdicts off
-noise). Diagnoses gained a `recorded_at` stamp (the one learning ledger with no
-time axis) so those windows exist; prospective — the class path is dormant
-until post-V3 diagnoses accrue, then activates itself. The confirmed/degraded →
+noise). Diagnoses had no time axis of their own; V3 gives each one a coordinate
+two ways — a go-forward `recorded_at` stamp *and* an events-log join on
+`loop_id` (`_loop_ts_index`, ~99% coverage on real data) — so the class path is
+live on the full historical ledger (1274/1277 diagnoses on this box), not
+dormant waiting for new diagnoses. The confirmed/degraded →
 calibrate/demote lifecycle and symmetric authority are reused from V2 unchanged.
 **The owner call landed as its safe default:** graduation rules stay
 advisor-gated (a human applies them via `maro evolver apply`) — nothing
@@ -274,9 +276,12 @@ A/B flag in one chunk (`navigator.lesson_inject`, shadow-comparable like
   (human-applied → degraded surfaces for review, never auto-reverted — the
   owner's safe default). Structural `verify_pattern` stays pure observability
   (a grep miss ≠ the applied lesson failed). Knob
-  `evolver.verify_use_class_signal` (default ON). 10 new tests
-  (`test_evolver.py::TestVerifyClassSignal`, `test_introspect.py`); class path
-  is prospective (dormant until post-V3 diagnoses accrue).
+  `evolver.verify_use_class_signal` (default ON). **Time axis (hardened same
+  day):** each diagnosis's date comes from its `recorded_at` stamp *or* an
+  events-log join on `loop_id` (`_loop_ts_index`) — the join covers 1274/1277
+  diagnoses already on disk, so the class path is live on the historical ledger,
+  not dormant waiting for post-V3 rows to accrue. 13 tests
+  (`test_evolver.py::TestVerifyClassSignal`, `test_introspect.py`).
 - **V4 — divergence adjudication (Sonnet/Opus):** capped LLM pass +
   agreement-table breakdown.
 - **V5 — navigator lessons (Opus):** crystallize + inject + A/B flag,

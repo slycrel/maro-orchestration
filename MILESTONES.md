@@ -11,16 +11,17 @@ they only ever parked `unverifiable`. V3 makes the verdict **resolve**:
 verdicts a `failure_class_rate` row on *that class's* rate over
 timestamped-diagnosis windows (self-falls-back to the stuck-rate when the class
 windows are thin → a sparse class parks honestly, never verdicts off noise).
-Diagnoses gained a `recorded_at` stamp — the one learning ledger with no time
-axis — so those windows exist (prospective: dormant until post-V3 diagnoses
-accrue). Confirmed/degraded → calibrate/demote lifecycle + symmetric authority
-reused from V2 unchanged. **Owner call landed as its safe default:** graduation
-rules stay advisor-gated (human applies via `maro evolver apply`; nothing
-auto-applies a standing rule) → a degraded graduation row is surfaced for
-review, never auto-reverted. Structural `verify_pattern` grep stays pure
-observability (a grep miss ≠ the applied lesson failed). Knob
-`evolver.verify_use_class_signal` (DEFAULTS.md, default ON). 10 new tests
-(`test_evolver.py::TestVerifyClassSignal`, `test_introspect.py`). **The
+Each diagnosis's time coordinate comes from a go-forward `recorded_at` stamp
+*or* an events-log join on `loop_id` (`_loop_ts_index`, ~99% coverage) — so the
+class path is live on the full historical ledger (1274/1277 diagnoses on this
+box), not dormant waiting for new rows to accrue. Confirmed/degraded →
+calibrate/demote lifecycle + symmetric authority reused from V2 unchanged.
+**Owner call landed as its safe default:** graduation rules stay advisor-gated
+(human applies via `maro evolver apply`; nothing auto-applies a standing rule) →
+a degraded graduation row is surfaced for review, never auto-reverted. Structural
+`verify_pattern` grep stays pure observability (a grep miss ≠ the applied lesson
+failed). Knob `evolver.verify_use_class_signal` (DEFAULTS.md, default ON). 13
+tests (`test_evolver.py::TestVerifyClassSignal`, `test_introspect.py`). **The
 applied-change verify→learn loop is now closed for BOTH the evolver-suggestion
 (V2) and graduation (V3) lanes; next is V4/V5 — the navigator half of thread
 decision #6.** See `docs/VERIFY_LEARN_ARC.md` §3/§7.

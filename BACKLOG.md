@@ -52,9 +52,11 @@ consumes the row's `expected_signal` and verdicts a `failure_class_rate` row on
 thin). Lifecycle + symmetric authority reused from V2; rules stay advisor-gated
 (human-applied → degraded surfaces for review, never auto-reverted — the owner's
 safe default); structural `verify_pattern` stays pure observability. Knob
-`evolver.verify_use_class_signal` (default ON); prospective (class path dormant
-until post-V3 diagnoses accrue). The applied-change verify→learn loop is now
-closed for BOTH the evolver-suggestion (V2) and graduation (V3) lanes.
+`evolver.verify_use_class_signal` (default ON); each diagnosis's date comes from
+its `recorded_at` stamp or an events-log join on `loop_id` (`_loop_ts_index`,
+~99% coverage), so the class path is live on the historical ledger, not dormant.
+The applied-change verify→learn loop is now closed for BOTH the
+evolver-suggestion (V2) and graduation (V3) lanes.
 **Navigator-side V4/V5 remain the open half of thread decision #6.**
 
 ---
@@ -1244,8 +1246,10 @@ folds into this decision (see docs/INDEX.md note).
   `maro evolver apply`; nothing auto-applies a standing rule, so a degraded
   graduation row surfaces for review (never auto-reverted). This is a safety
   posture, not a gap; revisit only if the auto-apply-threshold owner call
-  changes. (The live workspace still has no `graduation:` suggestions, so the
-  class path has no organic evidence yet — prospective by design.)
+  changes. (The live workspace still has no *applied* `graduation:` suggestions
+  to verdict yet, but the class-rate time axis is live: `_load_dated_diagnoses`
+  now recovers 1274/1277 real diagnoses via the events-log join, so the metric
+  is exercisable on real data the moment a graduation row is applied.)
 
 - [ ] **Design constraint, not a task: decay trust, never data.** Append-only
   evidence layer stays perfect (the computerization edge over human forgetting);
