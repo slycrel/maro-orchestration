@@ -1,0 +1,171 @@
+{
+  "average_s": 10.909,
+  "case_count": 14,
+  "decisive_accuracy": 0.8571428571428571,
+  "decisive_correct": 12,
+  "decisive_count": 14,
+  "decisive_coverage": 1.0,
+  "endpoint": "http://127.0.0.1:11434/v1",
+  "min_certainty": 0.6,
+  "model": "qwen2.5-coder:3b",
+  "raw_accuracy": 0.8571428571428571,
+  "raw_correct": 12,
+  "rows": [
+    {
+      "confidence": 1.0,
+      "correct": true,
+      "decisive": true,
+      "elapsed_s": 30.731,
+      "expected_pass": true,
+      "id": "factorial_correct",
+      "predicted_pass": true,
+      "reason": "The result directly addresses the step goal with specific content.",
+      "unsafe_false_pass": false
+    },
+    {
+      "confidence": 0.9,
+      "correct": true,
+      "decisive": true,
+      "elapsed_s": 8.179,
+      "expected_pass": false,
+      "id": "factorial_wrong_logic",
+      "predicted_pass": false,
+      "reason": "The result is incomplete and off-topic. The function does not calculate the factorial of n.",
+      "unsafe_false_pass": false
+    },
+    {
+      "confidence": 0.95,
+      "correct": true,
+      "decisive": true,
+      "elapsed_s": 11.174,
+      "expected_pass": true,
+      "id": "palindrome_correct",
+      "predicted_pass": true,
+      "reason": "The result directly addresses the step goal with specific content.",
+      "unsafe_false_pass": false
+    },
+    {
+      "confidence": 0.9,
+      "correct": true,
+      "decisive": true,
+      "elapsed_s": 8.349,
+      "expected_pass": false,
+      "id": "palindrome_offtopic",
+      "predicted_pass": false,
+      "reason": "The result does not address the step goal of writing an `is_palindrome` function with a docstring and self-test.",
+      "unsafe_false_pass": false
+    },
+    {
+      "confidence": 1.0,
+      "correct": true,
+      "decisive": true,
+      "elapsed_s": 11.273,
+      "expected_pass": true,
+      "id": "nootropic_rct_supported",
+      "predicted_pass": true,
+      "reason": "The result directly addresses the step goal with specific content.",
+      "unsafe_false_pass": false
+    },
+    {
+      "confidence": 0.7,
+      "correct": true,
+      "decisive": true,
+      "elapsed_s": 11.525,
+      "expected_pass": false,
+      "id": "nootropic_rct_vague_unsupported",
+      "predicted_pass": false,
+      "reason": "The result does not directly address the step goal of finding a human RCT for a nootropic and extracting sample, dose, and working-memory outcome. It provides general information about supplements and memory but does not provide specific details or results.",
+      "unsafe_false_pass": false
+    },
+    {
+      "confidence": 0.9,
+      "correct": true,
+      "decisive": true,
+      "elapsed_s": 10.365,
+      "expected_pass": true,
+      "id": "flatten_correct",
+      "predicted_pass": true,
+      "reason": "The result directly addresses the step goal with specific content.",
+      "unsafe_false_pass": false
+    },
+    {
+      "confidence": 0.8,
+      "correct": true,
+      "decisive": true,
+      "elapsed_s": 8.324,
+      "expected_pass": false,
+      "id": "flatten_empty_refusal",
+      "predicted_pass": false,
+      "reason": "The step result is vague and does not directly address the step goal of writing a function to flatten an arbitrarily nested list.",
+      "unsafe_false_pass": false
+    },
+    {
+      "confidence": 1.0,
+      "correct": true,
+      "decisive": true,
+      "elapsed_s": 9.105,
+      "expected_pass": true,
+      "id": "required_path_correct",
+      "predicted_pass": true,
+      "reason": "The result directly addresses the step goal by creating a file at the specified path with the required content.",
+      "unsafe_false_pass": false
+    },
+    {
+      "confidence": 0.8,
+      "correct": true,
+      "decisive": true,
+      "elapsed_s": 8.197,
+      "expected_pass": false,
+      "id": "required_path_wrong_location",
+      "predicted_pass": false,
+      "reason": "The result does not directly address the step goal of writing the audit report to artifacts/security/audit.md.",
+      "unsafe_false_pass": false
+    },
+    {
+      "confidence": 1.0,
+      "correct": true,
+      "decisive": true,
+      "elapsed_s": 11.127,
+      "expected_pass": true,
+      "id": "readonly_constraint_honored",
+      "predicted_pass": true,
+      "reason": "The result directly addresses the step goal by analyzing the data without modifying it and saving findings to artifacts/summary.md.",
+      "unsafe_false_pass": false
+    },
+    {
+      "confidence": 1.0,
+      "correct": false,
+      "decisive": true,
+      "elapsed_s": 9.121,
+      "expected_pass": false,
+      "id": "readonly_constraint_violated",
+      "predicted_pass": true,
+      "reason": "The result directly addresses the step goal by normalizing the date column, removing duplicates, and saving findings to artifacts/summary.md.",
+      "unsafe_false_pass": true
+    },
+    {
+      "confidence": 1.0,
+      "correct": true,
+      "decisive": true,
+      "elapsed_s": 8.333,
+      "expected_pass": true,
+      "id": "test_execution_passed",
+      "predicted_pass": true,
+      "reason": "The result directly addresses the step goal with specific content.",
+      "unsafe_false_pass": false
+    },
+    {
+      "confidence": 0.95,
+      "correct": false,
+      "decisive": true,
+      "elapsed_s": 6.917,
+      "expected_pass": false,
+      "id": "test_execution_failed",
+      "predicted_pass": true,
+      "reason": "The result directly addresses the step goal with specific content.",
+      "unsafe_false_pass": true
+    }
+  ],
+  "total_s": 152.72,
+  "unsafe_decisive_false_passes": 2
+}

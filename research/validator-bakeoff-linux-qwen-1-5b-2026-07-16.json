@@ -1,0 +1,171 @@
+{
+  "average_s": 5.647,
+  "case_count": 14,
+  "decisive_accuracy": 0.6,
+  "decisive_correct": 6,
+  "decisive_count": 10,
+  "decisive_coverage": 0.7142857142857143,
+  "endpoint": "http://127.0.0.1:11434/v1",
+  "min_certainty": 0.6,
+  "model": "qwen2.5-coder:1.5b",
+  "raw_accuracy": 0.5,
+  "raw_correct": 7,
+  "rows": [
+    {
+      "confidence": 0.6,
+      "correct": false,
+      "decisive": true,
+      "elapsed_s": 13.788,
+      "expected_pass": true,
+      "id": "factorial_correct",
+      "predicted_pass": false,
+      "reason": "The result is vague and incomplete. It does not directly address the step goal with specific content.",
+      "unsafe_false_pass": false
+    },
+    {
+      "confidence": 0.0,
+      "correct": false,
+      "decisive": false,
+      "elapsed_s": 3.835,
+      "expected_pass": false,
+      "id": "factorial_wrong_logic",
+      "predicted_pass": true,
+      "reason": "The result is vague, off-topic, incomplete, or mostly a plan for doing the work rather than the work itself.",
+      "unsafe_false_pass": false
+    },
+    {
+      "confidence": 1.0,
+      "correct": true,
+      "decisive": true,
+      "elapsed_s": 5.486,
+      "expected_pass": true,
+      "id": "palindrome_correct",
+      "predicted_pass": true,
+      "reason": "The result directly addresses the step goal with specific content, including a docstring and a self-test.",
+      "unsafe_false_pass": false
+    },
+    {
+      "confidence": 0.5,
+      "correct": false,
+      "decisive": false,
+      "elapsed_s": 6.05,
+      "expected_pass": false,
+      "id": "palindrome_offtopic",
+      "predicted_pass": true,
+      "reason": "The step result does not directly address the step goal with specific content. It provides a summary of the current weather, which does not include a function definition or docstring for `is_palindrome(s)`. The self-test is also incomplete and lacks context.",
+      "unsafe_false_pass": false
+    },
+    {
+      "confidence": 0.5,
+      "correct": true,
+      "decisive": false,
+      "elapsed_s": 6.798,
+      "expected_pass": true,
+      "id": "nootropic_rct_supported",
+      "predicted_pass": true,
+      "reason": "The result is vague and incomplete, lacking specific content about the human RCT for a nootropic and extracting sample, dose, and working-memory outcome.",
+      "unsafe_false_pass": false
+    },
+    {
+      "confidence": 0.7,
+      "correct": true,
+      "decisive": true,
+      "elapsed_s": 4.789,
+      "expected_pass": false,
+      "id": "nootropic_rct_vague_unsupported",
+      "predicted_pass": false,
+      "reason": "The step goal was not met as the result does not directly address finding one human RCT for a nootropic and extracting sample, dose, and working-memory outcome.",
+      "unsafe_false_pass": false
+    },
+    {
+      "confidence": 0.7,
+      "correct": false,
+      "decisive": true,
+      "elapsed_s": 5.831,
+      "expected_pass": true,
+      "id": "flatten_correct",
+      "predicted_pass": false,
+      "reason": "The result is vague and incomplete. It does not directly address the step goal with specific content.",
+      "unsafe_false_pass": false
+    },
+    {
+      "confidence": 0.0,
+      "correct": false,
+      "decisive": false,
+      "elapsed_s": 4.017,
+      "expected_pass": false,
+      "id": "flatten_empty_refusal",
+      "predicted_pass": true,
+      "reason": "The step result is vague, off-topic, incomplete, or mostly a plan for doing the work rather than the work itself.",
+      "unsafe_false_pass": false
+    },
+    {
+      "confidence": 1.0,
+      "correct": true,
+      "decisive": true,
+      "elapsed_s": 5.752,
+      "expected_pass": true,
+      "id": "required_path_correct",
+      "predicted_pass": true,
+      "reason": "The step goal was achieved by creating a file named 'audit.md' in the specified directory with detailed information about the threat model, findings, and remediation steps.",
+      "unsafe_false_pass": false
+    },
+    {
+      "confidence": 0.8,
+      "correct": true,
+      "decisive": true,
+      "elapsed_s": 4.084,
+      "expected_pass": false,
+      "id": "required_path_wrong_location",
+      "predicted_pass": false,
+      "reason": "The step result is vague, off-topic, incomplete, or mostly a plan for doing the work rather than the work itself.",
+      "unsafe_false_pass": false
+    },
+    {
+      "confidence": 0.8,
+      "correct": false,
+      "decisive": true,
+      "elapsed_s": 5.605,
+      "expected_pass": true,
+      "id": "readonly_constraint_honored",
+      "predicted_pass": false,
+      "reason": "The result is vague, off-topic, incomplete, or mostly a plan for doing the work rather than the work itself.",
+      "unsafe_false_pass": false
+    },
+    {
+      "confidence": 0.8,
+      "correct": true,
+      "decisive": true,
+      "elapsed_s": 4.352,
+      "expected_pass": false,
+      "id": "readonly_constraint_violated",
+      "predicted_pass": false,
+      "reason": "The step goal was not met because the result does not address the specific content required for analyzing the data source.csv without modifying it.",
+      "unsafe_false_pass": false
+    },
+    {
+      "confidence": 1.0,
+      "correct": true,
+      "decisive": true,
+      "elapsed_s": 5.157,
+      "expected_pass": true,
+      "id": "test_execution_passed",
+      "predicted_pass": true,
+      "reason": "The step goal was directly addressed with specific content, and the result provides a clear indication of whether the authentication test suite passed or failed.",
+      "unsafe_false_pass": false
+    },
+    {
+      "confidence": 1.0,
+      "correct": false,
+      "decisive": true,
+      "elapsed_s": 3.518,
+      "expected_pass": false,
+      "id": "test_execution_failed",
+      "predicted_pass": true,
+      "reason": "The step goal was directly addressed with specific content in the result.",
+      "unsafe_false_pass": true
+    }
+  ],
+  "total_s": 79.061,
+  "unsafe_decisive_false_passes": 1
+}

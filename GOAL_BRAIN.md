@@ -3149,3 +3149,22 @@ Dormant (deliberately parked, not dropped):
   every llama-server load died ("cannot get current path") → local tier
   silently erroring, every validation escalated to paid. Fixed (spawn
   cwd="/", src/local_models.py) + regression test.
+- **2026-07-16 (Jeremy, late evening) — qwen parameter sweep run + local-lane
+  posture ratified.** Follow-up asks: verify thinking (not startup/teardown)
+  killed VibeThinker → confirmed by warm probe (7.1 tok/s warm, ~10s one-time
+  load; even "2+2" burns ~122 reasoning tokens); "worth looking at
+  qwen2.5-coder:3b and seeing if we can find a smaller bit model with similar
+  capabilities" (his caveat: "principle of the thing... we're going to change
+  escalation (or direct) path likely tonight to the free tier of groq/gemini
+  anyway") → default qwen tags are already Q4, so swept parameter count
+  instead: 3b keeps (12/14, full coverage, 10.9s avg — under breaker, same 2
+  false-passes as M1, Tier-0-covered); 1.5b and 0.5b REJECTED (coverage/
+  accuracy crater faster than latency improves; 0.5b is a rubber stamp,
+  3 unsafe false-passes). See docs/LOCAL_VALIDATOR.md "Linux qwen parameter
+  sweep"; raw in research/. Jeremy on results: "likely the lower tiers aren't
+  going to be as helpful. I like the idea of a small LLM for this and other
+  things like this, but the time is just longer than we want. Kinda lame that
+  the free tier of cloud stuff is better nearly at any local hardware level
+  (even the M1 likely)." → Standing read: local lane = free/offline floor
+  behind Tier-0 + breaker, hosted-free = the real quality/latency lane; don't
+  invest further in local-model upgrades on this box unprompted.

@@ -310,6 +310,30 @@ deterministic Tier-0 guards and the latency breaker; the quality upgrade
 lane there is hosted-free validation (Groq/Gemini), not a local reasoning
 model. Raw rows: `research/validator-bakeoff-linux-2026-07-16.json`.
 
+### Linux qwen parameter sweep (2026-07-16)
+
+Follow-up to Jeremy's "worth looking at the qwen2.5-coder:3b and seeing if
+we can find a smaller bit model with similar capabilities there?" Note the
+default Ollama `qwen2.5-coder` tags are **already Q4_K_M (4-bit)** — lower
+bit-widths (Q2/Q3) save little on a CPU-compute-bound box and shed quality
+fast, so the real lever is parameter count. Same daemon, corpus, and
+protocol as above:
+
+| Candidate | Raw accuracy | Decisive coverage / accuracy | Unsafe decisive false-passes | Avg latency (warm daemon) | Judgment |
+|---|---:|---:|---:|---:|---|
+| qwen2.5-coder:3b (box baseline) | 12/14 | 14/14; 100% / 86% | 2 | 10.9s (max 30.7s = first-call load) | **Keep.** Only candidate under the 15s breaker with full coverage; its two known false-passes (read-only violation, failing test run) are exactly the cases Tier-0 deterministic guards catch first |
+| qwen2.5-coder:1.5b | 7/14 | 10/14; 71% / 60% | 1 | 5.6s | Reject: false-RETRYs correct work (factorial, flatten, honored constraint) and still blessed a failing test run — coin-flip accuracy at half the latency isn't a trade |
+| qwen2.5-coder:0.5b | 6/14 | 9/14; 64% / 56% | 3 | 2.4s | Reject: rubber stamp — passed 6 of 7 negative cases (decisively or via low-conf escalation), including path/read-only/test violations |
+
+Capability degrades faster than latency improves: each halving of
+parameters roughly halves latency but the model loses the ability to say
+RETRY with evidence. The 3b's Linux false-passes are the **same two cases**
+it failed on the M1 — consistent cross-platform, so the M1 quality verdict
+transfers even though the latency numbers don't (0.81s on M1 vs 10.9s
+here). No smaller qwen with similar capability exists at this corpus; 3b
+stays the box's local floor. Raw rows:
+`research/validator-bakeoff-linux-qwen-{3b,1-5b,0-5b}-2026-07-16.json`.
+
 These are single-sample point estimates from a small, temperature-0.1 corpus
 run, not a statistical proof of safety. In particular, zero unsafe passes among
 seven negative examples does not establish a zero real-world error rate. The

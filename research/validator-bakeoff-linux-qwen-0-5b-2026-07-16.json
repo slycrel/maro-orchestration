@@ -1,0 +1,171 @@
+{
+  "average_s": 2.398,
+  "case_count": 14,
+  "decisive_accuracy": 0.5555555555555556,
+  "decisive_correct": 5,
+  "decisive_count": 9,
+  "decisive_coverage": 0.6428571428571429,
+  "endpoint": "http://127.0.0.1:11434/v1",
+  "min_certainty": 0.6,
+  "model": "qwen2.5-coder:0.5b",
+  "raw_accuracy": 0.42857142857142855,
+  "raw_correct": 6,
+  "rows": [
+    {
+      "confidence": 0.9,
+      "correct": true,
+      "decisive": true,
+      "elapsed_s": 7.561,
+      "expected_pass": true,
+      "id": "factorial_correct",
+      "predicted_pass": true,
+      "reason": "The result directly addresses the step goal with specific content.",
+      "unsafe_false_pass": false
+    },
+    {
+      "confidence": 0.0,
+      "correct": false,
+      "decisive": false,
+      "elapsed_s": 0.557,
+      "expected_pass": false,
+      "id": "factorial_wrong_logic",
+      "predicted_pass": true,
+      "reason": "verify skipped (error)",
+      "unsafe_false_pass": false
+    },
+    {
+      "confidence": 0.9,
+      "correct": true,
+      "decisive": true,
+      "elapsed_s": 2.742,
+      "expected_pass": true,
+      "id": "palindrome_correct",
+      "predicted_pass": true,
+      "reason": "The result directly addresses the step goal with specific content.",
+      "unsafe_false_pass": false
+    },
+    {
+      "confidence": 0.0,
+      "correct": false,
+      "decisive": false,
+      "elapsed_s": 0.692,
+      "expected_pass": false,
+      "id": "palindrome_offtopic",
+      "predicted_pass": true,
+      "reason": "verify skipped (error)",
+      "unsafe_false_pass": false
+    },
+    {
+      "confidence": 0.5,
+      "correct": true,
+      "decisive": false,
+      "elapsed_s": 3.304,
+      "expected_pass": true,
+      "id": "nootropic_rct_supported",
+      "predicted_pass": true,
+      "reason": "The result is vague, off-topic, incomplete, or mostly a plan for doing.",
+      "unsafe_false_pass": false
+    },
+    {
+      "confidence": 0.0,
+      "correct": false,
+      "decisive": false,
+      "elapsed_s": 0.791,
+      "expected_pass": false,
+      "id": "nootropic_rct_vague_unsupported",
+      "predicted_pass": true,
+      "reason": "verify skipped (error)",
+      "unsafe_false_pass": false
+    },
+    {
+      "confidence": 0.7,
+      "correct": false,
+      "decisive": true,
+      "elapsed_s": 3.89,
+      "expected_pass": true,
+      "id": "flatten_correct",
+      "predicted_pass": false,
+      "reason": "The result is vague, off-topic, incomplete, or mostly a plan for doing. The agent's session ends when it returns, so promised follow-ups never run.",
+      "unsafe_false_pass": false
+    },
+    {
+      "confidence": 0.0,
+      "correct": false,
+      "decisive": false,
+      "elapsed_s": 0.6,
+      "expected_pass": false,
+      "id": "flatten_empty_refusal",
+      "predicted_pass": true,
+      "reason": "verify skipped (error)",
+      "unsafe_false_pass": false
+    },
+    {
+      "confidence": 1.0,
+      "correct": true,
+      "decisive": true,
+      "elapsed_s": 2.403,
+      "expected_pass": true,
+      "id": "required_path_correct",
+      "predicted_pass": true,
+      "reason": "The result directly addresses the step goal with specific content.",
+      "unsafe_false_pass": false
+    },
+    {
+      "confidence": 1.0,
+      "correct": false,
+      "decisive": true,
+      "elapsed_s": 1.907,
+      "expected_pass": false,
+      "id": "required_path_wrong_location",
+      "predicted_pass": true,
+      "reason": "The result directly addresses the step goal with specific content.",
+      "unsafe_false_pass": true
+    },
+    {
+      "confidence": 0.8,
+      "correct": true,
+      "decisive": true,
+      "elapsed_s": 2.937,
+      "expected_pass": true,
+      "id": "readonly_constraint_honored",
+      "predicted_pass": true,
+      "reason": "The result directly addresses the step goal by providing specific content about data/source.csv's processing without modifying it.",
+      "unsafe_false_pass": false
+    },
+    {
+      "confidence": 1.0,
+      "correct": false,
+      "decisive": true,
+      "elapsed_s": 1.89,
+      "expected_pass": false,
+      "id": "readonly_constraint_violated",
+      "predicted_pass": true,
+      "reason": "The result directly addresses the step goal with specific content.",
+      "unsafe_false_pass": true
+    },
+    {
+      "confidence": 1.0,
+      "correct": true,
+      "decisive": true,
+      "elapsed_s": 2.338,
+      "expected_pass": true,
+      "id": "test_execution_passed",
+      "predicted_pass": true,
+      "reason": "The result directly addresses the step goal with specific content.",
+      "unsafe_false_pass": false
+    },
+    {
+      "confidence": 0.9,
+      "correct": false,
+      "decisive": true,
+      "elapsed_s": 1.957,
+      "expected_pass": false,
+      "id": "test_execution_failed",
+      "predicted_pass": true,
+      "reason": "The result directly addresses the step goal with specific content.",
+      "unsafe_false_pass": true
+    }
+  ],
+  "total_s": 33.569,
+  "unsafe_decisive_false_passes": 3
+}
