@@ -362,7 +362,10 @@ from provenance import (
 )
 
 
-def _verify_now_outcome(message: str, outcome: Dict[str, Any], adapter) -> Dict[str, Any]:
+def _verify_now_outcome(
+    message: str, outcome: Dict[str, Any], adapter,
+    wall_start: Optional[float] = None,
+) -> Dict[str, Any]:
     """Demote an autonomous NOW 'done' to 'incomplete' when the response itself
     reports failure. Fails open — any error keeps the original status."""
     # Deterministic provenance guard, ahead of the text judge: if the goal named
@@ -372,7 +375,8 @@ def _verify_now_outcome(message: str, outcome: Dict[str, Any], adapter) -> Dict[
     _missing = _provenance_missing(
         message,
         result_text=str(outcome.get("result", "")),
-        window_start=_run_window_start(outcome.get("elapsed_ms")),
+        window_start=_run_window_start(
+            outcome.get("elapsed_ms"), wall_start=wall_start),
     )
     if _missing:
         out = dict(outcome)
@@ -681,6 +685,9 @@ def _handle_impl(
 
     handle_id = str(uuid.uuid4())[:8]
     started_at = time.monotonic()
+    # Wall anchor for the provenance freshness window: monotonic can't feed
+    # mtime comparisons, and now-minus-elapsed drifts (see _run_window_start).
+    wall_started_at = time.time()
 
     from ancestry import normalize_measurement_class
     measurement_class = normalize_measurement_class(
@@ -905,7 +912,8 @@ def _handle_impl(
         # "incomplete" when the response reports non-fulfillment.
         # Interactive calls keep raw speed.
         if origin is not None and not dry_run and outcome.get("status") == "done":
-            outcome = _verify_now_outcome(message, outcome, adapter)
+            outcome = _verify_now_outcome(
+                message, outcome, adapter, wall_start=wall_started_at)
         elapsed = int((time.monotonic() - started_at) * 1000)
 
         # Goal verdict as its own metadata dimension (done != successful):
@@ -1848,7 +1856,8 @@ def _handle_impl(
                 _prov_missing = _provenance_missing(
                     _raw_input,
                     result_text=_done_results,
-                    window_start=_run_window_start(loop_result.elapsed_ms),
+                    window_start=_run_window_start(
+                        loop_result.elapsed_ms, wall_start=wall_started_at),
                 )
                 if _prov_missing:
                     _provenance_failed = True

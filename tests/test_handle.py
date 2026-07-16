@@ -3178,6 +3178,33 @@ class TestOutputProvenanceGuard:
         w = _run_window_start(5000)
         assert w is not None and w < time.time()
 
+    def test_run_window_start_prefers_wall_anchor(self):
+        """Pin for run 123bf935 (2026-07-16): a slow post-loop closure pushed
+        'now' past loop end, so now-minus-elapsed slid the window PAST artifacts
+        the run's own early steps wrote — false demotion. The recorded wall
+        start must win over the reconstruction whenever it is known."""
+        import time
+        from handle import _run_window_start
+        from provenance import _WINDOW_BUFFER_SECS
+        now = time.time()
+        wall_start = now - 1200          # run started 20 min ago
+        elapsed_ms = 645282              # stale mid-loop snapshot (~10.75 min)
+        artifact_mtime = wall_start + 60  # written by an early step
+
+        w = _run_window_start(elapsed_ms, wall_start=wall_start)
+        assert w == wall_start - _WINDOW_BUFFER_SECS
+        assert artifact_mtime >= w  # fresh — the bug flagged exactly this
+
+        # reconstruction (no wall anchor) would have flagged it
+        w_old = _run_window_start(elapsed_ms)
+        assert artifact_mtime < w_old
+
+        # bogus anchors fall back to reconstruction, never crash
+        assert _run_window_start(5000, wall_start=0) is not None
+        assert _run_window_start(None, wall_start=None) is None
+        assert _run_window_start(None, wall_start=now - 5) == \
+            now - 5 - _WINDOW_BUFFER_SECS
+
     def test_result_claimed_outputs_filters_remote_transient(self):
         from handle import _result_claimed_outputs
         assert "out/real.json" in _result_claimed_outputs("saved to out/real.json")

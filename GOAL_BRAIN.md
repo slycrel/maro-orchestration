@@ -3052,3 +3052,16 @@ Dormant (deliberately parked, not dropped):
   Messages still sign-in→sign-out ~10s with no 2FA prompt; Jeremy created
   agentic.poe@icloud.com and suspects Monterey too old for the 2FA device
   path — he'll try an old device as trusted-device anchor.
+- **2026-07-16 (system) — container-on day one caught a verification-layer
+  bug, fixed same morning:** the container itself verified clean (steps saw
+  `/.dockerenv` + cgroup v2 markers from inside), but the verification run
+  (123bf935) was **falsely demoted to incomplete** by the provenance
+  freshness gate: `_run_window_start` reconstructed the run window as
+  now − elapsed_ms − buffer, and a slow post-loop closure pushed "now" ~8 min
+  past loop end — sliding the window past artifacts the run's own early steps
+  had genuinely written (mtimes 15:04/15:07 vs reconstructed window ~15:10).
+  False demotions poison `goal_achieved` (the substrate-trial lesson), so
+  fixed immediately, not backlogged: `_handle_impl` now records a wall-clock
+  start beside the monotonic anchor and both provenance call sites (NOW +
+  agenda) prefer it over the reconstruction. Pin test
+  `test_run_window_start_prefers_wall_anchor` reproduces the exact shape.

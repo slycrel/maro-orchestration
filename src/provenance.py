@@ -213,10 +213,18 @@ def _missing_claimed_inputs(goal: str) -> List[str]:
 _WINDOW_BUFFER_SECS = 120.0
 
 
-def _run_window_start(elapsed_ms) -> Optional[float]:
+def _run_window_start(elapsed_ms, wall_start: Optional[float] = None) -> Optional[float]:
     """Wall-clock instant before which a file mtime can't be evidence of THIS
-    run: now - elapsed - buffer. None (skip the gate) when elapsed is unknown."""
+    run. Prefer the run's recorded wall start — reconstructing it as
+    now - elapsed - buffer is only valid when the check runs immediately at
+    work end AND elapsed spans the whole run; run 123bf935 (2026-07-16,
+    container-on day one) was falsely demoted when a slow post-loop closure
+    pushed "now" ~8 min past loop end, sliding the reconstructed window past
+    artifacts its own early steps had genuinely written. None (skip the
+    gate) when neither anchor is known."""
     try:
+        if wall_start and float(wall_start) > 0:
+            return float(wall_start) - _WINDOW_BUFFER_SECS
         ems = float(elapsed_ms or 0)
         if ems <= 0:
             return None
