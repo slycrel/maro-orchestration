@@ -3204,4 +3204,11 @@ Dormant (deliberately parked, not dropped):
   credential backup at `~/claude/credentials-backup/` (README manifest;
   maro secrets .env, gh hosts.yml, ssh keys incl. mini2 dispatch lane,
   openclaw.json + recovered vault; outside all git repos, chmod 700;
-  re-copy on key rotation).
+  re-copy on key rotation). Follow-up same evening: Jeremy approved a
+  shadow-eval batch on the new hosted tier ("go ahead and shadow eval
+  that") → `validate.shadow_eval: true` on the box 2026-07-16; measures
+  gemini-vs-paid agreement on organic traffic; doubles validation spend
+  while on; one-shot Telegram reminder (maro-shadow-batch-reminder.timer,
+  2026-07-19 09:00) to analyze via `python3 -m validation_shadow
+  --agreement` and flip it back OFF. Also removed the now-moot 19:04
+  keys-reminder timer (unit files deleted, not disabled).
