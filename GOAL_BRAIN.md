@@ -3036,3 +3036,19 @@ Dormant (deliberately parked, not dropped):
   (`scripts/viz-ctl.sh start --host 0.0.0.0` → http://192.168.0.45:8787/index.html;
   process-level, does not survive reboot). Open q7 (container-on for
   network-sourced goals) still Jeremy-gated.
+- **2026-07-16 (Jeremy, morning after dispatch went live) — three calls in one
+  message:** (1) **`executor.container: on` FLIPPED on the box** ("I'm fine
+  flipping it on… better in-practice testing on that harder, more secure
+  edge") — resolves SESSION_PROTOCOL_DESIGN §11 q7; box-level, all runs;
+  fresh-install default stays off per CONTAINER_BURN_IN §6; verified same
+  morning with a containerized dispatch through the Hermes gate. (2)
+  **Orchestration Telegram alerts → the Hermes /sethome ops group, not the
+  DM** ("truly de-clutter that") — `telegram.chat_id` in `~/.maro/config.yml`
+  now points at the home-channel group; same bot, Hermes owns polling, Maro
+  only sends; verified live. (3) **Share the two-box PoC** ("no reason to not
+  PoC what we've done here and share") → `deploy/hermes/TWO_BOX_POC.md`
+  (beta/tips species, secrets scrubbed), indexed in docs/INDEX.md.
+  iMessage status same message: icloud.com sign-in works (account unlocked),
+  Messages still sign-in→sign-out ~10s with no 2FA prompt; Jeremy created
+  agentic.poe@icloud.com and suspects Monterey too old for the 2FA device
+  path — he'll try an old device as trusted-device anchor.

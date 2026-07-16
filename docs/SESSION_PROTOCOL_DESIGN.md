@@ -438,8 +438,14 @@ long-horizon decompose:
    deterministic id — the memory-module design anticipated this.)
 6. ~~Persistent channel?~~ **ANSWERED (Jeremy 2026-07-15): no — don't start
    with one.** ssh+poll until a message type proves it can't carry it.
-7. When Hermes dispatch goes live, does box `container: on` become the
-   standing posture for network-sourced goals? (Likely yes — decide then.)
+7. ~~When Hermes dispatch goes live, does box `container: on` become the
+   standing posture for network-sourced goals?~~ **ANSWERED (Jeremy
+   2026-07-16, morning after dispatch went live): yes — flipped ON.** "I'm
+   fine flipping it on; sure it's working without it, and maybe that's
+   asking for pain, but it's better in-practice testing on that harder,
+   more secure edge." Box-level `executor.container: on` (all runs, not
+   just network-sourced — no per-origin split built or wanted yet); the
+   fresh-install default stays off per CONTAINER_BURN_IN.md §6.
 8. ~~Enrichment metadata format~~ **ANSWERED (Jeremy 2026-07-15): MVP = "we
    don't care."** Goal required + assumed enriched; optional raw user-ask
    field rides along when the interface has one; nothing downstream is

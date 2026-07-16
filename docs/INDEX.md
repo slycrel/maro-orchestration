@@ -25,6 +25,7 @@ BACKLOG, VISION, CLAUDE, README…) are living by definition and carry no frontm
 | What events go to the captain's log? | `CAPTAINS_LOG_EVENTS.md` |
 | How does the navigator decide? | `NAVIGATOR_SCHEMA.md`; memory slice: `RECALL_DESIGN.md` |
 | How does an external substrate (OpenClaw/Hermes) call us? | `SUBSTRATE_INTEGRATION.md` |
+| Two-box Hermes-interface + Maro-orchestrator PoC recipe? | `../deploy/hermes/TWO_BOX_POC.md` (+ `../deploy/hermes/README.md` for the dispatch lane) |
 | Local validator model setup/results? | `LOCAL_VALIDATOR.md` |
 | Security / sandbox posture? | `SECURITY_MODEL.md` |
 | How do we cut/publish a release? | `PUBLISH_CHECKLIST.md` (exists since v0.1 — cite it, don't re-derive; SF-14 release amnesia) |
