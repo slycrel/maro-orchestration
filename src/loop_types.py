@@ -179,6 +179,12 @@ class LoopResult:
     elapsed_ms: int = 0
     log_path: Optional[str] = None
     interrupts_applied: int = 0
+    # Structured record of every operator interrupt applied mid-run (§6a
+    # after-the-fact visibility): {ts, interrupt_id, source, intent, message,
+    # context_only, goal_before, goal_after}. Injected content must stay
+    # delineated from the original prompt/goal in run records — goal_before/
+    # goal_after is non-None only when a corrective interrupt changed the goal.
+    injections: List[dict] = field(default_factory=list)
     march_of_nines_alert: bool = False    # Phase 19: chain_success < 0.5 alert
     pre_flight_review: Optional[Any] = None  # Phase 58: PlanReview if pre-flight ran
     # data-r2-01: carried out so deferred (post-closure) skill synthesis knows
@@ -427,6 +433,10 @@ class LoopContext:
     # boundary poll — consumed by the §6a injection-trigger director
     # evaluation. Reset each poll; empty when nothing was applied.
     last_boundary_interrupts: List[str] = field(default_factory=list)
+    # Cumulative structured record of ALL interrupts applied this run —
+    # carried into LoopResult.injections / the loop log / the run report so
+    # injected content stays delineated from the original goal after the fact.
+    injections: List[dict] = field(default_factory=list)
 
     # Flags
     march_of_nines_alert: bool = False

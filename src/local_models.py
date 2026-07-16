@@ -731,6 +731,14 @@ def ensure_validator_running(*, wait_secs: float = 60.0, start_reaper: bool = Tr
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                 env={**os.environ, **env_over} if env_over else None,
                 start_new_session=True,  # own process group → clean group teardown
+                # Stable cwd: the daemon outlives its spawner, and ollama's
+                # llama-server children getcwd() at startup. Inheriting a
+                # transient cwd (a run dir, a Claude agent worktree) means
+                # every model load dies with "cannot get current path" once
+                # that dir is deleted — found live 2026-07-16 (daemon cwd was
+                # a deleted .claude/worktrees/agent-*; validation silently
+                # errored → every call escalated to paid).
+                cwd="/",
             )
         except Exception as exc:
             log.warning("local validator autostart failed to spawn: %s", exc)

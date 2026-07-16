@@ -3109,3 +3109,38 @@ Dormant (deliberately parked, not dropped):
   iMessage activation requires a real phone number (anti-spam); he messaged
   Apple support. Side wins: agentic.poe@icloud.com email live; yahoo mail
   wired into the Mini via Internet Accounts.
+
+- **2026-07-16 (Jeremy, evening) — Purgatorio #3 RESOLVED: ACCEPT exposure.**
+  "I'm not overly concerned, it's all supplement talk outside of the grey
+  market peptides; my understanding is that's discouraged/disallowed on the
+  seller side as not approved, not prohibited/illegal on the consumer side.
+  I'm comfortable with that line, but could be persuaded if I'm silently
+  asking for a felony or some such nonsense if I'm targeted." Verification
+  (general info, not legal advice): nothing in the exposed blobs is
+  felony-class; peptides (retatrutide etc.) are unscheduled — FDA enforcement
+  is seller-side, matching his read; the single nuance is armodafinil
+  (US Schedule IV — *unprescribed possession* is misdemeanor-class, and a
+  historical doc mention is not possession evidence). His comfort line
+  holds → NO second history rewrite, stale branches left as-is (deleting
+  them gains nothing while main's history stays reachable). Standing state:
+  `user/` medication-era blobs remain reachable in public history
+  (99f5a67..358ad5d + two stale branches); tip is clean/neutral since
+  358ad5d. Same message, injection decision-point follow-ups decreed:
+  (a) after-the-fact visibility that injection ≠ prompt ("some clear
+  delineation there"), (b) confirm overall goal change vs clarification is
+  possible in that hook — both addressed same evening (LoopResult.injections
+  + run-report "Operator injections" section + GOAL CHANGED decision line +
+  ctx.goal sync; corrective intent = goal replacement, confirmed live in
+  code). (2nd tangent) **Local validator: use VibeThinker 4-bit** — "we
+  should use that new 4 bit quantized model of the tiny model we found when
+  testing on the M1... I don't have concerns about flipping that custom
+  model back on in the smaller footprint version"; note his memory slightly
+  inverts the sweep record (the 8-bit was REJECTED — 1 unsafe false-pass,
+  slower; the 4-bit is the reference that aced it), which only strengthens
+  his call. Linux lane = GGUF Q4_K_M via Ollama, burn-in gate per BACKLOG
+  (zero unsafe false-passes + warm latency under breaker) — bakeoff run on
+  the box same evening. Side-find while running it: the orchestration-owned
+  ollama daemon had inherited a since-deleted Claude agent worktree as cwd →
+  every llama-server load died ("cannot get current path") → local tier
+  silently erroring, every validation escalated to paid. Fixed (spawn
+  cwd="/", src/local_models.py) + regression test.

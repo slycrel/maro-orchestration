@@ -5010,6 +5010,91 @@ def test_injection_eval_adjust_replaces_remaining(monkeypatch, tmp_path):
     assert len(result.steps) == 2, step_texts
 
 
+def test_corrective_interrupt_changes_goal_with_delineated_record(monkeypatch, tmp_path):
+    """A corrective interrupt changes the run's goal mid-flight, and the
+    after-the-fact record delineates it: LoopResult.goal is the goal the loop
+    actually pursued, LoopResult.injections carries the original
+    (goal_before -> goal_after), and the loop log JSON has the same record."""
+    _setup_workspace(monkeypatch, tmp_path)
+    from interrupt import InterruptQueue
+
+    q = InterruptQueue(queue_path=tmp_path / "interrupts.jsonl")
+    q.post("actually focus on the migration risks instead",
+           source="test", intent="corrective")
+
+    result = run_agent_loop(
+        "summarize the release notes",
+        project="corrective-goal-test",
+        adapter=_DryRunAdapter(),
+        dry_run=False,
+        interrupt_queue=q,
+    )
+    assert result.interrupts_applied == 1
+    # Goal the loop pursued after the correction — not the original.
+    assert result.goal == "actually focus on the migration risks instead"
+    assert len(result.injections) == 1
+    rec = result.injections[0]
+    assert rec["intent"] == "corrective"
+    assert rec["source"] == "test"
+    assert rec["context_only"] is False
+    assert rec["goal_before"] == "summarize the release notes"
+    assert rec["goal_after"] == "actually focus on the migration risks instead"
+    # The durable loop log carries the same delineated record.
+    logs = list(tmp_path.rglob("loop-*-log.json"))
+    assert logs, "loop log JSON not written"
+    payload = json.loads(logs[-1].read_text())
+    assert payload["injections"] and payload["injections"][0]["goal_after"] == rec["goal_after"]
+    assert payload["goal"] == rec["goal_after"]
+
+
+def test_note_interrupt_recorded_as_context_only_injection(monkeypatch, tmp_path):
+    """A note interrupt lands in LoopResult.injections marked context-only,
+    with no goal fields — visible after the fact, distinct from the plan."""
+    _setup_workspace(monkeypatch, tmp_path)
+    from interrupt import InterruptQueue
+
+    q = InterruptQueue(queue_path=tmp_path / "interrupts.jsonl")
+    q.post("the deadline moved to Friday", source="test", intent="note")
+
+    result = run_agent_loop(
+        "prepare a writeup with a note injection record",
+        adapter=_DryRunAdapter(),
+        dry_run=False,
+        interrupt_queue=q,
+    )
+    assert len(result.injections) == 1
+    rec = result.injections[0]
+    assert rec["context_only"] is True
+    assert rec["goal_before"] is None and rec["goal_after"] is None
+    assert "deadline moved" in rec["message"]
+
+
+def test_render_injections_delineates_goal_change():
+    """Report section renders injected content as injected, and a goal change
+    shows the original goal alongside the new one."""
+    from loop_report import _render_injections
+
+    assert _render_injections([]) == ""
+    assert _render_injections(None) == ""
+    html = _render_injections([
+        {"ts": "2026-07-16T20:00:00+00:00", "interrupt_id": "abcd1234",
+         "source": "telegram", "intent": "corrective",
+         "message": "actually chase the migration risks instead",
+         "context_only": False,
+         "goal_before": "summarize the release notes",
+         "goal_after": "actually chase the migration risks instead"},
+        {"ts": "2026-07-16T20:05:00+00:00", "interrupt_id": "ef567890",
+         "source": "cli", "intent": "note",
+         "message": "deadline moved", "context_only": True,
+         "goal_before": None, "goal_after": None},
+    ])
+    assert "Operator injections (2)" in html
+    assert "Injected mid-run by the operator" in html
+    assert "GOAL CHANGED" in html
+    assert "summarize the release notes" in html
+    assert "context-only" in html and "plan-affecting" in html
+
+
 def test_parallel_batch_delivers_pending_once(monkeypatch, tmp_path):
     """Pending contributions reach a parallel batch boundary exactly once:
     the batch consumes them, and the following boundary gets nothing."""

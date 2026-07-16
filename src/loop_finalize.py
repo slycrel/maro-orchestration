@@ -133,6 +133,7 @@ def _build_result_and_finalize(
                 status=loop_status,
                 elapsed_ms=elapsed_total,
                 replan_count=replan_count,
+                injections=list(ctx.injections),
             )
         except Exception as _rep_exc:
             log.warning("run report final write failed: %s", _rep_exc)
@@ -146,6 +147,7 @@ def _build_result_and_finalize(
         start_ts=start_ts,
         elapsed_ms=elapsed_total,
         stuck_reason=stuck_reason,
+        injections=list(ctx.injections),
     )
 
     # 2026-07-08 adversarial review (finding #3): the index reads totals from
@@ -221,6 +223,7 @@ def _build_result_and_finalize(
         status=loop_status,
         steps=step_outcomes,
         interrupts_applied=interrupts_applied,
+        injections=list(ctx.injections),
         stuck_reason=stuck_reason,
         total_tokens_in=total_tokens_in,
         total_tokens_out=total_tokens_out,

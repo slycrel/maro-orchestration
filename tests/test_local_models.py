@@ -406,6 +406,7 @@ def test_ensure_manages_ollama_runtime(monkeypatch):
         state["spawned"] = True
         state["argv"] = argv
         state["env"] = k.get("env")
+        state["cwd"] = k.get("cwd")
         p = MagicMock(); p.poll.return_value = None; p.pid = 5151
         return p
 
@@ -418,6 +419,11 @@ def test_ensure_manages_ollama_runtime(monkeypatch):
         # `ollama serve` is the tail of the argv (a CPU-cap prefix may precede it).
         assert state["argv"][-2:] == ["/usr/bin/ollama", "serve"]
         assert state["env"]["OLLAMA_NUM_PARALLEL"] == "1"
+        # Stable cwd, never inherited: the daemon outlives its spawner and
+        # llama-server children getcwd() at startup — a deleted inherited cwd
+        # (run dir, agent worktree) killed every model load, found live
+        # 2026-07-16.
+        assert state["cwd"] == "/"
     finally:
         lm.shutdown_validator()
 

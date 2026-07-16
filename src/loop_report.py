@@ -1061,6 +1061,42 @@ def _render_decision_points(markers: List[dict]) -> str:
     return '<h2>Decision points (' + str(len(markers)) + ')</h2><ul class="decision-list">' + "".join(items) + '</ul>'
 
 
+def _render_injections(injections: Optional[List[dict]]) -> str:
+    """Operator injections applied mid-run — §6a after-the-fact delineation.
+
+    Injected content must read as injected, never blended into the goal or
+    the plan. Goal changes render the original goal alongside the new one.
+    """
+    if not injections:
+        return ""
+    items = []
+    for inj in injections:
+        intent = _esc(str(inj.get("intent", "?")))
+        source = _esc(str(inj.get("source", "?")))
+        ts = _esc(_fmt_ts(str(inj.get("ts", ""))))
+        message = _esc_truncated(str(inj.get("message", "")), 400)
+        scope = "context-only" if inj.get("context_only") else "plan-affecting"
+        goal_html = ""
+        if inj.get("goal_after"):
+            goal_html = (
+                '<div class="inj-goal-change"><b>GOAL CHANGED:</b> '
+                f'<s>{_esc_truncated(str(inj.get("goal_before", "")), 160)}</s>'
+                ' &rarr; '
+                f'<b>{_esc_truncated(str(inj.get("goal_after", "")), 160)}</b></div>'
+            )
+        items.append(
+            f'<li><span class="badge">{intent}</span> from <b>{source}</b>'
+            f' at {ts} <i>({scope})</i>:<br>&ldquo;{message}&rdquo;{goal_html}</li>'
+        )
+    return (
+        f'<h2>Operator injections ({len(injections)})</h2>'
+        '<div class="panel" style="border-left:4px solid #c77d00;">'
+        '<p><i>Injected mid-run by the operator — not part of the original '
+        'goal or plan.</i></p>'
+        '<ul class="decision-list">' + "".join(items) + '</ul></div>'
+    )
+
+
 def _render_report_html(
     *,
     project: str,
@@ -1074,6 +1110,7 @@ def _render_report_html(
     replan_count: int,
     report_dir: Path,
     index_link: Optional[str],
+    injections: Optional[List[dict]] = None,
 ) -> str:
     windows, approx = _step_windows(step_outcomes, start_ts)
     attributed_markers, activity_entries = _gather_log_markers(loop_id, start_ts, report_dir)
@@ -1105,6 +1142,10 @@ def _render_report_html(
     # regeneration. Never emitted once frozen (status != "running"), so a
     # finished report never re-fetches itself.
     refresh_html = '<meta http-equiv="refresh" content="30">' if status == "running" else ""
+    goal_changed_html = (
+        ' <b style="color:#c77d00;">(redirected mid-run &mdash; see Operator injections)</b>'
+        if any(inj.get("goal_after") for inj in (injections or [])) else ""
+    )
 
     body = f"""{sentinel}
 <!DOCTYPE html>
@@ -1112,11 +1153,12 @@ def _render_report_html(
 <style>{_CSS}</style></head>
 <body>
 <h1>Run <code>{_esc(loop_id)}</code></h1>
-<div class="meta"><b>Project:</b> {_esc(project or "(none)")} &middot; <b>Goal:</b> {_esc_truncated(goal, 160)}</div>
+<div class="meta"><b>Project:</b> {_esc(project or "(none)")} &middot; <b>Goal:</b> {_esc_truncated(goal, 160)}{goal_changed_html}</div>
 <div class="meta"><b><span title="Process status only — steps finished/blocked, not whether the goal was verified achieved. See the cross-run index for that once curation runs.">Status:</span></b> {_esc(status)} &middot; <b>Progress:</b> {done}/{total_planned} done, {blocked} blocked{replan_html}</div>
 <div class="meta"><b>Started:</b> {_esc(_fmt_ts(start_ts))} &middot; <b>Elapsed:</b> {elapsed_ms}ms &middot; <b>Tokens:</b> {_fmt_tokens_split(total_tokens_in, total_tokens_out)} &middot; <b><span title="Estimated from this report's step token counts — may differ from the run's recorded actual spend shown in the cross-run index.">Cost (est.):</span></b> {cost_str}</div>
 
 {_render_verdict(report_dir)}
+{_render_injections(injections)}
 <h2>Timeline</h2>
 <div class="panel">{_render_timeline(planned_steps, step_outcomes, windows, approx, marker_slots, status)}</div>
 
@@ -1149,6 +1191,7 @@ def write_run_report(
     status: str = "running",
     elapsed_ms: int = 0,
     replan_count: int = 0,
+    injections: Optional[List[dict]] = None,
 ) -> Optional[str]:
     """Write (or overwrite) the per-run HTML visibility report.
 
@@ -1219,6 +1262,7 @@ def write_run_report(
                 replan_count=replan_count,
                 report_dir=path.parent,
                 index_link=index_link,
+                injections=injections,
             )
             _atomic_write_text(path, content)
         except Exception:

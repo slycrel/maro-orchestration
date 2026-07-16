@@ -114,6 +114,14 @@ experiments, correct DEFAULTS/CLAUDE/GOAL_BRAIN to match reality.
 **Members:** docs-02, docs-04, docs-05. **Severity: blocker-for-1.0
 (privacy).**
 
+> **RESOLVED 2026-07-16.** Tip fixed earlier (neutral templates in repo,
+> real files in the workspace overlay, lane documented). The residual —
+> historical `user/` blobs with health/supplement details reachable in
+> public git history (99f5a67..358ad5d + two stale branches) — was put to
+> Jeremy with a turnkey scrub option prepared; he ratified ACCEPT
+> ("I'm not overly concerned... comfortable with that line"). No second
+> rewrite. Full record: GOAL_BRAIN.md Decisions 2026-07-16 evening.
+
 `user/GOALS.md`/`CONTEXT.md`/`SIGNALS.md` are git-tracked with identity
 and medical details, and planner.py injects 500 chars of each into
 **every decompose prompt** resolved from the install dir — a stranger's

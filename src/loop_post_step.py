@@ -15,6 +15,7 @@ import logging
 import os
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -395,6 +396,20 @@ def _check_loop_interrupts(
                 ctx.last_boundary_interrupts.append(
                     f"{intr.intent} from {intr.source}: {intr.message}"
                 )
+                # After-the-fact delineation (§6a): every applied interrupt
+                # gets a structured record so run artifacts can show injected
+                # content as injected, never blended into the original goal.
+                _inj_record = {
+                    "ts": datetime.now(timezone.utc).isoformat(),
+                    "interrupt_id": intr.id,
+                    "source": intr.source,
+                    "intent": intr.intent,
+                    "message": intr.message,
+                    "context_only": intr.intent == INTENT_NOTE,
+                    "goal_before": None,
+                    "goal_after": None,
+                }
+                ctx.injections.append(_inj_record)
                 if intr.intent == INTENT_NOTE:
                     # Context-only intent (§6 injection seam): append a
                     # provenance-stamped contribution for the next step's
@@ -414,9 +429,27 @@ def _check_loop_interrupts(
                             file=sys.stderr, flush=True,
                         )
                     continue
+                _goal_before = goal
                 new_remaining, goal, should_stop = apply_interrupt_fn(
                     intr, remaining_steps, goal
                 )
+                if goal != _goal_before:
+                    # Corrective goal change: sync ctx.goal so finalize/report/
+                    # log record the goal the loop actually pursued; the
+                    # injection record preserves the original for delineation.
+                    _inj_record["goal_before"] = _goal_before
+                    _inj_record["goal_after"] = goal
+                    ctx.goal = goal
+                    o.append_decision(ctx.project, [
+                        f"[loop:{ctx.loop_id}] GOAL CHANGED by interrupt({intr.intent}) "
+                        f"from {intr.source}: {_goal_before!r} -> {goal!r}",
+                    ])
+                    if ctx.verbose:
+                        print(
+                            f"[maro] interrupt: goal changed by {intr.source} — "
+                            f"now: {goal[:80]}",
+                            file=sys.stderr, flush=True,
+                        )
                 if should_stop:
                     loop_status = "interrupted"
                     stuck_reason = f"stopped by {intr.source}: {intr.message[:80]}"

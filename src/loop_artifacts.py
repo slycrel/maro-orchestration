@@ -169,6 +169,7 @@ def _write_loop_log(
     start_ts: str,
     elapsed_ms: int,
     stuck_reason: Optional[str],
+    injections: Optional[List[dict]] = None,
 ) -> Optional[str]:
     """Write the full loop log JSON to the project artifacts directory."""
     try:
@@ -189,6 +190,11 @@ def _write_loop_log(
             "started_at": start_ts,
             "elapsed_ms": elapsed_ms,
             "stuck_reason": stuck_reason,
+            # §6a after-the-fact delineation: operator interrupts applied
+            # mid-run, injected content kept distinct from the goal above.
+            # When a corrective interrupt changed the goal, the record's
+            # goal_before/goal_after carries the original.
+            "injections": injections or [],
             "steps": [
                 {
                     "index": s.index,
