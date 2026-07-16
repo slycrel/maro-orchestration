@@ -400,3 +400,249 @@ class TestGoalPriorityOrder:
                   _Adapter(), max_steps=8)
         assert seen_extras, "draw_cuts was never called — cuts gate broken?"
         assert any(_PRIORITY_DIRECTIVE in x for x in seen_extras)
+
+
+# ---------------------------------------------------------------------------
+# Goal-stated step-count ceiling (BACKLOG: step-count constraint ignored)
+# ---------------------------------------------------------------------------
+# Specimen: goal said "2-3 steps maximum"; the planner produced 7 steps /
+# 1.55M tokens for what one shell step answers. Same family as #23c above,
+# plus MECHANICAL enforcement (corrective re-ask → hard truncation).
+
+from planner import goal_step_ceiling, _STEP_CEILING_DIRECTIVE
+
+
+class TestGoalStepCeilingDetector:
+    def test_range_returns_upper_bound(self):
+        # The BACKLOG specimen phrasing.
+        assert goal_step_ceiling("answer the question, 2-3 steps maximum") == 3
+
+    def test_range_with_to(self):
+        assert goal_step_ceiling("2 to 3 steps max") == 3
+
+    def test_steps_max(self):
+        assert goal_step_ceiling("summarize the config, 3 steps max") == 3
+
+    def test_maximum_of(self):
+        assert goal_step_ceiling("use a maximum of 3 steps") == 3
+
+    def test_at_most(self):
+        assert goal_step_ceiling("plan this in at most 3 steps") == 3
+
+    def test_no_more_than(self):
+        assert goal_step_ceiling("no more than 3 steps") == 3
+
+    def test_or_fewer(self):
+        assert goal_step_ceiling("do it in 3 steps or fewer") == 3
+
+    def test_or_less(self):
+        assert goal_step_ceiling("do it in 3 steps or less") == 3
+
+    def test_limit_to(self):
+        assert goal_step_ceiling("limit to 3 steps") == 3
+
+    def test_limit_the_plan_to(self):
+        assert goal_step_ceiling("limit the plan to 3 steps") == 3
+
+    def test_word_number(self):
+        # Word-numbers one–ten are in scope: a shared alternation keeps the
+        # regex readable and "three steps max" is as binding as "3 steps max".
+        assert goal_step_ceiling("three steps max") == 3
+
+    def test_case_insensitive(self):
+        assert goal_step_ceiling("AT MOST 3 STEPS") == 3
+
+    def test_single_step_with_qualifier(self):
+        assert goal_step_ceiling("do it in a single step") == 1
+        assert goal_step_ceiling("just one step") == 1
+        assert goal_step_ceiling("one step only") == 1
+        assert goal_step_ceiling("one step maximum") == 1
+
+    # -- negatives: conservative, stays out of ambiguous phrasing --
+
+    def test_bare_count_does_not_fire(self):
+        assert goal_step_ceiling("explain the deploy process in 3 steps") is None
+
+    def test_plan_content_reference_does_not_fire(self):
+        assert goal_step_ceiling(
+            "document the 3 steps of the deploy process") is None
+
+    def test_step_ordinal_does_not_fire(self):
+        assert goal_step_ceiling("step 2 of the migration") is None
+
+    def test_non_step_number_does_not_fire(self):
+        assert goal_step_ceiling("fix those 2 goal related things") is None
+
+    def test_bare_single_step_does_not_fire(self):
+        assert goal_step_ceiling("one step of the process") is None
+        assert goal_step_ceiling(
+            "this is a single step in a longer journey") is None
+
+    def test_empty_and_plain_goals(self):
+        assert goal_step_ceiling("") is None
+        assert goal_step_ceiling("review the auth module") is None
+
+
+class _SeqAdapter:
+    """Fake adapter: returns each payload in sequence (last one repeats),
+    records every message of every call as (role, content) tuples."""
+
+    def __init__(self, *payloads):
+        self.payloads = payloads
+        self.calls = []
+
+    def complete(self, messages, **kw):
+        self.calls.append([(getattr(m, "role", ""), getattr(m, "content", ""))
+                           for m in messages])
+        i = min(len(self.calls) - 1, len(self.payloads) - 1)
+        from types import SimpleNamespace
+        return SimpleNamespace(content=self.payloads[i],
+                               input_tokens=5, output_tokens=20)
+
+    def systems(self):
+        return [c for call in self.calls for (r, c) in call if r == "system"]
+
+    def users(self):
+        return [c for call in self.calls for (r, c) in call if r == "user"]
+
+
+def _steps_json(n):
+    import json
+    return json.dumps([f"step {i}" for i in range(1, n + 1)])
+
+
+class TestStepCeilingDecompose:
+    """The ceiling is binding: clamped prompt, loud directive, and mechanical
+    enforcement (one corrective re-ask, then hard truncation)."""
+
+    NARROW_CEILING_GOAL = "do the thing, 3 steps max"  # narrow scope, ceiling 3
+
+    def test_corrective_reask_then_truncate(self, monkeypatch, caplog):
+        import logging
+        import captains_log
+        events = []
+        monkeypatch.setattr(captains_log, "log_event",
+                            lambda *a, **k: events.append((a, k)))
+        adapter = _SeqAdapter(_steps_json(7))  # every call returns 7 steps
+
+        with caplog.at_level(logging.WARNING, logger="maro.planner"):
+            result = decompose(self.NARROW_CEILING_GOAL, adapter, max_steps=8)
+
+        # single-shot + ONE corrective re-ask, then hard truncation
+        assert len(adapter.calls) == 2
+        retry_user = adapter.users()[1]
+        assert "You returned 7 steps" in retry_user
+        assert "at most 3 steps" in retry_user
+        assert result == ["step 1", "step 2", "step 3"]
+        assert any("hard-truncated" in m for m in caplog.messages)
+        assert any(a[0] == "STEP_CEILING_ENFORCED" for a, _ in events)
+
+    def test_corrective_reask_success_no_truncation(self):
+        adapter = _SeqAdapter(_steps_json(7), '["merged 1", "merged 2", "merged 3"]')
+        result = decompose(self.NARROW_CEILING_GOAL, adapter, max_steps=8)
+        assert len(adapter.calls) == 2
+        assert result == ["merged 1", "merged 2", "merged 3"]
+
+    def test_compliant_plan_untouched_no_corrective_call(self):
+        adapter = _SeqAdapter(_steps_json(2))
+        result = decompose(self.NARROW_CEILING_GOAL, adapter, max_steps=8)
+        # Never padded up to the ceiling, no corrective call issued.
+        assert result == ["step 1", "step 2"]
+        assert len(adapter.calls) == 1
+
+    def test_prompt_clamped_directive_present_hint_suppressed(self):
+        adapter = _SeqAdapter(_steps_json(2))
+        decompose(self.NARROW_CEILING_GOAL, adapter, max_steps=8)
+        user = adapter.users()[0]
+        system = adapter.systems()[0]
+        assert "Decompose into 3 or fewer concrete steps." in user
+        assert "STEP-COUNT CEILING" in system
+        assert "AT MOST 3" in system
+        # Scope hint must not contradict the ceiling — suppressed outright.
+        assert "SCOPE HINT" not in system
+
+    def test_compose_lane_clamped_and_enforced(self):
+        # "implement" → medium scope → multi-plan + compose lane.
+        goal = "implement rate limit retry logic in llm.py, at most 3 steps"
+        adapter = _SeqAdapter(_steps_json(7))
+        result = decompose(goal, adapter, max_steps=8)
+        # 3 candidates + compose + ONE corrective re-ask
+        assert len(adapter.calls) == 5
+        assert result == ["step 1", "step 2", "step 3"]
+        compose_user = adapter.users()[3]
+        assert "Compose the best plan (3 steps max)." in compose_user
+        compose_system = adapter.systems()[3]
+        assert "STEP-COUNT CEILING" in compose_system
+
+    def test_directive_reaches_staged_pass_lane(self):
+        adapter = _SeqAdapter('["Pass 1/2 — core", "Pass 2/2 — synth [after:1]"]')
+        decompose("adversarial review of the entire codebase, at most 3 steps",
+                  adapter, max_steps=8)
+        assert any("STEP-COUNT CEILING" in s for s in adapter.systems())
+
+    def test_directive_reaches_draw_cuts_under_cuts_first(self, monkeypatch):
+        # Same seam as the #23c regression test above: the cuts probe path
+        # returns early, so the directive must already be in extras.
+        import config
+        import planner
+        monkeypatch.setattr(config, "get", lambda key, default=None:
+                            True if key == "planner.cuts_first" else default)
+        seen_extras = []
+
+        def _spy_draw_cuts(goal, adapter, context_extras=""):
+            seen_extras.append(context_extras)
+            return None
+
+        monkeypatch.setattr(planner, "draw_cuts", _spy_draw_cuts)
+        adapter = _SeqAdapter(_steps_json(2))
+        decompose(self.NARROW_CEILING_GOAL, adapter, max_steps=8)
+        assert seen_extras, "draw_cuts was never called — cuts gate broken?"
+        assert any("STEP-COUNT CEILING" in x for x in seen_extras)
+
+    def test_verification_step_respects_ceiling(self):
+        from planner import maybe_add_verification_step
+        steps = ["a", "b", "c"]
+        # Research goal WITH a ceiling already met → no injection.
+        bounded = maybe_add_verification_step(
+            steps, "research X thoroughly, at most 3 steps", max_steps=8)
+        assert bounded == steps
+        # Same research goal WITHOUT a ceiling → injection still happens.
+        unbounded = maybe_add_verification_step(
+            steps, "research X thoroughly", max_steps=8)
+        assert len(unbounded) == 4
+
+    # -- byte-identity regression pin -------------------------------------
+
+    def test_no_ceiling_prompts_byte_identical(self):
+        """When NO ceiling is detected, every prompt decompose sends must be
+        byte-identical to the pre-change construction: exact user_msg bytes,
+        exact scope-hint bytes at the end of system, no directive fragment
+        anywhere, and no extra adapter calls."""
+        # Narrow lane
+        goal_n = "check the config timeout value"
+        adapter_n = _SeqAdapter(_steps_json(2))
+        decompose(goal_n, adapter_n, max_steps=4)
+        assert len(adapter_n.calls) == 1
+        assert adapter_n.users()[0] == (
+            f"Goal: {goal_n}\n\nDecompose into 4 or fewer concrete steps.")
+        assert adapter_n.systems()[0].endswith(
+            "SCOPE HINT: This goal is narrow — expect 1-4 steps. "
+            "Do not over-decompose.")
+        # Medium lane (multi-plan + compose)
+        goal_m = "implement rate limit retry logic in llm.py"
+        adapter_m = _SeqAdapter(_steps_json(3))
+        decompose(goal_m, adapter_m, max_steps=8)
+        assert len(adapter_m.calls) == 4  # 3 candidates + compose, nothing more
+        expected_user = f"Goal: {goal_m}\n\nDecompose into 8 or fewer concrete steps."
+        assert adapter_m.users()[0] == expected_user
+        assert adapter_m.users()[1] == expected_user
+        assert adapter_m.users()[2] == expected_user
+        assert adapter_m.users()[3].endswith(
+            "Compose the best plan (8 steps max). JSON array only.")
+        for s in adapter_m.systems()[:3]:
+            assert s.endswith(
+                "SCOPE HINT: This goal is medium complexity — expect 5-10 steps.")
+        for adapter in (adapter_n, adapter_m):
+            for call in adapter.calls:
+                for _, content in call:
+                    assert "STEP-COUNT CEILING" not in content

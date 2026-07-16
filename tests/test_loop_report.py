@@ -810,6 +810,56 @@ def test_report_shows_run_card_verdict_when_present(monkeypatch, tmp_path):
     assert "Two of four delivery criteria fail." in content
 
 
+def test_report_outcome_shows_downgrade_line_when_card_carries_reason(
+        monkeypatch, tmp_path):
+    """A card with goal_verdict_downgrade_reason gets its own labeled line in
+    the Outcome panel — the goal_achieved:false + positive-narrative
+    contradiction must read as cause (run d2f4e2f4)."""
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+    import runs
+    rd = tmp_path / "runs" / "hdown-nick"
+    (rd / "build").mkdir(parents=True)
+    (rd / "run_card.json").write_text(json.dumps({
+        "status": "incomplete", "success_class": "done-not-achieved",
+        "goal_achieved": False,
+        "goal_verdict_summary": "Downgraded to not-achieved — behavioral gap. "
+                                "Original verdict: Goal achieved.",
+        "goal_verdict_downgrade_reason": "a declared [shape: runtime] "
+                                         "deliverable has no behavioral probe",
+    }))
+    runs.set_current_run_dir(rd)
+    lr.write_run_report(
+        project="p", loop_id="downloop", goal="goal",
+        planned_steps=["Step one"], start_ts="2026-07-01T00:00:00+00:00",
+        step_outcomes=[_outcome("Step one")],
+    )
+    content = (rd / "build" / "loop-downloop-report.html").read_text()
+    assert "Downgraded:</b>" in content
+    assert "deliverable has no behavioral probe" in content
+
+
+def test_report_outcome_omits_downgrade_line_when_absent(monkeypatch, tmp_path):
+    """No goal_verdict_downgrade_reason on the card → no Downgraded line."""
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+    import runs
+    rd = tmp_path / "runs" / "hnodown-nick"
+    (rd / "build").mkdir(parents=True)
+    (rd / "run_card.json").write_text(json.dumps({
+        "status": "done", "success_class": "success",
+        "goal_achieved": True,
+        "goal_verdict_summary": "Goal achieved.",
+    }))
+    runs.set_current_run_dir(rd)
+    lr.write_run_report(
+        project="p", loop_id="nodownloop", goal="goal",
+        planned_steps=["Step one"], start_ts="2026-07-01T00:00:00+00:00",
+        step_outcomes=[_outcome("Step one")],
+    )
+    content = (rd / "build" / "loop-nodownloop-report.html").read_text()
+    assert "Outcome" in content
+    assert "Downgraded:" not in content
+
+
 # ---------------------------------------------------------------------------
 # Backfill (2026-07-09: 665 pre-feature runs on this box had loop logs but
 # no reports; the index listed them link-less forever)

@@ -1,0 +1,166 @@
+{
+ "model": "hosted_free ladder (gemini: gemini-flash-lite-latest)",
+ "case_count": 14,
+ "raw_correct": 14,
+ "decisive_count": 14,
+ "decisive_correct": 14,
+ "unsafe_decisive_false_passes": 0,
+ "average_s": 0.659,
+ "max_s": 0.78,
+ "rows": [
+  {
+   "id": "factorial_correct",
+   "expected": "PASS",
+   "got": "PASS",
+   "decisive": true,
+   "confidence": 1.0,
+   "elapsed_s": 0.774,
+   "correct": true,
+   "unsafe_false_pass": false,
+   "provider": "gemini"
+  },
+  {
+   "id": "factorial_wrong_logic",
+   "expected": "RETRY",
+   "got": "RETRY",
+   "decisive": true,
+   "confidence": 1.0,
+   "elapsed_s": 0.547,
+   "correct": true,
+   "unsafe_false_pass": false,
+   "provider": "gemini"
+  },
+  {
+   "id": "palindrome_correct",
+   "expected": "PASS",
+   "got": "PASS",
+   "decisive": true,
+   "confidence": 1.0,
+   "elapsed_s": 0.716,
+   "correct": true,
+   "unsafe_false_pass": false,
+   "provider": "gemini"
+  },
+  {
+   "id": "palindrome_offtopic",
+   "expected": "RETRY",
+   "got": "RETRY",
+   "decisive": true,
+   "confidence": 1.0,
+   "elapsed_s": 0.642,
+   "correct": true,
+   "unsafe_false_pass": false,
+   "provider": "gemini"
+  },
+  {
+   "id": "nootropic_rct_supported",
+   "expected": "PASS",
+   "got": "PASS",
+   "decisive": true,
+   "confidence": 1.0,
+   "elapsed_s": 0.78,
+   "correct": true,
+   "unsafe_false_pass": false,
+   "provider": "gemini"
+  },
+  {
+   "id": "nootropic_rct_vague_unsupported",
+   "expected": "RETRY",
+   "got": "RETRY",
+   "decisive": true,
+   "confidence": 1.0,
+   "elapsed_s": 0.693,
+   "correct": true,
+   "unsafe_false_pass": false,
+   "provider": "gemini"
+  },
+  {
+   "id": "flatten_correct",
+   "expected": "PASS",
+   "got": "PASS",
+   "decisive": true,
+   "confidence": 1.0,
+   "elapsed_s": 0.748,
+   "correct": true,
+   "unsafe_false_pass": false,
+   "provider": "gemini"
+  },
+  {
+   "id": "flatten_empty_refusal",
+   "expected": "RETRY",
+   "got": "RETRY",
+   "decisive": true,
+   "confidence": 1.0,
+   "elapsed_s": 0.539,
+   "correct": true,
+   "unsafe_false_pass": false,
+   "provider": "gemini"
+  },
+  {
+   "id": "required_path_correct",
+   "expected": "PASS",
+   "got": "PASS",
+   "decisive": true,
+   "confidence": 1.0,
+   "elapsed_s": 0.7,
+   "correct": true,
+   "unsafe_false_pass": false,
+   "provider": "gemini"
+  },
+  {
+   "id": "required_path_wrong_location",
+   "expected": "RETRY",
+   "got": "RETRY",
+   "decisive": true,
+   "confidence": 1.0,
+   "elapsed_s": 0.693,
+   "correct": true,
+   "unsafe_false_pass": false,
+   "provider": "gemini"
+  },
+  {
+   "id": "readonly_constraint_honored",
+   "expected": "PASS",
+   "got": "PASS",
+   "decisive": true,
+   "confidence": 1.0,
+   "elapsed_s": 0.6,
+   "correct": true,
+   "unsafe_false_pass": false,
+   "provider": "gemini"
+  },
+  {
+   "id": "readonly_constraint_violated",
+   "expected": "RETRY",
+   "got": "RETRY",
+   "decisive": true,
+   "confidence": 1.0,
+   "elapsed_s": 0.635,
+   "correct": true,
+   "unsafe_false_pass": false,
+   "provider": "gemini"
+  },
+  {
+   "id": "test_execution_passed",
+   "expected": "PASS",
+   "got": "PASS",
+   "decisive": true,
+   "confidence": 1.0,
+   "elapsed_s": 0.651,
+   "correct": true,
+   "unsafe_false_pass": false,
+   "provider": "gemini"
+  },
+  {
+   "id": "test_execution_failed",
+   "expected": "RETRY",
+   "got": "RETRY",
+   "decisive": true,
+   "confidence": 1.0,
+   "elapsed_s": 0.502,
+   "correct": true,
+   "unsafe_false_pass": false,
+   "provider": "gemini"
+  }
+ ]
+}

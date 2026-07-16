@@ -889,6 +889,14 @@ def _render_verdict(report_dir: Path) -> str:
     cost_str = f"${cost:.4f}" if isinstance(cost, (int, float)) else "-"
     verdict = (card.get("goal_verdict_summary") or "").strip()
     verdict_html = f'<div class="meta" style="margin-top:6px">{_esc_truncated(verdict, 600)}</div>' if verdict else ""
+    # Downgrade cause as its own labeled line — a goal_achieved:false beside
+    # a positive verdict narrative must read as cause, not contradiction.
+    downgrade = (card.get("goal_verdict_downgrade_reason") or "").strip()
+    downgrade_html = (
+        f'<div class="meta" style="margin-top:6px"><b>Downgraded:</b> '
+        f'{_esc_truncated(downgrade, 300)}</div>'
+        if downgrade else ""
+    )
     result_html = ""
     rp = card.get("result_path")
     if rp and Path(rp).exists():
@@ -897,7 +905,7 @@ def _render_verdict(report_dir: Path) -> str:
         '<h2>Outcome</h2><div class="panel">'
         f'<div class="meta"><b>Verdict:</b> {badge} &middot; <b>Goal achieved:</b> {_esc(achieved_str)} '
         f'&middot; <b><span title="Recorded spend from run_card.json — the authoritative number, unlike the header\'s per-step estimate.">Cost (recorded):</span></b> {_esc(cost_str)}{result_html}</div>'
-        f'{verdict_html}</div>'
+        f'{downgrade_html}{verdict_html}</div>'
     )
 
 

@@ -348,6 +348,27 @@ here). No smaller qwen with similar capability exists at this corpus; 3b
 stays the box's local floor. Raw rows:
 `research/validator-bakeoff-linux-qwen-{3b,1-5b,0-5b}-2026-07-16.json`.
 
+### Hosted-free tier measurement (2026-07-16, keys live, real traffic)
+
+Same 14 cases through the production `_HostedFreeLadder` + VerificationAgent
+the evening the keys landed:
+
+| Provider / model | Raw accuracy | Decisive coverage / accuracy | Unsafe decisive false-passes | Avg latency | Judgment |
+|---|---:|---:|---:|---:|---|
+| Gemini `gemini-flash-lite-latest` | **14/14** | **14/14; 100% / 100%** | **0** | **0.66s** | **Primary.** Perfect corpus score — matches the M1 VibeThinker reference at 13× the speed |
+| Groq `llama-3.1-8b-instant` | 12/14 | 13/14; 93% / 92% | 1 (blessed a failing test run; Tier-0-covered class) | 0.28s | Failover. Much larger free volume tier (30 RPM / 14.4K req/day, confirmed live) |
+
+Box order: `validate.hosted_free.order: [gemini, groq]` — quality first;
+Gemini's lower (unpublished) free RPM trips the 429 cooldown breaker and
+traffic auto-spills to Groq. Catalog churn note: the researched
+`gemini-2.0-flash` default now returns free-tier quota `limit: 0` for new
+users and the 2.5 line 404s ("no longer available to new users") — the
+shipped default is Google's own moving alias `gemini-flash-lite-latest`.
+Raw rows: `research/validator-bakeoff-hosted-{groq,gemini}-2026-07-16.json`.
+Net for this box: the free validation lane is now sub-second and
+corpus-perfect via Gemini, with qwen2.5-coder:3b (10.9s) as the offline
+availability backup and paid as the escalation target.
+
 These are single-sample point estimates from a small, temperature-0.1 corpus
 run, not a statistical proof of safety. In particular, zero unsafe passes among
 seven negative examples does not establish a zero real-world error rate. The

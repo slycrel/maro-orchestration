@@ -187,6 +187,9 @@ def classify_outcome(rd: Path, meta: dict, card: dict) -> None:
     card["status"] = status
     card["goal_achieved"] = achieved
     card["goal_verdict_summary"] = meta.get("goal_verdict_summary")
+    # Only-when-stamped (matches the metadata write): absent = no downgrade.
+    if meta.get("goal_verdict_downgrade_reason"):
+        card["goal_verdict_downgrade_reason"] = meta["goal_verdict_downgrade_reason"]
     card["audit_incomplete"] = audit_incomplete
     card["audit_repair_required"] = bool(meta.get("audit_repair_required"))
     # Cost-per-run via the loop_ids join key (absent on pre-2026-07-02 runs).
@@ -937,7 +940,8 @@ _CURATOR_SPECS: List[CuratorSpec] = [
     CuratorSpec(classify_outcome,
                 provides=("success_class", "status", "goal_achieved",
                           "goal_verdict_summary", "audit_incomplete",
-                          "audit_repair_required", "total_cost_usd")),
+                          "audit_repair_required", "total_cost_usd"),
+                optional_provides=("goal_verdict_downgrade_reason",)),
     CuratorSpec(inventory_assets, provides=("inventory", "mineable")),
     CuratorSpec(excerpt_result,
                 optional_provides=("result_excerpt", "result_path")),

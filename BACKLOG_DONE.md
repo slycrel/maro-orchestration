@@ -8,6 +8,46 @@ Last split: 2026-04-16 (session 34).
 
 ---
 
+### 25. Hosted-free small-LLM tier: Groq + Gemini free tiers — SHIPPED + LIVE (2026-07-12 → 2026-07-16)
+
+**Source:** Jeremy 2026-07-12 ("I'm open to Groq or Gemini free tiers for
+small LLM work in the orchestrator"), from item 24's model-route decision —
+the $0 replacement for the old OpenRouter-free-model headache.
+
+**Code shipped 2026-07-13:** `src/hosted_free.py` (consent gate, per-provider
+latency + 429/Retry-After rate-limit breakers, config-resident model ids) +
+`GroqAdapter`/`GeminiAdapter` in `src/llm.py` (deliberately OUT of
+DEFAULT_BACKEND_ORDER), wired into `step_exec.verify_step`, shadow-eval
+integrated from day one.
+
+**Reordered + enabled 2026-07-16** (Jeremy: "hosted-free first, then 3b
+local as backup... slow + local seems better than a network API call fail
+for whatever reason"): hosted-free is Tier 1 (first free rung); local qwen
+is the availability backup, consulted only when hosted produces no verdict
+(conf-0.0 sentinel); a genuine hosted UNDECIDED escalates straight to paid.
+Fresh installs unchanged (consent gate default OFF). Credentials .env
+migrated legacy→`~/.maro/workspace/secrets/.env`.
+
+**Keys live + real-traffic pass 2026-07-16 (same evening):** both providers
+verified through the production ladder on the 14-case validation corpus:
+- **gemini-flash-lite-latest: 14/14 correct, 14/14 decisive, 0 unsafe
+  false-passes, 0.66s avg** — a perfect corpus score (matches the M1
+  VibeThinker reference at 13× the speed).
+- groq llama-3.1-8b-instant: 12/14, 13/14 decisive, 1 unsafe false-pass
+  (blessed a failing test run — Tier-0-covered case class), 0.28s avg.
+- Box config `validate.hosted_free.order: [gemini, groq]` — quality first,
+  429 breaker auto-spills to Groq's larger volume tier.
+- Catalog churn bit exactly as predicted: the researched `gemini-2.0-flash`
+  default now returns free-tier quota `limit: 0` for new users; 2.5-line is
+  404 "no longer available to new users"; shipped default moved to Google's
+  own `gemini-flash-lite-latest` alias. Groq's researched RPM (30/14.4K day,
+  llama-3.1-8b-instant) confirmed live.
+- Raw rows: `research/validator-bakeoff-hosted-{groq,gemini}-2026-07-16.json`.
+
+Residual watch (not a work item): Gemini free-tier daily caps are
+unpublished — if validation volume ever exhausts them, the breaker handles
+it (cooldown → Groq), but agreement quality shifts to Groq's profile.
+
 ### recall() loop-slice lesson icon ignored the verdict (SF-2 family) — SHIPPED (2026-07-15)
 
 **Source:** pre-existing divergence surfaced by the age-stamp adversarial

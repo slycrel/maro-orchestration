@@ -308,7 +308,10 @@ class TestEventTypes:
         # +1 (2026-07-14): NAVIGATOR_ADJUDICATED — divergence adjudication verdict
         # (VERIFY_LEARN_ARC V4); defined but omitted from the set until the
         # adversarial-review pass (finding F) completed the registry.
-        assert len(EVENT_TYPES) == 64
+        # +1 (2026-07-16): STEP_CEILING_ENFORCED — goal-stated step-count
+        # ceiling held by hard truncation after one corrective re-ask
+        # (BACKLOG step-count constraint; planner._enforce_step_ceiling).
+        assert len(EVENT_TYPES) == 65
 
     def test_previously_unregistered_events_in_set(self):
         from captains_log import EVOLVER_REVERTED, EVOLVER_VERIFY, PLAYBOOK_UPDATED

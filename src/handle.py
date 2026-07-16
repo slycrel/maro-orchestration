@@ -1985,6 +1985,13 @@ def _handle_impl(
                             ),
                             "goal_verdict_summary": str(_closure.summary)[:300],
                         }
+                        # Only-when-stamped: key absent means "no downgrade",
+                        # never "" — same convention as the event fields.
+                        _downgrade = str(
+                            getattr(_closure, "downgrade_reason", "") or "")
+                        if _downgrade:
+                            _verdict_extra["goal_verdict_downgrade_reason"] = (
+                                _downgrade[:300])
                         if _judged:
                             _verdict_extra["goal_achieved"] = bool(_closure.complete)
                         _wm_verdict(
@@ -2215,6 +2222,9 @@ def _handle_impl(
                                             source=_post_source,
                                             confidence=float(_post_closure.confidence),
                                             summary=str(_post_closure.summary),
+                                            downgrade_reason=str(getattr(
+                                                _post_closure,
+                                                "downgrade_reason", "") or ""),
                                         )
                                     except Exception:
                                         pass

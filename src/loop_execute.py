@@ -459,8 +459,21 @@ def _execute_main_loop(
                     _evidence = (_evidence + "\n\n" if _evidence else "") + (
                         f"{_prio_directive}\nOriginal goal (source of the "
                         f"priority order): {goal}")
+                # Step-ceiling carry (same reason as #23c above): the
+                # remainder text may drop the goal's "N steps max" phrasing,
+                # so decompose's own detector can't see it — clamp this
+                # re-decompose and carry the binding directive explicitly.
+                from planner import (goal_step_ceiling as _gsc,
+                                     _STEP_CEILING_DIRECTIVE as _ceil_directive)
+                _bd_max_steps = 5
+                _bd_ceiling = _gsc(goal)
+                if _bd_ceiling is not None and _gsc(_remainder_goal) is None:
+                    _bd_max_steps = min(_bd_max_steps, _bd_ceiling)
+                    _evidence = (_evidence + "\n\n" if _evidence else "") + (
+                        f"{_ceil_directive.format(n=_bd_ceiling)}\n"
+                        f"Original goal (source of the step ceiling): {goal}")
                 _bd_sub = _bd_decompose(
-                    _remainder_goal, adapter, max_steps=5,
+                    _remainder_goal, adapter, max_steps=_bd_max_steps,
                     ancestry_context=_evidence, allow_cuts=False,
                 )
                 if _bd_sub and _bd_sub != [_remainder_goal]:

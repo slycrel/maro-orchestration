@@ -1971,6 +1971,149 @@ class TestVerifyGoalCompletion:
         assert result.confidence >= 0.6
         assert any("decomposition_too_broad" in gap for gap in result.gaps)
 
+    # -- downgrade reason reaches the verdict summary (run d2f4e2f4) --------
+    # The behavioral/diagnosis downgrades used to flip complete without
+    # touching summary, so the card carried "Goal achieved." beside
+    # goal_achieved=false with the cause only in the worker log.
+
+    def test_behavioral_downgrade_stamps_reason_and_rewrites_summary(
+            self, monkeypatch, tmp_path):
+        """Signal-3 downgrade (runtime deliverable, all-static probes) must
+        LEAD the summary with the cause and set verdict.downgrade_reason."""
+        from unittest.mock import MagicMock, patch
+        from scope import Deliverable, ResolvedIntent, ScopeSet
+
+        adapter = MagicMock()
+        checks = [{"description": "artifact grep",
+                   "command": "grep -q VERDICT artifacts/out.txt"}]
+        verdict_data = {"complete": True, "confidence": 0.92, "gaps": [],
+                        "summary": "Goal achieved. Everything checks out."}
+        ri = ResolvedIntent(
+            scope=ScopeSet(raw_text=""),
+            deliverables=[Deliverable(name="src/detector.py",
+                                      description="container detector",
+                                      shape="runtime")],
+            raw_text="",
+        )
+
+        with patch("closure_verify.extract_json",
+                   side_effect=[{"checks": checks}, verdict_data]):
+            with patch("closure_verify.content_or_empty", return_value="{}"):
+                with patch("subprocess.run") as run:
+                    run.return_value = MagicMock(returncode=0, stdout="ok",
+                                                 stderr="")
+                    result = verify_goal_completion(
+                        "build the detector", [], adapter,
+                        workspace_path=str(tmp_path), resolved_intent=ri,
+                    )
+
+        assert result.complete is False
+        assert result.downgrade_reason == (
+            "a declared [shape: runtime] deliverable has no behavioral "
+            "probe and no logged waiver"
+        )
+        assert result.summary.startswith("Downgraded to not-achieved — ")
+        assert "Original verdict: Goal achieved." in result.summary
+        # Leading placement keeps the cause inside the [:300] truncation
+        # every metadata write site applies.
+        assert "Downgraded to not-achieved" in result.summary[:300]
+
+    def test_diagnosis_downgrade_stamps_reason_and_rewrites_summary(
+            self, monkeypatch, tmp_path):
+        """Diagnosis-gap downgrade gets the same summary/reason shape."""
+        from unittest.mock import MagicMock, patch
+
+        class _Diag:
+            failure_class = "decomposition_too_broad"
+            severity = "warning"
+            recommendation = "split the work into narrower steps"
+
+        adapter = MagicMock()
+        checks = [{"description": "repo grep",
+                   "command": "grep -q handler server.go"}]
+        verdict_data = {"complete": True, "confidence": 0.9, "gaps": [],
+                        "summary": "All good."}
+
+        with patch("closure_verify.extract_json",
+                   side_effect=[{"checks": checks}, verdict_data]):
+            with patch("closure_verify.content_or_empty", return_value="{}"):
+                with patch("subprocess.run") as run:
+                    run.return_value = MagicMock(returncode=0, stdout="ok",
+                                                 stderr="")
+                    result = verify_goal_completion(
+                        "build X", [], adapter,
+                        workspace_path=str(tmp_path), diagnosis=_Diag(),
+                    )
+
+        assert result.complete is False
+        assert "decomposition_too_broad" in result.downgrade_reason
+        assert result.summary.startswith("Downgraded to not-achieved — ")
+        assert "Original verdict: All good." in result.summary
+
+    def test_both_downgrades_join_reasons_behavioral_first(
+            self, monkeypatch, tmp_path):
+        """When both branches fire, both causes reach the reason ('; '-joined,
+        behavioral first) and both are represented in the summary."""
+        from unittest.mock import MagicMock, patch
+
+        class _Diag:
+            failure_class = "decomposition_too_broad"
+            severity = "warning"
+            recommendation = "split the work"
+
+        adapter = MagicMock()
+        checks = [{"description": "repo grep",
+                   "command": "grep -q handler server.go"}]
+        # Signal-1 admission text fires the behavioral gap; _Diag the other.
+        verdict_data = {
+            "complete": True, "confidence": 0.9, "gaps": [],
+            "summary": "Goal achieved. Gap: runtime validation was not performed.",
+        }
+
+        with patch("closure_verify.extract_json",
+                   side_effect=[{"checks": checks}, verdict_data]):
+            with patch("closure_verify.content_or_empty", return_value="{}"):
+                with patch("subprocess.run") as run:
+                    run.return_value = MagicMock(returncode=0, stdout="ok",
+                                                 stderr="")
+                    result = verify_goal_completion(
+                        "build X", [], adapter,
+                        workspace_path=str(tmp_path), diagnosis=_Diag(),
+                    )
+
+        assert result.complete is False
+        behavioral_part, diagnosis_part = result.downgrade_reason.split("; ", 1)
+        assert "runtime" in behavioral_part
+        assert "decomposition_too_broad" in diagnosis_part
+        assert result.summary.startswith("Downgraded to not-achieved — ")
+
+    def test_no_downgrade_leaves_summary_byte_identical(
+            self, monkeypatch, tmp_path):
+        """No downgrade → the LLM's summary passes through untouched and
+        downgrade_reason stays empty (regression guard for the rewrite)."""
+        from unittest.mock import MagicMock, patch
+
+        adapter = MagicMock()
+        checks = [{"description": "artifact exists",
+                   "command": "test -f artifacts/out.txt"}]
+        llm_summary = "All good. The artifact checks out."
+        verdict_data = {"complete": True, "confidence": 0.9, "gaps": [],
+                        "summary": llm_summary}
+
+        with patch("closure_verify.extract_json",
+                   side_effect=[{"checks": checks}, verdict_data]):
+            with patch("closure_verify.content_or_empty", return_value="{}"):
+                with patch("subprocess.run") as run:
+                    run.return_value = MagicMock(returncode=0, stdout="ok",
+                                                 stderr="")
+                    result = verify_goal_completion(
+                        "build X", [], adapter, workspace_path=str(tmp_path),
+                    )
+
+        assert result.complete is True
+        assert result.summary == llm_summary
+        assert result.downgrade_reason == ""
+
     # -- B2: shape-conditional MUST + waiver logging + timeout split -------
 
     def test_plan_prompt_surfaces_deliverable_shape(self, tmp_path):

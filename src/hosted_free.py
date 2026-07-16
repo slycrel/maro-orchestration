@@ -124,9 +124,13 @@ def groq_model() -> str:
 
 def gemini_model() -> str:
     """Gemini free-tier model id via the official OpenAI-compat endpoint.
-    Default: a Flash-class model (~10 RPM free, unpublished exact cap as of
-    2026-07-12 — probe, don't assume). Override via config."""
-    return str(_cfg("gemini_model", "gemini-2.0-flash") or "gemini-2.0-flash").strip()
+    Default: `gemini-flash-lite-latest` — Google's own moving alias for the
+    current Flash-Lite model, the non-thinking fast lane. Live-verified
+    2026-07-16 (0.55s; pointed at gemini-3.1-flash-lite): the pinned 2.x ids
+    the docs used to suggest now return free-tier quota `limit: 0` for new
+    users, and the full `flash` models default to thinking (16s+ per call) —
+    wrong shape for a validation verdict. Override via config."""
+    return str(_cfg("gemini_model", "gemini-flash-lite-latest") or "gemini-flash-lite-latest").strip()
 
 
 def min_certainty() -> float:

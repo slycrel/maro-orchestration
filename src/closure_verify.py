@@ -152,6 +152,12 @@ class ClosureVerdict:
     # 2026-07-09 dogfood batch: 4/5 known-good runs were false-negatived by
     # verdicts resting on the verifier's own failures, not the goal's.
     judged: bool = True
+    # Why a complete=True LLM verdict was flipped to False by the
+    # deterministic downgrade branches (behavioral gap / diagnosis gap);
+    # "" when no downgrade fired. Surfaced on the run card so a
+    # goal_achieved=false beside a positive narrative reads as cause, not
+    # contradiction (run d2f4e2f4: the reason lived only in the worker log).
+    downgrade_reason: str = ""
 
 
 _PRECOND_SENTINELS = frozenset({"none", "n/a", "na", "-", "tbd", "(none)", "null", "nil"})
@@ -885,6 +891,21 @@ def verify_goal_completion(
             gaps = list(gaps) + [
                 f"Loop diagnosis and closure disagree: {diagnosis_gap_reason}"
             ]
+        # Stamp the downgrade INTO the summary, leading, so every surface
+        # that shows goal_verdict_summary (run card, CLI, decision prior)
+        # carries the cause instead of the LLM's pre-downgrade "Goal
+        # achieved." narrative — leading keeps it inside the [:300]
+        # truncation the metadata write sites apply (run d2f4e2f4: card
+        # showed goal_achieved=false beside a 0.92-confidence positive
+        # summary with the reason only in the worker log).
+        downgrade_reason = "; ".join(
+            r for r in (behavioral_gap_reason, diagnosis_gap_reason) if r
+        )
+        if downgrade_reason:
+            summary = (
+                f"Downgraded to not-achieved — {downgrade_reason}."
+                + (f" Original verdict: {summary}" if summary else "")
+            )
         if complete and inconclusive_checks and checks_passed == 0:
             # Positive-evidence rule: inconclusive probes can't prove
             # completion, so a verdict resting ONLY on inconclusive evidence
@@ -994,6 +1015,7 @@ def verify_goal_completion(
             checks_passed=checks_passed,
             inconclusive_count=len(inconclusive_checks),
             judged=judged,
+            downgrade_reason=downgrade_reason,
         )
 
         # Emit needs_work if gaps found

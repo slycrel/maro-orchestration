@@ -674,54 +674,6 @@ All adversarially verified (41/42 confirmed). The two blockers-at-the-time first
   ops-r2-03-replaced
   pidfile litter (harmless — flock is the mutex; stale file is cosmetic).
 
-### 25. Hosted-free small-LLM tier: Groq + Gemini free tiers (2026-07-12, from item 24 decision)
-
-**Code SHIPPED 2026-07-13** (`src/hosted_free.py` + `GroqAdapter`/`GeminiAdapter`
-in `src/llm.py`, wired into `step_exec.verify_step`). **REORDERED + ENABLED
-2026-07-16** (Jeremy: "hosted-free first, then 3b local as backup... slow +
-local seems better than a network API call fail for whatever reason"):
-hosted-free is now Tier 1 (first free rung); local qwen is the availability
-backup, consulted only when hosted produces no verdict; a genuine hosted
-UNDECIDED escalates straight to paid. `validate.hosted_free.enabled: true`
-set in the box config; credentials .env migrated to
-`~/.maro/workspace/secrets/.env` (preferred path, legacy OpenClaw file left
-in place). **Remaining:** Jeremy creates `GROQ_API_KEY`/`GEMINI_API_KEY`
-(console.groq.com / aistudio.google.com/apikey) and appends them to that
-.env; then a real-traffic pass to confirm the RPM numbers below still hold
-(verified 2026-07-12 from research, not yet from a real call). See
-BACKLOG_DONE for implementation detail once that lands.
-
-Jeremy: "I'm open to Groq or Gemini free tiers for small LLM work in the
-orchestrator." Wire the free tiers as a hosted-free rung for the
-non-agentic call classes (validation ladder, classify/routing, cheap
-verification) — the $0 replacement for the old OpenRouter-free-model
-headache, with no credits to babysit.
-
-Design sketch (from the 2026-07-12 research, details in
-docs/MODEL_ROUTE_EXPLORATION.md round 2):
-- **Groq** (primary): OpenAI-compatible; free tier verified 2026-07-12 at
-  llama-3.1-8b-instant 30 RPM / 14.4K req/day (classification volume) and
-  gpt-oss-20b/120b 30 RPM / 1K req/day with strict JSON-schema constrained
-  decoding (verification-grade structured output). Model churn is real
-  (Kimi K2 was removed Mar 2026) — keep model IDs in config, not code.
-- **Gemini API free** (secondary): official OpenAI-compat endpoint
-  (`generativelanguage.googleapis.com/v1beta/openai/`), ~10 RPM
-  Flash-class. Rate-limit numbers are no longer published — probe, don't
-  assume.
-- Implementation shape: two small `OpenAICompatAdapter` subclasses in
-  llm.py (mirror OpenRouterAdapter: base URL + `GROQ_API_KEY` /
-  `GEMINI_API_KEY` + `_MODEL_MAP` entries), NOT in the global
-  `backend_order` failover — plug in as a hosted-free rung of the
-  validation ladder alongside the local-models tier (step_exec.py
-  ladder + local_models.py latency-breaker pattern; reuse
-  `latency_guard_tripped` semantics and validation_shadow scoring so
-  free-vs-paid agreement is measured from day one, same as the local
-  lane).
-- Free-tier RPM caps mean a rate-limit-aware gate (429 → trip like the
-  latency breaker, retry-after aware), not naive failover.
-- Needs: Jeremy to create the free API keys (no card for Groq; Google
-  account for Gemini). Zero recurring cost.
-
 ### 22. Capabilities catalog + blank-slate skill set (2026-07-10, Jeremy)
 
 Jeremy (in-session, riffing off the car ask "where can I get non-ethanol

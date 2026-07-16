@@ -253,6 +253,24 @@ def test_classify_outcome_is_pure(workspace):
     assert card["success_class"] == "success"
 
 
+def test_classify_outcome_downgrade_reason_only_when_stamped(workspace):
+    """The card mirrors metadata's only-when-stamped convention: the key rides
+    along when present, and is absent (not None/"") when metadata lacks it."""
+    card = {}
+    classify_outcome(Path("/nonexistent"), {
+        "status": "done", "goal_achieved": False,
+        "goal_verdict_summary": "Downgraded to not-achieved — behavioral gap.",
+        "goal_verdict_downgrade_reason": "behavioral gap: no probe",
+    }, card)
+    assert card["success_class"] == "done-not-achieved"
+    assert card["goal_verdict_downgrade_reason"] == "behavioral gap: no probe"
+
+    card2 = {}
+    classify_outcome(Path("/nonexistent"),
+                     {"status": "done", "goal_achieved": True}, card2)
+    assert "goal_verdict_downgrade_reason" not in card2
+
+
 class TestSpendTransparency:
     """BACKLOG #11: above budget.transparency_usd the card carries the full
     build/artifact bundle (absolute paths + sizes) — no grep required."""

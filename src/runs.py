@@ -494,6 +494,7 @@ def stamp_run_verdict(
     source: str,
     confidence: float,
     summary: str,
+    downgrade_reason: str = "",
 ) -> Optional[Path]:
     """Replace the active run's latest goal verdict, preserving tri-state.
 
@@ -501,6 +502,10 @@ def stamp_run_verdict(
     goal.  In that case an earlier attempt's boolean must be removed rather
     than inherited: the run metadata describes the delivered/latest attempt,
     not the best-looking verdict seen anywhere in the handle.
+
+    ``downgrade_reason`` follows the only-when-stamped convention: nonempty
+    writes ``goal_verdict_downgrade_reason``; empty removes any stale one
+    from an earlier attempt (same replace-semantics as ``goal_achieved``).
     """
     try:
         rd = current_run_dir()
@@ -519,6 +524,11 @@ def stamp_run_verdict(
                 "goal_verdict_confidence": float(confidence),
                 "goal_verdict_summary": str(summary)[:300],
             })
+            if downgrade_reason:
+                existing["goal_verdict_downgrade_reason"] = (
+                    str(downgrade_reason)[:300])
+            else:
+                existing.pop("goal_verdict_downgrade_reason", None)
             if goal_achieved is None:
                 existing.pop("goal_achieved", None)
             else:

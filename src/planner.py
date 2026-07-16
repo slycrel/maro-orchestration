@@ -453,6 +453,94 @@ _PRIORITY_DIRECTIVE = (
 
 
 # ---------------------------------------------------------------------------
+# Goal-stated step-count ceiling (BACKLOG: step-count constraint ignored)
+# ---------------------------------------------------------------------------
+# Specimen: goal said "2-3 steps maximum"; the planner produced 7 steps /
+# 296-line module + docs / 1.55M tokens / $0.21 for what one shell step
+# answers. Same family as #23c binding-priority above: a deterministic
+# goal-text detector, zero LLM, plus a loud directive injected into every
+# prompt lane — and, unlike priority, MECHANICAL enforcement on the final
+# plan (_enforce_step_ceiling), because a ceiling is checkable
+# (len(plan) vs N) where ordering is not.
+#
+# Conservative by design: fires only when a step count is paired with an
+# explicit bound qualifier (max / maximum of / at most / no more than /
+# or fewer / limit to). Bare counts ("explain X in 3 steps"), plan-content
+# references ("document the 3 steps of the deploy process", "step 2 of the
+# migration"), and non-step numbers never fire. Word-numbers one–ten ARE
+# supported — a single shared _STEP_NUM alternation keeps the patterns
+# readable, and "three steps max" is exactly as binding as "3 steps max".
+
+_STEP_NUM_WORDS = {
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+    "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+}
+_STEP_NUM = r"(?:\d{1,2}|" + "|".join(_STEP_NUM_WORDS) + r")"
+
+_STEP_CEILING_PATTERNS = [
+    # "3 steps max" / "2-3 steps maximum" / "2 to 3 steps max"
+    re.compile(
+        rf"\b({_STEP_NUM})(?:(?:\s*[-–]\s*|\s+to\s+)({_STEP_NUM}))?"
+        rf"\s+steps?\s+(?:maximum|max)\b", re.IGNORECASE),
+    # "maximum of 3 steps" / "a max of 3 steps"
+    re.compile(rf"\b(?:maximum|max)\s+of\s+({_STEP_NUM})\s+steps?\b", re.IGNORECASE),
+    # "at most 3 steps"
+    re.compile(rf"\bat\s+most\s+({_STEP_NUM})\s+steps?\b", re.IGNORECASE),
+    # "no more than 3 steps"
+    re.compile(rf"\bno\s+more\s+than\s+({_STEP_NUM})\s+steps?\b", re.IGNORECASE),
+    # "3 steps or fewer" / "in 3 steps or less"
+    re.compile(rf"\b({_STEP_NUM})\s+steps?\s+or\s+(?:fewer|less)\b", re.IGNORECASE),
+    # "limit (the plan) to 3 steps" / "limited to 3 steps"
+    re.compile(
+        rf"\blimit(?:ed)?\s+(?:\S+\s+){{0,2}}?to\s+({_STEP_NUM})\s+steps?\b",
+        re.IGNORECASE),
+]
+
+# "single step" / "one step" only WITH a bounding qualifier — bare "one step"
+# is ambiguous ("one step of the process") and stays out.
+_SINGLE_STEP_RE = re.compile(
+    r"\b(?:just|only)\s+(?:a\s+)?(?:one|single)\s+step\b"
+    r"|\b(?:in|as)\s+a\s+single\s+step\b"
+    r"|\b(?:one|single)\s+step\s+only\b",
+    re.IGNORECASE,
+)
+
+
+def _step_count_value(token: str) -> int:
+    token = token.strip().lower()
+    return int(token) if token.isdigit() else _STEP_NUM_WORDS[token]
+
+
+def goal_step_ceiling(goal: str) -> Optional[int]:
+    """Detect an explicit step-count ceiling in goal text — deterministic, zero LLM.
+
+    Returns the ceiling (upper end of a range like "2-3 steps maximum"), or
+    None when the goal does not bound its own plan. Conservative: a number
+    near "steps" fires only alongside an explicit bound qualifier.
+    """
+    if not goal:
+        return None
+    for pattern in _STEP_CEILING_PATTERNS:
+        m = pattern.search(goal)
+        if m:
+            bound = [g for g in m.groups() if g][-1]  # range → upper end
+            ceiling = _step_count_value(bound)
+            return ceiling if ceiling >= 1 else None
+    if _SINGLE_STEP_RE.search(goal):
+        return 1
+    return None
+
+
+_STEP_CEILING_DIRECTIVE = (
+    "THIS GOAL STATES AN EXPLICIT STEP-COUNT CEILING — it is BINDING. The "
+    "plan MUST contain AT MOST {n} step(s). Merge or condense related work "
+    "to fit. The ceiling is a maximum, not a target — fewer steps is fine, "
+    "more is a violation. Preserve the goal's full intent and any "
+    "verification inside the ceiling."
+)
+
+
+# ---------------------------------------------------------------------------
 # Dependency parsing
 # ---------------------------------------------------------------------------
 
@@ -535,6 +623,91 @@ def parse_steps(content: str, max_steps: int) -> Optional[List[str]]:
             parsed.append(step)
         return parsed[:max_steps]
     return None
+
+
+# ---------------------------------------------------------------------------
+# Step-ceiling enforcement (mechanical — the ceiling is binding, not advisory)
+# ---------------------------------------------------------------------------
+
+def _enforce_step_ceiling(
+    plan: Optional[List[str]],
+    ceiling: Optional[int],
+    goal: str,
+    adapter,
+    *,
+    lane: str,
+) -> Optional[List[str]]:
+    """Mechanically enforce a goal-stated step ceiling on a final plan.
+
+    The directive was already in every prompt, so an oversized plan here
+    means advisory failed once: issue ONE corrective re-ask to merge/condense,
+    then hard-truncate to the first `ceiling` steps if the retry still
+    exceeds it (or errors). Never pads short plans — the ceiling is a max,
+    not a target. No-op when no ceiling was detected or the plan already fits.
+    """
+    if ceiling is None or not plan or len(plan) <= ceiling:
+        return plan
+    from llm import LLMMessage
+    oversized = plan
+    try:
+        resp = adapter.complete(
+            [
+                LLMMessage("system",
+                           DECOMPOSE_SYSTEM + "\n\n"
+                           + _STEP_CEILING_DIRECTIVE.format(n=ceiling)),
+                LLMMessage("user",
+                           f"Goal: {goal}\n\n"
+                           f"You returned {len(plan)} steps:\n"
+                           + json.dumps(plan, indent=2) + "\n\n"
+                           f"The goal explicitly bounds the plan to at most "
+                           f"{ceiling} steps. Merge/condense into at most "
+                           f"{ceiling} steps, preserving the goal's full "
+                           f"intent and any verification step. Respond ONLY "
+                           f"with a JSON array of step strings."),
+            ],
+            max_tokens=1024,
+            temperature=0.1,
+        )
+        # Parse with a cap ABOVE the ceiling so non-compliance stays visible
+        # (parse_steps truncates silently at its max).
+        condensed = parse_steps(resp.content.strip(), max(len(plan), ceiling))
+        if condensed:
+            if len(condensed) <= ceiling:
+                log.info("step-ceiling (%s lane): corrective re-ask condensed "
+                         "%d → %d step(s) (ceiling %d)",
+                         lane, len(plan), len(condensed), ceiling)
+                return condensed
+            oversized = condensed
+    except Exception as exc:
+        log.warning("step-ceiling (%s lane): corrective re-ask failed (%s) — "
+                    "hard-truncating", lane, exc)
+    truncated = oversized[:ceiling]
+    log.warning(
+        "step-ceiling (%s lane): plan exceeds the goal-stated ceiling after "
+        "one corrective re-ask (%d > %d) — hard-truncated to the first %d "
+        "step(s); dropped: %s",
+        lane, len(oversized), ceiling, ceiling,
+        "; ".join(s[:60] for s in oversized[ceiling:]),
+    )
+    try:
+        from captains_log import log_event, STEP_CEILING_ENFORCED
+        log_event(
+            STEP_CEILING_ENFORCED,
+            subject="step_ceiling_enforced",
+            summary=(f"Plan hard-truncated {len(oversized)} → {ceiling} "
+                     f"step(s): goal-stated ceiling held after one "
+                     f"corrective re-ask ({lane} lane)."),
+            context={
+                "goal_preview": goal[:200],
+                "ceiling": ceiling,
+                "returned_steps": len(oversized),
+                "lane": lane,
+                "dropped_steps": [s[:120] for s in oversized[ceiling:]],
+            },
+        )
+    except Exception:
+        pass
+    return truncated
 
 
 # ---------------------------------------------------------------------------
@@ -633,6 +806,18 @@ def decompose(
         extras.append(_PRIORITY_DIRECTIVE)
         log.info("decompose: goal states an explicit priority order — binding directive injected")
 
+    # Goal-stated step-count ceiling (same family as #23c): binding, injected
+    # loudly, and mechanically enforced on the final plan
+    # (_enforce_step_ceiling). Detected BEFORE the cuts-first block for the
+    # same reason as priority: the probe path returns early, so the directive
+    # must already be in extras for draw_cuts to see it — and it rides into
+    # the boundary expansion via loop_execute's carry.
+    _step_ceiling = goal_step_ceiling(goal)
+    if _step_ceiling is not None:
+        extras.append(_STEP_CEILING_DIRECTIVE.format(n=_step_ceiling))
+        log.info("decompose: goal states a step-count ceiling of %d — "
+                 "binding directive injected", _step_ceiling)
+
     # Cuts-first narrowing (Qix-cuts decree). Gated: caller allows it AND the
     # config flag is on (default OFF — one extra LLM call per goal, no silent
     # spend for fresh installs). Wide/deep goals skip — staged-pass already
@@ -694,12 +879,19 @@ def decompose(
         system = DECOMPOSE_SYSTEM + "\n\n" + "\n\n".join(extras)
 
     # Inject scope hint into system prompt for medium goals so the planner calibrates step count.
-    if _goal_scope == "medium":
-        system += "\n\nSCOPE HINT: This goal is medium complexity — expect 5-10 steps."
-    elif _goal_scope == "narrow":
-        system += "\n\nSCOPE HINT: This goal is narrow — expect 1-4 steps. Do not over-decompose."
+    # A detected ceiling suppresses the hint — "expect 5-10 steps" must not
+    # contradict "3 steps maximum"; the binding directive wins outright.
+    if _step_ceiling is None:
+        if _goal_scope == "medium":
+            system += "\n\nSCOPE HINT: This goal is medium complexity — expect 5-10 steps."
+        elif _goal_scope == "narrow":
+            system += "\n\nSCOPE HINT: This goal is narrow — expect 1-4 steps. Do not over-decompose."
 
-    user_msg = f"Goal: {goal}\n\nDecompose into {max_steps} or fewer concrete steps."
+    # Clamp the asked-for step count to a detected ceiling. parse_steps keeps
+    # the UNclamped max so an over-ceiling response stays visible to
+    # _enforce_step_ceiling (parse truncation is silent — no re-ask, no log).
+    _prompt_max = max_steps if _step_ceiling is None else min(max_steps, _step_ceiling)
+    user_msg = f"Goal: {goal}\n\nDecompose into {_prompt_max} or fewer concrete steps."
 
     # --- Wide/deep goals: staged-pass decomposition ---
     # When scope estimate is wide or deep, decompose into domain-area passes.
@@ -714,6 +906,8 @@ def decompose(
             _staged_system = _STAGED_PASS_SYSTEM
             if _has_priority_order:
                 _staged_system += "\n\n" + _PRIORITY_DIRECTIVE
+            if _step_ceiling is not None:
+                _staged_system += "\n\n" + _STEP_CEILING_DIRECTIVE.format(n=_step_ceiling)
             resp = adapter.complete(
                 [LLMMessage("system", _staged_system),
                  LLMMessage("user", f"Goal: {goal}\n\nDecompose into 3-5 staged passes.")],
@@ -726,7 +920,7 @@ def decompose(
                     import sys
                     print(f"[maro] large-scope goal → staged-pass decomposition: {len(staged)} passes",
                           file=sys.stderr, flush=True)
-                return staged
+                return _enforce_step_ceiling(staged, _step_ceiling, goal, adapter, lane="staged")
         except Exception as exc:
             log.info("staged-pass decomposition failed, falling back to multi-plan: %s", exc)
 
@@ -742,7 +936,8 @@ def decompose(
             simple_steps = parse_steps(resp.content.strip(), max_steps)
             if simple_steps:
                 log.info("decompose narrow: single-shot %d steps", len(simple_steps))
-                return simple_steps
+                return _enforce_step_ceiling(simple_steps, _step_ceiling, goal, adapter,
+                                             lane="narrow")
         except Exception as exc:
             log.info("narrow single-shot failed, falling back to multi-plan: %s", exc)
 
@@ -780,10 +975,12 @@ def decompose(
                         "command per step, never merged. MORE steps is better than FEWER larger steps. "
                         "NEVER merge two steps that read different files, even if they seem related. "
                         "Output ONLY a JSON array of step strings."
-                        + ("\n\n" + _PRIORITY_DIRECTIVE if _has_priority_order else "")),
+                        + ("\n\n" + _PRIORITY_DIRECTIVE if _has_priority_order else "")
+                        + ("\n\n" + _STEP_CEILING_DIRECTIVE.format(n=_step_ceiling)
+                           if _step_ceiling is not None else "")),
                     LLMMessage("user",
                         f"Goal: {goal}\n\n{plans_text}\n\n"
-                        f"Compose the best plan ({max_steps} steps max). JSON array only."),
+                        f"Compose the best plan ({_prompt_max} steps max). JSON array only."),
                 ],
                 **_compose_kwargs,
             )
@@ -795,14 +992,17 @@ def decompose(
                     import sys
                     print(f"[maro] decomposed into {len(composed)} steps (multi-plan from {len(candidates)} candidates)",
                           file=sys.stderr, flush=True)
-                return composed
+                return _enforce_step_ceiling(composed, _step_ceiling, goal, adapter,
+                                             lane="compose")
             # Fall through if compose failed — use the first valid candidate
             log.debug("decompose compose failed, using first candidate")
-            return candidates[0]
+            return _enforce_step_ceiling(candidates[0], _step_ceiling, goal, adapter,
+                                         lane="compose-fallback")
 
         elif len(candidates) == 1:
             log.info("decompose multi-plan: only 1 valid candidate")
-            return candidates[0]
+            return _enforce_step_ceiling(candidates[0], _step_ceiling, goal, adapter,
+                                         lane="single-candidate")
 
     except Exception as exc:
         log.info("decompose multi-plan failed, trying single plan: %s", exc)
@@ -816,7 +1016,8 @@ def decompose(
         )
         parsed = parse_steps(resp.content.strip(), max_steps)
         if parsed:
-            return parsed
+            return _enforce_step_ceiling(parsed, _step_ceiling, goal, adapter,
+                                         lane="single-plan")
     except Exception as exc:
         log.warning("decompose LLM failed, falling back to heuristic: %s", exc)
         if verbose:
@@ -867,6 +1068,13 @@ def maybe_add_verification_step(steps: List[str], goal: str, max_steps: int = 8)
 
     # Don't exceed max_steps
     if len(steps) >= max_steps:
+        return steps
+
+    # A goal-stated step ceiling binds here too — verification injection runs
+    # AFTER decompose (loop_planning._decompose) and must not push a
+    # ceiling-respecting plan over its bound.
+    ceiling = goal_step_ceiling(goal)
+    if ceiling is not None and len(steps) >= ceiling:
         return steps
 
     # Don't add if the last step already looks like verification

@@ -346,6 +346,8 @@ def _print_run_dir(rd, fmt: str) -> int:
             print(f"goal_achieved={meta['goal_achieved']}")
         if meta.get("goal_verdict_summary"):
             print(f"goal_verdict_summary={meta['goal_verdict_summary']}")
+        if meta.get("goal_verdict_downgrade_reason"):
+            print(f"goal_verdict_downgrade_reason={meta['goal_verdict_downgrade_reason']}")
         print(f"attribution.environment={attribution['environment']}")
         print(f"attribution.skills_manifest={attribution['skills_manifest']}")
         print(f"attribution.captains_log_slice={attribution['captains_log_slice']}")
@@ -599,6 +601,10 @@ def _closure_verdict_pass(goal_str: str, result, *, dry_run: bool = False):
             "goal_verdict_source": ("closure" if _judged else "closure_unverifiable"),
             "goal_verdict_summary": str(_verdict.summary)[:300],
         }
+        # Only-when-stamped: key absent means "no downgrade", never "".
+        _downgrade = str(getattr(_verdict, "downgrade_reason", "") or "")
+        if _downgrade:
+            _vf["goal_verdict_downgrade_reason"] = _downgrade[:300]
         if _judged:
             _vf["goal_achieved"] = bool(_verdict.complete)
         stamp_run_metadata(_vf)
@@ -743,6 +749,10 @@ def _emit_run_output(args, result, _verdict) -> int:
         if getattr(_verdict, "judged", True):
             _out["goal_achieved"] = bool(_verdict.complete)
         _out["goal_verdict_summary"] = str(_verdict.summary)[:300]
+        # Only-when-stamped: key absent means "no downgrade", never "".
+        _downgrade = str(getattr(_verdict, "downgrade_reason", "") or "")
+        if _downgrade:
+            _out["goal_verdict_downgrade_reason"] = _downgrade[:300]
     if getattr(result, "audit_incomplete_warning", ""):
         _out["audit_incomplete_warning"] = result.audit_incomplete_warning
     if args.format == "json":
@@ -751,6 +761,8 @@ def _emit_run_output(args, result, _verdict) -> int:
         print(result.summary())
         if "goal_achieved" in _out:
             print(f"goal_achieved: {_out['goal_achieved']} — {_out['goal_verdict_summary']}")
+        if _out.get("goal_verdict_downgrade_reason"):
+            print(f"downgraded: {_out['goal_verdict_downgrade_reason']}")
     return 0 if result.status == "done" else 1
 
 

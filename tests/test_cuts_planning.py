@@ -308,6 +308,38 @@ def test_boundary_expansion_carries_goal_priority_directive(monkeypatch, tmp_pat
     assert "in priority order" in _ctx  # original goal carried as the source
 
 
+def test_boundary_expansion_carries_step_ceiling(monkeypatch, tmp_path):
+    """Step-ceiling analog of the #23c carry above: the boundary remainder
+    text may drop the goal's "N steps max" phrasing, so the expansion
+    decompose can't detect it — the binding directive is carried explicitly
+    and the re-decompose's max_steps is clamped to the ceiling."""
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    from agent_loop import run_agent_loop, _DryRunAdapter
+    import loop_planning
+
+    goal = "Find the nearest station and report it, 2-3 steps maximum."
+    initial_plan = [
+        "Probe: search for stations near Manti",
+        f"Plan and complete the remaining bounded work using findings from "
+        f"the prior steps: report the nearest station {BOUNDARY_TAG}",
+    ]
+    mock_expand = MagicMock(return_value=["bounded step A"])
+
+    with patch.object(loop_planning, "_decompose_impl", return_value=initial_plan), \
+         patch("pre_flight.review_plan", return_value=_no_milestones_review()), \
+         patch("planner.decompose", mock_expand):
+        run_agent_loop(goal, adapter=_DryRunAdapter(), dry_run=False,
+                       max_iterations=10)
+
+    assert mock_expand.called
+    kwargs = mock_expand.call_args.kwargs
+    assert kwargs.get("max_steps") == 3  # min(5, ceiling 3)
+    _ctx = kwargs.get("ancestry_context", "")
+    assert "STEP-COUNT CEILING" in _ctx
+    assert "AT MOST 3" in _ctx
+    assert "2-3 steps maximum" in _ctx  # original goal carried as the source
+
+
 def test_boundary_expansion_failure_degrades_to_broad_step(monkeypatch, tmp_path):
     """If expansion returns nothing usable, the boundary step runs as one
     broad step with the tag stripped — degrade, don't die."""

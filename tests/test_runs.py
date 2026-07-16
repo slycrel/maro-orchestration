@@ -462,6 +462,37 @@ def test_stamp_run_verdict_replaces_boolean_with_unjudged(workspace):
         set_current_run_dir(None)
 
 
+def test_stamp_run_verdict_downgrade_reason_only_when_nonempty(workspace):
+    """Only-when-stamped: nonempty writes the key; a later verdict without a
+    downgrade removes the stale one (replace-semantics, like goal_achieved) —
+    the key is never present as ""."""
+    from runs import create_run_dir, set_current_run_dir, stamp_run_verdict
+    rd = create_run_dir("verdict2", prompt="build X")
+    set_current_run_dir(rd)
+    try:
+        stamp_run_verdict(
+            goal_achieved=False,
+            source="closure",
+            confidence=0.92,
+            summary="Downgraded to not-achieved — no behavioral probe. "
+                    "Original verdict: Goal achieved.",
+            downgrade_reason="no behavioral probe and no logged waiver",
+        )
+        meta = json.loads((rd / "metadata.json").read_text())
+        assert meta["goal_verdict_downgrade_reason"] == (
+            "no behavioral probe and no logged waiver")
+        stamp_run_verdict(
+            goal_achieved=True,
+            source="closure",
+            confidence=0.95,
+            summary="Goal achieved on retry.",
+        )
+        meta = json.loads((rd / "metadata.json").read_text())
+        assert "goal_verdict_downgrade_reason" not in meta
+    finally:
+        set_current_run_dir(None)
+
+
 def test_environment_snapshot_records_backend_order(workspace):
     from runs import create_run_dir, set_current_run_dir, write_environment_snapshot
     rd = create_run_dir("envtest3", prompt="p")

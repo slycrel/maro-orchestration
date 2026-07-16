@@ -3185,3 +3185,23 @@ Dormant (deliberately parked, not dropped):
   legacy keys carried; legacy file untouched). Keys are Jeremy's next move
   (console.groq.com + aistudio.google.com/apikey → append to that .env);
   hosted tier then goes live with zero further changes.
+- **2026-07-16 (Jeremy, keys live ~1hr later) — HOSTED-FREE TIER LIVE +
+  credentials backup decree.** Keys added by Jeremy (Gemini via a renamed
+  pre-existing key); "Feel free to test those, both directly and in the
+  orchestration" → both providers live-verified through the production
+  ladder on the 14-case corpus: **gemini-flash-lite-latest 14/14, all
+  decisive, 0 unsafe false-passes, 0.66s avg (perfect score — M1 reference
+  quality at 13× speed)**; groq llama-3.1-8b-instant 12/14, 1 unsafe
+  false-pass (failing-test case, Tier-0-covered), 0.28s avg. Box order
+  flipped `[gemini, groq]` (quality first, 429-breaker auto-spill to Groq's
+  30 RPM/14.4K-day volume tier — confirmed live). Shipped default
+  `gemini_model` moved `gemini-2.0-flash`→`gemini-flash-lite-latest` (2.x =
+  free-quota `limit: 0` for new users, 2.5 = 404 "no longer available to
+  new users" — the predicted catalog churn, now measured). BACKLOG #25
+  archived to BACKLOG_DONE. Decree: "Back those all up if desired into our
+  claude workspace somewhere, along with the general machine credentials.
+  I could see us wiping the maro workspace at some point" → full machine
+  credential backup at `~/claude/credentials-backup/` (README manifest;
+  maro secrets .env, gh hosts.yml, ssh keys incl. mini2 dispatch lane,
+  openclaw.json + recovered vault; outside all git repos, chmod 700;
+  re-copy on key rotation).
