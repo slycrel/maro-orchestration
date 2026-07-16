@@ -1403,6 +1403,10 @@ _ADAPTIVE_SYSTEM = textwrap.dedent("""\
     - Choose "escalate" only for genuine decision points: conflicting goals, irreversible
       actions, or deep ambiguity that cannot be resolved from context alone.
     - Default is autonomous. Escalate sparingly.
+    - Trigger "injection" means the operator injected new information mid-run. Any
+      step additions/reordering they explicitly requested are ALREADY applied to the
+      remaining steps — your job is only to judge whether the plan still serves the
+      goal in light of the injection. "continue" is correct when it does.
     - When the convergence budget is 0, you MUST return "continue" (no more replans/restarts).
 
     Field rules:
@@ -1445,6 +1449,7 @@ class EvaluationContext:
     max_steps: int
     current_approach: str = ""         # "" until ExecutionPlan introduced (Phase B+)
     convergence_budget_remaining: int = 2  # 0 means no more replans allowed
+    injected_context: str = ""         # operator injection(s) applied this boundary (trigger="injection")
 
 
 @dataclass
@@ -1478,7 +1483,7 @@ def director_evaluate(
     Args:
         goal:     original goal (immutable)
         eval_ctx: compact snapshot of current execution state
-        trigger:  what fired this call — "verify_failure" | "step_threshold" | "stuck"
+        trigger:  what fired this call — "verify_failure" | "step_threshold" | "stuck" | "injection"
         adapter:  LLM adapter (cheap model is sufficient)
         dry_run:  skip LLM call and return continue
     """
@@ -1503,9 +1508,15 @@ def director_evaluate(
         else f"Convergence budget remaining: {eval_ctx.convergence_budget_remaining} replan(s)."
     )
 
+    injection_block = (
+        f"Operator injection(s) just applied at this boundary:\n{eval_ctx.injected_context}\n\n"
+        if eval_ctx.injected_context else ""
+    )
+
     user_msg = (
         f"Goal: {goal}\n\n"
         f"Trigger: {trigger}\n"
+        f"{injection_block}"
         f"Steps completed ({eval_ctx.total_steps_taken}/{eval_ctx.max_steps}):\n{completed_str}\n\n"
         f"Steps remaining:\n{remaining_str}\n\n"
         f"Recent step results:\n{eval_ctx.step_results_summary or '(none)'}\n\n"

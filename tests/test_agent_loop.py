@@ -4889,6 +4889,127 @@ def test_two_contributors_same_boundary_both_render_in_loop(monkeypatch, tmp_pat
                for m in step5_msgs), step5_msgs
 
 
+def test_injection_eval_gated_off_by_default(monkeypatch, tmp_path):
+    """Fresh-install default: an applied interrupt must NOT fire
+    director_evaluate(trigger="injection") — the gate is a spend gate."""
+    _setup_workspace(monkeypatch, tmp_path)
+    from interrupt import InterruptQueue
+    import director as _dm
+
+    _triggers = []
+    _orig_eval = _dm.director_evaluate
+
+    def _spy_eval(goal, eval_ctx, trigger, adapter, *, dry_run=False):
+        _triggers.append(trigger)
+        return _orig_eval(goal, eval_ctx, trigger, adapter, dry_run=dry_run)
+
+    monkeypatch.setattr(_dm, "director_evaluate", _spy_eval)
+
+    q = InterruptQueue(queue_path=tmp_path / "interrupts.jsonl")
+    q.post("the deadline moved to Friday", source="test", intent="note")
+
+    result = run_agent_loop(
+        "goal with an interrupt but the injection gate off",
+        adapter=_DryRunAdapter(),
+        dry_run=False,
+        interrupt_queue=q,
+    )
+    assert result.status == "done"
+    assert result.interrupts_applied == 1
+    assert "injection" not in _triggers, _triggers
+
+
+def test_injection_eval_fires_when_enabled(monkeypatch, tmp_path):
+    """Gate on + applied interrupt → director_evaluate fires with
+    trigger="injection" and the injected text reaches injected_context."""
+    _setup_workspace(monkeypatch, tmp_path)
+    from interrupt import InterruptQueue
+    from director import DirectorDecision
+    import config as _cfg_mod
+    import director as _dm
+
+    _orig_cfg_get = _cfg_mod.get
+
+    def _patched_cfg_get(key, default=None):
+        if key == "director.evaluate_on_injection":
+            return True
+        return _orig_cfg_get(key, default)
+
+    monkeypatch.setattr(_cfg_mod, "get", _patched_cfg_get)
+
+    _calls = []
+
+    def _fake_eval(goal, eval_ctx, trigger, adapter, *, dry_run=False):
+        _calls.append((trigger, eval_ctx))
+        return DirectorDecision(action="continue", reasoning="plan still fits")
+
+    monkeypatch.setattr(_dm, "director_evaluate", _fake_eval)
+
+    q = InterruptQueue(queue_path=tmp_path / "interrupts.jsonl")
+    q.post("the deadline moved to Friday", source="test", intent="note")
+
+    result = run_agent_loop(
+        "goal exercising the injection decision-point",
+        adapter=_DryRunAdapter(),
+        dry_run=False,
+        interrupt_queue=q,
+    )
+    assert result.status == "done"
+    assert result.interrupts_applied == 1
+    _inj_calls = [(t, c) for t, c in _calls if t == "injection"]
+    assert len(_inj_calls) == 1, _calls
+    _eval_ctx = _inj_calls[0][1]
+    assert "deadline moved to Friday" in _eval_ctx.injected_context
+    assert "note from test" in _eval_ctx.injected_context
+
+
+def test_injection_eval_adjust_replaces_remaining(monkeypatch, tmp_path):
+    """An injection-triggered adjust decision replaces the remaining tail —
+    the adjusted step executes; the displaced originals do not."""
+    _setup_workspace(monkeypatch, tmp_path)
+    from interrupt import InterruptQueue
+    from director import DirectorDecision
+    import config as _cfg_mod
+    import director as _dm
+
+    _orig_cfg_get = _cfg_mod.get
+
+    def _patched_cfg_get(key, default=None):
+        if key == "director.evaluate_on_injection":
+            return True
+        return _orig_cfg_get(key, default)
+
+    monkeypatch.setattr(_cfg_mod, "get", _patched_cfg_get)
+
+    def _fake_eval(goal, eval_ctx, trigger, adapter, *, dry_run=False):
+        if trigger == "injection":
+            return DirectorDecision(
+                action="adjust",
+                reasoning="injection invalidates the old tail",
+                revised_steps=["adjusted step via injection"],
+            )
+        return DirectorDecision(action="continue", reasoning="ok")
+
+    monkeypatch.setattr(_dm, "director_evaluate", _fake_eval)
+
+    q = InterruptQueue(queue_path=tmp_path / "interrupts.jsonl")
+    q.post("scope changed: only the summary matters now",
+           source="test", intent="note")
+
+    result = run_agent_loop(
+        "goal whose tail is adjusted after an injection",
+        adapter=_DryRunAdapter(),
+        dry_run=False,
+        interrupt_queue=q,
+    )
+    assert result.status == "done"
+    step_texts = [s.text for s in result.steps]
+    assert any("adjusted step via injection" in t for t in step_texts), step_texts
+    # The _DryRunAdapter plan is 3 steps; the note applies at the post-step-1
+    # boundary, so steps 2-3 are displaced by the single adjusted step.
+    assert len(result.steps) == 2, step_texts
+
+
 def test_parallel_batch_delivers_pending_once(monkeypatch, tmp_path):
     """Pending contributions reach a parallel batch boundary exactly once:
     the batch consumes them, and the following boundary gets nothing."""

@@ -386,9 +386,15 @@ def _check_loop_interrupts(
     if interrupt_queue is not None:
         try:
             from interrupt import INTENT_NOTE
+            # Fresh per poll — the injection-trigger director evaluation
+            # (§6a) reads this right after the boundary to see what landed.
+            ctx.last_boundary_interrupts = []
             pending = interrupt_queue.poll()
             for intr in pending:
                 interrupts_applied += 1
+                ctx.last_boundary_interrupts.append(
+                    f"{intr.intent} from {intr.source}: {intr.message}"
+                )
                 if intr.intent == INTENT_NOTE:
                     # Context-only intent (§6 injection seam): append a
                     # provenance-stamped contribution for the next step's

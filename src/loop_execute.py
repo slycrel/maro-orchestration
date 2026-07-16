@@ -1719,6 +1719,179 @@ def _execute_main_loop(
             stuck_reason = _intr_reason
             break
 
+        # §6a decision-point: an applied injection may legitimately mean
+        # continue-unchanged / adjust-next-step / replan — keep that an
+        # explicit director decision at the same boundary where the injection
+        # landed, before the next step consumes it. Mirrors the _ae2 adaptive
+        # block below; gated separately (spend) via director.evaluate_on_injection.
+        if interrupts_applied != _interrupts_before:
+            try:
+                from config import get as _inj_cfg_get
+                _inj_on = bool(_inj_cfg_get("director.evaluate_on_injection", False))
+            except Exception:
+                _inj_on = False
+            if _inj_on:
+                try:
+                    from director import (
+                        director_evaluate as _dir_evaluate3,
+                        EvaluationContext as _EvalCtx3,
+                    )
+                    _inj_done = [o for o in step_outcomes if o.status == "done"]
+                    _inj_results = "\n---\n".join(
+                        (o.result or "")[:600] for o in _inj_done[-3:]
+                    )
+                    _inj_lines = list(
+                        getattr(ctx, "last_boundary_interrupts", []) or []
+                    )
+                    _inj_ctx = _EvalCtx3(
+                        goal=goal,
+                        current_pass_scope=goal,
+                        steps_completed=[o.text for o in step_outcomes],
+                        steps_remaining=list(remaining_steps),
+                        step_results_summary=_inj_results,
+                        verify_failure_count=ctx.session_verify_failures,
+                        total_steps_taken=len(step_outcomes),
+                        max_steps=max_iterations,
+                        convergence_budget_remaining=(
+                            ctx.director_budget_ceiling - ctx.director_replan_count
+                        ),
+                        injected_context="\n".join(
+                            f"- {t[:300]}" for t in _inj_lines
+                        ),
+                    )
+                    _inj_decision = _dir_evaluate3(
+                        goal, _inj_ctx, "injection", adapter, dry_run=dry_run
+                    )
+                    # Budget enforcement: replan disallowed when ceiling reached
+                    if (_inj_decision.action == "replan"
+                            and ctx.director_replan_count >= ctx.director_budget_ceiling):
+                        log.info(
+                            "adaptive [injection]: replan requested but budget "
+                            "exhausted (%d/%d) — forcing continue",
+                            ctx.director_replan_count, ctx.director_budget_ceiling,
+                        )
+                        _inj_decision = type(_inj_decision)(
+                            action="continue",
+                            reasoning="replan budget exhausted",
+                            next_check_in=_inj_decision.next_check_in,
+                        )
+                    _record_loop_decision(
+                        "director", "injection",
+                        _inj_decision.action, _inj_decision.reasoning,
+                    )
+                    # Executor session was already reset at this boundary
+                    # (operator interrupt changed run state) — no per-arm
+                    # reset needed here, unlike _ae2.
+                    if _inj_decision.action == "adjust" and _inj_decision.revised_steps:
+                        _inj_new = _inj_decision.revised_steps
+                        remaining_steps[:] = _inj_new
+                        remaining_indices[:] = [-1] * len(_inj_new)
+                        log.info("adaptive [injection/adjust]: replaced %d steps — %s",
+                                 len(_inj_new), _inj_decision.reasoning[:100])
+                        if verbose:
+                            print(
+                                f"[maro] adaptive adjust (injection): {len(_inj_new)} steps — "
+                                f"{_inj_decision.reasoning[:60]}", file=sys.stderr, flush=True,
+                            )
+                    elif _inj_decision.action == "replan":
+                        try:
+                            from planner import decompose as _planner_decompose3
+                            _inj_completed_ctx = "\n".join(
+                                f"- {o.text}: {(o.result or '')[:200]}"
+                                for o in step_outcomes[-5:]
+                            )
+                            _inj_ancestry = (
+                                f"Director replan after operator injection: "
+                                f"{_inj_decision.new_approach or 'fresh approach'}\n\n"
+                                f"Injection(s):\n"
+                                + "\n".join(f"- {t[:200]}" for t in _inj_lines)
+                                + f"\n\nAlready completed:\n{_inj_completed_ctx}"
+                            )
+                            _inj_replan_steps = _planner_decompose3(
+                                goal, adapter,
+                                max_steps=max(3, max_iterations - len(step_outcomes)),
+                                ancestry_context=_inj_ancestry,
+                            )
+                            if _inj_replan_steps:
+                                remaining_steps[:] = _inj_replan_steps
+                                remaining_indices[:] = [-1] * len(_inj_replan_steps)
+                                ctx.director_replan_count += 1
+                                log.info(
+                                    "adaptive [injection/replan]: fresh %d steps "
+                                    "(replan %d/%d) — %s",
+                                    len(_inj_replan_steps),
+                                    ctx.director_replan_count, ctx.director_budget_ceiling,
+                                    _inj_decision.reasoning[:80],
+                                )
+                                if verbose:
+                                    print(
+                                        f"[maro] adaptive replan (injection): "
+                                        f"{len(_inj_replan_steps)} steps — "
+                                        f"{_inj_decision.reasoning[:60]}",
+                                        file=sys.stderr, flush=True,
+                                    )
+                        except Exception as _inj_replan_exc:
+                            log.debug("adaptive replan (injection) planner call failed: %s",
+                                      _inj_replan_exc)
+                    elif _inj_decision.action == "restart":
+                        _inj_restart_ctx = (
+                            _inj_decision.restart_context or _inj_decision.reasoning
+                        )
+                        ctx.director_replan_count += 1
+                        loop_status = "restart"
+                        stuck_reason = _inj_restart_ctx
+                        log.info("adaptive [injection/restart]: breaking loop "
+                                 "(replan %d/%d) — %s",
+                                 ctx.director_replan_count, ctx.director_budget_ceiling,
+                                 _inj_restart_ctx[:100])
+                        if verbose:
+                            print(f"[maro] adaptive restart (injection) — "
+                                  f"{_inj_restart_ctx[:80]}", file=sys.stderr, flush=True)
+                    elif _inj_decision.action == "escalate":
+                        _inj_question = (
+                            _inj_decision.user_question or _inj_decision.reasoning
+                        )
+                        # Same per-site consumer check as _ae2: a reply's only
+                        # consumer is the next iteration's merge-point drain.
+                        if not remaining_steps:
+                            log.info(
+                                "adaptive [injection/escalate]: suppressed — "
+                                "no remaining step to consume a reply; "
+                                "treating as continue. Question was: %s",
+                                _inj_question[:150],
+                            )
+                            _record_loop_decision(
+                                "director", "injection", "escalate_suppressed",
+                                "escalate requested at final step boundary — "
+                                "no remaining step to consume a user reply; "
+                                "question not sent: " + _inj_question[:100],
+                            )
+                        elif ctx.channel is not None:
+                            try:
+                                _inj_reply = ctx.channel.ask(_inj_question)
+                                if _inj_reply:
+                                    _pending_context.append(
+                                        "escalate_reply", "reply",
+                                        f"Director asked: {_inj_question}\n"
+                                        f"User replied: {_inj_reply}",
+                                    )
+                                    log.info("adaptive [injection/escalate]: got user "
+                                             "reply (%d chars)", len(_inj_reply))
+                            except Exception as _inj_esc_exc:
+                                log.debug("adaptive escalate (injection) channel.ask "
+                                          "failed: %s", _inj_esc_exc)
+                        else:
+                            log.info("adaptive [injection/escalate]: no channel — "
+                                     "logging question: %s", _inj_question[:150])
+                    else:
+                        log.info("adaptive [injection/continue]: %s",
+                                 _inj_decision.reasoning[:100])
+                except Exception as _inj_exc:
+                    log.debug("injection-trigger evaluation error: %s", _inj_exc)
+            # Restart break — outside the try/except, mirroring _ae2
+            if loop_status == "restart":
+                break
+
     # Belt-and-braces (adversarial review 2026-07-15): the merge-point drain
     # only runs when another step executes, so anything still pending when
     # the loop exits — hook output from the final step, an escalate reply

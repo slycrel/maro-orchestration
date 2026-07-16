@@ -423,6 +423,10 @@ class LoopContext:
     # prompt (§6 injection seam). Contributors append; the merge point drains.
     pending_context: ContributionLedger = field(default_factory=ContributionLedger)
     interrupts_applied: int = 0
+    # Human-readable descriptions of interrupts applied at the most recent
+    # boundary poll — consumed by the §6a injection-trigger director
+    # evaluation. Reset each poll; empty when nothing was applied.
+    last_boundary_interrupts: List[str] = field(default_factory=list)
 
     # Flags
     march_of_nines_alert: bool = False

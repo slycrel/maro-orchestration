@@ -3078,7 +3078,11 @@ Dormant (deliberately parked, not dropped):
   `advisor.stuck_step` SHIPPED (3d35ba0), fresh default off. (2)
   **`navigator.adjudicate_divergences` ON** ("let's turn that on, yep") —
   box config flipped. (3) **director_evaluate(trigger="injection"): build +
-  enable** ("agree, build + enable"). (4) **Hosted-free keys: remind
+  enable** ("agree, build + enable") — SHIPPED same day: fires at the
+  boundary poll when an interrupt was applied and the loop continues,
+  injected text reaches the director via `EvaluationContext.injected_context`,
+  arms mirror `_ae2` (replan budget-clamped); gate
+  `director.evaluate_on_injection` fresh-default OFF, box ON. (4) **Hosted-free keys: remind
   tonight** — Gemini key location non-obvious to him, no Groq account yet;
   one-shot systemd timer set for 19:04 MT. Same breath, **local-validator
   lean-in decree:** "we should lean into that slightly upgraded local option

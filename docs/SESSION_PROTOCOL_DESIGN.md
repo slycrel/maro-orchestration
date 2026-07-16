@@ -294,8 +294,13 @@ Keep the worker lane untouched in v1 (gap 5 is a lane, not a bug).
 *Deltas as shipped:* rendering happens loop-side (`render_contributions` at
 the drain points, feeding both the delta-block slot and the fresh-prompt
 ancestry tail — fresh prompts never see `incremental_context`, so
-`execute_step` is unchanged); `director_evaluate(trigger="injection")` was
-NOT built (spend-gated, pending Jeremy).
+`execute_step` is unchanged); `director_evaluate(trigger="injection")`
+SHIPPED 2026-07-16 (Jeremy: "agree, build + enable") — fires at the boundary
+poll when an interrupt was applied and the loop continues, gated by
+`director.evaluate_on_injection` (fresh default OFF per defaults registry;
+this box ON). The applied injection text reaches the director via
+`EvaluationContext.injected_context`; decision arms mirror the `_ae2`
+adaptive block (adjust/replan/restart/escalate, replan budget-clamped).
 
 **Semantics trap (found + fixed during this inventory):** the carry-forward
 assignment at `loop_execute.py:~1522` doubles as the *consume/clear* of the
