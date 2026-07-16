@@ -323,6 +323,13 @@ class TestEventTypes:
         from captains_log import NAVIGATOR_ACTED
         assert NAVIGATOR_ACTED in EVENT_TYPES
 
+    def test_step_ceiling_enforced_in_set(self):
+        # Count-pin hardening (step-ceiling review M19): the count assert
+        # alone dies to ANY concurrent event addition; membership pins the
+        # registration itself.
+        from captains_log import STEP_CEILING_ENFORCED
+        assert STEP_CEILING_ENFORCED in EVENT_TYPES
+
     def test_validator_shadowed_in_set(self):
         from captains_log import VALIDATOR_SHADOWED
         assert VALIDATOR_SHADOWED in EVENT_TYPES

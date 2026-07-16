@@ -465,11 +465,17 @@ _PRIORITY_DIRECTIVE = (
 #
 # Conservative by design: fires only when a step count is paired with an
 # explicit bound qualifier (max / maximum of / at most / no more than /
-# or fewer / limit to). Bare counts ("explain X in 3 steps"), plan-content
-# references ("document the 3 steps of the deploy process", "step 2 of the
-# migration"), and non-step numbers never fire. Word-numbers one–ten ARE
-# supported — a single shared _STEP_NUM alternation keeps the patterns
-# readable, and "three steps max" is exactly as binding as "3 steps max".
+# or fewer / limit to). Bare counts ("explain X in 3 steps"), most
+# plan-content references ("document the 3 steps of the deploy process",
+# "step 2 of the migration"), and non-step numbers do not fire.
+# KNOWN GAP (accepted, pinned in TestGoalStepCeilingDetector): a bound
+# qualifier inside a content reference still fires — "it is limited to 3
+# steps by design", "at most 3 steps of the pipeline are affected" — regex
+# cannot tell a content reference from a plan bound. Impact is bounded:
+# the plan clamps to the stated N; it degrades, never crashes.
+# Word-numbers one–ten ARE supported — a single shared _STEP_NUM
+# alternation keeps the patterns readable, and "three steps max" is
+# exactly as binding as "3 steps max".
 
 _STEP_NUM_WORDS = {
     "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
@@ -478,10 +484,11 @@ _STEP_NUM_WORDS = {
 _STEP_NUM = r"(?:\d{1,2}|" + "|".join(_STEP_NUM_WORDS) + r")"
 
 _STEP_CEILING_PATTERNS = [
-    # "3 steps max" / "2-3 steps maximum" / "2 to 3 steps max"
+    # "3 steps max" / "2-3 steps maximum" / "2 to 3 steps max" /
+    # "3 steps, maximum" (optional comma — review F4)
     re.compile(
         rf"\b({_STEP_NUM})(?:(?:\s*[-–]\s*|\s+to\s+)({_STEP_NUM}))?"
-        rf"\s+steps?\s+(?:maximum|max)\b", re.IGNORECASE),
+        rf"\s+steps?\s*,?\s+(?:maximum|max)\b", re.IGNORECASE),
     # "maximum of 3 steps" / "a max of 3 steps"
     re.compile(rf"\b(?:maximum|max)\s+of\s+({_STEP_NUM})\s+steps?\b", re.IGNORECASE),
     # "at most 3 steps"
@@ -699,6 +706,10 @@ def _enforce_step_ceiling(
                      f"corrective re-ask ({lane} lane)."),
             context={
                 "goal_preview": goal[:200],
+                # When the corrective retry over-returned, parse_steps already
+                # capped it at max(len(plan), ceiling) — returned_steps and
+                # dropped_steps then UNDERCOUNT what the model actually sent
+                # (review F5, accepted: the enforcement is correct either way).
                 "ceiling": ceiling,
                 "returned_steps": len(oversized),
                 "lane": lane,

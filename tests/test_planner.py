@@ -460,6 +460,22 @@ class TestGoalStepCeilingDetector:
 
     # -- negatives: conservative, stays out of ambiguous phrasing --
 
+    def test_comma_before_maximum(self):
+        # review F4: comma between the count and the qualifier
+        assert goal_step_ceiling("summarize the config files - 3 steps, maximum") == 3
+
+    def test_known_gap_bound_qualifier_in_content_reference_fires(self):
+        """KNOWN GAP (review F3, accepted): a bound qualifier inside a
+        content reference still fires — regex cannot tell a content
+        reference from a plan bound. Pinned so any future change here is a
+        deliberate decision, not an accident. Impact is bounded: the plan
+        clamps to the stated N; it degrades, never crashes."""
+        assert goal_step_ceiling(
+            "document the deploy pipeline; it is limited to 3 steps by design") == 3
+        assert goal_step_ceiling(
+            "investigate the failures - at most 3 steps of the pipeline "
+            "are affected") == 3
+
     def test_bare_count_does_not_fire(self):
         assert goal_step_ceiling("explain the deploy process in 3 steps") is None
 
@@ -579,6 +595,48 @@ class TestStepCeilingDecompose:
         decompose("adversarial review of the entire codebase, at most 3 steps",
                   adapter, max_steps=8)
         assert any("STEP-COUNT CEILING" in s for s in adapter.systems())
+
+    # -- per-lane enforcement pins (review F1: mutants nulling the ceiling
+    # on these four lanes survived the original suite) -------------------
+
+    def test_staged_lane_enforced(self, monkeypatch):
+        import captains_log
+        events = []
+        monkeypatch.setattr(captains_log, "log_event",
+                            lambda *a, **k: events.append((a, k)))
+        # wide scope → staged lane; every call returns 4 passes
+        adapter = _SeqAdapter(_steps_json(4))
+        result = decompose(
+            "adversarial review of the entire codebase, at most 3 steps",
+            adapter, max_steps=8)
+        assert len(adapter.calls) == 2  # staged + ONE corrective re-ask
+        assert result == ["step 1", "step 2", "step 3"]
+        assert any(a[0] == "STEP_CEILING_ENFORCED" for a, _ in events)
+
+    def test_compose_fallback_lane_enforced(self):
+        goal = "implement rate limit retry logic in llm.py, at most 3 steps"
+        adapter = _SeqAdapter(_steps_json(7), _steps_json(7), _steps_json(7),
+                              "not json", "still not json")
+        result = decompose(goal, adapter, max_steps=8)
+        # 3 candidates + failed compose + ONE corrective re-ask → truncation
+        assert len(adapter.calls) == 5
+        assert result == ["step 1", "step 2", "step 3"]
+
+    def test_single_candidate_lane_enforced(self):
+        goal = "implement rate limit retry logic in llm.py, at most 3 steps"
+        adapter = _SeqAdapter("nope", "nope", _steps_json(7), "nope")
+        result = decompose(goal, adapter, max_steps=8)
+        # 3 candidate attempts (1 valid) + ONE corrective re-ask → truncation
+        assert len(adapter.calls) == 4
+        assert result == ["step 1", "step 2", "step 3"]
+
+    def test_single_plan_lane_enforced(self):
+        goal = "implement rate limit retry logic in llm.py, at most 3 steps"
+        adapter = _SeqAdapter("nope", "nope", "nope", _steps_json(7), "nope")
+        result = decompose(goal, adapter, max_steps=8)
+        # 3 failed candidates + single-plan fallback + ONE corrective re-ask
+        assert len(adapter.calls) == 5
+        assert result == ["step 1", "step 2", "step 3"]
 
     def test_directive_reaches_draw_cuts_under_cuts_first(self, monkeypatch):
         # Same seam as the #23c regression test above: the cuts probe path

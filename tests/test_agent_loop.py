@@ -2754,6 +2754,40 @@ def test_milestone_step_is_expanded(monkeypatch, tmp_path):
     assert mock_decompose.called
 
 
+def test_milestone_expansion_carries_step_ceiling(monkeypatch, tmp_path):
+    """Step-ceiling carry at the milestone-expansion seam (review F2 — same
+    bug class as the boundary-expansion carry): the milestone step's own
+    text doesn't carry the goal's "N steps max" phrasing, so the
+    sub-decompose is clamped to the ceiling and the binding directive is
+    carried explicitly."""
+    _setup_workspace(monkeypatch, tmp_path)
+    from unittest.mock import MagicMock, patch
+
+    fake_pf = MagicMock()
+    fake_pf.milestone_step_indices = [1]
+    fake_pf.scope = "wide"
+    fake_pf.flags = []
+
+    with patch("pre_flight.review_plan", return_value=fake_pf):
+        with patch("planner.decompose",
+                   return_value=["sub-step A", "sub-step B"]) as mock_decompose:
+            run_agent_loop(
+                "do a complex analysis, 2-3 steps maximum",
+                adapter=_DryRunAdapter(),
+                dry_run=False,
+                max_iterations=10,
+            )
+
+    carry_calls = [c for c in mock_decompose.call_args_list
+                   if "STEP-COUNT CEILING" in c.kwargs.get("ancestry_context", "")]
+    assert carry_calls, "no decompose call carried the ceiling directive"
+    kw = carry_calls[0].kwargs
+    assert kw.get("max_steps") == 3  # min(5, ceiling 3)
+    assert "AT MOST 3" in kw["ancestry_context"]
+    # original goal carried as the source of the ceiling
+    assert "2-3 steps maximum" in kw["ancestry_context"]
+
+
 def test_milestone_step_expansion_only_at_depth_zero(monkeypatch, tmp_path):
     """Milestone expansion is skipped at continuation_depth > 0 to prevent recursion."""
     _setup_workspace(monkeypatch, tmp_path)

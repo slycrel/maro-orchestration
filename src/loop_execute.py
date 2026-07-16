@@ -519,7 +519,25 @@ def _execute_main_loop(
             _milestone_expanded.add(_would_be_step_idx)
             try:
                 from planner import decompose as _ms_decompose
-                _ms_sub = _ms_decompose(step_text, adapter, max_steps=5, allow_cuts=False)
+                # Step-ceiling carry (same bug class as the boundary carry
+                # above; review F2): the milestone step's own text won't carry
+                # the goal's "N steps max" phrasing, so decompose's detector
+                # can't see it — clamp this expansion and carry the binding
+                # directive explicitly.
+                from planner import (goal_step_ceiling as _ms_gsc,
+                                     _STEP_CEILING_DIRECTIVE as _ms_ceil_dir)
+                _ms_max_steps = 5
+                _ms_ancestry = ""
+                _ms_ceiling = _ms_gsc(goal)
+                if _ms_ceiling is not None and _ms_gsc(step_text) is None:
+                    _ms_max_steps = min(_ms_max_steps, _ms_ceiling)
+                    _ms_ancestry = (
+                        f"{_ms_ceil_dir.format(n=_ms_ceiling)}\n"
+                        f"Original goal (source of the step ceiling): {goal}")
+                _ms_sub = _ms_decompose(step_text, adapter,
+                                        max_steps=_ms_max_steps,
+                                        ancestry_context=_ms_ancestry,
+                                        allow_cuts=False)
                 if _ms_sub and len(_ms_sub) >= 2:
                     _ms_sub = _shape_steps(_ms_sub, label="milestone-expand")
                     _reset_executor_session("milestone expanded")
