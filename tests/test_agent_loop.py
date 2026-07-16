@@ -337,6 +337,82 @@ def test_loop_stuck_detection(monkeypatch, tmp_path):
     assert result.stuck_reason is not None
 
 
+def _run_always_stuck_loop(monkeypatch, tmp_path, advisor_stub):
+    """Shared rig for the stuck-advisor gate tests: an always-flag-stuck
+    adapter driving the terminal-stuck path, with llm.advisor_call replaced
+    by `advisor_stub`. Same bypasses as test_loop_stuck_detection."""
+    _setup_workspace(monkeypatch, tmp_path)
+    import llm as _llm
+    import loop_planning as _lp
+    import loop_blocked as _lb
+    monkeypatch.setattr(_lp, "_decompose", lambda *a, **kw: ["step one"])
+    monkeypatch.setattr(_lb, "_generate_refinement_hint",
+                        lambda *a, **kw: "try something different")
+    monkeypatch.setattr(_llm, "advisor_call", advisor_stub)
+
+    class AlwaysStuckAdapter:
+        model_key = "explicit-test"
+
+        def complete(self, messages, **kwargs):
+            from llm import LLMResponse, ToolCall
+            return LLMResponse(
+                content="",
+                tool_calls=[ToolCall(
+                    name="flag_stuck",
+                    arguments={"reason": "cannot proceed", "attempted": "tried everything"},
+                )],
+                stop_reason="tool_use",
+            )
+
+    return run_agent_loop(
+        "something impossible",
+        project="stuck-advisor-test",
+        adapter=AlwaysStuckAdapter(),
+        max_steps=1,
+        _recovery_in_progress=True,
+    )
+
+
+def test_stuck_advisor_gated_off_by_default(monkeypatch, tmp_path):
+    """advisor.stuck_step defaults OFF: activating the once-dead block must
+    not add silent LLM spend to strangers' stuck paths (2026-07-16)."""
+    def _must_not_be_called(**kwargs):
+        raise AssertionError("advisor_call must not fire when advisor.stuck_step is off")
+    result = _run_always_stuck_loop(monkeypatch, tmp_path, _must_not_be_called)
+    assert result.status == "stuck"
+
+
+def test_stuck_advisor_fires_when_enabled(monkeypatch, tmp_path):
+    """With advisor.stuck_step on, the advisor is consulted at the terminal
+    stuck boundary (this block was dead code from birth — .get() on a
+    dataclass raised into a catch-all; pin that it actually runs now)."""
+    (tmp_path / "config.yml").write_text("advisor:\n  stuck_step: true\n")
+    calls = []
+    def _advisor(**kwargs):
+        calls.append(kwargs)
+        return "(c) abort the mission"
+    result = _run_always_stuck_loop(monkeypatch, tmp_path, _advisor)
+    assert result.status == "stuck"
+    assert len(calls) >= 1
+    # the context summary is built from StepOutcome attributes — the old
+    # .get() shape bug would have raised before reaching the stub
+    assert "stuck" in calls[0]["question"].lower() or calls[0]["context"]
+
+
+def test_stuck_advisor_retry_path_records_step(monkeypatch, tmp_path):
+    """Advisor (b) retry exits via continue — the stuck-flagged execution must
+    still land in the run record (same contract as the other continue exits),
+    and the loop must go terminal on a later verdict, not spin."""
+    (tmp_path / "config.yml").write_text("advisor:\n  stuck_step: true\n")
+    verdicts = iter(["(b) rephrase and retry the step"])
+    def _advisor(**kwargs):
+        return next(verdicts, "(c) abort the mission")
+    result = _run_always_stuck_loop(monkeypatch, tmp_path, _advisor)
+    assert result.status == "stuck"
+    blocked = [s for s in result.steps if s.status == "blocked"]
+    assert len(blocked) >= 2  # helper append on (b)-continue + terminal append
+
+
 def test_loop_result_token_counts(monkeypatch, tmp_path):
     _setup_workspace(monkeypatch, tmp_path)
     result = run_agent_loop(

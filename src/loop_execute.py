@@ -1214,6 +1214,11 @@ def _execute_main_loop(
                         if verbose:
                             print(f"[maro] adaptive restart (stuck) — "
                                   f"{_ae_restart_ctx[:80]}", file=sys.stderr, flush=True)
+                        # This break exits the loop entirely — without the
+                        # append, the 3rd (stuck-flagged) execution vanishes
+                        # from the run record (2026-07-15 residual: the helper
+                        # covered only the four continue-shaped exits).
+                        _append_stuck_step_outcome()
                         break
                     elif _ae_decision.action == "escalate":
                         _ae_question = _ae_decision.user_question or _ae_decision.reasoning
@@ -1268,32 +1273,56 @@ def _execute_main_loop(
                 except Exception as _ae_exc:
                     log.debug("adaptive execution (stuck trigger) error: %s", _ae_exc)
 
-            # Advisor Pattern: before giving up, ask Opus for strategic guidance
+            # Advisor Pattern: before giving up, ask a power-tier model for
+            # strategic guidance. Config-gated (advisor.stuck_step, default
+            # off): this block was dead code from birth — `.get()` on
+            # StepOutcome dataclasses raised AttributeError into a catch-all,
+            # so the call never fired (BACKLOG 2026-07-15 finding). Fixing it
+            # ACTIVATES a paid LLM call on every terminal-stuck path, hence
+            # the gate (Jeremy 2026-07-16: fix + gate, on for this box).
             try:
-                from llm import advisor_call as _advisor_call
+                from config import get as _adv_cfg_get
+                _advisor_on = bool(_adv_cfg_get("advisor.stuck_step", False))
+            except Exception:
+                _advisor_on = False
+            if _advisor_on:
                 _ctx_summary = "\n".join(
-                    f"  step {i+1}: {o_s.get('status','?')} — {o_s.get('summary','')[:60]}"
+                    f"  step {i+1}: {o_s.status or '?'} — {o_s.result[:60]}"
                     for i, o_s in enumerate(step_outcomes[-5:])
                 )
-                _advice = _advisor_call(
-                    goal=goal,
-                    context=f"Completed {len(step_outcomes)} steps.\nRecent:\n{_ctx_summary}\n\nCurrent stuck step: {step_text}",
-                    question=f"Step '{step_text}' has failed 3 times with status '{step_status}'. Should we: (a) skip this step and continue, (b) rephrase the step and retry, or (c) abort the mission? If (b), suggest the rephrased step.",
-                )
+                _advice = None
+                try:
+                    from llm import advisor_call as _advisor_call
+                    _advice = _advisor_call(
+                        goal=goal,
+                        context=f"Completed {len(step_outcomes)} steps.\nRecent:\n{_ctx_summary}\n\nCurrent stuck step: {step_text}",
+                        question=f"Step '{step_text}' has failed 3 times with status '{step_status}'. Should we: (a) skip this step and continue, (b) rephrase the step and retry, or (c) abort the mission? If (b), suggest the rephrased step.",
+                    )
+                except Exception as _adv_exc:
+                    # LLM-call failures only (context build sits outside the
+                    # try — a shape bug here must be loud, that's the lesson).
+                    log.warning("stuck-step advisor call failed: %s", _adv_exc)
                 if _advice and "(b)" in _advice.lower():
-                    # Advisor says rephrase — extract suggestion and retry once
+                    # Advisor says rephrase — retry the same step once
                     log.info("advisor: suggests rephrasing stuck step %d — trying once more", step_idx)
                     if verbose:
-                        print(f"[maro] advisor (Opus): rephrase step {step_idx}", file=sys.stderr)
+                        print(f"[maro] advisor: rephrase step {step_idx}", file=sys.stderr)
+                    _record_loop_decision(
+                        "advisor", "stuck", "retry",
+                        f"advisor chose (b) rephrase-and-retry: {_advice[:100]}",
+                    )
                     stuck_streak = 0  # reset streak to give one more attempt
+                    # This 3rd (stuck-flagged) execution exits via continue,
+                    # skipping both the terminal stuck append below and the
+                    # bottom-of-loop append — record it (same contract as
+                    # every other continue-shaped exit above).
+                    _append_stuck_step_outcome()
                     # Don't break — let the loop continue with the same step
                     # The advisor's advice is logged but the step text stays the same
                     # (rephrasing would require plan mutation which is a bigger change)
                     continue
                 elif _advice:
                     log.info("advisor on stuck step %d: %s", step_idx, _advice[:120])
-            except Exception as _adv_exc:
-                log.debug("stuck-step advisor call failed: %s", _adv_exc)
 
             loop_status = "stuck"
             stuck_reason = f"same outcome '{step_status}' on '{step_text}' repeated 3 times"
