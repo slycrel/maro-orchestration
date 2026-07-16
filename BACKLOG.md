@@ -115,6 +115,31 @@ learning (promoted: the data layer that makes "active orchestrator" a runtime
 fact), container-on posture for network-sourced goals (revisit at Hermes
 go-live).
 
+Container-on day-one findings (2026-07-16, two dispatched verification runs):
+- [x] **Provenance freshness-window false demotion** — run 123bf935 demoted
+  `incomplete` because `_run_window_start` reconstructed the window as
+  now − elapsed − buffer and a slow post-loop closure slid it past artifacts
+  the run's own early steps wrote. FIXED same morning (8393883): wall-clock
+  start recorded in `_handle_impl`, preferred at both provenance call sites;
+  pin `test_run_window_start_prefers_wall_anchor`. Re-verified live on run
+  d2f4e2f4 (no mtime flag).
+- [ ] **Closure downgrade reason never reaches the run card** — run d2f4e2f4:
+  closure_verify downgraded complete→False ("behavioral gap: a declared
+  [shape: runtime] deliverable has no behavioral probe and no logged waiver")
+  but the card/metadata still carry the pre-downgrade narrative
+  (`goal_verdict_summary` opens "Goal achieved." beside
+  `goal_achieved: false`, confidence 0.92). Anyone reading the card sees a
+  contradiction with no cause; the reason lives only in the worker log.
+  Stamp the downgrade reason into the verdict summary (or a
+  `verdict_downgrade_reason` field the card surfaces). Also worth an eye:
+  the run HAD run its deliverable twice (exit 0, verdict line) — the
+  behavioral-probe detector may be too shape-strict about what counts.
+- [ ] **Step-count constraint ignored in decompose** — goal said "2-3 steps
+  maximum"; planner produced 7 steps / 296-line module + docs / 1.55M tokens
+  / $0.21 for what one shell step answers. Same family as the #23
+  binding-priority/batch-cap work (CLOSED for priority/batch; step-count
+  ceilings from goal text are not yet binding constraints).
+
 - [ ] **Stuck advisor block is dead code** (pre-existing; discovered by the
   stuck-outcome adversarial review 2026-07-15 — the fix itself shipped, see
   BACKLOG_DONE): `_ctx_summary` in `loop_execute.py` (~:1236) calls
