@@ -8,6 +8,85 @@ Last split: 2026-04-16 (session 34).
 
 ---
 
+## Closure downgrade reason now reaches the run card — SHIPPED (2026-07-16)
+
+**Source:** container-on day-one findings (run d2f4e2f4): closure_verify
+downgraded complete→False (behavioral gap) but the card kept the
+pre-downgrade "Goal achieved." narrative beside `goal_achieved: false`,
+confidence 0.92 — contradiction with no cause; the reason lived only in the
+worker log.
+
+**Shipped:** the deterministic downgrade branches (behavioral gap /
+diagnosis gap) now rewrite the verdict summary to LEAD with "Downgraded to
+not-achieved — {reason}. Original verdict: {…}" (leading so it survives
+every `[:300]` truncation site), plus `ClosureVerdict.downgrade_reason` →
+`goal_verdict_downgrade_reason` threaded metadata → run card → report
+Outcome panel ("Downgraded:" line) → CLI (inspect-run, run output JSON+text),
+only-when-stamped (key absent when empty, stale key popped on re-stamp).
+`decision_prior`'s "why" inherits the cause for free via the summary.
+8 writer tests + 9 review-driven pins. Code swept into `5c3a886` by a
+concurrent session mid-flow (complete + green at sweep; reviewer
+md5-verified no mutant leaked); review fixes in the follow-up commit.
+
+**Adversarial review (FIX_FIRST → fixed):** F1 REAL BUG, reproduced — the
+CLI verdict lane stamped via merge-no-pop, so `maro resume` with a clean
+retry verdict left the stale downgrade key: card rendered "Goal achieved:
+yes" + "Downgraded: …" (the same contradiction, inverted). Fix:
+`_closure_verdict_pass` now calls `runs.stamp_run_verdict` (one shared
+replace-semantics implementation; both CLI lanes wrap in `scoped_run_dir`
+so the plumbing matches). Deliberate rider, pinned: an unjudged retry now
+drops a stale `goal_achieved` too (stamp_run_verdict's documented
+latest-attempt semantics). F2: 6 of 12 mutation sites had no killing test —
+all 6 pinned with verified FAIL→PASS kills (incl. end-to-end curate_run on
+a downgraded run proving `optional_provides` is load-bearing: removing it
+hard-fails the curator output contract). Held under attack: truncation
+survival at 315-char reasons, both-downgrade join order, HTML escaping,
+inconclusive-flip stays unprefixed, no-downgrade summary byte-identical.
+
+**Spawned items (BACKLOG):** probe-modality compound-command
+misclassification (the actual root of the "detector too shape-strict" flag;
+DECISION-FLAGGED — the fix shifts verdicts in the blessing direction);
+precondition pre-flight strings leaking into closure checks as mangled
+shell (d2f4e2f4 probes 1-3).
+
+## Step-count ceilings from goal text are now binding in decompose — SHIPPED (2026-07-16)
+
+**Source:** container-on day-one findings — goal said "2-3 steps maximum",
+planner produced 7 steps / 1.55M tokens / $0.21 for what one shell step
+answers. #23c binding-priority family (priority/batch shipped; step-count
+ceilings weren't binding).
+
+**Shipped (mirrors #23c):** `goal_step_ceiling(goal)` — conservative
+deterministic detector (digits + word-numbers one–ten; "N steps max/maximum",
+"maximum of/at most/no more than N steps", "N steps or fewer/less",
+"limit(ed) … to N steps", single-step phrasings; ranges → upper bound;
+bare "in 3 steps" deliberately ambiguous → no fire). Binding via:
+`_STEP_CEILING_DIRECTIVE` in extras BEFORE cuts-first (probe path sees it),
+staged + compose injection, `user_msg` clamped to `min(max_steps, ceiling)`,
+scope-hint suppressed under ceiling, and `_enforce_step_ceiling()` on all
+six return lanes — one corrective re-ask, then hard-truncate + loud warning
++ `STEP_CEILING_ENFORCED` captain's-log event. Never pads. Ceiling carried
+across boundary expansion AND (review F2) milestone expansion.
+`maybe_add_verification_step` is ceiling-aware (caller runs post-decompose).
+Byte-identity when no ceiling stated: pinned AND re-proven empirically by
+the reviewer against the pre-change planner (5 lanes, every message
+byte-identical, incl. the #23c priority case).
+
+**Adversarial review (SHIP; follow-ups fixed):** 19 mutants — 15 killed at
+review, the 4 unpinned enforcement lanes (staged / compose-fallback /
+single-candidate / single-plan) pinned after with verified kills. Milestone
+expansion carry added (same bug class as the boundary carry). "3 steps,
+maximum" comma false-negative fixed. Two content-reference false-fires
+("limited to 3 steps by design", "at most 3 steps of the pipeline are
+affected") documented as known-gap pins — regex can't tell content
+references from plan bounds; plan degrades to the stated N, never crashes.
+
+**Accepted residuals (deliberate):** ceiling binds each plan-drawing, not
+total executed steps — cuts probes already executed don't count against it;
+blocked-step splits can still grow totals. The enforcement event undercounts
+dropped steps on over-return retries (parse cap hides the true count; noted
+in code). Word-numbers stop at ten; "eleven steps max" doesn't fire.
+
 ### 25. Hosted-free small-LLM tier: Groq + Gemini free tiers — SHIPPED + LIVE (2026-07-12 → 2026-07-16)
 
 **Source:** Jeremy 2026-07-12 ("I'm open to Groq or Gemini free tiers for

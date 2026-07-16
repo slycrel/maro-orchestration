@@ -123,22 +123,43 @@ Container-on day-one findings (2026-07-16, two dispatched verification runs):
   start recorded in `_handle_impl`, preferred at both provenance call sites;
   pin `test_run_window_start_prefers_wall_anchor`. Re-verified live on run
   d2f4e2f4 (no mtime flag).
-- [ ] **Closure downgrade reason never reaches the run card** — run d2f4e2f4:
-  closure_verify downgraded complete→False ("behavioral gap: a declared
-  [shape: runtime] deliverable has no behavioral probe and no logged waiver")
-  but the card/metadata still carry the pre-downgrade narrative
-  (`goal_verdict_summary` opens "Goal achieved." beside
-  `goal_achieved: false`, confidence 0.92). Anyone reading the card sees a
-  contradiction with no cause; the reason lives only in the worker log.
-  Stamp the downgrade reason into the verdict summary (or a
-  `verdict_downgrade_reason` field the card surfaces). Also worth an eye:
-  the run HAD run its deliverable twice (exit 0, verdict line) — the
-  behavioral-probe detector may be too shape-strict about what counts.
-- [ ] **Step-count constraint ignored in decompose** — goal said "2-3 steps
-  maximum"; planner produced 7 steps / 296-line module + docs / 1.55M tokens
-  / $0.21 for what one shell step answers. Same family as the #23
-  binding-priority/batch-cap work (CLOSED for priority/batch; step-count
-  ceilings from goal text are not yet binding constraints).
+- [x] **Closure downgrade reason never reaches the run card** — SHIPPED
+  2026-07-16 (code swept into `5c3a886`, review fixes follow-up commit; full
+  adversarial-review record in BACKLOG_DONE). Summary now leads with
+  "Downgraded to not-achieved — {reason}"; `goal_verdict_downgrade_reason`
+  rides metadata → card → report → CLI, replace-semantics on re-stamp
+  (resume stale-key bug found by review, fixed). The "detector too
+  shape-strict" side-question became the compound-command item below.
+- [x] **Step-count constraint ignored in decompose** — SHIPPED 2026-07-16
+  (code swept into `5c3a886`, review fixes follow-up commit; full record in
+  BACKLOG_DONE). `goal_step_ceiling()` detector + binding directive + prompt
+  clamp + re-ask-then-truncate enforcement on all six decompose lanes,
+  carries across boundary AND milestone expansion; byte-identical prompts
+  when no ceiling stated.
+- [ ] **Probe-modality classifier counts run-then-grep compound commands as
+  static** (from the closure-downgrade review, 2026-07-16 — the confirmed
+  root of d2f4e2f4's "too shape-strict" flag): `_classify_probe_modality`
+  checks `_STATIC_HINTS` before the process patterns, so the single most
+  common probe idiom — `<run the artifact> && grep <its output>` — counts
+  static even when it executed the deliverable end-to-end (d2f4e2f4 probe #8:
+  `python3 -m src > log && grep VERDICT=...` → static; modality showed
+  {"static": 8} on a run that exercised its deliverable twice). The
+  precedence exists to keep `go build ./cmd/foo` from false-matching `./path`,
+  but explicit runners (`python|go run|node|timeout`) were swept in as
+  collateral, contradicting the module's own mixed-command header comment
+  (the `curl && grep` → http precedent). **DECISION-FLAGGED**: the clean fix
+  (per-segment classification — split on `&&`/`;`/`|`, take most-behavioral)
+  broadly shifts verdicts in the *blessing* direction (suppresses
+  behavioral-gap downgrades), the expensive failure per this file's
+  documented asymmetry. Needs a deliberate call + a small verdict-shift
+  measurement, not a drive-by fix.
+- [ ] **Precondition pre-flight strings leak into the closure check list** —
+  d2f4e2f4 probes 1-3 were Python expressions run as shell commands
+  (`shutil.which('cat')`, `shutil.which('wc)')` — note the mangled paren,
+  `shutil.which('PYTHONPATH=src')`); they were the run's 2 inconclusive
+  checks. Side-finding from the closure-downgrade review 2026-07-16; find
+  the seam where `_run_precondition_preflight` output joins the closure
+  plan's checks and keep the species apart (or shell-quote properly).
 
 - [ ] **Stuck advisor block is dead code** (pre-existing; discovered by the
   stuck-outcome adversarial review 2026-07-15 — the fix itself shipped, see

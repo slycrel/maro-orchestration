@@ -595,19 +595,20 @@ def _closure_verdict_pass(goal_str: str, result, *, dry_run: bool = False):
     # pinned (the outcomes annotation above stays the loop-keyed source of
     # truth either way), so the honesty-only unit tests are unaffected.
     try:
-        from runs import stamp_run_metadata
-        _vf = {
-            "goal_verdict_confidence": float(_verdict.confidence),
-            "goal_verdict_source": ("closure" if _judged else "closure_unverifiable"),
-            "goal_verdict_summary": str(_verdict.summary)[:300],
-        }
-        # Only-when-stamped: key absent means "no downgrade", never "".
-        _downgrade = str(getattr(_verdict, "downgrade_reason", "") or "")
-        if _downgrade:
-            _vf["goal_verdict_downgrade_reason"] = _downgrade[:300]
-        if _judged:
-            _vf["goal_achieved"] = bool(_verdict.complete)
-        stamp_run_metadata(_vf)
+        from runs import stamp_run_verdict
+        # Replace-semantics on purpose (not stamp_run_metadata's merge):
+        # `maro resume` reuses the original run-dir and re-runs this pass,
+        # so a clean retry verdict must remove attempt 1's stale
+        # goal_verdict_downgrade_reason — and an unjudged retry must drop
+        # the stale goal_achieved boolean (latest-attempt semantics).
+        stamp_run_verdict(
+            goal_achieved=(bool(_verdict.complete) if _judged else None),
+            source=("closure" if _judged else "closure_unverifiable"),
+            confidence=float(_verdict.confidence),
+            summary=str(_verdict.summary),
+            downgrade_reason=str(
+                getattr(_verdict, "downgrade_reason", "") or ""),
+        )
     except Exception:
         pass
     # Status honesty: verified-done beats reported-done; unjudged verdicts

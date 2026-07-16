@@ -271,6 +271,39 @@ def test_classify_outcome_downgrade_reason_only_when_stamped(workspace):
     assert "goal_verdict_downgrade_reason" not in card2
 
 
+def test_curate_run_downgraded_run_carries_reason_end_to_end(workspace):
+    """Mutation survivor M9: classify_outcome's
+    optional_provides=("goal_verdict_downgrade_reason",) declaration is
+    load-bearing — without it the runtime output-contract check fails
+    classify_outcome ("wrote undeclared keys") on EVERY downgraded run,
+    dropping success_class and the whole classification from the card.
+    Pin at the curate_run seam so both the declaration and the card
+    pathway are covered."""
+    rd = create_run_dir(
+        "h00000dg", prompt="ship the runtime thing", lane="now",
+        model="claude",
+        extra_metadata={
+            "goal_achieved": False,
+            "goal_verdict_summary":
+                "Downgraded to not-achieved — no behavioral probe.",
+            "goal_verdict_downgrade_reason":
+                "no behavioral probe and no logged waiver",
+        })
+    finalize_run("h00000dg", status="done")
+
+    card = curate_run("h00000dg")
+    assert card is not None
+    assert card["success_class"] == "done-not-achieved"
+    assert card["goal_achieved"] is False
+    assert card["goal_verdict_downgrade_reason"] == (
+        "no behavioral probe and no logged waiver")
+    # And the persisted card, not just the returned dict.
+    written = json.loads((rd / "run_card.json").read_text())
+    assert written["success_class"] == "done-not-achieved"
+    assert written["goal_verdict_downgrade_reason"] == (
+        "no behavioral probe and no logged waiver")
+
+
 class TestSpendTransparency:
     """BACKLOG #11: above budget.transparency_usd the card carries the full
     build/artifact bundle (absolute paths + sizes) — no grep required."""

@@ -1906,6 +1906,37 @@ class TestClosureRestart:
         meta2 = _json.loads((runs_mod.run_dir(hr2.handle_id) / "metadata.json").read_text())
         assert meta2.get("goal_achieved") is True
 
+    def test_downgraded_verdict_stamps_downgrade_reason(self, monkeypatch, tmp_path):
+        """Mutation survivor M5: a deterministic downgrade (complete=True LLM
+        verdict flipped to False — behavioral/diagnosis gap) must land its
+        downgrade_reason in the run-dir metadata, so goal_achieved=False
+        beside a positive narrative reads as cause, not contradiction.
+        checks all passed → narrative-only gate skips the restart, so the
+        downgraded verdict IS the one stamped."""
+        self._setup(monkeypatch, tmp_path)
+        from unittest.mock import patch
+        import runs as runs_mod
+
+        downgraded = self._fake_closure(False, 0.92, checks_run=2)
+        downgraded.checks_passed = 2  # all checks passed → no restart
+        downgraded.downgrade_reason = (
+            "no behavioral probe and no logged waiver")
+        downgraded.summary = "Downgraded to not-achieved — no behavioral probe."
+
+        with patch("agent_loop.run_agent_loop", return_value=self._fake_loop_result()), \
+             patch("intent.check_goal_clarity", return_value={"clear": True}), \
+             patch("director.verify_goal_completion", return_value=downgraded), \
+             self._no_quality_gate():
+            hr = handle("build X", force_lane="agenda", dry_run=False)
+
+        import json as _json
+        meta = _json.loads(
+            (runs_mod.run_dir(hr.handle_id) / "metadata.json").read_text())
+        assert meta["goal_achieved"] is False
+        assert meta["goal_verdict_source"] == "closure"
+        assert meta["goal_verdict_downgrade_reason"] == (
+            "no behavioral probe and no logged waiver")
+
     def test_closure_verdict_recorded_in_thread_brain(self, monkeypatch, tmp_path):
         """MILESTONES #3a compiled-truth: a closure verdict with checks run
         lands as a verified claim in the run's goal-brain."""
@@ -2537,6 +2568,46 @@ class TestPostEscalateClosure:
         assert meta["goal_achieved"] is False
         assert meta["goal_verdict_source"] == "closure"
         assert meta["goal_verdict_confidence"] == 0.95
+
+    def test_post_escalate_downgraded_verdict_stamps_downgrade_reason(
+        self, monkeypatch, tmp_path
+    ):
+        """Mutation survivor M6: the post-escalate stamp_run_verdict call must
+        pass the escalated verdict's downgrade_reason through — the escalated
+        attempt is what ships, so its downgrade cause is the one the run card
+        surfaces."""
+        self._setup(monkeypatch, tmp_path)
+        from unittest.mock import patch, MagicMock
+        import runs as runs_mod
+
+        run_results = [
+            self._fake_loop_result(status="done", loop_id="lr-initial"),
+            self._fake_loop_result(status="done", loop_id="lr-escalated"),
+        ]
+        downgraded = self._fake_closure(complete=False, confidence=0.95)
+        downgraded.downgrade_reason = (
+            "no behavioral probe and no logged waiver")
+        downgraded.summary = "Downgraded to not-achieved — no behavioral probe."
+        closures = [
+            self._fake_closure(complete=True, confidence=0.9),  # initial, clean
+            downgraded,                                          # post-escalate
+        ]
+
+        with patch("agent_loop.run_agent_loop", side_effect=lambda *a, **k: run_results.pop(0)), \
+             patch("intent.check_goal_clarity", return_value={"clear": True}), \
+             patch("director.verify_goal_completion", side_effect=lambda *a, **k: closures.pop(0)), \
+             patch("llm.build_adapter", return_value=MagicMock()), \
+             patch("loop_finalize.finalize_deferred_learning"), \
+             self._escalating_gate():
+            result = handle("build X", force_lane="agenda", model="cheap", dry_run=False)
+
+        meta = json.loads(
+            (runs_mod.run_dir(result.handle_id) / "metadata.json").read_text()
+        )
+        assert meta["goal_achieved"] is False
+        assert meta["goal_verdict_confidence"] == 0.95
+        assert meta["goal_verdict_downgrade_reason"] == (
+            "no behavioral probe and no logged waiver")
 
     def test_post_escalate_stamp_failure_warns_and_skips_retry_learning(
             self, monkeypatch, tmp_path):

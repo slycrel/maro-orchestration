@@ -796,7 +796,8 @@ class TestClosureVerdictPass:
 
     class _Verdict:
         def __init__(self, complete, confidence=0.9, judged=True,
-                     checks_run=3, checks_passed=1, summary="gaps found"):
+                     checks_run=3, checks_passed=1, summary="gaps found",
+                     downgrade_reason=""):
             self.complete = complete
             self.confidence = confidence
             self.judged = judged
@@ -805,6 +806,7 @@ class TestClosureVerdictPass:
             self.gaps = []
             self.summary = summary
             self.inconclusive_count = 0
+            self.downgrade_reason = downgrade_reason
 
     def _result(self, status="done"):
         class _R:
@@ -903,6 +905,165 @@ class TestClosureVerdictPass:
         _cli_module._closure_verdict_pass("the goal", r)
         assert ann == []
         assert r.status == "done"
+
+    # --- run-dir stamping (adversarial review 2026-07: stale-downgrade
+    # resume bug + mutation survivor M7a). `maro resume` reuses the ORIGINAL
+    # run-dir, so this pass must stamp with replace-semantics
+    # (runs.stamp_run_verdict), never a merge that lets attempt 1's downgrade
+    # key shadow a clean retry verdict.
+
+    def _pinned_run_dir(self, monkeypatch, tmp_path):
+        import runs
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+        rd = runs.create_run_dir("cvpstamp", prompt="build X")
+        runs.set_current_run_dir(rd)
+        return rd
+
+    def test_downgraded_verdict_stamps_downgrade_reason_on_run_dir(
+            self, monkeypatch, tmp_path):
+        """M7a pin: the downgrade reason reaches the run-dir metadata via the
+        CLI closure pass (only-when-stamped: nonempty writes the key)."""
+        import runs
+        rd = self._pinned_run_dir(monkeypatch, tmp_path)
+        try:
+            self._patch(monkeypatch, self._Verdict(
+                complete=False, confidence=0.92,
+                summary="Downgraded to not-achieved — no behavioral probe.",
+                downgrade_reason="no behavioral probe and no logged waiver",
+            ), [])
+            _cli_module._closure_verdict_pass("the goal", self._result("done"))
+            meta = json.loads((rd / "metadata.json").read_text())
+            assert meta["goal_achieved"] is False
+            assert meta["goal_verdict_downgrade_reason"] == (
+                "no behavioral probe and no logged waiver")
+            assert meta["goal_verdict_source"] == "closure"
+        finally:
+            runs.set_current_run_dir(None)
+
+    def test_resume_clean_retry_clears_stale_downgrade_key(
+            self, monkeypatch, tmp_path):
+        """Stale-key resume bug pin: downgraded attempt 1, clean attempt 2 on
+        the SAME run dir (the `maro resume` shape) — the clean verdict must
+        remove the stale downgrade key, not merge around it. Regression:
+        run cards rendered 'Goal achieved: yes' beside a 'Downgraded:' cause."""
+        import runs
+        rd = self._pinned_run_dir(monkeypatch, tmp_path)
+        try:
+            self._patch(monkeypatch, self._Verdict(
+                complete=False, confidence=0.92,
+                summary="Downgraded to not-achieved — no behavioral probe.",
+                downgrade_reason="no behavioral probe and no logged waiver",
+            ), [])
+            _cli_module._closure_verdict_pass("the goal", self._result("done"))
+            meta1 = json.loads((rd / "metadata.json").read_text())
+            assert meta1["goal_achieved"] is False
+            assert "goal_verdict_downgrade_reason" in meta1
+
+            self._patch(monkeypatch, self._Verdict(
+                complete=True, confidence=0.95, checks_passed=3,
+                summary="Goal achieved on retry.",
+            ), [])
+            _cli_module._closure_verdict_pass("the goal", self._result("done"))
+            meta2 = json.loads((rd / "metadata.json").read_text())
+            assert meta2["goal_achieved"] is True
+            assert meta2["goal_verdict_summary"] == "Goal achieved on retry."
+            assert "goal_verdict_downgrade_reason" not in meta2
+        finally:
+            runs.set_current_run_dir(None)
+
+    def test_unjudged_retry_drops_stale_goal_achieved(
+            self, monkeypatch, tmp_path):
+        """Latest-attempt semantics (stamp_run_verdict contract): an unjudged
+        retry removes attempt 1's goal_achieved boolean rather than letting
+        the best-looking verdict seen anywhere in the handle survive."""
+        import runs
+        rd = self._pinned_run_dir(monkeypatch, tmp_path)
+        try:
+            self._patch(monkeypatch, self._Verdict(
+                complete=True, checks_passed=3), [])
+            _cli_module._closure_verdict_pass("the goal", self._result("done"))
+            assert json.loads(
+                (rd / "metadata.json").read_text())["goal_achieved"] is True
+
+            self._patch(monkeypatch, self._Verdict(
+                complete=False, judged=False,
+                summary="checks were inconclusive"), [])
+            _cli_module._closure_verdict_pass("the goal", self._result("done"))
+            meta = json.loads((rd / "metadata.json").read_text())
+            assert "goal_achieved" not in meta
+            assert meta["goal_verdict_source"] == "closure_unverifiable"
+        finally:
+            runs.set_current_run_dir(None)
+
+
+# ---------------------------------------------------------------------------
+# Downgrade-reason surfaces (mutation survivors M7b/M7c): the reason must
+# reach BOTH user surfaces — `maro run` output and `maro inspect-run`.
+# ---------------------------------------------------------------------------
+
+def test_emit_run_output_json_includes_downgrade_reason(capsys):
+    """M7b pin: _emit_run_output carries goal_verdict_downgrade_reason into
+    the JSON payload (and the text 'downgraded:' line) when the verdict was
+    downgraded — only-when-stamped, so the key is absent on clean verdicts."""
+    import types
+
+    class _Step:
+        status = "done"
+
+    result = types.SimpleNamespace(
+        loop_id="loop1234", project="proj", goal="build X", status="done",
+        steps=[_Step()], stuck_reason=None, total_tokens_in=10,
+        total_tokens_out=20, elapsed_ms=5, log_path="/tmp/x.log",
+        summary=lambda: "one line",
+    )
+    verdict = types.SimpleNamespace(
+        complete=False, confidence=0.92, judged=True, checks_run=2,
+        checks_passed=1, gaps=["gap"],
+        summary="Downgraded to not-achieved — no behavioral probe.",
+        downgrade_reason="no behavioral probe and no logged waiver",
+    )
+    args = types.SimpleNamespace(format="json")
+    rc = _cli_module._emit_run_output(args, result, verdict)
+    out = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    assert out["goal_achieved"] is False
+    assert out["goal_verdict_downgrade_reason"] == (
+        "no behavioral probe and no logged waiver")
+
+    # Clean verdict: key absent, never "".
+    verdict.downgrade_reason = ""
+    verdict.complete = True
+    _cli_module._emit_run_output(args, result, verdict)
+    out2 = json.loads(capsys.readouterr().out)
+    assert "goal_verdict_downgrade_reason" not in out2
+
+
+def test_cli_inspect_run_text_shows_downgrade_reason(tmp_path):
+    """M7c pin: `maro inspect-run` (text mode) prints the downgrade reason
+    stamped on the run-dir metadata, so a goal_achieved=False reads as cause."""
+    import runs
+    prev = os.environ.get("OPENCLAW_WORKSPACE")
+    os.environ["OPENCLAW_WORKSPACE"] = str(tmp_path)
+    try:
+        runs.create_run_dir(
+            "dgreason", prompt="ship the runtime thing", lane="agenda",
+            extra_metadata={
+                "goal_achieved": False,
+                "goal_verdict_summary": "Downgraded to not-achieved.",
+                "goal_verdict_downgrade_reason": (
+                    "no behavioral probe and no logged waiver"),
+            })
+    finally:
+        if prev is None:
+            os.environ.pop("OPENCLAW_WORKSPACE", None)
+        else:
+            os.environ["OPENCLAW_WORKSPACE"] = prev
+
+    view = _run(tmp_path, "inspect-run", "dgreason")
+    assert view.returncode == 0
+    assert "goal_achieved=False" in view.stdout
+    assert ("goal_verdict_downgrade_reason="
+            "no behavioral probe and no logged waiver") in view.stdout
 
 
 # ---------------------------------------------------------------------------

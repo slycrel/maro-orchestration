@@ -3212,3 +3212,20 @@ Dormant (deliberately parked, not dropped):
   2026-07-19 09:00) to analyze via `python3 -m validation_shadow
   --agreement` and flip it back OFF. Also removed the now-moot 19:04
   keys-reminder timer (unit files deleted, not disabled).
+- **2026-07-16 (Jeremy, afternoon): "Let's fix those 2 goal related things"**
+  — the two container-on day-one findings, both SHIPPED same day via the
+  writer→verify→adversarial-review→fix pattern (full records in
+  BACKLOG_DONE): (1) closure downgrade reason now reaches the run card
+  (summary leads with the cause; `goal_verdict_downgrade_reason` on
+  metadata/card/report/CLI; review found + fixed a resume stale-key bug —
+  clean retry used to render "Goal achieved: yes" beside "Downgraded: …");
+  (2) goal-text step-count ceilings are binding in decompose
+  (`goal_step_ceiling` detector + directive + clamp + re-ask-then-truncate
+  on all six lanes + boundary/milestone expansion carry; no-ceiling prompts
+  byte-identical, reviewer-proven). Code content was swept into `5c3a886`
+  by the parallel session mid-flow (Jeremy: safe to ignore if complete —
+  it was complete + green; reviewer md5-confirmed no mutant leaked);
+  review fixes + records landed as the follow-up commits. Two new BACKLOG
+  items spawned, one DECISION-FLAGGED: probe-modality per-segment
+  classification (fix shifts verdicts toward blessing — needs a deliberate
+  call), and precondition pre-flight strings leaking into closure checks.
