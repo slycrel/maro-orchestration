@@ -1597,23 +1597,85 @@ def verify_step(
     Returns a dict with: passed, reason, confidence.
     Non-fatal — returns passed=True on any error so verify never blocks execution.
 
-    Local-first validation ladder (only when `validate.local_models` is set):
-    a free local model judges first; if its confidence is below
-    `validate.min_certainty` (UNDECIDED) we escalate to the paid `adapter`.
-    With no local models configured this is byte-identical to the paid path.
+    Free-tier order (decreed 2026-07-16, Jeremy: "hosted-free first, then 3b
+    local as backup... slow + local seems better than a network API call fail
+    for whatever reason"):
 
-    Hosted-free rung (BACKLOG #25, only when GROQ_API_KEY/GEMINI_API_KEY is
-    set): tried between the local tier and paid — a second free opinion (over
-    the network, rate-limited) before spending on the paid adapter. Inert
-    no-op when neither key is configured; see hosted_free.py.
+      Tier 1   hosted-free (BACKLOG #25, gated on `validate.hosted_free.enabled`
+               + a GROQ_API_KEY/GEMINI_API_KEY) — stronger models, ~1-2s.
+      Tier 1b  local model (`validate.local_models`) — the availability BACKUP:
+               consulted only when the hosted tier is inert (unconfigured/
+               breakers) or failed to produce a verdict at all. A genuine
+               hosted UNDECIDED escalates straight to paid — the weaker local
+               model doesn't get to overrule a stronger model's uncertainty.
+      Tier 2   paid `adapter` — escalation target for UNDECIDED, and the whole
+               path when neither free tier is configured (byte-identical).
     """
-    # --- Tier 1: free local validator (gated; falls through to paid on anything) ---
     _escalated = False
     _local_lv = None   # (verdict, source) carried to Tier 2 for shadow-eval (no-op unless enabled)
     _local_elapsed_ms = 0
+    _hosted_lv = None  # (verdict, source) likewise
+    _try_local = True  # cleared when hosted-free actually judged (decisive or UNDECIDED)
+
+    # --- Tier 1: hosted-free (Groq/Gemini free API tier, BACKLOG #25) ---
+    # Inert no-op (hosted_free.configured_providers() == []) when no key is
+    # set or the consent gate is off — the local tier below is then the first
+    # free rung, exactly the pre-hosted-free behavior.
+    try:
+        import hosted_free as _hf
+        if _hf.available():
+            hosted = _hf.build_hosted_free_adapter()  # None if no key configured
+            if hosted is not None:
+                from verification_agent import VerificationAgent
+                _t0 = time.monotonic()
+                # As with the local rung, RETRY interpretation and decisive
+                # acceptance must share one boundary or an intermediate-
+                # confidence RETRY can become a trusted free-tier PASS.
+                hv = VerificationAgent(hosted, confidence_threshold=_hf.min_certainty(),
+                                       max_input_chars=_hf.input_char_budget()).verify_step(step_text, result)
+                _hosted_elapsed_ms = int((time.monotonic() - _t0) * 1000)
+                _hosted_source = f"hosted_free:{getattr(hosted, '_active_provider', '') or '?'}:{getattr(hosted, 'model_key', '')}"
+                if hv.confidence >= _hf.min_certainty():
+                    _hosted_lv = (hv, _hosted_source)
+                    log.debug("hosted-free validator decisive: passed=%s conf=%.2f via %s",
+                              hv.passed, hv.confidence, _hosted_source)
+                    _log_validation_ladder(
+                        tier="hosted-free-decisive", source=_hosted_source,
+                        passed=hv.passed, confidence=hv.confidence,
+                        local_elapsed_ms=_hosted_elapsed_ms,
+                        input_chars=len(result or ""), step_text=step_text)
+                    try:
+                        import validation_shadow as _vs
+                        _vs.shadow_eval(step_text, result, hv, _hosted_source,
+                                        paid_adapter=adapter,
+                                        confidence_threshold=confidence_threshold)
+                    except Exception:
+                        pass
+                    return {"passed": hv.passed, "reason": hv.reason, "confidence": hv.confidence,
+                            "decision": "HOSTED_FREE_PASS" if hv.passed else "HOSTED_FREE_FAIL",
+                            "source": _hosted_source}
+                if hv.confidence > 0.0:
+                    # The (stronger) hosted model judged and was genuinely
+                    # unsure — escalate straight to paid, skipping the local
+                    # backup: it exists for availability, not second opinions.
+                    _hosted_lv = (hv, _hosted_source)
+                    _try_local = False
+                    _escalated = True
+                    log.info("hosted-free validator UNDECIDED (conf=%.2f < %.2f) — escalating to paid",
+                             hv.confidence, _hf.min_certainty())
+                else:
+                    # confidence == 0.0 is VerificationAgent's no-verdict
+                    # sentinel (transport failure / unparseable output across
+                    # every provider): the tier FAILED rather than judged.
+                    # This is the exact case the local backup exists for.
+                    log.info("hosted-free tier produced no verdict — falling back to local backup")
+    except Exception as exc:
+        log.debug("hosted-free validator path skipped (non-fatal): %s", exc)
+
+    # --- Tier 1b: free local validator, the availability backup ---
     try:
         import local_models as _lm
-        if _lm.configured_models() and not _lm.latency_guard_tripped():
+        if _try_local and _lm.configured_models() and not _lm.latency_guard_tripped():
             _lm.ensure_validator_running()               # spin up on demand (no-op if up/disabled/ollama)
             local = _lm.build_local_validator_adapter()  # None if endpoint/model absent
             if local is not None:
@@ -1655,51 +1717,6 @@ def verify_step(
                 _escalated = True
     except Exception as exc:
         log.debug("local validator path skipped (non-fatal): %s", exc)
-
-    # --- Tier 1b: hosted-free (Groq/Gemini free API tier, BACKLOG #25) ---
-    # An additional free rung ALONGSIDE the local tier above, not a
-    # replacement — tried whether or not local ran (local unconfigured, or
-    # local UNDECIDED both land here), before falling to paid. Inert no-op
-    # (hosted_free.configured_providers() == []) when no key is set.
-    _hosted_lv = None  # (verdict, source) carried to Tier 2 for shadow-eval
-    try:
-        import hosted_free as _hf
-        if _hf.available():
-            hosted = _hf.build_hosted_free_adapter()  # None if no key configured
-            if hosted is not None:
-                from verification_agent import VerificationAgent
-                _t0 = time.monotonic()
-                # As with the local rung, RETRY interpretation and decisive
-                # acceptance must share one boundary or an intermediate-
-                # confidence RETRY can become a trusted free-tier PASS.
-                hv = VerificationAgent(hosted, confidence_threshold=_hf.min_certainty(),
-                                       max_input_chars=_hf.input_char_budget()).verify_step(step_text, result)
-                _hosted_elapsed_ms = int((time.monotonic() - _t0) * 1000)
-                _hosted_source = f"hosted_free:{getattr(hosted, '_active_provider', '') or '?'}:{getattr(hosted, 'model_key', '')}"
-                _hosted_lv = (hv, _hosted_source)
-                if hv.confidence >= _hf.min_certainty():
-                    log.debug("hosted-free validator decisive: passed=%s conf=%.2f via %s",
-                              hv.passed, hv.confidence, _hosted_source)
-                    _log_validation_ladder(
-                        tier="hosted-free-decisive", source=_hosted_source,
-                        passed=hv.passed, confidence=hv.confidence,
-                        local_elapsed_ms=_hosted_elapsed_ms,
-                        input_chars=len(result or ""), step_text=step_text)
-                    try:
-                        import validation_shadow as _vs
-                        _vs.shadow_eval(step_text, result, hv, _hosted_source,
-                                        paid_adapter=adapter,
-                                        confidence_threshold=confidence_threshold)
-                    except Exception:
-                        pass
-                    return {"passed": hv.passed, "reason": hv.reason, "confidence": hv.confidence,
-                            "decision": "HOSTED_FREE_PASS" if hv.passed else "HOSTED_FREE_FAIL",
-                            "source": _hosted_source}
-                log.info("hosted-free validator UNDECIDED (conf=%.2f < %.2f) — escalating to paid",
-                         hv.confidence, _hf.min_certainty())
-                _escalated = True
-    except Exception as exc:
-        log.debug("hosted-free validator path skipped (non-fatal): %s", exc)
 
     # --- Tier 2: paid validator (default path, or escalation target for UNDECIDED) ---
     try:

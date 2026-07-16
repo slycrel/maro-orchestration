@@ -3168,3 +3168,20 @@ Dormant (deliberately parked, not dropped):
   (even the M1 likely)." → Standing read: local lane = free/offline floor
   behind Tier-0 + breaker, hosted-free = the real quality/latency lane; don't
   invest further in local-model upgrades on this box unprompted.
+- **2026-07-16 (Jeremy, same exchange) — VALIDATION FREE-TIER ORDER FLIPPED:
+  hosted-free first, local backup.** "Let's (sadly) flip this then;
+  hosted-free first, then 3b local as backup. Not that gemini + groq are
+  likely to ever be down at the same time so maybe moot, but slow + local
+  seems better than a network API call fail for whatever reason." Shipped
+  same hour: `step_exec.verify_step` reordered — hosted-free (when enabled +
+  keyed) judges first; local qwen is the AVAILABILITY backup, consulted only
+  when the hosted tier is inert or produces no verdict (conf-0.0 sentinel =
+  transport/parse failure); a genuine hosted UNDECIDED escalates straight to
+  paid (weaker local model doesn't overrule a stronger model's uncertainty).
+  Fresh installs unchanged (hosted-free stays consent-gated OFF; local
+  remains first rung when hosted is inert). Box config:
+  `validate.hosted_free.enabled: true` (inert until keys). Credentials .env
+  migrated legacy→`~/.maro/workspace/secrets/.env` (preferred path; all 5
+  legacy keys carried; legacy file untouched). Keys are Jeremy's next move
+  (console.groq.com + aistudio.google.com/apikey → append to that .env);
+  hosted tier then goes live with zero further changes.

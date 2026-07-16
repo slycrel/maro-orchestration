@@ -16,20 +16,34 @@ behaves exactly as before (paid path). See `src/local_models.py`.
 ## The validation ladder
 
 ```
-Tier 0  free, deterministic   claim_verifier · settled_by_command · tests · constraints
-Tier 1  free, LOCAL model     local validator → verdict + confidence        ← this feature
-Tier 2  paid                  paid validator (the step's adapter)            ← escalation target
-Tier 3  paid ensemble         quality_gate.run_llm_council (3-persona trio)
+Tier 0   free, deterministic   claim_verifier · settled_by_command · tests · constraints
+Tier 1   free, HOSTED          Groq/Gemini free API tier (hosted_free.py)     ← when enabled + keyed
+Tier 1b  free, LOCAL model     local validator → verdict + confidence         ← this feature (backup)
+Tier 2   paid                  paid validator (the step's adapter)            ← escalation target
+Tier 3   paid ensemble         quality_gate.run_llm_council (3-persona trio)
 ```
 
-`verify_step()` runs Tier 1 first when `validate.local_models` is set. If the
-local verdict's `confidence >= validate.min_certainty` it is **decisive** and
-the paid path is skipped entirely (zero cost). Below that threshold the verdict
-is **UNDECIDED** and we escalate to the paid `adapter`. The returned dict gains
-`decision` (`LOCAL_PASS` | `LOCAL_FAIL` | `ESCALATED`) and `source`.
+**Free-tier order (decreed 2026-07-16, Jeremy):** hosted-free first, local as
+the availability backup — "slow + local seems better than a network API call
+fail for whatever reason." When `validate.hosted_free.enabled` is on and a
+`GROQ_API_KEY`/`GEMINI_API_KEY` is present, the hosted tier judges first
+(stronger models, ~1–2s). The local tier is consulted only when the hosted
+tier is inert (disabled, no keys, all providers breaker-tripped) or fails to
+produce any verdict (network failure / unparseable output). A *genuine*
+hosted UNDECIDED escalates straight to paid — the weaker local model doesn't
+overrule a stronger model's uncertainty. With hosted-free off (the
+fresh-install default), the local tier remains the first free rung, unchanged.
+
+If a free verdict's `confidence >= min_certainty` (local:
+`validate.min_certainty`; hosted: `validate.hosted_free.min_certainty`) it is
+**decisive** and the paid path is skipped entirely (zero cost). Below that
+threshold the verdict is **UNDECIDED** and we escalate to the paid `adapter`.
+The returned dict gains `decision` (`HOSTED_FREE_PASS` | `HOSTED_FREE_FAIL` |
+`LOCAL_PASS` | `LOCAL_FAIL` | `ESCALATED`) and `source`.
 
 A dead endpoint or empty result surfaces as confidence `0.0`, which is below any
-threshold → automatic escalation. Nothing ever blocks on the local model.
+threshold → automatic escalation (hosted `0.0` first falls back to the local
+backup). Nothing ever blocks on a free validator.
 
 ## Runtimes
 

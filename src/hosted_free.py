@@ -6,9 +6,17 @@ Google account for Gemini) suitable for the orchestrator's high-volume
 plugs them in as an ADDITIONAL rung of the validation ladder, alongside
 (never replacing) `local_models.py`'s in-process local-model tier:
 
-    Tier 1  local models      (local_models.py)   — free, in-process, fast
-    Tier 1b hosted-free       (this module)        — free, network, rate-limited
+    Tier 1  hosted-free       (this module)        — free, network, rate-limited
+    Tier 1b local models      (local_models.py)    — free, in-process, BACKUP
     Tier 2  paid                                   — the existing adapter
+
+Order decreed 2026-07-16 (Jeremy): "hosted-free first, then 3b local as
+backup... slow + local seems better than a network API call fail for
+whatever reason." When this tier is enabled and keyed, it judges first
+(stronger models, ~1-2s); the local tier is consulted only when this tier
+is inert or fails to produce a verdict (see step_exec.verify_step). With
+this tier disabled (the fresh-install default) the local tier remains the
+first free rung, unchanged.
 
 Design mirrors `local_models.py` on purpose (same shape the codebase already
 knows how to reason about):

@@ -677,13 +677,19 @@ All adversarially verified (41/42 confirmed). The two blockers-at-the-time first
 ### 25. Hosted-free small-LLM tier: Groq + Gemini free tiers (2026-07-12, from item 24 decision)
 
 **Code SHIPPED 2026-07-13** (`src/hosted_free.py` + `GroqAdapter`/`GeminiAdapter`
-in `src/llm.py`, wired into `step_exec.verify_step` as Tier 1b between local
-and paid). Fully inert unless explicitly enabled, and inert with no key set —
-the only thing left is Jeremy setting `validate.hosted_free.enabled: true`,
-creating `GROQ_API_KEY`/`GEMINI_API_KEY`, and confirming the free-tier RPM
-numbers below still hold against the live endpoints (they were verified
-2026-07-12 from research, not yet from a real call). See BACKLOG_DONE for
-implementation detail once keys are live and this has a real-traffic pass.
+in `src/llm.py`, wired into `step_exec.verify_step`). **REORDERED + ENABLED
+2026-07-16** (Jeremy: "hosted-free first, then 3b local as backup... slow +
+local seems better than a network API call fail for whatever reason"):
+hosted-free is now Tier 1 (first free rung); local qwen is the availability
+backup, consulted only when hosted produces no verdict; a genuine hosted
+UNDECIDED escalates straight to paid. `validate.hosted_free.enabled: true`
+set in the box config; credentials .env migrated to
+`~/.maro/workspace/secrets/.env` (preferred path, legacy OpenClaw file left
+in place). **Remaining:** Jeremy creates `GROQ_API_KEY`/`GEMINI_API_KEY`
+(console.groq.com / aistudio.google.com/apikey) and appends them to that
+.env; then a real-traffic pass to confirm the RPM numbers below still hold
+(verified 2026-07-12 from research, not yet from a real call). See
+BACKLOG_DONE for implementation detail once that lands.
 
 Jeremy: "I'm open to Groq or Gemini free tiers for small LLM work in the
 orchestrator." Wire the free tiers as a hosted-free rung for the
