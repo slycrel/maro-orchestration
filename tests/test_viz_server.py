@@ -133,3 +133,80 @@ def test_rejects_directory_listing(live_server):
     with pytest.raises(urllib.error.HTTPError) as exc:
         urllib.request.urlopen(f"{live_server}/eager-otter/build/calls/")
     assert exc.value.code == 403
+
+
+# ---------------------------------------------------------------------------
+# ensure_running — viz.autostart (default off; spawn only when port is free)
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def autostart_env(monkeypatch, tmp_path):
+    """Isolate the pid/log files and give tests a config knob."""
+    import config
+    monkeypatch.setattr(vs, "_PID_FILE", str(tmp_path / "viz.pid"))
+    monkeypatch.setattr(vs, "_LOG_FILE", str(tmp_path / "viz.log"))
+    cfg = {}
+    monkeypatch.setattr(config, "get", lambda key, default=None: cfg.get(key, default))
+    return cfg
+
+
+def test_autostart_default_off_no_spawn(autostart_env, monkeypatch):
+    import subprocess
+    def _boom(*a, **k):
+        raise AssertionError("must not spawn when viz.autostart is off")
+    monkeypatch.setattr(subprocess, "Popen", _boom)
+    assert vs.ensure_running() is False
+
+
+def test_autostart_skips_when_port_occupied(autostart_env, monkeypatch):
+    import socket
+    import subprocess
+    holder = socket.socket()
+    holder.bind(("127.0.0.1", 0))
+    holder.listen(1)
+    port = holder.getsockname()[1]
+    autostart_env.update({"viz.autostart": True, "viz.port": port,
+                          "viz.host": "0.0.0.0"})
+    def _boom(*a, **k):
+        raise AssertionError("must not spawn when the port is already served")
+    monkeypatch.setattr(subprocess, "Popen", _boom)
+    try:
+        assert vs.ensure_running() is False
+    finally:
+        holder.close()
+
+
+def test_autostart_spawns_detached_when_port_free(autostart_env, monkeypatch, tmp_path):
+    import socket
+    import subprocess
+    with socket.socket() as s:  # find a definitely-free port, then release it
+        s.bind(("127.0.0.1", 0))
+        free_port = s.getsockname()[1]
+    autostart_env.update({"viz.autostart": True, "viz.port": free_port})
+    spawned = {}
+    class _FakeProc:
+        pid = 4242
+    def _fake_popen(cmd, **kwargs):
+        spawned["cmd"] = cmd
+        spawned["kwargs"] = kwargs
+        return _FakeProc()
+    monkeypatch.setattr(subprocess, "Popen", _fake_popen)
+    assert vs.ensure_running() is True
+    assert spawned["cmd"][1].endswith("cli.py")
+    assert spawned["cmd"][2:] == ["viz", "serve"]
+    assert spawned["kwargs"]["start_new_session"] is True
+    assert (tmp_path / "viz.pid").read_text().strip() == "4242"
+
+
+def test_autostart_failure_is_nonfatal(autostart_env, monkeypatch):
+    """Contract: called at goal-run entry — a broken spawn must not raise."""
+    import socket
+    import subprocess
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        free_port = s.getsockname()[1]
+    autostart_env.update({"viz.autostart": True, "viz.port": free_port})
+    def _boom(*a, **k):
+        raise OSError("no exec for you")
+    monkeypatch.setattr(subprocess, "Popen", _boom)
+    assert vs.ensure_running() is False

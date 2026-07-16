@@ -694,6 +694,13 @@ def _handle_impl(
         measurement_class or (origin or {}).get("measurement_class")
     )
 
+    # Revive the run viewer if configured (viz.autostart, default off) — a
+    # goal run is the natural "someone will want to look" moment, and this
+    # survives reboots without a system agent. Best-effort, never blocks.
+    if not dry_run:
+        from viz_server import ensure_running as _viz_ensure_running
+        _viz_ensure_running()
+
     if verbose:
         print(f"[maro:{handle_id}] handle: {message!r}", file=sys.stderr, flush=True)
 

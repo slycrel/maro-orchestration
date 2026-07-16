@@ -33,6 +33,11 @@ log = logging.getLogger("maro.viz")
 _DEFAULT_HOST = "127.0.0.1"
 _DEFAULT_PORT = 8787
 
+# Shared with scripts/viz-ctl.sh — keep in sync so `viz-ctl.sh stop/status`
+# can manage a server that autostart spawned.
+_PID_FILE = "/tmp/maro-viz-server.pid"
+_LOG_FILE = "/tmp/maro-viz-server.log"
+
 
 def _resolve_allowed_path(url_path: str, root: Path) -> Optional[Path]:
     """Map a request path to a servable location under `root`, or None if denied.
@@ -104,6 +109,53 @@ def _make_handler_class(root: Path) -> Type[http.server.SimpleHTTPRequestHandler
             return None
 
     return _ViewerHandler
+
+
+def ensure_running() -> bool:
+    """Start the viz server detached if `viz.autostart` says so and nothing is
+    already listening. Best-effort by contract: called at goal-run entry, so
+    ANY failure logs and returns False rather than touching the run. Returns
+    True only when this call actually spawned a server.
+
+    Why this exists (2026-07-16, Jeremy): the viewer is process-level and dies
+    with a reboot; autostart-on-run means the next goal run revives it without
+    a system agent. Default OFF (an opt-in listening socket is an operator
+    decision, docs/DEFAULTS.md); this box opts in via config.
+    """
+    try:
+        from config import get as _get
+        if not _get("viz.autostart", False):
+            return False
+        host = str(_get("viz.host", _DEFAULT_HOST))
+        port = int(_get("viz.port", _DEFAULT_PORT))
+        # Wildcard binds aren't connectable as-written; probe via loopback.
+        probe_host = "127.0.0.1" if host in ("0.0.0.0", "::", "") else host
+        import socket
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.settimeout(0.5)
+            if s.connect_ex((probe_host, port)) == 0:
+                return False  # something already serves the port
+        import subprocess
+        import sys
+        cli = Path(__file__).with_name("cli.py")
+        with open(_LOG_FILE, "ab") as lf:
+            proc = subprocess.Popen(
+                [sys.executable, str(cli), "viz", "serve"],
+                stdout=lf, stderr=lf,
+                start_new_session=True,
+            )
+        # A concurrent run may have raced us here; the loser's bind() fails
+        # and its process exits — harmless, first writer wins the port.
+        try:
+            Path(_PID_FILE).write_text(f"{proc.pid}\n")
+        except OSError:
+            pass  # viz-ctl falls back to pgrep
+        log.info("viz autostart: spawned viewer pid=%s for %s:%s",
+                 proc.pid, host, port)
+        return True
+    except Exception as exc:
+        log.debug("viz autostart skipped (non-fatal): %s", exc)
+        return False
 
 
 def serve(host: Optional[str] = None, port: Optional[int] = None, root: Optional[Path] = None) -> None:
