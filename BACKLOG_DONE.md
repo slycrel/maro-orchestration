@@ -8,6 +8,53 @@ Last split: 2026-04-16 (session 34).
 
 ---
 
+## Precondition pre-flight no longer leaks garbage checks into the closure feed — SHIPPED (2026-07-16)
+
+**Source:** side-finding from the closure-downgrade review (run d2f4e2f4):
+the run card showed probes 1-3 as `shutil.which('cat')`,
+`shutil.which('wc)')` (mangled paren), `shutil.which('PYTHONPATH=src')` —
+two of them the run's only inconclusive checks, diluting an 8-check feed
+on a run that had exercised its deliverable twice.
+
+**Mechanism (corrected from the BACKLOG framing):** the original item said
+the strings were "Python expressions run as shell commands" — they never
+execute; the preflight row's `command` field is provenance-only. The real
+chain, confirmed from the run's recorded calls (call-00005): the intent LLM
+emitted prose preconditions — `[preconditions: Linux with /proc filesystem,
+standard utilities (grep, cat, wc)]`, `[preconditions: Python 3.10+,
+PYTHONPATH=src, no external dependencies]` — and
+`scope._parse_deliverable_line` split the annotation on EVERY comma,
+shredding the parenthesized list into `standard utilities (grep`, `cat`,
+`wc)`. `_classify_precondition`'s command gate was absence-of-spaces/dots,
+so `wc)` and `PYTHONPATH=src` classified as commands, failed shutil.which
+(exit 127 → inconclusive), and rode the check feed. Corpus scan over 1768
+recorded calls: paren-lists and env-var preconditions are both recurring
+shapes (`(GasBuddy, Shell/Chevron locators)`, `(uname, ls)`,
+`(curl/Python requests/similar)`), not one-offs.
+
+**Shipped (two layers, keep-the-species-apart):**
+- `scope._split_preconditions` — top-level-comma splitter (commas inside
+  parens don't split; unbalanced open paren swallows the rest into one
+  item, the safe direction: one opaque prose item vs several bogus
+  tokens). Round-trip through `to_markdown_line` stays faithful.
+- `closure_verify._classify_precondition` — the command branch is now a
+  positive binary-name match (`[A-Za-z0-9_][A-Za-z0-9_+-]*`; `g++`,
+  `clang-14` still commands) instead of absence-of-spaces, so shredded
+  fragments and env-var requirements land in opaque, which the docstring
+  had always promised.
+
+Regression pins use d2f4e2f4's exact strings end-to-end
+(`test_precondition_preflight_run_d2f4e2f4_regression`: the two real
+deliverable lines produce ZERO synthetic rows), plus splitter edge shapes
+and classifier cases. Both reversion mutants (naive split back;
+old absence-of-spaces gate back) verified FAIL→PASS against the new pins.
+
+**Residual (accepted):** preconditions that are single well-formed command
+names still pre-flight as before — that path is the feature, not the leak.
+The preflight `command` field keeps its `shutil.which(...)` provenance
+string; with the garbage rows gone, it only appears when a *real* declared
+tool is genuinely missing, which is exactly when a reader wants it.
+
 ## Closure downgrade reason now reaches the run card — SHIPPED (2026-07-16)
 
 **Source:** container-on day-one findings (run d2f4e2f4): closure_verify

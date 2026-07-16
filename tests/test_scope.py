@@ -416,6 +416,42 @@ def test_deliverable_to_markdown_line_roundtrips():
     assert "preconditions: Go" in line
 
 
+def test_parse_deliverable_line_preconditions_parenthesized_commas():
+    """Commas inside parentheses don't split precondition items.
+
+    Regression: run d2f4e2f4 (2026-07-16) — the naive comma split shredded
+    `standard utilities (grep, cat, wc)` into `standard utilities (grep`,
+    `cat`, `wc)`; the fragments then failed closure pre-flight as bogus
+    command checks (the run's two inconclusive checks).
+    """
+    d = _parse_deliverable_line(
+        "artifacts/container-recheck.txt: verdict file "
+        "[preconditions: Linux with /proc filesystem, "
+        "standard utilities (grep, cat, wc)] [shape: data]"
+    )
+    assert d.preconditions == [
+        "Linux with /proc filesystem",
+        "standard utilities (grep, cat, wc)",
+    ]
+
+
+def test_split_preconditions_edge_shapes():
+    from scope import _split_preconditions
+    # unbalanced open paren swallows the rest into one item (safe direction)
+    assert _split_preconditions("foo (bar, baz") == ["foo (bar, baz"]
+    # stray close paren doesn't wedge the depth counter negative
+    assert _split_preconditions("a), b") == ["a)", "b"]
+    assert _split_preconditions("") == []
+    assert _split_preconditions("x, , y") == ["x", "y"]
+
+
+def test_deliverable_roundtrip_preserves_parenthesized_precondition():
+    d = Deliverable(name="x", description="y",
+                    preconditions=["standard utilities (grep, cat, wc)"])
+    d2 = _parse_deliverable_line(d.to_markdown_line().lstrip("- ").strip())
+    assert d2.preconditions == ["standard utilities (grep, cat, wc)"]
+
+
 # ---------------------------------------------------------------------------
 # Deliverable.shape (docs/ROUTING_AND_PROBE_SYNTHESIS_DESIGN.md Part B, "probe
 # honesty" — B1: declare artifact kind at scope time instead of inferring it

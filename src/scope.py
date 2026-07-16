@@ -274,6 +274,36 @@ def _split_sections(text: str) -> dict:
 
 # `[preconditions: X, Y, Z]` — trailing annotation in deliverable bullets.
 _PRECONDITIONS_RE = re.compile(r"\[preconditions?:\s*(.+?)\s*\]", re.IGNORECASE)
+
+
+def _split_preconditions(raw: str) -> List[str]:
+    """Split a preconditions annotation on top-level commas only.
+
+    LLMs routinely emit prose items with parenthesized lists inside —
+    `standard utilities (grep, cat, wc)`, `HTTP client (curl/Python
+    requests/similar)`. A naive `split(",")` shreds those into fragments
+    (`standard utilities (grep`, `cat`, `wc)`) that downstream closure
+    pre-flight then misreads as command names — run d2f4e2f4's two
+    "inconclusive" checks were exactly such fragments (`wc)` failing
+    shutil.which). Commas inside parentheses do not split; an unbalanced
+    open paren swallows the rest of the string into one item, which is
+    the safe direction (one opaque prose item vs several bogus tokens).
+    """
+    out: List[str] = []
+    buf: List[str] = []
+    depth = 0
+    for ch in raw:
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth = max(0, depth - 1)
+        if ch == "," and depth == 0:
+            out.append("".join(buf).strip())
+            buf = []
+        else:
+            buf.append(ch)
+    out.append("".join(buf).strip())
+    return [p for p in out if p]
 # `[shape: document|runtime|data]` — trailing annotation, parallel to
 # preconditions. See Deliverable.shape docstring for the three-value split.
 _SHAPE_RE = re.compile(r"\[shape:\s*(.+?)\s*\]", re.IGNORECASE)
@@ -299,7 +329,7 @@ def _parse_deliverable_line(item: str) -> Deliverable:
     m = _PRECONDITIONS_RE.search(item)
     if m:
         pre_raw = m.group(1)
-        preconditions = [p.strip() for p in pre_raw.split(",") if p.strip()]
+        preconditions = _split_preconditions(pre_raw)
         item = (item[:m.start()] + item[m.end():]).strip()
     shape: Optional[str] = None
     m = _SHAPE_RE.search(item)

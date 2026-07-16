@@ -1668,6 +1668,51 @@ class TestVerifyGoalCompletion:
         # A bare dotted-name shouldn't be a command either
         assert _classify_precondition("python3.12") == "opaque"
 
+    def test_precondition_classifies_fragments_and_env_vars_opaque(self):
+        """Comma-shredded prose fragments and env-var requirements → opaque.
+
+        Regression: run d2f4e2f4 (2026-07-16) — the fragments `wc)` and
+        `PYTHONPATH=src` classified as commands, failed shutil.which, and
+        rode the closure feed as the run's two inconclusive checks.
+        """
+        from director import _classify_precondition
+        assert _classify_precondition("wc)") == "opaque"
+        assert _classify_precondition("(grep") == "opaque"
+        assert _classify_precondition("PYTHONPATH=src") == "opaque"
+        # real binary-name shapes still classify as commands
+        assert _classify_precondition("g++") == "command"
+        assert _classify_precondition("clang-14") == "command"
+
+    def test_precondition_preflight_run_d2f4e2f4_regression(self, tmp_path):
+        """The exact preconditions from run d2f4e2f4 produce no synthetic rows.
+
+        Both layers together: the paren-aware split keeps `standard
+        utilities (grep, cat, wc)` one opaque prose item, and the positive
+        command match rejects `PYTHONPATH=src` — nothing here is
+        pre-flightable, so nothing lands in the check feed.
+        """
+        from director import _run_precondition_preflight
+        from scope import _parse_deliverable_line
+
+        d1 = _parse_deliverable_line(
+            "artifacts/container-recheck.txt: verdict file "
+            "[preconditions: Linux with /proc filesystem, "
+            "standard utilities (grep, cat, wc)] [shape: data]"
+        )
+        d2 = _parse_deliverable_line(
+            "src/container_detect.py: detection module "
+            "[preconditions: Python 3.10+, PYTHONPATH=src, "
+            "no external dependencies] [shape: runtime]"
+        )
+        assert d1.preconditions == [
+            "Linux with /proc filesystem",
+            "standard utilities (grep, cat, wc)",
+        ]
+        assert d2.preconditions == [
+            "Python 3.10+", "PYTHONPATH=src", "no external dependencies",
+        ]
+        assert _run_precondition_preflight([d1, d2], cwd=str(tmp_path)) == []
+
     def test_precondition_preflight_command_present(self, tmp_path):
         from director import _run_precondition_preflight
         from scope import Deliverable

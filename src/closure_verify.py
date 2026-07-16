@@ -214,9 +214,14 @@ def _classify_precondition(preq: str) -> str:
     # Path-shaped: starts with /, ./, ../, ~, or contains a slash
     if s.startswith(("/", "./", "../", "~")) or "/" in s:
         return "path"
-    # Command-shaped: single token, no spaces, no dots (dots usually mean a
-    # version string, file extension, or similar — not a binary on PATH).
-    if " " not in s and "\t" not in s and "." not in s:
+    # Command-shaped: a token that looks like a binary name — letters/digits
+    # plus the few chars real PATH binaries use (`g++`, `clang-14`). Positive
+    # match, not absence-of-spaces: `wc)` (a comma-shredded prose fragment)
+    # and `PYTHONPATH=src` (an env-var requirement) both used to fall through
+    # here, fail shutil.which, and poison the verdict feed with synthetic
+    # inconclusive rows (run d2f4e2f4, 2026-07-16). Dots stay excluded —
+    # they usually mean a version string or file extension, not a binary.
+    if re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_+-]*", s):
         return "command"
     return "opaque"
 

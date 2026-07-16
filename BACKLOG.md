@@ -153,13 +153,15 @@ Container-on day-one findings (2026-07-16, two dispatched verification runs):
   behavioral-gap downgrades), the expensive failure per this file's
   documented asymmetry. Needs a deliberate call + a small verdict-shift
   measurement, not a drive-by fix.
-- [ ] **Precondition pre-flight strings leak into the closure check list** —
-  d2f4e2f4 probes 1-3 were Python expressions run as shell commands
-  (`shutil.which('cat')`, `shutil.which('wc)')` — note the mangled paren,
-  `shutil.which('PYTHONPATH=src')`); they were the run's 2 inconclusive
-  checks. Side-finding from the closure-downgrade review 2026-07-16; find
-  the seam where `_run_precondition_preflight` output joins the closure
-  plan's checks and keep the species apart (or shell-quote properly).
+- [x] **Precondition pre-flight strings leak into the closure check list** —
+  SHIPPED 2026-07-16 (full record in BACKLOG_DONE, incl. a mechanism
+  correction: the strings were never run as shell — the real chain was
+  scope.py's naive comma split shredding prose preconditions +
+  `_classify_precondition`'s absence-of-spaces command gate letting the
+  fragments (`wc)`, `PYTHONPATH=src`) through to shutil.which as synthetic
+  inconclusive rows). Fixed both layers: paren-aware top-level comma split
+  + positive binary-name command match; pinned with d2f4e2f4's exact
+  deliverable lines producing zero synthetic rows.
 
 - [ ] **Stuck advisor block is dead code** (pre-existing; discovered by the
   stuck-outcome adversarial review 2026-07-15 — the fix itself shipped, see
