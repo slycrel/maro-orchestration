@@ -258,7 +258,8 @@ and the model's training signal matters more than its size.
 | `mlx-community/VibeThinker-3B-4bit` | MLX | ~1.8 GB | **Apple Silicon reference.** Best measured size/latency/quality trade on the M1 Max. |
 | `mlx-community/VibeThinker-3B-8bit` | MLX | ~3.4 GB | Same specialist at higher precision; measured slower here with no gain on the bounded eval. |
 | `mlx-community/VibeThinker-1.5B-mlx-4bit` | MLX | ~1.2 GB resident / 844 MB disk | Runs comfortably, but failed the canonical judge eval; do not use for this role. |
-| `qwen2.5-coder:3b` | Ollama | ~1.9 GB disk | Very fast, but rejected for validation after two unsafe false-passes on the shared corpus. |
+| `qwen2.5-coder:3b` | Ollama | ~1.9 GB disk | Very fast, but rejected for validation after two unsafe false-passes on the shared corpus. Remains the only latency-viable local candidate on the 2014 Ubuntu box (see Linux measurement below). |
+| `hf.co/mradermacher/VibeThinker-3B-GGUF:Q4_K_M` | Ollama (GGUF) | ~1.9 GB disk | The reference model's Linux/CPU build. **Fails the latency gate on the 2014 Ubuntu box** — 13/14 corpus verdicts hit the 60s generation timeout; the one completed took 55.8s vs the 15s breaker. Not viable there; unmeasured on faster Linux hosts. |
 
 ### M1 Max measurement (2026-07-14)
 
@@ -292,6 +293,22 @@ disk but are not configured in Maro and did not beat the 1.8 GB specialist
 for this job. The old 2014 Ubuntu Mac mini remains a poor target: this verdict
 is specifically for Apple Silicon/MLX. A Linux/Ollama deployment still needs an
 on-box latency and safety replay before it is enabled there.
+
+### Linux (2014 Ubuntu Mac mini) measurement (2026-07-16)
+
+That replay ran (Jeremy: "we should use that new 4 bit quantized model"):
+`hf.co/mradermacher/VibeThinker-3B-GGUF:Q4_K_M` via the production-capped
+Ollama daemon (cores 2,3, nice 12), same 14 cases, exact adapter/verifier
+protocol. **Fails the latency gate decisively:** 13/14 verdicts hit the
+adapter's 60-second generation timeout without producing a verdict; the one
+that completed took 55.8s (correct, decisive, conf 0.9) — ≥4× the 15s
+breaker. Zero unsafe decisive false-passes, but decisive coverage was 1/14,
+all of it paid for in wall-time. This converts the "reasoning models are a
+CPU dead-end here" hypothesis into a measurement. Standing posture on that
+box: `qwen2.5-coder:3b` stays as the fast local first-pass behind the
+deterministic Tier-0 guards and the latency breaker; the quality upgrade
+lane there is hosted-free validation (Groq/Gemini), not a local reasoning
+model. Raw rows: `research/validator-bakeoff-linux-2026-07-16.json`.
 
 These are single-sample point estimates from a small, temperature-0.1 corpus
 run, not a statistical proof of safety. In particular, zero unsafe passes among

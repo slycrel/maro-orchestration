@@ -3139,7 +3139,12 @@ Dormant (deliberately parked, not dropped):
   slower; the 4-bit is the reference that aced it), which only strengthens
   his call. Linux lane = GGUF Q4_K_M via Ollama, burn-in gate per BACKLOG
   (zero unsafe false-passes + warm latency under breaker) — bakeoff run on
-  the box same evening. Side-find while running it: the orchestration-owned
+  the box same evening: **FAILS the latency gate** (13/14 verdicts hit the
+  60s adapter timeout; the one completed took 55.8s vs the 15s breaker;
+  0 unsafe false-passes but 1/14 decisive coverage). VibeThinker-4bit stays
+  the Apple-Silicon reference; on this box qwen+Tier-0 guards+breaker stand,
+  hosted-free is the quality lane (keys tonight). Raw:
+  research/validator-bakeoff-linux-2026-07-16.json. Side-find while running it: the orchestration-owned
   ollama daemon had inherited a since-deleted Claude agent worktree as cwd →
   every llama-server load died ("cannot get current path") → local tier
   silently erroring, every validation escalated to paid. Fixed (spawn

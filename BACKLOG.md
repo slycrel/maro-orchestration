@@ -1689,7 +1689,7 @@ qwen2.5-coder:3b, the exact build the M1 sweep REJECTED for two unsafe
 decisive false-passes). Watch total added wall-time per run, not just
 per-call latency, when evaluating.
 
-- [ ] **Replay the committed validator corpus on the production Linux box before
+- [x] **Replay the committed validator corpus on the production Linux box before
   enabling Ollama there.** The formal M1 sweep is complete (BACKLOG_DONE): all
   four small candidates used the same 14 cases and exact production protocol.
   It selected VibeThinker-3B-4bit on Apple Silicon and rejected Ollama
@@ -1698,6 +1698,25 @@ per-call latency, when evaluating.
   proof. This residual is hardware-gated: choose a Linux candidate, replay with
   `scripts/validator-bakeoff.py`, and require zero unsafe decisive false-passes
   plus warm latency under the configured breaker before enabling it.
+  **RUN 2026-07-16 (Jeremy: "we should use that new 4 bit quantized model") —
+  VibeThinker-3B Q4_K_M GGUF via Ollama FAILS the latency gate on this box.**
+  Same 14 cases, exact protocol, cores 2,3 / nice 12 (production caps):
+  13/14 verdicts hit the adapter's 60s `_GEN_TIMEOUT` without finishing; the
+  one completed case took 55.8s (correct, decisive, conf 0.9). ≥4x over the
+  15s breaker — the reasoning-model CPU dead-end confirmed by measurement,
+  not assumption. 0 unsafe decisive false-passes, but decisive coverage 1/14.
+  Raw JSON: `research/validator-bakeoff-linux-2026-07-16.json`. Standing
+  state on this box: qwen2.5-coder:3b stays configured as the fast local
+  first-pass (its two known unsafe classes — read-only violation, failing
+  test run — are the exact classes the deterministic Tier-0 guards
+  [write-fence/scavenge, settled-by-command] also police), latency breaker
+  armed; the QUALITY upgrade lane for this box is hosted-free (Groq/Gemini
+  keys, item above), not a local reasoning model. VibeThinker-3B-4bit
+  remains the Apple-Silicon reference. Side-find during the run: the
+  orchestration-owned ollama daemon had a deleted agent-worktree cwd →
+  every llama-server load died → local tier silently erroring (all
+  validation escalated to paid); fixed in src/local_models.py (cwd="/") +
+  regression test, commit 778b81e.
 
 ### Benchmark/eval mission isolation — DONE 2026-07-14 → BACKLOG_DONE
 
