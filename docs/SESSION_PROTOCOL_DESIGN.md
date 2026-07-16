@@ -85,6 +85,9 @@ Existing contract surface (all shipped, local-only today):
 `notify.command` push, `maro enqueue --drain`, `maro-runs status|result`,
 `run_card.json`, `output/escalations.jsonl`, `deploy/openclaw/maro-dispatch.sh`.
 The protocol below **extends** this surface; it does not replace it.
+*2026-07-16:* the cross-box leg of msg 0 shipped as `deploy/hermes/`
+(SSH forced-command gate + async dispatch driver + Hermes skill) — see §9
+stage 2 and `deploy/hermes/README.md`.
 
 ## 3. Transport (v0: boring on purpose)
 
@@ -383,7 +386,10 @@ outlive a continuation.
 2. **Box lands (2026-07-16):** Hermes up on B (recipe: `~/claude/hermes-maro-trial/`
    + memory notes). Thinnest cross-box slice: enqueue from B over
    ssh/tailscale, run_card back on B. Prove the contract crosses the wire
-   before ANY richness.
+   before ANY richness. **DONE 2026-07-16 → `deploy/hermes/`** (forced-command
+   SSH gate + async dispatch driver; the job_id→handle_id join lives in
+   dispatch records under `output/hermes-dispatch/`; Hermes-side skill
+   `orchestration/maro-dispatch`). Verified end-to-end same day.
 3. **Then, by leverage:** effort+consent (msg 1) → progress query (msg 2) →
    injection (msg 3, after the seam refactor) → clarification loop (msg 4).
 4. **Parallel, box-independent:** deeper/larger test goals (§10) — they

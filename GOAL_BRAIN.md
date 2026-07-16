@@ -3018,3 +3018,21 @@ Dormant (deliberately parked, not dropped):
   decision quality on rows with `lessons_injected`>0 vs =0 once more lessons accrue.
   Revert = flip false. **V5 loop now closed end-to-end: adjudicate → crystallize →
   inject → shadow-measure.**
+- **2026-07-16 (Jeremy: "get started with hooking up hermes to maro properly") —
+  SESSION PROTOCOL §9 STAGE 2 SHIPPED: Hermes→Maro cross-box dispatch live.**
+  The thinnest slice per `docs/SESSION_PROTOCOL_DESIGN.md`: Hermes on the Mini
+  (192.168.0.55) dispatches over SSH, run_card comes back. Pieces:
+  `deploy/hermes/maro-ssh-gate.sh` (forced-command allowlist on a dedicated
+  ed25519 key — ping/dispatch/status/result/list, nothing else; §8 posture:
+  the Mini's brain is an LLM with shell access, so no login shell) +
+  `deploy/hermes/dispatch.py` (async split of `enqueue --drain`: enqueue
+  returns job_id in seconds, a detached per-job worker drains it — drain-once
+  contract intact — and records the job_id→handle_id join in
+  `output/hermes-dispatch/<job_id>.json`, the mapping core never persisted;
+  needed because Hermes caps tool calls at 300s) + Hermes-side skill
+  `~/.hermes/skills/orchestration/maro-dispatch/SKILL.md` (async etiquette:
+  dispatch = receipt, poll status, never block). Verified end-to-end
+  2026-07-16. Also same session: goal viewer started LAN-visible
+  (`scripts/viz-ctl.sh start --host 0.0.0.0` → http://192.168.0.45:8787/index.html;
+  process-level, does not survive reboot). Open q7 (container-on for
+  network-sourced goals) still Jeremy-gated.
