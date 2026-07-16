@@ -3065,3 +3065,43 @@ Dormant (deliberately parked, not dropped):
   start beside the monotonic anchor and both provenance call sites (NOW +
   agenda) prefer it over the reconstruction. Pin test
   `test_run_window_start_prefers_wall_anchor` reproduces the exact shape.
+- **2026-07-16 (Jeremy, midday decision batch — answers to the morning AFK
+  list, plus a process decree):** (0) **Process: lead with decisions** —
+  "This wasn't me being able to 'quickly' decide anything, maybe lead with
+  the decisions as the other work proceeds"; he happened to be WFH today,
+  won't always be. (pre) **Viewer autostart decree:** "add a config value to
+  start the viewer, if it's not on, upon a goal run ... default to off, but
+  let's turn it on for our box" → `viz.autostart` SHIPPED same day (2cbef2f),
+  live-verified revival. (1) **Stuck advisor: fix + config-gate, box ON**
+  ("turn it on by default for ourselves for actual testing as we go... we can
+  rabbit hole down the local LLM vs spend vs 'off' behavior later") →
+  `advisor.stuck_step` SHIPPED (3d35ba0), fresh default off. (2)
+  **`navigator.adjudicate_divergences` ON** ("let's turn that on, yep") —
+  box config flipped. (3) **director_evaluate(trigger="injection"): build +
+  enable** ("agree, build + enable"). (4) **Hosted-free keys: remind
+  tonight** — Gemini key location non-obvious to him, no Groq account yet;
+  one-shot systemd timer set for 19:04 MT. Same breath, **local-validator
+  lean-in decree:** "we should lean into that slightly upgraded local option
+  from a few days ago for now, and let's keep an eye on the overall time" —
+  Linux burn-in priority raised in BACKLOG. (5) **Billing-failover default
+  OFF RATIFIED** ("billing default should be off, yes"); **auto-resume cap
+  NOT ratified** — "probably need a discussion around the resume
+  cap/flexibility... likely right decision is not binary" (design doc
+  annotated). (6) **Flagship Tier-5 goal:** "that was an example idea of the
+  pattern" — channel is RektProof PA (~43k subs, his subscription, bot
+  access unverified), evening project someday, NOT urgent; expects the
+  strategy "will never amount to much", the value is orchestration under
+  real-world stakes. (7) **Purgatorio #3 needs re-decision with new facts:**
+  Jeremy thought the git-history review was covered by the 0.8.0-era
+  rewrite; scan today shows the 2026-07-12 rewrite was employer-token-scoped
+  ONLY — the historical `user/` GOALS/CONTEXT/SIGNALS blobs with medication
+  details (GLP-1/nootropic lists) are reachable in the PUBLIC repo history
+  right now (added 99f5a67 2026-03-30, cleaned at tip 358ad5d 2026-07-09;
+  also on stale remote branches feat/local-validator +
+  worktree-refactor-plan). Options + turnkey `--replace-text` path prepared;
+  HIS CALL, nothing executed. iMessage saga same message: Monterey-2FA
+  theory DEAD (the Mini worked as a 2FA device); iPhone 7 also
+  signs-in-then-out with "can't be activated" + support link; new theory =
+  iMessage activation requires a real phone number (anti-spam); he messaged
+  Apple support. Side wins: agentic.poe@icloud.com email live; yahoo mail
+  wired into the Mini via Internet Accounts.

@@ -175,6 +175,14 @@ warn the type list grows.
 > absorbing "your Anthropic auth is dead" behind an OpenRouter failover
 > means the user discovers it weeks later as a surprise bill or when the
 > last backend dies; the run should succeed *and* the user should be told.
+>
+> **RATIFIED WITH AMENDMENT (Jeremy, 2026-07-16): billing-failover
+> defaults OFF.** ("billing default should be off, yes.") Billing-class
+> errors do NOT fail over to another backend unless a config flag opts in
+> — a billing failure switching the run onto a *different paid backend* is
+> exactly the silent-spend shape the defaults registry forbids. The
+> user-actionable event still always fires. Auth-class one-shot failover
+> stands as drafted.
 
 > **DECISION (provisional):** `advisor_call` stays fail-open (llm.py:
 > 1882-1943) but counts consecutive failures and emits one notify event
@@ -326,6 +334,17 @@ re-execution risks double-applying whatever step 7 half-did.
 > (memory: rogue-process and self-rearming-loop history on this box makes
 > unbounded auto-retry a named hazard); manual-first proves the resume
 > path on real corpses before automating it.
+>
+> **NOT RATIFIED — DISCUSSION WANTED (Jeremy, 2026-07-16):** "probably
+> need a discussion around the resume cap/flexibility... likely right
+> decision is not binary." The flat 1-cap is too blunt a shape; the
+> discussion should consider graduated policy — e.g. cap varying by error
+> class (a `RETRY_AT` rate-limit deferral is not a crash), by remaining
+> cost budget, or per-goal consent (the effort-language spend UX from
+> SESSION_PROTOCOL_DESIGN §5 is the natural home). Manual-first still
+> stands; nothing auto-resumes until this lands. Resume-surface
+> recommendation (notify over CLI-only, now that the ops channel exists)
+> remains provisional, unobjected.
 
 ## 4. Implementation slicing
 

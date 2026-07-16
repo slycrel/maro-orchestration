@@ -1679,6 +1679,16 @@ rather than fixed with a fragile heuristic:
 
 ### Linux local-validator burn-in
 
+**Priority raised 2026-07-16 (Jeremy, hosted-free keys pending):** "Liking
+the local LLM angle and we should lean into that slightly upgraded local
+option from a few days ago for now, and let's keep an eye on the overall
+time, I get that it's adding minutes in some long goal runs." Until the
+Groq/Gemini keys land, the local tier carries validation on this box —
+which makes the burn-in below the live gap (the box currently runs
+qwen2.5-coder:3b, the exact build the M1 sweep REJECTED for two unsafe
+decisive false-passes). Watch total added wall-time per run, not just
+per-call latency, when evaluating.
+
 - [ ] **Replay the committed validator corpus on the production Linux box before
   enabling Ollama there.** The formal M1 sweep is complete (BACKLOG_DONE): all
   four small candidates used the same 14 cases and exact production protocol.
@@ -2031,8 +2041,14 @@ stand on their own). Sequencing constraint that survives the de-1.0 pass:
   (at-least-once + guards), recommended minimum 1.0 slice = classify+message,
   checkpoint-into-run-dir, stranded-state sweep + manual `maro resume`.
   9 provisional decisions greppable as "DECISION (provisional)" — Jeremy
-  review wanted on: billing-failover default, 1-auto-resume cap,
-  resume-surface (CLI vs notify), depth-cap inconsistency (4 / <3 / 2 —
+  review wanted on: billing-failover default (**RATIFIED OFF 2026-07-16** —
+  "billing default should be off, yes"; billing-class errors never fail
+  over to another paid backend without opt-in, event always fires),
+  1-auto-resume cap (**NOT ratified 2026-07-16** — "likely right decision
+  is not binary"; discussion wanted on graduated shape: per-error-class /
+  cost-budget / per-goal consent — see design doc annotation),
+  resume-surface (CLI vs notify — rec notify now that the ops channel
+  exists; provisional, unobjected), depth-cap inconsistency (4 / <3 / 2 —
   **RATIFIED + SHIPPED 2026-07-12**, unified to `loop_types.MAX_RESTART_DEPTH
   = 3`, see MILESTONES -5 #3).
   **Minimum 1.0 slice SHIPPED 2026-07-09 (slices 1+2+3):** slice 1 =
