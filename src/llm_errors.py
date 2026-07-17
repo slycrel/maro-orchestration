@@ -31,6 +31,7 @@ FAILOVER = "failover"                  # this backend is down — try the next
 AUTH_ACTIONABLE = "auth_actionable"    # credentials dead — tell user the fix
 BILLING_ACTIONABLE = "billing_actionable"  # credits/quota gone — never retry
 INPUT_TOO_LARGE = "input_too_large"    # context overrun — retry/failover useless
+OUTPUT_CAP_EXCEEDED = "output_cap_exceeded"  # utility call blew its own token cap — caller's fallback, never failover
 BUDGET_RUNAWAY = "budget_runaway"      # run's runaway cost circuit tripped — never retry/failover
 FATAL = "fatal"                        # unclassified — propagate raw
 
@@ -162,6 +163,16 @@ def classify_error(exc: Exception, backend: str = "") -> ErrorInfo:
 
     if any(p in msg for p in _INPUT_PATTERNS):
         return _mk(INPUT_TOO_LARGE)
+
+    # A capped no_tools utility call overran CLAUDE_CODE_MAX_OUTPUT_TOKENS
+    # (the 2026-07-16 hard-error cap). The request is malformed for ANY
+    # backend — the contract call wants more tokens than its caller allowed —
+    # so failover would just re-run it on a billed backend (azure-finch
+    # 2026-07-17: routing call → OpenRouter 402 alert spam → OpenAI). Must
+    # outrank the generic "subprocess failed" shape below. Propagate raw;
+    # every capped call site has a parse-fallback that handles the exception.
+    if "output token maximum" in msg:
+        return _mk(OUTPUT_CAP_EXCEEDED)
 
     if any(p in msg for p in _BILLING_PATTERNS):
         # Permanent until billing is fixed: never retry; failover-eligible

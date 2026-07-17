@@ -91,6 +91,7 @@ Two classes (retryable / failover) are not enough. The evidence forces six:
 | `AUTH_ACTIONABLE` | Credentials invalid/expired. **Never retryable.** Fail over once if another backend exists, and always surface the exact fix command. | New surfacing; failover already partially matches (llm.py:224-232). |
 | `BILLING_ACTIONABLE` | Credits/quota exhausted. Never retryable. Fail over if possible; surface "top up or switch backend". | New — today this class is misfiled (see traps). |
 | `INPUT_TOO_LARGE` | Context/prompt overrun. Retry and failover are both useless (same prompt fails everywhere similar-sized). Bubble a distinct signal so the *caller* can shrink (step decomposition, summarize-context), else surface. | New — handled nowhere today. |
+| `OUTPUT_CAP_EXCEEDED` | A capped `no_tools` utility call overran its own `CLAUDE_CODE_MAX_OUTPUT_TOKENS` (the 2026-07-16 hard-error cap). Request-shaped, not backend death: never retry, never failover — propagate so the call site's parse-fallback runs. Added 2026-07-17 after azure-finch failed such a call over to a credit-dead OpenRouter key (402 alert spam to Telegram). | Added post-design; azure-finch specimen. |
 
 Anything unmatched stays `FATAL` (propagate with the raw message; the
 current behavior, llm.py:434-436).

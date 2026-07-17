@@ -184,3 +184,24 @@ def _clear_default_subprocess_cwd():
         llm.set_default_subprocess_cwd(None)
     except Exception:
         pass
+
+
+@pytest.fixture(autouse=True)
+def _clear_backend_circuit():
+    """Reset the process-wide billing/auth circuit breaker between tests.
+
+    A test that trips the circuit (e.g. a 402 through FailoverAdapter) would
+    otherwise make a later test's same-named fake backend get skipped as
+    deterministically dead. Clear before and after, like the cwd fixture.
+    """
+    try:
+        import llm
+        llm._circuit_clear()
+    except Exception:
+        pass
+    yield
+    try:
+        import llm
+        llm._circuit_clear()
+    except Exception:
+        pass

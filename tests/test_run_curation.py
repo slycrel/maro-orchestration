@@ -1267,7 +1267,7 @@ def test_synthesize_answer_llm_path(workspace, monkeypatch, tmp_path):
     )
     monkeypatch.setattr(
         run_curation, "_llm_answer",
-        lambda goal, body: "1. cron  2. maker-checker  3. MCP (pending)",
+        lambda goal, body, **kw: "1. cron  2. maker-checker  3. MCP (pending)",
     )
     card = {"deliverables": [{"path": str(deliv), "bytes": 10}]}
     run_curation.synthesize_answer(tmp_path, {"prompt": "what to install?"}, card)
@@ -1290,7 +1290,7 @@ def test_synthesize_answer_flags_truncation(workspace, monkeypatch, tmp_path):
     )
     long_answer = "\n".join(
         f"{i}. item {i} " + ("detail " * 20).strip() for i in range(1, 9))
-    monkeypatch.setattr(run_curation, "_llm_answer", lambda goal, body: long_answer)
+    monkeypatch.setattr(run_curation, "_llm_answer", lambda goal, body, **kw: long_answer)
     card = {"deliverables": [{"path": str(deliv), "bytes": 10}]}
     run_curation.synthesize_answer(tmp_path, {"prompt": "what to install?"}, card)
     assert card["answer_truncated"] is True
@@ -1310,7 +1310,7 @@ def test_synthesize_answer_llm_failure_falls_back_to_excerpt(
         config, "get",
         lambda k, d=None: True if k == "curation.answer_synthesis" else d,
     )
-    monkeypatch.setattr(run_curation, "_llm_answer", lambda goal, body: "")
+    monkeypatch.setattr(run_curation, "_llm_answer", lambda goal, body, **kw: "")
     card = {"deliverables": [{"path": str(deliv), "bytes": 10}]}
     run_curation.synthesize_answer(tmp_path, {"prompt": "what to install?"}, card)
     assert card["answer_source"] == "excerpt"
@@ -1359,3 +1359,47 @@ def test_llm_answer_rejects_token_cap_overrun(monkeypatch):
 
     monkeypatch.setattr(llm, "build_adapter", lambda **kw: _Adapter())
     assert run_curation._llm_answer("what to install?", "body " * 50) == ""
+
+
+def test_synthesize_answer_feeds_all_deliverables_and_verdict(
+        workspace, monkeypatch, tmp_path):
+    """azure-finch 2026-07-17: size-first ranking put a 123KB raw
+    mirror-capture .txt ahead of claims.md, single-source synthesis read only
+    the capture, and the answer ('post is inaccessible') contradicted the
+    run's own verdict ('root post was recovered'). All prose deliverables and
+    the verdict must reach the model."""
+    import config
+    import run_curation
+
+    raw = tmp_path / "thread-mirrors.txt"
+    raw.write_text("wayback: 404\nnitter: connection refused\n" * 50)
+    claims = tmp_path / "claims.md"
+    claims.write_text("| claim | verdict |\n| repo exists | true |\n")
+    monkeypatch.setattr(
+        config, "get",
+        lambda k, d=None: True if k == "curation.answer_synthesis" else d,
+    )
+    seen = {}
+
+    def fake_llm(goal, body, verdict=""):
+        seen["body"] = body
+        seen["verdict"] = verdict
+        return "grounded answer"
+
+    monkeypatch.setattr(run_curation, "_llm_answer", fake_llm)
+    card = {"deliverables": [
+        {"path": str(raw), "bytes": raw.stat().st_size},
+        {"path": str(claims), "bytes": claims.stat().st_size},
+    ]}
+    meta = {
+        "prompt": "evaluate the thread",
+        "goal_verdict_summary": "Not achieved: root post recovered, table missing",
+        "goal_verdict_gaps": ["claims.md has no pipe-delimited table"],
+    }
+    run_curation.synthesize_answer(tmp_path, meta, card)
+    assert card["answer_summary"] == "grounded answer"
+    assert "[thread-mirrors.txt]" in seen["body"]
+    assert "[claims.md]" in seen["body"]
+    assert "repo exists" in seen["body"]
+    assert "root post recovered" in seen["verdict"]
+    assert "pipe-delimited" in seen["verdict"]

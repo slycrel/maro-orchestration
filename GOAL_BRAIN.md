@@ -3352,3 +3352,21 @@ Dormant (deliberately parked, not dropped):
   evidence the review reads. Open design question for that pass: how an
   append-only Decisions section compacts without losing the
   reversal-chain property.
+- **2026-07-17 (Jeremy, via Telegram/poe relay, morning test run) —
+  Claude is the preferred go-to backend; OpenRouter is PoC-context, not
+  the default route.** "Maro shouldn't be using openrouter first, that's
+  more PoC context, claude is our preferred go-to. Is that a
+  configuration setting or how we're choosing to run the orchestration?"
+  Answer: it's config (`model.backend_order`, ~/.maro/config.yml), and
+  Claude/subprocess was ALREADY first — the azure-finch run's alerts
+  named only "OpenRouter → OpenAI" (the failover tail), hiding the real
+  chain (subprocess output-cap error → dead OpenRouter → dead OpenAI).
+  Applied: openrouter + openai removed from this box's backend_order
+  (both verified credit/quota-dead 2026-07-17; re-add is one documented
+  line after topping up); alerts now carry the full failover chain + run
+  identity; billing/auth-dead backends circuit-break for 15 min
+  process-wide; cap-overrun classified request-shaped (no failover);
+  answer synthesis grounded in the run's own verdict; batch steps now
+  ledger-recorded and the budget breaker prices cache-aware (the $2.41
+  phantom total that hard-stopped azure-finch one step early vs $0.406
+  real spend).

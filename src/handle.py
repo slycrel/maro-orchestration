@@ -606,6 +606,10 @@ def handle(
                             "backend": _backend_err.backend,
                             "user_action": _backend_err.user_action,
                             "summary": _backend_err.user_action,
+                            # Run identity for the relay layer — an alert
+                            # without the original ask can't be tied back to
+                            # the job it interrupted (azure-finch 2026-07-17).
+                            "goal": str((_card or {}).get("goal", ""))[:300],
                         })
                     except Exception:
                         pass

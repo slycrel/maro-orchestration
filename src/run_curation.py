@@ -376,11 +376,21 @@ def _strip_result_preamble(text: str) -> str:
 _ANSWER_MAX_TOKENS = 1500
 
 
-def _llm_answer(goal: str, deliverable: str) -> str:
+def _llm_answer(goal: str, deliverable: str, verdict: str = "") -> str:
     try:
         from llm import build_adapter, LLMMessage, MODEL_CHEAP
         from llm_parse import content_or_empty
         adapter = build_adapter(model=MODEL_CHEAP)
+        # Verdict grounding: the run's own adjudication is ground truth about
+        # what was and wasn't accomplished. Without it, azure-finch
+        # (2026-07-17) synthesized "Cannot evaluate — post is inaccessible"
+        # from a raw mirror-capture file while the verdict said the post WAS
+        # recovered — a confident answer contradicting the run's own record.
+        _verdict_block = (
+            f"\n\nRun verification verdict (ground truth — your answer must "
+            f"not contradict it; if the request wasn't fully achieved, lead "
+            f"with what WAS established and say plainly what's missing):\n"
+            f"{verdict[:800]}" if verdict else "")
         resp = adapter.complete(
             [
                 LLMMessage("system", (
@@ -389,10 +399,15 @@ def _llm_answer(goal: str, deliverable: str) -> str:
                     "lead with the substance (the recommendations, findings, "
                     "names, numbers). At most 120 words; short bullets welcome. "
                     "Never mention the run, its steps, verification, or file "
-                    "names. Never restate the request."
+                    "names. Never restate the request. Use only what the "
+                    "deliverables state — never fill gaps from your own "
+                    "knowledge."
                 )),
                 LLMMessage("user",
-                           f"Request: {goal[:600]}\n\nDeliverable:\n{deliverable[:6000]}"),
+                           # 9000: three 2500-char deliverable sections +
+                           # labels must all survive the cut.
+                           f"Request: {goal[:600]}\n\nDeliverable:\n"
+                           f"{deliverable[:9000]}{_verdict_block}"),
             ],
             max_tokens=_ANSWER_MAX_TOKENS,
             temperature=0.2,
@@ -422,24 +437,33 @@ def synthesize_answer(rd: Path, meta: dict, card: dict) -> None:
     `curation.answer_synthesis` on, one cheap no_tools call compresses it to
     the direct answer; otherwise (or on any failure) a deterministic excerpt
     of the deliverable body ships — worse prose, same orientation."""
-    text = ""
-    for d in card.get("deliverables") or []:
+    # ALL prose deliverables feed the synthesis, not just the top-ranked one:
+    # size-first ranking put azure-finch's 123KB raw mirror-capture file
+    # (2026-07-17) ahead of the actual analysis (claims.md / verify-model.md),
+    # and a single-source synthesis concluded the opposite of what the run
+    # found. The top pick still owns the excerpt fallback, but every prose
+    # deliverable reaches the model.
+    sections: List[str] = []
+    top_text = ""
+    for d in (card.get("deliverables") or [])[:3]:
         p = Path(str(d.get("path", "")))
         if p.is_file() and p.suffix.lower() in (".md", ".txt"):
             try:
-                text = p.read_text(errors="replace")
+                t = p.read_text(errors="replace")
             except Exception:
-                text = ""
-            if text.strip():
-                break
-    if not text.strip():
+                continue
+            if t.strip():
+                if not top_text:
+                    top_text = t
+                sections.append(f"[{p.name}]\n{t[:2500]}")
+    if not top_text.strip():
         rp = str(card.get("result_path") or "")
         if rp:
             try:
-                text = Path(rp).read_text(errors="replace")
+                top_text = Path(rp).read_text(errors="replace")
             except Exception:
-                text = ""
-    body = _strip_result_preamble(text)
+                top_text = ""
+    body = _strip_result_preamble(top_text)
     if not body:
         return
     goal = str(meta.get("prompt") or card.get("goal") or "").strip()
@@ -449,7 +473,12 @@ def synthesize_answer(rd: Path, meta: dict, card: dict) -> None:
     except Exception:
         _synth_on = False
     if _synth_on and goal:
-        summary = _llm_answer(goal, body)
+        verdict = str(meta.get("goal_verdict_summary") or "").strip()
+        gaps = [str(g) for g in (meta.get("goal_verdict_gaps") or []) if str(g).strip()]
+        if gaps:
+            verdict = (verdict + "\nGaps: " + "; ".join(gaps)).strip()
+        synth_input = "\n\n".join(sections) if len(sections) > 1 else body
+        summary = _llm_answer(goal, synth_input, verdict=verdict)
         if summary:
             if len(summary) > 900:
                 # Trim on a line boundary — a bullet cut mid-word reads

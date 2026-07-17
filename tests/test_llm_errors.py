@@ -16,6 +16,7 @@ from llm_errors import (
     FAILOVER,
     FATAL,
     INPUT_TOO_LARGE,
+    OUTPUT_CAP_EXCEEDED,
     RETRY_AT,
     RETRY_BACKOFF,
     BackendError,
@@ -60,6 +61,15 @@ CASES = [
     # Subprocess lane deaths → failover
     (RuntimeError("claude binary not found"), FAILOVER, False, True),
     (RuntimeError("subprocess failed with rc=1"), FAILOVER, False, True),
+    # Output-cap overrun (no_tools CLAUDE_CODE_MAX_OUTPUT_TOKENS hard error):
+    # request-shaped, NOT backend death — must outrank the generic
+    # "subprocess failed" row above. Live shape from azure-finch 2026-07-17,
+    # where this failed over to a dead OpenRouter key (402 alert spam).
+    (RuntimeError("claude subprocess failed (rc=1): API Error: Claude's "
+                  "response exceeded the 128 output token maximum. To "
+                  "configure this behavior, set the "
+                  "CLAUDE_CODE_MAX_OUTPUT_TOKENS environment variable."),
+     OUTPUT_CAP_EXCEEDED, False, False),
     # Usage limit with a stated reset
     (RuntimeError("You've hit your weekly limit · resets Mon 12:00am"),
      RETRY_AT, True, False),
@@ -173,3 +183,109 @@ def test_failover_adapter_fatal_propagates_raw():
     fa = FailoverAdapter([_FakeAdapter(exc=ValueError("schema mismatch"))])
     with pytest.raises(ValueError):
         fa.complete([LLMMessage("user", "hi")])
+
+
+# ---------------------------------------------------------------------------
+# Billing/auth circuit breaker (azure-finch 2026-07-17: one dead OpenRouter
+# key re-tried and re-alerted on every failover walk of the run)
+# ---------------------------------------------------------------------------
+
+class _NamedFake(_FakeAdapter):
+    def __init__(self, backend, exc=None, content="ok"):
+        super().__init__(exc=exc, content=content)
+        self.backend = backend
+        self.calls = 0
+
+    def complete(self, messages, **kwargs):
+        self.calls += 1
+        return super().complete(messages, **kwargs)
+
+
+def test_circuit_skips_billing_dead_backend_on_next_call():
+    from llm import FailoverAdapter, LLMMessage, _circuit_clear
+    _circuit_clear()
+    dead = _NamedFake("openrouter", exc=RuntimeError(
+        "402 Client Error: Payment Required"))
+    ok = _NamedFake("openai", content="answer")
+    # First walk: dead backend is tried (trips the circuit), failover succeeds.
+    fa = FailoverAdapter([dead, ok])
+    assert fa.complete([LLMMessage("user", "hi")]).content == "answer"
+    assert dead.calls == 1
+    # Fresh adapter, same process: the dead backend is skipped outright.
+    dead2 = _NamedFake("openrouter", exc=RuntimeError(
+        "402 Client Error: Payment Required"))
+    ok2 = _NamedFake("openai", content="answer2")
+    fa2 = FailoverAdapter([dead2, ok2])
+    assert fa2.complete([LLMMessage("user", "hi")]).content == "answer2"
+    assert dead2.calls == 0
+
+
+def test_circuit_trip_during_walk_does_not_skip_same_walk():
+    # The existing failover semantics within ONE walk are unchanged: the trip
+    # protects future complete() calls only.
+    from llm import FailoverAdapter, LLMMessage, _circuit_clear
+    _circuit_clear()
+    fa = FailoverAdapter([
+        _FakeAdapter(exc=RuntimeError("Your credit balance is too low")),
+        _FakeAdapter(content="still reached"),
+    ])
+    assert fa.complete([LLMMessage("user", "hi")]).content == "still reached"
+
+
+def test_all_circuit_open_raises_backend_error():
+    from llm import FailoverAdapter, LLMMessage, _circuit_clear, _circuit_trip
+    from llm_errors import classify_error
+    _circuit_clear()
+    info = classify_error(RuntimeError("402 payment required"), backend="openrouter")
+    _circuit_trip("openrouter", info)
+    only = _NamedFake("openrouter", content="never")
+    fa = FailoverAdapter([only])
+    with pytest.raises(BackendError) as ei:
+        fa.complete([LLMMessage("user", "hi")])
+    assert ei.value.info.error_class == BILLING_ACTIONABLE
+    assert only.calls == 0
+
+
+def test_circuit_ttl_expiry_restores_backend():
+    import llm as llm_mod
+    from llm import FailoverAdapter, LLMMessage, _circuit_clear, _circuit_trip
+    from llm_errors import classify_error
+    _circuit_clear()
+    info = classify_error(RuntimeError("402 payment required"), backend="openrouter")
+    _circuit_trip("openrouter", info)
+    llm_mod._BACKEND_CIRCUIT["openrouter"]["until"] = 1.0  # long expired
+    healed = _NamedFake("openrouter", content="back")
+    fa = FailoverAdapter([healed])
+    assert fa.complete([LLMMessage("user", "hi")]).content == "back"
+    assert healed.calls == 1
+
+
+def test_actionable_failover_alert_dedups_and_carries_chain(monkeypatch):
+    from llm import FailoverAdapter, LLMMessage, _circuit_clear
+    _circuit_clear()
+    events = []
+    import notify
+    monkeypatch.setattr(notify, "emit",
+                        lambda et, payload, **kw: events.append((et, payload)) or True)
+
+    def walk():
+        fa = FailoverAdapter([
+            _NamedFake("subprocess", exc=RuntimeError(
+                "claude subprocess failed (rc=1): API Error: 529 Overloaded")),
+            _NamedFake("openrouter", exc=RuntimeError(
+                "402 Client Error: Payment Required")),
+            _NamedFake("openai", content="answer"),
+        ])
+        return fa.complete([LLMMessage("user", "hi")])
+
+    assert walk().content == "answer"
+    assert len(events) == 1
+    etype, payload = events[0]
+    assert etype == "backend_actionable"
+    # Root-cause-first chain: subprocess's failure is visible, not just the
+    # billed backends (the 2026-07-17 misread).
+    assert "subprocess(failover)" in payload["failover_chain"]
+    assert "openrouter(billing_actionable)" in payload["failover_chain"]
+    # Second walk in the same process: no second alert for the same key.
+    assert walk().content == "answer"
+    assert len(events) == 1

@@ -609,7 +609,7 @@ def _execute_main_loop(
                     break
 
         if _parallel_peers:
-            iteration, step_idx, _tin, _tout = _run_parallel_batch(
+            iteration, step_idx, _tin, _tout, _tcache = _run_parallel_batch(
                 ctx, step_text, _parallel_peers,
                 step_outcomes=step_outcomes,
                 completed_context=completed_context,
@@ -625,12 +625,19 @@ def _execute_main_loop(
             )
             total_tokens_in += _tin
             total_tokens_out += _tout
-            # Keep total_cost_usd honest for the budget breaker. The batch helper
-            # doesn't surface cache_read, so price at full rate — the safe (slight
-            # over-estimate) direction for a circuit breaker.
+            total_cache_read += _tcache
+            # Keep total_cost_usd honest for the budget breaker — cache-aware,
+            # like the sequential path. Full-rate pricing here ("safe
+            # over-estimate") inflated azure-finch (2026-07-17, ~99% cache
+            # reads) roughly 10x on batch steps and the breaker hard-stopped
+            # the run one step before its final synthesis: an over-estimate
+            # that kills real work isn't the safe direction.
             try:
                 from metrics import estimate_cost as _batch_est
-                total_cost_usd += _batch_est(_tin, _tout, model=getattr(ctx.adapter, "model_key", "") or None)
+                total_cost_usd += _batch_est(
+                    _tin, _tout,
+                    model=getattr(ctx.adapter, "model_key", "") or None,
+                    cache_read_tokens=_tcache)
             except ImportError:
                 pass
             # A batch boundary counts as a step end for the time-gap

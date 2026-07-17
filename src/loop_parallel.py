@@ -133,7 +133,8 @@ def _run_parallel_batch(
     item. Recording these (instead of hardcoding -1) is the BACKLOG #2 fix:
     outcomes keep a real index and done items get marked in NEXT.md.
 
-    Returns (iteration, step_idx, total_tokens_in_delta, total_tokens_out_delta).
+    Returns (iteration, step_idx, total_tokens_in_delta, total_tokens_out_delta,
+    cache_read_tokens_delta).
     Mutates step_outcomes, completed_context, remaining_steps/indices in place.
     """
     from llm import LLMTool
@@ -163,6 +164,7 @@ def _run_parallel_batch(
     # Process batch outcomes
     _tokens_in_delta = 0
     _tokens_out_delta = 0
+    _cache_read_delta = 0
     _batch_injected: List[str] = []
     for _bi, (_batch_text, _batch_oc) in enumerate(zip(_batch_steps, _batch_outcomes)):
         step_idx += 1
@@ -170,6 +172,26 @@ def _run_parallel_batch(
         _b_elapsed = int((time.monotonic() - _batch_start) * 1000)
         _tokens_in_delta += _batch_oc.get("tokens_in", 0)
         _tokens_out_delta += _batch_oc.get("tokens_out", 0)
+        _cache_read_delta += _batch_oc.get("cache_read_tokens", 0)
+        # Ledger parity with the sequential path (loop_post_step): batch
+        # steps used to skip record_step_cost entirely, so run_card cost
+        # (spend_for_loops) silently excluded them — azure-finch 2026-07-17
+        # showed $0.406 on the card vs $2.41 at the loop's budget breaker.
+        try:
+            from metrics import record_step_cost
+            record_step_cost(
+                step_text=_batch_text,
+                tokens_in=_batch_oc.get("tokens_in", 0),
+                tokens_out=_batch_oc.get("tokens_out", 0),
+                status=_b_status,
+                goal=ctx.goal,
+                model=getattr(ctx.adapter, "model_key", ""),
+                elapsed_ms=_b_elapsed,
+                cache_read_tokens=_batch_oc.get("cache_read_tokens", 0),
+                loop_id=getattr(ctx, "loop_id", "") or "",
+            )
+        except Exception as _cost_exc:
+            log.debug("batch record_step_cost failed (non-critical): %s", _cost_exc)
         _b_item_idx = (batch_item_indices[_bi]
                        if batch_item_indices and _bi < len(batch_item_indices)
                        else -1)
@@ -235,7 +257,7 @@ def _run_parallel_batch(
     except Exception as _exc:
         log.debug("parallel batch cost logging failed: %s", _exc)
 
-    return iteration, step_idx, _tokens_in_delta, _tokens_out_delta
+    return iteration, step_idx, _tokens_in_delta, _tokens_out_delta, _cache_read_delta
 
 
 def _run_parallel_path(

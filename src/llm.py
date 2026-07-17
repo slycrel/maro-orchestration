@@ -54,6 +54,7 @@ import os
 import re
 import subprocess
 import textwrap
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Tuple
@@ -206,9 +207,12 @@ _MODEL_MAP: Dict[str, Dict[str, str]] = {
         MODEL_POWER: "anthropic/claude-opus-4.6",
     },
     "openai": {
-        MODEL_CHEAP: "gpt-4o-mini",
-        MODEL_MID:   "gpt-4o",
-        MODEL_POWER: "gpt-4.5-preview",
+        # Refreshed 2026-07-17 against the live /v1/models list on this box's
+        # key: gpt-4.5-preview was retired from the API (mid-2025) and 404'd
+        # every POWER-tier fallback call (azure-finch advisor_call specimen).
+        MODEL_CHEAP: "gpt-5.4-mini",
+        MODEL_MID:   "gpt-5.4",
+        MODEL_POWER: "gpt-5.5",
     },
     "subprocess": {
         MODEL_CHEAP: "haiku",
@@ -493,6 +497,86 @@ class LLMAdapter:
 # FailoverAdapter — wraps multiple adapters; tries each on backend errors
 # ---------------------------------------------------------------------------
 
+# Billing/auth circuit breaker — process-wide, TTL-bounded. A backend whose
+# credits or credentials are dead fails deterministically, but adapters are
+# rebuilt per call site, so instance state can't remember the trip: every
+# fresh FailoverAdapter re-tried the dead backend and re-emitted the same
+# Telegram alert (azure-finch 2026-07-17: three OpenRouter-402 alerts in 35
+# minutes from one run). TTL rather than process-forever so a topped-up
+# account self-heals in long-lived processes (heartbeat --loop, telegram
+# listener) without a restart.
+_BACKEND_CIRCUIT: Dict[str, Dict[str, Any]] = {}
+_BACKEND_CIRCUIT_TTL_S = 15 * 60.0
+
+
+def _circuit_trip(backend: str, info: Any) -> None:
+    if backend:
+        _BACKEND_CIRCUIT[backend] = {
+            "until": time.time() + _BACKEND_CIRCUIT_TTL_S, "info": info}
+
+
+def _circuit_open(backend: str) -> Optional[Any]:
+    """ErrorInfo the backend is tripped on, or None if it's usable."""
+    trip = _BACKEND_CIRCUIT.get(backend)
+    if not trip:
+        return None
+    if trip["until"] <= time.time():
+        _BACKEND_CIRCUIT.pop(backend, None)
+        return None
+    return trip["info"]
+
+
+_POWER_FALLBACK_WARNED = False
+
+
+def _circuit_clear() -> None:
+    """Test seam."""
+    _BACKEND_CIRCUIT.clear()
+    _ALERTED_BACKENDS.clear()
+
+
+# backend_actionable dedup — belt to the circuit's suspenders: even when a
+# failover path re-reaches a dead backend (circuit expired, different error),
+# the human hears about a given (backend, error_class) once per process.
+_ALERTED_BACKENDS: set = set()
+
+
+def _alert_once(backend: str, error_class: str) -> bool:
+    """True the first time this (backend, error_class) alerts in this process."""
+    key = (backend, error_class)
+    if key in _ALERTED_BACKENDS:
+        return False
+    _ALERTED_BACKENDS.add(key)
+    return True
+
+
+def _current_run_context() -> Dict[str, str]:
+    """Run identity for mid-run alerts (handle_id + goal), best-effort.
+
+    The 2026-07-17 backend_actionable alerts carried no run identity at all —
+    the substrate relaying them to Jeremy could not say which job was
+    affected ("this event contains no original ask"). Empty dict outside a
+    run; never raises.
+    """
+    try:
+        from runs import current_run_dir
+        run_dir = current_run_dir()
+        if run_dir is None:
+            return {}
+        ctx: Dict[str, str] = {"run_dir": str(run_dir)}
+        name = Path(run_dir).name
+        if name:
+            ctx["handle_id"] = name.split("-", 1)[0]
+        meta = Path(run_dir) / "metadata.json"
+        if meta.is_file():
+            prompt = str(json.loads(meta.read_text()).get("prompt", ""))
+            if prompt:
+                ctx["goal"] = prompt[:300]
+        return ctx
+    except Exception:
+        return {}
+
+
 class FailoverAdapter(LLMAdapter):
     """Wraps an ordered list of adapters; tries the next on backend failures.
 
@@ -568,8 +652,27 @@ class FailoverAdapter(LLMAdapter):
                 and _meter["spent_usd"] >= _meter["ceiling_usd"]:
             from llm_errors import BudgetRunawayError
             raise BudgetRunawayError(_meter["spent_usd"], _meter["ceiling_usd"])
+        _skipped_info: Optional[Any] = None
+        _chain: List[str] = []  # "backend(error_class)" per failed hop, for alert context
+        # Snapshot at entry: a trip recorded DURING this walk protects future
+        # complete() calls, not later adapters in this one — the walk already
+        # moves past the failed adapter on its own.
+        _open_at_entry = {
+            b for b in (getattr(a, "backend", "") for a in self._adapters)
+            if _circuit_open(b) is not None
+        }
         for idx, adapter in enumerate(self._adapters):
             self._current_idx = idx
+            _tripped = (_circuit_open(getattr(adapter, "backend", ""))
+                        if getattr(adapter, "backend", "") in _open_at_entry else None)
+            if _tripped is not None:
+                # Deterministically dead (billing/auth) — calling it again
+                # would only burn the retry ladder and re-alert.
+                _skipped_info = _skipped_info or _tripped
+                _chain.append(f"{getattr(adapter, 'backend', '?')}(circuit-open:{_tripped.error_class})")
+                log.info("FailoverAdapter: skipping %s — circuit open (%s)",
+                         getattr(adapter, "backend", "?"), _tripped.error_class)
+                continue
             try:
                 result = adapter.complete(
                     messages,
@@ -642,17 +745,26 @@ class FailoverAdapter(LLMAdapter):
                 return result
             except Exception as exc:
                 last_exc = exc
+                from llm_errors import (AUTH_ACTIONABLE, BILLING_ACTIONABLE,
+                                        BackendError, classify_error,
+                                        is_actionable)
+                _bname = getattr(adapter, "backend", "")
+                _info = exc.info if isinstance(exc, BackendError) \
+                    else classify_error(exc, backend=_bname)
+                _chain.append(f"{_bname or '?'}({_info.error_class})")
+                if _info.error_class in (BILLING_ACTIONABLE, AUTH_ACTIONABLE):
+                    # Dead credits/credentials stay dead — trip the process-
+                    # wide circuit so later FailoverAdapters skip this backend
+                    # instead of re-failing (and re-alerting) on every call.
+                    _circuit_trip(_bname, _info)
                 if not _is_failover_error(exc) or idx >= len(self._adapters) - 1:
                     # Non-failover error or last adapter — propagate. When the
                     # user can DO something about it (auth/billing/context),
                     # wrap in BackendError so every surface downstream (CLI
                     # stderr, run metadata, notify) renders the fix instead of
                     # a traceback (BACKEND_RESILIENCE_DESIGN §2).
-                    from llm_errors import BackendError, classify_error, is_actionable
-                    if not isinstance(exc, BackendError):
-                        _info = classify_error(exc, backend=getattr(adapter, "backend", ""))
-                        if is_actionable(_info):
-                            raise BackendError(_info) from exc
+                    if not isinstance(exc, BackendError) and is_actionable(_info):
+                        raise BackendError(_info) from exc
                     raise
                 next_backend = getattr(self._adapters[idx + 1], "backend", "?")
                 log.warning(
@@ -662,23 +774,36 @@ class FailoverAdapter(LLMAdapter):
                 # Actionable-class failovers must not be silently absorbed by a
                 # successful failover (design decision: the run should succeed
                 # AND the user should learn their credential/billing is dead).
+                # Once per (backend, error_class) per process — the 8:23/8:24/
+                # 8:57 triple-alert on one dead OpenRouter key was pure noise.
                 try:
-                    from llm_errors import classify_error as _cls, is_actionable as _act
-                    _finfo = _cls(exc, backend=getattr(adapter, "backend", ""))
-                    if _act(_finfo):
+                    if is_actionable(_info) and _alert_once(_bname, _info.error_class):
                         from notify import emit as _notify_emit
                         _notify_emit("backend_actionable", {
                             "status": "degraded",
-                            "error_class": _finfo.error_class,
-                            "backend": _finfo.backend,
-                            "user_action": _finfo.user_action,
-                            "summary": f"failed over to {next_backend}: {_finfo.user_action}",
+                            "error_class": _info.error_class,
+                            "backend": _info.backend,
+                            "user_action": _info.user_action,
+                            # Root-cause-first chain: the 2026-07-17 alerts
+                            # named only "openrouter → openai", so the primary
+                            # backend's failure (the actual story) was
+                            # invisible and Jeremy read OpenRouter as primary.
+                            "failover_chain": " -> ".join(_chain),
+                            "summary": (
+                                f"{_bname} {_info.error_class} "
+                                f"(chain: {' -> '.join(_chain)}; continuing on "
+                                f"{next_backend}): {_info.user_action}"),
+                            **_current_run_context(),
                         })
                 except Exception:
                     pass
-        # Should never reach here, but satisfy type checker
         if last_exc is not None:
             raise last_exc
+        if _skipped_info is not None:
+            # Every adapter was circuit-open — surface the recorded fix
+            # rather than re-proving a failure we already classified.
+            from llm_errors import BackendError
+            raise BackendError(_skipped_info)
         raise RuntimeError("FailoverAdapter: no adapters configured")
 
 
@@ -2670,7 +2795,7 @@ def build_adapter(
     # next available backend is tried automatically.
     order = _get_backend_order()
     available: List[LLMAdapter] = []
-    power_fallback_warned = False
+    global _POWER_FALLBACK_WARNED
     for name in order:
         if name == "anthropic":
             key = _get_key("ANTHROPIC_API_KEY", env)
@@ -2686,14 +2811,17 @@ def build_adapter(
                 available.append(OpenAIAdapter(api_key=key, model=model))
         elif name == "subprocess":
             if _claude_bin_available():
-                if model == MODEL_POWER and not power_fallback_warned:
-                    # Opus over `claude -p` is flaky on complex steps — warn but honor config.
+                if model == MODEL_POWER and not _POWER_FALLBACK_WARNED:
+                    # Opus over `claude -p` is flaky on complex steps — warn but
+                    # honor config. Once per PROCESS, not per build_adapter call:
+                    # advisor-heavy runs repeated this three times in a 28-line
+                    # log (azure-finch 2026-07-17) with zero new information.
                     log.warning(
                         "build_adapter: MODEL_POWER resolving to subprocess (claude -p) "
                         "per backend_order. Opus via subprocess is unreliable for long "
                         "multi-step work; set an API key or reorder `model.backend_order`."
                     )
-                    power_fallback_warned = True
+                    _POWER_FALLBACK_WARNED = True
                 available.append(ClaudeSubprocessAdapter(model=model))
         elif name == "codex":
             if _codex_auth_available():
