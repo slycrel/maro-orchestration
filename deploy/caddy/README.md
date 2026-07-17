@@ -42,18 +42,33 @@ sudo systemctl daemon-reload && sudo systemctl enable --now caddy
 
 ## First login (bootstrap credentials)
 
-The plugin auto-created a `webadmin` user (role `authp/admin`) on first
-start and logged the generated password ONCE. Retrieve it (box-local,
-requires sudo — it is deliberately nowhere else):
+The plugin auto-creates a `webadmin` user (role `authp/admin`) on first
+start — and in the installed version its generated password is logged
+NOWHERE (the journal line has username/email/roles only). The working
+bootstrap/reset procedure is to set the password hash directly
+(2026-07-17, verified by bcrypt round-trip):
 
 ```bash
-sudo journalctl -u caddy --no-pager | grep "created default admin user"
+umask 077
+openssl rand -base64 18 > /etc/caddy/auth/bootstrap-password.txt
+hash=$(caddy hash-password --plaintext "$(cat /etc/caddy/auth/bootstrap-password.txt)")
+python3 -c "
+import json, sys
+path = '/etc/caddy/auth/users.json'
+d = json.load(open(path))
+d['users'][0]['passwords'][0]['hash'] = sys.argv[1]
+json.dump(d, open(path, 'w'), indent=2)" "$hash"
+sudo systemctl restart caddy
 ```
 
-Log in at `https://mc.feifdom.com/auth/`, then change the password via
-the portal's settings page. To start over: `rm /etc/caddy/auth/users.json
-&& sudo systemctl restart caddy` regenerates the user + password (old
-logins die with the file).
+Read the credential with `sudo cat /etc/caddy/auth/bootstrap-password.txt`,
+log in at `https://mc.feifdom.com/auth/` as `webadmin`, change the
+password via the portal's settings page, then delete the file.
+
+Note: the auth flow cannot be exercised against the loopback test
+listener — the portal's `cookie domain mc.feifdom.com` makes session
+cookies invalid on `127.0.0.1`, so sandbox state never sticks there.
+Test logins on the real domain.
 
 ## Go-live checklist (router side — Jeremy)
 
