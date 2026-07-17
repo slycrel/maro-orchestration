@@ -756,9 +756,16 @@ def verify_goal_completion(
                 # Failed static checks get ground-truth excerpts of the files
                 # they probed, so the verdict judges the content instead of
                 # guessing what a failed grep implies. Behavioral failures
-                # (http/ws/process) stay as-is — their file args aren't the
-                # thing being verified.
-                if outcome == "fail" and modality == "static":
+                # (http/ws/browser) stay as-is — their file args aren't the
+                # thing being verified. Process compounds keep the evidence
+                # when a static-hint segment is present: `run.py && grep out`
+                # classified static before the per-segment change, and its
+                # failed-grep file evidence is still the thing the verdict
+                # needs.
+                if outcome == "fail" and (
+                    modality == "static"
+                    or (modality == "process" and _STATIC_HINTS.search(cmd))
+                ):
                     evidence = _failed_check_file_evidence(cmd, cwd)
                     if evidence:
                         result["target_file_content"] = evidence
@@ -846,9 +853,13 @@ def verify_goal_completion(
 
         # Build modality distribution now; we use it both for the behavioral-gap
         # downgrade below and for the CLOSURE_VERDICT event at the end.
+        # Respect the stamped modality when present — preflight rows carry
+        # "preflight" and used to be re-classified static here (their
+        # provenance-only `shutil.which(...)` command string has no hints),
+        # which misrepresented the dist in the CLOSURE_VERDICT event.
         modality_dist: Dict[str, int] = {}
         for r in check_results:
-            mode = _classify_probe_modality(r.get("command", ""))
+            mode = r.get("modality") or _classify_probe_modality(r.get("command", ""))
             modality_dist[mode] = modality_dist.get(mode, 0) + 1
 
         # Behavioral-evidence downgrade: when the verdict claims complete=True
@@ -1123,32 +1134,122 @@ _STATIC_HINTS = re.compile(
 )
 
 
+def _split_probe_segments(cmd: str) -> List[str]:
+    """Split a shell command on top-level `&&` / `||` / `;` / `|` — quote-aware.
+
+    Operators inside single/double quotes (or backslash-escaped) do not
+    split: `python3 -c "import json; json.load(...)"` is ONE segment, and
+    `grep -q 'a && ./x' file` must not shed a fake `./x` process segment.
+    A single `&` (backgrounding, `2>&1`) never splits. Subshell/group
+    nesting is not tracked — a split inside `$( )` produces fragments that
+    still classify individually, which is harmless for most-behavioral
+    aggregation.
+    """
+    out: List[str] = []
+    buf: List[str] = []
+    quote = ""
+    escaped = False
+    i, n = 0, len(cmd or "")
+    while i < n:
+        ch = cmd[i]
+        if escaped:
+            buf.append(ch)
+            escaped = False
+            i += 1
+            continue
+        if ch == "\\" and quote != "'":
+            buf.append(ch)
+            escaped = True
+            i += 1
+            continue
+        if quote:
+            if ch == quote:
+                quote = ""
+            buf.append(ch)
+            i += 1
+            continue
+        if ch in "'\"":
+            quote = ch
+            buf.append(ch)
+            i += 1
+            continue
+        if ch == "&" and cmd.startswith("&&", i):
+            out.append("".join(buf))
+            buf = []
+            i += 2
+            continue
+        if ch == "|":
+            out.append("".join(buf))
+            buf = []
+            i += 2 if cmd.startswith("||", i) else 1
+            continue
+        if ch == ";":
+            out.append("".join(buf))
+            buf = []
+            i += 1
+            continue
+        buf.append(ch)
+        i += 1
+    out.append("".join(buf))
+    return [s.strip() for s in out if s.strip()]
+
+
+# Cross-segment aggregation order for _classify_probe_modality: the most
+# behavioral segment names the whole probe.
+_MODALITY_RANK = {"static": 0, "process": 1, "http": 2, "ws": 3, "browser": 4}
+
+
+def _classify_probe_segment(seg: str) -> str:
+    """Classify ONE shell segment (no top-level operators) by modality."""
+    if not seg:
+        return "static"
+    # Browser / ws / http are the strongest behavioral signals — they win
+    # even when mixed with static tools inside the segment.
+    for label, pat in _MODALITY_PATTERNS[:3]:
+        if pat.search(seg):
+            return label
+    # Before checking "process", defer to explicit static hints. A command
+    # like `go build ./cmd/slycrel-server` otherwise matches "process" via
+    # `./cmd/...` even though the actual verb is a compile-only check.
+    if _STATIC_HINTS.search(seg):
+        return "static"
+    # Process = runs a built binary / script that likely exercises the
+    # artifact without network I/O.
+    for label, pat in _MODALITY_PATTERNS[3:]:
+        if pat.search(seg):
+            return label
+    # No runtime indicator — treat as static.
+    return "static"
+
+
 def _classify_probe_modality(cmd: str) -> str:
     """Classify a closure probe command by what it actually exercises.
 
     Returns one of: browser, ws, http, process, static. "static" is the
     residual — code inspection and compile-level checks that never touch
     the running artifact.
+
+    Per-segment (Jeremy's call, 2026-07-16; measurement in BACKLOG_DONE):
+    the command is split on top-level shell operators and the most
+    behavioral segment wins. The old whole-string pass let _STATIC_HINTS
+    beat the process patterns, so the single most common probe idiom —
+    `<run the artifact> && grep <its output>` — counted static even though
+    it executed the deliverable end-to-end (run d2f4e2f4 showed
+    {"static": 8} on a run that exercised its deliverable twice). The
+    static-hint-before-process precedence still holds WITHIN a segment,
+    which is where the `go build ./cmd/foo` false-match it guards against
+    actually lives. Corpus replay over all 58 recorded closure verdicts:
+    11 probes shift, all static→process, all genuine run-then-grep idioms;
+    exactly one historical verdict flips (d2f4e2f4's own false downgrade).
     """
     if not cmd:
         return "static"
-    # Browser / ws / http are the strongest behavioral signals — they win
-    # even when mixed with static tools (e.g. "curl ... && grep ...").
-    for label, pat in _MODALITY_PATTERNS[:3]:
-        if pat.search(cmd):
-            return label
-    # Before checking "process", defer to explicit static hints. A command
-    # like `go build ./cmd/slycrel-server` otherwise matches "process" via
-    # `./cmd/...` even though the actual verb is a compile-only check.
-    if _STATIC_HINTS.search(cmd):
-        return "static"
-    # Process = runs a built binary / script that likely exercises the
-    # artifact without network I/O.
-    for label, pat in _MODALITY_PATTERNS[3:]:
-        if pat.search(cmd):
-            return label
-    # No runtime indicator — treat as static.
-    return "static"
+    best = "static"
+    for seg in _split_probe_segments(cmd):
+        label = _classify_probe_segment(seg)
+        if _MODALITY_RANK.get(label, 0) > _MODALITY_RANK.get(best, 0):
+            best = label
+    return best
 
 
 # Runtime-gap admission phrases — what the LLM says when it knows it didn't

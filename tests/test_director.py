@@ -769,6 +769,55 @@ class TestProbeModalityClassifier:
         from director import _classify_probe_modality
         assert _classify_probe_modality("") == "static"
 
+    # -- per-segment classification (Jeremy's call 2026-07-16; corpus
+    # measurement in BACKLOG_DONE: 11 probes shift, all static→process,
+    # exactly one historical verdict flips — d2f4e2f4's false downgrade) --
+
+    def test_run_then_grep_compound_is_process(self):
+        """The single most common probe idiom: run the artifact, grep its
+        output. Whole-string classification let the grep static-hint win;
+        run d2f4e2f4's probe #8 counted static on a run that executed its
+        deliverable end-to-end."""
+        from closure_verify import _classify_probe_modality
+        assert _classify_probe_modality(
+            "python3 -m src > /tmp/out.log && grep -c 'VERDICT=' /tmp/out.log"
+        ) == "process"
+        assert _classify_probe_modality(
+            "python3 artifacts/csv_stats.py artifacts/data.csv | grep -qE '[0-9]'"
+        ) == "process"
+
+    def test_build_then_run_compound_is_process(self):
+        from closure_verify import _classify_probe_modality
+        assert _classify_probe_modality(
+            "go build ./... && ./bin/server --help") == "process"
+
+    def test_static_hint_still_beats_process_within_a_segment(self):
+        """The go-build guard the old precedence existed for lives INSIDE a
+        segment — it must survive the per-segment change."""
+        from closure_verify import _classify_probe_modality
+        assert _classify_probe_modality("go build ./cmd/slycrel-server") == "static"
+        assert _classify_probe_modality("cd /repo && go build ./...") == "static"
+
+    def test_quoted_operators_do_not_split(self):
+        """A quoted `&&`/`;` must not shed fake segments: `grep -q 'a && ./x'`
+        would otherwise grow a bogus `./x` process segment (false promotion,
+        the blessing direction)."""
+        from closure_verify import _classify_probe_modality, _split_probe_segments
+        assert _classify_probe_modality("grep -q 'a && ./x' file.txt") == "static"
+        assert _split_probe_segments(
+            'python3 -c "import json; json.load(open(\'x.json\'))"'
+        ) == ['python3 -c "import json; json.load(open(\'x.json\'))"']
+
+    def test_split_probe_segments_shapes(self):
+        from closure_verify import _split_probe_segments
+        assert _split_probe_segments("a && b; c | d") == ["a", "b", "c", "d"]
+        # single & (backgrounding, 2>&1) never splits
+        assert _split_probe_segments("timeout 5 ./server & sleep 1") == [
+            "timeout 5 ./server & sleep 1"]
+        assert _split_probe_segments("python3 -m src 2>&1") == ["python3 -m src 2>&1"]
+        assert _split_probe_segments("a || b") == ["a", "b"]
+        assert _split_probe_segments("") == []
+
 
 class TestDetectBehavioralGap:
     """Tests for _detect_behavioral_gap — the complete=True downgrade.
@@ -3180,6 +3229,37 @@ class TestClosureFalseNegativeRegressions:
         verdict_user_msg = captured[1][1].content
         assert "target_file_content" in verdict_user_msg
         assert "| Rank | Station |" in verdict_user_msg
+
+    def test_failed_run_then_grep_compound_still_carries_evidence(self, tmp_path):
+        """Per-segment reclassification makes run-then-grep compounds
+        "process" — but a failed grep in the tail still needs its file's
+        ground truth attached, exactly as when the compound counted static
+        (evidence-gate extension, 2026-07-16)."""
+        from unittest.mock import MagicMock, patch
+        (tmp_path / "artifacts").mkdir()
+        (tmp_path / "artifacts" / "out.md").write_text("delivered-but-differently\n")
+        adapter = MagicMock()
+        captured = []
+        def _complete(messages, **kwargs):
+            captured.append(messages)
+            return MagicMock()
+        adapter.complete.side_effect = _complete
+        checks = [{
+            "description": "verdict line present",
+            "command": ("python3 -c \"print('ran')\" > /dev/null "
+                        "&& grep -q 'Needle' artifacts/out.md"),
+        }]
+        verdict_data = {"complete": True, "confidence": 0.9, "gaps": [],
+                        "summary": "content intact, brittle grep"}
+        with patch("closure_verify.extract_json", side_effect=[{"checks": checks}, verdict_data]):
+            with patch("closure_verify.content_or_empty", return_value="{}"):
+                verify_goal_completion(
+                    "produce out.md", [], adapter, workspace_path=str(tmp_path),
+                )
+        verdict_user_msg = captured[1][1].content
+        assert '"modality": "process"' in verdict_user_msg
+        assert "target_file_content" in verdict_user_msg
+        assert "delivered-but-differently" in verdict_user_msg
 
     def test_passed_and_behavioral_checks_attach_no_evidence(self, tmp_path):
         """Evidence rides only on cleanly-failed static checks: passes need

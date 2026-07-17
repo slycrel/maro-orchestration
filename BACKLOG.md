@@ -136,42 +136,12 @@ Container-on day-one findings (2026-07-16, two dispatched verification runs):
   clamp + re-ask-then-truncate enforcement on all six decompose lanes,
   carries across boundary AND milestone expansion; byte-identical prompts
   when no ceiling stated.
-- [ ] **Probe-modality classifier counts run-then-grep compound commands as
-  static** (from the closure-downgrade review, 2026-07-16 — the confirmed
-  root of d2f4e2f4's "too shape-strict" flag): `_classify_probe_modality`
-  checks `_STATIC_HINTS` before the process patterns, so the single most
-  common probe idiom — `<run the artifact> && grep <its output>` — counts
-  static even when it executed the deliverable end-to-end (d2f4e2f4 probe #8:
-  `python3 -m src > log && grep VERDICT=...` → static; modality showed
-  {"static": 8} on a run that exercised its deliverable twice). The
-  precedence exists to keep `go build ./cmd/foo` from false-matching `./path`,
-  but explicit runners (`python|go run|node|timeout`) were swept in as
-  collateral, contradicting the module's own mixed-command header comment
-  (the `curl && grep` → http precedent). **DECISION-FLAGGED**: the clean fix
-  (per-segment classification — split on `&&`/`;`/`|`, take most-behavioral)
-  broadly shifts verdicts in the *blessing* direction (suppresses
-  behavioral-gap downgrades), the expensive failure per this file's
-  documented asymmetry. Needs a deliberate call + a small verdict-shift
-  measurement, not a drive-by fix.
-  **Measurement DONE 2026-07-16** (replayed per-segment classification
-  against every recorded closure verdict — 710 run dirs, 58 with recorded
-  verdict calls since record-mode shipped 2026-06-26): **11 probe-level
-  shifts, all static→process, all genuine run-the-artifact-then-grep
-  idioms** (eyeballed: `python3 -m src > log && grep VERDICT=`,
-  `python3 artifacts/csv_stats.py … | grep -qE`, pytest invocations — zero
-  false promotions of compile-style commands). Run-level: **55/58
-  NO_CHANGE; 2 GATE_OPENED with llm_complete=False** (the gap detector
-  never consults modality when the LLM already said incomplete → zero
-  behavior change on those); **exactly 1 historical verdict flips:
-  d2f4e2f4 itself** — the downgrade this item came from, which the
-  closure-downgrade review already established was false (the run
-  exercised its deliverable twice). The feared broad blessing shift does
-  not materialize in the recorded corpus. Caveats: 58-run window
-  (record-mode era only); the real fix's splitter must be quote-aware
-  (`python3 -c "a; b"` must not split on the quoted `;` — the naive
-  measurement splitter got the right answers here, but by pattern-order
-  luck, not correctness). Recommendation: ship per-segment with a
-  quote-aware splitter. Awaiting Jeremy's call.
+- [x] **Probe-modality classifier counts run-then-grep compound commands as
+  static** — SHIPPED 2026-07-16 (Jeremy's call, same day, after the
+  verdict-shift measurement; full record incl. the measurement and the
+  original DECISION-FLAGGED analysis in BACKLOG_DONE). Per-segment
+  classification with a quote-aware top-level splitter; exactly one
+  historical verdict flips (d2f4e2f4's own false downgrade).
 - [x] **Precondition pre-flight strings leak into the closure check list** —
   SHIPPED 2026-07-16 (full record in BACKLOG_DONE, incl. a mechanism
   correction: the strings were never run as shell — the real chain was

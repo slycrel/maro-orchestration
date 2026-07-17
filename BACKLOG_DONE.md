@@ -8,6 +8,62 @@ Last split: 2026-04-16 (session 34).
 
 ---
 
+## Probe modality is per-segment: run-then-grep compounds count behavioral — SHIPPED (2026-07-16)
+
+**Source:** closure-downgrade review side-question (the confirmed root of
+d2f4e2f4's "too shape-strict" flag): `_classify_probe_modality` checked
+`_STATIC_HINTS` before the process patterns over the WHOLE string, so the
+single most common probe idiom — `<run the artifact> && grep <its output>`
+— counted static even when it executed the deliverable end-to-end
+(d2f4e2f4 probe #8: `python3 -m src > log && grep VERDICT=…` → static;
+modality showed {"static": 8} on a run that exercised its deliverable
+twice). The precedence exists to keep `go build ./cmd/foo` from
+false-matching the `./path` process pattern, but explicit runners
+(`python|go run|node|timeout`) were swept in as collateral, contradicting
+the module's own `curl && grep → http` precedent.
+
+**Decision path (DECISION-FLAGGED → measured → Jeremy's call):** the fix
+shifts verdicts in the blessing direction (suppresses behavioral-gap
+downgrades), the expensive failure per the module's documented asymmetry —
+so it was flagged, measured, then decided. **Measurement** (replayed
+per-segment classification against every recorded closure verdict — 710
+run dirs, 58 with recorded verdict calls since record-mode shipped
+2026-06-26): 11 probe-level shifts, ALL static→process, all genuine
+run-the-artifact-then-grep idioms, zero false promotions of compile-style
+commands. Run-level: 55/58 NO_CHANGE; 2 flips with llm_complete=False
+(gap detector never consults modality then → zero behavior change);
+exactly 1 historical verdict flips — d2f4e2f4 itself, the downgrade this
+item came from, already established false. Jeremy 2026-07-16: "Agree,
+ship the fix with the quote-aware splitter."
+
+**Shipped:**
+- `_split_probe_segments` — quote-aware split on top-level `&&`/`||`/`;`/
+  `|` (single `&` and `2>&1` never split; quoted operators stay:
+  `grep -q 'a && ./x' file` must not shed a fake `./x` process segment —
+  that would be a false promotion, the exact failure the flag feared).
+- `_classify_probe_segment` — the old whole-string logic verbatim, per
+  segment; static-hint-before-process precedence preserved WITHIN a
+  segment, which is where the go-build guard actually lives.
+- `_classify_probe_modality` — most-behavioral segment wins
+  (browser > ws > http > process > static).
+- Evidence-gate extension: failed run-then-grep compounds (now "process")
+  still attach `target_file_content` when a static-hint segment is present
+  — the failed grep's file ground truth is still what the verdict needs.
+- `modality_dist` rebuild respects the stamped modality — preflight rows
+  no longer misreported as static in the CLOSURE_VERDICT event.
+
+**Verification:** corpus replay with the REAL implementation reproduced
+the measurement exactly (same 11 shifts, same single d2f4e2f4 flip).
+Mutants all killed FAIL→PASS: whole-string revert (2 pins), quote-blind
+splitter, evidence-gate narrowing. Existing precedence pins
+(`go build ./cmd/…` static, `curl && grep` http, server-boot-curl http)
+unchanged and green.
+
+**Residual (accepted):** a quoted URL/tool word inside a grep pattern
+(`grep 'https://foo' file`) still classifies http — pre-existing
+whole-segment wart, untouched by this change; no occurrence in the
+recorded corpus.
+
 ## Precondition pre-flight no longer leaks garbage checks into the closure feed — SHIPPED (2026-07-16)
 
 **Source:** side-finding from the closure-downgrade review (run d2f4e2f4):

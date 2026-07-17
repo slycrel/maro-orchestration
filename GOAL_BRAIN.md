@@ -3229,3 +3229,17 @@ Dormant (deliberately parked, not dropped):
   items spawned, one DECISION-FLAGGED: probe-modality per-segment
   classification (fix shifts verdicts toward blessing — needs a deliberate
   call), and precondition pre-flight strings leaking into closure checks.
+- **2026-07-16 (Jeremy, later afternoon) — two calls on the spawned items.**
+  On the probe-modality DECISION-FLAG, after the verdict-shift measurement
+  (58 recorded closure verdicts replayed: 11 probe shifts, all genuine
+  run-then-grep idioms; exactly 1 historical verdict flips — d2f4e2f4's
+  own false downgrade): "Agree, ship the fix with the quote-aware
+  splitter" → SHIPPED same day (per-segment classification, quote-aware
+  top-level splitter, within-segment go-build precedence preserved,
+  evidence-gate + preflight-dist riders; record in BACKLOG_DONE). And on
+  the stuck-advisor dead code: "let's fix + enable that stuck lane's
+  advisor. I thought that was on" — fix + ENABLE, not gate, not delete;
+  he notes he's probably confusing it with something else that's off.
+  The precondition pre-flight leak also shipped this afternoon
+  (mechanism corrected: comma-shredded prose preconditions + a too-loose
+  command gate, not shell-executed Python strings; record in BACKLOG_DONE).
