@@ -152,20 +152,21 @@ Container-on day-one findings (2026-07-16, two dispatched verification runs):
   + positive binary-name command match; pinned with d2f4e2f4's exact
   deliverable lines producing zero synthetic rows.
 
-- [ ] **Stuck advisor block is dead code** (pre-existing; discovered by the
-  stuck-outcome adversarial review 2026-07-15 — the fix itself shipped, see
-  BACKLOG_DONE): `_ctx_summary` in `loop_execute.py` (~:1236) calls
-  `o_s.get('status','?')` on StepOutcome dataclass objects → AttributeError
-  → swallowed by the broad `except Exception` below (~:1257) →
-  `advisor_call` never executes. Net effect: the adaptive-off stuck lane
-  (the "(b)" advisor continue) has silently never run — with
-  `adaptive_execution` OFF, stuck always goes terminal. The code fix is
-  trivial (`o_s.status`), but shipping it ACTIVATES a never-run LLM call on
-  stuck paths — behavior activation, not a bugfix. **DECISION-FLAGGED for
-  Jeremy**: fix + enable, fix + config-gate, or delete the block
-  (narrow-except feedback applies either way). Fold in the same-family
-  residual: director `restart` break still drops the stuck step's outcome
-  record (the shipped helper covers the four continue-shaped exits only).
+- [x] **Stuck advisor block is dead code** — RESOLVED 2026-07-16, decided
+  by Jeremy twice in two parallel sessions with the same outcome ("fix +
+  config-gate... turn it on by default for ourselves" in the morning
+  session; "let's fix + enable that stuck lane's advisor. I thought that
+  was on" in the afternoon one — he thought it was on because he'd already
+  turned it on). Shipped in `3d35ba0`: attribute access fixed, context
+  build outside the try (shape bugs loud), except narrowed to the LLM call
+  at warning level, (b)-retry records the stuck-flagged execution, the
+  folded restart-break residual fixed (`_append_stuck_step_outcome()`
+  before the break), `advisor.stuck_step` gate default OFF
+  (docs/DEFAULTS.md) with this box opted in, 3 gate tests. Afternoon
+  session added the missing restart-break pin
+  (`test_stuck_restart_records_stuck_step_outcome`, mutant-verified —
+  the 3d35ba0 tests covered the gate and (b)-retry but not the break
+  exit's record guarantee).
 
 
 ### R6. VERIFY_LEARN_ARC V4/V5 adversarial review — 4 fixed live, 4 deferred (2026-07-14)

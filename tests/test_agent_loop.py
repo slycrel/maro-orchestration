@@ -4198,6 +4198,40 @@ def test_stuck_replan_success_records_stuck_step_outcome(monkeypatch, tmp_path):
     assert "final consolidated answer" in result.steps[-1].text
 
 
+def test_stuck_restart_records_stuck_step_outcome(monkeypatch, tmp_path):
+    """Same record guarantee on the stuck-restart BREAK exit: the restart
+    break leaves the loop entirely, and without the append the 3rd
+    (stuck-flagged) execution vanished from the run record (2026-07-15
+    residual: the record helper covered only the four continue-shaped
+    exits; the break exit was fixed 2026-07-16, pinned here)."""
+    _setup_workspace(monkeypatch, tmp_path)
+    _patch_adaptive_execution_on(monkeypatch)
+
+    from director import DirectorDecision
+    import director as _dm
+
+    monkeypatch.setattr(
+        _dm, "director_evaluate",
+        lambda goal, eval_ctx, trigger, adapter, *, dry_run=False: DirectorDecision(
+            action="restart",
+            reasoning="not worth preserving",
+            restart_context="start fresh with what was learned",
+        ),
+    )
+
+    adapter = _ExecCaptureAdapter()
+    result = run_agent_loop(
+        "goal that repeats until stuck then restarts",
+        adapter=adapter,
+        dry_run=False,
+        preset_steps=["Inspect the ledger contents once more"] * 3,
+    )
+    assert result.status == "restart", result.status
+    stuck = [s for s in result.steps if s.status == "blocked"]
+    assert stuck, [(s.text[:40], s.status) for s in result.steps]
+    assert stuck[-1].text == "Inspect the ledger contents once more"
+
+
 def test_undelivered_pending_context_surfaced_at_loop_exit(monkeypatch, tmp_path, caplog):
     """Contributions still pending when the loop exits (e.g. post-step hook
     output from the FINAL step) must not vanish silently: the loop logs a

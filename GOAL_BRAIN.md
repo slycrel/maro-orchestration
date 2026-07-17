@@ -3238,8 +3238,13 @@ Dormant (deliberately parked, not dropped):
   top-level splitter, within-segment go-build precedence preserved,
   evidence-gate + preflight-dist riders; record in BACKLOG_DONE). And on
   the stuck-advisor dead code: "let's fix + enable that stuck lane's
-  advisor. I thought that was on" — fix + ENABLE, not gate, not delete;
-  he notes he's probably confusing it with something else that's off.
+  advisor. I thought that was on" — RECONCILED: the morning session had
+  already shipped exactly this (`3d35ba0`, Jeremy there: "fix +
+  config-gate... turn it on by default for ourselves") — gate default OFF
+  for fresh installs (no-silent-spend), `advisor.stuck_step: true` on this
+  box. The two decrees agree; he thought it was on because it was. The
+  afternoon session's delta: the missing restart-break record pin
+  (mutant-verified).
   The precondition pre-flight leak also shipped this afternoon
   (mechanism corrected: comma-shredded prose preconditions + a too-loose
   command gate, not shell-executed Python strings; record in BACKLOG_DONE).

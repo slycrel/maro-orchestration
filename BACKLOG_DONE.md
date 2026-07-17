@@ -8,6 +8,44 @@ Last split: 2026-04-16 (session 34).
 
 ---
 
+## Stuck-step advisor resurrected behind `advisor.stuck_step` — SHIPPED (2026-07-16)
+
+**Source:** stuck-outcome adversarial review 2026-07-15 — `_ctx_summary` in
+`loop_execute.py` called `o_s.get('status','?')` on StepOutcome dataclass
+objects → AttributeError → swallowed by the broad `except Exception` → the
+adaptive-off stuck lane's "(b)" advisor had silently never run. Shipping
+the one-line fix would ACTIVATE a never-run LLM call on stuck paths, so it
+was DECISION-FLAGGED (fix+enable / fix+gate / delete).
+
+**Decision path:** Jeremy decided this twice in two parallel sessions,
+converging on the same outcome. Morning session: "fix + config-gate...
+turn it on by default for ourselves for actual testing as we go" →
+shipped as `3d35ba0`. Afternoon session (this one): "let's fix + enable
+that stuck lane's advisor. I thought that was on" — it WAS on; his memory
+was right, and the afternoon decree was already satisfied. Net:
+`advisor.stuck_step` defaults OFF for fresh installs (no-silent-spend
+decree), enabled in this box's `~/.maro/workspace/config.yml` for live
+testing.
+
+**Shipped (`3d35ba0`, morning session):** dataclass attribute access
+fixed (`o_s.status` / `o_s.result`); context summary built OUTSIDE the
+try so shape bugs are loud; except narrowed to the LLM call only, logged
+at warning; the (b)-retry path records the stuck-flagged execution; the
+folded restart-break residual fixed (`_append_stuck_step_outcome()`
+before the director-restart `break` — every loop exit now records the
+stuck step); config gate + docs/DEFAULTS.md row; 3 tests
+(gated-off-by-default, fires-when-enabled, retry-path-records-step).
+
+**Afternoon session's delta:** the restart-break exit had no dedicated
+pin — `test_stuck_restart_records_stuck_step_outcome` in
+tests/test_agent_loop.py drives the loop to stuck via repeating preset
+steps, has the director decide `restart`, and asserts the stuck step
+appears in `result.steps` as blocked. Mutant-verified: removing the
+`_append_stuck_step_outcome()` call before the break flips it FAIL.
+
+**Verification:** all 4 advisor/stuck tests green; full
+tests/test_agent_loop.py suite exit 0; mutant killed, source md5-restored.
+
 ## Probe modality is per-segment: run-then-grep compounds count behavioral — SHIPPED (2026-07-16)
 
 **Source:** closure-downgrade review side-question (the confirmed root of
