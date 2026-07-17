@@ -62,8 +62,14 @@ sudo systemctl restart caddy
 ```
 
 Read the credential with `sudo cat /etc/caddy/auth/bootstrap-password.txt`,
-log in at `https://mc.feifdom.com/auth/` as `webadmin`, change the
-password via the portal's settings page, then delete the file.
+log in at `https://mc.feifdom.com/auth/` as `webadmin`, store the
+password in a password manager, then delete the file.
+
+**There is no in-portal password change**: this plugin build hard-404s
+`/auth/settings` (probed 2026-07-17 — the authcrunch portal refactor
+dropped the self-service pages; `/auth/whoami` and `/auth/portal` exist,
+`/auth/settings*` does not). To change the password, re-run the
+hash-reset above with a plaintext of your choosing.
 
 Note: the auth flow cannot be exercised against the loopback test
 listener — the portal's `cookie domain mc.feifdom.com` makes session

@@ -31,9 +31,11 @@
 			ui {
 				links {
 					"Maro visualizations" /maro/index.html icon "las la-chart-bar"
-					"Settings (change password)" /auth/settings icon "las la-cog"
 				}
 			}
+			# No settings link: this plugin build 404s /auth/settings (the
+			# portal refactor dropped the self-service pages). Password
+			# changes happen via the hash-reset procedure in the README.
 			transform user {
 				match origin local
 				action add role authp/user
