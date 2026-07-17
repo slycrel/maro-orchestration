@@ -153,7 +153,15 @@ task-…b414ccab / run cobalt-pine — five-link failure chain, four fixed live)
   `-p` flag set has no cap flag). Utility (`no_tools`) calls now set
   `CLAUDE_CODE_MAX_OUTPUT_TOKENS` (live-probed: overrun = hard CLI error, not
   truncation — callers all fall back safely, which is the right direction for
-  JSON-contract calls); agentic calls deliberately uncapped. Every call
+  JSON-contract calls). **Correction 2026-07-17 (live, dapper-heron answer
+  synthesis):** on this CLI version the env cap acts PER API MESSAGE
+  (thinking tokens included) and the CLI auto-continues past it — the `-p`
+  result is then only the LAST chunk (1005 tokens out vs a 350 cap; content
+  began mid-sentence). Not a hard error, worse than truncation: it
+  decapitates. Treat the env cap as a warning-seam companion, not an
+  enforcer — callers needing shape safety must check
+  `output_tokens > requested` and fall back (run_curation._llm_answer does;
+  pin in test_run_curation). Agentic calls deliberately uncapped. Every call
   record now carries `max_tokens_requested`; the FailoverAdapter seam warns
   on utility overrun for backends with no enforcement (codex CLI
   accepts-and-ignores, no cap flag exists). Anthropic SDK and
@@ -197,16 +205,21 @@ task-…b414ccab / run cobalt-pine — five-link failure chain, four fixed live)
   per-run viewer link (notify.viewer_url). Verified live end-to-end with
   dapper-heron's real card. SKILL.md tells Hermes to read the inbox before
   ssh-polling.
-- [ ] **Completion excerpt should be the deliverable, not the step log** —
-  the run card's result_excerpt/result_path point at the loop RESULT.md
-  (step-by-step execution narrative); dapper-heron's actual deliverable
-  (FINAL_REPORT.md, ranked shortlist) lives in the PROJECT dir and the
-  curator never links it into the card (inventory.artifacts scans the run
-  dir only, came back empty). The completion message therefore excerpts
-  "Read artifacts/step-2-transcript.json…" process prose instead of the
-  shortlist. Fix belongs in curation: excerpt_result (or a new curator
-  task) should prefer declared deliverables / project-dir artifacts
-  written by the run.
+- [x] **Completion excerpt should be the deliverable, not the step log** —
+  SHIPPED 2026-07-17 (same night, answer-first pass). Two new curators:
+  `locate_deliverables` (FS-diff of the run's project dir via
+  `files_modified_since`, ranked by name-hint/prose/size; top copy lands in
+  `<run>/artifact/` and `deliverable_link_path` on the card) and
+  `synthesize_answer` (`answer_summary` = the ANSWER to the goal — gated
+  cheap LLM call under `curation.answer_synthesis`, deterministic
+  deliverable excerpt otherwise/on failure). Both message surfaces lead
+  with the answer; verifier self-grade only shown when NOT achieved.
+  Two-tone contract (Jeremy 2026-07-17): raw-orchestrator surfaces render
+  human-readable; the Hermes push carries DATA (goal + answer_summary +
+  full `deliverable_content` ≤16KB) and a detached Hermes brain turn
+  composes the user DM from it (deterministic DM kept as spawn-failure
+  fallback). Verified live: Hermes composed, sent, and filed the event to
+  processed/ unprompted. Pins in test_run_curation / test_notify_telegram.
 
 Container-on day-one findings (2026-07-16, two dispatched verification runs):
 - [x] **Provenance freshness-window false demotion** — run 123bf935 demoted

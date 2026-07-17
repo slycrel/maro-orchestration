@@ -178,3 +178,61 @@ def test_main_garbage_payload_degrades(monkeypatch, capsys):
 def test_send_without_token_returns_false(monkeypatch):
     monkeypatch.setattr("telegram_listener._resolve_token", lambda: "")
     assert notify_telegram.send("hello") is False
+
+
+# --- answer-first completion (delivery-loop arc 2026-07-17) ------------------
+
+
+def test_answer_first_message_leads_with_the_answer():
+    """The user asked a question; the body is the answer, not the verifier's
+    self-grade ("all core goal elements are demonstrably present" answers
+    'did the machinery work?' — the wrong question)."""
+    msg = format_message({
+        "event_type": "run_completed",
+        "success_class": "success",
+        "goal_achieved": True,
+        "goal": "use the maro orchestration to examine this X thread and "
+                "recommend what to install with our new hermes setup",
+        "handle_id": "h7",
+        "goal_verdict_summary": "All core goal elements are demonstrably present.",
+        "answer_summary": "1. Turn on cron\n2. Maker-checker delegation\n"
+                          "3. MCP (pending one doc check)",
+    })
+    assert "1. Turn on cron" in msg
+    assert "demonstrably present" not in msg
+    assert "Re: use the maro orchestration" in msg
+    assert msg.index("Turn on cron") < msg.index("maro-runs result")
+
+
+def test_answer_first_keeps_verdict_when_not_achieved():
+    """On a failure the why-not DOES matter — verdict stays alongside the
+    partial answer."""
+    msg = format_message({
+        "event_type": "run_completed",
+        "success_class": "done-not-achieved",
+        "goal_achieved": False,
+        "goal": "g",
+        "handle_id": "h8",
+        "goal_verdict_summary": "Shortlist exists but constraints unverified.",
+        "answer_summary": "Partial shortlist: cron, delegation.",
+    })
+    assert "Partial shortlist" in msg
+    assert "constraints unverified" in msg
+
+
+def test_deliverable_link_preferred_over_report(monkeypatch):
+    monkeypatch.setattr(
+        notify_telegram, "_cfg",
+        lambda key, default: "http://192.168.0.45:8787"
+        if key == "notify.viewer_url" else default,
+    )
+    msg = format_message({
+        "event_type": "run_completed",
+        "success_class": "success",
+        "goal": "g",
+        "handle_id": "h9",
+        "answer_summary": "the answer",
+        "deliverable_link_path": "h9-nick/artifact/FINAL_REPORT.md",
+        "result_path": "/anything/loop-x-RESULT.md",
+    })
+    assert "📄 Full report: http://192.168.0.45:8787/h9-nick/artifact/FINAL_REPORT.md" in msg

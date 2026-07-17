@@ -1209,3 +1209,106 @@ class TestCuratorDependencyOutcomes:
         assert "wrote undeclared keys ['nested', 'owner_key']" in (
             outcome["failed"][0]["error"]
         )
+
+
+# --- deliverable location + answer synthesis (delivery-loop arc 2026-07-17) --
+
+
+def test_locate_deliverables_and_answer_excerpt(workspace):
+    """The card must carry the run's user-facing deliverable (project dir,
+    not the run dir) and an answer_summary leading with its content — not
+    the step log (dapper-heron: 11KB FINAL_REPORT.md invisible to the card
+    while the completion message excerpted process prose)."""
+    import orch_items
+
+    rd = create_run_dir(
+        "h000delv", prompt="what should I install?", lane="agenda",
+        model="cheap",
+        extra_metadata={"project": "proj-x", "goal_achieved": True},
+    )
+    pdir = orch_items.projects_root() / "proj-x"
+    pdir.mkdir(parents=True)
+    (pdir / "NEXT.md").write_text("housekeeping — never a deliverable")
+    (pdir / "notes.json").write_text('{"scratch": 1}')
+    (pdir / "FINAL_REPORT.md").write_text(
+        "# Final Report\n\n1. Turn on cron\n2. Maker-checker delegation\n"
+    )
+    finalize_run("h000delv", status="done")
+    card = curate_run("h000delv")
+
+    names = [Path(d["path"]).name for d in card["deliverables"]]
+    assert names[0] == "FINAL_REPORT.md"
+    assert "NEXT.md" not in names
+    # Top deliverable is copied into the run dir so the viz server (which
+    # serves runs_root only) can serve it.
+    assert (rd / "artifact" / "FINAL_REPORT.md").is_file()
+    assert card["deliverable_link_path"].endswith("/artifact/FINAL_REPORT.md")
+    # answer_synthesis defaults OFF → deterministic deliverable-body excerpt.
+    assert card["answer_source"] == "excerpt"
+    assert "Turn on cron" in card["answer_summary"]
+
+
+def test_locate_deliverables_no_project_is_noop(workspace):
+    _finish("h000nodl", "quick check", "done", achieved=True)
+    card = curate_run("h000nodl")
+    assert "deliverables" not in card
+    assert "deliverable_link_path" not in card
+
+
+def test_synthesize_answer_llm_path(workspace, monkeypatch, tmp_path):
+    import config
+    import run_curation
+
+    deliv = tmp_path / "FINAL_REPORT.md"
+    deliv.write_text("# Report\n\nInstall cron first, then maker-checker.\n")
+    monkeypatch.setattr(
+        config, "get",
+        lambda k, d=None: True if k == "curation.answer_synthesis" else d,
+    )
+    monkeypatch.setattr(
+        run_curation, "_llm_answer",
+        lambda goal, body: "1. cron  2. maker-checker  3. MCP (pending)",
+    )
+    card = {"deliverables": [{"path": str(deliv), "bytes": 10}]}
+    run_curation.synthesize_answer(tmp_path, {"prompt": "what to install?"}, card)
+    assert card["answer_summary"] == "1. cron  2. maker-checker  3. MCP (pending)"
+    assert card["answer_source"] == "llm"
+
+
+def test_synthesize_answer_llm_failure_falls_back_to_excerpt(
+        workspace, monkeypatch, tmp_path):
+    import config
+    import run_curation
+
+    deliv = tmp_path / "FINAL_REPORT.md"
+    deliv.write_text("# Report\n\nInstall cron first.\n")
+    monkeypatch.setattr(
+        config, "get",
+        lambda k, d=None: True if k == "curation.answer_synthesis" else d,
+    )
+    monkeypatch.setattr(run_curation, "_llm_answer", lambda goal, body: "")
+    card = {"deliverables": [{"path": str(deliv), "bytes": 10}]}
+    run_curation.synthesize_answer(tmp_path, {"prompt": "what to install?"}, card)
+    assert card["answer_source"] == "excerpt"
+    assert "Install cron first." in card["answer_summary"]
+
+
+def test_llm_answer_rejects_token_cap_overrun(monkeypatch):
+    """CLAUDE_CODE_MAX_OUTPUT_TOKENS caps per API message; the CLI
+    auto-continues and the -p result is only the LAST chunk (live:
+    dapper-heron, 1005 tokens vs a 350 cap → answer began mid-sentence).
+    An overrun means the content may be a tail fragment — _llm_answer must
+    return '' so the deterministic excerpt ships instead of garbage."""
+    import llm
+    import run_curation
+
+    class _Resp:
+        content = "…knowledge store. **Cost:** $0 (tail fragment)"
+        output_tokens = run_curation._ANSWER_MAX_TOKENS + 500
+
+    class _Adapter:
+        def complete(self, messages, **kw):
+            return _Resp()
+
+    monkeypatch.setattr(llm, "build_adapter", lambda **kw: _Adapter())
+    assert run_curation._llm_answer("what to install?", "body " * 50) == ""

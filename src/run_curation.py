@@ -37,11 +37,14 @@ CLI:
 from __future__ import annotations
 
 import json
+import logging
 import shutil
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+log = logging.getLogger("run_curation")
 
 # Decision-prior card schema (shape + load/format) lives in the neutral
 # decision_prior.py — shared with recall.py, which surfaces the formatted
@@ -257,6 +260,205 @@ def excerpt_result(rd: Path, meta: dict, card: dict) -> None:
     text = (res.get("result") or "").strip()
     card["result_excerpt"] = text[:500] + ("…" if len(text) > 500 else "")
     card["result_path"] = res.get("result_path")
+
+
+# --- deliverable location + answer synthesis (2026-07-17 delivery-loop arc) --
+
+_DELIVERABLE_EXCLUDE = {"DECISIONS.md", "NEXT.md", "PROVENANCE.md", "PRIORITY",
+                        "GOALS.md", "README.md", "step_data.json"}
+_DELIVERABLE_NAME_HINTS = ("final_report", "report", "summary", "shortlist",
+                           "findings", "answer", "recommendation")
+
+
+def _project_dir_for(meta: dict) -> Optional[Path]:
+    """Resolve the project dir a run wrote into, '' project → None."""
+    slug = str(meta.get("project") or "").strip()
+    if not slug:
+        try:
+            from agent_loop import _goal_to_slug
+            slug = _goal_to_slug(str(meta.get("prompt") or ""))
+        except Exception:
+            return None
+    if not slug:
+        return None
+    try:
+        import orch_items as o
+        p = o.projects_root() / slug
+    except Exception:
+        return None
+    return p if p.is_dir() else None
+
+
+def locate_deliverables(rd: Path, meta: dict, card: dict) -> None:
+    """Find what the run wrote FOR THE USER and make the best of it servable.
+
+    RESULT.md is the run's diary; the deliverable — the thing that answers
+    the goal — usually lands in the PROJECT dir (FINAL_REPORT.md,
+    ranked_shortlist.md), which inventory_assets never sees (it scans the run
+    dir; dapper-heron 2026-07-17 came back `artifacts: []` while an 11KB
+    final report sat in the project dir). Mechanically: project files
+    modified during the run window, housekeeping excluded, report-shaped
+    names then size ranked. The top pick is COPIED into <run>/artifact/ so
+    the viz server (which serves runs_root only) can serve it and completion
+    messages can link the actual report."""
+    pdir = _project_dir_for(meta)
+    started = str(meta.get("started_at") or "").strip()
+    if pdir is None or not started:
+        return
+    try:
+        from artifact_check import files_modified_since
+        changed = files_modified_since(pdir, started, limit=100)
+    except Exception:
+        return
+    candidates: List[Path] = []
+    for rel in changed:
+        p = pdir / rel
+        name = p.name
+        if (not p.is_file() or name in _DELIVERABLE_EXCLUDE
+                or name.startswith(".") or name.endswith(".lock")):
+            continue
+        if p.suffix.lower() not in (".md", ".txt", ".json", ".csv", ".html"):
+            continue
+        try:
+            if p.stat().st_size == 0:
+                continue
+        except OSError:
+            continue
+        candidates.append(p)
+    if not candidates:
+        return
+
+    def _rank(p: Path):
+        name = p.name.lower()
+        hinted = any(h in name for h in _DELIVERABLE_NAME_HINTS)
+        is_prose = p.suffix.lower() in (".md", ".txt")
+        try:
+            size = p.stat().st_size
+        except OSError:
+            size = 0
+        return (not hinted, not is_prose, -size)
+
+    candidates.sort(key=_rank)
+    card["deliverables"] = [
+        {"path": str(p), "bytes": p.stat().st_size} for p in candidates[:3]
+    ]
+    top = candidates[0]
+    try:
+        dest_dir = rd / "artifact"
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        dest = dest_dir / top.name
+        shutil.copy2(top, dest)
+        card["deliverable_link_path"] = f"{rd.name}/artifact/{top.name}"
+    except Exception:
+        log.debug("deliverable copy failed for %s", top, exc_info=True)
+
+
+def _strip_result_preamble(text: str) -> str:
+    """Drop the '# Result: <goal echo>' header + telemetry line, keep body."""
+    out: List[str] = []
+    for ln in text.splitlines():
+        s = ln.strip()
+        if not out and (not s or s.startswith("# Result:")
+                        or s.startswith("Status: ") or s == "---"):
+            continue
+        out.append(ln)
+    return "\n".join(out).strip()
+
+
+# Cap needs headroom over the ~160-token ask: CLAUDE_CODE_MAX_OUTPUT_TOKENS
+# caps per API message — thinking tokens included — and the CLI
+# auto-continues past it, returning only the LAST chunk as the -p result
+# (live: dapper-heron re-curation 2026-07-17, 1005 tokens out vs a 350 cap
+# → answer began mid-sentence). A tight cap doesn't shorten the answer, it
+# decapitates it. Observed good calls run ~560 tokens (thinking + 120-word
+# answer); 1500 leaves thinking headroom while the overrun guard below
+# still catches genuine runaways.
+_ANSWER_MAX_TOKENS = 1500
+
+
+def _llm_answer(goal: str, deliverable: str) -> str:
+    try:
+        from llm import build_adapter, LLMMessage, MODEL_CHEAP
+        from llm_parse import content_or_empty
+        adapter = build_adapter(model=MODEL_CHEAP)
+        resp = adapter.complete(
+            [
+                LLMMessage("system", (
+                    "You turn a completed deliverable into the direct answer to "
+                    "the user's original request. Answer the request itself — "
+                    "lead with the substance (the recommendations, findings, "
+                    "names, numbers). At most 120 words; short bullets welcome. "
+                    "Never mention the run, its steps, verification, or file "
+                    "names. Never restate the request."
+                )),
+                LLMMessage("user",
+                           f"Request: {goal[:600]}\n\nDeliverable:\n{deliverable[:6000]}"),
+            ],
+            max_tokens=_ANSWER_MAX_TOKENS,
+            temperature=0.2,
+            no_tools=True,
+            purpose="curation.answer",
+        )
+        tokens_out = getattr(resp, "output_tokens", None)
+        if tokens_out and tokens_out > _ANSWER_MAX_TOKENS:
+            log.warning(
+                "answer synthesis overran its token cap (%s > %s) — content "
+                "may be a tail fragment; using the excerpt fallback",
+                tokens_out, _ANSWER_MAX_TOKENS)
+            return ""
+        return content_or_empty(resp).strip()
+    except Exception:
+        log.debug("answer synthesis LLM call failed", exc_info=True)
+        return ""
+
+
+def synthesize_answer(rd: Path, meta: dict, card: dict) -> None:
+    """Write the ANSWER to the goal onto the card — not the run's paperwork.
+
+    The user asked a question; every completion surface should answer it
+    (Jeremy 2026-07-17: "we ask a question and should get an answer" — the
+    verifier's meta-verdict answers "did the machinery work?", the wrong
+    question). Source = the top deliverable, else the RESULT body. With
+    `curation.answer_synthesis` on, one cheap no_tools call compresses it to
+    the direct answer; otherwise (or on any failure) a deterministic excerpt
+    of the deliverable body ships — worse prose, same orientation."""
+    text = ""
+    for d in card.get("deliverables") or []:
+        p = Path(str(d.get("path", "")))
+        if p.is_file() and p.suffix.lower() in (".md", ".txt"):
+            try:
+                text = p.read_text(errors="replace")
+            except Exception:
+                text = ""
+            if text.strip():
+                break
+    if not text.strip():
+        rp = str(card.get("result_path") or "")
+        if rp:
+            try:
+                text = Path(rp).read_text(errors="replace")
+            except Exception:
+                text = ""
+    body = _strip_result_preamble(text)
+    if not body:
+        return
+    goal = str(meta.get("prompt") or card.get("goal") or "").strip()
+    try:
+        from config import get as _cfg_get
+        _synth_on = bool(_cfg_get("curation.answer_synthesis", False))
+    except Exception:
+        _synth_on = False
+    if _synth_on and goal:
+        summary = _llm_answer(goal, body)
+        if summary:
+            if len(summary) > 900:
+                # Trim on a line boundary — a bullet cut mid-word reads broken.
+                summary = summary[:900].rsplit("\n", 1)[0].rstrip()
+            card["answer_summary"] = summary
+            card["answer_source"] = "llm"
+            return
+    card["answer_summary"] = body[:600] + ("…" if len(body) > 600 else "")
+    card["answer_source"] = "excerpt"
 
 
 def spend_transparency(rd: Path, meta: dict, card: dict) -> None:
@@ -954,6 +1156,11 @@ _CURATOR_SPECS: List[CuratorSpec] = [
     CuratorSpec(inventory_assets, provides=("inventory", "mineable")),
     CuratorSpec(excerpt_result,
                 optional_provides=("result_excerpt", "result_path")),
+    CuratorSpec(locate_deliverables,
+                optional_provides=("deliverables", "deliverable_link_path")),
+    CuratorSpec(synthesize_answer,
+                optional_provides=("answer_summary", "answer_source"),
+                optional_requires=("deliverables", "result_path")),
     CuratorSpec(spend_transparency, optional_provides=("spend_transparency",),
                 requires=("success_class", "total_cost_usd")),
     CuratorSpec(promote_skills_lite, optional_provides=("skills_lite",),

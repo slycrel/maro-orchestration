@@ -3261,3 +3261,19 @@ Dormant (deliberately parked, not dropped):
   SESSION_PROTOCOL §3 push leg live (notify-hermes.sh → mini2 inbox + DM
   follow-up for dispatched jobs). Standing test for future work: does the
   end user hear the outcome, in plain words, where they asked for the work?
+- **2026-07-17 (Jeremy, late night) — completion results are TWO-TONE
+  (standing design contract).** Same conversation, on the answer itself:
+  "if we're running a raw orchestrator, we likely want a human readable
+  answer. If we're calling the orchestrator from another LLM, we want to
+  give it the data and have it organize an answer for the user in the way
+  it deems appropriate; the data should be there (original ask and the data
+  for the result)." Also answer-first: "user doesn't care that it worked
+  (presumption is that it did...!) ... we ask a question and should get an
+  answer" — the verifier's self-grade answers "did the machinery work?",
+  the wrong question; it earns space only when the goal was NOT achieved.
+  Shipped same night: curation `locate_deliverables` + `synthesize_answer`
+  (answer_summary on the card), answer-first Maro Telegram message (human
+  tone), Hermes push payload carries goal + answer + full deliverable
+  content (data tone) and a Hermes brain turn composes the user DM from it.
+  Standing test: every completion surface must answer the original ask;
+  LLM consumers get data, humans get prose.

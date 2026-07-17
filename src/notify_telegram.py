@@ -109,15 +109,20 @@ def _deliverable_excerpt(payload: dict, limit: int = 600) -> str:
 
 
 def _viewer_link(payload: dict) -> str:
-    """Per-run report URL when a viz server base is configured, else ''.
+    """Servable URL for the run's output when a viz base is configured.
 
-    notify.viewer_url (e.g. "http://192.168.0.45:8787") + the runs-root-
-    relative report path, derived from result_path's loop id — the report
-    html sits next to the RESULT.md the card already points at.
+    Prefers the curated deliverable (deliverable_link_path — the actual
+    report, copied into <run>/artifact/ by run_curation.locate_deliverables);
+    falls back to the loop report html derived from result_path.
     """
     base = str(_cfg("notify.viewer_url", "") or "").rstrip("/")
+    if not base:
+        return ""
+    deliverable = str(payload.get("deliverable_link_path", "") or "").strip("/")
+    if deliverable:
+        return f"{base}/{deliverable}"
     path = str(payload.get("result_path", "") or "")
-    if not base or not path or not path.endswith("-RESULT.md"):
+    if not path or not path.endswith("-RESULT.md"):
         return ""
     try:
         from runs import runs_root
@@ -173,19 +178,32 @@ def format_message(payload: dict) -> str:
         or _STATUS_LABEL.get(status)
         or ("ℹ", f"run {cls or status or '?'}")
     )
+    # Answer-first (2026-07-17): the user asked a question — the message body
+    # is the ANSWER (curation's answer_summary), not the run's paperwork.
+    # Verdict prose only earns a line when the goal was NOT achieved (the
+    # why-not matters; the verifier's self-grade on a success doesn't).
+    answer = str(payload.get("answer_summary", "") or "").strip()
     lines = [f"{icon} {label}"]
-    if goal_line:
+    if answer:
+        if goal:
+            lines.append(f"Re: {goal[:100]}" + ("…" if len(goal) > 100 else ""))
+        lines.extend(["", answer, ""])
+    elif goal_line:
         lines.append(f"Goal: {goal_line}")
     verdict = str(payload.get("goal_verdict_summary", "") or "").strip()
-    if verdict:
+    if verdict and (not answer or payload.get("goal_achieved") is False):
         lines.append("Verdict: " + verdict[:300] + ("…" if len(verdict) > 300 else ""))
     gaps = payload.get("goal_verdict_gaps") or []
     if gaps:
         gap_text = "; ".join(str(g) for g in gaps)
         lines.append("Missing: " + gap_text[:300] + ("…" if len(gap_text) > 300 else ""))
-    excerpt = _deliverable_excerpt(payload)
-    if excerpt:
-        lines.extend(["", excerpt, ""])
+    if not answer:
+        excerpt = _deliverable_excerpt(payload)
+        if excerpt:
+            lines.extend(["", excerpt, ""])
+    link = _viewer_link(payload)
+    if link:
+        lines.append(f"📄 Full report: {link}")
     tail = f"run: {run_ref}" if run_ref else ""
     stats = _run_stats_line(payload)
     if stats:
@@ -194,9 +212,6 @@ def format_message(payload: dict) -> str:
         lines.append(tail)
     if hid:
         lines.append(f"Full result: maro-runs result {hid}")
-    link = _viewer_link(payload)
-    if link:
-        lines.append(link)
     return "\n".join(lines)
 
 

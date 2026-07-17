@@ -46,6 +46,28 @@ print(json.dumps(d, default=str))
   [ -n "$enriched" ] && payload="$enriched"
 fi
 
+# Two-tone contract (Jeremy 2026-07-17): an LLM substrate gets the DATA —
+# the original ask is already in the card (goal); embed the top deliverable's
+# CONTENT too (paths in the card are maro-box-local, unreadable from mini2),
+# so Hermes can compose the user-facing answer itself.
+enriched="$(printf '%s' "$payload" | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+for entry in d.get("deliverables") or []:
+    path = str(entry.get("path", ""))
+    try:
+        text = open(path, errors="replace").read()
+    except OSError:
+        continue
+    if text.strip():
+        d["deliverable_name"] = path.rsplit("/", 1)[-1]
+        d["deliverable_content"] = text[:16000]
+        d["deliverable_truncated"] = len(text) > 16000
+        break
+print(json.dumps(d, default=str))
+' 2>/dev/null || true)"
+[ -n "$enriched" ] && payload="$enriched"
+
 # Leg 1: ops-channel Telegram message.
 printf '%s' "$payload" | (cd "$REPO" && PYTHONPATH=src python3 -m notify_telegram)
 ok_telegram=$?
