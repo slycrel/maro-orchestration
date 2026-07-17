@@ -3437,3 +3437,25 @@ Dormant (deliberately parked, not dropped):
   outside decree. The heavyweight claims-matrix pipeline stays for
   goals that actually want it. Capability captured in
   docs/CAPABILITIES.md.
+- **2026-07-17 (Jeremy, Telegram follow-up) — AMENDMENT to the entry
+  above: Hermes one-shots NOW-shaped asks at the interface; Maro is
+  for genuinely multi-step work.** Verbatim: "I'm okay with that. In
+  fact, I'd actually prefer you to just 1-shot the things that might
+  end up being the maro NOW items." This supersedes the previous
+  entry's "fast lane INSIDE Maro" reading — the interface brain makes
+  the fast practical call first, by Jeremy's explicit preference. The
+  condition he attached is the system's origin story: Maro got built
+  because chat assistants reflected his thesis back instead of doing
+  the work ("'Hey, go look at this thing!' 'That's a thing but you
+  should figure it out' 'yep you're right...! uh.. thanks...?'").
+  Interface-level triage must therefore DO — inspect, judge, act; the
+  moment it drifts back to evasive mirroring, the work belongs in
+  Maro. Maro-side implication: the dedicated triage lane is demoted
+  from next-chunk to proportionality work — link-shaped asks that DO
+  reach Maro (CLI, dispatch, Hermes escalation) must not get the
+  23-min claims-matrix hammer, but nothing new gets built for this
+  now. Long-haul framing recorded: Jeremy is working orchestration
+  from both ends (Claude CLI = builder's end, Telegram/Hermes = the
+  interface he'd prefer to live in) and is watching whether early
+  "getting to know you" corrections paint later behavior into
+  corners.
