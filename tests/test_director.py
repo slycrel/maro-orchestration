@@ -2181,10 +2181,11 @@ class TestVerifyGoalCompletion:
         assert "decomposition_too_broad" in diagnosis_part
         assert result.summary.startswith("Downgraded to not-achieved — ")
 
-    def test_no_downgrade_leaves_summary_byte_identical(
+    def test_no_downgrade_keeps_prose_behind_achieved_opener(
             self, monkeypatch, tmp_path):
-        """No downgrade → the LLM's summary passes through untouched and
-        downgrade_reason stays empty (regression guard for the rewrite)."""
+        """No downgrade → the LLM's prose survives intact behind the
+        deterministic "Achieved: " opener and downgrade_reason stays empty
+        (the opener comes from the flag since the verdict-first change)."""
         from unittest.mock import MagicMock, patch
 
         adapter = MagicMock()
@@ -2205,8 +2206,86 @@ class TestVerifyGoalCompletion:
                     )
 
         assert result.complete is True
-        assert result.summary == llm_summary
+        assert result.summary == f"Achieved: {llm_summary}"
         assert result.downgrade_reason == ""
+
+    # -- verdict-first summaries: the flag writes the opener (d2f4e2f4) -----
+    # The LLM prose opened "Goal achieved." on a complete=False verdict, so
+    # every truncated view (metadata [:300], logs [:120]) read as achieved
+    # beside goal_achieved=false. The stored summary now opens from the flag.
+
+    def test_not_achieved_prose_cannot_contradict_flag(
+            self, monkeypatch, tmp_path):
+        """complete=False + prose opening "Goal achieved." → stored summary
+        opens "Not achieved: " and the contradictory opener is stripped."""
+        from unittest.mock import MagicMock, patch
+
+        adapter = MagicMock()
+        checks = [{"description": "server builds", "command": "false"}]
+        verdict_data = {
+            "complete": False, "confidence": 0.92,
+            "gaps": ["one check failed"],
+            "summary": "Goal achieved. The container detection code was created.",
+        }
+
+        with patch("closure_verify.extract_json",
+                   side_effect=[{"checks": checks}, verdict_data]):
+            with patch("closure_verify.content_or_empty", return_value="{}"):
+                result = verify_goal_completion(
+                    "build the detector", [], adapter,
+                    workspace_path=str(tmp_path),
+                )
+
+        assert result.complete is False
+        assert result.summary.startswith("Not achieved: ")
+        assert "Goal achieved." not in result.summary
+        assert "container detection code" in result.summary
+
+    def test_unjudged_verdict_opens_not_judged(self, monkeypatch, tmp_path):
+        """Negative verdict resting only on inconclusive probes (exit 127)
+        is unjudged — the opener says so instead of asserting a verdict."""
+        from unittest.mock import MagicMock, patch
+
+        adapter = MagicMock()
+        checks = [{"description": "tool probe",
+                   "command": "definitely_not_a_real_tool_xyz --check"}]
+        verdict_data = {
+            "complete": False, "confidence": 0.75, "gaps": [],
+            "summary": "Could not verify the deliverable.",
+        }
+
+        with patch("closure_verify.extract_json",
+                   side_effect=[{"checks": checks}, verdict_data]):
+            with patch("closure_verify.content_or_empty", return_value="{}"):
+                result = verify_goal_completion(
+                    "build X", [], adapter, workspace_path=str(tmp_path),
+                )
+
+        assert result.judged is False
+        assert result.summary.startswith(
+            "Not judged (verification evidence inconclusive):")
+
+    def test_verdict_first_summary_helper(self):
+        """Opener stripping + prefix selection + downgrade passthrough."""
+        from closure_verify import _verdict_first_summary
+
+        # Contradictory LLM opener stripped, flag wins.
+        assert _verdict_first_summary(
+            "The goal was achieved: all tests pass.",
+            complete=False, judged=True,
+        ) == "Not achieved: all tests pass."
+        # Agreeing opener stripped too — no "Achieved: Goal achieved." doubling.
+        assert _verdict_first_summary(
+            "Goal achieved. All tests pass.", complete=True, judged=True,
+        ) == "Achieved: All tests pass."
+        # Empty body → bare verdict.
+        assert _verdict_first_summary(
+            "goal not achieved,", complete=False, judged=True,
+        ) == "Not achieved."
+        assert _verdict_first_summary("", complete=True, judged=True) == "Achieved."
+        # Downgrade-branch summaries are already verdict-first and pinned.
+        dg = "Downgraded to not-achieved — no behavioral probe. Original verdict: ok"
+        assert _verdict_first_summary(dg, complete=False, judged=True) == dg
 
     # -- B2: shape-conditional MUST + waiver logging + timeout split -------
 

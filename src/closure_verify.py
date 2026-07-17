@@ -131,7 +131,7 @@ _CLOSURE_VERDICT_SYSTEM = textwrap.dedent("""\
       "complete": true|false,
       "confidence": 0.0–1.0,
       "gaps": ["specific gap 1", "specific gap 2"],
-      "summary": "one or two sentences"
+      "summary": "one or two sentences, opening with the verdict ('Goal achieved.' or 'Goal not achieved.') matching the complete flag"
     }
 """).strip()
 
@@ -158,6 +158,41 @@ class ClosureVerdict:
     # goal_achieved=false beside a positive narrative reads as cause, not
     # contradiction (run d2f4e2f4: the reason lived only in the worker log).
     downgrade_reason: str = ""
+
+
+# Leading verdict restatement the LLM prose may open with — stripped before
+# the deterministic prefix in _verdict_first_summary so summaries never read
+# "Achieved: Goal achieved. ...". Dumb on purpose: only the unambiguous
+# "[the] goal [was|is] [not] [fully] achieved" openers.
+_VERDICT_OPENER_RE = re.compile(
+    r"^\s*(?:the\s+)?goal\s+(?:was\s+|is\s+)?(?:not\s+)?(?:fully\s+)?achieved[.!:,]?\s*",
+    re.IGNORECASE,
+)
+
+
+def _verdict_first_summary(summary: str, *, complete: bool, judged: bool) -> str:
+    """Open the stored summary with the FLAG's verdict, deterministically.
+
+    Every surface that shows goal_verdict_summary truncates it ([:300] metadata
+    stamps, [:120] logs), and the LLM's prose opener has already contradicted
+    the flag once: run d2f4e2f4 recorded goal_achieved=false beside a summary
+    whose visible prefix read "Goal achieved." The flag writes the opener; the
+    prose can only elaborate, never contradict, in any truncated view.
+
+    Summaries the downgrade branch already rewrote ("Downgraded to
+    not-achieved — ...") are left alone: that opener is code-written,
+    verdict-first, and pinned by consumers/tests.
+    """
+    if summary.startswith("Downgraded to not-achieved"):
+        return summary
+    body = _VERDICT_OPENER_RE.sub("", summary).strip()
+    if not judged:
+        prefix = "Not judged (verification evidence inconclusive)"
+    elif complete:
+        prefix = "Achieved"
+    else:
+        prefix = "Not achieved"
+    return f"{prefix}: {body}" if body else f"{prefix}."
 
 
 _PRECOND_SENTINELS = frozenset({"none", "n/a", "na", "-", "tbd", "(none)", "null", "nil"})
@@ -1021,6 +1056,10 @@ def verify_goal_completion(
                 f"threshold."
             )
             summary = f"{summary} {_env_note}" if summary else _env_note
+
+        # Last mutation before the verdict is built: the flag decides the
+        # opener, after every complete/judged flip above has settled.
+        summary = _verdict_first_summary(summary, complete=complete, judged=judged)
 
         verdict = ClosureVerdict(
             complete=complete,
