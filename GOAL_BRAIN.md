@@ -3321,3 +3321,12 @@ Dormant (deliberately parked, not dropped):
   minecraft server :)" — old /maro links dead by choice, no redirect.
   Bootstrap password moved to ~/claude/credentials-backup/caddy/ per his
   ask; OAuth is the primary login, local webadmin is break-glass.
+  **Verified by Jeremy same day: "github SSO is working as intended.
+  Good work." Arc closed.** Port-obscurity (7777→443 NAT) evaluated at
+  his ask and declined — thin gain (CT logs already publish the
+  hostname; SNI-gating + default-deny auth are the real layers), real
+  friction (non-standard ports blocked on work/hotel networks; 80 must
+  stay open for ACME regardless). On the full-tailscale alternative:
+  "I really like the full tailscale stack, I just balk at needing
+  custom setup at each point along the way" — public + SSO is the
+  accepted steady state; tailnet retreat stays documented, not planned.

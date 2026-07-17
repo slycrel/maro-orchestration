@@ -242,10 +242,10 @@ task-…b414ccab / run cobalt-pine — five-link failure chain, four fixed live)
   login = break-glass, password in ~/claude/credentials-backup/caddy/).
   mc.feifdom.com was reclaimed for the kids' Minecraft server — no
   redirect kept, pre-swap message links are dead by choice. viewer_url →
-  https://maro.feifdom.com. Remaining: Jeremy verifies "Login with
-  GitHub" once; if GitHub errors redirect_uri mismatch, fix the OAuth
-  app's callback to
-  https://maro.feifdom.com/auth/oauth2/github/authorization-code-callback.
+  https://maro.feifdom.com. **VERIFIED by Jeremy 2026-07-17: "github
+  SSO is working as intended."** Arc closed end-to-end. He expects
+  "another UX pass at some point for the goal runs" — unscheduled, no
+  open work.
 - [x] **Completion excerpt should be the deliverable, not the step log** —
   SHIPPED 2026-07-17 (same night, answer-first pass). Two new curators:
   `locate_deliverables` (FS-diff of the run's project dir via
