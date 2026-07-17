@@ -225,11 +225,16 @@ task-…b414ccab / run cobalt-pine — five-link failure chain, four fixed live)
   **Update (same night):** superseded-in-flight by the public route —
   Caddy + caddy-security now runs on this box (SSO-as-floor decree;
   deploy/caddy/) serving https://mc.feifdom.com/maro/* behind an auth
-  portal. Waiting on Jeremy: router forwards 80+443 → 192.168.0.45, first
-  portal login (bootstrap credential retrieval + password change), THEN
-  flip viewer_url to https://mc.feifdom.com/maro (go-live checklist in
-  deploy/caddy/README.md). GitHub OAuth upgrade documented there too.
-  Tailscale IP stays the viewer_url meanwhile.
+  portal. **LIVE 2026-07-17 (same night):** Jeremy forwarded 80+443; the
+  first ACME timeouts predated the forwards (external TCP probes then
+  confirmed both ports reachable; a caddy restart got "certificate
+  obtained successfully"); portal verified from off-LAN; viewer_url
+  flipped to https://mc.feifdom.com/maro. Still Jeremy-side: first
+  portal login (bootstrap credential retrieval + password change —
+  README) and, when wanted, the GitHub OAuth upgrade. LAN caveat: the
+  public name from inside the house needs router NAT-loopback
+  (hairpin); if his router lacks it, in-house devices fall back to the
+  tailscale/LAN base while messages carry the public link.
 - [x] **Completion excerpt should be the deliverable, not the step log** —
   SHIPPED 2026-07-17 (same night, answer-first pass). Two new curators:
   `locate_deliverables` (FS-diff of the run's project dir via
