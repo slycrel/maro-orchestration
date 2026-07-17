@@ -179,21 +179,34 @@ task-…b414ccab / run cobalt-pine — five-link failure chain, four fixed live)
   or mount run records read-only into the container. Until then, dispatched
   self-diagnostics are structurally unable to succeed. Captured in
   docs/CAPABILITIES.md (Tier 2, aspirational).
-- [ ] **Per-loop restart alert reads as terminal failure** — the Telegram
-  alert for dapper-heron's loop-1 restart said "❌ Mission complete —
-  Status: restart | Steps: 5/6 done" while the run was alive and already
-  executing loop 2. Jeremy read it as the run dying (2026-07-17). A
-  mid-run restart alert should say the run is continuing (e.g. "🔄 Loop 1
-  ended (restart) — loop 2 starting, 5/6 steps carried") and reserve ❌ +
-  "Mission complete" for terminal states.
-- [ ] **Hermes never notified on run completion** — Maro's alerts go
-  straight to the Telegram channel; Hermes has no poller/callback, so
-  Jeremy heard from the channel but not from the agent he dispatched
-  through. Structural, not a bug — the dispatch lane is fire-and-poll.
-  Belongs to the session-protocol / substrate-go-between arc (escalation
-  design decree: the go-between IS the surface). Options: dispatch.py
-  worker pings Hermes over the existing SSH lane on completion, or Hermes
-  gains a cheap status poller for open job_ids.
+- [x] **Per-loop restart alert reads as terminal failure** — SHIPPED
+  2026-07-17 (same night): loop_finalize's per-loop "Mission complete"
+  telegram block (terminal language + per-loop totals for a NON-terminal
+  event) replaced with a restart-only "🔄 Replanning … the run continues"
+  ping. Completion is announced once, at run level, by
+  notify.emit(run_completed) → notify_telegram with the curated card.
+- [x] **Hermes never notified on run completion** — SHIPPED 2026-07-17
+  (same night): SESSION_PROTOCOL §3 push leg wired for real.
+  notify.command → `deploy/hermes/notify-hermes.sh` (two legs: rich
+  ops-channel message via notify_telegram + ssh push of the job_id-enriched
+  card to mini2 `~/bin/maro-inbox.sh` → `~/.hermes/inbox/maro/`); for
+  dispatched-run completions + escalation-class events the inbox script
+  also DMs Jeremy deterministically (fields quoted, no brain turn).
+  notify_telegram rewritten user-grade: plain-language outcome header,
+  verdict, gaps, findings excerpt (goal-echo stripped), cost+duration,
+  per-run viewer link (notify.viewer_url). Verified live end-to-end with
+  dapper-heron's real card. SKILL.md tells Hermes to read the inbox before
+  ssh-polling.
+- [ ] **Completion excerpt should be the deliverable, not the step log** —
+  the run card's result_excerpt/result_path point at the loop RESULT.md
+  (step-by-step execution narrative); dapper-heron's actual deliverable
+  (FINAL_REPORT.md, ranked shortlist) lives in the PROJECT dir and the
+  curator never links it into the card (inventory.artifacts scans the run
+  dir only, came back empty). The completion message therefore excerpts
+  "Read artifacts/step-2-transcript.json…" process prose instead of the
+  shortlist. Fix belongs in curation: excerpt_result (or a new curator
+  task) should prefer declared deliverables / project-dir artifacts
+  written by the run.
 
 Container-on day-one findings (2026-07-16, two dispatched verification runs):
 - [x] **Provenance freshness-window false demotion** — run 123bf935 demoted

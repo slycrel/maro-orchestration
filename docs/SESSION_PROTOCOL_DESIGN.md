@@ -107,6 +107,10 @@ stage 2 and `deploy/hermes/README.md`.
 - **Push direction** (Maro → Hermes: run_completed, escalations) reuses
   `notify.command` — the configured command becomes an ssh-wrapped call to a
   Hermes-side inbox script. Same contract, new legs.
+  *2026-07-17: SHIPPED as `deploy/hermes/notify-hermes.sh` (two legs:
+  ops-channel Telegram + ssh push of the job_id-enriched run_card to mini2
+  `~/bin/maro-inbox.sh` → `~/.hermes/inbox/maro/`, with a deterministic DM
+  follow-up for dispatched-run completions and escalation-class events).*
 - **NOT building:** an HTTP daemon, an open port, a message broker. A public
   API is one auth bug away from remote code execution (a goal IS code
   execution). Graduate to a persistent channel only if a message type in §4

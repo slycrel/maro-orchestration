@@ -3248,3 +3248,16 @@ Dormant (deliberately parked, not dropped):
   The precondition pre-flight leak also shipped this afternoon
   (mechanism corrected: comma-shredded prose preconditions + a too-loose
   command gate, not shell-executed Python strings; record in BACKLOG_DONE).
+- **2026-07-17 (Jeremy, late night) — the delivery loop IS the product surface
+  (standing course-correction).** After the first real Hermes-dispatch run:
+  "we're still making the standard LLM mistake... I'm sitting here 'waiting'
+  as an end user; hermes can't tell me it's finished (or not) because it's
+  not checking. I got a message saying it wasn't done ('restarted') which was
+  bad. I also don't have a meaningful way to see what happened... It's like
+  we missed the forest for the trees." Internal fixes don't count until the
+  user gets told the answer where they asked. Shipped same night: per-loop
+  "Mission complete" alert → restart-only progress ping; run-level completion
+  message rewritten user-grade (verdict, findings, cost, viewer link);
+  SESSION_PROTOCOL §3 push leg live (notify-hermes.sh → mini2 inbox + DM
+  follow-up for dispatched jobs). Standing test for future work: does the
+  end user hear the outcome, in plain words, where they asked for the work?

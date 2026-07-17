@@ -671,21 +671,23 @@ def _finalize_loop(
         except Exception as _evo_exc:
             log.warning("run-cadence evolver cycle failed (non-fatal): %s", _evo_exc)
 
-    # Post-mission Telegram notification
-    if not dry_run:
+    # Loop-boundary Telegram ping — progress only, and only for a restart.
+    # Completion is announced ONCE, at run level, by notify.emit(
+    # "run_completed") → notify_telegram with the curated card (verdict,
+    # result, full-run cost). This block used to send "Mission complete"
+    # per LOOP with per-loop totals — a mid-run restart therefore read as
+    # the run dying with understated numbers (2026-07-17, dapper-heron).
+    if not dry_run and loop_status == "restart":
         try:
             from telegram_listener import telegram_notify
             _done_count = sum(1 for s in step_outcomes if s.status == "done")
-            _total_tokens = total_tokens_in + total_tokens_out
-            _status_icon = "✅" if loop_status == "done" else ("⚠️" if loop_status == "partial" else "❌")
-            _msg = (
-                f"{_status_icon} *Mission complete* — `{project or goal[:40]}`\n"
-                f"Status: {loop_status} | Steps: {_done_count}/{len(step_outcomes)} done\n"
-                f"Tokens: {_total_tokens:,} | Time: {elapsed_ms // 1000}s"
+            telegram_notify(
+                f"🔄 Replanning — `{project or goal[:40]}`\n"
+                f"Loop ended after {_done_count}/{len(step_outcomes)} steps; "
+                f"the run continues on a fresh plan."
             )
-            telegram_notify(_msg)
         except Exception as _tg_exc:
-            log.debug("post-mission Telegram notification failed (non-critical): %s", _tg_exc)
+            log.debug("loop-boundary Telegram ping failed (non-critical): %s", _tg_exc)
 
 
 def _crystallize_and_synthesize(

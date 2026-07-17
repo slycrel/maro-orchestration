@@ -23,14 +23,109 @@ from __future__ import annotations
 
 import json
 import sys
+from pathlib import Path
 
-_CLASS_ICON = {
-    "success": "✅",             # ✅ verified achieved
-    "done-unverified": "☑",     # ☑ finished, no verdict
-    "done-not-achieved": "⚠",   # ⚠ finished but verdict says no
-    "partial": "⚠",
-    "failed": "❌",              # ❌
+# Plain-language outcome headers — the first line IS the message for a user
+# glancing at a phone. The old format led with the internal class name
+# ("maro run done-not-achieved"); a user shouldn't need the taxonomy.
+_CLASS_LABEL = {
+    "success": ("✅", "Done — goal achieved"),
+    "done-unverified": ("☑", "Done (not verified)"),
+    "done-not-achieved": ("⚠", "Finished — but goal NOT achieved"),
+    "partial": ("⚠", "Partial — stopped before finishing"),
+    "failed": ("❌", "Failed"),
 }
+_STATUS_LABEL = {
+    "done": ("✅", "Done"),
+    "error": ("❌", "Failed"),
+    "blocked": ("🛑", "Blocked — needs input"),
+    "incomplete": ("⚠", "Incomplete"),
+}
+
+
+def _cfg(key: str, default):
+    try:
+        from config import get as _get
+        return _get(key, default)
+    except Exception:
+        return default
+
+
+def _run_stats_line(payload: dict) -> str:
+    """'cost $0.71 | 37m' — best-effort from run-card fields, '' when absent."""
+    parts = []
+    cost = payload.get("total_cost_usd")
+    if cost is not None:
+        try:
+            parts.append(f"cost ${float(cost):.2f}")
+        except Exception:
+            pass
+    try:
+        from datetime import datetime
+        started, ended = payload.get("started_at"), payload.get("ended_at")
+        if started and ended:
+            secs = (datetime.fromisoformat(str(ended))
+                    - datetime.fromisoformat(str(started))).total_seconds()
+            if secs >= 90:
+                parts.append(f"{secs / 60:.0f}m")
+            elif secs > 0:
+                parts.append(f"{secs:.0f}s")
+    except Exception:
+        pass
+    return " | ".join(parts)
+
+
+def _deliverable_excerpt(payload: dict, limit: int = 600) -> str:
+    """The run's findings, not its paperwork.
+
+    RESULT.md (and the card's result_excerpt mirror of it) opens with a
+    '# Result: <full goal echo>' header plus a telemetry status line —
+    exactly the content a completion message should NOT lead with. Read
+    result_path when available, skip that preamble, and return the first
+    real body content.
+    """
+    text = ""
+    path = str(payload.get("result_path", "") or "")
+    if path:
+        try:
+            text = Path(path).read_text(errors="replace")
+        except Exception:
+            text = ""
+    if not text:
+        text = str(payload.get("result_excerpt", "") or "")
+    lines_out: list[str] = []
+    for ln in text.splitlines():
+        s = ln.strip()
+        if not lines_out and (
+            not s or s.startswith("# Result:") or s.startswith("Status: ")
+            or s == "---"
+        ):
+            continue
+        lines_out.append(ln)
+    out = "\n".join(lines_out).strip()
+    if not out:
+        return ""
+    return out[:limit] + ("…" if len(out) > limit else "")
+
+
+def _viewer_link(payload: dict) -> str:
+    """Per-run report URL when a viz server base is configured, else ''.
+
+    notify.viewer_url (e.g. "http://192.168.0.45:8787") + the runs-root-
+    relative report path, derived from result_path's loop id — the report
+    html sits next to the RESULT.md the card already points at.
+    """
+    base = str(_cfg("notify.viewer_url", "") or "").rstrip("/")
+    path = str(payload.get("result_path", "") or "")
+    if not base or not path or not path.endswith("-RESULT.md"):
+        return ""
+    try:
+        from runs import runs_root
+        rel = Path(path).resolve().relative_to(Path(runs_root()).resolve())
+    except Exception:
+        return ""
+    rel_report = str(rel)[: -len("-RESULT.md")] + "-report.html"
+    return f"{base}/{rel_report}"
 
 
 def format_message(payload: dict) -> str:
@@ -54,17 +149,54 @@ def format_message(payload: dict) -> str:
         return "\n".join(lines)
 
     # run_completed (and anything unrecognized — degrade to a status line)
-    cls = str(payload.get("success_class", "") or payload.get("status", "?"))
-    icon = _CLASS_ICON.get(cls, "ℹ")  # ℹ
-    lines = [f"{icon} maro run {cls}"]
+    status = str(payload.get("status", "") or "")
+    hid = str(payload.get("handle_id", "") or "")
+    nickname = str(payload.get("nickname", "") or "")
+    run_ref = hid + (f" ({nickname})" if nickname else "")
+
+    if status == "clarification_needed":
+        # The question IS the payload — relay it, say how to answer.
+        lines = ["❓ Maro needs an answer before it can run this"]
+        if goal_line:
+            lines.append(f"Goal: {goal_line}")
+        question = str(payload.get("clarification_question", "") or "").strip()
+        excerpt = str(payload.get("result_excerpt", "") or "").strip()
+        lines.append(question or excerpt[:400] or "(no question recorded)")
+        lines.append("Re-send the goal with the answer included.")
+        if run_ref:
+            lines.append(f"run: {run_ref}")
+        return "\n".join(lines)
+
+    cls = str(payload.get("success_class", "") or "")
+    icon, label = (
+        _CLASS_LABEL.get(cls)
+        or _STATUS_LABEL.get(status)
+        or ("ℹ", f"run {cls or status or '?'}")
+    )
+    lines = [f"{icon} {label}"]
     if goal_line:
         lines.append(f"Goal: {goal_line}")
-    excerpt = str(payload.get("result_excerpt", "")).strip()
+    verdict = str(payload.get("goal_verdict_summary", "") or "").strip()
+    if verdict:
+        lines.append("Verdict: " + verdict[:300] + ("…" if len(verdict) > 300 else ""))
+    gaps = payload.get("goal_verdict_gaps") or []
+    if gaps:
+        gap_text = "; ".join(str(g) for g in gaps)
+        lines.append("Missing: " + gap_text[:300] + ("…" if len(gap_text) > 300 else ""))
+    excerpt = _deliverable_excerpt(payload)
     if excerpt:
-        lines.append(excerpt[:800])
-    hid = payload.get("handle_id")
+        lines.extend(["", excerpt, ""])
+    tail = f"run: {run_ref}" if run_ref else ""
+    stats = _run_stats_line(payload)
+    if stats:
+        tail = f"{tail} | {stats}" if tail else stats
+    if tail:
+        lines.append(tail)
     if hid:
-        lines.append(f"run: {hid}  (maro-runs result {hid})")
+        lines.append(f"Full result: maro-runs result {hid}")
+    link = _viewer_link(payload)
+    if link:
+        lines.append(link)
     return "\n".join(lines)
 
 
