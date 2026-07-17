@@ -316,6 +316,21 @@ Container-on day-one findings (2026-07-16, two dispatched verification runs):
   exit's record guarantee).
 
 
+### 26. web_fetch reply-aware X rung (2026-07-17, from the zesty-ash dig + Jeremy's follow-up-post note)
+
+`web_fetch.fetch_x_tweet`'s best authenticated rung shells to the OpenClaw-era
+`x-twitter-cli.sh post`, which renders ONLY the target tweet (keeps the reply
+*count*, drops reply content) — so the worker-facing web_fetch tool is
+structurally blind to the follow-up-post pattern Jeremy flagged ("Repo👇" →
+link in the author's first self-reply; both X-research runs burned steps
+hunting a repo whose link sat one reply down). The CLI itself returns replies
+(`twitter -c tweet`, verified live 2026-07-17 — found the link). Skill recipe
+fixed same day (stale `thread` → `tweet` + follow-up-pattern note), so
+research runs following social_search are covered; this item is the code
+half: give web_fetch a direct-CLI rung that keeps same-author replies (don't
+develop in the poly-proto wrapper — reference only). Swipe-don't-depend rules
+apply.
+
 ### R6. VERIFY_LEARN_ARC V4/V5 adversarial review — 4 fixed live, 4 deferred (2026-07-14)
 
 Codex ×3 (Skeptic/Architect/Minimalist) over `e792768` (V3 dates) + `8349b7c`

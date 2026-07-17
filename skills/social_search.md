@@ -58,8 +58,18 @@ export TWITTER_CT0=$(python3 -c "import json,os;print(json.load(open(os.path.exp
 
 # then:
 twitter -c search "your query" --max 20   # -c = compact JSON, LLM-friendly
-twitter -c thread <tweet_url_or_id>        # full thread
+twitter -c tweet <tweet_url_or_id>         # tweet + its replies (the thread)
 ```
+
+**Follow-up-post pattern (verified 2026-07-17):** when a post says
+"Repo👇" / "link below" / "🧵", the payload link lives in the AUTHOR'S OWN
+first reply, not the root post. `twitter -c tweet` returns the replies —
+scan them for same-author entries before declaring a link unobtainable
+(runs 1dac0e17 + 75a88777 both burned steps hunting a GitHub repo whose
+link was sitting in the author's follow-up reply). Note: the CLI command
+is `tweet`, not `thread` — 0.8.5 renamed it; and `src/web_fetch.py`'s
+`fetch_x_tweet` returns the SINGLE post only (its wrapper drops reply
+content), so for threads use the CLI directly.
 
 NEVER echo, log, or write the cookie values anywhere — export only, as
 above. If cookies have expired (auth errors), run
