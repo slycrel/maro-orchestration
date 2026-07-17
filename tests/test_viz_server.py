@@ -59,8 +59,23 @@ def test_denies_source(rundir_root):
     assert vs._resolve_allowed_path("/eager-otter/source/metadata.json", rundir_root) is None
 
 
-def test_denies_artifact(rundir_root):
+def test_denies_artifact_bundle(rundir_root):
+    """artifact/ non-prose payloads (repo bundles etc.) stay denied even
+    though deliverable extensions are now served from that dir."""
     assert vs._resolve_allowed_path("/eager-otter/artifact/repo.bundle", rundir_root) is None
+
+
+def test_allows_artifact_deliverable(rundir_root):
+    """Curated deliverable copies (run_curation.locate_deliverables) are the
+    'Full report' links completion messages hand to the user — 403ing them
+    strands the answer (live: dapper-heron's FINAL_REPORT.md link, 2026-07-17)."""
+    got = vs._resolve_allowed_path("/eager-otter/artifact/FINAL_REPORT.md", rundir_root)
+    assert got == (rundir_root / "eager-otter" / "artifact" / "FINAL_REPORT.md").resolve()
+
+
+def test_denies_artifact_nested_or_extensionless(rundir_root):
+    assert vs._resolve_allowed_path("/eager-otter/artifact/sub/x.md", rundir_root) is None
+    assert vs._resolve_allowed_path("/eager-otter/artifact/README", rundir_root) is None
 
 
 def test_denies_rundir_root_metadata(rundir_root):

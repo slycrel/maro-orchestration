@@ -205,6 +205,23 @@ task-…b414ccab / run cobalt-pine — five-link failure chain, four fixed live)
   per-run viewer link (notify.viewer_url). Verified live end-to-end with
   dapper-heron's real card. SKILL.md tells Hermes to read the inbox before
   ssh-polling.
+- [ ] **Viewer links: base URL posture (Jeremy 2026-07-17)** — "the detail
+  link is a local IP. probably should be a tailscale link or a
+  (configurable?) DNS base URL." The knob already existed
+  (`notify.viewer_url`); this box now points at the tailscale IP
+  (`http://100.82.68.63:8787`) and DEFAULTS.md documents the posture
+  (localhost for same-box installs — the common case — tailscale/DNS over
+  LAN IP for split setups). Found + fixed on the way: viz_server's
+  allowlist 403'd `artifact/**`, so every "Full report" deliverable link
+  sent before 2026-07-17 was dead on arrival regardless of base — now
+  serves `<run>/artifact/*.{md,txt,html,json,csv}` only (repo.bundle et al
+  stay denied; pins in test_viz_server). Remaining, both Jeremy-side:
+  (a) MagicDNS doesn't resolve on the tailnet (both boxes fail on
+  `maro.taile7bacd.ts.net`) — enable in the tailscale admin console for a
+  stable pretty name; (b) the phone isn't on the tailnet (only maro +
+  jers-16-mbp), so tailscale links open on the MacBook but not the phone
+  until it joins — if that's a problem in practice, swap viewer_url back
+  to the LAN IP in ~/.maro/config.yml (one line).
 - [x] **Completion excerpt should be the deliverable, not the step log** —
   SHIPPED 2026-07-17 (same night, answer-first pass). Two new curators:
   `locate_deliverables` (FS-diff of the run's project dir via

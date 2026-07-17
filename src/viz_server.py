@@ -47,6 +47,11 @@ def _resolve_allowed_path(url_path: str, root: Path) -> Optional[Path]:
     404s it the normal way) rather than reported as 403:
       - "index.html" at the document root
       - "<run-dir-name>/build/**" (any file under a run-dir's build/ subtree)
+      - "<run-dir-name>/artifact/*.{md,txt,html,json,csv}" — curated
+        deliverable copies placed by run_curation.locate_deliverables (the
+        "Full report" links completion messages hand to the user). Prose
+        extensions only: artifact/ also holds non-viewer payloads
+        (e.g. repo.bundle), which stay denied.
 
     Never touches the filesystem for a request this rejects.
     """
@@ -59,6 +64,10 @@ def _resolve_allowed_path(url_path: str, root: Path) -> Optional[Path]:
     if segments == ["index.html"]:
         candidate = root / "index.html"
     elif len(segments) >= 3 and segments[1] == "build":
+        candidate = root.joinpath(*segments)
+    elif (len(segments) == 3 and segments[1] == "artifact"
+          and Path(segments[2]).suffix.lower()
+          in (".md", ".txt", ".html", ".json", ".csv")):
         candidate = root.joinpath(*segments)
     else:
         return None
