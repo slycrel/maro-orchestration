@@ -1,26 +1,37 @@
 # Caddy reverse proxy — public entry for the maro box
 
-`https://mc.feifdom.com/maro/...` → the viz server on `127.0.0.1:8787`,
-behind an authentication portal. Set up 2026-07-17.
+`https://maro.feifdom.com/...` → the viz server on `127.0.0.1:8787`,
+behind an authentication portal at `/auth`. Set up 2026-07-17.
 
 **Auth posture (Jeremy's decree, 2026-07-17): SSO as the floor,
 implementation swappable.** The caddy-security plugin provides an auth
-portal that issues JWTs and an authorization policy that gates `/maro`.
-The identity provider *behind* the portal is a config block: it starts as
-a local user store (zero external dependencies) and upgrades to GitHub
-OAuth without touching the `/maro` route or its policy. Flat-open "we'll
-add auth later" was explicitly rejected.
+portal that issues JWTs and an authorization policy that gates the site.
+The identity provider *behind* the portal is a config block: local user
+store (break-glass) + GitHub OAuth (primary, pinned to `slycrel`). Flat-
+open "we'll add auth later" was explicitly rejected — but so was
+high-friction auth: if this stack generates friction, the sanctioned
+retreat is TLS-only read-only (see Fallback posture).
+
+**Serving shape (2026-07-17):** dedicated subdomain, viz at the root —
+no path prefix, no `uri strip_prefix`. (The original path shape on
+another hostname was dropped same-day — that host belongs to the kids'
+Minecraft server; links sent before the swap are dead, accepted.)
 
 ## Pieces
 
 | What | Where | In git? |
 |---|---|---|
 | Caddy binary (custom build, caddy-security baked in) | `/usr/local/bin/caddy` | no — see rebuild below |
-| Caddyfile | `/etc/caddy/Caddyfile` (source of truth: `deploy/caddy/Caddyfile`) | yes |
+| Caddyfile (live = OAuth variant) | `/etc/caddy/Caddyfile` (source: `deploy/caddy/Caddyfile.github-oauth`) | yes |
+| Local-only fallback Caddyfile | `deploy/caddy/Caddyfile` | yes |
 | systemd unit | `/etc/systemd/system/caddy.service` (source: `deploy/caddy/caddy.service`) | yes |
-| JWT signing key | `/etc/caddy/caddy.env` (mode 600) | **never** |
+| JWT signing key + GitHub OAuth creds | `/etc/caddy/caddy.env` (mode 600) | **never** |
 | Local user db | `/etc/caddy/auth/users.json` (mode 600, plugin-managed) | **never** |
 | ACME certs/state | `~clawd/.local/share/caddy/` | never |
+
+Secrets backup: `~/claude/credentials-backup/caddy/` holds copies of
+`caddy.env`, `users.json`, and the bootstrap password (manual snapshot —
+re-copy on rotation; never commit).
 
 Binary rebuild/upgrade (the plugin is baked in at build time, apt caddy
 won't have it):
@@ -34,24 +45,48 @@ sudo systemctl restart caddy
 ## Install / update config
 
 ```bash
-sudo cp deploy/caddy/Caddyfile /etc/caddy/Caddyfile
-sudo systemctl reload caddy        # validate first: caddy validate --config /etc/caddy/Caddyfile
+sudo cp deploy/caddy/Caddyfile.github-oauth /etc/caddy/Caddyfile
+sudo systemctl restart caddy   # restart, not reload — EnvironmentFile is start-time-only
 sudo cp deploy/caddy/caddy.service /etc/systemd/system/caddy.service
 sudo systemctl daemon-reload && sudo systemctl enable --now caddy
 ```
 
-## First login (bootstrap credentials)
+Validate first: `set -a; . /etc/caddy/caddy.env; set +a; caddy validate
+--config deploy/caddy/Caddyfile.github-oauth --adapter caddyfile`.
 
-The plugin auto-creates a `webadmin` user (role `authp/admin`) on first
-start — and in the installed version its generated password is logged
-NOWHERE (the journal line has username/email/roles only). The working
-bootstrap/reset procedure is to set the password hash directly
-(2026-07-17, verified by bcrypt round-trip):
+## GitHub OAuth (primary login)
+
+Enabled 2026-07-17 via `enable-github-oauth.sh`. The OAuth app lives
+under the `slycrel` GitHub account ("maro viewer", client ID
+`Ov23li63QjwAWcrpZI0s`); the client secret is in `/etc/caddy/caddy.env`.
+Only `github.com/slycrel` is granted a role — any other GitHub login
+authenticates but holds no role and is denied (default-deny holds).
+
+The OAuth app's **Authorization callback URL** must be
+`https://maro.feifdom.com/auth/oauth2/github/authorization-code-callback`.
+If GitHub shows a `redirect_uri` mismatch on login, the app was created
+with a different callback — edit it at github.com → Settings →
+Developer settings → OAuth Apps.
+
+Secret rotation: generate a new client secret on the OAuth app page,
+replace `GITHUB_CLIENT_SECRET` in `/etc/caddy/caddy.env`, then
+`sudo systemctl restart caddy`.
+
+## Local login (break-glass)
+
+`webadmin` in the local identity store remains as break-glass if GitHub
+is unreachable. Its password is in the credentials backup
+(`~/claude/credentials-backup/caddy/bootstrap-password.txt`).
+
+**There is no in-portal password change**: this plugin build hard-404s
+`/auth/settings` (probed 2026-07-17 — the authcrunch portal refactor
+dropped the self-service pages). To reset the password, set the hash
+directly (verified by bcrypt round-trip):
 
 ```bash
 umask 077
-openssl rand -base64 18 > /etc/caddy/auth/bootstrap-password.txt
-hash=$(caddy hash-password --plaintext "$(cat /etc/caddy/auth/bootstrap-password.txt)")
+openssl rand -base64 18 > /tmp/new-pw.txt    # or write a chosen password
+hash=$(caddy hash-password --plaintext "$(cat /tmp/new-pw.txt)")
 python3 -c "
 import json, sys
 path = '/etc/caddy/auth/users.json'
@@ -59,63 +94,18 @@ d = json.load(open(path))
 d['users'][0]['passwords'][0]['hash'] = sys.argv[1]
 json.dump(d, open(path, 'w'), indent=2)" "$hash"
 sudo systemctl restart caddy
+# then move /tmp/new-pw.txt into the credentials backup and delete it
 ```
 
-Read the credential with `sudo cat /etc/caddy/auth/bootstrap-password.txt`,
-log in at `https://mc.feifdom.com/auth/` as `webadmin`, store the
-password in a password manager, then delete the file.
-
-**There is no in-portal password change**: this plugin build hard-404s
-`/auth/settings` (probed 2026-07-17 — the authcrunch portal refactor
-dropped the self-service pages; `/auth/whoami` and `/auth/portal` exist,
-`/auth/settings*` does not). To change the password, re-run the
-hash-reset above with a plaintext of your choosing.
+The plugin auto-creates `webadmin` (role `authp/admin`) on first start,
+and in the installed version its generated password is logged NOWHERE
+(the journal line has username/email/roles only) — the hash-reset above
+is the only way in after a fresh `users.json`.
 
 Note: the auth flow cannot be exercised against the loopback test
-listener — the portal's `cookie domain mc.feifdom.com` makes session
+listener — the portal's `cookie domain maro.feifdom.com` makes session
 cookies invalid on `127.0.0.1`, so sandbox state never sticks there.
 Test logins on the real domain.
-
-## Go-live checklist (router side — Jeremy)
-
-DNS is already right (`mc.feifdom.com` → home ISP IP). Remaining:
-
-1. Router port-forwards to this box (`192.168.0.45`):
-   - external **80** → `192.168.0.45:80` (ACME HTTP-01 challenge)
-   - external **443** → `192.168.0.45:443`
-2. Nothing else — Caddy is already running and retrying cert issuance;
-   within a minute of the forwards existing, `https://mc.feifdom.com/auth`
-   serves the portal with a real certificate. Check with:
-   `sudo journalctl -u caddy -f | grep -iE "certificate|acme"`.
-3. **After confirming the portal loads from off-LAN**, flip the message
-   links: in `~/.maro/config.yml` set
-   `notify.viewer_url: "https://mc.feifdom.com/maro"`. Don't flip before —
-   dead links in completion messages are worse than LAN-only links.
-
-## Upgrade path: GitHub OAuth — staged, one browser step remains
-
-Everything is prebuilt: `Caddyfile.github-oauth` (validated; portal
-gains "Login with GitHub", only `github.com/slycrel` is granted a role,
-local login stays as break-glass) and `enable-github-oauth.sh` (guards
-on credentials, backs up the live config, validates, restarts, rolls
-back if caddy doesn't come up).
-
-The one thing only Jeremy can do — GitHub has no API for OAuth app
-creation (~2 min in a browser):
-
-1. https://github.com/settings/applications/new
-   - Application name: `maro viewer`
-   - Homepage URL: `https://mc.feifdom.com/`
-   - Callback URL: `https://mc.feifdom.com/auth/oauth2/github/authorization-code-callback`
-   Register, then "Generate a new client secret".
-2. Append both values to `/etc/caddy/caddy.env`:
-   `GITHUB_CLIENT_ID=...` and `GITHUB_CLIENT_SECRET=...`
-3. `bash deploy/caddy/enable-github-oauth.sh`
-
-If GitHub rejects the callback on first login, the path convention
-changed in the plugin — check the portal's login page source for the
-GitHub button's actual href and update the OAuth app's callback to
-match.
 
 ## Fallback posture (Jeremy 2026-07-17)
 
@@ -129,16 +119,15 @@ Caddyfile.
 
 ## Shape notes
 
-- The `/maro` prefix is stripped before proxying (`uri strip_prefix`), so
-  the viz server is prefix-blind. Loop reports use relative links
-  (verified 2026-07-17) so they survive subpath serving; if a future
-  index page uses absolute paths it will break behind `/maro` — fix it
-  there, not here.
-- The viz server's own allowlist (build/** + artifact/ prose files,
-  default-deny) still applies behind the proxy — auth is a second layer,
-  not a replacement.
-- A dedicated subdomain (`maro.feifdom.com`) instead of the path is one
-  extra site block + a Namecheap DNS record — nothing here assumes the
-  path shape except `viewer_url`.
+- The viz server serves at the subdomain root — no prefix stripping.
+  Loop reports use relative links (verified 2026-07-17) so they'd also
+  survive subpath serving, but nothing depends on that anymore.
+- The viz server's own allowlist (index.html at root, build/** +
+  artifact/ prose files, default-deny) still applies behind the proxy —
+  auth is a second layer, not a replacement.
+- DNS: Namecheap A-record → home ISP IP; router forwards 80
+  (ACME HTTP-01) + 443 → this box (`192.168.0.45`).
+- Message links come from `notify.viewer_url` in `~/.maro/config.yml`
+  (`https://maro.feifdom.com`).
 - Local wiring check without touching the domain:
   `curl -s http://127.0.0.1:8880/auth` (same routes, loopback-only site).

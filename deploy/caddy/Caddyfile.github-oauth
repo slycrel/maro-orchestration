@@ -9,6 +9,9 @@
 # `match sub` pin); any other GitHub login authenticates but holds no
 # role and is denied by the authorization policy (default-deny holds).
 #
+# Serving shape (2026-07-17, Jeremy): dedicated subdomain
+# maro.feifdom.com with the viz server at the ROOT (no /maro prefix).
+#
 # Secrets: JWT_SHARED_KEY + GitHub credentials live in
 # /etc/caddy/caddy.env (mode 600, not in git). Local user db is
 # /etc/caddy/auth/users.json (not in git).
@@ -36,10 +39,10 @@
 			crypto key sign-verify from env JWT_SHARED_KEY
 			enable identity store localdb
 			enable identity provider github
-			cookie domain mc.feifdom.com
+			cookie domain maro.feifdom.com
 			ui {
 				links {
-					"Maro visualizations" /maro/index.html icon "las la-chart-bar"
+					"Maro visualizations" /index.html icon "las la-chart-bar"
 				}
 			}
 			# No settings link: this plugin build 404s /auth/settings (the
@@ -57,48 +60,43 @@
 		}
 
 		authorization policy maro_policy {
-			set auth url https://mc.feifdom.com/auth/
+			set auth url https://maro.feifdom.com/auth/
 			crypto key verify from env JWT_SHARED_KEY
 			allow roles authp/admin authp/user
 		}
 	}
 }
 
-mc.feifdom.com {
+maro.feifdom.com {
 	route /auth* {
 		authenticate with maro_portal
 	}
 
-	# Bare /maro lands on the viz root, which its allowlist denies (blank
-	# 403) — send it to the index the allowlist does serve.
-	redir /maro /maro/index.html
-	redir /maro/ /maro/index.html
+	# Bare / lands on the viz root, which its allowlist denies (blank
+	# 403) — send it to the index the allowlist does serve. Unauthed
+	# hits on /index.html bounce to the portal via the policy's auth url.
+	redir / /index.html
 
-	route /maro* {
+	# /auth* sorts ahead of /* (Caddy orders same-directive routes by
+	# matcher specificity), so this catch-all never shadows the portal.
+	route /* {
 		authorize with maro_policy
-		uri strip_prefix /maro
 		reverse_proxy 127.0.0.1:8787
 	}
-
-	redir / /auth 302
 }
 
 # Local wiring check (no TLS, no cookies across domains — proves the
-# portal renders and unauthenticated /maro redirects; full flow needs the
+# portal renders and unauthenticated / redirects; full flow needs the
 # real domain): curl -s http://127.0.0.1:8880/auth | head
 http://127.0.0.1:8880 {
 	route /auth* {
 		authenticate with maro_portal
 	}
 
-	redir /maro /maro/index.html
-	redir /maro/ /maro/index.html
+	redir / /index.html
 
-	route /maro* {
+	route /* {
 		authorize with maro_policy
-		uri strip_prefix /maro
 		reverse_proxy 127.0.0.1:8787
 	}
-
-	redir / /auth 302
 }

@@ -205,7 +205,7 @@ task-…b414ccab / run cobalt-pine — five-link failure chain, four fixed live)
   per-run viewer link (notify.viewer_url). Verified live end-to-end with
   dapper-heron's real card. SKILL.md tells Hermes to read the inbox before
   ssh-polling.
-- [ ] **Viewer links: base URL posture (Jeremy 2026-07-17)** — "the detail
+- [x] **Viewer links: base URL posture (Jeremy 2026-07-17)** — "the detail
   link is a local IP. probably should be a tailscale link or a
   (configurable?) DNS base URL." The knob already existed
   (`notify.viewer_url`); this box now points at the tailscale IP
@@ -235,6 +235,17 @@ task-…b414ccab / run cobalt-pine — five-link failure chain, four fixed live)
   public name from inside the house needs router NAT-loopback
   (hairpin); if his router lacks it, in-house devices fall back to the
   tailscale/LAN base while messages carry the public link.
+  **CLOSED 2026-07-17 (morning):** final shape is a dedicated subdomain —
+  Jeremy added maro.feifdom.com at Namecheap and created the GitHub OAuth
+  app; viz now serves at the subdomain ROOT (no /maro prefix), cert
+  obtained, GitHub OAuth ENABLED live (pinned to slycrel; webadmin local
+  login = break-glass, password in ~/claude/credentials-backup/caddy/).
+  mc.feifdom.com was reclaimed for the kids' Minecraft server — no
+  redirect kept, pre-swap message links are dead by choice. viewer_url →
+  https://maro.feifdom.com. Remaining: Jeremy verifies "Login with
+  GitHub" once; if GitHub errors redirect_uri mismatch, fix the OAuth
+  app's callback to
+  https://maro.feifdom.com/auth/oauth2/github/authorization-code-callback.
 - [x] **Completion excerpt should be the deliverable, not the step log** —
   SHIPPED 2026-07-17 (same night, answer-first pass). Two new curators:
   `locate_deliverables` (FS-diff of the run's project dir via

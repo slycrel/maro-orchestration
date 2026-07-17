@@ -3313,3 +3313,11 @@ Dormant (deliberately parked, not dropped):
   enable-github-oauth.sh); the only remaining step is Jeremy's 2-minute
   OAuth-app creation. Friction on auth work is a signal to retreat, not
   push through.
+  **Landed (2026-07-17 morning, from work):** Jeremy created the OAuth app
+  and a dedicated subdomain (maro.feifdom.com via Namecheap) — GitHub
+  OAuth is now LIVE (portal at /auth, viz at the subdomain root, cert
+  obtained, external probe verified). mc.feifdom.com erased from configs
+  and docs at his direction — "that was always intended for my kids'
+  minecraft server :)" — old /maro links dead by choice, no redirect.
+  Bootstrap password moved to ~/claude/credentials-backup/caddy/ per his
+  ask; OAuth is the primary login, local webadmin is break-glass.
