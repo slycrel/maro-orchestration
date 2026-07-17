@@ -335,7 +335,15 @@ Truth anchor: GOAL_BRAIN.md Threads. History: docs/history/ROADMAP_ARCHIVE.md.
    compensating-for-model-weakness scaffolding (prompt taxonomies, planning
    crutches, routing cleverness) is the half at risk. Name which half each
    major arc is in. Output: a short findings doc + proposed course
-   corrections, decisions to Jeremy.
+   corrections, decisions to Jeremy. Caveat: the session cannot be fully
+   clean — the auto-memory index (MEMORY.md) is injected regardless. Treat
+   that as instrumentation, not contamination: whenever a conclusion rests
+   on a memory rather than something in the repo, SAY SO — each such case
+   is one of the "in context, not in the repo" gaps this review exists to
+   find. (Memory was pre-gardened 2026-07-17: 15 dead-arc files archived
+   out of the index; a deeper distillation of memory + direction docs is
+   queued to follow THIS review, using its findings — deliberately not
+   done before it.)
 
 -5. **Post-handoff execution queue (2026-07-12)** — *the ordered chunk list
    from the Fable-handoff session; every entry has a design doc or decided

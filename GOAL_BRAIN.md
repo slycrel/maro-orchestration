@@ -3339,3 +3339,16 @@ Dormant (deliberately parked, not dropped):
   model improvement vs. what compensates for weaknesses that are
   evaporating, and name which half each major arc is in. Spec updated
   same day.
+- **2026-07-17 (Jeremy, same wrap) — records weight is now a tracked
+  concern.** "I'm a little concerned that my own limitations are
+  shackling your ability. our memories and direction seem to be getting
+  heavier and heavier. Worth a cleanup pass there as well?" Assessment
+  given: the weight is the discipline we chose, not his limitations, and
+  it splits — auto-memory is Claude's to garden (safe tranche done same
+  day: 15 dead-arc files archived out of the injected index); the repo
+  direction docs (GOAL_BRAIN ~3.3k lines, append-only Decisions,
+  MILESTONES, BACKLOG) get their distillation pass AFTER the drift
+  review, using its findings — compressing first would erase the drift
+  evidence the review reads. Open design question for that pass: how an
+  append-only Decisions section compacts without losing the
+  reversal-chain property.
