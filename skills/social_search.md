@@ -67,17 +67,19 @@ first reply, not the root post. `twitter -c tweet` returns the replies —
 scan them for same-author entries before declaring a link unobtainable
 (runs 1dac0e17 + 75a88777 both burned steps hunting a GitHub repo whose
 link was sitting in the author's follow-up reply). Note: the CLI command
-is `tweet`, not `thread` — 0.8.5 renamed it; and `src/web_fetch.py`'s
-`fetch_x_tweet` returns the SINGLE post only (its wrapper drops reply
-content), so for threads use the CLI directly.
+is `tweet`, not `thread` — 0.8.5 renamed it. `src/web_fetch.py`'s
+`fetch_x_tweet` is reply-aware since 2026-07-17 (direct-CLI rung 0,
+BACKLOG #26): it returns the thread with author follow-ups in their own
+section and t.co links pre-resolved, falling back to the old reply-blind
+rungs only when the CLI/cookies are absent.
 
 NEVER echo, log, or write the cookie values anywhere — export only, as
 above. If cookies have expired (auth errors), run
 `~/.openclaw/workspace/scripts/x-twitter-cli-refresh.sh` to pull fresh ones
 from the saved browser profile, then re-export.
 
-Single known tweets can also be fetched without the CLI via
-`src/web_fetch.py` (`fetch_x_tweet` — Jina Reader → CLI → oEmbed fallbacks).
+Known tweets can also be fetched via `src/web_fetch.py` (`fetch_x_tweet` —
+direct CLI thread w/ replies → Jina Reader → wrapper CLI → oEmbed fallbacks).
 
 ## Quality gates
 

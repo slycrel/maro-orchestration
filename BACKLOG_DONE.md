@@ -8,6 +8,35 @@ Last split: 2026-04-16 (session 34).
 
 ---
 
+## #26. web_fetch reply-aware X rung — SHIPPED same day (2026-07-17)
+
+**Source:** the zesty-ash dig + Jeremy's follow-up-post note ("the github
+link was actually in a follow-up post by the original author... make sure
+that's a thing we're looking at still").
+
+`web_fetch.fetch_x_tweet`'s best authenticated rung shelled to the
+OpenClaw-era `x-twitter-cli.sh post`, which renders ONLY the target tweet
+(keeps the reply *count*, drops reply content) — so the worker-facing
+web_fetch tool was structurally blind to the "Repo👇" pattern (link in the
+author's first self-reply; both X-research runs 1dac0e17/75a88777 burned
+steps hunting a repo whose link sat one reply down). The thread-capture
+behavior Jeremy remembered was the OpenClaw/poly-proto x-capture era —
+it pre-dated Maro and never survived into a working rung.
+
+**Shipped:** `_fetch_x_thread_direct` — direct `twitter tweet <id> --json`
+(schema `{ok, data: [post, ...]}`, urls pre-resolved by the CLI), rendering
+root post + metrics, author follow-ups in their own labeled section (full
+text + links), other replies capped at 8×300 chars. Wired as rung 0 of
+`fetch_x_tweet`, BEFORE Jina — a root-only Jina success returned early and
+hid the thread, which is exactly how both runs missed the reply. Falls
+through on missing binary/cookies/JSON so the old ladder is untouched as
+fallback. Cookie handling reused from `_x_cookie_env` (never logged);
+poly-proto wrapper kept as a later rung, not developed (reference only).
+Live-verified end-to-end: returns the thread with
+github.com/ZeroPointRepo/awesome-hermes-skills resolved from the author's
+follow-up. Companion skill fix (stale `thread` → `tweet` command +
+follow-up-pattern note) shipped in d9ea0b4.
+
 ## Stuck-step advisor resurrected behind `advisor.stuck_step` — SHIPPED (2026-07-16)
 
 **Source:** stuck-outcome adversarial review 2026-07-15 — `_ctx_summary` in

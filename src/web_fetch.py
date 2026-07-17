@@ -12,10 +12,13 @@ Compression benchmarks on typical pages:
   - X/Twitter (direct):  302/402 → oEmbed fallback (~0.5k tokens)
 
 X-specific strategy (in priority order):
-  1. Direct fetch (works for some public content)
-  2. oEmbed API (publish.twitter.com) — returns tweet text + author + timestamp
-  3. Resolve t.co shortlinks and recurse on the target
-  4. Report access failure with clear diagnostic message
+  0. Direct twitter CLI (`twitter tweet <id> --json`) — tweet + REPLIES,
+     urls pre-resolved; the only reply-aware rung (BACKLOG #26)
+  1. Jina Reader (fast, public, root post only)
+  2. Authenticated wrapper CLI (OpenClaw x-twitter-cli.sh, single post)
+  3. Direct fetch (works for some public content)
+  4. oEmbed API (publish.twitter.com) — returns tweet text + author + timestamp
+  5. Report access failure with clear diagnostic message
 """
 
 from __future__ import annotations
@@ -63,6 +66,10 @@ _X_CLI_SCRIPT = Path(
     )
 )
 _X_CLI_TIMEOUT = 90  # seconds — Playwright can be slow
+# Direct twitter-CLI thread fetch (BACKLOG #26) — plain API calls, no
+# Playwright, so a tighter budget than the wrapper's.
+_X_DIRECT_CLI_TIMEOUT = 45
+_X_THREAD_MAX_OTHER_REPLIES = 8
 
 # Patterns that tell us a URL is an X/Twitter post or article
 _X_POST_RE = re.compile(
@@ -204,6 +211,90 @@ def _fetch_via_x_cli(command: str, url: str) -> str:
         return ""
 
 
+def _fetch_x_thread_direct(handle: str, tweet_id: str) -> str:
+    """Fetch a tweet AND its reply timeline via the twitter CLI directly.
+
+    BACKLOG #26 — the only rung with reply CONTENT. `twitter tweet <id>
+    --json` returns {ok, data: [post, ...]}: the target post plus its
+    replies, with t.co urls pre-resolved. The author's OWN replies are the
+    point: the "Repo👇" pattern puts the real link in the first self-reply
+    (runs 1dac0e17 + 75a88777 both burned steps hunting a repo whose link
+    sat there). Cookie handling swiped from the poly-proto wrapper; no
+    dependency on it — that wrapper renders the single post and drops
+    reply content. Requires the twitter binary and the cookie cache;
+    returns "" on any failure so the ladder falls through. Never logs
+    cookie values.
+    """
+    import shutil
+    binary = shutil.which("twitter")
+    env = _x_cookie_env()
+    if not binary or not env:
+        return ""
+    try:
+        result = subprocess.run(
+            [binary, "tweet", tweet_id, "--json"],
+            capture_output=True, text=True,
+            timeout=_X_DIRECT_CLI_TIMEOUT, env=env,
+        )
+        if result.returncode != 0:
+            return ""
+        # extract_json also tolerates warning lines the CLI prints before
+        # the JSON envelope ({ok, schema_version, data: [post, ...]}).
+        from llm_parse import extract_json
+        payload = extract_json(result.stdout, dict, log_tag="web_fetch.x_thread")
+        if not payload:
+            return ""
+        posts = payload.get("data", [])
+        if isinstance(posts, dict):  # older CLI schema: {"posts": [...]}
+            posts = posts.get("posts", [])
+        posts = [p for p in posts if isinstance(p, dict) and p.get("text")]
+        if not posts:
+            return ""
+    except Exception:
+        return ""
+
+    root = next((p for p in posts if str(p.get("id", "")) == str(tweet_id)),
+                posts[0])
+    author_sn = (root.get("author") or {}).get("screenName") or handle
+
+    def _fmt(p: dict, cap: int = 0) -> str:
+        a = p.get("author") or {}
+        text = (p.get("text") or "").strip()
+        if cap and len(text) > cap:
+            text = text[:cap] + "…"
+        line = f"@{a.get('screenName', '?')}"
+        when = p.get("createdAtISO") or p.get("createdAt") or ""
+        if when:
+            line += f" ({when})"
+        line += f":\n{text}"
+        urls = [u for u in (p.get("urls") or []) if u]
+        if urls:
+            line += "\nLinks: " + " ".join(urls[:5])
+        return line
+
+    m = root.get("metrics") or {}
+    metric_bits = " · ".join(
+        f"{k} {m[k]}" for k in ("likes", "retweets", "replies", "views")
+        if m.get(k) is not None)
+    out = [_fmt(root)]
+    if metric_bits:
+        out.append(f"Metrics: {metric_bits}")
+
+    others = [p for p in posts if p is not root]
+    own = [p for p in others
+           if (p.get("author") or {}).get("screenName") == author_sn]
+    rest = [p for p in others if not any(p is o for o in own)]
+    if own:
+        out.append(f"\nAuthor follow-up posts ({len(own)}) — payload links "
+                   "(\"Repo👇\", \"link below\") usually live here:")
+        out.extend(_fmt(p) for p in own)
+    if rest:
+        shown = rest[:_X_THREAD_MAX_OTHER_REPLIES]
+        out.append(f"\nReplies from others ({len(shown)} of {len(rest)} shown):")
+        out.extend(_fmt(p, cap=300) for p in shown)
+    return "\n".join(out)[:_MAX_TEXT_CHARS]
+
+
 def _html_to_text(html: str, max_chars: int = _MAX_TEXT_CHARS) -> str:
     """Strip HTML to readable prose, capped at max_chars."""
     if not _BS4:
@@ -256,10 +347,12 @@ def fetch_x_tweet(url: str) -> str:
     """Return text content for an X/Twitter tweet URL.
 
     Tries in order:
-    1. Direct fetch (works occasionally for public content)
-    2. oEmbed API (always works for public tweets; returns text+author)
-    3. Resolve t.co links within the oEmbed and summarise what we can
-    4. Honest failure report
+    0. Direct twitter CLI — tweet + REPLIES (the only reply-aware rung)
+    1. Jina Reader (fast, public, root post only)
+    2. Authenticated wrapper CLI (single post)
+    3. Direct fetch (works occasionally for public content)
+    4. oEmbed API (text+author, t.co links resolved)
+    5. Honest failure report
     """
     # Extract tweet ID
     m = _X_POST_RE.search(url)
@@ -269,27 +362,34 @@ def fetch_x_tweet(url: str) -> str:
     handle, tweet_id = m.group(1), m.group(2)
     clean_url = f"https://twitter.com/{handle}/status/{tweet_id}"
 
-    # ---- 0. Jina Reader — gets full rendered tweet + thread text (fast, public) ---
+    # ---- 0. Direct CLI thread fetch — must run BEFORE the reply-blind rungs:
+    # a root-only success from Jina would return early and hide the thread
+    # (exactly how runs 1dac0e17/75a88777 missed the author's "Repo:" reply).
+    thread = _fetch_x_thread_direct(handle, tweet_id)
+    if thread:
+        return f"[Tweet {handle}/{tweet_id} — via authenticated CLI, with replies]\n{thread}"
+
+    # ---- 1. Jina Reader — gets full rendered tweet + thread text (fast, public) ---
     jina_content = _jina_fetch(url, max_chars=8_000)
     if jina_content and len(jina_content) > 200:
         _lower = jina_content.lower()
         if not ("log in" in _lower and "sign up" in _lower and len(jina_content) < 500):
             return f"[Tweet {handle}/{tweet_id} — via Jina]\n{jina_content}"
 
-    # ---- 1. Authenticated CLI (OpenClaw x-twitter-cli.sh) — auth-required content --
+    # ---- 2. Authenticated wrapper CLI (OpenClaw x-twitter-cli.sh) — single post --
     if _x_cli_available():
         cli_content = _fetch_via_x_cli("post", url)
         if cli_content and len(cli_content) > 50:
             return f"[Tweet {handle}/{tweet_id} — via authenticated CLI]\n{cli_content}"
 
-    # ---- 2. Direct fetch ------------------------------------------------
+    # ---- 3. Direct fetch ------------------------------------------------
     status, html = _http_get(url)
     if status == 200 and html:
         text = _html_to_text(html, max_chars=8_000)
         if len(text) > 200:
             return f"[Tweet {handle}/{tweet_id}]\n{text}"
 
-    # ---- 3. oEmbed ------------------------------------------------------
+    # ---- 4. oEmbed ------------------------------------------------------
     oembed_url = f"https://publish.twitter.com/oembed?url={urllib.parse.quote(clean_url)}&omit_script=true"
     status, body = _http_get(oembed_url, timeout=10)
     if status == 200 and body:
@@ -322,7 +422,7 @@ def fetch_x_tweet(url: str) -> str:
         except Exception:
             pass
 
-    # ---- 4. Failure report -----------------------------------------------
+    # ---- 5. Failure report -----------------------------------------------
     return (
         f"[Tweet {handle}/{tweet_id}: access blocked (HTTP {status}). "
         f"This tweet may require authentication or may have been deleted. "

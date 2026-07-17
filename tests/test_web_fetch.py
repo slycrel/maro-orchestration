@@ -233,3 +233,97 @@ def test_fetch_tweet_uses_cli_first(monkeypatch):
     result = fetch_url_content("https://x.com/user/status/12345")
     assert "Authenticated tweet content" in result
     assert "authenticated CLI" in result
+
+
+# ---------------------------------------------------------------------------
+# _fetch_x_thread_direct — reply-aware CLI rung (BACKLOG #26)
+# ---------------------------------------------------------------------------
+
+_THREAD_JSON = """{"ok": true, "schema_version": 1, "data": [
+  {"id": "100", "text": "This repo unlocks 271 FREE skills.\\n\\nRepo\\ud83d\\udc47",
+   "author": {"screenName": "origauthor", "name": "Orig Author"},
+   "createdAtISO": "2026-07-16T17:22:38Z",
+   "metrics": {"likes": 129, "retweets": 17, "replies": 7, "views": 7544},
+   "urls": []},
+  {"id": "101", "text": "Repo:\\nhttps://t.co/abc",
+   "author": {"screenName": "origauthor"},
+   "urls": ["https://github.com/example/awesome-skills"]},
+  {"id": "102", "text": "@origauthor looks neat but does it survive a real repo?",
+   "author": {"screenName": "somereplier"}, "urls": []},
+  {"id": "103", "text": "Trade crypto in one app.",
+   "author": {"screenName": "AdvertiserApp"}, "urls": []}
+]}"""
+
+
+def _fake_cli_run(stdout, returncode=0):
+    r = MagicMock()
+    r.returncode = returncode
+    r.stdout = stdout
+    r.stderr = ""
+    return r
+
+
+def _wire_thread_cli(monkeypatch, stdout, returncode=0):
+    monkeypatch.setattr("shutil.which", lambda name: "/usr/bin/twitter")
+    monkeypatch.setattr(web_fetch, "_x_cookie_env",
+                        lambda: {"PATH": "/usr/bin", "TWITTER_AUTH_TOKEN": "x",
+                                 "TWITTER_CT0": "y"})
+    monkeypatch.setattr(web_fetch.subprocess, "run",
+                        lambda *a, **kw: _fake_cli_run(stdout, returncode))
+
+
+def test_thread_direct_surfaces_author_followup_links(monkeypatch):
+    """The author's self-reply (the "Repo👇" payload) must appear with its
+    pre-resolved link — the exact content runs 1dac0e17/75a88777 missed."""
+    _wire_thread_cli(monkeypatch, _THREAD_JSON)
+    out = web_fetch._fetch_x_thread_direct("origauthor", "100")
+    assert "Author follow-up posts (1)" in out
+    assert "https://github.com/example/awesome-skills" in out
+    assert "271 FREE skills" in out                       # root text
+    assert "Metrics: likes 129" in out
+    assert "somereplier" in out                           # other replies kept
+    assert "Replies from others (2 of 2 shown)" in out
+
+
+def test_thread_direct_missing_binary_returns_empty(monkeypatch):
+    monkeypatch.setattr("shutil.which", lambda name: None)
+    assert web_fetch._fetch_x_thread_direct("h", "1") == ""
+
+
+def test_thread_direct_no_cookies_returns_empty(monkeypatch):
+    monkeypatch.setattr("shutil.which", lambda name: "/usr/bin/twitter")
+    monkeypatch.setattr(web_fetch, "_x_cookie_env", lambda: {})
+    assert web_fetch._fetch_x_thread_direct("h", "1") == ""
+
+
+def test_thread_direct_garbage_output_returns_empty(monkeypatch):
+    _wire_thread_cli(monkeypatch, "WARNING something broke, no json here")
+    assert web_fetch._fetch_x_thread_direct("h", "1") == ""
+
+
+def test_thread_direct_nonzero_exit_returns_empty(monkeypatch):
+    _wire_thread_cli(monkeypatch, _THREAD_JSON, returncode=1)
+    assert web_fetch._fetch_x_thread_direct("h", "1") == ""
+
+
+def test_fetch_x_tweet_prefers_thread_rung(monkeypatch):
+    """Rung 0 must run BEFORE Jina — a root-only Jina success would return
+    early and hide the reply thread."""
+    monkeypatch.setattr(web_fetch, "_fetch_x_thread_direct",
+                        lambda h, t: "THREAD CONTENT")
+    called = {"jina": False}
+    def _jina(url, max_chars=8000):
+        called["jina"] = True
+        return "x" * 300
+    monkeypatch.setattr(web_fetch, "_jina_fetch", _jina)
+    out = web_fetch.fetch_x_tweet("https://x.com/someone/status/100")
+    assert "with replies" in out and "THREAD CONTENT" in out
+    assert called["jina"] is False
+
+
+def test_fetch_x_tweet_falls_through_when_thread_empty(monkeypatch):
+    monkeypatch.setattr(web_fetch, "_fetch_x_thread_direct", lambda h, t: "")
+    monkeypatch.setattr(web_fetch, "_jina_fetch",
+                        lambda url, max_chars=8000: "j" * 300)
+    out = web_fetch.fetch_x_tweet("https://x.com/someone/status/100")
+    assert "via Jina" in out
