@@ -1273,6 +1273,30 @@ def test_synthesize_answer_llm_path(workspace, monkeypatch, tmp_path):
     run_curation.synthesize_answer(tmp_path, {"prompt": "what to install?"}, card)
     assert card["answer_summary"] == "1. cron  2. maker-checker  3. MCP (pending)"
     assert card["answer_source"] == "llm"
+    assert "answer_truncated" not in card
+
+
+def test_synthesize_answer_flags_truncation(workspace, monkeypatch, tmp_path):
+    """The 900-char cap cut a 5-item shortlist to 3 with no marker (live,
+    dapper-heron) — trimming must leave a flag for renderers to surface."""
+    import config
+    import run_curation
+
+    deliv = tmp_path / "FINAL_REPORT.md"
+    deliv.write_text("# Report\n\nlong body\n")
+    monkeypatch.setattr(
+        config, "get",
+        lambda k, d=None: True if k == "curation.answer_synthesis" else d,
+    )
+    long_answer = "\n".join(
+        f"{i}. item {i} " + ("detail " * 20).strip() for i in range(1, 9))
+    monkeypatch.setattr(run_curation, "_llm_answer", lambda goal, body: long_answer)
+    card = {"deliverables": [{"path": str(deliv), "bytes": 10}]}
+    run_curation.synthesize_answer(tmp_path, {"prompt": "what to install?"}, card)
+    assert card["answer_truncated"] is True
+    assert len(card["answer_summary"]) <= 900
+    # Line-boundary trim: the last line is a complete item line.
+    assert card["answer_summary"].splitlines()[-1] in long_answer.splitlines()
 
 
 def test_synthesize_answer_llm_failure_falls_back_to_excerpt(

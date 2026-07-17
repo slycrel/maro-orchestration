@@ -186,8 +186,18 @@ def format_message(payload: dict) -> str:
     lines = [f"{icon} {label}"]
     if answer:
         if goal:
-            lines.append(f"Re: {goal[:100]}" + ("…" if len(goal) > 100 else ""))
-        lines.extend(["", answer, ""])
+            g = goal[:100]
+            if len(goal) > 100:
+                # Word-boundary trim — "Extract concrete Herme…" reads broken.
+                g = g.rsplit(" ", 1)[0] if " " in g else g
+                g += "…"
+            lines.append(f"Re: {g}")
+        lines.append("")
+        lines.append(answer)
+        if payload.get("answer_truncated"):
+            # A capped list must not read as "that's everything".
+            lines.append("⋯ more in the full report")
+        lines.append("")
     elif goal_line:
         lines.append(f"Goal: {goal_line}")
     verdict = str(payload.get("goal_verdict_summary", "") or "").strip()

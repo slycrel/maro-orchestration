@@ -220,6 +220,47 @@ def test_answer_first_keeps_verdict_when_not_achieved():
     assert "constraints unverified" in msg
 
 
+def test_truncated_answer_is_flagged_not_silent():
+    """A 900-char-capped shortlist showed 3 of 5 items with no hint the rest
+    existed (dapper-heron live) — a capped list must say it's capped."""
+    msg = format_message({
+        "event_type": "run_completed",
+        "success_class": "success",
+        "goal": "g",
+        "handle_id": "h10",
+        "answer_summary": "1. cron\n2. maker-checker\n3. MCP",
+        "answer_truncated": True,
+    })
+    assert "⋯ more in the full report" in msg
+    # And absent when the answer is complete.
+    msg2 = format_message({
+        "event_type": "run_completed",
+        "success_class": "success",
+        "goal": "g",
+        "handle_id": "h10",
+        "answer_summary": "1. cron\n2. maker-checker\n3. MCP",
+    })
+    assert "more in the full report" not in msg2
+
+
+def test_re_line_trims_on_word_boundary():
+    """'Re: … Extract concrete Herme…' (live) — mid-word chops read broken."""
+    goal = ("Review this X thread: https://example.com/status/123 then "
+            "extract concrete Hermes recommendations for the new setup please")
+    msg = format_message({
+        "event_type": "run_completed",
+        "success_class": "success",
+        "goal": goal,
+        "handle_id": "h11",
+        "answer_summary": "the answer",
+    })
+    re_line = [l for l in msg.splitlines() if l.startswith("Re: ")][0]
+    assert re_line.endswith("…")
+    # The visible fragment before the ellipsis is a whole word from the goal.
+    last_word = re_line[len("Re: "):-1].split()[-1]
+    assert f" {last_word} " in goal + " "
+
+
 def test_deliverable_link_preferred_over_report(monkeypatch):
     monkeypatch.setattr(
         notify_telegram, "_cfg",

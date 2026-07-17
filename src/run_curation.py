@@ -452,11 +452,17 @@ def synthesize_answer(rd: Path, meta: dict, card: dict) -> None:
         summary = _llm_answer(goal, body)
         if summary:
             if len(summary) > 900:
-                # Trim on a line boundary — a bullet cut mid-word reads broken.
+                # Trim on a line boundary — a bullet cut mid-word reads
+                # broken — and FLAG it: a silently capped list reads as
+                # "that's everything" (live: 3 of 5 shortlist items shown,
+                # no hint the rest existed). Renderers surface the flag.
                 summary = summary[:900].rsplit("\n", 1)[0].rstrip()
+                card["answer_truncated"] = True
             card["answer_summary"] = summary
             card["answer_source"] = "llm"
             return
+    if len(body) > 600:
+        card["answer_truncated"] = True
     card["answer_summary"] = body[:600] + ("…" if len(body) > 600 else "")
     card["answer_source"] = "excerpt"
 
@@ -1159,7 +1165,8 @@ _CURATOR_SPECS: List[CuratorSpec] = [
     CuratorSpec(locate_deliverables,
                 optional_provides=("deliverables", "deliverable_link_path")),
     CuratorSpec(synthesize_answer,
-                optional_provides=("answer_summary", "answer_source"),
+                optional_provides=("answer_summary", "answer_source",
+                                   "answer_truncated"),
                 optional_requires=("deliverables", "result_path")),
     CuratorSpec(spend_transparency, optional_provides=("spend_transparency",),
                 requires=("success_class", "total_cost_usd")),
