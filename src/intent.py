@@ -364,10 +364,14 @@ Respond with JSON only:
 """
 
 # Heuristic: detect imperative-heavy goals without LLM call
+# "next" only counts clause-initially — as a bare word it matched noun
+# phrases like "an exact safe next action" and dragged outcome-shaped goals
+# through the rewriter (hermes dispatch specimen, 2026-07-16).
 _IMPERATIVE_MARKERS = re.compile(
-    r"\b(first,?\s|then\s|step\s*\d|step\s*one|next,?\s|finally,?\s|afterwards?\s"
+    r"\b(first,?\s|then\s|step\s*\d|step\s*one|finally,?\s|afterwards?\s"
     r"|start by\s|begin by\s|start with\s|proceed to\s|make sure to\s"
-    r"|run the\s.*then\s|do\s.*,?\s*then\s|check\s.*,?\s*then\s)",
+    r"|run the\s.*then\s|do\s.*,?\s*then\s|check\s.*,?\s*then\s)"
+    r"|(?:^|[.;:!?]\s+)next,?\s",
     re.IGNORECASE,
 )
 
@@ -375,6 +379,24 @@ _IMPERATIVE_MARKERS = re.compile(
 def _is_imperative_heavy(goal: str) -> bool:
     """Quick heuristic: does the goal prescribe execution steps?"""
     return bool(_IMPERATIVE_MARKERS.search(goal)) and len(goal.split()) > 15
+
+
+_URL_RE = re.compile(r"https?://[^\s)\]}>\"']+")
+
+
+def _rewrite_loses_referent(original: str, rewritten: str) -> bool:
+    """True when the rewrite dropped a URL the original goal carried.
+
+    Rule 3 of the rewriter prompt ("preserve all proper nouns, tool names,
+    constraints") is advisory to the LLM; this is the enforced invariant for
+    the one referent class a run cannot re-derive. A cheap-model rewrite that
+    replaced an explicit X-thread URL with "the referenced thread" turned a
+    fetchable goal into a clarification dead-end (2026-07-16, cobalt-pine).
+    """
+    for url in _URL_RE.findall(original):
+        if url.rstrip(".,;:!?") not in rewritten:
+            return True
+    return False
 
 
 def rewrite_imperative_goal(
@@ -413,6 +435,12 @@ def rewrite_imperative_goal(
             rewritten = safe_str(data.get("rewritten"))
             if rewritten and len(rewritten) >= 10:
                 import logging as _logging
+                if _rewrite_loses_referent(goal, rewritten):
+                    _logging.getLogger(__name__).warning(
+                        "BLE rewrite dropped a URL from the goal — keeping original: %r",
+                        goal[:80],
+                    )
+                    return goal
                 _logging.getLogger(__name__).info(
                     "BLE rewrite applied: %r → %r", goal[:60], rewritten[:60]
                 )

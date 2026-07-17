@@ -1082,20 +1082,12 @@ def _handle_impl(
                 )
             except (ImportError, Exception):
                 pass  # fall through to direct agenda handling
-        # BLE rewriter — strip prescribed execution steps, keep outcome intent (non-blocking)
-        # Bitter Lesson Engineering: embed the "what", let the AI own the "how".
-        if not dry_run:
-            try:
-                from intent import rewrite_imperative_goal
-                _rewritten = rewrite_imperative_goal(message, adapter=adapter)
-                if _rewritten != message:
-                    if verbose:
-                        print(f"[maro:{handle_id}] BLE rewrite: imperative goal → outcome goal", file=sys.stderr, flush=True)
-                    message = _rewritten
-            except Exception:
-                pass  # rewrite failures must never block a run
-
-        # Clarification milestone — check goal clarity before starting (skipped if yolo=true)
+        # Clarification milestone — check goal clarity before starting (skipped if yolo=true).
+        # Runs on the goal AS SUBMITTED, before the BLE rewrite: clarity judges
+        # the user's goal, not the system's transform of it. When this ran
+        # after the rewrite, a lossy rewrite (URL dropped) became a
+        # clarification question back at the user for information they had
+        # already provided (2026-07-16, cobalt-pine / hermes dispatch).
         _yolo = _env_flag(
             "MARO_YOLO",
             str(_cfg.get("yolo", "false")).strip().lower() == "true",
@@ -1115,7 +1107,16 @@ def _handle_impl(
                             message = f"{message}\n\nAdditional context: {_reply}"
                         # Fall through to continue execution
                     else:
-                        # No channel — return clarification_needed (CLI path)
+                        # No channel — return clarification_needed (CLI path).
+                        # Stamp the question into run metadata: the HandleResult
+                        # is ephemeral on queue/dispatch paths, and a
+                        # clarification_needed record without its question is
+                        # undiagnosable from the other side of the wire.
+                        try:
+                            from runs import stamp_run_metadata as _stamp_q
+                            _stamp_q({"clarification_question": _q})
+                        except Exception:
+                            pass
                         elapsed = int((time.monotonic() - started_at) * 1000)
                         return HandleResult(
                             handle_id=handle_id,
@@ -1133,6 +1134,19 @@ def _handle_impl(
                         )
             except Exception:
                 pass  # clarity check must never block execution
+
+        # BLE rewriter — strip prescribed execution steps, keep outcome intent (non-blocking)
+        # Bitter Lesson Engineering: embed the "what", let the AI own the "how".
+        if not dry_run:
+            try:
+                from intent import rewrite_imperative_goal
+                _rewritten = rewrite_imperative_goal(message, adapter=adapter)
+                if _rewritten != message:
+                    if verbose:
+                        print(f"[maro:{handle_id}] BLE rewrite: imperative goal → outcome goal", file=sys.stderr, flush=True)
+                    message = _rewritten
+            except Exception:
+                pass  # rewrite failures must never block a run
 
         if verbose:
             print(f"[maro:{handle_id}] AGENDA lane — starting loop...", file=sys.stderr, flush=True)
@@ -1985,6 +1999,15 @@ def _handle_impl(
                             ),
                             "goal_verdict_summary": str(_closure.summary)[:300],
                         }
+                        # Gaps ride as their own field: the 300-char summary
+                        # can truncate away the "why not" — merry-nettle
+                        # (2026-07-16) surfaced goal_achieved=false beside a
+                        # summary whose visible prefix read "Goal achieved."
+                        _gaps = [
+                            str(g)[:200] for g in (_closure.gaps or []) if g
+                        ][:5]
+                        if _gaps and not _closure.complete:
+                            _verdict_extra["goal_verdict_gaps"] = _gaps
                         # Only-when-stamped: key absent means "no downgrade",
                         # never "" — same convention as the event fields.
                         _downgrade = str(

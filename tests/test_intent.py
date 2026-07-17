@@ -451,6 +451,21 @@ class TestIsImperativeHeavy:
             "Proceed to analyze the Polymarket data carefully, then generate a detailed summary report for the team"
         )
 
+    def test_next_action_noun_not_imperative(self):
+        # "next" as part of a noun phrase ("next action") is not sequencing —
+        # this exact shape false-positived the hermes X-thread goal (2026-07-16)
+        # and dragged an outcome-shaped goal through the rewriter.
+        assert not _is_imperative_heavy(
+            "Deliver a short ranked shortlist: what it is, fit rationale, "
+            "prerequisites and risk, and an exact safe next action for the user"
+        )
+
+    def test_clause_initial_next_is_imperative(self):
+        assert _is_imperative_heavy(
+            "Audit the repository dependencies for outdated packages. Next, "
+            "produce a detailed upgrade report with versions for every package found"
+        )
+
 
 class TestRewriteImperativeGoal:
     def test_returns_original_when_no_imperative(self):
@@ -483,6 +498,50 @@ class TestRewriteImperativeGoal:
         result = rewrite_imperative_goal(goal, adapter=RewriteAdapter())
         assert result == "Achieve X outcome given Y context"
         assert result != goal
+
+    def test_rewrite_dropping_url_rejected(self):
+        # The rewriter's "preserve constraints" rule is advisory to the LLM;
+        # the URL guard is the enforced invariant. A rewrite that replaces an
+        # explicit URL with "the referenced thread" is discarded (cobalt-pine
+        # specimen, 2026-07-16).
+        import json
+
+        class DropUrlAdapter:
+            class _Resp:
+                content = json.dumps({
+                    "rewritten": "Produce a ranked shortlist of recommendations from the referenced thread",
+                    "changed": True,
+                })
+                input_tokens = 30
+                output_tokens = 20
+                tool_calls = []
+
+            def complete(self, *args, **kwargs):
+                return self._Resp()
+
+        goal = ("Review this X thread: https://x.com/witcheer/status/207?s=43. First "
+                "extract recommendations, then deliver a ranked shortlist for the assistant setup")
+        assert rewrite_imperative_goal(goal, adapter=DropUrlAdapter()) == goal
+
+    def test_rewrite_preserving_url_accepted(self):
+        import json
+
+        rewritten = ("Produce a ranked shortlist of recommendations from "
+                     "https://x.com/witcheer/status/207?s=43 for the assistant setup")
+
+        class KeepUrlAdapter:
+            class _Resp:
+                content = json.dumps({"rewritten": rewritten, "changed": True})
+                input_tokens = 30
+                output_tokens = 20
+                tool_calls = []
+
+            def complete(self, *args, **kwargs):
+                return self._Resp()
+
+        goal = ("Review this X thread: https://x.com/witcheer/status/207?s=43. First "
+                "extract recommendations, then deliver a ranked shortlist for the assistant setup")
+        assert rewrite_imperative_goal(goal, adapter=KeepUrlAdapter()) == rewritten
 
     def test_llm_unchanged_returns_original(self):
         import json

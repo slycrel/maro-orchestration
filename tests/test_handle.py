@@ -202,6 +202,42 @@ def test_handle_poe_yolo_env_skips_clarity_block(monkeypatch, tmp_path):
     assert result.project == "test-proj-yolo"
 
 
+def test_clarity_judges_goal_as_submitted_and_question_is_persisted(monkeypatch, tmp_path):
+    """Clarity must see the user's goal, not the BLE rewrite of it — and a
+    clarification_needed run must persist its question (metadata + run card),
+    or the far side of a dispatch sees an unexplained dead run (cobalt-pine
+    specimen, 2026-07-16)."""
+    _setup(monkeypatch, tmp_path)
+    seen = {}
+
+    def _spy_clarity(goal, **kwargs):
+        seen["clarity_goal"] = goal
+        return {"clear": False, "question": "Which thread should I reference?"}
+
+    goal = ("Review this X thread: https://x.com/witcheer/status/207 and deliver "
+            "a ranked shortlist with an exact safe next action")
+    with patch("intent.check_goal_clarity", side_effect=_spy_clarity), \
+         patch("intent.rewrite_imperative_goal",
+               return_value="Produce a ranked shortlist from the referenced thread"):
+        result = handle(goal, force_lane="agenda", dry_run=False, adapter=MagicMock())
+
+    # Ordering: clarity ran on the goal as submitted, not post-rewrite.
+    assert seen["clarity_goal"] == goal
+    assert result.status == "clarification_needed"
+    assert "Which thread" in result.result
+
+    # Persistence: the question is stamped into run metadata and carried
+    # into the curated run card.
+    run_dirs = [d for d in (tmp_path / "runs").glob(f"{result.handle_id}*") if d.is_dir()]
+    assert run_dirs, "run dir should exist for the clarification-terminated run"
+    meta = json.loads((run_dirs[0] / "metadata.json").read_text())
+    assert meta["clarification_question"] == "Which thread should I reference?"
+    card_path = run_dirs[0] / "run_card.json"
+    assert card_path.exists(), "close_run should curate a card even for preflight-terminated runs"
+    card = json.loads(card_path.read_text())
+    assert card["clarification_question"] == "Which thread should I reference?"
+
+
 def test_handle_build_loop_source_skips_quality_gate(monkeypatch, tmp_path):
     _setup(monkeypatch, tmp_path)
     monkeypatch.setenv("MARO_YOLO", "true")

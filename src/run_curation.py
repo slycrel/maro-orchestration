@@ -190,6 +190,13 @@ def classify_outcome(rd: Path, meta: dict, card: dict) -> None:
     # Only-when-stamped (matches the metadata write): absent = no downgrade.
     if meta.get("goal_verdict_downgrade_reason"):
         card["goal_verdict_downgrade_reason"] = meta["goal_verdict_downgrade_reason"]
+    # Only-when-stamped: the not-achieved "why" and the preflight question.
+    # Both exist so a non-done card explains itself across the dispatch wire
+    # (hermes specimen 2026-07-16: clarification_needed with no question).
+    if meta.get("goal_verdict_gaps"):
+        card["goal_verdict_gaps"] = meta["goal_verdict_gaps"]
+    if meta.get("clarification_question"):
+        card["clarification_question"] = meta["clarification_question"]
     card["audit_incomplete"] = audit_incomplete
     card["audit_repair_required"] = bool(meta.get("audit_repair_required"))
     # Cost-per-run via the loop_ids join key (absent on pre-2026-07-02 runs).
@@ -941,7 +948,9 @@ _CURATOR_SPECS: List[CuratorSpec] = [
                 provides=("success_class", "status", "goal_achieved",
                           "goal_verdict_summary", "audit_incomplete",
                           "audit_repair_required", "total_cost_usd"),
-                optional_provides=("goal_verdict_downgrade_reason",)),
+                optional_provides=("goal_verdict_downgrade_reason",
+                                   "goal_verdict_gaps",
+                                   "clarification_question")),
     CuratorSpec(inventory_assets, provides=("inventory", "mineable")),
     CuratorSpec(excerpt_result,
                 optional_provides=("result_excerpt", "result_path")),

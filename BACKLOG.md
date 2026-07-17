@@ -115,6 +115,47 @@ learning (promoted: the data layer that makes "active orchestrator" a runtime
 fact), container-on posture for network-sourced goals (revisit at Hermes
 go-live).
 
+Preflight/observability findings (2026-07-16 evening, hermes X-thread dispatch
+task-…b414ccab / run cobalt-pine — five-link failure chain, four fixed live):
+- [x] **BLE imperative heuristic false positive** — bare `next\s` matched the
+  noun phrase "exact safe next action" and dragged an outcome-shaped goal
+  through the rewriter. FIXED: `next` now only counts clause-initially;
+  pins `test_next_action_noun_not_imperative` / `test_clause_initial_next_is_imperative`.
+- [x] **Rewriter dropped the goal's URL** — cheap-model rewriter went
+  off-script (role confusion: "I cannot browse the URL"), its embedded JSON
+  replaced the URL with "the referenced thread"; rule 3 (preserve constraints)
+  is advisory-only. FIXED: enforced URL-preservation guard
+  (`_rewrite_loses_referent`) rejects any rewrite that loses a URL; pins
+  `test_rewrite_dropping_url_rejected` / `_preserving_url_accepted`.
+- [x] **Clarity check ran on the rewritten goal** — system-introduced
+  ambiguity became a clarification question back at the user for info they
+  had provided. FIXED: clarity now runs on the goal as submitted, before the
+  rewrite; pin `test_clarity_judges_goal_as_submitted_and_question_is_persisted`.
+- [x] **Clarification question never persisted** — it lived only in the
+  ephemeral HandleResult; run metadata/card and the hermes dispatch record
+  all showed a bare `clarification_needed`. FIXED: question stamped into run
+  metadata → carried on the run card (`clarification_question`), and
+  dispatch.py worker now records `result_excerpt` from any preflight-
+  terminated result; `status` verb surfaces both plus `goal_verdict_gaps`
+  (new: closure gaps ride the card so the not-achieved "why" survives the
+  300-char summary truncation — merry-nettle showed goal_achieved=false
+  beside a summary whose visible prefix read "Goal achieved.").
+  Tests: `tests/test_hermes_dispatch.py` (new).
+- [ ] **Task-store status vs dispatch status disagree** — worker calls
+  `complete(job_id)` unconditionally, so the queue record says `done` while
+  the dispatch record says `clarification_needed`. Decide semantics: is
+  task-store "done" = "drained" (current) or should non-done handle results
+  map to a distinct terminal state? Low urgency now that the dispatch record
+  carries the why.
+- [ ] **subprocess adapter ignores max_tokens** — the rewrite call passed
+  `max_tokens=256`; Haiku returned 2489 tokens of chatty prose around the
+  JSON. Cheap-model preflight transforms need the cap (or a stricter
+  JSON-only contract) actually enforced.
+- [ ] **Closure prose can contradict its own flag** — merry-nettle's verdict
+  summary opened "Goal achieved." while `complete=false` (closure-probe bias
+  family). Gaps-on-the-card mitigates; consider making the closure prompt
+  require the summary to open with the verdict.
+
 Container-on day-one findings (2026-07-16, two dispatched verification runs):
 - [x] **Provenance freshness-window false demotion** — run 123bf935 demoted
   `incomplete` because `_run_window_start` reconstructed the window as

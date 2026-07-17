@@ -127,6 +127,13 @@ def cmd_worker(job_id: str) -> int:
             lane=getattr(res, "lane", None),
             ended_at=_now(),
         )
+        # The HandleResult's result text is the only carrier of the "why" for
+        # runs that never reach the loop (clarification question, guard
+        # refusal, error detail) — dropping it left clarification_needed
+        # records with no question on the far side (2026-07-16, cobalt-pine).
+        _why = str(getattr(res, "result", "") or "")
+        if _why:
+            rec["result_excerpt"] = _why[:2000]
         _write_rec(rec)
         return 0
     except Exception as exc:  # detached — the record IS the error channel
@@ -162,7 +169,9 @@ def cmd_status(job_id: str) -> int:
     if rec.get("handle_id"):
         card = _run_card(rec["handle_id"]) or {}
         for key in ("nickname", "success_class", "goal_achieved",
-                    "goal_verdict_summary", "total_cost_usd"):
+                    "goal_verdict_summary", "goal_verdict_gaps",
+                    "clarification_question", "result_excerpt",
+                    "total_cost_usd"):
             if key in card:
                 rec[key] = card[key]
     return _emit(rec)
