@@ -179,6 +179,21 @@ task-…b414ccab / run cobalt-pine — five-link failure chain, four fixed live)
   or mount run records read-only into the container. Until then, dispatched
   self-diagnostics are structurally unable to succeed. Captured in
   docs/CAPABILITIES.md (Tier 2, aspirational).
+- [ ] **Per-loop restart alert reads as terminal failure** — the Telegram
+  alert for dapper-heron's loop-1 restart said "❌ Mission complete —
+  Status: restart | Steps: 5/6 done" while the run was alive and already
+  executing loop 2. Jeremy read it as the run dying (2026-07-17). A
+  mid-run restart alert should say the run is continuing (e.g. "🔄 Loop 1
+  ended (restart) — loop 2 starting, 5/6 steps carried") and reserve ❌ +
+  "Mission complete" for terminal states.
+- [ ] **Hermes never notified on run completion** — Maro's alerts go
+  straight to the Telegram channel; Hermes has no poller/callback, so
+  Jeremy heard from the channel but not from the agent he dispatched
+  through. Structural, not a bug — the dispatch lane is fire-and-poll.
+  Belongs to the session-protocol / substrate-go-between arc (escalation
+  design decree: the go-between IS the surface). Options: dispatch.py
+  worker pings Hermes over the existing SSH lane on completion, or Hermes
+  gains a cheap status poller for open job_ids.
 
 Container-on day-one findings (2026-07-16, two dispatched verification runs):
 - [x] **Provenance freshness-window false demotion** — run 123bf935 demoted
