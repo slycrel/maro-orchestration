@@ -1,0 +1,104 @@
+# Caddy reverse proxy for the maro box — GITHUB OAUTH VARIANT.
+# Identical to deploy/caddy/Caddyfile plus the GitHub identity provider
+# (portal shows "Login with GitHub" alongside the local login, which
+# stays as break-glass). Requires GITHUB_CLIENT_ID / GITHUB_CLIENT_SECRET
+# in /etc/caddy/caddy.env — install via deploy/caddy/enable-github-oauth.sh,
+# which checks the credentials exist before swapping this file in.
+#
+# Only the slycrel GitHub account is granted a role (the transform's
+# `match sub` pin); any other GitHub login authenticates but holds no
+# role and is denied by the authorization policy (default-deny holds).
+#
+# Secrets: JWT_SHARED_KEY + GitHub credentials live in
+# /etc/caddy/caddy.env (mode 600, not in git). Local user db is
+# /etc/caddy/auth/users.json (not in git).
+
+{
+	order authenticate before respond
+	order authorize before basic_auth
+
+	security {
+		local identity store localdb {
+			realm local
+			path /etc/caddy/auth/users.json
+		}
+
+		oauth identity provider github {
+			realm github
+			driver github
+			client_id {env.GITHUB_CLIENT_ID}
+			client_secret {env.GITHUB_CLIENT_SECRET}
+			scopes user
+		}
+
+		authentication portal maro_portal {
+			crypto default token lifetime 86400
+			crypto key sign-verify from env JWT_SHARED_KEY
+			enable identity store localdb
+			enable identity provider github
+			cookie domain mc.feifdom.com
+			ui {
+				links {
+					"Maro visualizations" /maro/index.html icon "las la-chart-bar"
+				}
+			}
+			# No settings link: this plugin build 404s /auth/settings (the
+			# portal refactor dropped the self-service pages). Password
+			# changes happen via the hash-reset procedure in the README.
+			transform user {
+				match origin local
+				action add role authp/user
+			}
+			transform user {
+				match realm github
+				match sub github.com/slycrel
+				action add role authp/user
+			}
+		}
+
+		authorization policy maro_policy {
+			set auth url https://mc.feifdom.com/auth/
+			crypto key verify from env JWT_SHARED_KEY
+			allow roles authp/admin authp/user
+		}
+	}
+}
+
+mc.feifdom.com {
+	route /auth* {
+		authenticate with maro_portal
+	}
+
+	# Bare /maro lands on the viz root, which its allowlist denies (blank
+	# 403) — send it to the index the allowlist does serve.
+	redir /maro /maro/index.html
+	redir /maro/ /maro/index.html
+
+	route /maro* {
+		authorize with maro_policy
+		uri strip_prefix /maro
+		reverse_proxy 127.0.0.1:8787
+	}
+
+	redir / /auth 302
+}
+
+# Local wiring check (no TLS, no cookies across domains — proves the
+# portal renders and unauthenticated /maro redirects; full flow needs the
+# real domain): curl -s http://127.0.0.1:8880/auth | head
+http://127.0.0.1:8880 {
+	route /auth* {
+		authenticate with maro_portal
+	}
+
+	redir /maro /maro/index.html
+	redir /maro/ /maro/index.html
+
+	route /maro* {
+		authorize with maro_policy
+		uri strip_prefix /maro
+		reverse_proxy 127.0.0.1:8787
+	}
+
+	redir / /auth 302
+}

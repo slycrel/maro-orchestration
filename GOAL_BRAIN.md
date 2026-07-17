@@ -3301,3 +3301,15 @@ Dormant (deliberately parked, not dropped):
   local identity store first, GitHub OAuth as the documented drop-in —
   deploy/caddy/README.md). Standing rule: a new public surface starts
   behind the portal, not with a TODO.
+  **Softened next morning (Jeremy, on the way to work):** "in theory I
+  like the idea of doing all of this, in practice this just feels like...
+  work. :) misleading, painful, and hoop jumping for some measure of
+  security that may or may not matter. Let's clean it up, still a good
+  floor if we can get it going well. If not, we can probably be read-only
+  pages with no auth." Reading: the floor stands ONLY if it stays
+  low-friction; the sanctioned fallback for the read-only viewer is
+  TLS-only with no portal (a config deletion — README "Fallback posture").
+  GitHub OAuth staged same morning (Caddyfile.github-oauth +
+  enable-github-oauth.sh); the only remaining step is Jeremy's 2-minute
+  OAuth-app creation. Friction on auth work is a signal to retreat, not
+  push through.

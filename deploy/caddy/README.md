@@ -92,46 +92,40 @@ DNS is already right (`mc.feifdom.com` → home ISP IP). Remaining:
    `notify.viewer_url: "https://mc.feifdom.com/maro"`. Don't flip before —
    dead links in completion messages are worse than LAN-only links.
 
-## Upgrade path: GitHub OAuth (the SSO this was sized for)
+## Upgrade path: GitHub OAuth — staged, one browser step remains
 
-1. GitHub → Settings → Developer settings → OAuth Apps → New. Homepage
-   `https://mc.feifdom.com/`, callback
-   `https://mc.feifdom.com/auth/oauth2/github/authorization-code-callback`
-   (verify the exact callback path against authcrunch.com docs for the
-   installed plugin version when doing this).
-2. Append the client id/secret to `/etc/caddy/caddy.env` as
-   `GITHUB_CLIENT_ID=` / `GITHUB_CLIENT_SECRET=`.
-3. In the Caddyfile `security` block add the provider and enable it in
-   the portal:
+Everything is prebuilt: `Caddyfile.github-oauth` (validated; portal
+gains "Login with GitHub", only `github.com/slycrel` is granted a role,
+local login stays as break-glass) and `enable-github-oauth.sh` (guards
+on credentials, backs up the live config, validates, restarts, rolls
+back if caddy doesn't come up).
 
-   ```
-   oauth identity provider github {
-       realm github
-       driver github
-       client_id {env.GITHUB_CLIENT_ID}
-       client_secret {env.GITHUB_CLIENT_SECRET}
-       scopes user
-   }
-   ```
+The one thing only Jeremy can do — GitHub has no API for OAuth app
+creation (~2 min in a browser):
 
-   ```
-   authentication portal maro_portal {
-       ...
-       enable identity provider github
-       transform user {
-           match realm github
-           match sub github.com/slycrel
-           action add role authp/user
-       }
-   }
-   ```
+1. https://github.com/settings/applications/new
+   - Application name: `maro viewer`
+   - Homepage URL: `https://mc.feifdom.com/`
+   - Callback URL: `https://mc.feifdom.com/auth/oauth2/github/authorization-code-callback`
+   Register, then "Generate a new client secret".
+2. Append both values to `/etc/caddy/caddy.env`:
+   `GITHUB_CLIENT_ID=...` and `GITHUB_CLIENT_SECRET=...`
+3. `bash deploy/caddy/enable-github-oauth.sh`
 
-   The `transform user` match is the allow-list — without it any GitHub
-   account could log in and get no roles (denied by policy), but pinning
-   `slycrel` to `authp/user` is the explicit intent. `/maro`'s
-   authorization policy is untouched.
-4. `sudo systemctl reload caddy`. Optionally remove the local store once
-   GitHub login is proven (keep it as break-glass until then).
+If GitHub rejects the callback on first login, the path convention
+changed in the plugin — check the portal's login page source for the
+GitHub button's actual href and update the OAuth app's callback to
+match.
+
+## Fallback posture (Jeremy 2026-07-17)
+
+"Still a good floor if we can get it going well. If not, we can
+probably be read-only pages with no auth." If the auth stack keeps
+generating friction, the sanctioned retreat is: viewer stays read-only
+(it already is — GET-only allowlist, no mutations), drop the portal,
+keep TLS. That retreat is a config deletion, not a rebuild: remove the
+`security` block + `authorize`/`authenticate` directives from the
+Caddyfile.
 
 ## Shape notes
 
