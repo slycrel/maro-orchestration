@@ -215,6 +215,23 @@ class TestComplete:
         t = task_store.complete("d2", artifact_paths={"report": "/tmp/report.md"})
         assert t["artifact_paths"]["report"] == "/tmp/report.md"
 
+    def test_complete_with_result_status(self):
+        # Queue "done" = drained; result_status carries what the processing
+        # concluded, so the two records can't be read as contradicting.
+        task_store.enqueue(job_id="d2b")
+        task_store.claim("d2b")
+        t = task_store.complete("d2b", result_status="clarification_needed")
+        assert t["status"] == "done"
+        assert t["result_status"] == "clarification_needed"
+        on_disk = task_store._read_task(task_store.task_path("d2b"))
+        assert on_disk["result_status"] == "clarification_needed"
+
+    def test_complete_without_result_status_omits_key(self):
+        task_store.enqueue(job_id="d2c")
+        task_store.claim("d2c")
+        t = task_store.complete("d2c")
+        assert "result_status" not in t
+
     def test_complete_nonexistent_raises(self):
         with pytest.raises(FileNotFoundError):
             task_store.complete("ghost")

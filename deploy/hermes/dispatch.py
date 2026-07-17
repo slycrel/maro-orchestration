@@ -91,7 +91,10 @@ def cmd_enqueue(goal: str) -> int:
     job_id = enqueue_goal(goal)
     rec = {
         "job_id": job_id,
-        "goal": goal[:500],
+        # Display copy — the queue task holds the full text. Mark the cut so
+        # a truncated goal can't pass for the whole thing (2026-07-16: a goal
+        # cut mid-word read as if the dispatch had mangled it).
+        "goal": goal[:500] + ("…" if len(goal) > 500 else ""),
         "status": "dispatched",
         "handle_id": None,
         "dispatched_at": _now(),
@@ -120,9 +123,17 @@ def cmd_worker(job_id: str) -> int:
     try:
         task = claim(job_id)
         res = handle_queue.handle_task(task)
-        complete(job_id)
+        res_status = getattr(res, "status", "done") or "done"
+        # Queue semantics: "done" = drained, annotated with the handle-result
+        # status so the two records can't be read as contradicting; a
+        # handle-level error (guard refusal, backend death) is a drain that
+        # produced no work — that's the existing fail() path.
+        if res_status == "error":
+            task_fail(job_id, str(getattr(res, "result", "") or res_status)[:500])
+        else:
+            complete(job_id, result_status=res_status)
         rec.update(
-            status=getattr(res, "status", "done") or "done",
+            status=res_status,
             handle_id=getattr(res, "handle_id", "") or None,
             lane=getattr(res, "lane", None),
             ended_at=_now(),

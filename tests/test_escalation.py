@@ -623,7 +623,7 @@ class TestDrainTaskStore:
 
         with mock.patch("task_store.list_tasks", return_value=tasks), \
              mock.patch("task_store.claim", side_effect=lambda jid: None), \
-             mock.patch("task_store.complete", side_effect=lambda jid: None), \
+             mock.patch("task_store.complete", side_effect=lambda jid, **kw: None), \
              mock.patch("handle.handle_task", lambda t, **kw: processed.append(t["job_id"])):
             count = drain_task_store(dry_run=False, max_tasks=2)
 
@@ -652,7 +652,7 @@ class TestDrainTaskStore:
 
         with mock.patch("task_store.list_tasks", return_value=tasks), \
              mock.patch("task_store.claim", side_effect=lambda jid: None), \
-             mock.patch("task_store.complete", side_effect=lambda jid: None), \
+             mock.patch("task_store.complete", side_effect=lambda jid, **kw: None), \
              mock.patch("handle.handle_task", lambda t, **kw: processed.append(t["job_id"])):
             count = drain_task_store(dry_run=False, max_tasks=1,
                                      job_ids={"mine-001"})

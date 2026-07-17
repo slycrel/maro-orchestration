@@ -241,8 +241,20 @@ def claim(job_id: str, pid: Optional[int] = None) -> Dict[str, Any]:
     return task
 
 
-def complete(job_id: str, artifact_paths: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
-    """Mark task as done and resolve dependents."""
+def complete(
+    job_id: str,
+    artifact_paths: Optional[Dict[str, str]] = None,
+    result_status: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Mark task as done and resolve dependents.
+
+    Queue "done" means drained — the task was claimed and processed. What the
+    processing itself concluded is a separate fact: ``result_status`` carries
+    the handle-result status (e.g. "clarification_needed", "incomplete") so
+    the queue record and the run outcome can no longer be read as
+    contradicting each other (2026-07-16: task …b414ccab showed queue "done"
+    beside dispatch "clarification_needed" and derailed diagnosis).
+    """
     path = task_path(job_id)
     with _lock_task(path):
         task = _read_task(path)
@@ -255,6 +267,8 @@ def complete(job_id: str, artifact_paths: Optional[Dict[str, str]] = None) -> Di
         task["claimed_by_pid"] = None
         if artifact_paths:
             task["artifact_paths"].update(artifact_paths)
+        if result_status:
+            task["result_status"] = result_status
         _atomic_write(path, task)
 
     _resolve_dependents(job_id)

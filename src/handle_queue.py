@@ -276,9 +276,16 @@ def drain_task_store(
             continue
 
         try:
-            _handle_mod.handle_task(task, adapter=adapter, dry_run=dry_run, verbose=verbose)
+            _res = _handle_mod.handle_task(task, adapter=adapter, dry_run=dry_run, verbose=verbose)
+            _res_status = getattr(_res, "status", "done") or "done"
+            # Same terminal semantics as the hermes dispatch worker: "done" =
+            # drained + result_status annotation; a handle-level error is a
+            # drain that produced no work → fail().
             try:
-                complete(job_id)
+                if _res_status == "error":
+                    task_fail(job_id, str(getattr(_res, "result", "") or _res_status)[:500])
+                else:
+                    complete(job_id, result_status=_res_status)
             except Exception as _ce:
                 log.warning("drain_task_store: failed to mark %s complete: %s", job_id, _ce)
             processed += 1

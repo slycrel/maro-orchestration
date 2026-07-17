@@ -25,14 +25,17 @@ def _load_dispatch(tmp_path, monkeypatch):
 
 
 def _fake_task_modules(monkeypatch, handle_result):
+    """Install fake task_store/handle_queue; returns a call log for asserts."""
+    calls = []
     fake_ts = types.ModuleType("task_store")
     fake_ts.claim = lambda job_id: {"job_id": job_id, "reason": "goal", "source": "user_goal"}
-    fake_ts.complete = lambda job_id: None
-    fake_ts.fail = lambda job_id, msg: None
+    fake_ts.complete = lambda job_id, **kw: calls.append(("complete", job_id, kw))
+    fake_ts.fail = lambda job_id, msg: calls.append(("fail", job_id, msg))
     fake_hq = types.ModuleType("handle_queue")
     fake_hq.handle_task = lambda task: handle_result
     monkeypatch.setitem(sys.modules, "task_store", fake_ts)
     monkeypatch.setitem(sys.modules, "handle_queue", fake_hq)
+    return calls
 
 
 def test_worker_records_result_excerpt(tmp_path, monkeypatch, capsys):
@@ -46,12 +49,60 @@ def test_worker_records_result_excerpt(tmp_path, monkeypatch, capsys):
         lane="agenda",
         result="Before starting, I need to clarify one thing:\n\nWhich thread?",
     )
-    _fake_task_modules(monkeypatch, res)
+    calls = _fake_task_modules(monkeypatch, res)
 
     assert mod.cmd_worker("job-1") == 0
     rec = json.loads((tmp_path / "hermes-dispatch" / "job-1.json").read_text())
     assert rec["status"] == "clarification_needed"
     assert "Which thread?" in rec["result_excerpt"]
+    # Queue "done" = drained, annotated with what the drain concluded.
+    assert calls == [("complete", "job-1", {"result_status": "clarification_needed"})]
+
+
+def test_worker_error_result_routes_to_fail(tmp_path, monkeypatch, capsys):
+    """A handle-level error (guard refusal, backend death) is a drain that
+    produced no work — the queue record must say failed, not done."""
+    mod = _load_dispatch(tmp_path, monkeypatch)
+    res = types.SimpleNamespace(
+        status="error",
+        handle_id="",
+        lane="agenda",
+        result="recall guard: 3 attempts at this goal in the last 60m, all failed",
+    )
+    calls = _fake_task_modules(monkeypatch, res)
+
+    assert mod.cmd_worker("job-err") == 0
+    rec = json.loads((tmp_path / "hermes-dispatch" / "job-err.json").read_text())
+    assert rec["status"] == "error"
+    assert "recall guard" in rec["result_excerpt"]
+    assert len(calls) == 1
+    verb, job_id, detail = calls[0]
+    assert verb == "fail"
+    assert job_id == "job-err"
+    assert "recall guard" in detail
+
+
+def test_enqueue_marks_goal_truncation(tmp_path, monkeypatch, capsys):
+    """The 500-char display copy of the goal must show that it was cut —
+    a mid-word truncation read as a mangled goal (2026-07-16)."""
+    mod = _load_dispatch(tmp_path, monkeypatch)
+    fake_hq = types.ModuleType("handle_queue")
+    fake_hq.enqueue_goal = lambda goal: "job-long"
+    monkeypatch.setitem(sys.modules, "handle_queue", fake_hq)
+    spawned = []
+    monkeypatch.setattr(mod.subprocess, "Popen", lambda *a, **kw: spawned.append(a))
+
+    long_goal = "x" * 600
+    assert mod.cmd_enqueue(long_goal) == 0
+    rec = json.loads((tmp_path / "hermes-dispatch" / "job-long.json").read_text())
+    assert rec["goal"] == "x" * 500 + "…"
+    assert spawned, "worker should still be spawned"
+
+    short_goal = "y" * 40
+    fake_hq.enqueue_goal = lambda goal: "job-short"
+    assert mod.cmd_enqueue(short_goal) == 0
+    rec = json.loads((tmp_path / "hermes-dispatch" / "job-short.json").read_text())
+    assert rec["goal"] == short_goal
 
 
 def test_worker_omits_result_excerpt_when_empty(tmp_path, monkeypatch, capsys):
