@@ -813,6 +813,7 @@ def _next_call_seq(rd: Path) -> int:
 
 def record_llm_call(prompt, response_text, *, backend="", model="",
                     tool_events=None, tokens_in=None, tokens_out=None,
+                    max_tokens_requested=None,
                     purpose: str = "",
                     run_dir: Optional[Path] = None) -> Optional[Path]:
     """Persist one LLM call to `<run-dir>/build/calls/call-NNNNN.json` (scrubbed).
@@ -844,6 +845,9 @@ def record_llm_call(prompt, response_text, *, backend="", model="",
             "tool_events": tool_events or [],
             "tokens_in": tokens_in,
             "tokens_out": tokens_out,
+            # Requested cap, recorded so an overrun is diagnosable from the
+            # call record alone (not every backend enforces max_tokens).
+            "max_tokens_requested": max_tokens_requested,
             "purpose": purpose or "",
             "ts": datetime.now(timezone.utc).isoformat(),
         })

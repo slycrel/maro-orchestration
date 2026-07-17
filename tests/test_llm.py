@@ -308,6 +308,67 @@ def test_subprocess_complete_no_tools_disables_all_tools(monkeypatch):
     assert "--disallowedTools" not in cmd
 
 
+def test_subprocess_no_tools_enforces_max_tokens_via_env(monkeypatch):
+    """no_tools utility calls pass CLAUDE_CODE_MAX_OUTPUT_TOKENS so the CLI
+    hard-enforces the requested cap. The -p flag set has no token-cap flag,
+    so max_tokens was silently ignored — a 256-cap goal-rewrite call returned
+    2489 tokens of prose and mangled the goal (cobalt-pine, 2026-07-16)."""
+    a = ClaudeSubprocessAdapter()
+    mock_result = MagicMock()
+    mock_result.returncode = 0
+    mock_result.stdout = _make_subprocess_output("ok")
+    mock_result.stderr = ""
+
+    with patch("llm._run_subprocess_safe", return_value=mock_result) as mock_run:
+        a.complete([LLMMessage("user", "classify this")], no_tools=True,
+                   max_tokens=256)
+
+    env_extra = mock_run.call_args.kwargs["env_extra"]
+    assert env_extra == {"CLAUDE_CODE_MAX_OUTPUT_TOKENS": "256"}
+
+
+def test_subprocess_agentic_call_not_token_capped(monkeypatch):
+    """Agentic (tool-holding) calls stay uncapped: their multi-turn output
+    legitimately exceeds utility-sized caps, and the CLI's overrun behavior
+    is a hard error, not truncation — it would kill real work."""
+    a = ClaudeSubprocessAdapter()
+    mock_result = MagicMock()
+    mock_result.returncode = 0
+    mock_result.stdout = _make_subprocess_output("ok")
+    mock_result.stderr = ""
+
+    with patch("llm._run_subprocess_safe", return_value=mock_result) as mock_run:
+        a.complete([LLMMessage("user", "do the work")], max_tokens=4096)
+
+    assert mock_run.call_args.kwargs["env_extra"] is None
+
+
+def test_failover_warns_on_utility_max_tokens_overrun(monkeypatch, caplog):
+    """The record seam warns when a no_tools call's output exceeds its
+    requested cap — covers backends with no enforcement mechanism (codex)."""
+    import logging
+    from llm import FailoverAdapter, LLMResponse
+
+    class ChattyAdapter:
+        backend = "codex"
+        model_key = "cheap"
+
+        def complete(self, messages, **kwargs):
+            return LLMResponse(content="{}", backend="codex", model="m",
+                               input_tokens=10, output_tokens=2489)
+
+    fa = FailoverAdapter([ChattyAdapter()])
+    with caplog.at_level(logging.WARNING, logger="llm"):
+        fa.complete([LLMMessage("user", "rewrite")], max_tokens=256,
+                    no_tools=True, purpose="goal rewrite")
+    assert any("exceeded requested max_tokens" in r.message for r in caplog.records)
+
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="llm"):
+        fa.complete([LLMMessage("user", "step")], max_tokens=256)
+    assert not any("exceeded requested max_tokens" in r.message for r in caplog.records)
+
+
 def test_codex_complete_no_tools_uses_readonly_sandbox(monkeypatch):
     """no_tools=True on the codex adapter (BACKLOG #16): codex has no blanket
     tool-disable flag, so read-only sandbox is the closest available

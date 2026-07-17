@@ -75,6 +75,16 @@ def test_record_writes_purpose_field(workspace):
     assert rec["purpose"] == "routing"
 
 
+def test_record_writes_max_tokens_requested(workspace):
+    """Requested cap persists on the record so an overrun is diagnosable from
+    the call file alone (not every backend enforces max_tokens)."""
+    rd = create_run_dir("hid00005", prompt="do a thing")
+    set_current_run_dir(rd)
+    out = record_llm_call("p", "r", tokens_out=2489, max_tokens_requested=256)
+    rec = json.loads(out.read_text())
+    assert rec["max_tokens_requested"] == 256
+
+
 def test_record_purpose_defaults_to_empty_string(workspace):
     rd = create_run_dir("hid00003", prompt="do a thing")
     set_current_run_dir(rd)

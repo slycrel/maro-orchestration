@@ -585,6 +585,23 @@ class FailoverAdapter(LLMAdapter):
                         "FailoverAdapter: succeeded on %s (index %d/%d)",
                         adapter.backend, idx + 1, len(self._adapters),
                     )
+                # Requested-cap visibility: not every backend enforces
+                # max_tokens (the claude CLI ignored it until the no_tools env
+                # cap, codex CLI still does). Warn on utility-call overrun —
+                # a JSON-contract call blowing its cap is exactly the shape
+                # that mangled cobalt-pine's goal rewrite (2026-07-16).
+                # Agentic calls stay warning-free: multi-turn output exceeding
+                # the default 4096 is normal, not a contract breach.
+                _tokens_out = getattr(result, "output_tokens", None)
+                if (kwargs.get("no_tools") and _tokens_out and max_tokens
+                        and _tokens_out > max_tokens):
+                    log.warning(
+                        "LLM call (purpose=%r, backend=%s) exceeded requested "
+                        "max_tokens: %d > %d — backend did not enforce the cap",
+                        _purpose,
+                        getattr(adapter, "backend", "?"),
+                        _tokens_out, max_tokens,
+                    )
                 # Record-mode: capture the paid-for call for replay/mining. One
                 # seam covers every backend. No-op when off / no active run-dir;
                 # never affects the outcome (record_llm_call swallows errors).
@@ -598,6 +615,7 @@ class FailoverAdapter(LLMAdapter):
                         tool_events=getattr(result, "tool_events", None),
                         tokens_in=getattr(result, "input_tokens", None),
                         tokens_out=getattr(result, "output_tokens", None),
+                        max_tokens_requested=max_tokens,
                         purpose=_purpose,
                     )
                     if _rec_path is not None:
@@ -841,7 +859,8 @@ def _session_cpu_ticks(leader_pid: int) -> int:
 
 def _run_subprocess_safe(cmd, *, input=None, timeout=600,
                          liveness_timeout=None, poll_interval=2.0, cwd=None,
-                         stream_probe=None, container_name=None):
+                         stream_probe=None, container_name=None,
+                         env_extra=None):
     """Run a subprocess in its own process group with streaming + liveness check.
 
     Streams the subprocess's stdout+stderr (merged) to a single temp file
@@ -980,6 +999,8 @@ def _run_subprocess_safe(cmd, *, input=None, timeout=600,
     # MARO_ALLOW_MAIN_PUSH=1 itself when explicitly authorized to push.
     child_env = dict(os.environ)
     child_env["MARO_WORKER_RUN"] = "1"
+    if env_extra:
+        child_env.update(env_extra)
     try:
         from config import get as _cfg_get
         if bool(_cfg_get("workers.allow_main_push", False)):
@@ -1639,6 +1660,19 @@ class ClaudeSubprocessAdapter(_JSONToolPromptMixin, LLMAdapter):
                     _session_turns = 0
                 _session_state["signature"] = _session_signature
 
+        # Enforce max_tokens on utility (no_tools) calls via the CLI's
+        # CLAUDE_CODE_MAX_OUTPUT_TOKENS env var — the -p flag set has no
+        # per-call token cap, so the signature's max_tokens was silently
+        # ignored (cobalt-pine 2026-07-16: a 256-cap rewrite call returned
+        # 2489 tokens of prose and mangled the goal). Overrun becomes a hard
+        # CLI error, not truncation — the right direction for JSON-only
+        # contract calls, whose callers all fall back safely. Agentic calls
+        # are deliberately uncapped: their multi-turn output legitimately
+        # exceeds any utility-sized cap and an error would kill real work.
+        _env_extra = None
+        if no_tools and max_tokens:
+            _env_extra = {"CLAUDE_CODE_MAX_OUTPUT_TOKENS": str(int(max_tokens))}
+
         prompt = _delta_prompt if _resume_id else full_prompt
         if _resume_id:
             cmd += ["--resume", _resume_id]
@@ -1649,7 +1683,7 @@ class ClaudeSubprocessAdapter(_JSONToolPromptMixin, LLMAdapter):
             result = _run_subprocess_safe(
                 cmd, input=prompt, timeout=_timeout, cwd=_cwd,
                 stream_probe=_build_stream_cost_probe(model_str),
-                container_name=_container_name)
+                container_name=_container_name, env_extra=_env_extra)
         except subprocess.TimeoutExpired:
             raise RuntimeError(f"claude subprocess timed out after {_timeout}s")
         except FileNotFoundError:
@@ -1672,6 +1706,7 @@ class ClaudeSubprocessAdapter(_JSONToolPromptMixin, LLMAdapter):
             try:
                 result = _run_subprocess_safe(
                     fresh_cmd, input=prompt, timeout=_timeout, cwd=_cwd,
+                    env_extra=_env_extra,
                     stream_probe=_build_stream_cost_probe(model_str),
                     container_name=_container_name)
             except subprocess.TimeoutExpired:
