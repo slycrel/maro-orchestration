@@ -52,6 +52,11 @@
 				match origin local
 				action add role authp/user
 			}
+			# One block per allowed GitHub account. To grant someone
+			# access: copy this block, change the username, reinstall
+			# (README "Adding another person"). No GitHub-side change
+			# needed — accounts without a matching block authenticate
+			# but hold no role and are denied.
 			transform user {
 				match realm github
 				match sub github.com/slycrel

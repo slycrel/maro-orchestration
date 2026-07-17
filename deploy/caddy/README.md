@@ -72,6 +72,28 @@ Secret rotation: generate a new client secret on the OAuth app page,
 replace `GITHUB_CLIENT_SECRET` in `/etc/caddy/caddy.env`, then
 `sudo systemctl restart caddy`.
 
+### Adding another person
+
+Access is per-GitHub-account, in config — no database, no GitHub-side
+change. Each allowed account is one `transform user` block in
+`Caddyfile.github-oauth`; copy the existing one and change the username:
+
+```
+transform user {
+	match realm github
+	match sub github.com/<their-github-username>
+	action add role authp/user
+}
+```
+
+Then install: `sudo cp deploy/caddy/Caddyfile.github-oauth
+/etc/caddy/Caddyfile && sudo systemctl restart caddy`. They log in with
+their normal GitHub account. Any GitHub account can *authenticate*
+against the OAuth app; only accounts with a matching block get a role,
+and no role = denied (default-deny). Removal = delete the block,
+reinstall. (Passworded local accounts via `users.json` are also
+possible, but GitHub is the intended path.)
+
 ## Local login (break-glass)
 
 `webadmin` in the local identity store remains as break-glass if GitHub
