@@ -180,6 +180,43 @@ def test_send_without_token_returns_false(monkeypatch):
     assert notify_telegram.send("hello") is False
 
 
+def test_live_example_dapper_heron_message_shape(monkeypatch):
+    """End-to-end pin on the REAL first-dispatch run card (2026-07-17,
+    the X-thread research goal that drove the whole delivery-loop arc).
+    Fixture = the actual curated card. If the completion-message pattern
+    evolves, it must still deliver on this example: answer first, capped
+    list flagged, no verifier self-grade on a success, deliverable link,
+    honest stats. (Jeremy: capture the example so the pattern stays
+    testable against real data.)"""
+    card = json.loads(
+        (Path(__file__).parent / "fixtures" / "dapper_heron"
+         / "run_card.json").read_text())
+    card["event_type"] = "run_completed"
+    monkeypatch.setattr(
+        notify_telegram, "_cfg",
+        lambda key, default: "http://192.168.0.45:8787"
+        if key == "notify.viewer_url" else default,
+    )
+    msg = format_message(card)
+    lines = msg.splitlines()
+    # Outcome header first, answer body before any run metadata.
+    assert lines[0] == "✅ Done — goal achieved"
+    assert "Enable cron scheduling" in msg
+    assert msg.index("cron scheduling") < msg.index("maro-runs result")
+    # The Re: goal line trims on a word boundary, never mid-word.
+    re_line = [l for l in lines if l.startswith("Re: ")][0]
+    assert re_line.endswith("…") and not re_line.endswith("Herme…")
+    # The 900-char cap cut this answer — the message must say so.
+    assert "⋯ more in the full report" in msg
+    # Verifier self-grade stays out of a successful completion.
+    assert "demonstrably present" not in msg
+    # One-tap deliverable, not the loop report.
+    assert ("📄 Full report: http://192.168.0.45:8787/"
+            "2b25b6c7-dapper-heron/artifact/FINAL_REPORT.md") in msg
+    assert "cost $0.71" in msg and "37m" in msg
+    assert "Full result: maro-runs result 2b25b6c7" in msg
+
+
 # --- answer-first completion (delivery-loop arc 2026-07-17) ------------------
 
 

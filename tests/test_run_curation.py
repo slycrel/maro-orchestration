@@ -1317,6 +1317,29 @@ def test_synthesize_answer_llm_failure_falls_back_to_excerpt(
     assert "Install cron first." in card["answer_summary"]
 
 
+def test_live_example_dapper_heron_excerpt_is_the_deliverable(workspace, tmp_path):
+    """Pin on the REAL first-dispatch deliverable (FINAL_REPORT.md from the
+    2026-07-17 X-thread research run): with answer synthesis OFF (the fresh
+    default), the excerpt fallback must still ship the deliverable's
+    substance — the failure this arc fixed was excerpting step-log process
+    prose ('Read artifacts/step-2-transcript.json…') instead."""
+    import run_curation
+    from pathlib import Path as _P
+
+    fixture = (_P(__file__).parent / "fixtures" / "dapper_heron"
+               / "FINAL_REPORT.md")
+    deliv = tmp_path / "FINAL_REPORT.md"
+    deliv.write_text(fixture.read_text())
+    card = {"deliverables": [{"path": str(deliv), "bytes": deliv.stat().st_size}]}
+    run_curation.synthesize_answer(tmp_path, {"prompt": "what to install?"}, card)
+    assert card["answer_source"] == "excerpt"
+    # Deliverable substance, not run paperwork.
+    assert "Final Report" in card["answer_summary"]
+    assert "step-2-transcript" not in card["answer_summary"]
+    # 11.8KB source → the 600-char excerpt must admit it was cut.
+    assert card["answer_truncated"] is True
+
+
 def test_llm_answer_rejects_token_cap_overrun(monkeypatch):
     """CLAUDE_CODE_MAX_OUTPUT_TOKENS caps per API message; the CLI
     auto-continues and the -p result is only the LAST chunk (live:
