@@ -1,0 +1,32 @@
+# Caddy reverse proxy (maro box public entry — mc.feifdom.com).
+# Source of truth: deploy/caddy/caddy.service in the maro-orchestration
+# repo; install with:
+#   sudo cp deploy/caddy/caddy.service /etc/systemd/system/caddy.service
+#   sudo systemctl daemon-reload && sudo systemctl enable --now caddy
+#
+# Runs as clawd (config and cert storage stay user-owned);
+# CAP_NET_BIND_SERVICE grants the 80/443 bind without root.
+[Unit]
+Description=Caddy reverse proxy (mc.feifdom.com -> maro services)
+Documentation=https://caddyserver.com/docs/
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+User=clawd
+Group=clawd
+EnvironmentFile=/etc/caddy/caddy.env
+ExecStart=/usr/local/bin/caddy run --environ --config /etc/caddy/Caddyfile
+ExecReload=/usr/local/bin/caddy reload --config /etc/caddy/Caddyfile --force
+TimeoutStopSec=5s
+LimitNOFILE=1048576
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=/etc/caddy
+
+[Install]
+WantedBy=multi-user.target

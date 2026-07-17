@@ -1,0 +1,79 @@
+# Caddy reverse proxy for the maro box — public entry at mc.feifdom.com.
+# Source of truth: deploy/caddy/Caddyfile in the maro-orchestration repo
+# (same convention as deploy/hermes/*); install with:
+#   sudo cp deploy/caddy/Caddyfile /etc/caddy/Caddyfile && sudo systemctl reload caddy
+#
+# Auth posture (Jeremy 2026-07-17): SSO as the floor, implementation
+# swappable. caddy-security provides the auth portal + JWT authorization;
+# the identity provider behind the portal starts as a local user store and
+# upgrades to GitHub OAuth by adding a provider block (see
+# deploy/caddy/README.md) — the /maro route's authorization policy does
+# not change when the provider does.
+#
+# Secrets: JWT_SHARED_KEY lives in /etc/caddy/caddy.env (mode 600, not in
+# git). The local user db is /etc/caddy/auth/users.json (not in git).
+
+{
+	order authenticate before respond
+	order authorize before basic_auth
+
+	security {
+		local identity store localdb {
+			realm local
+			path /etc/caddy/auth/users.json
+		}
+
+		authentication portal maro_portal {
+			crypto default token lifetime 86400
+			crypto key sign-verify from env JWT_SHARED_KEY
+			enable identity store localdb
+			cookie domain mc.feifdom.com
+			ui {
+				links {
+					"Maro visualizations" /maro/ icon "las la-chart-bar"
+				}
+			}
+			transform user {
+				match origin local
+				action add role authp/user
+			}
+		}
+
+		authorization policy maro_policy {
+			set auth url https://mc.feifdom.com/auth/
+			crypto key verify from env JWT_SHARED_KEY
+			allow roles authp/admin authp/user
+		}
+	}
+}
+
+mc.feifdom.com {
+	route /auth* {
+		authenticate with maro_portal
+	}
+
+	route /maro* {
+		authorize with maro_policy
+		uri strip_prefix /maro
+		reverse_proxy 127.0.0.1:8787
+	}
+
+	redir / /auth 302
+}
+
+# Local wiring check (no TLS, no cookies across domains — proves the
+# portal renders and unauthenticated /maro redirects; full flow needs the
+# real domain): curl -s http://127.0.0.1:8880/auth | head
+http://127.0.0.1:8880 {
+	route /auth* {
+		authenticate with maro_portal
+	}
+
+	route /maro* {
+		authorize with maro_policy
+		uri strip_prefix /maro
+		reverse_proxy 127.0.0.1:8787
+	}
+
+	redir / /auth 302
+}

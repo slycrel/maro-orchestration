@@ -3290,3 +3290,14 @@ Dormant (deliberately parked, not dropped):
   session — spec in MILESTONES -6 (cold-read the repo without conversational
   backstory; verdict on drift vs north star; honest, including "wrong
   continent").
+- **2026-07-17 (Jeremy, late night) — SSO as the floor for public surfaces
+  (standing security posture).** On exposing the viz server at
+  mc.feifdom.com: "This is just-in-case security, but that's how bad habits
+  form I suppose... I'm as guilty as the next guy of wanting my programmer
+  hack around auth. Maybe we should assume SSO as the floor, with
+  implementation changeable later." Flat-open + basic_auth-as-enough both
+  rejected for anything public-facing. Shipped same night: Caddy +
+  caddy-security on the maro box (auth portal + JWT policy gating /maro;
+  local identity store first, GitHub OAuth as the documented drop-in —
+  deploy/caddy/README.md). Standing rule: a new public surface starts
+  behind the portal, not with a TODO.
