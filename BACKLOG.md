@@ -141,20 +141,44 @@ task-…b414ccab / run cobalt-pine — five-link failure chain, four fixed live)
   300-char summary truncation — merry-nettle showed goal_achieved=false
   beside a summary whose visible prefix read "Goal achieved.").
   Tests: `tests/test_hermes_dispatch.py` (new).
-- [ ] **Task-store status vs dispatch status disagree** — worker calls
-  `complete(job_id)` unconditionally, so the queue record says `done` while
-  the dispatch record says `clarification_needed`. Decide semantics: is
-  task-store "done" = "drained" (current) or should non-done handle results
-  map to a distinct terminal state? Low urgency now that the dispatch record
-  carries the why.
-- [ ] **subprocess adapter ignores max_tokens** — the rewrite call passed
-  `max_tokens=256`; Haiku returned 2489 tokens of chatty prose around the
-  JSON. Cheap-model preflight transforms need the cap (or a stricter
-  JSON-only contract) actually enforced.
-- [ ] **Closure prose can contradict its own flag** — merry-nettle's verdict
-  summary opened "Goal achieved." while `complete=false` (closure-probe bias
-  family). Gaps-on-the-card mitigates; consider making the closure prompt
-  require the summary to open with the verdict.
+- [x] **Task-store status vs dispatch status disagree** — SHIPPED 2026-07-16
+  (same evening, parallel-fork pass): queue "done" = drained stays, annotated
+  with `result_status` carrying the handle-result outcome; handle-level
+  `error` results route to the existing `fail()` path with the result text.
+  Both call sites (dispatch worker + `drain_task_store`) share the semantics;
+  enqueue's 500-char display goal now marks truncation with `…`. Pins in
+  `test_task_store` / `test_hermes_dispatch`.
+- [x] **subprocess adapter ignores max_tokens** — SHIPPED 2026-07-16 (same
+  evening, parallel-fork pass). Root cause: accepted-but-never-passed (the
+  `-p` flag set has no cap flag). Utility (`no_tools`) calls now set
+  `CLAUDE_CODE_MAX_OUTPUT_TOKENS` (live-probed: overrun = hard CLI error, not
+  truncation — callers all fall back safely, which is the right direction for
+  JSON-contract calls); agentic calls deliberately uncapped. Every call
+  record now carries `max_tokens_requested`; the FailoverAdapter seam warns
+  on utility overrun for backends with no enforcement (codex CLI
+  accepts-and-ignores, no cap flag exists). Anthropic SDK and
+  OpenAI-compat adapters verified honoring. Pins in `test_llm` /
+  `test_record_mode`.
+- [x] **Closure prose can contradict its own flag** — SHIPPED 2026-07-16
+  (same evening, parallel-fork pass): `_verdict_first_summary()` in
+  closure_verify makes the FLAG write the summary opener deterministically
+  ("Achieved: " / "Not achieved: " / "Not judged (…): "), stripping a
+  leading LLM verdict restatement so nothing doubles; downgrade-branch
+  summaries (already code-written verdict-first) pass through; fail-open
+  skip sentinels untouched. Prompt also asks for verdict-first prose
+  (secondary). Pins in `test_director` incl. the merry-nettle
+  contradiction case.
+- [ ] **Container executor walls off introspection goals** — the hermes-
+  dispatched self-diagnostic (run brisk-saffron, task-…80466244) executed in
+  the container executor ($HOME=/home/maro): no view of the host's
+  ~/.maro/workspace run records, no dispatch CLI, no maro binary. It spent
+  2.8M tokens / 28min exhaustively proving its own isolation (its H2
+  hypothesis — "a pre-execution gate set clarification_needed but never
+  wrote the reason" — was correct and unverifiable from inside). Needs a
+  routing decision: detect introspection-shaped goals and run them host-side,
+  or mount run records read-only into the container. Until then, dispatched
+  self-diagnostics are structurally unable to succeed. Captured in
+  docs/CAPABILITIES.md (Tier 2, aspirational).
 
 Container-on day-one findings (2026-07-16, two dispatched verification runs):
 - [x] **Provenance freshness-window false demotion** — run 123bf935 demoted
