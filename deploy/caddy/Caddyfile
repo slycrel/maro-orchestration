@@ -30,7 +30,8 @@
 			cookie domain mc.feifdom.com
 			ui {
 				links {
-					"Maro visualizations" /maro/ icon "las la-chart-bar"
+					"Maro visualizations" /maro/index.html icon "las la-chart-bar"
+					"Settings (change password)" /auth/settings icon "las la-cog"
 				}
 			}
 			transform user {
@@ -52,6 +53,11 @@ mc.feifdom.com {
 		authenticate with maro_portal
 	}
 
+	# Bare /maro lands on the viz root, which its allowlist denies (blank
+	# 403) — send it to the index the allowlist does serve.
+	redir /maro /maro/index.html
+	redir /maro/ /maro/index.html
+
 	route /maro* {
 		authorize with maro_policy
 		uri strip_prefix /maro
@@ -68,6 +74,9 @@ http://127.0.0.1:8880 {
 	route /auth* {
 		authenticate with maro_portal
 	}
+
+	redir /maro /maro/index.html
+	redir /maro/ /maro/index.html
 
 	route /maro* {
 		authorize with maro_policy
