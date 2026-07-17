@@ -3277,3 +3277,16 @@ Dormant (deliberately parked, not dropped):
   content (data tone) and a Hermes brain turn composes the user DM from it.
   Standing test: every completion surface must answer the original ask;
   LLM consumers get data, humans get prose.
+- **2026-07-17 (Jeremy, session close) — pattern-not-example caution +
+  holistic drift review commissioned.** On the shipped delivery-loop work:
+  "Hopefully this is identifying the right pattern, as opposed to dialing
+  in this specific example. Time will tell; it's miles better than it was."
+  Standing check for the answer-first/two-tone surfaces: watch the next few
+  UNLIKE runs (build goals, ops goals, failures) — the shapes were derived
+  from one research run. And: "Might be time to do a wholistic review, and
+  honestly see if we are on target, and if the drift moved us in a better
+  direction towards our mountain we wanted to climb... or if we ended up on
+  the wrong continent looking at a swamp." Review commissioned for a clean
+  session — spec in MILESTONES -6 (cold-read the repo without conversational
+  backstory; verdict on drift vs north star; honest, including "wrong
+  continent").

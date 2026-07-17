@@ -310,6 +310,25 @@ Truth anchor: GOAL_BRAIN.md Threads. History: docs/history/ROADMAP_ARCHIVE.md.
 
 ## Active Queue
 
+-6. **Holistic drift review (Jeremy, 2026-07-17) — do this in a CLEAN
+   session, first thing.** After the delivery-loop/two-tone arc: "Might be
+   time to do a wholistic review, and honestly see if we are on target, and
+   if the drift moved us in a better direction towards our mountain we
+   wanted to climb... or if we ended up on the wrong continent looking at a
+   swamp." Method matters as much as verdict: cold-read the repo the way a
+   stranger would — VISION, GOAL_BRAIN, MILESTONES, BACKLOG, DEFAULTS,
+   docs/ — WITHOUT leaning on conversational backstory, and test (a)
+   whether the recorded state alone carries the true state (his other
+   observation: "what we've got 'in context' and what is just sort of...
+   'in the repo'"), and (b) whether the accumulated arcs still climb toward
+   the north star (self-improving autonomous agent; visible → reliable →
+   replayable) or optimized locally away from it. Honest verdict wanted,
+   including "wrong continent". Also carry in: his caution that the
+   delivery-loop fixes should be "identifying the right pattern, as opposed
+   to dialing in this specific example" — the review should check new
+   surfaces against pattern-vs-example. Output: a short findings doc +
+   proposed course corrections, decisions to Jeremy.
+
 -5. **Post-handoff execution queue (2026-07-12)** — *the ordered chunk list
    from the Fable-handoff session; every entry has a design doc or decided
    spec behind it — implementation sessions should not need to invent
