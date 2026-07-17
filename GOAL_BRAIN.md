@@ -3370,3 +3370,28 @@ Dormant (deliberately parked, not dropped):
   ledger-recorded and the budget breaker prices cache-aware (the $2.41
   phantom total that hard-stopped azure-finch one step early vs $0.406
   real spend).
+- **2026-07-17 (session, afternoon re-run zesty-ash 75a88777) — verify
+  must judge evidence, not narration.** Jeremy re-dispatched the X-post
+  research after the morning fixes ("in theory this has been fixed up.
+  Want to run that again with maro?"). The morning fixes held (no billed
+  failover, no alert spam, sane cost, verdict-grounded answer). The run
+  still ended stuck on a single wrong premise propagating three times:
+  ralph verify sees only result[:1200] narration — the worker had
+  delivered the root post body to artifacts/step-2-output.txt, verify
+  demanded it "in the result" and FAILed the step; the blocked-step
+  guard then matched "not found" in the step's *research narration*
+  (about a third-party repo) and converted the retryable verify FAIL
+  into a terminal MISSING_INPUT stuck; the goal verdict then trusted the
+  poisoned DEAD_ENDS entry over the artifact ("root post never
+  captured" — false). Applied same day: artifact-evidence note (fresh
+  artifacts/ listing w/ size + excerpt) threaded through the whole
+  validator ladder; ralph-verify blocks exempted from the missing-input
+  short-circuit; CLAUDE_CODE_MAX_OUTPUT_TOKENS floored at 1500 on
+  no_tools subprocess calls (the CLI cap counts thinking tokens — the
+  300-cap scope call died before the model could reason, degrading the
+  run's scope); scope-raw-FAILED.txt debug dump relocated from project
+  artifacts/ (where it ranked as a user deliverable and the morning
+  planner planned a step around reading it) to the run build dir.
+  Still open, report-only: closure Check-1 pipe-char false positive is
+  a recurrence of the known static-probe bias; X reply-thread capture
+  missing across both runs (captured in docs/CAPABILITIES.md).

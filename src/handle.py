@@ -1482,14 +1482,32 @@ def _handle_impl(
                     # debug pass has evidence, and record a captain's log event
                     # so closure/scope observability runs can count parse failures.
                     _raw = (_scope.raw_text or "").strip()
-                    if _proj_dir is not None and _raw:
+                    if _raw:
+                        # Debug evidence, not a work product — keep it OUT of
+                        # the project artifacts dir. artifacts/ is the
+                        # deliverable channel: run 75a88777 ranked this dump
+                        # as a user deliverable, and the 1dac0e17 planner even
+                        # planned a step around reading it. Run build dir
+                        # first; project ROOT (unscanned) as fallback.
+                        _dump_dir = None
                         try:
-                            (_proj_dir / "scope-raw-FAILED.txt").write_text(
-                                _raw + "\n", encoding="utf-8"
-                            )
-                            log.info("scope: parse failed, raw response at %s/scope-raw-FAILED.txt", _proj_dir)
-                        except Exception as _raw_exc:
-                            log.debug("scope: could not record raw response: %s", _raw_exc)
+                            from runs import current_run_dir as _crd_scope
+                            _rd_scope = _crd_scope()
+                            if _rd_scope is not None:
+                                _dump_dir = _rd_scope / "build"
+                                _dump_dir.mkdir(parents=True, exist_ok=True)
+                        except Exception:
+                            _dump_dir = None
+                        if _dump_dir is None and _proj_dir is not None:
+                            _dump_dir = _proj_dir.parent
+                        if _dump_dir is not None:
+                            try:
+                                (_dump_dir / "scope-raw-FAILED.txt").write_text(
+                                    _raw + "\n", encoding="utf-8"
+                                )
+                                log.info("scope: parse failed, raw response at %s/scope-raw-FAILED.txt", _dump_dir)
+                            except Exception as _raw_exc:
+                                log.debug("scope: could not record raw response: %s", _raw_exc)
                     try:
                         from captains_log import log_event, SCOPE_PARSE_FAILED
                         log_event(

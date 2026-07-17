@@ -869,9 +869,21 @@ def _handle_blocked_step(
     # re-decomposing FABRICATES a synthetic stand-in and fakes success (the
     # fabricated-input false-success bug). Honest escalate/fail instead — the
     # navigator wanted escalate/close 5/5 at exactly this point.
-    if _is_input_consuming_step(step_text) and (
-        _looks_like_missing_input(block_reason)
-        or _looks_like_missing_input(step_result)
+    # Ralph-verify blocks are quality judgments on a PRODUCED result — the
+    # verifier saw output, so the step's input existed. Scanning that output
+    # for missing-input signals false-positives on research narration that
+    # legitimately reports some third thing as absent (run 75a88777: "target
+    # repo not found" in a fetch step's summary turned a retryable verify FAIL
+    # into a terminal MISSING_INPUT stuck). If the input is truly gone, the
+    # retry will block through the worker/flag_stuck path and land here
+    # without the ralph prefix.
+    if (
+        _is_input_consuming_step(step_text)
+        and not (block_reason or "").startswith("[ralph verify]")
+        and (
+            _looks_like_missing_input(block_reason)
+            or _looks_like_missing_input(step_result)
+        )
     ):
         log.info("missing external input on %r (%s) — escalating, not fabricating",
                  step_text[:60], block_reason[:60])

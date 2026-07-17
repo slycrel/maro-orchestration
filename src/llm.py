@@ -1639,6 +1639,14 @@ class _JSONToolPromptMixin:
         return ToolCall(name=tool_name, arguments=args)
 
 
+# Floor for the CLAUDE_CODE_MAX_OUTPUT_TOKENS hard cap on no_tools calls.
+# The CLI cap counts thinking tokens, so contract-sized caps (128/300) kill
+# the call before the model can reason. 1500 matches what run_curation's
+# answer cap independently converged on (dapper-heron: "a tight cap doesn't
+# shorten the answer, it decapitates it").
+_OUTPUT_CAP_FLOOR = 1500
+
+
 class ClaudeSubprocessAdapter(_JSONToolPromptMixin, LLMAdapter):
     """Adapter using `claude -p` subprocess. Works anywhere Claude Code is installed.
 
@@ -1794,9 +1802,17 @@ class ClaudeSubprocessAdapter(_JSONToolPromptMixin, LLMAdapter):
         # contract calls, whose callers all fall back safely. Agentic calls
         # are deliberately uncapped: their multi-turn output legitimately
         # exceeds any utility-sized cap and an error would kill real work.
+        #
+        # Floor at _OUTPUT_CAP_FLOOR: the CLI cap counts THINKING tokens, so
+        # a 128/300-token contract cap hard-errors before the model can even
+        # reason (run 75a88777: scope's 300-cap call died, degrading the whole
+        # run's scope). The floor un-decapitates thinking while keeping the
+        # runaway guard: a genuine prose runaway still exceeds it, and the
+        # caller's parse-fallback remains the contract-quality gate below it.
         _env_extra = None
         if no_tools and max_tokens:
-            _env_extra = {"CLAUDE_CODE_MAX_OUTPUT_TOKENS": str(int(max_tokens))}
+            _env_extra = {"CLAUDE_CODE_MAX_OUTPUT_TOKENS":
+                          str(max(int(max_tokens), _OUTPUT_CAP_FLOOR))}
 
         prompt = _delta_prompt if _resume_id else full_prompt
         if _resume_id:

@@ -120,3 +120,28 @@ class TestInputWindow:
         VerificationAgent(adapter, max_input_chars=4000).verify_step("goal", big)
         # 4000-char window → far more of the result reaches the validator
         assert self._user_msg_len(adapter) > 3900
+
+
+# ---------------------------------------------------------------------------
+# Artifact evidence (run 75a88777: verify judged narration, not artifacts)
+# ---------------------------------------------------------------------------
+
+class TestArtifactsNote:
+    def test_note_included_outside_truncation_window(self):
+        """The artifacts note must survive result truncation — it is the
+        evidence that content the narration only summarizes reached disk."""
+        adapter = _make_adapter('{"verdict": "PASS", "reason": "delivered", "confidence": 0.9}')
+        va = VerificationAgent(adapter, max_input_chars=200)
+        note = "- step-2-output.txt (20932 B, ~3m old): root post body captured"
+        va.verify_step("fetch the root post (full body)", "x" * 5000,
+                       artifacts_note=note)
+        user_msg = adapter.complete.call_args.args[0][1].content
+        assert "step-2-output.txt" in user_msg
+        assert user_msg.index("step-2-output.txt") > 200
+
+    def test_no_note_no_evidence_block(self):
+        adapter = _make_adapter('{"verdict": "PASS", "reason": "ok", "confidence": 0.9}')
+        va = VerificationAgent(adapter)
+        va.verify_step("do the thing", "did the thing")
+        user_msg = adapter.complete.call_args.args[0][1].content
+        assert "Project artifact files" not in user_msg

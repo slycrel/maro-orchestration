@@ -312,7 +312,13 @@ def test_subprocess_no_tools_enforces_max_tokens_via_env(monkeypatch):
     """no_tools utility calls pass CLAUDE_CODE_MAX_OUTPUT_TOKENS so the CLI
     hard-enforces the requested cap. The -p flag set has no token-cap flag,
     so max_tokens was silently ignored — a 256-cap goal-rewrite call returned
-    2489 tokens of prose and mangled the goal (cobalt-pine, 2026-07-16)."""
+    2489 tokens of prose and mangled the goal (cobalt-pine, 2026-07-16).
+
+    Contract-sized caps are FLOORED at _OUTPUT_CAP_FLOOR: the CLI cap counts
+    thinking tokens, so a 300-cap scope call hard-errored before the model
+    could reason (run 75a88777). The floor keeps runaway protection while
+    un-decapitating thinking; caller parse-fallback stays the contract gate."""
+    import llm as llm_mod
     a = ClaudeSubprocessAdapter()
     mock_result = MagicMock()
     mock_result.returncode = 0
@@ -324,7 +330,24 @@ def test_subprocess_no_tools_enforces_max_tokens_via_env(monkeypatch):
                    max_tokens=256)
 
     env_extra = mock_run.call_args.kwargs["env_extra"]
-    assert env_extra == {"CLAUDE_CODE_MAX_OUTPUT_TOKENS": "256"}
+    assert env_extra == {
+        "CLAUDE_CODE_MAX_OUTPUT_TOKENS": str(llm_mod._OUTPUT_CAP_FLOOR)}
+
+
+def test_subprocess_no_tools_cap_above_floor_passes_through(monkeypatch):
+    """A requested cap above the floor is used as-is."""
+    a = ClaudeSubprocessAdapter()
+    mock_result = MagicMock()
+    mock_result.returncode = 0
+    mock_result.stdout = _make_subprocess_output("ok")
+    mock_result.stderr = ""
+
+    with patch("llm._run_subprocess_safe", return_value=mock_result) as mock_run:
+        a.complete([LLMMessage("user", "summarize")], no_tools=True,
+                   max_tokens=9000)
+
+    env_extra = mock_run.call_args.kwargs["env_extra"]
+    assert env_extra == {"CLAUDE_CODE_MAX_OUTPUT_TOKENS": "9000"}
 
 
 def test_subprocess_agentic_call_not_token_capped(monkeypatch):

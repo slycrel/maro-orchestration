@@ -693,6 +693,38 @@ def _record_loop_decision(source: str, trigger: str, action: str,
         return False
 
 
+def _artifacts_evidence_note(project: str, limit: int = 5) -> str:
+    """Compact listing of the freshest project artifact files for the ralph
+    verifier: name, size, age, head excerpt. Steps deliver content to
+    artifacts/ and narrate a summary — without this evidence the verifier
+    structurally FAILs fetch/extract steps whose narration cannot contain the
+    content (run 75a88777: the root post sat in step-2-output.txt while verify
+    demanded it in the result text, cascading to a false MISSING_INPUT stuck).
+    Lists recent files regardless of which step wrote them — a retried step's
+    evidence may have been delivered by an earlier attempt. Never raises.
+    """
+    try:
+        from orch_items import project_dir
+        art = project_dir(project) / "artifacts"
+        if not art.is_dir():
+            return ""
+        files = sorted((p for p in art.iterdir() if p.is_file()),
+                       key=lambda p: p.stat().st_mtime, reverse=True)[:limit]
+        now = time.time()
+        lines = []
+        for p in files:
+            st = p.stat()
+            age_min = max(0, int((now - st.st_mtime) / 60))
+            try:
+                head = " ".join(p.read_text(encoding="utf-8", errors="replace")[:160].split())
+            except Exception:
+                head = "(unreadable)"
+            lines.append(f"- {p.name} ({st.st_size} B, ~{age_min}m old): {head}")
+        return "\n".join(lines)
+    except Exception:
+        return ""
+
+
 def _run_ralph_verify(
     ctx: LoopContext,
     step_text: str,
@@ -715,7 +747,10 @@ def _run_ralph_verify(
     from llm import MODEL_CHEAP, MODEL_MID, MODEL_POWER
 
     try:
-        _vr = _verify_step(step_text, step_result, step_adapter)
+        _vr = _verify_step(
+            step_text, step_result, step_adapter,
+            artifacts_note=_artifacts_evidence_note(
+                getattr(ctx, "project", "") or ""))
         if not _vr["passed"]:
             log.info("ralph verify FAIL step=%d reason=%r — marking blocked for retry",
                      step_idx, _vr["reason"][:80])

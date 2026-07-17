@@ -1590,6 +1590,7 @@ def verify_step(
     adapter,
     *,
     confidence_threshold: float = 0.75,
+    artifacts_note: str = "",
 ) -> dict:
     """Verify that a completed step result actually addressed the step goal.
 
@@ -1632,7 +1633,8 @@ def verify_step(
                 # acceptance must share one boundary or an intermediate-
                 # confidence RETRY can become a trusted free-tier PASS.
                 hv = VerificationAgent(hosted, confidence_threshold=_hf.min_certainty(),
-                                       max_input_chars=_hf.input_char_budget()).verify_step(step_text, result)
+                                       max_input_chars=_hf.input_char_budget()).verify_step(
+                                           step_text, result, artifacts_note=artifacts_note)
                 _hosted_elapsed_ms = int((time.monotonic() - _t0) * 1000)
                 _hosted_source = f"hosted_free:{getattr(hosted, '_active_provider', '') or '?'}:{getattr(hosted, 'model_key', '')}"
                 if hv.confidence >= _hf.min_certainty():
@@ -1686,7 +1688,8 @@ def verify_step(
                 # min_certainty and the paid threshold is converted to PASS,
                 # then immediately trusted as a decisive local verdict.
                 lv = VerificationAgent(local, confidence_threshold=_lm.min_certainty(),
-                                       max_input_chars=_lm.input_char_budget()).verify_step(step_text, result)
+                                       max_input_chars=_lm.input_char_budget()).verify_step(
+                                           step_text, result, artifacts_note=artifacts_note)
                 _local_elapsed_ms = int((time.monotonic() - _t0) * 1000)
                 _lm.report_latency(_local_elapsed_ms)
                 _local_source = getattr(local, "model_key", "local")
@@ -1723,7 +1726,7 @@ def verify_step(
         from verification_agent import VerificationAgent
         va = VerificationAgent(adapter, confidence_threshold=confidence_threshold)
         _t0 = time.monotonic()
-        verdict = va.verify_step(step_text, result)
+        verdict = va.verify_step(step_text, result, artifacts_note=artifacts_note)
         _paid_elapsed_ms = int((time.monotonic() - _t0) * 1000)
         _log_validation_ladder(
             tier="escalated" if _escalated else "paid",
@@ -1772,6 +1775,9 @@ def verify_step(
                 LLMMessage("user",
                     f"Step goal: {step_text}\n\n"
                     f"Step result (first 1200 chars):\n{result[:1200]}"
+                    + (f"\n\nProject artifact files (evidence of content "
+                       f"delivered to disk):\n{artifacts_note[:1200]}"
+                       if artifacts_note else "")
                 ),
             ],
             max_tokens=128,

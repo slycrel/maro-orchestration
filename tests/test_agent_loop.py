@@ -1259,6 +1259,25 @@ def test_missing_input_detected_in_step_result():
     assert decision.stuck_reason.startswith("MISSING_INPUT:")
 
 
+def test_ralph_verify_block_never_missing_input():
+    """A ralph-verify block is a quality judgment on a PRODUCED result — the
+    input existed. 'not found' inside research narration (about some third
+    thing) must not convert a retryable verify FAIL into a terminal
+    MISSING_INPUT stuck (run 75a88777: 'target repo not found' in a fetch
+    step's summary stuck the whole run)."""
+    decision = _handle_blocked_step(
+        step_text="Fetch the root X post at https://x.com/example/status/1 "
+                  "(full body + reply thread)",
+        outcome={"stuck_reason": "[ralph verify] The result provides a summary "
+                                 "but fails to provide the actual content",
+                 "result": "Root post extracted (5 claims). Repo claims "
+                           "unverified — target repo not found."},
+        prior_retries=0,
+        adapter=None,
+    )
+    assert not decision.stuck_reason.startswith("MISSING_INPUT:")
+
+
 def test_missing_input_producing_step_not_short_circuited():
     """A 'create' step that doesn't yet find its target is NOT a missing-input fail."""
     decision = _handle_blocked_step(

@@ -39,6 +39,13 @@ _VERIFY_STEP_SYSTEM = textwrap.dedent("""\
     the work; the agent's session ends when it returns, so promised follow-ups
     never run. State in your reason that the step must re-execute SYNCHRONOUSLY.
 
+    Steps often deliver their real content to files in the project artifacts
+    directory and report only a summary — the result text is narration, not the
+    deliverable. When an artifact listing is provided and shows a file whose
+    name, size, and excerpt match the claimed delivery, treat that content as
+    delivered and judge the step on the artifact evidence. Do NOT retry a step
+    merely because the full content is not pasted into the result text.
+
     Respond with JSON only:
     {"verdict": "PASS" or "RETRY", "reason": "one sentence", "confidence": 0.0-1.0}
 
@@ -89,17 +96,28 @@ class VerificationAgent:
     # verify_step — ralph verify loop (step-level)
     # ------------------------------------------------------------------
 
-    def verify_step(self, step_text: str, result: str) -> StepVerdict:
+    def verify_step(self, step_text: str, result: str,
+                    artifacts_note: str = "") -> StepVerdict:
         """Verify a completed step result. Returns StepVerdict(passed, reason, confidence).
 
         PASS → accept the result. RETRY → step should be retried.
         Returns passed=True on any error so verification never blocks execution.
+
+        artifacts_note: optional listing of project artifact files (name/size/
+        excerpt) — evidence that content the result only summarizes was actually
+        delivered to disk. Kept outside the result truncation window.
         """
         if not isinstance(result, str):
             result = str(result) if result else ""
         if not result.strip():
             return StepVerdict(passed=False, reason="empty result", confidence=1.0)
 
+        _evidence = ""
+        if artifacts_note:
+            _evidence = (
+                "\n\nProject artifact files (evidence of content delivered to "
+                f"disk):\n{artifacts_note[:1200]}"
+            )
         try:
             from llm import LLMMessage
             resp = self._adapter.complete(
@@ -109,6 +127,7 @@ class VerificationAgent:
                         f"Step goal: {step_text}\n\n"
                         f"Step result (first {self._max_input_chars} chars):\n"
                         f"{result[:self._max_input_chars]}"
+                        f"{_evidence}"
                     ),
                 ],
                 max_tokens=128,

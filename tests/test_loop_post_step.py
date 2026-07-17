@@ -61,3 +61,33 @@ def test_external_scan_failure_taints_executor_session():
     )
 
     assert outcome["executor_session_tainted"] == "external-content scan failed"
+
+
+# ---------------------------------------------------------------------------
+# Artifact evidence note for the ralph verifier (run 75a88777)
+# ---------------------------------------------------------------------------
+
+def test_artifacts_evidence_note_lists_files(tmp_path, monkeypatch):
+    import orch_items
+    from loop_post_step import _artifacts_evidence_note
+
+    proj = tmp_path / "demo-project"
+    art = proj / "artifacts"
+    art.mkdir(parents=True)
+    (art / "step-2-output.txt").write_text("root post body: 271 FREE skills\n")
+    (art / "claims.md").write_text("| claim | verdict |\n")
+    monkeypatch.setattr(orch_items, "project_dir", lambda slug: proj)
+
+    note = _artifacts_evidence_note("demo-project")
+    assert "step-2-output.txt" in note
+    assert "claims.md" in note
+    assert "271 FREE skills" in note   # head excerpt included
+    assert " B, " in note              # size present
+
+
+def test_artifacts_evidence_note_missing_dir_empty(tmp_path, monkeypatch):
+    import orch_items
+    from loop_post_step import _artifacts_evidence_note
+    monkeypatch.setattr(orch_items, "project_dir",
+                        lambda slug: tmp_path / "nope")
+    assert _artifacts_evidence_note("nope") == ""

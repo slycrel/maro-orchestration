@@ -1532,3 +1532,21 @@ class TestVerifyStepHostedFreeTier:
 
         assert out["passed"] is True
         assert "decision" not in out
+
+
+# ---------------------------------------------------------------------------
+# artifacts_note threading through the validator ladder (run 75a88777)
+# ---------------------------------------------------------------------------
+
+def test_verify_step_threads_artifacts_note_to_paid_tier():
+    """artifacts_note must reach VerificationAgent.verify_step — the paid
+    tier is the default path when no free tier is configured."""
+    from step_exec import verify_step
+    mock_va = MagicMock()
+    mock_va.verify_step.return_value = MagicMock(
+        passed=True, reason="ok", confidence=0.9)
+    with patch("verification_agent.VerificationAgent", return_value=mock_va):
+        verify_step("fetch the post", "saved to artifacts", MagicMock(),
+                    artifacts_note="- f.txt (5 B, ~0m old): hi")
+    kwargs = mock_va.verify_step.call_args.kwargs
+    assert kwargs["artifacts_note"].startswith("- f.txt")
