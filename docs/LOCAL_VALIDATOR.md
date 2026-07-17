@@ -265,6 +265,25 @@ and the model's training signal matters more than its size.
   `validate.output_provenance`, `validate.input_provenance`. This is the lever the
   shadow-eval data pointed at — *not* a confidence threshold. See BACKLOG_DONE.md.
 
+  **Hosted-free batch (2026-07-16 → 07-17, gemini-flash-lite as the free
+  rung, closed early):** Jeremy's bounded organic-traffic batch after the
+  hosted-free tier went primary. Closed a day early on latency grounds: the
+  paid comparison rung on this box is the *subprocess* adapter, so each
+  decisive-path shadow call cost ~20-40s of wall-clock inside the step loop —
+  calm-echo (2026-07-17) carried ~11 of them, ≈ +3.5 min on a 10-step run.
+  "Extra spend" on this box is really "extra minutes". Corpus at close
+  (cumulative): **n=89, 92.1% agreement**; gemini's 0.9-1.0 confidence bucket
+  agrees 93.2%. 4 false_pass total across the corpus — **every one is
+  narration-vs-evidence** (worker narrated success; requirement unmet or
+  content contradicted the record), zero are judgment errors on content the
+  validator actually saw. This re-confirms the n=42 conclusion with 2× the
+  data: the lever is provenance/artifact evidence (now shipped: provenance
+  guards + the artifacts-evidence note threaded through the ladder), not
+  per-class certainty thresholds. Re-run a batch only if the paid rung stops
+  being the subprocess adapter (a real API key makes the extra call ~1-2s
+  and cheap to leave on longer). Config comment in
+  `~/.maro/workspace/config.yml` carries the same closeout.
+
 ### Reference + alternatives
 
 | Model | Backend | Footprint | Role fit |

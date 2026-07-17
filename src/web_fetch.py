@@ -69,6 +69,12 @@ _X_CLI_TIMEOUT = 90  # seconds — Playwright can be slow
 # Direct twitter-CLI thread fetch (BACKLOG #26) — plain API calls, no
 # Playwright, so a tighter budget than the wrapper's.
 _X_DIRECT_CLI_TIMEOUT = 45
+# Known install locations checked when `twitter` isn't on PATH (SSH-dispatched
+# runs inherit a bare non-interactive PATH without linuxbrew).
+_X_DIRECT_CLI_FALLBACKS = (
+    Path("/home/linuxbrew/.linuxbrew/bin/twitter"),
+    Path.home() / ".local" / "bin" / "twitter",
+)
 _X_THREAD_MAX_OTHER_REPLIES = 8
 
 # Patterns that tell us a URL is an X/Twitter post or article
@@ -226,7 +232,11 @@ def _fetch_x_thread_direct(handle: str, tweet_id: str) -> str:
     cookie values.
     """
     import shutil
-    binary = shutil.which("twitter")
+    # SSH-dispatched runs get a bare non-interactive PATH (no linuxbrew),
+    # so which() alone silently skips this rung — calm-echo 2026-07-17
+    # fell through to root-only Jina and re-hunted a link the thread had.
+    binary = shutil.which("twitter") or next(
+        (str(p) for p in _X_DIRECT_CLI_FALLBACKS if p.is_file()), "")
     env = _x_cookie_env()
     if not binary or not env:
         return ""

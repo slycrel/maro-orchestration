@@ -287,6 +287,9 @@ def test_thread_direct_surfaces_author_followup_links(monkeypatch):
 
 def test_thread_direct_missing_binary_returns_empty(monkeypatch):
     monkeypatch.setattr("shutil.which", lambda name: None)
+    # Neutralize the known-location fallback so the test doesn't find a
+    # real binary on the dev box.
+    monkeypatch.setattr(web_fetch, "_X_DIRECT_CLI_FALLBACKS", ())
     assert web_fetch._fetch_x_thread_direct("h", "1") == ""
 
 

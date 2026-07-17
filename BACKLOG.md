@@ -86,6 +86,24 @@ as misleading open work.
 
 Ordered open work that matters. Top of the list is next.
 
+### 27. no_tools sweep — pure-text LLM calls that still run with tools live (2026-07-17, calm-echo)
+
+Planner decompose calls ran the subprocess adapter with tools enabled; on
+calm-echo the boundary-expansion decompose EXECUTED the remainder goal
+instead of planning it (~4 min rogue side-quest, wrong FINAL_REPORT.txt
+written into the project dir, shipped as the user-facing answer). planner.py
+fixed same day (no_tools=True + purpose tags on all 6 call sites, seam test
+in tests/test_planner.py::TestDecomposePureTextContract). The sweep: ~70
+other `adapter.complete` sites don't pass `no_tools` (closure_verify,
+director, inspector, introspect, quality_gate, memory, skills, workers,
+conductor, …). Each is either (a) a pure-text/JSON-contract call → add
+`no_tools=True` + `purpose`, or (b) intentionally agentic → leave and note.
+On this box every call rides `claude -p`, so each unmarked contract call is
+both a rogue-execution risk AND ~20-40s of tool-harness latency. Consider a
+bughunter lint after the sweep (contract-shaped prompt + missing no_tools),
+mirroring BH011's shape. Inventory snapshot in the 2026-07-17 session
+transcript; regenerate with a grep for `.complete(` vs `no_tools=True`.
+
 ### SP. Session-protocol arc — two-box Hermes dispatch, interactive goals, effort UX (OPENED 2026-07-15, Jeremy)
 
 The umbrella for the next big lane; full skeleton + stance decrees in

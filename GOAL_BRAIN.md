@@ -3395,3 +3395,45 @@ Dormant (deliberately parked, not dropped):
   Still open, report-only: closure Check-1 pipe-char false positive is
   a recurrence of the known static-probe bias; X reply-thread capture
   missing across both runs (captured in docs/CAPABILITIES.md).
+- **2026-07-17 (session, evening run calm-echo 258859a8) — planning
+  calls are pure-text contracts; the planner must never hold tools.**
+  Jeremy: ">20 minutes... seems like way too long to get some X thread
+  data and then think about the results and send back an answer." The
+  23-min wall-clock decomposed to: 79s pre-loop; 1001s loop (511s of
+  real 10-step work + ~490s overhead); ~285s post-loop. The two big
+  overheads were both self-inflicted: (1) every planner decompose call
+  ran the subprocess adapter WITH TOOLS — the boundary-expansion
+  decompose (remainder text: "Plan and complete the remaining bounded
+  work…") therefore EXECUTED the goal instead of planning it, a ~4-min
+  rogue side-quest that wrote a wrong FINAL_REPORT.txt/VERDICT.md
+  ("repo not found", "OpenClaw doesn't exist") into the project dir;
+  curation's size-ranked deliverable locator then preferred that draft
+  over the run's real, correct FINAL_RESPONSE.md (repo found, README
+  hand-verified, 3 true/2 misleading, MIXED) and the Telegram answer
+  contradicted the run's own verdict — the NOT-USEFUL/MIXED mismatch
+  Jeremy spotted himself. (2) validate.shadow_eval (Jeremy's bounded
+  2026-07-16 batch) added ~11 extra `claude -p` verify calls ≈ +3.5
+  min. Fixes same day: no_tools=True + purpose tags on all six planner
+  call sites (seam test pins it); deliverable ranking now prefers
+  recency over size within hint tiers + "response"/"verdict" hints;
+  shadow batch closed early with analysis (89 rows, 92.1% agreement,
+  all 4 false_passes narration-vs-evidence — provenance is the lever,
+  not thresholds), reminder timer disarmed. BACKLOG #27 files the
+  repo-wide no_tools sweep (~70 unmarked call sites).
+- **2026-07-17 (Jeremy, via Telegram/Hermes) — DECREE: link triage is
+  conversational compute, not research-paper compute.** Verbatim:
+  "Maro was borne from my laziness... essentially I'd like to drop a
+  link somewhere and ask 'is this worth my time?' 2 mins of looking at
+  it manually and I think the answer is 'yep, sure is'. I'm looking
+  for conversational compute, not research paper level compute I
+  think. In that sense, totally off the mark. It does... do things
+  though. :)" Context: Hermes proposed routing link-triage AROUND Maro
+  (lean Hermes-side read, save Maro for multi-source research); Jeremy:
+  "Not sure I agree with hermes' conclusion, but it's in the vague
+  direction." Standing constraint reading: the fix is a fast
+  conversational lane INSIDE Maro (NOW-lane-shaped: fetch via the
+  reply-aware rung, one opinionated no_tools read, answer in ~2 min),
+  not external routing — per the don't-manage-orchestration-from-
+  outside decree. The heavyweight claims-matrix pipeline stays for
+  goals that actually want it. Capability captured in
+  docs/CAPABILITIES.md.

@@ -267,7 +267,8 @@ def excerpt_result(rd: Path, meta: dict, card: dict) -> None:
 _DELIVERABLE_EXCLUDE = {"DECISIONS.md", "NEXT.md", "PROVENANCE.md", "PRIORITY",
                         "GOALS.md", "README.md", "step_data.json"}
 _DELIVERABLE_NAME_HINTS = ("final_report", "report", "summary", "shortlist",
-                           "findings", "answer", "recommendation")
+                           "findings", "answer", "recommendation", "response",
+                           "verdict")
 
 
 def _project_dir_for(meta: dict) -> Optional[Path]:
@@ -333,10 +334,15 @@ def locate_deliverables(rd: Path, meta: dict, card: dict) -> None:
         hinted = any(h in name for h in _DELIVERABLE_NAME_HINTS)
         is_prose = p.suffix.lower() in (".md", ".txt")
         try:
-            size = p.stat().st_size
+            st = p.stat()
+            size, mtime = st.st_size, st.st_mtime
         except OSError:
-            size = 0
-        return (not hinted, not is_prose, -size)
+            size, mtime = 0, 0.0
+        # Recency before size: the run's final synthesis lands LAST, not
+        # largest. calm-echo 2026-07-17: an early wrong draft (5.3KB,
+        # minute 4) outranked the verified FINAL_RESPONSE.md (4.4KB,
+        # minute 17) on size alone and shipped as the answer.
+        return (not hinted, not is_prose, -mtime, -size)
 
     candidates.sort(key=_rank)
     card["deliverables"] = [

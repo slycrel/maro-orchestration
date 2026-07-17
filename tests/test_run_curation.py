@@ -1403,3 +1403,36 @@ def test_synthesize_answer_feeds_all_deliverables_and_verdict(
     assert "repo exists" in seen["body"]
     assert "root post recovered" in seen["verdict"]
     assert "pipe-delimited" in seen["verdict"]
+
+
+def test_locate_deliverables_recency_beats_size(workspace):
+    """Among hinted prose deliverables, the LAST-written file wins — the
+    run's final synthesis lands last, not largest (calm-echo 2026-07-17:
+    an early wrong FINAL_REPORT.txt outranked the later, verified
+    FINAL_RESPONSE.md on size alone and shipped as the answer)."""
+    import os
+    import time
+
+    import orch_items
+
+    create_run_dir(
+        "h000recn", prompt="evaluate the thread", lane="agenda",
+        model="cheap",
+        extra_metadata={"project": "proj-recency", "goal_achieved": True},
+    )
+    pdir = orch_items.projects_root() / "proj-recency"
+    (pdir / "artifacts").mkdir(parents=True)
+    early = pdir / "FINAL_REPORT.txt"
+    early.write_text("WRONG early draft — repo not found. " * 40)
+    late = pdir / "artifacts" / "FINAL_RESPONSE.md"
+    late.write_text("# Verified result\n\nRepo found; 3 true, 2 misleading.\n")
+    # Both inside the run window (>= started_at), early one older by 15 min.
+    now = time.time()
+    os.utime(early, (now + 1, now + 1))
+    os.utime(late, (now + 901, now + 901))
+    finalize_run("h000recn", status="done")
+    card = curate_run("h000recn")
+
+    names = [Path(d["path"]).name for d in card["deliverables"]]
+    assert names[0] == "FINAL_RESPONSE.md"
+    assert card["deliverable_link_path"].endswith("/artifact/FINAL_RESPONSE.md")

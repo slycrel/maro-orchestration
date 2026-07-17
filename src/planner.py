@@ -674,6 +674,8 @@ def _enforce_step_ceiling(
             ],
             max_tokens=1024,
             temperature=0.1,
+            no_tools=True,
+            purpose="decompose-ceiling",
         )
         # Parse with a cap ABOVE the ceiling so non-compliance stays visible
         # (parse_steps truncates silently at its max).
@@ -911,7 +913,8 @@ def decompose(
     # general scope estimator (Phase 58: scope estimation before decomposition).
     if _goal_scope in ("wide", "deep"):
         try:
-            _staged_kwargs: dict = {"max_tokens": 512, "temperature": 0.2}
+            _staged_kwargs: dict = {"max_tokens": 512, "temperature": 0.2,
+                                    "no_tools": True, "purpose": "decompose-staged"}
             if thinking_budget:
                 _staged_kwargs["thinking_budget"] = thinking_budget
             _staged_system = _STAGED_PASS_SYSTEM
@@ -943,6 +946,8 @@ def decompose(
                 [LLMMessage("system", system), LLMMessage("user", user_msg)],
                 max_tokens=512,
                 temperature=0.3,
+                no_tools=True,
+                purpose="decompose-narrow",
             )
             simple_steps = parse_steps(resp.content.strip(), max_steps)
             if simple_steps:
@@ -959,6 +964,8 @@ def decompose(
                 [LLMMessage("system", system), LLMMessage("user", user_msg)],
                 max_tokens=1024,
                 temperature=0.7,  # higher temp for diversity
+                no_tools=True,
+                purpose="decompose-candidate",
             )
             parsed = parse_steps(resp.content.strip(), max_steps)
             if parsed:
@@ -973,6 +980,8 @@ def decompose(
             _compose_kwargs: dict = {
                 "max_tokens": 1024,
                 "temperature": 0.1,
+                "no_tools": True,
+                "purpose": "decompose-compose",
             }
             if thinking_budget:
                 _compose_kwargs["thinking_budget"] = thinking_budget
@@ -1024,6 +1033,8 @@ def decompose(
             [LLMMessage("system", system), LLMMessage("user", user_msg)],
             max_tokens=1024,
             temperature=0.2,
+            no_tools=True,
+            purpose="decompose-single",
         )
         parsed = parse_steps(resp.content.strip(), max_steps)
         if parsed:

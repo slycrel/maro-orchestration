@@ -704,3 +704,65 @@ class TestStepCeilingDecompose:
             for call in adapter.calls:
                 for _, content in call:
                     assert "STEP-COUNT CEILING" not in content
+
+
+# ---------------------------------------------------------------------------
+# decompose — pure-text contract (no_tools on every planning call)
+# ---------------------------------------------------------------------------
+
+class _KwargsRecordingAdapter:
+    """Fake adapter: records the kwargs of every complete() call."""
+
+    def __init__(self, content='["step one", "step two"]'):
+        self.calls = []
+        self._content = content
+
+    def complete(self, messages, **kwargs):
+        self.calls.append(kwargs)
+
+        class _Resp:
+            input_tokens = 10
+            output_tokens = 5
+        _Resp.content = self._content
+        return _Resp()
+
+
+class TestDecomposePureTextContract:
+    """Planning is a text→JSON contract: every decompose LLM call must pass
+    no_tools=True. calm-echo 2026-07-17: the boundary-expansion decompose ran
+    through the subprocess adapter with tools live, and the CLI session
+    EXECUTED the remainder goal instead of planning it — ~4 min of rogue
+    work that wrote a wrong FINAL_REPORT.txt into the project dir, which
+    curation then ranked as the top deliverable and shipped as the answer."""
+
+    def _assert_all_no_tools(self, adapter):
+        assert adapter.calls, "expected at least one LLM call"
+        for kw in adapter.calls:
+            assert kw.get("no_tools") is True, (
+                f"planning call ran with tools enabled: {kw}")
+
+    def test_narrow_goal_calls_are_no_tools(self):
+        from planner import decompose
+        a = _KwargsRecordingAdapter()
+        decompose("check the config", a, max_steps=4)
+        self._assert_all_no_tools(a)
+
+    def test_medium_goal_multiplan_calls_are_no_tools(self):
+        from planner import decompose
+        a = _KwargsRecordingAdapter()
+        decompose("implement rate limit retry logic in llm.py", a, max_steps=6)
+        self._assert_all_no_tools(a)
+
+    def test_wide_goal_staged_calls_are_no_tools(self):
+        from planner import decompose
+        a = _KwargsRecordingAdapter()
+        decompose(
+            "review the entire codebase: every module, every subsystem, "
+            "all tests and all docs", a, max_steps=8)
+        self._assert_all_no_tools(a)
+
+    def test_ceiling_reask_is_no_tools(self):
+        from planner import decompose
+        a = _KwargsRecordingAdapter(content='["a", "b", "c", "d"]')
+        decompose("audit the top-level docs in at most 2 steps", a, max_steps=6)
+        self._assert_all_no_tools(a)
