@@ -326,8 +326,16 @@ Truth anchor: GOAL_BRAIN.md Threads. History: docs/history/ROADMAP_ARCHIVE.md.
    including "wrong continent". Also carry in: his caution that the
    delivery-loop fixes should be "identifying the right pattern, as opposed
    to dialing in this specific example" — the review should check new
-   surfaces against pattern-vs-example. Output: a short findings doc +
-   proposed course corrections, decisions to Jeremy.
+   surfaces against pattern-vs-example. And his framing on wrap (2026-07-17):
+   "I think we've got something that works, great in some areas, just enough
+   in others, and the bitter lesson trumps about half of what we're trying
+   to do already... harness engineering is hard." So a third axis: sort the
+   machinery by *what survives model improvement* — trust/visibility/data
+   plumbing (delivery loop, records, run capture, auth) ages well;
+   compensating-for-model-weakness scaffolding (prompt taxonomies, planning
+   crutches, routing cleverness) is the half at risk. Name which half each
+   major arc is in. Output: a short findings doc + proposed course
+   corrections, decisions to Jeremy.
 
 -5. **Post-handoff execution queue (2026-07-12)** — *the ordered chunk list
    from the Fable-handoff session; every entry has a design doc or decided

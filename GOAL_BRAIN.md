@@ -3330,3 +3330,12 @@ Dormant (deliberately parked, not dropped):
   "I really like the full tailscale stack, I just balk at needing
   custom setup at each point along the way" — public + SSO is the
   accepted steady state; tailnet retreat stays documented, not planned.
+- **2026-07-17 (Jeremy, wrapping the session) — bitter-lesson lens added
+  to the drift review.** "I think we've got something that works, great
+  in some areas, just enough in others, and the bitter lesson trumps
+  about half of what we're trying to do already... harness engineering
+  is hard." Not a work order — an input: the clean-session holistic
+  review (MILESTONES -6) should sort the machinery by what survives
+  model improvement vs. what compensates for weaknesses that are
+  evaporating, and name which half each major arc is in. Spec updated
+  same day.
