@@ -4358,3 +4358,42 @@ class TestComplexDirectiveUrlOpaque:
         assert _is_complex_directive(
             "fetch https://example.com/a then verify the claims and then "
             "save a report")
+
+
+class TestAnswerFirstDeferredLearning:
+    """Deferred learning (lessons + skill crystallization) must run AFTER
+    the run_completed notify — calm-echo 2026-07-17 spent ~90-120s of
+    user-perceived latency on bookkeeping the user never sees. The
+    quality-gate escalation path drains early instead (its retry's
+    decompose recalls the failed loop's lessons)."""
+
+    def test_learning_runs_after_run_completed_notify(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        calls = []
+        import loop_finalize
+        import notify
+        monkeypatch.setattr(loop_finalize, "finalize_deferred_learning",
+                            lambda *a, **kw: calls.append("learning"))
+        monkeypatch.setattr(notify, "emit",
+                            lambda event, *a, **kw: calls.append(event))
+        result = handle("research winning polymarket strategies", dry_run=True)
+        assert result.lane == "agenda"
+        assert "learning" in calls
+        assert "run_completed" in calls
+        assert calls.index("run_completed") < calls.index("learning")
+
+    def test_registry_drain_runs_clears_and_swallows(self):
+        from handle import (_POST_NOTIFY_LEARNING, _defer_learning_post_notify,
+                            _drain_deferred_learning)
+        ran = []
+        _defer_learning_post_notify("t-hid", lambda: ran.append(1))
+
+        def _boom():
+            ran.append(2)
+            raise RuntimeError("swallowed")
+
+        _defer_learning_post_notify("t-hid", _boom)
+        assert _drain_deferred_learning("t-hid") == 2
+        assert ran == [1, 2]
+        assert "t-hid" not in _POST_NOTIFY_LEARNING
+        assert _drain_deferred_learning("t-hid") == 0

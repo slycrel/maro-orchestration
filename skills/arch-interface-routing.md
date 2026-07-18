@@ -38,6 +38,14 @@ Goal arrives (Telegram / Slack / CLI / Python API / Dashboard)
           → emits verification event (check results) + needs_work event (gaps)
       → Quality gate (optional multi-pass review)
       → Format result → return HandleResult
+      → handle() finalize: close_run (slice log, curate run_card incl.
+        answer synthesis, render reports) → notify run_completed
+        (user hears the outcome HERE) → THEN deferred learning drains
+        (lessons + skill crystallization, _POST_NOTIFY_LEARNING) →
+        card classification refresh + re-render. Answer-first since
+        2026-07-17 — learning is bookkeeping and must not sit between
+        the finished answer and the user. Exception: quality-gate
+        escalation drains learning early (retry decompose recalls it)
 ```
 
 ## Director Closure Check (verify_goal_completion)

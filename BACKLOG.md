@@ -1041,6 +1041,19 @@ crowd-sourced or not)."
     Next envelope action = one clean post-fix run, re-measure the
     between-step pool warm; expected ~47s/step → ~12-15s. Only then
     decide if any concurrency work is still worth it.
+    **2026-07-17 answer-first delivery SHIPPED:** deferred learning
+    (lessons + crystallization, ~90-120s of subprocess calls) now runs
+    AFTER the run_completed notify instead of before it — registered in
+    handle.py `_POST_NOTIFY_LEARNING`, drained post-emit, then
+    `refresh_run_card_classification` + report re-render restore the
+    lesson-consuming card fields (audit-repair contract). The quality-gate
+    escalation path drains early (its retry's decompose recalls the failed
+    loop's lessons), preserving the closure→learning dependency mapped
+    above. User-perceived post-loop tail drops from ~285s to closure +
+    curation (~120-160s); remaining pre-notify levers = closure ∥
+    quality-gate (safe pair above) and closure checks through the
+    hosted-free ladder (unbuilt — judgment-quality tradeoff, don't do
+    silently).
   - **Scavenge detector false-positive on URL paths — SHIPPED 2026-07-11
     (080ef51):** root cause was three markup classes in Bash command text,
     not curl+jq output: XML closing tags in worker-written parse regexes

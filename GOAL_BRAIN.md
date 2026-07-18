@@ -3475,3 +3475,21 @@ Dormant (deliberately parked, not dropped):
   here" honesty; no claims matrix unless the goal asks for
   verification depth) is sanctioned next-chunk work, built this
   session.
+- **2026-07-17 (session, answer-first delivery) — deferred learning
+  moved AFTER the run_completed notify; hardy-magpie smoke debris
+  deleted on Jeremy's delegation.** Follow-through on the delivery-loop
+  decree: lessons + skill crystallization (~90-120s of subprocess
+  calls) were sitting between a finished answer and the user hearing
+  it — calm-echo's post-loop tail was ~285s. Now handle.py registers
+  the learning (`_POST_NOTIFY_LEARNING`), the finalize block drains it
+  after the notify emit, then refreshes the run card's
+  lesson-consuming fields (audit-repair contract). Quality-gate
+  escalation drains early — its retry's decompose recalls the failed
+  loop's lessons (dependency mapped in BACKLOG P3 analysis). Remaining
+  pre-notify cost = closure + curation (~120-160s); closure∥quality-
+  gate and closure-through-hosted-free-ladder stay unbuilt (the
+  latter is a judgment-quality tradeoff, not to be done silently).
+  Also: Jeremy delegated the hardy-magpie keep/delete call ("your
+  call... if not, delete it") — deleted: 112K of killed-run debris
+  from the routing-bug smoke test, nothing the three completed runs
+  of the same question didn't already cover.

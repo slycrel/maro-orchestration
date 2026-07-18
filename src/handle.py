@@ -172,6 +172,37 @@ This is a side-note, not a task result.
 """
 
 
+# Answer-first delivery (2026-07-17): deferred learning (lesson extraction +
+# skill crystallization — 2-4 subprocess LLM calls, ~90-120s on this box) is
+# bookkeeping the user never sees; running it before the run_completed notify
+# was the biggest slice of calm-echo's ~285s post-loop tail. _handle_impl
+# registers the work here instead of running it inline; handle()'s finalize
+# block drains it AFTER the notify emit, then refreshes the run card's
+# lesson-consuming fields (decision priors, classification) via the same
+# contract audit repair uses. The quality-gate escalation path drains early
+# instead — the escalated retry's decompose recalls lessons from the loop it
+# is retrying.
+_POST_NOTIFY_LEARNING: dict = {}
+
+
+def _defer_learning_post_notify(handle_id: str, fn) -> None:
+    _POST_NOTIFY_LEARNING.setdefault(handle_id, []).append(fn)
+
+
+def _drain_deferred_learning(handle_id: str) -> int:
+    """Run + clear any registered deferred learning for handle_id.
+
+    Returns the number of callables run. Never raises."""
+    fns = _POST_NOTIFY_LEARNING.pop(handle_id, [])
+    for fn in fns:
+        try:
+            fn()
+        except Exception as exc:
+            log.warning("deferred learning failed for handle %s: %s",
+                        handle_id, exc)
+    return len(fns)
+
+
 def _is_complex_directive(message: str) -> bool:
     """Heuristic: does a NOW-classified message actually require Director-level planning?
 
@@ -673,6 +704,19 @@ def handle(
                     )
                 except Exception:
                     pass
+                # Answer-first: deferred learning runs only now, after the
+                # user has heard the outcome. Lessons feed curation's
+                # decision priors and classification, so refresh those card
+                # fields + re-render — the same contract audit repair uses.
+                if _drain_deferred_learning(_hid):
+                    try:
+                        from run_curation import refresh_run_card_classification
+                        from loop_report import write_reports_for_run_dir
+                        from runs import run_dir as _run_dir_refresh
+                        refresh_run_card_classification(_hid)
+                        write_reports_for_run_dir(_run_dir_refresh(_hid))
+                    except Exception:
+                        pass
         except Exception:
             pass  # finalize must never affect the request outcome
         if not dry_run:
@@ -2140,18 +2184,28 @@ def _handle_impl(
         # was judged not-achieved. Sits OUTSIDE the closure gate on purpose:
         # when closure was skipped (dry run, no done steps), the deferred
         # lessons still extract — unjudged, same as the pre-fix behavior.
+        # Answer-first: registered, not run — handle()'s finalize drains this
+        # after the run_completed notify (or the escalation path drains it
+        # early, see _POST_NOTIFY_LEARNING). Snapshot the mutables now:
+        # loop_result is rebound and _run_loop_ids appended-to on escalation.
         try:
             from loop_finalize import finalize_deferred_learning
             _final_lid = getattr(loop_result, "loop_id", "") or ""
-            finalize_deferred_learning(
-                loop_result,
-                adapter=adapter,
-                project=project or getattr(loop_result, "project", "") or "",
-                dry_run=dry_run,
-                verbose=verbose,
-                extra_loop_ids=[l for l in _run_loop_ids if l != _final_lid],
-                skip_loop_ids=list(_audit_failed_loop_ids),
-            )
+            _dl_result = loop_result
+            _dl_project = project or getattr(loop_result, "project", "") or ""
+            _dl_extra = [l for l in _run_loop_ids if l != _final_lid]
+            _dl_skip = list(_audit_failed_loop_ids)
+            _defer_learning_post_notify(
+                handle_id,
+                lambda: finalize_deferred_learning(
+                    _dl_result,
+                    adapter=adapter,
+                    project=_dl_project,
+                    dry_run=dry_run,
+                    verbose=verbose,
+                    extra_loop_ids=_dl_extra,
+                    skip_loop_ids=_dl_skip,
+                ))
         except Exception as _dl_exc:
             log.warning("deferred learning failed for loop %s: %s",
                         getattr(loop_result, "loop_id", ""), _dl_exc)
@@ -2223,6 +2277,10 @@ def _handle_impl(
                         if verbose:
                             print(f"[maro:{handle_id}] re-running with model={_next_tier}",
                                   file=sys.stderr, flush=True)
+                        # Deferred learning drains early here: the retry's
+                        # decompose recalls lessons from the loop it is
+                        # retrying, so they must exist before it plans.
+                        _drain_deferred_learning(handle_id)
                         _escalated_adapter = build_adapter(model=_next_tier)
                         _pre_escalation_loop_id = getattr(loop_result, "loop_id", None)
                         _escalated_project = (
@@ -2349,13 +2407,18 @@ def _handle_impl(
                         if not _post_audit_failed:
                             try:
                                 from loop_finalize import finalize_deferred_learning as _fdl_post
-                                _fdl_post(
-                                    loop_result,
-                                    adapter=_escalated_adapter,
-                                    project=_escalated_project,
-                                    dry_run=False,
-                                    verbose=verbose,
-                                )
+                                _dl_post_result = loop_result
+                                _dl_post_adapter = _escalated_adapter
+                                _dl_post_project = _escalated_project
+                                _defer_learning_post_notify(
+                                    handle_id,
+                                    lambda: _fdl_post(
+                                        _dl_post_result,
+                                        adapter=_dl_post_adapter,
+                                        project=_dl_post_project,
+                                        dry_run=False,
+                                        verbose=verbose,
+                                    ))
                             except Exception as _post_dl_exc:
                                 log.warning(
                                     "post-escalate deferred learning failed for loop %s: %s",
