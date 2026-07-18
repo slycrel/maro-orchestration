@@ -2223,8 +2223,11 @@ Active:
   `ancestry_context_extra` re-entry shapes; checkpoint-resume step-text
   mutation — run-scoped-vs-step-scoped semantics deliberately left for a
   decision, not invented overnight), gap 5 worker lane (a lane, not a bug),
-  `director_evaluate(trigger="injection")` (spend-gated, pending Jeremy),
-  network/dispatch stages awaiting the second box (arrives 2026-07-16).
+  `director_evaluate(trigger="injection")` DECIDED + ENABLED on this box
+  2026-07-16 (Jeremy: "agree, build + enable" — DEFAULTS.md row, workspace
+  config; this line previously said "pending Jeremy" and lagged, corrected
+  2026-07-18), network/dispatch stages LIVE 2026-07-16 (cross-box Hermes
+  dispatch — see BACKLOG SP records).
 - **Refactor plan (`docs/REFACTOR_PLAN.md`)**: opened 2026-07-02 off an
   architecture-review pass. Tiers 0–3 fully done and mainlined, including
   both `agent_loop.py`'s 10-file split (`242c4db`) and `evolver.py`'s
@@ -3493,3 +3496,33 @@ Dormant (deliberately parked, not dropped):
   call... if not, delete it") — deleted: 112K of killed-run debris
   from the routing-bug smoke test, nothing the three completed runs
   of the same question didn't already cover.
+- **2026-07-18 (Jeremy, quick decision batch — no big arcs, queue check
+  session) — introspection goals vs the container executor DECIDED:
+  provision the container, don't route around it.** The 2026-07-16
+  finding (brisk-saffron: a dispatched self-diagnostic ran inside the
+  container executor with no view of host run records, no dispatch CLI,
+  no maro binary — 2.8M tokens / 28min exhaustively proving its own
+  isolation) is resolved per Jeremy: **"Install in the container only
+  for the runs that need access."** Not host-side routing (the
+  classifier-override escape hatch was offered and not taken), not a
+  blanket read-only mount for every run — containment posture stays the
+  default; introspection-shaped runs get their container provisioned
+  with what the goal needs (maro CLI in-image/in-mount + workspace run
+  records, read-only). Implementation shape: detection signal for
+  introspection-shaped goals + per-run mount-map/provisioning extension
+  in container_exec. Buildable chunk; BACKLOG SP-finding bullet updated
+  with the decision.
+  **Same batch, two staleness corrections instead of decisions:** (1)
+  `director_evaluate(trigger="injection")` was re-asked as "pending" off
+  the stale Threads line — actually decided + enabled 2026-07-16; line
+  corrected above. (2) The escalation-continuation depth-cap "design
+  call" (MILESTONES 2026-07-13 checkpoint prose) was already resolved
+  same-day by the recursive-checkin decree (check-in-and-continue, no
+  hard cap). Jeremy's fresh answer independently re-affirmed the shipped
+  posture — verbatim: "sub-goals should have space to run, infinite
+  loops are something else; with recursive context the LLM should be
+  able to avoid these loops, without context it's much easier to spin --
+  as long as it's clear to the decision makers it likely will be fine."
+  His visibility condition already holds: `handle_escalation`'s prompt
+  carries `Continuation depth: {depth}` (director.py). No change; the
+  re-affirmation is the record.

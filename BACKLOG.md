@@ -124,7 +124,9 @@ adversarial-review record): typed `ContextContribution` ledger, `maro
 interrupt --intent note`, parallel-batch threading. Remaining §6a gaps
 (run-scoped `ancestry_context_extra` shapes, resume step-text mutation,
 worker lane) stay open in the design doc; `director_evaluate
-(trigger="injection")` is spend-gated → evening decision session.
+(trigger="injection")` decided + ENABLED on this box 2026-07-16
+(DEFAULTS.md row; the "evening decision session" framing here had gone
+stale — corrected 2026-07-18).
 Parallel, box-independent: tier-up test goals (flagship: the 5–6yr
 Telegram trading-channel corpus → backtested strategy, research-only —
 CAPABILITIES.md Tier 5). Related standing items it touches: escalation channel
@@ -194,16 +196,20 @@ task-…b414ccab / run cobalt-pine — five-link failure chain, four fixed live)
   skip sentinels untouched. Prompt also asks for verdict-first prose
   (secondary). Pins in `test_director` incl. the merry-nettle
   contradiction case.
-- [ ] **Container executor walls off introspection goals** — the hermes-
-  dispatched self-diagnostic (run brisk-saffron, task-…80466244) executed in
-  the container executor ($HOME=/home/maro): no view of the host's
-  ~/.maro/workspace run records, no dispatch CLI, no maro binary. It spent
-  2.8M tokens / 28min exhaustively proving its own isolation (its H2
-  hypothesis — "a pre-execution gate set clarification_needed but never
-  wrote the reason" — was correct and unverifiable from inside). Needs a
-  routing decision: detect introspection-shaped goals and run them host-side,
-  or mount run records read-only into the container. Until then, dispatched
-  self-diagnostics are structurally unable to succeed. Captured in
+- [ ] **Container executor walls off introspection goals — DECIDED
+  2026-07-18, buildable** — the hermes-dispatched self-diagnostic (run
+  brisk-saffron, task-…80466244) executed in the container executor
+  ($HOME=/home/maro): no view of the host's ~/.maro/workspace run records,
+  no dispatch CLI, no maro binary. It spent 2.8M tokens / 28min exhaustively
+  proving its own isolation (its H2 hypothesis — "a pre-execution gate set
+  clarification_needed but never wrote the reason" — was correct and
+  unverifiable from inside). **Jeremy's call (2026-07-18, GOAL_BRAIN
+  Decisions): "Install in the container only for the runs that need
+  access."** Not host-side routing, not a blanket mount — containment stays
+  the default; introspection-shaped runs get their container provisioned
+  per-run (maro CLI available inside + workspace run records mounted
+  read-only). Work shape: introspection-goal detection signal + per-run
+  mount-map/provisioning extension in container_exec. Captured in
   docs/CAPABILITIES.md (Tier 2, aspirational).
 - [x] **Per-loop restart alert reads as terminal failure** — SHIPPED
   2026-07-17 (same night): loop_finalize's per-loop "Mission complete"
