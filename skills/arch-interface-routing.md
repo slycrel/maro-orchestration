@@ -15,7 +15,18 @@ How goals enter the system, get classified, and reach the right execution path.
 ```
 Goal arrives (Telegram / Slack / CLI / Python API / Dashboard)
   → handle.py: parse prefixes, classify intent
-    → NOW lane: _run_now() → single LLM call → response
+    → intent.classify(): deterministic _is_link_triage() shortcut first
+      ("worth my time?" + URL + ≤25 non-URL words + no file output → NOW,
+      no LLM call), then LLM classifier; capability overrides (file-output,
+      needs_live_data) can force AGENDA — but URL-bearing messages are
+      exempt from the live-data override (NOW lane pre-fetches links)
+    → NOW lane: _run_now() → enrich_step_with_urls() pre-fetch (X threads
+      via authenticated CLI, pages via Jina) → single no_tools LLM call
+      (+ _NOW_LINK_READ opinionated-read shape when enrichment present)
+      → self-verify → response. Conversational compute: ~2-min opinionated
+      answer for link triage (GOAL_BRAIN 2026-07-17)
+      → _is_complex_directive() may escalate NOW→AGENDA; URLs are replaced
+        with an opaque token first so link dots don't read as sentences
     → AGENDA lane:
       → Clarity check (ambiguous? ask user first, unless yolo mode)
       → BLE rewrite (strip imperative steps → outcome-focused goal)

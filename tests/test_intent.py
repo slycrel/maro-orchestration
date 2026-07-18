@@ -600,3 +600,82 @@ class TestRewriteImperativeGoal:
         goal = "First do X then do Y then check Z and commit and push to origin main branch"
         result = rewrite_imperative_goal(goal, adapter=TinyAdapter())
         assert result == goal  # too short — ignored
+
+
+class TestLinkExemption:
+    """Conversational-compute decree (2026-07-17, GOAL_BRAIN): asks that CARRY
+    an explicit URL stay NOW-eligible — _run_now pre-fetches provided links
+    (reply-aware for X), so 'is this worth my time? <link>' is answerable
+    inline. Only source-less live-data asks (searches) still escalate."""
+
+    def _live_data_now_adapter(self):
+        import json
+
+        class _Adapter:
+            class _Resp:
+                content = json.dumps({
+                    "lane": "now",
+                    "confidence": 0.85,
+                    "reason": "Quick link read",
+                    "needs_live_data": True,
+                })
+                input_tokens = 10
+                output_tokens = 10
+                tool_calls = []
+
+            def complete(self, *args, **kwargs):
+                return self._Resp()
+
+        return _Adapter()
+
+    def test_url_bearing_live_data_ask_stays_now(self):
+        lane, _, _ = classify(
+            "is this worth my time? https://x.com/someone/status/12345",
+            adapter=self._live_data_now_adapter(),
+        )
+        assert lane == "now"
+
+    def test_sourceless_live_data_ask_still_escalates(self):
+        lane, _, reason = classify(
+            "Where can I get non-ethanol gas in or around Manti, Utah?",
+            adapter=self._live_data_now_adapter(),
+        )
+        assert lane == "agenda"
+        assert "live external data" in reason
+
+
+class TestLinkTriageShortcut:
+    """Deterministic NOW routing for the canonical conversational-compute ask
+    — live smoke 2026-07-17 had the LLM classifier route 'is this worth my
+    time? <link>' agenda@0.95 despite a verbatim prompt example."""
+
+    def test_canonical_ask_routes_now_deterministically(self):
+        lane, conf, reason = classify(
+            "is this worth my time? https://x.com/someone/status/12345",
+            dry_run=True)
+        assert lane == "now"
+        assert "triage" in reason.lower()
+
+    def test_task_verbs_on_url_not_matched(self):
+        from intent import _is_link_triage
+        assert not _is_link_triage(
+            "fix the bug at https://github.com/x/y/issues/5")
+
+    def test_long_instruction_goals_not_matched(self):
+        from intent import _is_link_triage
+        msg = ("Perform a clean, final retry of this X-thread evaluation "
+               "after the latest Maro fixes: https://x.com/u/status/1 "
+               "Research only - make no system changes. First recover and "
+               "quote the root post text; separately identify unavailable "
+               "reply content. Extract every concrete claim and verify each "
+               "against primary sources. Also, is this worth my time?")
+        assert not _is_link_triage(msg)
+
+    def test_file_output_ask_not_matched(self):
+        from intent import _is_link_triage
+        assert not _is_link_triage(
+            "worth a look? summarize https://example.com to artifacts/notes.md")
+
+    def test_no_url_not_matched(self):
+        from intent import _is_link_triage
+        assert not _is_link_triage("is this worth my time?")

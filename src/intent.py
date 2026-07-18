@@ -44,6 +44,16 @@ def classify(
         - confidence: 0.0–1.0
         - reason: one-sentence explanation
     """
+    # Deterministic link-triage shortcut, ahead of any LLM opinion
+    # (conversational-compute decree, 2026-07-17): the canonical "is this
+    # worth my time? <link>" must route NOW every time — live smoke same day
+    # had the LLM classifier route it agenda@0.95 despite a verbatim prompt
+    # example, then stack the clarification gate on top. Conservative on
+    # purpose: triage phrasing + a URL + no file deliverable + a short ask.
+    if _is_link_triage(message):
+        return ("now", 0.9,
+                "Link triage — provided link is pre-fetched and read inline")
+
     needs_live_data = False
     if dry_run or adapter is None:
         lane, confidence, reason = _heuristic_classify(message)
@@ -75,13 +85,66 @@ def classify(
     # Part A. Gated the same as the heuristic-path flip below (adversarial-review
     # finding, 2026-07-12: this override fired unconditionally, contradicting
     # DEFAULTS.md's documented "flag OFF makes both paths inert" contract).
-    if lane == "now" and needs_live_data and _config_get("now_lane.live_data_routing", True):
+    # 2026-07-17 (conversational-compute decree): asks that CARRY an explicit
+    # URL are exempt — _run_now pre-fetches provided links (reply-aware for X)
+    # so "is this worth my time? <link>" is answerable inline. Only
+    # source-less live-data asks (searches) still escalate.
+    if (lane == "now" and needs_live_data
+            and _config_get("now_lane.live_data_routing", True)
+            and not _message_has_url(message)):
         return (
             "agenda",
             max(confidence, 0.8),
             "Needs live external data — NOW lane cannot fetch it",
         )
     return (lane, confidence, reason)
+
+
+def _message_has_url(message: str) -> bool:
+    """Explicit URL in the message. The NOW lane pre-fetches provided links
+    itself (web_fetch enrichment), so a live-data ask that carries its own
+    source stays NOW-eligible."""
+    try:
+        from web_fetch import extract_urls_from_text
+        return bool(extract_urls_from_text(message))
+    except Exception:
+        return False
+
+
+# Triage-shaped phrasings: an opinion about a provided link, not a task on
+# it. Deliberately narrow — "fix the bug at <url>" or "port this repo" must
+# NOT match; those are real work even when short.
+_LINK_TRIAGE_RE = re.compile(
+    r"(\bworth\s+(?:my|your|our|the|a)\s+(?:time|while|look|read)\b"
+    r"|\bworth\s+(?:looking\s+at|reading|checking(?:\s+out)?)\b"
+    r"|\bshould\s+i\s+(?:care|bother|look|read)\b"
+    r"|\bis\s+this\s+(?:legit|real|hype|useful|any\s+good|interesting)\b"
+    r"|\bwhat(?:'s|\s+is)\s+this\b"
+    r"|\bquick\s+(?:take|read|look|opinion)\b"
+    r"|\btl;?dr\b)",
+    re.I,
+)
+_TRIAGE_MAX_WORDS = 25  # excluding URLs — longer asks carry real instructions
+
+
+def _is_link_triage(message: str) -> bool:
+    """Deterministic match for the canonical conversational-compute ask:
+    a short, triage-phrased question about link(s) the message itself
+    carries. Everything else keeps normal classification."""
+    if not _LINK_TRIAGE_RE.search(message or ""):
+        return False
+    if _requires_file_output(message):
+        return False
+    if not _message_has_url(message):
+        return False
+    try:
+        from web_fetch import extract_urls_from_text
+        stripped = message
+        for u in extract_urls_from_text(message):
+            stripped = stripped.replace(u, " ")
+    except Exception:
+        stripped = message
+    return len(stripped.split()) <= _TRIAGE_MAX_WORDS
 
 
 _FILE_OUTPUT_RE = re.compile(
@@ -118,6 +181,13 @@ AGENDA: Requires multiple steps, research, iteration, or planning. Examples:
   Manti, Utah") — these need needs_live_data=true (below); NOW cannot fetch
   live data, so a live-data ask is AGENDA even though it reads like a quick
   question.
+
+EXCEPTION — link reads: when the request itself CONTAINS the URL(s) to look
+at, the system pre-fetches those links before the NOW call, so a quick read
+of provided links IS completable in one step. "Is this worth my time?
+<link>", "summarize this page <url>", "what's the catch here? <link>" are
+NOW. Still AGENDA when the ask demands multi-source verification, file
+outputs, or open-ended research beyond the provided link(s).
 
 Also decide needs_live_data: true when a correct answer requires information
 that changes over time or is locally situated — current prices/availability/

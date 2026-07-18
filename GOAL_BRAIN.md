@@ -3459,3 +3459,19 @@ Dormant (deliberately parked, not dropped):
   interface he'd prefer to live in) and is watching whether early
   "getting to know you" corrections paint later behavior into
   corners.
+- **2026-07-17 (Jeremy, session, third clarification) — the Hermes
+  1-shot posture is Hermes-side ONLY; Maro stays fully capable.**
+  Verbatim: "I'm fine taking that position _with hermes_ to have
+  hermes attempt 1-shots over orchestration. I think for the maro
+  side, I still want that to be fully capable; we don't know how
+  that's going to be fed information, I'd love to make sure we do the
+  best we can there and not assume another LLM is going to vet or
+  frame things for us (and I hope that's normally how it works)."
+  Supersedes the "nothing new gets built" reading in the entry above:
+  Maro must handle conversational/link-triage asks well ITSELF — no
+  assuming an upstream brain vetted, framed, or triaged the input.
+  The conversational fast lane inside Maro (reply-aware fetch → one
+  opinionated no_tools read → ~2-min answer; "can't see it from
+  here" honesty; no claims matrix unless the goal asks for
+  verification depth) is sanctioned next-chunk work, built this
+  session.

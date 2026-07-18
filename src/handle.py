@@ -149,6 +149,22 @@ If the request is a question, answer it. If it's a task, complete it.
 Do not hedge or defer — just do the work.
 """
 
+# Appended to _NOW_SYSTEM only when link content was pre-fetched. The shape
+# comes from the conversational-compute decree (Jeremy 2026-07-17, GOAL_BRAIN):
+# an opinionated ~2-min read, and honest "can't see it" over fake certainty
+# or reflecting the ask back ("that's a thing but you should figure it out").
+_NOW_LINK_READ = """
+Fetched content for the link(s) in the request is provided above it. Answer
+from that content — never tell the user to go look for themselves. If the
+ask is link triage ("is this worth my time?"-shaped), give a quick
+opinionated read: verdict first (worth your time / probably not /
+interesting, but wait), what it actually is, one or two reasons it does or
+doesn't fit the user's setup, and the catch or the one thing to verify
+next. If the fetched content is empty or missing something you need, say
+plainly what you couldn't see ("can't see it from here — send the direct
+repo link or a screenshot") rather than guessing.
+"""
+
 _BTW_SYSTEM = """You are an autonomous agent surfacing a non-blocking observation.
 Note what you observe, briefly and specifically. Do not attempt to fix or solve anything.
 Keep it to 1–3 sentences max. Format: one sentence per observation, plain text.
@@ -172,6 +188,15 @@ def _is_complex_directive(message: str) -> bool:
         save Y" — a pipeline, even when each verb alone would stay NOW)
     """
     import re
+    # URLs are opaque tokens — their dots/digits must not read as sentence
+    # boundaries (live 2026-07-17: "is this worth my time? <x.com link>"
+    # escalated NOW→agenda because the URL's dots counted as sentences).
+    try:
+        from web_fetch import extract_urls_from_text
+        for _u in extract_urls_from_text(message):
+            message = message.replace(_u, "URL")
+    except Exception:
+        pass
     msg_lower = message.lower().strip()
     words = msg_lower.split()
 
@@ -285,21 +310,42 @@ def _run_now(
     adapter,
     verbose: bool = False,
 ) -> Dict[str, Any]:
-    """Execute a NOW-lane task: single LLM call, returns result dict."""
+    """Execute a NOW-lane task: single LLM call, returns result dict.
+
+    Link-bearing asks get their URLs pre-fetched (reply-aware for X, via
+    web_fetch) and answered from the fetched content in the same single
+    call — the conversational-compute lane (Jeremy 2026-07-17: "drop a
+    link somewhere and ask 'is this worth my time?'"). No URLs, or nothing
+    fetchable → identical to the plain NOW call.
+    """
     from llm import LLMMessage
 
     if verbose:
         print(f"[maro:{handle_id}] NOW lane — executing...", file=sys.stderr, flush=True)
 
     t0 = time.monotonic()
+    enrichment = ""
+    try:
+        from web_fetch import enrich_step_with_urls
+        enrichment = enrich_step_with_urls(message) or ""
+    except Exception:
+        log.debug("NOW-lane URL enrichment failed (answering without it)",
+                  exc_info=True)
+    if enrichment and verbose:
+        print(f"[maro:{handle_id}] NOW lane — pre-fetched {len(enrichment)} "
+              f"chars of link content", file=sys.stderr, flush=True)
     try:
         resp = adapter.complete(
             [
-                LLMMessage("system", _NOW_SYSTEM),
-                LLMMessage("user", message),
+                LLMMessage("system",
+                           _NOW_SYSTEM + (_NOW_LINK_READ if enrichment else "")),
+                LLMMessage("user",
+                           f"{enrichment}\n\n{message}" if enrichment else message),
             ],
             max_tokens=2048,
             temperature=0.4,
+            no_tools=True,
+            purpose="now",
         )
         elapsed = int((time.monotonic() - t0) * 1000)
         content = resp.content.strip()
@@ -402,6 +448,8 @@ def _verify_now_outcome(
             ],
             max_tokens=64,
             temperature=0.0,
+            no_tools=True,
+            purpose="now-verify",
         )
         verdict = extract_json(resp.content, dict, log_tag="now_verify")
         if verdict.get("fulfilled") is False:

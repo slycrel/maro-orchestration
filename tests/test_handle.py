@@ -4270,3 +4270,91 @@ class TestVerdictStampFailureQuarantine:
         assert meta["goal_verdict_stamp_failed"] is True
         assert meta["goal_verdict_stamp_failed_label"] == "provenance"
         assert meta["goal_verdict_stamp_failed_loop_id"] == "loop-provfail"
+
+
+# ---------------------------------------------------------------------------
+# NOW lane — link enrichment (conversational compute, 2026-07-17)
+# ---------------------------------------------------------------------------
+
+class _NowCapturingAdapter:
+    def __init__(self):
+        self.calls = []
+
+    def complete(self, messages, **kwargs):
+        self.calls.append((messages, kwargs))
+
+        class _Resp:
+            content = "Worth your time — real repo, MIT, one catch."
+            input_tokens = 10
+            output_tokens = 5
+        return _Resp()
+
+
+class TestRunNowLinkEnrichment:
+    """_run_now pre-fetches URLs in the message and answers from the fetched
+    content in the same single no_tools call (conversational-compute decree,
+    GOAL_BRAIN 2026-07-17). No URLs / fetch failure → plain NOW call."""
+
+    def test_link_content_injected_with_shape_directive(self, monkeypatch):
+        import web_fetch
+        import handle as handle_mod
+        monkeypatch.setattr(
+            web_fetch, "enrich_step_with_urls",
+            lambda msg, **kw: "[Tweet x/1 — via authenticated CLI]\nrepo link here")
+        a = _NowCapturingAdapter()
+        out = handle_mod._run_now(
+            "is this worth my time? https://x.com/u/status/1", "h1", a)
+        assert out["status"] == "done"
+        messages, kwargs = a.calls[0]
+        system, user = messages[0].content, messages[1].content
+        assert "opinionated read" in system
+        assert "can't see it from here" in system
+        assert user.startswith("[Tweet x/1")
+        assert "is this worth my time?" in user
+        assert kwargs.get("no_tools") is True
+
+    def test_no_urls_means_plain_now_call(self, monkeypatch):
+        import web_fetch
+        import handle as handle_mod
+        monkeypatch.setattr(web_fetch, "enrich_step_with_urls",
+                            lambda msg, **kw: "")
+        a = _NowCapturingAdapter()
+        out = handle_mod._run_now("what does HTTP 429 mean?", "h2", a)
+        assert out["status"] == "done"
+        messages, kwargs = a.calls[0]
+        assert messages[0].content == handle_mod._NOW_SYSTEM
+        assert messages[1].content == "what does HTTP 429 mean?"
+        assert kwargs.get("no_tools") is True
+
+    def test_enrichment_failure_fails_open(self, monkeypatch):
+        import web_fetch
+        import handle as handle_mod
+
+        def _boom(msg, **kw):
+            raise RuntimeError("fetch exploded")
+
+        monkeypatch.setattr(web_fetch, "enrich_step_with_urls", _boom)
+        a = _NowCapturingAdapter()
+        out = handle_mod._run_now(
+            "summarize https://example.com/page", "h3", a)
+        assert out["status"] == "done"
+        messages, _ = a.calls[0]
+        assert messages[0].content == handle_mod._NOW_SYSTEM
+
+
+class TestComplexDirectiveUrlOpaque:
+    """URLs must be opaque to _is_complex_directive — live 2026-07-17 the
+    x.com link's dots read as sentence boundaries and flipped a NOW-classified
+    link-triage ask back to agenda."""
+
+    def test_triage_ask_with_url_not_complex(self):
+        from handle import _is_complex_directive
+        assert not _is_complex_directive(
+            "is this worth my time? "
+            "https://x.com/divyansht91162/status/2077806123160313957")
+
+    def test_genuinely_compound_url_message_still_complex(self):
+        from handle import _is_complex_directive
+        assert _is_complex_directive(
+            "fetch https://example.com/a then verify the claims and then "
+            "save a report")
