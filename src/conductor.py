@@ -277,6 +277,8 @@ def _compile_executive_summary(adapter=None) -> str:
             ],
             max_tokens=512,
             temperature=0.3,
+            no_tools=True,
+            purpose="executive summary",
         )
         return resp.content.strip() or "No summary available."
     except Exception as exc:
@@ -556,9 +558,10 @@ def conduct(
     confidence = 0.6
     reason = "default"
 
+    _introspects = False
     if classify is not None and adapter is not None:
         try:
-            lane, confidence, reason = classify(message, adapter=adapter)
+            lane, confidence, reason, _introspects = classify(message, adapter=adapter)
         except Exception:
             lane = "agenda"
 
@@ -651,6 +654,7 @@ def conduct(
                 dry_run=False,
                 verbose=False,
                 ancestry_context_extra=_persona_context,
+                introspection_access=_introspects,
             )
 
             # Phase 31: record persona outcome for feedback loop
@@ -706,18 +710,47 @@ Do not hedge or defer — just do the work.
 
 
 def _handle_now_lane(message: str, adapter=None) -> str:
-    """Execute a NOW-lane task: single LLM call."""
+    """Execute a NOW-lane task: single tool-less LLM call.
+
+    URL pre-fetch mirrors handle._run_now (BACKLOG #27 sweep, 2026-07-18):
+    this path previously ran with the tool harness live and depended on it to
+    fetch links — the exact rogue-execution shape the sweep closes, and a
+    contract intent.classify already assumes (its URL exemption from the
+    live-data override exists BECAUSE the NOW lane pre-fetches provided
+    links). Enrichment failure degrades to answering without link content,
+    same as handle's lane — never back to a live tool harness.
+    """
     if adapter is None or LLMMessage is None:
         return f"[no adapter] Would answer: {message[:80]}"
+
+    enrichment = ""
+    try:
+        from web_fetch import enrich_step_with_urls
+        enrichment = enrich_step_with_urls(message) or ""
+    except Exception:
+        import logging as _log_mod
+        _log_mod.getLogger(__name__).debug(
+            "NOW-lane URL enrichment failed (answering without it)", exc_info=True)
+    _link_read = ""
+    if enrichment:
+        try:
+            # Lazy import — handle imports conductor at module level, so this
+            # direction must stay call-time only.
+            from handle import _NOW_LINK_READ as _link_read
+        except Exception:
+            _link_read = "\nAnswer from the fetched link content provided above the request."
 
     try:
         resp = adapter.complete(
             [
-                LLMMessage("system", _NOW_SYSTEM),
-                LLMMessage("user", message),
+                LLMMessage("system", _NOW_SYSTEM + (_link_read if enrichment else "")),
+                LLMMessage("user",
+                           f"{enrichment}\n\n{message}" if enrichment else message),
             ],
             max_tokens=2048,
             temperature=0.4,
+            no_tools=True,
+            purpose="now",
         )
         return resp.content.strip() or "[no response]"
     except Exception as exc:

@@ -148,6 +148,7 @@ def run_agent_loop(
     defer_learning: bool = False,  # data-r2-01: caller runs closure + finalize_deferred_learning() afterwards — skip verdict-blind lesson extraction/crystallization at finalize
     measurement_class: str = "",  # explicit organic/smoke/control/benchmark provenance; empty = unknown direct caller
     handle_id: str = "",  # top-level request key; continuations reuse it for report dedup
+    introspection_access: bool = False,  # introspection-shaped goal: containerized steps get ro run-records + maro source (decree 2026-07-18)
     _recovery_in_progress: bool = False,  # internal: set by the Phase 45 auto-recovery re-run to prevent recursion
 ) -> LoopResult:
     """Run the autonomous loop for a goal.
@@ -248,6 +249,10 @@ def run_agent_loop(
             # (adversarial-review 2026-07-13, finding D).
             _ce.set_container_suppressed(False)
             set_default_container_rw_roots([])
+            # Introspection provisioning is opt-in per run and must never be
+            # inherited from a prior run in this context (same finding-D
+            # reasoning as the two resets above).
+            _ce.set_introspection_run(bool(introspection_access))
 
             if getattr(ctx, "run_worktree", None) is not None:
                 # busy_policy=worktree: the whole run works in its isolated
@@ -358,6 +363,7 @@ def run_agent_loop(
                 (lambda: set_default_subprocess_cwd(None), "subprocess cwd"),
                 (lambda: set_default_container_rw_roots([]), "rw-root policy"),
                 (lambda: _ce.set_container_suppressed(True), "container suppression"),
+                (lambda: _ce.set_introspection_run(False), "introspection access"),
             ):
                 try:
                     _neutralize()

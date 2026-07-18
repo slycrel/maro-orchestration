@@ -5450,3 +5450,36 @@ def test_compound_guard_split_rearms_contributions(monkeypatch, tmp_path):
         "[hook] watch file sizes closely" in m
         for m in adapter.exec_user_msgs
     ), adapter.exec_user_msgs
+
+
+# ---------------------------------------------------------------------------
+# introspection_access threading (decree 2026-07-18)
+# ---------------------------------------------------------------------------
+
+def test_run_agent_loop_sets_introspection_flag(monkeypatch, tmp_path):
+    """introspection_access=True must reach container_exec's run-scoped flag
+    via the fence block — and, per the finding-D pattern (reset FIRST, same
+    as suppression and rw roots), a subsequent run in the same context must
+    not inherit it."""
+    _setup_workspace(monkeypatch, tmp_path)
+    import container_exec as ce
+
+    ce.reset_container_caches()
+    run_agent_loop("why did your last run fail?", dry_run=True,
+                   introspection_access=True)
+    assert ce.introspection_run() is True, "fence block must set the flag"
+
+    # Next run without the grant: the fence reset clears the stale flag.
+    run_agent_loop("summarize the incident timeline", dry_run=True)
+    assert ce.introspection_run() is False, (
+        "a later run must not inherit a prior run's introspection grant")
+    ce.reset_container_caches()
+
+
+def test_run_agent_loop_default_leaves_flag_off(monkeypatch, tmp_path):
+    _setup_workspace(monkeypatch, tmp_path)
+    import container_exec as ce
+
+    ce.reset_container_caches()
+    run_agent_loop("summarize the incident timeline", dry_run=True)
+    assert ce.introspection_run() is False

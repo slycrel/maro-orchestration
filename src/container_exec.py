@@ -349,6 +349,86 @@ def reset_container_caches() -> None:
     global _last_degrade_warn
     _last_degrade_warn = 0.0
     _container_suppressed.set(False)
+    _introspection_run.set(False)
+
+
+# Run-scoped introspection flag (decree 2026-07-18, GOAL_BRAIN Decisions:
+# "Install in the container only for the runs that need access"). When a goal
+# is classified introspection-shaped — it asks about Maro's own runs/behavior —
+# the containerized executor gets read-only provisioning (run records + the
+# maro source, see introspection_provision()) instead of blind isolation:
+# brisk-saffron (task-…80466244) spent 2.8M tokens / 28min proving only that
+# it couldn't see the host records it was asked to diagnose. A ContextVar so
+# thread fan-out inherits it; reset per run by agent_loop (finding-D pattern,
+# same as the suppression flag above).
+_introspection_run: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "maro_introspection_run", default=False
+)
+
+
+def set_introspection_run(on: bool = True) -> None:
+    """Mark this run introspection-shaped (see _introspection_run)."""
+    _introspection_run.set(bool(on))
+
+
+def introspection_run() -> bool:
+    return _introspection_run.get()
+
+
+def introspection_provision() -> Optional[dict]:
+    """Read-only container provisioning for an introspection-shaped run.
+
+    Returns {"ro_mounts": [host_path, ...], "env": {name: value, ...}} when
+    this run is flagged introspective AND `executor.introspection_access`
+    (default on; inert unless the container executor itself is on) — else None.
+
+    What is provisioned, deliberately narrow (decree 2026-07-18):
+      - the workspace `runs/` dir, ro — the run records the goal is asked to
+        reason about. A *descendant* of the workspace root, which itself stays
+        hard-forbidden (design §4): memory/, config, secrets are NOT mounted,
+        and build_mount_map's forbidden filter still applies to whatever this
+        returns (defense in depth — a bug here cannot mount the workspace root).
+        Must be a REAL directory: a symlinked `runs/` is refused, or the link
+        target (memory/, secrets/, anywhere) would ride the introspection
+        grant past the descendant allowance (adversarial-review 2026-07-18).
+      - the maro source module dir, ro, plus PYTHONPATH — best-effort CLI:
+        `python3 -m <module>` works in-container for stdlib-only readers (the
+        image ships python3); modules needing third-party deps fail loudly
+        there, and the records mount above remains the actual guarantee.
+      - env markers so the worker knows what it has: MARO_INTROSPECTION=1 and
+        MARO_INTROSPECTION_RUNS=<records path> (identity-mapped host path).
+
+    Fails CLOSED, all-or-nothing: no resolvable run-records dir → None, never
+    a source-only mount with the introspection marker set — that would tell
+    the worker it can introspect while reproducing the exact records-blind
+    failure this exists to fix (adversarial-review 2026-07-18, consensus
+    finding). Worst case is always the pre-decree behavior, never a broader
+    mount.
+    """
+    try:
+        if not introspection_run():
+            return None
+        if not get("executor.introspection_access", True):
+            return None
+        from config import workspace_root
+        ws_real = os.path.realpath(str(workspace_root()))
+        runs_dir = os.path.join(ws_real, "runs")
+        runs_real = os.path.realpath(runs_dir)
+        if runs_real != runs_dir or not os.path.isdir(runs_real):
+            log.warning(
+                "introspection_provision: %s missing or symlinked — "
+                "run stays isolated", runs_dir)
+            return None
+        ro_mounts = [runs_real]
+        env = {"MARO_INTROSPECTION": "1", "MARO_INTROSPECTION_RUNS": runs_real}
+        module_dir = os.path.dirname(os.path.realpath(__file__))
+        if os.path.isdir(module_dir):
+            ro_mounts.append(module_dir)
+            env["PYTHONPATH"] = module_dir
+        return {"ro_mounts": ro_mounts, "env": env}
+    except Exception as exc:
+        log.warning("introspection_provision failed (run stays isolated): %s", exc)
+        return None
 
 
 def _current_loop_id() -> str:

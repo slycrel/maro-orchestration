@@ -882,3 +882,96 @@ class TestBuildMountMap:
         cwd = tmp_path / "proj"; cwd.mkdir()
         out = ce.build_mount_map(str(cwd), rw_roots=["/tmp"])
         assert (R("/tmp"), "rw") not in out
+
+
+class TestIntrospectionProvision:
+    """Decree 2026-07-18 ("Install in the container only for the runs that
+    need access"): introspection-shaped runs get ro run records + maro source
+    in the executor container; everything else keeps blind isolation."""
+
+    @pytest.fixture(autouse=True)
+    def _clean_flag(self):
+        ce.reset_container_caches()
+        yield
+        ce.reset_container_caches()
+
+    def test_unflagged_run_gets_none(self, monkeypatch):
+        monkeypatch.setattr(ce, "get", lambda k, d=None: d)
+        assert ce.introspection_provision() is None
+
+    def test_config_gate_off_gets_none(self, monkeypatch):
+        ce.set_introspection_run(True)
+        monkeypatch.setattr(
+            ce, "get",
+            lambda k, d=None: False if k == "executor.introspection_access" else d)
+        assert ce.introspection_provision() is None
+
+    def test_flagged_run_gets_runs_dir_ro_plus_source(self, tmp_path, monkeypatch):
+        import config as cfg
+        runs = tmp_path / "runs"; runs.mkdir()
+        monkeypatch.setattr(cfg, "workspace_root", lambda: tmp_path)
+        monkeypatch.setattr(ce, "get", lambda k, d=None: d)
+        ce.set_introspection_run(True)
+        out = ce.introspection_provision()
+        assert out is not None
+        assert R(runs) in out["ro_mounts"]
+        assert out["env"]["MARO_INTROSPECTION"] == "1"
+        assert out["env"]["MARO_INTROSPECTION_RUNS"] == R(runs)
+        # maro source rides along for the best-effort in-container CLI
+        src_dir = os.path.dirname(os.path.realpath(ce.__file__))
+        assert src_dir in out["ro_mounts"]
+        assert out["env"]["PYTHONPATH"] == src_dir
+
+    def test_workspace_root_itself_never_mounted(self, tmp_path, monkeypatch):
+        # runs/ is a workspace DESCENDANT; the root (memory/, config, secrets)
+        # must never appear in the provision list.
+        import config as cfg
+        runs = tmp_path / "runs"; runs.mkdir()
+        monkeypatch.setattr(cfg, "workspace_root", lambda: tmp_path)
+        monkeypatch.setattr(ce, "get", lambda k, d=None: d)
+        ce.set_introspection_run(True)
+        out = ce.introspection_provision()
+        assert R(tmp_path) not in out["ro_mounts"]
+
+    def test_missing_runs_dir_fails_closed(self, tmp_path, monkeypatch):
+        # All-or-nothing (adversarial-review 2026-07-18, consensus): no run
+        # records → NO provisioning at all. A source-only mount with
+        # MARO_INTROSPECTION=1 would claim introspection while reproducing
+        # the records-blind failure this feature exists to fix.
+        import config as cfg
+        monkeypatch.setattr(cfg, "workspace_root", lambda: tmp_path)  # no runs/
+        monkeypatch.setattr(ce, "get", lambda k, d=None: d)
+        ce.set_introspection_run(True)
+        assert ce.introspection_provision() is None
+
+    def test_symlinked_runs_dir_fails_closed(self, tmp_path, monkeypatch):
+        # A symlinked runs/ (→ memory/, secrets/, anywhere) must not ride the
+        # introspection grant past the workspace-descendant allowance.
+        import config as cfg
+        memory = tmp_path / "memory"; memory.mkdir()
+        (tmp_path / "runs").symlink_to(memory)
+        monkeypatch.setattr(cfg, "workspace_root", lambda: tmp_path)
+        monkeypatch.setattr(ce, "get", lambda k, d=None: d)
+        ce.set_introspection_run(True)
+        assert ce.introspection_provision() is None
+
+    def test_reset_clears_flag(self):
+        ce.set_introspection_run(True)
+        assert ce.introspection_run() is True
+        ce.reset_container_caches()
+        assert ce.introspection_run() is False
+
+    def test_provision_survives_forbidden_filter(self, tmp_path, monkeypatch):
+        # Defense in depth: the provision output still passes build_mount_map's
+        # forbidden filter — a bug here cannot smuggle the workspace root in.
+        import config as cfg
+        runs = tmp_path / "runs"; runs.mkdir()
+        monkeypatch.setattr(cfg, "workspace_root", lambda: tmp_path)
+        monkeypatch.setattr(ce, "get", lambda k, d=None: d)
+        ce.set_introspection_run(True)
+        out = ce.introspection_provision()
+        cwd = tmp_path / "scratch"; cwd.mkdir()
+        mounts = ce.build_mount_map(str(cwd), ro_mounts=out["ro_mounts"])
+        assert (R(runs), "ro") in mounts
+        assert (R(tmp_path), "ro") not in mounts
+        assert (R(tmp_path), "rw") not in mounts

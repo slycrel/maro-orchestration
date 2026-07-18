@@ -3526,3 +3526,26 @@ Dormant (deliberately parked, not dropped):
   His visibility condition already holds: `handle_escalation`'s prompt
   carries `Continuation depth: {depth}` (director.py). No change; the
   re-affirmation is the record.
+- **2026-07-18 (work-ahead session, same day as the decision batch) —
+  BACKLOG #27 no_tools sweep SHIPPED + introspection decree BUILT.**
+  (1) Every `adapter.complete` site in src/ classified: ~55 contract
+  calls now pass `no_tools=True` + `purpose`; 6 intentionally-agentic
+  sites carry `# agentic:` markers; conductor's NOW lane ported to the
+  handle-style URL pre-fetch so its no_tools pin is safe on the live
+  Telegram/Slack path. Standing lint `tests/test_no_tools_contract.py`
+  (literal `no_tools=True` + `purpose` or `# agentic`, vacuity-guarded)
+  makes the classification permanent — full record in BACKLOG_DONE #27.
+  (2) The decree ("Install in the container only for the runs that need
+  access") shipped same-day: `intent.classify` → `introspects_self`
+  (4-tuple) → `run_agent_loop(introspection_access=…)` → run-scoped
+  ContextVar → `container_exec.introspection_provision()` mounts
+  workspace `runs/` + maro source read-only with env markers, gated by
+  `executor.introspection_access` (DEFAULTS.md row; inert unless
+  containers are on), all-or-nothing fail-closed, symlinked `runs/`
+  refused. Design doc §4 amended; CAPABILITIES self-diagnosis row
+  promoted aspirational → target (verified needs a live dispatched run
+  once containers turn on). Adversarial review (Codex ×3): 1 High + 4
+  Medium confirmed and fixed pre-commit (conductor/pipeline/team/direct
+  dropped the grant; partial-open provisioning; lint substring
+  weakness); known-gap accepted: `--lane` force skips the classifier so
+  forced runs never get the grant.

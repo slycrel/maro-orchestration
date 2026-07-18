@@ -1689,7 +1689,7 @@ class TestNowDirectorEscalation:
         fake_resp.output_tokens = 5
 
         with patch("handle._run_now", wraps=lambda *a, **kw: {"status": "done", "result": "answer", "tokens_in": 0, "tokens_out": 0, "elapsed_ms": 0}) as mock_now:
-            with patch("intent.classify", return_value=("now", 0.9, "simple")):
+            with patch("intent.classify", return_value=("now", 0.9, "simple", False)):
                 result = handle("research all the LLMs and implement a comparison framework", dry_run=True, force_lane="now")
         # Should have used NOW lane (or dry_run short-circuits — either is fine)
         assert result.lane in ("now",)
@@ -2757,7 +2757,7 @@ class TestNowLaneOutcomeRecord:
         canned = {"status": "done", "result": "the answer",
                   "tokens_in": 7, "tokens_out": 3}
         with patch("handle._run_now", return_value=canned):
-            with patch("intent.classify", return_value=("now", 0.9, "simple")):
+            with patch("intent.classify", return_value=("now", 0.9, "simple", False)):
                 result = handle(
                     "what time is it?",
                     adapter=fake_adapter,
@@ -2782,7 +2782,7 @@ class TestNowLaneOutcomeRecord:
         canned = {"status": "done", "result": "x", "tokens_in": 1, "tokens_out": 1}
         with patch("memory.extract_lessons_via_llm") as mock_extract:
             with patch("handle._run_now", return_value=canned):
-                with patch("intent.classify", return_value=("now", 0.9, "simple")):
+                with patch("intent.classify", return_value=("now", 0.9, "simple", False)):
                     handle("ping", adapter=fake_adapter, force_lane="now", dry_run=False)
         mock_extract.assert_not_called()
 
@@ -2843,7 +2843,7 @@ class TestNowStatusHonesty:
         canned = {"status": "done", "result": "The binary does not exist; goal incomplete.",
                   "tokens_in": 7, "tokens_out": 3}
         with patch("handle._run_now", return_value=canned):
-            with patch("intent.classify", return_value=("now", 0.9, "simple")):
+            with patch("intent.classify", return_value=("now", 0.9, "simple", False)):
                 result = handle(
                     "do it",
                     adapter=self._verdict_adapter(False),
@@ -2867,7 +2867,7 @@ class TestNowStatusHonesty:
         canned = {"status": "done", "result": "Here is the report you asked for.",
                   "tokens_in": 7, "tokens_out": 3}
         with patch("handle._run_now", return_value=canned):
-            with patch("intent.classify", return_value=("now", 0.9, "simple")):
+            with patch("intent.classify", return_value=("now", 0.9, "simple", False)):
                 result = handle(
                     "do it",
                     adapter=self._verdict_adapter(True),
@@ -2889,7 +2889,7 @@ class TestNowStatusHonesty:
                   "tokens_in": 1, "tokens_out": 1}
         adapter = self._verdict_adapter(False)
         with patch("handle._run_now", return_value=canned):
-            with patch("intent.classify", return_value=("now", 0.9, "simple")):
+            with patch("intent.classify", return_value=("now", 0.9, "simple", False)):
                 result = handle("do it", adapter=adapter, force_lane="now", dry_run=False)
         assert result.status == "done"
         adapter.complete.assert_not_called()
@@ -2944,7 +2944,7 @@ class TestNowVerdictEscalation:
                   "result": "You could try searching Google Maps for that.",
                   "tokens_in": 7, "tokens_out": 3}
         with patch("handle._run_now", return_value=canned), \
-             patch("intent.classify", return_value=("now", 0.9, "simple")), \
+             patch("intent.classify", return_value=("now", 0.9, "simple", False)), \
              patch("intent.check_goal_clarity", return_value={"clear": True}), \
              patch("agent_loop.run_agent_loop", return_value=self._fake_loop()) as m_loop:
             result = handle(
@@ -2969,7 +2969,7 @@ class TestNowVerdictEscalation:
         canned = {"status": "done", "result": "You could try searching.",
                   "tokens_in": 7, "tokens_out": 3}
         with patch("handle._run_now", return_value=canned), \
-             patch("intent.classify", return_value=("now", 0.9, "simple")), \
+             patch("intent.classify", return_value=("now", 0.9, "simple", False)), \
              patch("agent_loop.run_agent_loop",
                    side_effect=AssertionError("must not escalate")) as m_loop:
             result = handle(
@@ -3011,7 +3011,7 @@ class TestNowVerdictEscalation:
         canned = {"status": "done", "result": "Maverik in Ephraim, 7.3 miles.",
                   "tokens_in": 7, "tokens_out": 3}
         with patch("handle._run_now", return_value=canned), \
-             patch("intent.classify", return_value=("now", 0.9, "simple")), \
+             patch("intent.classify", return_value=("now", 0.9, "simple", False)), \
              patch("agent_loop.run_agent_loop",
                    side_effect=AssertionError("must not escalate")) as m_loop:
             result = handle(
@@ -3329,7 +3329,7 @@ class TestEscalationLaneMetadata:
                "do not fabricate output. If the tool cannot be run, the goal is incomplete.")
         from handle import _is_complex_directive
         assert _is_complex_directive(msg)
-        with patch("intent.classify", return_value=("now", 0.9, "looks quick")):
+        with patch("intent.classify", return_value=("now", 0.9, "looks quick", False)):
             result = handle(msg, dry_run=True)
         assert result.lane == "agenda"
         from runs import run_dir

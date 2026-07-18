@@ -86,24 +86,6 @@ as misleading open work.
 
 Ordered open work that matters. Top of the list is next.
 
-### 27. no_tools sweep — pure-text LLM calls that still run with tools live (2026-07-17, calm-echo)
-
-Planner decompose calls ran the subprocess adapter with tools enabled; on
-calm-echo the boundary-expansion decompose EXECUTED the remainder goal
-instead of planning it (~4 min rogue side-quest, wrong FINAL_REPORT.txt
-written into the project dir, shipped as the user-facing answer). planner.py
-fixed same day (no_tools=True + purpose tags on all 6 call sites, seam test
-in tests/test_planner.py::TestDecomposePureTextContract). The sweep: ~70
-other `adapter.complete` sites don't pass `no_tools` (closure_verify,
-director, inspector, introspect, quality_gate, memory, skills, workers,
-conductor, …). Each is either (a) a pure-text/JSON-contract call → add
-`no_tools=True` + `purpose`, or (b) intentionally agentic → leave and note.
-On this box every call rides `claude -p`, so each unmarked contract call is
-both a rogue-execution risk AND ~20-40s of tool-harness latency. Consider a
-bughunter lint after the sweep (contract-shaped prompt + missing no_tools),
-mirroring BH011's shape. Inventory snapshot in the 2026-07-17 session
-transcript; regenerate with a grep for `.complete(` vs `no_tools=True`.
-
 ### SP. Session-protocol arc — two-box Hermes dispatch, interactive goals, effort UX (OPENED 2026-07-15, Jeremy)
 
 The umbrella for the next big lane; full skeleton + stance decrees in
@@ -196,21 +178,31 @@ task-…b414ccab / run cobalt-pine — five-link failure chain, four fixed live)
   skip sentinels untouched. Prompt also asks for verdict-first prose
   (secondary). Pins in `test_director` incl. the merry-nettle
   contradiction case.
-- [ ] **Container executor walls off introspection goals — DECIDED
-  2026-07-18, buildable** — the hermes-dispatched self-diagnostic (run
-  brisk-saffron, task-…80466244) executed in the container executor
-  ($HOME=/home/maro): no view of the host's ~/.maro/workspace run records,
-  no dispatch CLI, no maro binary. It spent 2.8M tokens / 28min exhaustively
-  proving its own isolation (its H2 hypothesis — "a pre-execution gate set
-  clarification_needed but never wrote the reason" — was correct and
-  unverifiable from inside). **Jeremy's call (2026-07-18, GOAL_BRAIN
-  Decisions): "Install in the container only for the runs that need
-  access."** Not host-side routing, not a blanket mount — containment stays
-  the default; introspection-shaped runs get their container provisioned
-  per-run (maro CLI available inside + workspace run records mounted
-  read-only). Work shape: introspection-goal detection signal + per-run
-  mount-map/provisioning extension in container_exec. Captured in
-  docs/CAPABILITIES.md (Tier 2, aspirational).
+- [x] **Container executor walls off introspection goals — SHIPPED
+  2026-07-18 (same day as the decree)** — brisk-saffron (task-…80466244)
+  spent 2.8M tokens / 28min proving only its own isolation. **Jeremy's call
+  (GOAL_BRAIN Decisions 2026-07-18): "Install in the container only for the
+  runs that need access."** Shipped shape: `intent.classify()` gained an
+  `introspects_self` schema field (4-tuple return; fails open False on the
+  heuristic path — isolation is the safe default) → handle threads it as
+  `introspection_access` into `run_agent_loop` → run-scoped ContextVar in
+  container_exec (finding-D reset pattern) → `introspection_provision()`
+  adds ro mounts (workspace `runs/` + maro source dir + PYTHONPATH +
+  MARO_INTROSPECTION markers) to the container branch in llm.py. Gated by
+  `executor.introspection_access` (docs/DEFAULTS.md row; default on, inert
+  unless containers are on); provision output still passes build_mount_map's
+  forbidden filter (workspace root/memory/config/secrets stay out); fails
+  CLOSED to blind isolation. Design doc §4 amended. In-container maro CLI is
+  best-effort (stdlib-only modules — image has no maro deps); the records
+  mount is the real guarantee. Tests: TestIntrospectionProvision
+  (test_container_exec.py), TestIntrospectsSelf (test_intent.py),
+  agent_loop threading pins. Adversarial review (Codex ×3) same day:
+  confirmed-and-fixed = conductor dropped the grant before run_agent_loop;
+  pipeline/team/direct handle paths didn't thread it; provisioning failed
+  partially OPEN (source-only mount + MARO_INTROSPECTION=1 with no records
+  — now all-or-nothing None); symlinked runs/ could ride the grant past the
+  descendant allowance (now refused). Accepted known gap: `--lane agenda`
+  forces past the classifier → no grant (comment at the force_lane branch).
 - [x] **Per-loop restart alert reads as terminal failure** — SHIPPED
   2026-07-17 (same night): loop_finalize's per-loop "Mission complete"
   telegram block (terminal language + per-loop totals for a NON-terminal
@@ -1208,6 +1200,21 @@ refresh attempt — see BACKLOG_DONE for the reconciliation note).
 ---
 
 ## Vision / Deferred
+
+### Two small refactors from the 2026-07-18 adversarial review (low, grab when nearby)
+
+- **NOW-lane prompt assembly is duplicated** between `handle._run_now` and
+  `conductor._handle_now_lane` (both: enrich_step_with_urls + link-read
+  system suffix + degrade-on-failure). Two copies is at the repo's
+  3-wants-extraction edge; if a third NOW surface appears or the enrichment
+  pattern changes again, extract a shared pure builder (structured state in,
+  (system, user) out) into web_fetch or a small now_lane module.
+- **`intent.classify()`'s widening tuple wants a dataclass.** The 3→4-tuple
+  migration let conductor unpack-and-discard `introspects_self` without type
+  pressure (the review's one confirmed High). A `ClassifyResult` with named
+  routing facts (lane, confidence, reason, needs_live_data, introspects_self)
+  would make the next field addition a non-event. Do it as its own tiny
+  chunk, not mid-feature.
 
 ### Time blindness — LLMs don't experience ideas over time (2026-07-11, Jeremy)
 

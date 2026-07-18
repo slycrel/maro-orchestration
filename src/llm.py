@@ -1176,6 +1176,13 @@ def _run_subprocess_safe(cmd, *, input=None, timeout=600,
             _ro_mounts = [str(x) for x in (_cfg_get("executor.container_extra_mounts", []) or []) if x]
         except Exception as _mnt_exc:
             log.debug("container_extra_mounts read failed (non-fatal): %s", _mnt_exc)
+        # Introspection-shaped runs (decree 2026-07-18): read-only run records
+        # + maro source + env markers, so a dispatched self-diagnostic can see
+        # what it is asked to diagnose instead of proving its own isolation.
+        _intro = _ce.introspection_provision()
+        if _intro:
+            _ro_mounts.extend(_intro["ro_mounts"])
+            _worker_env.update(_intro["env"])
         # realpath so a symlinked cwd resolves to the same target build_mount_map
         # binds and the exclusion filter checks (adversarial-review 2026-07-13):
         # -w must name the path that actually exists inside the container.
@@ -2716,6 +2723,8 @@ def probe_backends() -> List[Tuple[str, bool, str]]:
             resp = adapter.complete(
                 [LLMMessage("user", "Reply with the single word: ok")],
                 max_tokens=8,
+                no_tools=True,
+                purpose="backend liveness probe",
             )
             ok = bool((resp.content or "").strip())
             out.append((name, ok, "live" if ok else "empty response"))

@@ -141,6 +141,7 @@ run may write (`loop_execute.py:683-687`):
 | Goal-declared roots (`artifact_check.goal_declared_roots`, :601-622 — user intent to write there) | **rw** | per-run, cap 8, already `FENCE_EXTENDED`-audited |
 | `validate.write_fence_allow` config roots | **rw** | config |
 | `executor.container_extra_mounts` (reference data, repo checkouts) | **ro** | config, new |
+| Introspection-shaped runs only: workspace `runs/` + maro source dir (`container_exec.introspection_provision()`) | **ro** | per-run, decree 2026-07-18 |
 | Container `/tmp` | container-local | free — matches the fence's /tmp allowance without touching host /tmp |
 
 **Deliberately absent — the orchestration itself (Jeremy, 2026-07-12
@@ -156,6 +157,23 @@ Maro; recursion per the recursion decree is a navigator move, so "spawn a
 sub-goal" means the HOST spawns a sibling container. If real runs surface a
 legitimate workspace read, add a targeted **ro** mount from evidence — the
 same evidence-driven posture as the fence residuals (BACKLOG #1).
+
+**Amendment, decree 2026-07-18 ("Install in the container only for the runs
+that need access"):** the first evidence-driven exception to the paragraph
+above. brisk-saffron (task-…80466244) — a dispatched self-diagnostic — spent
+2.8M tokens / 28min proving only that it couldn't see the host run records
+it was asked to diagnose. When `intent.classify()` flags a goal
+`introspects_self`, that run's containers get **ro** provisioning: the
+workspace `runs/` dir (a workspace *descendant*; the root itself stays
+hard-forbidden) + the maro source dir with `PYTHONPATH`, so `python3 -m`
+readers work in-container best-effort (stdlib-only modules — the image
+carries no maro Python deps; the records mount is the real guarantee), plus
+`MARO_INTROSPECTION`/`MARO_INTROSPECTION_RUNS` markers. Still absent even
+then: `memory/`, `config.yml`, `secrets/`, the workspace root. Gated by
+`executor.introspection_access` (default on, inert unless `executor.container`
+is on); fails CLOSED to blind isolation on any resolution error. The flag is
+run-scoped (`ContextVar`, finding-D reset pattern) — a later run never
+inherits the grant.
 
 **uid/gid:** run `--user $(id -u):$(id -g)` so mounted files stay
 operator-owned (the known edge flagged at decision time). Symlink escapes:

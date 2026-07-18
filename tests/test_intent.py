@@ -47,7 +47,7 @@ class TestFileOutputOverride:
     after classification (LLM or heuristic)."""
 
     def test_now_shaped_goal_with_artifact_path_forced_to_agenda(self):
-        lane, conf, reason = classify(
+        lane, conf, reason, _ = classify(
             "Summarize what the unix command 'comm' does and give 3 worked "
             "examples, saved to artifacts/comm-examples.md",
             dry_run=True,
@@ -57,15 +57,15 @@ class TestFileOutputOverride:
         assert "file deliverable" in reason
 
     def test_save_to_named_file_forced_to_agenda(self):
-        lane, _, _ = classify("Quick: save the top 5 rows to report.csv", dry_run=True)
+        lane, _, _, _ = classify("Quick: save the top 5 rows to report.csv", dry_run=True)
         assert lane == "agenda"
 
     def test_plain_now_goal_unaffected(self):
-        lane, _, _ = classify("what time is it?", dry_run=True)
+        lane, _, _, _ = classify("what time is it?", dry_run=True)
         assert lane == "now"
 
     def test_inline_transform_unaffected(self):
-        lane, _, _ = classify("translate this to Spanish: hello world", dry_run=True)
+        lane, _, _, _ = classify("translate this to Spanish: hello world", dry_run=True)
         assert lane == "now"
 
 
@@ -95,7 +95,7 @@ class TestLiveDataOverride:
             def complete(self, *args, **kwargs):
                 return self._Resp()
 
-        lane, conf, reason = classify(
+        lane, conf, reason, _ = classify(
             "Where can I get non-ethanol gas in or around Manti, Utah?",
             adapter=LiveDataAdapter(),
         )
@@ -123,7 +123,7 @@ class TestLiveDataOverride:
             def complete(self, *args, **kwargs):
                 return self._Resp()
 
-        lane, _, _ = classify("what's the current BTC price?", adapter=StringBoolAdapter())
+        lane, _, _, _ = classify("what's the current BTC price?", adapter=StringBoolAdapter())
         assert lane == "agenda"
 
     def test_llm_absent_needs_live_data_defaults_false(self):
@@ -144,7 +144,7 @@ class TestLiveDataOverride:
             def complete(self, *args, **kwargs):
                 return self._Resp()
 
-        lane, conf, reason = classify("what time is it?", adapter=NoFieldAdapter())
+        lane, conf, reason, _ = classify("what time is it?", adapter=NoFieldAdapter())
         assert lane == "now"
         assert conf == 0.9
 
@@ -168,13 +168,13 @@ class TestLiveDataOverride:
             def complete(self, *args, **kwargs):
                 return self._Resp()
 
-        lane, conf, reason = classify("research current gas prices", adapter=AgendaLiveDataAdapter())
+        lane, conf, reason, _ = classify("research current gas prices", adapter=AgendaLiveDataAdapter())
         assert lane == "agenda"
         assert conf == 0.75
         assert reason == "Multi-source research required"
 
     def test_stable_knowledge_now_lookup_unaffected(self):
-        lane, _, _ = classify("what does HTTP 429 mean?", dry_run=True)
+        lane, _, _, _ = classify("what does HTTP 429 mean?", dry_run=True)
         assert lane == "now"
 
     def test_llm_needs_live_data_flip_disabled_restores_now(self, monkeypatch):
@@ -207,7 +207,7 @@ class TestLiveDataOverride:
             def complete(self, *args, **kwargs):
                 return self._Resp()
 
-        lane, conf, reason = classify(
+        lane, conf, reason, _ = classify(
             "Where can I get non-ethanol gas in or around Manti, Utah?",
             adapter=LiveDataAdapter(),
         )
@@ -220,7 +220,7 @@ class TestLiveDataOverride:
         assert lane == "agenda"
 
     def test_heuristic_live_data_phrasing_routes_agenda_via_classify_dry_run(self):
-        lane, _, _ = classify("what's the current BTC price?", dry_run=True)
+        lane, _, _, _ = classify("what's the current BTC price?", dry_run=True)
         assert lane == "agenda"
 
     def test_heuristic_live_data_flip_disabled_restores_now(self, monkeypatch):
@@ -299,24 +299,25 @@ class TestHeuristicEdgeCases:
 # ---------------------------------------------------------------------------
 
 def test_classify_dry_run_short():
-    lane, conf, reason = classify("what time is it?", dry_run=True)
+    lane, conf, reason, _ = classify("what time is it?", dry_run=True)
     assert lane == "now"
     assert isinstance(conf, float)
     assert isinstance(reason, str)
 
 
 def test_classify_dry_run_research():
-    lane, conf, reason = classify("research polymarket strategies", dry_run=True)
+    lane, conf, reason, _ = classify("research polymarket strategies", dry_run=True)
     assert lane == "agenda"
 
 
 def test_classify_returns_tuple():
     result = classify("hello", dry_run=True)
-    assert len(result) == 3
-    lane, conf, reason = result
+    assert len(result) == 4
+    lane, conf, reason, introspects_self = result
     assert lane in ("now", "agenda")
     assert 0.0 <= conf <= 1.0
     assert len(reason) > 0
+    assert introspects_self is False  # heuristic path fails open to isolation
 
 
 def test_classify_falls_back_on_adapter_error():
@@ -325,7 +326,7 @@ def test_classify_falls_back_on_adapter_error():
         def complete(self, *args, **kwargs):
             raise RuntimeError("API down")
 
-    lane, conf, reason = classify("research X", adapter=FailAdapter())
+    lane, conf, reason, _ = classify("research X", adapter=FailAdapter())
     assert lane in ("now", "agenda")
     assert 0.0 <= conf <= 1.0
 
@@ -629,14 +630,14 @@ class TestLinkExemption:
         return _Adapter()
 
     def test_url_bearing_live_data_ask_stays_now(self):
-        lane, _, _ = classify(
+        lane, _, _, _ = classify(
             "is this worth my time? https://x.com/someone/status/12345",
             adapter=self._live_data_now_adapter(),
         )
         assert lane == "now"
 
     def test_sourceless_live_data_ask_still_escalates(self):
-        lane, _, reason = classify(
+        lane, _, reason, _ = classify(
             "Where can I get non-ethanol gas in or around Manti, Utah?",
             adapter=self._live_data_now_adapter(),
         )
@@ -650,7 +651,7 @@ class TestLinkTriageShortcut:
     time? <link>' agenda@0.95 despite a verbatim prompt example."""
 
     def test_canonical_ask_routes_now_deterministically(self):
-        lane, conf, reason = classify(
+        lane, conf, reason, _ = classify(
             "is this worth my time? https://x.com/someone/status/12345",
             dry_run=True)
         assert lane == "now"
@@ -679,3 +680,77 @@ class TestLinkTriageShortcut:
     def test_no_url_not_matched(self):
         from intent import _is_link_triage
         assert not _is_link_triage("is this worth my time?")
+
+
+# ---------------------------------------------------------------------------
+# introspects_self (decree 2026-07-18: introspection-shaped runs get ro run
+# records + maro source inside the executor container)
+# ---------------------------------------------------------------------------
+
+def _canned_adapter(payload: dict):
+    import json
+
+    class _Adapter:
+        class _Resp:
+            content = json.dumps(payload)
+            input_tokens = 10
+            output_tokens = 10
+            tool_calls = []
+
+        def complete(self, *args, **kwargs):
+            return self._Resp()
+
+    return _Adapter()
+
+
+class TestIntrospectsSelf:
+    def test_llm_flag_true_surfaces(self):
+        lane, _, _, introspects = classify(
+            "why did your last run fail?",
+            adapter=_canned_adapter({
+                "lane": "agenda", "confidence": 0.9,
+                "reason": "Requires reading run records",
+                "introspects_self": True,
+            }))
+        assert lane == "agenda"
+        assert introspects is True
+
+    def test_string_true_parsed(self):
+        _, _, _, introspects = classify(
+            "audit your own planner",
+            adapter=_canned_adapter({
+                "lane": "agenda", "confidence": 0.8,
+                "reason": "self-audit", "introspects_self": "true",
+            }))
+        assert introspects is True
+
+    def test_absent_field_fails_open_false(self):
+        _, _, _, introspects = classify(
+            "what time is it?",
+            adapter=_canned_adapter({
+                "lane": "now", "confidence": 0.9, "reason": "simple",
+            }))
+        assert introspects is False
+
+    def test_survives_file_output_override(self):
+        """Lane overrides rewrite (lane, conf, reason) — the introspection
+        flag must ride through them, not be dropped."""
+        lane, _, _, introspects = classify(
+            "diagnose your retries and save findings to artifacts/diag.md",
+            adapter=_canned_adapter({
+                "lane": "now", "confidence": 0.7,
+                "reason": "quick self-check", "introspects_self": True,
+            }))
+        assert lane == "agenda"  # file deliverable forces AGENDA
+        assert introspects is True
+
+    def test_heuristic_path_false(self):
+        _, _, _, introspects = classify("why did your last run fail?",
+                                        dry_run=True)
+        assert introspects is False
+
+    def test_link_triage_shortcut_false(self):
+        lane, _, _, introspects = classify(
+            "worth my time? https://example.com/post", dry_run=True)
+        assert lane == "now"
+        assert introspects is False

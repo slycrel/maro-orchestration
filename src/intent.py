@@ -9,11 +9,12 @@ heuristic keyword matching if the LLM call fails.
 
 Usage:
     from intent import classify
-    lane, confidence, reason = classify("what time is it?")
-    # → ("now", 0.95, "Simple factual question")
+    lane, confidence, reason, introspects_self = classify("what time is it?")
+    # → ("now", 0.95, "Simple factual question", False)
 
-    lane, confidence, reason = classify("research winning polymarket strategies")
-    # → ("agenda", 0.92, "Requires research and multi-step analysis")
+    lane, confidence, reason, introspects_self = classify(
+        "why did your last run fail?")
+    # → ("agenda", 0.9, "Requires reading run records", True)
 """
 
 from __future__ import annotations
@@ -35,14 +36,18 @@ def classify(
     *,
     adapter=None,
     dry_run: bool = False,
-) -> Tuple[Lane, float, str]:
+) -> Tuple[Lane, float, str, bool]:
     """Classify a message as NOW or AGENDA lane.
 
     Returns:
-        (lane, confidence, reason)
+        (lane, confidence, reason, introspects_self)
         - lane: "now" or "agenda"
         - confidence: 0.0–1.0
         - reason: one-sentence explanation
+        - introspects_self: the goal asks about THIS system's own runs/
+          behavior/source (decree 2026-07-18: such runs get read-only run
+          records + maro source inside the executor container). Fails open
+          to False on the heuristic path — isolation is the safe default.
     """
     # Deterministic link-triage shortcut, ahead of any LLM opinion
     # (conversational-compute decree, 2026-07-17): the canonical "is this
@@ -52,14 +57,17 @@ def classify(
     # purpose: triage phrasing + a URL + no file deliverable + a short ask.
     if _is_link_triage(message):
         return ("now", 0.9,
-                "Link triage — provided link is pre-fetched and read inline")
+                "Link triage — provided link is pre-fetched and read inline",
+                False)
 
     needs_live_data = False
+    introspects_self = False
     if dry_run or adapter is None:
         lane, confidence, reason = _heuristic_classify(message)
     else:
         try:
-            lane, confidence, reason, needs_live_data = _llm_classify(message, adapter)
+            lane, confidence, reason, needs_live_data, introspects_self = (
+                _llm_classify(message, adapter))
         except Exception:
             lane, confidence, reason = _heuristic_classify(message)
 
@@ -74,6 +82,7 @@ def classify(
             "agenda",
             max(confidence, 0.8),
             "Names a file deliverable — NOW lane cannot write files",
+            introspects_self,
         )
 
     # Capability override, same class as the file-output one above: NOW is a
@@ -96,8 +105,9 @@ def classify(
             "agenda",
             max(confidence, 0.8),
             "Needs live external data — NOW lane cannot fetch it",
+            introspects_self,
         )
-    return (lane, confidence, reason)
+    return (lane, confidence, reason, introspects_self)
 
 
 def _message_has_url(message: str) -> bool:
@@ -194,12 +204,19 @@ that changes over time or is locally situated — current prices/availability/
 hours, "near me"/named-place inventory, weather, schedules, recent events —
 i.e. anything you cannot know reliably from training data. false otherwise.
 
+Also decide introspects_self: true when the request asks about THIS system's
+own behavior — its past runs, failures, decisions, logs, configuration, or
+source code ("why did the last run fail?", "diagnose your step retries",
+"what did you work on yesterday?", "audit your own planner"). false for
+ordinary tasks about the outside world, even technical ones about other
+software.
+
 Respond ONLY with a JSON object:
-{"lane": "now" or "agenda", "confidence": 0.0-1.0, "reason": "one sentence", "needs_live_data": true or false}
+{"lane": "now" or "agenda", "confidence": 0.0-1.0, "reason": "one sentence", "needs_live_data": true or false, "introspects_self": true or false}
 """
 
 
-def _llm_classify(message: str, adapter) -> Tuple[Lane, float, str, bool]:
+def _llm_classify(message: str, adapter) -> Tuple[Lane, float, str, bool, bool]:
     from llm import LLMMessage
     import json
 
@@ -227,13 +244,19 @@ def _llm_classify(message: str, adapter) -> Tuple[Lane, float, str, bool]:
         needs_live_data = raw_ld is True or (
             isinstance(raw_ld, str) and raw_ld.strip().lower() == "true"
         )
-        return (lane, confidence, reason, needs_live_data)
+        # Same fail-open shape: absent/malformed → False → containerized
+        # steps keep pre-decree isolation (safe, just less capable).
+        raw_is = data.get("introspects_self", False)
+        introspects_self = raw_is is True or (
+            isinstance(raw_is, str) and raw_is.strip().lower() == "true"
+        )
+        return (lane, confidence, reason, needs_live_data, introspects_self)
 
     # Couldn't parse — fall back (heuristic has no schema field to read;
     # its own lexical approximation of live-data-ness already lives in
     # _heuristic_classify's pattern scoring, so no override needed here)
     lane, confidence, reason = _heuristic_classify(message)
-    return (lane, confidence, reason, False)
+    return (lane, confidence, reason, False, False)
 
 
 # ---------------------------------------------------------------------------

@@ -907,12 +907,18 @@ def _handle_impl(
         adapter = _DryRunAdapter()
 
     # Classify intent
+    introspects_self = False
     if force_lane:
+        # Known gap (adversarial-review 2026-07-18, accepted): a forced lane
+        # skips classification, so `--lane agenda "diagnose your last run"`
+        # runs blind-isolated — the introspection grant requires the
+        # classifier. Acceptable: force_lane exists to skip that LLM call,
+        # and the operator forcing a lane can also flip the config gate.
         lane = force_lane
         confidence = 1.0
         reason = f"forced to {force_lane}"
     else:
-        lane, confidence, reason = classify(message, adapter=adapter if not dry_run else None, dry_run=dry_run)
+        lane, confidence, reason, introspects_self = classify(message, adapter=adapter if not dry_run else None, dry_run=dry_run)
 
     if verbose:
         print(f"[maro:{handle_id}] classified lane={lane} confidence={confidence:.2f}: {reason}", file=sys.stderr, flush=True)
@@ -946,6 +952,8 @@ def _handle_impl(
                 [LLMMessage("system", _BTW_SYSTEM), LLMMessage("user", message)],
                 max_tokens=256,
                 temperature=0.3,
+                no_tools=True,
+                purpose="btw observation",
             )
             _btw_content = _btw_resp.content.strip() or "[no observation]"
         except Exception as _btw_exc:
@@ -1310,6 +1318,7 @@ def _handle_impl(
                     preset_steps=_pipe_steps,
                     measurement_class=measurement_class,
                     handle_id=handle_id,
+                    introspection_access=introspects_self,
                 )
                 return _loop_result_to_handle(
                     _pipe_result, handle_id=handle_id, message=message,
@@ -1332,6 +1341,7 @@ def _handle_impl(
                 parallel_fan_out=4,
                 measurement_class=measurement_class,
                 handle_id=handle_id,
+                introspection_access=introspects_self,
             )
             return _loop_result_to_handle(
                 _team_result, handle_id=handle_id, message=message,
@@ -1351,6 +1361,7 @@ def _handle_impl(
                 verbose=verbose,
                 measurement_class=measurement_class,
                 handle_id=handle_id,
+                introspection_access=introspects_self,
             )
             return _loop_result_to_handle(
                 _direct_result, handle_id=handle_id, message=message,
@@ -1377,6 +1388,7 @@ def _handle_impl(
             ralph_verify=_ralph_from_cfg or _ralph_prefix,
             measurement_class=measurement_class,
             handle_id=handle_id,
+            introspection_access=introspects_self,
         )
         if _ultraplan_max_steps is not None:
             _loop_kwargs["max_steps"] = _ultraplan_max_steps

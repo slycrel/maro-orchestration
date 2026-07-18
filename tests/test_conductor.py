@@ -22,6 +22,7 @@ from conductor import (
     _looks_like_goal_map,
     _looks_like_multi_day,
     _handle_now_lane,
+    _NOW_SYSTEM,
 )
 from llm import MODEL_CHEAP, MODEL_MID, MODEL_POWER
 
@@ -40,8 +41,9 @@ def _mock_adapter(content: str = "test response"):
     return adapter
 
 
-def _mock_classify(lane: str = "now", confidence: float = 0.9, reason: str = "test"):
-    return (lane, confidence, reason)
+def _mock_classify(lane: str = "now", confidence: float = 0.9, reason: str = "test",
+                   introspects_self: bool = False):
+    return (lane, confidence, reason, introspects_self)
 
 
 # ---------------------------------------------------------------------------
@@ -223,7 +225,7 @@ def test_poe_handle_dry_run_now():
 def test_poe_handle_now_intent():
     """NOW message → routed_to=now_lane."""
     adapter = _mock_adapter("2+2 is 4")
-    with patch("conductor.classify", return_value=("now", 0.95, "simple question")):
+    with patch("conductor.classify", return_value=("now", 0.95, "simple question", False)):
         with patch("conductor.evaluate_action") as mock_eval:
             mock_decision = MagicMock()
             mock_decision.requires_human = False
@@ -236,7 +238,7 @@ def test_poe_handle_now_intent():
 def test_poe_handle_agenda_intent():
     """AGENDA message → routed_to=mission or director."""
     adapter = _mock_adapter("task completed")
-    with patch("conductor.classify", return_value=("agenda", 0.85, "multi-step")):
+    with patch("conductor.classify", return_value=("agenda", 0.85, "multi-step", False)):
         with patch("conductor.evaluate_action") as mock_eval:
             mock_decision = MagicMock()
             mock_decision.requires_human = False
@@ -281,7 +283,7 @@ def test_poe_handle_goal_map_message():
 def test_poe_handle_requires_human_escalation():
     """When autonomy tier requires human, return escalation message."""
     adapter = _mock_adapter("ok")
-    with patch("conductor.classify", return_value=("agenda", 0.8, "multi-step")):
+    with patch("conductor.classify", return_value=("agenda", 0.8, "multi-step", False)):
         with patch("conductor.evaluate_action") as mock_eval:
             mock_decision = MagicMock()
             mock_decision.requires_human = True
@@ -356,6 +358,43 @@ def test_handle_now_lane_adapter_error():
     adapter.complete.side_effect = RuntimeError("timeout")
     result = _handle_now_lane("something", adapter=adapter)
     assert "Error" in result or "error" in result
+
+
+def test_handle_now_lane_pins_no_tools():
+    """BACKLOG #27: the conductor NOW lane is a contract call — the CLI tool
+    harness must be off (rogue-execution guard), with a purpose label."""
+    adapter = _mock_adapter("answer")
+    _handle_now_lane("What time is it in Tokyo?", adapter=adapter)
+    kwargs = adapter.complete.call_args.kwargs
+    assert kwargs.get("no_tools") is True
+    assert kwargs.get("purpose") == "now"
+
+
+def test_handle_now_lane_url_prefetch():
+    """URL-bearing NOW messages get link content pre-fetched into the prompt
+    (the capability no_tools removed), mirroring handle._run_now."""
+    adapter = _mock_adapter("summary")
+    with patch("web_fetch.enrich_step_with_urls",
+               return_value="[fetched] example.com says hello"):
+        _handle_now_lane("Summarize https://example.com", adapter=adapter)
+    messages = adapter.complete.call_args.args[0]
+    system, user = messages[0].content, messages[1].content
+    assert "[fetched] example.com says hello" in user
+    assert "Summarize https://example.com" in user
+    assert system != _NOW_SYSTEM  # link-read instruction appended
+
+
+def test_handle_now_lane_enrichment_failure_degrades():
+    """Enrichment blowing up must degrade to answering without link content —
+    never fall back to a live tool harness."""
+    adapter = _mock_adapter("best effort")
+    with patch("web_fetch.enrich_step_with_urls",
+               side_effect=RuntimeError("fetch down")):
+        result = _handle_now_lane("Summarize https://example.com",
+                                  adapter=adapter)
+    assert result == "best effort"
+    kwargs = adapter.complete.call_args.kwargs
+    assert kwargs.get("no_tools") is True
 
 
 # ---------------------------------------------------------------------------
