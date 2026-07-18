@@ -146,6 +146,8 @@ Rules:
         resp = adapter.complete(
             [LLMMessage("user", prompt)],
             max_tokens=600,
+            no_tools=True,
+            purpose="skill rewrite",
         )
         raw = resp.content.strip()
         # Strip markdown code fences if present
@@ -400,6 +402,8 @@ def synthesize_skill(
             ],
             max_tokens=512,
             temperature=0.3,
+            no_tools=True,
+            purpose="skill synthesis",
         )
         parsed = extract_json(content_or_empty(resp), dict, log_tag="evolver.synthesize_skill")
     except Exception as e:

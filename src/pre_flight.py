@@ -176,6 +176,8 @@ def review_plan(
             max_tokens=512,
             temperature=0.1,
             timeout=30,
+            no_tools=True,
+            purpose="plan review",
         )
 
         raw = resp.content.strip()

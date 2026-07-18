@@ -212,6 +212,8 @@ def run_doctor() -> bool:
             [LLMMessage("user", "Reply with exactly: ok")],
             max_tokens=8,
             temperature=0.0,
+            no_tools=True,
+            purpose="llm-probe",
         )
         ok = "ok" in resp.content.lower()
         results.append(_check("LLM API reachable", ok, resp.content.strip()[:40]))

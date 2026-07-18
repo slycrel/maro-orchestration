@@ -141,7 +141,11 @@ def _extract_llm(outcome, adapter) -> List[Tuple[str, str, str, str]]:
         )
 
         from llm import LLMMessage
-        result = adapter.complete([LLMMessage(role="user", content=prompt)])
+        result = adapter.complete(
+            [LLMMessage(role="user", content=prompt)],
+            no_tools=True,
+            purpose="knowledge extraction",
+        )
         text = result.content or ""
 
         candidates = []

@@ -687,6 +687,8 @@ def generate_refinement_hint(
             [LLMMessage("user", _refine_prompt)],
             max_tokens=150,
             temperature=0.3,
+            no_tools=True,
+            purpose="refine-hint",
         )
         hint = resp.content.strip()
         if hint:
@@ -1076,6 +1078,7 @@ def execute_step(
             _call_kwargs["session_state"] = executor_session
             _call_kwargs["session_delta_prompt"] = session_delta_msg
             _call_kwargs["session_context_key"] = _static_session_context_key
+        # agentic: the worker executor step — tools do the real work (executor=True)
         resp = adapter.complete(
             [
                 LLMMessage("system", EXECUTE_SYSTEM),
@@ -1168,6 +1171,7 @@ def execute_step(
                     # forces a second opaque rotation on the following step.
                     if executor_session is not None:
                         executor_session.clear()
+                    # agentic: same worker executor step re-called with expanded tools
                     resp = adapter.complete(
                         [
                             LLMMessage("system", EXECUTE_SYSTEM),
@@ -1782,6 +1786,8 @@ def verify_step(
             ],
             max_tokens=128,
             temperature=0.1,
+            no_tools=True,
+            purpose="verify-step",
         )
 
         data = extract_json(content_or_empty(resp), dict, log_tag="step_exec.verify_step")

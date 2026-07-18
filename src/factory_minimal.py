@@ -65,6 +65,8 @@ def run_factory_minimal(
 
     adapter = build_adapter(model=model)
 
+    # agentic: bitter-lesson baseline — the model does the whole goal in one
+    # pass ("everything else is up to the model"); tools may do the real work
     resp = adapter.complete(
         [
             LLMMessage("system", FACTORY_SYSTEM),

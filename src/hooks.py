@@ -433,6 +433,8 @@ def _run_reviewer(
             [LLMMessage("user", prompt)],
             max_tokens=512,
             temperature=0.1,
+            no_tools=True,
+            purpose="reviewer hook verdict",
         )
         output = resp.content.strip()
     except Exception as exc:
@@ -522,6 +524,8 @@ def _run_coordinator(
             [LLMMessage("user", prompt)],
             max_tokens=512,
             temperature=0.2,
+            no_tools=True,
+            purpose="coordinator hook decision",
         )
         output = resp.content.strip()
     except Exception as exc:

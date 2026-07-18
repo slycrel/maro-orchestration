@@ -277,6 +277,8 @@ def attribute_failure(outcome: dict, adapter=None) -> Attribution:
                     [LLMMessage("user", prompt)],
                     max_tokens=512,
                     temperature=0.1,
+                    no_tools=True,
+                    purpose="failure attribution",
                 )
             else:
                 raise RuntimeError("LLMMessage not available")

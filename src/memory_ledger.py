@@ -1239,6 +1239,8 @@ def compress_old_outcomes(
                 ],
                 max_tokens=200,
                 temperature=0.2,
+                no_tools=True,
+                purpose="outcome compression",
             )
             compressed_text = content_or_empty(resp).strip()[:600]
         except Exception as exc:

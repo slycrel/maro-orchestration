@@ -211,6 +211,7 @@ def create_team_worker(
                 _shared_block = "\n\nRelevant context from prior steps:\n" + "\n".join(_entries)
         user_msg = f"Ticket: {task}{_shared_block}\n\nComplete this ticket. Call deliver_result when done."
 
+        # agentic: team worker executes its ticket (real work) and reports via deliver_result/flag_blocked
         resp = adapter.complete(
             [
                 LLMMessage("system", persona_text),

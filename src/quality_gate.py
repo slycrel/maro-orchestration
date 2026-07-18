@@ -157,6 +157,8 @@ def run_llm_council(
                     ],
                     max_tokens=512,
                     temperature=0.4,
+                    no_tools=True,
+                    purpose="council critique",
                 )
                 data = extract_json(content_or_empty(resp), dict, log_tag="quality_gate.council")
                 if data:
@@ -372,6 +374,8 @@ def run_quality_gate(
             ],
             max_tokens=256,
             temperature=0.1,
+            no_tools=True,
+            purpose="quality gate verdict",
         )
         _gate_elapsed_ms = int((time.monotonic() - _t0) * 1000)
 
@@ -443,6 +447,8 @@ def run_quality_gate(
                 ],
                 max_tokens=1024,
                 temperature=0.3,
+                no_tools=True,
+                purpose="adversarial claim review",
             )
 
             parsed = extract_json(content_or_empty(adv_resp), list, log_tag="quality_gate.adversarial")

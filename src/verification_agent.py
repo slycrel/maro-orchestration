@@ -132,6 +132,8 @@ class VerificationAgent:
                 ],
                 max_tokens=128,
                 temperature=0.1,
+                no_tools=True,
+                purpose="verify-step",
             )
             data = extract_json(content_or_empty(resp), dict, log_tag="verification_agent.verify_step")
             if data:

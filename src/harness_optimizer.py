@@ -262,6 +262,8 @@ def _llm_analyze_harness(
             ],
             max_tokens=1024,
             temperature=0.3,
+            no_tools=True,
+            purpose="harness prompt proposals",
         )
         raw = extract_json(content_or_empty(resp), dict)
         raw_proposals = safe_list(raw.get("proposals", []) if raw else [], element_type=dict)

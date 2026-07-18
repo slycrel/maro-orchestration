@@ -281,7 +281,7 @@ class TestRunCrossRef:
         # First call returns claims, second returns confirmed
         call_count = [0]
 
-        def side_effect(messages, tools=[]):
+        def side_effect(messages, tools=[], **kwargs):
             resp = MagicMock()
             resp.tool_calls = []
             resp.input_tokens = 50
@@ -305,7 +305,7 @@ class TestRunCrossRef:
         claims = [{"claim": "Bad claim.", "category": "statistic", "confidence_in_text": "high"}]
         call_count = [0]
 
-        def side_effect(messages, tools=[]):
+        def side_effect(messages, tools=[], **kwargs):
             resp = MagicMock()
             resp.tool_calls = []
             resp.input_tokens = 50
@@ -329,7 +329,7 @@ class TestRunCrossRef:
         claims = [{"claim": "Uncertain claim.", "category": "statistic", "confidence_in_text": "high"}]
         call_count = [0]
 
-        def side_effect(messages, tools=[]):
+        def side_effect(messages, tools=[], **kwargs):
             resp = MagicMock()
             resp.tool_calls = []
             resp.input_tokens = 50

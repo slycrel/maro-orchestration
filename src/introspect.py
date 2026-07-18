@@ -958,6 +958,8 @@ def _quality_lens(
             [LLMMessage("user", prompt)],
             max_tokens=300,
             temperature=_temp,
+            no_tools=True,
+            purpose="quality lens review",
         )
         if resp.content and len(resp.content) > 20:
             findings.append(resp.content.strip())
@@ -1112,6 +1114,8 @@ def _adversarial_lens(
             [LLMMessage("user", prompt)],
             max_tokens=300,
             temperature=_temp,
+            no_tools=True,
+            purpose="adversarial lens review",
         )
         if resp.content and len(resp.content) > 20:
             findings.append(resp.content.strip())
@@ -1182,6 +1186,8 @@ def adversarial_sample(
             [LLMMessage("user", prompt)],
             max_tokens=300,
             temperature=_temp,
+            no_tools=True,
+            purpose="adversarial mid-run review",
         )
         if resp.content and len(resp.content) > 20:
             findings.append(resp.content.strip())

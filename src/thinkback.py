@@ -344,7 +344,7 @@ def run_thinkback(
             LLMMessage(role="system", content=_THINKBACK_SYSTEM),
             LLMMessage(role="user", content=user_msg),
         ]
-        resp = adapter.complete(messages, tools=[])
+        resp = adapter.complete(messages, tools=[], no_tools=True, purpose="hindsight review")
         raw = resp.content or ""
         parsed = _parse_thinkback_response(raw, len(steps))
     except Exception as exc:

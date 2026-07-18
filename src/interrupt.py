@@ -476,6 +476,8 @@ def _classify_intent(
             ],
             max_tokens=512,
             temperature=0.1,
+            no_tools=True,
+            purpose="interrupt classify",
         )
         d = extract_json(content_or_empty(resp), dict, log_tag="interrupt.classify_interrupt")
         if d:

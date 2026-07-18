@@ -198,7 +198,7 @@ def extract_verifiable_claims(
             LLMMessage(role="system", content=_EXTRACT_CLAIMS_SYSTEM),
             LLMMessage(role="user", content=f"TEXT:\n{excerpt}"),
         ]
-        resp = adapter.complete(messages, tools=[])
+        resp = adapter.complete(messages, tools=[], no_tools=True, purpose="claim extraction")
         parsed = _extract_json(resp.content or "")
         claims = parsed.get("claims", [])
         # Safety: limit and validate
@@ -239,7 +239,7 @@ def verify_single_claim(
             LLMMessage(role="system", content=_VERIFY_CLAIM_SYSTEM),
             LLMMessage(role="user", content=f"CLAIM: {claim}"),
         ]
-        resp = adapter.complete(messages, tools=[])
+        resp = adapter.complete(messages, tools=[], no_tools=True, purpose="claim verification")
         parsed = _extract_json(resp.content or "")
         elapsed = int((time.monotonic() - t0) * 1000)
         return ClaimVerification(

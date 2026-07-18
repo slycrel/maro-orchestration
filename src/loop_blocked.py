@@ -743,6 +743,8 @@ def _generate_timeout_split(step_text: str, adapter) -> List[str]:
                 max_tokens=300,
                 temperature=0.2,
                 timeout=45,
+                no_tools=True,
+                purpose="timeout-split",
             )
             lines = [
                 ln.lstrip("0123456789.-) ").strip()

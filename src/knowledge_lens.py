@@ -641,6 +641,7 @@ Output ONLY valid JSON:
         from llm_parse import extract_json, content_or_empty
         resp = adapter.complete(
             [LLMMessage("user", prompt)], max_tokens=400, temperature=0.2,
+            no_tools=True, purpose="rule refight verdict",
         )
         parsed = extract_json(content_or_empty(resp), dict,
                               log_tag="knowledge_lens.refight")

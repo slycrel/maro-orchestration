@@ -287,6 +287,8 @@ def extract_skills(outcomes: List[dict], adapter) -> List[Skill]:
             ],
             max_tokens=2048,
             temperature=0.3,
+            no_tools=True,
+            purpose="skill extraction",
         )
         data = extract_json(content_or_empty(resp), dict, log_tag="skills.extract_skill_patterns")
         if data:
@@ -1121,6 +1123,8 @@ def validate_skill_for_promotion(skill: "Skill", adapter: Any) -> Dict[str, Any]
             ],
             max_tokens=150,
             temperature=0.1,
+            no_tools=True,
+            purpose="skill promotion validation",
         )
         parsed = extract_json(content_or_empty(resp), dict, log_tag="skills.validate")
         if isinstance(parsed, dict):
@@ -1674,6 +1678,8 @@ def generate_skill_tests(
                 ],
                 max_tokens=512,
                 temperature=0.2,
+                no_tools=True,
+                purpose="skill test generation",
             )
             raw = extract_json(content_or_empty(resp), list, log_tag="skills.generate_skill_tests")
             if raw is not None:
@@ -1757,6 +1763,10 @@ def run_skill_tests(
                 f"Steps:\n" + "\n".join(f"- {s}" for s in skill.steps_template[:5])
             )
             if LLMMessage is not None:
+                # Contract, not agentic: the "execution" is a textual smoke
+                # test — output is keyword-matched only, and this runs inside
+                # the autonomous mutation gate where live tools would be a
+                # side-effect hazard.
                 resp = adapter.complete(
                     [
                         LLMMessage("system", skill_context),
@@ -1764,6 +1774,8 @@ def run_skill_tests(
                     ],
                     max_tokens=256,
                     temperature=0.1,
+                    no_tools=True,
+                    purpose="skill smoke test",
                 )
                 output = resp.content.lower()
                 if any(kw.lower() in output for kw in test.expected_keywords):

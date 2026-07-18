@@ -513,6 +513,8 @@ def assess_goal_alignment(goal: str, result_summary: str, adapter=None) -> float
             [LLMMessage("user", prompt)],
             max_tokens=16,
             temperature=0.0,
+            no_tools=True,
+            purpose="goal alignment score",
         )
         text = resp.content.strip()
         return float(text)
@@ -610,6 +612,8 @@ def inspect_session(outcome: dict, adapter=None) -> SessionQuality:
                 ],
                 max_tokens=128,
                 temperature=0.2,
+                no_tools=True,
+                purpose="session quality notes",
             )
             inspector_notes = resp.content.strip()[:300]
         except Exception:
@@ -684,6 +688,8 @@ def _analyze_patterns_with_llm(
             ],
             max_tokens=1024,
             temperature=0.2,
+            no_tools=True,
+            purpose="cross-session patterns",
         )
         data = extract_json(content_or_empty(resp), dict, log_tag="inspector.analyze_patterns")
         if data:

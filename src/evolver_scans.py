@@ -182,6 +182,8 @@ def scan_outcomes_for_signals(
             ],
             max_tokens=1024,
             temperature=0.3,
+            no_tools=True,
+            purpose="business signal scan",
         )
         data = extract_json(content_or_empty(resp), dict, log_tag="evolver.signal_scan")
         if not data:

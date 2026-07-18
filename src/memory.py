@@ -329,6 +329,8 @@ def extract_lessons_via_llm(
                 ],
                 max_tokens=320,
                 temperature=0.3,
+                no_tools=True,
+                purpose="lesson extraction",
             )
             # F6: token transparency — track per-call token usage
             # LLMResponse uses input_tokens/output_tokens; accept either naming convention

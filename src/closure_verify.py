@@ -732,6 +732,8 @@ def verify_goal_completion(
             ],
             max_tokens=512,
             temperature=0.1,
+            no_tools=True,
+            purpose="closure plan",
         )
         plan_data = extract_json(content_or_empty(plan_resp), dict,
                                  log_tag="director.closure_plan")
@@ -872,6 +874,8 @@ def verify_goal_completion(
             ],
             max_tokens=256,
             temperature=0.1,
+            no_tools=True,
+            purpose="closure verdict",
         )
         verdict_data = extract_json(content_or_empty(verdict_resp), dict,
                                     log_tag="director.closure_verdict")

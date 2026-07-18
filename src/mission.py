@@ -164,6 +164,8 @@ def decompose_mission(
             ],
             max_tokens=2048,
             temperature=0.2,
+            no_tools=True,
+            purpose="mission decompose",
         )
         data = extract_json(content_or_empty(resp), dict, log_tag="mission.decompose_milestones")
         if data:
@@ -269,6 +271,8 @@ def _validate_milestone(
             ],
             max_tokens=256,
             temperature=0.1,
+            no_tools=True,
+            purpose="milestone validation",
         )
         data = extract_json(content_or_empty(resp), dict, log_tag="mission.validate_milestone")
         if data:

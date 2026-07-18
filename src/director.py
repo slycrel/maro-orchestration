@@ -666,6 +666,8 @@ def _produce_spec(
             ],
             max_tokens=1024,
             temperature=0.2,
+            no_tools=True,
+            purpose="director spec",
         )
         data = extract_json(content_or_empty(resp), dict, log_tag="director._produce_spec")
         if data:
@@ -734,6 +736,8 @@ def _challenge_spec(
             ],
             max_tokens=512,
             temperature=0.3,
+            no_tools=True,
+            purpose="spec challenge",
         )
         data = extract_json(content_or_empty(resp), dict, log_tag="director._challenge_spec")
         if data:
@@ -781,6 +785,8 @@ def _review_worker_output(
             ],
             max_tokens=256,
             temperature=0.1,
+            no_tools=True,
+            purpose="worker review",
         )
         data = extract_json(content_or_empty(resp), dict, log_tag="director._review_worker_output")
         if data:
@@ -833,6 +839,8 @@ def _compile_report(
             ],
             max_tokens=4096,
             temperature=0.3,
+            no_tools=True,
+            purpose="report compile",
         )
         return (resp.content.strip(), (resp.input_tokens, resp.output_tokens))
     except Exception as exc:
@@ -1157,6 +1165,8 @@ def handle_escalation(
             ],
             max_tokens=512,
             temperature=0.1,
+            no_tools=True,
+            purpose="escalation decision",
         )
         data = extract_json(content_or_empty(resp), dict, log_tag="director.handle_escalation")
     except Exception as exc:
@@ -1534,6 +1544,8 @@ def director_evaluate(
             ],
             max_tokens=512,
             temperature=0.1,
+            no_tools=True,
+            purpose="adaptive supervision",
         )
         data = extract_json(content_or_empty(resp), dict, log_tag="director.adaptive")
         if not data:

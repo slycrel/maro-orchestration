@@ -8,6 +8,57 @@ Last split: 2026-04-16 (session 34).
 
 ---
 
+## #27. no_tools sweep — every adapter.complete site classified — SHIPPED 2026-07-18
+
+**Source:** calm-echo rogue execution (2026-07-17): planner decompose ran
+the subprocess adapter with tools enabled and EXECUTED the remainder goal
+instead of planning it (~4 min side-quest, wrong FINAL_REPORT.txt shipped
+as the answer). planner.py fixed same day; this sweep covered the other
+~70 `adapter.complete` sites.
+
+**Classification record (balanced-paren inventory, 87 `.complete(` sites;
+13 already marked, 74 swept):**
+- **Contract calls → `no_tools=True` + `purpose="<label>"`:** ~55 sites
+  across memory, memory_ledger, knowledge_bridge, knowledge_lens,
+  attribution, cross_ref, thinkback, closure_verify, step_exec (contract
+  seams), loop_blocked, heartbeat, doctor, verification_agent,
+  sprint_contract, inspector, introspect, evolver, evolver_scans,
+  quality_gate, skills, skill_lifecycle, harness_optimizer, hooks,
+  conductor, director, handle, interrupt, mission, persona, team, workers,
+  navigator_prompt, pre_flight, factory_minimal, factory_thin, llm
+  (backend probe).
+- **Intentionally agentic → `# agentic: <reason>` marker (6):**
+  step_exec.py:1081/1174 (worker executor seams), factory_minimal.py:68,
+  factory_thin.py:217 (factory step execution), team.py:214, workers.py:252
+  (worker execution paths).
+- **Not adapter calls (skipped by inventory):** docstring/prose mentions,
+  handle's ConversationChannel.complete, harness_optimizer prompt strings.
+
+**Conductor NOW-lane port (the one real gap found):** the live
+Telegram/Slack `conduct()` NOW path depended on the CLI tool harness to
+fetch URLs — the exact rogue-execution shape. Ported handle._run_now's
+pre-fetch pattern (web_fetch.enrich_step_with_urls + _NOW_LINK_READ system
+suffix, degrade-to-answering on enrichment failure) so `no_tools=True` is
+safe there; this also makes intent.classify's URL-exemption assumption
+("the NOW lane pre-fetches provided links") true on the conductor path,
+not just handle's. Pins in test_conductor.py.
+
+**Standing lint (the BH011-shaped bughunter):**
+`tests/test_no_tools_contract.py` — balanced-paren extraction of every
+`.complete(` call in src/; a call passing messages must have literal
+`no_tools=True`/`"no_tools": True` AND a `purpose` kwarg in the call or
+within 20 preceding lines (kwargs-dict pattern, e.g. planner), or an
+`# agentic` marker within 3 lines. The literal-True + purpose requirement
+came out of the same-day adversarial review (all three reviewers): the
+first draft accepted any `no_tools` substring, so `no_tools=False` left
+after debugging — or a stray comment — would have passed. Exempt: llm.py,
+hosted_free.py (adapter internals/delegation). A vacuity guard asserts the
+lint still sees ≥40 real sites so regex drift can't green it silently.
+
+**Also:** ~3 rigid test stubs (`def side_effect(messages, tools=[])`)
+gained `**kwargs`; six adapter `complete()` signatures already accepted
+`**kwargs` so the sweep is signature-safe by construction.
+
 ## #26. web_fetch reply-aware X rung — SHIPPED same day (2026-07-17)
 
 **Source:** the zesty-ash dig + Jeremy's follow-up-post note ("the github

@@ -765,7 +765,10 @@ def persona_for_goal(
                 f"Goal: {goal[:300]}\n\n"
                 f"Which single persona best fits this goal? Reply with ONLY the persona name, nothing else."
             )
-            resp = adapter.complete([LLMMessage("user", prompt)], max_tokens=30)
+            resp = adapter.complete(
+                [LLMMessage("user", prompt)], max_tokens=30,
+                no_tools=True, purpose="persona selection",
+            )
             llm_name = resp.content.strip().lower().split()[0] if resp.content.strip() else ""
             if llm_name in available_names:
                 return llm_name, 0.80

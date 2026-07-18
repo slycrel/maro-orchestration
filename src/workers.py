@@ -249,6 +249,7 @@ def dispatch_worker(
     user_msg = f"Ticket: {ticket}{context_block}\n\nComplete this ticket. Call deliver_result when done."
 
     try:
+        # agentic: worker-ticket executor seam — model does the ticket's real work (executor=True, container lane)
         resp = adapter.complete(
             [
                 LLMMessage("system", persona),

@@ -230,6 +230,8 @@ def _llm_analyze(outcomes: List[Any], *, dry_run: bool = False, adapter=None) ->
             ],
             max_tokens=2048,
             temperature=0.2,
+            no_tools=True,
+            purpose="evolver outcome analysis",
         )
         data = extract_json(content_or_empty(resp), dict, log_tag="evolver._analyze")
         if data:

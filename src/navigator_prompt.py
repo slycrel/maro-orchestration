@@ -228,6 +228,8 @@ def _complete(adapter, system: str, user: str, *, max_tokens: int = 800) -> str:
         [LLMMessage("system", system), LLMMessage("user", user)],
         max_tokens=max_tokens,
         temperature=0.2,
+        no_tools=True,
+        purpose="navigator decision",
     )
     return content_or_empty(resp)
 

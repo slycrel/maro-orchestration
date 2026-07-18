@@ -163,6 +163,8 @@ def negotiate_contract(
                 ],
                 max_tokens=512,
                 temperature=0.2,
+                no_tools=True,
+                purpose="contract-negotiate",
             )
             data = extract_json(content_or_empty(resp), dict, log_tag="sprint_contract.negotiate")
             if data:
@@ -263,6 +265,8 @@ def grade_contract(
             ],
             max_tokens=1024,
             temperature=0.1,
+            no_tools=True,
+            purpose="contract-grade",
         )
         data = extract_json(content_or_empty(resp), dict, log_tag="sprint_contract.grade")
         if data:

@@ -310,6 +310,8 @@ def _tier2_llm_diagnosis(stuck_projects: List[str], *, dry_run: bool = False) ->
                 ],
                 max_tokens=512,
                 temperature=0.2,
+                no_tools=True,
+                purpose="stuck-diagnosis",
             )
             _mark_diagnosis_ran(project)
             actions.append(RecoveryAction(

@@ -185,6 +185,8 @@ def run_factory_thin(
         ],
         max_tokens=512,
         temperature=0.3,
+        no_tools=True,
+        purpose="factory-decompose",
     )
     total_tokens_in += decompose_resp.input_tokens
     total_tokens_out += decompose_resp.output_tokens
@@ -212,6 +214,7 @@ def run_factory_thin(
         for _attempt in range(max_retries if verify else 1):
             context_block = f"\n\nCompleted so far:\n{completed_context}" if completed_context else ""
             retry_hint = f"\n\nPrevious attempt was rejected by verifier — produce more specific, complete output." if _attempt > 0 else ""
+            # agentic: thin-loop step execution — the model does the step's real work
             resp = adapter.complete(
                 [
                     LLMMessage("system", FACTORY_STEP),
@@ -285,6 +288,8 @@ def run_factory_thin(
             ],
             max_tokens=2048,
             temperature=0.3,
+            no_tools=True,
+            purpose="factory-adversarial",
         )
         total_tokens_in += adv_resp.input_tokens
         total_tokens_out += adv_resp.output_tokens
@@ -308,6 +313,8 @@ def run_factory_thin(
         ],
         max_tokens=4096,
         temperature=0.1,
+        no_tools=True,
+        purpose="factory-compile",
     )
     total_tokens_in += compile_resp.input_tokens
     total_tokens_out += compile_resp.output_tokens
