@@ -13,6 +13,8 @@
 #   status <job_id>           dispatch record / run progress
 #   result <job_id>           final run_card JSON
 #   list                      recent dispatches
+#   land hermes/<topic>       publish a proposal branch from the Mini's
+#                             persistent clone (PROPOSE_LANE.md) → JSON receipt
 #
 # Goal text passes through raw — a goal is code execution by design; Maro's
 # containment machinery is the control for goal CONTENT, this gate only
@@ -24,7 +26,7 @@ DRIVER="$REPO/deploy/hermes/dispatch.py"
 
 cmd="${SSH_ORIGINAL_COMMAND:-}"
 if [ -z "$cmd" ]; then
-    echo '{"error": "no command — this key is dispatch-only (ping|dispatch|status|result|list)"}' >&2
+    echo '{"error": "no command — this key is dispatch-only (ping|dispatch|status|result|list|land)"}' >&2
     exit 2
 fi
 
@@ -55,6 +57,13 @@ case "$verb" in
     status|result)
         _check_id "$rest"
         exec python3 "$DRIVER" "$verb" "$rest" ;;
+    land)
+        # Branch name is the only input; land.sh re-validates it too.
+        if ! [[ "$rest" =~ ^hermes/[A-Za-z0-9._-]{1,64}$ ]]; then
+            echo '{"error": "land needs a branch matching hermes/<topic>"}' >&2
+            exit 2
+        fi
+        exec "$REPO/deploy/hermes/land.sh" "$rest" ;;
     *)
         echo "{\"error\": \"verb not allowed: $verb\"}" >&2
         exit 2 ;;
