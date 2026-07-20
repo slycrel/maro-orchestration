@@ -3549,3 +3549,17 @@ Dormant (deliberately parked, not dropped):
   dropped the grant; partial-open provisioning; lint substring
   weakness); known-gap accepted: `--lane` force skips the classifier so
   forced runs never get the grant.
+- **2026-07-20 (Jeremy, after a Hermes backlog commit stranded in mini2's
+  /tmp) — Hermes propose-only lane: the trust boundary is merge-to-main,
+  not push.** Hermes keeps no GitHub credentials (mini2's persistent
+  clone at `~/.hermes/repos/maro-orchestration` is https = fetch-only by
+  construction); it works on `hermes/<topic>` branches and hands them to
+  this box via a new `land` verb on the dispatch gate. Docs-only
+  proposals (all `*.md`) auto-fast-forward to main; anything touching
+  code stops as a pushed `hermes/*` branch + PR URL awaiting Jeremy —
+  his stated concern: hermes must not rewrite the orchestration that
+  governs it on its own. Built + verified e2e same day (docs commit from
+  mini2 landed on main through the lane; code commit correctly held at
+  branch; gate rejects non-`hermes/*` refs). Mechanics + ops:
+  `deploy/hermes/PROPOSE_LANE.md`; Hermes-side contract:
+  `~/.hermes/skills/orchestration/maro-propose/SKILL.md` (mini2).
