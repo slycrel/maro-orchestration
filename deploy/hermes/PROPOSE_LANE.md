@@ -58,3 +58,5 @@ mini2 (Hermes)                              maro box (this repo)
   branches from freshly-fetched `origin/main`, so stale-base proposals
   are self-healing on the next attempt; `land.sh` reports (not merges)
   stale-base docs proposals.
+
+**Verified end-to-end 2026-07-20:** this line was committed on mini2 by the lane itself and landed on main via `maro-propose send` → `land`.
