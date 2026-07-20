@@ -1634,6 +1634,46 @@ re-scoping against what shipped before any further implementation.
 - Crystallization Stage 5 (existing gap in `KNOWLEDGE_CRYSTALLIZATION.md`) — the navigator's cheaper-over-time mechanism
 - Shared-learning portability (new) — self-learned artifacts should survive HDD loss / orchestrator switch
 
+**Part 2 — Compound-thinking review (added 2026-07-20, Jeremy).** Re-review the
+thread/navigator design from the practical question: does the system choose the
+smallest useful shape of work, or does it turn a simple ask into a large
+orchestration ritual? The target is not brute-force decomposition or a new
+"reasoning model." It is an external cognitive architecture that can: (a) keep a
+true one-shot as a one-shot; (b) split genuinely independent questions into
+small, concurrent, independently verifiable children; (c) sequence only real
+dependencies; and (d) preserve/merge the resulting evidence without losing the
+user's context.
+
+- **Review the current move set** (`execute`, `fork`, `collate`, `extend`,
+  `close`, `escalate`) and identify the minimum decision inputs and output
+  contracts needed to distinguish one-shot / fan-out / sequence / monitor.
+  Do not add an always-plan phase or a generic task taxonomy.
+- **Use organic acceptance cases**, including the Manti non-ethanol-gas ask,
+  link-farm triage ("is this worth my time?"), a bounded code change
+  (inspect → change → test → verify), and a genuinely parallel comparison.
+  Compare the chosen shape against a direct one-shot baseline on usefulness,
+  wall time, cost, and whether the final answer contains the requested result.
+- **Concurrency is conditional, not aspirational:** fan out only when children
+  have independent inputs/side effects and a defined collation artifact.
+  Each child must leave inspectable evidence; a failed child returns its
+  partial result plus its exact blocker, not a generic planner failure.
+- **Keep the human context as a first-class input.** The work-shape decision
+  must preserve stated outcome, constraints, prior thread artifacts, and user
+  preferences; decomposition is a tool for reducing work, not a license to
+  replace the user's intent with a planner's abstraction.
+- **Bitter Lesson posture:** cite `docs/history/2026-03-30-bitter-lesson-analysis.md`
+  as a historical design lens, but do not treat it as a deletion mandate. Its
+  earlier suggestion that parallel fan-out/locks are merely "how" needs
+  reconciliation with observed cases: lightweight harnessing, durable context,
+  boundaries, and verifiable collation may increase usable model capability.
+  The review should retain only mechanisms that beat the one-shot baseline on
+  real tasks, and explicitly remove or demote mechanisms that do not.
+
+**Deliverable:** a short decision memo that updates
+`docs/THREAD_ARCHITECTURE.md` only after the organic-case review: retained work
+shapes, rejected/removed ceremony, required evidence contracts, and the first
+small implementation or measurement slice. No broad rewrite before that memo.
+
 ### Intent resolution — naming the "side-quests before decompose" shape (discovered 2026-04-18)
 
 Run 7 of slycrel-go surfaced (again) that "done" means "the plan we guessed
