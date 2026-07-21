@@ -3607,3 +3607,54 @@ Dormant (deliberately parked, not dropped):
   plus a completeness critic whose confirmed findings were folded back.
   The edges-for-plan digest (KNOWLEDGE_JOURNEY.md final section) is the
   input to the checkpoint that gates the implementation chunks.
+- **2026-07-21 (Jeremy, plan-revision checkpoint) — revival dispositions,
+  confirmed by clean review.** On the history's candidate revivals:
+  "let's go with your recommendation here, including adding personas to
+  phase 5. Let's run a clean adversarial sub-agent review against the
+  decision, along with the plan doc, and give them the history if they
+  want to go digging. Then we can confirm or correct our decision
+  there." Dispositions: IN — typed finding codes (chunk 1),
+  effort-estimate compute (chunk 7; the consent *message* belongs to the
+  session-protocol thread), persona-dispatch owner (chunk 5b, ships
+  before the lenses that consume it). BACKLOG (entries added in chunk 1)
+  — Also-After hooks, RISKS.md as reviewer input, decision-gated-ping
+  escalation shape, blind persona-panel tiebreaker, signal-source
+  rotation runtime half, exception-vs-break lifecycle, REASSESS
+  7-question overlay, recurring doc-census cadence, promotion-side
+  starvation, hand-adjudicated burn-in ritual. The clean two-agent
+  review (grounding checker + adversary, history available) CONFIRMED
+  the dispositions — no BACKLOG item is load-bearing for chunks 3-5 —
+  and corrected the plan: Phase 0.5 battery → real-instance blinded
+  ground truth; patterns doc out of skills/ (skill_loader globs repo
+  skills/ into runtime prompts); chunk-4 prerequisites made explicit
+  (rules_cited/lesson-ID stamps in RECALL_PERFORMED, Stage-5 provenance
+  pointers, verdict_trust()-only closure reads, UNDECIDED→unjudged);
+  chunk 8 split report-early/enforce-late with a registration
+  convention; chunk 5 split 5a/5b; typed codes moved to chunk 1. The
+  adversary also caught three citation morphs in the plan and
+  KNOWLEDGE_JOURNEY.md — citation inversion, the very class the 05-12
+  taxonomy names — all verified and fixed same day.
+- **2026-07-21 (Jeremy) — Phase 0.5: patterns doc before chunk 1,
+  test-driven, two halves.** "There is a part of me that wonders if
+  we're doing this backwards and need to come at this in a more test
+  driven approach... I wonder if we need to create a skill a-la the
+  bitter lesson, regarding the patterns we have already identified, then
+  run some tests (maybe a phase 0.5?) to see if that skill performs as
+  we might expect." Refined in-session: "you're focused a bit on the
+  verification half; which is thematic here... but I'd also like to
+  capture the patterns for the up front part of the skill as well."
+  Adopted: `docs/DEV_PATTERNS.md` (docs/, NOT skills/) with **up-front
+  commitments** applied at plan/design time (cuts-first, consumer-first,
+  decree-with-tripwire, done-means, scope/inversion) AND **audit
+  checks**; graduation rule — every check carries a `deterministic-home:`
+  tag and LEAVES the doc when its deterministic home ships (enforced by
+  the chunk-8 census, not prose). Battery runs BEFORE chunk 1 because
+  the tree's real violations (decisions.jsonl readerless,
+  contradict_pattern dead writer, playbook horizon bug, mode:thin
+  unadjudicated) are the blinded ground truth and chunks 2-4 destroy
+  it; scored on unprompted surfacing AND plan shape (consumers/tripwires
+  named up front). Pre-registered gate: clear delta → standing CLAUDE.md
+  pre-read; ambiguous → ship as non-gated pre-read and say so — do not
+  launder noise as a benchmark verdict. Prior instantiations on record
+  (playbook, Stage-5 compiled rules) both half-died; the differentiator
+  here is the test that can fail.
