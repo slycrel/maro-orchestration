@@ -3696,3 +3696,24 @@ Dormant (deliberately parked, not dropped):
   experiment) — but no doc or channel links them; the connection lived
   only in Jeremy's head ("in my mind those are the same conversation,
   just continued over time").
+- **2026-07-21 (Jeremy) — the star skill: an alpha prompt-only
+  mini-orchestrator as standing gut check.** "Let's create a skill
+  that's explicitly an alpha prototype... itself a mini-orchestrator in
+  this same direction... what I have called a star pattern architecture
+  in the past (not linear, but a master process that delegates a task,
+  receives an answer, delegates a new task... rinse repeat until the
+  process is complete... the process is 0..n steps, not an explicitly
+  planned pathway to tread)." Map-reduce recursion explicitly rejected
+  for this: "great for simple things and lossy/brittle/heavy/
+  unmaintainable for complex processes, especially ones that change
+  often." Purpose: "a functioning gut check / test [to] help us clarify
+  and identify our patterns as we develop the orchestration
+  mechanism... grounding along the way and builds in the bitter
+  lesson." SHIPPED same day: `.claude/skills/star/SKILL.md` — master
+  owns taste+judgement only (the delegation-boundary razor made
+  operational), explicit output criteria required per task (factory
+  finding #3 pin), tri-state judgement, surprise capture, serial-only
+  (box rule), code-pressure = report-don't-build, pre-registered
+  keep/kill adjudication (swarm-arc end or 5 uses — the gate its
+  lineage never had). Tangent lane: exercised opportunistically during
+  chunks 1-8, never gating them.
