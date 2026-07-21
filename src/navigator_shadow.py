@@ -519,14 +519,23 @@ def _divergence_key(row: Dict[str, Any]) -> str:
 
     Derived from the fields a NAVIGATOR_DECIDED divergence and its
     NAVIGATOR_ADJUDICATED record both carry identically: the second-precision
-    timestamp plus the decision point and the two moves that disagreed. Stable
-    across reads (so we never re-adjudicate) and effectively unique — two
-    distinct divergences would have to share a wall-clock second AND the same
-    point/move/pipeline, at which point they are the same decision.
+    timestamp, the decision point, the two moves that disagreed, and the goal
+    preview. Stable across reads (so we never re-adjudicate) and effectively
+    unique per divergence.
+
+    ``goal_preview`` is part of the key (adversarial-review finding A): without
+    it, two divergences that share a wall-clock second AND the same
+    point/move/pipeline but ran on *different goals* collapse to one key — one
+    verdict then silently stands in for both. Two same-goal collisions really
+    are the same decision; different goals are not. The 71 legacy rows written
+    under the older no-goal_preview scheme re-key transparently because
+    ``_load_adjudications`` recomputes the key from each row's echoed fields (all
+    of which include goal_preview), so widening the key strands no verdict and
+    forces no re-adjudication.
     """
     import hashlib
     raw = "|".join(str(row.get(k, "")) for k in
-                   ("timestamp", "point", "move", "pipeline"))
+                   ("timestamp", "point", "move", "pipeline", "goal_preview"))
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
 
 
@@ -675,13 +684,30 @@ def _load_navigator_events() -> List[Dict[str, Any]]:
 def _load_adjudications(events: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
     """Build ``div_key -> adjudication record`` from NAVIGATOR_ADJUDICATED rows.
     Last write wins (a re-adjudication supersedes), so the map reflects the
-    current verdict for each divergence."""
+    current verdict for each divergence.
+
+    The key is recomputed from each row's echoed divergence fields rather than
+    trusting the stored ``div_key`` (adversarial-review finding A): the stored
+    value was written under whatever key scheme was current at the time, so
+    recomputing lets a scheme change (e.g. adding goal_preview) re-key legacy
+    rows in place — the agreement side computes the same current-scheme key from
+    the live divergence, so they still join with no re-adjudication or re-spend.
+    Rows that predate the field echo carry only the stored key and fall back to
+    it. One entry per record either way (crystallize counts ``.values()``)."""
     out: Dict[str, Dict[str, Any]] = {}
     for e in events:
         if e.get("event_type") != "NAVIGATOR_ADJUDICATED":
             continue
         c = e.get("context") or {}
-        key = c.get("div_key")
+        # Recompute only when the full echo is present — timestamp is what makes
+        # a second-precision key distinct, so recomputing without it would
+        # collapse different divergences onto one degenerate key. Real rows echo
+        # all of these (the write path stamps them); rows that don't fall back to
+        # their stored key, which was correct under whatever scheme wrote it.
+        if c.get("timestamp") and c.get("move") and c.get("pipeline"):
+            key: Any = _divergence_key(c)
+        else:
+            key = c.get("div_key")
         if key:
             out[str(key)] = c
     return out
@@ -725,6 +751,18 @@ def _adjudicate_one(row: Dict[str, Any], adapter) -> Optional[Dict[str, str]]:
     return {"verdict": verdict, "rationale": str(obj.get("rationale", ""))[:300]}
 
 
+def _adjudicate_lock_path() -> Path:
+    """Per-workspace lock file guarding the V4 adjudication pass (finding G).
+
+    Separate from the captain's log and lessons files so acquiring it never
+    contends with the append/rewrite those do inside the pass."""
+    try:
+        from orch_items import memory_dir
+        return memory_dir() / "navigator_adjudicate"
+    except Exception:
+        return Path.home() / ".maro" / "workspace" / "memory" / "navigator_adjudicate"
+
+
 def adjudicate_navigator_divergences(
     run_id: str = "",
     *,
@@ -739,6 +777,15 @@ def adjudicate_navigator_divergences(
     is a NAVIGATOR_ADJUDICATED row keyed to the divergence it judges; nothing
     is reverted or acted on. Rides the evolver cadence hook (no daemon).
 
+    Serialized under one per-workspace lock across the whole load->judge->write
+    pass (adversarial-review finding G): the evolver cadence runs this whenever
+    ``navigator.adjudicate_divergences`` is on (this box since 2026-07-16) while
+    the manual ``python3 -m navigator_shadow --adjudicate`` path still exists, so
+    without the lock a cadence pass and a hand-run pass can judge the same
+    divergences twice and double-spend. Fail-closed: a pass that can't get the
+    lock in time no-ops this cycle (``locked``) rather than duplicating spend —
+    the un-judged divergences carry forward to the next append-only pass.
+
     Returns a summary dict. ``dry_run`` renders verdicts without persisting them.
     """
     from config import get as config_get
@@ -747,6 +794,41 @@ def adjudicate_navigator_divergences(
     if tier is None:
         tier = str(config_get("navigator.adjudicate_tier", "cheap"))
 
+    try:
+        from file_lock import locked_write, FileLockTimeout
+    except Exception:
+        # file_lock unavailable — degrade to the pre-lock unserialized pass.
+        return _adjudicate_pass(
+            run_id, max_per_cycle, tier, dry_run, adapter_factory, verbose)
+    try:
+        with locked_write(_adjudicate_lock_path()):
+            return _adjudicate_pass(
+                run_id, max_per_cycle, tier, dry_run, adapter_factory, verbose)
+    except FileLockTimeout:
+        log.warning("navigator adjudication: another pass holds the lock; "
+                    "skipping this cycle (un-judged divergences carry forward)")
+        return {
+            "divergences_total": 0,
+            "already_adjudicated": 0,
+            "adjudicated": 0,
+            "skipped_no_verdict": 0,
+            "write_failed": 0,
+            "verdicts": {v: 0 for v in ADJ_VERDICTS},
+            "dry_run": dry_run,
+            "locked": True,
+        }
+
+
+def _adjudicate_pass(
+    run_id: str,
+    max_per_cycle: int,
+    tier: str,
+    dry_run: bool,
+    adapter_factory: Optional[Any],
+    verbose: bool,
+) -> Dict[str, Any]:
+    """The capped adjudication pass itself, run under the caller's workspace
+    lock (see ``adjudicate_navigator_divergences``)."""
     events = _load_navigator_events()
     existing = _load_adjudications(events)
     summary = analyze_live_agreement(events, adjudications=existing)
@@ -1010,6 +1092,10 @@ def main(argv: Optional[List[str]] = None) -> int:
             dry_run=args.dry_run, verbose=not args.json)
         if args.json:
             print(json.dumps(result, indent=2))
+        elif result.get("locked"):
+            print("another adjudication pass is already running "
+                  "(evolver cadence or a second --adjudicate) — nothing done; "
+                  "un-judged divergences carry forward. Retry shortly.")
         else:
             print(f"divergences: {result['divergences_total']} "
                   f"({result['already_adjudicated']} already adjudicated); "
