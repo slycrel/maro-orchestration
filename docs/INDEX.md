@@ -15,6 +15,7 @@ BACKLOG, VISION, CLAUDE, README…) are living by definition and carry no frontm
 | What is current truth / what won a decision? | `../GOAL_BRAIN.md` (wins on conflict, by decree) |
 | What should I work on next? | `../MILESTONES.md`, then `../BACKLOG.md` |
 | How does the whole system fit together? | `ARCHITECTURE_OVERVIEW.md` (incl. V→R→R doctrine + visibility ladder) |
+| How did our *thinking* get here? (era timeline, aha moments, pros/cons vs today) | `KNOWLEDGE_JOURNEY.md` (living; details in `history/knowledge-journey/`) |
 | What are we deliberately NOT building? | `ARCHITECTURE_NON_GOALS.md` |
 | What should Maro be able to do? (example goals, test corpus, pre-installed skill target) | `CAPABILITIES.md` (living catalog — add real asks as they happen) |
 | Two-box / Hermes dispatch, interactive goals, effort-based spend UX, mid-flight injection? | `SESSION_PROTOCOL_DESIGN.md` (dormant-design; the 2026-07-15 skeleton, iterate there) |
