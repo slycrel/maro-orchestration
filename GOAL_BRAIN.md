@@ -3658,3 +3658,41 @@ Dormant (deliberately parked, not dropped):
   launder noise as a benchmark verdict. Prior instantiations on record
   (playbook, Stage-5 compiled rules) both half-died; the differentiator
   here is the test that can fail.
+- **2026-07-21 (Jeremy) — the taste/judgement delegation boundary.**
+  "From the parent process's perspective, taste is determining the
+  plan/task/'what' the sub-agent attempts. And judgement is the
+  validation that we've accomplished what we set out to do." Adopted as
+  the naming vocabulary for DEV_PATTERNS' two halves (taste = up-front
+  commitments, judgement = audit checks) and as an audit razor: a
+  mechanism belongs to the orchestration layer iff it serves
+  parent-taste or parent-judgement — if neither, why does the parent
+  own it? This upgrades the 2026-03-30 what-vs-how audit (whose
+  misclassification of harnessing/collation as cruft the standing
+  BACKLOG bitter-lesson-posture note already flags): it retro-predicts
+  the 03-31 factory benchmark — everything load-bearing (adversarial
+  review, verify loop, output criteria) is judgement machinery;
+  everything removable (persona-as-routing, lesson injection into
+  execution, multi-plan ceremony) is neither — and splits personas
+  correctly (lens = judgement diversity, stays; routing = execution
+  how, removed with no loss).
+- **2026-07-21 (session) — factory-branch archaeology closes Jeremy's
+  lost-history question.** The bitter-lesson branch survives
+  (`factory`, local + origin); findings docs on main
+  (`docs/history/2026-03-30-bitter-lesson-analysis.md`,
+  `2026-03-31-factory-mode-findings.md`); the constraint-orchestration
+  conversation transcript is `docs/conversations/2026-04-16-...md`.
+  Two record gaps confirmed: (1) `factory_full_sim.py` v1-v4
+  (whole-architecture-as-one-prompt, self-audited, tipped at cycle 6/8
+  under stress) never landed on main and its verdict was never written
+  — Jeremy's recall: "mixed bag at best; wasn't that different than a
+  general LLM prompt; move on with scope+constraint, revisit later" —
+  matching Purgatorio arch-10 ("work finished, pushed, lost from the
+  record", adjudication still open). Folded into chunk 1's mode:thin
+  adjudication item: Phase 49's decision gate finally fires, and the
+  verdict gets written down. (2) Crystallization (03-25) and the
+  bitter-lesson thread (03-30) share one axis — crystallization is the
+  freeze direction (fluid reasoning hardens to code), bitter-lesson the
+  melt direction (code re-expressed as prompt; factory was the melt
+  experiment) — but no doc or channel links them; the connection lived
+  only in Jeremy's head ("in my mind those are the same conversation,
+  just continued over time").
