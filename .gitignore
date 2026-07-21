@@ -29,6 +29,10 @@ tmp/
 checkpoints/
 prototypes/
 artifacts/
+# ...but the knowledge-journey excavation artifacts are a curated history
+# record (Jeremy 2026-07-21), not runtime output — same trap class as the
+# old blanket skills/ ignore noted below.
+!docs/history/knowledge-journey/artifacts/
 
 # NOTE: repo skills/ are shipped defaults (tracked); the runtime skill
 # library lives in ~/.maro/workspace/skills/ (outside the repo). An old
