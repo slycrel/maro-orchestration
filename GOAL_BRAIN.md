@@ -3743,3 +3743,23 @@ Dormant (deliberately parked, not dropped):
   corpus that lets strategy choice crystallize later. Direction only —
   no maro implementation scoped; chunk 3 touches the step contract and
   is the natural first seam.
+- **2026-07-21 (Jeremy) — the north star named: CGI, not AGI; and the
+  possible-now values statement.** "I think what I want is probably
+  something more like CGI -- capable general intelligence. I don't want
+  a slave mind or to create artificial life; I want something as
+  capable as me as a workhorse in the digital space, with all the
+  benefits that a computer brings." (Confirms the early not-AGI
+  distinction with a positive name.) Paired values statement on the
+  meandering path: "what scares me most is decisions NOT to do the
+  work (when the work is possible). It's easy/lazy of all of us to
+  assume we need better models so we can 1-shot things so often. The
+  harder part is the composition thinking... no single step is
+  difficult, but the complexity comes in with taste (what we decide to
+  attempt) and judgement (what we do about the results)." → the
+  possible-now bias, queued as a DEV_PATTERNS taste-half candidate:
+  "needs a better model" is a claim requiring evidence of the
+  composition that was tried, not a default. Open edge named and
+  deferred by Jeremy's own call ("let's worry about that when we get
+  further in"): taste/judgement maturation may need consequence-coupled
+  reps, not just training data — the bottleneck framing recorded is
+  verified-outcome density, not calendar time.
