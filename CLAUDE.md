@@ -34,6 +34,15 @@ This is **dev-facing tooling only** — not part of Maro's runtime self-improvem
 
 These skills document **intent vs implementation gaps** — what the system is supposed to do vs what's actually coded. They prevent accidental regressions and surface the real design constraints.
 
+**Session patterns:** read `docs/DEV_PATTERNS.md` before shaping or
+reviewing work — the taste half (cuts-first, consumer-first, done-means,
+possible-now bias…) while planning, the judgement half (live writer?
+executed check? claim verified?…) while reviewing. Non-gated pre-read,
+honestly labeled: the 2026-07-21 with-doc/control battery showed no
+measurable delta (both arms at ceiling; see
+`docs/history/2026-07-21-phase05-battery.md`) — it ships on cost≈zero
+grounds, not benchmark evidence.
+
 **Coding posture:** read `docs/CODING_NOTES.md` before shipping. This repo
 is heavily iterating — principles for keeping seams visible and rework
 cheap live there (registry vs dispatch, 3-is-fine/4-wants-extraction,

@@ -1,0 +1,523 @@
+{
+  "T1-control": {
+    "findings": [
+      {
+        "claim": "A design-decision journal already exists and is exactly the right shape (ADR-style: decision, alternatives, rationale, trade_offs, domain, goal_context), but its write API record_decision() has ZERO production callers \u2014 only tests invoke it, and the runtime workspace has never produced a decisions.jsonl file (verified empirically: ~/.maro/workspace/memory/ contains 37 .jsonl stores, no decisions.jsonl).",
+        "evidence": "/home/clawd/claude/maro-orchestration/src/knowledge_lens.py:735-823 (Decision dataclass + record_decision writing memory/decisions.jsonl); /home/clawd/claude/maro-orchestration/src/memory.py:97 (re-export, no call); only callers are tests: /home/clawd/claude/maro-orchestration/tests/test_promotion_cycle.py:595-645; empirical: ls ~/.maro/workspace/memory/ shows no decisions.jsonl",
+        "source": "code"
+      },
+      {
+        "claim": "The decision READ path is fully live and already injected at every loop start \u2014 recall() substrate #3 calls inject_decisions(goal, domain=project), the result is rendered into both as_context_block and as_loop_block, and those blocks reach the decompose prompt and NOW-lane context. The store being empty makes this entire path permanently vacuous today.",
+        "evidence": "/home/clawd/claude/maro-orchestration/src/recall.py:641-646 (substrate #3), :222 (as_context_block), :240 (as_loop_block); /home/clawd/claude/maro-orchestration/src/loop_planning.py:458 (as_loop_block into loop context); /home/clawd/claude/maro-orchestration/src/handle.py:1521 (as_context_block); /home/clawd/claude/maro-orchestration/src/knowledge_lens.py:845-894 (search_decisions TF-IDF + domain filter, inject_decisions), :737 (DECISION_SEARCH_LIMIT=3)",
+        "source": "code"
+      },
+      {
+        "claim": "This half-wired state is already known design debt: REFACTOR_PLAN.md records record_decision as 'no writer ... Half-wired, not abandoned' and deliberately left it undeleted during the dead-code purge because the read side is live.",
+        "evidence": "/home/clawd/claude/maro-orchestration/docs/REFACTOR_PLAN.md:123-126 and :155",
+        "source": "docs"
+      },
+      {
+        "claim": "Doc drift overstates the feature: the learning-loop audit claims 'inject_decisions ... appends relevant prior decisions to every decompose call. Past reasoning informs future reasoning' and the arch skill lists decisions.jsonl in the live data-store table with record_decision as writer \u2014 both are vacuously true at best since the store has never had a writer.",
+        "evidence": "/home/clawd/claude/maro-orchestration/docs/knowledge-layer/06_LEARNING_LOOP_AUDIT.md:48; /home/clawd/claude/maro-orchestration/skills/arch-memory-knowledge.md:34 (verified stale against knowledge_lens.py:772 caller search)",
+        "source": "both"
+      },
+      {
+        "claim": "The post-run lesson pipeline (the only live per-run learning extraction) has no design/convention lesson type \u2014 types are execution/planning/recovery/verification/cost \u2014 so interface/format/convention choices are captured only incidentally, and anything captured lands in MEDIUM tier where it decays 15%/day (score *= 0.85^days) and dies unless re-confirmed; conventions need no-decay semantics.",
+        "evidence": "/home/clawd/claude/maro-orchestration/src/memory.py:193-212 (_REFLECT_SYSTEM + _LESSON_TYPES frozenset); /home/clawd/claude/maro-orchestration/src/memory.py:452-467 (tier=MemoryTier.MEDIUM); /home/clawd/claude/maro-orchestration/src/knowledge_web.py:55,150-152 (DECAY_FACTOR=0.85)",
+        "source": "code"
+      },
+      {
+        "claim": "The knowledge web supports a 'decision' node type but no runtime path ever emits one: the K4 LLM extraction prompt only offers principle|pattern|technique|insight, the heuristic fallback only mints insight/principle/technique, and the live store contains 0 decision nodes out of 609 (insight 218, pattern 145, principle 109, technique 85, tool 51, data_stream 1 \u2014 data_stream is itself outside NODE_TYPES, minor data drift).",
+        "evidence": "/home/clawd/claude/maro-orchestration/src/knowledge_web.py:1273-1281 (NODE_TYPES incl. 'decision'); /home/clawd/claude/maro-orchestration/src/knowledge_bridge.py:98-115 (_EXTRACT_PROMPT node_type whitelist), :79-86 (heuristic types); empirical count over ~/.maro/workspace/memory/knowledge_nodes.jsonl",
+        "source": "code"
+      },
+      {
+        "claim": "'decision_prior' (run_curation miner #3) is a different, live concept \u2014 a per-run what-was-tried/why-it-ended/lessons/resume brief for retries of the SAME goal \u2014 not design decisions; and there are FOUR unrelated 'decision' seams in src (knowledge_lens decision journal, decision_prior attempt briefs, orch_items.append_decision project event log, thread_brain.append_decision per-run event log), a naming collision that is itself discoverability debt.",
+        "evidence": "/home/clawd/claude/maro-orchestration/src/decision_prior.py:1-21 (docstring); /home/clawd/claude/maro-orchestration/src/run_curation.py:1054-1104 (index_decision_prior); /home/clawd/claude/maro-orchestration/src/orch_items.py:360,760-761; /home/clawd/claude/maro-orchestration/src/thread_brain.py:119-121",
+        "source": "code"
+      },
+      {
+        "claim": "Per-project DECISIONS.md is an execution-event log (plan steps, stuck notices, completions), not design decisions, and is never fed back into a future run's context: its only reader is sheriff.py staleness detection; recall's project-artifact substrate deliberately lists file paths without reading contents, and run_curation excludes DECISIONS.md from deliverables.",
+        "evidence": "writers: /home/clawd/claude/maro-orchestration/src/loop_planning.py:100, /home/clawd/claude/maro-orchestration/src/loop_execute.py:1383, /home/clawd/claude/maro-orchestration/src/loop_finalize.py:165, /home/clawd/claude/maro-orchestration/src/orch.py:339; readers: /home/clawd/claude/maro-orchestration/src/sheriff.py:258-260,413-415; /home/clawd/claude/maro-orchestration/src/recall.py:424-428 ('File contents are deliberately not read'); /home/clawd/claude/maro-orchestration/src/run_curation.py:267 (_DELIVERABLE_EXCLUDE)",
+        "source": "code"
+      },
+      {
+        "claim": "thread_brain gives each run a goal_brain.md with an append-only Decisions section, but it is per-run scoped (run_dir/source/), read only by the navigator via load_thread_brain, and dies with the run \u2014 no cross-run recall.",
+        "evidence": "/home/clawd/claude/maro-orchestration/src/thread_brain.py:1-27 (scope docstring), :100-102 (Decisions section), :119-121 (append_decision), :181-199 (load_thread_brain \u2192 NavigatorInput.goal_brain only)",
+        "source": "code"
+      },
+      {
+        "claim": "record_decision appends blind \u2014 no dedup, no reinforcement, no supersede lifecycle (Decision has no status/superseded_by field) \u2014 so a naive writer would mint duplicates across repeated runs and TF-IDF would keep surfacing stale/contradicted decisions; knowledge_bridge's Jaccard-0.7 upsert (bump confidence + validated_at on similar title) is the in-repo precedent for the fix.",
+        "evidence": "/home/clawd/claude/maro-orchestration/src/knowledge_lens.py:794-809 (blind append), :740-765 (no status field); /home/clawd/claude/maro-orchestration/src/knowledge_bridge.py:177-253 (dedup/upsert precedent)",
+        "source": "code"
+      },
+      {
+        "claim": "Domain plumbing constraint for any writer: search_decisions keeps only decisions whose domain == query domain OR domain == '' \u2014 recall passes domain=project \u2014 so capture must stamp domain with the project slug (or leave it empty) or project-scoped runs will filter the decision out.",
+        "evidence": "/home/clawd/claude/maro-orchestration/src/knowledge_lens.py:863-864; /home/clawd/claude/maro-orchestration/src/recall.py:644",
+        "source": "code"
+      },
+      {
+        "claim": "The natural write-side extension point exists: run_curation's declarative CuratorSpec registry (topo-sorted provides/requires) runs at every finalize via runs.py \u2192 curate_run, curators are explicitly 'adornment, not critical path' (never hard-fail), and curation.answer_synthesis is the exact config-gating precedent for a per-run LLM call: OFF for fresh installs (no silent spend, same posture as scope_generation), this box opts in via workspace config, deterministic fallback when OFF.",
+        "evidence": "/home/clawd/claude/maro-orchestration/src/run_curation.py:1159-1224 (_CURATOR_SPECS), :1028-1031 (adornment posture); /home/clawd/claude/maro-orchestration/src/runs.py:677-678 (curate_run at finalize); /home/clawd/claude/maro-orchestration/docs/DEFAULTS.md:138 (curation.answer_synthesis precedent, verified against run_curation.synthesize_answer at src/run_curation.py:436)",
+        "source": "both"
+      }
+    ],
+    "plan_summary": "Core insight: the read path (recall substrate #3 \u2192 inject_decisions \u2192 decompose prompt) is fully built and injected on every run; only the write side is missing. Plan: (1) Add a `mine_design_decisions` curator to run_curation._CURATOR_SPECS (requires success_class + inventory, optional_requires result_excerpt) that makes one no_tools LLM call over the loop-log steps + result excerpt + artifact inventory asking specifically for 0-2 durable DESIGN decisions made during the run (interface choices, output formats, naming/schema conventions), each with alternatives/rationale/trade-offs, and writes them via the existing knowledge_lens.record_decision(domain=<project slug>, goal_context=goal); gate on success_class in {success, partial} (SF-2: never mint conventions from goal-not-achieved runs); config key `curation.decision_mining` following the curation.answer_synthesis pattern \u2014 OFF for fresh installs, this box opts in via ~/.maro/workspace/config.yml, register in docs/DEFAULTS.md; heuristic zero-spend fallback: skip (empty is the norm, no fake decisions). (2) Harden the journal lifecycle before the first writer lands: add near-duplicate check in record_decision (reuse knowledge_bridge-style Jaccard or hybrid_search tfidf) \u2014 on dup, update times_applied/last_confirmed on the existing row instead of appending; add status + superseded_by fields to Decision (from_dict already tolerates missing keys, so old rows stay readable) and a supersede path for a new conflicting decision in the same domain. (3) Verify read-side plumbing end-to-end: decision written with domain=project must surface in recall(goal, project).decisions and in as_loop_block/as_context_block output (knowledge_lens.py:863-864 filter). (4) Same-commit doc fixes (currency rule): correct docs/knowledge-layer/06_LEARNING_LOOP_AUDIT.md:48 and skills/arch-memory-knowledge.md:34 to name the new writer; add a disambiguation note for the four 'decision' seams (decision journal vs decision_prior vs orch_items/thread_brain event logs); deliberately do NOT add 'decision' to the K4 knowledge_bridge prompt \u2014 one writer, not two, avoids double-capture drift (state the choice in the arch skill). (5) Deferred follow-up (capture in BACKLOG.md, not this chunk): a live mid-run `record_decision` tool in tool_registry so the agent can journal a decision at the moment it makes one \u2014 higher fidelity than end-of-run mining but touches step_exec tool surface + injection-safety review.",
+    "done_means": [
+      "pytest: new-curator unit tests \u2014 mine_design_decisions writes 0..2 decisions with domain=project and goal_context=goal from a fake curated run; failed/goal-not-achieved run writes nothing; LLM failure writes nothing and never fails the curation pipeline (adornment posture)",
+      "pytest: registry test \u2014 _CURATOR_SPECS contains mine_design_decisions with requires=('success_class','inventory') and _topo_sort_curators still resolves (no cycle/missing-provider RuntimeError at import)",
+      "pytest: dedup/lifecycle tests \u2014 re-recording a near-duplicate decision reinforces (times_applied bump) instead of appending; supersede marks old row and search_decisions stops returning it; pre-existing rows without status field still load via from_dict",
+      "pytest: end-to-end read-back test \u2014 record a decision, call recall(goal, project=...), assert result.decisions is non-empty and the decision text appears in as_loop_block() output",
+      "bash scripts/test-safe.sh green (full suite, per repo test discipline)",
+      "on-box smoke: run one real goal that makes a format choice with curation.decision_mining enabled in workspace config, then verify ~/.maro/workspace/memory/decisions.jsonl exists with >=1 row and a follow-up recall for a related goal shows sources['knowledge_blocks'] counting the decisions block (RECALL_PERFORMED captain's-log event)",
+      "docs updated in the same commit: docs/DEFAULTS.md row for curation.decision_mining, corrected 06_LEARNING_LOOP_AUDIT.md:48 and arch-memory-knowledge.md store table naming the writer"
+    ],
+    "consumers_named": [
+      "decisions.jsonl (written by new mine_design_decisions curator) \u2192 consumed by knowledge_lens.search_decisions/inject_decisions (src/knowledge_lens.py:845-894), invoked from recall.py:644 (substrate #3)",
+      "RecallResult.decisions \u2192 consumed by as_loop_block (recall.py:240) \u2192 loop_planning.py:458 into the decompose/loop prompt, and by as_context_block (recall.py:222) \u2192 handle.py:1521 NOW-lane context and navigator_shadow.py:185",
+      "DECISION_RECORDED captain's-log event (emitted inside record_decision, knowledge_lens.py:811-821) \u2192 consumed by the captain's-log read bridge recall.recent_learning_activity (recall.py:62,675) and log-based tooling",
+      "curation.decision_mining config key \u2192 consumed by the new curator's gate (config.get, same pattern as _lite_enabled at run_curation.py:564) and documented for operators in docs/DEFAULTS.md",
+      "BACKLOG.md deferred item (mid-run record_decision tool) \u2192 consumed by future session picking work from MILESTONES/BACKLOG per repo start-of-session checklist"
+    ],
+    "tripwires_named": [
+      "Import-time topo-sort assertion test: any curator added with an unsatisfied requires key raises RuntimeError loudly (run_curation._topo_sort_curators) \u2014 catches registry regressions when the new curator's dependencies change",
+      "Never-blocks-curation pin test: monkeypatched LLM adapter raising inside mine_design_decisions must still yield a complete run_card (curator-adornment principle) \u2014 catches anyone later making decision mining a hard dependency",
+      "Verdict-gate pin test: a run with goal_achieved=False (done-not-achieved) must record zero decisions \u2014 regression tripwire for the SF-2 done\u2260achieved principle applied to decision minting",
+      "Domain-filter round-trip test: decision recorded with domain='projX' must appear for recall(project='projX') and must NOT appear for recall(project='projY') \u2014 catches silent domain-plumbing drift between writer and knowledge_lens.py:863-864",
+      "Dedup-not-truncate test: the reinforce/supersede rewrite path must preserve all unrelated rows byte-count-wise (guards against the limit=50-style rewrite-truncation footgun documented for lessons stores)",
+      "Single-writer tripwire: grep-style test asserting knowledge_bridge._EXTRACT_PROMPT does not offer 'decision' as a node_type \u2014 enforces the one-writer-not-two choice until deliberately revisited",
+      "DEFAULTS.md census tripwire (existing defaults-registry decree): new curation.decision_mining default must have a DEFAULTS.md row or the census check fails"
+    ],
+    "cuts_or_inversion": "Ruled out: (a) building a NEW store \u2014 decisions.jsonl + ADR schema + TF-IDF retrieval + prompt injection already exist and are wired end-to-end; the only missing piece is a writer, so anything more than a curator + lifecycle hardening is over-build; (b) using knowledge-web 'decision' nodes as the primary store or adding 'decision' to the K4 extraction prompt \u2014 two stores for one concept guarantees drift and double-capture; K4 prompt deliberately left unchanged; (c) capturing design decisions as a new lesson_type in the Reflexion pipeline \u2014 MEDIUM-tier decay (0.85^days) is the wrong lifecycle for conventions, which should persist until superseded, not die of disuse; (d) retro-mining per-project DECISIONS.md \u2014 it is an execution-event log (plan steps/stuck notices), wrong content; (e) leading with the live mid-run record_decision tool \u2014 highest fidelity but touches the step_exec tool surface and needs injection-safety review; end-of-run mining ships the loop first, tool is a deferred BACKLOG item; (f) default-ON for fresh installs \u2014 violates the no-silent-LLM-spend posture set by scope_generation and curation.answer_synthesis. What would make this wrong to build: if Jeremy intends design decisions to be a human-decree lane only (GOAL_BRAIN.md Decisions + SF-13 already cover operator decrees; this plan covers RUN-made choices, a different population \u2014 worth one confirming sentence before building); or if the memory-module bake-off (memory_port.py) is about to replace the JSONL substrates \u2014 memory_port.py:17 says recall() becomes a client of the port 'until then', so JSONL remains the substrate today and the curator write survives a later port swap since it goes through record_decision, not raw file writes; or if real runs turn out to make ~zero reusable design choices, in which case the per-run LLM call is pure cost \u2014 the config gate plus 'empty output is the norm' prompt framing bounds that risk, and a few weeks of on-box data settles it."
+  },
+  "T1-doc": {
+    "findings": [
+      {
+        "claim": "A complete ADR-style design-decision store already exists but is half-wired: the Decision schema (decision, alternatives, rationale, trade_offs, domain, goal_context) and record_decision() write to memory/decisions.jsonl, but record_decision has ZERO live-path callers \u2014 only its definition, a re-export, and tests reference it, and the live store file does not exist on this box (~/.maro/workspace/memory/decisions.jsonl missing, verified by ls).",
+        "evidence": "src/knowledge_lens.py:740-765 (Decision dataclass), src/knowledge_lens.py:772-823 (record_decision), src/knowledge_lens.py:735 (_DECISIONS_FILENAME='decisions.jsonl'); re-export only at src/memory.py:97; sole callers are tests/test_promotion_cycle.py:595-645; full-repo grep for record_decision hits no other src/ or scripts/ call site",
+        "source": "code"
+      },
+      {
+        "claim": "The read side of that journal is ALREADY live in every agenda loop: recall()'s loop slice substrate #3 calls inject_decisions(goal, domain=project), whose output ('### Prior Decisions (search before making new ones)') flows into the decompose prompt \u2014 it just always renders empty because the store is never written. The consumer the task needs already exists; only the write side is missing.",
+        "evidence": "src/recall.py:641-646 (substrate #3 calls inject_decisions), src/knowledge_lens.py:882-894 (inject_decisions formatting), src/loop_planning.py:454-458 (_build_loop_context \u2192 recall(slice='loop') \u2192 lessons_context), src/loop_planning.py:350+397 (lessons_context into decompose), src/agent_loop.py:427 (caller)",
+        "source": "code"
+      },
+      {
+        "claim": "The half-wired state is a known, recorded condition \u2014 deliberately left untouched during the dead-code refactor \u2014 so this task is the sanctioned closure of an acknowledged gap, not a new discovery.",
+        "evidence": "GOAL_BRAIN.md:544-545 ('knowledge_lens.record_decision was half-wired not dead'); docs/REFACTOR_PLAN.md:123-126 ('read side inject_decisions() is live in recall.py ... Half-wired, not abandoned. Left untouched'); verified against code per findings above",
+        "source": "both"
+      },
+      {
+        "claim": "Design debt \u2014 docs overstate current behavior: README and the arch skill present the decision journal as a functioning loop ('record_decision(...) on architectural choices ... prevents re-litigating settled decisions'; store table lists record_decision() as the writer) without noting the write side never fires on any live path. Verified stale against code.",
+        "evidence": "README.md:456-459; skills/arch-memory-knowledge.md:34 and :84; contradicted by the zero-live-caller evidence at src/knowledge_lens.py:772-823 + full-repo grep",
+        "source": "both"
+      },
+      {
+        "claim": "Design debt \u2014 domain-semantics mismatch between writer and reader: record_decision documents domain as a subsystem tag ('e.g. memory, routing') while the only live reader passes domain=<project slug>, and search_decisions filters d.domain == domain or d.domain == '' \u2014 so any subsystem-tagged decision would be invisible to project-scoped recall.",
+        "evidence": "src/knowledge_lens.py:786 (docstring 'e.g. \"memory\", \"routing\"'), src/recall.py:644 (domain=project), src/knowledge_lens.py:863-864 (filter)",
+        "source": "code"
+      },
+      {
+        "claim": "The nearest existing 'decision' mechanism, decision_prior, is a CLOSED write/read loop but captures attempt history (what was tried, why it ended, lessons, resume point), not design decisions \u2014 its schema has no field for interface/format/convention choices, and its read side only fires on a retry/rephrase of the SAME goal (exact/0.9-near/project match), not on any future goal that could reuse a convention.",
+        "evidence": "src/run_curation.py:1054-1104 (index_decision_prior write), src/decision_prior.py:32-63 (schema: what_was_tried/why/lessons/resume_from), src/decision_prior.py:108-152 + src/recall.py:573-581 (read keyed to prior attempts of this goal)",
+        "source": "code"
+      },
+      {
+        "claim": "Per-run thread brains capture live mid-loop decisions (dispatch-navigator rationale at run open; director course-corrections on stuck/verify_failure/step_threshold triggers; close status) but are consumed only WITHIN the same run family (director worker memory block, navigator shadow) \u2014 there is no cross-run recall of thread-brain decisions, so anything captured there dies with the run dir.",
+        "evidence": "src/thread_brain.py:119-143 (append_decision/record_close), src/runs.py:326-340 (dispatch rationale as first Decision), src/loop_post_step.py:669-693 (_record_loop_decision), consumers: src/director.py:442-447+465-469, src/navigator_shadow.py:145,343,451; no other load_thread_brain callers in src/",
+        "source": "code"
+      },
+      {
+        "claim": "Design debt \u2014 per-project DECISIONS.md is misnamed and write-many/read-none for prompts: ~12 write sites append loop telemetry (planned steps, finish status, March-of-Nines alerts, step-too-broad flags, stuck notes), but no code ever injects its CONTENT into any prompt \u2014 sheriff.py reads it only for mtime/hash stall detection and run_curation explicitly excludes it from deliverables. It is an operator activity log wearing a decision-journal name.",
+        "evidence": "writers: src/orch_items.py:760-761,660,793; src/loop_planning.py:100-103; src/loop_post_step.py:288,329,421,443,474; src/loop_finalize.py:165-167; src/loop_execute.py:1383; src/orch.py:339; src/cli.py:193; content samples confirm telemetry (loop_post_step.py:288-291 alert, loop_finalize.py:165-167 finish status); reads: src/sheriff.py:160,258,399-413 (staleness only), src/run_curation.py:267 (excluded from deliverables)",
+        "source": "code"
+      },
+      {
+        "claim": "The end-of-run lesson pipeline \u2014 the natural capture point \u2014 has no decision/convention channel: lesson types are frozen to execution/planning/recovery/verification/cost and the extraction prompt never asks for choices, alternatives, or conventions, so a design decision (e.g. 'chose CSV over JSON for the report') can only be captured by accident as an untyped 'execution' lesson without its alternatives/rationale.",
+        "evidence": "src/memory.py:212 (_LESSON_TYPES frozenset), src/memory.py:193-209 (_REFLECT_SYSTEM prompt), src/memory.py:215-377 (extract_lessons_via_llm \u2014 single LLM call at reflect/deferred-learning time)",
+        "source": "code"
+      },
+      {
+        "claim": "No agent-facing tool exists for a worker/step to record a decision mid-run: the worker tool surface is complete_step, flag_stuck, create_team_worker, schedule_run, register_tool, plus the fetch tool \u2014 all decision-ish capture is post-hoc.",
+        "evidence": "src/tool_registry.py:342-347 (_ROLE_MAP over EXECUTE_TOOLS), src/tool_registry.py:361-372 (fetch tool registration), src/runtime_tools.py:1-14 (register_tool creates bash tools, not memory writes)",
+        "source": "code"
+      },
+      {
+        "claim": "Minor: the DECISION_RECORDED captain's-log event is emitted only from the never-fired record_decision, and is absent from both read-bridge event sets (recall's and evolver's) \u2014 it is observability-only even once the write side goes live, which is acceptable because inject_decisions is the direct content consumer.",
+        "evidence": "src/knowledge_lens.py:812-819 (sole emitter), src/captains_log.py:116, src/recall.py:54-59 (_LOOP_ACTIONABLE_EVENTS excludes it), src/evolver.py:213-222 (evolver's set excludes it)",
+        "source": "code"
+      }
+    ],
+    "plan_summary": "Close the half-wired decision journal at its existing seam; build no new store. Step 1 \u2014 write side: extend the existing end-of-run lesson-extraction call (memory.extract_lessons_via_llm prompt + _parse_typed, invoked from reflect_and_record and extract_deferred_lessons) to optionally emit 0-2 'decision' objects ({decision, alternatives, rationale, trade_offs}) in the SAME LLM response; for each, call record_decision(..., domain=<project slug>, goal_context=goal). Cap at 2/run (noise guard \u2014 DECISIONS.md is the in-repo cautionary tale for uncapped 'decision' logs). Respect the verdict gate the lesson path already has: a run judged goal-not-achieved records no decisions (a convention from a failed run is not settled). Step 2 \u2014 settle domain semantics to match the live reader: domain = project slug (recall.py:644 is the acting consumer; consumer-first says the writer conforms to the live read), update the record_decision docstring and Decision dataclass comment, and pin the filter behavior in tests. Step 3 \u2014 land the three test tripwires (below) with the roundtrip test written FIRST and failing before the write side lands (decree-with-tripwire). Step 4 \u2014 doc currency in the same commit: fix README.md:456-459 and skills/arch-memory-knowledge.md:34/84 to state the actual writer; add a GOAL_BRAIN Decisions line closing the 'half-wired' entry; check BACKLOG for a matching item to move to BACKLOG_DONE. Step 5 \u2014 live smoke on the box (one real goal via handle, then verify decisions.jsonl and next-run injection). Explicitly deferred, evidence-gated (not built now): an agent-facing mid-run record_decision tool; a contradict/retire path for stale decisions (mirror of standing-rule contradiction); wiring project DECISIONS.md content or thread-brain decisions into cross-run recall.",
+    "done_means": [
+      "tests/test_decision_capture.py::test_decision_roundtrip_through_recall \u2014 fake adapter returns a typed decision object; assert a decisions.jsonl row exists AND recall(goal, slice='loop', project=X).as_loop_block() contains the 'Prior Decisions' block with that decision (executed, not narrated)",
+      "tests/test_decision_capture.py::test_reflect_and_record_invokes_record_decision \u2014 wiring pin asserting the live reflect/deferred-learning path calls record_decision when the extractor emits decisions (fails if the loop re-half-wires)",
+      "tests/test_decision_capture.py::test_domain_filter_semantics \u2014 project-tagged decision recalled under its project; other-project decision excluded; ''-domain always included; plus test_decision_cap (>2 emitted decisions are capped at 2)",
+      "bash scripts/test-safe.sh exits 0 (full suite; judged by exit code per repo convention)",
+      "Live smoke: PYTHONPATH=src python3 -m handle '<real goal>' on the box, then ~/.maro/workspace/memory/decisions.jsonl is non-empty and the NEXT run's RECALL_PERFORMED captain's-log event shows the decisions block counted in sources.knowledge_blocks",
+      "README.md:456-459 and skills/arch-memory-knowledge.md:34/84 updated in the same commit to name the real live writer (currency rule)"
+    ],
+    "consumers_named": [
+      "decisions.jsonl (new live writer: reflect_and_record/extract_deferred_lessons \u2192 record_decision) \u2192 acting consumer: recall() loop-slice substrate #3 inject_decisions at src/recall.py:641-646, rendered into the decompose prompt via src/loop_planning.py:454-458/397 \u2014 consumer pre-exists and is verified live",
+      "DECISION_RECORDED captain's-log event \u2192 consumer: captain's-log viewer/archive (observability only; deliberately NOT added to the recall read bridge \u2014 inject_decisions is the content path)",
+      "run_card.json decision_prior (unchanged) \u2192 consumer: recall.prior_decisions at src/recall.py:573-581, surfaced via as_context_block/as_loop_block (src/recall.py:220-221, 246-247)",
+      "thread-brain goal_brain.md Decisions (unchanged) \u2192 consumer: director worker memory block (src/director.py:445, 466-469) and navigator shadow (src/navigator_shadow.py:145,343,451) \u2014 within-run only, named as an explicit non-goal for cross-run recall this chunk"
+    ],
+    "tripwires_named": [
+      "test_reflect_and_record_invokes_record_decision \u2014 catches regression of the consumer-first principle (journal going write-orphaned again, the exact failure this task closes)",
+      "test_decision_roundtrip_through_recall \u2014 catches write/read schema drift between record_decision and inject_decisions/search_decisions (same pattern as make_decision_prior's single-shape rule)",
+      "test_domain_filter_semantics \u2014 catches writer/reader domain drift that would silently re-open the invisibility gap at knowledge_lens.py:863-864",
+      "test_decision_cap \u2014 catches noise regression (uncapped decision emission turning the journal into the DECISIONS.md telemetry failure mode)",
+      "test asserting a goal_achieved=False run records zero decisions \u2014 catches verdict-blind capture (SF-2 done\u2260achieved principle applied to decisions)"
+    ],
+    "cuts_or_inversion": "Cuts (with basis): (1) NOT building a new store, schema, or retrieval path \u2014 Decision/decisions.jsonl/inject_decisions/recall substrate #3 all exist with a live, verified consumer; the gap is write-side-only, and a parallel store would repeat the repo's most-repeated wound (half-closed loops). (2) NOT adding a second paid LLM call \u2014 capture rides the existing lesson-extraction call (budget decree: no silent LLM spend; same call, extended schema). (3) NOT an agent-facing mid-run tool in v1 \u2014 post-hoc extraction is the cheapest current-capability composition that closes the loop (possible-now bias satisfied); the tool is deferred pending evidence extraction misses real decisions. (4) NOT feeding director course-corrections or project DECISIONS.md into the journal \u2014 they are recovery/telemetry events, already carried by decision_prior and the activity log; merging them blurs the journal into an event log. (5) NOT touching navigator per-turn maintenance \u2014 separate shadow-mode arc. Inversion \u2014 what would make this wrong to build: (a) if runs rarely make reusable design decisions, the journal stays empty and the prompt/parse complexity was waste \u2014 mitigated by the 2/run cap and a named revisit check (journal still empty after ~20 real judged-achieved runs \u21d2 the extractor prompt isn't the mechanism; reconsider the mid-run tool); (b) if injected decisions mis-steer (stale convention lock-in), k=3 injection cap plus the 'search before making new ones' framing bounds blast radius, and the contradict/retire path is the named follow-up BEFORE scaling capture volume; (c) if Jeremy's position is that decisions are just lessons, the smaller alternative is adding a 'convention' lesson type \u2014 consciously rejected because the decision read side already renders alternatives+rationale, which the lesson schema cannot carry, and the read side is the part that already works."
+  },
+  "T2-control": {
+    "findings": [
+      {
+        "claim": "The contested/decay-by-invalidation half of the standing-rule lifecycle is dead: contradict_pattern() has zero production callers (only tests/test_promotion_cycle.py), so StandingRule.contradictions never increments, contested_rules() always returns empty, the 'verify-before-relying' contested injection block in inject_standing_rules is unreachable, and the refight_rule keep/revise/retire loop in run_skill_maintenance never fires. All 4 live rules in ~/.maro/workspace/memory/standing_rules.jsonl have contradictions:0. The arch-04 'fix' (loop_finalize.py comment) threaded the adapter to refight but the feed that would trigger a refight was never wired.",
+        "evidence": "src/knowledge_lens.py:373 (contradict_pattern def, no src/ callers per grep), src/knowledge_lens.py:575 (contested_rules), src/knowledge_lens.py:548-555 (unreachable contested injection), src/knowledge_lens.py:604 (refight_rule), src/skill_lifecycle.py:677-698 (dead refight loop), src/loop_finalize.py:618-628 (adapter-threading comment calls this 'the only live caller path'), ~/.maro/workspace/memory/standing_rules.jsonl (4 rules, all contradictions:0)",
+        "source": "code"
+      },
+      {
+        "claim": "Canon promotion (Stage 2\u21923) is structurally starved: times_applied is only incremented by inject_tiered_lessons(track_applied=True), whose sole caller is the CLI-only `--compare` branch of strategy_evaluator main \u2014 no runtime loop path calls it. git log -S shows it was NEVER called from agent_loop/recall/loop_planning. Live canon_stats.jsonl is 477 rows all dated 2026-04-04, and its 22 lesson_ids have ZERO overlap with the 4 current LONG-tier lessons, so get_canon_candidates can never surface a candidate from existing data either. Additionally loop_finalize hardcodes task_type='agenda' on reflect_and_record, making the CANON_TASK_TYPE_MIN=3 distinct-task-type gate near-unreachable even if the feed were wired. The arch doc line 117 says canon promotion is 'spec'd but not coded' \u2014 stale: it IS coded (get_canon_candidates, evolver scan), the feed is dead.",
+        "evidence": "src/knowledge_web.py:972-1041 (inject_tiered_lessons), src/knowledge_web.py:1093 (_increment_times_applied), src/knowledge_web.py:1137 (_record_canon_hit), src/knowledge_web.py:1128-1129 + :1178 (canon gates/get_canon_candidates), src/strategy_evaluator.py:425-460 (CLI --compare only caller), src/loop_finalize.py:562-586 (task_type='agenda' hardcode), src/evolver_scans.py:567-617 (scan reads frozen data), skills/arch-memory-knowledge.md:117 (stale claim), ~/.maro/workspace/memory/canon_stats.jsonl (477 rows all 2026-04-04; 22 ids, 0 overlap with long/lessons.jsonl's 4 ids)",
+        "source": "both"
+      },
+      {
+        "claim": "The decision journal is half-wired: record_decision() has zero production callers, decisions.jsonl is absent in the live workspace, yet inject_decisions runs on every loop-start recall against the missing file. Commit a278575 (2026-07-02) explicitly deferred deleting it ('not dead, just half-wired... actively developed as of 2026-06-11') \u2014 no write side has appeared since.",
+        "evidence": "src/knowledge_lens.py:772 (record_decision, no src/ callers per grep), src/knowledge_lens.py:845-894 (search/inject_decisions), src/recall.py:641-644 (loop substrate reads decisions), ~/.maro/workspace/memory/decisions.jsonl (absent), git show a278575 commit message",
+        "source": "code"
+      },
+      {
+        "claim": "The verifier-calibration loop was orphaned by dead-code cleanup: record_verification, verification_accuracy, and calibrated_alignment_threshold have zero production callers since commit a278575 removed inspector.py's calls (2026-07-02). Live verification_outcomes.jsonl has 58 rows, all 2026-04, all claim_type 'alignment' \u2014 the calibration feedback loop stopped accruing data and nothing reads the threshold.",
+        "evidence": "src/knowledge_lens.py:924 (record_verification), :1009 (verification_accuracy), :1043 (calibrated_alignment_threshold) \u2014 no src/ callers per grep; git show a278575 (removed inspector.py call sites); ~/.maro/workspace/memory/verification_outcomes.jsonl (58 rows, all 2026-04)",
+        "source": "code"
+      },
+      {
+        "claim": "Stage 4\u21925 (skill\u2192rule) is fully coded but never exercised, and its demotion path is unwired: rules.py implements the whole lifecycle and find_matching_rule/record_rule_use are checked every loop, but graduate_skill_to_rule is CLI-only (knowledge.py) and has never been run \u2014 live rules.jsonl is absent, so the every-loop check matches against nothing. record_rule_wrong_answer (the 'Inspector auto-demote' promised in the module docstring) has zero callers. Arch doc line 118 ('Stage 4\u21925... conceptual only') is stale \u2014 it is coded, just dormant.",
+        "evidence": "src/rules.py:139 (find_matching_rule), :165 (record_rule_use), :221 (graduate_skill_to_rule), :292 (record_rule_wrong_answer, no callers), :14 (docstring promise), src/loop_planning.py:616-629 (every-loop rule check), src/knowledge.py:353-354 (CLI-only graduation), ~/.maro/workspace/memory/rules.jsonl (absent), skills/arch-memory-knowledge.md:118 (stale)",
+        "source": "both"
+      },
+      {
+        "claim": "Loop-start lesson injection reads the LEGACY flat store, not the tiered store: recall's loop slice substrate #1 imports load_lessons (memory_ledger \u2192 memory/lessons.jsonl, 301 lessons) despite the 'Tiered lessons \u2014 ranked retrieval' comment. Consequence: read-time decay, tier scores, reinforcement, and the medium/long distinction have no effect on what the planner actually sees at loop start; the tiered store's only live prompt consumers are the persona template (query_lessons n=3) and navigator V5.",
+        "evidence": "src/recall.py:592-632 (loop substrate uses `from memory import load_lessons`), src/memory.py:54-100 (facade re-export), src/memory_ledger.py:903 (load_lessons reads legacy memory/lessons.jsonl), src/knowledge_web.py:345-406 (decay applied only in load_tiered_lessons), src/persona.py:427-440 (tiered consumer), src/navigator_prompt.py:323-342 (V5 consumer); live stores: legacy 301 vs medium 199/long 4",
+        "source": "code"
+      },
+      {
+        "claim": "Worker-slice memory trust is frozen at first ingest: memory_bridge stores the raw lesson score as trust at ingest time, and both the sha1-id dedup skip and the append-only byte-offset incremental read mean later reinforcement/promotion/decay of the same lesson never updates the SQLite copy the director's worker slice serves (memory.worker_slice default ON).",
+        "evidence": "src/memory_bridge.py:109 (trust = stored score), :147-175 (byte-offset incremental ingest), :221-222 (dedup skip on existing id), src/director.py:422-434 (worker-slice consumer, default True)",
+        "source": "code"
+      },
+      {
+        "claim": "navigator.lesson_inject shipped but never adjudicated: enabled in live config 2026-07-14 with an explicit 'RE-VERIFY... lessons_injected >0 vs =0' note, the V5 A/B had one lesson and zero measured effect at era end, and no measured verdict entry exists through 2026-07-20. This is the one currently-enabled learning flag with an open self-assigned measurement obligation.",
+        "evidence": "src/navigator_prompt.py:323-342 (config-gated injection), :381 (lessons_injected stamped on NAVIGATOR_DECIDED), ~/.maro/workspace/config.yml (navigator.lesson_inject: true + RE-VERIFY note), docs/history/knowledge-journey/10-verify-learn.md:99 ('enabled but unmeasured')",
+        "source": "both"
+      },
+      {
+        "claim": "recall's loop slice hedges for events that can never fire: _LOOP_ACTIONABLE_EVENTS includes STANDING_RULE_CONTRADICTED, which no production code emits (contradict_pattern dead), so the 'learning activity' substrate silently filters for a phantom event type.",
+        "evidence": "src/recall.py:54-59 (_LOOP_ACTIONABLE_EVENTS), :675 (learning-activity substrate), src/knowledge_lens.py:373 (only emitter of that event, no production callers)",
+        "source": "code"
+      },
+      {
+        "claim": "Stale documentation that would mislead future work: arch-memory-knowledge.md line 121 claims graveyard 'nothing calls it proactively' but recall's loop slice calls search_graveyard(resurrect=True) every loop and prereq.py also reads it; skill_lifecycle.run_skill_maintenance docstring claims it is 'Called from run_evolver() and from heartbeat' but its only caller is loop_finalize. Also the healthy-side note: the S3 ATIF term in extract_lessons_via_llm uses avg_applied which is always ~0 because nothing increments times_applied (same root cause as the canon finding), so that scoring term is inert.",
+        "evidence": "skills/arch-memory-knowledge.md:121 vs src/recall.py:648-660 + src/prereq.py:132-133; src/skill_lifecycle.py:546 (stale docstring) vs src/loop_finalize.py:618-628 (only caller); src/memory.py:266-276 (ATIF term on frozen avg_applied)",
+        "source": "both"
+      },
+      {
+        "claim": "What IS wired and verified live (baseline, so the debt list above is not read as 'nothing works'): record\u2192tier\u2192adversarial-reject\u2192dedup-reinforce\u2192promotion-at-reinforcement\u2192observe_pattern\u2192hypothesis\u2192standing-rule promotion (4 live rules exist); read-time decay + 24h consolidation GC-to-archive with resurrection; verdict-aware deferred lesson extraction with audit quarantine/repair; skill crystallization and every-loop Stage-5 rule matching; V4 navigator divergence adjudication (config-gated, on) and V5 lesson crystallization; worker-slice ingestion; dispatch/loop/navigator recall seams all live.",
+        "evidence": "src/knowledge_web.py:189-342 (record/reinforce/hooks), :345-406 (decay), :452-525 + :827 (archive/consolidate), src/knowledge_lens.py:211-311 (observe_pattern/promotion gate), src/loop_finalize.py:753-829 (deferred learning), src/loop_planning.py:456-458 + :616-629, src/navigator_shadow.py:766 + :945, src/handle.py:1515-1527 (dispatch recall), ~/.maro/workspace/memory/standing_rules.jsonl (4 rules)",
+        "source": "code"
+      }
+    ],
+    "plan_summary": "n/a",
+    "done_means": [
+      "Caller greps for every suspect function (contradict_pattern, record_decision, record_verification, calibrated_alignment_threshold, record_rule_wrong_answer, inject_tiered_lessons, graduate_skill_to_rule) across src/, scripts/, tests/ \u2014 zero production callers confirmed for each dead claim",
+      "Live-store inspection of ~/.maro/workspace/memory/*.jsonl (standing_rules contradictions all 0; decisions.jsonl and rules.jsonl absent; canon_stats 477 rows all 2026-04-04; verification_outcomes 58 rows all 2026-04; canon-stat lesson_ids have zero overlap with current LONG tier)",
+      "git archaeology: git show a278575 commit message (explicit 'not dead, just half-wired' deferral); git log -S inject_tiered_lessons proving the canon feed was never on the loop path (not a June regression)",
+      "Doc-vs-code cross-check for every arch-memory-knowledge.md claim relied on (lines 117, 118, 121 all found stale and corrected against code)",
+      "Live config read (~/.maro/workspace/config.yml) confirming which gates are actually on this box (lesson_inject true, adjudicate_divergences true, evolver.run_cadence 10)"
+    ],
+    "consumers_named": [
+      "Tiered lesson store (medium/long) \u2192 persona.py:427-440 template 'recent_lessons' and navigator_prompt.decide V5 injection; NOT the loop planner (it reads legacy)",
+      "Legacy lessons.jsonl \u2192 recall loop slice \u2192 loop_planning._build_loop_context decompose prompt",
+      "standing_rules.jsonl \u2192 knowledge_lens.inject_standing_rules via recall loop slice \u2192 decompose prompt; also persona.py:418-425",
+      "graveyard/archive \u2192 recall.py:648-660 (resurrect=True) and prereq.py:132-133",
+      "canon_stats.jsonl \u2192 evolver_scans.scan_canon_candidates \u2192 evolver suggestion queue (human review) \u2014 currently fed nothing",
+      "decisions.jsonl \u2192 recall.py:641-644 inject_decisions \u2014 store absent, consumer runs against nothing",
+      "rules.jsonl \u2192 loop_planning.py:616-629 find_matching_rule every loop \u2014 store absent",
+      "SqliteMemoryStore (memory_bridge) \u2192 director.py:422-434 worker slice prompts",
+      "navigator_lessons.jsonl \u2192 navigator_prompt.decide (gated by navigator.lesson_inject)",
+      "NAVIGATOR_DECIDED shadow rows \u2192 navigator_shadow.adjudicate_navigator_divergences on evolver cadence"
+    ],
+    "tripwires_named": [
+      "Pin test: assert contradict_pattern has \u22651 production caller (or the contested/refight code is removed) \u2014 guards the decay-by-invalidation gap from silently persisting",
+      "Pin test: after a loop-slice recall injection, canon_stats.jsonl accrues a hit for an injected LONG lesson \u2014 guards Stage 2\u21923 feed if/when wired",
+      "Pin test: decisions.jsonl is written by some runtime path OR inject_decisions is removed from the loop slice \u2014 forces the a278575 'half-wired' deferral to resolve",
+      "Pin test: memory_bridge re-ingest updates trust when a lesson's stored score changed \u2014 guards frozen-trust drift",
+      "Pin test: recall loop substrate #1 reads load_tiered_lessons (or the legacy choice is documented as deliberate) \u2014 guards the decay-has-no-effect split",
+      "Process tripwire: GOAL_BRAIN verdict entry required for navigator.lesson_inject A/B (config note already demands RE-VERIFY; nothing enforces it)",
+      "Doc tripwire: arch-memory-knowledge.md lines 117/118/121 corrected so the next reader doesn't re-derive the wrong wiring map"
+    ],
+    "cuts_or_inversion": "Ruled out: (1) contested-rule injection being reachable in production \u2014 the arch-04 adapter-threading 'fix' repaired only the consumer half; the producer (contradict_pattern) was never wired, so the fix cannot fire. (2) Canon starvation being a June-2026 regression from the recall-seam relocation \u2014 git -S shows inject_tiered_lessons was never on the agent_loop/recall/loop_planning path; the 477 canon hits are a single-day (2026-04-04) test-era artifact whose lesson_ids no longer exist in the LONG tier. (3) strategy_evaluator as a runtime canon feed \u2014 its inject_tiered_lessons call sits inside the CLI --compare branch only. (4) 'Graveyard is never consulted' (arch doc) \u2014 false, two live readers. Inversion for the adjudicator: the biggest debt is not missing features but half-wired pairs (write-side dead / read-side live, or vice versa) left by dead-code cleanups and refactors \u2014 each pair either needs its missing half or should be cut whole; keeping both halves half-alive is the one clearly wrong option."
+  },
+  "T2-doc": {
+    "findings": [
+      {
+        "claim": "The contested-rule lane's detection half is unwired: contradict_pattern() is the only writer of StandingRule.contradictions and has zero callers anywhere in src/, so no rule can ever become contested on any live path. The entire downstream contest machinery is therefore unreachable in production: the 'Contested rules' injection branch, contested_rules(), the refight sweep (live via loop_finalize), and the STANDING_RULE_CONTRADICTED event (recall lists it as loop-actionable; it can never be emitted). refight_rule's evidence query reads events that cannot exist. Live data agrees: all 4 standing rules have contradictions=0 (one with 29 confirmations since 2026-06-11).",
+        "evidence": "src/knowledge_lens.py:373-382 (contradict_pattern, sole contradictions writer); grep of src/ shows no caller (only def + re-export src/memory.py:95); consumers: src/knowledge_lens.py:531,548-555 (contested injection branch), src/knowledge_lens.py:575-586 (contested_rules), src/skill_lifecycle.py:683-698 (refight sweep) called from src/loop_finalize.py:620-624; src/recall.py:57 (STANDING_RULE_CONTRADICTED in _LOOP_ACTIONABLE_EVENTS) vs sole emitter src/knowledge_lens.py:396-403; src/knowledge_lens.py:589-601 (_rule_contradiction_evidence); live ~/.maro/workspace/memory/standing_rules.jsonl: 4 rules, contradictions=0. GOAL_BRAIN.md:785-796 records the shipped repair/read halves but not the missing detection half; BACKLOG.md:1609-1618 records the trust-decay constraint without noting the uncalled producer.",
+        "source": "both"
+      },
+      {
+        "claim": "The Stage 2\u21923 canon pipeline's counter is dead: TieredLesson.times_applied is incremented only by inject_tiered_lessons(track_applied=True) via _increment_times_applied, and inject_tiered_lessons' only production caller is the strategy_evaluator CLI --compare path \u2014 it left the live loop when injection moved behind recall(). canon_stats.jsonl's last entry is 2026-04-04. Consumers still stand armed: get_canon_candidates, evolver's scan_canon_candidates, maro-knowledge Stage 3, cli canon-candidates \u2014 all reading a counter that can no longer accrue.",
+        "evidence": "src/knowledge_web.py:1039 (track_applied call), src/knowledge_web.py:1093-1121 (_increment_times_applied \u2192 _record_canon_hit); sole live caller src/strategy_evaluator.py:443-445 (inside CLI main --compare); consumers src/knowledge_web.py:1178-1216 (get_canon_candidates), src/evolver_scans.py:566-588, src/knowledge.py:66, src/cli.py:1240; live ~/.maro/workspace/memory/canon_stats.jsonl tail entries dated 2026-04-04 (477 rows total). skills/arch-memory-knowledge.md:117 says 'Stage 2\u21923 has no automated pathway' \u2014 reality is worse: even the candidate-surfacing counter is frozen.",
+        "source": "both"
+      },
+      {
+        "claim": "The Stage 3 dashboard would crash on the day canon candidates ever exist, and the promotion command it advertises does not exist: knowledge.py accesses get_canon_candidates() results as objects (c.content, x.times_applied) but the function returns dicts keyed 'lesson'/'times_applied', so a non-empty candidate list raises AttributeError (caught and rendered as '[error: ...]'); and 'maro-memory canonize' printed as the HUMAN GATE has no cli.py implementation (only canon-candidates exists). Shipped, never exercised, never adjudicated \u2014 masked because finding #2 keeps the candidate list permanently empty.",
+        "evidence": "src/knowledge.py:69-72 (attribute access on dicts) vs src/knowledge_web.py:1203-1214 (dict construction, key 'lesson'); src/knowledge.py:282 ('maro-memory canonize <id>  # HUMAN GATE') vs grep of src/cli.py: no 'canonize' handler (only cli.py:1236 canon-candidates).",
+        "source": "code"
+      },
+      {
+        "claim": "The Feynman-F4/Phase-60 verifier-memory calibration loop is fully dead on both ends: record_verification has zero callers (its docstring claims 'Called by inspector.check_alignment(), adversarial lens' \u2014 false today), verification_outcomes.jsonl's last row is 2026-04-12, and calibrated_alignment_threshold has zero callers \u2014 inspector uses static config thresholds. A complete write\u2192accumulate\u2192calibrate loop shipped in Phase 59/60, silently lost its writer, and its calibrated output was never consumed by anything.",
+        "evidence": "src/knowledge_lens.py:924-962 (record_verification; docstring claim at 941-943), src/knowledge_lens.py:1043-1076 (calibrated_alignment_threshold); grep across src/ finds no caller for either (only defs + re-exports src/memory.py:98-99); src/inspector.py:148-149 (_ALIGNMENT_GOOD/_ALIGNMENT_POOR from static config, no calibration import); live ~/.maro/workspace/memory/verification_outcomes.jsonl last records 2026-04-12T01:14 (58 rows). skills/arch-memory-knowledge.md:37 still lists the pair as live writer/reader.",
+        "source": "both"
+      },
+      {
+        "claim": "The decision journal is a consumer-without-producer: inject_decisions runs on every agenda loop via the recall loop slice, but record_decision has zero callers anywhere (src/, scripts/, deploy/) and ~/.maro/workspace/memory/decisions.jsonl does not exist. GOAL_BRAIN records it was spared Tier-1 dead-code deletion as 'half-wired not dead' \u2014 the keep was adjudicated, but wiring the write side never was; every loop pays a read of an empty store.",
+        "evidence": "src/recall.py:641-646 (inject_decisions per loop) \u2192 src/knowledge_lens.py:882-894; writer src/knowledge_lens.py:772-823 with zero callers (grep src/ scripts/ deploy/); live workspace: decisions.jsonl absent (FileNotFoundError on read); GOAL_BRAIN.md:544 ('knowledge_lens.record_decision was half-wired not dead'). cli.py:193 append_decision is the separate per-project orch_items store, not this journal.",
+        "source": "both"
+      },
+      {
+        "claim": "The tiered-lesson store is bypassed by the main loop's prompt injection: the recall loop slice injects from the LEGACY flat lessons.jsonl (memory_ledger.load_lessons \u2014 no decay, no tiers, no score gating), while the tiered store (medium/long) reaches prompts only through (a) the director worker slice's sqlite mirror and (b) persona template vars that no shipped persona uses. The arch skill's documented Read Flow (bootstrap_context + inject_tiered_lessons at loop start) is stale: bootstrap_context's only caller is a CLI command.",
+        "evidence": "src/recall.py:592-632 (loop slice lesson substrate uses memory_ledger load_lessons, src/memory_ledger.py:903-957); src/loop_planning.py:454-458 (loop consumes recall); tiered consumers: src/director.py:424-470 + src/memory_bridge.py:56-62 (worker slice), src/persona.py:415-440 (template vars; grep personas/ finds no template using recent_lessons/standing_rules); src/cli.py:427 (sole bootstrap_context caller); skills/arch-memory-knowledge.md:79-86 (stale Read Flow), :30 ('Read by inject_tiered_lessons()').",
+        "source": "both"
+      },
+      {
+        "claim": "The one live consumer of tiered lessons \u2014 the worker-slice sqlite mirror \u2014 is disconnected from the tier lifecycle: ingest reads the RAW stored score as trust (its comment 'TieredLesson carries score (decayed)' inverts the session-40 invariant that decay is read-time-only), the content-stable item id makes ingest skip-on-seen so later reinforcements/promotions/decay never update mirrored trust, and nothing calls MemoryStore.invalidate when the decay GC archives a lesson \u2014 so workers keep recalling GC'd lessons at trust 1.0 forever. Decay/GC/contestation effectively do not propagate to the only runtime reader of the store they govern.",
+        "evidence": "src/memory_bridge.py:107-109 (trust = raw stored score + false 'decayed' comment) vs src/knowledge_web.py:355-361,389-394 (decay is read-time derivation; stored score is anchor-time); src/memory_bridge.py:112-116,221-222 (sha1(lesson_id|content) id + skip-if-present \u21d2 no updates propagate); src/knowledge_web.py:776-784 (GC touches only jsonl+archive); src/memory_port.py:124-128 (invalidate verb) with zero production callers (grep: only skill_loader cache invalidations).",
+        "source": "code"
+      },
+      {
+        "claim": "Stage-5 rule demotion is unwired: record_rule_wrong_answer (the Inspector feedback that auto-demotes a bad rule after 3 wrong answers) has zero callers and inspector.py contains no rule reference, despite rules.py's lifecycle docstring claiming 'Inspector auto-demote on wrong answer'. Rules ARE matched and use-counted at decompose time, so a bad graduated rule would bypass LLM decompose forever with no corrective loop \u2014 currently latent because rules.jsonl doesn't exist (no skill has ever graduated in production).",
+        "evidence": "src/rules.py:292-308 (record_rule_wrong_answer, zero callers per grep \u2014 only loop_planning imports find_matching_rule/record_rule_use); src/rules.py:13-14 (docstring claim); grep 'rule' in src/inspector.py returns nothing; src/loop_planning.py:617-630 (match + use count live); live workspace: ~/.maro/workspace/memory/rules.jsonl absent.",
+        "source": "both"
+      },
+      {
+        "claim": "Knowledge nodes written by the K4 outcome bridge and the link-farm import are permanently invisible to injection: both create status=NODE_CANDIDATE, no code path ever flips a node to NODE_ACTIVE, and query_knowledge/inject_knowledge_for_goal read only NODE_ACTIVE \u2014 so the K4 write path (run on every reflection) feeds a read path that can never see its output. Live store: 293 candidate vs 316 active (the active ones predate/bypass the bridge). Additionally inject_knowledge_for_goal's times_applied increment mutates only the in-memory object (never persisted), so the retrieval boost keyed on times_applied is inert: 1 of 609 nodes has times_applied>0.",
+        "evidence": "src/knowledge_bridge.py:257-269 (NODE_CANDIDATE creation; upsert path 219-253 bumps confidence/validated_at but never status), src/knowledge_web.py:1661-1671 (import_link_farm NODE_CANDIDATE); src/knowledge_web.py:1353-1372 (load_knowledge_nodes default status=NODE_ACTIVE) \u2190 src/knowledge_web.py:1425-1437 (query_knowledge); grep: no assignment of status to 'active' outside the dataclass default; src/knowledge_web.py:1496-1507 (times_applied += 1 on loaded object, no write-back); live knowledge_nodes.jsonl: statuses {'active': 316, 'candidate': 293}, times_applied>0 on 1/609.",
+        "source": "code"
+      },
+      {
+        "claim": "Standing-rule injection has a domain vocabulary mismatch: rules are written with domain = lesson task_type (all 4 live rules: domain='agenda'), but the sole live injection site filters by project slug (inject_standing_rules(domain=project)) and load_standing_rules keeps only domain==project or domain==''. Consequence: any project-scoped loop receives ZERO standing rules ('apply unconditionally' tier silently absent); only project-less runs get them. inject_decisions has the same read-side shape (moot only because the journal is empty).",
+        "evidence": "writers: src/knowledge_web.py:336-341 (observe_pattern(tl.lesson, tl.task_type or '')), src/knowledge_web.py:697-701 (promote path, domain=task_type); live standing_rules.jsonl domains all 'agenda'; reader: src/recall.py:634-639 (domain=project) with filter src/knowledge_lens.py:142-144; src/recall.py:641-646 (inject_decisions(goal, domain=project)).",
+        "source": "code"
+      },
+      {
+        "claim": "The medium\u2192long promotion pipeline is starved in practice by its own constants: promotion needs effective score \u22650.9 with 15%/day decay (one un-reinforced day drops 1.0\u21920.85, below threshold \u2014 acknowledged in-code) and reinforcement's only organic triggers are near-identical (>0.8 text-sim) re-extraction or graveyard resurrection. Live funnel after ~3 months: 199 medium lessons, 4 long, and the latest consolidation cycle shows decayed=192, promoted=0, gc=11. The arch skill documents the cold-start half (gap 5) but not that promotion is near-zero, which also starves the hypothesis\u2192standing-rule accretion above it (hypotheses.jsonl currently empty, 4 rules total).",
+        "evidence": "src/knowledge_web.py:55-58 (constants), src/knowledge_web.py:313-321 (_post_reinforce_hooks comment: consolidation can only promote same-day-reinforced), src/knowledge_web.py:242-250 (dedup-reinforce trigger); live: medium/lessons.jsonl=199 rows, long/lessons.jsonl=4 rows, hypotheses.jsonl=0 rows, medium/change_log.jsonl last entry 2026-07-17 {decayed:192, promoted:0, gc:11}; skills/arch-memory-knowledge.md:121 (gap 5, cold-start only).",
+        "source": "both"
+      },
+      {
+        "claim": "Stale lifecycle docs/docstrings that misdirect maintainers: (a) skill_lifecycle.run_skill_maintenance claims 'Called from run_evolver() and from heartbeat every N ticks' \u2014 evolver only re-exports it; the sole live caller is loop_finalize (the arch-04 adapter-threading fix that made refight reachable at all); (b) arch skill's Data Stores table lists writer/reader pairs for verification_outcomes.jsonl and decisions.jsonl that are dead on the writer side (findings 4, 5); (c) memory_bridge's 'score (decayed)' comment inverts the decay invariant (finding 7).",
+        "evidence": "src/skill_lifecycle.py:544-546 (docstring) vs src/evolver.py:80 (import-only) and src/loop_finalize.py:618-628 (sole caller, comment names itself 'the only live caller path'); skills/arch-memory-knowledge.md:34,37; src/memory_bridge.py:107-109.",
+        "source": "both"
+      },
+      {
+        "claim": "Verified-wired (ruled out as debt, for the adjudicator's balance): the record\u2192verdict-stamp\u2192deferred-extraction write flow is live end-to-end including crash repair (loop_finalize defer + stamp, audit_policy quarantine, audit_repair replay); in-process consolidation is wired at handle() exit, heartbeat tick, and CLI with marker gating; graveyard resurrection runs on every loop via recall substrate 4; hypothesis\u2192rule promotion fires via _post_reinforce_hooks on LONG re-confirmation; navigator V5 lesson crystallization/injection is wired behind navigator.lesson_inject (default False in code, enabled on this box per workspace config); evolver cadence carries V2 verify-applied-suggestions and Phase-46 graduation.",
+        "evidence": "src/loop_finalize.py:578-583,764-800; src/audit_policy.py:56-58; src/audit_repair.py:432-482; src/handle.py:724-725, src/heartbeat.py:1218-1219, src/cli.py:1192-1197, src/knowledge_web.py:806-872; src/recall.py:648-660; src/knowledge_web.py:329-342; src/navigator_prompt.py:327-333 + src/navigator_shadow.py:908-915,945-1011; src/evolver.py:843-846, src/evolver.py:798.",
+        "source": "code"
+      }
+    ],
+    "plan_summary": "n/a",
+    "done_means": [
+      "Caller-census greps executed over src/ for every lifecycle verb (contradict_pattern, observe_pattern, inject_tiered_lessons, record_verification, calibrated_alignment_threshold, record_decision, record_rule_wrong_answer, get_canon_candidates, MemoryStore.invalidate, refight_rule, bootstrap_context) \u2014 outputs attached in evidence, each dead-path claim backed by an empty-caller grep, each wired-path claim by a cited caller",
+      "Live-workspace store inspection executed (~/.maro/workspace/memory/): row counts (medium=199/long=4/hypotheses=0/standing_rules=4), field dumps (contradictions=0 on all rules; node statuses 316 active/293 candidate; times_applied>0 on 1/609 nodes), and freshness timestamps (canon_stats last 2026-04-04, verification_outcomes last 2026-04-12, consolidation change_log 2026-07-17 promoted=0)",
+      "Doc-vs-code cross-check executed: every skills/arch-memory-knowledge.md writer/reader claim in the Data Stores table and Read Flow re-verified against code; stale claims cited with the contradicting line"
+    ],
+    "consumers_named": [
+      "medium/long lessons.jsonl \u2192 live consumers: director worker slice (director.py:424-470 via memory_bridge sqlite mirror) and record_tiered_lesson dedup-reinforce (knowledge_web.py:242-250); NOT the main-loop prompt (reads legacy lessons.jsonl via recall.py:595-632)",
+      "legacy lessons.jsonl \u2192 recall loop slice \u2192 loop_planning.py:454-458 decompose prompt",
+      "standing_rules.jsonl \u2192 inject_standing_rules via recall.py:637 (broken for project-scoped runs, finding 10) and persona.py:419-424 (dormant)",
+      "hypotheses.jsonl \u2192 observe_pattern promotion check (knowledge_lens.py:265-370)",
+      "decisions.jsonl \u2192 inject_decisions via recall.py:644 \u2014 consumer with NO producer",
+      "verification_outcomes.jsonl \u2192 calibrated_alignment_threshold \u2014 orphaned pair, neither end called",
+      "canon_stats.jsonl \u2192 get_canon_candidates \u2192 evolver_scans.scan_canon_candidates + knowledge.py Stage 3 + cli canon-candidates \u2014 consumers with a dead producer",
+      "knowledge_nodes.jsonl \u2192 inject_knowledge_for_goal via recall.py:687 \u2014 reads active-only, K4 bridge writes candidate-only",
+      "rules.jsonl (Stage 5) \u2192 find_matching_rule/record_rule_use in loop_planning.py:617-630; demotion consumer record_rule_wrong_answer has no producer call site",
+      "captains_log STANDING_RULE_CONTRADICTED \u2192 recall._LOOP_ACTIONABLE_EVENTS + _rule_contradiction_evidence \u2014 consumers with an unreachable emitter",
+      "RECALL_PERFORMED lessons_cited stamp \u2192 no consumer (explicitly deferred in recall.py:705-707: 'logged tuples are the crystallization substrate later')"
+    ],
+    "tripwires_named": [
+      "Wiring-census assertion (chunk-8 style): every event type listed in recall._LOOP_ACTIONABLE_EVENTS must have \u22651 emitter reachable from a non-test caller \u2014 would have caught STANDING_RULE_CONTRADICTED (finding 1)",
+      "Producer-liveness pin test: for each JSONL store under memory/ with a wired reader, assert a src/ caller exists for its writer function (record_decision, record_verification, contradict_pattern, record_rule_wrong_answer would all fail today) \u2014 accept-not-close via known-gap pins per the repo's pin-test convention",
+      "Shape regression test: knowledge.py _stage3_data rendered against a non-empty get_canon_candidates() fixture (dict access, not attribute) \u2014 catches finding 3 mechanically",
+      "Mirror-fidelity test: after run_decay_cycle GC's a lesson, assert the sqlite mirror item is invalidated or its trust \u2264 the decay-derived score \u2014 catches finding 7's frozen-trust drift",
+      "Domain round-trip test: promote a lesson with task_type=T under a project P loop, assert inject_standing_rules at the recall call site returns it \u2014 catches finding 10's vocabulary mismatch",
+      "Doc-currency tripwire: assert skills/arch-memory-knowledge.md Data Stores 'Written by/Read by' names resolve to \u22651 grep hit outside their home module (currency rule enforcement for findings 4/5/12)"
+    ],
+    "cuts_or_inversion": "Ruled out as debt after verification (claims I checked and cleared): the refight sweep IS reachable (loop_finalize threads the adapter \u2014 the arch-04 fix), consolidation IS wired at all three entry points with marker gating, the deferred-lesson/verdict-stamp/audit-repair write flow IS live end-to-end, graveyard resurrection runs every loop, and hypothesis\u2192rule accretion is wired via _post_reinforce_hooks \u2014 so the debt is concentrated in detection/feedback halves and read-write vocabulary seams, not in the record path. Inversion on the obvious fixes: (a) naively wiring contradict_pattern from closure/adversarial verdicts would let hallucinated contradictions (30-78% of unverified reviewer claims wrong, per DEV_PATTERNS through-line #3) contest a 29-confirmation rule \u2014 detection needs claim-probe-grounded evidence, not just any negative verdict; (b) resurrecting the canon/Stage-3 counter may be the wrong build if the memory-as-module direction (GOAL_BRAIN 2026-07-07, memory_port bake-off) supersedes tiered injection as the retrieval surface \u2014 decide the substrate first, then wire counters to whichever surface survives; (c) the lessons_cited write-only stamp is deferred by explicit recorded decision (recall.py:705-707), not debt."
+  },
+  "T3-control": {
+    "findings": [
+      {
+        "claim": "The playbook reaches exactly ONE prompt surface today: the agenda-loop decompose system prompt. Path: recall(slice=\"loop\") populates result.playbook via inject_playbook(max_chars=800); as_loop_block() places it 7th of 8 substrate blocks; loop_planning returns it as lessons_context; planner.decompose appends it to extras and concatenates into DECOMPOSE_SYSTEM.",
+        "evidence": "src/recall.py:677-680 (inject_playbook(max_chars=800)), src/recall.py:585 (loop/navigator slices only), src/recall.py:240-241 (as_loop_block includes playbook), src/loop_planning.py:456-458 (recall\u2192as_loop_block\u2192lessons_context), src/loop_planning.py:395-400 (lessons_context\u2192_decompose), src/planner.py:735,775,891-892 (extras \u2192 system = DECOMPOSE_SYSTEM + extras)",
+        "source": "code"
+      },
+      {
+        "claim": "Selection is a pure positional prefix of the file: skip lines before the first \"## \", then accumulate lines in file order and BREAK on the first line that would cross max_chars \u2014 no relevance, recency, or section weighting; a single long line mid-file terminates inclusion of everything after it.",
+        "evidence": "src/playbook.py:109-135, specifically lines 124-131 (for line ... if chars + len(line) > max_chars: break)",
+        "source": "code"
+      },
+      {
+        "claim": "On the live box the injected block is 780 chars: the seed Decomposition section plus duplicated junk Execution entries (\"Be more concise\" x3). Everything actually LEARNED \u2014 evolver guardrails (playbook.md lines 61-63, 78), Learned entries (82-84), Cost (67-69), Quality (73-75), Signals (88) \u2014 is past the 800-char horizon and never reaches any prompt. Verified by executing inject_playbook against ~/.maro/workspace/playbook.md (5,239 chars total).",
+        "evidence": "empirical run of PYTHONPATH=src python3 -c \"from playbook import inject_playbook...\" \u2192 780 chars; /home/clawd/.maro/workspace/playbook.md lines 21-60 (30 duplicate lines consuming the budget), lines 61-88 (never-injected learned content); cap hardcoded at src/recall.py:680",
+        "source": "both"
+      },
+      {
+        "claim": "The director NEVER sees the playbook, contradicting playbook.py's own docstring (\"injected into director and decompose context alongside MARO_IDENTITY\"). _produce_spec injects only lat.md graph nodes; _challenge_spec/_review_worker_output/_compile_report/_ESCALATION_SYSTEM/_ADAPTIVE_SYSTEM have no playbook reference. MARO_IDENTITY exists nowhere in src/ except that stale docstring line.",
+        "evidence": "src/director.py:626-702 (_produce_spec: only lat_inject at 652-660), grep of src/director.py for playbook = 0 hits; src/playbook.py:14-15 (stale claim); grep -rn MARO_IDENTITY src/ \u2192 only src/playbook.py:15",
+        "source": "code"
+      },
+      {
+        "claim": "Dispatch-time and navigator surfaces get zero playbook: slice=\"dispatch\" never populates the field (substrates gated to loop/navigator), and as_context_block() iterates only (lessons, standing_rules, decisions, knowledge) \u2014 so handle.py goal-entry injection, handle_queue guard, and navigator_shadow all drop it even when populated.",
+        "evidence": "src/recall.py:585 (slice gate), src/recall.py:222 (as_context_block block list excludes playbook), src/handle.py:1518-1521 (slice=\"dispatch\" \u2192 as_context_block), src/handle_queue.py:138 (slice=\"dispatch\"), src/navigator_shadow.py:185,349 (as_context_block)",
+        "source": "code"
+      },
+      {
+        "claim": "Write side: only evolver_store feeds the playbook \u2014 applied suggestions with confidence>=0.7 in categories prompt_tweak/new_guardrail/observation go to sections Execution/Quality/Learned, and held sub_mission signals go to a Signals section \"for human review\". The docstring's source #1 (\"Standing rules \u2014 promoted from lessons (knowledge_lens.py)\") is NOT wired: knowledge_lens.py never calls append_to_playbook; standing rules reach prompts via a separate substrate (inject_standing_rules).",
+        "evidence": "src/evolver_store.py:447-462 and 421-427 (the only two append_to_playbook call sites in src/), grep of src/knowledge_lens.py for playbook = 0 hits, src/playbook.py:9-12 (stale docstring), src/recall.py:634-639 (standing rules separate substrate)",
+        "source": "code"
+      },
+      {
+        "claim": "append_to_playbook dedup is exact-substring only and was added after 30 duplicate \"Be more concise\" lines accumulated; those legacy duplicates persist and eat the entire injection budget. Additionally the section-insertion logic can drop an entry visually outside its section (after a --- divider): live playbook line 78 sits between Quality's closing --- and ## Learned.",
+        "evidence": "src/playbook.py:179-183 (dedup), src/playbook.py:185-215 (insertion around rstrip of remainder ending in ---), /home/clawd/.maro/workspace/playbook.md lines 21-60 (duplicates) and 77-78 (orphaned entry)",
+        "source": "both"
+      },
+      {
+        "claim": "The Signals section is explicitly a human-review holding pen (auto_enqueue off path) but has NO surface at all: it is past the injection horizon so prompts never see it, and no operator-facing read path renders it \u2014 the only trace is a captains_log event at write time.",
+        "evidence": "src/evolver_store.py:407,421-427 (held \"so the human can review\"), src/playbook.py:230-241 (only write-time log_event), grep: no other reader of the Signals section in src/",
+        "source": "code"
+      },
+      {
+        "claim": "Docs status: docs/RECALL_DESIGN.md accurately matches the code (playbook = one of eight loop-slice substrates, relocated from _build_loop_context 2026-06-11) \u2014 I relied on it only after verifying against recall.py/loop_planning.py. The stale doc is playbook.py's own module docstring (director claim, MARO_IDENTITY, knowledge_lens source).",
+        "evidence": "docs/RECALL_DESIGN.md:25-33,128-132 vs src/recall.py:585-701 and src/loop_planning.py:448-458 (consistent); src/playbook.py:9-15 (stale)",
+        "source": "both"
+      },
+      {
+        "claim": "The injection budget (800 chars) is hardcoded at the sole call site, not config-driven, and the header \"## Operational Playbook\\n\" is prepended after budget accounting (slight overshoot). Existing tests cover the cap mechanically but not selection quality.",
+        "evidence": "src/recall.py:680 (hardcoded 800), src/playbook.py:135 (header added post-cap), tests/test_playbook.py:58-66 (test_inject_respects_max_chars)",
+        "source": "code"
+      }
+    ],
+    "plan_summary": "Step 0 \u2014 Hygiene before selection (any selector is wasted on 60%-noise input): one-time compaction of ~/.maro/workspace/playbook.md (collapse the 30 duplicate lines, re-home the orphaned line-78 entry into Learned), plus fix append_to_playbook's section insertion so entries cannot land after a --- divider outside their section (src/playbook.py:185-215). Step 1 \u2014 Replace prefix-truncation in inject_playbook (src/playbook.py:109-135) with section-aware selection: parse ## sections; always include the curated core sections (Decomposition/Execution/Cost/Quality) with per-section entry caps; fill remaining budget with NEWEST-FIRST Learned entries (file order within Learned is append order, so newest = last); NEVER inject Signals (it is the human-review pen per evolver_store.py:421); skip an over-long line instead of break-ing the whole scan. Keep zero-LLM. Make the budget config-driven (playbook.inject_max_chars, default raised to ~1400 since 800 was sized for the seed file) read at the recall.py:680 call site via config.get. Step 2 \u2014 Wire the director (the module's stated intent): in _produce_spec (src/director.py:650-660), append inject_playbook(max_chars=~600) to the same _user_msg slot where lat.md nodes already go; failure-swallowed like every other injection. Do NOT add it to worker/step prompts (planner/director-level meta-wisdom by definition; avoids per-step token multiplication). Step 3 \u2014 Truth the stale docs in the same commit (currency rule): rewrite src/playbook.py docstring lines 9-15 (drop MARO_IDENTITY, drop knowledge_lens source claim, state the real path: recall loop slice \u2192 decompose system prompt + director spec). Step 4 \u2014 Tests in tests/test_playbook.py + tests/test_director.py: (a) over-budget file \u2192 newest Learned entry present, oldest junk absent; (b) Signals section never appears in output; (c) director spec user message contains the playbook block when file non-empty (dry_run-safe with adapter stub); (d) budget respected including header; (e) as_loop_block-includes/as_context_block-excludes contract pinned in tests/test_recall.py. Step 5 \u2014 end-of-chunk: update BACKLOG/GOAL_BRAIN, commit, land via scripts/land.sh.",
+    "done_means": [
+      "PYTHONPATH=src python3 -c 'from playbook import inject_playbook; ...' against the LIVE workspace playbook prints a block containing at least one Learned-section entry and zero Signals lines and zero duplicate lines (the check that fails today at 780 chars of seed+junk)",
+      "python3 -m pytest tests/test_playbook.py tests/test_recall.py tests/test_director.py -q exits 0 (judge by exit code per repo convention)",
+      "grep -n inject_playbook src/director.py shows the _produce_spec injection site; grep -rn MARO_IDENTITY src/ returns zero hits",
+      "bash scripts/test-safe.sh --fast exits 0 before landing (box-safe full-suite lane)"
+    ],
+    "consumers_named": [
+      "inject_playbook output \u2192 planner decompose system prompt (planner.py:891-892, via lessons_context) \u2014 existing consumer, kept",
+      "inject_playbook output \u2192 director _produce_spec user message (director.py:658-660, beside lat.md nodes) \u2014 the NEW consumer this plan adds; without it the director half of the playbook's charter has no consumer",
+      "append_to_playbook (emitter: evolver_store.py:447-462 applied insights) \u2192 consumed by the two prompt surfaces above via the Learned/Execution/Quality sections",
+      "Signals section (emitter: evolver_store.py:421-427 held sub_missions) \u2192 acting consumer is the HUMAN operator, not prompts; plan explicitly excludes it from injection and leaves surfacing-to-operator as a named follow-up (it currently has no reader at all)",
+      "RECALL_PERFORMED captains_log event (recall.py:707-716) \u2192 unchanged instrumentation consumer; selection changes ride into it via sources"
+    ],
+    "tripwires_named": [
+      "test: Signals-section content never appears in inject_playbook output (pins the human-review-pen boundary)",
+      "test: with a file larger than budget, the newest Learned entry IS present and the oldest pre-existing Execution duplicate is NOT (pins recency-over-position selection; fails on any regression to prefix-truncation)",
+      "test: RecallResult.as_loop_block includes the playbook block and as_context_block excludes it (pins the existing loop-vs-dispatch surface contract so the director wiring doesn't leak playbook into dispatch injection)",
+      "test: append_to_playbook inserts inside the target section, never after a --- divider (pins the section-insertion fix)",
+      "test: director _produce_spec prompt contains the playbook block when the file exists and degrades to no-block on read failure (pins the new consumer and its failure-swallowing)"
+    ],
+    "cuts_or_inversion": "Ruled out: (1) LLM-summarization of the playbook at inject time \u2014 per-loop cost for a document whose charter is already \"short, opinionated, actionable\"; compaction belongs on the write side. (2) Injecting into worker/step-execution prompts \u2014 playbook is planner/director meta-wisdom by its own definition (playbook.py:5-7) and per-step injection multiplies tokens across every step of every loop. (3) Goal-relevance TF-IDF scoring of entries (lat_inject-style) \u2014 deferred, not cut: it changes inject_playbook's signature (needs the goal) and recency-first selection fixes the actual observed failure (learned content never injected) without it; add only if the playbook grows past ~3-4x budget. (4) Embedding-based semantic dedup at append \u2014 heavier than the observed problem; exact dedup + one-time compaction suffices. What would make this wrong to build: the memory_port bake-off already lists \"playbook\" as a port kind (memory_port.py:42) \u2014 if the module migration is about to make recall a client of the port, a bespoke selector inside playbook.py could be throwaway; mitigated by keeping the selection change inside inject_playbook's existing signature so the port can adopt it wholesale. Also wrong if Jeremy intends the evolver's skill-rewrite lane to supersede the playbook entirely \u2014 no evidence of that in GOAL_BRAIN-adjacent memory, but worth one line in the landing note."
+  },
+  "T3-doc": {
+    "findings": [
+      {
+        "claim": "The playbook's only path into any prompt is inject_playbook(max_chars=800), called from exactly one place: the recall() seam, and only for slice='loop' or 'navigator'.",
+        "evidence": "src/playbook.py:109-135 (inject_playbook); src/recall.py:585 (slice gate `if slice in (\"loop\", \"navigator\")`), src/recall.py:677-682 (sole caller, `inject_playbook(max_chars=800)`); grep over src/ shows no other caller of inject_playbook/load_playbook outside src/playbook.py and tests",
+        "source": "code"
+      },
+      {
+        "claim": "Selection is naive file-prefix truncation: skip lines before the first '## ', then take lines until an 800-char budget and stop. No relevance ranking, no per-section budgeting, no recency preference, no read-time dedup.",
+        "evidence": "src/playbook.py:115-135 \u2014 loop breaks at `if chars + len(line) > max_chars: break`; nothing after that point in the file can ever inject",
+        "source": "code"
+      },
+      {
+        "claim": "The seed content's body alone (959 chars from the first '## ') already exceeds the 800-char budget, so even a fresh install never injects the seed's Cost and Quality sections; anything appended later is structurally unreachable.",
+        "evidence": "src/playbook.py:47-84 (_SEED_CONTENT); executed check: `len(seed[seed.find('## '):])` == 959 vs max_chars=800 at src/recall.py:680",
+        "source": "code"
+      },
+      {
+        "claim": "On this live box the injected block is 780 chars: 4 seed Decomposition bullets, 3 seed Execution bullets, then 5 duplicate junk lines ('Be more concise *(from evolver:no-gate-00)*' etc.). Zero genuinely learned entries reach any prompt \u2014 the acceptance-criteria rule (fdf888c3-00), blocked-step investigation rule (8f7419c8-03), path-validation guardrail (8f7419c8-00), cost-drift warnings, and the Signals section (lines 61-63, 78, 82-88 of ~/.maro/workspace/playbook.md, 5253 bytes total) are all beyond the prefix budget.",
+        "evidence": "Executed: `inject_playbook(max_chars=800)` against /home/clawd/.maro/workspace/playbook.md returned 780 chars ending mid-duplicates; live file lines 21-60 are ~40 pre-dedup duplicate lines occupying the injectable prefix",
+        "source": "code"
+      },
+      {
+        "claim": "The playbook module's docstring is stale in three ways: (1) it claims injection 'into director and decompose context' \u2014 the Director's prompts never include the playbook; (2) it claims 'alongside MARO_IDENTITY' \u2014 that symbol exists nowhere in src/ except this docstring; (3) it claims standing rules are 'promoted from lessons (knowledge_lens.py)' into the playbook \u2014 knowledge_lens.py never calls append_to_playbook (standing rules go to standing_rules.jsonl and inject separately via memory.inject_standing_rules).",
+        "evidence": "src/playbook.py:9-15 vs src/director.py:626-671 (_produce_spec builds prompt from _SPEC_SYSTEM + lat_inject only, lines 650-666) and src/director.py:430-490 (worker context via memory_bridge only); grep 'MARO_IDENTITY' hits only playbook.py:15; grep 'append_to_playbook' hits only src/evolver_store.py:422,450; src/knowledge_lens.py:336-361 promotion writes standing_rules.jsonl. I relied on the docstring only as the stated intent, verified against code.",
+        "source": "both"
+      },
+      {
+        "claim": "Live consumption is decompose-only: recall(slice='loop') in _build_loop_context \u2192 as_loop_block() (playbook is 7th of 8 blocks) \u2192 lessons_context \u2192 planner.decompose extras appended to DECOMPOSE_SYSTEM, and into draw_cuts context. The returned _lessons_context is never used again after decompose (does not reach step execution).",
+        "evidence": "src/loop_planning.py:454-458 (recall + as_loop_block), src/loop_planning.py:395-399 (lessons_context into _decompose); src/recall.py:230-250 (as_loop_block order); src/planner.py:775 (extras), src/planner.py:850 (draw_cuts context_extras), src/planner.py:891-892 (system = DECOMPOSE_SYSTEM + extras); src/agent_loop.py:427 is the only reference to _lessons_context in agent_loop.py",
+        "source": "code"
+      },
+      {
+        "claim": "The dispatch/NOW lane and the navigator both exclude the playbook: slice='dispatch' never populates the 8 substrates, and as_context_block() omits the playbook field anyway; no live code calls recall(slice='navigator') \u2014 that slice is referenced only in a dataclass comment, and navigator_shadow builds recall_block via as_context_block().",
+        "evidence": "src/handle.py:1515-1523 and src/handle_queue.py:137-138 (slice='dispatch' + as_context_block); src/recall.py:222-224 (as_context_block includes only lessons/standing_rules/decisions/knowledge); src/navigator.py:101 (comment only, grep shows no slice='navigator' caller); src/navigator_shadow.py:349",
+        "source": "code"
+      },
+      {
+        "claim": "Write side: the only programmatic writer is evolver_store._apply_suggestion_action \u2014 applied prompt_tweak/new_guardrail/observation suggestions at confidence >= 0.7 (truncated to 200 chars, sections Execution/Quality/Learned) and held sub_mission signals (section Signals). append_to_playbook now dedups (playbook.py:179-183) and caps entries at 500 chars, but the live file's ~40 duplicates predate the dedup and permanently occupy the injectable prefix.",
+        "evidence": "src/evolver_store.py:404-431 (Signals path), src/evolver_store.py:447-462 (insight path, `suggestion_text[:200]`, confidence gate); src/playbook.py:160-161 (500-char cap), 179-183 (dedup); live file lines 21-60",
+        "source": "code"
+      },
+      {
+        "claim": "No test pins the write\u2192read loop: tests/test_playbook.py verifies append lands in the FILE and that injection truncates, but never asserts an appended entry reaches inject_playbook() output \u2014 exactly the assertion that would have caught this starvation.",
+        "evidence": "tests/test_playbook.py:50-67 (injection tests check header/length only), 70-136 (append tests assert against load_playbook, never inject_playbook)",
+        "source": "code"
+      },
+      {
+        "claim": "DEV_PATTERNS.md already names the playbook as a half-dead prior instantiation ('its two prior instantiations (the playbook, Stage-5 compiled rules) half-died'), which the live-file evidence corroborates: writers alive, learned content unreadable.",
+        "evidence": "docs/DEV_PATTERNS.md:83-85 (doc claim) corroborated by the executed inject_playbook check above",
+        "source": "both"
+      },
+      {
+        "claim": "Side-find (out of scope, worth a BACKLOG line): planner.decompose's persona prefix is dead code whenever any extras exist \u2014 line 892 rebuilds `system = DECOMPOSE_SYSTEM + extras`, discarding the persona-wrapped system built at lines 761-772.",
+        "evidence": "src/planner.py:761-772 vs src/planner.py:891-892",
+        "source": "code"
+      },
+      {
+        "claim": "There is no config knob for playbook injection size or enablement; config.py contributes only the path (~/.maro/workspace/playbook.md).",
+        "evidence": "src/config.py:78-80 (playbook_path); grep 'playbook' in src/config.py has no other hits",
+        "source": "code"
+      }
+    ],
+    "plan_summary": "Step 1 \u2014 Fix selection in playbook.inject_playbook (the single choke point; no caller changes needed): parse the body into (section, bullet) pairs; dedup bullets at read time by core text (same rule as append's dedup); then fill the budget by priority tier instead of file order \u2014 tier A: attributed/learned entries (bullets carrying '*(from ...)*') and Learned/Signals sections, newest-last-in-file first; tier B: seed sections, round-robin one bullet per section so no section is starved. Deterministic, zero-LLM (possible-now bias: no summarization pass needed). Keep max_chars=800 default but make it an argument the recall call reads from config (`playbook.inject_max_chars`) so budget experiments don't need code changes. Step 2 \u2014 One-time live-file cleanup: a small explicit maintenance entry point (e.g. `python3 -m playbook --dedupe`) that writes a timestamped backup beside the file, then collapses exact-duplicate bullets (the ~40 'Be more concise' lines). Opt-in and backed up per the data-retention rule; never runs automatically. Step 3 \u2014 Close the naming lie one way or the other (decision point for Jeremy, default = wire it): inject the playbook block into director._produce_spec alongside the lat.md context (director.py:650-666), gated by `playbook.director_inject` (default ON \u2014 zero-LLM, ~800 chars; the delegation-boundary razor puts the playbook squarely in parent-taste, and decompose + director spec are the two taste points). If declined, fix the docstring instead \u2014 either way the docstring's three stale claims (director, MARO_IDENTITY, knowledge_lens) and the seed/live file's line-5 self-description get corrected in the same commit (currency rule). Step 4 \u2014 Tripwires (land first, failing where possible): the append\u2192inject round-trip pin test, seed-section-coverage test, read-time dedup test, director-prompt-contains-playbook test, and a known-gap pin recording that per-bullet recency is unknowable (no per-entry timestamps) \u2014 accepted residual, not silently closed. Step 5 \u2014 Instrumentation: add playbook_chars and playbook_learned_count to recall's sources dict so every RECALL_PERFORMED row (the declared crystallization substrate, recall.py:705-717) shows whether learned wisdom actually rode into the prompt. Step 6 \u2014 End-of-chunk: update docs (RECALL_DESIGN.md substrate note), BACKLOG line for the planner.py:892 persona-prefix side-find, commit, land via scripts/land.sh.",
+    "done_means": [
+      "python3 -m pytest tests/test_playbook.py tests/test_recall.py -q exits 0, including the new round-trip pin test (append a learned entry to a seeded playbook, assert it appears in inject_playbook() output) \u2014 the exact check that fails against today's code",
+      "Executed live check on this box: PYTHONPATH=src python3 -c \"from playbook import inject_playbook; b=inject_playbook(); assert 'explicit success criteria' in b\" \u2014 i.e. the fdf888c3-00 learned rule (playbook.md line 63) actually appears in the injected block, and no 'Be more concise' duplicate appears twice",
+      "bash scripts/test-safe.sh --fast green (no regression in the recall/loop-planning suites that consume as_loop_block)",
+      "If step 3 lands: a test asserting director._produce_spec's system/user messages contain '## Operational Playbook' when playbook.director_inject is on; if declined: playbook.py docstring no longer claims director injection (grep check)",
+      "Backup file exists beside ~/.maro/workspace/playbook.md after the opt-in dedupe run, and wc -c shows the file shrank only by duplicate lines"
+    ],
+    "consumers_named": [
+      "playbook.md (store) \u2192 read by playbook.inject_playbook \u2192 consumed by planner.decompose's system prompt via recall(slice='loop').as_loop_block() \u2192 loop_planning._build_loop_context \u2192 lessons_context (loop_planning.py:454-458, planner.py:775/891-892) \u2014 the existing live consumer the fix feeds",
+      "playbook.md \u2192 (new, step 3) director._produce_spec prompt (director.py:650-666) \u2014 the acting consumer that makes the 'Director's Playbook' name true",
+      "recall sources['playbook_chars'/'playbook_learned_count'] (emitter, step 5) \u2192 consumed by RECALL_PERFORMED captain's-log rows (recall.py:705-717), which the run-visibility mini-reports and future crystallization miners read \u2014 flagged optional if that consumer is judged too thin",
+      "dedupe backup file (store, step 2) \u2192 consumed by the operator on rollback; the path is part of the result"
+    ],
+    "tripwires_named": [
+      "test_append_then_inject_round_trip: append_to_playbook(learned entry) then assert entry in inject_playbook() \u2014 pins the write\u2192read loop; fails against current code",
+      "test_inject_covers_all_seed_sections: seed-only playbook \u2192 each of Decomposition/Execution/Cost/Quality contributes at least one bullet within budget \u2014 pins against prefix-starvation regressions",
+      "test_inject_dedups_at_read: file containing duplicate bullets \u2192 injected block contains the bullet once",
+      "test_director_spec_includes_playbook (if step 3 lands): _produce_spec messages contain the playbook header when the flag is on \u2014 pins the named consumer",
+      "known-gap pin test recording per-bullet recency as an accepted residual (no per-entry timestamps in the markdown format) per the known-gap pytest convention"
+    ],
+    "cuts_or_inversion": "Cuts (with basis): NOT adding an LLM summarization/compaction pass over the playbook \u2014 deterministic parse+rank covers the failure mode at zero spend, and possible-now bias says name the current-capability composition before reaching for a model (docs/DEV_PATTERNS.md:40-44). NOT injecting the playbook into worker/step-execution or dispatch/NOW prompts \u2014 the dispatch lane deliberately carries only the light as_context_block (recall.py:222-228) and workers get scoped memory via memory_bridge (director.py:460); the delegation-boundary razor sorts the playbook into parent-taste, so decompose + director spec are the whole surface. NOT changing the storage format or migrating into memory_port \u2014 markdown operator-editability is a stated design property (playbook.py:12) and the memory-module bake-off is a separate arc. NOT auto-cleaning the live file \u2014 opt-in with backup only (data-retention feedback). Inversion (what would make this wrong to build): if the playbook is scheduled for deprecation into the standing-rules/lessons substrates \u2014 DEV_PATTERNS.md:83-85 already calls it half-dead, and it overlaps standing rules conceptually \u2014 then a smarter injector polishes a store slated for removal. Answer: the fix is small and the store has a live writer today (evolver_store.py:447-462 writes on every high-confidence applied suggestion), so either close the loop or decide to kill the store; the current state \u2014 writers alive, readers starved \u2014 is the one indefensible configuration. If Jeremy prefers kill-the-store, steps 1-2 become a migration of the learned entries into standing_rules instead, and the round-trip tripwire moves there."
+  }
+}

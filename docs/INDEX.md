@@ -17,6 +17,8 @@ BACKLOG, VISION, CLAUDE, README…) are living by definition and carry no frontm
 | How does the whole system fit together? | `ARCHITECTURE_OVERVIEW.md` (incl. V→R→R doctrine + visibility ladder) |
 | How did our *thinking* get here? (era timeline, aha moments, pros/cons vs today) | `KNOWLEDGE_JOURNEY.md` (living; details in `history/knowledge-journey/`; raw excavation artifacts in `history/knowledge-journey/artifacts/`) |
 | The swarm-review arc conversation (decrees, taste/judgement, star pattern, CGI)? | `conversations/2026-07-20-swarm-review-arc.md` (verbatim session log) |
+| Taste/judgement patterns for dev sessions (cuts-first, consumer-first, live-writer?…)? | `DEV_PATTERNS.md` (living; non-gated CLAUDE.md pre-read — battery verdict 2026-07-21) |
+| The Phase 0.5 with-doc/control battery (protocol, verdict, new findings V1-V6)? | `history/2026-07-21-phase05-battery.md` (raw arm outputs in `history/phase05-battery/`) |
 | What are we deliberately NOT building? | `ARCHITECTURE_NON_GOALS.md` |
 | What should Maro be able to do? (example goals, test corpus, pre-installed skill target) | `CAPABILITIES.md` (living catalog — add real asks as they happen) |
 | Two-box / Hermes dispatch, interactive goals, effort-based spend UX, mid-flight injection? | `SESSION_PROTOCOL_DESIGN.md` (dormant-design; the 2026-07-15 skeleton, iterate there) |

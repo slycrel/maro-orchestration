@@ -86,9 +86,11 @@ exactly this rule.
 
 ## Status
 
-- Battery: with-doc vs control over real ground-truth violations, run
-  before chunks 2-4 destroy the ground truth. Protocol + results:
-  `docs/history/` (landed with the battery report).
-- Gate (pre-registered): clear catch/plan-shape delta → standing CLAUDE.md
-  pre-read; ambiguous → non-gated pre-read, stated plainly. Runtime
-  injection stays a chunk-2 decision on chunk-2 evidence.
+- Battery RUN + ADJUDICATED 2026-07-21: **ambiguous — no measurable delta**
+  (both arms caught all pointed ground truths at ceiling; the plan-shape
+  measure was invalidated by a schema flaw). Per the pre-registered gate
+  this ships as a **non-gated pre-read** (CLAUDE.md line), on cost≈zero
+  grounds, not benchmark evidence. Full report + raw outputs:
+  `docs/history/2026-07-21-phase05-battery.md`.
+- Runtime injection of this content stays a chunk-2 decision on chunk-2
+  evidence.

@@ -3763,3 +3763,21 @@ Dormant (deliberately parked, not dropped):
   further in"): taste/judgement maturation may need consequence-coupled
   reps, not just training data — the bottleneck framing recorded is
   verified-outcome density, not calendar time.
+
+- 2026-07-21 (Claude adjudication, pre-registered gate): **Phase 0.5
+  battery verdict = AMBIGUOUS → DEV_PATTERNS ships as a NON-GATED
+  CLAUDE.md pre-read**, stated plainly, not laundered as a benchmark
+  win. Both arms caught every pointed ground truth (GT1/GT2/GT3) with
+  code-derived provenance — ceiling effect; GT4 caught by neither; the
+  plan-shape measure was invalidated by a pre-registration flaw (the
+  output schema itself forced the shape fields). The battery's real
+  yield: six adjudicator-verified NEW findings (V1 recall loop reads
+  legacy lesson store not tiered; V2 standing-rule domain vocabulary
+  mismatch — all 4 live rules invisible on project-scoped runs; V3
+  bridged knowledge nodes forever NODE_CANDIDATE/invisible; V4 Stage-3
+  dashboard dict-vs-attr; V5 planner persona wrap discarded whenever
+  extras exist — live-impacting under the personas-stay decree; V6
+  playbook seed alone overflows the 800-char budget) triaged into the
+  arc: V1 = checkpoint-class flag on chunk 6, V2 = chunk 4 prerequisite,
+  V5 = chunk 1 candidate, V3/V4 = chunk-1 BACKLOG batch, V6 = chunk 2
+  input. Report: docs/history/2026-07-21-phase05-battery.md.
