@@ -774,11 +774,11 @@ class TestAdjudicatedAgreementTable:
             _decided("escalate", "execute", goal="a"),    # divergence 1
             _decided("close", "extend", goal="b"),        # divergence 2 (unadjudicated)
         ]
-        # Adjudicate only the first divergence.
-        from navigator_shadow import analyze_live_agreement as _ala
+        # Adjudicate only the first divergence. goal_preview is part of the key
+        # (finding A), so it must match the divergence's goal ("a").
         div1_key = _divergence_key({"timestamp": "2026-06-12T00:00:00",
                                     "point": "dispatch", "move": "escalate",
-                                    "pipeline": "execute"})
+                                    "pipeline": "execute", "goal_preview": "a"})
         adj = {div1_key: {"verdict": "navigator_right", "rationale": "r"}}
         s = analyze_live_agreement(events, adjudications=adj)
         assert s["adjudicated"]["navigator_right"] == 1
@@ -795,6 +795,58 @@ class TestAdjudicatedAgreementTable:
         s = analyze_live_agreement([_decided("escalate", "execute")])
         assert s["adjudicated"]["unadjudicated"] == 1
         assert s["divergences"][0]["adjudication"] is None
+
+    def test_goal_preview_is_part_of_the_key(self):
+        # Finding A: two divergences that share a wall-clock second and the same
+        # point/move/pipeline but ran on DIFFERENT goals must get different keys,
+        # or one verdict silently covers both. Same goal + same fields IS the
+        # same decision and keeps one key.
+        from navigator_shadow import _divergence_key
+        base = {"timestamp": "2026-06-12T00:00:00", "point": "dispatch",
+                "move": "escalate", "pipeline": "execute"}
+        k1 = _divergence_key({**base, "goal_preview": "goal one"})
+        k2 = _divergence_key({**base, "goal_preview": "goal two"})
+        assert k1 != k2
+        assert k1 == _divergence_key({**base, "goal_preview": "goal one"})
+
+    def test_legacy_row_rekeys_without_readjudication(self):
+        # Finding A migration: rows written before goal_preview joined the key
+        # carry an old stored div_key but echo the divergence fields (incl
+        # goal_preview). _load_adjudications recomputes from those fields, so the
+        # legacy rows re-key into the current scheme and still attach — no
+        # strand, no re-spend. Reproduces the exact collision the old key merged:
+        # two divergences in the same wall-clock second, same point/move/pipeline,
+        # differing only by goal.
+        import hashlib
+        import navigator_shadow as ns
+        div_alpha = _decided("escalate", "execute", goal="alpha")
+        div_bravo = _decided("escalate", "execute", goal="bravo")  # same second
+        # Old-scheme stored key: identical for both (goal_preview absent).
+        old_key = hashlib.sha1(
+            "|".join(["2026-06-12T00:00:00", "dispatch", "escalate",
+                      "execute"]).encode("utf-8")).hexdigest()[:16]
+
+        def _legacy(verdict, goal, ts_suffix):
+            return {
+                "event_type": "NAVIGATOR_ADJUDICATED",
+                "timestamp": f"2026-06-12T03:00:0{ts_suffix}+00:00",
+                "context": {
+                    "div_key": old_key, "verdict": verdict,
+                    "timestamp": "2026-06-12T00:00:00", "point": "dispatch",
+                    "move": "escalate", "pipeline": "execute",
+                    "goal_preview": goal,
+                },
+            }
+        events = [div_alpha, div_bravo,
+                  _legacy("navigator_right", "alpha", 0),
+                  _legacy("pipeline_right", "bravo", 1)]
+        s = ns.analyze_live_agreement(events,
+                                      adjudications=ns._load_adjudications(events))
+        by_goal = {d["goal_preview"]: d["adjudication"] for d in s["divergences"]}
+        # Both same-second divergences adjudicated distinctly — the shared old
+        # stored key would have collapsed them into one verdict.
+        assert by_goal == {"alpha": "navigator_right", "bravo": "pipeline_right"}
+        assert s["adjudicated"]["unadjudicated"] == 0
 
 
 class TestAdjudicateDivergences:
@@ -904,6 +956,34 @@ class TestAdjudicateDivergences:
         assert result["write_failed"] == 1
         assert result["verdicts"]["navigator_right"] == 0
         assert adapter.calls == 1        # spent, but not falsely counted
+
+    def test_locked_pass_skips_without_spending(self, monkeypatch):
+        # Finding G: the load->judge->write pass runs under one per-workspace
+        # lock so an evolver-cadence pass and a manual `--adjudicate` can't judge
+        # the same divergences twice and double-spend. When the lock is already
+        # held, this call must no-op (locked) — no LLM call, no new row —
+        # instead of duplicating the work.
+        import navigator_shadow as ns
+        import file_lock
+        from contextlib import contextmanager
+        monkeypatch.setattr(ns, "_load_navigator_events",
+                            lambda: [_decided("escalate", "execute", goal="a")])
+
+        class _Boom:
+            def complete(self, *a, **k):
+                raise AssertionError("adapter must not be called when locked")
+
+        @contextmanager
+        def _held(path):
+            raise file_lock.FileLockTimeout("held by another pass")
+            yield  # pragma: no cover — unreachable, present so this is a CM
+        monkeypatch.setattr(file_lock, "locked_write", _held)
+
+        result = ns.adjudicate_navigator_divergences(
+            "test", tier="cheap", adapter_factory=lambda t: _Boom())
+        assert result["locked"] is True
+        assert result["adjudicated"] == 0
+        assert result["verdicts"] == {v: 0 for v in ns.ADJ_VERDICTS}
 
 
 # ---------------------------------------------------------------------------

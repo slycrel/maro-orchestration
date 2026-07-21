@@ -80,6 +80,17 @@ corrected the live Manti, Phase 65, and
 count-files records; shipped items moved to BACKLOG_DONE rather than remaining
 as misleading open work.
 
+Current pass (2026-07-20, twenty-fifth): R6's two remaining deferred residuals
+(A div_key collision, G double-judge race) shipped — both were parked on
+"adjudication is gated OFF", and that gate was flipped ON at cadence 2026-07-16,
+so the deferral conditions the review itself named had come true. Verified
+against the live workspace first (dataset grew 71→82 divergences, 0 collisions,
+all 71 verdicts re-key for free): goal_preview now joins the divergence key with
+a read-time migration that strands nothing, and the adjudication pass runs under
+one fail-closed per-workspace lock so cadence + manual `--adjudicate` can't
+double-spend. E stays deferred as an explicit watch-item (lesson_inject is live
+but only one lesson has crystallized — no A/B signal yet).
+
 ---
 
 ## Actionable Stack
@@ -332,7 +343,7 @@ Container-on day-one findings (2026-07-16, two dispatched verification runs):
   exit's record guarantee).
 
 
-### R6. VERIFY_LEARN_ARC V4/V5 adversarial review — 4 fixed live, 4 deferred (2026-07-14)
+### R6. VERIFY_LEARN_ARC V4/V5 adversarial review — 6 fixed (4 live + A/G on 2026-07-20), 1 deferred (E, watch-item) (2026-07-14)
 
 Codex ×3 (Skeptic/Architect/Minimalist) over `e792768` (V3 dates) + `8349b7c`
 (V4/V5). Verdict CONTESTED — real findings, none blocking (evidence-only,
@@ -341,18 +352,40 @@ events.jsonl is 2.8 MB so the "OOM" read is trivial today). **Fixed live** (comm
 after this entry): B honest persistence (`raise_on_error=True`, count only on
 durable write, `write_failed` counter); C atomic lessons rewrite (tmp + os.replace);
 D2 undatable-diagnosis drops now counted + logged (no-silent-caps); F
-`NAVIGATOR_ADJUDICATED` registered in EVENT_TYPES. **Deferred residuals:**
-- **A — div_key second-precision collision.** Two same-second, same-(point,move,
-  pipeline), different-goal divergences collapse to one key. Fix (add goal_preview
-  to the key) is correct but retroactively invalidates all 71 existing div_keys —
-  stranding the verdicts (they'd re-adjudicate = re-spend + orphan rows). Zero live
-  collisions; evidence-only. Revisit only if adjudication ever runs concurrently
-  (then do it with a one-time key migration).
-- **G — check-then-write concurrency race (double-judge/double-spend).** Cadence
-  path gated OFF, CLI is manual; worst case = a few wasted cheap calls + last-write-
-  wins (no corruption). A full flock across load→judge→write is heavier than the
-  gated-off, low-frequency, evidence-only path warrants. Add a lock only if the
-  cadence gate is turned on AND an operator also runs `--adjudicate`.
+`NAVIGATOR_ADJUDICATED` registered in EVENT_TYPES.
+
+**A + G SHIPPED 2026-07-20** (twenty-fifth pass). Both were deferred on the
+premise that adjudication was gated OFF; that premise expired when Jeremy
+enabled `navigator.adjudicate_divergences` at evolver cadence 2026-07-16 (and
+`lesson_inject` 2026-07-14) on this box — the deferral conditions the review
+named literally came true, so the residuals reactivated. Verified against the
+live workspace before touching code: dataset has grown 71→82 divergences
+(organic growth, exactly what the enablement intended), still 0 collisions, and
+all 71 stored verdicts carry the fields needed to re-key for free. **Deferred
+residuals:**
+- [x] **A — div_key second-precision collision.** Two same-second,
+  same-(point,move,pipeline), different-goal divergences collapsed to one key —
+  one verdict silently covering both. **SHIPPED:** `goal_preview` is now part of
+  `_divergence_key`, and `_load_adjudications` recomputes the key from each row's
+  echoed fields (all 71 carry them) instead of trusting the stored value — so
+  the widened key re-keys the legacy rows *in place*. The feared "retroactively
+  invalidates all 71 div_keys → re-adjudicate + re-spend + orphan rows" is
+  averted: proven on the real workspace, all 71 verdicts still join their
+  divergences (0 strand, 0 re-spend). Rows predating the field echo fall back to
+  their stored key. Pins: `test_goal_preview_is_part_of_the_key`,
+  `test_legacy_row_rekeys_without_readjudication` (reproduces the exact
+  same-second collision the old key merged).
+- [x] **G — check-then-write concurrency race (double-judge/double-spend).**
+  Reachable now that cadence adjudication is ON while the manual
+  `python3 -m navigator_shadow --adjudicate` path still exists (and the docs
+  actively tell operators to run it) — a cadence pass and a hand-run pass could
+  judge the same divergences twice and double-spend. **SHIPPED:** the whole
+  load→judge→write pass runs under one fail-closed per-workspace `file_lock`
+  (the skill-candidate-sweep precedent); a pass that can't get the lock in time
+  no-ops (`locked`) and its un-judged divergences carry forward to the next
+  append-only cycle — no duplicate spend, no corruption. The manual CLI prints a
+  clean "already running" message instead of a traceback. Pin:
+  `test_locked_pass_skips_without_spending`.
 - [x] **D1 — `read_jsonl_tail` reads the whole file before applying `limit`.** Real for a
   multi-GB `events.jsonl`; latent here (2.8 MB, caller self-extinguishes as
   `recorded_at` rows age in). Fix = byte-bounded tail read in `jsonl_utils` (shared;
@@ -363,9 +396,12 @@ D2 undatable-diagnosis drops now counted + logged (no-silent-caps); F
   mismatches; live concurrent-append probe clean) caught the first cut's
   full-scan branch returning `[]` on one crash-torn multi-byte line —
   fixed same pass, pinned in `test_undecodable_line_skipped_in_full_scan`.
-- **E — lesson_text embeds truncated goal previews (anchoring risk).** Behind the
-  default-OFF `lesson_inject` A/B whose shadow marker measures exactly this — let the
-  A/B tell us before pre-optimizing the prompt.
+- **E — lesson_text embeds truncated goal previews (anchoring risk).** Still
+  correctly deferred, now as an explicit watch-item: `lesson_inject` is ON (since
+  2026-07-14) so the A/B *is* running, but only ONE lesson has crystallized so
+  far (blocked_step execute→extend), so the shadow marker has no signal yet.
+  Re-evaluate once more lessons accrue and the `lessons_injected`>0 vs =0
+  comparison has n — pre-optimizing the prompt before then is guessing.
 
 ### R5. Independent holistic + adversarial review of the rolling 48-hour changeset (2026-07-13) — all residuals closed
 
