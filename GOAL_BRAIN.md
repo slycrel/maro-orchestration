@@ -3578,3 +3578,32 @@ Dormant (deliberately parked, not dropped):
   stays moot for it. mini2 stays zero-creds/propose-only; the Hermes
   code→review guard is untouched. CLAUDE.md end-of-chunk discipline +
   `PROPOSE_LANE.md` scope note updated to match.
+- **2026-07-20 (Jeremy, swarm-review session — five decrees, from the
+  Cursor agent-swarm-economics review):** (1) **Give up the cheap split**
+  — two execution-lane defaults (handle=CHEAP vs loop=MID) is "a
+  non-decision" under flat-rate; unify execution at MID (CHEAP stays for
+  non-agentic classification/triage calls). (2) **Local LLMs are "a nice
+  OSS dream but really just in the way"** — remove the ollama/local-model
+  wiring, revisit "in a year or three"; stay LLM-agnostic at the adapter
+  seams. (3) **Personas stay** — "having the ability to examine the same
+  facts from different angles IMO is key to this process
+  (taste/judgement)... seems more important than just not yet used here."
+  Disuse is not a cull reason. (4) **Skip the 3-arm spend experiment** —
+  "I'm concerned we're getting bogged down in the implementation... as
+  opposed to the general pattern of discretion. Spend is one discretionary
+  lever... a simple one that (sort of) equates with capability." (5)
+  **Fork contract is not parent-always-wins** — children need an
+  evidence-based escalation path against parent-owned decisions (three-way
+  ownership: leaf-local / parent-owned / escalation-trigger).
+  Implementation: the swarm-review arc plan, chunks provisional until the
+  plan-revision checkpoint.
+- **2026-07-20 (Jeremy) — history-before-implementation: the knowledge
+  journey.** Before any swarm-review chunk: "write a historic timeline log
+  of our knowledge journey... essentially going back in time via git...
+  pull out all the stops." Rationale: "I trust your judgement but sadly,
+  not yet your context." DELIVERED 2026-07-21 (3333512):
+  `docs/KNOWLEDGE_JOURNEY.md` + `docs/history/knowledge-journey/` (13 era
+  files + side-channels companion), 37 excavate/verify/write agent chains
+  plus a completeness critic whose confirmed findings were folded back.
+  The edges-for-plan digest (KNOWLEDGE_JOURNEY.md final section) is the
+  input to the checkpoint that gates the implementation chunks.
