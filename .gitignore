@@ -33,6 +33,7 @@ artifacts/
 # record (Jeremy 2026-07-21), not runtime output — same trap class as the
 # old blanket skills/ ignore noted below.
 !docs/history/knowledge-journey/artifacts/
+!docs/history/knowledge-journey/artifacts/*.tar.gz
 
 # NOTE: repo skills/ are shipped defaults (tracked); the runtime skill
 # library lives in ~/.maro/workspace/skills/ (outside the repo). An old
