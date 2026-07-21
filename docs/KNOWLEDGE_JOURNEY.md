@@ -1,3 +1,7 @@
+---
+status: living
+---
+
 # The Knowledge Journey
 
 *A historic timeline of how this project's **thinking** changed — the discoveries and aha moments, era by era, each judged against today's architecture. Commissioned by Jeremy 2026-07-20, before the swarm-review implementation arc: "I trust your judgement but sadly, not yet your context."*

@@ -2,7 +2,29 @@
 
 What to do next, in what order. Updated each session. Deferred ideas live in BACKLOG.md; completed phase history in docs/history/ROADMAP_ARCHIVE.md (ROADMAP.md is a stub). This file is the executable queue.
 
-Last updated: 2026-07-14 (test-suite truth + reduction pass SHIPPED). Pytest's
+Last updated: 2026-07-21 — **swarm-review arc, chunk 1 SHIPPED** (of 8; plan:
+`~/.claude/plans/abundant-gathering-lagoon.md`, Phase 0 knowledge journey +
+Phase 0.5 DEV_PATTERNS/battery landed earlier same arc). Chunk 1: execution
+defaults unified at MID (handle entry, loop, thin mode; per-step cheap
+downgrade removed; `classify_step_model` deleted; user-CONFIG cheap pin
+unset — smoke-verified `model=mid` per step, hosted-free rung decisive,
+zero ollama); local-model wiring REMOVED (`local_models.py` + bakeoff
+scripts/tests deleted; ladder = Tier-0 → hosted-free → paid; revival trigger
+in the retired `docs/LOCAL_VALIDATOR.md`); dead config keys deleted
+(DEFAULTS census green); battery V5 planner persona-wrap fix; typed
+finding-code vocabulary (`src/finding_codes.py` + DEV_PATTERNS convention);
+factory adjudication — Phase 49's gate fired, branch archived as tag
+`archive/factory-2026-03-31`, mode:thin/minimal kept as instruments
+(`docs/history/2026-07-21-factory-adjudication.md`); report-only wiring
+inventory saved (27 stores/events, 8 verify-before-fix surprises —
+`docs/history/2026-07-21-wiring-inventory.md`); side-channel first-party
+failure corpus folded into CAPABILITIES.md; stale-doc sweep (debate pass,
+~5400-line claim, bootstrap_context, all-passes-cheap); BACKLOG batch adds
+(10 revival dispositions, V3/V4, era C-tier drops, wiring surprises;
+local burn-in item superseded → BACKLOG_DONE). **Next: chunk 2 (playbook
+repair — curation, injection ranking, dream-cycle curation verb; V6 input).**
+
+Previous checkpoint — 2026-07-14 (test-suite truth + reduction pass SHIPPED). Pytest's
 global marker filter had made every claimed "full" run silently exclude the
 slow lane; `test-safe.sh` also advertised chunking while its 1000-file default
 produced one chunk. Full is now genuinely full, `--fast` is explicit, the safe

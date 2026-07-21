@@ -211,6 +211,32 @@ state/session losses are what run cards + checkpoints already solve; Family
 already counters). Known skew, per the corpus's own audit trail:
 HN-and-ChatGPT-heavy by data availability.
 
+## First-party failure corpus — side-channel findings (folded 2026-07-21)
+
+The external corpus above is the world's failures; these are **ours** —
+failure patterns mined from the Feb–Apr 2026 conversational record
+(Telegram export, Grok rounds, Codex review; evidence + verbatim quotes
+in `docs/history/knowledge-journey/side-channels.md`). Same format as
+the external corpus: concrete failure → the capability that prevents it.
+Marked ✅ where the capability shipped, ⬜ where it is still a target.
+
+| Failure (channel evidence) | Preventing capability | Status |
+|---|---|---|
+| Conversational grants/decrees never persisted as machine state — permission re-asked days after being granted (Feb 6, Mar 3) | Durable decree capture: GOAL_BRAIN Decisions + SF-13; runtime `record_decision` pipe | ✅ dev-side (SF-13); ⬜ runtime writer (chunk 3) |
+| Interleaved side-asks silently cleared the standing agenda — "I think I derailed things by asking to pause" (Mar 8; recurred as the July Godot agenda-divergence finding) | Persistent agenda state that survives side-quests; side-quest handling in `INTENT_RESOLUTION_DESIGN.md` | ⬜ open design space |
+| Quantifier decay — "all of the M stages" heard, only M1 shipped (Mar 11-12) | Scope echo-back: explicit work-list extraction from the grant, verified against delivery | ⬜ (closure verdicts check one goal, not a granted list) |
+| "Iterate until done" heard as a bounded batch — "Why wait?" (Mar 5; recurred ≥7×) | Continuation-by-default inside a structured phase (ralph-within-structure rule) | ✅ as dev practice; ⬜ as runtime default |
+| Time/effort expressions don't survive contact — "work all night" became 20 minutes (Mar 27-28) | Effort contract in EFFORT language (chunk 7 computes the estimate; consent message → session-protocol thread) | ⬜ |
+| Informational vs directive messages conflated (named Feb 13; July "need = evaluation ask" rule) | Language-precision classification before acting on an apparent directive | ✅ dev-side rule; ⬜ runtime classifier awareness |
+| Work claimed without evidence — the Mar 19→Apr 4 trust rupture ("I'd hate to set you up to lie to me") | Positive-evidence principle: claim probing, deterministic provenance, closure evidence attachment | ✅ live (claim_probe, closure verdicts) |
+| "Done" that was never used — dashboard "more of a prop in a play" (Mar 29) | done≠successful split; usage-verified delivery (run-visibility arc) | ✅ (verdict stamping; delivery-loop decree) |
+| Session loss wiped in-flight work + memory, four times in five days (Feb 5-9) | Durable run state + land-per-chunk discipline + memory ledger | ✅ |
+
+Why it's here: era 12 named this fold-in as one of its two loss
+candidates ("if a future reader finds these unshipped, this is the
+circling ledger's next row"). The ⬜ rows are capability targets in the
+catalog's sense — real asks, phrased from our own record.
+
 ---
 
 ## Blank-slate capability target (pre-installed set)

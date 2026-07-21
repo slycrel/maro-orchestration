@@ -77,13 +77,17 @@ failure. Rows before 2026-07-09 are all unjudged (historical, no backfill).
 ## Read Flow (before/during runs)
 
 ```
-Loop starting
-  → bootstrap_context() → top 5 outcomes + top 10 lessons
+Loop starting (recall.py loop slice)
   → inject_standing_rules(domain) → promoted rules (zero-cost match)
-  → inject_tiered_lessons(task_type) → highest-scoring lessons
+  → legacy lessons.jsonl substrate → recent lessons
   → inject_decisions(goal) → TF-IDF search of decision journal
+  → inject_playbook / inject_knowledge_for_goal → wisdom + ACTIVE nodes
   → Captain's log bridge → recent lifecycle events
 ```
+
+(`bootstrap_context()` — top outcomes + lessons — is CLI-only
+(`cli.py`), not part of loop start. Full store-by-store liveness map:
+`docs/history/2026-07-21-wiring-inventory.md`.)
 
 ## Tiered Memory Model
 

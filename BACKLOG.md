@@ -1907,54 +1907,72 @@ rather than fixed with a fragile heuristic:
 ### Agentic verifier for large artifacts
 
 - [ ] **Agentic verifier for large artifacts.** Today the validator sees a bounded
-  in-context slice of the result (`validate.max_input_chars`, default 6000 for the
-  free local path vs 1200 paid). For multi-KB artifacts, stuffing the whole thing
+  in-context slice of the result (`validate.max_input_chars`; hosted-free uses
+  its own `input_char_budget`). For multi-KB artifacts, stuffing the whole thing
   into context is wasteful — a tool-using verifier that reads the artifact
-  selectively (grep/read a temp file) is the better pattern. Caveat: that needs
-  tool use, which a small specialist (VibeThinker) is weak at — so scope it as an
-  opt-in verifier tier, not the default. (Input/output limits are separate knobs:
-  `max_input_chars` = what it sees; `local_max_tokens` = what it can generate.)
+  selectively (grep/read a temp file) is the better pattern. Scope it as an
+  opt-in verifier tier, not the default. (2026-07-21: local-model caveats
+  removed with the local rung; the pattern itself stands.)
 
-### Linux local-validator burn-in
+### Swarm-review chunk-1 batch adds (2026-07-21)
 
-**Priority raised 2026-07-16 (Jeremy, hosted-free keys pending):** "Liking
-the local LLM angle and we should lean into that slightly upgraded local
-option from a few days ago for now, and let's keep an eye on the overall
-time, I get that it's adding minutes in some long goal runs." Until the
-Groq/Gemini keys land, the local tier carries validation on this box —
-which makes the burn-in below the live gap (the box currently runs
-qwen2.5-coder:3b, the exact build the M1 sweep REJECTED for two unsafe
-decisive false-passes). Watch total added wall-time per run, not just
-per-call latency, when evaluating.
+Recorded in one pass per the checkpoint decree ("add all BACKLOG entries
+in chunk 1") so every deferred item from the knowledge journey, the
+plan-revision review, the Phase 0.5 battery, and the wiring inventory is
+a deliberate drop with a paper trail — not a silent one.
 
-- [x] **Replay the committed validator corpus on the production Linux box before
-  enabling Ollama there.** The formal M1 sweep is complete (BACKLOG_DONE): all
-  four small candidates used the same 14 cases and exact production protocol.
-  It selected VibeThinker-3B-4bit on Apple Silicon and rejected Ollama
-  qwen2.5-coder:3b despite its speed because it produced two unsafe decisive
-  false-passes. The 2014 Ubuntu Mac mini experiment is not a viable deployment
-  proof. This residual is hardware-gated: choose a Linux candidate, replay with
-  `scripts/validator-bakeoff.py`, and require zero unsafe decisive false-passes
-  plus warm latency under the configured breaker before enabling it.
-  **RUN 2026-07-16 (Jeremy: "we should use that new 4 bit quantized model") —
-  VibeThinker-3B Q4_K_M GGUF via Ollama FAILS the latency gate on this box.**
-  Same 14 cases, exact protocol, cores 2,3 / nice 12 (production caps):
-  13/14 verdicts hit the adapter's 60s `_GEN_TIMEOUT` without finishing; the
-  one completed case took 55.8s (correct, decisive, conf 0.9). ≥4x over the
-  15s breaker — the reasoning-model CPU dead-end confirmed by measurement,
-  not assumption. 0 unsafe decisive false-passes, but decisive coverage 1/14.
-  Raw JSON: `research/validator-bakeoff-linux-2026-07-16.json`. Standing
-  state on this box: qwen2.5-coder:3b stays configured as the fast local
-  first-pass (its two known unsafe classes — read-only violation, failing
-  test run — are the exact classes the deterministic Tier-0 guards
-  [write-fence/scavenge, settled-by-command] also police), latency breaker
-  armed; the QUALITY upgrade lane for this box is hosted-free (Groq/Gemini
-  keys, item above), not a local reasoning model. VibeThinker-3B-4bit
-  remains the Apple-Silicon reference. Side-find during the run: the
-  orchestration-owned ollama daemon had a deleted agent-worktree cwd →
-  every llama-server load died → local tier silently erroring (all
-  validation escalated to paid); fixed in src/local_models.py (cwd="/") +
-  regression test, commit 778b81e.
+**Checkpoint revival dispositions (Jeremy 2026-07-21, review-confirmed
+BACKLOG; era refs in `docs/KNOWLEDGE_JOURNEY.md` + era files):**
+
+- [ ] Also-After hooks — structural attachment point for post-goal review (era 01)
+- [ ] RISKS.md as reviewer input — swarms shouldn't re-flag accepted risks (era 00)
+- [ ] Decision-gated-ping escalation shape (era 00)
+- [ ] Blind persona-panel tiebreaker for contested verdicts (era 09; designed, never productized)
+- [ ] Signal-source rotation, runtime half — navigator stuck-step move (era 05; distinct from chunk-5 review lenses)
+- [ ] Exception-vs-break lifecycle — justified-exception events (era 04; waits on a consumer per consumer-first)
+- [ ] REASSESS full 7-question overlay (era 06)
+- [ ] Recurring doc-grounding census cadence (era 06)
+- [ ] Promotion-side yield starvation (era 03)
+- [ ] Periodic hand-adjudicated burn-in ritual — impossible-control goals, verdicts vs artifacts on disk (era 08; the only method that caught verdict-layer bugs automated metrics blessed)
+
+**Battery side-finds V3/V4 (verified against the tree 2026-07-21;
+evidence in `docs/history/2026-07-21-phase05-battery.md`):**
+
+- [ ] **V3 — NODE_CANDIDATE promote path missing.** Bridged knowledge nodes are born `NODE_CANDIDATE` (conf 0.3) and nothing ever promotes them; live readers filter ACTIVE-only, so every live write is invisible to every live read. Fix belongs with chunk-6-adjacent knowledge work (consumer-first: promote path + liveness test together).
+- [ ] **V4 — knowledge.py canon-candidate dict-vs-attr + phantom `canonize` command.** `knowledge.py:65-72` treats dict rows as attrs (degrades, doesn't crash) and the suggested `canonize` CLI verb doesn't exist. Small fix; verify the degradation shape before changing.
+
+**Era-file C-tier drops (grounding-checker review §C — out-of-arc,
+batched here so the drop is deliberate; full context in each era file's
+"lost good ideas" section):** Loop-Sheriff one-pager; degrade-don't-idle;
+metric-thresholded promotion gates (era 00). UX timing SLA numbers;
+per-phase cost models (01). SOURCES.md landed-where log;
+runtime-awareness/tool-latency injection; research-doc-with-parallels
+format (02). Bi-temporal fields; queryable git; @lat backlinks;
+PASS/FAIL-gate template; `await:<kind>` (03). Constraint-level outcomes;
+human-gate-at-constraint-altitude; eval train/test holdout (04). Parallel
+watcher; elephant invariant; agenda-reframing/propose-better-goal;
+cross-run convergence cap; blocking ask() (05). Per-claim ratings format
+(06). GOAL_BRAIN compaction (07 — separately queued post-drift-review).
+Semver CHANGELOG; rung-ladder DoD form (08). Fastembed/sqlite-vec gate
+re-check (09). Session-reuse cost A/B; verifier-synthesis resumption;
+enrichment consumption; Fable-handoff discipline (10). Drift review
+specced-never-executed; closure-latency-before-notify (11). None is
+load-bearing for chunks 3-5 (review-confirmed); pull individually on a
+real trigger, don't sweep.
+
+**Wiring-inventory surprises (2026-07-21, agent-reported — every claim
+below is UNVERIFIED by the adjudicating session; per verify-before-fix,
+re-verify against the tree before acting. Full table:
+`docs/history/2026-07-21-wiring-inventory.md`):**
+
+- [ ] `task_ledger.jsonl` WRITE-ORPHAN — appended every step (loop_execute.py:1386, ~2978 rows), `load_task_ledger` has zero callers
+- [ ] Outcome-compression pipeline DEAD — `compress_old_outcomes`/`load_compressed_batches`/`load_outcomes_with_context` zero callers; outcomes.jsonl grows unbounded
+- [ ] `knowledge_edges.jsonl` dead both ends — live writer requires `skills_used` which memory.py:515/679 omit; reader zero callers; 2124 frozen rows
+- [ ] `times_applied += 1` in-memory only (knowledge_web.py:1505) — ACTIVE-node usage evidence discarded, never persisted
+- [ ] Persona template memory seam live but dormant — no persona file contains `{{ standing_rules }}`/`{{ recent_lessons }}`
+- [ ] `hypotheses.jsonl` has no runtime injection reader (pack.py CLI only) — hypotheses invisible to recall until graduated
+- [ ] Verification calibration cluster independently dead — `verification_accuracy`/`calibrated_alignment_threshold` uncalled, beyond the known record/load pair
+- [ ] `RULE_GRADUATED` second phantom event in recall.py:54 — only emitter is CLI-only
 
 ### Benchmark/eval mission isolation — DONE 2026-07-14 → BACKLOG_DONE
 

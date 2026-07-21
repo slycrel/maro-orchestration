@@ -776,7 +776,7 @@ def _handle_impl(
         HandleResult with routing info and substantive result.
     """
     from intent import classify
-    from llm import build_adapter, MODEL_CHEAP
+    from llm import build_adapter
     from agent_loop import run_agent_loop, _DryRunAdapter
 
     handle_id = str(uuid.uuid4())[:8]
@@ -845,9 +845,9 @@ def _handle_impl(
     # so it must outrank a passive config default, not lose to it. The
     # previous order (config default applied first, prefix only applied "if
     # model is None") meant a configured default_model_tier silently defeated
-    # every prefix's tier bump — live and currently active on this box, whose
-    # own user/CONFIG.md ships `default_model_tier: cheap` (adversarial-review
-    # finding, 2026-07-13).
+    # every prefix's tier bump (adversarial-review finding, 2026-07-13; the
+    # template stopped shipping a default_model_tier value 2026-07-21 —
+    # execution floor is the MID role default unless the operator opts in).
     _pfx = _apply_prefixes(message)
     message = _pfx.message
     # Explicit persona= wins over a prefix-forced persona (full precedence
@@ -886,23 +886,11 @@ def _handle_impl(
     _strict_prefix = _pfx.strict_mode
     _team_prefix = _pfx.team_mode
 
-    # Scope-based model floor: wide/deep goals shouldn't start on cheap.
-    # The pre-flight scope estimate is free (<1ms, zero LLM) and already exists.
-    # If no explicit model was requested (no prefix, no config), lift to mid.
-    if model is None or model == MODEL_CHEAP:
-        try:
-            from planner import estimate_goal_scope
-            _scope = estimate_goal_scope(message)
-            if _scope in ("wide", "deep"):
-                model = "mid"
-                log.info("handle: scope=%s → lifting model floor to mid (was %s)",
-                         _scope, model or "cheap")
-        except Exception:
-            pass
-
-    # Build adapter
+    # Build adapter — execution floor is MID by role (2026-07-20 decree:
+    # the cheap-vs-mid execution split was a non-decision under flat-rate).
     if adapter is None and not dry_run:
-        adapter = build_adapter(model=model or MODEL_CHEAP)
+        from conductor import assign_model_by_role
+        adapter = build_adapter(model=model or assign_model_by_role("worker"))
     elif dry_run:
         adapter = _DryRunAdapter()
 
@@ -1255,13 +1243,17 @@ def _handle_impl(
         if verbose:
             print(f"[maro:{handle_id}] AGENDA lane — starting loop...", file=sys.stderr, flush=True)
 
-        # mode:thin — use factory_thin loop (faster, lower cost) instead of full Mode 2
+        # mode:thin — use factory_thin loop (stripped scaffolding) instead of
+        # full Mode 2. Kept as an operator-only escape hatch + benchmark
+        # instrument per the 2026-07-21 factory adjudication ("mixed bag");
+        # default tier follows the MID execution-floor decree.
         if _use_thin_mode and not dry_run:
             try:
                 from factory_thin import run_factory_thin
+                from conductor import assign_model_by_role
                 _thin_result = run_factory_thin(
                     message,
-                    model=model or "cheap",
+                    model=model or assign_model_by_role("worker"),
                     verbose=verbose,
                 )
                 elapsed = int((time.monotonic() - started_at) * 1000)
@@ -2279,7 +2271,10 @@ def _handle_impl(
                     )
                 _contested_claims = _gate_verdict.contested_claims or []
                 if _gate_verdict.escalate and loop_result.status == "done":
-                    _next_tier = next_model_tier(model or "cheap")
+                    _cur_tier = model or getattr(adapter, "model_key", None)
+                    if not isinstance(_cur_tier, str):
+                        _cur_tier = "mid"  # execution floor since 2026-07-21
+                    _next_tier = next_model_tier(_cur_tier)
                     _action = _cfg.get("quality_gate_action", "escalate").strip().lower()
                     _gate_note = f"\n\n⚠️ Quality gate: ESCALATE — {_gate_verdict.reason}"
                     if verbose:

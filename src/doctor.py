@@ -368,26 +368,23 @@ def run_doctor() -> bool:
     except Exception as exc:
         results.append(_check("Curated skills (skills/)", False, str(exc)[:80]))
 
-    # Local validator (optional, zero-cost first-pass validation)
+    # Hosted-free validator tier (optional, zero-cost first-pass validation;
+    # the local-model tier was removed 2026-07-21 by decree)
     try:
-        import local_models as _lm
-        _models = _lm.configured_models()
-        if not _models:
-            results.append(_check("Local validator", True, "not configured — paid validation (default)"))
+        import hosted_free as _hf
+        _providers = _hf.configured_providers()
+        if not _providers:
+            results.append(_check("Hosted-free validator", True,
+                                  "not configured — paid validation (default)"))
+        elif _hf.available():
+            results.append(_check("Hosted-free validator", True,
+                                  f"providers: {', '.join(_providers)}"))
         else:
-            _rt = _lm.resolve_runtime()
-            _ep = _lm.resolve_endpoint(_rt)
-            _loaded = set(_lm.loaded_models(_ep))
-            _usable = [m for m in _models if m in _loaded]
-            if _usable:
-                results.append(_check("Local validator", True,
-                                      f"{_rt} @ {_ep} — active: {', '.join(_usable)}"))
-            else:
-                results.append(_check("Local validator", False,
-                                      f"{_rt} @ {_ep} unreachable or {_models} not loaded — "
-                                      f"run scripts/local-validator.sh start"))
+            results.append(_check("Hosted-free validator", False,
+                                  f"configured ({', '.join(_providers)}) but all "
+                                  f"breakers tripped — will fall through to paid"))
     except Exception as exc:
-        results.append(_check("Local validator", True, f"skipped: {exc}"))  # optional, not fatal
+        results.append(_check("Hosted-free validator", True, f"skipped: {exc}"))  # optional, not fatal
 
     # Bughunter scan (quick check)
     try:

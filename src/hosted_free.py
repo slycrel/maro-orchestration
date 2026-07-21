@@ -3,23 +3,19 @@
 Groq and Gemini both offer a genuinely free API tier (no card for Groq, a
 Google account for Gemini) suitable for the orchestrator's high-volume
 *non-agentic* call classes — chiefly step/quality validation. This module
-plugs them in as an ADDITIONAL rung of the validation ladder, alongside
-(never replacing) `local_models.py`'s in-process local-model tier:
+is the free rung of the validation ladder:
 
     Tier 1  hosted-free       (this module)        — free, network, rate-limited
-    Tier 1b local models      (local_models.py)    — free, in-process, BACKUP
     Tier 2  paid                                   — the existing adapter
 
-Order decreed 2026-07-16 (Jeremy): "hosted-free first, then 3b local as
-backup... slow + local seems better than a network API call fail for
-whatever reason." When this tier is enabled and keyed, it judges first
-(stronger models, ~1-2s); the local tier is consulted only when this tier
-is inert or fails to produce a verdict (see step_exec.verify_step). With
-this tier disabled (the fresh-install default) the local tier remains the
-first free rung, unchanged.
+(The in-process local-model tier that used to sit between them was removed
+2026-07-21 by decree — "local LLMs are in the way for now"; revival path in
+docs/LOCAL_VALIDATOR.md.) When this tier is enabled and keyed, it judges
+first (stronger models, ~1-2s); UNDECIDED or no-verdict escalates to paid.
+With this tier disabled (the fresh-install default) validation is the paid
+path, byte-identical to pre-ladder behavior.
 
-Design mirrors `local_models.py` on purpose (same shape the codebase already
-knows how to reason about):
+Design notes (shape inherited from the retired local_models.py on purpose):
 
   * **Explicit opt-in.** `validate.hosted_free.enabled` defaults false. When
     enabled, no `GROQ_API_KEY`/`GEMINI_API_KEY` in env or the credentials

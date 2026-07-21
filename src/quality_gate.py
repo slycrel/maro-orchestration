@@ -270,14 +270,15 @@ def run_quality_gate(
        (devil's advocate, domain skeptic, implementation critic). Escalates if 2+
        critics rate WEAK. Catches sycophancy that single-pass adversarial misses.
 
-    Uses the provided adapter (should be cheap tier — gate itself is cheap).
+    Uses the provided adapter — callers pass the run's execution adapter
+    (MID by default since the 2026-07-21 unification).
     Returns PASS with low confidence on any failure — gate errors must never
     block or degrade the result.
 
     Args:
         goal: The original goal text.
         step_outcomes: List of StepOutcome objects from the loop.
-        adapter: LLM adapter to use for the review (cheap tier recommended).
+        adapter: LLM adapter to use for the review (the run's execution adapter).
         confidence_threshold: Minimum confidence to act on ESCALATE.
         run_adversarial: Whether to run the adversarial claim review pass.
         run_council: Whether to run the LLM council (3 additional critic calls).
@@ -290,43 +291,9 @@ def run_quality_gate(
     if not done_steps:
         return QualityVerdict("PASS", "no completed steps to review", 0.5, False)
 
-    # --- Tier 0: free local gate (BACKLOG #7; mirrors step_exec.verify_step) ---
-    # Only when `validate.local_models` is configured. The local model runs the
-    # SAME gate (recursive call, ladder disabled); decisive (confidence >=
-    # validate.min_certainty) → its verdict IS production and the paid call is
-    # skipped. UNDECIDED → fall through to the paid adapter below, mirroring
-    # the WEAK_ESCALATE stance: a recommendation without confidence doesn't
-    # act, it escalates. With no local models this is byte-identical to the
-    # paid path.
-    if _ladder:
-        try:
-            import local_models as _lm
-            if _lm.configured_models() and not _lm.latency_guard_tripped():
-                _lm.ensure_validator_running()
-                _local = _lm.build_local_validator_adapter()
-                if _local is not None:
-                    # Consults the breaker (gate above) but does not feed it:
-                    # this recursive gate is a composite of several calls, so
-                    # its wall time is not a per-call latency signal. The
-                    # single-call site (step_exec.verify_step) owns reporting.
-                    lv = run_quality_gate(
-                        goal, step_outcomes, _local,
-                        confidence_threshold=confidence_threshold,
-                        run_adversarial=run_adversarial,
-                        run_council=run_council,
-                        run_cross_ref=run_cross_ref,
-                        loop_id=loop_id,
-                        _ladder=False,
-                    )
-                    if lv.confidence >= _lm.min_certainty():
-                        log.info("local quality gate decisive: verdict=%s conf=%.2f via %s",
-                                 lv.verdict, lv.confidence,
-                                 getattr(_local, "model_key", "local"))
-                        return lv
-                    log.info("local quality gate UNDECIDED (conf=%.2f < %.2f) — escalating to paid",
-                             lv.confidence, _lm.min_certainty())
-        except Exception as exc:
-            log.debug("local quality-gate path skipped (non-fatal): %s", exc)
+    # Free gate rung: the local-model Tier 0 was REMOVED 2026-07-21 by decree
+    # ("local LLMs are in the way for now"). The `_ladder` flag is retained as
+    # the seam where the hosted-free rung lands (swarm-review chunk 5).
 
     # Use the last 3 step results as the review payload — synthesis/summary steps
     # are most representative of final quality

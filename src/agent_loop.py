@@ -61,14 +61,14 @@ from loop_post_step import (
     _write_iteration_artifacts,
     _check_loop_interrupts,
     _post_step_checks,
-    _local_auto_ralph_enabled,
+    _free_auto_ralph_enabled,
     _current_run_dir_safe,
     _record_loop_decision,
     _run_ralph_verify,
     _process_done_step,
 )
 from loop_finalize import _build_result_and_finalize, _finalize_loop
-from loop_execute import _select_step_adapter, _run_scoped_validator, _execute_main_loop
+from loop_execute import _select_step_adapter, _execute_main_loop
 
 # ---------------------------------------------------------------------------
 # System prompts
@@ -106,14 +106,14 @@ _EXECUTE_TOOLS = EXECUTE_TOOLS
 
 # _handle_budget_ceiling, _check_step_too_broad, _compute_march_of_nines,
 # _write_iteration_artifacts, _check_loop_interrupts, _post_step_checks,
-# _local_auto_ralph_enabled, _current_run_dir_safe, _record_loop_decision,
+# _free_auto_ralph_enabled, _current_run_dir_safe, _record_loop_decision,
 # _run_ralph_verify, and _process_done_step moved to loop_post_step.py
 # (Tier 3 split).
 
 
 
-# _select_step_adapter, _run_scoped_validator, and _execute_main_loop
-# moved to loop_execute.py (Tier 3 split).
+# _select_step_adapter and _execute_main_loop moved to loop_execute.py
+# (Tier 3 split).
 
 
 def run_agent_loop(

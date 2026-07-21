@@ -1,8 +1,7 @@
 """Main step-execution loop for the agent loop (Tier 3 split of agent_loop.py).
 
 Extracted verbatim from agent_loop.py — per-step model tier selection
-(_select_step_adapter), the local-validator lifecycle decorator
-(_run_scoped_validator), and _execute_main_loop itself: the Phase F
+(_select_step_adapter) and _execute_main_loop itself: the Phase F
 step-iteration engine (parallel-peer batching, ralph-verify, post-step
 checks, stuck detection, adaptive-execution triggers, recovery and
 interrupt handling) that runs until no steps remain or a terminal status
@@ -11,7 +10,6 @@ is reached.
 
 from __future__ import annotations
 
-import functools
 import hashlib
 import logging
 import sys
@@ -27,7 +25,6 @@ from loop_types import (
     step_from_decompose,
     _orch,
     _project_dir_root,
-    _configure_logging,
 )
 from loop_artifacts import _write_step_artifact
 from loop_planning import _is_combined_exec_analyze, _split_exec_analyze, _shape_steps
@@ -35,7 +32,7 @@ from loop_blocked import BlockedStepContext, _process_blocked_step
 from loop_parallel import _run_parallel_batch
 from loop_post_step import (
     _handle_budget_ceiling,
-    _local_auto_ralph_enabled,
+    _free_auto_ralph_enabled,
     _run_ralph_verify,
     _post_step_checks,
     _record_loop_decision,
@@ -91,46 +88,17 @@ def _select_step_adapter(
                     print(f"[maro] step {step_idx}: escalated to {_tier_name} (retry tier-up)", file=sys.stderr, flush=True)
             except Exception as _ta_exc:
                 log.debug("tier-override adapter build failed for step %d, using default: %s", step_idx, _ta_exc)
-        else:
+        elif session_tier_floor:
+            # Execution floor is MID (2026-07-20 decree — per-step cheap
+            # downgrade removed); only a raised session floor re-tiers here.
             try:
-                from conductor import classify_step_model
-                _step_model = classify_step_model(step_text)
-                if session_tier_floor and tier_order.get(_step_model, 0) < tier_order.get(session_tier_floor, 0):
-                    _step_model = session_tier_floor
-                if _step_model != adapter.model_key:
-                    _step_adapter = build_adapter(model=_step_model)
-                    if ctx.verbose:
-                        _tier = "haiku" if _step_model == MODEL_CHEAP else "sonnet"
-                        print(f"[maro] step {step_idx}: routing to {_tier} (classify_step_model)", file=sys.stderr, flush=True)
+                if tier_order.get(adapter.model_key, 0) < tier_order.get(session_tier_floor, 0):
+                    _step_adapter = build_adapter(model=session_tier_floor)
             except Exception as _cm_exc:
-                log.debug("classify_step_model failed for step %d, using default: %s", step_idx, _cm_exc)
+                log.debug("session-floor adapter build failed for step %d, using default: %s", step_idx, _cm_exc)
     return _step_adapter
 
 
-def _run_scoped_validator(fn):
-    """Own the local validator's lifecycle for the whole run: spin it up at the
-    start (if it'll be used) and tear down what this run started at the end —
-    on completion or failure. Reused/external/parent-run servers are left alone.
-    Non-fatal: any lifecycle hiccup just falls through to lazy per-step spin-up.
-    """
-    @functools.wraps(fn)
-    def wrapper(*args, **kwargs):
-        # Configure logging up front (idempotent) so the run-start validator
-        # spin-up is visible — otherwise it fires before the in-body setup.
-        _configure_logging(kwargs.get("verbose", False))
-        goal = args[0] if args else kwargs.get("goal", "")
-        ralph = kwargs.get("ralph_verify", False)
-        try:
-            import local_models as _lm
-            cm = _lm.managed_for_run(goal, ralph)
-        except Exception:
-            return fn(*args, **kwargs)
-        with cm:
-            return fn(*args, **kwargs)
-    return wrapper
-
-
-@_run_scoped_validator
 def _execute_main_loop(
     ctx: LoopContext,
     steps: List[str],
@@ -1060,11 +1028,12 @@ def _execute_main_loop(
             except Exception:
                 pass
 
-        # Ralph verify loop (Phase F8). Defaults ON when a usable local validator
-        # is configured — verification is then free (opt out: validate.auto_verify).
+        # Ralph verify loop (Phase F8). Defaults ON when the hosted-free
+        # validator tier is usable — verification is then free (opt out:
+        # validate.auto_verify).
         _ralph_active = (ralph_verify
                          or goal.lower().startswith(("ralph:", "verify:"))
-                         or _local_auto_ralph_enabled())
+                         or _free_auto_ralph_enabled())
         if step_status == "done" and _ralph_active and step_result:
             step_status, step_result, _session_verify_failures, _session_tier_floor = _run_ralph_verify(
                 ctx, step_text, step_idx, step_result, step_status, outcome, _step_adapter,

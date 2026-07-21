@@ -1602,25 +1602,16 @@ def verify_step(
     Returns a dict with: passed, reason, confidence.
     Non-fatal — returns passed=True on any error so verify never blocks execution.
 
-    Free-tier order (decreed 2026-07-16, Jeremy: "hosted-free first, then 3b
-    local as backup... slow + local seems better than a network API call fail
-    for whatever reason"):
+    Ladder (local-model tier REMOVED 2026-07-21 by decree — "local LLMs are
+    in the way for now"; revival path documented in docs/LOCAL_VALIDATOR.md):
 
       Tier 1   hosted-free (BACKLOG #25, gated on `validate.hosted_free.enabled`
                + a GROQ_API_KEY/GEMINI_API_KEY) — stronger models, ~1-2s.
-      Tier 1b  local model (`validate.local_models`) — the availability BACKUP:
-               consulted only when the hosted tier is inert (unconfigured/
-               breakers) or failed to produce a verdict at all. A genuine
-               hosted UNDECIDED escalates straight to paid — the weaker local
-               model doesn't get to overrule a stronger model's uncertainty.
-      Tier 2   paid `adapter` — escalation target for UNDECIDED, and the whole
-               path when neither free tier is configured (byte-identical).
+      Tier 2   paid `adapter` — escalation target for UNDECIDED/no-verdict, and
+               the whole path when hosted-free is unconfigured (byte-identical).
     """
     _escalated = False
-    _local_lv = None   # (verdict, source) carried to Tier 2 for shadow-eval (no-op unless enabled)
-    _local_elapsed_ms = 0
-    _hosted_lv = None  # (verdict, source) likewise
-    _try_local = True  # cleared when hosted-free actually judged (decisive or UNDECIDED)
+    _hosted_lv = None  # (verdict, source) carried to Tier 2 for shadow-eval (no-op unless enabled)
 
     # --- Tier 1: hosted-free (Groq/Gemini free API tier, BACKLOG #25) ---
     # Inert no-op (hosted_free.configured_providers() == []) when no key is
@@ -1661,11 +1652,9 @@ def verify_step(
                             "decision": "HOSTED_FREE_PASS" if hv.passed else "HOSTED_FREE_FAIL",
                             "source": _hosted_source}
                 if hv.confidence > 0.0:
-                    # The (stronger) hosted model judged and was genuinely
-                    # unsure — escalate straight to paid, skipping the local
-                    # backup: it exists for availability, not second opinions.
+                    # The hosted model judged and was genuinely unsure —
+                    # escalate to paid.
                     _hosted_lv = (hv, _hosted_source)
-                    _try_local = False
                     _escalated = True
                     log.info("hosted-free validator UNDECIDED (conf=%.2f < %.2f) — escalating to paid",
                              hv.confidence, _hf.min_certainty())
@@ -1673,57 +1662,10 @@ def verify_step(
                     # confidence == 0.0 is VerificationAgent's no-verdict
                     # sentinel (transport failure / unparseable output across
                     # every provider): the tier FAILED rather than judged.
-                    # This is the exact case the local backup exists for.
-                    log.info("hosted-free tier produced no verdict — falling back to local backup")
+                    log.info("hosted-free tier produced no verdict — escalating to paid")
     except Exception as exc:
         log.debug("hosted-free validator path skipped (non-fatal): %s", exc)
 
-    # --- Tier 1b: free local validator, the availability backup ---
-    try:
-        import local_models as _lm
-        if _try_local and _lm.configured_models() and not _lm.latency_guard_tripped():
-            _lm.ensure_validator_running()               # spin up on demand (no-op if up/disabled/ollama)
-            local = _lm.build_local_validator_adapter()  # None if endpoint/model absent
-            if local is not None:
-                from verification_agent import VerificationAgent
-                _t0 = time.monotonic()
-                # The same threshold must govern both RETRY interpretation and
-                # local decisiveness.  Otherwise a RETRY in the band between
-                # min_certainty and the paid threshold is converted to PASS,
-                # then immediately trusted as a decisive local verdict.
-                lv = VerificationAgent(local, confidence_threshold=_lm.min_certainty(),
-                                       max_input_chars=_lm.input_char_budget()).verify_step(
-                                           step_text, result, artifacts_note=artifacts_note)
-                _local_elapsed_ms = int((time.monotonic() - _t0) * 1000)
-                _lm.report_latency(_local_elapsed_ms)
-                _local_source = getattr(local, "model_key", "local")
-                _local_lv = (lv, _local_source)
-                if lv.confidence >= _lm.min_certainty():
-                    log.debug("local validator decisive: passed=%s conf=%.2f via %s",
-                              lv.passed, lv.confidence, _local_source)
-                    _log_validation_ladder(
-                        tier="local-decisive", source=_local_source,
-                        passed=lv.passed, confidence=lv.confidence,
-                        local_elapsed_ms=_local_elapsed_ms,
-                        input_chars=len(result or ""), step_text=step_text)
-                    # Decisive → production uses local and skips paid. Shadow-eval
-                    # (opt-in) asks paid anyway to learn whether local was right —
-                    # the only place that agreement signal exists. Decide-only.
-                    try:
-                        import validation_shadow as _vs
-                        _vs.shadow_eval(step_text, result, lv, _local_source,
-                                        paid_adapter=adapter,
-                                        confidence_threshold=confidence_threshold)
-                    except Exception:
-                        pass
-                    return {"passed": lv.passed, "reason": lv.reason, "confidence": lv.confidence,
-                            "decision": "LOCAL_PASS" if lv.passed else "LOCAL_FAIL",
-                            "source": _local_source}
-                log.info("local validator UNDECIDED (conf=%.2f < %.2f) — escalating to paid",
-                         lv.confidence, _lm.min_certainty())
-                _escalated = True
-    except Exception as exc:
-        log.debug("local validator path skipped (non-fatal): %s", exc)
 
     # --- Tier 2: paid validator (default path, or escalation target for UNDECIDED) ---
     try:
@@ -1736,18 +1678,11 @@ def verify_step(
             tier="escalated" if _escalated else "paid",
             source=getattr(adapter, "model_key", "") or "paid",
             passed=verdict.passed, confidence=verdict.confidence,
-            local_elapsed_ms=_local_elapsed_ms, paid_elapsed_ms=_paid_elapsed_ms,
+            paid_elapsed_ms=_paid_elapsed_ms,
             input_chars=len(result or ""), step_text=step_text)
         # Escalation path(s): whichever free tier(s) actually ran now have a
         # paid verdict on the same result — log each pair for shadow-eval
         # (free; no extra call). No-op unless validate.shadow_eval is on.
-        if _local_lv is not None:
-            try:
-                import validation_shadow as _vs
-                _vs.shadow_eval(step_text, result, _local_lv[0], _local_lv[1],
-                                paid_verdict=verdict, escalated=True)
-            except Exception:
-                pass
         if _hosted_lv is not None:
             try:
                 import validation_shadow as _vs

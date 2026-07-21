@@ -2529,7 +2529,8 @@ class OpenAIAdapter(OpenAICompatAdapter):
 # Zero-cost rung for non-agentic call classes (validation ladder, classify/
 # routing, cheap verification) — see hosted_free.py for the config, model-ID
 # resolution, and per-provider rate-limit/latency breakers that wire these
-# into step_exec.verify_step alongside local_models' local-model tier.
+# into step_exec.verify_step (the free rung; local-model tier removed
+# 2026-07-21 by decree).
 #
 # Deliberately NOT in DEFAULT_BACKEND_ORDER / _KNOWN_BACKENDS / build_adapter:
 # these are free-tier helpers with tight RPM caps (Groq: 30 RPM / ~14.4K-1K

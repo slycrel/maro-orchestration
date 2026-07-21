@@ -978,7 +978,7 @@ Closes the full loop: observe → classify → fix → verify → graduate.
 
 ---
 
-### Phase 49: Factory Mode Revisit — Full Comparison *(TODO — shelved until Phase 46+ ships)*
+### Phase 49: Factory Mode Revisit — Full Comparison *(RESOLVED 2026-07-21 — decision gate fired without the full comparison; see `docs/history/2026-07-21-factory-adjudication.md`)*
 
 *"Test factory mode vs a stable target, not a moving one."*
 

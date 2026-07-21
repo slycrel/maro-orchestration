@@ -646,12 +646,20 @@ def _post_step_checks(
     return step_status, step_result, _step_injected_context
 
 
-def _local_auto_ralph_enabled() -> bool:
-    """Default the ralph verify loop ON when a usable local validator is
-    configured (free verification). Cached + non-fatal."""
+def _free_auto_ralph_enabled() -> bool:
+    """Default the ralph verify loop ON when the hosted-free validator tier
+    is usable (verification is then free). Opt out with
+    `validate.auto_verify: false`. Was local-model-conditional; the local
+    tier was removed 2026-07-21 by decree. Non-fatal."""
     try:
-        import local_models as _lm
-        return _lm.auto_verify_enabled()
+        import hosted_free as _hf
+        if not _hf.available():
+            return False
+        from config import get as _cfg_get
+        val = _cfg_get("validate.auto_verify", True)
+        if isinstance(val, str):
+            return val.strip().lower() not in ("false", "0", "no", "off")
+        return bool(val)
     except Exception:
         return False
 
@@ -754,27 +762,25 @@ def _run_ralph_verify(
         if not _vr["passed"]:
             log.info("ralph verify FAIL step=%d reason=%r — marking blocked for retry",
                      step_idx, _vr["reason"][:80])
-            # Per-step tier escalation on verify failure
-            _vf_tier = getattr(step_adapter, "model_key", MODEL_CHEAP)
-            if _vf_tier == MODEL_CHEAP:
-                step_tier_overrides[step_text] = MODEL_MID
-                log.info("step %d verify-fail tier-up: cheap → mid", step_idx)
-            elif _vf_tier == MODEL_MID:
+            # Per-step tier escalation on verify failure. Execution floor is
+            # MID (2026-07-20 decree), so the ladder is mid → power only.
+            _vf_tier = getattr(step_adapter, "model_key", MODEL_MID)
+            if _vf_tier == MODEL_MID:
                 step_tier_overrides[step_text] = MODEL_POWER
                 log.info("step %d verify-fail tier-up: mid → power", step_idx)
             # Session-level lagging signal
             session_verify_failures += 1
             if (session_verify_failures >= verify_fail_threshold
                     and not session_tier_floor):
-                _current_tier = getattr(ctx.adapter, "model_key", MODEL_CHEAP)
-                if _current_tier == MODEL_CHEAP:
-                    session_tier_floor = MODEL_MID
+                _current_tier = getattr(ctx.adapter, "model_key", MODEL_MID)
+                if _current_tier == MODEL_MID:
+                    session_tier_floor = MODEL_POWER
                     log.warning("session-level tier-up: %d consecutive verify failures → "
-                                "raising floor to mid for remaining steps",
+                                "raising floor to power for remaining steps",
                                 session_verify_failures)
                     if ctx.verbose:
                         print(f"[maro] session tier-up: {session_verify_failures} verify "
-                              "failures → floor raised to mid",
+                              "failures → floor raised to power",
                               file=sys.stderr, flush=True)
             if ctx.verbose:
                 print(f"[maro] ralph verify: step {step_idx} RETRY — {_vr['reason'][:80]}",

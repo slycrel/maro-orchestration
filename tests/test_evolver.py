@@ -2120,14 +2120,18 @@ class TestScanStepCosts:
         result = scan_step_costs(entries=entries)
         assert all(s.category == "cost_optimization" for s in result)
 
-    def test_suggestion_mentions_haiku(self, monkeypatch):
+    def test_suggestion_respects_mid_floor(self, monkeypatch):
+        """Cost suggestions propose token budgets, never cheap-tier routing
+        (2026-07-20 execution-floor decree)."""
         from evolver import scan_step_costs
         entries = (
             self._make_entries("verify", 5, 200) +
             self._make_entries("research", 5, 3000)
         )
         result = scan_step_costs(entries=entries)
-        assert any("Haiku" in s.suggestion or "MODEL_CHEAP" in s.suggestion for s in result)
+        assert any("token-budget" in s.suggestion for s in result)
+        assert not any("Haiku" in s.suggestion or "MODEL_CHEAP" in s.suggestion
+                       for s in result)
 
     def test_skips_types_with_single_entry(self, monkeypatch):
         """Step types with only 1 entry are skipped (not enough data)."""

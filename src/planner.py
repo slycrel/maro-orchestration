@@ -889,7 +889,10 @@ def decompose(
                               + "\n".join(f"- {c}" for c in cuts.known_constraints))
 
     if extras:
-        system = DECOMPOSE_SYSTEM + "\n\n" + "\n\n".join(extras)
+        # Append to `system`, not DECOMPOSE_SYSTEM — rebuilding from the bare
+        # constant silently discarded the persona wrap whenever any extras
+        # existed (battery finding V5, 2026-07-21).
+        system = system + "\n\n" + "\n\n".join(extras)
 
     # Inject scope hint into system prompt for medium goals so the planner calibrates step count.
     # A detected ceiling suppresses the hint — "expect 5-10 steps" must not

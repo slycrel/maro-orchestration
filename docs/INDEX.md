@@ -19,6 +19,8 @@ BACKLOG, VISION, CLAUDE, README…) are living by definition and carry no frontm
 | The swarm-review arc conversation (decrees, taste/judgement, star pattern, CGI)? | `conversations/2026-07-20-swarm-review-arc.md` (verbatim session log) |
 | Taste/judgement patterns for dev sessions (cuts-first, consumer-first, live-writer?…)? | `DEV_PATTERNS.md` (living; non-gated CLAUDE.md pre-read — battery verdict 2026-07-21) |
 | The Phase 0.5 with-doc/control battery (protocol, verdict, new findings V1-V6)? | `history/2026-07-21-phase05-battery.md` (raw arm outputs in `history/phase05-battery/`) |
+| Which memory/knowledge stores have live writers AND readers? (orphan/dead map) | `history/2026-07-21-wiring-inventory.md` (report-only; agent-produced, verify before fixing; enforcement pin after chunks 3-4) |
+| What happened to factory mode / the Bitter Lesson experiment / mode:thin? | `history/2026-07-21-factory-adjudication.md` (branch archived as tag `archive/factory-2026-03-31`; thin/minimal kept as instruments) |
 | What are we deliberately NOT building? | `ARCHITECTURE_NON_GOALS.md` |
 | What should Maro be able to do? (example goals, test corpus, pre-installed skill target) | `CAPABILITIES.md` (living catalog — add real asks as they happen) |
 | Two-box / Hermes dispatch, interactive goals, effort-based spend UX, mid-flight injection? | `SESSION_PROTOCOL_DESIGN.md` (dormant-design; the 2026-07-15 skeleton, iterate there) |
@@ -30,7 +32,7 @@ BACKLOG, VISION, CLAUDE, README…) are living by definition and carry no frontm
 | How does the navigator decide? | `NAVIGATOR_SCHEMA.md`; memory slice: `RECALL_DESIGN.md` |
 | How does an external substrate (OpenClaw/Hermes) call us? | `SUBSTRATE_INTEGRATION.md` |
 | Two-box Hermes-interface + Maro-orchestrator PoC recipe? | `../deploy/hermes/TWO_BOX_POC.md` (+ `../deploy/hermes/README.md` for the dispatch lane) |
-| Local validator model setup/results? | `LOCAL_VALIDATOR.md` |
+| Local validator model setup/results? | `LOCAL_VALIDATOR.md` (history — local rung removed 2026-07-21; revival trigger + bakeoff methodology inside) |
 | Security / sandbox posture? | `SECURITY_MODEL.md` |
 | How do we cut/publish a release? | `PUBLISH_CHECKLIST.md` (exists since v0.1 — cite it, don't re-derive; SF-14 release amnesia) |
 | How do I monitor the host (disk/spend/orphans/heartbeat)? | `HOST_MONITORING.md` (runs `../scripts/host-check.sh`) |

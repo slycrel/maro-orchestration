@@ -3781,3 +3781,44 @@ Dormant (deliberately parked, not dropped):
   arc: V1 = checkpoint-class flag on chunk 6, V2 = chunk 4 prerequisite,
   V5 = chunk 1 candidate, V3/V4 = chunk-1 BACKLOG batch, V6 = chunk 2
   input. Report: docs/history/2026-07-21-phase05-battery.md.
+- 2026-07-21 (chunk 1 executed, standing grant): **swarm-review chunk 1
+  shipped** — (1) execution defaults unified at MID: handle.py entry
+  adapter now `assign_model_by_role("worker")`, scope-lift block and
+  `classify_step_model` cheap-vs-mid downgrade removed; verify-fail
+  ladder starts mid→power; CHEAP survives only for non-agentic
+  classifier/heartbeat/curation calls. Post-escalate tier computation
+  fixed in the same pass (was hardcoded `model or "cheap"` — would have
+  re-run escalations at the tier that just failed). (2) Local-model
+  wiring REMOVED (not disabled): src/local_models.py + bakeoff scripts +
+  tests deleted; ladder is Tier-0 deterministic → hosted-free → paid;
+  hosted no-verdict escalates straight to paid; revival trigger (hosted
+  free-tier churn) + re-entry path documented in the retired
+  docs/LOCAL_VALIDATOR.md; corpus fixture kept. (3) Dead config keys
+  `model.default_tier/planning_tier/advisor_tier` + `validate.local_*`
+  deleted; DEFAULTS.md census green, new `validate.auto_verify` row.
+  (4) Battery V5 planner fix (persona wrap no longer discarded when
+  extras exist). (5) Typed finding-code vocabulary shipped:
+  src/finding_codes.py (CITATION_INVERSION / PHANTOM_SYMBOL /
+  THEORY_MECHANISM / GAP_UNDERSTATED) + DEV_PATTERNS convention +
+  tests. (6) Report-only wiring inventory saved
+  (docs/history/2026-07-21-wiring-inventory.md, 27 stores/events, 8
+  agent-reported surprises flagged verify-before-fix; enforcement pin
+  waits for post-chunk-3/4 per pin-after-fix). (7) Side-channel
+  first-party failure corpus folded into docs/CAPABILITIES.md (era 12's
+  named loss candidate). (8) Stale-doc sweep: debate pass, ~5400-line
+  claim, bootstrap_context-at-loop-start, all-passes-cheap claim fixed.
+  (9) BACKLOG batch adds: 10 revival dispositions, V3/V4, era C-tier
+  drops, 8 wiring surprises; VibeThinker/local burn-in item SUPERSEDED →
+  BACKLOG_DONE.
+- 2026-07-21 (Jeremy verdict, recorded per SF-13; executed by session):
+  **factory-mode adjudication — Phase 49's decision gate finally
+  fired.** Jeremy's verdict on factory mode, recalled during the
+  knowledge journey and never previously persisted: "mixed bag — not
+  much different than a general LLM prompt." Dispositions:
+  origin/factory branch ARCHIVED as tag `archive/factory-2026-03-31`
+  (remote branch deleted, every commit reachable via tag — arch-10
+  record-loss flag closed); `mode:thin` + factory_thin.py KEPT as
+  operator-only escape hatch + benchmark instrument, default tier bumped
+  cheap→MID per the execution-floor decree; factory_minimal.py KEPT as
+  the single-completion benchmark baseline. Record:
+  docs/history/2026-07-21-factory-adjudication.md.

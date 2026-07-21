@@ -1319,91 +1319,16 @@ class TestVerifyStepHostedFreeTier:
     wiring — that the tier is skipped when unavailable (regression net:
     byte-identical paid path when GROQ_API_KEY/GEMINI_API_KEY are unset),
     that a decisive hosted-free verdict short-circuits before paid, and
-    the 2026-07-16 free-tier ordering decree: hosted-free judges FIRST;
-    a genuine hosted UNDECIDED escalates straight to paid (local skipped);
-    the local tier is the availability backup, consulted only when the
-    hosted tier is inert or produced no verdict at all.
+    that UNDECIDED or no-verdict escalates to paid. (The local backup tier
+    these tests used to pin was removed 2026-07-21 by decree.)
     """
 
-    @staticmethod
-    def _wire_local(monkeypatch, tracker):
-        """Configure a live-looking local tier that records whether it ran."""
-        import local_models as lm
-        def _configured():
-            tracker["local_consulted"] = True
-            return ["qwen2.5-coder:3b"]
-        monkeypatch.setattr(lm, "configured_models", _configured)
-        monkeypatch.setattr(lm, "latency_guard_tripped", lambda: "")
-        monkeypatch.setattr(lm, "ensure_validator_running", lambda: None)
-        monkeypatch.setattr(lm, "build_local_validator_adapter", lambda: MagicMock(model_key="qwen2.5-coder:3b"))
-        monkeypatch.setattr(lm, "min_certainty", lambda: 0.6)
-        monkeypatch.setattr(lm, "input_char_budget", lambda: 6000)
-        monkeypatch.setattr(lm, "report_latency", lambda ms: None)
-
-    def test_hosted_decisive_skips_local_entirely(self, monkeypatch):
-        """Hosted-free judges first: a decisive hosted verdict means the local
-        tier is never even consulted (no configured_models() probe)."""
+    def test_hosted_no_verdict_escalates_to_paid(self, monkeypatch):
+        """Hosted tier produced NO verdict (the conf-0.0 VerificationAgent
+        sentinel — network fail / unparseable across every provider) →
+        escalate to paid (the local backup was removed 2026-07-21)."""
         from step_exec import verify_step
         import hosted_free as hf
-
-        tracker = {"local_consulted": False}
-        self._wire_local(monkeypatch, tracker)
-
-        hosted_adapter = MagicMock()
-        hosted_adapter._active_provider = "groq"
-        hosted_adapter.model_key = "llama-3.1-8b-instant"
-        monkeypatch.setattr(hf, "available", lambda: True)
-        monkeypatch.setattr(hf, "build_hosted_free_adapter", lambda: hosted_adapter)
-        monkeypatch.setattr(hf, "min_certainty", lambda: 0.6)
-        monkeypatch.setattr(hf, "input_char_budget", lambda: 4000)
-
-        mock_va = MagicMock()
-        mock_va.verify_step.return_value = MagicMock(passed=True, reason="fine", confidence=0.95)
-        paid_adapter = MagicMock()
-        with patch("verification_agent.VerificationAgent", return_value=mock_va):
-            out = verify_step("do the thing", "did the thing", paid_adapter)
-
-        assert out["decision"] == "HOSTED_FREE_PASS"
-        assert tracker["local_consulted"] is False
-        paid_adapter.complete.assert_not_called()
-
-    def test_hosted_undecided_skips_local_straight_to_paid(self, monkeypatch):
-        """A genuine hosted UNDECIDED (conf > 0 but below threshold) escalates
-        to paid WITHOUT consulting the weaker local backup."""
-        from step_exec import verify_step
-        import hosted_free as hf
-
-        tracker = {"local_consulted": False}
-        self._wire_local(monkeypatch, tracker)
-
-        hosted_adapter = MagicMock()
-        hosted_adapter._active_provider = "gemini"
-        hosted_adapter.model_key = "gemini-2.0-flash"
-        monkeypatch.setattr(hf, "available", lambda: True)
-        monkeypatch.setattr(hf, "build_hosted_free_adapter", lambda: hosted_adapter)
-        monkeypatch.setattr(hf, "min_certainty", lambda: 0.6)
-        monkeypatch.setattr(hf, "input_char_budget", lambda: 4000)
-
-        undecided = MagicMock(passed=True, reason="unsure", confidence=0.4)
-        paid_verdict = MagicMock(passed=True, reason="paid says fine", confidence=0.95)
-        mock_va = MagicMock()
-        mock_va.verify_step.side_effect = [undecided, paid_verdict]
-        with patch("verification_agent.VerificationAgent", return_value=mock_va):
-            out = verify_step("do the thing", "did the thing", MagicMock())
-
-        assert out["decision"] == "ESCALATED"
-        assert out["source"] == "paid"
-        assert tracker["local_consulted"] is False
-
-    def test_hosted_no_verdict_falls_back_to_local_backup(self, monkeypatch):
-        """The decreed failure path: hosted tier produced NO verdict (the
-        conf-0.0 VerificationAgent sentinel — network fail / unparseable
-        across every provider) → local backup judges and can be decisive."""
-        from step_exec import verify_step
-        import hosted_free as hf
-
-        tracker = {"local_consulted": False}
-        self._wire_local(monkeypatch, tracker)
 
         hosted_adapter = MagicMock()
         hosted_adapter._active_provider = "groq"
@@ -1414,16 +1339,14 @@ class TestVerifyStepHostedFreeTier:
         monkeypatch.setattr(hf, "input_char_budget", lambda: 4000)
 
         no_verdict = MagicMock(passed=True, reason="verify skipped (error)", confidence=0.0)
-        local_verdict = MagicMock(passed=True, reason="local says fine", confidence=0.9)
+        paid_verdict = MagicMock(passed=False, reason="paid says no", confidence=0.9)
         mock_va = MagicMock()
-        mock_va.verify_step.side_effect = [no_verdict, local_verdict]
-        paid_adapter = MagicMock()
+        mock_va.verify_step.side_effect = [no_verdict, paid_verdict]
         with patch("verification_agent.VerificationAgent", return_value=mock_va):
-            out = verify_step("do the thing", "did the thing", paid_adapter)
+            out = verify_step("do the thing", "did the thing", MagicMock())
 
-        assert out["decision"] == "LOCAL_PASS"
-        assert tracker["local_consulted"] is True
-        paid_adapter.complete.assert_not_called()
+        assert out["passed"] is False
+        assert "paid says no" in out["reason"]
 
     def test_inert_when_hosted_free_unavailable(self, monkeypatch):
         """No key configured (hosted_free.available() False): untouched paid path."""

@@ -396,16 +396,10 @@ def _run_steps_parallel(
 
     Returns outcomes list in step-index order.
     """
-    from llm import build_adapter
-
     def _run_one(step_idx: int, step_text: str) -> tuple[int, dict]:
-        try:
-            from conductor import classify_step_model
-            step_model = classify_step_model(step_text)
-            step_adapter = build_adapter(model=step_model) if step_model != adapter.model_key else adapter
-        except Exception as _cla_exc:
-            log.debug("classify_step_model failed for parallel step %d, using default: %s", step_idx, _cla_exc)
-            step_adapter = adapter
+        # Execution floor is MID (2026-07-20 decree) — parallel steps run on
+        # the session adapter; the per-step cheap downgrade was removed.
+        step_adapter = adapter
 
         # _execute_step handles prefetch internally
         outcome = _run_in_step_worktree(f"step{step_idx}", lambda: _execute_step(
@@ -540,7 +534,6 @@ def _run_steps_dag(
 
     Returns outcomes list in step-index order.
     """
-    from llm import build_adapter
     import threading as _threading
 
     n = len(steps)
@@ -566,13 +559,9 @@ def _run_steps_dag(
             if dep_result:
                 dep_ctx.append(f"Step {dep_idx} ({dep_step_text[:60]}):\n{dep_result[:600]}")
 
-        try:
-            from conductor import classify_step_model
-            step_model = classify_step_model(step_text)
-            step_adapter = build_adapter(model=step_model) if step_model != adapter.model_key else adapter
-        except Exception as _cla_exc:
-            log.debug("classify_step_model failed for DAG step %d, using default: %s", step_idx, _cla_exc)
-            step_adapter = adapter
+        # Execution floor is MID (2026-07-20 decree) — DAG steps run on the
+        # session adapter; the per-step cheap downgrade was removed.
+        step_adapter = adapter
 
         outcome = _run_in_step_worktree(f"dagstep{step_idx}", lambda: _execute_step(
             goal=goal,

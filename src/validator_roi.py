@@ -35,11 +35,9 @@ _DEFAULT_IN_TOKENS = 2000      # fallback when no row carries input_chars
 
 
 def _local_model_names() -> List[str]:
-    try:
-        import local_models as _lm
-        return [str(m) for m in (_lm.configured_models() or [])]
-    except Exception:
-        return []
+    # Local-model tier removed 2026-07-21 (decree); historical ledger rows
+    # with local sources still classify via the ollama-tag heuristic below.
+    return []
 
 
 def _is_local_source(source: str, local_names: List[str]) -> bool:

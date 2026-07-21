@@ -373,15 +373,13 @@ def scan_step_costs(
             if count < 2:
                 continue
 
-            # Estimate potential savings: routing to Haiku saves ~5× vs Sonnet
             avg_cost = stats.get("avg_cost_usd", 0.0)
-            est_savings = avg_cost * count * 0.8  # conservative 80% savings via Haiku
 
             suggestion_text = (
                 f"Step type '{step_type}' averages {avg_tok:,} tokens across {count} steps "
-                f"(~${avg_cost:.6f}/step, ~${est_savings:.4f} total savings potential). "
-                f"Consider routing these steps to MODEL_CHEAP (Haiku) via classify_step_model(), "
-                f"or adding a token-budget constraint in the step prompt."
+                f"(~${avg_cost:.6f}/step). Consider adding a token-budget constraint in "
+                f"the step prompt. (Execution floor is MID by decree — do not suggest "
+                f"cheap-tier routing for agentic steps.)"
             )
             suggestions.append(Suggestion(
                 suggestion_id=f"cost-{step_type[:12]}",

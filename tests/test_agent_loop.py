@@ -2072,7 +2072,7 @@ def test_run_agent_loop_blocks_fabricated_write_claim(monkeypatch, tmp_path):
     import agent_loop as al
     import loop_execute
     # Keep the text-only verifier out of the way so we isolate the FS guard.
-    monkeypatch.setattr(loop_execute, "_local_auto_ralph_enabled", lambda: False)
+    monkeypatch.setattr(loop_execute, "_free_auto_ralph_enabled", lambda: False)
 
     class _FabAdapter:
         model_key = "test"
@@ -2105,7 +2105,7 @@ def test_run_agent_loop_allows_real_write(monkeypatch, tmp_path):
     monkeypatch.setenv("MARO_ORCH_ROOT", str(tmp_path))
     import agent_loop as al
     import loop_execute
-    monkeypatch.setattr(loop_execute, "_local_auto_ralph_enabled", lambda: False)
+    monkeypatch.setattr(loop_execute, "_free_auto_ralph_enabled", lambda: False)
 
     slug = al._goal_to_slug("build fizzbuzz for real")
     proj_dir = tmp_path / "projects" / slug
@@ -2147,7 +2147,7 @@ def test_run_agent_loop_blocks_inert_output_claim(monkeypatch, tmp_path):
     monkeypatch.setenv("MARO_ORCH_ROOT", str(tmp_path))
     import agent_loop as al
     import loop_execute
-    monkeypatch.setattr(loop_execute, "_local_auto_ralph_enabled", lambda: False)
+    monkeypatch.setattr(loop_execute, "_free_auto_ralph_enabled", lambda: False)
 
     slug = al._goal_to_slug("build fizzbuzz with output")
     proj_dir = tmp_path / "projects" / slug
@@ -2192,7 +2192,7 @@ def test_run_agent_loop_blocks_execution_contradiction(monkeypatch, tmp_path):
     monkeypatch.setenv("MARO_ORCH_ROOT", str(tmp_path))
     import agent_loop as al
     import loop_execute
-    monkeypatch.setattr(loop_execute, "_local_auto_ralph_enabled", lambda: False)
+    monkeypatch.setattr(loop_execute, "_free_auto_ralph_enabled", lambda: False)
 
     class _ContradictAdapter:
         model_key = "test"
@@ -2228,7 +2228,7 @@ def test_run_agent_loop_allows_real_passing_run(monkeypatch, tmp_path):
     monkeypatch.setenv("MARO_ORCH_ROOT", str(tmp_path))
     import agent_loop as al
     import loop_execute
-    monkeypatch.setattr(loop_execute, "_local_auto_ralph_enabled", lambda: False)
+    monkeypatch.setattr(loop_execute, "_free_auto_ralph_enabled", lambda: False)
 
     class _RealRunAdapter:
         model_key = "test"
@@ -4329,7 +4329,7 @@ def test_run_agent_loop_emits_scavenge_event(monkeypatch, tmp_path):
     import agent_loop as al
     import loop_execute
     import captains_log
-    monkeypatch.setattr(loop_execute, "_local_auto_ralph_enabled", lambda: False)
+    monkeypatch.setattr(loop_execute, "_free_auto_ralph_enabled", lambda: False)
 
     # Must be outside BOTH the project dir and the conftest workspace
     # (MARO_WORKSPACE=tmp_path), and not a filtered system prefix.
@@ -4380,7 +4380,7 @@ def test_run_agent_loop_no_scavenge_event_for_in_fence_access(monkeypatch, tmp_p
     import agent_loop as al
     import loop_execute
     import captains_log
-    monkeypatch.setattr(loop_execute, "_local_auto_ralph_enabled", lambda: False)
+    monkeypatch.setattr(loop_execute, "_free_auto_ralph_enabled", lambda: False)
 
     events_seen = []
     monkeypatch.setattr(
@@ -4426,7 +4426,7 @@ def test_run_agent_loop_write_fence_blocks_out_of_fence_write(monkeypatch, tmp_p
     import loop_execute
     import captains_log
     import config as config_mod
-    monkeypatch.setattr(loop_execute, "_local_auto_ralph_enabled", lambda: False)
+    monkeypatch.setattr(loop_execute, "_free_auto_ralph_enabled", lambda: False)
 
     _orig_get = config_mod.get
 
@@ -4495,7 +4495,7 @@ def test_run_agent_loop_write_fence_explicit_off(monkeypatch, tmp_path):
         lambda key, default=None: False if key == "validate.write_fence"
         else _orig_get(key, default),
     )
-    monkeypatch.setattr(loop_execute, "_local_auto_ralph_enabled", lambda: False)
+    monkeypatch.setattr(loop_execute, "_free_auto_ralph_enabled", lambda: False)
 
     events_seen = []
     monkeypatch.setattr(
@@ -4573,7 +4573,7 @@ def test_run_agent_loop_write_fence_allows_tmp_scratch(monkeypatch, tmp_path):
     import agent_loop as al
     import loop_execute
     import captains_log
-    monkeypatch.setattr(loop_execute, "_local_auto_ralph_enabled", lambda: False)
+    monkeypatch.setattr(loop_execute, "_free_auto_ralph_enabled", lambda: False)
     _fence_on_config(monkeypatch)
 
     events_seen = []
@@ -4603,7 +4603,7 @@ def test_run_agent_loop_write_fence_widens_to_goal_declared_path(monkeypatch, tm
     import agent_loop as al
     import loop_execute
     import captains_log
-    monkeypatch.setattr(loop_execute, "_local_auto_ralph_enabled", lambda: False)
+    monkeypatch.setattr(loop_execute, "_free_auto_ralph_enabled", lambda: False)
     _fence_on_config(monkeypatch)
 
     events_seen = []
@@ -4639,7 +4639,7 @@ def test_run_agent_loop_write_fence_still_blocks_undeclared_path(monkeypatch, tm
     import agent_loop as al
     import loop_execute
     import captains_log
-    monkeypatch.setattr(loop_execute, "_local_auto_ralph_enabled", lambda: False)
+    monkeypatch.setattr(loop_execute, "_free_auto_ralph_enabled", lambda: False)
     _fence_on_config(monkeypatch)
 
     events_seen = []

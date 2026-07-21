@@ -36,14 +36,16 @@ Post-hoc analyzer of outcomes.jsonl. Detects 7 friction signals:
 Configurable thresholds via config.yml. Produces InspectorReport with severity classification (low/medium/high).
 
 ### Quality Gate (quality_gate.py)
-Multi-pass review system. 5 optional passes:
+Multi-pass review system. 4 passes:
 1. PASS/ESCALATE verdict (mandatory)
 2. Adversarial claim review (CONFIRMED/DOWNGRADED/CONTESTED)
-3. Cross-reference fact check
-4. LLM Council (3 critics)
-5. Multi-agent debate (Bull/Bear/Risk Manager)
+3. Cross-reference fact check (optional, `strict:`)
+4. LLM Council (3 critics; optional, `strict:`)
 
-All passes use cheap model. Defaults to PASS on any error. In practice, most runs only get pass 1 — the expensive passes are rarely triggered.
+All passes use the caller's adapter — the run's execution adapter, MID by
+default since the 2026-07-21 unification. Defaults to PASS on any error.
+In practice, most runs only get passes 1-2 — council/cross-ref are
+`strict:`-gated.
 
 ### Introspect (introspect.py, ~1590 lines)
 Failure classification (11 types: setup_failure, adapter_timeout, token_explosion, etc.). Each diagnosis has severity, evidence, recommendation. Written to diagnoses.jsonl.

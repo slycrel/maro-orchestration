@@ -74,6 +74,18 @@ era citations are the receipts (`docs/KNOWLEDGE_JOURNEY.md`).
    removable (persona-as-routing, multi-plan ceremony — neither).
    *(Jeremy 2026-07-21 · deterministic-home: none yet)*
 
+## Typed finding codes (the shared vocabulary for review findings)
+
+When a review (dev session, adversarial pass, evidence-path lens) writes
+a finding that fits a known error class, stamp it `FINDING[CODE]` on the
+finding's first line. Codes and their definitions live in
+`src/finding_codes.py` (seeded from the 2026-05-12 taxonomy:
+CITATION_INVERSION, PHANTOM_SYMBOL, THEORY_MECHANISM, GAP_UNDERSTATED).
+Stamps make error classes greppable/countable — the chunk-7 discretion
+readout tabulates them instead of LLM-classifying prose. Extend the
+vocabulary in the module (zero-overlap rule in its docstring); a finding
+that fits no code goes honestly unstamped.
+
 ## Graduation rule (the tripwire on this document itself)
 
 Each check carries a `deterministic-home:` tag. When a check's home ships —

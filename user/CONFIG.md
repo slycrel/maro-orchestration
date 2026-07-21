@@ -31,10 +31,12 @@ yolo: false
 # Model Defaults
 # ---------------------------------------------------------------------------
 
-# Default model tier for all runs.
+# Default model tier for all runs. Unset by default since 2026-07-21
+# (execution-floor decree): the code's role default is MID for execution;
+# setting this recreates the cheap-vs-mid split the decree removed.
 # Options: cheap (Haiku), mid (Sonnet), power (Opus)
 # Override per-run with: --model claude-haiku-4-5-20251001
-default_model_tier: cheap
+# default_model_tier: mid
 
 # ---------------------------------------------------------------------------
 # Run Behavior
@@ -45,7 +47,6 @@ default_model_tier: cheap
 # default_lane: agenda
 
 # Not yet wired (ideas, no reader in src/ — uncommenting does nothing):
-# research_step_model: auto   # force "mid"/"cheap" for research steps
 # max_steps: 8                # per-run step cap
 # always_skeptic: false       # skeptic framing on every run
 

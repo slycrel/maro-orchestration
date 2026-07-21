@@ -1,8 +1,20 @@
 ---
-status: living
+status: record
+note: local rung REMOVED 2026-07-21 (swarm-review chunk 1, Jeremy decree
+  "local LLMs are in the way for now"). Body below is the methodology
+  record as it stood before removal — do not treat as current wiring.
 ---
 
-# Local Validator — zero-cost first-pass validation
+# Local Validator — zero-cost first-pass validation (RETIRED 2026-07-21)
+
+**Retirement + revival trigger:** the local (Ollama/qwen) rung and
+`src/local_models.py` were removed 2026-07-21 — the live ladder is now
+Tier-0 deterministic → hosted-free (`hosted_free.py`) → paid, with hosted
+no-verdict/UNDECIDED escalating straight to paid. **Revive the local rung
+if the hosted free tiers churn away** (providers cut free quotas, keys
+die, breakers trip chronically): the re-entry path is the bakeoff
+methodology below + the kept corpus `tests/fixtures/validation_cases.json`
++ this doc's implementation record in git history (pre-2026-07-21).
 
 Poe's highest-volume LLM call is **validation** ("did this step result satisfy
 the goal?"). Those calls are frequent and mostly easy, so paying a frontier API

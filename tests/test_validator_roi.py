@@ -99,11 +99,9 @@ class TestVerifyStepEmitsLadderRow:
 
     def test_paid_only_path_emits_paid_tier(self, monkeypatch, captured):
         import step_exec
-        import local_models
         from types import SimpleNamespace
         from unittest.mock import MagicMock, patch
 
-        monkeypatch.setattr(local_models, "configured_models", lambda: [])
         va = MagicMock()
         va.return_value.verify_step.return_value = SimpleNamespace(
             passed=True, reason="ok", confidence=0.9)
@@ -115,43 +113,20 @@ class TestVerifyStepEmitsLadderRow:
         assert ladder[0]["context"]["tier"] == "paid"
         assert ladder[0]["context"]["input_chars"] == len("did the thing")
 
-    def test_local_decisive_path_emits_local_tier(self, monkeypatch, captured):
-        import step_exec
-        import local_models
-        from types import SimpleNamespace
-        from unittest.mock import MagicMock, patch
-
-        monkeypatch.setattr(local_models, "configured_models", lambda: ["qwen2.5-coder:3b"])
-        monkeypatch.setattr(local_models, "ensure_validator_running", lambda: None)
-        monkeypatch.setattr(local_models, "min_certainty", lambda: 0.6)
-        monkeypatch.setattr(local_models, "input_char_budget", lambda: 6000)
-        _local_adapter = SimpleNamespace(model_key="qwen2.5-coder:3b")
-        monkeypatch.setattr(local_models, "build_local_validator_adapter",
-                            lambda: _local_adapter)
-        va = MagicMock()
-        va.return_value.verify_step.return_value = SimpleNamespace(
-            passed=True, reason="ok", confidence=0.95)
-        with patch("verification_agent.VerificationAgent", va):
-            out = step_exec.verify_step("do the thing", "did the thing", adapter=object())
-        assert out["source"] == "qwen2.5-coder:3b"
-        ladder = [e for e in captured if e["event_type"] == "VALIDATION_LADDER"]
-        assert len(ladder) == 1
-        assert ladder[0]["context"]["tier"] == "local-decisive"
-
     def test_escalation_path_emits_escalated_tier(self, monkeypatch, captured):
         import step_exec
-        import local_models
+        import hosted_free
         from types import SimpleNamespace
         from unittest.mock import MagicMock, patch
 
-        monkeypatch.setattr(local_models, "configured_models", lambda: ["qwen2.5-coder:3b"])
-        monkeypatch.setattr(local_models, "ensure_validator_running", lambda: None)
-        monkeypatch.setattr(local_models, "min_certainty", lambda: 0.6)
-        monkeypatch.setattr(local_models, "input_char_budget", lambda: 6000)
-        monkeypatch.setattr(local_models, "build_local_validator_adapter",
-                            lambda: SimpleNamespace(model_key="qwen2.5-coder:3b"))
+        monkeypatch.setattr(hosted_free, "available", lambda: True)
+        monkeypatch.setattr(hosted_free, "build_hosted_free_adapter",
+                            lambda: SimpleNamespace(model_key="llama-3.1-8b-instant",
+                                                    _active_provider="groq"))
+        monkeypatch.setattr(hosted_free, "min_certainty", lambda: 0.6)
+        monkeypatch.setattr(hosted_free, "input_char_budget", lambda: 4000)
         va = MagicMock()
-        # local UNDECIDED (conf below min_certainty) then paid decisive
+        # hosted-free UNDECIDED (conf below min_certainty) then paid decisive
         va.return_value.verify_step.side_effect = [
             SimpleNamespace(passed=True, reason="?", confidence=0.2),
             SimpleNamespace(passed=False, reason="paid says no", confidence=0.9),

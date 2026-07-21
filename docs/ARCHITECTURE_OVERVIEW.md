@@ -120,7 +120,7 @@ User-visible + prunable via
 - ~~Personas aren't auto-selected~~ **Stale since 2026-03-27:** `persona_for_goal()` auto-selects (c964d3b), used from conductor.py and handle.py; prefixes remain as manual override.
 - The "never off" vision (VISION §9) is not the default operating mode: manual runs work without background services, and always-on behavior must be intentionally enabled.
 
-**Key files:** `handle.py` (~2526 lines), `intent.py`, `director.py`, `workers.py`, `persona.py`
+**Key files:** `handle.py` (~2870 lines), `intent.py`, `director.py`, `workers.py`, `persona.py`
 
 ---
 
@@ -129,7 +129,7 @@ User-visible + prunable via
 **Intent:** Goal → decompose into steps → execute each step → learn from results. The loop should handle stuck detection, retries, budget limits, parallel execution, and checkpoint/resume — all autonomously.
 
 **What exists:**
-- `agent_loop.py` (~5400 lines): Seven-phase pipeline (INIT → DECOMPOSE → PRE_FLIGHT → PARALLEL → PREPARE → EXECUTE → FINALIZE). Monolith decomposition complete — all seven phases (incl. EXECUTE via `_execute_main_loop`) are now extracted as functions taking `LoopContext`; `run_agent_loop()` is the thin orchestrator.
+- `agent_loop.py` (~800 lines; phase bodies live in `loop_*.py`): Seven-phase pipeline (INIT → DECOMPOSE → PRE_FLIGHT → PARALLEL → PREPARE → EXECUTE → FINALIZE). Monolith decomposition complete — all seven phases (incl. EXECUTE via `_execute_main_loop`) are now extracted as functions taking `LoopContext`; `run_agent_loop()` is the thin orchestrator.
 - `planner.py`: Decomposes goals. Routes by scope (narrow/medium/wide/deep). Multi-plan comparison for complex goals.
 - `step_exec.py`: Executes individual steps via LLM with tool calling.
 - `pre_flight.py`: Cheap plan criticism before execution. Detects scope explosions, hidden assumptions, milestone candidates.
@@ -180,7 +180,7 @@ User-visible + prunable via
 - `evolver.py`: Proposes improvements (prompt tweaks, guardrails, skills, observations). Auto-applies low-risk changes (lessons, observations). Holds guardrails for human review.
 - `graduation.py`: Promotes repeated failure-class diagnoses to permanent fixes. Has templates with verify_patterns.
 - `introspect.py`: Failure classification (11 classes), lenses, recovery planning.
-- `quality_gate.py`: Multi-pass review (verdict, adversarial claims, cross-ref, council, debate).
+- `quality_gate.py`: Multi-pass review (verdict, adversarial claims, cross-ref, council).
 - `skills.py`: Discovery, scoring, promotion/demotion, circuit breaker. Auto-promote at 5+ uses / 70%+ success.
 - `constraint.py`: Pre-execution enforcement. Tiered gates (READ/WRITE/DESTROY/EXTERNAL).
 

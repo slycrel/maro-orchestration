@@ -50,8 +50,7 @@ YAML config (`~/.maro/config.yml` + `<workspace>/config.yml`, see
 | Key | Default | Effect |
 |-----|---------|--------|
 | `yolo` | `false` | `true` = skip clarification prompts and just run (also: `MARO_YOLO` env var) |
-| `default_model_tier` | `cheap` | Model tier for all runs: `cheap` (Haiku) / `mid` (Sonnet) / `power` (Opus) |
-| `research_step_model` | `auto` | Force `mid`/`cheap` for research/analysis steps; `auto` = classifier decides |
+| `default_model_tier` | unset (code role default: `mid`) | Model tier for all runs: `cheap` (Haiku) / `mid` (Sonnet) / `power` (Opus). Unset since 2026-07-21 — execution floor is MID |
 | `max_steps` | `8` | Maximum steps per run |
 | `always_skeptic` | `false` | `true` = skeptic framing on every run (else only with `skeptic:` prefix) |
 | `ralph_verify` | `false` | `true` = per-step verify loop with retry on every run (~30% wall time; else `ralph:` prefix) |
