@@ -14,6 +14,13 @@ radius, and that gate lives on this box.
   agent must not modify the orchestration that governs it without a human
   in the loop.
 
+**Scope (Jeremy, 2026-07-20): this PR-review gate is the *Poe/Hermes* lane
+only.** It exists because a dispatched agent on mini2 has no directing human
+at the keyboard. It is **not** a rule about the maro box's own directed work —
+a Claude Code session here has Jeremy in the loop by construction, so it lands
+code directly to main (`scripts/land.sh`, ff-only over SSH). "PRs for Poe; maro
+box continues as before." Don't propagate this gate to maro-box sessions.
+
 Born from a real failure: Hermes committed backlog work into an ephemeral
 `/tmp` shallow clone it couldn't push from, and the commit survived only
 because `/tmp` hadn't been reaped (recovered as `1d89191`, 2026-07-20).

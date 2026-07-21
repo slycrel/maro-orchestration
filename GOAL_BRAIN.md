@@ -3563,3 +3563,18 @@ Dormant (deliberately parked, not dropped):
   branch; gate rejects non-`hermes/*` refs). Mechanics + ops:
   `deploy/hermes/PROPOSE_LANE.md`; Hermes-side contract:
   `~/.hermes/skills/orchestration/maro-propose/SKILL.md` (mini2).
+- **2026-07-20 (Jeremy, clarifying the above) — "PRs for Poe; maro box
+  continues as before."** The propose-lane PR-and-human-review gate applies
+  to the *Poe/Hermes* lane ONLY (dispatched-autonomous work on mini2, no
+  directing human). It is NOT a rule for the maro box's own directed
+  sessions — those have Jeremy in the loop by construction and land code
+  directly to main. Root cause of the friction that surfaced this: the maro
+  box's `gh` API token has been dead (401) since ~2026-07-14, so a Claude
+  session here couldn't even open a PR and Jeremy had to pull-and-merge the
+  R6 branch by hand — a broken credential masquerading as a policy gate. Fix
+  shipped same session: `scripts/land.sh` (ff-only push to main over the SSH
+  remote, never force, refs-only so it's concurrency-safe) is now the blessed
+  maro-box landing path; no GitHub API token needed and the dead `gh` token
+  stays moot for it. mini2 stays zero-creds/propose-only; the Hermes
+  code→review guard is untouched. CLAUDE.md end-of-chunk discipline +
+  `PROPOSE_LANE.md` scope note updated to match.

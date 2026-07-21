@@ -226,9 +226,21 @@ When a chunk of work is done (milestone delivered, bug fixed, feature shipped �
 
 1. **Document** — update MILESTONES.md / BACKLOG.md / relevant docs so the next session knows what changed and what's next.
 2. **Commit** — clean, scoped commit with a useful message. No "WIP" or dangling work.
-3. **Push** — `git push` so the remote matches local. Don't let commits pile up unpushed — means a box crash loses work.
+3. **Land** — get it onto `main`. On the maro box, once tests are green, land your
+   directed work directly with **`bash scripts/land.sh`** (fast-forwards `main`
+   over SSH — no PR, no GitHub API token). Don't leave a finished chunk sitting
+   on a branch waiting for a human to merge it; a box crash loses unlanded work.
 
-Don't wait to be asked. Push is cheap, forgetting is expensive.
+**Landing policy (Jeremy, 2026-07-20 — "PRs for Poe; maro box continues as before"):**
+The PR-and-human-review gate is the **Poe/Hermes** lane only (mini2 dispatched-
+autonomous work — `deploy/hermes/`, `PROPOSE_LANE.md`), where an agent that could
+modify its own orchestration must have a human in the loop. The **maro box lands
+its own directed work directly to main** — you're already the human in the loop
+here. `scripts/land.sh` is ff-only and never force-pushes main, so it's safe
+alongside concurrent sessions. (`gh` PR creation is dead on this box — invalid
+token — and stays moot for this path; SSH push is the credential that works.)
+
+Don't wait to be asked. Landing is cheap, forgetting is expensive.
 
 **Session-close rule (SF-13, standing since 2026-07-09):** any Jeremy
 statement worth an auto-memory write also gets a GOAL_BRAIN.md Decisions
