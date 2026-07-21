@@ -25,6 +25,32 @@ The master owns exactly two things (the delegation-boundary razor,
 **judgement** — validating that we accomplished what we set out to do.
 Everything else is the sub-agent's.
 
+## The node contract (bounded, function-shaped)
+
+A star run is a function call, not an open-ended wander (Jeremy
+2026-07-21, the email-pipeline bound: fixed inputs, bounded outputs):
+
+- **In**: the invocation contract — goal, done-means, cuts, budget.
+- **Out**: the result block (see ledger close) — named deliverables,
+  done-means verdict, residuals. Nothing else escapes the run; side
+  effects beyond the named deliverables are contract violations to
+  report.
+
+This uniform contract is what makes the pattern recursive *in
+principle*: goal → taste+judgement → result at every scale ("our steps
+in a nutshell"). Alpha keeps recursion OFF. The enabling conditions,
+if/when it turns on, are structural, not vibes:
+
+1. a child is invoked with the exact same contract shape;
+2. the child's budget is a strict fraction of the parent's **remaining**
+   budget — well-founded recursion, termination by decreasing measure
+   (the off-the-rails guard);
+3. the child's cuts are a superset of the parent's cuts (no sideways
+   scope drift down the tree);
+4. the parent judges the child's result block against criteria the
+   PARENT set — a child's self-reported verdict is a claim, never a
+   verdict (fork-fabrication lesson, era 08).
+
 ## Invocation contract (taste, up front — do this BEFORE any delegation)
 
 Write these four lines in your reply before the first delegation. If you
@@ -81,7 +107,8 @@ cannot fill one in, ask the user — that gap is itself a finding.
   box, and star is definitionally answer-informed).
 - **Recursion is not foreclosed** (standing decree) but alpha adds no
   machinery for it: a sub-agent may structure its own work internally as
-  it likes; the master never spawns a star inside a star.
+  it likes; the master never spawns a star inside a star. The turn-on
+  conditions live in "The node contract" above.
 - **Honest exit.** Blocked, over-budget, or inconclusive-at-the-end are
   legitimate endings — report them plainly. A green summary over unrun
   checks is the failure mode this whole instrument exists to catch.
@@ -91,9 +118,16 @@ cannot fill one in, ask the user — that gap is itself a finding.
 | # | Task (outcome) | Criteria stated? | Verdict | Surprise |
 |---|----------------|------------------|---------|----------|
 
-Close the ledger with: delegations used vs budget, done-means result
-(pass/fail/inconclusive, with the actual check output), and any
-crystallization-pressure or granularity findings.
+Close the ledger with the **result block** (the node's bounded output):
+- **Deliverables**: each named artifact — path + one-line description.
+- **Done-means verdict**: pass/fail/inconclusive, with the actual check
+  output (run it, don't narrate it).
+- **Residuals**: what remains undone or uncertain, honestly.
+- **Cost**: delegations used vs budget.
+- **Findings**: crystallization-pressure, granularity, or strategy notes
+  (which local move was chosen where — one-shot / delegate / would-have
+  -recursed — and whether it was right in hindsight). These strategy
+  rows are the corpus that strategy selection can later be learned from.
 
 ## Alpha adjudication (pre-registered — the test that can fail)
 

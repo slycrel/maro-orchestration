@@ -3717,3 +3717,29 @@ Dormant (deliberately parked, not dropped):
   keep/kill adjudication (swarm-arc end or 5 uses — the gate its
   lineage never had). Tangent lane: exercised opportunistically during
   chunks 1-8, never gating them.
+- **2026-07-21 (Jeremy) — star is bounded (the node contract) + the
+  recursion formulation.** "I think it should be bounded... fixed
+  inputs and bounded outputs" (his email-pipeline prior art). And the
+  formulation he's been circling: "a recursive pattern of goal ->
+  taste + judgement -> result returned is our steps in a nutshell, and
+  the recursion comes if the inner taste + judgement is allowed the
+  same pattern." Skill amended same day: explicit function-shaped node
+  contract (in: goal/done-means/cuts/budget; out: deliverables/verdict/
+  residuals result block), recursion stays OFF in alpha with
+  pre-registered structural turn-on conditions — same contract shape,
+  strictly decreasing budget (well-founded recursion = the
+  off-the-rails guard), cuts inherited downward, parent judges child
+  against parent-set criteria (fork-fabrication lesson). Session
+  analysis recorded alongside: the reason this "can't quite be nailed"
+  in maro today is contract asymmetry — maro steps append text to a
+  shared ledger instead of returning judged deliverables to a parent,
+  so the self-similar node type doesn't exist yet; the
+  strategy-selection dream ("pick the proper tool based on known
+  context up front") restates as per-node taste with iterative
+  deepening as the strategy-agnostic default (the 04-26 "1-shot first,
+  decompose as escape hatch" note IS iterative deepening in the
+  decomposition dimension, as the verify-fail ladder already is in the
+  model dimension); star's result-block strategy rows are the longhand
+  corpus that lets strategy choice crystallize later. Direction only —
+  no maro implementation scoped; chunk 3 touches the step contract and
+  is the natural first seam.
