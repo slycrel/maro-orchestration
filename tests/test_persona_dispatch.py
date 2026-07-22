@@ -57,6 +57,13 @@ class TestDispatchPrompt:
         assert not r.ok
         assert "persona and/or system" in r.error
 
+    def test_system_none_does_not_raise(self):
+        # 5b adversarial-review pin: the never-raises contract must hold for
+        # system=None, not just system="".
+        r = dispatch_prompt("hello", system=None)
+        assert not r.ok
+        assert "persona and/or system" in r.error
+
     def test_unknown_persona_is_error(self, tmp_path):
         r = dispatch_prompt("hello", persona="nope", registry=_registry(tmp_path),
                             adapter=_adapter())

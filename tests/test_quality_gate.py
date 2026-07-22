@@ -310,6 +310,55 @@ class TestCouncilLadder:
         v = run_llm_council("goal", [_make_step()], adapter=adapter)
         assert all(c.source == "claude-sonnet-4-6" for c in v.critiques)
 
+    def test_confirmation_event_keeps_free_round_seats(self, monkeypatch):
+        # 5b adversarial-review pin (unanimous finding): when paid
+        # confirmation acts, the free round's per-seat evidence must survive
+        # in the event — it IS the A/B data, not just a weak count.
+        captured = _capture_events(monkeypatch)
+        hosted = _make_adapter(_WEAK)
+        hosted._active_provider = "groq"
+        hosted.model_key = "llama-3.1-8b-instant"
+        _hosted_on(monkeypatch, hosted)
+        paid = _make_adapter(_STRONG)
+        paid.model_key = "claude-sonnet-4-6"
+        v = run_llm_council("goal", [_make_step()], adapter=paid)
+        assert v.escalate is False
+        ev = [e for e in captured if e["event_type"] == "QUALITY_GATE_COUNCIL"]
+        ctx = ev[0]["context"]
+        assert "confirmed_by_paid" in ev[0]["summary"]
+        # Acting seats are the paid round...
+        assert all(s["source"] == "claude-sonnet-4-6" for s in ctx["seats"])
+        # ...and the free round survives per-seat, codes and all.
+        assert [s["lens"] for s in ctx["free_seats"]] == [
+            "transcript_aware", "artifact_only", "probe_armed"]
+        assert all(s["verdict"] == "WEAK" for s in ctx["free_seats"])
+        assert all(s["source"].startswith("hosted_free:groq:")
+                   for s in ctx["free_seats"])
+        assert ctx["free_seats"][0]["finding_codes"] == ["GAP_UNDERSTATED"]
+        assert ctx["free_round_weak"] == 3
+
+    def test_empty_paid_confirmation_is_not_confirmation(self, monkeypatch):
+        # 5b adversarial-review pin: paid round returning zero parsable votes
+        # must record as an UNCONFIRMED free flag, not as "confirmed_by_paid"
+        # — "paid disagreed" and "paid failed to vote" never conflate.
+        captured = _capture_events(monkeypatch)
+        hosted = _make_adapter(_WEAK)
+        hosted._active_provider = "groq"
+        hosted.model_key = "llama-3.1-8b-instant"
+        _hosted_on(monkeypatch, hosted)
+        paid = _make_adapter("total garbage, no json")
+        v = run_llm_council("goal", [_make_step()], adapter=paid)
+        assert paid.complete.call_count == 3  # confirmation was attempted
+        assert v.escalate is False            # but never acts on free alone
+        ev = [e for e in captured if e["event_type"] == "QUALITY_GATE_COUNCIL"]
+        assert "confirmed_by_paid" not in ev[0]["summary"]
+        ctx = ev[0]["context"]
+        assert ctx["confirmation_ran"] is True
+        assert ctx["free_flag_unconfirmed"] is True
+        # Acting seats fall back to the free round (flag-only record).
+        assert all(s["source"].startswith("hosted_free:groq:")
+                   for s in ctx["seats"])
+
 
 # ---------------------------------------------------------------------------
 # Probe-armed seat — its own probes can refute its concerns
@@ -368,6 +417,22 @@ class TestProbeArmedLens:
         v = run_llm_council("goal", [_make_step()], adapter=adapter)
         assert probes_run == []  # nothing dict-shaped → no subprocess probes
         assert len(v.critiques) == 3
+
+    def test_string_concerns_tagged_unprobed(self, monkeypatch):
+        # 5b adversarial-review pin: a probe seat that ignores its dict
+        # contract keeps its concerns (conservatism — absence of a probe
+        # never silences a claim) but they must be VISIBLY unprobed, not
+        # indistinguishable from probe-survived ones.
+        import quality_gate as qg
+        _capture_events(monkeypatch)
+        monkeypatch.setattr(qg, "_probe_contested_claims",
+                            lambda claims: claims)
+        adapter = _make_adapter(_WEAK)
+        v = run_llm_council("goal", [_make_step()], adapter=adapter)
+        probe_seat = [c for c in v.critiques if c.critic == "probe_armed"][0]
+        assert probe_seat.verdict == "WEAK"
+        assert probe_seat.concerns == [
+            "FINDING[GAP_UNDERSTATED] thin [probe:unprobed]"]
 
 
 # ---------------------------------------------------------------------------
@@ -455,6 +520,29 @@ class TestCrossRefLanes:
                              run_cross_ref="hosted_free", _ladder=False)
         assert called == []
         assert v.cross_ref is None
+
+    def test_hosted_lane_zero_claims_still_emits_event(self, monkeypatch):
+        # 5b adversarial-review pin: "ran and found nothing" must reach the
+        # captain's log — zero-claim runs are the readout's denominator.
+        captured = _capture_events(monkeypatch)
+        import cross_ref as _cr
+        monkeypatch.setattr(_cr, "run_cross_ref",
+                            lambda text, adapter=None, **kw: self._report(0))
+        hosted = MagicMock()
+        hosted._active_provider = "gemini"
+        hosted.model_key = "gemini-flash-lite-latest"
+        _hosted_on(monkeypatch, hosted)
+        self._force_cr_config(monkeypatch, True)
+        v = run_quality_gate("research goal", [_make_step()],
+                             self._gate_pass_adapter(),
+                             run_adversarial=False,
+                             run_cross_ref="hosted_free", _ladder=False)
+        assert v.cross_ref is not None
+        ev = [e for e in captured if e["event_type"] == "QUALITY_GATE_CROSS_REF"]
+        assert len(ev) == 1
+        assert ev[0]["context"]["claims_extracted"] == 0
+        assert ev[0]["context"]["disputes"] == 0
+        assert ev[0]["context"]["acted"] is False
 
     def test_hosted_lane_killswitch_quoted_false(self, monkeypatch):
         # DEFAULTS discipline: a quoted "false" must actually kill the lane.
@@ -639,7 +727,9 @@ class TestProbeContestedClaims:
         def _raise_timeout(*a, **kw):
             raise _sp.TimeoutExpired(cmd=a[0] if a else "", timeout=1)
         monkeypatch.setattr(_sp, "run", _raise_timeout)
-        claim = {"claim": "x", "verdict": "CONTESTED", "settled_by_command": "sleep 100"}
+        # Command must pass the read-only guard to reach execution at all.
+        claim = {"claim": "x", "verdict": "CONTESTED",
+                 "settled_by_command": "grep -r pattern /huge/tree"}
         [out] = _probe_contested_claims([claim])
         assert out["probe_status"] == "unrunnable"
         assert out["verdict"] == "CONTESTED"  # don't grant either side
@@ -650,7 +740,9 @@ class TestProbeContestedClaims:
         def _raise(*a, **kw):
             raise OSError("simulated exec failure")
         monkeypatch.setattr(_sp, "run", _raise)
-        claim = {"claim": "x", "verdict": "CONTESTED", "settled_by_command": "does-not-matter"}
+        # Command must pass the read-only guard to reach execution at all.
+        claim = {"claim": "x", "verdict": "CONTESTED",
+                 "settled_by_command": "test -f some/file"}
         [out] = _probe_contested_claims([claim])
         assert out["probe_status"] == "unrunnable"
         assert out["verdict"] == "CONTESTED"

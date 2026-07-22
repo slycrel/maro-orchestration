@@ -4052,3 +4052,28 @@ Dormant (deliberately parked, not dropped):
   seats + one probe self-dismissal, real captain's-log
   free_flag_unconfirmed row (2989ms); ablation both arms ran
   (docs/history/2026-07-22-lens-ablation-smoke.md).
+- 2026-07-22 (session, executing Jeremy's /goal per-chunk review
+  discipline): **chunk-5b adversarial review ran post-land** (3 Codex
+  lenses vs f49666b) — verdict CONTESTED; 7/7 findings verified real, 0
+  hallucinated (sixth consecutive clean round). The one that mattered
+  most: reviewer-authored `settled_by_command` probes executed with
+  shell=True and only PROMPT TEXT enforcing read-only — pre-existing
+  exposure, but 5b added a seat whose job is authoring probes, on
+  weaker hosted-free models, judging content that can include fetched
+  web text (a real prompt-injection chain). Fixed at root:
+  `probe_command_rejected()` mechanical guard in claim_probe (shlex
+  operator parsing, head-command allowlist, git read-subcommands only,
+  find/curl mutating flags blocked, no substitution/redirect/chaining,
+  single pipes OK); blocked → `probe_status="blocked"`, concern STANDS
+  (unrunnable neutrality — the guard can never dismiss a claim).
+  Also fixed: council event now keeps the free round per-seat
+  (`free_seats`) when paid confirmation acts (was collapsing the A/B
+  evidence to a count — unanimous 3/3 finding); empty paid confirmation
+  now records free_flag_unconfirmed, never "confirmed_by_paid" (paid
+  disagreed ≠ paid failed to vote); probe-seat string concerns tagged
+  `[probe:unprobed]` (kept — absence of a probe never silences a claim,
+  but degradation must be visible); cross-ref emits on zero-claim runs
+  (denominator data); dispatch_prompt tolerates system=None. Rejected:
+  artifact_only-sees-the-goal (deliberate and already explicit in the
+  lens contract). Record:
+  docs/history/2026-07-22-chunk5b-adversarial-review.md.

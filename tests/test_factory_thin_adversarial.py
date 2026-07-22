@@ -37,22 +37,22 @@ class TestGroundAdversarialFindings:
         assert _ground_adversarial_findings(raw) == raw
 
     def test_dismissed_probe_labels_claim(self):
-        # `true` always exits 0 → claim should dismiss
+        # exits 0 (and passes the read-only guard) → claim should dismiss
         raw = (
             '{"contested_claims": [{"claim": "Go not installed", '
             '"verdict": "CONTESTED", "reason": "go missing", '
-            '"settled_by_command": "true"}]}'
+            '"settled_by_command": "test -d /tmp"}]}'
         )
         out = _ground_adversarial_findings(raw)
         assert "[DISMISSED_BY_PROBE]" in out
         assert "settled by probe" in out
 
     def test_validated_probe_keeps_verdict(self):
-        # `false` always exits 1 → contestation stands
+        # exits 1 (and passes the read-only guard) → contestation stands
         raw = (
             '{"contested_claims": [{"claim": "file missing", '
             '"verdict": "OVERCLAIMED", "reason": "not on disk", '
-            '"settled_by_command": "false"}]}'
+            '"settled_by_command": "test -f /nonexistent-probe-xyz"}]}'
         )
         out = _ground_adversarial_findings(raw)
         assert "[OVERCLAIMED]" in out

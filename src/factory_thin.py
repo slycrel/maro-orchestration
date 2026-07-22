@@ -404,6 +404,8 @@ def _ground_adversarial_findings(raw: str) -> str:
             suffix = " (probe confirmed contestation)"
         elif probe_status == "unrunnable":
             suffix = " (probe un-runnable; verdict stands)"
+        elif probe_status == "blocked":
+            suffix = " (probe blocked by read-only guard; verdict stands)"
         lines.append(f"- [{verdict}] {claim_txt} — {reason}{suffix}")
     return "\n".join(lines) if lines else raw
 

@@ -24,6 +24,7 @@ free dismissal). Consumers: quality_gate, factory_thin, verification_agent.
 from __future__ import annotations
 
 import logging
+import shlex
 import textwrap
 from typing import List
 
@@ -33,6 +34,74 @@ log = logging.getLogger("maro.claim_probe")
 
 # Read-only probes must be quick; the reviewer is told <15s.
 PROBE_TIMEOUT_SEC = 15
+
+# Probes are authored by reviewer LLMs (gate Pass-2 contestations, the council
+# probe-armed seat, verification_agent) and executed with shell=True. Prompt
+# text asking for "read-only" must not be the only thing between a
+# hallucinating or injected reviewer and a mutating command — reviewed content
+# includes fetched web text, so the prompt-injection chain is real. The guard
+# is mechanical: allowlisted head commands only, git restricted to read
+# subcommands, find/curl stripped of their mutating flags, no command
+# substitution / redirects / chaining (a single pipe between allowlisted
+# commands is fine — the prompt's own examples use one). A blocked command
+# maps to probe_status="blocked": the concern STANDS, exactly like
+# "unrunnable" — the guard can degrade calibration data but can never dismiss
+# a claim or grant the reviewer a win.
+_PROBE_SAFE_CMDS = {
+    "grep", "rg", "test", "[", "ls", "cat", "head", "tail", "wc", "stat",
+    "file", "diff", "cmp", "command", "which", "type", "jq", "sort", "uniq",
+    "cut", "tr", "find", "git", "curl", "basename", "dirname", "realpath",
+}
+_GIT_READ_SUBCMDS = {
+    "status", "log", "show", "diff", "grep", "ls-files", "ls-remote",
+    "rev-parse", "describe", "blame", "shortlog", "cat-file",
+}
+_FIND_MUTATING_FLAGS = {"-delete", "-exec", "-execdir", "-ok", "-okdir",
+                        "-fprint", "-fprintf", "-fls"}
+_CURL_MUTATING_FLAGS = {"-X", "--request", "-d", "--data", "--data-raw",
+                        "--data-binary", "--data-urlencode", "-F", "--form",
+                        "-T", "--upload-file", "-o", "--output", "-O",
+                        "--remote-name", "-J", "--remote-header-name"}
+_SHELL_OPERATORS_BLOCKED = {";", "&", "&&", "||", ">", ">>", "<", "<<", "(", ")"}
+
+
+def probe_command_rejected(cmd: str) -> str:
+    """Why a reviewer-authored probe is not read-only-safe ('' = safe to run)."""
+    if "`" in cmd or "$(" in cmd or "${" in cmd or "\n" in cmd or "\r" in cmd:
+        return "command substitution / multi-line"
+    try:
+        lex = shlex.shlex(cmd, posix=True, punctuation_chars="|&;<>()")
+        lex.whitespace_split = True
+        tokens = list(lex)
+    except ValueError as exc:
+        return f"unparsable: {exc}"
+    if not tokens:
+        return "empty"
+    blocked_ops = [t for t in tokens if t in _SHELL_OPERATORS_BLOCKED]
+    if blocked_ops:
+        return f"shell operator {blocked_ops[0]!r}"
+    # Split on single pipes; each segment must independently be allowlisted.
+    segments: List[List[str]] = [[]]
+    for t in tokens:
+        if t == "|":
+            segments.append([])
+        else:
+            segments[-1].append(t)
+    for seg in segments:
+        if not seg:
+            return "empty pipe segment"
+        head = seg[0].rsplit("/", 1)[-1]
+        if head not in _PROBE_SAFE_CMDS:
+            return f"command not allowlisted: {head}"
+        if head == "git":
+            sub = next((t for t in seg[1:] if not t.startswith("-")), "")
+            if sub not in _GIT_READ_SUBCMDS:
+                return f"git subcommand not allowlisted: {sub or '?'}"
+        if head == "find" and any(t in _FIND_MUTATING_FLAGS for t in seg):
+            return "find with mutating action"
+        if head == "curl" and any(t in _CURL_MUTATING_FLAGS for t in seg):
+            return "curl with mutating/output flag"
+    return ""
 
 
 # The shared prompt fragment. Appended to each adversarial system prompt so every
@@ -62,6 +131,9 @@ def probe_contested_claims(claims: list) -> list:
 
     Reclassification rule (first applicable):
       - No `settled_by_command` → mutate in-place, add `probe_status=unprobed`
+      - Command fails the read-only guard (`probe_command_rejected`) →
+        `probe_status=blocked`, never executed; verdict untouched — the
+        concern stands, same neutrality as unrunnable
       - Probe exits 0 → reviewer's contestation was likely wrong about the
         concrete fact: downgrade verdict to "DISMISSED_BY_PROBE", set
         `probe_status=dismissed`. The claim will still appear in the record
@@ -98,6 +170,17 @@ def probe_contested_claims(claims: list) -> list:
         probe_status = "unrunnable"
         probe_exit = None
         probe_out = ""
+        _rejected = probe_command_rejected(cmd)
+        if _rejected:
+            probe_status = "blocked"
+            probe_out = f"[blocked: not read-only-safe — {_rejected}]"
+            log.info("claim probe blocked (%s): %s", _rejected, cmd[:120])
+            claim["probe_status"] = probe_status
+            claim["probe_exit_code"] = probe_exit
+            claim["probe_output_preview"] = probe_out
+            _emit_claim_probed(claim, cmd, probe_status, probe_exit, probe_out)
+            out.append(claim)
+            continue
         try:
             # Run the probe in the run-scoped project dir, not Maro's launch
             # cwd — otherwise `git status` / file checks resolve against the
@@ -129,32 +212,7 @@ def probe_contested_claims(claims: list) -> list:
         claim["probe_status"] = probe_status
         claim["probe_exit_code"] = probe_exit
         claim["probe_output_preview"] = probe_out
-
-        # Per-claim captain's log event so reviewer calibration can be
-        # measured instead of guessed. Same shape as closure's modality chart.
-        try:
-            from captains_log import log_event, CLAIM_PROBED
-            log_event(
-                CLAIM_PROBED,
-                subject="claim_probed",
-                summary=(
-                    f"Claim probe {probe_status}: "
-                    f"{safe_str(claim.get('claim', ''))[:120]}"
-                ),
-                context={
-                    "claim_preview": safe_str(claim.get("claim", ""))[:200],
-                    "reviewer_verdict": safe_str(claim.get("original_verdict")
-                                                  or claim.get("verdict", "")),
-                    "final_verdict": safe_str(claim.get("verdict", "")),
-                    "probe_command": cmd[:300],
-                    "probe_status": probe_status,
-                    "probe_exit_code": probe_exit,
-                    "probe_output_preview": probe_out[:300],
-                },
-            )
-        except Exception:
-            pass
-
+        _emit_claim_probed(claim, cmd, probe_status, probe_exit, probe_out)
         out.append(claim)
 
     # Summary log for the whole batch — one line per run, not per claim.
@@ -164,3 +222,32 @@ def probe_contested_claims(claims: list) -> list:
         log.info("adversarial probe outcomes: %s", dict(status_counts))
 
     return out
+
+
+def _emit_claim_probed(claim: dict, cmd: str, probe_status: str,
+                       probe_exit, probe_out: str) -> None:
+    """Per-claim captain's log event so reviewer calibration can be measured
+    instead of guessed. Same shape as closure's modality chart. Blocked
+    probes emit too — the guard's rejections are calibration data."""
+    try:
+        from captains_log import log_event, CLAIM_PROBED
+        log_event(
+            CLAIM_PROBED,
+            subject="claim_probed",
+            summary=(
+                f"Claim probe {probe_status}: "
+                f"{safe_str(claim.get('claim', ''))[:120]}"
+            ),
+            context={
+                "claim_preview": safe_str(claim.get("claim", ""))[:200],
+                "reviewer_verdict": safe_str(claim.get("original_verdict")
+                                              or claim.get("verdict", "")),
+                "final_verdict": safe_str(claim.get("verdict", "")),
+                "probe_command": cmd[:300],
+                "probe_status": probe_status,
+                "probe_exit_code": probe_exit,
+                "probe_output_preview": probe_out[:300],
+            },
+        )
+    except Exception:
+        pass

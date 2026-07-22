@@ -113,6 +113,7 @@ def dispatch_prompt(
 
     Never raises — failures land in ``DispatchResult.error``.
     """
+    system = system or ""  # never-raises contract: tolerate system=None
     if persona is None and not system.strip():
         return DispatchResult(persona="(none)", content="",
                               error="dispatch needs a persona and/or system text")

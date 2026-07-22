@@ -54,7 +54,9 @@ Multi-pass review system. 5 passes:
 4. LLM Council (optional, `strict:`) — three **evidence-path lenses**
    since chunk 5b: transcript_aware / artifact_only (context-blind) /
    probe_armed (its settled_by_command probes actually run and can dismiss
-   its own concerns). Seats dispatch via persona_dispatch on hosted-free
+   its own concerns; reviewer-authored commands pass claim_probe's
+   mechanical read-only guard first — blocked ones stand unprobed, never
+   dismissed). Seats dispatch via persona_dispatch on hosted-free
    first; a free 2+-WEAK flag only escalates after a paid confirmation
    round re-votes it (weaker-never-acts). Findings stamp FINDING[CODE]
    from finding_codes.py. Rounds land as QUALITY_GATE_COUNCIL events —

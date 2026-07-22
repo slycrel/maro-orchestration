@@ -35,8 +35,20 @@ EVENT_TYPES 69→71; ~45 new pins across test_persona_dispatch /
 test_lens_ablation / test_quality_gate (ladder semantics, probe dismissal,
 lens blindness, lane killswitch); live-verified on real Gemini flash-lite
 (dispatch 832ms; council row weak=2/3 `free_flag_unconfirmed` with planted
-PHANTOM_SYMBOL caught by 2 seats + probe self-dismissal). **Next: chunk-5b
-adversarial review, then chunk 6** (extraction expectation-mismatch +
+PHANTOM_SYMBOL caught by 2 seats + probe self-dismissal).
+**Chunk-5b adversarial review DONE 2026-07-22** (3 Codex lenses vs f49666b,
+CONTESTED, 7/7 verified real, 0 hallucinated — sixth clean round). The big
+one, fixed at root: reviewer-authored probes ran shell=True with only
+prompt text enforcing read-only → `probe_command_rejected()` mechanical
+guard in claim_probe (allowlist + operator parsing; blocked = concern
+stands, never dismissed). Also: council event keeps free-round per-seat
+evidence (`free_seats`) under paid confirmation (unanimous find); empty
+paid confirmation = free_flag_unconfirmed, not "confirmed_by_paid";
+probe-seat string concerns tagged `[probe:unprobed]`; cross-ref emits
+zero-claim denominator rows; dispatch_prompt tolerates system=None.
+Rejected: artifact_only-sees-goal (deliberate, contract already explicit).
+Record: docs/history/2026-07-22-chunk5b-adversarial-review.md.
+**Next: chunk 6** (extraction expectation-mismatch +
 novelty term; V1 checkpoint-class flag — recall substrate #1 reads the
 LEGACY flat store, decide rewire-vs-rescope with Jeremy if ambiguous).
 

@@ -1,3 +1,7 @@
+---
+status: record
+---
+
 # Triad ablation — seat divergence report
 
 Goal: summarize evidence on multi-family review panels

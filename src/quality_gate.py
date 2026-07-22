@@ -240,8 +240,14 @@ def _parse_lens_concerns(critic_name: str, data: dict) -> tuple:
              "settled_by_command": c.get("settled_by_command")}
             for c in raw if isinstance(c, dict) and c.get("claim")
         ]
-        # Tolerate seats that answered with plain strings despite the contract.
+        # Tolerate seats that answered with plain strings despite the
+        # contract — but tag them: an unprobed concern must be
+        # distinguishable from a probe-survived one downstream, and the
+        # tolerance must not silently turn this seat into a third costume.
         plain = [safe_str(c) for c in raw if isinstance(c, str) and c.strip()]
+        if plain:
+            log.debug("council probe seat returned %d unstructured "
+                      "concern(s) — kept, tagged unprobed", len(plain))
         if claim_dicts:
             probed = _probe_contested_claims(claim_dicts)
             for c in probed:
@@ -250,7 +256,7 @@ def _parse_lens_concerns(critic_name: str, data: dict) -> tuple:
                     probe_dismissed += 1
                     continue  # the seat's own probe refuted it — dropped
                 concerns.append(f"{c['claim']} [probe:{status}]")
-        concerns.extend(plain)
+        concerns.extend(f"{p} [probe:unprobed]" for p in plain)
     else:
         concerns = safe_list(raw, element_type=str, max_items=4)
 
@@ -370,6 +376,11 @@ def run_llm_council(
             if confirmed:
                 acting = confirmed
                 acting_weak = confirmed_weak
+            else:
+                # Paid round produced no parsable vote — that is NOT a
+                # confirmation. The free flag stays flag-only; "paid
+                # disagreed" and "paid failed to vote" must never conflate.
+                free_flag_unconfirmed = True
             escalate = confirmed_weak >= 2
         else:
             # Free seats flagged but no paid adapter exists to confirm —
@@ -384,22 +395,30 @@ def run_llm_council(
     if critiques:
         try:
             from captains_log import log_event, QUALITY_GATE_COUNCIL
+
+            def _seat_row(c: CouncilCritique) -> dict:
+                return {"lens": c.critic, "verdict": c.verdict,
+                        "source": c.source, "finding_codes": c.finding_codes,
+                        "probe_dismissed": c.probe_dismissed,
+                        "most_critical_gap": c.most_critical_gap[:200]}
+
+            confirmed_by_paid = confirmation_ran and not free_flag_unconfirmed
             log_event(
                 QUALITY_GATE_COUNCIL,
                 subject=goal[:120],
                 summary=(
                     f"weak={acting_weak}/{len(acting)} escalate={escalate}"
-                    + (" confirmed_by_paid" if confirmation_ran else "")
+                    + (" confirmed_by_paid" if confirmed_by_paid else "")
                     + (" free_flag_unconfirmed" if free_flag_unconfirmed else "")
                 ),
                 context={
-                    "seats": [
-                        {"lens": c.critic, "verdict": c.verdict, "source": c.source,
-                         "finding_codes": c.finding_codes,
-                         "probe_dismissed": c.probe_dismissed,
-                         "most_critical_gap": c.most_critical_gap[:200]}
-                        for c in acting
-                    ],
+                    "seats": [_seat_row(c) for c in acting],
+                    # When a paid confirmation acts, the free round's per-seat
+                    # evidence (lens/verdict/source/codes/probe_dismissed) is
+                    # exactly what the A/B readout studies — keep it, don't
+                    # reduce it to a count.
+                    "free_seats": ([_seat_row(c) for c in critiques]
+                                   if confirmation_ran else None),
                     "weak_count": acting_weak,
                     "escalate": escalate,
                     "free_round_weak": weak_count if confirmation_ran else None,
@@ -849,7 +868,10 @@ def run_quality_gate(
                     _cr_acted = True
                     log.info("quality_gate cross_ref_escalated disputes=%d",
                              len(cross_ref_result.disputes))
-                if cross_ref_result.claims_checked > 0 or cross_ref_result.claims_extracted > 0:
+                # Emit whenever the lane RAN — zero-claim runs are denominator
+                # data ("ran and found nothing" ≠ "did not run"); dropping
+                # them would bias the readout toward productive calls only.
+                if cross_ref_result is not None:
                     try:
                         from captains_log import log_event, QUALITY_GATE_CROSS_REF
                         log_event(
