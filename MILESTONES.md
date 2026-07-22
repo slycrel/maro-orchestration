@@ -21,8 +21,15 @@ renders learned entries ranked in, zero dupes. Side-find → BACKLOG:
 record-mode never fires on single-backend boxes (record seam only exists in
 FailoverAdapter; this box's bare subprocess adapter skips it — every run has
 `n_calls: 0`). Wiring row 17 (director omits playbook) BACKLOG'd
-consumer-first. **Next: chunk-2 adversarial review, then chunk 3
-(decisions.jsonl writer + consumer-first + SF-13 pipe).**
+consumer-first. **Chunk-2 adversarial review DONE same day** (3 Codex
+lenses vs 257b34d, CONTESTED, 6 verified findings all accepted ≥ in part,
+0/6 hallucinated): LLM call moved outside the playbook write lock
+(snapshot → compute → compare-and-swap), compression guard made structural
+(exact-line/Counter/ceil), rank-order dedup, hard 800-char cap,
+atomic_write on both rewrite paths, newest-first rendering
+(`docs/history/2026-07-21-chunk2-adversarial-review.md`). **Next: chunk 3
+(decisions.jsonl writer + consumer-first + SF-13 pipe), then its
+adversarial review.**
 
 Previous checkpoint — 2026-07-21 **chunk 1 SHIPPED** (Phase 0 knowledge
 journey + Phase 0.5 DEV_PATTERNS/battery landed earlier same arc). Chunk 1: execution

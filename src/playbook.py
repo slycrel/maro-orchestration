@@ -188,25 +188,31 @@ def inject_playbook(*, max_chars: int = 800) -> str:
     if not entries:
         return ""
 
-    # Dedup: first occurrence wins (dup spam is identical text anyway).
+    learned = [e for e in entries if e["learned"]]
+    learned.reverse()  # newest (last-appended) first
+    seed = [e for e in entries if not e["learned"]]
+    ranked = learned + seed
+
+    # Dedup in rank order — the highest-ranked copy survives: a learned
+    # entry beats a seed line with the same core, a newer learned entry
+    # beats an older one (chunk-2 review F3: first-occurrence-wins
+    # discarded the attributed copy).
     seen: set = set()
     unique: List[dict] = []
-    for e in entries:
+    for e in ranked:
         if e["core"] in seen:
             continue
         seen.add(e["core"])
         unique.append(e)
 
-    learned = [e for e in unique if e["learned"]]
-    learned.reverse()  # newest (last-appended) first
-    seed = [e for e in unique if not e["learned"]]
-    ranked = learned + seed
-
-    # Greedy fill: budget covers bullet lines + each section header once.
+    # Greedy fill: budget covers EVERYTHING emitted — top header, section
+    # headers (once each), bullet lines — so len(result) <= max_chars is a
+    # real contract (chunk-2 review F4).
+    top = "## Operational Playbook"
     selected: List[dict] = []
     included_sections: set = set()
-    chars = 0
-    for e in ranked:
+    chars = len(top) + 1
+    for e in unique:
         cost = len(e["line"]) + 1
         if e["section"] not in included_sections:
             cost += len(e["section"]) + 4  # "## <section>\n"
@@ -219,13 +225,15 @@ def inject_playbook(*, max_chars: int = 800) -> str:
     if not selected:
         return ""
 
-    # Render grouped by section, sections and bullets in file order.
+    # Render: sections in file order (stable document shape); bullets
+    # within a section in rank order — newest learned first — so the
+    # ranking is visible to the consumer, not just to selection
+    # (chunk-2 review F6).
     out_lines: List[str] = []
     for sec in dict.fromkeys(e["section"] for e in sorted(selected, key=lambda x: x["position"])):
         out_lines.append(f"## {sec}")
-        out_lines.extend(e["line"] for e in sorted(selected, key=lambda x: x["position"])
-                         if e["section"] == sec)
-    return "## Operational Playbook\n" + "\n".join(out_lines)
+        out_lines.extend(e["line"] for e in selected if e["section"] == sec)
+    return top + "\n" + "\n".join(out_lines)
 
 
 def append_to_playbook(
@@ -317,7 +325,8 @@ def append_to_playbook(
                 updated,
             )
 
-        path.write_text(updated, encoding="utf-8")
+        from file_lock import atomic_write
+        atomic_write(path, updated)
         log.info("playbook: appended to [%s]: %s", section, entry_line[:80])
 
     # Captain's log (outside lock — doesn't need file exclusivity)
@@ -401,21 +410,35 @@ Playbook:
 
 
 def _valid_compression(old: str, new: str) -> bool:
-    """Reject an LLM rewrite that lost structure, attributions, or grew."""
+    """Reject an LLM rewrite that lost structure, attributions, or grew.
+
+    Structural checks, not substring sniffs (chunk-2 review F2): header
+    LINES must survive exactly and occurrence-counted (`## Cost` is not
+    preserved by `## Costly`, a duplicated section may not collapse);
+    every `*(from ...)*` attribution must survive occurrence-counted;
+    the bullet floor rounds UP (3 bullets require 2, never 1).
+    """
+    import math
+    from collections import Counter
+
     new = (new or "").strip()
     if not new:
         return False
     if len(new) > len(old) * 1.1:
         return False
-    old_sections = {ln.strip() for ln in old.split("\n") if ln.startswith("## ")}
-    if not all(s in new for s in old_sections):
+    old_headers = Counter(
+        ln.strip() for ln in old.split("\n") if ln.strip().startswith("## "))
+    new_headers = Counter(
+        ln.strip() for ln in new.split("\n") if ln.strip().startswith("## "))
+    if any(new_headers[h] < n for h, n in old_headers.items()):
         return False
-    old_attribs = set(re.findall(r"\*\(from [^)]*\)\*", old))
-    if not all(a in new for a in old_attribs):
+    old_attribs = Counter(re.findall(r"\*\(from [^)]*\)\*", old))
+    new_attribs = Counter(re.findall(r"\*\(from [^)]*\)\*", new))
+    if any(new_attribs[a] < n for a, n in old_attribs.items()):
         return False
     old_bullets = sum(1 for ln in old.split("\n") if ln.lstrip().startswith("- "))
     new_bullets = sum(1 for ln in new.split("\n") if ln.lstrip().startswith("- "))
-    return new_bullets >= max(1, int(old_bullets * 0.6))
+    return new_bullets >= max(1, math.ceil(old_bullets * 0.6))
 
 
 def curate_playbook(*, force: bool = False, adapter=None) -> Optional[dict]:
@@ -451,40 +474,55 @@ def curate_playbook(*, force: bool = False, adapter=None) -> Optional[dict]:
         if not path.exists():
             return None
 
-        from file_lock import locked_write
+        from file_lock import atomic_write, locked_write
 
+        # Snapshot under lock; compute OUTSIDE it. Holding the write lock
+        # across an LLM round trip starves concurrent append_to_playbook
+        # writers into FileLockTimeout (chunk-2 review F1) — external work
+        # doesn't belong in a file critical section.
         with locked_write(path):
             original = path.read_text(encoding="utf-8")
-            text, removed = _dedup_text(original)
-            llm_compressed = False
 
-            min_chars = int(_cfg_get("playbook.curation_min_chars", 4000))
-            if len(text) > min_chars:
-                try:
-                    if adapter is None:
-                        from llm import build_adapter
-                        from conductor import assign_model_by_role
-                        adapter = build_adapter(
-                            model=assign_model_by_role("cheap_worker"))
-                    from llm import LLMMessage
-                    resp = adapter.complete(
-                        [LLMMessage("user", _COMPRESS_PROMPT.format(text=text))],
-                        max_tokens=2000,
-                        temperature=0.2,
-                        no_tools=True,
-                        purpose="playbook-curation",
-                    )
-                    candidate = (getattr(resp, "content", "") or "").strip()
-                    if _valid_compression(text, candidate):
-                        text = candidate
-                        llm_compressed = True
-                    else:
-                        log.info("playbook: LLM compression rejected by "
-                                 "validation — keeping deterministic result")
-                except Exception as exc:
-                    log.debug("playbook: LLM compression skipped: %s", exc)
+        text, removed = _dedup_text(original)
+        llm_compressed = False
 
-            if text == original:
+        min_chars = int(_cfg_get("playbook.curation_min_chars", 4000))
+        if len(text) > min_chars:
+            try:
+                if adapter is None:
+                    from llm import build_adapter
+                    from conductor import assign_model_by_role
+                    adapter = build_adapter(
+                        model=assign_model_by_role("cheap_worker"))
+                from llm import LLMMessage
+                resp = adapter.complete(
+                    [LLMMessage("user", _COMPRESS_PROMPT.format(text=text))],
+                    max_tokens=2000,
+                    temperature=0.2,
+                    no_tools=True,
+                    purpose="playbook-curation",
+                )
+                candidate = (getattr(resp, "content", "") or "").strip()
+                if _valid_compression(text, candidate):
+                    text = candidate
+                    llm_compressed = True
+                else:
+                    log.info("playbook: LLM compression rejected by "
+                             "validation — keeping deterministic result")
+            except Exception as exc:
+                log.debug("playbook: LLM compression skipped: %s", exc)
+
+        if text == original:
+            return None
+
+        # Compare-and-swap: if another writer appended while we were
+        # computing, discard this pass rather than clobber their entry —
+        # the next dream cycle re-curates from the fresh file.
+        with locked_write(path):
+            current = path.read_text(encoding="utf-8")
+            if current != original:
+                log.info("playbook: changed during curation — "
+                         "skipping this cycle")
                 return None
 
             archived = archive_playbook(original, reason="curation")
@@ -495,7 +533,7 @@ def curate_playbook(*, force: bool = False, adapter=None) -> Optional[dict]:
             if "*Last updated:" in text:
                 text = re.sub(r"\*Last updated:.*\*",
                               f"*Last updated: {now}*", text)
-            path.write_text(text, encoding="utf-8")
+            atomic_write(path, text)
 
         stats = {
             "removed_duplicates": removed,

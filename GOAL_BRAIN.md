@@ -3859,3 +3859,20 @@ Dormant (deliberately parked, not dropped):
   seam exists only in FailoverAdapter; this box's bare subprocess
   adapter skips it — every run shows `n_calls: 0` despite default-ON).
   (6) Wiring row 17's director half stays BACKLOG'd consumer-first.
+- 2026-07-21 (session, executing Jeremy's /goal per-chunk review
+  discipline): **chunk-2 adversarial review ran post-land** (3 Codex
+  lenses vs 257b34d) — verdict CONTESTED, 6 verified findings, all
+  accepted at least in part, fixed same-day; 0/6 hallucinated (second
+  consecutive clean round). The two that mattered: `curate_playbook`
+  held the playbook write lock across the LLM round trip (concurrent
+  appenders would FileLockTimeout and lose entries — restructured to
+  snapshot-under-lock → compute unlocked → compare-and-swap, skip the
+  cycle if the file moved); `_valid_compression` was soft exactly where
+  it claimed to be hard (int-floor bullet ratio, substring headers,
+  set-collapsed attributions — now ceil + exact-line and
+  occurrence-counted Counter checks). Also: dedup now runs in rank
+  order so a learned copy beats a seed duplicate; the 800-char budget
+  is a real cap (top header counted, `len<=max_chars` pinned);
+  `atomic_write` on both playbook rewrite paths; newest-first visible
+  in rendered output. Record:
+  docs/history/2026-07-21-chunk2-adversarial-review.md.

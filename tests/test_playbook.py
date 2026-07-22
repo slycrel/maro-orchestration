@@ -98,7 +98,7 @@ class TestPlaybookInjection:
         )
         block = inject_playbook(max_chars=800)
         assert "artifact-diff evidence" in block
-        assert len(block) <= 800 + len("## Operational Playbook\n") + 8
+        assert len(block) <= 800  # budget covers the top header too (F4)
 
     def test_inject_newest_learned_first_under_tight_budget(self, tmp_path):
         seed_playbook()
@@ -109,6 +109,50 @@ class TestPlaybookInjection:
         block = inject_playbook(max_chars=120)
         assert "Newer learned entry" in block
         assert "Older learned entry" not in block
+
+    def test_inject_learned_copy_beats_seed_duplicate(self, tmp_path):
+        """Chunk-2 review F3 pin: when a learned entry shares its normalized
+        core with a seed bullet, the attributed learned copy must survive
+        dedup — rank picks the survivor, not file position."""
+        (tmp_path / "playbook.md").write_text(
+            "# Director's Playbook\n\n---\n\n"
+            "## Execution\n\n"
+            "- Always verify outputs before recording as done.\n"
+            "\n## Learned\n\n"
+            "- Always verify outputs before recording as done. "
+            "*(from evolver:dup-01)*\n"
+        )
+        block = inject_playbook(max_chars=800)
+        assert block.count("Always verify outputs") == 1
+        assert "*(from evolver:dup-01)*" in block
+
+    def test_inject_budget_is_a_hard_cap(self, tmp_path):
+        """Chunk-2 review F4 pin: len(result) <= max_chars, top header
+        included — callers (recall.py) trust the cap."""
+        spam = "- Be more concise *(from evolver:test-00)*\n" * 40
+        (tmp_path / "playbook.md").write_text(
+            "# Director's Playbook\n\n---\n\n"
+            "## Execution\n\n" + spam +
+            "\n## Learned\n\n"
+            "- Route flaky network steps to the ops worker. "
+            "*(from evolver:abc-01)*\n"
+        )
+        for budget in (120, 300, 800):
+            block = inject_playbook(max_chars=budget)
+            assert len(block) <= budget
+
+    def test_inject_newer_learned_renders_above_older(self, tmp_path):
+        """Chunk-2 review F6 pin: ranking must be visible in the rendered
+        block, not just drive selection — within a section, newest first."""
+        (tmp_path / "playbook.md").write_text(
+            "# Director's Playbook\n\n---\n\n"
+            "## Learned\n\n"
+            "- Older learned entry about queue retries. *(from evolver:old)*\n"
+            "- Newer learned entry about artifact checks. *(from evolver:new)*\n"
+        )
+        block = inject_playbook(max_chars=800)
+        assert "Older learned entry" in block and "Newer learned entry" in block
+        assert block.index("Newer learned entry") < block.index("Older learned entry")
 
 
 class TestParseEntries:
@@ -307,6 +351,60 @@ class TestPlaybookCuration:
         monkeypatch.setattr(pb, "_dedup_text",
                             lambda t: (_ for _ in ()).throw(RuntimeError("boom")))
         assert curate_playbook(force=True) is None
+
+    def test_curation_skips_when_file_changes_mid_pass(self, tmp_path):
+        """Chunk-2 review F1 pin: the LLM call runs OUTSIDE the write lock,
+        so a concurrent append can land mid-curation. The compare-and-swap
+        must then discard this pass — never clobber the fresh entry."""
+        from unittest.mock import patch
+
+        path = tmp_path / "playbook.md"
+        self._spammy(tmp_path, n=5)
+
+        class _ConcurrentWriterAdapter:
+            def complete(self, messages, **kwargs):
+                # Simulates another writer appending while curation computes.
+                path.write_text(path.read_text() +
+                                "- Fresh concurrent insight. *(from evolver:live)*\n")
+                import types
+                return types.SimpleNamespace(content="junk")  # rejected anyway
+
+        def fake_get(key, default=None):
+            if key == "playbook.curation_min_chars":
+                return 50  # open the size gate so the adapter runs
+            return default
+
+        with patch("config.get", side_effect=fake_get):
+            assert curate_playbook(force=True,
+                                   adapter=_ConcurrentWriterAdapter()) is None
+        text = path.read_text()
+        assert "Fresh concurrent insight." in text   # concurrent write kept
+        assert text.count("Be more concise") == 5     # our rewrite discarded
+        assert not (tmp_path / "playbook_history").exists()  # no false archive
+
+
+class TestValidCompression:
+    """Chunk-2 review F2 pins: the compression guard is structural."""
+
+    def test_header_must_survive_as_exact_line(self):
+        from playbook import _valid_compression
+        old = "## Cost\n- a\n- b\n"
+        assert _valid_compression(old, "## Costly notes\n- a\n- b\n") is False
+        assert _valid_compression(old, "## Cost\n- a\n- b\n") is True
+
+    def test_duplicate_attributions_may_not_collapse(self):
+        from playbook import _valid_compression
+        old = "## L\n- x *(from e:1)*\n- y *(from e:1)*\n"
+        merged = "## L\n- xy *(from e:1)*\n- z\n"       # 2 bullets, 1 attrib
+        assert _valid_compression(old, merged) is False
+        kept = "## L\n- x *(from e:1)*\n- y *(from e:1)*\n"
+        assert _valid_compression(old, kept) is True
+
+    def test_bullet_floor_rounds_up(self):
+        from playbook import _valid_compression
+        old = "## L\n- a\n- b\n- c\n"
+        assert _valid_compression(old, "## L\n- a\n") is False   # 1/3 = 33%
+        assert _valid_compression(old, "## L\n- a\n- b\n") is True  # 2/3 >= 60%
 
 
 class TestWorkspaceSkillResolution:

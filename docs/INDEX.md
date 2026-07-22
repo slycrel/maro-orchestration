@@ -22,6 +22,7 @@ BACKLOG, VISION, CLAUDE, README…) are living by definition and carry no frontm
 | Which memory/knowledge stores have live writers AND readers? (orphan/dead map) | `history/2026-07-21-wiring-inventory.md` (report-only; agent-produced, verify before fixing; enforcement pin after chunks 3-4) |
 | What happened to factory mode / the Bitter Lesson experiment / mode:thin? | `history/2026-07-21-factory-adjudication.md` (branch archived as tag `archive/factory-2026-03-31`; thin/minimal kept as instruments) |
 | What did the chunk-1 adversarial review find? (residual cheap paths, strict finding-code boundary) | `history/2026-07-21-chunk1-adversarial-review.md` (6 fixed / 1 rejected; 0/7 reviewer claims hallucinated) |
+| What did the chunk-2 adversarial review find? (LLM-under-lock, soft compression guard, dedup-before-rank) | `history/2026-07-21-chunk2-adversarial-review.md` (6 findings, all accepted ≥ in part; 0/6 hallucinated) |
 | What are we deliberately NOT building? | `ARCHITECTURE_NON_GOALS.md` |
 | What should Maro be able to do? (example goals, test corpus, pre-installed skill target) | `CAPABILITIES.md` (living catalog — add real asks as they happen) |
 | Two-box / Hermes dispatch, interactive goals, effort-based spend UX, mid-flight injection? | `SESSION_PROTOCOL_DESIGN.md` (dormant-design; the 2026-07-15 skeleton, iterate there) |
