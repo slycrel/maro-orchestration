@@ -36,9 +36,17 @@ class TestFindingCodes:
         assert parse_finding_codes(text) == [
             "CITATION_INVERSION", "GAP_UNDERSTATED"]
 
-    def test_parse_ignores_unknown_but_surfaces_via_helper(self):
+    def test_parse_unknown_code_raises_by_default(self):
+        # 2026-07-21 chunk-1 adversarial review (all three lenses): a
+        # typo'd stamp silently dropping out of a readout's counts is the
+        # exact failure the vocabulary exists to prevent.
         text = "FINDING[TYPO_CODE] oops\nFINDING[PHANTOM_SYMBOL] real one"
-        assert parse_finding_codes(text) == ["PHANTOM_SYMBOL"]
+        with pytest.raises(ValueError, match="TYPO_CODE"):
+            parse_finding_codes(text)
+
+    def test_tolerant_parse_ignores_unknown_but_surfaces_via_helper(self):
+        text = "FINDING[TYPO_CODE] oops\nFINDING[PHANTOM_SYMBOL] real one"
+        assert parse_finding_codes(text, strict=False) == ["PHANTOM_SYMBOL"]
         assert parse_unknown_codes(text) == ["TYPO_CODE"]
 
     def test_stamp_without_detail(self):

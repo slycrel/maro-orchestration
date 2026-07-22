@@ -23,6 +23,10 @@ Convention:
   definition instead of adding a near-duplicate).
 - A finding that fits no code goes unstamped — an honest blank beats a
   forced classification.
+- Read boundary is strict by default: ``parse_finding_codes`` raises on
+  an unknown code inside a FINDING[...] stamp, so typos force repair
+  instead of silently vanishing from counts. Tolerant readers opt in
+  with ``strict=False`` and must surface ``parse_unknown_codes``.
 """
 
 from __future__ import annotations
@@ -70,14 +74,27 @@ def stamp(code: str, detail: str = "") -> str:
     return f"FINDING[{code}] {detail}".rstrip()
 
 
-def parse_finding_codes(text: str) -> List[str]:
-    """Extract all *known* finding codes stamped in ``text``, in order.
+def parse_finding_codes(text: str, *, strict: bool = True) -> List[str]:
+    """Extract all finding codes stamped in ``text``, in order.
 
-    Unknown codes inside FINDING[...] are ignored (a typo'd stamp must
-    not crash a readout); count them via ``parse_unknown_codes`` if a
-    readout wants to surface drift.
+    strict (default): an unknown code inside FINDING[...] raises — a
+    typo'd stamp silently vanishing from a readout is exactly the
+    failure this vocabulary exists to prevent (2026-07-21 chunk-1
+    adversarial review, all three lenses). A reader that must survive
+    malformed historical text passes ``strict=False`` and owns surfacing
+    ``parse_unknown_codes`` in its output.
     """
-    return [c for c in _STAMP_RE.findall(text) if c in FINDING_CODES]
+    found = _STAMP_RE.findall(text)
+    if strict:
+        unknown = [c for c in found if c not in FINDING_CODES]
+        if unknown:
+            raise ValueError(
+                f"unknown finding code(s) stamped: {sorted(set(unknown))} — "
+                f"fix the stamp or extend finding_codes.FINDING_CODES "
+                f"(known: {sorted(FINDING_CODES)}); tolerant readers use "
+                f"strict=False + parse_unknown_codes()"
+            )
+    return [c for c in found if c in FINDING_CODES]
 
 
 def parse_unknown_codes(text: str) -> List[str]:

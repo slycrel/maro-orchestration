@@ -717,7 +717,11 @@ def _navigator_act_blocked_step(
 
 
 def _generate_timeout_split(step_text: str, adapter) -> List[str]:
-    """Ask the cheap model to split a timed-out step into smaller atomic steps.
+    """Split a timed-out step into smaller atomic steps.
+
+    Splitting rewrites the plan — a decompose-class call, so it rides the
+    execution floor (MID), not a cheap pin (2026-07-21 unification; chunk-1
+    adversarial review, Skeptic finding 3).
 
     Uses a short 45s timeout so a struggling adapter doesn't compound the delay.
     Falls back to a simple heuristic split (one sentence per line) if the LLM
@@ -725,7 +729,8 @@ def _generate_timeout_split(step_text: str, adapter) -> List[str]:
     """
     if adapter is not None:
         try:
-            from llm import LLMMessage, MODEL_CHEAP, build_adapter
+            from llm import LLMMessage, build_adapter
+            from conductor import assign_model_by_role
             _prompt = (
                 f"An autonomous agent step timed out because it was too large to complete in time.\n\n"
                 f"Timed-out step: {step_text}\n\n"
@@ -734,9 +739,9 @@ def _generate_timeout_split(step_text: str, adapter) -> List[str]:
                 f"Return ONLY a numbered list, one step per line, no explanation."
             )
             try:
-                _split_adapter = build_adapter(model=MODEL_CHEAP)
+                _split_adapter = build_adapter(model=assign_model_by_role("worker"))
             except Exception as _sa_exc:
-                log.debug("cheap adapter build for timeout-split failed, using default: %s", _sa_exc)
+                log.debug("adapter build for timeout-split failed, using default: %s", _sa_exc)
                 _split_adapter = adapter
             resp = _split_adapter.complete(
                 [LLMMessage("user", _prompt)],

@@ -3822,3 +3822,16 @@ Dormant (deliberately parked, not dropped):
   cheap→MID per the execution-floor decree; factory_minimal.py KEPT as
   the single-completion benchmark baseline. Record:
   docs/history/2026-07-21-factory-adjudication.md.
+- 2026-07-21 (session, executing Jeremy's /goal "use the adversarial
+  review skill after each chunk"): **chunk-1 adversarial review ran
+  post-land** (3 Codex lenses vs b6fd488) — verdict CONTESTED, 6 verified
+  findings fixed same-day, 1 rejected. The MID-floor decree had THREE
+  more silent defeats beyond the two found at ship time: factory_thin's
+  standalone CLI defaulted cheap, blocked-step hint/split recovery built
+  cheap adapters, and the intent classifier inherited the MID worker
+  adapter (role leak in the other direction). All tier choices now route
+  through assign_model_by_role. Also: parse_finding_codes is strict by
+  default (typo'd stamps raise, not vanish); validator_roi counts
+  hosted-free-decisive. Notable: 0/7 reviewer claims hallucinated
+  (historical rate 30–78%). Record:
+  docs/history/2026-07-21-chunk1-adversarial-review.md.

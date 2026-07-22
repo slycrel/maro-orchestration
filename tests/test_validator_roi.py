@@ -1,4 +1,4 @@
-"""Tests for the local-validator ROI report (BACKLOG #9)."""
+"""Tests for the free-validator ROI report (BACKLOG #9)."""
 
 import sys
 from pathlib import Path
@@ -28,6 +28,9 @@ class TestIsLocalSource:
     def test_configured_local_model_matches(self):
         assert vr._is_local_source("qwen2.5-coder:3b", ["qwen2.5-coder:3b"])
 
+    def test_hosted_free_source_matches(self):
+        assert vr._is_local_source("hosted_free:gemini:gemini-flash-lite-latest", [])
+
     def test_ollama_tag_heuristic_without_config(self):
         assert vr._is_local_source("qwen2.5-coder:3b", [])
 
@@ -54,24 +57,50 @@ class TestAnalyzeRoi:
         ]
         s = vr.analyze_roi(rows, [], local_names=["qwen2.5-coder:3b"])["step_ladder"]
         assert s["local_decisive"] == 2
+        assert s["free_decisive"] == 2
         assert s["escalated"] == 1
         assert s["paid_only"] == 1
         assert s["paid_calls_skipped"] == 2
-        # decisive rate over local ATTEMPTS (decisive + escalated), not all rows
+        # decisive rate over free ATTEMPTS (decisive + escalated), not all rows
         assert s["decisive_rate"] == pytest.approx(2 / 3)
-        assert s["avg_local_latency_ms"] == 1000
+        assert s["avg_free_latency_ms"] == 1000
         assert s["avg_paid_latency_ms"] == 4000
-        assert s["avg_wasted_local_ms_on_escalation"] == 800
+        assert s["avg_wasted_free_ms_on_escalation"] == 800
         assert s["est_saved_usd"] > 0
 
-    def test_gate_local_vs_paid_split(self):
+    def test_hosted_free_decisive_rows_counted(self):
+        # Chunk-1 adversarial review (Minimalist finding 2): the live ladder
+        # emits tier="hosted-free-decisive"; the ROI report must count it as
+        # a skipped paid call, not silently drop it.
+        rows = [
+            _ladder_row("hosted-free-decisive", local_ms=700),
+            _ladder_row("hosted-free-decisive", local_ms=900),
+            _ladder_row("escalated", local_ms=600, paid_ms=3000),
+        ]
+        s = vr.analyze_roi(rows, [], local_names=[])["step_ladder"]
+        assert s["hosted_free_decisive"] == 2
+        assert s["free_decisive"] == 2
+        assert s["local_decisive"] == 0
+        assert s["paid_calls_skipped"] == 2
+        assert s["decisive_rate"] == pytest.approx(2 / 3)
+        assert s["avg_free_latency_ms"] == 800
+        assert s["est_saved_usd"] > 0
+
+    def test_gate_free_vs_paid_split(self):
         gates = [_gate_row("qwen2.5-coder:3b"), _gate_row("qwen2.5-coder:3b"),
                  _gate_row("power"), _gate_row("unknown")]
         g = vr.analyze_roi([], gates, local_names=["qwen2.5-coder:3b"])["quality_gate"]
-        assert g["local_decisive"] == 2
+        assert g["free_decisive"] == 2
         assert g["paid"] == 2
         assert g["paid_calls_skipped"] == 2
         assert g["est_saved_usd"] > 0
+
+    def test_gate_hosted_free_source_counts_as_free(self):
+        gates = [_gate_row("hosted_free:gemini:gemini-flash-lite-latest"),
+                 _gate_row("power")]
+        g = vr.analyze_roi([], gates, local_names=[])["quality_gate"]
+        assert g["free_decisive"] == 1
+        assert g["paid"] == 1
 
     def test_unknown_tier_rows_ignored(self):
         s = vr.analyze_roi([_ladder_row("bogus")], [], local_names=[])

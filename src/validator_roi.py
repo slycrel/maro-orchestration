@@ -1,15 +1,19 @@
-"""Local-validator ROI report — token/cost delta on the real corpus (BACKLOG #9).
+"""Free-validator ROI report — token/cost delta on the real corpus (BACKLOG #9).
 
-The local ladder (qwen via ollama) exists to skip paid validation calls. This
-module answers "what is that actually buying us?" from the captain's log:
+The free validation rung exists to skip paid validation calls. Since
+2026-07-21 that rung is hosted-free (`hosted_free.py` — gemini/groq free
+tiers, tier="hosted-free-decisive"); before that it was a local model
+(qwen via ollama, tier="local-decisive" — removed by decree, historical
+rows still counted). This module answers "what is the free rung actually
+buying us?" from the captain's log:
 
   * `VALIDATION_LADDER` rows (step-level `verify_step`, one per call): which
     tier decided, per-tier latency, payload size.
-  * `QUALITY_GATE_VERDICT` rows (goal-level gate, one per tier): local-decisive
+  * `QUALITY_GATE_VERDICT` rows (goal-level gate, one per tier): free-decisive
     verdicts vs paid verdicts, latency where recorded.
 
-Report: paid calls skipped (the saving), escalation rate (local UNDECIDED →
-paid anyway, where the local attempt is pure added latency), latency of local
+Report: paid calls skipped (the saving), escalation rate (free UNDECIDED →
+paid anyway, where the free attempt is pure added latency), latency of free
 vs paid tiers, and an estimated USD saving. Cost is an ESTIMATE — verdict
 calls aren't individually metered, so we price the recorded payload
 (`input_chars`/4 tokens in, 256 max out) through `metrics.estimate_cost`'s
@@ -45,6 +49,9 @@ def _is_local_source(source: str, local_names: List[str]) -> bool:
     if not s:
         return False
     if s in local_names or s == "local":
+        return True
+    # hosted-free rung sources (hosted_free:<provider>:<model>, 2026-07-21+)
+    if s.startswith("hosted_free:"):
         return True
     # ollama-style tags (name:size) that aren't a configured paid backend key
     return ":" in s and s.split(":")[0] not in ("anthropic", "openai", "openrouter")
@@ -94,10 +101,14 @@ def analyze_roi(ladder_events: List[Dict[str, Any]],
     local_names = local_names if local_names is not None else _local_model_names()
 
     # --- step-level ladder (VALIDATION_LADDER) ---
-    tiers = {"local-decisive": 0, "escalated": 0, "paid": 0}
-    local_lat: List[float] = []       # decisive local latency
+    # Free-decisive tiers: hosted-free (current rung, 2026-07-21+) and
+    # local (removed rung; historical rows). Both skipped a paid call.
+    _free_decisive_tiers = ("local-decisive", "hosted-free-decisive")
+    tiers = {"local-decisive": 0, "hosted-free-decisive": 0,
+             "escalated": 0, "paid": 0}
+    free_lat: List[float] = []        # decisive free-rung latency
     paid_lat: List[float] = []        # paid latency (paid + escalated rows)
-    wasted_lat: List[float] = []      # local attempt latency on escalated rows
+    wasted_lat: List[float] = []      # free attempt latency on escalated rows
     skipped_costs: List[float] = []
     in_chars: List[float] = []
     for e in ladder_events:
@@ -109,8 +120,8 @@ def analyze_roi(ladder_events: List[Dict[str, Any]],
         ic = int(c.get("input_chars") or 0)
         if ic > 0:
             in_chars.append(ic)
-        if tier == "local-decisive":
-            local_lat.append(float(c.get("local_elapsed_ms") or 0.0))
+        if tier in _free_decisive_tiers:
+            free_lat.append(float(c.get("local_elapsed_ms") or 0.0))
         else:
             paid_lat.append(float(c.get("paid_elapsed_ms") or 0.0))
             if tier == "escalated":
@@ -118,11 +129,12 @@ def analyze_roi(ladder_events: List[Dict[str, Any]],
     fallback_in = _avg(in_chars) / 4.0 if in_chars else _DEFAULT_IN_TOKENS
     for e in ladder_events:
         c = e.get("context") or {}
-        if str(c.get("tier", "")) == "local-decisive":
+        if str(c.get("tier", "")) in _free_decisive_tiers:
             skipped_costs.append(_est_call_cost(int(c.get("input_chars") or 0), fallback_in))
 
     ladder_total = sum(tiers.values())
-    local_attempts = tiers["local-decisive"] + tiers["escalated"]
+    free_decisive = tiers["local-decisive"] + tiers["hosted-free-decisive"]
+    free_attempts = free_decisive + tiers["escalated"]
 
     # --- goal-level gate (QUALITY_GATE_VERDICT) ---
     gate_local = 0
@@ -146,19 +158,21 @@ def analyze_roi(ladder_events: List[Dict[str, Any]],
     return {
         "step_ladder": {
             "rows": ladder_total,
+            "free_decisive": free_decisive,
             "local_decisive": tiers["local-decisive"],
+            "hosted_free_decisive": tiers["hosted-free-decisive"],
             "escalated": tiers["escalated"],
             "paid_only": tiers["paid"],
-            "decisive_rate": (tiers["local-decisive"] / local_attempts) if local_attempts else 0.0,
-            "paid_calls_skipped": tiers["local-decisive"],
+            "decisive_rate": (free_decisive / free_attempts) if free_attempts else 0.0,
+            "paid_calls_skipped": free_decisive,
             "est_saved_usd": round(sum(skipped_costs), 4),
-            "avg_local_latency_ms": round(_avg(local_lat)),
+            "avg_free_latency_ms": round(_avg(free_lat)),
             "avg_paid_latency_ms": round(_avg(paid_lat)),
-            "avg_wasted_local_ms_on_escalation": round(_avg(wasted_lat)),
+            "avg_wasted_free_ms_on_escalation": round(_avg(wasted_lat)),
         },
         "quality_gate": {
             "rows": len(gate_events),
-            "local_decisive": gate_local,
+            "free_decisive": gate_local,
             "paid": gate_paid,
             "paid_calls_skipped": gate_local,
             "est_saved_usd": round(sum(gate_local_costs), 4),
@@ -182,7 +196,8 @@ def _false_pass_count() -> Optional[int]:
 
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Local-validator ROI: paid calls skipped, escalation rate, "
+        description="Free-validator ROI (hosted-free rung; historical local "
+                    "rows counted): paid calls skipped, escalation rate, "
                     "latency, estimated USD saved (BACKLOG #9).")
     parser.add_argument("--json", action="store_true", help="emit JSON")
     args = parser.parse_args(argv)
@@ -201,22 +216,23 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     s = summary["step_ladder"]
     g = summary["quality_gate"]
-    print("Local-validator ROI (captain's-log corpus)")
+    print("Free-validator ROI (captain's-log corpus)")
     print(f"  step ladder rows: {s['rows']} "
-          f"(local-decisive {s['local_decisive']}, escalated {s['escalated']}, "
-          f"paid-only {s['paid_only']})")
-    if s["local_decisive"] or s["escalated"]:
-        print(f"  decisive-local rate: {s['decisive_rate']*100:.1f}% "
+          f"(free-decisive {s['free_decisive']} "
+          f"[hosted {s['hosted_free_decisive']}, local-era {s['local_decisive']}], "
+          f"escalated {s['escalated']}, paid-only {s['paid_only']})")
+    if s["free_decisive"] or s["escalated"]:
+        print(f"  decisive-free rate: {s['decisive_rate']*100:.1f}% "
               f"| paid calls skipped: {s['paid_calls_skipped']} "
               f"(~${s['est_saved_usd']:.2f})")
-        print(f"  latency: local {s['avg_local_latency_ms']}ms vs paid "
-              f"{s['avg_paid_latency_ms']}ms; wasted local attempt on "
-              f"escalation {s['avg_wasted_local_ms_on_escalation']}ms")
+        print(f"  latency: free {s['avg_free_latency_ms']}ms vs paid "
+              f"{s['avg_paid_latency_ms']}ms; wasted free attempt on "
+              f"escalation {s['avg_wasted_free_ms_on_escalation']}ms")
     else:
         print("  (no VALIDATION_LADDER rows yet — instrumentation shipped "
               "2026-07-04; data accrues from future validated runs)")
     print(f"  quality gate rows: {g['rows']} "
-          f"(local-decisive {g['local_decisive']}, paid {g['paid']}) "
+          f"(free-decisive {g['free_decisive']}, paid {g['paid']}) "
           f"| paid calls skipped: {g['paid_calls_skipped']} (~${g['est_saved_usd']:.2f})")
     print(f"  est total saved: ~${summary['est_total_saved_usd']:.2f}")
     if fp is not None:

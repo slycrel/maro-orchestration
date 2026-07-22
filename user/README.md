@@ -51,12 +51,12 @@ YAML config (`~/.maro/config.yml` + `<workspace>/config.yml`, see
 |-----|---------|--------|
 | `yolo` | `false` | `true` = skip clarification prompts and just run (also: `MARO_YOLO` env var) |
 | `default_model_tier` | unset (code role default: `mid`) | Model tier for all runs: `cheap` (Haiku) / `mid` (Sonnet) / `power` (Opus). Unset since 2026-07-21 — execution floor is MID |
-| `max_steps` | `8` | Maximum steps per run |
-| `always_skeptic` | `false` | `true` = skeptic framing on every run (else only with `skeptic:` prefix) |
+| `max_steps` | `8` | **Not yet wired** (no reader in src/ — setting it does nothing) |
+| `always_skeptic` | `false` | **Not yet wired** (no reader in src/; skeptic framing needs the `skeptic:` prefix) |
 | `ralph_verify` | `false` | `true` = per-step verify loop with retry on every run (~30% wall time; else `ralph:` prefix) |
 | `quality_gate` | `true` | Post-loop skeptic quality check |
 | `quality_gate_action` | `escalate` | On gate rejection: `escalate` (re-run, next tier) or `warn` (keep result) |
-| `notify_on_complete` | `true` | Telegram notification when a mission finishes (no-op if not configured) |
+| `notify_on_complete` | `true` | **Not yet wired** (no reader in src/ — run-completion notifications are the YAML config's job: `notify.command` / `notify.events`, see docs/DEFAULTS.md) |
 | `mcp_servers` | *(unset)* | Comma-separated MCP servers loaded at heartbeat startup (shell command = stdio, URL = HTTP) |
 
 ## Privacy note

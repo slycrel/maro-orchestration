@@ -24,7 +24,7 @@ flowchart TD
     META -->|Yes| POE_CEO[poe_handle\nstatus summary]
     META -->|No| THIN{mode:thin?}
 
-    THIN -->|Yes| FACTORY[factory_thin loop\nHaiku, fast]
+    THIN -->|Yes| FACTORY[factory_thin loop\nMID, single-pass]
     THIN -->|No| PIPELINE{pipeline: prefix?}
     PIPELINE -->|Yes| PRESET[Preset steps\nno LLM decompose]
     PIPELINE -->|No| DECOMPOSE

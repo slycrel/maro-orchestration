@@ -888,6 +888,10 @@ def _handle_impl(
 
     # Build adapter — execution floor is MID by role (2026-07-20 decree:
     # the cheap-vs-mid execution split was a non-decision under flat-rate).
+    # A caller-supplied adapter is the injection seam (tests, scripted
+    # flows): every LLM call in this handle rides it, classification
+    # included.
+    _adapter_injected = adapter is not None
     if adapter is None and not dry_run:
         from conductor import assign_model_by_role
         adapter = build_adapter(model=model or assign_model_by_role("worker"))
@@ -906,7 +910,22 @@ def _handle_impl(
         confidence = 1.0
         reason = f"forced to {force_lane}"
     else:
-        lane, confidence, reason, introspects_self = classify(message, adapter=adapter if not dry_run else None, dry_run=dry_run)
+        # Classification is a classifier-role call (CHEAP by decree) — don't
+        # reuse the MID worker adapter for it. Chunk-1 adversarial review
+        # (Architect finding 1): the worker default leaked backward into the
+        # classifier when the shared adapter went MID. Only applies when we
+        # built the adapter ourselves — an injected adapter stays the seam.
+        _classify_adapter = None
+        if not dry_run:
+            if _adapter_injected:
+                _classify_adapter = adapter
+            else:
+                try:
+                    from conductor import assign_model_by_role as _ambr
+                    _classify_adapter = build_adapter(model=_ambr("classifier"))
+                except Exception:
+                    _classify_adapter = adapter  # fall back to the run adapter
+        lane, confidence, reason, introspects_self = classify(message, adapter=_classify_adapter, dry_run=dry_run)
 
     if verbose:
         print(f"[maro:{handle_id}] classified lane={lane} confidence={confidence:.2f}: {reason}", file=sys.stderr, flush=True)

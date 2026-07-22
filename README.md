@@ -55,7 +55,7 @@ Most of the list above is table stakes in 2026. Maro's distinguishing layer is a
 - **Fail-closed spend caps** — $5/run and $25/day on by default; a malformed budget value falls back to the default cap, never to uncapped (`loop_init.py`)
 - **Write fence** — an out-of-fence write demotes a "done" step to blocked, with the offending paths logged as evidence (`loop_execute.py`)
 - **Replay capture** — every LLM call's prompt, response, and tool events are written secret-scrubbed to `<run-dir>/build/calls/`; local, free, on by default (`MARO_RECORD=0` to disable) (`runs.py`)
-- **Local-first validation** — an optional local model (ollama/mlx) acts as the first-pass step judge, escalating to a paid model only when uncertain; on the box this repo runs on, the free tier has decided 82% of recorded step verifications (58/71 ladder events) (`local_models.py`, `step_exec.py`)
+- **Free-first validation** — hosted free-tier models (gemini-flash-lite/groq via `hosted_free.py`) act as the first-pass step judge after a deterministic Tier-0 check, escalating to a paid model only when uncertain or verdict-less (`step_exec.py`; local-model rung removed 2026-07-21, revival path in `docs/LOCAL_VALIDATOR.md`)
 - **Portable learning** — `maro-import` merges runs and memory ledgers from another workspace with provenance markers and exact-line dedup under lock; curated files are quarantined for review, never merged into live state (`workspace_import.py`)
 - **No phone-home** — no network telemetry of any kind; all metrics stay in local JSONL
 

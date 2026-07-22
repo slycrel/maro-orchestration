@@ -663,7 +663,7 @@ def generate_refinement_hint(
         return _fallback
 
     try:
-        from llm import LLMMessage, MODEL_CHEAP
+        from llm import LLMMessage
         _refine_prompt = (
             f"A step in an autonomous agent loop failed twice.\n\n"
             f"Step: {step_text}\n"
@@ -676,14 +676,17 @@ def generate_refinement_hint(
             "Be specific and actionable. Do not suggest giving up."
         )
 
-        # Use cheap model for refinement analysis
+        # The hint steers a MID execution retry — an execution-shaping call
+        # rides the execution floor, not a cheap pin (2026-07-21 unification;
+        # chunk-1 adversarial review, Skeptic finding 3).
         try:
             from llm import build_adapter
-            _cheap_adapter = build_adapter(model=MODEL_CHEAP)
+            from conductor import assign_model_by_role
+            _hint_adapter = build_adapter(model=assign_model_by_role("worker"))
         except Exception:
-            _cheap_adapter = adapter
+            _hint_adapter = adapter
 
-        resp = _cheap_adapter.complete(
+        resp = _hint_adapter.complete(
             [LLMMessage("user", _refine_prompt)],
             max_tokens=150,
             temperature=0.3,

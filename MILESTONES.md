@@ -21,8 +21,14 @@ inventory saved (27 stores/events, 8 verify-before-fix surprises —
 failure corpus folded into CAPABILITIES.md; stale-doc sweep (debate pass,
 ~5400-line claim, bootstrap_context, all-passes-cheap); BACKLOG batch adds
 (10 revival dispositions, V3/V4, era C-tier drops, wiring surprises;
-local burn-in item superseded → BACKLOG_DONE). **Next: chunk 2 (playbook
-repair — curation, injection ranking, dream-cycle curation verb; V6 input).**
+local burn-in item superseded → BACKLOG_DONE). Post-land adversarial
+review (3 Codex lenses, per-chunk discipline via Jeremy's /goal): 6
+verified findings fixed — three MORE residual cheap paths (factory_thin
+CLI default, blocked-step hint/split recovery, classifier riding the MID
+worker adapter), strict finding-code read boundary, hosted-free-aware
+validator ROI (`docs/history/2026-07-21-chunk1-adversarial-review.md`).
+**Next: chunk 2 (playbook repair — curation, injection ranking,
+dream-cycle curation verb; V6 input), then its adversarial review.**
 
 Previous checkpoint — 2026-07-14 (test-suite truth + reduction pass SHIPPED). Pytest's
 global marker filter had made every claimed "full" run silently exclude the

@@ -153,7 +153,7 @@ class ThinLoopResult:
 def run_factory_thin(
     goal: str,
     *,
-    model: str = "cheap",
+    model: str = "mid",  # execution floor is MID (2026-07-21 unification decree)
     max_steps: int = 8,
     verify: bool = False,
     max_retries: int = 2,
@@ -416,7 +416,7 @@ def main():
     import argparse
     p = argparse.ArgumentParser(description="Factory thin loop: decompose→execute→compile")
     p.add_argument("goal", help="Goal to execute")
-    p.add_argument("--model", default="cheap", choices=["cheap", "mid", "power",
+    p.add_argument("--model", default="mid", choices=["cheap", "mid", "power",
                    "claude-haiku-4-5-20251001", "claude-sonnet-4-6", "claude-opus-4-6"],
                    help="Model tier or full model ID")
     p.add_argument("--max-steps", type=int, default=8)
