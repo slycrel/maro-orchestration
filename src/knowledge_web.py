@@ -851,6 +851,17 @@ def maybe_consolidate(*, force: bool = False) -> Optional[Dict[str, Any]]:
             "medium": cycle,
         }
 
+        # Playbook curation rides the same dream cycle (swarm-review
+        # chunk 2): dedup always, size-gated LLM compress; archives the
+        # prior version first. Self-caps via this function's interval gate.
+        try:
+            from playbook import curate_playbook
+            _pb_stats = curate_playbook()
+            if _pb_stats:
+                summary["playbook"] = _pb_stats
+        except Exception as _pb_exc:
+            log.debug("playbook curation skipped (non-fatal): %s", _pb_exc)
+
         marker = _consolidation_marker_path()
         marker.write_text(json.dumps(summary), encoding="utf-8")
 

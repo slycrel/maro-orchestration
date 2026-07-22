@@ -11,22 +11,39 @@ Three sources feed the playbook:
   2. Evolver suggestions — when applied, the insight is captured here
   3. Manual edits — operator can directly edit the playbook
 
-The playbook is injected into director and decompose context alongside
-MARO_IDENTITY. It's meant to be short, opinionated, and actionable.
+The playbook reaches prompts through recall() substrate #7 → the loop's
+decompose/execution context (`RecallResult.as_loop_block`). The director's
+compact context block (`as_context_block`) currently omits it — a
+half-closed loop confirmed 2026-07-21 (wiring-inventory row 17; BACKLOG).
+It's meant to be short, opinionated, and actionable.
+
+Injection is RANKED, not positional (swarm-review chunk 2): learned
+entries outrank seed entries, newest learned first, exact duplicates
+dropped — so an entry appended at the file's tail can never be starved
+by whatever sits above it (the 2026-07-16 spam incident buried every
+learned entry below 40 duplicate lines, and the seed alone already
+overflowed the 800-char window — battery V6).
+
+Curation rides the consolidation dream cycle (`knowledge_web.
+maybe_consolidate` → `curate_playbook`): a free deterministic dedup pass
+plus a size-gated, adapter-gated LLM compression pass. Every rewrite
+archives the previous version to `playbook_history/` first (append-only;
+learning data is never destroyed).
 
 Usage:
     from playbook import load_playbook, inject_playbook, append_to_playbook
     wisdom = load_playbook()              # Full text
-    block = inject_playbook(max_chars=800) # Formatted for injection
+    block = inject_playbook(max_chars=800) # Ranked selection for injection
     append_to_playbook("Research tasks need gather→synthesize→verify steps.")
 """
 
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 log = logging.getLogger(__name__)
 
@@ -68,7 +85,7 @@ manually by the operator. It's injected into director and decompose context.
 
 ## Cost
 
-- Haiku for execution, Sonnet for decomposition, Opus only at decision points.
+- Execution floor is MID (2026-07-21 unification); POWER at orchestrator/planner/reviewer decision points; CHEAP only for non-agentic calls (classify, triage, curation).
 - Enable extended thinking for decompose (high) and advisory calls (mid).
 - Narrow goals should skip multi-plan (saves 3 LLM calls).
 
@@ -106,33 +123,109 @@ def seed_playbook() -> None:
     log.info("playbook: seeded at %s", path)
 
 
-def inject_playbook(*, max_chars: int = 800) -> str:
-    """Load playbook and format for context injection.
+# ---------------------------------------------------------------------------
+# Entry parsing + ranked injection (swarm-review chunk 2)
+# ---------------------------------------------------------------------------
 
-    Returns a truncated version suitable for prepending to decompose/director
-    prompts. Skips the header, extracts the operational rules.
+# Trailing source attribution appended by append_to_playbook.
+_ATTRIB_RE = re.compile(r"\s*\*\(from [^)]*\)\*\s*$")
+
+# Sections shipped by _SEED_CONTENT; anything else is operator/system-grown.
+_SEED_SECTIONS = frozenset({"Decomposition", "Execution", "Cost", "Quality"})
+
+
+def _entry_core(line: str) -> str:
+    """Dedup key: bullet text without dash prefix, attribution, or case."""
+    core = _ATTRIB_RE.sub("", line.strip())
+    return core.lstrip("- ").strip().casefold()
+
+
+def parse_entries(text: str) -> List[dict]:
+    """Parse playbook bullets into entries with section + provenance.
+
+    An entry is *learned* if it carries a source attribution or lives in
+    a non-seed section (evolver output and operator additions); bare
+    bullets inside seed sections are seed content.
+    """
+    entries: List[dict] = []
+    section = ""
+    for pos, line in enumerate(text.split("\n")):
+        if line.startswith("## "):
+            section = line[3:].strip()
+            continue
+        if not line.lstrip().startswith("- "):
+            continue
+        core = _entry_core(line)
+        if not core:
+            continue
+        learned = bool(_ATTRIB_RE.search(line)) or (
+            bool(section) and section not in _SEED_SECTIONS)
+        entries.append({
+            "section": section or "Notes",
+            "line": line.strip(),
+            "core": core,
+            "learned": learned,
+            "position": pos,
+        })
+    return entries
+
+
+def inject_playbook(*, max_chars: int = 800) -> str:
+    """Ranked playbook selection for context injection.
+
+    Priority: learned entries first (newest first — file position is
+    append order), then seed entries in file order; exact duplicates
+    (normalized core) dropped. Fills the budget greedily and renders
+    grouped by section for readability. Replaces the head-window scheme
+    whose fixed cursor let anything above the fold starve everything
+    below it (the injection-horizon bug, confirmed 2026-07-21).
     """
     text = load_playbook()
     if not text:
         return ""
 
-    # Skip the header (everything before first ##)
-    lines = text.split("\n")
-    body_lines = []
-    in_body = False
-    chars = 0
-    for line in lines:
-        if line.startswith("## "):
-            in_body = True
-        if in_body:
-            if chars + len(line) > max_chars:
-                break
-            body_lines.append(line)
-            chars += len(line) + 1
-
-    if not body_lines:
+    entries = parse_entries(text)
+    if not entries:
         return ""
-    return "## Operational Playbook\n" + "\n".join(body_lines)
+
+    # Dedup: first occurrence wins (dup spam is identical text anyway).
+    seen: set = set()
+    unique: List[dict] = []
+    for e in entries:
+        if e["core"] in seen:
+            continue
+        seen.add(e["core"])
+        unique.append(e)
+
+    learned = [e for e in unique if e["learned"]]
+    learned.reverse()  # newest (last-appended) first
+    seed = [e for e in unique if not e["learned"]]
+    ranked = learned + seed
+
+    # Greedy fill: budget covers bullet lines + each section header once.
+    selected: List[dict] = []
+    included_sections: set = set()
+    chars = 0
+    for e in ranked:
+        cost = len(e["line"]) + 1
+        if e["section"] not in included_sections:
+            cost += len(e["section"]) + 4  # "## <section>\n"
+        if chars + cost > max_chars:
+            continue
+        selected.append(e)
+        included_sections.add(e["section"])
+        chars += cost
+
+    if not selected:
+        return ""
+
+    # Render grouped by section, sections and bullets in file order.
+    out_lines: List[str] = []
+    for sec in dict.fromkeys(e["section"] for e in sorted(selected, key=lambda x: x["position"])):
+        out_lines.append(f"## {sec}")
+        out_lines.extend(e["line"] for e in sorted(selected, key=lambda x: x["position"])
+                         if e["section"] == sec)
+    return "## Operational Playbook\n" + "\n".join(out_lines)
 
 
 def append_to_playbook(
@@ -239,3 +332,193 @@ def append_to_playbook(
             )
         except Exception:
             pass
+
+
+# ---------------------------------------------------------------------------
+# Curation verb — the dream-cycle rewrite pass (swarm-review chunk 2)
+# ---------------------------------------------------------------------------
+
+def _history_dir() -> Path:
+    return _playbook_path().parent / "playbook_history"
+
+
+def archive_playbook(text: str, *, reason: str = "curation") -> Optional[Path]:
+    """Append-only archive of a playbook version. Never deletes.
+
+    Data-retention rule: learning data is never destroyed — every rewrite
+    preserves the pre-rewrite version here first.
+    """
+    try:
+        d = _history_dir()
+        d.mkdir(parents=True, exist_ok=True)
+        ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        p = d / f"playbook-{ts}-{reason}.md"
+        # Never clobber an existing archive (same-second rewrites).
+        n = 0
+        while p.exists():
+            n += 1
+            p = d / f"playbook-{ts}-{reason}-{n}.md"
+        p.write_text(text, encoding="utf-8")
+        return p
+    except Exception as exc:
+        log.warning("playbook: archive failed (curation aborts): %s", exc)
+        return None
+
+
+def _dedup_text(text: str) -> tuple:
+    """Drop exact-duplicate bullets (normalized core), keep first occurrence.
+
+    Non-bullet lines pass through untouched. Returns (new_text, removed).
+    """
+    seen: set = set()
+    out: List[str] = []
+    removed = 0
+    for line in text.split("\n"):
+        if line.lstrip().startswith("- "):
+            core = _entry_core(line)
+            if core and core in seen:
+                removed += 1
+                continue
+            if core:
+                seen.add(core)
+        out.append(line)
+    return "\n".join(out), removed
+
+
+_COMPRESS_PROMPT = """\
+You maintain an autonomous orchestration system's operational playbook (markdown).
+Rewrite it TIGHTER: merge near-duplicate bullets, trim verbosity, keep it opinionated and actionable.
+
+Hard rules:
+- Keep every `## Section` header that exists in the input.
+- Keep every source attribution `*(from ...)*` verbatim (a merged bullet carries all its sources).
+- Do NOT invent advice that is not in the input. Do NOT drop factual content.
+- Return ONLY the full rewritten markdown document, no commentary.
+
+Playbook:
+{text}
+"""
+
+
+def _valid_compression(old: str, new: str) -> bool:
+    """Reject an LLM rewrite that lost structure, attributions, or grew."""
+    new = (new or "").strip()
+    if not new:
+        return False
+    if len(new) > len(old) * 1.1:
+        return False
+    old_sections = {ln.strip() for ln in old.split("\n") if ln.startswith("## ")}
+    if not all(s in new for s in old_sections):
+        return False
+    old_attribs = set(re.findall(r"\*\(from [^)]*\)\*", old))
+    if not all(a in new for a in old_attribs):
+        return False
+    old_bullets = sum(1 for ln in old.split("\n") if ln.lstrip().startswith("- "))
+    new_bullets = sum(1 for ln in new.split("\n") if ln.lstrip().startswith("- "))
+    return new_bullets >= max(1, int(old_bullets * 0.6))
+
+
+def curate_playbook(*, force: bool = False, adapter=None) -> Optional[dict]:
+    """Dedup and (when oversized) LLM-compress the playbook.
+
+    Rides the consolidation dream cycle (knowledge_web.maybe_consolidate),
+    so it runs at most once per consolidation interval. Two passes:
+
+      1. Deterministic dedup — free, always (the session-17 guard applied
+         retroactively: spam that predates the append-time guard, or
+         re-accretes around it, gets collapsed here).
+      2. LLM compression — only when the file exceeds
+         ``playbook.curation_min_chars`` (default 4000): a curation-class
+         call (CHEAP by decree — non-agentic). A rewrite that loses a
+         section header, an attribution, >40% of bullets, or grows is
+         rejected and the deterministic result kept.
+
+    The pre-curation version is archived to playbook_history/ before any
+    write; if archiving fails, curation aborts (never rewrite what you
+    can't restore). Config gate: ``playbook.curation_enabled`` (default
+    True). Returns a stats dict if the file changed, None otherwise.
+    Never raises — callers sit on app exit paths.
+    """
+    try:
+        try:
+            from config import get as _cfg_get
+        except Exception:
+            _cfg_get = lambda k, d=None: d  # noqa: E731
+        if not force and not _cfg_get("playbook.curation_enabled", True):
+            return None
+
+        path = _playbook_path()
+        if not path.exists():
+            return None
+
+        from file_lock import locked_write
+
+        with locked_write(path):
+            original = path.read_text(encoding="utf-8")
+            text, removed = _dedup_text(original)
+            llm_compressed = False
+
+            min_chars = int(_cfg_get("playbook.curation_min_chars", 4000))
+            if len(text) > min_chars:
+                try:
+                    if adapter is None:
+                        from llm import build_adapter
+                        from conductor import assign_model_by_role
+                        adapter = build_adapter(
+                            model=assign_model_by_role("cheap_worker"))
+                    from llm import LLMMessage
+                    resp = adapter.complete(
+                        [LLMMessage("user", _COMPRESS_PROMPT.format(text=text))],
+                        max_tokens=2000,
+                        temperature=0.2,
+                        no_tools=True,
+                        purpose="playbook-curation",
+                    )
+                    candidate = (getattr(resp, "content", "") or "").strip()
+                    if _valid_compression(text, candidate):
+                        text = candidate
+                        llm_compressed = True
+                    else:
+                        log.info("playbook: LLM compression rejected by "
+                                 "validation — keeping deterministic result")
+                except Exception as exc:
+                    log.debug("playbook: LLM compression skipped: %s", exc)
+
+            if text == original:
+                return None
+
+            archived = archive_playbook(original, reason="curation")
+            if archived is None:
+                return None  # can't restore → don't rewrite
+
+            now = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            if "*Last updated:" in text:
+                text = re.sub(r"\*Last updated:.*\*",
+                              f"*Last updated: {now}*", text)
+            path.write_text(text, encoding="utf-8")
+
+        stats = {
+            "removed_duplicates": removed,
+            "llm_compressed": llm_compressed,
+            "archived": str(archived),
+            "chars_before": len(original),
+            "chars_after": len(text),
+        }
+        try:
+            from captains_log import log_event, PLAYBOOK_CURATED
+            log_event(
+                event_type=PLAYBOOK_CURATED,
+                subject="playbook",
+                summary=(f"curated: -{removed} dup(s), "
+                         f"llm={'yes' if llm_compressed else 'no'}, "
+                         f"{len(original)}→{len(text)} chars"),
+                context=stats,
+            )
+        except Exception:
+            pass
+        log.info("playbook: curated (-%d dups, llm=%s, %d→%d chars)",
+                 removed, llm_compressed, len(original), len(text))
+        return stats
+    except Exception as exc:
+        log.warning("playbook: curation failed (non-fatal): %s", exc)
+        return None

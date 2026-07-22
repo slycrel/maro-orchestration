@@ -2,9 +2,30 @@
 
 What to do next, in what order. Updated each session. Deferred ideas live in BACKLOG.md; completed phase history in docs/history/ROADMAP_ARCHIVE.md (ROADMAP.md is a stub). This file is the executable queue.
 
-Last updated: 2026-07-21 — **swarm-review arc, chunk 1 SHIPPED** (of 8; plan:
-`~/.claude/plans/abundant-gathering-lagoon.md`, Phase 0 knowledge journey +
-Phase 0.5 DEV_PATTERNS/battery landed earlier same arc). Chunk 1: execution
+Last updated: 2026-07-21 — **swarm-review arc, chunk 2 SHIPPED** (of 8; plan:
+`~/.claude/plans/abundant-gathering-lagoon.md`). Chunk 2 (playbook repair —
+the live bug): `inject_playbook` is now RANKED selection (learned-over-seed,
+newest learned first, dedup by normalized core, greedy 800-char budget fill —
+kills the head-window horizon bug AND battery V6 seed-overflow; entry parser
+`parse_entries` + pins in test_playbook.py); `curate_playbook` curation verb
+rides `maybe_consolidate` (dream cycle): free deterministic dedup always +
+size-gated (>4000 chars, `playbook.curation_min_chars`) CHEAP-tier LLM
+compress with hard validation (headers/attributions preserved, ≤1.1× length,
+bullets ≥60%) — invalid compression keeps the deterministic result;
+archive-before-write to `playbook_history/` (append-only; abort curation if
+archive fails), `PLAYBOOK_CURATED` captain's-log event, config kill-switch
+`playbook.curation_enabled` (DEFAULTS census green); one-time live curation
+done (5239→3172 chars, spam-free, original archived); decree-stale seed Cost
+line fixed to the MID-floor decree. Live-path verified: loop recall block
+renders learned entries ranked in, zero dupes. Side-find → BACKLOG:
+record-mode never fires on single-backend boxes (record seam only exists in
+FailoverAdapter; this box's bare subprocess adapter skips it — every run has
+`n_calls: 0`). Wiring row 17 (director omits playbook) BACKLOG'd
+consumer-first. **Next: chunk-2 adversarial review, then chunk 3
+(decisions.jsonl writer + consumer-first + SF-13 pipe).**
+
+Previous checkpoint — 2026-07-21 **chunk 1 SHIPPED** (Phase 0 knowledge
+journey + Phase 0.5 DEV_PATTERNS/battery landed earlier same arc). Chunk 1: execution
 defaults unified at MID (handle entry, loop, thin mode; per-step cheap
 downgrade removed; `classify_step_model` deleted; user-CONFIG cheap pin
 unset — smoke-verified `model=mid` per step, hosted-free rung decisive,
@@ -27,8 +48,6 @@ verified findings fixed — three MORE residual cheap paths (factory_thin
 CLI default, blocked-step hint/split recovery, classifier riding the MID
 worker adapter), strict finding-code read boundary, hosted-free-aware
 validator ROI (`docs/history/2026-07-21-chunk1-adversarial-review.md`).
-**Next: chunk 2 (playbook repair — curation, injection ranking,
-dream-cycle curation verb; V6 input), then its adversarial review.**
 
 Previous checkpoint — 2026-07-14 (test-suite truth + reduction pass SHIPPED). Pytest's
 global marker filter had made every claimed "full" run silently exclude the

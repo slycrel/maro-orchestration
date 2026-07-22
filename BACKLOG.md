@@ -1973,6 +1973,8 @@ re-verify against the tree before acting. Full table:
 - [ ] `hypotheses.jsonl` has no runtime injection reader (pack.py CLI only) — hypotheses invisible to recall until graduated
 - [ ] Verification calibration cluster independently dead — `verification_accuracy`/`calibrated_alignment_threshold` uncalled, beyond the known record/load pair
 - [ ] `RULE_GRADUATED` second phantom event in recall.py:54 — only emitter is CLI-only
+- [ ] Director/dispatch context omits the playbook (wiring row 17) — CONFIRMED structurally 2026-07-21 (chunk 2): `RecallResult.as_context_block` renders only lessons/standing_rules/decisions/knowledge; playbook (+ graveyard, failure_notes, learning_activity) reach only the loop slice via `as_loop_block`. The playbook module docstring claimed director injection for months. Decide whether the director prompt should carry playbook wisdom (and which other substrates), then wire with a liveness test — consumer-first.
+- [ ] Record-mode never fires on single-backend boxes — CONFIRMED 2026-07-21 (chunk-2 verification): `record_llm_call` lives only in `FailoverAdapter.complete` (llm.py:~711), but `build_adapter(auto)` returns the bare adapter when exactly one backend is available (llm.py:2866 "single backend — no wrapper overhead"). This box (subprocess-only since the key cull) has `n_calls: 0` on every run despite record-mode default-ON — the "default-on capture" claim in runs.py is false for the most common deployment shape. Fix: move the record seam into a shared base/complete wrapper, or always wrap in FailoverAdapter (len==1 included). Evidence: run c772366a-wily-badger run_card inventory.
 
 ### Benchmark/eval mission isolation — DONE 2026-07-14 → BACKLOG_DONE
 

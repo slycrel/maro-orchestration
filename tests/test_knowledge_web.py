@@ -856,6 +856,22 @@ class TestConsolidation:
         with patch.object(kw, "run_decay_cycle", side_effect=RuntimeError("boom")):
             assert kw.maybe_consolidate() is None
 
+    def test_playbook_curation_rides_dream_cycle(self, tmp_path):
+        # Swarm-review chunk 2: curation is a consolidation passenger, and
+        # its stats land in the summary (and thus the marker file).
+        import playbook
+        with patch.object(playbook, "curate_playbook",
+                          return_value={"removed_duplicates": 3}):
+            result = kw.maybe_consolidate()
+        assert result is not None
+        assert result["playbook"] == {"removed_duplicates": 3}
+
+    def test_playbook_curation_failure_never_blocks_cycle(self, tmp_path):
+        import playbook
+        with patch.object(playbook, "curate_playbook",
+                          side_effect=RuntimeError("boom")):
+            assert kw.maybe_consolidate() is not None
+
     def test_interval_hours_override(self, tmp_path):
         kw.maybe_consolidate()
         assert kw.consolidation_due(interval_hours=0.0) is True

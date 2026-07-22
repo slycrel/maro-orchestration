@@ -98,6 +98,12 @@ EVOLVER_VERDICT = "EVOLVER_VERDICT"
 # a playbook section. Context: source, section.
 PLAYBOOK_UPDATED = "PLAYBOOK_UPDATED"
 
+# Playbook curation pass ran (dream-cycle verb, swarm-review chunk 2):
+# duplicates collapsed and/or LLM compression applied; previous version
+# archived to playbook_history/. Context: removed_duplicates,
+# llm_compressed, archived, chars_before, chars_after.
+PLAYBOOK_CURATED = "PLAYBOOK_CURATED"
+
 # Recovery & diagnosis
 AUTO_RECOVERY = "AUTO_RECOVERY"
 DIAGNOSIS = "DIAGNOSIS"
@@ -208,6 +214,7 @@ EVENT_TYPES = {
     EVOLVER_APPLIED, EVOLVER_GENERATED, EVOLVER_SKIPPED, GRADUATION_PROPOSED,
     GRADUATION_VERIFIED,
     EVOLVER_REVERTED, EVOLVER_VERIFY, EVOLVER_VERDICT, PLAYBOOK_UPDATED,
+    PLAYBOOK_CURATED,
     AUTO_RECOVERY, DIAGNOSIS, INPUT_MISMATCH,
     DECISION_RECORDED, METACOGNITIVE_DECISION,
     CUTS_DRAWN, BOUNDARY_EXPANDED, STEP_CEILING_ENFORCED,

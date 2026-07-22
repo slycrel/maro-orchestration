@@ -114,7 +114,7 @@ Append-only event stream tracking knowledge lifecycle:
 ## Test Coverage
 
 - **knowledge_web.py**: 103 tests in test_knowledge_web.py (session 17) — covers decay, reinforcement, TF-IDF ranking, tiered lessons CRUD, near-duplicate detection, graveyard search, prompt injection formatting.
-- **playbook.py**: `append_to_playbook()` now rejects empty entries and truncates at 500 chars (session 17).
+- **playbook.py**: `append_to_playbook()` rejects empty entries and truncates at 500 chars (session 17). Since 2026-07-21 (chunk 2): `inject_playbook()` is RANKED (learned-over-seed, newest first, deduped — the head-window horizon bug is gone), and `curate_playbook()` rides `maybe_consolidate()` (dedup + size-gated LLM compress, prior version archived to `playbook_history/`). The director's compact context block still omits the playbook (wiring row 17, BACKLOG).
 
 ## Known Gaps (Intent vs Implementation)
 

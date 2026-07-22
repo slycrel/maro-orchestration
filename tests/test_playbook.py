@@ -14,6 +14,8 @@ from playbook import (
     seed_playbook,
     inject_playbook,
     append_to_playbook,
+    curate_playbook,
+    parse_entries,
 )
 
 
@@ -65,6 +67,66 @@ class TestPlaybookInjection:
         (tmp_path / "playbook.md").write_text("Just a title\n")
         block = inject_playbook()
         assert block == ""
+
+    def test_inject_learned_outranks_spam(self, tmp_path):
+        """The injection-horizon pin (wiring row 17 / 2026-07-16 incident).
+
+        40 duplicate lines above the fold must not starve a learned entry
+        appended at the tail — ranked selection replaced the head window.
+        """
+        spam = "- Be more concise *(from evolver:test-00)*\n" * 40
+        (tmp_path / "playbook.md").write_text(
+            "# Director's Playbook\n\n---\n\n"
+            "## Execution\n\n"
+            "- Always verify outputs before recording as done.\n"
+            + spam +
+            "\n## Learned\n\n"
+            "- Route flaky network steps to the ops worker. *(from evolver:abc-01)*\n"
+        )
+        block = inject_playbook(max_chars=800)
+        assert "Route flaky network steps" in block
+        assert block.count("Be more concise") == 1  # deduped, not repeated
+
+    def test_inject_seed_overflow_still_serves_learned(self, tmp_path):
+        """Battery V6 pin: the seed alone overflows the 800-char budget, so a
+        positional scheme could never show a learned entry. Ranked selection
+        puts learned first regardless."""
+        seed_playbook()
+        append_to_playbook(
+            "Prefer artifact-diff evidence over narration when verifying.",
+            section="Learned", source="evolver:v6-pin",
+        )
+        block = inject_playbook(max_chars=800)
+        assert "artifact-diff evidence" in block
+        assert len(block) <= 800 + len("## Operational Playbook\n") + 8
+
+    def test_inject_newest_learned_first_under_tight_budget(self, tmp_path):
+        seed_playbook()
+        append_to_playbook("Older learned entry about queue retries.",
+                           section="Learned", source="evolver:old")
+        append_to_playbook("Newer learned entry about artifact checks.",
+                           section="Learned", source="evolver:new")
+        block = inject_playbook(max_chars=120)
+        assert "Newer learned entry" in block
+        assert "Older learned entry" not in block
+
+
+class TestParseEntries:
+    def test_learned_detection_by_attribution_and_section(self):
+        text = (
+            "## Execution\n"
+            "- Seed bullet.\n"
+            "- Attributed bullet. *(from evolver:x-00)*\n"
+            "## Learned\n"
+            "- Bare bullet in grown section.\n"
+        )
+        entries = parse_entries(text)
+        assert [e["learned"] for e in entries] == [False, True, True]
+
+    def test_core_normalization(self):
+        text = "## Execution\n- Be Concise *(from evolver:a)*\n- be concise\n"
+        entries = parse_entries(text)
+        assert entries[0]["core"] == entries[1]["core"]
 
 
 class TestPlaybookAppend:
@@ -134,6 +196,117 @@ class TestPlaybookAppend:
         text = load_playbook()
         assert "First insight." in text
         assert "Second insight." in text
+
+
+class _FakeAdapter:
+    def __init__(self, content):
+        self._content = content
+        self.calls = 0
+
+    def complete(self, messages, **kwargs):
+        self.calls += 1
+        import types
+        return types.SimpleNamespace(content=self._content)
+
+
+class TestPlaybookCuration:
+    """The dream-cycle curation verb (swarm-review chunk 2)."""
+
+    def _spammy(self, tmp_path, n=10, extra=""):
+        content = (
+            "# Director's Playbook\n\n---\n\n"
+            "## Execution\n\n"
+            "- Always verify outputs before recording as done.\n"
+            + "- Be more concise *(from evolver:test-00)*\n" * n
+            + "\n## Learned\n\n"
+            "- Real learned entry. *(from evolver:abc-01)*\n"
+            + extra +
+            "\n*Last updated: 2026-07-16*\n"
+        )
+        (tmp_path / "playbook.md").write_text(content)
+        return content
+
+    def test_dedup_collapses_and_archives_original(self, tmp_path):
+        original = self._spammy(tmp_path, n=10)
+        stats = curate_playbook(force=True)
+        assert stats is not None
+        assert stats["removed_duplicates"] == 9
+        text = (tmp_path / "playbook.md").read_text()
+        assert text.count("Be more concise") == 1
+        assert "Real learned entry." in text
+        # Data-retention: the pre-curation version is archived verbatim.
+        archives = list((tmp_path / "playbook_history").glob("playbook-*.md"))
+        assert len(archives) == 1
+        assert archives[0].read_text() == original
+        assert stats["archived"] == str(archives[0])
+
+    def test_noop_when_clean_returns_none(self, tmp_path):
+        seed_playbook()
+        assert curate_playbook(force=True) is None
+        assert not (tmp_path / "playbook_history").exists()
+
+    def test_disabled_by_config(self, tmp_path):
+        from unittest.mock import patch
+        self._spammy(tmp_path)
+
+        def fake_get(key, default=None):
+            if key == "playbook.curation_enabled":
+                return False
+            return default
+
+        with patch("config.get", side_effect=fake_get):
+            assert curate_playbook() is None
+
+    def test_llm_compression_applied_when_valid(self, tmp_path):
+        from unittest.mock import patch
+        self._spammy(tmp_path, n=2)
+        compressed = (
+            "# Director's Playbook\n\n## Execution\n\n"
+            "- Verify outputs; be concise. *(from evolver:test-00)*\n"
+            "## Learned\n\n"
+            "- Real learned entry. *(from evolver:abc-01)*\n"
+            "*Last updated: 2026-07-16*\n"
+        )
+        fake = _FakeAdapter(compressed)
+
+        def fake_get(key, default=None):
+            if key == "playbook.curation_min_chars":
+                return 50  # force the size gate open
+            return default
+
+        with patch("config.get", side_effect=fake_get):
+            stats = curate_playbook(force=True, adapter=fake)
+        assert stats is not None and stats["llm_compressed"] is True
+        assert fake.calls == 1
+        text = (tmp_path / "playbook.md").read_text()
+        assert "Verify outputs; be concise." in text
+        # Timestamp refreshed on rewrite
+        assert "*Last updated: 2026-07-16*" not in text
+
+    def test_llm_compression_rejected_keeps_deterministic(self, tmp_path):
+        from unittest.mock import patch
+        self._spammy(tmp_path, n=5)
+        # Invalid rewrite: drops the Learned section AND its attribution.
+        fake = _FakeAdapter("# Director's Playbook\n\n## Execution\n\n- Tiny.\n")
+
+        def fake_get(key, default=None):
+            if key == "playbook.curation_min_chars":
+                return 50
+            return default
+
+        with patch("config.get", side_effect=fake_get):
+            stats = curate_playbook(force=True, adapter=fake)
+        assert stats is not None and stats["llm_compressed"] is False
+        text = (tmp_path / "playbook.md").read_text()
+        assert "Real learned entry." in text          # nothing lost
+        assert text.count("Be more concise") == 1     # dedup still applied
+
+    def test_curation_never_raises(self, tmp_path, monkeypatch):
+        import playbook as pb
+        self._spammy(tmp_path)
+        monkeypatch.setattr(pb, "_dedup_text",
+                            lambda t: (_ for _ in ()).throw(RuntimeError("boom")))
+        assert curate_playbook(force=True) is None
 
 
 class TestWorkspaceSkillResolution:

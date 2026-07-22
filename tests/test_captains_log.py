@@ -311,7 +311,9 @@ class TestEventTypes:
         # +1 (2026-07-16): STEP_CEILING_ENFORCED — goal-stated step-count
         # ceiling held by hard truncation after one corrective re-ask
         # (BACKLOG step-count constraint; planner._enforce_step_ceiling).
-        assert len(EVENT_TYPES) == 65
+        # +1 (2026-07-21): PLAYBOOK_CURATED — dream-cycle playbook curation
+        # (dedup + size-gated LLM compress; swarm-review chunk 2).
+        assert len(EVENT_TYPES) == 66
 
     def test_previously_unregistered_events_in_set(self):
         from captains_log import EVOLVER_REVERTED, EVOLVER_VERIFY, PLAYBOOK_UPDATED

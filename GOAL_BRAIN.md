@@ -3835,3 +3835,27 @@ Dormant (deliberately parked, not dropped):
   hosted-free-decisive. Notable: 0/7 reviewer claims hallucinated
   (historical rate 30–78%). Record:
   docs/history/2026-07-21-chunk1-adversarial-review.md.
+- 2026-07-21 (chunk 2 executed, standing grant): **swarm-review chunk 2
+  shipped — playbook repair, the live bug.** (1) `inject_playbook` is
+  ranked selection: learned-over-seed, newest learned first, dedup by
+  normalized entry core, greedy 800-char budget fill — the fixed
+  head-window horizon bug (wiring row 17's injection half) and battery
+  V6's seed-overflow are both dead; `parse_entries` is the shared entry
+  parser; pins in test_playbook.py. (2) `curate_playbook` curation verb
+  rides `maybe_consolidate` (the dream cycle): free deterministic dedup
+  always; size-gated (>4000 chars) CHEAP-tier LLM compress with hard
+  validation (all `## ` headers + all `*(from ...)*` attributions
+  preserved verbatim, ≤1.1× length, ≥60% bullet retention) — invalid
+  compression keeps the deterministic result; archive-before-write to
+  `playbook_history/` (append-only, abort if archive fails — never
+  rewrite what you can't restore); `PLAYBOOK_CURATED` captain's-log
+  event; kill-switch `playbook.curation_enabled` (DEFAULTS rows added,
+  census green). (3) One-time live curation: 5239→3172 chars, test-era
+  spam dropped, original archived verbatim in playbook_history/;
+  decree-stale seed Cost line now states the MID floor. (4) Live-path
+  verified: loop recall block (`as_loop_block`, the exact decompose
+  feed) renders learned entries ranked in, zero dupes. (5) Side-find →
+  BACKLOG: record-mode NEVER fires on single-backend boxes (the record
+  seam exists only in FailoverAdapter; this box's bare subprocess
+  adapter skips it — every run shows `n_calls: 0` despite default-ON).
+  (6) Wiring row 17's director half stays BACKLOG'd consumer-first.
