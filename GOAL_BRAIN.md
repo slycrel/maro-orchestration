@@ -4133,3 +4133,27 @@ Dormant (deliberately parked, not dropped):
   architecture — GOAL_BRAIN/MILESTONES/DEFAULTS-census/skill-currency).
   Six new pins; suite green 188 items. Record:
   docs/history/2026-07-22-chunk6-adversarial-review.md.
+
+- **2026-07-22 — Swarm-review chunk 7 SHIPPED (discretion readout).**
+  A judgement report, not a bill (EFFORT language per the budget-posture
+  decree; dollars ride as one trailing column). (1) `discretion_readout.py`
+  + CLI — read-only, no LLM calls, no flags: per-day EFFORT (calls/tokens/
+  model mix), METACOGNITIVE_DECISION retry/replan discretion, RECALL_PERFORMED
+  reinjection volume + exact-dup goal texts, gate-family tabulations
+  (second-family agreement, council FINDING[CODE] tally — the chunk-1
+  typed-code vocabulary's first consumer; cross-ref with zero-claim
+  denominators), LESSON_RECORDED novelty distribution (chunk 6's deferred
+  readout), background-lane duty cycle, and an explicit "Not computable
+  today" block (fan-out justification, semantic goal overlap, NOW-triage —
+  the plan's log() requirement, stated not silently dropped). (2) Navigator
+  A/B readout: `navigator_shadow --agreement` grows a by-lesson-inject
+  table — closes the V5 "watch with no readout" gap. First live numbers:
+  with_lessons 58% agreement (15/26) vs baseline 41% (49/120) — early
+  directional positive for `navigator.lesson_inject`, n too small to act.
+  Live findings the readout surfaced on first run: evidence-free retries
+  0/1253 (Phase 62 convergence detection already escalates instead of
+  blind-retrying — the guard works); playbook-curation events emit only on
+  file change (quiet passes invisible — caveat now in the report); live
+  second-family vocabulary carries a SECOND_FAMILY_ prefix (normalized).
+  Consent message stays with the session-protocol thread; 3-arm experiment
+  stays skipped (Jeremy's call).

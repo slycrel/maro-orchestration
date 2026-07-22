@@ -126,6 +126,7 @@ py-modules = [
     "cross_ref",
     "decision_prior",
     "director",
+    "discretion_readout",
     "doctor",
     "eval",
     "evolver",

@@ -597,18 +597,23 @@ class TestAnalyzeLiveAgreement:
     """analyze_live_agreement: per-move agreement table from NAVIGATOR_DECIDED
     rows — the per-class cutover evidence, structured."""
 
-    def _event(self, move, pipeline, *, live=True, conf=0.9, goal="g", point=None):
+    def _event(self, move, pipeline, *, live=True, conf=0.9, goal="g", point=None,
+               lessons=None):
         pa = {"move_equivalent": pipeline, "live": live}
         if point is not None:
             pa["point"] = point
+        ctx = {
+            "move": move, "confidence": conf, "tier": "cheap",
+            "input_digest": {"goal_preview": goal},
+            "pipeline_actual": pa,
+        }
+        if lessons is not None:
+            # mirrors _log_decision: the key exists only when injection ran
+            ctx["lessons_injected"] = lessons
         return {
             "event_type": "NAVIGATOR_DECIDED",
             "timestamp": "2026-06-12T00:00:00+00:00",
-            "context": {
-                "move": move, "confidence": conf, "tier": "cheap",
-                "input_digest": {"goal_preview": goal},
-                "pipeline_actual": pa,
-            },
+            "context": ctx,
         }
 
     def test_by_point_breakdown(self):
@@ -658,6 +663,20 @@ class TestAnalyzeLiveAgreement:
         ]
         s = analyze_live_agreement(events)
         assert s["live_rows"] == 1
+
+    def test_lesson_inject_ab_grouping(self):
+        # Chunk 7: navigator.lesson_inject A/B readout. lessons_injected is
+        # stamped only when > 0, so an absent key groups as baseline.
+        from navigator_shadow import analyze_live_agreement
+        events = [
+            self._event("execute", "execute", lessons=2),
+            self._event("escalate", "execute", lessons=1),
+            self._event("execute", "execute"),          # key absent → baseline
+            self._event("close", "execute"),
+        ]
+        s = analyze_live_agreement(events)
+        assert s["by_lesson_inject"]["with_lessons"] == {"agree": 1, "diverge": 1}
+        assert s["by_lesson_inject"]["baseline"] == {"agree": 1, "diverge": 1}
 
 
 class TestAnalyzePlanningDepthAgreement:

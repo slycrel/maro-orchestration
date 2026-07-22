@@ -2,8 +2,33 @@
 
 What to do next, in what order. Updated each session. Deferred ideas live in BACKLOG.md; completed phase history in docs/history/ROADMAP_ARCHIVE.md (ROADMAP.md is a stub). This file is the executable queue.
 
-Last updated: 2026-07-22 — **swarm-review arc, chunk 6 SHIPPED** (of 8; plan:
-`~/.claude/plans/abundant-gathering-lagoon.md`). Chunk 6 (surprise as a
+Last updated: 2026-07-22 — **swarm-review arc, chunk 7 SHIPPED** (of 8; plan:
+`~/.claude/plans/abundant-gathering-lagoon.md`). Chunk 7 (discretion
+readout — a judgement report, not a bill): **(1)** new
+`discretion_readout.py` + CLI (`python3 -m discretion_readout`, read-only,
+no flags): per-day EFFORT headline (calls/tokens/model mix; dollars one
+trailing column per the budget-posture decree), METACOGNITIVE_DECISION
+retry/replan discretion (evidence-free retries = same-fingerprint retry;
+live count 0/1253 — Phase 62 convergence detection already escalates
+instead of blind-retrying), RECALL_PERFORMED reinjection volume + exact-dup
+goal texts, gate-family tabulations (second-family agreement w/
+SECOND_FAMILY_ prefix normalization; council seats + FINDING[CODE] tally —
+typed-code consumption; cross-ref lanes w/ zero-claim denominators),
+LESSON_RECORDED novelty distribution (chunk 6's deferred readout; live: 350
+rows all pre-chunk-6 — denominator honesty), background-lane duty cycle
+(consolidation 19 rows/16 days; playbook-curation emits only on change —
+caveat stated), and an explicit **"Not computable today"** block (fan-out
+justification, semantic goal overlap, NOW-triage cycle — the plan's log()
+requirement). **(2)** Navigator A/B readout closes the V5
+"watch with no readout" gap: `navigator_shadow --agreement` grows a
+by-lesson-inject table (`lessons_injected` stamped-only-when-positive →
+with_lessons vs baseline). **First live readout: with_lessons 58% agreement
+(15/26) vs baseline 41% (49/120)** — early directional positive for
+`navigator.lesson_inject`, small n. Both CLIs live-verified non-empty
+(plan's verification gate). Consent message stays with the
+session-protocol thread; 3-arm experiment stays skipped (Jeremy's call).
+
+Previous checkpoint — 2026-07-22 **chunk 6 SHIPPED**. Chunk 6 (surprise as a
 capture signal): **(1)** extraction prompt leads with the
 expectation-mismatch question ("what actually DIFFERED from what the plan
 assumed?" — capture the mismatch, not just the workaround); no new lesson
@@ -80,13 +105,12 @@ top-up not empty-fallback; flat top-up chains agenda+general;
 query_lessons ranks the full store (n*5 score-sorted cap hid relevant
 rows). Rejected: docs-duplication (decreed record architecture). Six new
 pins. Record: docs/history/2026-07-22-chunk6-adversarial-review.md.
-**Next: chunk 7** (discretion readout —
-EFFORT language, coordination-waste computable-today subset, navigator A/B
-tabulation, novelty tabulation, effort-estimate compute; consent message
-stays with the session-protocol thread), then chunk 8 (enforcement pin).
-After the chunks: the compound-thinking chunk-6 discussion Jeremy queued
-(docs/COMPOUND_THINKING_DESIGN.md — his stated intent, needs discussion
-and planning; §10 surprise→calibration touches this chunk's territory).
+**Next: chunk-7 adversarial review**, then chunk 8 (enforcement pin —
+DEFAULTS flag-enablement column under the AST census; stores/guards need a
+registration convention first). After the chunks: the compound-thinking
+chunk-6 discussion Jeremy queued (docs/COMPOUND_THINKING_DESIGN.md — his
+stated intent, needs discussion and planning; §10 surprise→calibration
+touches chunk-6 territory).
 
 Previous checkpoint — 2026-07-21 **chunk 5a SHIPPED**. Chunk 5a (gate hosted-free
 rung, stack-don't-substitute): the quality gate's free rung is back as

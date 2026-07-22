@@ -574,6 +574,9 @@ def analyze_live_agreement(
             "reasoning": str(c.get("reasoning", ""))[:600],
             "goal_preview": str(
                 (c.get("input_digest") or {}).get("goal_preview", ""))[:80],
+            # V5 A/B marker: _log_decision stamps lessons_injected only when
+            # > 0, so absence means the decision ran without lesson injection.
+            "lessons_injected": int(c.get("lessons_injected") or 0),
         })
 
     def _agree(r: Dict[str, Any]) -> bool:
@@ -583,7 +586,12 @@ def analyze_live_agreement(
 
     tables, divergences, agreements = _tabulate_agreement(
         rows,
-        {"by_move": lambda r: r["move"], "by_point": lambda r: r["point"]},
+        {"by_move": lambda r: r["move"], "by_point": lambda r: r["point"],
+         # Chunk 7: the navigator.lesson_inject A/B readout — agreement with
+         # vs without injected lessons. Closes the "watch with no readout"
+         # gap from VERIFY_LEARN_ARC V5.
+         "by_lesson_inject": lambda r: (
+             "with_lessons" if r["lessons_injected"] else "baseline")},
         _agree,
     )
     adj = adjudications or {}
@@ -601,6 +609,7 @@ def analyze_live_agreement(
         "live_rows": len(rows),
         "by_move": tables["by_move"],
         "by_point": tables["by_point"],
+        "by_lesson_inject": tables["by_lesson_inject"],
         "agreements": agreements,
         "divergences": divergences,
         "adjudicated": breakdown,
@@ -1036,6 +1045,12 @@ def _analyze_main(json_out: bool) -> int:
     print("by navigator move:")
     for move, s in sorted(summary["by_move"].items()):
         print(f"  {move:10s} agree={s['agree']:3d} diverge={s['diverge']:3d}")
+    print("by lesson injection (navigator.lesson_inject A/B):")
+    for group, s in sorted(summary.get("by_lesson_inject", {}).items()):
+        total = s["agree"] + s["diverge"]
+        rate = (s["agree"] / total) if total else 0.0
+        print(f"  {group:12s} agree={s['agree']:3d} diverge={s['diverge']:3d} "
+              f"({rate:.0%})")
     adjb = summary.get("adjudicated", {})
     if any(adjb.get(v) for v in ADJ_VERDICTS):
         print("adjudicated divergences (VERIFY_LEARN_ARC V4):")
