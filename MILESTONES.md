@@ -20,8 +20,18 @@ Documented expectation: modest lift — all 4 measured gate false-passes were
 narration-vs-evidence, already caught by the deterministic claim probes.
 EVENT_TYPES 68→69; 11 new pins (TestSecondFamilyCheck); live-verified
 against real Gemini flash-lite (649ms, AGREE row in the real captain's
-log). **Next: chunk-5a adversarial review, then chunk 5b (persona-dispatch
-owner first, then evidence-path lenses + triad ablation).**
+log). **Chunk-5a adversarial review DONE** (3 Codex lenses vs 441f4cf,
+**PASS — first of the arc**, 4/4 verified real, 0 hallucinated — fifth
+clean round): quoted-"false" killswitch bypass fixed + pinned (unanimous);
+the one-row event-contract-doc nit verified out to **13 missing rows** —
+all backfilled against their emit sites + a census tripwire
+(`test_event_contract_doc_covers_all_types`) so CAPTAINS_LOG_EVENTS.md can
+never silently drift again; positive-path tests made config-hermetic;
+typed-dataclass suggestion rejected consumer-first
+(`docs/history/2026-07-21-chunk5a-adversarial-review.md`). **Next:
+chunk 5b (persona-dispatch owner first, then evidence-path lenses + triad
+ablation; council stays `strict:`-gated until A/B data; cross_ref enable
+for research-shaped goals on hosted-free).**
 
 Previous checkpoint — 2026-07-21 **chunk 4 SHIPPED**. Chunk 4 (contradiction
 wiring — `contradict_pattern` finally has a runtime writer; the

@@ -3998,3 +3998,21 @@ Dormant (deliberately parked, not dropped):
   false-passes were narration-vs-evidence, already caught by claim
   probes. EVENT_TYPES 68→69; 11 pins; live-verified against real
   Gemini flash-lite (649ms, AGREE row in the real captain's log).
+- 2026-07-22 (session, executing Jeremy's /goal per-chunk review
+  discipline): **chunk-5a adversarial review ran post-land** (3 Codex
+  lenses vs 441f4cf) — verdict **PASS, the arc's first** (chunks 1–4
+  were CONTESTED/REJECT); 4/4 findings verified real, 0 hallucinated
+  (fifth consecutive clean round). Fixed: quoted-string "false" couldn't
+  disable `quality_gate.second_family_check` (config.get returns raw
+  YAML nodes; normalized like `hosted_free_enabled()`, pinned);
+  positive-path tests were reading real box config (now hermetic via a
+  forced-config seam). The finding that mattered most grew under
+  verification: one missing event-contract row turned out to be **13
+  event types** absent from docs/CAPTAINS_LOG_EVENTS.md (drift since
+  2026-06-24, spanning three arcs) — all 13 backfilled against their
+  actual emit sites and a census tripwire added
+  (test_event_contract_doc_covers_all_types, DEFAULTS-census precedent
+  applied to the event contract). Rejected consumer-first: typed
+  SecondFamilyVerdict dataclass (the durable contract is the event row;
+  no in-process consumer yet). Record:
+  docs/history/2026-07-21-chunk5a-adversarial-review.md.

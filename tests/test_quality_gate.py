@@ -535,7 +535,23 @@ class TestSecondFamilyCheck:
         monkeypatch.setattr(hosted_free, "available", lambda: True)
         monkeypatch.setattr(hosted_free, "build_hosted_free_adapter", lambda: fake)
         monkeypatch.setattr(hosted_free, "min_certainty", lambda: min_cert)
+        # Hermeticity (chunk-5a review F4): force the killswitch ON so the
+        # positive-path tests don't silently exercise the skip path when the
+        # box config carries `quality_gate.second_family_check: false`.
+        self._force_config(monkeypatch, True)
         return fake
+
+    @staticmethod
+    def _force_config(monkeypatch, value):
+        import config as config_module
+        real_get = config_module.get
+
+        def forced_get(key, default=None):
+            if key == "quality_gate.second_family_check":
+                return value
+            return real_get(key, default)
+
+        monkeypatch.setattr(config_module, "get", forced_get)
 
     def _captured_events(self, monkeypatch):
         captured = []
@@ -641,17 +657,21 @@ class TestSecondFamilyCheck:
         build.assert_not_called()
 
     def test_config_off_skips(self, monkeypatch):
-        import config as config_module
         self._captured_events(monkeypatch)
         hosted = self._hosted(monkeypatch, '{"verdict": "PASS"}')
-        real_get = config_module.get
+        self._force_config(monkeypatch, False)
+        v = run_quality_gate("goal", [_make_step()], self._paid_adapter(),
+                             run_adversarial=False)
+        assert v.second_family is None
+        hosted.complete.assert_not_called()
 
-        def fake_get(key, default=None):
-            if key == "quality_gate.second_family_check":
-                return False
-            return real_get(key, default)
-
-        monkeypatch.setattr(config_module, "get", fake_get)
+    def test_config_quoted_false_string_disables(self, monkeypatch):
+        # Review F1 pin (unanimous): config.get returns raw YAML nodes, so a
+        # quoted "false" arrives as a truthy string — the killswitch must
+        # normalize it like hosted_free_enabled() does.
+        self._captured_events(monkeypatch)
+        hosted = self._hosted(monkeypatch, '{"verdict": "PASS"}')
+        self._force_config(monkeypatch, "false")
         v = run_quality_gate("goal", [_make_step()], self._paid_adapter(),
                              run_adversarial=False)
         assert v.second_family is None

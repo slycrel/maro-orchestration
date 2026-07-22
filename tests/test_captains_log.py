@@ -396,6 +396,19 @@ class TestEventTypes:
         assert QUALITY_GATE_SECOND_FAMILY in EVENT_TYPES
         assert QUALITY_GATE_SECOND_FAMILY == "QUALITY_GATE_SECOND_FAMILY"
 
+    def test_event_contract_doc_covers_all_types(self):
+        # Census tripwire (chunk-5a review F2): docs/CAPTAINS_LOG_EVENTS.md
+        # claims to be the full event contract, yet 13 event types had
+        # shipped without rows (silent drift since the 2026-06-24 sweep).
+        # Every EVENT_TYPES member must appear backtick-quoted in the doc —
+        # when this fails, add the event's row (emitter, context fields,
+        # when it fires), don't weaken the check.
+        doc = (Path(__file__).resolve().parents[1]
+               / "docs" / "CAPTAINS_LOG_EVENTS.md").read_text()
+        missing = sorted(e for e in EVENT_TYPES if f"`{e}`" not in doc)
+        assert missing == [], (
+            f"EVENT_TYPES missing from docs/CAPTAINS_LOG_EVENTS.md: {missing}")
+
 
 # ---------------------------------------------------------------------------
 # classify_input_type

@@ -424,7 +424,13 @@ def run_quality_gate(
         try:
             from config import get as _cfg_get
             import hosted_free as _hf
-            if _cfg_get("quality_gate.second_family_check", True) and _hf.available():
+            # config.get returns raw YAML nodes — a quoted "false" is a
+            # truthy string, so normalize the same way hosted_free_enabled()
+            # does (chunk-5a review F1) or the killswitch can't kill.
+            _sf_enabled = _cfg_get("quality_gate.second_family_check", True)
+            if isinstance(_sf_enabled, str):
+                _sf_enabled = _sf_enabled.strip().lower() not in ("false", "0", "no", "off")
+            if _sf_enabled and _hf.available():
                 _hosted = _hf.build_hosted_free_adapter()
                 if _hosted is not None:
                     _t0 = time.monotonic()
