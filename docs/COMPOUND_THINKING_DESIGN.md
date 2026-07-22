@@ -333,3 +333,115 @@ deliberately not a build order.
   risk, the rare 1-shot split) → maze (believe the exit; a blocked route ≠ no exit)
   → pirate map (waypoints > edges) → bidirectional / N-landmarks → tri-state fog of
   war → observe vs construct + tech tree → escalation altitude.
+
+---
+
+## 12. Grounding pass — the conversation vs the shipped tree (fable, 2026-07-22)
+
+The conversation ran while chunks 1–5 were landing and could not see chunks 6–8.
+This section is the first of the "revisit with new context" passes Jeremy
+predicted — written after the full arc landed, with every claim below verified
+against the tree, not memory. **Verdict up front: conceptually on target. The
+map model unifies rather than invents — and that's its strength.** The nudges
+are almost all of one kind: *a recommendation framed as a question to answer is
+actually a seam that already exists — point at it instead of building.*
+
+### Where the spiral genuinely moved up
+
+1. **The inverted confidence gradient** (§2) — sure of landmarks, guessing at
+   edges — is a real inversion of how the planner trusts its sequence today.
+   Nothing shipped thinks this way yet.
+2. **The four-stop untangling** (§3a) extends the done≠successful split
+   (session 40) one level up, and that split paid for itself. Distinct verdicts
+   with distinct evidence is a proven move here.
+3. **The observe→construct line** (§8) — escalate at capability acquisition,
+   not at difficulty — is the cleanest statement of the escalation boundary
+   this project has produced, and it composes with possible-now bias instead of
+   competing with it.
+4. **Recon's return type is map edits** (§4) — the type distinction, not the
+   step flavor itself, is the new part. It's what makes recon verifiable.
+
+### Nudges — each one verified against the tree
+
+1. **Rec §9.3 (structural declare-blocked) is not greenfield.** Phase 62
+   already ships this brake at step level: error-fingerprint convergence
+   detection (`loop_blocked.py` — `_is_converging`, escalate-only navigator
+   cutover), and the chunk-7 readout measured it live: **0 evidence-free
+   retries in 1,253 metacognitive decisions**. "Blocked = stopped converging,
+   not spent enough" is already how steps stop. The plan-level version wants
+   the same shape, one level up: **map-edit rate** — consecutive probes
+   returning zero new landmarks/edges = the stall signal. Extend the seam,
+   don't invent a signal.
+2. **§10.3 (calibration) is further along than the doc knows — chunk 6 shipped
+   mid-conversation.** Lesson extraction now *leads* with the
+   expectation-mismatch question (memory.py:200); novelty = 1 − max store
+   similarity is measured on every recorded lesson (knowledge_web.py:13 — the
+   killswitch kills only the boost, never the measurement); the chunk-7
+   readout has a novelty section plus an honesty line for what's missing. The
+   open question reduces to a **join, not a mechanism**: surprise/novelty at
+   capture-time ⋈ verified outcome at closure-time. The negative half already
+   exists — the chunk-4 contradiction pipeline (cited lesson + FULL-trust
+   failure → contested → refight) IS "the meander punishing a bad prior." The
+   positive half is reinforcement. What's missing is only the readout over the
+   join, and data density (all 350 live lessons predate the novelty field).
+3. **Rec §9.5 (coherence check) half-collapses into an existing seam.**
+   closure_verify already treats the director-proxy commitment as a *binding
+   goal definition* (closure_verify.py:648-655) and verifies at goal level
+   against the original ask — that IS the anti-Bugs-Bunny check. The hole is
+   **cadence, not mechanism**: closure fires at the END, so a long meander can
+   burn its budget on a drifted string before anything re-anchors. First
+   experiment: run the existing goal-level question mid-meander at milestone
+   boundaries, against the journaled commitment. If that catches the drift,
+   coherence never needed to be its own signal.
+4. **Rec §9.1 (landmark graph) is the tower-of-babel candidate — build it
+   last, not first.** Consumer-first: nothing reads a landmark graph today,
+   and the tree already holds landmark-shaped artifacts (ResolvedIntent
+   deliverables, the side-quest DAG, decisions.jsonl, thread_brain). A graph
+   store built before its consumer is the exact rot pattern chunks 3–4 just
+   spent two chunks repairing. Order the work so the schema emerges by
+   subtraction: ship the stop-verdict split (§9.4) and recon flavor (§9.2)
+   first — their return/verdict types FORCE the minimal map schema into
+   existence, and the graph becomes whatever those two actually needed.
+5. **§2b's authority resolution already has a decided ancestor.** The fork
+   contract (THREAD_ARCHITECTURE.md, chunk 3) defines the escalation-trigger
+   lane: a child with *evidence* against a parent-owned decision surfaces it
+   and the parent decides — explicitly not parent-always-wins. Master-recuts-
+   on-the-record vs child-drift is the same three-way ownership applied to
+   cuts. Owning the miss: star's alpha guardrail conflated no-silent-drift
+   with no-re-cutting — the conversation's correction is right, and it's
+   **fixed in `.claude/skills/star/SKILL.md` as of this pass** (re-cutting is
+   a logged master taste act; children surface cut-evidence, never edit).
+6. **§10.1 (escalation altitude) — not a rivalry; the payload carries both.**
+   The per-chasm yes/no is the decision; the goal-family ROI is one line of
+   context inside the payload. The escalation-surface decree (substrate
+   go-between, durable file) already fixes where it lands. Don't gate the
+   yes/no on the family calculus — supply it and let the human read at
+   whichever altitude they're standing at.
+
+### What the conversation missed entirely
+
+**Recursion.** The map is described as one flat map, but the standing recursion
+decree means every sub-goal is its own map: landmark and cut inheritance across
+parent/child IS the ancestry problem (thread_brain → ancestry.json, already an
+open GOAL_BRAIN thread), and the fork contract already answers the authority
+half. If the map schema isn't stated as **recursive from the start** — a
+landmark on the parent's map can be a whole map one level down — it will bake
+in single-map assumptions that the recursion decree forbids. This should be a
+§9 recommendation in its own right.
+
+### Proposed build order (input to the discussion, not decisions)
+
+(a) **Stop-verdict split (§9.4)** — smallest, proven precedent, and every
+other piece wants its honest data. (b) **Recon flavor (§9.2)** with
+claim-probe-shaped verification — chunk 5b's `settled_by_command` discipline is
+the existing answer to "is that new edge real or hallucinated." (c) **Exercise
+the map moves in `star` first** — as pure prompting, per its charter;
+crystallization-pressure findings decide what graduates to src/. Never-build
+list (current belief): §9.1 as a standalone graph store; §9.8 as new ROI
+machinery (a payload line suffices until proven otherwise).
+
+An independent contrast take from the opposite model family (Codex, xhigh
+reasoning) is recorded at
+`docs/history/2026-07-22-compound-thinking-codex-take.md` — commissioned
+per Jeremy's ask, summarized there rather than here so this section stays
+fable's own read.

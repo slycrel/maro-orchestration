@@ -32,7 +32,22 @@ swarm-review arc is COMPLETE.** Next: **chunk 9 — compound thinking**
 (docs/COMPOUND_THINKING_DESIGN.md), renumbered from Jeremy's mid-arc
 "chunk 6" addition to the next sequential number as addendum work on the
 completed arc (his call, 2026-07-22; he'd had chunk 5 as the arc's end).
-Opens with discussion + planning, not implementation.
+Opens with discussion + planning, not implementation. **Discussion OPENED
+2026-07-22**: fable's grounding pass appended as design-doc §12 (verdict:
+conceptually on target; most §9 recommendations point at seams the arc
+already shipped — Phase 62 convergence brake, chunk-6 surprise/novelty
+capture, chunk-4 contradiction join, closure's binding proxy commitment;
+recursion named as the conversation's missing piece); independent Codex
+xhigh contrast recorded at
+docs/history/2026-07-22-compound-thinking-codex-take.md (cross-family
+convergence on build order: recon flavor + stop-verdict split first,
+graph deferred; corrections adopted for discussion: stall-as-evidence,
+typed landmarks, VOI gate on recon, side-effect reversibility). One
+settled fix shipped per Jeremy's explicit endorsement: star skill
+re-cutting guardrail (cuts-continuously; master re-cuts on the record,
+children surface cut-evidence, never edit). Remaining agenda awaits
+Jeremy: build order confirmation, coherence-as-cadence vs own-signal,
+escalation payload shape, recursive map framing.
 
 Previous checkpoint — 2026-07-22 **chunk 7 SHIPPED**. Chunk 7 (discretion
 readout — a judgement report, not a bill): **(1)** new

@@ -4214,3 +4214,36 @@ Dormant (deliberately parked, not dropped):
   is renumbered to the next sequential chunk as addendum work on the
   completed arc. Opens with discussion and planning before any
   implementation, per his original intent statement.
+
+- **2026-07-22 — Decision (Jeremy): chunk 9 continues as async discussion;
+  implementation of settled points authorized at Claude's discretion.**
+  Verbatim: "At your discretion, you're welcome to implement if you agree
+  with opus and I towards our overall maro goals while I'm afk." Amends the
+  discussion-first posture: unsettled recommendations stay discussion
+  material; points with explicit three-way agreement (Jeremy + Opus +
+  fable) may ship without waiting. Also asked for a Codex xhigh contrast
+  take on the conversation (delivered:
+  docs/history/2026-07-22-compound-thinking-codex-take.md). His estimate
+  on the conversation's implementation conclusions: "80% there."
+
+- **2026-07-22 — chunk 9 discussion OPENED (grounding + contrast).**
+  Fable's grounding pass = COMPOUND_THINKING_DESIGN.md §12: conceptually
+  on target; the nudges are mostly "the recommendation is a seam the arc
+  already shipped" (§9.3 → Phase 62 fingerprint convergence + future
+  map-edit rate; §10.3 → chunk-6 surprise/novelty capture + chunk-4
+  contradiction join, missing piece is the capture⋈outcome join readout;
+  §9.5 → closure's binding proxy commitment run mid-meander — cadence,
+  not mechanism; §9.1 graph = tower-of-babel candidate, build last,
+  schema by subtraction from §9.4+§9.2; §2b authority = the fork
+  contract's escalation-trigger lane). Missing piece named: the map must
+  be recursive from the start (recursion decree; a parent landmark can be
+  a whole child map). Codex xhigh contrast independently converged on the
+  same build order (recon flavor + stop-verdict split first, graph
+  deferred) and added corrections adopted for the agenda:
+  stall-as-evidence-not-verdict, typed landmarks (type on the node,
+  symmetry in traversal), VOI gate on unknown-unknown recon, side-effect
+  reversibility on committed edges. Settled fix shipped (Jeremy's
+  explicit endorsement in the transcript, turn 4 point 3): star skill
+  re-cutting guardrail — cuts-continuously, master re-cuts on the record
+  naming the licensing surprise, children surface cut-evidence via the
+  escalation-trigger lane, silent drift stays the violation.

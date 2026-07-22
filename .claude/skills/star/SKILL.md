@@ -45,8 +45,10 @@ if/when it turns on, are structural, not vibes:
 2. the child's budget is a strict fraction of the parent's **remaining**
    budget — well-founded recursion, termination by decreasing measure
    (the off-the-rails guard);
-3. the child's cuts are a superset of the parent's cuts (no sideways
-   scope drift down the tree);
+3. the child's cuts at invocation are a superset of the parent's cuts
+   *as they stand at that moment* (no sideways scope drift down the
+   tree — but the parent's cuts are living; see the re-cutting
+   guardrail);
 4. the parent judges the child's result block against criteria the
    PARENT set — a child's self-reported verdict is a claim, never a
    verdict (fork-fabrication lesson, era 08).
@@ -60,7 +62,8 @@ cannot fill one in, ask the user — that gap is itself a finding.
 2. **Done-means**: the executed check(s) that will verify completion —
    named now, not after.
 3. **Cuts**: what is explicitly out of scope / what would make this the
-   wrong thing to build (inversion).
+   wrong thing to build (inversion). Cuts are a living term, not a
+   frozen contract — see the re-cutting guardrail.
 4. **Budget**: max delegations this run (default 8). Hitting the cap =
    stop and report honestly, never push past it silently.
 
@@ -100,6 +103,16 @@ cannot fill one in, ask the user — that gap is itself a finding.
   delegated. If a task feels too small to delegate, note that as a
   granularity finding and delegate it anyway or fold it into a larger task
   — do not quietly do it inline.
+- **Re-cutting is a master taste act, on the record** (compound-thinking
+  correction, 2026-07-22: cuts-first is cuts-*continuously* — possible-now
+  bias protects the *thesis*; the cuts stay liquid). The master may redraw
+  its own cuts mid-run when a judged result licenses it; the redraw gets
+  its own ledger row whose Surprise column names the observation that
+  licensed it — that audit trail is what separates re-cutting from drift.
+  Sub-agents never edit cuts: a child that believes the cuts are wrong
+  surfaces the evidence in its result block (the fork-contract
+  escalation-trigger lane) and the master decides. Silent drift — by
+  master or child — remains the violation.
 - **Two consecutive rejects on the same task → escalate to the user** with
   both rejection evidences. Vary approach once; never ralph the same
   prompt.
