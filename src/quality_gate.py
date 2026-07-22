@@ -8,8 +8,10 @@ The gate also runs an adversarial pass that produces specific contested claims �
 these are appended to the result text even on PASS, so the output flags its own
 weak spots rather than silently emitting potentially overclaimed findings.
 
-The gate uses a cheap model (Haiku) regardless of what ran the loop — fast,
-low-cost, and good enough at pattern-matching for "was this thorough?".
+The gate runs on the run's execution adapter (MID by default since the
+2026-07-21 unification). Because that means the gate reviews output its own
+model family produced, a hosted-free second-family check (Groq/Gemini) can
+stack a decorrelated opinion on top — see run_quality_gate Pass 1.5.
 
 Usage:
     from quality_gate import run_quality_gate, QualityVerdict
@@ -244,6 +246,7 @@ class QualityVerdict:
     contested_claims: List[dict] = field(default_factory=list)  # from adversarial pass
     council: Optional[CouncilVerdict] = None  # from LLM council (if run_council=True)
     cross_ref: Optional[Any] = None  # from cross-reference check (if run_cross_ref=True)
+    second_family: Optional[dict] = None  # hosted-free second-family check (Pass 1.5); flag-only
 
 
 def run_quality_gate(
@@ -260,8 +263,13 @@ def run_quality_gate(
 ) -> QualityVerdict:
     """Review completed loop output and return a quality verdict.
 
-    Runs up to four passes:
+    Runs up to five passes:
     1. PASS/ESCALATE verdict — should we re-run at a higher tier?
+    1.5. Hosted-free second-family check (`_ladder`, chunk 5a) — on a Pass-1
+       PASS, one Groq/Gemini call re-judges the same payload. Stack, don't
+       substitute: dissent is recorded in verdict.second_family and the
+       captain's log, never acted on. Inert when hosted-free is
+       unconfigured/not-opted-in.
     2. Adversarial claim review — what specific claims are contested/overclaimed?
     2.5. Cross-reference check (optional, run_cross_ref=True) — second-source fact check.
        Contested claims are returned in verdict.contested_claims regardless of
@@ -292,8 +300,9 @@ def run_quality_gate(
         return QualityVerdict("PASS", "no completed steps to review", 0.5, False)
 
     # Free gate rung: the local-model Tier 0 was REMOVED 2026-07-21 by decree
-    # ("local LLMs are in the way for now"). The `_ladder` flag is retained as
-    # the seam where the hosted-free rung lands (swarm-review chunk 5).
+    # ("local LLMs are in the way for now"). Its replacement is Pass 1.5 below
+    # (chunk 5a): a hosted-free second-family check that STACKS on the paid
+    # verdict instead of substituting for it. `_ladder` gates that pass.
 
     # Use the last 3 step results as the review payload — synthesis/summary steps
     # are most representative of final quality
@@ -398,6 +407,103 @@ def run_quality_gate(
         log.debug("quality_gate pass1 failed (non-fatal): %s", exc)
         return QualityVerdict("PASS", "gate parse error — defaulting to pass", 0.0, False)
 
+    # --- Pass 1.5: hosted-free second-family check (chunk 5a) ---
+    # The paid gate reviews output its own model family produced —
+    # family-correlated sycophancy is the failure mode the removed local rung
+    # targeted by SUBSTITUTING a free verdict for the paid one. This stacks
+    # instead: on a paid PASS, one second-family call (Groq llama / Gemini
+    # flash-lite via hosted_free) judges the SAME payload, and dissent is
+    # recorded as a flag for the agreement readout, never an action (the
+    # WEAK_ESCALATE stance above: recommendation ≠ action). Authority for the
+    # second family comes from A/B agreement data, or not at all.
+    # Expectation on record: modest lift — all 4 measured gate false-passes
+    # were narration-vs-evidence, which the deterministic provenance probes
+    # (claim_probe, Pass 2) already catch.
+    second_family: Optional[dict] = None
+    if _ladder and data and verdict == "PASS":
+        try:
+            from config import get as _cfg_get
+            import hosted_free as _hf
+            if _cfg_get("quality_gate.second_family_check", True) and _hf.available():
+                _hosted = _hf.build_hosted_free_adapter()
+                if _hosted is not None:
+                    _t0 = time.monotonic()
+                    _sf_resp = _hosted.complete(
+                        [
+                            LLMMessage("system", _GATE_SYSTEM),
+                            LLMMessage("user", user_msg),
+                        ],
+                        max_tokens=256,
+                        temperature=0.1,
+                        no_tools=True,
+                        purpose="quality gate second-family check",
+                    )
+                    _sf_elapsed_ms = int((time.monotonic() - _t0) * 1000)
+                    _sf_source = (
+                        f"hosted_free:{getattr(_hosted, '_active_provider', '') or '?'}"
+                        f":{getattr(_hosted, 'model_key', '')}"
+                    )
+                    _sf_data = extract_json(content_or_empty(_sf_resp), dict,
+                                            log_tag="quality_gate.second_family")
+                    _sf_verdict = safe_str((_sf_data or {}).get("verdict", "")).upper()
+                    _sf_conf = safe_float((_sf_data or {}).get("confidence"),
+                                          default=0.0, min_val=0.0, max_val=1.0)
+                    _sf_reason = safe_str((_sf_data or {}).get("reason"))
+                    if _sf_verdict == "PASS":
+                        _sf_decision = "SECOND_FAMILY_AGREE"
+                    elif _sf_verdict == "ESCALATE" and _sf_conf >= _hf.min_certainty():
+                        _sf_decision = "SECOND_FAMILY_DISSENT"
+                    elif _sf_verdict == "ESCALATE":
+                        # Wanted ESCALATE without conviction — UNDECIDED, not
+                        # dissent (same min_certainty semantics as the
+                        # validator ladder: a weak judge cannot flag).
+                        _sf_decision = "SECOND_FAMILY_UNDECIDED"
+                    else:
+                        # Response received but no usable verdict — recorded
+                        # so the agreement readout sees the true denominator.
+                        _sf_decision = "SECOND_FAMILY_NO_VERDICT"
+                    second_family = {
+                        "decision": _sf_decision,
+                        "verdict": _sf_verdict,
+                        "confidence": _sf_conf,
+                        "reason": _sf_reason[:400],
+                        "source": _sf_source,
+                        "elapsed_ms": _sf_elapsed_ms,
+                    }
+                    log.info(
+                        "quality_gate second_family decision=%s verdict=%s conf=%.2f via %s",
+                        _sf_decision, _sf_verdict or "?", _sf_conf, _sf_source)
+                    try:
+                        from captains_log import log_event, QUALITY_GATE_SECOND_FAMILY
+                        log_event(
+                            QUALITY_GATE_SECOND_FAMILY,
+                            subject=goal[:120],
+                            summary=(
+                                f"decision={_sf_decision} paid=PASS "
+                                f"second={_sf_verdict or '?'} conf={_sf_conf:.2f}"
+                            ),
+                            context={
+                                "decision": _sf_decision,
+                                "verdict": _sf_verdict,
+                                "confidence": _sf_conf,
+                                "reason": _sf_reason[:400],
+                                "source": _sf_source,
+                                "paid_verdict": verdict,
+                                "paid_confidence": confidence,
+                                "paid_source": getattr(adapter, "model_key", "") or "unknown",
+                                "elapsed_ms": _sf_elapsed_ms,
+                                "input_chars": len(user_msg),
+                            },
+                            loop_id=loop_id,
+                        )
+                    except Exception as _sf_ev_exc:
+                        log.debug("captains_log second_family emit failed: %s", _sf_ev_exc)
+        except Exception as exc:
+            # Transport failure / every provider tripped: the tier failed
+            # rather than judged. hosted_free's own breakers already recorded
+            # the failure; the gate result is untouched.
+            log.debug("quality_gate second-family check skipped (non-fatal): %s", exc)
+
     # --- Pass 2: Adversarial claim review ---
     if run_adversarial:
         try:
@@ -473,7 +579,8 @@ def run_quality_gate(
         except Exception as exc:
             log.warning("quality_gate cross_ref pass failed: %s", exc)
 
-    return QualityVerdict(verdict, reason, confidence, escalate, contested_claims, council_verdict, cross_ref_result)
+    return QualityVerdict(verdict, reason, confidence, escalate, contested_claims,
+                          council_verdict, cross_ref_result, second_family)
 
 
 # ---------------------------------------------------------------------------

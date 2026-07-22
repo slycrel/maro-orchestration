@@ -318,7 +318,10 @@ class TestEventTypes:
         # citation-bearing run emits a candidate; capped evolver-cadence
         # adjudication renders the tri-state verdict (only "yes" mutates via
         # contradict_pattern, making the refight lifecycle reachable).
-        assert len(EVENT_TYPES) == 68
+        # +1 (2026-07-21): QUALITY_GATE_SECOND_FAMILY — chunk-5a stacked
+        # hosted-free second-family gate check (agree/dissent evidence rows;
+        # flag-only, nothing reads it for control flow).
+        assert len(EVENT_TYPES) == 69
 
     def test_previously_unregistered_events_in_set(self):
         from captains_log import EVOLVER_REVERTED, EVOLVER_VERIFY, PLAYBOOK_UPDATED
@@ -387,6 +390,11 @@ class TestEventTypes:
         from captains_log import QUALITY_GATE_VERDICT
         assert QUALITY_GATE_VERDICT in EVENT_TYPES
         assert QUALITY_GATE_VERDICT == "QUALITY_GATE_VERDICT"
+
+    def test_quality_gate_second_family_in_set(self):
+        from captains_log import QUALITY_GATE_SECOND_FAMILY
+        assert QUALITY_GATE_SECOND_FAMILY in EVENT_TYPES
+        assert QUALITY_GATE_SECOND_FAMILY == "QUALITY_GATE_SECOND_FAMILY"
 
 
 # ---------------------------------------------------------------------------

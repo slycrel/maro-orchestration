@@ -36,15 +36,23 @@ Post-hoc analyzer of outcomes.jsonl. Detects 7 friction signals:
 Configurable thresholds via config.yml. Produces InspectorReport with severity classification (low/medium/high).
 
 ### Quality Gate (quality_gate.py)
-Multi-pass review system. 4 passes:
+Multi-pass review system. 5 passes:
 1. PASS/ESCALATE verdict (mandatory)
+1.5. Hosted-free second-family check (chunk 5a, 2026-07-21): on a Pass-1
+   PASS, one Groq/Gemini call judges the same payload. **Stack, don't
+   substitute** — dissent lands as a QUALITY_GATE_SECOND_FAMILY event +
+   `verdict.second_family`, never an action (the removed local rung
+   substituted its verdict; this one only accrues A/B agreement evidence).
+   Inert unless hosted-free is opted in; killswitch
+   `quality_gate.second_family_check`.
 2. Adversarial claim review (CONFIRMED/DOWNGRADED/CONTESTED)
 3. Cross-reference fact check (optional, `strict:`)
 4. LLM Council (3 critics; optional, `strict:`)
 
-All passes use the caller's adapter — the run's execution adapter, MID by
-default since the 2026-07-21 unification. Defaults to PASS on any error.
-In practice, most runs only get passes 1-2 — council/cross-ref are
+All paid passes use the caller's adapter — the run's execution adapter, MID
+by default since the 2026-07-21 unification; that self-review correlation is
+exactly what the second-family check instruments. Defaults to PASS on any
+error. In practice, most runs only get passes 1-2 — council/cross-ref are
 `strict:`-gated.
 
 ### Introspect (introspect.py, ~1590 lines)

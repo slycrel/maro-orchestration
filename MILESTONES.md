@@ -2,8 +2,28 @@
 
 What to do next, in what order. Updated each session. Deferred ideas live in BACKLOG.md; completed phase history in docs/history/ROADMAP_ARCHIVE.md (ROADMAP.md is a stub). This file is the executable queue.
 
-Last updated: 2026-07-21 — **swarm-review arc, chunk 4 SHIPPED** (of 8; plan:
-`~/.claude/plans/abundant-gathering-lagoon.md`). Chunk 4 (contradiction
+Last updated: 2026-07-21 — **swarm-review arc, chunk 5a SHIPPED** (of 8; plan:
+`~/.claude/plans/abundant-gathering-lagoon.md`). Chunk 5a (gate hosted-free
+rung, stack-don't-substitute): the quality gate's free rung is back as
+**Pass 1.5** — on a paid Pass-1 PASS, one hosted-free second-family call
+(Groq llama / Gemini flash-lite via the existing `hosted_free` ladder)
+judges the SAME payload; agree/dissent/undecided/no-verdict lands as a new
+QUALITY_GATE_SECOND_FAMILY captain's-log row (paid+second verdict pair,
+source, latency) plus `QualityVerdict.second_family`. Flag-only by design —
+dissent never changes the verdict or triggers escalation (the removed local
+rung SUBSTITUTED its verdict; authority for the second family comes from
+A/B agreement data or not at all; weak-judge ESCALATE below
+`validate.hosted_free.min_certainty` = UNDECIDED, not dissent). Inert
+unless hosted-free is opted in; killswitch
+`quality_gate.second_family_check` (DEFAULTS row + census green).
+Documented expectation: modest lift — all 4 measured gate false-passes were
+narration-vs-evidence, already caught by the deterministic claim probes.
+EVENT_TYPES 68→69; 11 new pins (TestSecondFamilyCheck); live-verified
+against real Gemini flash-lite (649ms, AGREE row in the real captain's
+log). **Next: chunk-5a adversarial review, then chunk 5b (persona-dispatch
+owner first, then evidence-path lenses + triad ablation).**
+
+Previous checkpoint — 2026-07-21 **chunk 4 SHIPPED**. Chunk 4 (contradiction
 wiring — `contradict_pattern` finally has a runtime writer; the
 contested→refight lifecycle is reachable for the first time): recall's loop
 slice stamps durable citation IDs (`rules_cited` via new

@@ -508,3 +508,169 @@ class TestQualityGateCaptainsLogEmit:
         assert ev["context"]["escalate"] is False
 
 
+
+
+# ---------------------------------------------------------------------------
+# Pass 1.5 — hosted-free second-family check (chunk 5a, stack-don't-substitute)
+# ---------------------------------------------------------------------------
+
+class TestSecondFamilyCheck:
+    """The stacked second-family check is flag-only: it records agreement
+    evidence and may never change the paid gate's verdict or escalate."""
+
+    def _paid_adapter(self, verdict="PASS", confidence=0.9):
+        return _make_adapter(
+            f'{{"verdict": "{verdict}", "reason": "judged", "confidence": {confidence}}}'
+        )
+
+    def _hosted(self, monkeypatch, content=None, *, raises=None, min_cert=0.6):
+        import hosted_free
+        fake = MagicMock()
+        fake._active_provider = "groq"
+        fake.model_key = "llama-3.1-8b-instant"
+        if raises is not None:
+            fake.complete.side_effect = raises
+        else:
+            fake.complete.return_value = SimpleNamespace(content=content or "")
+        monkeypatch.setattr(hosted_free, "available", lambda: True)
+        monkeypatch.setattr(hosted_free, "build_hosted_free_adapter", lambda: fake)
+        monkeypatch.setattr(hosted_free, "min_certainty", lambda: min_cert)
+        return fake
+
+    def _captured_events(self, monkeypatch):
+        captured = []
+
+        def fake_log_event(event_type, subject="", summary="", context=None,
+                           note=None, loop_id=None, related_ids=None, **kw):
+            captured.append({"event_type": event_type, "summary": summary,
+                             "context": context or {}, "loop_id": loop_id})
+            return {}
+
+        import captains_log as _cl
+        monkeypatch.setattr(_cl, "log_event", fake_log_event)
+        return captured
+
+    def test_second_family_defaults_none(self):
+        v = QualityVerdict("PASS", "ok", 0.9, False)
+        assert v.second_family is None
+
+    def test_dissent_is_flag_only(self, monkeypatch):
+        events = self._captured_events(monkeypatch)
+        hosted = self._hosted(
+            monkeypatch,
+            '{"verdict": "ESCALATE", "reason": "shallow", "confidence": 0.9}')
+        v = run_quality_gate("goal", [_make_step()], self._paid_adapter(),
+                             run_adversarial=False, loop_id="loop-sf-1")
+        # Flag only — the paid verdict is untouched.
+        assert v.verdict == "PASS"
+        assert v.escalate is False
+        assert v.second_family["decision"] == "SECOND_FAMILY_DISSENT"
+        assert v.second_family["verdict"] == "ESCALATE"
+        assert hosted.complete.call_count == 1
+        sf = [e for e in events if e["event_type"] == "QUALITY_GATE_SECOND_FAMILY"]
+        assert len(sf) == 1
+        assert sf[0]["context"]["decision"] == "SECOND_FAMILY_DISSENT"
+        assert sf[0]["context"]["paid_verdict"] == "PASS"
+        assert sf[0]["context"]["source"].startswith("hosted_free:groq:")
+        assert sf[0]["loop_id"] == "loop-sf-1"
+
+    def test_agreement_recorded(self, monkeypatch):
+        events = self._captured_events(monkeypatch)
+        self._hosted(
+            monkeypatch,
+            '{"verdict": "PASS", "reason": "fine", "confidence": 0.8}')
+        v = run_quality_gate("goal", [_make_step()], self._paid_adapter(),
+                             run_adversarial=False)
+        assert v.second_family["decision"] == "SECOND_FAMILY_AGREE"
+        sf = [e for e in events if e["event_type"] == "QUALITY_GATE_SECOND_FAMILY"]
+        assert len(sf) == 1
+
+    def test_low_confidence_escalate_is_undecided(self, monkeypatch):
+        # min_certainty semantics from the validator ladder: a weak judge
+        # cannot flag — ESCALATE below the bar is UNDECIDED, not DISSENT.
+        self._captured_events(monkeypatch)
+        self._hosted(
+            monkeypatch,
+            '{"verdict": "ESCALATE", "reason": "hmm", "confidence": 0.3}',
+            min_cert=0.6)
+        v = run_quality_gate("goal", [_make_step()], self._paid_adapter(),
+                             run_adversarial=False)
+        assert v.second_family["decision"] == "SECOND_FAMILY_UNDECIDED"
+        assert v.escalate is False
+
+    def test_garbage_response_is_no_verdict(self, monkeypatch):
+        # Still emitted — the agreement readout needs the true denominator.
+        events = self._captured_events(monkeypatch)
+        self._hosted(monkeypatch, "I cannot help with that.")
+        v = run_quality_gate("goal", [_make_step()], self._paid_adapter(),
+                             run_adversarial=False)
+        assert v.second_family["decision"] == "SECOND_FAMILY_NO_VERDICT"
+        sf = [e for e in events if e["event_type"] == "QUALITY_GATE_SECOND_FAMILY"]
+        assert len(sf) == 1
+
+    def test_paid_escalate_skips_check(self, monkeypatch):
+        self._captured_events(monkeypatch)
+        hosted = self._hosted(monkeypatch, '{"verdict": "PASS"}')
+        v = run_quality_gate("goal", [_make_step()],
+                             self._paid_adapter(verdict="ESCALATE"),
+                             run_adversarial=False)
+        assert v.second_family is None
+        hosted.complete.assert_not_called()
+
+    def test_weak_escalate_skips_check(self, monkeypatch):
+        # Paid verdict ESCALATE under threshold (decision WEAK_ESCALATE) is
+        # not a PASS — the stacked check runs on paid PASS only.
+        self._captured_events(monkeypatch)
+        hosted = self._hosted(monkeypatch, '{"verdict": "PASS"}')
+        v = run_quality_gate("goal", [_make_step()],
+                             self._paid_adapter(verdict="ESCALATE", confidence=0.5),
+                             run_adversarial=False)
+        assert v.second_family is None
+        hosted.complete.assert_not_called()
+
+    def test_unavailable_tier_is_inert(self, monkeypatch):
+        import hosted_free
+        self._captured_events(monkeypatch)
+        monkeypatch.setattr(hosted_free, "available", lambda: False)
+        build = MagicMock()
+        monkeypatch.setattr(hosted_free, "build_hosted_free_adapter", build)
+        v = run_quality_gate("goal", [_make_step()], self._paid_adapter(),
+                             run_adversarial=False)
+        assert v.verdict == "PASS"
+        assert v.second_family is None
+        build.assert_not_called()
+
+    def test_config_off_skips(self, monkeypatch):
+        import config as config_module
+        self._captured_events(monkeypatch)
+        hosted = self._hosted(monkeypatch, '{"verdict": "PASS"}')
+        real_get = config_module.get
+
+        def fake_get(key, default=None):
+            if key == "quality_gate.second_family_check":
+                return False
+            return real_get(key, default)
+
+        monkeypatch.setattr(config_module, "get", fake_get)
+        v = run_quality_gate("goal", [_make_step()], self._paid_adapter(),
+                             run_adversarial=False)
+        assert v.second_family is None
+        hosted.complete.assert_not_called()
+
+    def test_ladder_false_skips(self, monkeypatch):
+        self._captured_events(monkeypatch)
+        hosted = self._hosted(monkeypatch, '{"verdict": "PASS"}')
+        v = run_quality_gate("goal", [_make_step()], self._paid_adapter(),
+                             run_adversarial=False, _ladder=False)
+        assert v.second_family is None
+        hosted.complete.assert_not_called()
+
+    def test_transport_failure_non_fatal(self, monkeypatch):
+        events = self._captured_events(monkeypatch)
+        self._hosted(monkeypatch, raises=RuntimeError("all providers tripped"))
+        v = run_quality_gate("goal", [_make_step()], self._paid_adapter(),
+                             run_adversarial=False)
+        assert v.verdict == "PASS"
+        assert v.second_family is None
+        sf = [e for e in events if e["event_type"] == "QUALITY_GATE_SECOND_FAMILY"]
+        assert sf == []

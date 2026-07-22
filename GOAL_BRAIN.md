@@ -3976,3 +3976,25 @@ Dormant (deliberately parked, not dropped):
   lesson-store contested tier (no consumer), maintenance cadence
   redesign (pre-existing architecture). Record:
   docs/history/2026-07-21-chunk4-adversarial-review.md.
+- 2026-07-21 (chunk 5a executed, standing grant): **swarm-review chunk 5a
+  shipped — the quality gate's free rung returns as a stacked
+  second-family check, not a substitute.** The removed local Tier-0
+  (chunk 1) SUBSTITUTED a free verdict for the paid one when decisive;
+  the plan's stack-don't-substitute correction lands as gate Pass 1.5:
+  on a paid Pass-1 PASS, one hosted-free call (existing `hosted_free`
+  ladder — Groq llama / Gemini flash-lite, $0, consent-gated by
+  `validate.hosted_free.enabled`) judges the SAME payload, and the
+  agreement outcome (AGREE / DISSENT / UNDECIDED / NO_VERDICT) is
+  recorded as QUALITY_GATE_SECOND_FAMILY (paid+second verdict pair,
+  source, latency, loop_id) + `QualityVerdict.second_family`. Flag-only
+  invariant pinned: dissent NEVER changes verdict/escalate — authority
+  comes from A/B agreement data (chunk-7 readout) or not at all; a
+  weak-judge ESCALATE below `validate.hosted_free.min_certainty` maps
+  to UNDECIDED (validator-ladder semantics: a weak judge cannot flag);
+  received-but-unparsable = NO_VERDICT, still emitted so the readout
+  sees the true denominator. Killswitch
+  `quality_gate.second_family_check` default ON (flag-only, $0).
+  Documented expectation per plan: modest lift — all 4 measured gate
+  false-passes were narration-vs-evidence, already caught by claim
+  probes. EVENT_TYPES 68→69; 11 pins; live-verified against real
+  Gemini flash-lite (649ms, AGREE row in the real captain's log).

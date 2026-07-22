@@ -163,6 +163,13 @@ FENCE_EXTENDED = "FENCE_EXTENDED"  # per-run: fence widened to path(s) the goal 
 LOOP_CREATED = "LOOP_CREATED"  # every loop spawn — reason, parent_loop_id, slug, max_steps
 QUALITY_GATE_VERDICT = "QUALITY_GATE_VERDICT"  # PASS / ESCALATE — most important escalation signal
 
+# Second-family gate check (swarm-review chunk 5a, stack-don't-substitute).
+# One per paid-gate PASS while hosted-free is available: a different model
+# family (Groq/Gemini) re-judges the SAME payload; the row records
+# agree/dissent/undecided/no-verdict plus both verdicts. Flag-only evidence
+# for the agreement readout (chunk 7); nothing reads it for control flow.
+QUALITY_GATE_SECOND_FAMILY = "QUALITY_GATE_SECOND_FAMILY"
+
 # Per-step resource-burn signal: step exceeded the cap from the
 # decomposition_too_broad post-mortem note (≤120s and ≤200K tokens per step).
 # Fires mid-loop so the warning is visible without waiting for the loop to
@@ -233,7 +240,7 @@ EVENT_TYPES = {
     SCOPE_GENERATED, SCOPE_PARSE_FAILED, SCOPE_SKIPPED, CLOSURE_VERDICT, CLAIM_PROBED,
     CLAIM_VERIFIER_OUTCOME, FABRICATION_DETECTED, SCAVENGE_DETECTED, FENCE_WRITE_BLOCKED,
     FENCE_EXTENDED,
-    LOOP_CREATED, QUALITY_GATE_VERDICT, STEP_TOO_BROAD,
+    LOOP_CREATED, QUALITY_GATE_VERDICT, QUALITY_GATE_SECOND_FAMILY, STEP_TOO_BROAD,
     RECALL_PERFORMED, RECALL_GUARD_TRIPPED,
     NAVIGATOR_DECIDED, NAVIGATOR_ACTED, NAVIGATOR_ADJUDICATED,
     VALIDATOR_SHADOWED, VALIDATION_LADDER,
