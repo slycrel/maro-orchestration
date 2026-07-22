@@ -313,7 +313,12 @@ class TestEventTypes:
         # (BACKLOG step-count constraint; planner._enforce_step_ceiling).
         # +1 (2026-07-21): PLAYBOOK_CURATED — dream-cycle playbook curation
         # (dedup + size-gated LLM compress; swarm-review chunk 2).
-        assert len(EVENT_TYPES) == 66
+        # +2 (2026-07-21): CONTRADICTION_CANDIDATE + CONTRADICTION_ADJUDICATED
+        # — chunk-4 contradiction wiring: full-trust failed verdict on a
+        # citation-bearing run emits a candidate; capped evolver-cadence
+        # adjudication renders the tri-state verdict (only "yes" mutates via
+        # contradict_pattern, making the refight lifecycle reachable).
+        assert len(EVENT_TYPES) == 68
 
     def test_previously_unregistered_events_in_set(self):
         from captains_log import EVOLVER_REVERTED, EVOLVER_VERIFY, PLAYBOOK_UPDATED

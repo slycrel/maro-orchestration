@@ -104,6 +104,17 @@ PLAYBOOK_UPDATED = "PLAYBOOK_UPDATED"
 # llm_compressed, archived, chars_before, chars_after.
 PLAYBOOK_CURATED = "PLAYBOOK_CURATED"
 
+# Contradiction lifecycle (swarm-review chunk 4): a trusted goal-not-achieved
+# verdict on a run whose recall cited standing rules / lessons becomes a
+# candidate collision; the evolver-cadence adjudicator judges whether the
+# failure actually contradicts the cited artifact (tri-state — UNDECIDED is
+# unjudged, never contested). YES routes through contradict_pattern, which
+# makes the contested tier + refight_rule reachable.
+# Candidate context: loop_id, rule_ids, lesson_ids, failure_summary.
+CONTRADICTION_CANDIDATE = "CONTRADICTION_CANDIDATE"
+# Adjudicated context: candidate loop_id, verdict (yes|no|undecided), rule_ids.
+CONTRADICTION_ADJUDICATED = "CONTRADICTION_ADJUDICATED"
+
 # Recovery & diagnosis
 AUTO_RECOVERY = "AUTO_RECOVERY"
 DIAGNOSIS = "DIAGNOSIS"
@@ -215,6 +226,7 @@ EVENT_TYPES = {
     GRADUATION_VERIFIED,
     EVOLVER_REVERTED, EVOLVER_VERIFY, EVOLVER_VERDICT, PLAYBOOK_UPDATED,
     PLAYBOOK_CURATED,
+    CONTRADICTION_CANDIDATE, CONTRADICTION_ADJUDICATED,
     AUTO_RECOVERY, DIAGNOSIS, INPUT_MISMATCH,
     DECISION_RECORDED, METACOGNITIVE_DECISION,
     CUTS_DRAWN, BOUNDARY_EXPANDED, STEP_CEILING_ENFORCED,

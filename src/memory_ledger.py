@@ -626,6 +626,7 @@ def stamp_outcome_verdict(
                 row["goal_verdict_confidence"] = float(goal_verdict_confidence)
             lines[target_idx] = json.dumps(row)
             updated["hit"] = True
+            updated["row"] = row
             return "\n".join(lines) + ("\n" if lines else "")
 
         try:
@@ -656,7 +657,74 @@ def stamp_outcome_verdict(
             )
             return OutcomeVerdictStampResult(
                 "write_failed", attempts=attempt, error=str(exc))
+        _maybe_emit_contradiction_candidate(loop_id, updated.get("row") or {})
         return OutcomeVerdictStampResult("updated", attempts=attempt)
+
+
+def _maybe_emit_contradiction_candidate(loop_id: str, row: dict) -> None:
+    """Chunk-4 contradiction wiring (era-07's "natural collision detector"):
+    a fully-trusted goal_achieved=False verdict on a run that was injected
+    with specific rules/lessons is a candidate collision between crystallized
+    knowledge and reality. Emits the append-only CONTRADICTION_CANDIDATE
+    event; the capped adjudicator (knowledge_lens.
+    adjudicate_contradiction_candidates, evolver cadence) decides whether the
+    failure actually contradicts what was cited — the emitter never judges.
+
+    Gates, in order:
+    - goal_achieved is False (True/None verdicts collide with nothing);
+    - verdict_trust(row) == FULL — the era-10 single-gate law: closure
+      verdicts are consumed only through verdict_trust, so a directional
+      (low-confidence) or excluded (verifier's-own-failure) False can never
+      seed a contradiction against a standing rule;
+    - the run dir has a non-empty source/recall_citations.json (written by
+      recall's loop slice). Audit-process re-stamps run with no current run
+      dir and degrade to no event — by design, the citation join belongs to
+      the run that was actually injected.
+
+    Never raises: candidate emission is observability-grade, and a log
+    failure must not perturb the verdict stamp it rides on.
+    """
+    try:
+        if row.get("goal_achieved") is not False:
+            return
+        if verdict_trust(row) != VERDICT_TRUST_FULL:
+            return
+        import runs as _runs
+        rd = _runs.current_run_dir()
+        if rd is None:
+            return
+        cit_path = Path(rd) / "source" / "recall_citations.json"
+        if not cit_path.exists():
+            return
+        cit = json.loads(cit_path.read_text(encoding="utf-8"))
+        rule_ids = [str(r) for r in (cit.get("rule_ids") or []) if r]
+        lesson_ids = [str(l) for l in (cit.get("lesson_ids") or []) if l]
+        if not rule_ids and not lesson_ids:
+            return
+        from captains_log import log_event, CONTRADICTION_CANDIDATE
+        log_event(
+            CONTRADICTION_CANDIDATE,
+            subject=loop_id,
+            summary=(
+                f"Run failed with full-trust verdict while injected with "
+                f"{len(rule_ids)} rule(s) / {len(lesson_ids)} lesson(s) — "
+                "candidate collision, awaiting adjudication."),
+            context={
+                "loop_id": loop_id,
+                "rule_ids": rule_ids,
+                "lesson_ids": lesson_ids,
+                "failure_summary": str(row.get("summary", "") or "")[:300],
+                "goal_preview": str(row.get("goal", "") or "")[:200],
+                "verdict_source": str(row.get("goal_verdict_source", "") or ""),
+            },
+            loop_id=loop_id,
+            related_ids=[f"rule:{r}" for r in rule_ids],
+        )
+    except Exception:
+        log.debug(
+            "contradiction-candidate emit failed for %s", loop_id,
+            exc_info=True)
+
 
 def load_outcome_by_loop_id(loop_id: str) -> Optional[Outcome]:
     """Load the NEWEST outcomes row matching loop_id, rehydrated as an Outcome.

@@ -282,8 +282,9 @@ class TestLoopSlice:
 
         monkeypatch.setattr(memory, "load_lessons",
                             lambda **kw: [_L()] if kw.get("task_type") == "agenda" else [])
-        monkeypatch.setattr(memory, "inject_standing_rules",
-                            lambda domain="": "## Standing Rules\n- always push")
+        monkeypatch.setattr(memory, "standing_rules_with_ids",
+                            lambda domain="": ("## Standing Rules\n- always push",
+                                               ["r-1"]))
         monkeypatch.setattr(memory, "inject_decisions",
                             lambda goal, domain="": "## Decisions\n- chose sqlite")
         monkeypatch.setattr(memory, "search_graveyard",
@@ -370,6 +371,69 @@ class TestLoopSlice:
         cited = performed[0]["context"]["lessons_cited"]
         assert cited == ["the cited lesson text"]
 
+    def test_citation_ids_stamped_and_written_run_keyed(
+            self, monkeypatch, tmp_path):
+        """Chunk-4 join: durable IDs (not 120-char previews) reach both the
+        RECALL_PERFORMED stamp and the run-keyed citations file that
+        stamp_outcome_verdict's candidate emitter reads."""
+        _setup(monkeypatch, tmp_path)
+        import memory
+        import runs as runs_module
+
+        class _L:
+            outcome = "done"
+            lesson = "the cited lesson text"
+            lesson_id = "lid-1"
+
+        monkeypatch.setattr(memory, "load_lessons", lambda **kw: [_L()])
+        monkeypatch.setattr(
+            memory, "standing_rules_with_ids",
+            lambda domain="": ("### Standing Rules\n- always x", ["r-1"]))
+        run_dir = tmp_path / "runs" / "r1"
+        run_dir.mkdir(parents=True)
+        monkeypatch.setattr(runs_module, "current_run_dir", lambda: run_dir)
+
+        events = []
+        with patch("captains_log.log_event",
+                   side_effect=lambda et, **kw: events.append((et, kw))):
+            recall("any goal", slice="loop", project="proj-x")
+
+        ctx = [kw for et, kw in events if et == "RECALL_PERFORMED"][0]["context"]
+        assert ctx["lesson_ids_cited"] == ["lid-1"]
+        assert ctx["rules_cited"] == ["r-1"]
+        cit = json.loads(
+            (run_dir / "source" / "recall_citations.json").read_text())
+        assert cit["rule_ids"] == ["r-1"]
+        assert cit["lesson_ids"] == ["lid-1"]
+        assert cit["project"] == "proj-x"
+
+    def test_no_citations_no_run_file(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        import runs as runs_module
+        run_dir = tmp_path / "runs" / "r2"
+        run_dir.mkdir(parents=True)
+        monkeypatch.setattr(runs_module, "current_run_dir", lambda: run_dir)
+        recall("any goal", slice="loop")
+        assert not (run_dir / "source" / "recall_citations.json").exists()
+
+    def test_citation_file_failure_never_takes_recall_down(
+            self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        import memory
+        import runs as runs_module
+
+        class _L:
+            outcome = "done"
+            lesson = "text"
+            lesson_id = "lid-2"
+
+        monkeypatch.setattr(memory, "load_lessons", lambda **kw: [_L()])
+        monkeypatch.setattr(
+            runs_module, "current_run_dir",
+            lambda: (_ for _ in ()).throw(RuntimeError("runs down")))
+        r = recall("any goal", slice="loop")
+        assert "text" in r.lessons
+
     def test_broken_substrate_never_takes_seam_down(self, monkeypatch, tmp_path):
         _setup(monkeypatch, tmp_path)
         import memory
@@ -380,8 +444,9 @@ class TestLoopSlice:
         monkeypatch.setattr(memory, "load_lessons", _boom)
         monkeypatch.setattr(memory, "inject_lessons_for_task",
                             lambda *a, **kw: (_ for _ in ()).throw(RuntimeError()))
-        monkeypatch.setattr(memory, "inject_standing_rules",
-                            lambda domain="": "## Standing Rules\n- survives")
+        monkeypatch.setattr(memory, "standing_rules_with_ids",
+                            lambda domain="": ("## Standing Rules\n- survives",
+                                               []))
         r = recall("any goal", slice="loop")
         assert r.lessons == ""
         assert "survives" in r.standing_rules

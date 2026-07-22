@@ -3922,3 +3922,33 @@ Dormant (deliberately parked, not dropped):
   decision-kind taxonomy (three writers don't justify a type system),
   mid-run decision supersede/dedup lifecycle. Record:
   docs/history/2026-07-21-chunk3-adversarial-review.md.
+- 2026-07-21 (chunk 4 executed, standing grant): **swarm-review chunk 4
+  shipped — contradict_pattern finally has a runtime writer; the
+  contested→refight lifecycle Jeremy designed on the entropy thread
+  (2026-06-11) is reachable for the first time.** The chain: recall's
+  loop slice stamps durable IDs (`rules_cited` via new
+  `standing_rules_with_ids`, `lesson_ids_cited`) into RECALL_PERFORMED
+  and writes run-keyed `source/recall_citations.json`;
+  `stamp_outcome_verdict` (the single post-hoc verdict funnel) emits
+  CONTRADICTION_CANDIDATE when a FULL-trust `goal_achieved=False` lands
+  on a citation-bearing run — era-10 law honored: consumed ONLY through
+  `verdict_trust`, so directional/excluded verdicts can never seed a
+  contradiction (pinned); `adjudicate_contradiction_candidates`
+  (knowledge_lens, evolver cadence via run_skill_maintenance BEFORE the
+  refight scan, cap 3/cycle, config
+  `knowledge.contradiction_adjudication_enabled` default ON) renders a
+  tri-state verdict — only exact "yes" calls contradict_pattern;
+  UNDECIDED = unjudged, never contested (checkpoint law iv, pinned);
+  unparsable = no event, retriable; artifacts-all-gone = deterministic
+  moot-clear. End-to-end pin: failing run citing a rule reaches
+  RULE_REFOUGHT in ONE maintenance pass (test_contradiction_wiring.py).
+  Prerequisites shipped in-chunk: (v) battery-V2 domain fix — promotion
+  now writes domain="" (task-type vocabulary never matched the
+  project-filtered reader; the 4 live rules were invisible to every
+  project-scoped run since promotion) + live migration agenda→"" with
+  archive copy (standing_rules.jsonl.pre-domain-migration-2026-07-21),
+  verified: all 4 now inject on project reads; (ii) era-09 provenance —
+  StandingRule.source_lesson_ids keeps ALL contributing lessons at
+  promotion (source_lesson_id stays as first-contributor compat).
+  EVENT_TYPES 66→68. DEFAULTS.md row + census green; arch skill
+  updated. Full suite green (185 items).

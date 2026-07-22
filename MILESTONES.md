@@ -2,8 +2,28 @@
 
 What to do next, in what order. Updated each session. Deferred ideas live in BACKLOG.md; completed phase history in docs/history/ROADMAP_ARCHIVE.md (ROADMAP.md is a stub). This file is the executable queue.
 
-Last updated: 2026-07-21 — **swarm-review arc, chunk 3 SHIPPED** (of 8; plan:
-`~/.claude/plans/abundant-gathering-lagoon.md`). Chunk 3 (decisions.jsonl
+Last updated: 2026-07-21 — **swarm-review arc, chunk 4 SHIPPED** (of 8; plan:
+`~/.claude/plans/abundant-gathering-lagoon.md`). Chunk 4 (contradiction
+wiring — `contradict_pattern` finally has a runtime writer; the
+contested→refight lifecycle is reachable for the first time): recall's loop
+slice stamps durable citation IDs (`rules_cited` via new
+`standing_rules_with_ids`, `lesson_ids_cited`) into RECALL_PERFORMED + writes
+run-keyed `source/recall_citations.json`; `stamp_outcome_verdict` emits
+CONTRADICTION_CANDIDATE on a FULL-trust (verdict_trust — era-10 law, pinned)
+goal_achieved=False for a citation-bearing run;
+`adjudicate_contradiction_candidates` (evolver cadence, BEFORE the refight
+scan so candidate→contested→refought completes in one maintenance pass —
+pinned end-to-end; cap 3/cycle; `knowledge.contradiction_adjudication_enabled`
+default ON) renders tri-state verdicts — only exact "yes" mutates; UNDECIDED
+is unjudged, never contested (law iv, pinned). Prereqs in-chunk: battery-V2
+domain fix (promotion writes ""; 4 live rules migrated agenda→"" with archive
+copy — they now actually inject on project-scoped runs) and era-09 provenance
+(`StandingRule.source_lesson_ids` keeps all contributors). EVENT_TYPES
+66→68; 24 new pins (test_contradiction_wiring.py + promotion/recall);
+full suite green (185 items). **Next: chunk-4 adversarial review, then
+chunk 5a.**
+
+Previous checkpoint — 2026-07-21 **chunk 3 SHIPPED**. Chunk 3 (decisions.jsonl
 writers — the store's read side was always live, recall substrate #3; it
 never had a runtime writer): (1) executor DECISION directive — `decisions`
 field on complete_step (max 2/step, 200/300-char caps), fan-out in

@@ -33,6 +33,7 @@ import logging
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from ancestry import Origin
@@ -591,6 +592,8 @@ def recall(
 
         # 1. Tiered lessons — ranked retrieval; legacy injector as fallback.
         lessons_cited: List[str] = []
+        lesson_ids_cited: List[str] = []
+        rules_cited: List[str] = []
         try:
             from memory import load_lessons, _MAX_LESSON_INJECT_CHARS
             from age_stamp import age_stamps_enabled, age_suffix
@@ -617,6 +620,9 @@ def recall(
                         _age_stamped_any = True
                     _lines.append(f"- {_icon} {_l.lesson}{_suffix}")
                     lessons_cited.append(str(_l.lesson)[:120])
+                    _lid = getattr(_l, "lesson_id", "") or ""
+                    if _lid:
+                        lesson_ids_cited.append(_lid)
                 _text = "\n".join(_lines)
                 if len(_text) > _MAX_LESSON_INJECT_CHARS:
                     _text = _text[:_MAX_LESSON_INJECT_CHARS].rsplit("\n", 1)[0]
@@ -633,8 +639,9 @@ def recall(
 
         # 2. Standing rules (top tier — apply unconditionally), project-scoped.
         try:
-            from memory import inject_standing_rules
-            result.standing_rules = inject_standing_rules(domain=project)
+            from memory import standing_rules_with_ids
+            result.standing_rules, rules_cited = standing_rules_with_ids(
+                domain=project)
         except Exception:
             pass
 
@@ -699,6 +706,33 @@ def recall(
         # The log is the crystallization substrate — no new store.
         if lessons_cited:
             sources["lessons_cited"] = lessons_cited
+        # Chunk-4 citation join: durable IDs (not 120-char previews) so a
+        # later failure verdict can name the exact rules/lessons the run was
+        # injected with. Stamped in the log AND written run-keyed below —
+        # stamp_outcome_verdict reads the run dir, not the log.
+        if lesson_ids_cited:
+            sources["lesson_ids_cited"] = lesson_ids_cited
+        if rules_cited:
+            sources["rules_cited"] = rules_cited
+        if lesson_ids_cited or rules_cited:
+            try:
+                import runs as _runs
+                _rd = _runs.current_run_dir()
+                if _rd is not None:
+                    _src = Path(_rd) / "source"
+                    _src.mkdir(parents=True, exist_ok=True)
+                    # Overwrite-per-recall is correct: a restarted run's
+                    # verdict should join against the citations of the recall
+                    # that actually fed it (the verdict stamp reads before
+                    # any later run's recall overwrites).
+                    (_src / "recall_citations.json").write_text(json.dumps({
+                        "rule_ids": rules_cited,
+                        "lesson_ids": lesson_ids_cited,
+                        "goal_preview": goal[:200],
+                        "project": project or "",
+                    }, indent=2))
+            except Exception as exc:
+                log.debug("recall: citation file write failed: %s", exc)
 
     sources["elapsed_ms"] = int((time.monotonic() - t0) * 1000)
 

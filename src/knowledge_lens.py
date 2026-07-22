@@ -45,7 +45,11 @@ class StandingRule:
     rule_id: str
     rule: str                       # The rule text injected into decompose
     source_lesson_id: str           # Long-tier lesson this was promoted from
-    domain: str                     # goal domain / task_type tag
+                                    # (first contributor — source_lesson_ids has all)
+    domain: str                     # PROJECT slug or "" (global). Chunk-4 fix of
+                                    # battery V2: the sole live reader filters by
+                                    # project (recall substrate #2), so task_type
+                                    # values here never inject — do NOT write them.
     confirmations: int              # times confirmed in production after promotion
     contradictions: int             # times contradicted (≥1 → contested: injected as
                                     # verify-before-relying until refight_rule resolves it)
@@ -56,6 +60,11 @@ class StandingRule:
                                     # from being applied/injected. Empty on rules
                                     # written before 2026-06-11; promoted_at is
                                     # the freshness fallback.
+    source_lesson_ids: List[str] = field(default_factory=list)  # ALL contributing
+                                    # lessons at promotion (era-09 provenance decree:
+                                    # "provenance not recorded is gone" — refight
+                                    # re-derives from these). Rules promoted before
+                                    # 2026-07-21 have only source_lesson_id.
     imported: Dict[str, Any] = field(default_factory=dict)  # provenance stamp for
                                     # pack-imported rows (PORTABLE_LEARNING_DESIGN §3);
                                     # empty on locally-originated rules. Must stay a
@@ -69,7 +78,9 @@ class StandingRule:
             "source_lesson_id": self.source_lesson_id, "domain": self.domain,
             "confirmations": self.confirmations, "contradictions": self.contradictions,
             "promoted_at": self.promoted_at, "last_applied": self.last_applied,
-            "last_verified": self.last_verified, "imported": self.imported,
+            "last_verified": self.last_verified,
+            "source_lesson_ids": self.source_lesson_ids,
+            "imported": self.imported,
         }
 
     @classmethod
@@ -339,11 +350,16 @@ def _observe_pattern_locked(lesson: str, domain: str, *, source_lesson_id: str =
             rule_id=str(_uuid.uuid4())[:8],
             rule=target_hyp.lesson,
             source_lesson_id=target_hyp.source_lesson_ids[0] if target_hyp.source_lesson_ids else "",
-            domain=target_hyp.domain,
+            # Rules are global ("") unless a writer has a real project slug —
+            # the hypothesis domain is task_type vocabulary, which the sole
+            # live reader (recall substrate #2, project-filtered) can never
+            # match (battery V2, fixed swarm-review chunk 4).
+            domain="",
             confirmations=target_hyp.confirmations,
             contradictions=0,
             promoted_at=now,
             last_verified=now,
+            source_lesson_ids=list(target_hyp.source_lesson_ids),
         )
         from file_lock import locked_append
         locked_append(_rules_path(), json.dumps(rule.to_dict()))
@@ -520,9 +536,19 @@ def inject_standing_rules(domain: str = "") -> str:
 
     Returns empty string if no rules exist (safe to always call).
     """
+    return standing_rules_with_ids(domain)[0]
+
+
+def standing_rules_with_ids(domain: str = "") -> tuple:
+    """(rendered_block, [rule_ids]) — same render as inject_standing_rules,
+    plus the ids of every rule that made it into the block (all tiers: a
+    contested/stale rule the run was told to verify still counts as relied-on
+    for contradiction-candidate purposes). The ids feed RECALL_PERFORMED's
+    rules_cited stamp — the join contradiction wiring needs from a failing
+    run back to the specific rules it was injected with (chunk 4, era-07)."""
     rules = load_standing_rules(domain=domain)
     if not rules:
-        return ""
+        return "", []
     try:
         from config import get as _cfg_get
         staleness_days = int(_cfg_get("knowledge.rule_staleness_days", 30))
@@ -553,7 +579,8 @@ def inject_standing_rules(domain: str = "") -> str:
             f"contradicted {r.contradictions}x)"
             for r in contested
         )
-    return "\n".join(lines)
+    cited_ids = [r.rule_id for r in fresh + stale + contested]
+    return "\n".join(lines), cited_ids
 
 
 # ---------------------------------------------------------------------------
@@ -724,6 +751,196 @@ Output ONLY valid JSON:
     except Exception:
         pass
     return action
+
+
+# ---------------------------------------------------------------------------
+# Chunk-4 (2026-07-21): contradiction-candidate adjudication
+# ---------------------------------------------------------------------------
+# The missing writer for contradict_pattern (era-07: "collision detection
+# rides on contradiction recording" — recording never had a writer, so the
+# whole contested→refight lifecycle was unreachable). The emitter side lives
+# in memory_ledger._maybe_emit_contradiction_candidate (a full-trust failed
+# verdict on a citation-bearing run). This side runs at evolver cadence
+# (run_skill_maintenance), capped, and follows the navigator-V4 adjudication
+# pattern: candidate event → capped LLM verdict → append-only outcome event.
+
+CONTRADICTION_ADJUDICATION_CAP = 3   # candidates examined per maintenance cycle
+
+
+def _lesson_texts_by_id(lesson_ids: List[str]) -> Dict[str, str]:
+    """{lesson_id: lesson_text} for the ids still on the lessons ledger."""
+    wanted = set(lesson_ids)
+    found: Dict[str, str] = {}
+    if not wanted:
+        return found
+    try:
+        from memory_ledger import _lessons_path
+        for line in _lessons_path().read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            lid = str(row.get("lesson_id", "") or "")
+            if lid in wanted:
+                found[lid] = str(row.get("lesson", "") or "")
+    except Exception:
+        pass
+    return found
+
+
+def adjudicate_contradiction_candidates(
+    adapter,
+    *,
+    cap: int = CONTRADICTION_ADJUDICATION_CAP,
+    dry_run: bool = False,
+    verbose: bool = False,
+) -> Dict[str, int]:
+    """Judge pending CONTRADICTION_CANDIDATE events; feed contradict_pattern.
+
+    For each unadjudicated candidate (oldest first, ``cap`` per cycle) the
+    LLM answers one question: did this run's failure actually contradict the
+    rules/lessons it was injected with, or did the run fail for unrelated
+    reasons? Tri-state verdict, era-10 law applied to ourselves:
+
+      yes       — contradict_pattern() on each cited artifact (rule text +
+                  lesson text; text-similarity match means retired/rewritten
+                  artifacts degrade to a no-op). Rule moves to the contested
+                  injection tier; refight_rule reaches it next cycle.
+      no        — the citation was innocent. Adjudicated event, no mutation.
+      undecided — cannot tell from the evidence. UNDECIDED IS UNJUDGED,
+                  never contested: adjudicated event, no mutation. (A cheap
+                  judge must not be able to demote a rule by shrugging.)
+
+    Unparsable output writes NO adjudicated event — the candidate stays
+    pending and is retried next cycle. Candidates whose cited artifacts have
+    all left the stores adjudicate "no" deterministically (nothing left to
+    contest). Returns counters for the maintenance log.
+    """
+    counts = {"examined": 0, "contradicted": 0, "cleared": 0,
+              "undecided": 0, "unparsable": 0}
+    try:
+        from captains_log import (
+            query_log, log_event,
+            CONTRADICTION_CANDIDATE, CONTRADICTION_ADJUDICATED,
+        )
+    except Exception:
+        return counts
+
+    candidates = query_log(event_type=CONTRADICTION_CANDIDATE, limit=100)
+    if not candidates:
+        return counts
+    done_ids = {
+        str((e.get("context") or {}).get("loop_id") or e.get("subject") or "")
+        for e in query_log(event_type=CONTRADICTION_ADJUDICATED, limit=0)
+    }
+    # query_log returns newest first; adjudicate FIFO so a burst of fresh
+    # candidates can't starve an old one forever.
+    pending = [
+        c for c in reversed(candidates)
+        if str((c.get("context") or {}).get("loop_id")
+               or c.get("subject") or "") not in done_ids
+    ][:max(0, int(cap))]
+    if not pending:
+        return counts
+
+    rules_by_id = {r.rule_id: r for r in load_standing_rules()}
+
+    for cand in pending:
+        ctx = cand.get("context") or {}
+        loop_id = str(ctx.get("loop_id") or cand.get("subject") or "")
+        rule_ids = [str(r) for r in (ctx.get("rule_ids") or []) if r]
+        lesson_ids = [str(l) for l in (ctx.get("lesson_ids") or []) if l]
+        cited_rules = [rules_by_id[r] for r in rule_ids if r in rules_by_id]
+        cited_lessons = _lesson_texts_by_id(lesson_ids)
+
+        def _record(verdict: str, reasoning: str) -> None:
+            if dry_run:
+                return
+            try:
+                log_event(
+                    CONTRADICTION_ADJUDICATED,
+                    subject=loop_id,
+                    summary=(f"Adjudicated candidate for loop {loop_id}: "
+                             f"{verdict} — {reasoning[:120]}"),
+                    context={
+                        "loop_id": loop_id,
+                        "verdict": verdict,
+                        "reasoning": reasoning[:400],
+                        "rule_ids": rule_ids,
+                        "lesson_ids": lesson_ids,
+                    },
+                    related_ids=[f"rule:{r}" for r in rule_ids],
+                )
+            except Exception:
+                pass
+
+        counts["examined"] += 1
+
+        if not cited_rules and not cited_lessons:
+            counts["cleared"] += 1
+            _record("no", "cited artifacts no longer on record — moot")
+            continue
+        if adapter is None:
+            counts["examined"] -= 1  # nothing judged without an adapter
+            break
+
+        rules_text = "\n".join(
+            f'- rule {r.rule_id}: "{r.rule}"' for r in cited_rules) or "(none)"
+        lessons_text = "\n".join(
+            f'- lesson {lid}: "{txt}"'
+            for lid, txt in cited_lessons.items()) or "(none)"
+        prompt = f"""An autonomous agent run FAILED (verdict: goal not achieved, full confidence). Before it ran, the system injected crystallized knowledge into its planning prompt. Decide whether the failure CONTRADICTS that knowledge — i.e. the run plausibly failed *because it applied* a cited rule/lesson that is wrong or stale — or whether it failed for unrelated reasons.
+
+Goal (preview): {str(ctx.get("goal_preview") or "")[:200]}
+Failure summary: {str(ctx.get("failure_summary") or "")[:300]}
+
+Injected standing rules:
+{rules_text}
+
+Injected lessons:
+{lessons_text}
+
+Be conservative: "yes" puts every cited artifact into a contested re-verification tier. Answer "yes" only when the failure is plausibly attributable to following the cited knowledge. "no" when the failure is clearly unrelated. "undecided" when the evidence cannot distinguish.
+
+Output ONLY valid JSON:
+{{"contradicted": "yes|no|undecided", "reasoning": "<one short paragraph>"}}"""
+
+        try:
+            from llm import LLMMessage
+            from llm_parse import extract_json, content_or_empty
+            resp = adapter.complete(
+                [LLMMessage("user", prompt)], max_tokens=300, temperature=0.2,
+                no_tools=True, purpose="contradiction adjudication",
+            )
+            parsed = extract_json(content_or_empty(resp), dict,
+                                  log_tag="knowledge_lens.adjudicate")
+        except Exception as exc:
+            log.debug("adjudication adapter failed for %s: %s", loop_id, exc)
+            parsed = None
+        verdict = str((parsed or {}).get("contradicted") or "").strip().lower()
+        reasoning = str((parsed or {}).get("reasoning") or "")[:400]
+
+        if verdict not in ("yes", "no", "undecided"):
+            counts["unparsable"] += 1   # no event — retriable next cycle
+            continue
+        if verdict == "yes" and not dry_run:
+            for r in cited_rules:
+                contradict_pattern(r.rule, r.domain)
+            for txt in cited_lessons.values():
+                if txt:
+                    contradict_pattern(txt, "")
+        counts["contradicted" if verdict == "yes"
+               else "cleared" if verdict == "no" else "undecided"] += 1
+        _record(verdict, reasoning or "(no reasoning returned)")
+        if verbose:
+            import sys as _sys
+            print(f"[adjudicate] loop {loop_id}: {verdict}",
+                  file=_sys.stderr, flush=True)
+
+    return counts
 
 
 # ---------------------------------------------------------------------------

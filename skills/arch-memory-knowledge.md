@@ -111,6 +111,21 @@ Append-only event stream tracking knowledge lifecycle:
 - LESSON_RECORDED → LESSON_REINFORCED → HYPOTHESIS_CREATED → HYPOTHESIS_PROMOTED → STANDING_RULE_CONTRADICTED
 - Read bridge (K3 partial): recent events injected into decompose + evolver prompts
 
+**Contradiction wiring (chunk 4, 2026-07-21 — `contradict_pattern` finally has
+a runtime writer):** recall's loop slice stamps `rules_cited`/`lesson_ids_cited`
+(durable IDs) into RECALL_PERFORMED AND writes `source/recall_citations.json`
+into the current run dir. When `stamp_outcome_verdict` lands a FULL-trust
+(`verdict_trust`) `goal_achieved=False` on a citation-bearing run, it emits
+CONTRADICTION_CANDIDATE. At evolver cadence (`run_skill_maintenance`, gated by
+`knowledge.contradiction_adjudication_enabled`, cap 3/cycle) an LLM tri-state
+verdict adjudicates each candidate: only exact "yes" calls
+`contradict_pattern` (undecided = unjudged, never contested); the rule drops
+to the contested injection tier and `refight_rule` reaches it in the same
+maintenance pass. Standing-rule `domain` vocabulary is PROJECT slug or ""
+(global); promotion writes "" — task-type domains never matched the
+project-filtered reader (battery V2). Promotion also keeps every contributing
+lesson id in `source_lesson_ids` (era-09 provenance).
+
 ## Test Coverage
 
 - **knowledge_web.py**: 103 tests in test_knowledge_web.py (session 17) — covers decay, reinforcement, TF-IDF ranking, tiered lessons CRUD, near-duplicate detection, graveyard search, prompt injection formatting.

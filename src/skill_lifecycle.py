@@ -674,6 +674,26 @@ def run_skill_maintenance(
     except Exception as _ab_e:
         log.debug("ab variant retirement failed (non-fatal): %s", _ab_e)
 
+    # Chunk-4 (2026-07-21): adjudicate contradiction candidates BEFORE the
+    # refight scan so candidate → contested → refight can complete in one
+    # maintenance pass. A "yes" verdict calls contradict_pattern, which is
+    # exactly what makes contested_rules() below non-empty for the first time.
+    adjudicated: dict = {}
+    try:
+        from config import get as _cfg_get
+        if bool(_cfg_get("knowledge.contradiction_adjudication_enabled", True)):
+            from knowledge_lens import adjudicate_contradiction_candidates
+            adjudicated = adjudicate_contradiction_candidates(
+                adapter, dry_run=dry_run, verbose=verbose)
+            if verbose and adjudicated.get("examined"):
+                print(
+                    f"[evolver] contradiction candidates adjudicated: "
+                    f"{adjudicated}",
+                    file=sys.stderr,
+                )
+    except Exception as _adj_e:
+        log.debug("contradiction adjudication failed (non-fatal): %s", _adj_e)
+
     # Decay-by-invalidation v0 (BACKLOG 2026-06-11): re-fight contested
     # standing rules — the rewrite_skill collision→repair pattern applied to
     # the rule layer. A contradicted rule stops being injected "apply
@@ -703,6 +723,7 @@ def run_skill_maintenance(
         "rewritten": rewritten,
         "rewrite_candidates": rewrite_candidates,
         "rules_refought": refought,
+        "contradictions_adjudicated": adjudicated,
     }
 
 

@@ -127,7 +127,30 @@ class TestObservePattern:
         observe_pattern("Reuse existing adapters.", "llm")
         rule = observe_pattern("Reuse existing adapters.", "llm")
         assert isinstance(rule, StandingRule)
-        assert rule.domain == "llm"
+        # Chunk-4 V2 fix: hypothesis domain is task_type vocabulary; the sole
+        # live reader filters by PROJECT slug, so promotion writes "" (global)
+        # or a task-type rule would never inject on any project-scoped run.
+        assert rule.domain == ""
+
+    def test_promoted_rule_injects_on_project_scoped_read(self, tmp_path):
+        """Battery V2 regression: a rule promoted from task_type observations
+        must surface when recall reads with a project-slug domain filter."""
+        observe_pattern("Reuse existing adapters.", "agenda")
+        observe_pattern("Reuse existing adapters.", "agenda")
+        block = inject_standing_rules(domain="some-project-slug")
+        assert "Reuse existing adapters." in block
+
+    def test_promotion_keeps_all_source_lesson_ids(self, tmp_path):
+        """Chunk-4 provenance: every contributing lesson id survives promotion
+        (era-09 decree — refight re-derives from these), not just the first."""
+        observe_pattern("Always verify.", "ops", source_lesson_id="l1")
+        rule = observe_pattern("Always verify.", "ops", source_lesson_id="l2")
+        assert rule is not None
+        assert rule.source_lesson_id == "l1"      # compat: first contributor
+        assert rule.source_lesson_ids == ["l1", "l2"]
+        # And it round-trips through the store
+        stored = load_standing_rules()[0]
+        assert stored.source_lesson_ids == ["l1", "l2"]
 
 
 # ---------------------------------------------------------------------------
@@ -270,13 +293,22 @@ class TestStandingRulesInjection:
         assert "Always fetch via Jina." in result
 
     def test_domain_filter(self, tmp_path):
-        observe_pattern("Rule for ops.", "ops")
-        observe_pattern("Rule for ops.", "ops")
-        observe_pattern("Rule for research.", "research")
-        observe_pattern("Rule for research.", "research")
-        ops_only = inject_standing_rules(domain="ops")
-        assert "Rule for ops." in ops_only
-        assert "Rule for research." not in ops_only
+        """Domain vocabulary is PROJECT slug or "" (global). Promotion writes
+        "" so promoted rules can't exercise the filter; pin it with directly
+        stored project-scoped rows (imports / manual scoping still use it)."""
+        rows = [
+            StandingRule(
+                rule_id=f"r-{d}", rule=f"Rule for {d}.", source_lesson_id="",
+                domain=d, confirmations=2, contradictions=0,
+                promoted_at="2026-07-21", last_applied="",
+            ).to_dict()
+            for d in ("proj-a", "proj-b")
+        ]
+        (tmp_path / "standing_rules.jsonl").write_text(
+            "\n".join(json.dumps(r) for r in rows) + "\n")
+        a_only = inject_standing_rules(domain="proj-a")
+        assert "Rule for proj-a." in a_only
+        assert "Rule for proj-b." not in a_only
 
     def test_contested_rule_moves_to_verify_block(self, tmp_path):
         observe_pattern("Always fetch via Jina.", "fetch")
