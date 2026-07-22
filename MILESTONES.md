@@ -2,8 +2,28 @@
 
 What to do next, in what order. Updated each session. Deferred ideas live in BACKLOG.md; completed phase history in docs/history/ROADMAP_ARCHIVE.md (ROADMAP.md is a stub). This file is the executable queue.
 
-Last updated: 2026-07-22 — **swarm-review arc, chunk 7 SHIPPED** (of 8; plan:
-`~/.claude/plans/abundant-gathering-lagoon.md`). Chunk 7 (discretion
+Last updated: 2026-07-22 — **swarm-review arc, chunk 8 SHIPPED — final
+chunk** (plan: `~/.claude/plans/abundant-gathering-lagoon.md`). Chunk 8
+(enforcement pin, made mechanical per the checkpoint): **(1)** DEFAULTS.md
+**reverse census** — `test_every_documented_key_has_a_reader` in
+test_defaults_doc.py: a documented dotted key nothing in src/ reads fails
+the suite. "Read" is established mechanically — AST census hit, whole-key
+string literal (wrapper reads: `_coerce_cap("budget.daily_usd", ...)`),
+or f-string prefix + suffix-literal-in-same-file (hosted_free._cfg builds
+`f"validate.hosted_free.{key}"`) — **zero hand-maintained exemptions**
+(the checkpoint's rot-list warning applied to the census itself; the
+plan's sketched "DEFAULTS.md column" was subtracted — same tripwire, no
+doc churn). All 89 documented keys resolve; tripwire mutation-tested
+(injected a phantom row → suite fails naming it → reverted). It is a
+pytest census, not a run-once script — the 05-12 md-claims census's
+ran-once-and-died lesson. **(2)** Checks (a) stores and (c) guards
+BACKLOG'd with their prerequisite named (store-path registry; guard
+manifest + test_git_guard-style firing probes) — convention and enforcer
+land together when either ships (consumer-first). **The 8-chunk
+swarm-review arc is complete** pending chunk-8 review. Next after the
+arc: the compound-thinking chunk-6 discussion Jeremy queued.
+
+Previous checkpoint — 2026-07-22 **chunk 7 SHIPPED**. Chunk 7 (discretion
 readout — a judgement report, not a bill): **(1)** new
 `discretion_readout.py` + CLI (`python3 -m discretion_readout`, read-only,
 no flags): per-day EFFORT headline (calls/tokens/model mix; dollars one

@@ -82,3 +82,77 @@ def test_doc_exists_and_is_living():
     text = DOC.read_text()
     assert text.startswith("---\nstatus: living\n---"), (
         "DEFAULTS.md must carry living frontmatter — it is a registry, not a record")
+
+
+# ---------------------------------------------------------------------------
+# Reverse census (swarm-review chunk 8, the enforcement pin): every documented
+# key must have a reader in src/. The forward census stops keys shipping
+# undocumented; this direction stops rows outliving their code — a documented
+# flag nothing reads is rot that misleads clean-room discovery.
+#
+# "Read" is established mechanically, no hand-maintained exemption list (the
+# checkpoint's warning: an exemption registry is itself a rot list):
+#   1. the AST census found a direct config.get()/alias read, or
+#   2. the full dotted key appears as a string literal anywhere in src/
+#      (wrapper reads: _coerce_cap("budget.daily_usd", ...),
+#      notify_telegram._cfg("notify.viewer_url", ...)), or
+#   3. some file f-string-constructs keys from a constant prefix and the
+#      key's remaining suffix appears as a literal in that same file
+#      (hosted_free._cfg builds f"validate.hosted_free.{key}" and call
+#      sites pass "enabled" / "max_latency_ms").
+# This is a pytest census, not a run-once script, on purpose — the 05-12
+# md-claims census ran once and died; a suite test cannot die silently.
+# ---------------------------------------------------------------------------
+
+def _documented_table_keys() -> set:
+    """Dotted keys in DEFAULTS.md table rows (first column). Mirrors the
+    forward census's dotted-key discipline — dotless rows are out of scope."""
+    return set(re.findall(r"^\| `([a-z0-9_]+\.[a-z0-9_.]+)`", DOC.read_text(), re.M))
+
+
+def _src_literals_and_fstring_prefixes():
+    """(all string constants in src/, {file: (constants, f-string prefixes)}).
+
+    An f-string prefix is the leading constant part of a JoinedStr whose next
+    part is interpolated — the wrapper-key-construction shape."""
+    all_literals = set()
+    per_file = {}
+    for path in sorted((REPO_ROOT / "src").glob("*.py")):
+        try:
+            tree = ast.parse(path.read_text())
+        except SyntaxError:
+            continue
+        consts = set()
+        prefixes = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                consts.add(node.value)
+            elif isinstance(node, ast.JoinedStr) and len(node.values) >= 2:
+                first = node.values[0]
+                if (isinstance(first, ast.Constant)
+                        and isinstance(first.value, str) and first.value):
+                    prefixes.add(first.value)
+        all_literals |= consts
+        per_file[path.name] = (consts, prefixes)
+    return all_literals, per_file
+
+
+def test_every_documented_key_has_a_reader():
+    ast_read = _keys_read_by_code()
+    literals, per_file = _src_literals_and_fstring_prefixes()
+
+    def _is_read(key: str) -> bool:
+        if key in ast_read or key in literals:
+            return True
+        for consts, prefixes in per_file.values():
+            for prefix in prefixes:
+                if key.startswith(prefix) and key[len(prefix):] in consts:
+                    return True
+        return False
+
+    dead = sorted(k for k in _documented_table_keys() if not _is_read(k))
+    assert not dead, (
+        f"DEFAULTS.md documents keys nothing in src/ reads: {dead} — "
+        "either the code was removed (delete the row) or the read moved "
+        "behind a shape this census can't see (teach it the shape; do not "
+        "add an exemption list)")

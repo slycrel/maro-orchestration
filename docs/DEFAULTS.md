@@ -32,8 +32,13 @@ anything): *capability defaults ON when it only adds internal evidence or
 quality; OFF when it self-modifies, acts outward, spends money, or persists
 beyond the run.* Every exception below is dated and traced to a decision.
 
-Census enforced by `tests/test_defaults_doc.py` — a key read in `src/` but
-missing here fails the suite, so this table can't silently rot.
+Census enforced by `tests/test_defaults_doc.py`, both directions (reverse
+lane = swarm-review chunk 8's enforcement pin): a key read in `src/` but
+missing here fails the suite, AND a key documented here that nothing in
+`src/` reads fails the suite (`test_every_documented_key_has_a_reader` —
+wrapper reads and f-string-constructed keys are resolved by AST shape, so
+there is no hand-maintained exemption list). This table can't silently rot
+in either direction.
 
 ---
 

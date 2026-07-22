@@ -1914,6 +1914,29 @@ rather than fixed with a fragile heuristic:
   opt-in verifier tier, not the default. (2026-07-21: local-model caveats
   removed with the local rung; the pattern itself stands.)
 
+### Store/guard enforcement censuses — gated on a registration convention (swarm-review chunk 8, 2026-07-22)
+
+Chunk 8 shipped the mechanical half: the DEFAULTS.md **reverse census**
+(`test_every_documented_key_has_a_reader` — a documented flag nothing in
+src/ reads fails the suite; wrapper reads and f-string-constructed keys
+resolved by AST shape, zero hand-maintained exemptions). The other two
+wiring-inventory checks CANNOT ship the same way yet, per the checkpoint:
+
+- [ ] **(a) Stores census** — every store file (jsonl/md under the
+  workspace) must name a live writer AND reader. Prerequisite: store
+  paths declared through one helper/registry the census can walk
+  (today they're ad-hoc `_x_path()` functions across modules — a census
+  without the registry is a hand-maintained rot list).
+- [ ] **(c) Guards census** — every installed guard must be probed as
+  *firing*, test_git_guard-style (installed/runtime state + a
+  production-data-shape pin). Prerequisite: a guard manifest consumed
+  by BOTH the installer and the census. Lesson pinned in the plan: the
+  impact scanner passed its tests and never fired — "a test exists"
+  proves nothing about a guard.
+
+When either registry ships, the census follows in the same chunk
+(consumer-first: convention and enforcer land together).
+
 ### Swarm-review chunk-1 batch adds (2026-07-21)
 
 Recorded in one pass per the checkpoint decree ("add all BACKLOG entries

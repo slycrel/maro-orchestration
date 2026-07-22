@@ -4175,3 +4175,20 @@ Dormant (deliberately parked, not dropped):
   making the honesty rule apply to the module's own inputs, which is
   the review working as designed. Record:
   docs/history/2026-07-22-chunk7-adversarial-review.md.
+
+- **2026-07-22 — Swarm-review chunk 8 SHIPPED (enforcement pin — final
+  chunk of the arc).** The DEFAULTS.md census is now two-directional:
+  the new reverse lane (`test_every_documented_key_has_a_reader`) fails
+  the suite when a documented dotted key has no reader in src/. Read-
+  detection is mechanical — AST-census hit, whole-key string literal, or
+  f-string prefix + suffix literal in the same file — which resolved all
+  five wrapper-read keys (budget caps via _coerce_cap, notify.viewer_url
+  via notify_telegram._cfg, the two validate.hosted_free.* keys via the
+  prefix-constructing hosted_free._cfg) with ZERO hand-maintained
+  exemptions. Deviation from the checkpoint sketch, deliberate: no
+  "DEFAULTS.md column" — a doc column is hand-maintained state (the rot
+  list the checkpoint itself warned about); the AST-shape check achieves
+  the same enforcement with no doc churn. Tripwire mutation-tested
+  (phantom row → named failure → reverted). Checks (a) stores / (c)
+  guards BACKLOG'd with prerequisites named (store-path registry; guard
+  manifest + firing probes) — convention and enforcer land together.
