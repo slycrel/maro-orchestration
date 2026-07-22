@@ -19,9 +19,17 @@ pytest census, not a run-once script — the 05-12 md-claims census's
 ran-once-and-died lesson. **(2)** Checks (a) stores and (c) guards
 BACKLOG'd with their prerequisite named (store-path registry; guard
 manifest + test_git_guard-style firing probes) — convention and enforcer
-land together when either ships (consumer-first). **The 8-chunk
-swarm-review arc is complete** pending chunk-8 review. Next after the
-arc: the compound-thinking chunk-6 discussion Jeremy queued.
+land together when either ships (consumer-first). **Chunk-8 adversarial
+review DONE 2026-07-22** (2 Codex lenses vs a6cabd7, REJECT-as-reviewed →
+remediated same session; 2/2 verified, 0 hallucinated — ninth clean
+round): multi-key table cells escaped the census (7 sibling-documented
+keys never entered it — both lenses, verified to the digit; parser now
+takes every dotted key per cell, mutation-proven on a second-position
+phantom); both census lanes rglob (nested packages); collateral
+basename-collision fix. Record:
+docs/history/2026-07-22-chunk8-adversarial-review.md. **The 8-chunk
+swarm-review arc is COMPLETE.** Next: the compound-thinking chunk-6
+discussion Jeremy queued (docs/COMPOUND_THINKING_DESIGN.md).
 
 Previous checkpoint — 2026-07-22 **chunk 7 SHIPPED**. Chunk 7 (discretion
 readout — a judgement report, not a bill): **(1)** new

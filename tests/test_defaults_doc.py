@@ -42,7 +42,9 @@ def _config_get_aliases(tree: ast.AST) -> set:
 
 def _keys_read_by_code() -> set:
     keys = set()
-    for path in sorted((REPO_ROOT / "src").glob("*.py")):
+    # rglob, not glob (chunk-8 review): src/ has nested packages
+    # (maro_assets); a config read that moves into one must stay censused.
+    for path in sorted((REPO_ROOT / "src").rglob("*.py")):
         try:
             tree = ast.parse(path.read_text())
         except SyntaxError:
@@ -105,9 +107,19 @@ def test_doc_exists_and_is_living():
 # ---------------------------------------------------------------------------
 
 def _documented_table_keys() -> set:
-    """Dotted keys in DEFAULTS.md table rows (first column). Mirrors the
-    forward census's dotted-key discipline — dotless rows are out of scope."""
-    return set(re.findall(r"^\| `([a-z0-9_]+\.[a-z0-9_.]+)`", DOC.read_text(), re.M))
+    """ALL dotted keys in the key cell (first column) of DEFAULTS.md table
+    rows. Some rows document sibling keys together (`recall.guard_attempts` +
+    `recall.guard_window_minutes` share a cell) — taking only the row-leading
+    key let seven documented keys escape the census entirely (chunk-8 review,
+    both lenses). Mirrors the forward census's dotted-key discipline —
+    dotless rows are out of scope."""
+    keys = set()
+    for line in DOC.read_text().splitlines():
+        if not line.startswith("| "):
+            continue
+        cell = line.split("|")[1]
+        keys |= set(re.findall(r"`([a-z0-9_]+\.[a-z0-9_.]+)`", cell))
+    return keys
 
 
 def _src_literals_and_fstring_prefixes():
@@ -117,7 +129,7 @@ def _src_literals_and_fstring_prefixes():
     part is interpolated — the wrapper-key-construction shape."""
     all_literals = set()
     per_file = {}
-    for path in sorted((REPO_ROOT / "src").glob("*.py")):
+    for path in sorted((REPO_ROOT / "src").rglob("*.py")):
         try:
             tree = ast.parse(path.read_text())
         except SyntaxError:
@@ -133,7 +145,9 @@ def _src_literals_and_fstring_prefixes():
                         and isinstance(first.value, str) and first.value):
                     prefixes.add(first.value)
         all_literals |= consts
-        per_file[path.name] = (consts, prefixes)
+        # relative path, not basename — rglob can yield duplicate basenames
+        # (__init__.py) and a basename key would silently drop a file's scan
+        per_file[str(path.relative_to(REPO_ROOT))] = (consts, prefixes)
     return all_literals, per_file
 
 

@@ -4192,3 +4192,17 @@ Dormant (deliberately parked, not dropped):
   (phantom row → named failure → reverted). Checks (a) stores / (c)
   guards BACKLOG'd with prerequisites named (store-path registry; guard
   manifest + firing probes) — convention and enforcer land together.
+
+- **2026-07-22 — Chunk-8 adversarial review: REJECT-as-reviewed →
+  remediated same session; the swarm-review arc is COMPLETE.** 2 Codex
+  lenses vs a6cabd7; 2/2 findings verified, 0 hallucinated (ninth
+  consecutive clean round — zero hallucinated reviewer claims across
+  the entire arc). The high (both lenses): multi-key DEFAULTS table
+  cells escaped the reverse census — 7 sibling-documented keys (incl.
+  recall.guard_window_minutes, captains_log.rotate_keep) never entered
+  it; the parser took only the row-leading key. Fixed: every dotted key
+  per key cell; all 96 documented keys resolve; mutation-proven on a
+  second-position phantom key. Low: both census lanes now rglob
+  (nested src/ packages stay censused); collateral basename-collision
+  fix in the literal scan. Record:
+  docs/history/2026-07-22-chunk8-adversarial-review.md.
