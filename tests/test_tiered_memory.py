@@ -16,6 +16,7 @@ from memory import (
     TieredLesson,
     DECAY_FACTOR,
     REINFORCE_BONUS,
+    NOVELTY_BONUS,
     PROMOTE_MIN_SCORE,
     PROMOTE_MIN_SESSIONS,
     GC_THRESHOLD,
@@ -136,7 +137,10 @@ def test_record_tiered_lesson_medium(monkeypatch, tmp_path):
     tl = record_tiered_lesson("research needs clear criteria", "research", "done", "goal-1")
     assert isinstance(tl, TieredLesson)
     assert tl.tier == MemoryTier.MEDIUM
-    assert tl.score == pytest.approx(1.0)
+    # Chunk 6: a first lesson into an empty store is fully novel — the
+    # novelty term boosts its initial score above the classic 1.0.
+    assert tl.score == pytest.approx(1.0 + NOVELTY_BONUS)
+    assert tl.novelty == pytest.approx(1.0)
     assert tl.lesson_id
 
 

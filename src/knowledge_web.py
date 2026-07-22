@@ -8,7 +8,10 @@ Three tiers:
 
 Grok decay model:
   score *= 0.85  per non-reinforced day
-  score  = min(1.0, score + 0.3)  on reinforcement
+  score  = min(max(1.0, score), score + 0.3)  on reinforcement (never lowers
+           a novelty-boosted score > 1.0; classic min(1.0, ...) below that)
+  Initial score = 1.0 + 0.3 * novelty  (novelty = 1 - max similarity vs the
+           store at record time; chunk 6 — killswitch knowledge.novelty_term_enabled)
   Promote when score >= 0.9 AND sessions_validated >= 3
   GC (garbage-collect) when score < 0.2
 
@@ -54,6 +57,7 @@ _CITATION_PENALTY = 0.90
 
 DECAY_FACTOR = 0.85          # daily non-reinforced decay multiplier
 REINFORCE_BONUS = 0.3        # added to score on reinforcement
+NOVELTY_BONUS = 0.3          # max initial-score boost for a fully novel lesson (chunk 6)
 PROMOTE_MIN_SCORE = 0.9      # minimum score to promote medium → long
 PROMOTE_MIN_SESSIONS = 3     # minimum validated sessions to promote
 GC_THRESHOLD = 0.2           # gc entries with score below this
@@ -94,6 +98,11 @@ class TieredLesson:
     # on locally-originated lessons. asdict()/filtered-reconstruction round-trip
     # this automatically since it's a declared field.
     imported: Dict[str, Any] = field(default_factory=dict)
+    # Chunk 6: inverse max-similarity vs the store at record time (0.0 = near-dup
+    # of something we already knew, 1.0 = unlike anything stored). Boosts initial
+    # score so novel one-offs survive decay long enough to be tested; wrong novel
+    # guesses still die by decay. Old rows without this field deserialize to 0.0.
+    novelty: float = 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -153,8 +162,11 @@ def decay_score(score: float, days: int) -> float:
 
 
 def reinforce_score(score: float) -> float:
-    """Apply reinforcement bonus: score = min(1.0, score + REINFORCE_BONUS)."""
-    return min(1.0, score + REINFORCE_BONUS)
+    """Apply reinforcement bonus, capped at 1.0 — unless the score is already
+    above 1.0 (novelty-boosted, chunk 6), in which case reinforcement must
+    never LOWER it: the cap becomes the score itself. Behavior for scores
+    ≤ 1.0 is unchanged."""
+    return min(max(1.0, score), score + REINFORCE_BONUS)
 
 
 def _current_date() -> str:
@@ -170,6 +182,21 @@ def _current_date() -> str:
 _CONFIDENCE_SINGLE_CALL = 0.5    # single LLM call — not independently verified
 _CONFIDENCE_MAJORITY_VOTE = 0.7  # majority-vote across k_samples ≥ 3
 _CONFIDENCE_MULTI_SESSION = 0.9  # sessions_validated ≥ 3 — independently confirmed
+
+
+def _novelty_term_enabled() -> bool:
+    """Killswitch for the chunk-6 novelty term (default ON). config.get
+    returns raw YAML nodes — a quoted "false" is a truthy string, so
+    normalize the same way the quality-gate killswitches do (chunk-5a
+    review F1) or the killswitch can't kill."""
+    try:
+        from config import get as _cfg_get
+        val = _cfg_get("knowledge.novelty_term_enabled", True)
+        if isinstance(val, str):
+            return val.strip().lower() not in ("false", "0", "no", "off")
+        return bool(val)
+    except Exception:
+        return True
 
 
 def confidence_from_k_samples(k_samples: int) -> float:
@@ -239,15 +266,32 @@ def record_tiered_lesson(
     # the long-tier record (which feeds the standing-rule pipeline) instead of
     # accreting a duplicate in medium. limit=None — a dedup check against a
     # truncated load would silently miss matches.
+    # Chunk 6: the same scans double as the novelty measurement — max similarity
+    # vs everything scanned, at zero extra cost.
+    max_sim = 0.0
     if tier == MemoryTier.MEDIUM:
         for ex in load_tiered_lessons(tier=MemoryTier.LONG, task_type=task_type, limit=None):
-            if _text_similarity(ex.lesson, lesson_text) > 0.8:
+            sim = _text_similarity(ex.lesson, lesson_text)
+            if sim > 0.8:
                 return _reinforce_tiered_lesson(ex, tier=MemoryTier.LONG)
+            max_sim = max(max_sim, sim)
 
     existing = load_tiered_lessons(tier=tier, task_type=task_type, limit=None)
     for ex in existing:
-        if _text_similarity(ex.lesson, lesson_text) > 0.8:
+        sim = _text_similarity(ex.lesson, lesson_text)
+        if sim > 0.8:
             return _reinforce_tiered_lesson(ex, tier=tier)
+        max_sim = max(max_sim, sim)
+
+    # Chunk 6: novelty term — a lesson unlike anything stored starts above 1.0
+    # so it survives decay long enough to be tested; repeat-shaped lessons keep
+    # the classic 1.0. Counteracts the reinforce-the-familiar bias (+0.3 for
+    # repeats while novel one-offs die in ~7 days). Promotion is unaffected —
+    # sessions_validated still gates. Killswitch: knowledge.novelty_term_enabled.
+    novelty = 1.0 - max_sim
+    score = 1.0
+    if _novelty_term_enabled():
+        score = 1.0 + NOVELTY_BONUS * novelty
 
     tl = TieredLesson(
         lesson_id=str(uuid.uuid4())[:8],
@@ -257,11 +301,12 @@ def record_tiered_lesson(
         source_goal=source_goal,
         confidence=confidence,
         tier=tier,
-        score=1.0,
+        score=score,
         last_reinforced=_current_date(),
         acquired_for=acquired_for,
         evidence_sources=evidence_sources or [],
         lesson_type=lesson_type if lesson_type in _LESSON_TYPES else "",
+        novelty=round(novelty, 4),
     )
     _append_tiered_lesson(tl, tier=tier)
 
@@ -272,7 +317,8 @@ def record_tiered_lesson(
             event_type=LESSON_RECORDED,
             subject=tl.lesson_id,
             summary=f"New {tier} lesson (confidence: {confidence:.2f}): {lesson_text[:100]}",
-            context={"tier": tier, "task_type": task_type, "confidence": confidence, "lesson_type": lesson_type},
+            context={"tier": tier, "task_type": task_type, "confidence": confidence,
+                     "lesson_type": lesson_type, "novelty": tl.novelty, "score": score},
         )
     except Exception:
         pass

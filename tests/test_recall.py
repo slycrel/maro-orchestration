@@ -407,6 +407,61 @@ class TestLoopSlice:
         assert cit["lesson_ids"] == ["lid-1"]
         assert cit["project"] == "proj-x"
 
+    def test_tiered_only_lesson_reaches_prompt_and_citations(
+            self, monkeypatch, tmp_path):
+        """Chunk-6 rewire liveness pin: a lesson that exists ONLY in the
+        tiered store (M3 recovery lessons, verify-learn, novelty-scored
+        records are tiered-only writers) must reach the rendered loop
+        block AND land its durable ID in lesson_ids_cited. Pre-rewire the
+        substrate read the legacy flat store only, so these lessons never
+        reached the main-loop prompt despite the comment declaring
+        tiered-first."""
+        _setup(monkeypatch, tmp_path)
+        import memory
+        from knowledge_web import record_tiered_lesson
+
+        tl = record_tiered_lesson(
+            "tiered-only recovery insight about flaky sockets",
+            task_type="agenda", outcome="done", source_goal="g1")
+        # Flat store stays empty — the lesson exists only in tiered.
+        monkeypatch.setattr(memory, "load_lessons", lambda **kw: [])
+
+        events = []
+        with patch("captains_log.log_event",
+                   side_effect=lambda et, **kw: events.append((et, kw))):
+            r = recall("flaky sockets research", slice="loop")
+
+        assert "tiered-only recovery insight" in r.lessons
+        ctx = [kw for et, kw in events if et == "RECALL_PERFORMED"][0]["context"]
+        assert tl.lesson_id in ctx["lesson_ids_cited"]
+
+    def test_flat_topup_skips_dual_written_twin(self, monkeypatch, tmp_path):
+        """Extraction dual-writes the same text to both stores — the flat
+        top-up must not inject a tiered lesson's twin a second time, but
+        must still surface legacy flat-only lessons."""
+        _setup(monkeypatch, tmp_path)
+        import memory
+        from knowledge_web import record_tiered_lesson
+
+        record_tiered_lesson(
+            "prefer rsync over scp for large trees",
+            task_type="agenda", outcome="done", source_goal="g1")
+
+        class _Twin:
+            outcome = "done"
+            lesson = "prefer rsync over scp for large trees"
+
+        class _FlatOnly:
+            outcome = "done"
+            lesson = "legacy flat-only lesson about disk pressure"
+
+        monkeypatch.setattr(memory, "load_lessons",
+                            lambda **kw: [_Twin(), _FlatOnly()]
+                            if kw.get("task_type") == "agenda" else [])
+        r = recall("large tree sync", slice="loop")
+        assert r.lessons.count("prefer rsync over scp") == 1
+        assert "legacy flat-only lesson" in r.lessons
+
     def test_no_citations_no_run_file(self, monkeypatch, tmp_path):
         _setup(monkeypatch, tmp_path)
         import runs as runs_module

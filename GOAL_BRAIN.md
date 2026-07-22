@@ -4077,3 +4077,37 @@ Dormant (deliberately parked, not dropped):
   artifact_only-sees-the-goal (deliberate and already explicit in the
   lens contract). Record:
   docs/history/2026-07-22-chunk5b-adversarial-review.md.
+- 2026-07-22 (session): **chunk 6 SHIPPED — surprise as a capture
+  signal.** (1) Extraction prompt (`_REFLECT_SYSTEM`) now leads with the
+  expectation-mismatch question — "what actually DIFFERED from what the
+  plan assumed?" — capture the mismatch itself (assumed X, found Y), not
+  just the workaround; no new lesson types (taxonomy deliberately
+  deferred to the compound-thinking discussion Jeremy queued). (2)
+  Novelty term in `record_tiered_lesson`: novelty = 1 − max
+  `_text_similarity` vs the store, measured for free inside the existing
+  dedup scans; initial score = 1.0 + 0.3·novelty (NOVELTY_BONUS);
+  `novelty` stored on the row (old rows deserialize to 0.0);
+  `reinforce_score` → `min(max(1.0, score), score + 0.3)` so
+  reinforcement never lowers a boosted score (≤1.0 behavior byte-same);
+  promotion untouched (sessions_validated gates); killswitch
+  `knowledge.novelty_term_enabled` default ON with quoted-"false"
+  normalization — flag kills the boost only, novelty is always measured
+  so chunk 7's tabulation keeps its denominator. LESSON_RECORDED context
+  grew novelty + score. (3) **V1 checkpoint flag resolved as
+  not-ambiguous → REWIRE**: recall substrate #1's comment always
+  declared "tiered lessons — ranked retrieval" but the read was
+  flat-store-only, so tiered-only writers (M3 recovery lessons,
+  verify-learn, novelty-scored records) never reached the main-loop
+  prompt. Now `query_lessons` (tiered, ranked, decay-scored) leads,
+  legacy flat store tops up lessons never dual-written (twin-dedup by
+  normalized text), age stamps anchor on recorded_at-or-last_reinforced,
+  lesson_ids_cited/chunk-4 contradiction wiring preserved, exception
+  fallback to inject_lessons_for_task intact. Liveness pins: a
+  tiered-ONLY lesson reaches the rendered block AND its ID lands in
+  lesson_ids_cited; flat twin never double-injects. (4) In-chunk
+  liveness check on the REAL store (148 medium + 4 long, read-only):
+  near-dup of a stored lesson → would-be score 1.011; novel text →
+  1.274 (delta 0.263 of a possible 0.30) — the term separates cleanly
+  on real data. Consumer-first satisfied per checkpoint amendment
+  (in-chunk liveness + the rewired substrate IS the consumer); full
+  novelty tabulation lands in chunk 7's readout. Suite green 188 items.

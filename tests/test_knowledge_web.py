@@ -23,6 +23,7 @@ import knowledge_web as kw
 from knowledge_web import (
     DECAY_FACTOR,
     GC_THRESHOLD,
+    NOVELTY_BONUS,
     PROMOTE_MIN_SCORE,
     PROMOTE_MIN_SESSIONS,
     REINFORCE_BONUS,
@@ -232,7 +233,8 @@ class TestRecordTieredLesson:
             source_goal="goal-1",
         )
         assert tl.lesson == "Always check return codes"
-        assert tl.score == 1.0
+        # Chunk 6: empty store → fully novel → boosted initial score.
+        assert tl.score == pytest.approx(1.0 + NOVELTY_BONUS)
         assert tl.tier == MemoryTier.MEDIUM
         assert len(tl.lesson_id) == 8
 
@@ -325,6 +327,97 @@ class TestRecordTieredLesson:
         assert tl.tier == MemoryTier.LONG
         loaded = load_tiered_lessons(tier=MemoryTier.LONG)
         assert any(l.lesson_id == tl.lesson_id for l in loaded)
+
+
+# ===========================================================================
+# Novelty term (chunk 6)
+# ===========================================================================
+
+class TestNoveltyTerm:
+    """Chunk 6: inverse max-similarity vs the store boosts initial score so
+    novel one-offs survive decay long enough to be tested; decay still
+    disposes of wrong novel guesses."""
+
+    def test_first_lesson_fully_novel(self, tmp_path):
+        tl = record_tiered_lesson(
+            "Prefer streaming writes for large artifacts",
+            task_type="build", outcome="done", source_goal="g1")
+        assert tl.novelty == pytest.approx(1.0)
+        assert tl.score == pytest.approx(1.0 + NOVELTY_BONUS)
+
+    def test_related_lesson_gets_partial_novelty(self, tmp_path):
+        record_tiered_lesson(
+            "Always check subprocess return codes before parsing output",
+            task_type="build", outcome="done", source_goal="g1")
+        tl = record_tiered_lesson(
+            "Always check the exit status codes for network calls too",
+            task_type="build", outcome="done", source_goal="g2")
+        # Overlapping-but-distinct: below the 0.8 dedup bar, above 0 sim.
+        assert 0.0 < tl.novelty < 1.0
+        assert 1.0 < tl.score < 1.0 + NOVELTY_BONUS
+        assert tl.score == pytest.approx(1.0 + NOVELTY_BONUS * tl.novelty,
+                                         abs=1e-3)
+
+    def test_killswitch_off_keeps_classic_score(self, tmp_path, monkeypatch):
+        # Quoted-"false" pin: a YAML string must kill the switch (chunk-5a
+        # review F1 normalization rule).
+        import config as config_mod
+        real_get = config_mod.get
+
+        def fake_get(key, default=None):
+            if key == "knowledge.novelty_term_enabled":
+                return "false"
+            return real_get(key, default)
+
+        monkeypatch.setattr(config_mod, "get", fake_get)
+        tl = record_tiered_lesson(
+            "Novelty disabled lesson", task_type="build", outcome="done",
+            source_goal="g1")
+        assert tl.score == pytest.approx(1.0)
+        # Novelty is still measured and stored — flag kills the boost only,
+        # so chunk 7's tabulation keeps its denominator either way.
+        assert tl.novelty == pytest.approx(1.0)
+
+    def test_reinforcement_never_lowers_boosted_score(self, tmp_path):
+        tl1 = record_tiered_lesson(
+            "Boosted novel lesson about caching artifacts", task_type="build",
+            outcome="done", source_goal="g1")
+        assert tl1.score > 1.0
+        tl2 = record_tiered_lesson(
+            "Boosted novel lesson about caching artifacts", task_type="build",
+            outcome="done", source_goal="g2")
+        assert tl2.lesson_id == tl1.lesson_id
+        # Same-day dup: no decay yet — reinforcement must not pull the
+        # boosted score down to the classic 1.0 cap.
+        assert tl2.score >= tl1.score - 1e-9
+
+    def test_reinforce_score_above_one_is_floor_not_cap(self):
+        assert reinforce_score(1.2) == pytest.approx(1.2)
+        assert reinforce_score(1.05) == pytest.approx(1.05)
+        # Classic behavior at or below 1.0 unchanged.
+        assert reinforce_score(0.6) == pytest.approx(0.9)
+
+    def test_old_rows_without_novelty_deserialize(self, tmp_path):
+        tl = _make_lesson(lesson_id="oldrow")
+        d = asdict(tl)
+        d.pop("novelty")
+        path = kw._tiered_lessons_path(MemoryTier.MEDIUM)
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(d) + "\n")
+        loaded = load_tiered_lessons(tier=MemoryTier.MEDIUM)
+        assert loaded[0].novelty == 0.0
+
+    def test_lesson_recorded_event_carries_novelty(self, tmp_path, monkeypatch):
+        import captains_log
+        events = []
+        monkeypatch.setattr(captains_log, "log_event",
+                            lambda **kw_: events.append(kw_))
+        record_tiered_lesson("Event novelty pin lesson", task_type="build",
+                             outcome="done", source_goal="g1")
+        assert events, "LESSON_RECORDED not emitted"
+        ctx = events[-1]["context"]
+        assert ctx["novelty"] == pytest.approx(1.0)
+        assert ctx["score"] == pytest.approx(1.0 + NOVELTY_BONUS)
 
 
 # ===========================================================================

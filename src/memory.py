@@ -69,7 +69,8 @@ from memory_ledger import (  # noqa: F401, E402
 )
 from knowledge_web import (  # noqa: F401, E402
     MemoryTier, TieredLesson,
-    DECAY_FACTOR, REINFORCE_BONUS, PROMOTE_MIN_SCORE, PROMOTE_MIN_SESSIONS, GC_THRESHOLD,
+    DECAY_FACTOR, REINFORCE_BONUS, NOVELTY_BONUS, PROMOTE_MIN_SCORE, PROMOTE_MIN_SESSIONS,
+    GC_THRESHOLD,
     CANON_APPLY_THRESHOLD, CANON_TASK_TYPE_MIN,
     _STOP_WORDS, _CITATION_PENALTY, _CONFIDENCE_SINGLE_CALL, _CONFIDENCE_MAJORITY_VOTE,
     _CONFIDENCE_MULTI_SESSION,
@@ -195,6 +196,12 @@ _REFLECT_SYSTEM = textwrap.dedent("""\
     A lesson is a generalizable insight that would improve future similar runs.
     Good lessons are: specific, actionable, and generalize beyond this one case.
     Bad lessons are: too specific to this one task, or trivially obvious.
+
+    Start from the expectation-mismatch question: what actually DIFFERED from
+    what the plan assumed? Surprises — wrong guesses, unexpected obstacles,
+    unexpected shortcuts — carry the most durable lessons. When a mismatch
+    exists, capture the mismatch itself (assumed X, found Y), not just the
+    workaround. A run with no surprises usually has no lesson worth keeping.
 
     Lesson types (pick the best fit for each lesson):
     - "execution": how to carry out steps more effectively (tools, sequencing, parallelism)

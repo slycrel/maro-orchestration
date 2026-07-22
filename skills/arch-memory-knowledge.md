@@ -79,7 +79,8 @@ failure. Rows before 2026-07-09 are all unjudged (historical, no backfill).
 ```
 Loop starting (recall.py loop slice)
   → inject_standing_rules(domain) → promoted rules (zero-cost match)
-  → legacy lessons.jsonl substrate → recent lessons
+  → query_lessons() tiered-first (ranked, decay-scored; chunk 6 rewire)
+    → legacy lessons.jsonl tops up lessons never dual-written
   → inject_decisions(goal) → TF-IDF search of decision journal
   → inject_playbook / inject_knowledge_for_goal → wisdom + ACTIVE nodes
   → Captain's log bridge → recent lifecycle events
@@ -91,11 +92,11 @@ Loop starting (recall.py loop slice)
 
 ## Tiered Memory Model
 
-- **MEDIUM**: Score 0.2–1.0. Decays 15%/day (score *= 0.85^days). New lessons start here at score 1.0.
+- **MEDIUM**: Score 0.2–1.3. Decays 15%/day (score *= 0.85^days). New lessons start at `1.0 + 0.3 * novelty` (chunk 6 — novelty = 1 − max store similarity at record time, measured for free in the dedup scans; killswitch `knowledge.novelty_term_enabled`). A fully novel lesson starts at 1.3 (~2 extra days above the GC line); a repeat-shaped one at ~1.0.
 - **LONG**: Promoted when score ≥ 0.9 AND sessions_validated ≥ 3. No decay (enforced tier-aware since session 40 — earlier code decayed long-tier on load).
 - **Standing Rules**: Promoted from long-tier after 2+ pattern confirmations. Zero cost, always active.
 
-Reinforcement: When a lesson is re-confirmed, score += 0.3, sessions_validated++. At threshold: promote to LONG.
+Reinforcement: When a lesson is re-confirmed, score += 0.3 capped at 1.0, sessions_validated++ — but a novelty-boosted score above 1.0 is never lowered (`min(max(1.0, score), score + 0.3)`). At threshold: promote to LONG.
 
 **Re-confirmation side effects (session 40 M2, `_post_reinforce_hooks` in knowledge_web.py):** every reinforcement — whether via `reinforce_lesson()` or `record_tiered_lesson()`'s near-duplicate dedup — runs the hooks: a MEDIUM lesson meeting eligibility (score ≥ 0.9, sessions ≥ 3) promotes to LONG *immediately* (the returned lesson's `.tier` changes), and a LONG re-confirmation calls `observe_pattern()` so hypotheses accrue confirmations and standing rules accrete. `record_tiered_lesson(tier=MEDIUM)` also dedups against LONG first — re-learning an already-promoted lesson reinforces the long-tier record instead of creating a medium duplicate. Full accretion path: medium lesson → eligibility at reinforcement → LONG (promote_lesson seeds hypothesis, confirmation 1) → re-learned once more → standing rule (RULE_PROMOTE_CONFIRMATIONS = 2).
 
@@ -142,7 +143,7 @@ lesson id in `source_lesson_ids` (era-09 provenance).
 2. **No Stage 4→5 pathway.** Skill → rule promotion is conceptual only.
 3. **Reinforcement is passive.** Lessons only reinforce when explicitly re-confirmed in a run. System doesn't proactively test its own lessons.
 4. **Captain's log reads are coarse.** Dumps recent events rather than targeted retrieval.
-5. **Decay works but creates cold-start.** A valid lesson that isn't used for 7 days decays to ~0.32 — it effectively dies even if it's correct. `search_graveyard(resurrect=True)` can wake matches, but nothing calls it proactively.
+5. **Decay works but creates cold-start.** A valid lesson that isn't used for 7 days decays to ~0.32 — it effectively dies even if it's correct. `search_graveyard(resurrect=True)` can wake matches, but nothing calls it proactively. Partially mitigated (chunk 6): the novelty boost buys a fully novel lesson ~2 extra days above the GC line (dies ~day 11.5 instead of ~9.9), and recall's loop slice now actually reads the tiered store so being applied — and thus reinforced — is possible at all.
 6. ~~**Promotion timing race.**~~ FIXED (session 40 M2): promotion is now evaluated at reinforcement time (`_post_reinforce_hooks`), when the score is freshly re-anchored. The consolidation-cycle promotion check remains as a backstop but only catches same-day-reinforced lessons (one day of decay drops 1.0 → 0.85, below the 0.9 threshold).
 
 ## File Map

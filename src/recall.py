@@ -591,15 +591,34 @@ def recall(
         # walk — still future work.)
 
         # 1. Tiered lessons — ranked retrieval; legacy injector as fallback.
+        # Chunk 6 rewire: this comment always declared tiered-first, but the
+        # read was flat-store-only — so tiered-only writers (M3 recovery
+        # lessons, verify-learn, novelty-scored records) never reached the
+        # main-loop prompt. Now the tiered store (ranked, decay-scored) leads
+        # and the legacy flat store tops up with lessons never dual-written.
         lessons_cited: List[str] = []
         lesson_ids_cited: List[str] = []
         rules_cited: List[str] = []
         try:
             from memory import load_lessons, _MAX_LESSON_INJECT_CHARS
+            from knowledge_web import query_lessons
             from age_stamp import age_stamps_enabled, age_suffix
-            _lessons = load_lessons(task_type="agenda", query=goal, limit=3)
+            _lessons = list(query_lessons(goal, n=3, task_type="agenda"))
             if not _lessons:
-                _lessons = load_lessons(task_type="general", query=goal, limit=3)
+                # Untyped tiered writers (evolver, verify-learn, prereq).
+                _lessons = list(query_lessons(goal, n=3))
+            if len(_lessons) < 3:
+                _flat = (load_lessons(task_type="agenda", query=goal, limit=3)
+                         or load_lessons(task_type="general", query=goal, limit=3))
+                _seen = {str(_l.lesson).strip().lower() for _l in _lessons}
+                for _f in _flat or []:
+                    if len(_lessons) >= 3:
+                        break
+                    # Extraction dual-writes both stores — skip the flat twin
+                    # of a tiered lesson already selected.
+                    if str(_f.lesson).strip().lower() in _seen:
+                        continue
+                    _lessons.append(_f)
             if _lessons:
                 # Time-blindness hook (a): age-stamp injected lessons from
                 # their stored timestamp (memory.age_stamps; flag off or
@@ -614,7 +633,11 @@ def recall(
                     # memory.inject_lessons_for_task).
                     _icon = ("✗" if getattr(_l, "goal_achieved", None) is False
                              else ("✓" if _l.outcome == "done" else "✗"))
-                    _suffix = (age_suffix(getattr(_l, "recorded_at", "") or "")
+                    # TieredLesson rows may predate recorded_at; last_reinforced
+                    # is the decay anchor and always present — use it as the
+                    # age anchor of record when recorded_at is absent.
+                    _suffix = (age_suffix(getattr(_l, "recorded_at", "")
+                                          or getattr(_l, "last_reinforced", "") or "")
                                if _stamp_ages else "")
                     if _suffix:
                         _age_stamped_any = True

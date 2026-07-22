@@ -2,8 +2,29 @@
 
 What to do next, in what order. Updated each session. Deferred ideas live in BACKLOG.md; completed phase history in docs/history/ROADMAP_ARCHIVE.md (ROADMAP.md is a stub). This file is the executable queue.
 
-Last updated: 2026-07-22 — **swarm-review arc, chunk 5b SHIPPED** (of 8; plan:
-`~/.claude/plans/abundant-gathering-lagoon.md`). Chunk 5b (persona-dispatch
+Last updated: 2026-07-22 — **swarm-review arc, chunk 6 SHIPPED** (of 8; plan:
+`~/.claude/plans/abundant-gathering-lagoon.md`). Chunk 6 (surprise as a
+capture signal): **(1)** extraction prompt leads with the
+expectation-mismatch question ("what actually DIFFERED from what the plan
+assumed?" — capture the mismatch, not just the workaround); no new lesson
+types (taxonomy deferred to the compound-thinking discussion Jeremy queued).
+**(2)** Novelty term in `record_tiered_lesson`: novelty = 1 − max
+similarity vs the store (measured free inside the existing dedup scans);
+initial score = 1.0 + 0.3·novelty; `novelty` field stored (old rows → 0.0);
+`reinforce_score` never lowers a boosted score (`min(max(1.0, s), s+0.3)`);
+promotion untouched; killswitch `knowledge.novelty_term_enabled` (boost
+only — novelty always measured, chunk 7 keeps its denominator);
+LESSON_RECORDED grew novelty+score. **(3)** V1 checkpoint flag resolved
+not-ambiguous → REWIRE: recall substrate #1 now reads tiered-first via
+`query_lessons` (the comment always claimed it; the read was flat-only, so
+M3 recovery lessons / verify-learn / novelty scores never reached the
+main-loop prompt), legacy flat tops up with twin-dedup; age stamps,
+lesson_ids_cited (chunk-4 wiring), and the legacy fallback all preserved +
+pinned. **(4)** In-chunk liveness on the REAL store (148 medium + 4 long,
+read-only): near-dup 1.011 vs novel 1.274 would-be scores (delta 0.263 of
+0.30 possible) — clean separation on real data. Suite green 188 items.
+
+Previous checkpoint — 2026-07-22 **chunk 5b SHIPPED**. Chunk 5b (persona-dispatch
 owner + evidence-path lenses + triad ablation + cross-ref research lane), in
 the checkpoint-decreed order:
 **(1) persona_dispatch.py ships FIRST** — the owned "run this prompt with
@@ -48,9 +69,13 @@ probe-seat string concerns tagged `[probe:unprobed]`; cross-ref emits
 zero-claim denominator rows; dispatch_prompt tolerates system=None.
 Rejected: artifact_only-sees-goal (deliberate, contract already explicit).
 Record: docs/history/2026-07-22-chunk5b-adversarial-review.md.
-**Next: chunk 6** (extraction expectation-mismatch +
-novelty term; V1 checkpoint-class flag — recall substrate #1 reads the
-LEGACY flat store, decide rewire-vs-rescope with Jeremy if ambiguous).
+**Next: chunk-6 adversarial review**, then chunk 7 (discretion readout —
+EFFORT language, coordination-waste computable-today subset, navigator A/B
+tabulation, novelty tabulation, effort-estimate compute; consent message
+stays with the session-protocol thread), then chunk 8 (enforcement pin).
+After the chunks: the compound-thinking chunk-6 discussion Jeremy queued
+(docs/COMPOUND_THINKING_DESIGN.md — his stated intent, needs discussion
+and planning; §10 surprise→calibration touches this chunk's territory).
 
 Previous checkpoint — 2026-07-21 **chunk 5a SHIPPED**. Chunk 5a (gate hosted-free
 rung, stack-don't-substitute): the quality gate's free rung is back as

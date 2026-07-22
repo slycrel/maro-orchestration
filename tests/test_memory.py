@@ -726,6 +726,25 @@ class TestExtractLessonsViaLLMSingleSample:
         )
         assert result == ["single lesson"]
 
+    def test_expectation_mismatch_question_in_system_prompt(self, monkeypatch):
+        """Chunk 6: the extraction prompt must lead with the
+        expectation-mismatch question — surprises (plan assumed X, found Y)
+        are the capture signal the novelty term scores downstream."""
+        from memory import extract_lessons_via_llm
+        import types, json
+
+        captured = {}
+
+        class FakeAdapter:
+            def complete(self, messages, **kw):
+                captured["system"] = messages[0].content
+                return types.SimpleNamespace(content=json.dumps(["l"]))
+
+        extract_lessons_via_llm(
+            "goal", "done", "summary", "general", adapter=FakeAdapter())
+        assert "expectation-mismatch" in captured["system"]
+        assert "DIFFERED from" in captured["system"]
+
 
 # ---------------------------------------------------------------------------
 # load_tiered_lessons max_age_days staleness filter
