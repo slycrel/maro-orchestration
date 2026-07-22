@@ -266,49 +266,60 @@ def record_tiered_lesson(
     # the long-tier record (which feeds the standing-rule pipeline) instead of
     # accreting a duplicate in medium. limit=None — a dedup check against a
     # truncated load would silently miss matches.
-    # Chunk 6: the same scans double as the novelty measurement — max similarity
-    # vs everything scanned, at zero extra cost.
+    # Chunk 6 (+ its adversarial review): the scans double as the novelty
+    # measurement. DEDUP stays task_type-scoped (existing contract — identical
+    # text under a different task type is a separate lesson, pinned in
+    # test_tiered_memory); NOVELTY is store-wide (all task types), because
+    # "novel" must mean novel to the agent, not novel within one dedup
+    # partition — a cross-domain repeat is not a surprise.
     max_sim = 0.0
     if tier == MemoryTier.MEDIUM:
-        for ex in load_tiered_lessons(tier=MemoryTier.LONG, task_type=task_type, limit=None):
+        for ex in load_tiered_lessons(tier=MemoryTier.LONG, task_type=None, limit=None):
             sim = _text_similarity(ex.lesson, lesson_text)
-            if sim > 0.8:
+            if ex.task_type == task_type and sim > 0.8:
                 return _reinforce_tiered_lesson(ex, tier=MemoryTier.LONG)
             max_sim = max(max_sim, sim)
 
-    existing = load_tiered_lessons(tier=tier, task_type=task_type, limit=None)
-    for ex in existing:
-        sim = _text_similarity(ex.lesson, lesson_text)
-        if sim > 0.8:
-            return _reinforce_tiered_lesson(ex, tier=tier)
-        max_sim = max(max_sim, sim)
+    # Scan-and-append is one critical section (review finding: the dedup
+    # read raced a concurrent writer's append — two workers recording the
+    # same novel lesson both saw no match and both appended boosted
+    # duplicates). locked_write is reentrant per-thread, so the reinforce
+    # and append paths inside are safe.
+    from file_lock import locked_write
+    with locked_write(_tiered_lessons_path(tier)):
+        for ex in load_tiered_lessons(tier=tier, task_type=None, limit=None):
+            sim = _text_similarity(ex.lesson, lesson_text)
+            if ex.task_type == task_type and sim > 0.8:
+                return _reinforce_tiered_lesson(ex, tier=tier)
+            max_sim = max(max_sim, sim)
 
-    # Chunk 6: novelty term — a lesson unlike anything stored starts above 1.0
-    # so it survives decay long enough to be tested; repeat-shaped lessons keep
-    # the classic 1.0. Counteracts the reinforce-the-familiar bias (+0.3 for
-    # repeats while novel one-offs die in ~7 days). Promotion is unaffected —
-    # sessions_validated still gates. Killswitch: knowledge.novelty_term_enabled.
-    novelty = 1.0 - max_sim
-    score = 1.0
-    if _novelty_term_enabled():
-        score = 1.0 + NOVELTY_BONUS * novelty
+        # Chunk 6: novelty term — a lesson unlike anything stored starts above
+        # 1.0 so it survives decay long enough to be tested; repeat-shaped
+        # lessons keep the classic 1.0. Counteracts the reinforce-the-familiar
+        # bias (+0.3 for repeats while novel one-offs die in ~7 days).
+        # Promotion is unaffected — sessions_validated still gates.
+        # Killswitch: knowledge.novelty_term_enabled.
+        novelty = 1.0 - max_sim
+        score = 1.0
+        if _novelty_term_enabled():
+            score = 1.0 + NOVELTY_BONUS * novelty
 
-    tl = TieredLesson(
-        lesson_id=str(uuid.uuid4())[:8],
-        task_type=task_type,
-        outcome=outcome,
-        lesson=lesson_text,
-        source_goal=source_goal,
-        confidence=confidence,
-        tier=tier,
-        score=score,
-        last_reinforced=_current_date(),
-        acquired_for=acquired_for,
-        evidence_sources=evidence_sources or [],
-        lesson_type=lesson_type if lesson_type in _LESSON_TYPES else "",
-        novelty=round(novelty, 4),
-    )
-    _append_tiered_lesson(tl, tier=tier)
+        tl = TieredLesson(
+            lesson_id=str(uuid.uuid4())[:8],
+            task_type=task_type,
+            outcome=outcome,
+            lesson=lesson_text,
+            source_goal=source_goal,
+            confidence=confidence,
+            tier=tier,
+            score=score,
+            last_reinforced=_current_date(),
+            acquired_for=acquired_for,
+            evidence_sources=evidence_sources or [],
+            lesson_type=lesson_type if lesson_type in _LESSON_TYPES else "",
+            novelty=round(novelty, 4),
+        )
+        _append_tiered_lesson(tl, tier=tier)
 
     # Captain's log
     try:
@@ -1131,12 +1142,17 @@ def query_lessons(
 
     candidates: List[TieredLesson] = []
     for tier in tiers:
+        # limit=None — rank over the FULL live store (chunk-6 review): the
+        # old n*5 cap was applied to a score-sorted load, so a relevant
+        # lesson sitting below the top decayed scores was invisible to the
+        # ranker. Relevance filtering is the ranker's job; the store stays
+        # bounded by decay + GC, not by hiding rows from retrieval.
         pool = load_tiered_lessons(
             tier=tier,
             task_type=task_type,
             lesson_type=lesson_type,
             min_score=min_score,
-            limit=n * 5,
+            limit=None,
         )
         candidates.extend(pool)
 

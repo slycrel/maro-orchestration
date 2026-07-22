@@ -419,6 +419,72 @@ class TestNoveltyTerm:
         assert ctx["novelty"] == pytest.approx(1.0)
         assert ctx["score"] == pytest.approx(1.0 + NOVELTY_BONUS)
 
+    def test_novelty_is_store_wide_not_task_type_scoped(self, tmp_path):
+        """Chunk-6 review pin: dedup stays task_type-scoped (identical text
+        under a different task type is a separate lesson — existing
+        contract), but NOVELTY must be measured against the whole store: a
+        cross-domain repeat is not a surprise and must not collect the
+        boost."""
+        record_tiered_lesson(
+            "Always check subprocess return codes before parsing output",
+            task_type="research", outcome="done", source_goal="g1")
+        tl = record_tiered_lesson(
+            "Always check subprocess return codes before parsing output",
+            task_type="build", outcome="done", source_goal="g2")
+        # Separate lesson (dedup did not collapse across task types)...
+        assert tl.lesson_id != "rejected"
+        assert tl.task_type == "build"
+        # ...but novelty sees the research twin: identical text → ~0.
+        assert tl.novelty == pytest.approx(0.0, abs=0.05)
+        assert tl.score == pytest.approx(1.0, abs=0.02)
+
+    def test_record_scan_and_append_hold_the_tier_lock(self, tmp_path,
+                                                       monkeypatch):
+        """Chunk-6 review pin: the dedup/novelty scan and the append are one
+        critical section — a concurrent writer between read and write must
+        not be possible (two workers recording the same novel lesson would
+        both append boosted duplicates)."""
+        import knowledge_web as kw_mod
+        from file_lock import _get_held
+        held_at_append = {}
+        real_append = kw_mod._append_tiered_lesson
+
+        def spy_append(tl, *, tier):
+            lock_key = str(
+                (kw_mod._tiered_lessons_path(tier).parent
+                 / (kw_mod._tiered_lessons_path(tier).name + ".lock"))
+                .resolve())
+            held_at_append["held"] = lock_key in _get_held()
+            return real_append(tl, tier=tier)
+
+        monkeypatch.setattr(kw_mod, "_append_tiered_lesson", spy_append)
+        record_tiered_lesson("Lock discipline pin lesson", task_type="build",
+                             outcome="done", source_goal="g1")
+        assert held_at_append.get("held") is True
+
+
+# ===========================================================================
+# query_lessons full-store ranking (chunk-6 review)
+# ===========================================================================
+
+class TestQueryLessonsFullStore:
+    def test_relevant_lesson_below_score_cutoff_is_still_found(self, tmp_path):
+        """Chunk-6 review pin: the old n*5 load cap was applied to a
+        score-sorted list, so a relevant lesson below the top decayed
+        scores never reached the ranker. Relevance filtering is the
+        ranker's job — retrieval ranks over the full live store."""
+        for i in range(20):
+            _write_lesson_to_file(tmp_path, _make_lesson(
+                lesson_id=f"noise{i:02d}",
+                lesson=f"unrelated operational note number {i} about heartbeat cadence",
+                score=1.0))
+        _write_lesson_to_file(tmp_path, _make_lesson(
+            lesson_id="target01",
+            lesson="websocket reconnect storms need exponential backoff jitter",
+            score=0.35))
+        got = query_lessons("websocket reconnect backoff", n=3)
+        assert any(l.lesson_id == "target01" for l in got)
+
 
 # ===========================================================================
 # load_tiered_lessons

@@ -604,21 +604,37 @@ def recall(
             from knowledge_web import query_lessons
             from age_stamp import age_stamps_enabled, age_suffix
             _lessons = list(query_lessons(goal, n=3, task_type="agenda"))
-            if not _lessons:
-                # Untyped tiered writers (evolver, verify-learn, prereq).
-                _lessons = list(query_lessons(goal, n=3))
             if len(_lessons) < 3:
-                _flat = (load_lessons(task_type="agenda", query=goal, limit=3)
-                         or load_lessons(task_type="general", query=goal, limit=3))
+                # Untyped/other-type tiered writers (evolver, verify-learn,
+                # prereq) TOP UP — an existing agenda match must not mask
+                # them (chunk-6 review: they are tiered-only, so the flat
+                # top-up below can never recover them). Dedup by lesson_id
+                # — the untyped query is a superset of the agenda one.
+                _have_ids = {getattr(_l, "lesson_id", "") for _l in _lessons}
+                for _t in query_lessons(goal, n=3):
+                    if len(_lessons) >= 3:
+                        break
+                    if _t.lesson_id in _have_ids:
+                        continue
+                    _lessons.append(_t)
+                    _have_ids.add(_t.lesson_id)
+            if len(_lessons) < 3:
+                # Chain BOTH flat sources (chunk-6 review: `agenda or
+                # general` meant an agenda result of already-selected twins
+                # masked general flat-only lessons while slots stayed open).
+                _flat = ((load_lessons(task_type="agenda", query=goal, limit=3) or [])
+                         + (load_lessons(task_type="general", query=goal, limit=3) or []))
                 _seen = {str(_l.lesson).strip().lower() for _l in _lessons}
-                for _f in _flat or []:
+                for _f in _flat:
                     if len(_lessons) >= 3:
                         break
                     # Extraction dual-writes both stores — skip the flat twin
                     # of a tiered lesson already selected.
-                    if str(_f.lesson).strip().lower() in _seen:
+                    _norm = str(_f.lesson).strip().lower()
+                    if _norm in _seen:
                         continue
                     _lessons.append(_f)
+                    _seen.add(_norm)
             if _lessons:
                 # Time-blindness hook (a): age-stamp injected lessons from
                 # their stored timestamp (memory.age_stamps; flag off or
@@ -626,6 +642,7 @@ def recall(
                 _stamp_ages = age_stamps_enabled()
                 _age_stamped_any = False
                 _lines = ["## Lessons from Prior Runs (apply these)"]
+                _budget = len(_lines[0])
                 for _l in _lessons:
                     # Verdict-preferred (SF-2): a lesson from a run judged
                     # goal-not-achieved is a failure lesson even though the
@@ -639,20 +656,27 @@ def recall(
                     _suffix = (age_suffix(getattr(_l, "recorded_at", "")
                                           or getattr(_l, "last_reinforced", "") or "")
                                if _stamp_ages else "")
+                    _line = f"- {_icon} {_l.lesson}{_suffix}"
+                    # Budget-aware selection (chunk-6 review): a lesson is
+                    # cited ONLY if its line is actually rendered. The old
+                    # truncate-after-the-fact could drop trailing lines while
+                    # their IDs stayed cited — and the contradiction join
+                    # would then contest lessons the run never saw.
+                    if _budget + 1 + len(_line) > _MAX_LESSON_INJECT_CHARS:
+                        break
+                    _lines.append(_line)
+                    _budget += 1 + len(_line)
                     if _suffix:
                         _age_stamped_any = True
-                    _lines.append(f"- {_icon} {_l.lesson}{_suffix}")
                     lessons_cited.append(str(_l.lesson)[:120])
                     _lid = getattr(_l, "lesson_id", "") or ""
                     if _lid:
                         lesson_ids_cited.append(_lid)
-                _text = "\n".join(_lines)
-                if len(_text) > _MAX_LESSON_INJECT_CHARS:
-                    _text = _text[:_MAX_LESSON_INJECT_CHARS].rsplit("\n", 1)[0]
-                result.lessons = _text
-                if _age_stamped_any:
-                    # Rides into RECALL_PERFORMED via **sources below.
-                    sources["age_stamped"] = True
+                if len(_lines) > 1:
+                    result.lessons = "\n".join(_lines)
+                    if _age_stamped_any:
+                        # Rides into RECALL_PERFORMED via **sources below.
+                        sources["age_stamped"] = True
         except Exception:
             try:
                 from memory import inject_lessons_for_task

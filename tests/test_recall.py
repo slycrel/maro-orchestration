@@ -462,6 +462,92 @@ class TestLoopSlice:
         assert r.lessons.count("prefer rsync over scp") == 1
         assert "legacy flat-only lesson" in r.lessons
 
+    def test_agenda_match_does_not_mask_other_type_tiered_lessons(
+            self, monkeypatch, tmp_path):
+        """Chunk-6 review pin: the untyped tiered query is a TOP-UP, not an
+        empty-only fallback — one agenda match must not mask a relevant
+        tiered-only lesson recorded under another task type (flat top-up
+        can never recover those)."""
+        _setup(monkeypatch, tmp_path)
+        import memory
+        from knowledge_web import record_tiered_lesson
+
+        record_tiered_lesson(
+            "agenda lesson about socket retries and backoff",
+            task_type="agenda", outcome="done", source_goal="g1")
+        tl_general = record_tiered_lesson(
+            "verify-learn insight: socket retries need jitter",
+            task_type="general", outcome="done", source_goal="g2")
+        monkeypatch.setattr(memory, "load_lessons", lambda **kw: [])
+
+        r = recall("socket retries", slice="loop")
+        assert "agenda lesson about socket retries" in r.lessons
+        assert tl_general.lesson in r.lessons
+
+    def test_agenda_flat_twins_do_not_mask_general_flat_lessons(
+            self, monkeypatch, tmp_path):
+        """Chunk-6 review pin: flat top-up chains agenda THEN general — an
+        agenda flat result made entirely of already-selected twins must not
+        stop general flat-only lessons from filling open slots."""
+        _setup(monkeypatch, tmp_path)
+        import memory
+        from knowledge_web import record_tiered_lesson
+
+        record_tiered_lesson(
+            "prefer rsync over scp for large trees",
+            task_type="agenda", outcome="done", source_goal="g1")
+
+        class _Twin:
+            outcome = "done"
+            lesson = "prefer rsync over scp for large trees"
+
+        class _GeneralOnly:
+            outcome = "done"
+            lesson = "legacy general-store lesson about disk pressure"
+
+        def _flat(**kw):
+            if kw.get("task_type") == "agenda":
+                return [_Twin()]
+            if kw.get("task_type") == "general":
+                return [_GeneralOnly()]
+            return []
+
+        monkeypatch.setattr(memory, "load_lessons", _flat)
+        r = recall("large tree sync", slice="loop")
+        assert r.lessons.count("prefer rsync over scp") == 1
+        assert "legacy general-store lesson" in r.lessons
+
+    def test_truncated_lesson_is_not_cited(self, monkeypatch, tmp_path):
+        """Chunk-6 review pin (Architect high): a lesson is cited ONLY if its
+        line is actually rendered. Pre-fix, the block was truncated after
+        the citation lists were built — the contradiction-adjudication join
+        could contest lessons the run never saw."""
+        _setup(monkeypatch, tmp_path)
+        import memory
+
+        class _Fits:
+            outcome = "done"
+            lesson = "short lesson that fits"
+            lesson_id = "lid-fits"
+
+        class _TooBig:
+            outcome = "done"
+            lesson = "X" * 5000  # alone exceeds _MAX_LESSON_INJECT_CHARS
+            lesson_id = "lid-dropped"
+
+        monkeypatch.setattr(memory, "load_lessons",
+                            lambda **kw: [_Fits(), _TooBig()]
+                            if kw.get("task_type") == "agenda" else [])
+        events = []
+        with patch("captains_log.log_event",
+                   side_effect=lambda et, **kw: events.append((et, kw))):
+            r = recall("any goal", slice="loop")
+
+        assert "short lesson that fits" in r.lessons
+        assert "XXXX" not in r.lessons
+        ctx = [kw for et, kw in events if et == "RECALL_PERFORMED"][0]["context"]
+        assert ctx["lesson_ids_cited"] == ["lid-fits"]
+
     def test_no_citations_no_run_file(self, monkeypatch, tmp_path):
         _setup(monkeypatch, tmp_path)
         import runs as runs_module

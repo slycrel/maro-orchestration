@@ -4111,3 +4111,25 @@ Dormant (deliberately parked, not dropped):
   on real data. Consumer-first satisfied per checkpoint amendment
   (in-chunk liveness + the rewired substrate IS the consumer); full
   novelty tabulation lands in chunk 7's readout. Suite green 188 items.
+- 2026-07-22 (session): **chunk-6 adversarial review ran post-land** (3
+  Codex lenses vs 1236270) — verdict CONTESTED; 7/7 findings verified
+  real, 0 hallucinated (seventh consecutive clean round). Fixed same
+  session: (1) HIGH — citations could name lessons truncation dropped
+  (render loop cited before the block was capped; the chunk-4
+  contradiction join would contest lessons the run never saw) → budget-
+  aware selection, a lesson is cited only if its line renders; (2)
+  novelty was task_type-partition-local → now store-wide (dedup keeps
+  its type scope inline — identical text under another type stays a
+  separate lesson; a cross-domain repeat no longer collects the boost);
+  (3) scan-and-append race (two workers → boosted duplicates) → one
+  locked_write critical section (reentrant, matches _mutate pattern);
+  (4) untyped tiered query promoted from empty-only fallback to top-up
+  (an agenda match no longer masks verify-learn/general tiered-only
+  lessons); (5) flat top-up chains agenda+general (all-twin agenda
+  result no longer masks general flat-only lessons); (6) query_lessons
+  now ranks the FULL live store (the n*5 score-sorted load cap hid
+  relevant low-score lessons from the ranker — load-bearing now that
+  recall leads with it). Rejected: docs-duplication (the decreed record
+  architecture — GOAL_BRAIN/MILESTONES/DEFAULTS-census/skill-currency).
+  Six new pins; suite green 188 items. Record:
+  docs/history/2026-07-22-chunk6-adversarial-review.md.

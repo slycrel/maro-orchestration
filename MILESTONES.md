@@ -69,7 +69,18 @@ probe-seat string concerns tagged `[probe:unprobed]`; cross-ref emits
 zero-claim denominator rows; dispatch_prompt tolerates system=None.
 Rejected: artifact_only-sees-goal (deliberate, contract already explicit).
 Record: docs/history/2026-07-22-chunk5b-adversarial-review.md.
-**Next: chunk-6 adversarial review**, then chunk 7 (discretion readout —
+**Chunk-6 adversarial review DONE 2026-07-22** (3 Codex lenses vs 1236270,
+CONTESTED, 7/7 verified real, 0 hallucinated — seventh clean round). Fixed
+same session: citations only for rendered lessons (HIGH — truncation could
+drop lines whose IDs stayed cited, feeding the contradiction join lessons
+the run never saw); novelty store-wide, dedup stays task_type-scoped
+(cross-domain repeats no longer collect the boost); scan-and-append one
+locked critical section (boosted-duplicate race); untyped tiered query =
+top-up not empty-fallback; flat top-up chains agenda+general;
+query_lessons ranks the full store (n*5 score-sorted cap hid relevant
+rows). Rejected: docs-duplication (decreed record architecture). Six new
+pins. Record: docs/history/2026-07-22-chunk6-adversarial-review.md.
+**Next: chunk 7** (discretion readout —
 EFFORT language, coordination-waste computable-today subset, navigator A/B
 tabulation, novelty tabulation, effort-estimate compute; consent message
 stays with the session-protocol thread), then chunk 8 (enforcement pin).
