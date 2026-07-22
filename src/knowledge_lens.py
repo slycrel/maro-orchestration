@@ -1074,3 +1074,66 @@ def calibrated_alignment_threshold(claim_type: str = "alignment") -> float:
         threshold = _ALIGNMENT_THRESHOLD_BASE + 0.10
 
     return max(_ALIGNMENT_THRESHOLD_MIN, min(_ALIGNMENT_THRESHOLD_MAX, threshold))
+
+
+# ---------------------------------------------------------------------------
+# CLI — the SF-13 decree pipe (swarm-review chunk 3)
+# ---------------------------------------------------------------------------
+# Session-close rule SF-13 puts decree-class statements in GOAL_BRAIN.md's
+# Decisions section; this CLI pipes the same decree into decisions.jsonl so
+# the RUNTIME journal (recall substrate #3, director context) stays
+# searchable too. Dev-facing; the compiled record and the runtime journal
+# are fed by the same hand at the same moment:
+#
+#   PYTHONPATH=src python3 -m knowledge_lens decision \
+#       "Execution floor is MID" --rationale "flat-rate makes the cheap \
+#       split a non-decision" [--domain routing] [--alternatives a,b] \
+#       [--trade-offs ...] [--goal-context ...]
+
+def _cli() -> int:
+    import argparse
+
+    parser = argparse.ArgumentParser(prog="knowledge_lens")
+    sub = parser.add_subparsers(dest="cmd", required=True)
+
+    p_dec = sub.add_parser(
+        "decision", help="Record a decision to the runtime decision journal")
+    p_dec.add_argument("decision", help="What was decided (one sentence)")
+    p_dec.add_argument("--rationale", required=True,
+                       help="Why, over the alternatives")
+    p_dec.add_argument("--domain", default="",
+                       help="Subsystem/project tag (blank = matches all)")
+    p_dec.add_argument("--alternatives", default="",
+                       help="Comma-separated alternatives considered")
+    p_dec.add_argument("--trade-offs", default="", dest="trade_offs")
+    p_dec.add_argument("--goal-context", default="", dest="goal_context")
+
+    p_search = sub.add_parser(
+        "decisions", help="Search the decision journal")
+    p_search.add_argument("query")
+    p_search.add_argument("--domain", default="")
+
+    args = parser.parse_args()
+    if args.cmd == "decision":
+        alts = [a.strip() for a in args.alternatives.split(",") if a.strip()]
+        d = record_decision(
+            args.decision, args.rationale, domain=args.domain,
+            alternatives=alts, trade_offs=args.trade_offs,
+            goal_context=args.goal_context,
+        )
+        print(f"recorded {d.decision_id}: {d.decision}")
+        return 0
+    if args.cmd == "decisions":
+        found = search_decisions(args.query, domain=args.domain)
+        if not found:
+            print("no matching decisions")
+            return 0
+        for d in found:
+            print(f"[{d.decision_id}] ({d.domain or 'general'}) {d.decision}")
+            print(f"    — {d.rationale}")
+        return 0
+    return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(_cli())

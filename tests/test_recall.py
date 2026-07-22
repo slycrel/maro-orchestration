@@ -496,3 +496,43 @@ class TestAncestryUnification:
         r = recall("implement recall cache", slice="loop", project="child-proj")
         assert r.thread is not None
         assert r.thread.source == "ancestry"
+
+
+class TestDecisionLiveness:
+    """Swarm-review chunk 3 consumer-first pin: a decision recorded by any
+    writer (executor directive, scope proxy, SF-13 CLI) must round-trip
+    end-to-end into the next run's recall block — no mocks on the read side."""
+
+    def test_recorded_decision_reaches_recall_blocks(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        from memory import record_decision
+
+        record_decision(
+            "Use CSV output for the report exporter",
+            "Stable schema downstream tools can parse",
+            domain="proj",
+            goal_context="export the report",
+        )
+
+        r = recall("export the report as CSV", slice="loop", project="proj")
+        assert "Prior Decisions" in r.decisions
+        assert "Use CSV output for the report exporter" in r.decisions
+
+        loop_block = r.as_loop_block()
+        assert "Use CSV output for the report exporter" in loop_block
+        ctx_block = r.as_context_block(max_chars=2000)
+        assert "Use CSV output for the report exporter" in ctx_block
+
+    def test_blank_domain_decision_matches_scoped_read(self, monkeypatch, tmp_path):
+        """SF-13 CLI decrees default to domain="" — they must still inject on
+        project-scoped runs (search_decisions keeps blank-domain rows)."""
+        _setup(monkeypatch, tmp_path)
+        from memory import record_decision
+
+        record_decision(
+            "Decrees also get a GOAL_BRAIN Decisions line",
+            "Standing rule SF-13 from Jeremy",
+        )
+        r = recall("record the decree decisions line", slice="loop",
+                   project="some-project")
+        assert "GOAL_BRAIN Decisions line" in r.decisions

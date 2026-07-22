@@ -77,6 +77,14 @@ EXECUTE_SYSTEM = textwrap.dedent("""\
     When your step produces structured data that later steps need, use the "artifacts"
     field in complete_step to share it (key-value pairs, values as strings).
 
+    DESIGN DECISIONS:
+    When you make a design call that later steps or future runs should honor —
+    an interface choice, a file format, a naming convention, an interpretation
+    of ambiguous instructions — report it in the "decisions" field of
+    complete_step (decision + rationale, max 2 per step). Decisions are
+    recorded durably and carried uncompressed to every later step; routine
+    actions and findings belong in "result", not here.
+
     TOKEN EFFICIENCY:
     1. Extract 2-3 key facts from sources; never quote long passages verbatim.
     2. Output: bullet points or structured JSON. No preamble, no sign-offs.
@@ -458,6 +466,27 @@ EXECUTE_TOOLS = [
                         "not for general summaries (put those in 'result')."
                     ),
                     "additionalProperties": {"type": "string"},
+                },
+                "decisions": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "decision": {"type": "string"},
+                            "rationale": {"type": "string"},
+                        },
+                        "required": ["decision", "rationale"],
+                    },
+                    "description": (
+                        "Optional: design decisions you made in this step that later "
+                        "steps or future runs should honor — an interface choice, a "
+                        "format, a naming convention, an interpretation of ambiguous "
+                        "instructions. NOT routine actions or findings (those go in "
+                        "'result'). Each needs a one-sentence decision and a "
+                        "one-sentence rationale. Maximum 2 per step. These are "
+                        "recorded to the durable decision journal and carried "
+                        "uncompressed to every later step."
+                    ),
                 },
             },
             "required": ["result", "summary"],
@@ -893,6 +922,26 @@ def execute_step(
         if _art_entries:
             artifacts_block = "\n\nArtifacts from prior steps:\n" + "\n".join(_art_entries)
 
+    # Design decisions carry UNCOMPRESSED (swarm-review chunk 3): completed
+    # steps compress to 100-char summaries after a few iterations, which is
+    # exactly how mid-run design decisions used to evaporate. Decisions live
+    # in shared context under decision:{step}:{n} keys and render in full
+    # for every subsequent step.
+    decisions_block = ""
+    if shared_ctx:
+        _dec_entries = []
+        for _k, _v in shared_ctx.items():
+            if _k.startswith("decision:"):
+                _parts = _k.split(":", 2)
+                _dec_label = f"step {_parts[1]}" if len(_parts) >= 2 else _k
+                _dec_entries.append(f"  - ({_dec_label}) {str(_v)}")
+        if _dec_entries:
+            decisions_block = (
+                "\n\nDesign decisions from prior steps "
+                "(binding unless the step text overrides them):\n"
+                + "\n".join(_dec_entries)
+            )
+
     ancestry_block = f"\n\n{ancestry_context}" if ancestry_context else ""
 
     # Phase 35 P1/P2: HITL constraint check — block/warn before any LLM call.
@@ -983,6 +1032,7 @@ def execute_step(
         f"{workspace_block}"
         f"{context_block}"
         f"{artifacts_block}"
+        f"{decisions_block}"
         f"{prefetch_block}"
         f"{_pipeline_block}"
         f"{_artifact_block}"
@@ -1012,6 +1062,7 @@ def execute_step(
         f"Current step ({step_num}/{total_steps}) [{_step_type}]: {step_text}"
         f"{workspace_block}"
         f"{artifacts_block}"
+        f"{decisions_block}"
         f"{prefetch_block}"
         f"{_pipeline_block}"
         f"{_artifact_block}"
@@ -1267,6 +1318,24 @@ def execute_step(
                     _outcome["inject_steps"] = _clean_inject
                     log.info("step %d inject_steps: %d step(s) added to plan",
                              step_num, len(_clean_inject))
+            # DECISION directive (swarm-review chunk 3): design calls the
+            # executor wants honored downstream. Validated here; recorded to
+            # the decision journal + carried uncompressed by loop_post_step.
+            _raw_decisions = tc.arguments.get("decisions") or []
+            if isinstance(_raw_decisions, list):
+                _clean_decisions = []
+                for _rd in _raw_decisions[:2]:
+                    if not isinstance(_rd, dict):
+                        continue
+                    _d_txt = str(_rd.get("decision", "")).strip()[:200]
+                    _d_why = str(_rd.get("rationale", "")).strip()[:300]
+                    if _d_txt and _d_why:
+                        _clean_decisions.append(
+                            {"decision": _d_txt, "rationale": _d_why})
+                if _clean_decisions:
+                    _outcome["decisions"] = _clean_decisions
+                    log.info("step %d decisions: %d design decision(s) declared",
+                             step_num, len(_clean_decisions))
             # Escape-pattern demotions (BACKLOG #23a/#23g): a "done" whose
             # result is a promise of future background work, or an unprobed
             # environment-limitation claim on an agentic lane, is not done.

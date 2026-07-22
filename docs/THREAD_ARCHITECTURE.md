@@ -132,6 +132,36 @@ This handles:
 
 Same mechanism end-to-end — recursion is just thread structure.
 
+### Fork contract: decision ownership (design note, 2026-07-21 — swarm-review chunk 3)
+
+Jeremy's stated doubt about "parent always wins" is the constraint here:
+children need an evidence-based path against parent-owned decisions. The
+contract is three-way, not hierarchical:
+
+1. **Leaf-local decisions** — implementation calls whose blast radius is the
+   child's own build folder (variable names, internal file layout, tool
+   choice for a step). Never escalate, never recorded beyond the child's
+   thread brain.
+2. **Parent-owned decisions** — interface/format/interpretation calls that
+   siblings or the collation step depend on. Recorded in `decisions.jsonl`
+   (the runtime journal, live writer since chunk 3) and injected into
+   children via ancestry context. Children treat them as binding **by
+   default**.
+3. **Escalation triggers** — the explicit non-"parent-always-wins" lane: a
+   child that produces *evidence* contradicting a parent-owned decision
+   (a failing probe, an API that doesn't exist, a measured constraint) does
+   not silently comply or silently deviate; it surfaces the evidence and the
+   parent decision gets re-decided at the level that owns it. Evidence
+   reopens decisions; preference does not. (Matches the closure-contradiction
+   shape: collision detection rides on recorded decisions — chunk 4 wires the
+   same pattern for lessons/rules.)
+
+Prerequisite before any fork implementation: **ancestry write-side
+unification** — thread_brain and ancestry.json are separate write paths
+today; at fork time they must be one record or children inherit a fork of
+the truth as well as the work (GOAL_BRAIN open thread; queued in BACKLOG,
+deliberately NOT part of the swarm-review arc).
+
 ---
 
 ## The build folder

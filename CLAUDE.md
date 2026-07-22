@@ -256,7 +256,10 @@ statement worth an auto-memory write also gets a GOAL_BRAIN.md Decisions
 line before the session ends — even when the conversation produced no work
 chunk. Decree-class statements must reach the compiled record, not just
 Claude's memory; a session that ends conversationally is the exact case
-this rule exists for.
+this rule exists for. Since 2026-07-21 (swarm-review chunk 3) the same
+decree also gets piped into the RUNTIME decision journal so recall can
+surface it to runs:
+`PYTHONPATH=src python3 -m knowledge_lens decision "<decree>" --rationale "<why>"`.
 
 **Capability-capture rule (2026-07-11, Jeremy):** when work surfaces a
 real ask or a missing capability mid-session — a user-shaped request, a

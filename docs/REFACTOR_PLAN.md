@@ -152,7 +152,8 @@ scoped except where noted above):
 | Persona/Skills | `skills.py` ~350 lines of test-only surface (`SkillConstraint`, `verify_skill_description`, section parsers, `promote_skill_tier`, etc.) | ~350 |
 | Memory | Dead backend abstraction (`memory._backend()`, zero callers — `MARO_MEMORY_BACKEND=sqlite` silently does nothing) | ~100 |
 | Memory | `knowledge_bridge.validate_principle` (dead + duplicates upsert's rewrite loop) | ~65 |
-| Memory | `knowledge_web.detect_goal_gaps`/`GoalGap`, `majority_vote_lessons`+`k_samples>1` machinery (prod only ever uses `k_samples=1`), `knowledge_lens.record_decision` (no writer) | ~200 |
+| Memory | `knowledge_web.detect_goal_gaps`/`GoalGap`, `majority_vote_lessons`+`k_samples>1` machinery (prod only ever uses `k_samples=1`) | ~170 |
+| ~~Memory~~ | ~~`knowledge_lens.record_decision` (no writer)~~ — LIVE as of 2026-07-21 (swarm-review chunk 3): three writers (step DECISION directive, scope proxy commitment, SF-13 CLI). Do not remove. | — |
 | Memory | Shadowed constant redefinitions + unused imports in `memory.py` | small |
 | Core loop | `pre_flight.multi_lens_review` (~105 lines, never wired in), broken `maro-test` entry (Tier 0 #8), `step_events.py` (298-line event bus, zero registered handlers) | ~400 |
 | Core loop | `bootstrap_task.py` (266 lines, no in-repo caller — confirm no deployed worker manifest references it first) | ~266 |

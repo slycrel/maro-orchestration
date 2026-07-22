@@ -31,7 +31,7 @@ Stage 5: Rule      → Hardcoded path (zero inference cost)
 | long/lessons.jsonl | Promoted lessons (no decay) | promote_lesson() | inject_tiered_lessons() |
 | standing_rules.jsonl | Permanent rules (zero cost) | observe_pattern() → promote | inject_standing_rules() |
 | hypotheses.jsonl | Lessons being validated | observe_pattern() | check before promotion |
-| decisions.jsonl | ADR-style decision journal | record_decision() | inject_decisions() |
+| decisions.jsonl | ADR-style decision journal | step DECISION directive (step_exec/loop_post_step), scope proxy commitment (scope.py), `python3 -m knowledge_lens decision` (SF-13 decrees) — all via record_decision() | inject_decisions() (recall substrate #3) |
 | captains_log.jsonl | Event stream (11K+ entries) | Various — lifecycle events | captain's log read bridge |
 | task_ledger.jsonl | Per-step execution trace | record_step_trace() | evolver context |
 | verification_outcomes.jsonl | Claim verification history | record_verification() | calibration threshold |

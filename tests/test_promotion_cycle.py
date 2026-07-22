@@ -662,3 +662,36 @@ class TestDecision:
         d2 = Decision.from_dict(d.to_dict())
         assert d2.decision_id == "d1"
         assert d2.alternatives == ["weekly", "on-demand"]
+
+
+class TestDecisionCLI:
+    """Swarm-review chunk 3: SF-13 decree pipe — the `python3 -m knowledge_lens
+    decision` CLI writes through record_decision to the same journal."""
+
+    def test_decision_subcommand_writes_journal(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.setattr("sys.argv", [
+            "knowledge_lens", "decision",
+            "Decrees land direct to main via land.sh",
+            "--rationale", "Jeremy decree 2026-07-20; PR lane is for Poe",
+            "--alternatives", "PR lane, manual push",
+            "--goal-context", "chunk 3",
+        ])
+        assert _kl_module._cli() == 0
+        out = capsys.readouterr().out
+        assert "recorded" in out
+
+        rows = [json.loads(l) for l in
+                (tmp_path / "decisions.jsonl").read_text().splitlines()]
+        assert len(rows) == 1
+        assert rows[0]["decision"] == "Decrees land direct to main via land.sh"
+        assert rows[0]["alternatives"] == ["PR lane", "manual push"]
+        assert rows[0]["goal_context"] == "chunk 3"
+
+    def test_decisions_search_subcommand(self, monkeypatch, capsys):
+        record_decision("Use CSV output", "Stable schema", domain="proj")
+        monkeypatch.setattr("sys.argv", [
+            "knowledge_lens", "decisions", "CSV output schema"])
+        assert _kl_module._cli() == 0
+        out = capsys.readouterr().out
+        assert "Use CSV output" in out
+        assert "Stable schema" in out

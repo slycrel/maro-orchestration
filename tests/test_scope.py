@@ -365,6 +365,30 @@ def test_generate_scope_retry_does_not_recurse_if_second_scope_also_punts():
     assert len(adapter.calls) == 3  # exactly 3 — no recursive proxy pass
 
 
+def test_proxy_commitment_is_journaled_as_decision():
+    # Swarm-review chunk 3: the director-proxy interpretation is binding for
+    # planning AND closure — it must land in decisions.jsonl at the creation
+    # seam so future runs of similar goals inherit it via recall.
+    import json
+    from orch_items import memory_dir
+
+    adapter = _FakeAdapter(responses=[
+        _CLARIFICATION_RESPONSE,
+        _PROXY_COMMITMENT,
+        _GOOD_MARKDOWN,
+    ])
+    scope = generate_scope("create a branch for headless server", adapter)
+    assert scope is not None and not scope.is_empty()
+
+    journal = memory_dir() / "decisions.jsonl"
+    assert journal.exists()
+    rows = [json.loads(l) for l in journal.read_text().splitlines() if l.strip()]
+    assert len(rows) == 1
+    assert rows[0]["decision"].startswith("Goal interpreted as: Finalize")
+    assert "already exists" in rows[0]["rationale"]
+    assert rows[0]["goal_context"] == "create a branch for headless server"
+
+
 def test_generate_scope_skips_proxy_on_garbage_response_without_question():
     # Empty-scope response with no question mark should NOT route to proxy —
     # that's a different failure class (adapter/model problem, not ambiguity).

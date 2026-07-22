@@ -2,8 +2,28 @@
 
 What to do next, in what order. Updated each session. Deferred ideas live in BACKLOG.md; completed phase history in docs/history/ROADMAP_ARCHIVE.md (ROADMAP.md is a stub). This file is the executable queue.
 
-Last updated: 2026-07-21 — **swarm-review arc, chunk 2 SHIPPED** (of 8; plan:
-`~/.claude/plans/abundant-gathering-lagoon.md`). Chunk 2 (playbook repair —
+Last updated: 2026-07-21 — **swarm-review arc, chunk 3 SHIPPED** (of 8; plan:
+`~/.claude/plans/abundant-gathering-lagoon.md`). Chunk 3 (decisions.jsonl
+writers — the store's read side was always live, recall substrate #3; it
+never had a runtime writer): (1) executor DECISION directive — `decisions`
+field on complete_step (max 2/step, 200/300-char caps), fan-out in
+`_process_done_step` to the durable journal (`record_decision`), shared
+context (`decision:{step}:{n}` — carried UNCOMPRESSED into every later
+step's prompt via `decisions_block`; completed_context's 100-char compression
+was how design calls evaporated), and the thread brain; (2) scope
+director-proxy commitment journaled at the creation seam (binding for
+planning AND closure); (3) SF-13 decree pipe: `PYTHONPATH=src python3 -m
+knowledge_lens decision "<decree>" --rationale "<why>"` (CLAUDE.md rule
+amended; blank-domain rows match all scoped reads, pinned). Consumer-first
+liveness pins: record → recall → text in as_loop_block AND as_context_block
+with no read-side mocks (test_recall.py). Fork-contract design note in
+THREAD_ARCHITECTURE.md (leaf-local / parent-owned / evidence-based
+escalation triggers — NOT parent-always-wins); ancestry write-side
+unification BACKLOG'd (fork prerequisite, not this arc). REFACTOR_PLAN's
+"record_decision (no writer)" removal row struck. **Next: chunk-3
+adversarial review, then chunk 4 (contradiction wiring).**
+
+Previous checkpoint — 2026-07-21 **chunk 2 SHIPPED**. Chunk 2 (playbook repair —
 the live bug): `inject_playbook` is now RANKED selection (learned-over-seed,
 newest learned first, dedup by normalized core, greedy 800-char budget fill —
 kills the head-window horizon bug AND battery V6 seed-overflow; entry parser
@@ -27,11 +47,9 @@ lenses vs 257b34d, CONTESTED, 6 verified findings all accepted ≥ in part,
 (snapshot → compute → compare-and-swap), compression guard made structural
 (exact-line/Counter/ceil), rank-order dedup, hard 800-char cap,
 atomic_write on both rewrite paths, newest-first rendering
-(`docs/history/2026-07-21-chunk2-adversarial-review.md`). **Next: chunk 3
-(decisions.jsonl writer + consumer-first + SF-13 pipe), then its
-adversarial review.**
+(`docs/history/2026-07-21-chunk2-adversarial-review.md`).
 
-Previous checkpoint — 2026-07-21 **chunk 1 SHIPPED** (Phase 0 knowledge
+Earlier checkpoint — 2026-07-21 **chunk 1 SHIPPED** (Phase 0 knowledge
 journey + Phase 0.5 DEV_PATTERNS/battery landed earlier same arc). Chunk 1: execution
 defaults unified at MID (handle entry, loop, thin mode; per-step cheap
 downgrade removed; `classify_step_model` deleted; user-CONFIG cheap pin

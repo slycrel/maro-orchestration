@@ -916,6 +916,74 @@ class TestArtifactContextInjection:
         assert "Artifacts from prior steps" not in captured["user"]
 
 
+class TestDecisionDirective:
+    """Swarm-review chunk 3: the executor DECISION directive."""
+
+    def test_decisions_field_in_tool_schema(self):
+        from step_exec import EXECUTE_TOOLS
+        complete_step = next(t for t in EXECUTE_TOOLS if t["name"] == "complete_step")
+        props = complete_step["parameters"]["properties"]
+        assert "decisions" in props
+        assert props["decisions"]["type"] == "array"
+
+    def test_decision_guidance_in_system_prompt(self):
+        from step_exec import EXECUTE_SYSTEM
+        assert "DESIGN DECISIONS" in EXECUTE_SYSTEM
+        assert "decisions" in EXECUTE_SYSTEM
+
+    def test_decisions_parsed_capped_and_validated(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("MARO_ORCH_ROOT", str(tmp_path))
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        from llm import LLMResponse, ToolCall
+        from step_exec import execute_step, EXECUTE_TOOLS
+
+        class _Adapter:
+            def complete(self, messages, **kw):
+                return LLMResponse(
+                    content="",
+                    tool_calls=[ToolCall(
+                        name="complete_step",
+                        arguments={
+                            "result": "done", "summary": "done",
+                            "decisions": [
+                                {"decision": "Use CSV output",
+                                 "rationale": "R" * 400},   # rationale capped
+                                "not a dict",                # dropped
+                                {"decision": "", "rationale": "x"},  # dropped
+                                {"decision": "Third valid decision",
+                                 "rationale": "should be cut by the 2-cap"},
+                            ],
+                        },
+                    )],
+                )
+
+        outcome = execute_step(
+            goal="Test goal", step_text="Do something", step_num=1,
+            total_steps=1, completed_context=[], adapter=_Adapter(),
+            tools=EXECUTE_TOOLS,
+        )
+        decs = outcome.get("decisions")
+        assert decs is not None and len(decs) == 1
+        assert decs[0]["decision"] == "Use CSV output"
+        assert len(decs[0]["rationale"]) == 300  # capped
+
+    def test_decisions_context_injection(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("MARO_ORCH_ROOT", str(tmp_path))
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        from step_exec import execute_step, EXECUTE_TOOLS
+        adapter, captured = TestArtifactContextInjection._adapter_capturing_prompt(
+            TestArtifactContextInjection())
+        execute_step(
+            goal="Test goal", step_text="Later step", step_num=3,
+            total_steps=3, completed_context=[], adapter=adapter,
+            tools=EXECUTE_TOOLS,
+            shared_ctx={"decision:1:0": "Use CSV output — stable schema"},
+        )
+        assert "Design decisions from prior steps" in captured["user"]
+        assert "Use CSV output — stable schema" in captured["user"]
+        assert "(step 1)" in captured["user"]
+
+
 class TestToolTranscriptCapture:
     """The inner agent's real tool calls (resp.tool_events) are compacted onto
     the outcome, persisted to disk, and exposed via the artifacts seam."""

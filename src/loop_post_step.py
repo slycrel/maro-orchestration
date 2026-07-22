@@ -898,6 +898,41 @@ def _process_done_step(
             loop_shared_ctx[_art_key] = _art_val
         log.info("step %d: stored %d artifact(s) in shared context", step_idx, len(_artifacts))
 
+    # DECISION directive (swarm-review chunk 3): executor design calls go
+    # three places — the durable decision journal (read back by recall
+    # substrate #3 in future runs), shared context (uncompressed carry to
+    # every later step — completed_context compresses to 100 chars, which
+    # is how these used to evaporate), and the thread brain (ancestry).
+    # Never perturbs the loop.
+    _step_decisions = outcome.get("decisions")
+    if _step_decisions and isinstance(_step_decisions, list):
+        for _di, _dec in enumerate(_step_decisions):
+            if not isinstance(_dec, dict):
+                continue
+            _d_txt = str(_dec.get("decision", "")).strip()
+            _d_why = str(_dec.get("rationale", "")).strip()
+            if not (_d_txt and _d_why):
+                continue
+            try:
+                from memory import record_decision
+                record_decision(_d_txt, _d_why, domain=ctx.project,
+                                goal_context=ctx.goal)
+            except Exception as _dec_exc:
+                log.warning("step %d decision journal write failed: %s",
+                            step_idx, _dec_exc)
+            loop_shared_ctx[f"decision:{step_idx}:{_di}"] = f"{_d_txt} — {_d_why}"
+            try:
+                from runs import current_run_dir
+                from thread_brain import append_decision
+                _rd = current_run_dir()
+                if _rd is not None:
+                    append_decision(
+                        _rd, f"step {step_idx} [executor]: {_d_txt} — {_d_why[:160]}")
+            except Exception:
+                pass
+        log.info("step %d: recorded %d design decision(s)",
+                 step_idx, len(_step_decisions))
+
     # Mutable task graph: inject discovered steps
     _injected = outcome.get("inject_steps", [])
     if _injected and isinstance(_injected, list):

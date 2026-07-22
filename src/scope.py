@@ -680,6 +680,24 @@ def generate_scope(
                         **resolution,
                         "clarification_question": content.strip()[:800],
                     }
+                    # This interpretation is BINDING: the planner sees it via
+                    # ResolvedIntent and closure judges against it
+                    # (closure_verify's interpretation block). A commitment
+                    # that shapes both planning and the goal-achieved verdict
+                    # is a design decision — journal it so future runs of
+                    # similar goals inherit it (swarm-review chunk 3).
+                    try:
+                        from knowledge_lens import record_decision
+                        record_decision(
+                            f"Goal interpreted as: {resolution['interpretation'][:300]}",
+                            (resolution.get("reason", "").strip()
+                             or "director-proxy resolution of an ambiguous goal; "
+                                "binding for planning and closure"),
+                            goal_context=goal[:300],
+                        )
+                    except Exception as _dec_exc:
+                        log.debug("scope: decision journal write failed: %s",
+                                  _dec_exc)
                     log.info(
                         "scope: director-proxy resolved ambiguity, retry produced "
                         "%d failure modes, %d in-scope, %d out-of-scope",

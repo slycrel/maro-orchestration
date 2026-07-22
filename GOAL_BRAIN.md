@@ -3876,3 +3876,28 @@ Dormant (deliberately parked, not dropped):
   `atomic_write` on both playbook rewrite paths; newest-first visible
   in rendered output. Record:
   docs/history/2026-07-21-chunk2-adversarial-review.md.
+- 2026-07-21 (chunk 3 executed, standing grant): **swarm-review chunk 3
+  shipped — decisions.jsonl finally has writers.** Read side was always
+  live (recall loop-slice substrate #3 → `inject_decisions`); the store
+  had never had a runtime writer. Three now: (1) **executor DECISION
+  directive** — `decisions` field on complete_step (max 2/step,
+  decision≤200/rationale≤300 chars), fan-out in `_process_done_step` to
+  the durable journal (`record_decision`), shared context
+  (`decision:{step}:{n}` keys — carried UNCOMPRESSED to every later
+  step's prompt via `decisions_block`; completed_context's 100-char
+  compression was how design calls used to evaporate), and the thread
+  brain (`step N [executor]:` lines). (2) **Scope proxy commitment** —
+  the director-proxy interpretation closure already treats as binding
+  is journaled at the creation seam (scope.py retry-success path), not
+  at closure — root-cause placement. (3) **SF-13 decree pipe** —
+  `PYTHONPATH=src python3 -m knowledge_lens decision "<decree>"
+  --rationale "<why>"`; CLAUDE.md SF-13 rule amended; blank-domain rows
+  match all project-scoped reads (pinned). Consumer-first liveness pin:
+  record → recall → text in as_loop_block AND as_context_block, no
+  mocks on the read side (test_recall.py TestDecisionLiveness). Fork
+  contract design note added to THREAD_ARCHITECTURE.md (three-way
+  ownership: leaf-local / parent-owned / evidence-based escalation
+  triggers — NOT parent-always-wins, per Jeremy); ancestry write-side
+  unification BACKLOG'd as the fork prerequisite. REFACTOR_PLAN's
+  "record_decision (no writer)" removal candidate struck (currency
+  rule).
