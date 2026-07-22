@@ -226,6 +226,11 @@ def _run_parallel_batch(
             _b_result = _batch_oc.get("result", "")
             _b_excerpt = _b_result[:800] if _b_result else ""
             completed_context.append(f"Step {step_idx} ({_batch_text[:80]}):\n{_b_excerpt}")
+            # DECISION fan-out (chunk-3 review finding: parallel paths
+            # bypassed _process_done_step, silently dropping decisions).
+            # step_idx is already unique per batch member (incremented above).
+            from loop_post_step import record_step_decisions
+            record_step_decisions(ctx, str(step_idx), _batch_oc, loop_shared_ctx)
             if ctx.verbose:
                 print(f"[maro] step {step_idx} done (parallel): {_batch_oc.get('summary', '')[:80]}", file=sys.stderr, flush=True)
             _bi_inject = _batch_oc.get("inject_steps", [])
@@ -347,6 +352,11 @@ def _run_parallel_path(
             # fallback rather than rendering these as false zero-duration steps.
             ended_ts="",
         ))
+        if _st == "done":
+            # DECISION fan-out (chunk-3 review finding: the fan-out/DAG path
+            # bypassed _process_done_step, silently dropping decisions).
+            from loop_post_step import record_step_decisions
+            record_step_decisions(ctx, str(_i), _oc, loop_shared_ctx)
         _fanout_tokens_in += _oc.get("tokens_in", 0)
         _fanout_tokens_out += _oc.get("tokens_out", 0)
         if _st == "blocked":

@@ -936,10 +936,27 @@ def execute_step(
                 _dec_label = f"step {_parts[1]}" if len(_parts) >= 2 else _k
                 _dec_entries.append(f"  - ({_dec_label}) {str(_v)}")
         if _dec_entries:
+            # Budget, not append-forever: chronological order (earliest
+            # decisions constrain the most downstream work), hard char cap so
+            # a long run can't crowd step context out of the prompt. Omitted
+            # entries stay recoverable — every decision is also in the
+            # durable journal and the thread brain.
+            _dec_budget = 2000
+            _dec_kept, _dec_chars = [], 0
+            for _e in _dec_entries:
+                if _dec_chars + len(_e) + 1 > _dec_budget:
+                    break
+                _dec_kept.append(_e)
+                _dec_chars += len(_e) + 1
+            _dec_omitted = len(_dec_entries) - len(_dec_kept)
+            if _dec_omitted:
+                _dec_kept.append(
+                    f"  - (+{_dec_omitted} later decision(s) omitted for "
+                    "space — full list in the decision journal)")
             decisions_block = (
                 "\n\nDesign decisions from prior steps "
                 "(binding unless the step text overrides them):\n"
-                + "\n".join(_dec_entries)
+                + "\n".join(_dec_kept)
             )
 
     ancestry_block = f"\n\n{ancestry_context}" if ancestry_context else ""
@@ -1324,7 +1341,11 @@ def execute_step(
             _raw_decisions = tc.arguments.get("decisions") or []
             if isinstance(_raw_decisions, list):
                 _clean_decisions = []
-                for _rd in _raw_decisions[:2]:
+                # Cap AFTER validation: malformed entries must not consume
+                # the 2-decision budget (chunk-3 review finding).
+                for _rd in _raw_decisions:
+                    if len(_clean_decisions) >= 2:
+                        break
                     if not isinstance(_rd, dict):
                         continue
                     _d_txt = str(_rd.get("decision", "")).strip()[:200]

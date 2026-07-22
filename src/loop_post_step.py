@@ -701,6 +701,53 @@ def _record_loop_decision(source: str, trigger: str, action: str,
         return False
 
 
+def record_step_decisions(ctx, step_key: str, outcome: dict,
+                          loop_shared_ctx: Dict[str, Any]) -> None:
+    """Fan a done step's DECISION directives out to three places — the
+    durable decision journal (read back by recall substrate #3 in future
+    runs), shared context under decision:{step_key}:{n} (uncompressed carry
+    to every later step's prompt — completed_context compresses to 100
+    chars, which is how design calls used to evaporate), and the thread
+    brain (ancestry).
+
+    Shared by the sequential path (_process_done_step) and the parallel
+    batch/fan-out/DAG outcome walks in loop_parallel — all callers invoke
+    this from single-threaded post-join code, so the loop_shared_ctx
+    mutation needs no lock. step_key is the step number as a string —
+    callers must keep it unique per step or later decisions clobber
+    earlier ones in shared context. Never raises.
+    """
+    _step_decisions = outcome.get("decisions")
+    if not (_step_decisions and isinstance(_step_decisions, list)):
+        return
+    for _di, _dec in enumerate(_step_decisions):
+        if not isinstance(_dec, dict):
+            continue
+        _d_txt = str(_dec.get("decision", "")).strip()
+        _d_why = str(_dec.get("rationale", "")).strip()
+        if not (_d_txt and _d_why):
+            continue
+        try:
+            from memory import record_decision
+            record_decision(_d_txt, _d_why, domain=ctx.project,
+                            goal_context=ctx.goal)
+        except Exception as _dec_exc:
+            log.warning("step %s decision journal write failed: %s",
+                        step_key, _dec_exc)
+        loop_shared_ctx[f"decision:{step_key}:{_di}"] = f"{_d_txt} — {_d_why}"
+        try:
+            from runs import current_run_dir
+            from thread_brain import append_decision
+            _rd = current_run_dir()
+            if _rd is not None:
+                append_decision(
+                    _rd, f"step {step_key} [executor]: {_d_txt} — {_d_why[:160]}")
+        except Exception:
+            pass
+    log.info("step %s: recorded %d design decision(s)",
+             step_key, len(_step_decisions))
+
+
 def _artifacts_evidence_note(project: str, limit: int = 5) -> str:
     """Compact listing of the freshest project artifact files for the ralph
     verifier: name, size, age, head excerpt. Steps deliver content to
@@ -898,40 +945,9 @@ def _process_done_step(
             loop_shared_ctx[_art_key] = _art_val
         log.info("step %d: stored %d artifact(s) in shared context", step_idx, len(_artifacts))
 
-    # DECISION directive (swarm-review chunk 3): executor design calls go
-    # three places — the durable decision journal (read back by recall
-    # substrate #3 in future runs), shared context (uncompressed carry to
-    # every later step — completed_context compresses to 100 chars, which
-    # is how these used to evaporate), and the thread brain (ancestry).
-    # Never perturbs the loop.
-    _step_decisions = outcome.get("decisions")
-    if _step_decisions and isinstance(_step_decisions, list):
-        for _di, _dec in enumerate(_step_decisions):
-            if not isinstance(_dec, dict):
-                continue
-            _d_txt = str(_dec.get("decision", "")).strip()
-            _d_why = str(_dec.get("rationale", "")).strip()
-            if not (_d_txt and _d_why):
-                continue
-            try:
-                from memory import record_decision
-                record_decision(_d_txt, _d_why, domain=ctx.project,
-                                goal_context=ctx.goal)
-            except Exception as _dec_exc:
-                log.warning("step %d decision journal write failed: %s",
-                            step_idx, _dec_exc)
-            loop_shared_ctx[f"decision:{step_idx}:{_di}"] = f"{_d_txt} — {_d_why}"
-            try:
-                from runs import current_run_dir
-                from thread_brain import append_decision
-                _rd = current_run_dir()
-                if _rd is not None:
-                    append_decision(
-                        _rd, f"step {step_idx} [executor]: {_d_txt} — {_d_why[:160]}")
-            except Exception:
-                pass
-        log.info("step %d: recorded %d design decision(s)",
-                 step_idx, len(_step_decisions))
+    # DECISION directive (swarm-review chunk 3): executor design calls fan
+    # out via record_step_decisions — shared with the parallel/DAG paths.
+    record_step_decisions(ctx, str(step_idx), outcome, loop_shared_ctx)
 
     # Mutable task graph: inject discovered steps
     _injected = outcome.get("inject_steps", [])

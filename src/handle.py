@@ -1562,6 +1562,10 @@ def _handle_impl(
                 _resolved_intent = generate_resolved_intent(
                     message, adapter,
                     ancestry_context=_scope_ancestry,
+                    # Scopes any proxy-interpretation decision to this project
+                    # (blank domain would inject it into every project's
+                    # recall — chunk-3 review finding).
+                    decision_domain=project or _default_project_for(message),
                 )
                 # Keep _scope as the scope-view for back-compat with the
                 # existing artifact-write / captain's-log / ab-skip branches

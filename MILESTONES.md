@@ -20,8 +20,16 @@ with no read-side mocks (test_recall.py). Fork-contract design note in
 THREAD_ARCHITECTURE.md (leaf-local / parent-owned / evidence-based
 escalation triggers — NOT parent-always-wins); ancestry write-side
 unification BACKLOG'd (fork prerequisite, not this arc). REFACTOR_PLAN's
-"record_decision (no writer)" removal row struck. **Next: chunk-3
-adversarial review, then chunk 4 (contradiction wiring).**
+"record_decision (no writer)" removal row struck. **Chunk-3 adversarial
+review DONE same day** (3 Codex lenses vs fe0072d, REJECT-as-reviewed →
+remediated same session, 6/6 verified real, 0 hallucinated): parallel/DAG
+paths were silently dropping decisions (fan-out extracted to
+`record_step_decisions`, both parallel walks wired, pinned);
+`locked_append` on the journal; SF-13 CLI fails closed; scope-proxy
+decisions domain-scoped + goal_context in the TF-IDF ranked text;
+2000-char decisions_block budget; valid-first 2-cap
+(`docs/history/2026-07-21-chunk3-adversarial-review.md`). **Next:
+chunk 4 (contradiction wiring, prerequisites i–v).**
 
 Previous checkpoint — 2026-07-21 **chunk 2 SHIPPED**. Chunk 2 (playbook repair —
 the live bug): `inject_playbook` is now RANKED selection (learned-over-seed,

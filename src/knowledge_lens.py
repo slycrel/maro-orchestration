@@ -777,6 +777,7 @@ def record_decision(
     alternatives: Optional[List[str]] = None,
     trade_offs: str = "",
     goal_context: str = "",
+    strict: bool = False,
 ) -> Decision:
     """Record a significant decision to the decision journal.
 
@@ -787,6 +788,10 @@ def record_decision(
         alternatives: Other options that were considered.
         trade_offs: Known downsides or limitations of the chosen approach.
         goal_context: The goal that prompted this decision.
+        strict: Re-raise journal write failures instead of warn-and-continue.
+            Loop callers stay best-effort (a decision must never take a step
+            down); the SF-13 CLI passes True — its entire job is the write,
+            so a swallowed failure would be a false success.
 
     Returns:
         The recorded Decision object.
@@ -803,9 +808,14 @@ def record_decision(
         goal_context=goal_context,
     )
     try:
-        with open(_decisions_path(), "a", encoding="utf-8") as f:
-            f.write(json.dumps(d.to_dict()) + "\n")
+        # locked_append, not bare open('a'): the journal now has concurrent
+        # runtime writers (executor fan-out, scope proxy, CLI) and JSON rows
+        # can exceed the PIPE_BUF atomic-append guarantee.
+        from file_lock import locked_append
+        locked_append(_decisions_path(), json.dumps(d.to_dict()))
     except Exception as exc:
+        if strict:
+            raise
         log.warning("decision journal write failed: %s", exc)
 
     # Captain's log
@@ -870,7 +880,12 @@ def search_decisions(query: str, domain: str = "", limit: int = DECISION_SEARCH_
         class _FakeTL:
             """Adapter so _tfidf_rank can score decisions."""
             def __init__(self, d: Decision):
-                self.lesson = f"{d.decision} {d.rationale}"
+                # goal_context is part of the ranked text: queries are goal
+                # text, and for writers like the scope proxy the original
+                # goal's terms may appear ONLY there — without it, "future
+                # runs of similar goals inherit it" fails on exactly the
+                # decisions whose interpretation diverged from the goal words.
+                self.lesson = f"{d.decision} {d.rationale} {d.goal_context}"
                 self._d = d
 
         scored = _tfidf_rank(query, [_FakeTL(d) for d in all_decisions], top_k=limit)
@@ -1092,6 +1107,7 @@ def calibrated_alignment_threshold(claim_type: str = "alignment") -> float:
 
 def _cli() -> int:
     import argparse
+    import sys
 
     parser = argparse.ArgumentParser(prog="knowledge_lens")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -1116,11 +1132,16 @@ def _cli() -> int:
     args = parser.parse_args()
     if args.cmd == "decision":
         alts = [a.strip() for a in args.alternatives.split(",") if a.strip()]
-        d = record_decision(
-            args.decision, args.rationale, domain=args.domain,
-            alternatives=alts, trade_offs=args.trade_offs,
-            goal_context=args.goal_context,
-        )
+        try:
+            d = record_decision(
+                args.decision, args.rationale, domain=args.domain,
+                alternatives=alts, trade_offs=args.trade_offs,
+                goal_context=args.goal_context,
+                strict=True,
+            )
+        except Exception as exc:
+            print(f"error: decision NOT recorded — {exc}", file=sys.stderr)
+            return 1
         print(f"recorded {d.decision_id}: {d.decision}")
         return 0
     if args.cmd == "decisions":

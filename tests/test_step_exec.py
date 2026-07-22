@@ -950,8 +950,11 @@ class TestDecisionDirective:
                                  "rationale": "R" * 400},   # rationale capped
                                 "not a dict",                # dropped
                                 {"decision": "", "rationale": "x"},  # dropped
+                                {"decision": "Second valid decision",
+                                 "rationale": "malformed entries must not "
+                                              "consume the 2-cap"},
                                 {"decision": "Third valid decision",
-                                 "rationale": "should be cut by the 2-cap"},
+                                 "rationale": "cut by the 2-cap"},
                             ],
                         },
                     )],
@@ -963,9 +966,12 @@ class TestDecisionDirective:
             tools=EXECUTE_TOOLS,
         )
         decs = outcome.get("decisions")
-        assert decs is not None and len(decs) == 1
+        # Cap counts VALID decisions — the two malformed entries between the
+        # valid ones don't eat the budget (chunk-3 adversarial review).
+        assert decs is not None and len(decs) == 2
         assert decs[0]["decision"] == "Use CSV output"
         assert len(decs[0]["rationale"]) == 300  # capped
+        assert decs[1]["decision"] == "Second valid decision"
 
     def test_decisions_context_injection(self, tmp_path, monkeypatch):
         monkeypatch.setenv("MARO_ORCH_ROOT", str(tmp_path))
@@ -982,6 +988,30 @@ class TestDecisionDirective:
         assert "Design decisions from prior steps" in captured["user"]
         assert "Use CSV output — stable schema" in captured["user"]
         assert "(step 1)" in captured["user"]
+
+    def test_decisions_block_has_hard_budget(self, tmp_path, monkeypatch):
+        """Chunk-3 adversarial review: the uncompressed carry must not grow
+        without bound — chronological entries within a 2000-char budget, the
+        rest summarized by an omission note (journal keeps the full list)."""
+        monkeypatch.setenv("MARO_ORCH_ROOT", str(tmp_path))
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        from step_exec import execute_step, EXECUTE_TOOLS
+        adapter, captured = TestArtifactContextInjection._adapter_capturing_prompt(
+            TestArtifactContextInjection())
+        shared = {
+            f"decision:{i}:0": f"Decision {i:02d} — " + "why " * 100
+            for i in range(1, 21)
+        }
+        execute_step(
+            goal="Test goal", step_text="Late step", step_num=21,
+            total_steps=21, completed_context=[], adapter=adapter,
+            tools=EXECUTE_TOOLS, shared_ctx=shared,
+        )
+        user = captured["user"]
+        assert "Design decisions from prior steps" in user
+        assert "Decision 01" in user            # earliest kept
+        assert "omitted for space" in user      # overflow note present
+        assert "Decision 20" not in user        # tail dropped, not rendered
 
 
 class TestToolTranscriptCapture:

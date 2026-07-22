@@ -110,3 +110,72 @@ def test_handle_result_numbers_by_position_not_index():
     assert "Step -1" not in hr.result
     assert "**Step 1: first**" in hr.result
     assert "**Step 2: injected**" in hr.result
+
+
+class TestParallelDecisionFanOut:
+    """Chunk-3 adversarial review (finding 1, all three lenses): parallel
+    paths bypassed _process_done_step, silently dropping DECISION directives.
+    Both parallel surfaces now fan decisions out via record_step_decisions."""
+
+    _DEC = [{"status": "done", "result": "r1",
+             "decisions": [{"decision": "Use CSV output",
+                            "rationale": "stable schema"}]},
+            {"status": "done", "result": "r2",
+             "decisions": [{"decision": "Use tabs not spaces",
+                            "rationale": "matches repo style"}]},
+            {"status": "blocked", "stuck_reason": "x",
+             "decisions": [{"decision": "Never seen",
+                            "rationale": "blocked steps don't fan out"}]}]
+
+    def test_batch_path_fans_out_decisions(self, monkeypatch, orch_stub, tmp_path):
+        import knowledge_lens as kl
+        monkeypatch.setattr(kl, "_memory_dir", lambda: tmp_path)
+        monkeypatch.setattr(
+            loop_parallel, "_run_steps_parallel", lambda **kw: self._DEC)
+        shared = {}
+        _run_parallel_batch(
+            _Ctx(), "lead step", ["peer one", "peer two"],
+            step_outcomes=[], completed_context=[], remaining_steps=[],
+            remaining_indices=[], loop_shared_ctx=shared,
+            resolve_tools_fn=lambda: [], parallel_fan_out=2,
+            proj_artifact_dir="", iteration=0, step_idx=4,
+            batch_item_indices=None,
+        )
+        # step_idx increments per batch member (lead=5, peer1=6) — distinct
+        # keys, no same-batch clobber
+        assert shared["decision:5:0"] == "Use CSV output — stable schema"
+        assert shared["decision:6:0"] == "Use tabs not spaces — matches repo style"
+        # Blocked member's decision NOT carried
+        assert not any("Never seen" in v for v in shared.values())
+        # Durable journal got both
+        import json
+        rows = [json.loads(l) for l in
+                (tmp_path / "decisions.jsonl").read_text().splitlines()]
+        assert {r["decision"] for r in rows} == {"Use CSV output",
+                                                 "Use tabs not spaces"}
+
+    def test_fanout_path_fans_out_decisions(self, monkeypatch, tmp_path):
+        import knowledge_lens as kl
+        from loop_parallel import _run_parallel_path
+        monkeypatch.setattr(kl, "_memory_dir", lambda: tmp_path)
+        monkeypatch.setattr(
+            loop_parallel, "_run_steps_parallel", lambda **kw: self._DEC[:2])
+        monkeypatch.setattr(
+            loop_parallel, "_drain_pending_context", lambda ctx: ("", ""))
+
+        class _PCtx(_Ctx):
+            loop_id = "loop-t"
+            step_callback = None
+            started_at = time.monotonic()
+
+        shared = {}
+        result = _run_parallel_path(
+            _PCtx(), ["step a", "step b"],
+            clean_steps=["step a", "step b"], deps={}, levels=None,
+            parallel_levels=[], parallel_fan_out=2, proj_fanout_dir="",
+            loop_shared_ctx=shared, use_dag=False,
+            resolve_tools_fn=lambda: [],
+        )
+        assert result is not None
+        assert shared["decision:1:0"] == "Use CSV output — stable schema"
+        assert shared["decision:2:0"] == "Use tabs not spaces — matches repo style"

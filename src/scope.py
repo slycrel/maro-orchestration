@@ -530,6 +530,7 @@ def generate_resolved_intent(
     temperature: float = 0.3,
     ancestry_context: str = "",
     allow_proxy_fallback: bool = True,
+    decision_domain: str = "",
 ) -> Optional["ResolvedIntent"]:
     """Generate a resolved intent (scope + deliverable map) for `goal`.
 
@@ -552,6 +553,7 @@ def generate_resolved_intent(
         temperature=temperature,
         ancestry_context=ancestry_context,
         allow_proxy_fallback=allow_proxy_fallback,
+        decision_domain=decision_domain,
     )
     if scope is None:
         return None
@@ -591,6 +593,7 @@ def generate_scope(
     temperature: float = 0.3,
     ancestry_context: str = "",
     allow_proxy_fallback: bool = True,
+    decision_domain: str = "",
 ) -> Optional[ScopeSet]:
     """Generate a scope for `goal` via a single-call inversion pass.
 
@@ -674,6 +677,7 @@ def generate_scope(
                     max_tokens=max_tokens, temperature=temperature,
                     ancestry_context=ancestry_context,
                     allow_proxy_fallback=False,
+                    decision_domain=decision_domain,
                 )
                 if retry is not None and not retry.is_empty():
                     retry.proxy_resolution = {
@@ -693,6 +697,11 @@ def generate_scope(
                             (resolution.get("reason", "").strip()
                              or "director-proxy resolution of an ambiguous goal; "
                                 "binding for planning and closure"),
+                            # Scoped to the project when the caller knows it:
+                            # a one-off interpretation is not a global decree,
+                            # and blank-domain rows inject into EVERY
+                            # project's recall.
+                            domain=decision_domain,
                             goal_context=goal[:300],
                         )
                     except Exception as _dec_exc:

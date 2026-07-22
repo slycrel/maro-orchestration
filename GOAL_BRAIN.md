@@ -3901,3 +3901,24 @@ Dormant (deliberately parked, not dropped):
   unification BACKLOG'd as the fork prerequisite. REFACTOR_PLAN's
   "record_decision (no writer)" removal candidate struck (currency
   rule).
+- 2026-07-21 (session, executing Jeremy's /goal per-chunk review
+  discipline): **chunk-3 adversarial review ran post-land** (3 Codex
+  lenses vs fe0072d) — verdict REJECT-as-reviewed (unanimous high),
+  remediated same session; 6/6 findings verified real, 0 hallucinated
+  (third consecutive clean round). The one that mattered: the decision
+  fan-out lived only in the sequential `_process_done_step` — ALL
+  parallel surfaces (batch, fan-out, DAG) silently dropped executor
+  decisions; the live smoke run was sequential, which is exactly how
+  that class of gap survives smoke. Fixed by extracting
+  `record_step_decisions` as the single seam + wiring both parallel
+  outcome walks (pins in test_parallel_batch_indices.py). Also:
+  `locked_append` on the journal (multi-writer ledger, house
+  convention); SF-13 CLI fails closed (`strict=` kwarg — loop callers
+  stay best-effort); scope-proxy decisions domain-scoped to the project
+  (blank-domain = every project's recall) + `goal_context` joined into
+  the TF-IDF ranked text; decisions_block got a 2000-char chronological
+  budget with omission note; max-2 cap now counts VALID decisions (the
+  review caught my pin encoding the bug as spec). Deferred consciously:
+  decision-kind taxonomy (three writers don't justify a type system),
+  mid-run decision supersede/dedup lifecycle. Record:
+  docs/history/2026-07-21-chunk3-adversarial-review.md.
