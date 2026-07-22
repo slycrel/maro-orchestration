@@ -18,7 +18,9 @@ from quality_gate import (
     run_llm_council,
     run_quality_gate,
     next_model_tier,
-    _COUNCIL_FRAMINGS,
+    _EVIDENCE_LENSES,
+    _lens_evidence_transcript,
+    _lens_evidence_artifact,
     _probe_contested_claims,
 )
 
@@ -26,6 +28,19 @@ from quality_gate import (
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+@pytest.fixture(autouse=True)
+def _hosted_free_off(monkeypatch):
+    """Hermetic default: the hosted-free tier is OFF unless a test opts in.
+
+    The box this suite runs on has live hosted-free keys — without this pin,
+    council/gate tests would make real network calls (and their pass/fail
+    would depend on box consent state). Tests that want the tier re-patch
+    hosted_free.available/build_hosted_free_adapter themselves (5a precedent).
+    """
+    import hosted_free
+    monkeypatch.setattr(hosted_free, "available", lambda: False)
+
 
 def _make_step(status="done", text="do something", result="result text"):
     s = SimpleNamespace(status=status, text=text, result=result, index=1)
@@ -36,7 +51,35 @@ def _make_adapter(content: str):
     resp = SimpleNamespace(content=content, input_tokens=10, output_tokens=20)
     adapter = MagicMock()
     adapter.complete.return_value = resp
+    # Pin attribution attrs — MagicMock would auto-create truthy Mocks and
+    # persona_dispatch._adapter_source would misread the seat as hosted-free.
+    adapter._active_provider = ""
+    adapter.model_key = "stub-model"
     return adapter
+
+
+def _hosted_on(monkeypatch, hosted_adapter):
+    """Opt a test into the hosted-free tier with the given mock adapter."""
+    import hosted_free
+    monkeypatch.setattr(hosted_free, "available", lambda: True)
+    monkeypatch.setattr(hosted_free, "build_hosted_free_adapter",
+                        lambda: hosted_adapter)
+
+
+def _capture_events(monkeypatch):
+    captured: list = []
+
+    def fake_log_event(event_type, *, subject, summary, context=None,
+                       note=None, loop_id=None, related_ids=None):
+        captured.append({
+            "event_type": event_type, "subject": subject, "summary": summary,
+            "context": context or {}, "loop_id": loop_id,
+        })
+        return {}
+
+    import captains_log as _cl
+    monkeypatch.setattr(_cl, "log_event", fake_log_event)
+    return captured
 
 
 # ---------------------------------------------------------------------------
@@ -75,22 +118,45 @@ class TestCouncilDataclasses:
 
 
 # ---------------------------------------------------------------------------
-# Council framings
+# Evidence-path lenses (chunk 5b — seats differ in evidence, not costume)
 # ---------------------------------------------------------------------------
 
-class TestCouncilFramings:
-    def test_three_framings_exist(self):
-        assert len(_COUNCIL_FRAMINGS) == 3
+class TestEvidenceLenses:
+    def test_three_lenses_exist(self):
+        assert len(_EVIDENCE_LENSES) == 3
 
-    def test_framing_names(self):
-        names = [f[0] for f in _COUNCIL_FRAMINGS]
-        assert "devil_advocate" in names
-        assert "domain_skeptic" in names
-        assert "implementation_critic" in names
+    def test_lens_names(self):
+        names = [l[0] for l in _EVIDENCE_LENSES]
+        assert names == ["transcript_aware", "artifact_only", "probe_armed"]
 
-    def test_framing_prompts_not_empty(self):
-        for name, prompt in _COUNCIL_FRAMINGS:
-            assert len(prompt) > 50, f"{name} prompt too short"
+    def test_lens_prompts_rendered(self):
+        # The {code_instruction}/{json_contract} placeholders must be gone
+        # and every seat must carry the typed finding-code vocabulary.
+        for name, prompt, _builder in _EVIDENCE_LENSES:
+            assert len(prompt) > 100, f"{name} prompt too short"
+            assert "{code_instruction}" not in prompt
+            assert "{json_contract}" not in prompt
+            assert "FINDING[PHANTOM_SYMBOL]" in prompt, f"{name} missing code vocab"
+
+    def test_probe_lens_demands_settled_by_command(self):
+        prompt = dict((n, p) for n, p, _b in _EVIDENCE_LENSES)["probe_armed"]
+        assert "settled_by_command" in prompt
+
+    def test_evidence_builders_diverge(self):
+        # The whole point: seats see DIFFERENT evidence for the same run.
+        steps = [
+            _make_step(text="step one text", result="early result"),
+            _make_step(text="step two text", result="FINAL DELIVERABLE BODY"),
+        ]
+        transcript = _lens_evidence_transcript("goal", steps)
+        artifact = _lens_evidence_artifact("goal", steps)
+        # Transcript seat sees the trail...
+        assert "step one text" in transcript
+        assert "Run transcript" in transcript
+        # ...the context-blind seat sees only the final deliverable.
+        assert "step one text" not in artifact
+        assert "early result" not in artifact
+        assert "FINAL DELIVERABLE BODY" in artifact
 
 
 # ---------------------------------------------------------------------------
@@ -153,6 +219,258 @@ class TestRunLLMCouncil:
         v = run_llm_council("goal", steps, adapter=adapter)
         # Bad JSON → no critiques parsed, no escalation
         assert v.escalate is False
+
+
+# ---------------------------------------------------------------------------
+# Council ladder semantics — hosted-free first, paid confirmation acts
+# ---------------------------------------------------------------------------
+
+_WEAK = '{"verdict": "WEAK", "concerns": ["FINDING[GAP_UNDERSTATED] thin"], "most_critical_gap": "gap"}'
+_STRONG = '{"verdict": "STRONG", "concerns": [], "most_critical_gap": ""}'
+
+
+class TestCouncilLadder:
+    def test_free_agreement_never_touches_paid(self, monkeypatch):
+        _capture_events(monkeypatch)
+        hosted = _make_adapter(_STRONG)
+        hosted._active_provider = "groq"
+        hosted.model_key = "llama-3.1-8b-instant"
+        _hosted_on(monkeypatch, hosted)
+        paid = _make_adapter(_WEAK)
+        v = run_llm_council("goal", [_make_step()], adapter=paid)
+        assert v.escalate is False
+        assert hosted.complete.call_count == 3
+        paid.complete.assert_not_called()
+        assert v.source.startswith("hosted_free:groq:")
+
+    def test_free_flag_needs_paid_confirmation_to_act(self, monkeypatch):
+        _capture_events(monkeypatch)
+        hosted = _make_adapter(_WEAK)
+        hosted._active_provider = "groq"
+        hosted.model_key = "llama-3.1-8b-instant"
+        _hosted_on(monkeypatch, hosted)
+        paid = _make_adapter(_WEAK)
+        paid.model_key = "claude-sonnet-4-6"
+        v = run_llm_council("goal", [_make_step()], adapter=paid)
+        # Free flagged, paid confirmed — escalation acts, attribution is paid.
+        assert v.escalate is True
+        assert paid.complete.call_count == 3
+        assert v.source == "claude-sonnet-4-6"
+
+    def test_paid_round_overrules_free_flag(self, monkeypatch):
+        _capture_events(monkeypatch)
+        hosted = _make_adapter(_WEAK)
+        _hosted_on(monkeypatch, hosted)
+        paid = _make_adapter(_STRONG)
+        v = run_llm_council("goal", [_make_step()], adapter=paid)
+        assert v.escalate is False
+        assert paid.complete.call_count == 3
+
+    def test_free_flag_without_paid_adapter_is_flag_only(self, monkeypatch):
+        captured = _capture_events(monkeypatch)
+        hosted = _make_adapter(_WEAK)
+        _hosted_on(monkeypatch, hosted)
+        v = run_llm_council("goal", [_make_step()], adapter=None)
+        # Weaker family flagged with nothing stronger to confirm — recorded,
+        # never acted on (weaker-never-acts).
+        assert v.escalate is False
+        assert v.weak_count == 3
+        ev = [e for e in captured if e["event_type"] == "QUALITY_GATE_COUNCIL"]
+        assert len(ev) == 1
+        assert ev[0]["context"]["free_flag_unconfirmed"] is True
+
+    def test_degraded_free_tier_falls_back_to_paid(self, monkeypatch):
+        _capture_events(monkeypatch)
+        hosted = _make_adapter("total garbage, no json")
+        _hosted_on(monkeypatch, hosted)
+        paid = _make_adapter(_WEAK)
+        v = run_llm_council("goal", [_make_step()], adapter=paid)
+        # All free seats unparsable — paid round runs and its flag acts.
+        assert paid.complete.call_count == 3
+        assert v.escalate is True
+
+    def test_council_event_carries_seats_and_codes(self, monkeypatch):
+        captured = _capture_events(monkeypatch)
+        adapter = _make_adapter(_WEAK)
+        v = run_llm_council("goal", [_make_step()], adapter=adapter,
+                            loop_id="loop-42")
+        assert v.escalate is True
+        ev = [e for e in captured if e["event_type"] == "QUALITY_GATE_COUNCIL"]
+        assert len(ev) == 1
+        ctx = ev[0]["context"]
+        assert ev[0]["loop_id"] == "loop-42"
+        assert [s["lens"] for s in ctx["seats"]] == [
+            "transcript_aware", "artifact_only", "probe_armed"]
+        assert ctx["seats"][0]["finding_codes"] == ["GAP_UNDERSTATED"]
+        assert ctx["escalate"] is True
+
+    def test_critique_source_stamped(self):
+        adapter = _make_adapter(_STRONG)
+        adapter.model_key = "claude-sonnet-4-6"
+        v = run_llm_council("goal", [_make_step()], adapter=adapter)
+        assert all(c.source == "claude-sonnet-4-6" for c in v.critiques)
+
+
+# ---------------------------------------------------------------------------
+# Probe-armed seat — its own probes can refute its concerns
+# ---------------------------------------------------------------------------
+
+_PROBE_WEAK = (
+    '{"verdict": "WEAK", "concerns": ['
+    '{"claim": "config file missing", "settled_by_command": "test -f cfg"}], '
+    '"most_critical_gap": "missing config"}'
+)
+
+
+class TestProbeArmedLens:
+    def _responses(self, probe_json):
+        # Seat order: transcript_aware, artifact_only, probe_armed.
+        return [
+            SimpleNamespace(content=_STRONG, input_tokens=1, output_tokens=1),
+            SimpleNamespace(content=_STRONG, input_tokens=1, output_tokens=1),
+            SimpleNamespace(content=probe_json, input_tokens=1, output_tokens=1),
+        ]
+
+    def test_dismissed_probe_downgrades_weak(self, monkeypatch):
+        import quality_gate as qg
+        _capture_events(monkeypatch)
+        monkeypatch.setattr(qg, "_probe_contested_claims", lambda claims: [
+            {**c, "probe_status": "dismissed"} for c in claims])
+        adapter = MagicMock()
+        adapter.complete.side_effect = self._responses(_PROBE_WEAK)
+        v = run_llm_council("goal", [_make_step()], adapter=adapter)
+        probe_seat = [c for c in v.critiques if c.critic == "probe_armed"][0]
+        # WEAK rested entirely on a probe-dismissed concern → ACCEPTABLE.
+        assert probe_seat.verdict == "ACCEPTABLE"
+        assert probe_seat.probe_dismissed == 1
+        assert probe_seat.concerns == []
+        assert v.escalate is False
+
+    def test_validated_probe_keeps_weak(self, monkeypatch):
+        import quality_gate as qg
+        _capture_events(monkeypatch)
+        monkeypatch.setattr(qg, "_probe_contested_claims", lambda claims: [
+            {**c, "probe_status": "validated"} for c in claims])
+        adapter = MagicMock()
+        adapter.complete.side_effect = self._responses(_PROBE_WEAK)
+        v = run_llm_council("goal", [_make_step()], adapter=adapter)
+        probe_seat = [c for c in v.critiques if c.critic == "probe_armed"][0]
+        assert probe_seat.verdict == "WEAK"
+        assert probe_seat.concerns == ["config file missing [probe:validated]"]
+
+    def test_string_concerns_tolerated_without_probes(self, monkeypatch):
+        import quality_gate as qg
+        _capture_events(monkeypatch)
+        probes_run = []
+        monkeypatch.setattr(qg, "_probe_contested_claims",
+                            lambda claims: probes_run.append(claims) or claims)
+        adapter = _make_adapter(_WEAK)  # plain-string concerns everywhere
+        v = run_llm_council("goal", [_make_step()], adapter=adapter)
+        assert probes_run == []  # nothing dict-shaped → no subprocess probes
+        assert len(v.critiques) == 3
+
+
+# ---------------------------------------------------------------------------
+# Cross-ref lanes — strict: acts, research hosted-free lane is flag-only
+# ---------------------------------------------------------------------------
+
+class TestCrossRefLanes:
+    def _gate_pass_adapter(self):
+        return _make_adapter('{"verdict": "PASS", "reason": "ok", "confidence": 0.9}')
+
+    def _report(self, n_disputes):
+        from cross_ref import CrossRefReport, ClaimVerification
+        disputes = [
+            ClaimVerification(claim=f"claim {i}", category="statistic",
+                              status="disputed", confidence=0.9, note="off")
+            for i in range(n_disputes)
+        ]
+        return CrossRefReport(verified=disputes, claims_extracted=n_disputes,
+                              claims_checked=n_disputes, disputes=disputes)
+
+    def _force_cr_config(self, monkeypatch, value):
+        import config as _config
+        real_get = _config.get
+
+        def fake_get(key, default=None):
+            if key == "quality_gate.cross_ref_research":
+                return value
+            return real_get(key, default)
+
+        monkeypatch.setattr(_config, "get", fake_get)
+
+    def test_paid_lane_disputes_act(self, monkeypatch):
+        _capture_events(monkeypatch)
+        import cross_ref as _cr
+        monkeypatch.setattr(_cr, "run_cross_ref",
+                            lambda text, adapter=None, **kw: self._report(2))
+        v = run_quality_gate("goal", [_make_step()], self._gate_pass_adapter(),
+                             run_adversarial=False, run_cross_ref=True,
+                             _ladder=False)
+        assert v.escalate is True
+        assert v.verdict == "ESCALATE"
+
+    def test_hosted_lane_disputes_are_flag_only(self, monkeypatch):
+        captured = _capture_events(monkeypatch)
+        import cross_ref as _cr
+        seen_adapters = []
+
+        def fake_run(text, adapter=None, **kw):
+            seen_adapters.append(adapter)
+            return self._report(2)
+
+        monkeypatch.setattr(_cr, "run_cross_ref", fake_run)
+        hosted = MagicMock()
+        hosted._active_provider = "gemini"
+        hosted.model_key = "gemini-flash-lite-latest"
+        _hosted_on(monkeypatch, hosted)
+        self._force_cr_config(monkeypatch, True)
+        v = run_quality_gate("research goal", [_make_step()],
+                             self._gate_pass_adapter(),
+                             run_adversarial=False,
+                             run_cross_ref="hosted_free", _ladder=False)
+        # Disputes recorded, verdict untouched — weaker family never acts.
+        assert v.verdict == "PASS"
+        assert v.escalate is False
+        assert v.cross_ref is not None
+        assert seen_adapters == [hosted]
+        ev = [e for e in captured if e["event_type"] == "QUALITY_GATE_CROSS_REF"]
+        assert len(ev) == 1
+        assert ev[0]["context"]["lane"] == "hosted_free"
+        assert ev[0]["context"]["acted"] is False
+        assert ev[0]["context"]["disputes"] == 2
+        assert ev[0]["context"]["source"].startswith("hosted_free:gemini:")
+
+    def test_hosted_lane_inert_without_consent(self, monkeypatch):
+        # hosted-free OFF (autouse default) → the research lane does nothing.
+        _capture_events(monkeypatch)
+        import cross_ref as _cr
+        called = []
+        monkeypatch.setattr(_cr, "run_cross_ref",
+                            lambda *a, **kw: called.append(1) or self._report(0))
+        self._force_cr_config(monkeypatch, True)
+        v = run_quality_gate("research goal", [_make_step()],
+                             self._gate_pass_adapter(),
+                             run_adversarial=False,
+                             run_cross_ref="hosted_free", _ladder=False)
+        assert called == []
+        assert v.cross_ref is None
+
+    def test_hosted_lane_killswitch_quoted_false(self, monkeypatch):
+        # DEFAULTS discipline: a quoted "false" must actually kill the lane.
+        _capture_events(monkeypatch)
+        import cross_ref as _cr
+        called = []
+        monkeypatch.setattr(_cr, "run_cross_ref",
+                            lambda *a, **kw: called.append(1) or self._report(0))
+        hosted = MagicMock()
+        _hosted_on(monkeypatch, hosted)
+        self._force_cr_config(monkeypatch, "false")
+        run_quality_gate("research goal", [_make_step()],
+                         self._gate_pass_adapter(),
+                         run_adversarial=False,
+                         run_cross_ref="hosted_free", _ladder=False)
+        assert called == []
 
 
 # ---------------------------------------------------------------------------

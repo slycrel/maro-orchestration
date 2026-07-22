@@ -170,6 +170,18 @@ QUALITY_GATE_VERDICT = "QUALITY_GATE_VERDICT"  # PASS / ESCALATE — most import
 # for the agreement readout (chunk 7); nothing reads it for control flow.
 QUALITY_GATE_SECOND_FAMILY = "QUALITY_GATE_SECOND_FAMILY"
 
+# Evidence-path council round (swarm-review chunk 5b). One per run_llm_council
+# invocation that produced seats: per-seat lens/verdict/source/finding-codes,
+# free-round vs paid-confirmation vote, whether escalation acted. The council
+# is strict:-gated; this row is the A/B evidence for its graduation decision.
+QUALITY_GATE_COUNCIL = "QUALITY_GATE_COUNCIL"
+
+# Cross-ref pass inside the gate (chunk 5b made the research-shaped hosted-free
+# lane reachable; the strict: paid lane predates it). Records lane, claim
+# counts, disputes, and whether disputes acted (paid lane only — hosted lane
+# is flag-only per the weaker-never-acts rule).
+QUALITY_GATE_CROSS_REF = "QUALITY_GATE_CROSS_REF"
+
 # Per-step resource-burn signal: step exceeded the cap from the
 # decomposition_too_broad post-mortem note (≤120s and ≤200K tokens per step).
 # Fires mid-loop so the warning is visible without waiting for the loop to
@@ -240,7 +252,8 @@ EVENT_TYPES = {
     SCOPE_GENERATED, SCOPE_PARSE_FAILED, SCOPE_SKIPPED, CLOSURE_VERDICT, CLAIM_PROBED,
     CLAIM_VERIFIER_OUTCOME, FABRICATION_DETECTED, SCAVENGE_DETECTED, FENCE_WRITE_BLOCKED,
     FENCE_EXTENDED,
-    LOOP_CREATED, QUALITY_GATE_VERDICT, QUALITY_GATE_SECOND_FAMILY, STEP_TOO_BROAD,
+    LOOP_CREATED, QUALITY_GATE_VERDICT, QUALITY_GATE_SECOND_FAMILY,
+    QUALITY_GATE_COUNCIL, QUALITY_GATE_CROSS_REF, STEP_TOO_BROAD,
     RECALL_PERFORMED, RECALL_GUARD_TRIPPED,
     NAVIGATOR_DECIDED, NAVIGATOR_ACTED, NAVIGATOR_ADJUDICATED,
     VALIDATOR_SHADOWED, VALIDATION_LADDER,

@@ -321,7 +321,11 @@ class TestEventTypes:
         # +1 (2026-07-21): QUALITY_GATE_SECOND_FAMILY — chunk-5a stacked
         # hosted-free second-family gate check (agree/dissent evidence rows;
         # flag-only, nothing reads it for control flow).
-        assert len(EVENT_TYPES) == 69
+        # +2 (2026-07-22): QUALITY_GATE_COUNCIL + QUALITY_GATE_CROSS_REF —
+        # chunk-5b evidence-path council rounds (per-seat lens/verdict/codes,
+        # free-vs-paid confirmation) and gate cross-ref lanes (strict: acts,
+        # research hosted-free lane flag-only).
+        assert len(EVENT_TYPES) == 71
 
     def test_previously_unregistered_events_in_set(self):
         from captains_log import EVOLVER_REVERTED, EVOLVER_VERIFY, PLAYBOOK_UPDATED
@@ -395,6 +399,13 @@ class TestEventTypes:
         from captains_log import QUALITY_GATE_SECOND_FAMILY
         assert QUALITY_GATE_SECOND_FAMILY in EVENT_TYPES
         assert QUALITY_GATE_SECOND_FAMILY == "QUALITY_GATE_SECOND_FAMILY"
+
+    def test_quality_gate_council_and_cross_ref_in_set(self):
+        from captains_log import QUALITY_GATE_COUNCIL, QUALITY_GATE_CROSS_REF
+        assert QUALITY_GATE_COUNCIL in EVENT_TYPES
+        assert QUALITY_GATE_COUNCIL == "QUALITY_GATE_COUNCIL"
+        assert QUALITY_GATE_CROSS_REF in EVENT_TYPES
+        assert QUALITY_GATE_CROSS_REF == "QUALITY_GATE_CROSS_REF"
 
     def test_event_contract_doc_covers_all_types(self):
         # Census tripwire (chunk-5a review F2): docs/CAPTAINS_LOG_EVENTS.md

@@ -181,6 +181,8 @@ Written by `captains_log.log_event(...)`. Every entry has the four required fiel
 | `LOOP_CREATED` | agent_loop.py:2398 | reason, parent_loop_id, project, max_steps, continuation_depth, dry_run | Every loop spawn (root or continuation). |
 | `QUALITY_GATE_VERDICT` | quality_gate.py (run_quality_gate) | decision, verdict, confidence, confidence_threshold, escalate, source, reason, step_count, elapsed_ms, input_chars | The post-loop quality gate decided PASS or ESCALATE — the most important escalation signal. |
 | `QUALITY_GATE_SECOND_FAMILY` | quality_gate.py (run_quality_gate Pass 1.5) | decision (SECOND_FAMILY_AGREE\|DISSENT\|UNDECIDED\|NO_VERDICT), verdict, confidence, reason, source, paid_verdict, paid_confidence, paid_source, elapsed_ms, input_chars | On a paid-gate PASS, a hosted-free second-family call judged the same payload (chunk 5a, stack-don't-substitute). Flag-only: nothing reads it for control flow; the chunk-7 agreement readout consumes it. |
+| `QUALITY_GATE_COUNCIL` | quality_gate.py (run_llm_council) | seats [{lens, verdict, source, finding_codes, probe_dismissed, most_critical_gap}], weak_count, escalate, free_round_weak, confirmation_ran, free_flag_unconfirmed, source, elapsed_ms, step_count | One evidence-path council invocation that produced seats (chunk 5b: transcript_aware / artifact_only / probe_armed). Hosted-free round first; a free flag only acts after a paid confirmation round (weaker-never-acts). `strict:`-gated; these rows are the A/B evidence for the council's graduation decision. |
+| `QUALITY_GATE_CROSS_REF` | quality_gate.py (run_quality_gate Pass 2.5) | lane (paid\|hosted_free), claims_extracted, claims_checked, disputes, disputed_claims, acted, source, paid_verdict, elapsed_ms | The gate's cross-ref pass ran (chunk 5b made the research-shaped hosted-free lane reachable). Paid lane (strict:) disputes may flip the verdict (`acted=true`); the hosted-free lane is flag-only readout evidence. |
 | `STEP_TOO_BROAD` | agent_loop.py:989 | step_index, elapsed_s, tokens, cap_elapsed_s, cap_tokens, project | A step exceeded the resource cap (≤120s / ≤200K tokens). Fires mid-loop so the warning is actionable before the loop finishes. |
 
 ### Done≠achieved ground truth (per-step guards)
@@ -243,4 +245,4 @@ A few events are emitted from more than one call site with different `context` s
 
 ---
 
-*45 distinct event types actively emitted across ~52 call sites in 16 modules. Last inventory: 2026-06-24.*
+*71 registered event types (captains_log.EVENT_TYPES is the authoritative registry; `test_event_contract_doc_covers_all_types` keeps this doc in lockstep). Last full inventory: 2026-07-22.*

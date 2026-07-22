@@ -31,6 +31,7 @@ from dataclasses import dataclass, field
 from typing import Any, List, Optional
 from llm_parse import extract_json, safe_float, safe_str, safe_list, content_or_empty
 from claim_probe import probe_contested_claims, SETTLED_BY_COMMAND_CLAUSE, PROBE_TIMEOUT_SEC
+from finding_codes import FINDING_CODES, parse_finding_codes, parse_unknown_codes
 
 log = logging.getLogger("maro.quality_gate")
 
@@ -41,147 +42,380 @@ _probe_contested_claims = probe_contested_claims
 _PROBE_TIMEOUT_SEC = PROBE_TIMEOUT_SEC
 
 
+def _hosted_free_adapter_or_none():
+    """Hosted-free adapter when the tier is configured + opted-in, else None.
+
+    Consent boundary: validate.hosted_free.enabled owns data egress; callers
+    that get None fall back to their paid adapter (or skip) unchanged.
+    """
+    try:
+        import hosted_free as _hf
+        if _hf.available():
+            return _hf.build_hosted_free_adapter()
+    except Exception as exc:
+        log.debug("hosted-free adapter unavailable: %s", exc)
+    return None
+
+
 # ---------------------------------------------------------------------------
-# LLM Council — multi-framing critique (sycophancy defense)
+# LLM Council — evidence-path lenses (chunk 5b)
+#
+# The 2026-04-era council ran three prompt costumes (devil's advocate /
+# domain skeptic / implementation critic) over the SAME evidence — the last
+# 3 step results. Same context in, correlated verdicts out. The chunk-5b
+# repoint makes the seats differ in EVIDENCE PATH instead:
+#   transcript_aware — sees the step-by-step run transcript (process vs claims)
+#   artifact_only    — sees ONLY the final deliverable (the context-blind seat)
+#   probe_armed      — must name settled_by_command probes; probes actually run
+# The old costume framings live on in lens_ablation.py as the control arm of
+# the era-04 triad ablation (do N seats diverge, or agree at Nx cost?).
+#
+# Seats stamp findings with FINDING[CODE] from the shared finding_codes
+# vocabulary — the taxonomy is vocabulary WITHIN lenses, not extra seats.
 # ---------------------------------------------------------------------------
 
-_COUNCIL_FRAMINGS = [
+_LENS_CODE_VOCAB = "\n".join(
+    f"- FINDING[{code}]: {defn}" for code, (defn, _hint) in sorted(FINDING_CODES.items())
+)
+
+_LENS_JSON_CONTRACT = textwrap.dedent("""\
+    Respond with JSON:
+    {
+      "verdict": "WEAK" or "ACCEPTABLE" or "STRONG",
+      "concerns": ["specific concern 1", "specific concern 2"],
+      "most_critical_gap": "the single biggest problem"
+    }
+""").strip()
+
+_LENS_CODE_INSTRUCTION = (
+    "When a concern fits one of these typed finding codes, start it with the "
+    "stamp (e.g. \"FINDING[PHANTOM_SYMBOL] cites a file that doesn't exist\"). "
+    "A concern that fits no code goes unstamped — never force a classification.\n"
+    + _LENS_CODE_VOCAB
+)
+
+
+def _lens_evidence_transcript(goal: str, done_steps: list) -> str:
+    """Transcript-aware seat: the step-by-step trail, not just final output."""
+    steps = done_steps[-8:]
+    lines = [
+        f"Step {getattr(s, 'index', i + 1)}: {getattr(s, 'text', '?')[:120]}\n"
+        f"Result: {(getattr(s, 'result', '') or '')[:400]}"
+        for i, s in enumerate(steps)
+    ]
+    return (
+        f"Goal: {goal[:300]}\n\n"
+        f"Run transcript ({len(done_steps)} completed steps, showing last {len(steps)}):\n\n"
+        + "\n\n".join(lines)
+    )
+
+
+def _lens_evidence_artifact(goal: str, done_steps: list) -> str:
+    """Artifact-only seat: final deliverable, deliberately no process context."""
+    final = done_steps[-1]
+    return (
+        f"Goal: {goal[:300]}\n\n"
+        f"Final deliverable (you see only this):\n"
+        f"{(getattr(final, 'result', '') or '')[:2400]}"
+    )
+
+
+def _lens_evidence_probe(goal: str, done_steps: list) -> str:
+    """Probe-armed seat: same last-3 summary the gate itself reviews."""
+    steps = done_steps[-3:]
+    lines = [
+        f"Step {getattr(s, 'index', i + 1)}: {getattr(s, 'text', '?')[:80]}\n"
+        f"Result: {(getattr(s, 'result', '') or '')[:500]}"
+        for i, s in enumerate(steps)
+    ]
+    return f"Goal: {goal[:300]}\n\nOutput to review:\n" + "\n\n".join(lines)
+
+
+_EVIDENCE_LENSES = [
     (
-        "devil_advocate",
+        "transcript_aware",
         textwrap.dedent("""\
-            You are the devil's advocate. Assume the output is fundamentally flawed.
-            Find what's missing, what assumptions are unjustified, and what conclusions
-            the research failed to reach that it should have.
+            You are the transcript auditor. You see the run's step-by-step
+            transcript. Judge whether the PROCESS supports the final claims:
+            did the steps actually produce the evidence the output relies on?
+            Look for steps whose results don't support the conclusions drawn
+            from them, failures narrated as successes, and evidence-free leaps
+            between steps. The polish of the final prose is not your concern —
+            the trail is.
 
-            Be specific. Name gaps. Don't say "could be more thorough" — say exactly
-            what was omitted and why it matters for the stated goal.
+            {code_instruction}
 
-            Respond with JSON:
-            {
-              "verdict": "WEAK" or "ACCEPTABLE" or "STRONG",
-              "concerns": ["specific concern 1", "specific concern 2"],
-              "most_critical_gap": "the single biggest missing piece"
-            }
+            {json_contract}
         """).strip(),
+        _lens_evidence_transcript,
     ),
     (
-        "domain_skeptic",
+        "artifact_only",
         textwrap.dedent("""\
-            You are a domain skeptic. Challenge the methodology and assumptions.
-            Identify where the research draws on weak evidence, misapplies domain
-            knowledge, or reaches conclusions a domain expert would dispute.
+            You are a context-blind reviewer. You see ONLY the goal and the
+            final deliverable — deliberately no transcript, no process story,
+            no narration of effort. Judge the artifact as a stranger would:
+            does it stand on its own, answer the goal, and carry its evidence
+            inside itself? Anything the deliverable claims but does not show
+            is a gap.
 
-            Focus on: wrong evidence tiers (animal vs human), confounded variables,
-            contested mechanisms, population mismatch, missing context.
+            {code_instruction}
 
-            Respond with JSON:
-            {
-              "verdict": "WEAK" or "ACCEPTABLE" or "STRONG",
-              "concerns": ["specific concern 1", "specific concern 2"],
-              "most_critical_gap": "the single biggest methodological flaw"
-            }
+            {json_contract}
         """).strip(),
+        _lens_evidence_artifact,
     ),
     (
-        "implementation_critic",
+        "probe_armed",
         textwrap.dedent("""\
-            You are the implementation critic. Focus on actionability.
-            Is this output actually usable? Can someone act on it?
-            Are there missing specifics (doses, timelines, tools, steps) that block
-            real-world use? Are recommendations internally consistent?
+            You are the probe-armed reviewer. Challenge the output's checkable
+            claims about files, commands, tools, and system state. For EVERY
+            concern that asserts something a shell command could settle, you
+            MUST supply `settled_by_command`: a single-line, safe, read-only
+            command that decisively settles whether your concern is correct
+            (exit 0 = your concern was wrong). Set it to null only for
+            genuinely un-probe-able concerns. Your probes will actually run —
+            a concern your own probe dismisses is dropped.
+
+            {code_instruction}
 
             Respond with JSON:
-            {
+            {{
               "verdict": "WEAK" or "ACCEPTABLE" or "STRONG",
-              "concerns": ["specific concern 1", "specific concern 2"],
-              "most_critical_gap": "what would block someone from actually using this"
-            }
+              "concerns": [
+                {{"claim": "specific concern", "settled_by_command": "cmd" or null}}
+              ],
+              "most_critical_gap": "the single biggest problem"
+            }}
         """).strip(),
+        _lens_evidence_probe,
     ),
+]
+
+# Render the shared code-vocabulary + JSON contract into each seat's system
+# text once, at import time (probe_armed carries its own contract with {{ }}
+# escapes, so the unused json_contract kwarg is harmless there).
+_EVIDENCE_LENSES = [
+    (name, system.format(code_instruction=_LENS_CODE_INSTRUCTION,
+                         json_contract=_LENS_JSON_CONTRACT), builder)
+    for name, system, builder in _EVIDENCE_LENSES
 ]
 
 
 @dataclass
 class CouncilCritique:
-    critic: str           # "devil_advocate" | "domain_skeptic" | "implementation_critic"
+    critic: str           # "transcript_aware" | "artifact_only" | "probe_armed"
     verdict: str          # "WEAK" | "ACCEPTABLE" | "STRONG"
     concerns: List[str]
     most_critical_gap: str
+    source: str = ""      # model attribution for this seat
+    finding_codes: List[str] = field(default_factory=list)  # typed codes stamped in concerns
+    probe_dismissed: int = 0  # probe_armed only: concerns the seat's own probe refuted
 
 
 @dataclass
 class CouncilVerdict:
     critiques: List[CouncilCritique]
-    weak_count: int       # how many critics rated WEAK
-    escalate: bool        # True if majority (2+) weak
+    weak_count: int       # how many critics rated WEAK (acting round)
+    escalate: bool        # True if majority (2+) weak on the ACTING round
+    source: str = ""      # attribution of the acting round ("" = never ran)
+
+
+def _parse_lens_concerns(critic_name: str, data: dict) -> tuple:
+    """Normalize a seat's concerns; run probes for the probe-armed seat.
+
+    Returns (concern_strings, finding_codes, probe_dismissed, verdict_override).
+    verdict_override is "ACCEPTABLE" when a WEAK verdict rested entirely on
+    concerns the seat's own probes dismissed, else "".
+    """
+    raw = data.get("concerns", [])
+    if not isinstance(raw, list):
+        raw = []
+    probe_dismissed = 0
+    concerns: List[str] = []
+
+    if critic_name == "probe_armed":
+        claim_dicts = [
+            {"claim": safe_str(c.get("claim")),
+             "settled_by_command": c.get("settled_by_command")}
+            for c in raw if isinstance(c, dict) and c.get("claim")
+        ]
+        # Tolerate seats that answered with plain strings despite the contract.
+        plain = [safe_str(c) for c in raw if isinstance(c, str) and c.strip()]
+        if claim_dicts:
+            probed = _probe_contested_claims(claim_dicts)
+            for c in probed:
+                status = c.get("probe_status", "unprobed")
+                if status == "dismissed":
+                    probe_dismissed += 1
+                    continue  # the seat's own probe refuted it — dropped
+                concerns.append(f"{c['claim']} [probe:{status}]")
+        concerns.extend(plain)
+    else:
+        concerns = safe_list(raw, element_type=str, max_items=4)
+
+    all_text = "\n".join(concerns)
+    codes = parse_finding_codes(all_text, strict=False)
+    unknown = parse_unknown_codes(all_text)
+    if unknown:
+        log.info("council seat=%s stamped unknown finding codes: %s",
+                 critic_name, sorted(set(unknown)))
+
+    verdict_override = ""
+    if (critic_name == "probe_armed" and probe_dismissed > 0
+            and not concerns
+            and safe_str(data.get("verdict")).upper() == "WEAK"):
+        # Every concern behind the WEAK verdict was mechanically refuted.
+        verdict_override = "ACCEPTABLE"
+    return concerns[:6], codes, probe_dismissed, verdict_override
+
+
+def _run_council_round(goal: str, done_steps: list, adapter) -> List[CouncilCritique]:
+    """One council round: each evidence-path seat dispatched once."""
+    from persona_dispatch import dispatch_prompt
+
+    critiques: List[CouncilCritique] = []
+    for lens_name, lens_system, evidence_builder in _EVIDENCE_LENSES:
+        try:
+            evidence = evidence_builder(goal, done_steps)
+            result = dispatch_prompt(
+                evidence,
+                system=lens_system,
+                adapter=adapter,
+                expect="json",
+                max_tokens=700,
+                temperature=0.4,
+                purpose=f"council lens {lens_name}",
+            )
+            data = result.data
+            if not data:
+                log.debug("council seat=%s no verdict (%s)", lens_name,
+                          result.error or "unparsable")
+                continue
+            concerns, codes, dismissed, override = _parse_lens_concerns(lens_name, data)
+            verdict = override or safe_str(data.get("verdict", "ACCEPTABLE")).upper()
+            critiques.append(CouncilCritique(
+                critic=lens_name,
+                verdict=verdict,
+                concerns=concerns,
+                most_critical_gap=safe_str(data.get("most_critical_gap")),
+                source=result.source,
+                finding_codes=codes,
+                probe_dismissed=dismissed,
+            ))
+            log.debug("council seat=%s verdict=%s codes=%s", lens_name, verdict, codes)
+        except Exception as exc:
+            log.debug("council seat=%s failed (non-fatal): %s", lens_name, exc)
+    return critiques
 
 
 def run_llm_council(
     goal: str,
     step_outcomes: list,
     adapter=None,
+    *,
+    loop_id: Optional[str] = None,
 ) -> CouncilVerdict:
-    """Run 3 critics with distinct framings; escalate if 2+ rate WEAK.
+    """Run the 3 evidence-path lenses; escalate if 2+ rate WEAK.
 
-    Devil's advocate looks for gaps. Domain skeptic challenges methodology.
-    Implementation critic tests actionability. Together they catch failure modes
-    that the single adversarial pass misses (sycophancy defense).
+    Seats differ in what evidence they see (transcript / artifact-only /
+    probe-armed), not in prompt costume — decorrelation by evidence path
+    (chunk 5b). Each seat dispatches through persona_dispatch on the
+    hosted-free tier when available ($0, second model family), else on the
+    passed adapter.
+
+    Escalation authority follows the validator-ladder rule — a weaker
+    family never overrules a stronger one: when the free round flags
+    (2+ WEAK) and a paid adapter is available, the seats re-run on the paid
+    adapter and THAT round's vote acts. A free flag with no paid adapter to
+    confirm is recorded but never acts.
 
     Falls back to empty verdict on any failure — never blocks the caller.
     """
-    if adapter is None:
-        return CouncilVerdict([], 0, False)
-
     done_steps = [s for s in step_outcomes if getattr(s, "status", "") == "done"]
     if not done_steps:
         return CouncilVerdict([], 0, False)
 
-    review_steps = done_steps[-3:]
-    output_summary = "\n\n".join(
-        f"Step {getattr(s, 'index', i+1)}: {getattr(s, 'text', '?')[:80]}\n"
-        f"Result: {(getattr(s, 'result', '') or '')[:500]}"
-        for i, s in enumerate(review_steps)
-    )
-    user_msg = f"Goal: {goal[:300]}\n\nOutput to review:\n{output_summary}"
+    free_adapter = _hosted_free_adapter_or_none()
+    round1_adapter = free_adapter if free_adapter is not None else adapter
+    if round1_adapter is None:
+        return CouncilVerdict([], 0, False)
 
-    critiques: List[CouncilCritique] = []
-
-    try:
-        from llm import LLMMessage
-        import json
-
-        for critic_name, critic_system in _COUNCIL_FRAMINGS:
-            try:
-                resp = adapter.complete(
-                    [
-                        LLMMessage("system", critic_system),
-                        LLMMessage("user", user_msg),
-                    ],
-                    max_tokens=512,
-                    temperature=0.4,
-                    no_tools=True,
-                    purpose="council critique",
-                )
-                data = extract_json(content_or_empty(resp), dict, log_tag="quality_gate.council")
-                if data:
-                    critiques.append(CouncilCritique(
-                        critic=critic_name,
-                        verdict=safe_str(data.get("verdict", "ACCEPTABLE")).upper(),
-                        concerns=safe_list(data.get("concerns", []), element_type=str, max_items=4),
-                        most_critical_gap=safe_str(data.get("most_critical_gap")),
-                    ))
-                    log.debug("council critic=%s verdict=%s", critic_name, critiques[-1].verdict)
-            except Exception as exc:
-                log.debug("council critic=%s failed (non-fatal): %s", critic_name, exc)
-
-    except Exception as exc:
-        log.debug("run_llm_council setup failed (non-fatal): %s", exc)
-
+    _t0 = time.monotonic()
+    critiques = _run_council_round(goal, done_steps, round1_adapter)
+    ran_free_first = free_adapter is not None
+    if not critiques and ran_free_first and adapter is not None:
+        # Every free seat failed/unparsable — a degraded free tier must not
+        # silently neuter an opted-in (strict:) council; fall back to paid.
+        free_adapter = None
+        critiques = _run_council_round(goal, done_steps, adapter)
     weak_count = sum(1 for c in critiques if c.verdict == "WEAK")
-    escalate = weak_count >= 2
-    log.info("council critics=%d weak=%d escalate=%s", len(critiques), weak_count, escalate)
+    round1_source = critiques[0].source if critiques else ""
+    ran_free = free_adapter is not None
 
-    return CouncilVerdict(critiques=critiques, weak_count=weak_count, escalate=escalate)
+    acting = critiques
+    acting_weak = weak_count
+    escalate = False
+    confirmation_ran = False
+    free_flag_unconfirmed = False
+
+    if weak_count >= 2:
+        if not ran_free:
+            escalate = True  # round already ran on the run's own (paid) adapter
+        elif adapter is not None:
+            # Weaker family flagged — the paid family re-judges and acts.
+            confirmation_ran = True
+            confirmed = _run_council_round(goal, done_steps, adapter)
+            confirmed_weak = sum(1 for c in confirmed if c.verdict == "WEAK")
+            if confirmed:
+                acting = confirmed
+                acting_weak = confirmed_weak
+            escalate = confirmed_weak >= 2
+        else:
+            # Free seats flagged but no paid adapter exists to confirm —
+            # flag-only (weaker-never-acts), recorded for the readout.
+            free_flag_unconfirmed = True
+
+    elapsed_ms = int((time.monotonic() - _t0) * 1000)
+    acting_source = acting[0].source if acting else round1_source
+    log.info("council seats=%d weak=%d escalate=%s source=%s confirmed=%s",
+             len(acting), acting_weak, escalate, acting_source or "?", confirmation_ran)
+
+    if critiques:
+        try:
+            from captains_log import log_event, QUALITY_GATE_COUNCIL
+            log_event(
+                QUALITY_GATE_COUNCIL,
+                subject=goal[:120],
+                summary=(
+                    f"weak={acting_weak}/{len(acting)} escalate={escalate}"
+                    + (" confirmed_by_paid" if confirmation_ran else "")
+                    + (" free_flag_unconfirmed" if free_flag_unconfirmed else "")
+                ),
+                context={
+                    "seats": [
+                        {"lens": c.critic, "verdict": c.verdict, "source": c.source,
+                         "finding_codes": c.finding_codes,
+                         "probe_dismissed": c.probe_dismissed,
+                         "most_critical_gap": c.most_critical_gap[:200]}
+                        for c in acting
+                    ],
+                    "weak_count": acting_weak,
+                    "escalate": escalate,
+                    "free_round_weak": weak_count if confirmation_ran else None,
+                    "confirmation_ran": confirmation_ran,
+                    "free_flag_unconfirmed": free_flag_unconfirmed,
+                    "source": acting_source,
+                    "elapsed_ms": elapsed_ms,
+                    "step_count": len(done_steps),
+                },
+                loop_id=loop_id,
+            )
+        except Exception as _ev_exc:
+            log.debug("captains_log council emit failed: %s", _ev_exc)
+
+    return CouncilVerdict(critiques=acting, weak_count=acting_weak,
+                          escalate=escalate, source=acting_source)
 
 _GATE_SYSTEM = textwrap.dedent("""\
     You are a quality reviewer. A research/analysis task just completed.
@@ -271,12 +505,20 @@ def run_quality_gate(
        captain's log, never acted on. Inert when hosted-free is
        unconfigured/not-opted-in.
     2. Adversarial claim review — what specific claims are contested/overclaimed?
-    2.5. Cross-reference check (optional, run_cross_ref=True) — second-source fact check.
+    2.5. Cross-reference check (optional) — second-source fact check.
+       run_cross_ref=True (strict: lane) runs on the gate adapter and disputes
+       may flip the verdict. run_cross_ref="hosted_free" (research-shaped
+       goals, chunk 5b) runs on the hosted-free tier flag-only: disputes are
+       recorded (QUALITY_GATE_CROSS_REF event) but never act — the weaker
+       family doesn't overrule the paid verdict. Killswitch:
+       quality_gate.cross_ref_research (hosted lane only).
        Contested claims are returned in verdict.contested_claims regardless of
        PASS/ESCALATE, so callers can append them to the result text.
-    3. LLM Council (optional, run_council=True) — 3 critics with distinct framings
-       (devil's advocate, domain skeptic, implementation critic). Escalates if 2+
-       critics rate WEAK. Catches sycophancy that single-pass adversarial misses.
+    3. LLM Council (optional, run_council=True) — 3 evidence-path lenses
+       (transcript-aware / artifact-only / probe-armed) dispatched via
+       persona_dispatch, hosted-free first with paid confirmation before any
+       escalation acts (chunk 5b). Escalates if 2+ seats rate WEAK on the
+       acting round. Catches sycophancy that single-pass adversarial misses.
 
     Uses the provided adapter — callers pass the run's execution adapter
     (MID by default since the 2026-07-21 unification).
@@ -553,7 +795,7 @@ def run_quality_gate(
     # --- Pass 3: LLM Council (optional) ---
     council_verdict: Optional[CouncilVerdict] = None
     if run_council:
-        council_verdict = run_llm_council(goal, step_outcomes, adapter)
+        council_verdict = run_llm_council(goal, step_outcomes, adapter, loop_id=loop_id)
         if council_verdict.escalate and not escalate:
             escalate = True
             verdict = "ESCALATE"
@@ -564,24 +806,81 @@ def run_quality_gate(
             log.info("quality_gate council_escalated weak=%d", council_verdict.weak_count)
 
     # --- Pass 2.5: Cross-reference check (optional) ---
+    # Two lanes: True (strict:) = gate adapter, disputes may act.
+    # "hosted_free" (research-shaped goals) = hosted-free adapter, flag-only —
+    # the second family's disputes are readout fodder, never actions, matching
+    # the Pass 1.5 A/B posture. Inert without hosted-free consent.
     cross_ref_result = None
-    if run_cross_ref:
+    _cr_lane = "paid" if run_cross_ref is True else (
+        run_cross_ref if isinstance(run_cross_ref, str) else "")
+    if _cr_lane == "hosted_free":
+        try:
+            from config import get as _cfg_get
+            _cr_enabled = _cfg_get("quality_gate.cross_ref_research", True)
+            if isinstance(_cr_enabled, str):
+                _cr_enabled = _cr_enabled.strip().lower() not in ("false", "0", "no", "off")
+            if not _cr_enabled:
+                _cr_lane = ""
+        except Exception:
+            _cr_lane = ""
+    if _cr_lane:
         try:
             from cross_ref import run_cross_ref as _run_cross_ref
-            # Build cross-ref text from step outputs
-            _cr_text = "\n\n".join(
-                (getattr(s, "result", "") or s.get("result", "") if isinstance(s, dict) else getattr(s, "result", ""))
-                for s in done_steps[-3:]
-            )
-            cross_ref_result = _run_cross_ref(_cr_text, adapter=adapter)
-            if cross_ref_result.has_disputes and not escalate:
-                escalate = True
-                verdict = "ESCALATE"
-                reason = (
-                    f"Cross-ref: {len(cross_ref_result.disputes)} disputed claim(s) — "
-                    + cross_ref_result.disputes[0].claim[:60]
+            _cr_adapter = adapter
+            if _cr_lane == "hosted_free":
+                _cr_adapter = _hosted_free_adapter_or_none()
+            if _cr_adapter is not None:
+                # Build cross-ref text from step outputs
+                _cr_text = "\n\n".join(
+                    (getattr(s, "result", "") or s.get("result", "") if isinstance(s, dict) else getattr(s, "result", ""))
+                    for s in done_steps[-3:]
                 )
-                log.info("quality_gate cross_ref_escalated disputes=%d", len(cross_ref_result.disputes))
+                _cr_t0 = time.monotonic()
+                cross_ref_result = _run_cross_ref(_cr_text, adapter=_cr_adapter)
+                _cr_acted = False
+                if (_cr_lane == "paid" and cross_ref_result.has_disputes
+                        and not escalate):
+                    escalate = True
+                    verdict = "ESCALATE"
+                    reason = (
+                        f"Cross-ref: {len(cross_ref_result.disputes)} disputed claim(s) — "
+                        + cross_ref_result.disputes[0].claim[:60]
+                    )
+                    _cr_acted = True
+                    log.info("quality_gate cross_ref_escalated disputes=%d",
+                             len(cross_ref_result.disputes))
+                if cross_ref_result.claims_checked > 0 or cross_ref_result.claims_extracted > 0:
+                    try:
+                        from captains_log import log_event, QUALITY_GATE_CROSS_REF
+                        log_event(
+                            QUALITY_GATE_CROSS_REF,
+                            subject=goal[:120],
+                            summary=(
+                                f"lane={_cr_lane} checked={cross_ref_result.claims_checked} "
+                                f"disputed={len(cross_ref_result.disputes)} acted={_cr_acted}"
+                            ),
+                            context={
+                                "lane": _cr_lane,
+                                "claims_extracted": cross_ref_result.claims_extracted,
+                                "claims_checked": cross_ref_result.claims_checked,
+                                "disputes": len(cross_ref_result.disputes),
+                                "disputed_claims": [
+                                    d.claim[:120] for d in cross_ref_result.disputes[:3]
+                                ],
+                                "acted": _cr_acted,
+                                "source": (
+                                    f"hosted_free:{getattr(_cr_adapter, '_active_provider', '') or '?'}"
+                                    f":{getattr(_cr_adapter, 'model_key', '')}"
+                                    if _cr_lane == "hosted_free"
+                                    else getattr(_cr_adapter, "model_key", "") or "unknown"
+                                ),
+                                "paid_verdict": verdict,
+                                "elapsed_ms": int((time.monotonic() - _cr_t0) * 1000),
+                            },
+                            loop_id=loop_id,
+                        )
+                    except Exception as _cr_ev_exc:
+                        log.debug("captains_log cross_ref emit failed: %s", _cr_ev_exc)
         except Exception as exc:
             log.warning("quality_gate cross_ref pass failed: %s", exc)
 

@@ -2285,11 +2285,24 @@ def _handle_impl(
                 # in-workspace, not against Maro's launch cwd.
                 _qg_proj = getattr(loop_result, "project", "") or ""
                 _qg_cwd = str(_project_dir_root() / _qg_proj) if _qg_proj else None
+                # Cross-ref lanes: strict: = paid + acting (unchanged).
+                # Research-shaped goals get the hosted-free flag-only lane
+                # (chunk 5b) — cross_ref's fresh-context-per-claim design is
+                # the genuinely decorrelated check and had zero organic uses.
+                if _strict_prefix:
+                    _cross_ref_lane: object = True
+                else:
+                    from workers import infer_worker_type, WORKER_RESEARCH
+                    _cross_ref_lane = (
+                        "hosted_free"
+                        if infer_worker_type(message) == WORKER_RESEARCH
+                        else False
+                    )
                 with default_subprocess_cwd(_qg_cwd):
                     _gate_verdict = run_quality_gate(
                         message, loop_result.steps, adapter,
                         run_council=_strict_prefix,
-                        run_cross_ref=_strict_prefix,
+                        run_cross_ref=_cross_ref_lane,
                         loop_id=getattr(loop_result, "loop_id", None),
                     )
                 _contested_claims = _gate_verdict.contested_claims or []

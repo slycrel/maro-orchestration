@@ -145,14 +145,30 @@ Specialized executors with constrained tool access:
 
 Worker dispatch is stateless — each ticket is independent.
 
-## Persona System (persona.py)
+## Persona System (persona.py + persona_dispatch.py)
 
 Composable agent identities from YAML + markdown files. Each spec defines:
 - Role, model tier, tool access, memory scope
 - Communication style, system prompt sections
 - Composition rules (e.g., researcher + skepticism merge prompts)
 
-**Gap:** Personas exist but aren't auto-selected based on goal type. The vision (Phase 62 candidate) is bundled persona+skill packaging where the system picks the right identity for the job.
+Auto-selection is live: `persona_for_goal()` (Phase 31 keyword routing, LLM
+fallback optional) picks the persona in handle; `record_persona_dispatch()`
+logs fallbacks so `scan_persona_gaps()` can surface missing personas.
+
+**persona_dispatch.py (chunk 5b, 2026-07-22)** is the owned one-shot verb:
+`dispatch_prompt(prompt, persona=..., system=..., adapter=...)` — persona ×
+prompt as a single completion (no agent loop, `no_tools` pinned, hosted-free
+by default / explicit adapter for paid, attribution in the result). The
+pattern was re-improvised by hand ≥4 times (bake-off panels, audit
+multi-eye) before getting an owner. Consumers: quality_gate's evidence-path
+council lenses, lens_ablation, and the CLI
+(`python3 -m persona_dispatch "prompt" --persona critic` /
+`--panel a,b,c`). `spawn_persona` remains the full-loop sibling.
+
+**Gap (narrowed):** persona+skill packaging — the system authoring the right
+identity for the job, not just routing to shipped ones — remains the Phase 62
+/ next-leap candidate.
 
 ## File Map
 
@@ -162,4 +178,5 @@ Composable agent identities from YAML + markdown files. Each spec defines:
 | src/intent.py | ~320 | NOW/AGENDA classification |
 | src/director.py | ~2150 | Plan-delegate-review hierarchy + adaptive supervision |
 | src/workers.py | ~390 | Specialized executors |
-| src/persona.py | ~1375 | Composable identities |
+| src/persona.py | ~1085 | Composable identities |
+| src/persona_dispatch.py | ~250 | Owned one-shot persona × prompt verb |

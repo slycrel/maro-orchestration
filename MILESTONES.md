@@ -2,8 +2,45 @@
 
 What to do next, in what order. Updated each session. Deferred ideas live in BACKLOG.md; completed phase history in docs/history/ROADMAP_ARCHIVE.md (ROADMAP.md is a stub). This file is the executable queue.
 
-Last updated: 2026-07-21 — **swarm-review arc, chunk 5a SHIPPED** (of 8; plan:
-`~/.claude/plans/abundant-gathering-lagoon.md`). Chunk 5a (gate hosted-free
+Last updated: 2026-07-22 — **swarm-review arc, chunk 5b SHIPPED** (of 8; plan:
+`~/.claude/plans/abundant-gathering-lagoon.md`). Chunk 5b (persona-dispatch
+owner + evidence-path lenses + triad ablation + cross-ref research lane), in
+the checkpoint-decreed order:
+**(1) persona_dispatch.py ships FIRST** — the owned "run this prompt with
+this persona" one-shot verb (re-improvised by hand ≥4 times per eras 09/11,
+hist-r2-02): `dispatch_prompt`/`dispatch_panel` + CLI, persona and/or raw
+system framing, hosted-free by default / explicit adapter for paid (no
+silent spend), `no_tools` pinned, attribution in the result.
+**(2) Council repointed to evidence-path lenses** — `_COUNCIL_FRAMINGS`
+(3 same-context costumes) replaced by transcript_aware / artifact_only
+(context-blind seat) / probe_armed (its `settled_by_command` probes RUN and
+can dismiss its own concerns — live smoke did exactly that). Seats dispatch
+through the owner; hosted-free round first, and a free 2+-WEAK flag only
+acts after a paid confirmation round re-votes it (weaker-never-acts;
+degraded-free falls back to paid so strict: is never silently neutered).
+Findings stamp FINDING[CODE] (chunk-1 vocabulary WITHIN lenses, not seats).
+QUALITY_GATE_COUNCIL event = the graduation A/B evidence; council stays
+`strict:`-gated.
+**(3) Triad ablation harness** (`lens_ablation.py`) — the era-04 experiment,
+first time runnable: costume arm (retired framings, control) vs
+evidence-path arm on one payload; pairwise concern overlap + distinct-catch
+tabulation; degenerate-transcript honesty note; hosted-free by default.
+Live smoke: costume 0.12 / evidence 0.20 overlap (single synthetic payload —
+harness proof, not sizing data yet).
+**(4) Cross-ref research lane** — research-shaped goals (infer_worker_type)
+get Pass 2.5 on hosted-free, flag-only (disputes → QUALITY_GATE_CROSS_REF
+row, never a verdict flip; killswitch `quality_gate.cross_ref_research`);
+`strict:` paid lane keeps acting, now with the same event row.
+EVENT_TYPES 69→71; ~45 new pins across test_persona_dispatch /
+test_lens_ablation / test_quality_gate (ladder semantics, probe dismissal,
+lens blindness, lane killswitch); live-verified on real Gemini flash-lite
+(dispatch 832ms; council row weak=2/3 `free_flag_unconfirmed` with planted
+PHANTOM_SYMBOL caught by 2 seats + probe self-dismissal). **Next: chunk-5b
+adversarial review, then chunk 6** (extraction expectation-mismatch +
+novelty term; V1 checkpoint-class flag — recall substrate #1 reads the
+LEGACY flat store, decide rewire-vs-rescope with Jeremy if ambiguous).
+
+Previous checkpoint — 2026-07-21 **chunk 5a SHIPPED**. Chunk 5a (gate hosted-free
 rung, stack-don't-substitute): the quality gate's free rung is back as
 **Pass 1.5** — on a paid Pass-1 PASS, one hosted-free second-family call
 (Groq llama / Gemini flash-lite via the existing `hosted_free` ladder)

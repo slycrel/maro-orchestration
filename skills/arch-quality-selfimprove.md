@@ -46,14 +46,28 @@ Multi-pass review system. 5 passes:
    Inert unless hosted-free is opted in; killswitch
    `quality_gate.second_family_check`.
 2. Adversarial claim review (CONFIRMED/DOWNGRADED/CONTESTED)
-3. Cross-reference fact check (optional, `strict:`)
-4. LLM Council (3 critics; optional, `strict:`)
+3. Cross-reference fact check — two lanes since chunk 5b (2026-07-22):
+   `strict:` runs it on the gate adapter and disputes may act;
+   research-shaped goals get it on hosted-free flag-only (disputes →
+   QUALITY_GATE_CROSS_REF row, never a verdict flip; killswitch
+   `quality_gate.cross_ref_research`).
+4. LLM Council (optional, `strict:`) — three **evidence-path lenses**
+   since chunk 5b: transcript_aware / artifact_only (context-blind) /
+   probe_armed (its settled_by_command probes actually run and can dismiss
+   its own concerns). Seats dispatch via persona_dispatch on hosted-free
+   first; a free 2+-WEAK flag only escalates after a paid confirmation
+   round re-votes it (weaker-never-acts). Findings stamp FINDING[CODE]
+   from finding_codes.py. Rounds land as QUALITY_GATE_COUNCIL events —
+   the A/B evidence for the council's graduation off the `strict:` gate.
+   The retired same-context costume framings live in lens_ablation.py as
+   the control arm of the era-04 triad divergence harness.
 
 All paid passes use the caller's adapter — the run's execution adapter, MID
 by default since the 2026-07-21 unification; that self-review correlation is
 exactly what the second-family check instruments. Defaults to PASS on any
-error. In practice, most runs only get passes 1-2 — council/cross-ref are
-`strict:`-gated.
+error. In practice, most runs only get passes 1-2 (+1.5 and the research
+cross-ref lane where hosted-free is opted in) — council and the acting
+cross-ref lane are `strict:`-gated.
 
 ### Introspect (introspect.py, ~1590 lines)
 Failure classification (11 types: setup_failure, adapter_timeout, token_explosion, etc.). Each diagnosis has severity, evidence, recommendation. Written to diagnoses.jsonl.

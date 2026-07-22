@@ -4016,3 +4016,39 @@ Dormant (deliberately parked, not dropped):
   SecondFamilyVerdict dataclass (the durable contract is the event row;
   no in-process consumer yet). Record:
   docs/history/2026-07-21-chunk5a-adversarial-review.md.
+- 2026-07-22 (chunk 5b executed, standing grant): **swarm-review chunk 5b
+  shipped — evidence-diverse lenses, in the decreed order.** (1)
+  `persona_dispatch.py` ships FIRST as the owned one-shot persona×prompt
+  verb (re-improvised by hand ≥4 times per eras 09/11): `dispatch_prompt`
+  never raises, pins `no_tools=True`, resolves adapter explicit →
+  hosted-free → error (no silent paid spend), stamps attribution
+  (`hosted_free:<provider>:<model>` vs model_key); `dispatch_panel` +
+  CLI (`--persona`/`--panel`, `--model` = explicit paid). (2) Council
+  repointed from three same-context prompt costumes to three
+  **evidence-path lenses** — transcript-aware / artifact-only
+  (context-blind) / probe-armed (concerns are {claim,
+  settled_by_command} dicts, probes RUN via claim_probe: dismissed
+  concerns dropped, WEAK resting wholly on dismissed claims mechanically
+  downgraded to ACCEPTABLE) — with the 05-12 error taxonomy as
+  FINDING[CODE] vocabulary WITHIN lenses, not seats. Ladder semantics
+  honor weaker-never-overrules: hosted-free round runs first ($0);
+  free 2+-WEAK only acts after a paid confirmation round re-votes it;
+  free flag with no paid adapter = flag-only (`free_flag_unconfirmed`);
+  all-free-seats-unparsable falls back to paid (strict: opt-in never
+  silently neutered). New QUALITY_GATE_COUNCIL event (per-seat verdict/
+  source/codes/probe_dismissed). (3) Era-04 triad ablation harness
+  (`lens_ablation.py`) — retired costume framings preserved verbatim as
+  the control arm; token-Jaccard overlap + distinct-catches; first live
+  read: costume 0.12 vs evidence 0.20 mean pairwise overlap (harness
+  proof, not sizing data — n=1 payload). (4) cross_ref enabled for
+  research-shaped goals on hosted-free: `run_cross_ref` grew a
+  "hosted_free" lane (flag-only, killswitch
+  `quality_gate.cross_ref_research` default ON, inert without
+  hosted-free consent); paid strict: lane unchanged (disputes still flip
+  verdict). New QUALITY_GATE_CROSS_REF event. EVENT_TYPES 69→71.
+  Tests hermetic against the box's live hosted-free keys (autouse
+  available()→False pin). Live-verified vs real Gemini flash-lite:
+  dispatch CLI 832ms; council round weak=2/3 with PHANTOM_SYMBOL from 2
+  seats + one probe self-dismissal, real captain's-log
+  free_flag_unconfirmed row (2989ms); ablation both arms ran
+  (docs/history/2026-07-22-lens-ablation-smoke.md).
