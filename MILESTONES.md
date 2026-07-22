@@ -28,8 +28,11 @@ takes every dotted key per cell, mutation-proven on a second-position
 phantom); both census lanes rglob (nested packages); collateral
 basename-collision fix. Record:
 docs/history/2026-07-22-chunk8-adversarial-review.md. **The 8-chunk
-swarm-review arc is COMPLETE.** Next: the compound-thinking chunk-6
-discussion Jeremy queued (docs/COMPOUND_THINKING_DESIGN.md).
+swarm-review arc is COMPLETE.** Next: **chunk 9 — compound thinking**
+(docs/COMPOUND_THINKING_DESIGN.md), renumbered from Jeremy's mid-arc
+"chunk 6" addition to the next sequential number as addendum work on the
+completed arc (his call, 2026-07-22; he'd had chunk 5 as the arc's end).
+Opens with discussion + planning, not implementation.
 
 Previous checkpoint — 2026-07-22 **chunk 7 SHIPPED**. Chunk 7 (discretion
 readout — a judgement report, not a bill): **(1)** new

@@ -4206,3 +4206,11 @@ Dormant (deliberately parked, not dropped):
   (nested src/ packages stay censused); collateral basename-collision
   fix in the literal scan. Record:
   docs/history/2026-07-22-chunk8-adversarial-review.md.
+
+- **2026-07-22 — Decision (Jeremy): compound-thinking work = chunk 9,
+  addendum to the swarm-review arc.** His mid-arc COMPOUND_THINKING_DESIGN
+  addition (which he'd named "chunk 6" — he had chunk 5 as the arc's end
+  in his head; the collision with the shipped chunk 6 was unintentional)
+  is renumbered to the next sequential chunk as addendum work on the
+  completed arc. Opens with discussion and planning before any
+  implementation, per his original intent statement.
