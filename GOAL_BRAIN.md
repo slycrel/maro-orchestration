@@ -4157,3 +4157,21 @@ Dormant (deliberately parked, not dropped):
   second-family vocabulary carries a SECOND_FAMILY_ prefix (normalized).
   Consent message stays with the session-protocol thread; 3-arm experiment
   stays skipped (Jeremy's call).
+
+- **2026-07-22 — Chunk-7 adversarial review: PASS with fixes (second
+  PASS of the arc).** 3 Codex lenses vs b4c8c13; 5/5 findings verified
+  real, 0 hallucinated (eighth consecutive clean round). Fixed: (1)
+  unanimous — EFFORT headline was a silent newest-5000 tail sample
+  (armed at 3700 live rows); now reads the whole step-costs file — an
+  offline CLI has no reason to sample, and the module's own no-silent-
+  caps rule applied to its headline; (2) --log-dir mixed archive events
+  with live cost telemetry; now one base dir sources both inputs; (3)
+  input-read failures shrank denominators silently; coverage counters +
+  an "incomplete" warning now render; (4) operator-facing doc mentions
+  gained PYTHONPATH=src. Rejected: console-script entry point
+  (subtract-before-you-add), deleting --json/--log-dir (both earn keep
+  post-fix). Reviewers left the metric definitions, the A/B grouping
+  semantics, and the honesty block untouched — pressure landed on
+  making the honesty rule apply to the module's own inputs, which is
+  the review working as designed. Record:
+  docs/history/2026-07-22-chunk7-adversarial-review.md.

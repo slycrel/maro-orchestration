@@ -9,7 +9,8 @@ budget-posture decree (EFFORT language, not dollars).
 Read-only: consumes captain's-log events (active + rotated archives, same
 glob as navigator_shadow._load_navigator_events) and memory/step-costs.jsonl.
 No LLM calls, no writes, no config flags — a CLI that spends nothing needs
-no killswitch.
+no killswitch. (CLI arguments like --json/--log-dir are surfaces, not
+config: nothing here changes runtime behavior.)
 
 Honesty rule: every metric the plan names that CANNOT be computed from
 current instrumentation is listed in the report's "Not computable today"
@@ -38,30 +39,42 @@ CONSUMED_EVENT_TYPES = (
 )
 
 
-def load_events(base: Optional[Path] = None) -> List[Dict[str, Any]]:
+def load_events(base: Optional[Path] = None,
+                coverage: Optional[Dict[str, int]] = None) -> List[Dict[str, Any]]:
     """Read consumed event rows from the workspace captain's log (active +
     rotated archives), chronological. Mirrors navigator_shadow's loader so
-    both readouts see the same source of truth."""
+    both readouts see the same source of truth.
+
+    ``coverage``, when given, is filled with input-honesty counters
+    (files_read / files_failed / lines_skipped) — a judgement report must
+    not let a corrupt archive silently shrink every denominator (review
+    finding: the honesty rule applies to the inputs too)."""
     if base is None:
         try:
             from captains_log import _log_path
             base = _log_path().parent
         except Exception:
             base = Path.home() / ".maro" / "workspace" / "memory"
+    cov = coverage if coverage is not None else {}
+    cov.update({"files_read": 0, "files_failed": 0, "lines_skipped": 0})
     events: List[Dict[str, Any]] = []
     for p in sorted(base.glob("captains_log*.jsonl")):
         try:
-            for line in p.read_text(encoding="utf-8").splitlines():
-                if not any(t in line for t in CONSUMED_EVENT_TYPES):
-                    continue
-                try:
-                    e = json.loads(line)
-                except Exception:
-                    continue
-                if isinstance(e, dict) and e.get("event_type") in CONSUMED_EVENT_TYPES:
-                    events.append(e)
+            lines = p.read_text(encoding="utf-8").splitlines()
         except Exception:
+            cov["files_failed"] += 1
             continue
+        cov["files_read"] += 1
+        for line in lines:
+            if not any(t in line for t in CONSUMED_EVENT_TYPES):
+                continue
+            try:
+                e = json.loads(line)
+            except Exception:
+                cov["lines_skipped"] += 1
+                continue
+            if isinstance(e, dict) and e.get("event_type") in CONSUMED_EVENT_TYPES:
+                events.append(e)
     return events
 
 
@@ -298,12 +311,22 @@ def duty_cycle_summary(events: List[Dict[str, Any]]) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 def effort_summary(entries: Optional[List[dict]] = None,
-                   days: int = 7) -> Dict[str, Any]:
+                   days: int = 7,
+                   path: Optional[Path] = None) -> Dict[str, Any]:
     """Per-day EFFORT from step-costs.jsonl: calls, tokens, model mix —
-    cost_usd rides as the trailing column."""
+    cost_usd rides as the trailing column.
+
+    Reads the WHOLE file (limit=None) — this is an offline CLI, and a tail
+    cap here would silently understate the headline section (unanimous
+    review finding: the newest-5000 sample truncated older days with no
+    caveat). ``path`` keeps the corpus coherent under --log-dir: cost
+    telemetry comes from the same memory dir as the events."""
     if entries is None:
-        import metrics
-        entries = metrics.load_step_costs(limit=5000)
+        from jsonl_utils import read_jsonl_tail
+        if path is None:
+            import metrics
+            path = metrics._step_costs_path()
+        entries = read_jsonl_tail(path, limit=None)
     by_day: Dict[str, Dict[str, Any]] = {}
     for e in entries:
         day = str(e.get("recorded_at") or "")[:10]
@@ -357,16 +380,24 @@ def not_computable() -> List[str]:
 # ---------------------------------------------------------------------------
 
 def build_payload(events: Optional[List[Dict[str, Any]]] = None,
-                  step_entries: Optional[List[dict]] = None) -> Dict[str, Any]:
+                  step_entries: Optional[List[dict]] = None,
+                  base: Optional[Path] = None,
+                  input_coverage: Optional[Dict[str, int]] = None) -> Dict[str, Any]:
+    """``base`` sources BOTH inputs (events glob and step-costs.jsonl) from
+    one directory — an alternate --log-dir must never mix archive events
+    with live-workspace cost telemetry (review finding: mixed corpus)."""
+    coverage: Dict[str, int] = dict(input_coverage or {})
     if events is None:
-        events = load_events()
+        events = load_events(base, coverage=coverage)
+    step_path = (base / "step-costs.jsonl") if base is not None else None
     return {
         "metacognition": metacog_summary(events),
         "reinjection": reinjection_summary(events),
         "gate_families": gate_family_summary(events),
         "novelty": novelty_summary(events),
         "duty_cycle": duty_cycle_summary(events),
-        "effort": effort_summary(step_entries),
+        "effort": effort_summary(step_entries, path=step_path),
+        "input_coverage": coverage,
         "not_computable": not_computable(),
     }
 
@@ -448,6 +479,16 @@ def build_report(payload: Optional[Dict[str, Any]] = None) -> str:
         lines.append(f"  {lane:18s} rows={s['rows']:4d} "
                      f"days_active={s['days_active']:3d}  {span}")
 
+    cov = p.get("input_coverage") or {}
+    if cov:
+        lines.append("")
+        note = (f"input: {cov.get('files_read', 0)} log file(s) read, "
+                f"{cov.get('lines_skipped', 0)} malformed line(s) skipped")
+        if cov.get("files_failed"):
+            note += (f", {cov['files_failed']} file(s) UNREADABLE — "
+                     "denominators above are incomplete")
+        lines.append(note)
+
     lines.append("")
     lines.append("## Not computable today")
     for item in p["not_computable"]:
@@ -460,13 +501,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         description="Judgement report over existing instrumentation "
                     "(EFFORT language; read-only).")
     parser.add_argument("--log-dir", default=None,
-                        help="directory holding captains_log*.jsonl "
+                        help="memory directory sourcing BOTH inputs — "
+                             "captains_log*.jsonl and step-costs.jsonl "
                              "(default: the workspace memory dir)")
     parser.add_argument("--json", action="store_true",
                         help="emit the raw payload as JSON")
     args = parser.parse_args(argv)
     base = Path(args.log_dir) if args.log_dir else None
-    payload = build_payload(events=load_events(base))
+    payload = build_payload(base=base)
     if args.json:
         print(json.dumps(payload, indent=2))
     else:

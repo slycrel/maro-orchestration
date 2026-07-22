@@ -105,7 +105,17 @@ top-up not empty-fallback; flat top-up chains agenda+general;
 query_lessons ranks the full store (n*5 score-sorted cap hid relevant
 rows). Rejected: docs-duplication (decreed record architecture). Six new
 pins. Record: docs/history/2026-07-22-chunk6-adversarial-review.md.
-**Next: chunk-7 adversarial review**, then chunk 8 (enforcement pin —
+**Chunk-7 adversarial review DONE 2026-07-22** (3 Codex lenses vs b4c8c13,
+**PASS with fixes** — second PASS of the arc; 5/5 verified real, 0
+hallucinated — eighth clean round). Fixed same session: EFFORT reads the
+FULL step-costs file (unanimous finding — the newest-5000 tail sample
+silently truncated the headline section, armed at 3700 live rows);
+`--log-dir` sources both inputs from one directory (no mixed corpus);
+input-coverage honesty line (files read / malformed skipped / unreadable
+warning); PYTHONPATH=src on the operator-facing doc mentions. Rejected:
+console-script entry point, deleting --json/--log-dir. Record:
+docs/history/2026-07-22-chunk7-adversarial-review.md.
+**Next: chunk 8** (enforcement pin —
 DEFAULTS flag-enablement column under the AST census; stores/guards need a
 registration convention first). After the chunks: the compound-thinking
 chunk-6 discussion Jeremy queued (docs/COMPOUND_THINKING_DESIGN.md — his

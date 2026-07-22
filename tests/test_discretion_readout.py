@@ -209,11 +209,42 @@ class TestReportAndLoader:
         active.write_text(
             json.dumps(_ev("RECALL_PERFORMED", {"knowledge_blocks": 2})) + "\n"
             + json.dumps(_ev("NAVIGATOR_DECIDED", {})) + "\n"   # not consumed
-            + "not-json\n",
+            + "RECALL_PERFORMED not-json\n",                    # malformed
             encoding="utf-8")
-        events = dr.load_events(tmp_path)
+        cov = {}
+        events = dr.load_events(tmp_path, coverage=cov)
         types = sorted(e["event_type"] for e in events)
         assert types == ["LESSON_RECORDED", "RECALL_PERFORMED"]
+        # review pin: input honesty — skipped input is counted, not silent
+        assert cov["files_read"] == 2
+        assert cov["lines_skipped"] == 1
+        assert cov["files_failed"] == 0
+
+    def test_effort_reads_full_file_not_a_tail_sample(self, tmp_path):
+        # review pin (unanimous): the EFFORT headline must never be a
+        # silent newest-N sample — every row in the file is tabulated.
+        path = tmp_path / "step-costs.jsonl"
+        with path.open("w", encoding="utf-8") as f:
+            for i in range(120):
+                f.write(json.dumps({
+                    "recorded_at": f"2026-07-{15 + (i % 7):02d}T01:00:00+00:00",
+                    "total_tokens": 1, "cost_usd": 0.0, "model": "m"}) + "\n")
+        s = dr.effort_summary(path=path)
+        assert s["total_calls"] == 120
+
+    def test_log_dir_sources_step_costs_from_same_dir(self, tmp_path):
+        # review pin: --log-dir must not mix archive events with the live
+        # workspace's cost telemetry — one base dir sources both inputs.
+        (tmp_path / "captains_log.jsonl").write_text(
+            json.dumps(_ev("LESSON_RECORDED", {"novelty": 0.5})) + "\n",
+            encoding="utf-8")
+        (tmp_path / "step-costs.jsonl").write_text(
+            json.dumps({"recorded_at": "2026-07-22T01:00:00+00:00",
+                        "total_tokens": 42, "cost_usd": 0.0,
+                        "model": "m"}) + "\n", encoding="utf-8")
+        payload = dr.build_payload(base=tmp_path)
+        assert payload["effort"]["total_tokens"] == 42
+        assert payload["input_coverage"]["files_read"] == 1
 
     def test_cli_json_mode(self, tmp_path, capsys):
         (tmp_path / "captains_log.jsonl").write_text(
