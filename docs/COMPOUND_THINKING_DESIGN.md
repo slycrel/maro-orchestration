@@ -4,6 +4,13 @@ status: dormant-design
 
 # Compound Thinking — the self-surveying map (planning model)
 
+> *"Named for Publius Vergilius **Maro** — the poet Virgil, who in Dante's*
+> Inferno *guides the traveler down through the dark and safely out the other
+> side."* — the project README. The name encodes this whole model: an exit
+> believed-in but unseen, a descent through the dark (fog of war), a path found
+> by pathfinding rather than known in advance, recovery past each obstacle, out
+> the far side. We named the concept before we said it out loud.
+
 **Status: EXPLORATORY design sketch.** Captured from a conversation between
 Jeremy and Claude (Opus 4.8, 1M ctx) on 2026-07-21 → 07-22, on the dev M1
 while the swarm-review arc (chunks 1–5) was still landing on the box. **No
@@ -312,7 +319,10 @@ deliberately not a build order.
 ## 11. Provenance
 
 - Conversation: Jeremy ↔ Claude (Opus 4.8, 1M ctx), 2026-07-21 → 07-22, on the dev
-  M1 while the swarm-review arc (chunks 1–5) ran on the box.
+  M1 while the swarm-review arc (chunks 1–5) ran on the box. **Full verbatim
+  transcript:** `docs/conversations/2026-07-22-compound-thinking.md` (kept for
+  future revisits — we reliably glean new edges from raw logs once new context
+  lands; the Virgil catch is the proof).
 - Extends / relates: `docs/INTENT_RESOLUTION_DESIGN.md` (side-quests, "what does
   done mean"), `docs/DEV_PATTERNS.md` (taste/judgement, cuts-first, possible-now
   bias), `.claude/skills/star/SKILL.md` (star mini-orchestrator, node contract,
