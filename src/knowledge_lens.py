@@ -614,18 +614,40 @@ def contested_rules(
 
 
 def _rule_contradiction_evidence(rule_id: str, *, limit: int = 5) -> List[str]:
-    """Pull this rule's contradiction event summaries from the captain's log
-    (the append-only evidence layer the compiled counts were derived from)."""
+    """Pull this rule's contradiction evidence from the captain's log
+    (the append-only evidence layer the compiled counts were derived from).
+
+    Two sources (chunk-4 review F3): STANDING_RULE_CONTRADICTED summaries
+    carry only counts + rule text; the causal evidence — which run failed,
+    how, and why the judge attributed the failure to this rule — lives on
+    the CONTRADICTION_ADJUDICATED yes-events, so refight's keep/revise/retire
+    call is made against the actual collision, not just a tally."""
+    evidence: List[str] = []
     try:
         from captains_log import query_log
-        events = query_log(
+        for e in query_log(
+            f"rule:{rule_id}",
+            event_type="CONTRADICTION_ADJUDICATED",
+            limit=limit,
+        ):
+            ctx = e.get("context") or {}
+            if str(ctx.get("verdict") or "") != "yes":
+                continue
+            if rule_id not in (ctx.get("contradicted_ids") or []):
+                continue
+            evidence.append(
+                (f"run {ctx.get('loop_id', '?')} failed "
+                 f"({str(ctx.get('failure_summary') or 'no summary')[:120]}); "
+                 f"judge: {str(ctx.get('reasoning') or '')[:150]}")[:300])
+        for e in query_log(
             f"rule:{rule_id}",
             event_type="STANDING_RULE_CONTRADICTED",
             limit=limit,
-        )
-        return [str(e.get("summary") or "")[:200] for e in events]
+        ):
+            evidence.append(str(e.get("summary") or "")[:200])
     except Exception:
-        return []
+        pass
+    return evidence[:limit * 2]
 
 
 def refight_rule(rule: StandingRule, adapter, *, verbose: bool = False) -> Optional[str]:
@@ -717,8 +739,13 @@ Output ONLY valid JSON:
                 domain=target.domain,
                 confirmations=0,
                 contradictions=0,
+                # Full contributor list survives the demotion (chunk-4 review
+                # M3 — retirement is exactly the lifecycle provenance exists
+                # for); single-id fallback covers pre-2026-07-21 rules.
                 source_lesson_ids=(
-                    [target.source_lesson_id] if target.source_lesson_id else []
+                    list(target.source_lesson_ids)
+                    or ([target.source_lesson_id]
+                        if target.source_lesson_id else [])
                 ),
                 first_seen=now,
                 last_seen=now,
@@ -803,12 +830,17 @@ def adjudicate_contradiction_candidates(
     For each unadjudicated candidate (oldest first, ``cap`` per cycle) the
     LLM answers one question: did this run's failure actually contradict the
     rules/lessons it was injected with, or did the run fail for unrelated
-    reasons? Tri-state verdict, era-10 law applied to ourselves:
+    reasons? Tri-state verdict + per-artifact attribution (chunk-4 review
+    F4: a run cites its whole injected bundle, so a run-level "yes" fanned
+    out to every citation would collateral-contest innocent rules — the
+    judge must name WHICH artifacts the failure contradicts), era-10 law
+    applied to ourselves:
 
-      yes       — contradict_pattern() on each cited artifact (rule text +
-                  lesson text; text-similarity match means retired/rewritten
-                  artifacts degrade to a no-op). Rule moves to the contested
-                  injection tier; refight_rule reaches it next cycle.
+      yes       — contradict_pattern() on each artifact NAMED in
+                  contradicted_ids (subset of the cited ids; a "yes" naming
+                  none is unparsable and retried). Text-similarity match
+                  means retired/rewritten artifacts degrade to a no-op —
+                  the applied/no-op split is recorded on the event.
       no        — the citation was innocent. Adjudicated event, no mutation.
       undecided — cannot tell from the evidence. UNDECIDED IS UNJUDGED,
                   never contested: adjudicated event, no mutation. (A cheap
@@ -818,6 +850,14 @@ def adjudicate_contradiction_candidates(
     pending and is retried next cycle. Candidates whose cited artifacts have
     all left the stores adjudicate "no" deterministically (nothing left to
     contest). Returns counters for the maintenance log.
+
+    Concurrency (chunk-4 review F2): the whole cycle holds a dedicated
+    non-blocking lock (contradiction_adjudication.lock). run_skill_maintenance
+    runs at EVERY loop finalize, so two concurrent finalizes would otherwise
+    both see the same pending candidate and double-contest its rules. Losing
+    the try-lock skips the cycle (the holder is already draining the queue);
+    holding a single-purpose lock across the LLM calls is deliberate — it
+    serializes only adjudication cycles, never a shared store.
     """
     counts = {"examined": 0, "contradicted": 0, "cleared": 0,
               "undecided": 0, "unparsable": 0}
@@ -829,20 +869,57 @@ def adjudicate_contradiction_candidates(
     except Exception:
         return counts
 
-    candidates = query_log(event_type=CONTRADICTION_CANDIDATE, limit=100)
+    import fcntl
+    lock_path = _memory_dir() / "contradiction_adjudication.lock"
+    try:
+        lock_fd = open(lock_path, "w")
+    except OSError:
+        return counts
+    try:
+        try:
+            fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            log.debug("adjudication cycle already running elsewhere — skipping")
+            return counts
+        return _adjudicate_locked(
+            adapter, cap=cap, dry_run=dry_run, verbose=verbose, counts=counts,
+            query_log=query_log, log_event=log_event,
+            candidate_type=CONTRADICTION_CANDIDATE,
+            adjudicated_type=CONTRADICTION_ADJUDICATED,
+        )
+    finally:
+        lock_fd.close()
+
+
+def _adjudicate_locked(
+    adapter, *, cap, dry_run, verbose, counts,
+    query_log, log_event, candidate_type, adjudicated_type,
+) -> Dict[str, int]:
+    # Unlimited reads (chunk-4 review F1, three-lens consensus): a bounded
+    # newest-first window turned "FIFO" into "oldest of the newest N" — with
+    # >N pending, the oldest candidates became permanently invisible.
+    candidates = query_log(event_type=candidate_type, limit=0)
     if not candidates:
         return counts
     done_ids = {
         str((e.get("context") or {}).get("loop_id") or e.get("subject") or "")
-        for e in query_log(event_type=CONTRADICTION_ADJUDICATED, limit=0)
+        for e in query_log(event_type=adjudicated_type, limit=0)
     }
     # query_log returns newest first; adjudicate FIFO so a burst of fresh
-    # candidates can't starve an old one forever.
-    pending = [
-        c for c in reversed(candidates)
-        if str((c.get("context") or {}).get("loop_id")
-               or c.get("subject") or "") not in done_ids
-    ][:max(0, int(cap))]
+    # candidates can't starve an old one. One candidate per loop_id — a
+    # re-stamped verdict can emit duplicate candidates for the same loop
+    # (emitter is deliberately stateless); judging the first covers them all.
+    pending = []
+    seen_loops: set = set()
+    for c in reversed(candidates):
+        lid = str((c.get("context") or {}).get("loop_id")
+                  or c.get("subject") or "")
+        if lid in done_ids or lid in seen_loops:
+            continue
+        seen_loops.add(lid)
+        pending.append(c)
+        if len(pending) >= max(0, int(cap)):
+            break
     if not pending:
         return counts
 
@@ -856,23 +933,37 @@ def adjudicate_contradiction_candidates(
         cited_rules = [rules_by_id[r] for r in rule_ids if r in rules_by_id]
         cited_lessons = _lesson_texts_by_id(lesson_ids)
 
-        def _record(verdict: str, reasoning: str) -> None:
+        failure_summary = str(ctx.get("failure_summary") or "")[:300]
+        goal_preview = str(ctx.get("goal_preview") or "")[:200]
+
+        def _record(verdict: str, reasoning: str,
+                    contradicted_ids=None, applied=None) -> None:
             if dry_run:
                 return
             try:
                 log_event(
-                    CONTRADICTION_ADJUDICATED,
+                    adjudicated_type,
                     subject=loop_id,
                     summary=(f"Adjudicated candidate for loop {loop_id}: "
                              f"{verdict} — {reasoning[:120]}"),
+                    # failure_summary/goal_preview ride along so refight's
+                    # evidence gatherer can show the judge WHY the rule was
+                    # contested, not just that it was (review F3).
                     context={
                         "loop_id": loop_id,
                         "verdict": verdict,
                         "reasoning": reasoning[:400],
                         "rule_ids": rule_ids,
                         "lesson_ids": lesson_ids,
+                        "contradicted_ids": list(contradicted_ids or []),
+                        "applied": list(applied or []),
+                        "failure_summary": failure_summary,
+                        "goal_preview": goal_preview,
                     },
-                    related_ids=[f"rule:{r}" for r in rule_ids],
+                    related_ids=[f"rule:{r}" for r in (contradicted_ids
+                                                       if verdict == "yes"
+                                                       else rule_ids)
+                                 if r in rules_by_id],
                 )
             except Exception:
                 pass
@@ -894,8 +985,8 @@ def adjudicate_contradiction_candidates(
             for lid, txt in cited_lessons.items()) or "(none)"
         prompt = f"""An autonomous agent run FAILED (verdict: goal not achieved, full confidence). Before it ran, the system injected crystallized knowledge into its planning prompt. Decide whether the failure CONTRADICTS that knowledge — i.e. the run plausibly failed *because it applied* a cited rule/lesson that is wrong or stale — or whether it failed for unrelated reasons.
 
-Goal (preview): {str(ctx.get("goal_preview") or "")[:200]}
-Failure summary: {str(ctx.get("failure_summary") or "")[:300]}
+Goal (preview): {goal_preview}
+Failure summary: {failure_summary}
 
 Injected standing rules:
 {rules_text}
@@ -903,10 +994,10 @@ Injected standing rules:
 Injected lessons:
 {lessons_text}
 
-Be conservative: "yes" puts every cited artifact into a contested re-verification tier. Answer "yes" only when the failure is plausibly attributable to following the cited knowledge. "no" when the failure is clearly unrelated. "undecided" when the evidence cannot distinguish.
+Be conservative: each artifact you name goes into a contested re-verification tier. Answer "yes" only when the failure is plausibly attributable to following specific cited knowledge, and name ONLY those artifacts in contradicted_ids (their rule/lesson ids) — the run was injected with its whole bundle, so most cited artifacts are innocent bystanders. "no" when the failure is clearly unrelated to all of them. "undecided" when the evidence cannot distinguish.
 
 Output ONLY valid JSON:
-{{"contradicted": "yes|no|undecided", "reasoning": "<one short paragraph>"}}"""
+{{"contradicted": "yes|no|undecided", "contradicted_ids": ["<id of each artifact the failure actually contradicts — empty unless yes>"], "reasoning": "<one short paragraph>"}}"""
 
         try:
             from llm import LLMMessage
@@ -922,22 +1013,39 @@ Output ONLY valid JSON:
             parsed = None
         verdict = str((parsed or {}).get("contradicted") or "").strip().lower()
         reasoning = str((parsed or {}).get("reasoning") or "")[:400]
+        named = [str(i) for i in ((parsed or {}).get("contradicted_ids") or [])]
+        # Attribution guard (review F4): only ids that were actually cited
+        # count; a "yes" that names nothing valid is unparsable — retried,
+        # never fanned out across the whole bundle.
+        valid_named = [i for i in named
+                       if i in rules_by_id and i in rule_ids
+                       or i in cited_lessons]
 
-        if verdict not in ("yes", "no", "undecided"):
+        if verdict not in ("yes", "no", "undecided") or (
+                verdict == "yes" and not valid_named):
             counts["unparsable"] += 1   # no event — retriable next cycle
             continue
+        applied: List[str] = []
         if verdict == "yes" and not dry_run:
-            for r in cited_rules:
-                contradict_pattern(r.rule, r.domain)
-            for txt in cited_lessons.values():
-                if txt:
-                    contradict_pattern(txt, "")
+            for i in valid_named:
+                if i in rules_by_id:
+                    hit = contradict_pattern(rules_by_id[i].rule,
+                                             rules_by_id[i].domain)
+                else:
+                    # Lessons have no contested tier of their own — the call
+                    # only lands if the text also lives as a rule/hypothesis.
+                    # The applied list keeps the no-op honest (review F5).
+                    hit = contradict_pattern(cited_lessons[i], "")
+                if hit:
+                    applied.append(i)
         counts["contradicted" if verdict == "yes"
                else "cleared" if verdict == "no" else "undecided"] += 1
-        _record(verdict, reasoning or "(no reasoning returned)")
+        _record(verdict, reasoning or "(no reasoning returned)",
+                contradicted_ids=valid_named, applied=applied)
         if verbose:
             import sys as _sys
-            print(f"[adjudicate] loop {loop_id}: {verdict}",
+            print(f"[adjudicate] loop {loop_id}: {verdict}"
+                  + (f" -> {valid_named}" if verdict == "yes" else ""),
                   file=_sys.stderr, flush=True)
 
     return counts

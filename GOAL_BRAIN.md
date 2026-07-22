@@ -3952,3 +3952,27 @@ Dormant (deliberately parked, not dropped):
   promotion (source_lesson_id stays as first-contributor compat).
   EVENT_TYPES 66→68. DEFAULTS.md row + census green; arch skill
   updated. Full suite green (185 items).
+- 2026-07-21 (session, executing Jeremy's /goal per-chunk review
+  discipline): **chunk-4 adversarial review ran post-land** (3 Codex
+  lenses vs afe5c5a) — verdict REJECT-as-reviewed, remediated same
+  session; 8/8 findings verified real, 0 hallucinated (fourth
+  consecutive clean round). The two that mattered: (1) candidate
+  starvation — `query_log(limit=100)` truncates newest-first, so
+  "FIFO" was "oldest of the newest 100" and >100 pending made the
+  oldest permanently invisible (fixed: unlimited reads, pinned with a
+  105-candidate test); (2) collateral contestation — one run-level
+  scalar verdict fanned out to every cited artifact, but a run cites
+  its whole injected bundle (fixed: per-artifact `contradicted_ids`
+  attribution, validated subset, yes-naming-nothing = unparsable-
+  retry). Also: non-blocking cycle lock + batch dedup by loop_id
+  (maintenance runs at EVERY finalize — two concurrent finalizes could
+  double-contest); citation join moved from ambient run-dir ContextVar
+  to durable `runs.resolve_run_dir(loop_id)` (audit re-stamps now join
+  correctly instead of degrading); refight evidence enriched with the
+  adjudicated events' failure/reasoning (was judging against a bare
+  tally); `applied` list keeps lesson no-ops honest; retirement carries
+  full `source_lesson_ids`; DEFAULTS/arch-skill wording corrected
+  ("evolver cadence" → per-finalize truth). Deferred consciously:
+  lesson-store contested tier (no consumer), maintenance cadence
+  redesign (pre-existing architecture). Record:
+  docs/history/2026-07-21-chunk4-adversarial-review.md.

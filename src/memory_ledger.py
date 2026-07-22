@@ -676,10 +676,14 @@ def _maybe_emit_contradiction_candidate(loop_id: str, row: dict) -> None:
       verdicts are consumed only through verdict_trust, so a directional
       (low-confidence) or excluded (verifier's-own-failure) False can never
       seed a contradiction against a standing rule;
-    - the run dir has a non-empty source/recall_citations.json (written by
-      recall's loop slice). Audit-process re-stamps run with no current run
-      dir and degrade to no event — by design, the citation join belongs to
-      the run that was actually injected.
+    - the STAMPED LOOP's run dir has a non-empty
+      source/recall_citations.json (written by recall's loop slice). The
+      join is by durable identity — runs.resolve_run_dir(loop_id) — never
+      the ambient run-dir ContextVar (chunk-4 review F6: a cross-process
+      re-stamp, e.g. audit_repair, either has no context or somebody
+      else's; the citation join belongs to the run that was actually
+      injected, and the index knows which one that was). Unresolvable
+      loop → no event.
 
     Never raises: candidate emission is observability-grade, and a log
     failure must not perturb the verdict stamp it rides on.
@@ -690,7 +694,7 @@ def _maybe_emit_contradiction_candidate(loop_id: str, row: dict) -> None:
         if verdict_trust(row) != VERDICT_TRUST_FULL:
             return
         import runs as _runs
-        rd = _runs.current_run_dir()
+        rd = _runs.resolve_run_dir(loop_id)
         if rd is None:
             return
         cit_path = Path(rd) / "source" / "recall_citations.json"

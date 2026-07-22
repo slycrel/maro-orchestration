@@ -116,12 +116,17 @@ a runtime writer):** recall's loop slice stamps `rules_cited`/`lesson_ids_cited`
 (durable IDs) into RECALL_PERFORMED AND writes `source/recall_citations.json`
 into the current run dir. When `stamp_outcome_verdict` lands a FULL-trust
 (`verdict_trust`) `goal_achieved=False` on a citation-bearing run, it emits
-CONTRADICTION_CANDIDATE. At evolver cadence (`run_skill_maintenance`, gated by
-`knowledge.contradiction_adjudication_enabled`, cap 3/cycle) an LLM tri-state
-verdict adjudicates each candidate: only exact "yes" calls
-`contradict_pattern` (undecided = unjudged, never contested); the rule drops
-to the contested injection tier and `refight_rule` reaches it in the same
-maintenance pass. Standing-rule `domain` vocabulary is PROJECT slug or ""
+CONTRADICTION_CANDIDATE — joined to the run by durable identity
+(`runs.resolve_run_dir(loop_id)`), never the ambient run-dir ContextVar. At
+skill-maintenance cadence (`run_skill_maintenance` — every loop finalize plus
+evolver cycles; gated by `knowledge.contradiction_adjudication_enabled`, cap
+3/cycle, non-blocking cycle lock against concurrent finalizes) an LLM
+tri-state verdict with per-artifact attribution adjudicates each candidate:
+only exact "yes" naming specific cited ids calls `contradict_pattern` on
+those (undecided = unjudged, never contested; a yes naming nothing is
+unparsable and retried); the rule drops to the contested injection tier and
+`refight_rule` reaches it in the same maintenance pass, with the adjudicated
+events' failure/reasoning as refight evidence. Standing-rule `domain` vocabulary is PROJECT slug or ""
 (global); promotion writes "" — task-type domains never matched the
 project-filtered reader (battery V2). Promotion also keeps every contributing
 lesson id in `source_lesson_ids` (era-09 provenance).

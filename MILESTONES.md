@@ -20,8 +20,19 @@ domain fix (promotion writes ""; 4 live rules migrated agenda→"" with archive
 copy — they now actually inject on project-scoped runs) and era-09 provenance
 (`StandingRule.source_lesson_ids` keeps all contributors). EVENT_TYPES
 66→68; 24 new pins (test_contradiction_wiring.py + promotion/recall);
-full suite green (185 items). **Next: chunk-4 adversarial review, then
-chunk 5a.**
+full suite green (185 items). **Chunk-4 adversarial review DONE same day**
+(3 Codex lenses vs afe5c5a, REJECT-as-reviewed → remediated same session,
+8/8 verified real, 0 hallucinated — fourth clean round): unlimited candidate
+reads (limit-100 newest-first window starved the oldest pending);
+per-artifact `contradicted_ids` attribution (run-level yes fanned out to the
+whole innocent bundle); non-blocking cycle lock + loop_id batch dedup
+(maintenance runs at every finalize); citation join via durable
+`resolve_run_dir(loop_id)` not the ambient ContextVar (audit re-stamps now
+join correctly); refight evidence enriched from adjudicated events;
+`applied` no-op honesty; retirement keeps full `source_lesson_ids`;
+DEFAULTS wording de-euphemized
+(`docs/history/2026-07-21-chunk4-adversarial-review.md`). **Next:
+chunk 5a (gate hosted-free rung + stack-don't-substitute A/B).**
 
 Previous checkpoint — 2026-07-21 **chunk 3 SHIPPED**. Chunk 3 (decisions.jsonl
 writers — the store's read side was always live, recall substrate #3; it

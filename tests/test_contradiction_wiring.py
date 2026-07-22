@@ -58,7 +58,9 @@ def _events(event_type: str):
 
 def _seed_run_citations(monkeypatch, tmp_path, *, rule_ids=None,
                         lesson_ids=None, write_file=True):
-    """Point runs.current_run_dir at a tmp run dir with a citations file."""
+    """Durable loop_id→run-dir join (review F6): the emitter resolves the
+    STAMPED loop's dir via runs.resolve_run_dir, never the ambient
+    ContextVar — so these tests patch the resolver."""
     run_dir = tmp_path / "runs" / "test-run"
     (run_dir / "source").mkdir(parents=True, exist_ok=True)
     if write_file:
@@ -68,7 +70,7 @@ def _seed_run_citations(monkeypatch, tmp_path, *, rule_ids=None,
             "goal_preview": "test goal",
             "project": "test-project",
         }))
-    monkeypatch.setattr(runs_module, "current_run_dir", lambda: run_dir)
+    monkeypatch.setattr(runs_module, "resolve_run_dir", lambda ref: run_dir)
     return run_dir
 
 
@@ -140,10 +142,10 @@ class TestCandidateEmitter:
         assert _events(CONTRADICTION_CANDIDATE) == []
 
     def test_no_run_dir_degrades_gracefully(self, monkeypatch, tmp_path):
-        """Audit-process re-stamps have no current run dir — the stamp must
-        still land and no event fires."""
+        """A loop the run index can't resolve — the stamp must still land
+        and no event fires."""
         _setup(monkeypatch, tmp_path)
-        monkeypatch.setattr(runs_module, "current_run_dir", lambda: None)
+        monkeypatch.setattr(runs_module, "resolve_run_dir", lambda ref: None)
         record_outcome("goal", "done", "s", loop_id="lp-c6")
         assert stamp_outcome_verdict(
             "lp-c6", goal_achieved=False, goal_verdict_source="closure",
@@ -211,7 +213,8 @@ class TestAdjudicator:
         rule = _promote_rule()
         _seed_candidate("lp-a1", rule_ids=[rule.rule_id])
         adapter = _FakeAdapter(
-            '{"contradicted": "yes", "reasoning": "rule steered it wrong"}')
+            f'{{"contradicted": "yes", "contradicted_ids": ["{rule.rule_id}"],'
+            f' "reasoning": "rule steered it wrong"}}')
         counts = adjudicate_contradiction_candidates(adapter)
         assert counts["examined"] == 1 and counts["contradicted"] == 1
         stored = load_standing_rules()[0]
@@ -223,6 +226,43 @@ class TestAdjudicator:
         adjudicated = _events(CONTRADICTION_ADJUDICATED)
         assert len(adjudicated) == 1
         assert adjudicated[0]["context"]["verdict"] == "yes"
+        # Honest mutation record (review F5): the rule actually took the hit.
+        assert adjudicated[0]["context"]["applied"] == [rule.rule_id]
+
+    def test_yes_contests_only_named_artifacts(self, monkeypatch, tmp_path):
+        """Review F4 (Skeptic+Architect consensus): a run cites its whole
+        injected bundle — a yes must name the guilty artifact, and innocent
+        bystanders stay uncontested."""
+        _setup(monkeypatch, tmp_path)
+        guilty = _promote_rule("Always fetch via Jina.")
+        innocent = _promote_rule("Always run the linter.")
+        _seed_candidate("lp-a7", rule_ids=[guilty.rule_id, innocent.rule_id])
+        adjudicate_contradiction_candidates(_FakeAdapter(
+            f'{{"contradicted": "yes", "contradicted_ids": '
+            f'["{guilty.rule_id}"], "reasoning": "only the fetch rule"}}'))
+        by_id = {r.rule_id: r for r in load_standing_rules()}
+        assert by_id[guilty.rule_id].contradictions == 1
+        assert by_id[innocent.rule_id].contradictions == 0
+
+    def test_yes_naming_nothing_is_unparsable_and_retried(
+            self, monkeypatch, tmp_path):
+        """A yes with no valid attribution must never fan out across the
+        bundle — it is treated as unparsable and retried."""
+        _setup(monkeypatch, tmp_path)
+        rule = _promote_rule()
+        _seed_candidate("lp-a8", rule_ids=[rule.rule_id])
+        counts = adjudicate_contradiction_candidates(_FakeAdapter(
+            '{"contradicted": "yes", "contradicted_ids": [],'
+            ' "reasoning": "vibes"}'))
+        assert counts["unparsable"] == 1
+        assert load_standing_rules()[0].contradictions == 0
+        assert _events(CONTRADICTION_ADJUDICATED) == []
+        # Naming an id that was never cited is equally invalid.
+        counts2 = adjudicate_contradiction_candidates(_FakeAdapter(
+            '{"contradicted": "yes", "contradicted_ids": ["not-cited"],'
+            ' "reasoning": "?"}'))
+        assert counts2["unparsable"] == 1
+        assert load_standing_rules()[0].contradictions == 0
 
     def test_no_verdict_records_without_mutation(self, monkeypatch, tmp_path):
         _setup(monkeypatch, tmp_path)
@@ -298,11 +338,122 @@ class TestAdjudicator:
         rule = _promote_rule()
         _seed_candidate("lp-a6", rule_ids=[rule.rule_id])
         counts = adjudicate_contradiction_candidates(
-            _FakeAdapter('{"contradicted": "yes", "reasoning": "would hit"}'),
+            _FakeAdapter(
+                f'{{"contradicted": "yes", "contradicted_ids": '
+                f'["{rule.rule_id}"], "reasoning": "would hit"}}'),
             dry_run=True)
         assert counts["contradicted"] == 1
         assert load_standing_rules()[0].contradictions == 0
         assert _events(CONTRADICTION_ADJUDICATED) == []
+
+    def test_duplicate_candidates_same_loop_judged_once(
+            self, monkeypatch, tmp_path):
+        """Review F2/Architect-4: re-stamped verdicts can emit duplicate
+        candidates for one loop — one verdict covers them all, and the
+        contradiction count moves by exactly one."""
+        _setup(monkeypatch, tmp_path)
+        rule = _promote_rule()
+        _seed_candidate("lp-dup", rule_ids=[rule.rule_id])
+        _seed_candidate("lp-dup", rule_ids=[rule.rule_id])
+        adapter = _FakeAdapter(
+            f'{{"contradicted": "yes", "contradicted_ids": '
+            f'["{rule.rule_id}"], "reasoning": "x"}}',
+            f'{{"contradicted": "yes", "contradicted_ids": '
+            f'["{rule.rule_id}"], "reasoning": "x"}}')
+        counts = adjudicate_contradiction_candidates(adapter)
+        assert counts["examined"] == 1 and adapter.calls == 1
+        assert load_standing_rules()[0].contradictions == 1
+        # And the adjudicated marker blocks the duplicate on later cycles.
+        counts2 = adjudicate_contradiction_candidates(_FakeAdapter())
+        assert counts2["examined"] == 0
+
+    def test_no_bounded_window_starvation(self, monkeypatch, tmp_path):
+        """Review F1 (all three lenses): the candidate read must be
+        unlimited — with >100 pending, a limit-100 newest-first window made
+        the oldest candidates permanently invisible."""
+        _setup(monkeypatch, tmp_path)
+        rule = _promote_rule()
+        for i in range(105):
+            _seed_candidate(f"lp-s{i:03d}", rule_ids=[rule.rule_id])
+        adjudicate_contradiction_candidates(
+            _FakeAdapter(*['{"contradicted": "no", "reasoning": "x"}'] * 3))
+        judged = {e["context"]["loop_id"]
+                  for e in _events(CONTRADICTION_ADJUDICATED)}
+        # True FIFO: the three OLDEST — exactly the ones a bounded newest-100
+        # window would never have returned.
+        assert judged == {"lp-s000", "lp-s001", "lp-s002"}
+
+    def test_cycle_lock_skips_when_held(self, monkeypatch, tmp_path):
+        """Review F2: maintenance runs at every loop finalize; a concurrent
+        holder means this cycle skips rather than double-judging."""
+        import fcntl
+        _setup(monkeypatch, tmp_path)
+        rule = _promote_rule()
+        _seed_candidate("lp-lock", rule_ids=[rule.rule_id])
+        from memory_ledger import _memory_dir as md
+        lock_path = md() / "contradiction_adjudication.lock"
+        holder = open(lock_path, "w")
+        try:
+            fcntl.flock(holder.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            adapter = _FakeAdapter('{"contradicted": "no", "reasoning": "x"}')
+            counts = adjudicate_contradiction_candidates(adapter)
+            assert counts["examined"] == 0 and adapter.calls == 0
+        finally:
+            holder.close()
+        # Lock released → next cycle proceeds normally.
+        counts2 = adjudicate_contradiction_candidates(
+            _FakeAdapter('{"contradicted": "no", "reasoning": "x"}'))
+        assert counts2["examined"] == 1
+
+    def test_lesson_only_yes_records_honest_noop(self, monkeypatch, tmp_path):
+        """Review F5: a cited lesson that is not also a rule/hypothesis has
+        no contested tier — the yes records, but applied stays empty."""
+        _setup(monkeypatch, tmp_path)
+        from memory_ledger import _lessons_path
+        _lessons_path().parent.mkdir(parents=True, exist_ok=True)
+        with open(_lessons_path(), "a") as f:
+            f.write(json.dumps({"lesson_id": "l-solo",
+                                "lesson": "a lesson matching no rule"}) + "\n")
+        _seed_candidate("lp-a9", lesson_ids=["l-solo"])
+        counts = adjudicate_contradiction_candidates(_FakeAdapter(
+            '{"contradicted": "yes", "contradicted_ids": ["l-solo"],'
+            ' "reasoning": "the lesson misled it"}'))
+        assert counts["contradicted"] == 1
+        ev = _events(CONTRADICTION_ADJUDICATED)[0]["context"]
+        assert ev["contradicted_ids"] == ["l-solo"]
+        assert ev["applied"] == []
+
+    def test_refight_evidence_includes_adjudication_reasoning(
+            self, monkeypatch, tmp_path):
+        """Review F3: refight must see the actual collision (which run
+        failed, judge's attribution), not just a contradiction tally."""
+        _setup(monkeypatch, tmp_path)
+        rule = _promote_rule()
+        _seed_candidate("lp-ev", rule_ids=[rule.rule_id])
+        adjudicate_contradiction_candidates(_FakeAdapter(
+            f'{{"contradicted": "yes", "contradicted_ids": '
+            f'["{rule.rule_id}"], "reasoning": "Jina endpoint retired"}}'))
+        from knowledge_lens import _rule_contradiction_evidence
+        evidence = "\n".join(_rule_contradiction_evidence(rule.rule_id))
+        assert "Jina endpoint retired" in evidence
+        assert "lp-ev" in evidence
+
+    def test_retire_keeps_full_source_lesson_ids(self, monkeypatch, tmp_path):
+        """Review M3: demotion back to hypothesis is exactly the lifecycle
+        provenance exists for — every contributor survives retirement."""
+        _setup(monkeypatch, tmp_path)
+        observe_pattern("Always verify.", "agenda", source_lesson_id="l1")
+        rule = observe_pattern("Always verify.", "agenda",
+                               source_lesson_id="l2")
+        from knowledge_lens import refight_rule, load_hypotheses
+        from knowledge_lens import contradict_pattern
+        contradict_pattern("Always verify.", "")
+        rule = load_standing_rules()[0]
+        action = refight_rule(rule, _FakeAdapter(
+            '{"action": "retire", "reasoning": "world moved"}'))
+        assert action == "retire"
+        hyp = load_hypotheses()[0]
+        assert hyp.source_lesson_ids == ["l1", "l2"]
 
 
 # ---------------------------------------------------------------------------
@@ -321,10 +472,14 @@ class TestFullLifecycle:
         from recall import recall
         rule = _promote_rule()
 
-        # 1. A real recall writes the run-keyed citations file.
+        # 1. A real recall writes the run-keyed citations file. Recall runs
+        # inside the run (ambient dir is correct there); the emitter later
+        # joins the same dir by loop_id through the run index.
         run_dir = tmp_path / "runs" / "e2e"
         run_dir.mkdir(parents=True)
         monkeypatch.setattr(runs_module, "current_run_dir", lambda: run_dir)
+        monkeypatch.setattr(runs_module, "resolve_run_dir",
+                            lambda ref: run_dir if ref == "lp-e2e" else None)
         r = recall("do the thing", slice="loop", project="proj-x")
         assert rule.rule in r.standing_rules
         assert json.loads((run_dir / "source" / "recall_citations.json")
@@ -341,7 +496,8 @@ class TestFullLifecycle:
         # 3. One maintenance pass: adjudicate (yes) then refight (keep).
         from skill_lifecycle import run_skill_maintenance
         adapter = _FakeAdapter(
-            '{"contradicted": "yes", "reasoning": "rule steered the failure"}',
+            f'{{"contradicted": "yes", "contradicted_ids": '
+            f'["{rule.rule_id}"], "reasoning": "rule steered the failure"}}',
             '{"action": "keep", "reasoning": "noise — rule survives"}')
         result = run_skill_maintenance(adapter=adapter)
         assert result["contradictions_adjudicated"]["contradicted"] == 1
