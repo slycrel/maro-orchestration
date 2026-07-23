@@ -45,9 +45,35 @@ graph deferred; corrections adopted for discussion: stall-as-evidence,
 typed landmarks, VOI gate on recon, side-effect reversibility). One
 settled fix shipped per Jeremy's explicit endorsement: star skill
 re-cutting guardrail (cuts-continuously; master re-cuts on the record,
-children surface cut-evidence, never edit). Remaining agenda awaits
-Jeremy: build order confirmation, coherence-as-cadence vs own-signal,
-escalation payload shape, recursive map framing.
+children surface cut-evidence, never edit). **Chunk 9a (partial approval,
+Jeremy 2026-07-23 — "dig in where it appears that we all agree, and make
+the right things concrete"):** design-doc §13 appended with his second-pass
+corrections (13a ONE map — processes recurse, maps don't; children get a
+*vantage*, scoped view + scoped edit authority via the fork contract; 13b
+milestones revisitable — every stop verdict carries evidence AND a reopen
+condition, dead ends don't stay dead; 13c *river* replaces *meander* —
+locally wandering, globally lawful; 13d side-quests proposal — recon buys
+information, side-quest buys position/capability; his own earlier coinage,
+INTENT_RESOLUTION_DESIGN side-quest DAG). Star skill gained the agreed
+contract: task flavor commit/recon with VOI gate, recon-specific JUDGE
+question (map changed? edges real? settled_by_command), Flavor ledger
+column, "Honest exit, typed" — the four stop verdicts each with evidence +
+reopen condition. First exercise under the new contract: **stop-path
+survey** (docs/history/2026-07-23-stop-path-survey.md — 2 recon
+delegations, 11/11 master spot-verifications held): ~50 stop seams / 11
+families classified against the four verdicts; headline findings — the
+landing synthesis converts out-of-budget cap-hits into `status="done"`
+(learnable via done-unverified if closure fails open);
+reachable-but-not-worth-it is recorded NOWHERE (director escalation
+"close" leaves only an artifact file, the run stays "stuck"); closure
+demotions bypass the taxonomy's own done-not-achieved bucket via the
+status flip; interrupted/stranded/refused_busy/clarification_needed fall
+to success_class "unknown". Wiring observations recorded (stop_verdict
+beside stuck_reason on LoopResult; run_curation.classify_outcome the
+single choke point) — **src/ wiring NOT started**, awaits the evening
+artifacts conversation. Remaining agenda: build order confirmation,
+coherence-as-cadence vs own-signal, escalation payload shape,
+typed-landmarks reconciliation, side-quest terminology adoption.
 
 Previous checkpoint — 2026-07-22 **chunk 7 SHIPPED**. Chunk 7 (discretion
 readout — a judgement report, not a bill): **(1)** new
