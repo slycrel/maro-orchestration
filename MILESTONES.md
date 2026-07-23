@@ -62,18 +62,32 @@ reopen condition. First exercise under the new contract: **stop-path
 survey** (docs/history/2026-07-23-stop-path-survey.md — 2 recon
 delegations, 11/11 master spot-verifications held): ~50 stop seams / 11
 families classified against the four verdicts; headline findings — the
-landing synthesis converts out-of-budget cap-hits into `status="done"`
-(learnable via done-unverified if closure fails open);
-reachable-but-not-worth-it is recorded NOWHERE (director escalation
-"close" leaves only an artifact file, the run stays "stuck"); closure
+landing synthesis can convert an out-of-budget cap-hit into
+`status="done"` when the synthesis step succeeds (learnable via
+done-unverified if closure fails open); reachable-but-not-worth-it never
+reaches an outcome row (director escalation "close" leaves only an
+artifact file and the run stays "stuck"; dispatch navigator_close records
+a classification_reason but fires pre-run); closure
 demotions bypass the taxonomy's own done-not-achieved bucket via the
 status flip; interrupted/stranded/refused_busy/clarification_needed fall
 to success_class "unknown". Wiring observations recorded (stop_verdict
 beside stuck_reason on LoopResult; run_curation.classify_outcome the
-single choke point) — **src/ wiring NOT started**, awaits the evening
-artifacts conversation. Remaining agenda: build order confirmation,
-coherence-as-cadence vs own-signal, escalation payload shape,
-typed-landmarks reconciliation, side-quest terminology adoption.
+single choke point for success_class, though four learning consumers read
+raw status directly) — **src/ wiring NOT started**, awaits the evening
+artifacts conversation. **Chunk-9a adversarial review DONE 2026-07-23**
+(3 Codex lenses vs 5751393..65478b2, PASS with fixes — 7/7 verified, 0
+hallucinated): four-verdict taxonomy doesn't cover external-interrupt
+(all three lenses independently — now an explicit agenda question, not a
+smuggled fifth class); run_director live via CLI+Telegram, director/
+worker seam family added; navigator_close as second close-shaped
+judgment; raw-status consumers beyond classify_outcome; landing-synthesis
+wording made conditional; spot-verification evidence moved into the
+record; §13a one-map scope note. Record:
+docs/history/2026-07-23-chunk9a-adversarial-review.md. Remaining agenda:
+build order confirmation, coherence-as-cadence vs own-signal, escalation
+payload shape, typed-landmarks reconciliation, side-quest terminology
+adoption, external-interrupt vs the four verdicts, one-map scope
+(per-goal vs cross-goal).
 
 Previous checkpoint — 2026-07-22 **chunk 7 SHIPPED**. Chunk 7 (discretion
 readout — a judgement report, not a bill): **(1)** new

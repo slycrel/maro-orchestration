@@ -89,8 +89,12 @@ label).
 
 - director.py:100 `"needs_approval"` — declared in the status type
   comment, no assignment found; apparent dead enum value.
-- run_director (director.py:579-581) result feed into run-level outcome
-  untraced; may be reachable only from tests/older callers.
+- ~~run_director (director.py:579-581) result feed into run-level outcome
+  untraced; may be reachable only from tests/older callers.~~
+  *[post-review: WRONG — live callers exist (`maro director` via
+  cli.py:494; Telegram `/director|build|ops` via
+  telegram_listener.py:347-350). See "Post-review corrections" for the
+  director/worker seam rows this family adds.]*
 - stamp_outcome_verdict internals (memory_ledger.py:570) — edge behaviors
   unread.
 - audit_repair.py un-quarantine flow unread.
@@ -104,7 +108,7 @@ label).
 
 ---
 
-# Task-2 deliverable (verbatim, master-judged)
+# Task-2 deliverable (verbatim, master-judged; bracketed **[post-review]** notes added after the chunk's adversarial review — see "Post-review corrections" at the end)
 
 ## Classification table
 
@@ -186,16 +190,16 @@ label).
 ## Conflations
 
 1. **"stuck" is one word for three verdicts.** Out-of-budget (loop_init.py:83, loop_execute.py:306/860/878/908, handle.py:2240-2259 restart-exhaustion), thesis-refuted (loop_blocked.py:971/1077, loop_execute.py:1054→1334), and external system failure (agent_loop.py:335, loop_blocked.py:304/317, loop_parallel.py:485-659) all stamp `status="stuck"`. run_curation.py:68 maps all of them to `success_class="failed"`, so learning, verdict windows, and escalation consumers cannot tell "goal impossible" (update the thesis) from "cap too low" (bump the budget) from "backend died" (learn nothing) — and loop_blocked.py:370-426 records skill-failure attribution for all three alike.
-2. **"done" hides out-of-budget stops.** The landing synthesis (loop_execute.py:364-391) converts a max_iterations cap-hit into `status="done"` with the partial-ness recorded only in manifest/step text; if closure fails open (closure_verify.py:883-885/1137-1139) it becomes done-unverified — which outcome_policy.py:14 makes LEARNABLE. An out-of-budget stop can seed success lessons.
+2. **"done" hides out-of-budget stops.** The landing synthesis (loop_execute.py:364-391) converts a max_iterations cap-hit into `status="done"` with the partial-ness recorded only in manifest/step text *[post-review: conditional — the branch replaces remaining steps with one synthesis step; status stays "done" (initialized at loop_execute.py:236) only when that step succeeds; a failed synthesis still lands stuck]*; if closure fails open (closure_verify.py:883-885/1137-1139) it becomes done-unverified — which outcome_policy.py:14 makes LEARNABLE. An out-of-budget stop can seed success lessons.
 3. **"incomplete" merges lost-the-plot with infrastructure failure.** Closure demotions (handle.py:2091-2107, 2383-2436 — genuine "green pins, wrong string") share the status with stamp-persistence failure (handle.py:1903-1948) and NOW provenance/judge misses (handle.py:442-502); run_curation.py:67 buckets all as "partial". Worse, the demotion's status-flip means these runs bypass the taxonomy's own "done-not-achieved" class — the one bucket built for this verdict.
 4. **"interrupted" merges human stops with preset caps — then falls into "unknown".** Kill switch (loop_init.py:197, loop_post_step.py:360) and wall-clock timeout (loop_post_step.py:374 — a preset cap) share the label; and "interrupted" appears in none of run_curation's status sets, so all of them get `success_class="unknown"` alongside stranded/refused_busy/clarification_needed — external-interrupt exists only as a taxonomy hole.
 5. **"blocked" (build-loop + item state) merges validation failure with attempt caps.** orch.py:462 (done-but-not-passed, lost-the-plot-flavored) vs orch.py:468/536 (preset caps); heartbeat.py:1036-1068 folds every non-done non-busy backlog ending into STATE_BLOCKED with identical retry semantics.
-6. **The only reachable-but-not-worth-it judgment leaves no verdict anywhere.** director.py:1112-1371 "close" ("accept the partial result, no further work") is a discovered value/cost call, but it's recorded solely as `escalation-{job}-close.md`; the originating run keeps its earlier "stuck" (out-of-budget) label, so run_curation/verdict_trust never learn the chain was deliberately closed rather than dead.
+6. **The only reachable-but-not-worth-it judgment leaves no verdict anywhere.** director.py:1112-1371 "close" ("accept the partial result, no further work") is a discovered value/cost call, but it's recorded solely as `escalation-{job}-close.md`; the originating run keeps its earlier "stuck" (out-of-budget) label, so run_curation/verdict_trust never learn the chain was deliberately closed rather than dead. *[post-review: "only" is overstated — dispatch navigator close (handle.py:2743-2747, budget-pressure-preferring per navigator_prompt.py:78-80) is a second close-shaped judgment and DOES record machine-readably (`classification_reason="navigator_close"`); but it fires pre-run (run prevented), so the point stands that no verdict ever reaches the outcome row of the run that actually hit the wall.]*
 
 ## Unrepresented verdicts
 
 - **Thesis-refuted — no distinct recorded outcome; nearest approximation exists in prose.** loop_blocked.py:1077-1088 actually computes the structural evidence (`converging=`, `sibling_rate=`) and emits a METACOGNITIVE_DECISION event, but the run-level record is plain `stuck` with `stuck_reason=block_reason` (the raw error). No status, source, or class value anywhere means "avenues exhausted, nothing connects"; every candidate is step-local and shares its label with cap-hits.
-- **Reachable-but-not-worth-it — does not exist as a recorded outcome at all.** The judgment is made in exactly one place — director.handle_escalation "close"/"narrow" (director.py:1112-1371) — and recorded only as an artifact markdown file plus an in-memory EscalationDecision. No LoopResult status, no metadata field, no goal_verdict_source, no success_class ever says "path found, discovered cost exceeds value." The mid-loop budget bump (loop_execute.py:318-359) makes the inverse worth-it call (and continues) without recording that either.
+- **Reachable-but-not-worth-it — does not exist as a recorded outcome at all.** The judgment is made in exactly one place *[post-review: two — dispatch navigator close (handle.py:2743-2747) also makes it, recording `classification_reason="navigator_close"` on a HandleResult before any run starts; no outcome-row representation either way]* — director.handle_escalation "close"/"narrow" (director.py:1112-1371) — and recorded only as an artifact markdown file plus an in-memory EscalationDecision. No LoopResult status, no metadata field, no goal_verdict_source, no success_class ever says "path found, discovered cost exceeds value." The mid-loop budget bump (loop_execute.py:318-359) makes the inverse worth-it call (and continues) without recording that either.
 - **Out-of-budget — richly detected, never distinctly recorded.** Six-plus preset caps (daily spend, max_iterations, tokens, cost, runaway multiplier, restart/continuation depth, wall-clock) each name themselves in `stuck_reason`/reason prose, but the machine-readable layer collapses to "stuck" (or "interrupted" for wall-clock, or "done" post-synthesis). Recognizable today only by string-parsing stuck_reason.
 - **Lost-the-plot — partially represented, conflated with plain quality failure.** The closure demotions (closure_verify.py:925-948; handle.py:2012-2078, 2091-2107, 2383-2436) and success_class "done-not-achieved" are real recorded outcomes in this territory, with distinguishing `goal_verdict_source`/`downgrade_reason`. But (a) nothing separates "coherently assembled, wrong rabbit" from "buggy/incomplete work"; (b) the demotion status-flip routes runs into "partial" instead of "done-not-achieved"; (c) the only mid-loop coherence signal (drift → _ae2 restart, loop_execute.py:1631-1646) is consumed by restart machinery and never recorded as a verdict.
 
@@ -205,7 +209,71 @@ label).
 - `_BlockDecision` (loop_blocked.py) already carries `metacognitive_reason` — a structured stop-cause channel exists in-flight and is dropped at the LoopResult boundary.
 - METACOGNITIVE_DECISION events (loop_blocked.py:1077-1088) already record the exact evidence a thesis-refuted verdict needs (converging, sibling_rate); the event stream has it, the outcome row does not.
 - `Outcome.goal_verdict_source` (memory_ledger.py:48-69) is the existing enum-shaped provenance field; a stop-verdict field would be its natural sibling, flowing through the same stamp path verdict_trust already reads.
-- run_curation.classify_outcome (run_curation.py:171-213) is the single choke point deriving success_class from `status`+`goal_achieved`; it is where a stop_verdict in metadata would change downstream classes without touching consumers.
+- run_curation.classify_outcome (run_curation.py:171-213) is the single choke point deriving success_class from `status`+`goal_achieved`; it is where a stop_verdict in metadata would change downstream classes without touching consumers. *[post-review: single choke point for success_class only — four learning/recall consumers read raw `status` directly and would keep the old conflations unless also reached: outcome_policy.is_learnable_outcome's no-success_class fallback (outcome_policy.py:44-50), recall's unjudged-attempt fallback `a.status != "done"` (recall.py:157-165), strategy_evaluator's `_STATUS_WEIGHTS.get(outcome.status)` (strategy_evaluator.py:62-67), attribution's raw-status failure filter (attribution.py:367-371). Stop-verdict wiring must land on the outcome row itself (memory_ledger sibling field), not only in curation metadata.]*
 - HandleResult `classification_reason` ("navigator_escalate", "recall_guard") is already a machine-readable stop-reason slot — dispatch dead-ends are the only stop family with one today.
 - Budget seams already emit distinct notify events (`point="budget_gate"`, loop_init.py:83-108) — out-of-budget is distinct at the notify layer and lost at the status layer.
 - The run_curation status-set holes (interrupted/stranded/refused_busy/clarification_needed → "unknown") show external-interrupt is currently expressed as a taxonomy gap rather than a label — the statuses exist, the class doesn't.
+
+---
+
+# Post-review corrections & additions (chunk-9a adversarial review, 2026-07-23)
+
+Three Codex lenses (Skeptic/Architect/Minimalist) reviewed this record;
+every accepted finding below was re-verified by the master against source
+before being applied. Bracketed *[post-review: …]* notes above mark the
+in-place amendments; this section carries the additions.
+
+## Taxonomy coverage — the four verdicts don't cover two stop families (all three lenses, independently)
+
+The invocation contract says "classified against the four stop verdicts,"
+but the table needed two working categories beyond them: **external-interrupt**
+(kill switch, operator stop, backend death, merge-machinery failure —
+~14 rows) and **not-a-stop** (routing/recovery/recording machinery —
+~20 rows). That is itself a survey finding, stated explicitly now rather
+than smuggled: *the four verdicts are goal-directed stop causes; they do
+not cover infra/human interruption at all.* Whether external-interrupt
+becomes a fifth verdict, or stays a status-level concern (`interrupted`/
+`stranded` etc.) orthogonal to the verdict field, is an **open agenda
+question for the artifacts conversation** — the wiring must not silently
+force those rows into the four, nor silently mint a fifth.
+
+## Missed seam family — director/worker path (Skeptic; verified)
+
+The uncertain-list entry claiming run_director "may be reachable only from
+tests/older callers" was wrong — the path is live (`maro director`,
+cli.py:494; Telegram `/director|build|ops`, telegram_listener.py:347-350).
+Its stop vocabulary, verified:
+
+| Seam (file:line) | Mechanism | Current label | Nearest verdict | Conflation note |
+|---|---|---|---|---|
+| src/director.py:580-581 | run_director overall status | `"done" if all_done else "stuck"` | not-a-stop (aggregator) | Same collapse shape as the fan-out aggregator: heterogeneous worker causes → one "stuck" |
+| src/workers.py:264-270 | Worker LLM call failed | WorkerResult `status="blocked"`, `stuck_reason="LLM call failed: …"` | external-interrupt | Backend failure recorded with the same label as honest worker flag_blocked |
+| src/workers.py:287-291 | Worker self-reports blocked (`flag_blocked` tool) | `status="blocked"` + reason | thesis-refuted (amb.) | The one honest self-declared block; shares its label with infra failure above |
+| src/workers.py:312 | No useful output | `status="blocked"` | not-a-stop (quality) | Third distinct cause, same label |
+| src/director.py:558-566 | Review rounds exhausted | best-effort result **accepted**, run proceeds toward "done" | out-of-budget | A review-cap hit silently converts to acceptance — the DirectorResult never records that the cap, not the review, ended the loop |
+
+DirectorResult/WorkerResult is a **separate status vocabulary** from
+LoopResult (like build_loop_runner) — a stop-verdict field on LoopResult
+alone would not reach it.
+
+## Spot-verification evidence (Skeptic: outputs belong in the record, not the transcript)
+
+The 11 master spot-checks, with what the cited source actually says:
+
+1. loop_init.py:83-108 — budget gate returns `LoopResult(status="stuck", stuck_reason="daily budget exhausted: …")`. Confirmed.
+2. loop_execute.py:364-391 — `_remaining_budget <= 2` branch replaces remaining steps with a synthesis step; `loop_status` initialized `"done"` at :236 and never re-stamped by this branch. Confirmed (conditional wording applied above).
+3. closure_verify.py:991-1005 — unjudged verdict: `goal_achieved=None`, `goal_verdict_source="closure_unverifiable"`. Confirmed.
+4. handle.py:2091-2107 — judged complete=False conf ≥0.7 flips status done→"incomplete". Confirmed.
+5. run_curation.py:60-70 — status sets: done→success-family, `stuck/error/blocked`→"failed", else→"unknown"; "interrupted"/"stranded"/"refused_busy"/"clarification_needed" absent from all sets. Confirmed.
+6. loop_blocked.py:1077-1088 — exhausted-options builds `metacognitive_reason="exhausted: …converging=…sibling_rate=…"`, emits METACOGNITIVE_DECISION; run-level stuck_reason stays the raw block_reason. Confirmed.
+7. run_curation.py:171-213 classify_outcome — single derivation of success_class from status+goal_achieved with `else: "unknown"` fall-through. Confirmed.
+8. Done-not-achieved bucket-bypass — classify_outcome requires status in _SUCCESS_STATUSES for "done-not-achieved"; the demotion flips status first, landing "partial". Confirmed.
+9. outcome_policy.py:14 — `_LEARNABLE_SUCCESS_CLASSES = ("success", "done-unverified")`. Confirmed.
+10. director.py:1325-1348 — escalation "close" writes `escalation-{job}-{action}.md` artifact + EscalationDecision; no outcome-row stamp (grep across the handler: no stamp call). Confirmed.
+11. handle.py:2739/2794 — `classification = "navigator_escalate"` assigned to a variable, passed as classification_reason (the earlier literal-grep miss). Confirmed.
+
+## Review verdict
+
+PASS with fixes (no high-severity findings; 7 findings — 5 medium,
+2 low — all verified real, all accepted at least in part). Record:
+docs/history/2026-07-23-chunk9a-adversarial-review.md.

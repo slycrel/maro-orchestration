@@ -478,6 +478,14 @@ the fork contract already owns.)
 multi-dimensional *feeling* comes from vantage-dependence — the same
 landmark looks different from different vantages — not from multiple maps.
 
+*Scope note (post-review, 2026-07-23): "one" here is decreed against
+per-recursion-level maps within a goal pursuit. Whether the map is also
+one across successive goals — a persistent world-map, which §6's "capability
+edges persist to every future map" and §10's tech-tree-across-maps question
+already gesture at — is NOT decided by this decree. The tech tree persists
+across goals by §6; whether landmark/fog state does is an open agenda
+question.*
+
 ### 13b. Milestones are revisitable; stop verdicts are observations, not facts
 
 Not yet discussed in the original conversation, added now: **a dead end
