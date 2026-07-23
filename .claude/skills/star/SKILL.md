@@ -70,7 +70,15 @@ cannot fill one in, ask the user — that gap is itself a finding.
 ## The loop (repeat 0..n times)
 
 1. **TASTE — choose the next task.** From the goal + everything judged so
-   far, pick ONE next task, or declare done/blocked. A task states:
+   far, pick ONE next task, or declare done / a typed stop (see Honest
+   exit). A task states:
+   - its **flavor** — `commit` (buys deliverable progress) or `recon`
+     (buys map edits: a resolved or newly-surfaced unknown, a new
+     landmark/edge, a reachability-and-cost estimate — not progress).
+     A recon task must pass the **VOI gate**: name the pending decision
+     its answer would change. No decision named, no recon run — "would
+     clearing more fog change the next choice?" is the guard against
+     ritual exploration (codex correction, 2026-07-22);
    - the outcome wanted (never the method — the sub-agent owns the how);
    - **explicit output criteria** (form, bounds, and what evidence must
      accompany claims). A task without output criteria does not get
@@ -88,6 +96,11 @@ cannot fill one in, ask the user — that gap is itself a finding.
    **reject-with-evidence** / **inconclusive**. Inconclusive is never
    silently promoted to accept — it either becomes a new probing task or
    is reported as inconclusive.
+   For `recon` tasks judgement asks a different question: did the map
+   actually change, and are the new landmarks/edges REAL? Spot-probe
+   claimed edges (a claim should name what settles it — the
+   `settled_by_command` discipline); a claimed edge that can't be probed
+   is inconclusive, never accepted.
 4. **RECORD.** Append one row to the run ledger (kept in your reply, see
    below), including the **surprise** field: what differed from what you
    expected when you wrote the task?
@@ -122,19 +135,36 @@ cannot fill one in, ask the user — that gap is itself a finding.
   machinery for it: a sub-agent may structure its own work internally as
   it likes; the master never spawns a star inside a star. The turn-on
   conditions live in "The node contract" above.
-- **Honest exit.** Blocked, over-budget, or inconclusive-at-the-end are
-  legitimate endings — report them plainly. A green summary over unrun
-  checks is the failure mode this whole instrument exists to catch.
+- **Honest exit, typed.** "Blocked" is not one thing (compound-thinking
+  §3a/§13b). A run that doesn't reach done ends with one of four stop
+  verdicts, each recorded with its **evidence** and its **reopen
+  condition** — a stop verdict is a cached observation, not a permanent
+  fact (Jeremy 2026-07-23: dead ends don't stay dead):
+  - **thesis-refuted** — avenues exhausted, nothing connects; evidence =
+    what was tried. Reopens on a new landmark or vantage.
+  - **reachable-but-not-worth-it** — a path was found but its discovered
+    cost exceeds the goal's value; evidence = the cost. Reopens when the
+    cost or value estimate moves.
+  - **out-of-budget** — the delegation cap hit; says nothing about
+    possibility. Reopens trivially with budget.
+  - **lost-the-plot** — locally green, but the assembled work no longer
+    serves the original ask; evidence = the divergence. Reopens on
+    re-anchor against the invocation contract.
+  All four are legitimate endings — report them plainly. A green summary
+  over unrun checks is the failure mode this whole instrument exists to
+  catch.
 
 ## Run ledger (required, in the final reply)
 
-| # | Task (outcome) | Criteria stated? | Verdict | Surprise |
-|---|----------------|------------------|---------|----------|
+| # | Task (outcome) | Flavor | Criteria stated? | Verdict | Surprise |
+|---|----------------|--------|------------------|---------|----------|
 
 Close the ledger with the **result block** (the node's bounded output):
 - **Deliverables**: each named artifact — path + one-line description.
 - **Done-means verdict**: pass/fail/inconclusive, with the actual check
   output (run it, don't narrate it).
+- **Stop verdict** (only when not done): one of the four typed stops,
+  with evidence and reopen condition (see Honest exit, typed).
 - **Residuals**: what remains undone or uncertain, honestly.
 - **Cost**: delegations used vs budget.
 - **Findings**: crystallization-pressure, granularity, or strategy notes

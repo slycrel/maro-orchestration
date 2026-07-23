@@ -4247,3 +4247,41 @@ Dormant (deliberately parked, not dropped):
   re-cutting guardrail — cuts-continuously, master re-cuts on the record
   naming the licensing surprise, children surface cut-evidence via the
   escalation-trigger lane, silent drift stays the violation.
+
+- **2026-07-23 — Decision (Jeremy): partial approval — implement the
+  agreed set of chunk 9.** Verbatim: "let's dig in where it appears that
+  we all agree, and make the right things concrete… I guess explicitly
+  that means this is a partial approval where we're certain we need to
+  make changes and we have agreeance on what those are (and acknowledging
+  there is still discussion to be had)." Agreed set = the three-way
+  convergence (§9.4 stop-verdict split + §9.2 recon flavor, exercised in
+  `star` first). The artifacts conversation (uncertainty, remaining §9/§10
+  items) is planned for the evening of 2026-07-23. Standard discipline
+  applies: document, act, adversarial-review after appropriate chunks.
+
+- **2026-07-23 — Decision (Jeremy): ONE map — processes recurse, maps
+  don't.** Corrects §12's map-per-subgoal sketch: recursion lives in the
+  pattern (goal → [process] → result at every scale); the map is a single
+  shared substrate. A child process gets a **vantage** (scoped view +
+  scoped edit authority via the fork contract), not its own map. "Top of
+  the tower shows what the locked front door hid" — position changes what
+  is observable; reaching a landmark is progress AND a new survey station.
+  "Multi-dimensional map" framing explicitly rejected. Design doc §13a.
+
+- **2026-07-23 — Decision (Jeremy): milestones are revisitable; stop
+  verdicts carry reopen conditions.** A dead end doesn't stay a dead end:
+  a blocked-route label is a grey-fog cached observation that reopens when
+  the picture improves, capability changes, or the world changes
+  (backtracking-with-memory — the semi-left-behind tree-traversal idea).
+  Consequence for §9.4: every stop verdict is recorded with evidence AND
+  reopen condition. Chunk-4's contradiction pipeline is the shipped prior
+  art of exactly this shape. Design doc §13b.
+
+- **2026-07-23 — Decision (Jeremy): terminology — the river, not the
+  meander.** "Meander" invited aimlessness misreadings; the motion is
+  river-shaped: seemingly random but not — locally wandering, globally
+  lawful, and the path carves the terrain for later flows (the
+  lessons/playbook layer). Use "river" where intent matters. Design doc
+  §13c. (Side-quest question also settled on record: the term is Jeremy's
+  own prior coinage — INTENT_RESOLUTION_DESIGN.md's side-quest DAG — not a
+  new invention; §13d.)

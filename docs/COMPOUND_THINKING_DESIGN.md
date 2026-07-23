@@ -32,9 +32,10 @@ is actually decided.
 
 **Compound thinking** (Jeremy's term): the way a valuable result is reached by
 **composing many small, individually-easy asks into a complex mechanism that is
-not leap-able on its own** — a *meander*, not a leap. It is seeded by educated
-guesses, background priors (training data, memory), and knowledge deliberately
-built along the way (research tasks).
+not leap-able on its own** — a *meander*, not a leap (terminology later
+corrected to the **river** — locally wandering, globally lawful; see §13).
+It is seeded by educated guesses, background priors (training data, memory),
+and knowledge deliberately built along the way (research tasks).
 
 The atomic unit is the delegation-boundary loop from `DEV_PATTERNS.md`:
 
@@ -445,3 +446,84 @@ reasoning) is recorded at
 `docs/history/2026-07-22-compound-thinking-codex-take.md` — commissioned
 per Jeremy's ask, summarized there rather than here so this section stays
 fable's own read.
+
+---
+
+## 13. One map, revisits, and the river (Jeremy's second pass, 2026-07-23)
+
+Jeremy's response to §12 and the codex take (before his deep read — these
+came from re-reading the session summary). Three corrections and a
+terminology fix, plus one settled answer.
+
+### 13a. One map. Processes recurse; maps don't.
+
+§12 named recursion as the missing piece and sketched it as "a landmark on
+the parent's map can be a whole map one level down." **Jeremy's correction:
+recursion was always in the conversation** — it lives in the pattern itself
+(goal → [process] → result at every scale) — **but the map does not recurse
+with the process.** There is ONE map, a single shared substrate. What a
+child process gets is not its own map but a **vantage**: a scoped view (what
+it can see — its context and cuts) plus scoped authority (what it may edit —
+the fork contract's three-way ownership). His image: *the top of the tower
+shows you what the locked front door hid.* Position changes what is
+observable — reaching a landmark is both progress AND a new survey station.
+This folds §7 (theories as survey stations) and the compounding claim into
+one statement: **progress improves the survey; the map gets better because
+you moved.** (It also dissolves the parent/child landmark-inheritance
+question §12 raised: nothing is inherited across maps, because there is only
+one map — the ancestry problem becomes vantage/authority bookkeeping, which
+the fork contract already owns.)
+
+"Multi-dimensional map" is explicitly rejected framing. The
+multi-dimensional *feeling* comes from vantage-dependence — the same
+landmark looks different from different vantages — not from multiple maps.
+
+### 13b. Milestones are revisitable; stop verdicts are observations, not facts
+
+Not yet discussed in the original conversation, added now: **a dead end
+doesn't stay a dead end.** A "blocked" label on a route is a cached
+observation — grey fog like everything else — and it reopens when the
+overall picture improves (new landmark or vantage), when capability changes
+(tech-tree), or when the world changes. This is the tree-traversal idea
+semi-left-behind in earlier conversations: backtracking **with memory**,
+where a closed node reopens when its closure reason is invalidated.
+
+Design consequence with teeth for §9.4: **every stop verdict must be
+recorded with its evidence AND its reopen condition.**
+
+- *thesis-refuted* — reopens on new connection evidence (landmark/vantage).
+- *reachable-but-not-worth-it* — reopens when the cost or value estimate moves.
+- *out-of-budget* — reopens trivially with budget.
+- *lost-the-plot* — reopens on re-anchor against the original ask.
+
+Prior art already shipped: the chunk-4 contradiction pipeline is exactly
+this shape for lessons and rules (verdict + evidence → candidate →
+adjudicate → refight). A stop verdict without a reopen condition is the
+same rot as a lesson that can never be contested.
+
+### 13c. Terminology: the river, not the meander
+
+"Meander" has invited misreadings of aimlessness. Jeremy's correction: the
+motion is **river-shaped — seemingly random but not**; locally wandering,
+globally lawful. The course has its reasons (terrain and gradient) even
+where it looks unplanned. And a river *carves* — the path taken changes the
+terrain for every later flow, which is the lessons/playbook layer restated.
+Use "river" where intent matters; "meander" survives only for local texture.
+
+### 13d. Side-quests: established vocabulary, on the record
+
+Jeremy asked whether he'd just invented "side-quests for the main
+objective." No — he invented it earlier: the term entered the project in
+`INTENT_RESOLUTION_DESIGN.md` (the side-quest DAG, hand-generated today) and
+§3 of this doc already leans on it. Map-terms distinction worth keeping
+(proposal, not ratified): **recon buys information; a side-quest buys
+position or capability** — a detour to a landmark off the goal's subgraph
+that improves vantage or the tech tree.
+
+### Status
+
+13a–13c are decided (GOAL_BRAIN Decisions, 2026-07-23). The partial
+approval of the same date opens implementation on the three-way-agreed set
+(§9.4 stop-verdict split + §9.2 recon flavor, exercised in `star` first);
+everything else in §9/§10 remains discussion material for the artifacts
+conversation.
