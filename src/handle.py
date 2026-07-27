@@ -602,7 +602,7 @@ def _stamp_stop_on_demotion(loop_result, verdict: str, evidence: str) -> None:
         from memory_ledger import stamp_outcome_stop_verdict
         _lid = getattr(loop_result, "loop_id", "") or ""
         if _lid:
-            stamp_outcome_stop_verdict(_lid, verdict)
+            stamp_outcome_stop_verdict(_lid, verdict, loop_result.stop_evidence)
     except Exception as exc:
         log.debug("stop-verdict outcome stamp failed on demotion: %s", exc)
 

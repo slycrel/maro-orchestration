@@ -166,8 +166,15 @@ class RecallResult:
             # to process status. External interrupts (kill switch, stranded
             # owner, busy refusal, awaiting input) carry no goal evidence and
             # must not arm the repeat-guard (§13b): the goal wasn't disproven,
-            # the process was cut down around it.
+            # the process was cut down around it. The event lives in TWO
+            # channels (decree 2026-07-27): the verdict field when no map
+            # observation preceded the cut, else the interrupt STATUS beside
+            # a supported verdict — honor both, or an operator-stopped run
+            # that had already stamped out-of-budget arms the guard.
             if a.stop_verdict == "external-interrupt":
+                return False
+            from stop_verdicts import INTERRUPT_STATUSES
+            if a.status in INTERRUPT_STATUSES:
                 return False
             return a.status != "done"
 
@@ -214,9 +221,10 @@ class RecallResult:
                     f"; goal verdicts: {_n_true} achieved, "
                     f"{_n_false} NOT achieved, rest unjudged"
                 )
+            from stop_verdicts import INTERRUPT_STATUSES as _ISTAT
             _n_int = sum(
                 1 for a in self.prior_attempts
-                if a.stop_verdict == "external-interrupt"
+                if a.stop_verdict == "external-interrupt" or a.status in _ISTAT
             )
             if _n_int:
                 breakdown += (

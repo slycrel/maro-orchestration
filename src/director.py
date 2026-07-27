@@ -1127,6 +1127,7 @@ def _stamp_close_stop_verdict(loop_id: str, *, depth: int, confidence: int,
         f"director escalation close at depth {depth} "
         f"(confidence {confidence}/10): {reasoning}"
     )[:500]
+    row_evidence = evidence  # picks up the [refines: …] note when metadata had a prior verdict
     try:
         from runs import resolve_run_dir
         _rd = resolve_run_dir(loop_id)
@@ -1136,6 +1137,7 @@ def _stamp_close_stop_verdict(loop_id: str, *, depth: int, confidence: int,
         try:
             import json as _json
             from file_lock import locked_rmw
+            _ev_cell = {"v": evidence}
 
             def _merge(old: str) -> str:
                 try:
@@ -1151,15 +1153,18 @@ def _stamp_close_stop_verdict(loop_id: str, *, depth: int, confidence: int,
                     else ""
                 )
                 existing["stop_verdict"] = "reachable-but-not-worth-it"
-                existing["stop_evidence"] = (evidence + _note)[:500]
+                _ev_cell["v"] = (evidence + _note)[:500]
+                existing["stop_evidence"] = _ev_cell["v"]
                 return _json.dumps(existing, indent=2, default=str)
 
             locked_rmw(_rd / "metadata.json", _merge)
+            row_evidence = _ev_cell["v"]
         except Exception as exc:
             log.debug("close stop-verdict metadata stamp failed: %s", exc)
     try:
         from memory_ledger import stamp_outcome_stop_verdict
-        stamp_outcome_stop_verdict(loop_id, "reachable-but-not-worth-it")
+        stamp_outcome_stop_verdict(loop_id, "reachable-but-not-worth-it",
+                                   row_evidence)
     except Exception as exc:
         log.debug("close stop-verdict outcome stamp failed: %s", exc)
 

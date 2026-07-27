@@ -127,6 +127,72 @@ class TestStampRail:
         from memory_ledger import stamp_outcome_stop_verdict
         assert stamp_outcome_stop_verdict("no-such-loop", NOT_WORTH_IT) is False
 
+    # Adversarial-review round (2026-07-27, three-lens consensus): the rail
+    # promised verdict + evidence but the ledger row carried only the verdict
+    # — loop_blocked's convergence evidence and the director's [refines: …]
+    # note died at the row boundary.
+    def test_record_outcome_row_carries_evidence_and_omits_empty(self, workspace):
+        from memory_ledger import _outcomes_path, record_outcome
+        record_outcome("g1", "stuck", "s", loop_id="lp-ev",
+                       stop_verdict=THESIS_REFUTED,
+                       stop_evidence="exhausted: 3 retries, converging=True")
+        record_outcome("g2", "stuck", "s", loop_id="lp-noev",
+                       stop_verdict=OUT_OF_BUDGET)
+        rows = [json.loads(l) for l in
+                _outcomes_path().read_text().splitlines() if l.strip()]
+        by_loop = {r.get("loop_id"): r for r in rows}
+        assert by_loop["lp-ev"]["stop_evidence"].startswith("exhausted:")
+        assert "stop_evidence" not in by_loop["lp-noev"]
+
+    def test_record_outcome_evidence_capped_at_500(self, workspace):
+        from memory_ledger import _outcomes_path, record_outcome
+        record_outcome("g", "stuck", "s", loop_id="lp-cap",
+                       stop_verdict=OUT_OF_BUDGET, stop_evidence="x" * 900)
+        rows = [json.loads(l) for l in
+                _outcomes_path().read_text().splitlines() if l.strip()]
+        row = next(r for r in rows if r.get("loop_id") == "lp-cap")
+        assert len(row["stop_evidence"]) == 500
+
+    def test_posthoc_stamp_carries_evidence(self, workspace):
+        from memory_ledger import (
+            _outcomes_path,
+            record_outcome,
+            stamp_outcome_stop_verdict,
+        )
+        record_outcome("g", "done", "s", loop_id="lp-merge")
+        assert stamp_outcome_stop_verdict(
+            "lp-merge", EXTERNAL_INTERRUPT,
+            "worktree merge failed — work preserved on branch b") is True
+        rows = [json.loads(l) for l in
+                _outcomes_path().read_text().splitlines() if l.strip()]
+        row = next(r for r in rows if r.get("loop_id") == "lp-merge")
+        assert row["stop_verdict"] == EXTERNAL_INTERRUPT
+        assert "work preserved" in row["stop_evidence"]
+
+    def test_posthoc_stamp_rejects_off_vocabulary(self, workspace):
+        # Fail to unstamped, never a phantom value: a typo'd verdict would
+        # silently drift past every string-matching consumer.
+        from memory_ledger import (
+            _outcomes_path,
+            record_outcome,
+            stamp_outcome_stop_verdict,
+        )
+        record_outcome("g", "stuck", "s", loop_id="lp-typo")
+        assert stamp_outcome_stop_verdict("lp-typo", "out-of-buget") is False
+        rows = [json.loads(l) for l in
+                _outcomes_path().read_text().splitlines() if l.strip()]
+        row = next(r for r in rows if r.get("loop_id") == "lp-typo")
+        assert "stop_verdict" not in row
+
+    def test_ctx_stamp_drops_off_vocabulary(self):
+        from loop_types import LoopContext
+        ctx = LoopContext(loop_id="lp-1", goal="g")
+        ctx.stamp_stop("out-of-buget", "typo'd literal")
+        assert ctx.stop_verdict == ""
+        # A later correct stamp still lands (the bad one didn't claim the field).
+        ctx.stamp_stop(OUT_OF_BUDGET, "real cap")
+        assert ctx.stop_verdict == OUT_OF_BUDGET
+
 
 # ---------------------------------------------------------------------------
 # Post-hoc stamps: handle demotion + director escalation close
@@ -174,6 +240,26 @@ class TestDirectorCloseStamp:
         from director import _stamp_close_stop_verdict
         _stamp_close_stop_verdict("", depth=1, confidence=9, reasoning="r")
 
+    def test_close_evidence_reaches_ledger_row(self, workspace):
+        # Review round 2026-07-27: the [refines: …] refinement context used to
+        # survive only in metadata — a ledger-only consumer saw the typed
+        # label without the evidence that made it trustworthy.
+        from director import _stamp_close_stop_verdict
+        from memory_ledger import _outcomes_path, record_outcome
+        from runs import create_run_dir
+        create_run_dir(
+            "h00close2", prompt="g", lane="agenda", model="m",
+            extra_metadata={"stop_verdict": OUT_OF_BUDGET,
+                            "stop_evidence": "cap"})
+        record_outcome("g", "stuck", "s", loop_id="h00close2")
+        _stamp_close_stop_verdict("h00close2", depth=3, confidence=8,
+                                  reasoning="partial result suffices")
+        rows = [json.loads(l) for l in
+                _outcomes_path().read_text().splitlines() if l.strip()]
+        row = next(r for r in rows if r.get("loop_id") == "h00close2")
+        assert row["stop_verdict"] == NOT_WORTH_IT
+        assert "[refines: out-of-budget]" in row["stop_evidence"]
+
 
 # ---------------------------------------------------------------------------
 # Consumers
@@ -205,6 +291,19 @@ class TestLearnability:
         from outcome_policy import is_learnable_outcome
         assert is_learnable_outcome({"success_class": "done-unverified"}) is True
 
+    def test_interrupted_row_is_not_learnable_unless_achieved(self):
+        # Merge-failure re-stamp (review round 2026-07-27): the ledger row may
+        # still read status="done" from before the merge blocks ran; the
+        # post-hoc external-interrupt stamp must fail it closed as a seed.
+        from outcome_policy import is_learnable_outcome
+        assert is_learnable_outcome({
+            "status": "done", "stop_verdict": EXTERNAL_INTERRUPT,
+        }) is False
+        assert is_learnable_outcome({
+            "success_class": "success", "goal_achieved": True,
+            "stop_verdict": EXTERNAL_INTERRUPT,
+        }) is True
+
 
 class TestRepeatGuard:
     def _attempt(self, status, *, stop_verdict="", goal_achieved=None):
@@ -234,6 +333,18 @@ class TestRepeatGuard:
                           goal_achieved=False),
         ])
         assert rr.dispatch_signals(window_minutes=60.0)["all_failing"] is True
+
+    def test_interrupt_status_disarms_even_with_supported_verdict(self):
+        # Decree two-channel shape (adversarial-review round 2026-07-27): a
+        # run that stamped out-of-budget at its landing site and was THEN
+        # operator-stopped keeps the supported verdict in the field while the
+        # interrupt event lives in status — the guard must honor either
+        # channel, not just the verdict spelling.
+        from recall import RecallResult
+        rr = RecallResult(thread=None, prior_attempts=[
+            self._attempt("interrupted", stop_verdict=OUT_OF_BUDGET),
+        ])
+        assert rr.dispatch_signals(window_minutes=60.0)["all_failing"] is False
 
 
 class TestStrategyWeight:

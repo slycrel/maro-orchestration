@@ -496,9 +496,18 @@ class LoopContext:
         First write wins: the break site that decided the stop knows the
         specific cause; later wrap-up machinery (terminal blocked-exit,
         finalize) must not overwrite it with a generic one. Evidence is
-        bounded — it's a citation, not a transcript.
+        bounded — it's a citation, not a transcript. Off-vocabulary values
+        are dropped (fail to unstamped, so status fallbacks still apply) —
+        a typo'd verdict persisting silently would drift past every
+        string-matching consumer.
         """
         if self.stop_verdict:
+            return
+        from stop_verdicts import VALID_STOP_VALUES
+        if verdict not in VALID_STOP_VALUES:
+            import logging
+            logging.getLogger("maro.loop").warning(
+                "stamp_stop: off-vocabulary verdict %r dropped", verdict)
             return
         self.stop_verdict = verdict
         self.stop_evidence = (evidence or "")[:500]

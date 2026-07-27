@@ -68,7 +68,8 @@ def _outcome_weight(outcome: Any) -> float:
     # score neutral, not failure: a run cut down mid-flight often lands
     # status="stuck" (weight 0.0), but the stop carried no goal evidence
     # (§13b) — scoring it 0.0 would blame the strategy for the outage.
-    if getattr(outcome, "stop_verdict", "") == "external-interrupt":
+    from stop_verdicts import EXTERNAL_INTERRUPT
+    if getattr(outcome, "stop_verdict", "") == EXTERNAL_INTERRUPT:
         return 0.5
     return _STATUS_WEIGHTS.get(outcome.status, 0.5)
 

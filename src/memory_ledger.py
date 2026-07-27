@@ -70,6 +70,7 @@ class Outcome:
     # from "backend died" without parsing stuck_reason prose (stop-path
     # survey 2026-07-23, conflation 1).
     stop_verdict: str = ""
+    stop_evidence: str = ""         # bounded citation for the verdict (≤500 chars at stamp sites)
     loop_id: str = ""               # join key to runs/*/metadata.json for post-closure annotation
     dry_run: bool = False            # excludes synthetic dry-run lessons from production funnel metrics
     lesson_extraction_status: str = ""  # "deferred" | "completed" | "failed" | legacy unknown
@@ -439,6 +440,8 @@ def _verdict_row(obj: Any) -> Dict[str, Any]:
         row.pop("handle_id")
     if "stop_verdict" in row and not row["stop_verdict"]:
         row.pop("stop_verdict")
+    if "stop_evidence" in row and not row["stop_evidence"]:
+        row.pop("stop_evidence")
     return row
 
 
@@ -465,6 +468,7 @@ def record_outcome(
     measurement_class: str = "",
     handle_id: str = "",
     stop_verdict: str = "",
+    stop_evidence: str = "",
 ) -> Outcome:
     """Record the outcome of a completed run.
 
@@ -517,6 +521,7 @@ def record_outcome(
         measurement_class=measurement_class,
         handle_id=handle_id,
         stop_verdict=stop_verdict,
+        stop_evidence=(stop_evidence or "")[:500],
     )
 
     # Append to outcomes ledger
@@ -671,16 +676,25 @@ def stamp_outcome_verdict(
         return OutcomeVerdictStampResult("updated", attempts=attempt)
 
 
-def stamp_outcome_stop_verdict(loop_id: str, stop_verdict: str) -> bool:
+def stamp_outcome_stop_verdict(loop_id: str, stop_verdict: str,
+                               stop_evidence: str = "") -> bool:
     """Post-hoc stop-verdict stamp on the newest outcomes row for loop_id.
 
     The reachable-but-not-worth-it verdict is decided AFTER the run closed
     (director escalation "close" — a later value/cost judgment about a run
     that ended "stuck"), so it must land on the row post-hoc, the same way
     closure verdicts do. Merge-only: never touches goal-verdict fields.
-    Returns True when a row was updated. Best-effort — False on any miss.
+    Evidence, when given, rides along so the row stays auditable without a
+    metadata join. Returns True when a row was updated. Best-effort —
+    False on any miss, including an off-vocabulary verdict (fail to
+    unstamped so status fallbacks apply, never a phantom value).
     """
     if not loop_id or not stop_verdict:
+        return False
+    from stop_verdicts import VALID_STOP_VALUES
+    if stop_verdict not in VALID_STOP_VALUES:
+        log.warning("stamp_outcome_stop_verdict: off-vocabulary verdict %r "
+                    "for loop %s dropped", stop_verdict, loop_id)
         return False
     path = _outcomes_path()
     from file_lock import atomic_write, locked_write
@@ -698,6 +712,8 @@ def stamp_outcome_stop_verdict(loop_id: str, stop_verdict: str) -> bool:
                 continue
             if isinstance(row, dict) and row.get("loop_id") == loop_id:
                 row["stop_verdict"] = stop_verdict
+                if stop_evidence:
+                    row["stop_evidence"] = (stop_evidence or "")[:500]
                 lines[i] = json.dumps(row)
                 hit["v"] = True
                 break

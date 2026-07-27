@@ -26,8 +26,18 @@ Same session: **tire-goal rerun needle**
 (docs/history/2026-07-27-tire-rerun-needle.md) — run 4 DELIVERED the
 full answer at the series' lowest cost ($1.74 metrics / $2.49 meter vs
 baseline $2.14/$3.00), 16% fewer input tokens; brake armed, never fired
-(warm-start confound noted; honest claims only). **Next: chunk-9 #2 —
-recon flavor in star** (incl. §14 diagnosis/blocked_on ownership split).
+(warm-start confound noted; honest claims only). **Chunk-9 #4
+adversarial review DONE same day** (3 Codex lenses vs fc93dfa,
+CONTESTED → remediated; 6/6 verified, 0 hallucinated — eleventh clean
+round): stop_evidence through the ledger row (three-lens consensus),
+merge-failure post-hoc row re-stamp + external-interrupt learnability
+fail-closed, two-channel repeat-guard disarm (status OR verdict),
+off-vocabulary validation at both stamp seams; rejected: refusal-path
+ledger rows (non-attempts), status-derived fallback removal (legacy
+bridge). Record:
+docs/history/2026-07-27-chunk9-4-adversarial-review.md. **Next:
+chunk-9 #2 — recon flavor in star** (incl. §14 diagnosis/blocked_on
+ownership split).
 
 Previous checkpoint — 2026-07-22 **swarm-review arc, chunk 8 SHIPPED — final
 chunk** (plan: `~/.claude/plans/abundant-gathering-lagoon.md`). Chunk 8

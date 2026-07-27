@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
+from stop_verdicts import EXTERNAL_INTERRUPT, OUT_OF_BUDGET
+
 
 _LEARNABLE_SUCCESS_CLASSES = frozenset(("success", "done-unverified"))
 
@@ -45,8 +47,11 @@ def is_learnable_outcome(outcome: Mapping[str, Any]) -> bool:
     # evidence: budget-pressure landing synthesis flips status to "done" at
     # the cap (stop-path survey 2026-07-23); the typed stop verdict keeps the
     # cap-hit visible, so unverified-done + out-of-budget fails closed here.
+    # Same fail-closed shape for interrupts: a run cut down by infra (merge
+    # failure re-stamps the row post-hoc; the status may still read "done")
+    # carries no goal evidence and must not seed learning as a success.
     if (
-        outcome.get("stop_verdict") == "out-of-budget"
+        outcome.get("stop_verdict") in (OUT_OF_BUDGET, EXTERNAL_INTERRUPT)
         and outcome.get("goal_achieved") is not True
     ):
         return False

@@ -311,6 +311,7 @@ def _build_result_and_finalize(
         measurement_class=ctx.measurement_class,
         handle_id=ctx.handle_id,
         stop_verdict=ctx.stop_verdict,
+        stop_evidence=ctx.stop_evidence,
     )
 
     # Checkpoints are KEPT on completion (retention decree, 2026-07-10).
@@ -328,6 +329,12 @@ def _build_result_and_finalize(
     # closure/goal verdict is judged AFTER the loop returns.
     if not ctx.dry_run and ctx.project:
         cleanup_step_artifacts(ctx.project, exclude_loop_id=ctx.loop_id)
+
+    # The outcome-ledger row is already written (_finalize_loop above); if a
+    # merge-back block below adds a verdict, re-stamp that row post-hoc so
+    # ledger consumers (outcome_policy, strategy_evaluator, attribution)
+    # don't read a merge-failed run as a clean pre-merge ending.
+    _pre_merge_verdict = result.stop_verdict
 
     # Containerized self-dev (C3, CONTAINER_EXECUTOR_DESIGN §4): merge the
     # worker's scratch clone back into the fence repo FIRST — the clone's parent
@@ -400,6 +407,14 @@ def _build_result_and_finalize(
             log.warning("run worktree finalize error: %s", _wt_exc)
         ctx.run_worktree = None
 
+    if result.stop_verdict and result.stop_verdict != _pre_merge_verdict:
+        try:
+            from memory_ledger import stamp_outcome_stop_verdict
+            stamp_outcome_stop_verdict(
+                ctx.loop_id, result.stop_verdict, result.stop_evidence)
+        except Exception as _rs_exc:
+            log.debug("post-merge ledger stop-verdict stamp failed: %s", _rs_exc)
+
     # Persist the typed stop verdict where run_curation reads (metadata.json).
     # After the merge-back blocks above — they can add a verdict of their own.
     # Stamped unconditionally: empty clears a stale verdict from an earlier
@@ -465,6 +480,7 @@ def _finalize_loop(
     measurement_class: str = "",
     handle_id: str = "",
     stop_verdict: str = "",
+    stop_evidence: str = "",
 ) -> None:
     """Run all post-loop side effects after the main execution loop ends.
 
@@ -615,6 +631,7 @@ def _finalize_loop(
             measurement_class=measurement_class,
             handle_id=handle_id,
             stop_verdict=stop_verdict,
+            stop_evidence=stop_evidence,
         )
         # Meta-Harness steal: persist step-level traces so the evolver proposer
         # sees full execution context, not just aggregate summaries.

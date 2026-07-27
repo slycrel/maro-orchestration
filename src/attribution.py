@@ -367,11 +367,12 @@ def attribute_batch(outcomes: List[dict], adapter=None) -> AttributionReport:
     # (kill switch, dead backend, infra failure) are excluded unless a judged
     # failure verdict exists: attributing a skill for the outage that cut the
     # run down is cause-blind blame (§13b, stop-path survey 2026-07-23).
+    from stop_verdicts import EXTERNAL_INTERRUPT
     failed = [
         o for o in outcomes
         if (
             o.get("status") in ("stuck", "error", "blocked")
-            and o.get("stop_verdict") != "external-interrupt"
+            and o.get("stop_verdict") != EXTERNAL_INTERRUPT
         )
         or o.get("goal_achieved") is False
     ]

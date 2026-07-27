@@ -2114,10 +2114,12 @@ deferred rather than silently dropped:
     reach the right success_class via the choke-point rebucket
     (incomplete + judged False); the metadata verdict stamp itself is
     a 5-line add to `_run_now`'s metadata write when wanted.
-  - *Outcome-row ordering gap* — the ledger row is written before the
-    merge-back blocks, so a merge-failure external-interrupt reaches
-    LoopResult + metadata.json but not the row (pre-existing ordering;
-    `stamp_outcome_stop_verdict` exists if a consumer ever needs it).
+  - *Outcome-row ordering gap* — CLOSED by the adversarial-review round
+    (2026-07-27, Skeptic finding 2): finalize now re-stamps the
+    already-written row post-hoc when a merge-back block adds a verdict,
+    and `is_learnable_outcome` fails closed on external-interrupt
+    without a positive goal verdict. The row-write ordering itself is
+    unchanged (load-bearing for lesson dedup).
 - **Persona auto-selection misroute.** Run 3 routed to creative-director
   (conf 0.8) for a spec/pricing research task. Harmless here; worth a
   look if it recurs on research-shaped goals.

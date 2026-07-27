@@ -132,6 +132,10 @@ Post-hoc stamps, with explicit cross-layer policies:
   BEFORE the merge-back blocks — a merge-failure external-interrupt
   reaches LoopResult + metadata but not the ledger row (pre-existing
   row-write ordering; the post-hoc stamp exists if it ever matters).
+  *Closed same day by the adversarial-review round: finalize re-stamps
+  the row post-hoc when a merge block adds a verdict — see
+  `2026-07-27-chunk9-4-adversarial-review.md`, which also added
+  `stop_evidence` to the ledger row itself.*
 
 ## Tests
 
