@@ -76,7 +76,13 @@ EXECUTE_SYSTEM = textwrap.dedent("""\
     that file — never cat it.
     NEVER `curl` a web page into context: raw HTML is 20-100x larger than the
     markdown (one retailer page ~= 190k tokens) and will blow the step's budget.
-    curl is still correct for JSON APIs, which are already compact.
+    curl a JSON API only when the response is known-small — cap it anyway
+    (`curl ... | head -c 20000`) or save it to a file (`curl -o resp.json ...`)
+    and extract just the fields you need with jq/python; a multi-megabyte JSON
+    body blows the budget exactly like raw HTML.
+    Oversized command output does not reach you either way: the harness
+    truncates it and saves the full output to a file whose path appears in
+    the result — plan around that file instead of re-running the command.
     EXCEPTION: Goal-level CLI/SDK/tool instructions override this — use those tools.
 
     PRIOR STEP DATA:
