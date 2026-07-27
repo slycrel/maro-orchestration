@@ -1973,14 +1973,50 @@ deferred rather than silently dropped:
   `<rundir>/build/`: captures are unscrubbed third-party HTML and
   viz_server serves that tree.
 
-  **Still open — the mid-step token brake.** The fetch fix makes the
-  cheap path available and instructed, not enforced; a worker can still
-  curl. A substrate-boundary brake (truncate oversized Bash tool-output
-  in the stream-json parser, or a per-step input-token guard) is the
-  half that makes it structural. Also unverified: whether the CLI path
-  resolves inside the container executor, where the repo mount point may
-  differ from the host path baked into the prompt (falls back to curl if
-  not — no regression, but no fix either).
+  **Adversarial review 2026-07-27 (3 Codex lenses) returned REJECT by
+  consensus; remediated in `d3bda62`.** Findings that were real and are
+  now fixed: capture-store symlink handling (a planted `<digest>.html`
+  was reused and its path handed to the model as something to parse — a
+  file-disclosure primitive; a fixed `.tmp` name was both a planting
+  target and a two-lane race), a symlinked capture dir redirecting
+  captures into the viz-served `build/` tree, no egress policy (the
+  capture path made a second unproxied request, so a page could return
+  clean markdown via Jina and redirect the capture at cloud metadata),
+  credentials/query stored plaintext in the manifest, no disk budget,
+  "full fidelity" that was a 500KB decoded prefix, and a Cloudflare
+  string-valued `result` envelope parsed as failure. The review earns
+  its cost again — the 6612-green suite caught none of these.
+
+  **Still open:**
+  - **The mid-step token brake.** The fetch fix makes the cheap path
+    available and instructed, not enforced; a worker can still curl. A
+    substrate-boundary brake (truncate oversized Bash tool-output in the
+    stream-json parser, or a per-step input-token guard) is the half
+    that makes it structural. Reviewers also noted the "curl is fine for
+    JSON APIs" carve-out permits the same blowup via a multi-MB JSON
+    response — an output-size limit at the Bash boundary covers both.
+  - **Container-mode CLI resolution — UNVERIFIED.** `maro-fetch` is now
+    a console entry point and `_fetch_cli_path` prefers it, but nothing
+    proves it resolves inside the executor image; the host-path fallback
+    certainly does not. Needs a real-docker E2E that runs a research goal
+    with `executor.container=on` and asserts the fetch command ran.
+    Until then, container workers may still fall back to curl.
+  - **`skill_loader` progressive disclosure is not wired.** The module
+    docstring claims "full body loaded on demand when the step executor
+    resolves a skill match", but `load_full()` has exactly one production
+    caller (`scope.py`, hardcoded to `resolve_ambiguity`). So the four
+    research-skill bodies edited here reach no worker — the
+    EXECUTE_SYSTEM block is the only load-bearing instruction. Either
+    wire progressive disclosure at the executor or stop implying it.
+  - **SSRF depth.** `is_safe_public_url()` is literal-address only; a
+    hostname resolving to a private address still passes. Full defense
+    is resolve-then-pin-the-socket at the HTTP layer.
+  - **`viz_server` symlink containment.** A `build/report.html` symlinked
+    to `../fetch-raw/<digest>.html` passes the allowlist shape check and
+    resolves inside the runs root, so it is served. Pre-existing, but
+    captures give it attacker-controlled content to point at. Fix is to
+    require the resolved target to stay inside the resolved `build/`
+    subtree and reject symlinked path components.
 - **Success accounting vs answer quality.** `stuck → failed`
   (`run_curation.py`) even when partial_rescue holds contract-meeting
   deliverables — run 3 recorded "failed" with 2 of 3 tiers purchase-ready,
