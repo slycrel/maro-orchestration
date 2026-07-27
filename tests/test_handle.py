@@ -747,6 +747,68 @@ class TestOriginAncestry:
         assert "dispatch_navigator" not in captured["origin"]
 
 
+class TestNavigatorProjectContinuation:
+    """Run-3 regression (1bfd0894): a follow-up dispatch ("finish and
+    correct the tire...") minted a fresh project slug while the prior run's
+    brief lived in another project — "finish" silently became "start over".
+    The dispatch navigator is offered a recent-projects menu and may name
+    one in its execute payload; the pick binds only when it names an
+    existing project dir."""
+
+    def _run(self, monkeypatch, tmp_path, payload):
+        _setup(monkeypatch, tmp_path)
+        import handle as handle_mod
+        from types import SimpleNamespace
+
+        captured = {}
+
+        def _fake_handle(message, **kwargs):
+            captured["origin"] = kwargs.get("origin")
+            captured["project"] = kwargs.get("project")
+            return HandleResult(
+                handle_id="x", lane="agenda", lane_confidence=1.0,
+                classification_reason="t", message=message, status="done",
+                result="")
+
+        monkeypatch.setattr(handle_mod, "handle", _fake_handle)
+        monkeypatch.setattr("recall.recall", lambda *a, **kw: None)
+        monkeypatch.setattr(
+            "navigator_shadow.shadow_dispatch_live",
+            lambda *a, **kw: SimpleNamespace(
+                move="execute", confidence=0.92,
+                reasoning="continues prior work", payload=payload))
+        monkeypatch.setattr(handle_mod, "_navigator_act_dispatch",
+                            lambda *a, **kw: None)
+        handle_mod.handle_task(
+            {"job_id": "t-cont", "source": "user_goal",
+             "reason": "finish the tire work"}, dry_run=False)
+        return captured
+
+    def test_valid_pick_binds_project_and_stamps_origin(self, monkeypatch, tmp_path):
+        (tmp_path / "projects" / "prior-tire-research").mkdir(parents=True)
+        cap = self._run(monkeypatch, tmp_path,
+                        {"instruction": "go", "project": "prior-tire-research"})
+        assert cap["project"] == "prior-tire-research"
+        assert cap["origin"]["dispatch_navigator"]["project"] == "prior-tire-research"
+
+    def test_unknown_pick_is_ignored(self, monkeypatch, tmp_path):
+        cap = self._run(monkeypatch, tmp_path,
+                        {"instruction": "go", "project": "no-such-project"})
+        assert cap["project"] is None
+        assert "project" not in cap["origin"]["dispatch_navigator"]
+
+    def test_traversal_shaped_pick_is_ignored(self, monkeypatch, tmp_path):
+        (tmp_path / "evil").mkdir()
+        cap = self._run(monkeypatch, tmp_path,
+                        {"instruction": "go", "project": "../evil"})
+        assert cap["project"] is None
+
+    def test_no_pick_no_binding(self, monkeypatch, tmp_path):
+        cap = self._run(monkeypatch, tmp_path, {"instruction": "go"})
+        assert cap["project"] is None
+        assert "project" not in cap["origin"]["dispatch_navigator"]
+
+
 class TestRecallDispatchGuard:
     """handle_task refuses to re-run a goal whose recent attempts all failed
     (goal-brain step 3 dispatch guard, docs/RECALL_DESIGN.md). Basis: the same

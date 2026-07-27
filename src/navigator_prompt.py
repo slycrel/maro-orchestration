@@ -215,6 +215,21 @@ def render_input(nav_input: NavigatorInput) -> str:
     parts.append("## What the system already knows (recall)\n"
                  + (rb if rb else "(nothing relevant on record)"))
 
+    if nav_input.recent_projects:
+        lines = []
+        for p in nav_input.recent_projects:
+            hint = f" — {p.get('hint')}" if p.get("hint") else ""
+            lines.append(f"- {p.get('name')} ({p.get('age') or '?'}){hint}")
+        parts.append(
+            "## Recent projects (continuation menu)\n"
+            + "\n".join(lines)
+            + "\n\nIf this goal continues one of these — finishing, fixing, or "
+              "extending that prior work — add \"project\": \"<exact name from "
+              "this list>\" to your payload so the run lands where the prior "
+              "artifacts already are, instead of starting over in a fresh "
+              "project. Omit it for genuinely new work. Names not on this "
+              "list are invalid.")
+
     if nav_input.budget:
         b = ", ".join(f"{k}={v}" for k, v in sorted(nav_input.budget.items()))
         parts.append(f"## Budget\n{b}")

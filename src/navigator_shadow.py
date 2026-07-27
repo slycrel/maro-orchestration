@@ -262,6 +262,40 @@ def replay_run(
     return results
 
 
+def _recent_projects_menu(limit: int = 5) -> List[Dict[str, str]]:
+    """Continuation menu for the dispatch navigator: name + age + a mission
+    hint for the most recently touched projects. Deterministic and cheap
+    (one dirlist + one small read per entry); returns [] on any trouble so
+    the dispatch prompt stays byte-identical when there is nothing to offer.
+    """
+    out: List[Dict[str, str]] = []
+    try:
+        import time as _time
+        from orch_items import projects_root
+        root = projects_root()
+        if not root.is_dir():
+            return []
+        dirs = sorted((d for d in root.iterdir() if d.is_dir()),
+                      key=lambda d: d.stat().st_mtime, reverse=True)[:limit]
+        now = _time.time()
+        for d in dirs:
+            age_h = max(0.0, (now - d.stat().st_mtime) / 3600.0)
+            age = f"{age_h:.0f}h ago" if age_h < 48 else f"{age_h / 24:.0f}d ago"
+            hint = ""
+            try:
+                for line in (d / "NEXT.md").read_text(encoding="utf-8").splitlines():
+                    line = line.strip().lstrip(">").strip()
+                    if line and not line.startswith("#") and line.lower() != "mission:":
+                        hint = line[:140]
+                        break
+            except Exception:
+                hint = ""
+            out.append({"name": d.name, "age": age, "hint": hint})
+    except Exception:
+        return []
+    return out
+
+
 def shadow_dispatch_live(
     goal: str,
     *,
@@ -349,6 +383,7 @@ def shadow_dispatch_live(
             recall_block=rr.as_context_block() if rr is not None else "",
             goal_brain=goal_brain,
             budget={"note": "live dispatch shadow; loop budget not yet allocated"},
+            recent_projects=_recent_projects_menu(),
         )
         pipeline_actual = {
             "point": "dispatch",

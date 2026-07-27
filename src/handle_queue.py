@@ -122,6 +122,7 @@ def handle_task(
         # blocked. Basis: 2026-05-17, the same goal ran ~25x in 35 minutes
         # with nothing consulting prior outcomes. Skipped on dry_run (preview
         # burns nothing, so there is no waste to guard against).
+        _nav_project = ""
         if not dry_run:
             try:
                 from config import get as _cfg_get
@@ -221,7 +222,33 @@ def handle_task(
                     }
                 except Exception:
                     pass
-        return _handle_mod.handle(reason, adapter=adapter, dry_run=dry_run, verbose=verbose, origin=_origin)
+            # Continuation-aware project routing: the dispatch navigator was
+            # offered a recent-projects menu (shadow_dispatch_live) and may
+            # name one in its execute payload. The pick binds only when it
+            # names an existing project dir — the LLM chooses from the menu,
+            # the filesystem check keeps it honest (1bfd0894: "finish and
+            # correct the tire..." minted a fresh slug while the prior brief
+            # lived in another project, so finish silently became start-over).
+            if (_nav_decision is not None
+                    and getattr(_nav_decision, "move", "") == "execute"):
+                try:
+                    _cand = str((getattr(_nav_decision, "payload", {}) or {})
+                                .get("project") or "").strip()
+                    if _cand and "/" not in _cand and "\\" not in _cand \
+                            and ".." not in _cand:
+                        from orch_items import projects_root as _proots
+                        if (_proots() / _cand).is_dir():
+                            _nav_project = _cand
+                            if isinstance(_origin.get("dispatch_navigator"), dict):
+                                _origin["dispatch_navigator"]["project"] = _cand
+                            log.info(
+                                "handle_task navigator project continuation: "
+                                "%r job_id=%s", _cand, job_id)
+                except Exception:
+                    pass
+        return _handle_mod.handle(reason, adapter=adapter, dry_run=dry_run,
+                                  verbose=verbose, origin=_origin,
+                                  project=_nav_project or None)
 
 
 def drain_task_store(

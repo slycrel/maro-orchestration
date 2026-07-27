@@ -1173,3 +1173,42 @@ class TestVantageRule:
         assert "needs runtime evidence" in system_sent
         # the escalate move definition carries the same evidence demand
         assert "tried and failed" in system_sent
+
+
+class TestRecentProjectsMenu:
+    """Continuation menu (run-3 regression, 1bfd0894): dispatch offers
+    recently touched projects so a follow-up goal can bind to the project
+    holding the prior work instead of minting a fresh slug."""
+
+    def test_menu_rendered_when_present(self):
+        text = render_input(_nav_input(recent_projects=[
+            {"name": "prior-tire-research", "age": "2h ago",
+             "hint": "Complete the tire-buying research"},
+            {"name": "polymarket-edges", "age": "3d ago", "hint": ""},
+        ]))
+        assert "## Recent projects (continuation menu)" in text
+        assert "prior-tire-research (2h ago) — Complete the tire-buying research" in text
+        assert "polymarket-edges (3d ago)" in text
+        assert '"project": "<exact name from this list>"' in text
+
+    def test_no_menu_no_section(self):
+        # Non-dispatch callsites leave recent_projects empty — their prompt
+        # stays byte-identical to the pre-menu rendering.
+        assert "Recent projects" not in render_input(_nav_input())
+
+    def test_menu_builder_reads_projects_root(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        pdir = tmp_path / "projects" / "tirebuying-research"
+        pdir.mkdir(parents=True)
+        (pdir / "NEXT.md").write_text(
+            "# NEXT — tirebuying-research\n\nMission:\n\n> Complete this "
+            "practical tire-buying research request. Do NOT stop early\n")
+        from navigator_shadow import _recent_projects_menu
+        menu = _recent_projects_menu()
+        assert [m["name"] for m in menu] == ["tirebuying-research"]
+        assert menu[0]["hint"].startswith("Complete this practical")
+
+    def test_menu_builder_empty_when_no_projects(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        from navigator_shadow import _recent_projects_menu
+        assert _recent_projects_menu() == []

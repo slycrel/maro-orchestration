@@ -101,6 +101,12 @@ class NavigatorInput:
     recall_block: str = ""        # recall(slice="navigator") output
     budget: Dict[str, Any] = field(default_factory=dict)
     constraints: str = ""
+    # Continuation menu (dispatch only): [{"name","age","hint"}] of recently
+    # touched projects. When non-empty, render_input offers them so a
+    # follow-up goal can bind to the project holding the prior work instead
+    # of minting a fresh slug (1bfd0894: "finish and correct" started over
+    # in an empty project while the brief lived in the previous one).
+    recent_projects: List[Dict[str, str]] = field(default_factory=list)
 
     def digest(self) -> Dict[str, Any]:
         """Compact snapshot for the NAVIGATOR_DECIDED tuple. Full state lives
