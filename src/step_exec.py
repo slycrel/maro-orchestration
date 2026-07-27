@@ -65,8 +65,18 @@ EXECUTE_SYSTEM = textwrap.dedent("""\
     Do NOT guess or fabricate information to fill gaps.
 
     URL FETCHING:
-    Use ONLY the pre-fetched content in PRE-FETCHED URL CONTENT below.
-    If a URL is missing from that block, note it as unavailable and proceed.
+    Prefer the pre-fetched content in PRE-FETCHED URL CONTENT below when present.
+    For any OTHER url you need (e.g. one you found via search), fetch it with:
+        __FETCH_CLI__ "<url>"
+    (If that command is not present in this environment, say so in your result
+    rather than curling the page — a missing fetcher is a reportable condition,
+    not a reason to fall back to raw HTML.)
+    That returns clean markdown capped at ~5k tokens and saves the full raw HTML
+    to disk, printing its path. To pull a detail the summary dropped, grep/parse
+    that file — never cat it.
+    NEVER `curl` a web page into context: raw HTML is 20-100x larger than the
+    markdown (one retailer page ~= 190k tokens) and will blow the step's budget.
+    curl is still correct for JSON APIs, which are already compact.
     EXCEPTION: Goal-level CLI/SDK/tool instructions override this — use those tools.
 
     PRIOR STEP DATA:
@@ -97,6 +107,39 @@ EXECUTE_SYSTEM = textwrap.dedent("""\
     2. Read the filtered file and summarize in ≤200 words.
     Call complete_step with that summary, not raw data.
 """).strip()
+
+
+def _fetch_cli_path() -> str:
+    """Absolute path to the token-lean fetch CLI, for the execute prompt.
+
+    Subprocess (`claude -p`) workers can't reach the in-process `fetch` tool —
+    no registry, and WebFetch/WebSearch are disallowed (llm.py) — so the prompt
+    has to name a command Bash can run. Resolved at import from this file's own
+    location, which is correct for both the repo checkout and an installed
+    package. If the path can't be resolved the prompt keeps the module form,
+    which works wherever PYTHONPATH includes src/.
+    """
+    try:
+        import shutil
+        # Prefer the installed console script: it is a stable name that resolves
+        # via PATH, so it survives into an executor image where the host's source
+        # path does not exist. Falls back to the absolute script path for a plain
+        # repo checkout (the dev-box case).
+        if shutil.which("maro-fetch"):
+            return "maro-fetch"
+    except Exception:
+        pass
+    try:
+        from pathlib import Path as _Path
+        p = _Path(__file__).resolve().parent / "fetch_tool.py"
+        if p.is_file():
+            return f"python3 {p}"
+    except Exception:
+        pass
+    return "python3 -m fetch_tool"
+
+
+EXECUTE_SYSTEM = EXECUTE_SYSTEM.replace("__FETCH_CLI__", _fetch_cli_path())
 
 # ---------------------------------------------------------------------------
 # Data pipeline enforcement helpers

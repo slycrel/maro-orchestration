@@ -12,7 +12,7 @@ Use this skill when a goal requires pulling structured data out of web pages —
 ## Steps
 
 1. **Check permissions and set a budget** — read robots.txt and visible ToS for the target; set rate (requests/min), concurrency, timeouts, and a page cap before fetching anything. If robots disallows the paths you need, stop and report — don't route around it.
-2. **Recon one sample page** — fetch it, save the raw HTML as an artifact, and define the output schema (fields, types, one example row) before writing any extraction logic.
+2. **Recon one sample page** — fetch it, save the raw HTML as an artifact, and define the output schema (fields, types, one example row) before writing any extraction logic. Raw HTML belongs on disk, never in context: read it with a parser/grep, and use `python3 <repo>/src/fetch_tool.py "<url>"` when you want the readable-markdown view (it captures the raw file for you and prints its path).
 3. **Write redundant selectors** — for every field: a primary selector (stable id/attribute), a structural fallback (position/hierarchy), and a text-anchor heuristic (nearest stable label text). Record all three in an extraction table.
 4. **Fetch light-first** — plain HTTP first; escalate to stealth headers or a real browser only when you observe JS-rendered content or block pages. Note each escalation and why.
 5. **Enumerate before crawling** — derive the URL frontier up front (sitemap, pagination pattern, listing pages) rather than link-chasing; dedupe visited URLs; cap depth and total pages per the budget.

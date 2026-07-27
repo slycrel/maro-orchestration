@@ -26,7 +26,9 @@ from __future__ import annotations
 import html as html_lib
 import os
 import re
+import stat
 import subprocess
+import tempfile
 import time
 import urllib.error
 import urllib.parse
@@ -47,6 +49,16 @@ except ImportError:
 _MAX_TEXT_CHARS  = 20_000   # ~5k tokens — enough for any single page
 _MAX_URL_FETCH_SECS = 12
 _MAX_URLS_PER_STEP  = 5     # cap to avoid unbounded expansion
+
+# Raw-capture: bytes read for the on-disk artifact. Deliberately larger than
+# the 500KB in-context read cap — the capture exists so a later step can
+# re-extract (JSON-LD prices, tables) from the FULL page without any of it
+# passing through a context window.
+_MAX_CAPTURE_BYTES = 3_000_000
+
+# Per-capture-dir ceiling. A deep-research run over hundreds of unique URLs
+# would otherwise accumulate unboundedly. Override with MARO_FETCH_CAPTURE_BUDGET.
+_DEFAULT_CAPTURE_BUDGET = 200_000_000
 
 _UA_STANDARD = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -95,7 +107,8 @@ _URL_RE = re.compile(
 # Core fetch + strip
 # ---------------------------------------------------------------------------
 
-def _http_get(url: str, timeout: int = _MAX_URL_FETCH_SECS, ua: str = _UA_STANDARD) -> Tuple[int, str]:
+def _http_get(url: str, timeout: int = _MAX_URL_FETCH_SECS, ua: str = _UA_STANDARD,
+              max_bytes: int = 500_000) -> Tuple[int, str]:
     """Return (status_code, text). Never raises."""
     try:
         req = urllib.request.Request(
@@ -103,7 +116,7 @@ def _http_get(url: str, timeout: int = _MAX_URL_FETCH_SECS, ua: str = _UA_STANDA
             headers={"User-Agent": ua, "Accept": "text/html,application/xhtml+xml,*/*;q=0.8"},
         )
         with urllib.request.urlopen(req, timeout=timeout) as resp:
-            raw = resp.read(500_000)  # cap at 500KB raw
+            raw = resp.read(max_bytes)  # default cap 500KB raw
             charset = "utf-8"
             ct = resp.headers.get("Content-Type", "")
             m = re.search(r"charset=([^\s;]+)", ct, re.I)
@@ -341,12 +354,304 @@ def _jina_fetch(url: str, max_chars: int = _MAX_TEXT_CHARS) -> str:
     Jina renders JavaScript-heavy pages server-side and strips navigation/boilerplate.
     Returns the markdown content capped at max_chars, or "" on failure.
     """
+    if not is_safe_public_url(url):
+        return ""  # same disclosure boundary as the Cloudflare tier
     jina_url = _JINA_BASE + url
     status, body = _http_get(jina_url, ua="MaroBot/1.0 (+https://github.com/slycrel/openclaw-orchestration)")
     if status != 200 or not body:
         return ""
     # Jina response is already markdown — just cap length
     return body.strip()[:max_chars]
+
+
+# ---------------------------------------------------------------------------
+# Cloudflare markdown.new — second URL-to-markdown tier
+# ---------------------------------------------------------------------------
+
+def _cf_markdown_fetch(url: str, max_chars: int = _MAX_TEXT_CHARS) -> str:
+    """Fetch a URL via Cloudflare's markdown.new and return clean markdown.
+
+    Second markdown tier behind Jina. Jina is a single point of failure — it
+    403s on some hosts (see skills/social_search.md) and rate-limits — and a
+    worker with no working markdown path falls back to curling raw HTML, which
+    is the exact 2.14M-token failure this tier exists to prevent.
+
+    markdown.new is free, needs no auth, and is rate-limited to 500 req/day per
+    IP. Its own pipeline escalates to Cloudflare Browser Rendering for JS-heavy
+    pages, so it recovers cases where Jina returns thin content. Public URLs
+    only — login-walled pages (X/Twitter) are handled upstream by the X chain.
+
+    Returns markdown capped at max_chars, or "" on any failure.
+    """
+    # Handing an internal URL to a third party discloses it; handing one with
+    # credentials discloses those too.
+    if not is_safe_public_url(url):
+        return ""
+    try:
+        import json as _json
+        payload = _json.dumps({"url": url}).encode("utf-8")
+        req = urllib.request.Request(
+            _CF_MARKDOWN_BASE,
+            data=payload,
+            headers={"Content-Type": "application/json",
+                     "User-Agent": "MaroBot/1.0"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=_MAX_URL_FETCH_SECS) as resp:
+            if resp.status != 200:
+                return ""
+            body = resp.read(1_000_000).decode("utf-8", errors="replace")
+    except Exception:
+        return ""
+
+    if not body:
+        return ""
+    # Response may be raw markdown or a JSON envelope depending on tier.
+    text = body.strip()
+    if text.startswith("{"):
+        try:
+            import json as _json
+            data = _json.loads(text)
+            if isinstance(data, dict):
+                # `{"success":true,"result":"# md"}` is the shape Cloudflare's own
+                # Markdown endpoint documents — handle the string form before
+                # descending, or a valid response reads as a failure.
+                result = data.get("result")
+                if isinstance(result, str) and result.strip():
+                    text = result.strip()
+                else:
+                    inner = result if isinstance(result, dict) else data
+                    for key in ("markdown", "content", "text", "data"):
+                        val = inner.get(key) if isinstance(inner, dict) else None
+                        if isinstance(val, str) and val.strip():
+                            text = val.strip()
+                            break
+                    else:
+                        return ""
+        except Exception:
+            return ""
+    return text[:max_chars]
+
+
+# ---------------------------------------------------------------------------
+# Raw-page capture — full fidelity on disk, nothing extra in context
+# ---------------------------------------------------------------------------
+
+def capture_dir() -> Optional[Path]:
+    """Directory for raw page captures, or None if none can be resolved.
+
+    Resolution order: explicit env override → the active run-dir → the
+    workspace output dir. Deliberately NOT under `<rundir>/build/` — that
+    tree is what viz_server serves, and captures are unscrubbed third-party
+    HTML that must never be served back over HTTP.
+    """
+    override = os.environ.get("MARO_FETCH_CAPTURE_DIR")
+    candidates: List[Path] = []
+    if override:
+        candidates.append(Path(override).expanduser())
+    else:
+        try:
+            from runs import current_run_dir
+            rd = current_run_dir()
+            if rd is not None:
+                candidates.append(Path(rd) / "fetch-raw")
+        except Exception:
+            pass
+        try:
+            from config import output_dir
+            candidates.append(Path(output_dir()) / "fetch-raw")
+        except Exception:
+            pass
+    for cand in candidates:
+        try:
+            cand.mkdir(parents=True, exist_ok=True, mode=0o700)
+            # A symlinked capture dir defeats the whole placement argument: point
+            # it at <rundir>/build/ and viz_server serves attacker-controlled
+            # HTML to the operator's browser. Refuse rather than follow.
+            if cand.is_symlink():
+                continue
+            return cand
+        except Exception:
+            continue
+    return None
+
+
+def _capture_enabled() -> bool:
+    """Raw capture is on unless explicitly disabled."""
+    return os.environ.get("MARO_FETCH_CAPTURE", "1").strip().lower() not in (
+        "0", "false", "no", "off")
+
+
+def _capture_budget_bytes() -> int:
+    """Per-directory ceiling on captured bytes. 0 disables the ceiling."""
+    try:
+        return int(os.environ.get("MARO_FETCH_CAPTURE_BUDGET", _DEFAULT_CAPTURE_BUDGET))
+    except Exception:
+        return _DEFAULT_CAPTURE_BUDGET
+
+
+def _captured_bytes(cdir: Path) -> int:
+    """Bytes already captured in `cdir`. Cheap enough at capture scale."""
+    total = 0
+    try:
+        for p in cdir.glob("*.html"):
+            try:
+                total += p.stat().st_size
+            except OSError:
+                continue
+    except Exception:
+        return 0
+    return total
+
+
+def _safe_manifest_url(url: str) -> str:
+    """URL with credentials and query stripped, for durable storage.
+
+    The manifest outlives the run and is read by humans and later steps. A
+    presigned S3 signature or a `?token=` in the query would otherwise sit in
+    plaintext on disk indefinitely.
+    """
+    try:
+        parsed = urllib.parse.urlsplit(url)
+        netloc = parsed.hostname or ""
+        if parsed.port:
+            netloc += f":{parsed.port}"
+        redacted = parsed._replace(netloc=netloc, query="", fragment="")
+        out = urllib.parse.urlunsplit(redacted)
+        return out + ("?<redacted>" if parsed.query else "")
+    except Exception:
+        return "<unparseable-url>"
+
+
+# ---------------------------------------------------------------------------
+# Outbound URL policy — one gate for every egress in this module
+# ---------------------------------------------------------------------------
+
+def is_safe_public_url(url: str) -> bool:
+    """True if `url` is an ordinary public http(s) URL safe to fetch or proxy.
+
+    Every outbound path in this module runs through here: the proxy tiers hand
+    the URL to a third party, and the capture path fetches it directly. Without
+    a gate, a worker (or a redirect from an attacker-controlled page) can point
+    either at loopback, RFC1918, link-local, or cloud-metadata addresses and
+    have the response persisted to disk with a pointer handed back to the model.
+
+    Literal-address checks only — no DNS resolution, so a hostname that resolves
+    to a private address still passes. That is a deliberate scope line: full
+    SSRF defense needs resolve-then-pin-the-socket, which belongs at the HTTP
+    layer, not here. This blocks the direct and redirect-to-literal cases.
+    """
+    try:
+        parsed = urllib.parse.urlsplit(url)
+    except Exception:
+        return False
+    if parsed.scheme not in ("http", "https"):
+        return False
+    # Credentials in the URL would be handed to the proxy tiers verbatim.
+    if parsed.username or parsed.password:
+        return False
+    host = (parsed.hostname or "").strip("[]")
+    if not host:
+        return False
+    if host.lower() in _SKIP_DOMAINS or host.lower().endswith((".local", ".internal")):
+        return False
+    try:
+        import ipaddress
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return True  # a name, not a literal — allowed (see docstring caveat)
+    return not (ip.is_private or ip.is_loopback or ip.is_link_local
+                or ip.is_reserved or ip.is_multicast or ip.is_unspecified)
+
+
+def capture_raw(url: str, *, html: Optional[str] = None,
+                timeout: int = _MAX_URL_FETCH_SECS) -> Optional[Path]:
+    """Fetch `url`'s raw bytes and store them on disk. Returns the path or None.
+
+    Kept deliberately separate from the text-extraction chain: the markdown
+    tiers return *converted* text, so the original HTML (JSON-LD blocks, price
+    tables, attributes the converters drop) would otherwise be unrecoverable
+    without a re-fetch. A later step can grep/parse the captured file directly —
+    full fidelity on disk, zero extra tokens in context.
+
+    Pass `html` when the caller already downloaded the page (the raw-HTTP tier)
+    so capture costs no extra request; omit it and the page is fetched once.
+
+    Content-addressed by URL hash, so a repeat fetch of the same URL reuses the
+    existing file instead of re-downloading. Never raises.
+    """
+    cdir = capture_dir()
+    if cdir is None:
+        return None
+    if html is None and not is_safe_public_url(url):
+        # Capture would be a second, unproxied request straight from this host —
+        # the SSRF primitive. No policy pass, no fetch.
+        return None
+    try:
+        import hashlib
+        digest = hashlib.sha256(url.encode("utf-8", errors="replace")).hexdigest()[:16]
+        # Hash-derived name only — never URL-derived (path-traversal safe).
+        path = cdir / f"{digest}.html"
+        # lstat, not exists(): a planted symlink at <digest>.html pointing at a
+        # secret would otherwise be "reused" and its path handed to the model,
+        # which the prompt tells to parse it — a file-disclosure primitive.
+        try:
+            st = os.lstat(path)
+            if stat.S_ISREG(st.st_mode) and st.st_size > 0:
+                return path
+            os.unlink(path)  # symlink or non-regular: never trust it
+        except FileNotFoundError:
+            pass
+
+        budget = _capture_budget_bytes()
+        if budget and _captured_bytes(cdir) >= budget:
+            return None  # quota exhausted — surfaced by the caller's note
+
+        if html is not None:
+            status, body = 200, html
+        else:
+            status, body = _http_get(url, timeout=timeout, max_bytes=_MAX_CAPTURE_BYTES)
+        if status != 200 or not body:
+            return None
+
+        # Unpredictable temp name + O_NOFOLLOW|O_EXCL. A fixed `<digest>.html.tmp`
+        # was both a symlink-planting target (verified exploitable: the write
+        # followed the link and overwrote a victim file) and a collision point
+        # for two lanes capturing the same URL, where the loser's os.replace
+        # raised and silently returned None.
+        fd, tmp_name = tempfile.mkstemp(dir=str(cdir), prefix=f".{digest}-", suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8", errors="replace") as fh:
+                fh.write(body)
+            os.replace(tmp_name, path)
+        except Exception:
+            try:
+                os.unlink(tmp_name)
+            except OSError:
+                pass
+            raise
+
+        try:
+            import json as _json
+            entry = {"url": _safe_manifest_url(url), "path": str(path),
+                     "bytes": len(body), "status": status,
+                     "truncated": len(body) >= _MAX_CAPTURE_BYTES,
+                     "captured_at": time.strftime("%Y-%m-%dT%H:%M:%S")}
+            line = _json.dumps(entry) + "\n"
+            # O_APPEND|O_NOFOLLOW: a symlinked manifest is an arbitrary-append
+            # primitive. Single write() of one line keeps concurrent appends
+            # from interleaving mid-record.
+            mfd = os.open(cdir / "index.jsonl",
+                          os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o600)
+            try:
+                os.write(mfd, line.encode("utf-8"))
+            finally:
+                os.close(mfd)
+        except Exception:
+            pass  # manifest is a convenience; the capture itself already landed
+        return path
+    except Exception:
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -456,10 +761,46 @@ def fetch_x_article(url: str) -> str:
     )
 
 
+def _is_login_wall(text: str) -> bool:
+    """True for the short login-wall stubs the markdown tiers return."""
+    lower = text.lower()
+    return "log in" in lower and "sign up" in lower and len(text) < 500
+
+
+def _capture_note(url: str, *, html: Optional[str] = None) -> str:
+    """Capture the raw page and return a one-line pointer (or "").
+
+    The pointer is the whole point: ~15 tokens telling a later step that full
+    fidelity is on disk, instead of the 100k-500k tokens the page itself costs.
+    """
+    try:
+        if not _capture_enabled():
+            return ""
+        path = capture_raw(url, html=html)
+    except Exception:
+        return ""  # capture is a convenience — it must never fail a fetch
+    if path is None:
+        return ""
+    # Say "truncated" when it is. Calling a 500KB prefix "full" would send a
+    # later step looking for a field that was never stored.
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return ""
+    note = f"\n[raw HTML saved: {path} ({size:,} bytes"
+    if size >= _MAX_CAPTURE_BYTES:
+        note += ", TRUNCATED at the capture cap"
+    return note + ") — parse/grep this file for detail the summary above drops; do NOT cat it into context]"
+
+
 def fetch_url_content(url: str) -> str:
     """Fetch any URL and return stripped text content.
 
-    Handles X/Twitter specially. For all others: fetch HTML, strip, truncate.
+    Handles X/Twitter specially. For all others the chain is markdown-first —
+    Jina Reader, then Cloudflare markdown.new, then raw HTTP + BS4 stripping —
+    with every tier capped at _MAX_TEXT_CHARS. Raw HTML is captured to disk
+    alongside (see `capture_raw`) and referenced by path only.
+
     Returns a descriptive failure message on error — never raises.
     """
     # Handle t.co shortlinks
@@ -476,16 +817,23 @@ def fetch_url_content(url: str) -> str:
     if _X_POST_RE.search(url):
         return fetch_x_tweet(url)
 
-    # Regular pages — try Jina Reader first (returns clean markdown, handles JS rendering)
+    # Tier 1 — Jina Reader (clean markdown, handles JS rendering)
     jina_content = _jina_fetch(url)
-    if jina_content and len(jina_content) > 100:
-        # Skip Jina results that are just login walls (common pattern)
-        _lower = jina_content.lower()
-        if not ("log in" in _lower and "sign up" in _lower and len(jina_content) < 500):
-            return f"[Content from {url}]\n{jina_content}"
+    if jina_content and len(jina_content) > 100 and not _is_login_wall(jina_content):
+        return f"[Content from {url}]\n{jina_content}{_capture_note(url)}"
 
-    # Fallback: raw HTTP + HTML stripping (for sites that block Jina or return errors)
-    status, html = _http_get(url)
+    # Tier 2 — Cloudflare markdown.new. Jina 403s/rate-limits on some hosts;
+    # without a second markdown tier those pages fall through to raw HTML,
+    # which is what blew a single step to 2.14M input tokens.
+    cf_content = _cf_markdown_fetch(url)
+    if cf_content and len(cf_content) > 100 and not _is_login_wall(cf_content):
+        return f"[Content from {url}]\n{cf_content}{_capture_note(url)}"
+
+    # Tier 3 — raw HTTP + HTML stripping (sites that block both markdown tiers).
+    # Read to the capture cap, not the 500KB in-context cap: this same response
+    # is what gets captured, and a 500KB prefix stored as "the raw page" hides
+    # any JSON-LD past that offset. Text extraction caps itself at 20k chars.
+    status, html = _http_get(url, max_bytes=_MAX_CAPTURE_BYTES)
     if status == 0:
         return f"[Could not connect to {url}]"
     if status in (401, 402, 403):
@@ -505,7 +853,8 @@ def fetch_url_content(url: str) -> str:
     if not text:
         return f"[No readable text found at {url}]"
 
-    return f"[Content from {url}]\n{text}"
+    # This tier already holds the bytes — capture without a second request.
+    return f"[Content from {url}]\n{text}{_capture_note(url, html=html)}"
 
 
 # ---------------------------------------------------------------------------
@@ -530,6 +879,9 @@ def extract_urls_from_text(text: str) -> List[str]:
 # ---------------------------------------------------------------------------
 
 _JINA_BASE = "https://r.jina.ai/"   # Jina Reader: converts any URL to clean markdown
+# Cloudflare markdown.new: free, no-auth URL→markdown (500 req/day/IP), escalates
+# to Cloudflare Browser Rendering for JS-heavy pages. Second tier behind Jina.
+_CF_MARKDOWN_BASE = os.environ.get("MARO_CF_MARKDOWN_URL", "https://markdown.new/")
 
 _SKIP_DOMAINS = frozenset([
     "publish.twitter.com",
@@ -538,6 +890,7 @@ _SKIP_DOMAINS = frozenset([
     "localhost",
     "127.0.0.1",
     "r.jina.ai",  # don't recurse into Jina itself
+    "markdown.new",  # nor into the Cloudflare markdown tier
 ])
 
 _SKIP_EXTENSIONS = frozenset([
@@ -652,3 +1005,15 @@ def enrich_step_with_urls(
         "Use it directly — do NOT call WebFetch for these URLs again.\n\n"
     )
     return header + "\n\n---\n\n".join(blocks) + "\n\n=== END PRE-FETCHED CONTENT ==="
+
+
+if __name__ == "__main__":  # pragma: no cover - CLI entry
+    # Delegate to the unified seam so `python3 src/web_fetch.py <url>` and
+    # `python3 src/fetch_tool.py <url>` behave identically — docs and BACKLOG
+    # name this module, and a worker that guesses either one should not fail.
+    import sys as _sys
+    _here = str(Path(__file__).resolve().parent)
+    if _here not in _sys.path:
+        _sys.path.insert(0, _here)
+    from fetch_tool import main as _main
+    raise SystemExit(_main())

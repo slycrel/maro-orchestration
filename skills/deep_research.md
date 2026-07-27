@@ -13,7 +13,7 @@ Use this skill when a goal needs a defensible, cited research deliverable — no
 
 1. **Scope the brief** — restate the question, name the deliverable (report sections, expected length), and decompose into 3-6 sub-questions that together give an objective view of the topic (include at least one skeptical/criticism angle).
 2. **Plan the query fan-out** — for each sub-question, write 2-3 distinct search queries (definition, evidence, counter-evidence, recency). Record the plan before executing it.
-3. **Gather per sub-question, in parallel where the harness allows** — each lane searches, fetches 3-5 pages, and produces a per-source summary with URL, title, date, and the specific claims it supports. Prefer primary sources over aggregators.
+3. **Gather per sub-question, in parallel where the harness allows** — each lane searches, fetches 3-5 pages, and produces a per-source summary with URL, title, date, and the specific claims it supports. Prefer primary sources over aggregators. Fetch with `python3 <repo>/src/fetch_tool.py "<url>"` (clean markdown, ~5k-token cap, raw HTML saved to disk for re-extraction); never `curl` a page into context — at 3-5 pages per lane, raw HTML exhausts the cost budget before synthesis.
 4. **Curate** — dedupe sources across lanes, drop low-quality/undated/aggregator pages, and keep a source table (URL, credibility note, what it's used for).
 5. **Extract the claim ledger** — bullet every load-bearing claim with its supporting source(s). A claim without a fetched source does not enter the ledger.
 6. **Adversarial pass** — for each load-bearing claim, run at least one search specifically for disconfirming evidence. Mark each claim verified (2+ independent sources), contested (credible disagreement), or unverified.
