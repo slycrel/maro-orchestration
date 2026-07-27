@@ -837,6 +837,33 @@ def _handle_blocked_step(
     step_result = outcome.get("result", "")
     fingerprints = error_fingerprints or []
 
+    # Token runaway: this step already crossed the per-call ingest ceiling and
+    # its subprocess was killed. Retrying replays the SAME ingest — a step that
+    # burned 300K tokens burns another 300K, which is precisely what the brake
+    # exists to prevent — and re-decomposing spends more model calls on a step
+    # whose failure mode is volume, not phrasing. Record it once and advance to
+    # the remaining steps: the step dies, the run continues.
+    #
+    # Deliberately unlike `budget_runaway` (handled in loop_execute, stops the
+    # run): that circuit means the RUN's money is gone, so nothing further can
+    # succeed. This one is scoped to a single call.
+    #
+    # Adversarial review 2026-07-27: all three lenses caught that the typed
+    # error stopped at the adapter seam (no retry/failover THERE) while generic
+    # blocked recovery still returned retry=True one layer up.
+    if outcome.get("error_class") == "token_runaway":
+        log.warning("token runaway — step abandoned without retry: %s", block_reason[:160])
+        return _BlockDecision(
+            retry=False,
+            hint="",
+            loop_status="",      # empty: flow is "normal", the loop advances
+            stuck_reason="",
+            metacognitive_reason=(
+                "token runaway — per-call ingest ceiling crossed; retrying would "
+                "replay the same ingest, so the step is abandoned and the run continues"
+            ),
+        )
+
     # NEED_INFO: step explicitly requests more context (Phase 62 deliverable 4)
     if block_reason.startswith(_NEED_INFO_PREFIX):
         _info_needed = block_reason[len(_NEED_INFO_PREFIX):].strip()

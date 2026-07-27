@@ -223,6 +223,12 @@ def create_team_worker(
             temperature=0.3,
         )
     except Exception as exc:
+        # A token-runaway kill is a policy signal, not a worker-level failure:
+        # converting it to a generic blocked TeamResult hides it from the
+        # no-retry handling that exists to stop the ingest being replayed.
+        from llm_errors import TokenRunawayError as _TRE
+        if isinstance(exc, _TRE):
+            raise
         log.warning("team.create_worker failed role=%r: %s", role, exc)
         return TeamResult(
             role=role,

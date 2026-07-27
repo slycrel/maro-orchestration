@@ -1151,7 +1151,13 @@ def _run_subprocess_safe(cmd, *, input=None, timeout=600,
             pass
 
     if env_extra:
-        child_env.update(env_extra)
+        # A None value means "unset in the child" (see _bash_output_cap_env):
+        # plain update() would stringify it and set the literal "None".
+        for _k, _v in env_extra.items():
+            if _v is None:
+                child_env.pop(_k, None)
+            else:
+                child_env[_k] = _v
     try:
         from config import get as _cfg_get
         if bool(_cfg_get("workers.allow_main_push", False)):
@@ -1260,6 +1266,22 @@ def _run_subprocess_safe(cmd, *, input=None, timeout=600,
         while True:
             rc = proc.poll()
             if rc is not None:
+                # Drain and probe ONCE MORE before leaving: a subprocess that
+                # emits an over-ceiling event and exits before the next poll
+                # would otherwise never be probed at all, and the call returns
+                # as if nothing happened (adversarial review 2026-07-27,
+                # reproduced 10/10). The kill is moot — it already exited — but
+                # the accounting and the typed error are not.
+                if stream_probe is not None and kill_exc is None:
+                    try:
+                        _final = _drain_new_events()
+                        if _final:
+                            _probe_exc = stream_probe(_final)
+                            if _probe_exc is not None:
+                                kill_reason = f"stream probe kill: {_probe_exc}"
+                                kill_exc = _probe_exc
+                    except Exception as _probe_err:
+                        log.debug("final stream probe error (non-fatal): %s", _probe_err)
                 break
             now = time.monotonic()
             elapsed = now - start
@@ -1489,13 +1511,20 @@ def _fresh_input_ceiling() -> int:
         return _FRESH_INPUT_CEILING_DEFAULT
 
 
-def _bash_output_cap_env() -> Optional[Dict[str, str]]:
+def _bash_output_cap_env() -> Optional[Dict[str, Optional[str]]]:
     """Env block capping per-tool-call Bash output for an agentic subprocess.
 
     Precedence: MARO_BASH_MAX_OUTPUT_CHARS (0 disables) > an operator's own
     BASH_MAX_OUTPUT_LENGTH already in the environment (left alone — the
     subprocess inherits it) > config llm.subprocess.bash_max_output_chars >
     _BASH_OUTPUT_CAP_DEFAULT.
+
+    A None *value* means "unset this in the child", which is not the same as
+    returning None ("express no opinion, inherit whatever is there"). Disable
+    used to return the latter, so `MARO_BASH_MAX_OUTPUT_CHARS=0` alongside an
+    exported `BASH_MAX_OUTPUT_LENGTH=50000` left the 50000 in force — the
+    documented higher-precedence disable silently did nothing (adversarial
+    review 2026-07-27, reproduced by two lenses).
     """
     raw = os.environ.get("MARO_BASH_MAX_OUTPUT_CHARS")
     if raw is not None:
@@ -1505,7 +1534,10 @@ def _bash_output_cap_env() -> Optional[Dict[str, str]]:
             log.warning("MARO_BASH_MAX_OUTPUT_CHARS=%r not an int; ignoring", raw)
             cap = None
         if cap is not None:
-            return {"BASH_MAX_OUTPUT_LENGTH": str(cap)} if cap > 0 else None
+            if cap > 0:
+                return {"BASH_MAX_OUTPUT_LENGTH": str(cap)}
+            # Explicit disable outranks an inherited operator value.
+            return {"BASH_MAX_OUTPUT_LENGTH": None}
     if "BASH_MAX_OUTPUT_LENGTH" in os.environ:
         return None  # operator already governs the CLI directly; inherit as-is
     try:
@@ -1549,17 +1581,37 @@ def _build_step_token_brake(default_model: str = ""):
             usage = msg.get("usage") or {}
             if not usage:
                 continue
-            fresh = (int(usage.get("input_tokens", 0) or 0)
-                     + int(usage.get("cache_creation_input_tokens", 0) or 0))
+            # Safety accounting first, and defensively: a malformed field
+            # anywhere in this block used to raise, and _run_subprocess_safe
+            # swallows probe exceptions after the reader has already advanced —
+            # so one bad event silently discarded every later event in the same
+            # batch and disabled the brake for the rest of the call
+            # (adversarial review 2026-07-27, reproduced). Ingest is recorded
+            # even when the OPTIONAL cost estimate cannot be computed.
+            def _num(field: str) -> int:
+                try:
+                    return max(0, int(usage.get(field, 0) or 0))
+                except (TypeError, ValueError):
+                    log.warning("stream usage field %s=%r not numeric — counted as 0; "
+                                "brake accounting may under-report", field,
+                                usage.get(field))
+                    return 0
+
+            fresh = _num("input_tokens") + _num("cache_creation_input_tokens")
             est = 0.0
             if estimate_cost is not None:
-                cache_read = int(usage.get("cache_read_input_tokens", 0) or 0)
-                est = estimate_cost(
-                    fresh + cache_read,
-                    int(usage.get("output_tokens", 0) or 0),
-                    model=msg.get("model") or default_model,
-                    cache_read_tokens=cache_read,
-                )
+                cache_read = _num("cache_read_input_tokens")
+                try:
+                    est = estimate_cost(
+                        fresh + cache_read,
+                        _num("output_tokens"),
+                        model=msg.get("model") or default_model,
+                        cache_read_tokens=cache_read,
+                    )
+                except Exception as _cost_err:
+                    # Cost estimation is telemetry; it must never disarm the brake.
+                    log.debug("cost estimate failed in token brake: %s", _cost_err)
+                    est = 0.0
             key = msg.get("id")
             if key:
                 prev = state["by_id"].get(key, (0, 0.0))
@@ -1571,10 +1623,10 @@ def _build_step_token_brake(default_model: str = ""):
             f for f, _ in state["by_id"].values())
         if total_fresh < ceiling:
             return None
+        total_est = state["anon_est"] + sum(
+            e for _, e in state["by_id"].values())
         meter = _RUN_COST_METER.get()
         if meter is not None:
-            total_est = state["anon_est"] + sum(
-                e for _, e in state["by_id"].values())
             with meter["lock"]:
                 meter["spent_usd"] += total_est
         from llm_errors import TokenRunawayError
@@ -1582,7 +1634,7 @@ def _build_step_token_brake(default_model: str = ""):
             "step token brake: %d uncached input tokens ingested by one "
             "subprocess call >= ceiling %d — killing subprocess",
             total_fresh, ceiling)
-        return TokenRunawayError(total_fresh, ceiling)
+        return TokenRunawayError(total_fresh, ceiling, estimated_cost_usd=total_est)
 
     return _probe
 

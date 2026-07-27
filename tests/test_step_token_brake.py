@@ -304,8 +304,14 @@ class TestBashOutputCapEnv:
         assert _bash_output_cap_env() == {"BASH_MAX_OUTPUT_LENGTH": "1234"}
 
     def test_maro_env_zero_disables(self, monkeypatch, _clean_brake_env):
+        """Disable means "unset it in the child", not "express no opinion".
+
+        This test previously asserted `is None`, which pinned the defect: with
+        an operator's BASH_MAX_OUTPUT_LENGTH exported, returning None left that
+        value in force, so the documented higher-precedence disable did nothing.
+        """
         monkeypatch.setenv("MARO_BASH_MAX_OUTPUT_CHARS", "0")
-        assert _bash_output_cap_env() is None
+        assert _bash_output_cap_env() == {"BASH_MAX_OUTPUT_LENGTH": None}
 
     def test_operator_env_respected(self, monkeypatch, _clean_brake_env):
         # An operator already exporting the CLI's own var keeps control: the
@@ -364,3 +370,109 @@ class TestPromptCarveOut:
         # instead of fighting the cap.
         from step_exec import EXECUTE_SYSTEM
         assert "saves the full output to a file" in EXECUTE_SYSTEM
+
+
+# ---------------------------------------------------------------------------
+# Adversarial-review remediation (2026-07-27)
+# ---------------------------------------------------------------------------
+
+class TestRunawayIsNotRetried:
+    """The consensus ship-blocker: the typed error stopped at the adapter seam
+    (no retry/failover THERE) while generic blocked recovery still returned
+    retry=True one layer up — so a step killed at the ceiling ran again and
+    could burn the same ingest a second time."""
+
+    def _decide(self, error_class):
+        from loop_blocked import _handle_blocked_step
+        return _handle_blocked_step(
+            "research tire prices",
+            {"status": "blocked", "stuck_reason": "mid-step token brake: ...",
+             "error_class": error_class, "result": ""},
+            0,                      # prior_retries — the retry path fires at 0
+            None,                   # adapter (unused on this path)
+            error_fingerprints=["fp"],
+            step_outcomes=[],
+            replan_count=0,
+        )
+
+    def test_token_runaway_is_not_retried_or_redecomposed(self):
+        d = self._decide("token_runaway")
+        assert d.retry is False, "a runaway step must not replay the same ingest"
+        assert d.redecompose is False
+        assert not d.split_into
+
+    def test_token_runaway_lets_the_run_continue(self):
+        """Empty loop_status => flow 'normal' => the loop records the step and
+        advances. Contrast budget_runaway, which stops the run."""
+        d = self._decide("token_runaway")
+        assert d.loop_status == "", "runaway kills the step, not the run"
+
+    def test_other_blocked_classes_still_retry(self):
+        """The special case must not disarm normal recovery."""
+        d = self._decide("adapter_timeout")
+        assert d.retry is True
+
+
+class TestDisableOverridesInheritedVar:
+    def test_zero_unsets_an_operator_exported_cap(self, monkeypatch):
+        import llm
+        monkeypatch.setenv("BASH_MAX_OUTPUT_LENGTH", "50000")
+        monkeypatch.setenv("MARO_BASH_MAX_OUTPUT_CHARS", "0")
+        assert llm._bash_output_cap_env() == {"BASH_MAX_OUTPUT_LENGTH": None}
+
+    def test_none_value_removes_key_from_child_env(self, monkeypatch):
+        """A plain dict.update() would set the literal string 'None'."""
+        import llm
+        monkeypatch.setenv("BASH_MAX_OUTPUT_LENGTH", "50000")
+        seen = {}
+
+        class _Proc:
+            pid = 1234
+            returncode = 0
+
+            def poll(self):
+                return 0
+
+            def wait(self, timeout=None):
+                return 0
+
+        def _fake_popen(cmd, **kw):
+            seen.update(kw.get("env") or {})
+            return _Proc()
+
+        monkeypatch.setattr(llm.subprocess, "Popen", _fake_popen)
+        try:
+            llm._run_subprocess_safe(
+                ["true"], timeout=5,
+                env_extra={"BASH_MAX_OUTPUT_LENGTH": None})
+        except Exception:
+            pass
+        assert "BASH_MAX_OUTPUT_LENGTH" not in seen, seen.get("BASH_MAX_OUTPUT_LENGTH")
+
+
+class TestBrakeAccountingIsDefensive:
+    def test_malformed_field_does_not_disarm_the_brake(self):
+        """One bad usage field used to raise; the runner swallows probe
+        exceptions after the reader advanced, so every later event in that
+        batch was discarded and the brake stayed disarmed for the call."""
+        import llm
+        probe = llm._build_step_token_brake("sonnet")
+        exc = probe([
+            {"type": "assistant", "message": {
+                "id": "m1", "model": "sonnet",
+                "usage": {"input_tokens": 10, "output_tokens": "unknown"}}},
+            {"type": "assistant", "message": {
+                "id": "m2", "model": "sonnet",
+                "usage": {"input_tokens": 10_000_000}}},
+        ])
+        assert exc is not None, "valid over-ceiling event after a malformed one was dropped"
+
+    def test_runaway_error_carries_measured_usage(self):
+        import llm
+        probe = llm._build_step_token_brake("sonnet")
+        exc = probe([{"type": "assistant", "message": {
+            "id": "m1", "model": "sonnet",
+            "usage": {"input_tokens": 10_000_000, "output_tokens": 10}}}])
+        assert exc is not None
+        assert exc.fresh_input_tokens >= 10_000_000
+        assert hasattr(exc, "estimated_cost_usd")

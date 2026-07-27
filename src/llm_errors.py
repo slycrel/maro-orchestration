@@ -101,9 +101,15 @@ class TokenRunawayError(RuntimeError):
     same ingest.
     """
 
-    def __init__(self, fresh_input_tokens: int, ceiling_tokens: int):
+    def __init__(self, fresh_input_tokens: int, ceiling_tokens: int,
+                 estimated_cost_usd: float = 0.0):
         self.fresh_input_tokens = int(fresh_input_tokens)
         self.ceiling_tokens = int(ceiling_tokens)
+        # Carried so the blocked outcome can record what the killed call
+        # actually cost. Reporting a 300K-token call as zero tokens / zero
+        # dollars understates run totals and skill telemetry, and an unmetered
+        # run loses the spend entirely (adversarial review 2026-07-27, 3/3).
+        self.estimated_cost_usd = float(estimated_cost_usd or 0.0)
         super().__init__(
             f"mid-step token brake: one subprocess call ingested "
             f"{self.fresh_input_tokens} uncached input tokens >= ceiling "

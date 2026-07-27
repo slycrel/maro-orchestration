@@ -1232,7 +1232,7 @@ def execute_step(
                 f"LLM call failed ({_einfo.error_class}): {_einfo.user_action}"
                 if is_actionable(_einfo) else f"LLM call failed: {exc}"
             )
-            return {
+            _blocked = {
                 "status": "blocked",
                 "stuck_reason": _stuck,
                 "error_class": _einfo.error_class,
@@ -1241,6 +1241,16 @@ def execute_step(
                 "tokens_in": 0,
                 "tokens_out": 0,
             }
+            # A token-runaway kill is the one failure whose whole point is that
+            # it consumed a lot. Recording it as a zero-token step would hide
+            # the spend from run totals, cost reports and skill telemetry —
+            # exactly the accounting the brake exists to protect.
+            _fresh = getattr(exc, "fresh_input_tokens", None)
+            if _fresh is not None:
+                _blocked["tokens_in"] = int(_fresh)
+                _blocked["provider_cost_usd"] = float(
+                    getattr(exc, "estimated_cost_usd", 0.0) or 0.0)
+            return _blocked
         except Exception:
             return {
                 "status": "blocked",
@@ -1322,6 +1332,13 @@ def execute_step(
                     tc = resp.tool_calls[0] if resp.tool_calls else tc
                     log.debug("step %d tool_search re-call done: tool=%r", step_num, _tool_name_used)
                 except Exception as _rerun_exc:
+                    # Runaway kills must not be absorbed into "fall through and
+                    # carry on": the nested call already ingested past the
+                    # ceiling, and swallowing the typed error here means the
+                    # no-retry policy downstream never sees it.
+                    from llm_errors import TokenRunawayError as _TRE
+                    if isinstance(_rerun_exc, _TRE):
+                        raise
                     log.warning("step %d tool_search re-call failed: %s", step_num, _rerun_exc)
                     # Fall through to original response handling
             else:
