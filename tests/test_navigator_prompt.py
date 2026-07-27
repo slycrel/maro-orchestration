@@ -1157,3 +1157,19 @@ class TestNavigatorLessonInjection:
                adapter_factory=lambda t: _FakeAdapter([_resp("execute", instruction="go")]))
         # off path: no lessons_injected key on the row (kept sparse)
         assert "lessons_injected" not in events[0][1]["context"]
+
+
+class TestVantageRule:
+    """Run-1 regression (task 6ae4ff75): the dispatch navigator escalated at
+    conf 0.95 claiming the system "cannot access external URLs" — its own
+    no_tools vantage projected onto a runtime whose workers fetch the web
+    routinely. The rule forbidding that reasoning must reach the model."""
+
+    def test_capability_grounding_reaches_the_sent_prompt(self):
+        adapter = _FakeAdapter([_resp("execute", instruction="go")])
+        decide(_nav_input(), tiers=["cheap"], adapter_factory=lambda t: adapter)
+        system_sent = adapter.calls[0][0].content
+        assert "Your vantage is not the system's" in system_sent
+        assert "needs runtime evidence" in system_sent
+        # the escalate move definition carries the same evidence demand
+        assert "tried and failed" in system_sent
