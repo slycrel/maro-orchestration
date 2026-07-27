@@ -33,6 +33,7 @@ BILLING_ACTIONABLE = "billing_actionable"  # credits/quota gone — never retry
 INPUT_TOO_LARGE = "input_too_large"    # context overrun — retry/failover useless
 OUTPUT_CAP_EXCEEDED = "output_cap_exceeded"  # utility call blew its own token cap — caller's fallback, never failover
 BUDGET_RUNAWAY = "budget_runaway"      # run's runaway cost circuit tripped — never retry/failover
+TOKEN_RUNAWAY = "token_runaway"        # ONE subprocess call crossed the per-call ingest ceiling — step blocked, run continues
 FATAL = "fatal"                        # unclassified — propagate raw
 
 
@@ -83,6 +84,39 @@ class BudgetRunawayError(RuntimeError):
             f"ceiling ${ceiling_usd:.2f} (budget.runaway_multiplier x cost_budget) "
             f"— refusing further LLM calls. If this work was legitimate, raise "
             f"budget.per_run_usd or budget.runaway_multiplier."
+        )
+
+
+class TokenRunawayError(RuntimeError):
+    """One subprocess call crossed the per-call uncached-input token ceiling
+    (mid-step token brake, llm._build_step_token_brake).
+
+    Raised by the stream-side probe MID-call: the subprocess is killed the
+    poll after cumulative fresh ingest (input_tokens + cache_creation, deduped
+    per API message) crosses the ceiling. Distinct from BudgetRunawayError on
+    purpose — that one means the RUN has overspent and stops the loop; this
+    one means a SINGLE call is pathologically ingesting (the tire-runs
+    2.14M-token curl step) and only that step should die. Never retried,
+    never failed-over: replaying the same step on any backend replays the
+    same ingest.
+    """
+
+    def __init__(self, fresh_input_tokens: int, ceiling_tokens: int,
+                 estimated_cost_usd: float = 0.0):
+        self.fresh_input_tokens = int(fresh_input_tokens)
+        self.ceiling_tokens = int(ceiling_tokens)
+        # Carried so the blocked outcome can record what the killed call
+        # actually cost. Reporting a 300K-token call as zero tokens / zero
+        # dollars understates run totals and skill telemetry, and an unmetered
+        # run loses the spend entirely (adversarial review 2026-07-27, 3/3).
+        self.estimated_cost_usd = float(estimated_cost_usd or 0.0)
+        super().__init__(
+            f"mid-step token brake: one subprocess call ingested "
+            f"{self.fresh_input_tokens} uncached input tokens >= ceiling "
+            f"{self.ceiling_tokens} — call killed, step blocked, run continues. "
+            f"If this step legitimately needs more, raise "
+            f"llm.subprocess.fresh_input_ceiling_tokens (config) or "
+            f"MARO_SUBPROCESS_FRESH_INPUT_CEILING (env; 0 disables)."
         )
 
 
@@ -157,9 +191,14 @@ def classify_error(exc: Exception, backend: str = "") -> ErrorInfo:
         )
 
     # Exact type outranks all text matching: the circuit's own message
-    # mentions "cost"/"budget" and must never ride a retry ladder.
+    # mentions "cost"/"budget" and must never ride a retry ladder. Both
+    # runaway classes also outrank the maro_kill_reason FAILOVER shape below:
+    # the stream-probe kill path ATTACHES maro_kill_reason to these very
+    # exceptions, and a probe-ordered kill must never be re-run elsewhere.
     if isinstance(exc, BudgetRunawayError):
         return _mk(BUDGET_RUNAWAY)
+    if isinstance(exc, TokenRunawayError):
+        return _mk(TOKEN_RUNAWAY)
 
     if any(p in msg for p in _INPUT_PATTERNS):
         return _mk(INPUT_TOO_LARGE)

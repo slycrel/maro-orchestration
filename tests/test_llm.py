@@ -389,9 +389,14 @@ def test_subprocess_output_cap_tokens_never_tightens(monkeypatch):
 
 
 def test_subprocess_agentic_call_not_token_capped(monkeypatch):
-    """Agentic (tool-holding) calls stay uncapped: their multi-turn output
-    legitimately exceeds utility-sized caps, and the CLI's overrun behavior
-    is a hard error, not truncation — it would kill real work."""
+    """Agentic (tool-holding) calls stay OUTPUT-token uncapped: their
+    multi-turn output legitimately exceeds utility-sized caps, and the CLI's
+    overrun behavior is a hard error, not truncation — it would kill real
+    work. (Since the tire-runs mid-step brake they DO carry the per-tool-call
+    Bash ingest cap — a truncation guard, not an output cap; see
+    tests/test_step_token_brake.py.)"""
+    monkeypatch.delenv("MARO_BASH_MAX_OUTPUT_CHARS", raising=False)
+    monkeypatch.delenv("BASH_MAX_OUTPUT_LENGTH", raising=False)
     a = ClaudeSubprocessAdapter()
     mock_result = MagicMock()
     mock_result.returncode = 0
@@ -401,7 +406,9 @@ def test_subprocess_agentic_call_not_token_capped(monkeypatch):
     with patch("llm._run_subprocess_safe", return_value=mock_result) as mock_run:
         a.complete([LLMMessage("user", "do the work")], max_tokens=4096)
 
-    assert mock_run.call_args.kwargs["env_extra"] is None
+    env_extra = mock_run.call_args.kwargs["env_extra"] or {}
+    assert "CLAUDE_CODE_MAX_OUTPUT_TOKENS" not in env_extra
+    assert set(env_extra) <= {"BASH_MAX_OUTPUT_LENGTH"}
 
 
 def test_failover_warns_on_utility_max_tokens_overrun(monkeypatch, caplog):

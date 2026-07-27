@@ -982,6 +982,16 @@ def _session_cpu_ticks(leader_pid: int) -> int:
     return int(total * 100)
 
 
+# Env keys forwarded into a containerized executor (docker drops host env by
+# construction — only build_run_command's -e list crosses the boundary). The
+# CLI guard-rail caps the adapter sets per-call via env_extra MUST be listed
+# here or the container lane silently runs uncapped.
+_CONTAINER_ENV_PASSTHROUGH = (
+    "MARO_WORKER_RUN", "MARO_ALLOW_MAIN_PUSH",
+    "BASH_MAX_OUTPUT_LENGTH", "CLAUDE_CODE_MAX_OUTPUT_TOKENS",
+)
+
+
 def _run_subprocess_safe(cmd, *, input=None, timeout=600,
                          liveness_timeout=None, poll_interval=2.0, cwd=None,
                          stream_probe=None, container_name=None,
@@ -1141,7 +1151,13 @@ def _run_subprocess_safe(cmd, *, input=None, timeout=600,
             pass
 
     if env_extra:
-        child_env.update(env_extra)
+        # A None value means "unset in the child" (see _bash_output_cap_env):
+        # plain update() would stringify it and set the literal "None".
+        for _k, _v in env_extra.items():
+            if _v is None:
+                child_env.pop(_k, None)
+            else:
+                child_env[_k] = _v
     try:
         from config import get as _cfg_get
         if bool(_cfg_get("workers.allow_main_push", False)):
@@ -1183,7 +1199,7 @@ def _run_subprocess_safe(cmd, *, input=None, timeout=600,
     elif container_name:
         import container_exec as _ce
         _worker_env = {k: child_env[k]
-                       for k in ("MARO_WORKER_RUN", "MARO_ALLOW_MAIN_PUSH")
+                       for k in _CONTAINER_ENV_PASSTHROUGH
                        if k in child_env}
         # Configured read-only reference mounts (executor.container_extra_mounts).
         _ro_mounts = []
@@ -1250,6 +1266,22 @@ def _run_subprocess_safe(cmd, *, input=None, timeout=600,
         while True:
             rc = proc.poll()
             if rc is not None:
+                # Drain and probe ONCE MORE before leaving: a subprocess that
+                # emits an over-ceiling event and exits before the next poll
+                # would otherwise never be probed at all, and the call returns
+                # as if nothing happened (adversarial review 2026-07-27,
+                # reproduced 10/10). The kill is moot — it already exited — but
+                # the accounting and the typed error are not.
+                if stream_probe is not None and kill_exc is None:
+                    try:
+                        _final = _drain_new_events()
+                        if _final:
+                            _probe_exc = stream_probe(_final)
+                            if _probe_exc is not None:
+                                kill_reason = f"stream probe kill: {_probe_exc}"
+                                kill_exc = _probe_exc
+                    except Exception as _probe_err:
+                        log.debug("final stream probe error (non-fatal): %s", _probe_err)
                 break
             now = time.monotonic()
             elapsed = now - start
@@ -1366,7 +1398,13 @@ def _build_stream_cost_probe(default_model: str = ""):
         from metrics import estimate_cost
     except Exception:
         return None
-    state = {"est_usd": 0.0, "accrued": False}
+    # stream-json emits one assistant event PER CONTENT BLOCK, each carrying
+    # the same message id and identical usage (verified live on CLI 2.1.220,
+    # 2026-07-27: a thinking+tool_use turn arrived as two events with one
+    # msg_ id and the same usage dict). Estimating per event double-counted
+    # ~2x; dedupe per API message id — keeping the largest estimate seen for
+    # the id — and fall back to per-event accumulation for id-less events.
+    state = {"by_id": {}, "anon_est": 0.0, "accrued": False}
 
     def _probe(events):
         for ev in events:
@@ -1376,7 +1414,7 @@ def _build_stream_cost_probe(default_model: str = ""):
             usage = msg.get("usage") or {}
             if not usage:
                 continue
-            state["est_usd"] += estimate_cost(
+            est = estimate_cost(
                 int(usage.get("input_tokens", 0) or 0)
                 + int(usage.get("cache_read_input_tokens", 0) or 0)
                 + int(usage.get("cache_creation_input_tokens", 0) or 0),
@@ -1384,23 +1422,250 @@ def _build_stream_cost_probe(default_model: str = ""):
                 model=msg.get("model") or default_model,
                 cache_read_tokens=int(usage.get("cache_read_input_tokens", 0) or 0),
             )
+            key = msg.get("id")
+            if key:
+                state["by_id"][key] = max(state["by_id"].get(key, 0.0), est)
+            else:
+                state["anon_est"] += est
+        est_usd = state["anon_est"] + sum(state["by_id"].values())
         with meter["lock"]:
             spent = meter["spent_usd"]
-        if spent + state["est_usd"] >= meter["ceiling_usd"]:
+        if spent + est_usd >= meter["ceiling_usd"]:
             if not state["accrued"]:
                 state["accrued"] = True
                 with meter["lock"]:
-                    meter["spent_usd"] += state["est_usd"]
+                    meter["spent_usd"] += est_usd
             from llm_errors import BudgetRunawayError
             log.warning(
                 "stream cost probe: in-flight call estimate $%.4f pushes run "
                 "spend past ceiling $%.2f — killing subprocess",
-                state["est_usd"], meter["ceiling_usd"])
-            return BudgetRunawayError(spent + state["est_usd"],
+                est_usd, meter["ceiling_usd"])
+            return BudgetRunawayError(spent + est_usd,
                                       meter["ceiling_usd"])
         return None
 
     return _probe
+
+
+# --- Mid-step token brake (tire-runs deferred item, 2026-07-27) -------------
+#
+# Run 3 step 4 of the tire tangent burned 2.14M input tokens ($1.21) inside
+# ONE `claude -p` call by pulling raw retailer pages into context and then
+# re-sending them every turn. Two structural guards close that class:
+#
+#   1. _bash_output_cap_env(): per-tool-call ingest cap enforced by the CLI
+#      itself. BASH_MAX_OUTPUT_LENGTH makes Claude Code persist any Bash
+#      output larger than the cap to a file and put only a <=cap-char slice
+#      (plus the file path) in the transcript — the model never sees the
+#      rest. Verified live on CLI 2.1.220 (2026-07-27): 100K-char output
+#      with the var at 500 reached the transcript as exactly 500 chars in a
+#      <persisted-output> wrapper naming the full-output file; a 10K output
+#      passed through untouched with no var and was truncated to 1000 chars
+#      with the var at 1000. This covers curl, cat, and any other command —
+#      including the "JSON APIs are compact" carve-out the prompt used to
+#      grant — because the CLI applies it to Bash output as such.
+#
+#   2. _build_step_token_brake(): per-call ACCUMULATION backstop. The env cap
+#      bounds a single tool result but not fifty of them, and every turn
+#      re-sends the transcript. The brake sums uncached ingest (input_tokens
+#      + cache_creation_input_tokens, deduped per API message id) across the
+#      call's assistant events as they stream and kills the subprocess once
+#      it crosses the ceiling. The killed call surfaces as TokenRunawayError
+#      -> error_class "token_runaway" -> a blocked STEP; the run continues
+#      with its remaining budget (unlike budget_runaway, which stops the run).
+#
+# What maro can NOT do from here: rewrite a tool result before the model
+# sees it. The NDJSON this process parses is the CLI's after-the-fact echo
+# of its own agentic loop — by the time a tool_result event is readable on
+# stdout, the CLI has already fed it to the model. Truncating it in
+# _parse_stream_json would change maro's records, not the model's context
+# or the bill. Enforcement therefore lives in (1) what the CLI is configured
+# to admit per tool call and (2) killing the process on runaway accumulation.
+
+# Per-call uncached-ingest ceiling (tokens). 300K = 1.5x the 200K/step
+# decomposition_too_broad diagnostic watermark, ~7x what a healthy fetch-CLI
+# step ingests, and would have cut the 2.14M specimen at ~1/7 of its burn.
+_FRESH_INPUT_CEILING_DEFAULT = 300_000
+
+# Per-tool-call Bash output cap (chars) handed to the CLI. 24000 chars
+# (~6K tokens) keeps the fetch CLI's own capped output (~20.3K chars
+# measured) passing through untruncated while tightening the CLI default
+# and making the invariant maro-owned config instead of a CLI default.
+_BASH_OUTPUT_CAP_DEFAULT = 24_000
+
+
+def _fresh_input_ceiling() -> int:
+    """Resolve the per-call ingest ceiling: env > config > default; <=0 disables."""
+    raw = os.environ.get("MARO_SUBPROCESS_FRESH_INPUT_CEILING")
+    if raw is not None:
+        try:
+            return max(0, int(raw))
+        except ValueError:
+            log.warning("MARO_SUBPROCESS_FRESH_INPUT_CEILING=%r not an int; "
+                        "falling back to config/default", raw)
+    try:
+        from config import get as _cfg_get
+        return max(0, int(_cfg_get("llm.subprocess.fresh_input_ceiling_tokens",
+                                   _FRESH_INPUT_CEILING_DEFAULT) or 0))
+    except Exception:
+        return _FRESH_INPUT_CEILING_DEFAULT
+
+
+def _bash_output_cap_env() -> Optional[Dict[str, Optional[str]]]:
+    """Env block capping per-tool-call Bash output for an agentic subprocess.
+
+    Precedence: MARO_BASH_MAX_OUTPUT_CHARS (0 disables) > an operator's own
+    BASH_MAX_OUTPUT_LENGTH already in the environment (left alone — the
+    subprocess inherits it) > config llm.subprocess.bash_max_output_chars >
+    _BASH_OUTPUT_CAP_DEFAULT.
+
+    A None *value* means "unset this in the child", which is not the same as
+    returning None ("express no opinion, inherit whatever is there"). Disable
+    used to return the latter, so `MARO_BASH_MAX_OUTPUT_CHARS=0` alongside an
+    exported `BASH_MAX_OUTPUT_LENGTH=50000` left the 50000 in force — the
+    documented higher-precedence disable silently did nothing (adversarial
+    review 2026-07-27, reproduced by two lenses).
+    """
+    raw = os.environ.get("MARO_BASH_MAX_OUTPUT_CHARS")
+    if raw is not None:
+        try:
+            cap = int(raw)
+        except ValueError:
+            log.warning("MARO_BASH_MAX_OUTPUT_CHARS=%r not an int; ignoring", raw)
+            cap = None
+        if cap is not None:
+            if cap > 0:
+                return {"BASH_MAX_OUTPUT_LENGTH": str(cap)}
+            # Explicit disable outranks an inherited operator value.
+            return {"BASH_MAX_OUTPUT_LENGTH": None}
+    if "BASH_MAX_OUTPUT_LENGTH" in os.environ:
+        return None  # operator already governs the CLI directly; inherit as-is
+    try:
+        from config import get as _cfg_get
+        cap = int(_cfg_get("llm.subprocess.bash_max_output_chars",
+                           _BASH_OUTPUT_CAP_DEFAULT) or 0)
+    except Exception:
+        cap = _BASH_OUTPUT_CAP_DEFAULT
+    return {"BASH_MAX_OUTPUT_LENGTH": str(cap)} if cap > 0 else None
+
+
+def _build_step_token_brake(default_model: str = ""):
+    """Per-call ingest brake for `_run_subprocess_safe`, or None when disabled.
+
+    Sums uncached ingest (input_tokens + cache_creation_input_tokens) across
+    the call's stream-json assistant events — deduped per API message id,
+    because the CLI emits one assistant event per content block with the
+    same usage — and returns a TokenRunawayError once the total crosses the
+    ceiling (the runner kills the process group and raises it). Cache READS
+    deliberately don't count: they are the 0.1x-priced echo of prior ingest,
+    and counting them would fire on legitimately long multi-turn steps.
+
+    On kill, the call's estimated spend (which DOES include cache reads and
+    output) is accrued into the run cost meter when one is armed, so the
+    runaway cost circuit's accounting doesn't lose the killed call.
+    """
+    ceiling = _fresh_input_ceiling()
+    if ceiling <= 0:
+        return None
+    try:
+        from metrics import estimate_cost
+    except Exception:
+        estimate_cost = None
+    state: Dict[str, Any] = {"by_id": {}, "anon_fresh": 0, "anon_est": 0.0}
+
+    def _probe(events):
+        for ev in events:
+            if ev.get("type") != "assistant":
+                continue
+            msg = ev.get("message") or {}
+            usage = msg.get("usage") or {}
+            if not usage:
+                continue
+            # Safety accounting first, and defensively: a malformed field
+            # anywhere in this block used to raise, and _run_subprocess_safe
+            # swallows probe exceptions after the reader has already advanced —
+            # so one bad event silently discarded every later event in the same
+            # batch and disabled the brake for the rest of the call
+            # (adversarial review 2026-07-27, reproduced). Ingest is recorded
+            # even when the OPTIONAL cost estimate cannot be computed.
+            def _num(field: str) -> int:
+                try:
+                    return max(0, int(usage.get(field, 0) or 0))
+                except (TypeError, ValueError):
+                    log.warning("stream usage field %s=%r not numeric — counted as 0; "
+                                "brake accounting may under-report", field,
+                                usage.get(field))
+                    return 0
+
+            fresh = _num("input_tokens") + _num("cache_creation_input_tokens")
+            est = 0.0
+            if estimate_cost is not None:
+                cache_read = _num("cache_read_input_tokens")
+                try:
+                    est = estimate_cost(
+                        fresh + cache_read,
+                        _num("output_tokens"),
+                        model=msg.get("model") or default_model,
+                        cache_read_tokens=cache_read,
+                    )
+                except Exception as _cost_err:
+                    # Cost estimation is telemetry; it must never disarm the brake.
+                    log.debug("cost estimate failed in token brake: %s", _cost_err)
+                    est = 0.0
+            key = msg.get("id")
+            if key:
+                prev = state["by_id"].get(key, (0, 0.0))
+                state["by_id"][key] = (max(prev[0], fresh), max(prev[1], est))
+            else:
+                state["anon_fresh"] += fresh
+                state["anon_est"] += est
+        total_fresh = state["anon_fresh"] + sum(
+            f for f, _ in state["by_id"].values())
+        if total_fresh < ceiling:
+            return None
+        total_est = state["anon_est"] + sum(
+            e for _, e in state["by_id"].values())
+        meter = _RUN_COST_METER.get()
+        if meter is not None:
+            with meter["lock"]:
+                meter["spent_usd"] += total_est
+        from llm_errors import TokenRunawayError
+        log.warning(
+            "step token brake: %d uncached input tokens ingested by one "
+            "subprocess call >= ceiling %d — killing subprocess",
+            total_fresh, ceiling)
+        return TokenRunawayError(total_fresh, ceiling, estimated_cost_usd=total_est)
+
+    return _probe
+
+
+def _build_stream_probes(default_model: str = "", *, agentic: bool = True):
+    """Compose the stream-side kill probes for ONE subprocess attempt.
+
+    Fresh per attempt (accumulation is per-call by design). Cost probe first:
+    when both would fire in the same poll, the run-ceiling breach is the
+    stronger signal and its loop semantics (stop the run) should win. The
+    token brake only arms for agentic calls — no_tools utility calls are
+    single-shot and already capped via CLAUDE_CODE_MAX_OUTPUT_TOKENS.
+    """
+    probes = [p for p in (
+        _build_stream_cost_probe(default_model),
+        _build_step_token_brake(default_model) if agentic else None,
+    ) if p is not None]
+    if not probes:
+        return None
+    if len(probes) == 1:
+        return probes[0]
+
+    def _combined(events):
+        events = list(events)
+        for p in probes:
+            exc = p(events)
+            if exc is not None:
+                return exc
+        return None
+
+    return _combined
 
 
 def _extract_result_object(text: str) -> Optional[dict]:
@@ -1849,17 +2114,28 @@ class ClaudeSubprocessAdapter(_JSONToolPromptMixin, LLMAdapter):
             except Exception:
                 pass
             _env_extra = {"CLAUDE_CODE_MAX_OUTPUT_TOKENS": str(_cap)}
+        elif not no_tools:
+            # Agentic calls: cap per-tool-call Bash output at the CLI boundary
+            # (BASH_MAX_OUTPUT_LENGTH — oversized output is persisted to a
+            # file and only a capped slice reaches the model's context). The
+            # structural half of the tire-runs fix: the prompt asks workers
+            # not to curl pages into context; this makes a giant curl/cat —
+            # including a multi-megabyte JSON response — physically unable to
+            # inject more than the cap per call. See _bash_output_cap_env.
+            _env_extra = _bash_output_cap_env()
 
         prompt = _delta_prompt if _resume_id else full_prompt
         if _resume_id:
             cmd += ["--resume", _resume_id]
         try:
-            # stream_probe: in-flight runaway cost kill (no-op unless a cost
-            # meter is armed). BudgetRunawayError from the probe propagates
-            # past the TimeoutExpired conversion below by design.
+            # stream_probe: in-flight kill orders — the runaway cost circuit
+            # (no-op unless a cost meter is armed) plus, on agentic calls, the
+            # always-on per-call token brake. BudgetRunawayError /
+            # TokenRunawayError from a probe propagate past the
+            # TimeoutExpired conversion below by design.
             result = _run_subprocess_safe(
                 cmd, input=prompt, timeout=_timeout, cwd=_cwd,
-                stream_probe=_build_stream_cost_probe(model_str),
+                stream_probe=_build_stream_probes(model_str, agentic=not no_tools),
                 container_name=_container_name, env_extra=_env_extra)
         except subprocess.TimeoutExpired:
             raise RuntimeError(f"claude subprocess timed out after {_timeout}s")
@@ -1884,7 +2160,7 @@ class ClaudeSubprocessAdapter(_JSONToolPromptMixin, LLMAdapter):
                 result = _run_subprocess_safe(
                     fresh_cmd, input=prompt, timeout=_timeout, cwd=_cwd,
                     env_extra=_env_extra,
-                    stream_probe=_build_stream_cost_probe(model_str),
+                    stream_probe=_build_stream_probes(model_str, agentic=not no_tools),
                     container_name=_container_name)
             except subprocess.TimeoutExpired:
                 raise RuntimeError(f"claude subprocess timed out after {_timeout}s")
@@ -1960,9 +2236,12 @@ class ClaudeSubprocessAdapter(_JSONToolPromptMixin, LLMAdapter):
                     if resolve_container_run is not None and _container_name is not None:
                         _container_name = resolve_container_run(no_tools, executor)
                     try:
+                        # env_extra was missing here pre-2026-07-27: a
+                        # rate-limit retry of a capped call ran uncapped.
                         result = _run_subprocess_safe(
                             cmd, input=prompt, timeout=_timeout, cwd=_cwd,
-                            stream_probe=_build_stream_cost_probe(model_str),
+                            env_extra=_env_extra,
+                            stream_probe=_build_stream_probes(model_str, agentic=not no_tools),
                             container_name=_container_name)
                     except subprocess.TimeoutExpired:
                         log.warning("rate limit retry timed out after %ds, will retry", _timeout)

@@ -1999,14 +1999,46 @@ deferred rather than silently dropped:
   string-valued `result` envelope parsed as failure. The review earns
   its cost again — the 6612-green suite caught none of these.
 
+  **Mid-step token brake SHIPPED 2026-07-27** (same branch, follow-up
+  chunk). Two enforcement points, both at the substrate boundary:
+  (1) per-tool-call ingest cap — agentic subprocess calls now carry
+  `BASH_MAX_OUTPUT_LENGTH` (config `llm.subprocess.bash_max_output_chars`,
+  default 24000 chars; `MARO_BASH_MAX_OUTPUT_CHARS` overrides, 0 disables),
+  which makes the CLI ITSELF persist oversized Bash output to a file and
+  put only a capped slice in the model's context — verified live on CLI
+  2.1.220 (100K-char output → exactly-cap-sized slice in the transcript,
+  including through `ClaudeSubprocessAdapter.complete` end-to-end); covers
+  curl/cat/multi-MB JSON alike, and the keys are forwarded through the
+  container lane's explicit env passthrough. (2) per-call accumulation
+  brake — a stream-side probe (`llm._build_step_token_brake`) sums uncached
+  ingest (input + cache_creation, deduped per API message id) and kills the
+  subprocess past `llm.subprocess.fresh_input_ceiling_tokens` (default
+  300K; `MARO_SUBPROCESS_FRESH_INPUT_CEILING`, 0 disables) →
+  `TokenRunawayError` → error_class `token_runaway` → the STEP blocks and
+  the run continues (deliberately unlike budget_runaway, which stops the
+  run). The one thing maro canNOT do was verified and documented in
+  `llm.py`: tool results cannot be rewritten before the model sees them —
+  the NDJSON is the CLI's after-the-fact echo of its own loop, so
+  truncating in `_parse_stream_json` would only falsify maro's records.
+  Same-seam fixes riding along, both from live NDJSON evidence: the
+  stream cost probe double-counted usage ~2x (one assistant event per
+  content block, same message id + usage — now deduped), and the
+  rate-limit retry dropped `env_extra` (a capped call retried uncapped).
+  The EXECUTE_SYSTEM "curl is fine for JSON APIs" carve-out is closed with
+  size-aware guidance (`head -c 20000` / curl -o + jq) and discloses the
+  harness truncation so workers plan around the persisted file. Tests:
+  tests/test_step_token_brake.py (28).
+
   **Still open:**
-  - **The mid-step token brake.** The fetch fix makes the cheap path
-    available and instructed, not enforced; a worker can still curl. A
-    substrate-boundary brake (truncate oversized Bash tool-output in the
-    stream-json parser, or a per-step input-token guard) is the half
-    that makes it structural. Reviewers also noted the "curl is fine for
-    JSON APIs" carve-out permits the same blowup via a multi-MB JSON
-    response — an output-size limit at the Bash boundary covers both.
+  - **Brake ceiling calibration.** The 300K uncached-ingest default is
+    reasoned (1.5x the decomposition_too_broad diagnostic watermark), not
+    measured against this box's healthy-step distribution — mine
+    step-costs/run records on the runtime box before tightening or
+    loosening. Cache reads deliberately don't count; if a future blowup is
+    pure re-send amplification with low fresh ingest, the cost meter (not
+    this brake) is the guard that should catch it.
+  - **Codex lane has no brake.** `CodexCLIAdapter` streams a different
+    event shape; the token brake and Bash cap are claude-lane only.
   - **Container-mode CLI resolution — UNVERIFIED.** `maro-fetch` is now
     a console entry point and `_fetch_cli_path` prefers it, but nothing
     proves it resolves inside the executor image; the host-path fallback
