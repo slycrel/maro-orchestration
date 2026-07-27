@@ -4314,3 +4314,26 @@ Dormant (deliberately parked, not dropped):
   from scratch. Same distinction the project-continuation fix made at
   the goal seam, applied inside the run. Dropping intermediates as
   "unnecessary" is the same optimization working against us.
+
+- **2026-07-27 — Decisions (Jeremy): chunk-9 agenda items 1, 2, 3, 5.**
+  (1) Build order confirmed: #4 stop-verdict split first, then #2 recon
+  flavor, both exercised in star before src/ wiring. (2) Coherence rides
+  the existing closure/navigator judgment seams NOW ("let's make sure we
+  don't lose the plot ourselves"); a BACKLOG item carries the later half
+  — revisit with live data, confirm, upgrade to its own tracked signal.
+  (3) Escalation payload: simple first — single-chasm decision + one
+  family-ROI context line; complex later. Jeremy's gut, on record:
+  capability-acquisition side-quests ("literally learning a language to
+  cross the chasm") ARE the pattern we're building — the run-scale twin
+  of the lesson loop; excuses-masquerading-as-roadblocks (boil-the-ocean
+  prompts included) are the failure family to guard against. New open
+  question: scientific-method thinking at the failure boundary — when a
+  failed pass could succeed as a side-quest, how does the system
+  determine/recommend that? (5) External interrupt is NOT a fifth stop
+  verdict: the four verdicts are observations about the map; an
+  interrupt is an event about the run. Record run-level
+  interrupted:reason + whichever verdict the evidence supported at
+  interrupt time, with reopen pointer (run 3 reads "out-of-budget, work
+  product delivered, reopen: raise cap or continue" — not "failed").
+  Item 4 (one-map cross-goal scope) stays deliberately open pending
+  continuation-menu data.

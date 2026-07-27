@@ -1937,6 +1937,18 @@ wiring-inventory checks CANNOT ship the same way yet, per the checkpoint:
 When either registry ships, the census follows in the same chunk
 (consumer-first: convention and enforcer land together).
 
+### Coherence signal upgrade (chunk-9 item 2, later half — decided 2026-07-27)
+
+Now-lane (decided, ships with chunk-9 wiring): the coherence question
+("does the assembled path still tell the original story?") rides the
+existing closure/navigator judgment seams — a question added to seams
+that already run, not a new subsystem. This item is the later half:
+revisit with live data, confirm the seam-riding version actually fires
+(or visibly misses), and only then upgrade lost-the-plot to its own
+tracked signal with a readout. Consumer-first both times: the upgrade
+needs evidence of misses, not vibes. Decision 704420c7; design
+§6/§10 "Coherence vs done-means" (COMPOUND_THINKING_DESIGN.md).
+
 ### Tire-runs tangent — deferred findings (2026-07-27, Opus independent review)
 
 From the three Poe-dispatched tire-research runs (record:
