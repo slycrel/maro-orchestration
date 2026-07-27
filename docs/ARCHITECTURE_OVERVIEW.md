@@ -225,6 +225,46 @@ Boundaries between subsystems are implicit. There's no explicit contract saying 
 ### Conway's Law
 The system's architecture mirrors its development process: each subsystem was built in a focused session, then wired together. The result is good individual subsystems with loose coupling — but the *interfaces between them* are the weakest points.
 
+### Data Discipline: Artifacts Over Streams (Decree, 2026-07-27)
+
+**Context is a view over durable artifacts; a cap must never destroy the
+only copy.** Each step is intentional and data-driven; step internals are
+LLM magic to a degree, so the work is shown at the seams — every step's
+inputs, outputs, and artifacts persist to disk, and what enters context is
+a derived view (summary, extract, slice) that can be re-derived or
+re-reviewed from the durable source. Re-review beats rebuilding the world.
+
+The failure family this kills: caps applied to in-flight streams. A cap
+that truncates the only copy turns every mis-tuned number into
+unrecoverable data loss, and tuning never converges because the right cap
+depends on content value unknowable before reading. Lived examples: the
+1500-token CLI cap decapitating decompose/scope mid-thought, run 3
+(1bfd0894) streaming raw retailer HTML into context past its cost ceiling,
+design decisions decaying to 100-char summaries. Same shape every time.
+
+Operational rules:
+- **Classify every cap** as a *view budget* over a durable source (fine —
+  keep, tune freely) or *lossy destruction* of the only copy (a bug — fix
+  by persist-then-summarize when the seam is touched; no big-bang rewrite).
+- **API-seam `max_tokens` stays** — that's call mechanics, not context
+  assembly (see `output_cap_tokens` for the subprocess thinking-headroom
+  case).
+- **Remote resources fetch to disk first**: raw bytes → run-dir
+  `sources/` with URL + timestamp index → extracted view into context.
+  The worker-reachable fetch verb is the named next lift (the capped
+  fetch path in `web_fetch.py` is architecturally unreachable from
+  `claude -p` workers, who route around it with raw curl).
+- **Named costs, accepted**: staleness becomes first-class (fetch
+  timestamps + refresh judgment — for price-shaped research, re-fetching
+  is sometimes correct); `sources/` grows under the never-auto-delete
+  rule; extraction quality becomes the tuning knob — the good kind,
+  because raw is still on disk.
+
+Decree recorded in GOAL_BRAIN Decisions (2026-07-27) and the runtime
+decision store (59a5bcd9). Kin to the run-visibility arc: same instinct
+("make all inputs/outputs/artifacts visible"), formalized at the
+data-flow layer.
+
 ### Goal Lineage (Ancestry)
 
 Two invariants Jeremy holds here: (a) a human must be able to **see** a goal's

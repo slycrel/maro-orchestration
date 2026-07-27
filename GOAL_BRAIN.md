@@ -4285,3 +4285,23 @@ Dormant (deliberately parked, not dropped):
   §13c. (Side-quest question also settled on record: the term is Jeremy's
   own prior coinage — INTENT_RESOLUTION_DESIGN.md's side-quest DAG — not a
   new invention; §13d.)
+
+- **2026-07-27 — Decree (Jeremy): artifacts over streams — context is a
+  view over durable artifacts; a cap must never destroy the only copy.**
+  Surfaced by the tire-runs tangent (raw retailer HTML streamed into
+  context blew run 3's cost ceiling; caps truncating in-flight content
+  at many seams). Not a new principle — the same instinct as the
+  run-visibility arc ("make all inputs/outputs/artifacts visible"),
+  formalized at the data-flow layer: each step intentional and
+  data-driven; step internals stay magic hand-waving to a degree, so
+  the work is shown at the seams — every step's inputs, outputs, and
+  artifacts durable on disk, derived views in context, re-review over
+  rebuild-the-world. Dropping data on the floor as "unnecessary" for
+  performance is an optimization working against us. Caps split into
+  two classes: view budgets over durable sources (fine) vs lossy
+  destruction of the only copy (bugs — fix by persist-then-summarize
+  as seams are touched, not big-bang). API-seam max_tokens stays: call
+  mechanics, not context assembly. First instances: the Opus
+  token-reduction work persisting raw before transforming; a
+  worker-reachable fetch verb (fetch → sources/ artifact + index →
+  extracted view) is the named next lift.
