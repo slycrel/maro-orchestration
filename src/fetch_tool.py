@@ -14,10 +14,17 @@ the worker LLM, via the tool registry) should use.
     fetch("agent orchestration", mode="github_repos")     # platform query
     fetch("LocalLLaMA", mode="reddit_posts")
 
-Registered in the default tool registry as tool name `fetch` (worker role) —
-advertised to API-path workers via get_tools_for_role and dispatchable through
-`registry.resolve_and_call` (step_exec's registry branch). Subprocess workers
-(`claude -p`) have their own fetch tools and don't need this.
+Two entry points, one implementation:
+  - API-path workers: registered in the default tool registry as tool name
+    `fetch` (worker role), advertised via get_tools_for_role and dispatchable
+    through `registry.resolve_and_call` (step_exec's registry branch).
+  - Subprocess (`claude -p`) workers: the `main()` CLI at the bottom of this
+    file — `python3 src/fetch_tool.py <url>`. They have no tool registry, and
+    WebFetch/WebSearch are disallowed for them (llm.py), so without the CLI
+    their only page-reading affordance is Bash+curl. The docstring here used to
+    claim they "have their own fetch tools and don't need this"; that was wrong,
+    and the cost of it was a research step that curled raw retailer HTML for
+    2.14M input tokens (docs/history/2026-07-27-tire-runs-examination.md).
 
 Every mode returns a string and never raises — failures come back as
 descriptive `[...]` messages, matching web_fetch's contract.
@@ -140,3 +147,58 @@ def fetch_handler(input_data: Dict[str, Any]) -> str:
         limit = 5
     return fetch(str(data.get("target") or ""),
                  mode=str(data.get("mode") or "auto"), limit=limit)
+
+
+# ---------------------------------------------------------------------------
+# CLI — the seam for subprocess (`claude -p`) workers
+# ---------------------------------------------------------------------------
+#
+# API-path workers reach `fetch` through the tool registry. Subprocess workers
+# have no registry — their only affordance is Bash, and WebFetch/WebSearch are
+# disallowed (llm.py), so before this CLI existed the sole way to read a page
+# was `curl` → raw HTML → context. One tire-research step cost 2.14M input
+# tokens ($1.21) that way and hit the run's cost hard-stop
+# (docs/history/2026-07-27-tire-runs-examination.md). This entry point makes
+# the capped markdown chain reachable from a shell, so the cheap path is also
+# the available one.
+
+def main(argv=None) -> int:
+    """`python3 src/fetch_tool.py <target>` — print fetched content to stdout."""
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        prog="fetch_tool",
+        description="Token-lean web fetch: returns clean markdown/text, never raw HTML.",
+    )
+    parser.add_argument("target", help="URL, or query/subreddit for platform modes")
+    parser.add_argument("--mode", default="auto", choices=list(MODES),
+                        help="fetch mode (default: auto — routes URLs by host)")
+    parser.add_argument("--limit", type=int, default=5,
+                        help="max items for platform-query modes (default 5)")
+    parser.add_argument("--max-chars", type=int, default=0,
+                        help="truncate output to N chars (0 = the built-in ~20k cap)")
+    parser.add_argument("--no-capture", action="store_true",
+                        help="skip saving the raw page to disk")
+    args = parser.parse_args(argv)
+
+    if args.no_capture:
+        import os
+        os.environ["MARO_FETCH_CAPTURE"] = "0"
+
+    out = fetch(args.target, mode=args.mode, limit=args.limit)
+    if args.max_chars and args.max_chars > 0 and len(out) > args.max_chars:
+        out = out[:args.max_chars] + "\n[truncated by --max-chars]"
+    print(out)
+    # Bracketed-failure contract: `[...]`-only output means nothing was fetched.
+    return 1 if out.startswith("[") and "\n" not in out.strip() else 0
+
+
+if __name__ == "__main__":  # pragma: no cover - CLI entry
+    import sys as _sys
+    from pathlib import Path as _Path
+    # Support `python3 src/fetch_tool.py` (sys.path[0] is src/, imports resolve)
+    # and `python3 -m fetch_tool` from a PYTHONPATH=src environment alike.
+    _here = str(_Path(__file__).resolve().parent)
+    if _here not in _sys.path:
+        _sys.path.insert(0, _here)
+    raise SystemExit(main())

@@ -1953,6 +1953,34 @@ deferred rather than silently dropped:
   backend on this box bypasses the one seam that would contain the
   blowup. The 200K/step figure is diagnostic, not a brake. Cost control
   has to live at the substrate boundary.
+
+  **Fetch half SHIPPED 2026-07-27** (branch `token-lean-fetch`): the seam
+  is now reachable from a shell — `python3 src/fetch_tool.py <url>` (and
+  the `web_fetch.py` delegate) returns the capped markdown chain, and the
+  EXECUTE_SYSTEM "URL FETCHING" block names that command with an
+  absolute path resolved at import, replacing the old text that told
+  workers a non-pre-fetched URL was simply "unavailable" (which left
+  curl as the only move). Chain hardened to Jina → **Cloudflare
+  markdown.new** → raw HTTP+BS4: Jina was a single point of failure that
+  403s/rate-limits, and a worker with no working markdown tier falls
+  back to curl. Measured on en.wikipedia.org/wiki/Tire: 754,447 chars
+  (~188K tokens) raw → 20,279 (~5K) through the chain, 97.3% reduction.
+  Raw HTML is captured full-fidelity to `<rundir>/fetch-raw/` (content-
+  addressed, `index.jsonl` manifest) with only a one-line path pointer in
+  context, so a later step can re-extract JSON-LD/tables the markdown
+  drops without re-fetching — verified by pulling a `datePublished` field
+  out of a capture the markdown had dropped. Deliberately NOT under
+  `<rundir>/build/`: captures are unscrubbed third-party HTML and
+  viz_server serves that tree.
+
+  **Still open — the mid-step token brake.** The fetch fix makes the
+  cheap path available and instructed, not enforced; a worker can still
+  curl. A substrate-boundary brake (truncate oversized Bash tool-output
+  in the stream-json parser, or a per-step input-token guard) is the
+  half that makes it structural. Also unverified: whether the CLI path
+  resolves inside the container executor, where the repo mount point may
+  differ from the host path baked into the prompt (falls back to curl if
+  not — no regression, but no fix either).
 - **Success accounting vs answer quality.** `stuck → failed`
   (`run_curation.py`) even when partial_rescue holds contract-meeting
   deliverables — run 3 recorded "failed" with 2 of 3 tiers purchase-ready,

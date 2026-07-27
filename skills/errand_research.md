@@ -28,9 +28,12 @@ contract for a question someone wants answered in a minute or two.
    aggregator, the exact appliance model's manual over the product
    category's common answer).
 3. **Fetch and triangulate** — pull the 2-4 pages that actually answer the
-   question. If sources disagree (stale hours, conflicting phone numbers),
-   verify against the more authoritative one and note the correction rather
-   than averaging.
+   question with `python3 <repo>/src/fetch_tool.py "<url>"` (clean markdown,
+   ~5k-token cap, raw HTML saved to disk). Never `curl` a page into context —
+   raw retailer/product HTML runs 20-100x the markdown size and will exhaust
+   the run's cost budget before the answer lands. If sources disagree (stale
+   hours, conflicting phone numbers), verify against the more authoritative
+   one and note the correction rather than averaging.
 4. **Validate anything you're about to hand back as a concrete claim** —
    an address, a link, a phone number, a specific business name. A dead
    link or a fabricated-sounding specific is worse than saying less.
