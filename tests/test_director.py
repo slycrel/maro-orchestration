@@ -1334,6 +1334,9 @@ class TestVerifyGoalCompletion:
         assert len(captured) == 1
         ctx = captured[0].get("context", {})
         assert ctx.get("skip_reason") == "exception"
+        # The throwing exception must be visible in the event (2026-07-27
+        # tire runs: closure vanished on both and nothing recorded why).
+        assert ctx.get("skip_detail") == "RuntimeError: API down"
         assert captured[0].get("loop_id") == "loop-ghi"
 
     def test_closure_verdict_not_emitted_on_dry_run(self):

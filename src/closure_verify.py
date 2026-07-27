@@ -589,7 +589,7 @@ def verify_goal_completion(
     # the silent early returns where no checks were generated, no results came
     # back, or an unexpected exception was caught.  dry_run / no-adapter are
     # intentional skips and don't need a log entry.
-    def _emit_skip(reason: str) -> None:
+    def _emit_skip(reason: str, detail: str = "") -> None:
         try:
             from captains_log import log_event as _le, CLOSURE_VERDICT as _CV
             _le(
@@ -614,6 +614,7 @@ def verify_goal_completion(
                     "commands": [],
                     "summary": "Verification skipped.",
                     "skip_reason": reason,
+                    **({"skip_detail": detail[:300]} if detail else {}),
                 },
                 loop_id=loop_id or None,
             )
@@ -1134,9 +1135,15 @@ def verify_goal_completion(
 
         return verdict
 
-    except Exception:
-        log.debug("closure check error — treating as complete", exc_info=True)
-        _emit_skip("exception")
+    except Exception as exc:
+        # warning, not debug: this branch removes the intelligent arbiter
+        # from the verdict stack entirely (both 2026-07-27 tire runs lost
+        # closure this way and nobody could see why — the throwing exception
+        # was invisible and the run fell to the provenance regex alone).
+        log.warning("closure check error — verification did not run, "
+                    "treating as complete (%s: %s)",
+                    type(exc).__name__, exc, exc_info=True)
+        _emit_skip("exception", detail=f"{type(exc).__name__}: {exc}")
         return _null
 
 
