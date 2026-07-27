@@ -45,8 +45,10 @@ _SUCCESS_CLASS_INFO = {
     "success": ("success", "badge-done", "Steps completed and the goal was verified achieved."),
     "done-not-achieved": ("done, not achieved", "badge-retry", "Steps completed, but verification says the goal wasn't met."),
     "done-unverified": ("done, unverified", "badge-pending", "Steps completed; no achievement verification ran."),
+    "achieved-not-done": ("achieved (process broke)", "badge-done", "Verification says the goal WAS met, but the process ended stuck/errored — verdict-preferred."),
     "partial": ("partial", "badge-retry", "Stopped early — incomplete."),
     "failed": ("failed", "badge-blocked", "Stuck or errored."),
+    "interrupted": ("interrupted", "badge-pending", "Process-level ending (kill switch, stranded, awaiting input) — carries no goal evidence."),
     "unknown": ("unknown", "badge-pending", "Outcome not classified."),
 }
 _LANE_HELP = "NOW = trivial, answered in a single LLM call. AGENDA = multi-step, planned and executed as a loop."
@@ -1402,7 +1404,8 @@ def search_runs(
     - `goal`: case-insensitive substring match against the goal/prompt text.
     - `status`: exact match (case-insensitive) against the effective status
       — `success_class` once curated (success / done-not-achieved /
-      done-unverified / partial / failed), else the raw process status.
+      done-unverified / achieved-not-done / partial / failed / interrupted),
+      else the raw process status.
     - `lane`: exact match (case-insensitive) against the run's lane
       (now / agenda / user_goal).
     - `since` / `until`: inclusive bounds on `started_at`, ISO date

@@ -648,6 +648,26 @@ def _finalize_loop(
     except Exception as _reflect_exc:
         log.warning("reflect_and_record failed — run %s produced no learning data: %s", loop_id, _reflect_exc)
 
+    # Per-step learning (2026-07-27): a failure-shaped ending fails the
+    # run-level learnability gate, but steps that individually verified
+    # still carry method evidence — extract PROVISIONAL lessons from them
+    # (reduced score, no injection until confirmed; see extract_step_lessons).
+    # "done" runs skip: learnable ones learned via the run-level path, and
+    # closure-lane ones are judged later (run_deferred_learning covers the
+    # judged-False case post-verdict).
+    if not dry_run and step_outcomes and loop_status != "done":
+        try:
+            from memory import extract_step_lessons
+            extract_step_lessons(
+                goal,
+                step_outcomes,
+                task_type="agenda",
+                adapter=adapter,
+                loop_id=loop_id,
+            )
+        except Exception as _sl_exc:
+            log.debug("step-lesson extraction failed (non-critical): %s", _sl_exc)
+
     # Skill crystallization + synthesis for successful loops. Deferred with
     # the lessons (data-r2-01) when the caller runs closure — a done-but-not-
     # achieved run must not crystallize its pattern into the skill library.
@@ -853,6 +873,30 @@ def finalize_deferred_learning(
     if loop_id in _skip:
         return
     step_outcomes = getattr(loop_result, "steps", None) or []
+    # Per-step learning (2026-07-27): closure judged, and the row failed the
+    # learnability gate (judged-False verdict) — the run-level lessons came
+    # out failure-flavored, but individually-verified steps still carry
+    # method evidence. Final loop only (earlier attempts' steps are gone,
+    # same as the skill half below); idempotent via the row stamp, so the
+    # not-deferred loops this function also receives don't re-pay the call.
+    if step_outcomes and not dry_run:
+        try:
+            import dataclasses as _dc
+            from memory import extract_step_lessons
+            from memory_ledger import load_outcome_by_loop_id
+            from outcome_policy import is_learnable_outcome
+            _row = load_outcome_by_loop_id(loop_id)
+            if _row is not None and not is_learnable_outcome(_dc.asdict(_row)):
+                extract_step_lessons(
+                    getattr(loop_result, "goal", "") or "",
+                    step_outcomes,
+                    task_type="agenda",
+                    adapter=adapter,
+                    loop_id=loop_id,
+                    dry_run=dry_run,
+                )
+        except Exception as _sl_exc:
+            log.debug("post-verdict step-lesson extraction failed (non-critical): %s", _sl_exc)
     # Provenance demotion already downgraded status from "done", so a
     # provenance-failed run never reaches the skill branch via status alone.
     if dry_run or getattr(loop_result, "status", "") != "done" or not step_outcomes:

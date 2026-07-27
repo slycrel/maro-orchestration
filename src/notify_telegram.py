@@ -32,8 +32,10 @@ _CLASS_LABEL = {
     "success": ("✅", "Done — goal achieved"),
     "done-unverified": ("☑", "Done (not verified)"),
     "done-not-achieved": ("⚠", "Finished — but goal NOT achieved"),
+    "achieved-not-done": ("✅", "Goal achieved (run ended early)"),
     "partial": ("⚠", "Partial — stopped before finishing"),
     "failed": ("❌", "Failed"),
+    "interrupted": ("⏸", "Interrupted"),
 }
 _STATUS_LABEL = {
     "done": ("✅", "Done"),

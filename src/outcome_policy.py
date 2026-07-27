@@ -13,7 +13,8 @@ from typing import Any, Mapping
 from stop_verdicts import EXTERNAL_INTERRUPT, OUT_OF_BUDGET
 
 
-_LEARNABLE_SUCCESS_CLASSES = frozenset(("success", "done-unverified"))
+_LEARNABLE_SUCCESS_CLASSES = frozenset(
+    ("success", "done-unverified", "achieved-not-done"))
 
 
 def is_verdict_pending(outcome: Any) -> bool:
@@ -57,6 +58,13 @@ def is_learnable_outcome(outcome: Mapping[str, Any]) -> bool:
         return False
     if "success_class" in outcome:
         return outcome.get("success_class") in _LEARNABLE_SUCCESS_CLASSES
+    # Verdict-preferred raw path (SF-2 mirror of achieved-not-done): a judged
+    # goal_achieved=True is success evidence regardless of process status —
+    # the ledger-row twin of the curated classify_outcome branch. The
+    # budget/interrupt fail-closed check above already ran (it only fires
+    # when achieved is NOT True).
+    if outcome.get("goal_achieved") is True:
+        return True
     return (
         outcome.get("status") == "done"
         and outcome.get("goal_achieved") is not False

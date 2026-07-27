@@ -189,6 +189,14 @@ def classify_outcome(rd: Path, meta: dict, card: dict) -> None:
         # launder it into "partial" (stop-path survey 2026-07-23,
         # conflation: demotions bypassed the done-not-achieved bucket).
         cls = "done-not-achieved"
+    elif achieved is True:
+        # Verdict-preferred, the SF-2 inversion (star find 2026-07-27): a
+        # judged goal_achieved=True with a non-success process status is
+        # achievement evidence — falling through to "partial"/"failed"
+        # counted a judged SUCCESS as failure. Mirror of done-not-achieved:
+        # the process broke, the goal landed (live specimens: stuck runs
+        # 692bd96f-brisk-lichen, d9f01e13-golden-birch).
+        cls = "achieved-not-done"
     elif status in _PARTIAL_STATUSES:
         cls = "partial"
     elif status in _FAIL_STATUSES:

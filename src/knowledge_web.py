@@ -58,6 +58,9 @@ _CITATION_PENALTY = 0.90
 DECAY_FACTOR = 0.85          # daily non-reinforced decay multiplier
 REINFORCE_BONUS = 0.3        # added to score on reinforcement
 NOVELTY_BONUS = 0.3          # max initial-score boost for a fully novel lesson (chunk 6)
+PROVISIONAL_ENTRY_SCORE = 0.6  # entry score for provisional (step-verified) lessons —
+                               # below the confirmed 1.0 floor, so decay disposes of an
+                               # unconfirmed one in ~1 week instead of ~2
 PROMOTE_MIN_SCORE = 0.9      # minimum score to promote medium → long
 PROMOTE_MIN_SESSIONS = 3     # minimum validated sessions to promote
 GC_THRESHOLD = 0.2           # gc entries with score below this
@@ -103,6 +106,13 @@ class TieredLesson:
     # score so novel one-offs survive decay long enough to be tested; wrong novel
     # guesses still die by decay. Old rows without this field deserialize to 0.0.
     novelty: float = 0.0
+    # Per-step learning (2026-07-27): True for lessons extracted from
+    # individually-verified steps of a run whose run-level outcome failed the
+    # learnability gate. Provisional lessons are excluded from every injection
+    # surface (query_lessons, inject_tiered_lessons, memory_bridge ingest) and
+    # from LONG promotion until a confirmed-context re-record clears the flag
+    # (promote-on-evidence); decay disposes of the unconfirmed rest.
+    provisional: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -225,6 +235,7 @@ def record_tiered_lesson(
     acquired_for: Optional[str] = None,
     evidence_sources: Optional[List[str]] = None,
     lesson_type: str = "",
+    provisional: bool = False,
 ) -> TieredLesson:
     """Record a new lesson at the given tier.
 
@@ -240,6 +251,12 @@ def record_tiered_lesson(
         "recovery" | "verification" | "cost". Enables type-filtered retrieval.
     Phase 59: ``evidence_sources`` accepts a list of URLs/outcome_ids/paper refs
         that back the lesson's claim, enabling post-hoc claim tracing.
+    Per-step learning (2026-07-27): ``provisional=True`` records the lesson at
+        a reduced entry score with the provisional flag set (see TieredLesson).
+        A provisional recording that dedup-matches an existing lesson
+        reinforces it WITHOUT counting as confirmation; a confirmed
+        (non-provisional) recording matching an existing provisional lesson
+        clears its flag — promote-on-evidence.
     """
     import uuid
 
@@ -277,7 +294,8 @@ def record_tiered_lesson(
         for ex in load_tiered_lessons(tier=MemoryTier.LONG, task_type=None, limit=None):
             sim = _text_similarity(ex.lesson, lesson_text)
             if ex.task_type == task_type and sim > 0.8:
-                return _reinforce_tiered_lesson(ex, tier=MemoryTier.LONG)
+                return _reinforce_tiered_lesson(
+                    ex, tier=MemoryTier.LONG, confirming=not provisional)
             max_sim = max(max_sim, sim)
 
     # Scan-and-append is one critical section (review finding: the dedup
@@ -290,7 +308,8 @@ def record_tiered_lesson(
         for ex in load_tiered_lessons(tier=tier, task_type=None, limit=None):
             sim = _text_similarity(ex.lesson, lesson_text)
             if ex.task_type == task_type and sim > 0.8:
-                return _reinforce_tiered_lesson(ex, tier=tier)
+                return _reinforce_tiered_lesson(
+                    ex, tier=tier, confirming=not provisional)
             max_sim = max(max_sim, sim)
 
         # Chunk 6: novelty term — a lesson unlike anything stored starts above
@@ -300,9 +319,15 @@ def record_tiered_lesson(
         # Promotion is unaffected — sessions_validated still gates.
         # Killswitch: knowledge.novelty_term_enabled.
         novelty = 1.0 - max_sim
-        score = 1.0
+        # Provisional lessons enter below the confirmed 1.0 floor: the same
+        # novelty bonus applies (a novel provisional method observation still
+        # deserves its testing window), but the ceiling (0.9) stays under the
+        # confirmed floor so a provisional row can never outrank a confirmed
+        # one at equal age.
+        base = PROVISIONAL_ENTRY_SCORE if provisional else 1.0
+        score = base
         if _novelty_term_enabled():
-            score = 1.0 + NOVELTY_BONUS * novelty
+            score = base + NOVELTY_BONUS * novelty
 
         tl = TieredLesson(
             lesson_id=str(uuid.uuid4())[:8],
@@ -318,6 +343,7 @@ def record_tiered_lesson(
             evidence_sources=evidence_sources or [],
             lesson_type=lesson_type if lesson_type in _LESSON_TYPES else "",
             novelty=round(novelty, 4),
+            provisional=provisional,
         )
         _append_tiered_lesson(tl, tier=tier)
 
@@ -342,7 +368,8 @@ def _append_tiered_lesson(tl: TieredLesson, *, tier: str) -> None:
     locked_append(_tiered_lessons_path(tier), json.dumps(asdict(tl)))
 
 
-def _reinforce_tiered_lesson(tl: TieredLesson, *, tier: str) -> TieredLesson:
+def _reinforce_tiered_lesson(tl: TieredLesson, *, tier: str,
+                             confirming: bool = True) -> TieredLesson:
     """Reinforce an existing lesson: bump score and sessions_validated, rewrite file.
 
     ``tl.score`` is expected to be the *effective* (decay-derived) score —
@@ -350,7 +377,17 @@ def _reinforce_tiered_lesson(tl: TieredLesson, *, tier: str) -> TieredLesson:
 
     Phase 59 Feynman F5: once sessions_validated reaches 3, confidence is bumped
     to _CONFIDENCE_MULTI_SESSION (0.9+) — independently confirmed across sessions.
+
+    Per-step learning (2026-07-27): ``confirming=False`` marks a reinforcement
+    arriving from a provisional context (a step-verified extraction on a
+    non-learnable run). It still bumps score/sessions — the observation is
+    real — but it cannot clear an existing provisional flag; only a confirmed
+    context does (promote-on-evidence).
     """
+    if confirming and tl.provisional:
+        tl.provisional = False
+        log.info("provisional lesson %s confirmed by a learnable-context re-record",
+                 tl.lesson_id)
     tl.score = reinforce_score(tl.score)
     tl.sessions_validated += 1
     tl.times_reinforced += 1
@@ -384,7 +421,12 @@ def _post_reinforce_hooks(tl: TieredLesson, *, tier: str) -> TieredLesson:
     grows.
     """
     if tier == MemoryTier.MEDIUM:
-        if tl.score >= PROMOTE_MIN_SCORE and tl.sessions_validated >= PROMOTE_MIN_SESSIONS:
+        # Provisional lessons never promote: LONG is decay-free, so an
+        # unconfirmed step-verified observation reaching it would be
+        # permanent without ever having been verified in a learnable run.
+        if (tl.score >= PROMOTE_MIN_SCORE
+                and tl.sessions_validated >= PROMOTE_MIN_SESSIONS
+                and not tl.provisional):
             try:
                 if promote_lesson(tl.lesson_id):
                     tl.tier = MemoryTier.LONG
@@ -794,7 +836,11 @@ def run_decay_cycle(
     gc_ids = []
 
     for tl in effective:
-        if tl.score >= PROMOTE_MIN_SCORE and tl.sessions_validated >= PROMOTE_MIN_SESSIONS:
+        if (tl.score >= PROMOTE_MIN_SCORE
+                and tl.sessions_validated >= PROMOTE_MIN_SESSIONS
+                and not tl.provisional):
+            # not-provisional mirrors _post_reinforce_hooks — the backstop
+            # must not promote what the reinforcement path refuses to.
             promoted_ids.append(tl.lesson_id)
         elif tl.score < GC_THRESHOLD:
             gc_ids.append(tl.lesson_id)
@@ -1062,10 +1108,14 @@ def inject_tiered_lessons(
     # Load candidate lessons — fetch a wider pool when using TF-IDF ranking
     _pool_multiplier = 3 if goal else 1
 
-    long_candidates = load_tiered_lessons(
+    # Provisional lessons are excluded from every injection surface until a
+    # confirmed-context re-record clears the flag (per-step learning
+    # 2026-07-27). LONG can't hold provisional rows (promotion is guarded),
+    # but the filter is uniform so the invariant doesn't depend on it.
+    long_candidates = [t for t in load_tiered_lessons(
         tier=MemoryTier.LONG, task_type=task_type, min_score=0.0,
         limit=max_long * _pool_multiplier,
-    )
+    ) if not t.provisional]
     if goal and len(long_candidates) > max_long:
         _ranker = _hybrid_rank if _USE_HYBRID else _tfidf_rank
         long_candidates = _ranker(goal, long_candidates, top_k=max_long)
@@ -1078,10 +1128,10 @@ def inject_tiered_lessons(
             parts.append(f"- {icon} {l.lesson}")
             applied_ids.append((l.lesson_id, MemoryTier.LONG))
 
-    medium_candidates = load_tiered_lessons(
+    medium_candidates = [t for t in load_tiered_lessons(
         tier=MemoryTier.MEDIUM, task_type=task_type, min_score=0.3,
         limit=max_medium * _pool_multiplier,
-    )
+    ) if not t.provisional]
     if goal and len(medium_candidates) > max_medium:
         _ranker = _hybrid_rank if _USE_HYBRID else _tfidf_rank
         medium_candidates = _ranker(goal, medium_candidates, top_k=max_medium)
@@ -1117,6 +1167,7 @@ def query_lessons(
     lesson_type: Optional[str] = None,
     tiers: Optional[List[str]] = None,
     min_score: float = 0.0,
+    include_provisional: bool = False,
 ) -> List[TieredLesson]:
     """Retrieve the top-N lessons most relevant to `query` via hybrid retrieval.
 
@@ -1131,6 +1182,9 @@ def query_lessons(
                      Values: "execution" | "planning" | "recovery" | "verification" | "cost"
         tiers:       Which tiers to search. Default: [LONG, MEDIUM].
         min_score:   Minimum lesson confidence/score to include.
+        include_provisional: Default False — provisional (step-verified,
+                     unconfirmed) lessons stay out of retrieval until a
+                     confirmed-context re-record clears the flag.
 
     Returns:
         List of TieredLesson objects (most relevant first).
@@ -1154,6 +1208,8 @@ def query_lessons(
             min_score=min_score,
             limit=None,
         )
+        if not include_provisional:
+            pool = [t for t in pool if not t.provisional]
         candidates.extend(pool)
 
     if not candidates:

@@ -217,6 +217,17 @@ def ingest_lessons_to_store(
 
                     try:
                         lesson = json.loads(line)
+                        if lesson.get("provisional"):
+                            # Per-step learning (2026-07-27): provisional
+                            # lessons stay out of worker recall until a
+                            # confirmed-context re-record clears the flag.
+                            # Known lag: the bridge is ingest-once by
+                            # offset, so the row's later confirmed rewrite
+                            # only ingests after an offset reset (file
+                            # shrink). Accepted — the live tiered store,
+                            # not this mirror, is the primary injection
+                            # surface and sees confirmation immediately.
+                            continue
                         item = _lesson_to_memory_item(lesson)
                         if store.get(item.id, include_invalid=True) is not None:
                             continue  # already ingested (offset lost/reset)

@@ -48,6 +48,17 @@ Loop completes
     → For each lesson: record_tiered_lesson() → medium/lessons.jsonl
       (confidence 0.5-0.7 depending on k_samples)
     → Captain's log: LESSON_RECORDED event
+Run fails the learnability gate (per-step learning, 2026-07-27)
+  → extract_step_lessons(goal, step_outcomes) — memory.py
+    → over individually-verified steps only (status "done" + verify
+      confidence "strong"); one LLM call, 0-3 step-scoped lessons;
+      prompt forbids goal-level success claims AND negative/deadness
+      claims; killswitch memory.step_learning_enabled
+    → record_tiered_lesson(provisional=True) → medium/lessons.jsonl
+    → idempotent via step_lesson_count stamp on the outcomes row
+    → two call sites (loop_finalize): immediate on loop_status != "done";
+      post-verdict in run_deferred_learning when the judged row is
+      not learnable
 Closure judges the goal (handle.py, AFTER finalization)
   → stamp_outcome_verdict(loop_id, goal_achieved, goal_verdict_source)
     → stamps the verdict tri-state onto the already-written outcomes row
@@ -99,6 +110,8 @@ Loop starting (recall.py loop slice)
 Reinforcement: When a lesson is re-confirmed, score += 0.3 capped at 1.0, sessions_validated++ — but a novelty-boosted score above 1.0 is never lowered (`min(max(1.0, score), score + 0.3)`). At threshold: promote to LONG.
 
 **Re-confirmation side effects (session 40 M2, `_post_reinforce_hooks` in knowledge_web.py):** every reinforcement — whether via `reinforce_lesson()` or `record_tiered_lesson()`'s near-duplicate dedup — runs the hooks: a MEDIUM lesson meeting eligibility (score ≥ 0.9, sessions ≥ 3) promotes to LONG *immediately* (the returned lesson's `.tier` changes), and a LONG re-confirmation calls `observe_pattern()` so hypotheses accrue confirmations and standing rules accrete. `record_tiered_lesson(tier=MEDIUM)` also dedups against LONG first — re-learning an already-promoted lesson reinforces the long-tier record instead of creating a medium duplicate. Full accretion path: medium lesson → eligibility at reinforcement → LONG (promote_lesson seeds hypothesis, confirmation 1) → re-learned once more → standing rule (RULE_PROMOTE_CONFIRMATIONS = 2).
+
+**Provisional lessons (per-step learning, 2026-07-27):** `TieredLesson.provisional=True` marks step-scoped lessons from runs that failed the learnability gate. Entry score `0.6 + 0.3·novelty` (ceiling 0.9, under the confirmed 1.0 floor). Excluded from every injection surface — `query_lessons()` (opt back in via `include_provisional=True`), `inject_tiered_lessons()`, and the memory-bridge ingest — and blocked from LONG promotion in both `_post_reinforce_hooks` and the `run_decay_cycle` backstop (LONG is decay-free; unconfirmed must not become permanent). A confirmed-context re-record that dedup-matches clears the flag (`_reinforce_tiered_lesson(confirming=True)`); a provisional-context match reinforces without confirming. Decay disposes of never-confirmed rows in ~a week. Record: `docs/history/2026-07-27-per-step-learning.md`.
 
 **Decay is a read-time derivation, never persisted** (session 40 invariant). The stored score is the score as of `last_reinforced`; the effective score is computed on load. Any code that rewrites a lessons file MUST load with `raw=True, limit=None` — persisting an effective (decayed) score without re-anchoring `last_reinforced` compounds decay, and the default `limit=50` silently truncates larger stores on rewrite.
 

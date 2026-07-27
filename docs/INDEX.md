@@ -30,6 +30,7 @@ BACKLOG, VISION, CLAUDE, README…) are living by definition and carry no frontm
 | Recon flavor + §14 diagnosis in star, and the cap-stuck / achieved-but-stuck live numbers? | `history/2026-07-27-chunk9-2-recon-diagnosis-star.md` (star use #2; blocked_on contract; 9/726 cap-stuck; 2 achieved-true runs classify "failed") |
 | What did the chunk-9 #2 adversarial review find? (dedup key, reject-bridge, substantiation line) | `history/2026-07-27-chunk9-2-adversarial-review.md` (6 findings, 6/6 verified, all accepted; twelfth clean round) |
 | Did the tire-goal rerun move the needle after the brake land? | `history/2026-07-27-tire-rerun-needle.md` (run 4 delivered; brake armed, never fired; warm-start confound) |
+| Per-step learning from failed runs? (provisional lessons, achieved-not-done, promote-on-evidence) | `history/2026-07-27-per-step-learning.md` (learn at verification granularity, inject conservatively; asymmetric bar) |
 | What are we deliberately NOT building? | `ARCHITECTURE_NON_GOALS.md` |
 | What should Maro be able to do? (example goals, test corpus, pre-installed skill target) | `CAPABILITIES.md` (living catalog — add real asks as they happen) |
 | Two-box / Hermes dispatch, interactive goals, effort-based spend UX, mid-flight injection? | `SESSION_PROTOCOL_DESIGN.md` (dormant-design; the 2026-07-15 skeleton, iterate there) |

@@ -2,7 +2,28 @@
 
 What to do next, in what order. Updated each session. Deferred ideas live in BACKLOG.md; completed phase history in docs/history/ROADMAP_ARCHIVE.md (ROADMAP.md is a stub). This file is the executable queue.
 
-Last updated: 2026-07-27 — **chunk-9 #4 stop-verdict split SHIPPED**
+Last updated: 2026-07-27 — **per-step learning chunk SHIPPED** (Jeremy:
+"let's build the per-step learning chunk, then continue with 9/10").
+Learn at the granularity where verification actually happened, inject
+conservatively: `achieved-not-done` success class (verdict-preferred
+classify branch — judged goal_achieved=True + non-success status is
+achievement evidence, learnable; closes the achieved-but-stuck star
+find, both live specimens now classify correctly),
+`extract_step_lessons` (memory.py — one LLM call over
+individually-verified steps of runs failing the learnability gate;
+asymmetric bar: no goal-success or negative/deadness claims; killswitch
+memory.step_learning_enabled; idempotent via step_lesson_count row
+stamp; two disjoint call sites in loop_finalize), provisional lesson
+lifecycle in knowledge_web (entry 0.6+0.3·novelty, excluded from ALL
+injection surfaces, never promotes to LONG, confirmed-context re-record
+clears the flag, decay disposes of the rest). Deliberate cuts:
+side-quest + blocked_on learning wait for their runtime seams. 24 new
+pins (tests/test_step_learning.py) + one deliberate pin inversion
+(test_outcome_policy stuck+True → learnable). Record:
+docs/history/2026-07-27-per-step-learning.md. **Next: chunk 9/10
+compound-thinking continuation** (per Jeremy's same directive).
+
+Previous checkpoint — 2026-07-27 — **chunk-9 #4 stop-verdict split SHIPPED**
 (AFK session per Jeremy's build order: #4 first, then #2 recon flavor in
 star). Typed stop verdicts (src/stop_verdicts.py: out-of-budget /
 thesis-refuted / reachable-but-not-worth-it / lost-the-plot, plus the

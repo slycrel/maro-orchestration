@@ -2351,19 +2351,19 @@ Dormant (deliberately parked, not dropped):
 
 ## Open questions (system-maintained)
 
-- **Learning granularity below the run** (Jeremy 2026-07-27: "Should we
-  tweak the learning to be possible on a per step basis (or series of
-  steps... or sidequest success)? Seems silly to toss possible good
-  learning out just because the high level didn't work out") — today
-  `is_learnable_outcome` gates at run level, all-or-nothing; step traces
-  and step-level verify verdicts already persist. Candidate shape under
-  discussion: learn at the granularity where verification actually
-  happened (verified steps / closed side-quests / surviving `blocked_on`
-  diagnoses), entering as provisional (reduced score, no main-loop
-  injection until reinforced) — learn more, inject conservatively.
-  Related: achieved-but-stuck BACKLOG item (Jeremy agrees with
-  sentiment); 2026-07-27 work-box handoff doc's confirmed/provisional
-  gate is the same answer shape arrived at independently.
+- ~~**Learning granularity below the run**~~ — RESOLVED BY BUILD
+  2026-07-27 (Jeremy approved: "let's build the per-step learning
+  chunk"). Shipped: `achieved-not-done` success class (verdict-preferred
+  classify branch + learnable), `extract_step_lessons` over
+  individually-verified steps (status done + confidence strong) of
+  non-learnable runs, provisional lesson lifecycle (0.6+0.3·novelty
+  entry, excluded from ALL injection surfaces, never promotes to LONG,
+  confirmed-context re-record clears the flag, decay disposes of the
+  rest), asymmetric bar (no negative/deadness claims from failed runs).
+  Deliberate cuts: side-quest and `blocked_on` learning wait for their
+  runtime seams (§13d DAG design-only; star prompting-only). Record:
+  `docs/history/2026-07-27-per-step-learning.md`. Killswitch
+  `memory.step_learning_enabled`.
 - ~~**recall() shape**~~ — answered 2026-06-10 (`docs/RECALL_DESIGN.md`); edge
   vocabulary pinned there too. Successor questions: guard thresholds are unmeasured
   (watch RECALL_GUARD_TRIPPED). ~~Per-thread goal-brain creation~~ answered
@@ -4415,3 +4415,22 @@ Dormant (deliberately parked, not dropped):
   Ruled implementation detail; the mechanical rename stays available if
   a future consumer needs both simultaneously machine-readable on one
   row (today none does).
+- **2026-07-27 — Decision (Jeremy: "let's build the per-step learning
+  chunk"): learn at the granularity where verification actually
+  happened; inject conservatively.** Approves the session's proposed
+  design for his "seems silly to toss possible good learning out just
+  because the high level didn't work out" question. Shipped same
+  session: (a) `achieved-not-done` success class — judged
+  goal_achieved=True with non-success status is achievement evidence
+  (verdict-preferred classify branch, learnable; closes the
+  achieved-but-stuck star find); (b) `extract_step_lessons` —
+  individually-verified steps (done + strong) of non-learnable runs
+  yield PROVISIONAL lessons; (c) provisional lifecycle: reduced entry
+  score, excluded from every injection surface, never promotes to LONG,
+  a confirmed-context re-record clears the flag (promote-on-evidence),
+  decay disposes of the rest; (d) asymmetric bar — no negative/deadness
+  claims extracted from failed runs; (e) side-quest and `blocked_on`
+  learning deliberately deferred until their runtime seams exist.
+  Independent convergence noted: Jeremy's work-box handoff doc arrived
+  at the same confirmed/provisional gate the same week. Record:
+  docs/history/2026-07-27-per-step-learning.md.

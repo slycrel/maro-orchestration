@@ -8,6 +8,35 @@ Last split: 2026-04-16 (session 34).
 
 ---
 
+## Achieved-but-stuck classifies as "failed" — SHIPPED 2026-07-27 (per-step learning chunk)
+
+**Fixed as `achieved-not-done`:** `classify_outcome` gained a
+verdict-preferred branch (after the chunk-9 #4 incomplete-rebucket,
+before `_PARTIAL_STATUSES`/`_FAIL_STATUSES`) — judged goal_achieved=True
+with a non-success status now classifies `achieved-not-done`, the mirror
+of `done-not-achieved`. Learnable (curated class + raw-row twin in
+`is_learnable_outcome`); badge/label rows added in loop_report +
+notify_telegram; full consumer census in
+`docs/history/2026-07-27-per-step-learning.md`. The two live specimens
+(`692bd96f-brisk-lichen`, `d9f01e13-golden-birch`) classify correctly
+under the new branch. Original item follows.
+
+### Achieved-but-stuck classifies as "failed" (star find, 2026-07-27)
+
+The SF-2 inversion nobody named: `classify_outcome` checks
+`goal_achieved is True` only inside `_SUCCESS_STATUSES`, so a judged
+goal_achieved=True run with status "stuck" lands `success_class=
+"failed"` — a judged SUCCESS counted as failure evidence. Two live
+specimens: `692bd96f-brisk-lichen`, `d9f01e13-golden-birch` (both
+goal_achieved:true in metadata, both classify failed; spot-verified by
+executed classify_outcome). Fix shape: a verdict-preferred branch
+before `_FAIL_STATUSES` (judged True + non-success status → its own
+bucket or "success"), with the same consumer census the chunk-9 #4
+rebucket got (learnability, notify badge, evolver passthrough). Not
+rushed in the star run per its own cuts (no src/ changes in-run).
+
+---
+
 ## Linux local-validator burn-in — SUPERSEDED 2026-07-21 (local rung removed)
 
 **Closed without further burn-in:** the 2026-07-21 swarm-review chunk 1

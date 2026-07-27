@@ -357,6 +357,14 @@ def record_step_trace(
         sr = getattr(s, "stuck_reason", None)
         if sr:
             entry["stuck_reason"] = str(sr)[:300]
+        # Per-step learning (2026-07-27): the verify ladder's per-step
+        # confidence ("strong"|"weak"|"inferred"|"unverified") is the
+        # granularity step-level extraction keys on — persist it so the
+        # trace can answer "which steps individually verified" after the
+        # ephemeral StepOutcome objects are gone.
+        conf = getattr(s, "confidence", "")
+        if conf:
+            entry["confidence"] = conf
         steps_data.append(entry)
 
     trace = {
@@ -730,6 +738,80 @@ def stamp_outcome_stop_verdict(loop_id: str, stop_verdict: str,
                 atomic_write(path, new)
     except OSError as exc:
         log.warning("stamp_outcome_stop_verdict failed for loop %s: %s",
+                    loop_id, exc)
+        return False
+    return hit["v"]
+
+
+def outcome_row_has_step_lessons(loop_id: str) -> bool:
+    """True when the newest outcomes row for loop_id carries a
+    ``step_lesson_count`` key — the idempotence marker for per-step
+    extraction. Raw-line scan (the Outcome dataclass drops unknown keys, so
+    a typed load can't see the stamp). Missing file/row → False."""
+    if not loop_id:
+        return False
+    path = _outcomes_path()
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return False
+    for line in reversed(lines):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(row, dict) and row.get("loop_id") == loop_id:
+            return "step_lesson_count" in row
+    return False
+
+
+def stamp_outcome_step_lessons(loop_id: str, count: int) -> bool:
+    """Stamp ``step_lesson_count`` onto the newest outcomes row for loop_id.
+
+    Per-step learning (2026-07-27): marks that the step-level extraction pass
+    ran for this run (count may be 0 when the LLM returned nothing usable).
+    run_deferred_learning is called for loops that didn't defer, so without
+    this marker a failure-shaped run would re-pay the extraction call on
+    every post-closure pass. Merge-only, same shape as the stop-verdict
+    stamp. Returns True when a row was updated.
+    """
+    if not loop_id:
+        return False
+    path = _outcomes_path()
+    from file_lock import atomic_write, locked_write
+    hit = {"v": False}
+
+    def _stamp(old: str) -> str:
+        lines = old.splitlines()
+        for i in range(len(lines) - 1, -1, -1):
+            line = lines[i].strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(row, dict) and row.get("loop_id") == loop_id:
+                row["step_lesson_count"] = int(count)
+                lines[i] = json.dumps(row)
+                hit["v"] = True
+                break
+        return "\n".join(lines) + ("\n" if lines else "")
+
+    try:
+        with locked_write(path):
+            try:
+                old = path.read_text(encoding="utf-8")
+            except FileNotFoundError:
+                return False
+            new = _stamp(old)
+            if hit["v"]:
+                atomic_write(path, new)
+    except OSError as exc:
+        log.warning("stamp_outcome_step_lessons failed for loop %s: %s",
                     loop_id, exc)
         return False
     return hit["v"]

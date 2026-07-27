@@ -384,6 +384,180 @@ def extract_lessons_via_llm(
     return [text for text, _ in typed]
 
 
+# ---------------------------------------------------------------------------
+# Per-step learning (2026-07-27): provisional lessons from verified steps
+# ---------------------------------------------------------------------------
+
+_STEP_LESSON_SYSTEM = textwrap.dedent("""\
+    You are a meta-learning agent. A run's HIGH-LEVEL GOAL DID NOT land, but
+    some of its steps individually PASSED verification. Extract durable method
+    lessons scoped strictly to what those steps verifiably did.
+
+    Rules:
+    - Scope every lesson to the step-level method ("fetching X via Y worked",
+      "parsing Z needs W first") — NEVER to goal-level success. The run as a
+      whole failed; do not extract a lesson that celebrates or implies the
+      goal landed.
+    - NEVER extract negative/deadness claims ("X doesn't work", "X is dead",
+      "avoid Y") from this run. The run's failure is not evidence that any
+      particular method is dead — a wrongly-recorded dead-end gets a working
+      approach permanently avoided, which costs far more than a missed tip.
+    - Good lessons are specific, actionable, and generalize beyond this case.
+      A step with no surprise usually has no lesson worth keeping.
+
+    Lesson types (pick the best fit for each lesson):
+    - "execution": how to carry out steps more effectively (tools, sequencing, parallelism)
+    - "planning": how to decompose or scope goals better
+    - "verification": how to validate output quality or catch errors early
+    - "cost": how to reduce token spend or latency without sacrificing quality
+
+    Respond with a JSON array of 0-3 lesson objects, each with "lesson"
+    (string) and "type" (one of the above). An empty array is a valid answer.
+""").strip()
+
+_STEP_LESSON_MAX_STEPS = 8  # prompt cap — verified steps beyond this are dropped (logged)
+
+
+def _step_learning_enabled() -> bool:
+    """Killswitch for per-step provisional extraction (default ON). Same
+    quoted-"false" normalization as the other killswitches (chunk-5a F1)."""
+    try:
+        from config import get as _cfg_get
+        val = _cfg_get("memory.step_learning_enabled", True)
+        if isinstance(val, str):
+            return val.strip().lower() not in ("false", "0", "no", "off")
+        return bool(val)
+    except Exception:
+        return True
+
+
+def extract_step_lessons(
+    goal: str,
+    step_outcomes: List[Any],
+    *,
+    task_type: str = "agenda",
+    adapter=None,
+    loop_id: str = "",
+    dry_run: bool = False,
+) -> int:
+    """Extract PROVISIONAL lessons from individually-verified steps of a run
+    whose run-level outcome failed the learnability gate.
+
+    The run-level gate (outcome_policy.is_learnable_outcome) is correct about
+    the run — but it is applied at the only granularity that existed when it
+    was built. A run stuck at step 9/10 tossed the method evidence in the
+    eight steps that individually verified. This pass learns at the
+    granularity where verification actually happened: steps with
+    status="done" AND confidence="strong" (the verify ladder's positive
+    verdict; "weak"/"inferred"/"unverified" do not qualify).
+
+    Lessons enter the tiered store with provisional=True: reduced entry
+    score, excluded from every injection surface, never promoted to LONG —
+    until a confirmed-context re-record clears the flag (promote-on-evidence,
+    see record_tiered_lesson). Decay disposes of the unconfirmed rest.
+
+    Idempotent per run via the ``step_lesson_count`` stamp on the outcomes
+    row (run_deferred_learning is called for loops that didn't defer — the
+    stamp keeps a failure-shaped run from re-paying the extraction call on
+    every post-closure pass). One LLM call, capped at
+    _STEP_LESSON_MAX_STEPS steps. Never raises.
+
+    Returns the number of provisional lessons recorded (0 = pass skipped or
+    nothing usable).
+    """
+    if not _step_learning_enabled():
+        return 0
+    if dry_run or adapter is None or not step_outcomes:
+        return 0
+
+    verified = [
+        s for s in step_outcomes
+        if getattr(s, "status", "") == "done"
+        and getattr(s, "confidence", "") == "strong"
+    ]
+    if not verified:
+        return 0
+
+    from memory_ledger import outcome_row_has_step_lessons, stamp_outcome_step_lessons
+    if loop_id and outcome_row_has_step_lessons(loop_id):
+        return 0
+
+    if len(verified) > _STEP_LESSON_MAX_STEPS:
+        log.info("extract_step_lessons: %d verified steps, using first %d "
+                 "(plan order)", len(verified), _STEP_LESSON_MAX_STEPS)
+        verified = verified[:_STEP_LESSON_MAX_STEPS]
+
+    step_lines = []
+    for s in verified:
+        text = (getattr(s, "text", "") or "")[:200]
+        result = (getattr(s, "result", "") or "")[:300]
+        step_lines.append(f"- step: {text}\n  verified result: {result}")
+
+    user_msg = (
+        f"Task type: {task_type}\n"
+        f"High-level goal (NOT achieved): {goal[:300]}\n\n"
+        f"Individually-verified steps:\n" + "\n".join(step_lines) + "\n\n"
+        "Extract 0-3 step-scoped method lessons as typed JSON objects."
+    )
+
+    try:
+        from llm import LLMMessage
+        resp = adapter.complete(
+            [
+                LLMMessage("system", _STEP_LESSON_SYSTEM),
+                LLMMessage("user", user_msg),
+            ],
+            max_tokens=320,
+            temperature=0.3,
+            no_tools=True,
+            purpose="step lesson extraction",
+        )
+        raw = extract_json(content_or_empty(resp), list,
+                           log_tag="memory.extract_step_lessons")
+    except Exception as exc:
+        log.warning("extract_step_lessons: LLM call failed for loop %s: %s",
+                    loop_id, exc)
+        return 0
+
+    _step_types = frozenset({"execution", "planning", "verification", "cost"})
+    recorded = 0
+    for item in safe_list(raw, element_type=(dict, str), max_items=3):
+        if isinstance(item, dict):
+            lesson_text = str(item.get("lesson", "")).strip()
+            lesson_type = str(item.get("type", "execution")).strip().lower()
+        else:
+            lesson_text, lesson_type = str(item).strip(), "execution"
+        if lesson_type not in _step_types:
+            lesson_type = "execution"
+        if not lesson_text:
+            continue
+        try:
+            tl = record_tiered_lesson(
+                lesson_text=lesson_text,
+                task_type=task_type,
+                outcome="step-verified",
+                source_goal=goal[:120],
+                tier=MemoryTier.MEDIUM,
+                k_samples=1,
+                lesson_type=lesson_type,
+                provisional=True,
+                evidence_sources=[f"loop:{loop_id}"] if loop_id else [],
+            )
+            if getattr(tl, "lesson_id", "") != "rejected":
+                recorded += 1
+        except Exception:
+            continue  # recording must never block finalize
+
+    if loop_id:
+        # Stamp even when 0 recorded — the pass RAN; re-running it on the
+        # same steps would produce the same nothing for another LLM call.
+        stamp_outcome_step_lessons(loop_id, recorded)
+    log.info("extract_step_lessons: %d provisional lesson(s) from %d "
+             "verified step(s) for loop %s", recorded, len(verified),
+             loop_id or "?")
+    return recorded
+
+
 def reflect_and_record(
     goal: str,
     status: str,
