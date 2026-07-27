@@ -609,4 +609,11 @@ fc93dfa + review fixes ea8d347 —
 diagnosis section in the skill; exercised live on the cap-stuck
 question — `history/2026-07-27-chunk9-2-recon-diagnosis-star.md`).
 Graduation to src/ waits on crystallization pressure per the star
-charter.
+charter. Same day, third build: §9.6 SHIPPED simple-first per the item-3
+decision (`src/escalation_context.py` — deterministic single-chasm
+decision line per emit point + one family-ROI recurrence line keyed on
+the Phase 44 diagnosis taxonomy; all three escalation emit sites wired,
+telegram leads with the ask —
+`history/2026-07-27-escalation-payload.md`). "Complex later" (per-chasm
+capability-investment scoring, side-quest recommendation) stays
+discussion material with §9.7/§9.9/§10.

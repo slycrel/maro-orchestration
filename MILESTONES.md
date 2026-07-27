@@ -2,7 +2,22 @@
 
 What to do next, in what order. Updated each session. Deferred ideas live in BACKLOG.md; completed phase history in docs/history/ROADMAP_ARCHIVE.md (ROADMAP.md is a stub). This file is the executable queue.
 
-Last updated: 2026-07-27 — **per-step learning chunk SHIPPED** (Jeremy:
+Last updated: 2026-07-27 — **§9.6 escalation payload SHIPPED
+simple-first** (continuing 9/10 per Jeremy's standing directive;
+implements his agenda item-3 decision verbatim: "single-chasm decision +
+one family-ROI context line; complex later"). New
+`src/escalation_context.py` (`decision_line` — deterministic ask per
+emit point, honest options, never raises; `family_roi_line` — recurrence
+line keyed on Phase 44 diagnose_loop failure_class, first-occurrence is
+signal, silence over noise). All three escalation emit sites wired
+additively (blocked_step decision+family, dispatch decision-only —
+omitted-not-faked, director_escalation summary-as-ask); telegram leads
+with the ask, legacy payloads unchanged. No LLM, no config keys, no new
+persistence. Record: docs/history/2026-07-27-escalation-payload.md.
+**Remaining 9/10 material is discussion-shaped** (§9.3 largely absorbed
+by stop verdicts + Phase 62; §9.7/§9.9/§10 calibration await Jeremy).
+
+Previous checkpoint — 2026-07-27 — **per-step learning chunk SHIPPED** (Jeremy:
 "let's build the per-step learning chunk, then continue with 9/10").
 Learn at the granularity where verification actually happened, inject
 conservatively: `achieved-not-done` success class (verdict-preferred

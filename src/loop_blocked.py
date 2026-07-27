@@ -729,6 +729,21 @@ def _navigator_act_blocked_step(
         try:
             from notify import emit as _notify_emit
             from runs import current_handle_id as _current_handle_id
+            # §9.6 simple-first (2026-07-27): single-chasm decision line +
+            # one family-ROI context line. The family key is the mid-run
+            # Phase 44 diagnosis (pure heuristics — same consult the
+            # metacognitive path uses).
+            _decision_ask, _family = "", ""
+            try:
+                from escalation_context import decision_line, family_roi_line
+                from introspect import diagnose_loop
+                _decision_ask = decision_line(
+                    "blocked_step", reason=reasoning or stuck_reason,
+                    step=step_text)
+                _fc = diagnose_loop(loop_id).failure_class if loop_id else ""
+                _family = family_roi_line(_fc)
+            except Exception:
+                pass
             _notify_emit("escalation", {
                 "handle_id": _current_handle_id() or "",
                 "goal": goal,
@@ -738,6 +753,8 @@ def _navigator_act_blocked_step(
                 "loop_id": loop_id,
                 "point": "blocked_step",
                 "step": step_text[:200],
+                "decision": _decision_ask,
+                "family_roi": _family,
             })
         except Exception:
             pass

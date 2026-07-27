@@ -61,6 +61,16 @@ def handle_task(
             try:
                 from notify import emit as _notify_emit
                 _task_origin = task.get("origin") or {}
+                # §9.6: the director's summary_for_user IS the ask when it
+                # exists — the decision line frames it as one.
+                try:
+                    from escalation_context import decision_line
+                    _decision_ask = decision_line(
+                        "director_escalation",
+                        reason=(getattr(_esc, "summary_for_user", "")
+                                or getattr(_esc, "reasoning", "")))
+                except Exception:
+                    _decision_ask = ""
                 _notify_emit("escalation", {
                     "handle_id": str(_task_origin.get("parent_handle_id") or ""),
                     "goal": reason[:500],
@@ -70,6 +80,7 @@ def handle_task(
                     "job_id": job_id,
                     "source": source,
                     "point": "director_escalation",
+                    "decision": _decision_ask,
                 })
             except Exception:
                 pass

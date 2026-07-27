@@ -67,6 +67,37 @@ class TestActBlockedStep:
         assert notes and notes[0][0] == "escalation"
         assert notes[0][1]["point"] == "blocked_step"
         assert notes[0][1]["handle_id"] == "handle-blocked-1"
+        # §9.6: payload carries the single-chasm ask + family-ROI line.
+        # (diagnose_loop ran live against the empty tmp workspace — no
+        # events ledger reads as artifact_missing, first on record.)
+        payload = notes[0][1]
+        assert payload["decision"].startswith("Decide this chasm:")
+        assert "doomed block" in payload["decision"]
+        assert payload["family_roi"] == (
+            "Family context: first 'artifact_missing' failure on record.")
+
+    def test_escalate_payload_survives_diagnosis_failure(self, monkeypatch):
+        """§9.6 enrichment can never break the emit.
+
+        The decision ask is computed before the diagnosis consult, so a
+        diagnosis explosion costs only the family line — the ask survives.
+        """
+        monkeypatch.setattr("config.get", _cfg({"navigator.act_blocked_step": True}))
+        monkeypatch.setattr(
+            "captains_log.log_event", lambda event_type=None, **kw: None)
+        notes = []
+        monkeypatch.setattr("notify.emit", lambda kind, payload: notes.append((kind, payload)))
+        monkeypatch.setattr("runs.current_handle_id", lambda: "h")
+
+        def _boom(loop_id):
+            raise RuntimeError("diagnosis exploded")
+        monkeypatch.setattr("introspect.diagnose_loop", _boom)
+        out = _lb._navigator_act_blocked_step(
+            _nav(confidence=0.95), _forward_decision(),
+            goal="g", step_text="s", step_idx=3, loop_id="abc123")
+        assert out is not None and out.loop_status == "stuck"
+        assert notes and notes[0][1]["decision"].startswith("Decide this chasm:")
+        assert notes[0][1]["family_roi"] == ""
 
     def test_below_floor_falls_through(self, monkeypatch):
         monkeypatch.setattr("config.get", _cfg({"navigator.act_blocked_step": True}))

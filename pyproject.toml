@@ -129,6 +129,7 @@ py-modules = [
     "director",
     "discretion_readout",
     "doctor",
+    "escalation_context",
     "eval",
     "evolver",
     "evolver_scans",

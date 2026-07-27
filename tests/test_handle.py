@@ -1093,6 +1093,26 @@ class TestNavigatorDispatchCutover:
         assert result.status == "stuck"
         assert result.classification_reason == "navigator_escalate"
 
+    def test_escalate_emit_carries_decision_ask(self, monkeypatch, tmp_path):
+        """§9.6: the dispatch escalation payload carries the single-chasm
+        ask. Decision only — no loop ran, so there is no diagnosis to key
+        a family-ROI line on (omitted, not faked)."""
+        _setup(monkeypatch, tmp_path)
+        import handle as handle_mod
+        self._patch_shadow_returning(monkeypatch, self._decision("escalate", 0.95))
+        self._patch_handle(monkeypatch, [])
+        notes = []
+        monkeypatch.setattr(
+            "notify.emit", lambda kind, payload: notes.append((kind, payload)))
+
+        handle_mod.handle_task(self._task(), dry_run=False)
+
+        assert notes and notes[0][0] == "escalation"
+        payload = notes[0][1]
+        assert "parked before starting" in payload["decision"]
+        assert "test reasoning" in payload["decision"]
+        assert "family_roi" not in payload
+
     def test_synthesized_idunno_chain_escalate_never_acts(self, monkeypatch, tmp_path):
         """Chain-exhausted escalates (escalated_via=idunno_chain, synthetic
         conf 1.0) must fall through to execute even with act on: the chain

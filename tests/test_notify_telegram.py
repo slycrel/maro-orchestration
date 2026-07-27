@@ -142,6 +142,40 @@ def test_format_escalation_without_summary_uses_reason():
     assert "navigator escalated" in msg
 
 
+def test_format_escalation_decision_leads():
+    # §9.6: the single-chasm ask IS the message body; summary demotes to
+    # a Detail line, the family-ROI line rides after, "Why:" disappears.
+    msg = format_message({
+        "event_type": "escalation",
+        "goal": "sync the feeds",
+        "summary": "NAVIGATOR_ESCALATE: recovery overridden (conf 0.95)",
+        "reason": "credentials expired",
+        "decision": "Decide this chasm: a step is blocked — credentials "
+                    "expired. Options: re-send the goal with guidance, or drop it.",
+        "family_roi": "Family context: 'retry_churn' has 3 prior diagnoses "
+                      "on record, 2 in the last 30 days.",
+        "point": "blocked_step",
+        "job_id": "task-9",
+    })
+    lines = msg.splitlines()
+    assert lines[2].startswith("Decide this chasm:")
+    assert "Detail: NAVIGATOR_ESCALATE" in msg
+    assert "Family context: 'retry_churn'" in msg
+    assert "Why:" not in msg
+
+
+def test_format_escalation_decision_alone_no_detail_dupe():
+    # When the summary is already inside the ask, no Detail echo.
+    msg = format_message({
+        "event_type": "escalation",
+        "goal": "g",
+        "summary": "budget exhausted",
+        "decision": "Decide: budget exhausted",
+    })
+    assert "Decide: budget exhausted" in msg
+    assert "Detail:" not in msg
+
+
 def test_format_truncates_long_goal():
     msg = format_message({
         "event_type": "run_completed",

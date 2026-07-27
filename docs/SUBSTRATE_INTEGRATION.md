@@ -97,10 +97,20 @@ notify:
 The command receives the event payload as **JSON on stdin** — for
 `run_completed` that's the full run_card (including `result_excerpt` and
 `result_path`); for `escalation` it's `{goal, status, summary, reason, job_id,
-point}`. Env vars for cheap shell dispatch: `MARO_EVENT_TYPE`,
+point, decision, family_roi}`. Since 2026-07-27 (§9.6, simple-first)
+`decision` is the single-chasm ask — one deterministic sentence naming
+the decision the human is being asked to make and the honest options at
+that point — and `family_roi` (blocked_step only, may be empty) is one
+recurrence line keyed on the diagnosis failure-class taxonomy ("Family
+context: 'retry_churn' has 3 prior diagnoses on record, 2 in the last
+30 days."). Both are additive; consumers that predate them keep
+working. Env vars for cheap shell dispatch: `MARO_EVENT_TYPE`,
 `MARO_HANDLE_ID`, `MARO_STATUS`, `MARO_RUN_DIR`.
 
 Escalation events fire when Maro decides a human is needed:
+- **navigator escalate at a blocked step** — a mid-run recovery was
+  overridden with an honest stop (`point: blocked_step`; the run-dir
+  exists and finalize will also emit `run_completed`);
 - **navigator escalate at dispatch** — a queued goal was refused before
   spawning a run (`point: dispatch`; no run-dir exists, this event is the only
   signal out);

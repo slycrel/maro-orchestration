@@ -145,11 +145,23 @@ def format_message(payload: dict) -> str:
         lines = ["\U0001f514 maro needs a human"]  # 🔔
         if goal_line:
             lines.append(f"Goal: {goal_line}")
+        # §9.6 (2026-07-27): the single-chasm decision line leads when
+        # present — it IS the ask; summary/reason become the supporting
+        # detail. Older payloads without it keep the previous shape.
+        decision = str(payload.get("decision", "")).strip()
         summary = str(payload.get("summary", "")).strip()
         reason = str(payload.get("reason", "")).strip()
-        lines.append(summary or reason or "escalated with no summary")
-        if summary and reason and reason not in summary:
-            lines.append(f"Why: {reason[:300]}")
+        if decision:
+            lines.append(decision)
+            if summary and summary not in decision:
+                lines.append(f"Detail: {summary[:300]}")
+        else:
+            lines.append(summary or reason or "escalated with no summary")
+            if summary and reason and reason not in summary:
+                lines.append(f"Why: {reason[:300]}")
+        family = str(payload.get("family_roi", "")).strip()
+        if family:
+            lines.append(family)
         point = payload.get("point")
         if point:
             lines.append(f"(at {point}; job {payload.get('job_id', '?')})")

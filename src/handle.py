@@ -2823,6 +2823,14 @@ def _navigator_act_dispatch(
             # exists (the run was prevented), so this is the only signal out.
             try:
                 from notify import emit as _notify_emit
+                # §9.6: single-chasm ask. No loop ran, so there is no
+                # diagnosis to key a family-ROI line on — omitted, not faked.
+                try:
+                    from escalation_context import decision_line
+                    _decision_ask = decision_line(
+                        "dispatch", reason=reasoning or result)
+                except Exception:
+                    _decision_ask = ""
                 _notify_emit("escalation", {
                     "handle_id": "",
                     "goal": goal,
@@ -2832,6 +2840,7 @@ def _navigator_act_dispatch(
                     "job_id": job_id,
                     "source": source,
                     "point": "dispatch",
+                    "decision": _decision_ask,
                 })
             except Exception:
                 pass

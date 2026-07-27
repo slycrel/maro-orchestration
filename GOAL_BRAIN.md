@@ -4453,3 +4453,21 @@ Dormant (deliberately parked, not dropped):
   verdict_trust bypass as chunk defect (consistent with pre-existing
   siblings; BACKLOG'd as the real architecture question). Record:
   docs/history/2026-07-27-per-step-learning-adversarial-review.md.
+
+- **2026-07-27 (session, continuing 9/10 per Jeremy's standing
+  directive): §9.6 escalation payload SHIPPED simple-first** —
+  implements Jeremy's agenda item-3 decision exactly ("single-chasm
+  decision + one family-ROI context line; complex later"). New
+  `src/escalation_context.py`: `decision_line` (deterministic ask
+  templated per emit point, honest options only, never raises) +
+  `family_roi_line` (recurrence line keyed on Phase 44 diagnose_loop
+  failure_class; first-occurrence is signal; silence over noise on
+  empty/healthy/unreadable). All three escalation emit sites wired
+  additively (blocked_step: decision + family; dispatch: decision only
+  — no loop, no diagnosis, omitted-not-faked; director_escalation:
+  summary_for_user framed as the ask); telegram leads with the ask,
+  legacy payloads render unchanged. Pure/deterministic, no LLM, no
+  config keys, no new persistence. "Complex later" (capability-
+  investment scoring, side-quest recommendation at the boundary) stays
+  discussion material. Record:
+  docs/history/2026-07-27-escalation-payload.md.
