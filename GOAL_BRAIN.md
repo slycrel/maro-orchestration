@@ -2351,6 +2351,19 @@ Dormant (deliberately parked, not dropped):
 
 ## Open questions (system-maintained)
 
+- **Learning granularity below the run** (Jeremy 2026-07-27: "Should we
+  tweak the learning to be possible on a per step basis (or series of
+  steps... or sidequest success)? Seems silly to toss possible good
+  learning out just because the high level didn't work out") — today
+  `is_learnable_outcome` gates at run level, all-or-nothing; step traces
+  and step-level verify verdicts already persist. Candidate shape under
+  discussion: learn at the granularity where verification actually
+  happened (verified steps / closed side-quests / surviving `blocked_on`
+  diagnoses), entering as provisional (reduced score, no main-loop
+  injection until reinforced) — learn more, inject conservatively.
+  Related: achieved-but-stuck BACKLOG item (Jeremy agrees with
+  sentiment); 2026-07-27 work-box handoff doc's confirmed/provisional
+  gate is the same answer shape arrived at independently.
 - ~~**recall() shape**~~ — answered 2026-06-10 (`docs/RECALL_DESIGN.md`); edge
   vocabulary pinned there too. Successor questions: guard thresholds are unmeasured
   (watch RECALL_GUARD_TRIPPED). ~~Per-thread goal-brain creation~~ answered
@@ -4388,3 +4401,17 @@ Dormant (deliberately parked, not dropped):
   hole; recall repeat-guard, strategy weights, and failure attribution
   stop reading interrupts as goal evidence. Record:
   docs/history/2026-07-27-stop-verdict-split.md.
+
+- **2026-07-27 — Decision (fable, delegated by Jeremy: "no strong
+  opinion here, your call; if we're better served in the longer run by
+  one way or the other let's lean in, otherwise it's implementation
+  detail"): verdict field shape SETTLED — one-field-with-precedence
+  stands.** No long-run reason to switch to a second field surfaced in
+  twelve review rounds: the item-5 decree's dual-record need is met by
+  the verdict field (map observation) + the status channel (run event,
+  INTERRUPT_STATUSES), consumers were hardened to honor both channels
+  in the chunk-9 #4 review, and GOAL_VERDICTS structurally excludes the
+  marker so no consumer can mistake an interrupt for a map observation.
+  Ruled implementation detail; the mechanical rename stays available if
+  a future consumer needs both simultaneously machine-readable on one
+  row (today none does).
