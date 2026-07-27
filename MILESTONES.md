@@ -41,8 +41,11 @@ prompting per the build order): typed `blocked_on` failure contract
 (cause / what-would-be-different / proposed-experiment; five cause
 types with routing table), diagnosis question + ownership split
 (step diagnoses/recommends, master decides/routes; dedup at the map)
-in `.claude/skills/star/SKILL.md`; exercised live (star use #2) on the
-BACKLOG cap-stuck question — findings: cap-stuck family = 9/726 runs,
+in `.claude/skills/star/SKILL.md`; the star CONTRACT exercised live
+(star use #2) on the BACKLOG cap-stuck question — the blocked_on
+machinery itself was NOT triggered (no delegation failed; it fires
+opportunistically on a future blocked task) — findings: cap-stuck
+family = 9/726 runs,
 zero pre-rail stop_verdict stamps store-wide, and a NEW conflation the
 survey missed (judged goal_achieved=TRUE + status stuck →
 success_class "failed"; 2 live specimens; BACKLOG'd with fix shape).

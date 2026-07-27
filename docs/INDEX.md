@@ -28,6 +28,7 @@ BACKLOG, VISION, CLAUDE, README…) are living by definition and carry no frontm
 | How are typed stop verdicts wired? (break sites, precedence, consumers) | `history/2026-07-27-stop-verdict-split.md` (chunk-9 #4; external-interrupt = event marker per decree, not a fifth verdict) |
 | What did the chunk-9 #4 adversarial review find? (evidence on ledger rows, merge-failure re-stamp, two-channel repeat guard) | `history/2026-07-27-chunk9-4-adversarial-review.md` (6 findings, 6/6 verified, 4 accepted; eleventh clean round) |
 | Recon flavor + §14 diagnosis in star, and the cap-stuck / achieved-but-stuck live numbers? | `history/2026-07-27-chunk9-2-recon-diagnosis-star.md` (star use #2; blocked_on contract; 9/726 cap-stuck; 2 achieved-true runs classify "failed") |
+| What did the chunk-9 #2 adversarial review find? (dedup key, reject-bridge, substantiation line) | `history/2026-07-27-chunk9-2-adversarial-review.md` (6 findings, 6/6 verified, all accepted; twelfth clean round) |
 | Did the tire-goal rerun move the needle after the brake land? | `history/2026-07-27-tire-rerun-needle.md` (run 4 delivered; brake armed, never fired; warm-start confound) |
 | What are we deliberately NOT building? | `ARCHITECTURE_NON_GOALS.md` |
 | What should Maro be able to do? (example goals, test corpus, pre-installed skill target) | `CAPABILITIES.md` (living catalog — add real asks as they happen) |

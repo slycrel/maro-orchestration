@@ -96,7 +96,10 @@ cannot fill one in, ask the user — that gap is itself a finding.
    away (the goal may no longer need that step at all) / honest typed
    stop. The step recommended; the master decides — never auto-adopt the
    step's proposal. **Dedup at the map**: two tasks blocked on the same
-   cause become ONE routing decision, not two experiments.
+   *named missing thing* (`what_would_be_different`, not the cause enum —
+   "missing GitHub access" and "missing DB credentials" are both
+   missing-capability but need different side-quests) become ONE routing
+   decision, not two experiments.
 2. **DELEGATE.** One Agent-tool subagent, serial (one live at a time —
    box rule). The subagent's final text is data for step 3, not truth.
 3. **JUDGE.** Validate the answer against the criteria stated in step 1
@@ -114,9 +117,13 @@ cannot fill one in, ask the user — that gap is itself a finding.
    is inconclusive, never accepted.
 4. **RECORD.** Append one row to the run ledger (kept in your reply, see
    below), including the **surprise** field: what differed from what you
-   expected when you wrote the task? A task that came back blocked
-   records its typed cause in the Verdict column (`blocked:<cause>`);
-   the master's routing decision for it gets its own row.
+   expected when you wrote the task? A task whose `blocked_on` SURVIVES
+   judgement records `blocked:<cause>` in the Verdict column — an
+   accepted observation, not a reject: it does not count toward the
+   two-consecutive-rejects escalation (the routing row owns what happens
+   next). A malformed or excuse-shaped `blocked_on` is a
+   reject-with-evidence like any other unsupported claim, and DOES
+   count. The master's routing decision gets its own row either way.
 5. Loop. Done only when the done-means checks from the invocation
    contract actually pass a final judgement step (run them; do not
    narrate them).
@@ -143,6 +150,21 @@ The cause types route differently: missing-capability/tool/access is
 wrong-approach is *re-plannable*, terrain is *genuinely refuted*
 (feeds thesis-refuted), transient is *retriable*.
 
+Two boundary cases the cause set deliberately does NOT absorb:
+
+- **Cost-shaped inability is not a blockage.** "Feasible, but it
+  exceeds my granted budget / violates the cuts" returns as a
+  *reachability-and-cost estimate* in a normal result block — a map
+  edit feeding the master's worth-it judgment
+  (reachable-but-not-worth-it), not a `blocked_on`.
+- **The diagnosis question applies at every failure, not only
+  self-declared blockage.** When the master REJECTS or marks
+  INCONCLUSIVE a completion attempt, the routing row for what happens
+  next types the master's own cause hypothesis from the rejection
+  evidence — a failed pass never becomes a bare retry or a silent
+  abandon without a typed cause (that's the §14 smell this section
+  exists to kill).
+
 **Falsifiability is the excuse-killer.** "I can't" must name the
 specific missing thing AND the experiment that would prove it's really
 missing. An excuse names nothing specific, so it fails diagnosis and is
@@ -154,7 +176,13 @@ never named.
 DIAGNOSES and RECOMMENDS; the master DECIDES and ROUTES.** A blocked
 sub-agent may substantiate its hypothesis with evidence gatherable
 inside its already-granted scope and budget (the `which <tool>` class —
-that makes the recommendation falsifiable, not routing). The
+that makes the recommendation falsifiable, not routing). The line IS
+the already-granted scope/budget: inside it, running the probe is
+substantiation — and a probe that RESOLVES the blockage means the step
+isn't blocked, keep working; beyond it, the probe is named as
+`proposed_experiment` and returned unrun. What the step never does with
+a probe result, either way, is route on it (choose the side-quest,
+expand its own scope, or reroute itself). The
 discriminating experiment as a plan move, the side-quest spawn, and the
 revisit are map operations the step does not own — dedup only exists at
 the map (steps can't see each other's blockages), and the master may
