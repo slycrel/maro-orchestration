@@ -57,8 +57,8 @@ class TestTierChain:
         monkeypatch.setattr(web_fetch, "_jina_fetch", lambda u, **k: "")
         monkeypatch.setattr(web_fetch, "_cf_markdown_fetch", lambda u, **k: "c" * 200)
         raw = []
-        monkeypatch.setattr(web_fetch, "_http_get",
-                            lambda *a, **k: raw.append(a) or (200, "<p>raw</p>"))
+        monkeypatch.setattr(web_fetch, "_http_get_bytes",
+                            lambda *a, **k: raw.append(a) or (200, b"<p>raw</p>", "utf-8"))
         out = web_fetch.fetch_url_content("https://example.com/a")
         assert "c" * 200 in out
         assert raw == [], "CF succeeded — the raw-HTML tier must not run"
@@ -66,8 +66,8 @@ class TestTierChain:
     def test_raw_html_tier_is_last_resort(self, monkeypatch, no_capture):
         monkeypatch.setattr(web_fetch, "_jina_fetch", lambda u, **k: "")
         monkeypatch.setattr(web_fetch, "_cf_markdown_fetch", lambda u, **k: "")
-        monkeypatch.setattr(web_fetch, "_http_get",
-                            lambda *a, **k: (200, "<html><body><p>fallback text</p></body></html>"))
+        monkeypatch.setattr(web_fetch, "_http_get_bytes",
+                            lambda *a, **k: (200, b"<html><body><p>fallback text</p></body></html>", "utf-8"))
         out = web_fetch.fetch_url_content("https://example.com/a")
         assert "fallback text" in out
 
@@ -91,7 +91,7 @@ class TestTierChain:
         monkeypatch.setattr(web_fetch, "_jina_fetch", lambda u, **k: "")
         monkeypatch.setattr(web_fetch, "_cf_markdown_fetch", lambda u, **k: "")
         huge = "<html><body>" + ("word " * 500_000) + "</body></html>"
-        monkeypatch.setattr(web_fetch, "_http_get", lambda *a, **k: (200, huge))
+        monkeypatch.setattr(web_fetch, "_http_get_bytes", lambda *a, **k: (200, huge.encode(), "utf-8"))
         out = web_fetch.fetch_url_content("https://example.com/a")
         assert len(out) < web_fetch._MAX_TEXT_CHARS + 500
 
@@ -155,7 +155,7 @@ class TestCloudflareTierParsing:
 
 class TestCapture:
     def test_capture_writes_file_and_manifest(self, capture_env, monkeypatch):
-        monkeypatch.setattr(web_fetch, "_http_get", lambda *a, **k: (200, "<html>full</html>"))
+        monkeypatch.setattr(web_fetch, "_http_get_bytes", lambda *a, **k: (200, b"<html>full</html>", "utf-8"))
         path = web_fetch.capture_raw("https://example.com/p")
         assert path is not None and path.exists()
         assert path.read_text() == "<html>full</html>"
@@ -163,8 +163,8 @@ class TestCapture:
 
     def test_capture_reuses_existing_file_without_refetching(self, capture_env, monkeypatch):
         calls = []
-        monkeypatch.setattr(web_fetch, "_http_get",
-                            lambda *a, **k: calls.append(1) or (200, "<html>x</html>"))
+        monkeypatch.setattr(web_fetch, "_http_get_bytes",
+                            lambda *a, **k: calls.append(1) or (200, b"<html>x</html>", "utf-8"))
         first = web_fetch.capture_raw("https://example.com/p")
         second = web_fetch.capture_raw("https://example.com/p")
         assert first == second
@@ -172,14 +172,14 @@ class TestCapture:
 
     def test_capture_accepts_prefetched_html_without_a_request(self, capture_env, monkeypatch):
         """The raw-HTTP tier already holds the bytes — no second request."""
-        monkeypatch.setattr(web_fetch, "_http_get",
+        monkeypatch.setattr(web_fetch, "_http_get_bytes",
                             lambda *a, **k: pytest.fail("must not re-fetch"))
-        path = web_fetch.capture_raw("https://example.com/p", html="<html>given</html>")
+        path = web_fetch.capture_raw("https://example.com/p", body=b"<html>given</html>")
         assert path is not None and path.read_text() == "<html>given</html>"
 
     def test_capture_filename_is_hash_derived_not_url_derived(self, capture_env, monkeypatch):
         """A URL-derived name would be a path-traversal vector."""
-        monkeypatch.setattr(web_fetch, "_http_get", lambda *a, **k: (200, "<html>x</html>"))
+        monkeypatch.setattr(web_fetch, "_http_get_bytes", lambda *a, **k: (200, b"<html>x</html>", "utf-8"))
         path = web_fetch.capture_raw("https://example.com/../../etc/passwd?a=b")
         assert path is not None
         assert path.parent == capture_env
@@ -204,7 +204,7 @@ class TestCapture:
         digest = hashlib.sha256(url.encode()).hexdigest()[:16]
         os.symlink(victim, capture_env / f"{digest}.html.tmp")
 
-        monkeypatch.setattr(web_fetch, "_http_get", lambda *a, **k: (200, "<html>PWNED</html>"))
+        monkeypatch.setattr(web_fetch, "_http_get_bytes", lambda *a, **k: (200, b"<html>PWNED</html>", "utf-8"))
         web_fetch.capture_raw(url)
 
         assert victim.read_text() == "ORIGINAL", "symlink redirected the capture write"
@@ -223,7 +223,7 @@ class TestCapture:
         digest = hashlib.sha256(url.encode()).hexdigest()[:16]
         os.symlink(secret, capture_env / f"{digest}.html")
 
-        monkeypatch.setattr(web_fetch, "_http_get", lambda *a, **k: (200, "<html>fresh</html>"))
+        monkeypatch.setattr(web_fetch, "_http_get_bytes", lambda *a, **k: (200, b"<html>fresh</html>", "utf-8"))
         path = web_fetch.capture_raw(url)
 
         assert path is not None
@@ -245,13 +245,13 @@ class TestCapture:
         capture_env.mkdir(parents=True, exist_ok=True)
         (capture_env / "old.html").write_text("x" * 5000)
         monkeypatch.setenv("MARO_FETCH_CAPTURE_BUDGET", "1000")
-        monkeypatch.setattr(web_fetch, "_http_get", lambda *a, **k: (200, "<html>new</html>"))
+        monkeypatch.setattr(web_fetch, "_http_get_bytes", lambda *a, **k: (200, b"<html>new</html>", "utf-8"))
         assert web_fetch.capture_raw("https://example.com/new") is None
 
     def test_manifest_redacts_credentials_and_query(self, capture_env, monkeypatch):
         """The manifest outlives the run — a presigned signature must not sit
         in plaintext on disk."""
-        monkeypatch.setattr(web_fetch, "_http_get", lambda *a, **k: (200, "<html>x</html>"))
+        monkeypatch.setattr(web_fetch, "_http_get_bytes", lambda *a, **k: (200, b"<html>x</html>", "utf-8"))
         web_fetch.capture_raw("https://example.com/o?X-Amz-Signature=DEADBEEF")
         manifest = (capture_env / "index.jsonl").read_text()
         assert "DEADBEEF" not in manifest
@@ -259,7 +259,7 @@ class TestCapture:
 
     def test_capture_refuses_private_and_credentialed_urls(self, capture_env, monkeypatch):
         """capture_raw fetches directly from this host — the SSRF primitive."""
-        monkeypatch.setattr(web_fetch, "_http_get",
+        monkeypatch.setattr(web_fetch, "_http_get_bytes",
                             lambda *a, **k: pytest.fail("must not fetch a blocked URL"))
         for bad in ("http://169.254.169.254/latest/meta-data/",
                     "http://192.168.1.5/admin",
@@ -267,6 +267,49 @@ class TestCapture:
                     "https://user:pw@example.com/x",
                     "file:///etc/passwd"):
             assert web_fetch.capture_raw(bad) is None, bad
+
+    def test_capture_stores_bytes_verbatim_not_reencoded_text(self, capture_env, monkeypatch):
+        """A non-UTF-8 page must land on disk exactly as the server sent it.
+
+        Capture used to store `errors="replace"`-decoded text re-encoded as
+        UTF-8, so every byte outside the declared charset was silently rewritten
+        to U+FFFD — the captured file was not what the origin served, which
+        defeats keeping it for re-extraction.
+        """
+        raw = "<html><body>Preis: 25€ — Größe</body></html>".encode("windows-1252")
+        monkeypatch.setattr(web_fetch, "_http_get_bytes",
+                            lambda *a, **k: (200, raw, "windows-1252"))
+        path = web_fetch.capture_raw("https://example.com/de")
+        assert path is not None
+        assert path.read_bytes() == raw
+        assert b"\xef\xbf\xbd" not in path.read_bytes()  # no U+FFFD replacement chars
+
+    def test_extraction_is_pure_no_capture_side_effect(self, capture_env, monkeypatch):
+        """_extract_text does text only — capture happens at one seam above it.
+
+        When the two were interleaved, "get me the text" silently performed a
+        second origin request, which is how the SSRF path and the double-fetch
+        got in.
+        """
+        capture_env.mkdir(parents=True, exist_ok=True)
+        monkeypatch.setattr(web_fetch, "_jina_fetch", lambda u, **k: "m" * 200)
+        text, body = web_fetch._extract_text("https://example.com/a")
+        assert text == "m" * 200
+        assert body is None, "a proxy tier holds no origin bytes"
+        assert list(capture_env.glob("*.html")) == [], "extraction wrote to disk"
+
+    def test_raw_tier_capture_reuses_its_own_bytes(self, capture_env, monkeypatch):
+        """The tier that already downloaded the page must not fetch it twice."""
+        calls = []
+        monkeypatch.setattr(web_fetch, "_jina_fetch", lambda u, **k: "")
+        monkeypatch.setattr(web_fetch, "_cf_markdown_fetch", lambda u, **k: "")
+        monkeypatch.setattr(
+            web_fetch, "_http_get_bytes",
+            lambda *a, **k: calls.append(1) or (200, b"<html><p>hello world</p></html>", "utf-8"))
+        out = web_fetch.fetch_url_content("https://example.com/a")
+        assert "hello world" in out
+        assert "raw HTML saved" in out
+        assert len(calls) == 1, f"expected one origin request, got {len(calls)}"
 
     def test_capture_disabled_by_env(self, capture_env, monkeypatch):
         monkeypatch.setenv("MARO_FETCH_CAPTURE", "0")
@@ -289,7 +332,7 @@ class TestCapture:
     def test_content_carries_a_pointer_not_the_html(self, capture_env, monkeypatch):
         """The context cost of capture is one path line, not the page."""
         monkeypatch.setattr(web_fetch, "_jina_fetch", lambda u, **k: "summary text" * 20)
-        monkeypatch.setattr(web_fetch, "_http_get", lambda *a, **k: (200, "<html>" + "z" * 100_000 + "</html>"))
+        monkeypatch.setattr(web_fetch, "_http_get_bytes", lambda *a, **k: (200, b"<html>" + b"z" * 100_000 + b"</html>", "utf-8"))
         out = web_fetch.fetch_url_content("https://example.com/a")
         assert "raw HTML saved" in out
         assert "z" * 100 not in out, "captured HTML must never enter the returned text"
