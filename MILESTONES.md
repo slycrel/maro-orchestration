@@ -35,9 +35,22 @@ fail-closed, two-channel repeat-guard disarm (status OR verdict),
 off-vocabulary validation at both stamp seams; rejected: refusal-path
 ledger rows (non-attempts), status-derived fallback removal (legacy
 bridge). Record:
-docs/history/2026-07-27-chunk9-4-adversarial-review.md. **Next:
-chunk-9 #2 — recon flavor in star** (incl. §14 diagnosis/blocked_on
-ownership split).
+docs/history/2026-07-27-chunk9-4-adversarial-review.md. **Chunk-9 #2
+SHIPPED same day — recon flavor + §14 diagnosis in star** (pure
+prompting per the build order): typed `blocked_on` failure contract
+(cause / what-would-be-different / proposed-experiment; five cause
+types with routing table), diagnosis question + ownership split
+(step diagnoses/recommends, master decides/routes; dedup at the map)
+in `.claude/skills/star/SKILL.md`; exercised live (star use #2) on the
+BACKLOG cap-stuck question — findings: cap-stuck family = 9/726 runs,
+zero pre-rail stop_verdict stamps store-wide, and a NEW conflation the
+survey missed (judged goal_achieved=TRUE + status stuck →
+success_class "failed"; 2 live specimens; BACKLOG'd with fix shape).
+Vocabulary change deliberately deferred (consumer-census discipline).
+Record: docs/history/2026-07-27-chunk9-2-recon-diagnosis-star.md.
+**Next: remaining AFK lanes** — chunk-9 build order is exhausted
+(#4 ✓ review ✓, #2 ✓); everything further in §9/§10 is discussion
+material awaiting Jeremy.
 
 Previous checkpoint — 2026-07-22 **swarm-review arc, chunk 8 SHIPPED — final
 chunk** (plan: `~/.claude/plans/abundant-gathering-lagoon.md`). Chunk 8

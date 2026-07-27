@@ -602,4 +602,11 @@ confirmed; coherence rides existing seams, upgrade BACKLOG'd; escalation
 single-chasm + family-ROI line; external interrupt = run event, not a
 fifth verdict; item 4 cross-goal map scope deliberately open) — and §14
 added: diagnosis at the failure boundary, step-recommends /
-planner-routes.
+planner-routes. Later that day: §9.4 SHIPPED (stop-verdict split,
+fc93dfa + review fixes ea8d347 —
+`history/2026-07-27-stop-verdict-split.md`) and §9.2+§14 SHIPPED in
+`star` per the build order (typed `blocked_on` failure contract +
+diagnosis section in the skill; exercised live on the cap-stuck
+question — `history/2026-07-27-chunk9-2-recon-diagnosis-star.md`).
+Graduation to src/ waits on crystallization pressure per the star
+charter.

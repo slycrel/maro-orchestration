@@ -84,8 +84,19 @@ cannot fill one in, ask the user — that gap is itself a finding.
      accompany claims). A task without output criteria does not get
      delegated — criteria-free prompts drift, invent, and call
      hand-waving a completed product (factory finding #3, 2026-03-31);
+   - the **failure contract**: every delegated task states that if the
+     sub-agent cannot complete, it must return a typed `blocked_on`
+     block instead of a shrug (see Diagnosis at the failure boundary);
    - the minimum context it needs — partition, don't forward the whole
      history.
+
+   When a prior task came back `blocked_on`, routing its recommendation
+   is itself a taste act with its own ledger row: run the proposed
+   experiment as a `recon` task / spawn a capability side-quest / reroute
+   away (the goal may no longer need that step at all) / honest typed
+   stop. The step recommended; the master decides — never auto-adopt the
+   step's proposal. **Dedup at the map**: two tasks blocked on the same
+   cause become ONE routing decision, not two experiments.
 2. **DELEGATE.** One Agent-tool subagent, serial (one live at a time —
    box rule). The subagent's final text is data for step 3, not truth.
 3. **JUDGE.** Validate the answer against the criteria stated in step 1
@@ -103,10 +114,55 @@ cannot fill one in, ask the user — that gap is itself a finding.
    is inconclusive, never accepted.
 4. **RECORD.** Append one row to the run ledger (kept in your reply, see
    below), including the **surprise** field: what differed from what you
-   expected when you wrote the task?
+   expected when you wrote the task? A task that came back blocked
+   records its typed cause in the Verdict column (`blocked:<cause>`);
+   the master's routing decision for it gets its own row.
 5. Loop. Done only when the done-means checks from the invocation
    contract actually pass a final judgement step (run them; do not
    narrate them).
+
+## Diagnosis at the failure boundary (§14, 2026-07-27)
+
+A failed pass must produce a causal hypothesis before it becomes a
+verdict. The diagnosis question every blocked sub-agent answers: **what
+would have to be different for this pass to succeed?** The answer is a
+typed `blocked_on` block:
+
+```
+blocked_on:
+  cause: missing-capability | missing-information | wrong-approach
+         | terrain | transient
+  what_would_be_different: <the specific missing thing, named>
+  proposed_experiment: <the check that would prove it is really missing
+                        — the settled_by_command discipline applied to
+                        the blockage itself>
+```
+
+The cause types route differently: missing-capability/tool/access is
+*acquirable* (side-quest), missing-information is *recon-able*,
+wrong-approach is *re-plannable*, terrain is *genuinely refuted*
+(feeds thesis-refuted), transient is *retriable*.
+
+**Falsifiability is the excuse-killer.** "I can't" must name the
+specific missing thing AND the experiment that would prove it's really
+missing. An excuse names nothing specific, so it fails diagnosis and is
+rejected like any other unsupported claim; a boil-the-ocean ask is the
+same failure inverted — wanting everything because the one thing was
+never named.
+
+**Ownership split (Jeremy's tweak — the load-bearing part): the step
+DIAGNOSES and RECOMMENDS; the master DECIDES and ROUTES.** A blocked
+sub-agent may substantiate its hypothesis with evidence gatherable
+inside its already-granted scope and budget (the `which <tool>` class —
+that makes the recommendation falsifiable, not routing). The
+discriminating experiment as a plan move, the side-quest spawn, and the
+revisit are map operations the step does not own — dedup only exists at
+the map (steps can't see each other's blockages), and the master may
+route away regardless (the goal may not need that step; a step
+self-serving its experiment pre-empts a reroute that was never its call
+— delegation-boundary razor: routing is parent-taste). A blocked task
+is a landmark with a reopen condition, not a dead end: revisit when the
+routing decision lands its new capability or data.
 
 ## Guardrails (structural, not vibes)
 

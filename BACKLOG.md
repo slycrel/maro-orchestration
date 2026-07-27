@@ -2093,6 +2093,27 @@ deferred rather than silently dropped:
   cap-stuck-with-deliverables (e.g. to partial, or closure-on-stop
   judging the deliverable) is a separate judged decision — the tire
   run 4 needle doc (2026-07-27) is the live specimen.
+  *Star recon numbers (2026-07-27, chunk-9 #2 exercise —
+  docs/history/2026-07-27-chunk9-2-recon-diagnosis-star.md):* the
+  cap-stuck family is 9 of 726 runs in the live store (all
+  `cost_budget=$2.00 + slush` endings; 2 more cap-shaped land as
+  stranded/done); zero stamped stop_verdicts pre-date the fc93dfa rail,
+  so any legacy rebucket needs a stuck_reason-derived fallback (the cap
+  evidence lives in `build/loop-*-log.json`, NOT metadata — heavier
+  read). Forward runs carry the verdict; the open call is vocabulary
+  (new class vs verdict-aware readers).
+- **Achieved-but-stuck classifies as "failed" (star find, 2026-07-27).**
+  The SF-2 inversion nobody named: `classify_outcome` checks
+  `goal_achieved is True` only inside `_SUCCESS_STATUSES`, so a judged
+  goal_achieved=True run with status "stuck" lands `success_class=
+  "failed"` — a judged SUCCESS counted as failure evidence. Two live
+  specimens: `692bd96f-brisk-lichen`, `d9f01e13-golden-birch` (both
+  goal_achieved:true in metadata, both classify failed; spot-verified by
+  executed classify_outcome). Fix shape: a verdict-preferred branch
+  before `_FAIL_STATUSES` (judged True + non-success status → its own
+  bucket or "success"), with the same consumer census the chunk-9 #4
+  rebucket got (learnability, notify badge, evolver passthrough). Not
+  rushed in the star run per its own cuts (no src/ changes in-run).
 - **Closure fail-open posture.** With skip_detail now recorded, the
   remaining question is design: should closure return complete=True when
   the goal carries an explicit output contract and verification never
