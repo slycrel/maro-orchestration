@@ -4487,3 +4487,19 @@ Dormant (deliberately parked, not dropped):
   failure semantics — "returns []" is three different truths (empty,
   absent, unreadable). Record:
   docs/history/2026-07-27-escalation-payload-adversarial-review.md.
+
+- **2026-07-27 (session, Jeremy's ask: "consider archiving on the
+  backlog, I think it's getting pretty big"): BACKLOG archiving pass
+  DONE.** BACKLOG.md 2678 → 1541 lines; all fully-closed entries moved
+  intact (never deleted — data-retention rule) to BACKLOG_DONE.md
+  "Archived from BACKLOG 2026-07-27": triage-pass-history preamble
+  (passes 18–25), R2/R3/R4/R5 (residuals all closed), R6, C4-BOX
+  burn-in, -1 Purgatorio r2 graduates, #22 shipped trail, DONE pointer
+  stubs, install-trial residuals, launch-content arc, the 2026-07-04
+  stale-drop record. Open remainders stayed live as compact stubs
+  pointing at the archive: R6-E anchoring watch-item, C4 flip
+  (Jeremy-gated), #22 errand-envelope + standing habit, $HOME haiku.txt
+  watch-item, (g) filename-scrub known-gap + (h) auto-resume graduated
+  shape; the orch.py-trio removal residual now rides the Phase 38
+  subpackage entry. Verified no-loss by line set-difference (every
+  removed line present in the archive).
