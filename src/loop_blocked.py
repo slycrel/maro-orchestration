@@ -740,7 +740,8 @@ def _navigator_act_blocked_step(
                 _decision_ask = decision_line(
                     "blocked_step", reason=reasoning or stuck_reason,
                     step=step_text)
-                _fc = diagnose_loop(loop_id).failure_class if loop_id else ""
+                _fc = (diagnose_loop(loop_id, emit_log_event=False).failure_class
+                       if loop_id else "")
                 _family = family_roi_line(_fc)
             except Exception:
                 pass

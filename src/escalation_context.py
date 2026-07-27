@@ -70,26 +70,46 @@ def family_roi_line(failure_class: str, *, window_days: int = 30) -> str:
     unreadable — the line is context, and silence beats noise. First
     occurrence is signal too ("first ... on record"): a brand-new chasm
     reads differently from a recurring one.
+
+    Counts raw ledger rows over the WHOLE file (read_jsonl_tail reads it
+    all anyway — a "recent N" cap would just make "on record" a lie once
+    the ledger outgrows it), and a row that fails LoopDiagnosis
+    construction still counts: it is still on record.
     """
     if not failure_class or failure_class == "healthy":
         return ""
     try:
-        from introspect import load_diagnoses
-        rows = [d for d in load_diagnoses(limit=200)
-                if d.failure_class == failure_class]
+        # _diagnoses_path is introspect's single ledger-location authority;
+        # there is no public accessor and this read-only consumer doesn't
+        # justify adding one.
+        from introspect import _diagnoses_path
+        from jsonl_utils import read_jsonl_tail
+        path = _diagnoses_path()
+        raw = read_jsonl_tail(path)
+        if not raw:
+            # A missing/empty ledger honestly means "first failure on
+            # record". An existing non-empty file that yielded nothing
+            # readable does NOT — claiming "first" over an unreadable
+            # ledger is exactly the noise this line exists to avoid.
+            try:
+                if path.exists() and path.stat().st_size > 0:
+                    return ""
+            except OSError:
+                return ""
+        rows = [d for d in raw if d.get("failure_class") == failure_class]
         if not rows:
             return f"Family context: first '{failure_class}' failure on record."
         cutoff = datetime.now(timezone.utc) - timedelta(days=window_days)
         recent = 0
         for d in rows:
-            stamp = getattr(d, "recorded_at", "") or ""
+            stamp = d.get("recorded_at") or ""
             try:
                 ts = datetime.fromisoformat(stamp)
                 if ts.tzinfo is None:
                     ts = ts.replace(tzinfo=timezone.utc)
                 if ts >= cutoff:
                     recent += 1
-            except ValueError:
+            except (ValueError, TypeError):
                 continue  # pre-V3 row without a stamp — all-time count only
         line = (f"Family context: '{failure_class}' has {len(rows)} prior "
                 f"diagnos{'is' if len(rows) == 1 else 'es'} on record")

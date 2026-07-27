@@ -125,8 +125,46 @@ def test_unstamped_pre_v3_row_counts_all_time_only(tmp_path):
     assert "last 30 days" not in line
 
 
-def test_unreadable_ledger_renders_nothing(monkeypatch):
-    def _boom(limit=50):
-        raise OSError("ledger unreadable")
-    monkeypatch.setattr("introspect.load_diagnoses", _boom)
+def test_count_covers_whole_ledger_not_a_recent_window(tmp_path):
+    # Adversarial-review find (both lenses): a "newest N" load cap turns
+    # "on record" into a lie once the ledger outgrows it — old family rows
+    # vanish behind newer other-class rows and re-render as "first on
+    # record". The count must cover the whole file.
+    old = (datetime.now(timezone.utc) - timedelta(days=90)).isoformat()
+    _seed("retry_churn", recorded_at=old)
+    _seed("retry_churn", recorded_at=old)
+    import json
+    from introspect import _diagnoses_path
+    path = _diagnoses_path()
+    with path.open("a", encoding="utf-8") as f:
+        for i in range(230):
+            f.write(json.dumps({"loop_id": f"noise-{i}",
+                                "failure_class": "token_burn",
+                                "severity": "info"}) + "\n")
+    line = family_roi_line("retry_churn")
+    assert "'retry_churn' has 2 prior diagnoses on record" in line
+
+
+def test_construction_failing_row_still_counts(tmp_path):
+    # The count is over raw rows: a row LoopDiagnosis can't construct
+    # (pre-schema, hand-edited) is still on record.
+    import json
+    from introspect import _diagnoses_path
+    path = _diagnoses_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps({"failure_class": "retry_churn"}) + "\n")
+    line = family_roi_line("retry_churn")
+    assert "1 prior diagnosis on record" in line
+
+
+def test_unreadable_nonempty_ledger_renders_nothing(tmp_path):
+    # Adversarial-review find (both lenses): the loader swallows read
+    # failures into [], which the first cut rendered as a confident false
+    # "first ... on record". An existing non-empty ledger that yields
+    # nothing readable must render silence instead.
+    from introspect import _diagnoses_path
+    path = _diagnoses_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"\x00\xffnot json at all\n{broken\n")
     assert family_roi_line("retry_churn") == ""

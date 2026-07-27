@@ -321,6 +321,30 @@ def test_no_events_returns_artifact_missing(tmp_path, monkeypatch):
     assert diag.failure_class == "artifact_missing"
 
 
+def test_diagnose_loop_log_event_suppressible(tmp_path, monkeypatch):
+    """§9.6 review fix: read-only consumers (escalation payload enrichment)
+    must be able to consult the taxonomy without writing — by default a
+    non-healthy full-path diagnosis logs a captain's-log DIAGNOSIS event.
+    (The artifact_missing early return never reaches the log block, so this
+    seeds a real non-healthy trace.)"""
+    monkeypatch.setattr("introspect._events_path",
+                        lambda: tmp_path / "memory" / "events.jsonl")
+    logged = []
+    monkeypatch.setattr("captains_log.log_event",
+                        lambda **kw: logged.append(kw))
+    events = [
+        _make_step_event("supp01", 1, "blocked", tokens_in=0, tokens_out=0,
+                         elapsed_ms=200),
+        _make_loop_done("supp01", "stuck", "adapter error"),
+    ]
+    _write_events(tmp_path, events)
+    diag = diagnose_loop("supp01")
+    assert diag.failure_class != "healthy"
+    assert len(logged) == 1     # default: event emitted
+    diagnose_loop("supp01", emit_log_event=False)
+    assert len(logged) == 1     # suppressed: no second event
+
+
 # ---------------------------------------------------------------------------
 # Persistence roundtrip
 # ---------------------------------------------------------------------------

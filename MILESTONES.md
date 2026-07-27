@@ -14,6 +14,13 @@ additively (blocked_step decision+family, dispatch decision-only —
 omitted-not-faked, director_escalation summary-as-ask); telegram leads
 with the ask, legacy payloads unchanged. No LLM, no config keys, no new
 persistence. Record: docs/history/2026-07-27-escalation-payload.md.
+**Adversarial review DONE same day** (2 Codex lenses vs 839da56,
+CONTESTED → remediated; 3/3 verified, 0 hallucinated — fourteenth clean
+round): diagnose_loop consult made side-effect-free from the enrichment
+path (emit_log_event=False), unreadable-ledger silence instead of false
+"first on record", whole-ledger raw-row count (the limit cap bought
+nothing and lied at 1418 live rows). Record:
+docs/history/2026-07-27-escalation-payload-adversarial-review.md.
 **Remaining 9/10 material is discussion-shaped** (§9.3 largely absorbed
 by stop verdicts + Phase 62; §9.7/§9.9/§10 calibration await Jeremy).
 

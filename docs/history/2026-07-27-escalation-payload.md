@@ -36,6 +36,14 @@ additively, so every consumer sees them (durable
 `output/escalations.jsonl`, `notify.command` hook JSON, telegram) and
 none requires them.
 
+*Post-review note (same day, see
+`2026-07-27-escalation-payload-adversarial-review.md`):* the family
+count now covers the whole ledger via raw rows (the as-shipped
+`load_diagnoses(limit=200)` capped it), an existing-but-unreadable
+ledger renders silence rather than "first on record", and the
+blocked_step diagnosis consult passes `emit_log_event=False` so
+enrichment never writes a captain's-log event.
+
 ## Emit sites wired (all three)
 
 | Site | Point | Payload |

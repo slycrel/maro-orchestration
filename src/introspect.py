@@ -231,7 +231,8 @@ def _build_step_profiles(events: List[dict]) -> List[StepProfile]:
     return profiles
 
 
-def diagnose_loop(loop_id: str, project: str = "") -> LoopDiagnosis:
+def diagnose_loop(loop_id: str, project: str = "",
+                  emit_log_event: bool = True) -> LoopDiagnosis:
     """Analyze a completed loop's execution trace and classify any failures.
 
     Pure heuristics — no LLM calls. Reads events.jsonl for the given loop_id
@@ -241,6 +242,10 @@ def diagnose_loop(loop_id: str, project: str = "") -> LoopDiagnosis:
         loop_id: loop to diagnose.
         project: project slug for the loop (when known by caller). Persisted on
             the diagnosis so retrieval can prioritize same-project history.
+        emit_log_event: when False, skip the captain's-log DIAGNOSIS event for
+            non-healthy classes. Read-only consumers (§9.6 escalation payload
+            enrichment) pass False so consulting the taxonomy never writes —
+            the metacognitive path may have already logged the same loop.
 
     Returns LoopDiagnosis with failure_class from the taxonomy.
     """
@@ -445,7 +450,7 @@ def diagnose_loop(loop_id: str, project: str = "") -> LoopDiagnosis:
              loop_id, failure_class, severity, len(done), len(profiles), total_tokens)
 
     # Captain's log: non-healthy diagnoses
-    if failure_class != "healthy":
+    if failure_class != "healthy" and emit_log_event:
         try:
             from captains_log import log_event, DIAGNOSIS
             log_event(

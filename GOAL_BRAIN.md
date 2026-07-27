@@ -4471,3 +4471,19 @@ Dormant (deliberately parked, not dropped):
   investment scoring, side-quest recommendation at the boundary) stays
   discussion material. Record:
   docs/history/2026-07-27-escalation-payload.md.
+
+- **2026-07-27 (session, per-chunk review discipline): §9.6 adversarial
+  review DONE** (2 Codex lenses vs 839da56, CONTESTED → remediated same
+  session; 3/3 findings verified, 0 hallucinated — fourteenth clean
+  round). Fixed: diagnose_loop consult no longer writes a captain's-log
+  DIAGNOSIS event from the enrichment path (`emit_log_event=False` —
+  the chunk's own no-new-persistence constraint, Architect HIGH);
+  unreadable non-empty ledger renders silence instead of a false "first
+  on record" (the shipped test had proven a synthetic raise, not the
+  swallowing loader); family count now covers the whole ledger via raw
+  rows (the limit=200 cap bought nothing — read_jsonl_tail reads the
+  whole file anyway — and lied at the live ledger's 1418 rows).
+  Lesson: a helper reading through a fail-soft loader inherits its
+  failure semantics — "returns []" is three different truths (empty,
+  absent, unreadable). Record:
+  docs/history/2026-07-27-escalation-payload-adversarial-review.md.
