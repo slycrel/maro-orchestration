@@ -20,6 +20,16 @@ from llm_parse import extract_json
 
 log = logging.getLogger("maro.planner")
 
+# max_tokens for the no_tools contract calls that reason over a full goal
+# (cuts + every decompose lane). On the subprocess backend this value becomes
+# the CLAUDE_CODE_MAX_OUTPUT_TOKENS hard cap, which counts THINKING tokens —
+# a step-list-sized cap (512/1024 → 1500 floor) kills the call before the
+# model finishes reasoning about a real-sized goal (runs 4d20b559/1bfd0894:
+# every decompose lane died at the floor, leaving a heuristic 2-step plan).
+# The strict step/CUT parser stays the contract-quality gate; this is only
+# the runaway ceiling, so headroom is cheap.
+GOAL_REASONING_MAX_TOKENS = 4000
+
 
 # ---------------------------------------------------------------------------
 # Anti-sycophancy rules (injected into every planning prompt)
@@ -241,7 +251,7 @@ def draw_cuts(
     adapter,
     *,
     context_extras: str = "",
-    max_tokens: int = 700,
+    max_tokens: int = GOAL_REASONING_MAX_TOKENS,
 ) -> Optional[Cuts]:
     """Draw narrowing cuts for a goal before decomposition.
 
@@ -916,7 +926,8 @@ def decompose(
     # general scope estimator (Phase 58: scope estimation before decomposition).
     if _goal_scope in ("wide", "deep"):
         try:
-            _staged_kwargs: dict = {"max_tokens": 512, "temperature": 0.2,
+            _staged_kwargs: dict = {"max_tokens": GOAL_REASONING_MAX_TOKENS,
+                                    "temperature": 0.2,
                                     "no_tools": True, "purpose": "decompose-staged"}
             if thinking_budget:
                 _staged_kwargs["thinking_budget"] = thinking_budget
@@ -947,7 +958,7 @@ def decompose(
         try:
             resp = adapter.complete(
                 [LLMMessage("system", system), LLMMessage("user", user_msg)],
-                max_tokens=512,
+                max_tokens=GOAL_REASONING_MAX_TOKENS,
                 temperature=0.3,
                 no_tools=True,
                 purpose="decompose-narrow",
@@ -965,7 +976,7 @@ def decompose(
         for i in range(3):
             resp = adapter.complete(
                 [LLMMessage("system", system), LLMMessage("user", user_msg)],
-                max_tokens=1024,
+                max_tokens=GOAL_REASONING_MAX_TOKENS,
                 temperature=0.7,  # higher temp for diversity
                 no_tools=True,
                 purpose="decompose-candidate",
@@ -981,7 +992,7 @@ def decompose(
                 for i, c in enumerate(candidates)
             )
             _compose_kwargs: dict = {
-                "max_tokens": 1024,
+                "max_tokens": GOAL_REASONING_MAX_TOKENS,
                 "temperature": 0.1,
                 "no_tools": True,
                 "purpose": "decompose-compose",
@@ -1034,7 +1045,7 @@ def decompose(
     try:
         resp = adapter.complete(
             [LLMMessage("system", system), LLMMessage("user", user_msg)],
-            max_tokens=1024,
+            max_tokens=GOAL_REASONING_MAX_TOKENS,
             temperature=0.2,
             no_tools=True,
             purpose="decompose-single",

@@ -526,7 +526,11 @@ def generate_resolved_intent(
     goal: str,
     adapter,
     *,
-    max_tokens: int = 1200,
+    # 4000 not answer-sized: on the subprocess backend max_tokens becomes the
+    # CLAUDE_CODE_MAX_OUTPUT_TOKENS cap, which counts THINKING tokens — 1200
+    # (→1500 floor) killed scope on both real-goal runs 4d20b559/1bfd0894.
+    # Same rationale as planner.GOAL_REASONING_MAX_TOKENS.
+    max_tokens: int = 4000,
     temperature: float = 0.3,
     ancestry_context: str = "",
     allow_proxy_fallback: bool = True,
@@ -589,7 +593,11 @@ def generate_scope(
     goal: str,
     adapter,
     *,
-    max_tokens: int = 1200,
+    # 4000 not answer-sized: on the subprocess backend max_tokens becomes the
+    # CLAUDE_CODE_MAX_OUTPUT_TOKENS cap, which counts THINKING tokens — 1200
+    # (→1500 floor) killed scope on both real-goal runs 4d20b559/1bfd0894.
+    # Same rationale as planner.GOAL_REASONING_MAX_TOKENS.
+    max_tokens: int = 4000,
     temperature: float = 0.3,
     ancestry_context: str = "",
     allow_proxy_fallback: bool = True,
