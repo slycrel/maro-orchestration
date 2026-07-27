@@ -4348,3 +4348,20 @@ Dormant (deliberately parked, not dropped):
   because dedup across blocked steps only exists at the map (three
   steps missing one capability = ONE side-quest), and because the
   planner may route away regardless. Design doc §14.
+
+- **2026-07-27 — Decision (Jeremy): token-brake calibration + design
+  calls — "run with them" (delegated to fable's measured steers).**
+  (1) Fresh-ingest ceiling stays 300K — measured, not reasoned: healthy
+  fresh ingest cost-bounded at p95 ≈ 259K over 123 metered steps,
+  pathology band 337-478K; raw run-log tokens_in is a trap metric
+  (includes cache reads + pre-fix double-count) and must not be used to
+  calibrate. (2) Ceiling #2 = weighted ingest (fresh + cache_read/10),
+  default 600K ≈ 2.3× healthy p95 — closes the transcript-amplification
+  hole; unweighted totals rejected (false-positive band too close).
+  (3) Read bypass ACCEPTED as Bash-only enforcement with the guarantee
+  restated honestly — fetch-extract reads are the sanctioned lane, the
+  accumulation ceilings are the backstop. Context: 3-lens Codex review
+  REJECT on 344973f (headline verified: token_runaway retried one layer
+  above the adapter seam); remediation acc5eda; merge-gate round caught
+  the remediation's own run-stop coercion. Record:
+  docs/history/2026-07-27-token-brake-adversarial-review.md.

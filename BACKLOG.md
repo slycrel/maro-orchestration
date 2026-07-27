@@ -2029,14 +2029,29 @@ deferred rather than silently dropped:
   harness truncation so workers plan around the persisted file. Tests:
   tests/test_step_token_brake.py (28).
 
+  **Adversarial review 2026-07-27 (3 Codex lenses vs 344973f): REJECT →
+  remediated (acc5eda) → merge-gate round found the remediation's own gap
+  (empty loop_status coerced to "stuck" — no-retry delivered, run-continues
+  NOT) → fixed at merge. Full record:
+  docs/history/2026-07-27-token-brake-adversarial-review.md.**
+
+  **Resolved at merge (2026-07-27):**
+  - **Brake ceiling calibration — MEASURED.** 123 cost-metered steps on
+    this box: healthy fresh ingest cost-bounded at p95 ≈ 259K, pathology
+    band 337-478K → 300K default confirmed. (Raw run-log `tokens_in` is a
+    trap metric for this: includes cache reads + pre-fix double-count.)
+  - **Cache-read amplification — ceiling #2 shipped.** Weighted ingest
+    (fresh + cache_read/10) vs `llm.subprocess.weighted_input_ceiling_tokens`
+    (default 600K ≈ 2.3× healthy p95; `trigger="weighted"` on the error).
+  - **Read bypass — ACCEPTED as Bash-only, guarantee restated** (DEFAULTS
+    row): fetch-extract reads are the sanctioned lane; a wholesale Read of
+    a large capture lands as fresh ingest and the accumulation ceilings
+    are the backstop. The Read tool has no CLI knob (recorded, below).
+
   **Still open:**
-  - **Brake ceiling calibration.** The 300K uncached-ingest default is
-    reasoned (1.5x the decomposition_too_broad diagnostic watermark), not
-    measured against this box's healthy-step distribution — mine
-    step-costs/run records on the runtime box before tightening or
-    loosening. Cache reads deliberately don't count; if a future blowup is
-    pure re-send amplification with low fresh ingest, the cost meter (not
-    this brake) is the guard that should catch it.
+  - **Read tool has no per-call cap knob.** Bash-cap equivalent doesn't
+    exist CLI-side; if the CLI ever grows one, wire it into
+    `_bash_output_cap_env`'s sibling.
   - **Codex lane has no brake.** `CodexCLIAdapter` streams a different
     event shape; the token brake and Bash cap are claude-lane only.
   - **Container-mode CLI resolution — UNVERIFIED.** `maro-fetch` is now

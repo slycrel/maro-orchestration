@@ -102,7 +102,8 @@ class TokenRunawayError(RuntimeError):
     """
 
     def __init__(self, fresh_input_tokens: int, ceiling_tokens: int,
-                 estimated_cost_usd: float = 0.0):
+                 estimated_cost_usd: float = 0.0,
+                 weighted_input_tokens: int = 0, trigger: str = "fresh"):
         self.fresh_input_tokens = int(fresh_input_tokens)
         self.ceiling_tokens = int(ceiling_tokens)
         # Carried so the blocked outcome can record what the killed call
@@ -110,6 +111,23 @@ class TokenRunawayError(RuntimeError):
         # dollars understates run totals and skill telemetry, and an unmetered
         # run loses the spend entirely (adversarial review 2026-07-27, 3/3).
         self.estimated_cost_usd = float(estimated_cost_usd or 0.0)
+        # Which ceiling fired: "fresh" (uncached ingest) or "weighted"
+        # (fresh + cache_read/10 — the transcript-amplification backstop the
+        # same review flagged: fresh alone can't see a call that re-reads a
+        # quarter-million-token cached transcript twenty times).
+        self.weighted_input_tokens = int(weighted_input_tokens or 0)
+        self.trigger = str(trigger or "fresh")
+        if self.trigger == "weighted":
+            _detail = (
+                f"mid-step token brake: weighted ingest (fresh + cache_read/10) "
+                f"{self.weighted_input_tokens} >= ceiling {self.ceiling_tokens} "
+                f"(fresh alone: {self.fresh_input_tokens}) — call killed, step "
+                f"blocked, run continues. If this step legitimately needs more, "
+                f"raise llm.subprocess.weighted_input_ceiling_tokens (config) or "
+                f"MARO_SUBPROCESS_WEIGHTED_INPUT_CEILING (env; 0 disables)."
+            )
+            super().__init__(_detail)
+            return
         super().__init__(
             f"mid-step token brake: one subprocess call ingested "
             f"{self.fresh_input_tokens} uncached input tokens >= ceiling "

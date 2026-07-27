@@ -368,8 +368,12 @@ def _process_blocked_step(ctx: LoopContext, blk: BlockedStepContext) -> tuple:
                 consecutive_max_timeouts, _recovery_delta, replan_count)
 
     # Terminal failure — reached when no branch returned (redecompose fallthrough, or
-    # explicit stuck decision from _handle_blocked_step)
-    _loop_status = _decision.loop_status or "stuck"
+    # explicit stuck decision from _handle_blocked_step). advance=True means the
+    # STEP is terminal but the run is not: return an empty loop_status so the
+    # caller records the blocked step and moves on — the `or "stuck"` coercion
+    # must not eat it (merge-gate review 2026-07-27: it did, turning the brake's
+    # "step dies, run continues" contract into a silent full-run stop).
+    _loop_status = "" if _decision.advance else (_decision.loop_status or "stuck")
     _stuck_reason = _decision.stuck_reason or outcome.get("stuck_reason", "blocked")
     failure_chain.append(f"step {step_idx} terminal: {_stuck_reason[:80]}")
     if item_index >= 0:
@@ -378,7 +382,11 @@ def _process_blocked_step(ctx: LoopContext, blk: BlockedStepContext) -> tuple:
         except OSError as _mark_exc:  # FileLockTimeout: ledger contended — the run result matters more than the checkbox
             log.warning("mark_item(BLOCKED) failed for %s#%d: %s", ctx.project, item_index, _mark_exc)
     if ctx.verbose:
-        print(f"[maro] step {step_idx} stuck after retry: {_stuck_reason}", file=sys.stderr, flush=True)
+        if _decision.advance:
+            print(f"[maro] step {step_idx} abandoned ({_stuck_reason[:120]}) — continuing with remaining steps",
+                  file=sys.stderr, flush=True)
+        else:
+            print(f"[maro] step {step_idx} stuck after retry: {_stuck_reason}", file=sys.stderr, flush=True)
     try:
         from skills import attribute_failure_to_skills, find_matching_skills, record_variant_outcome, record_skill_outcome
         from metrics import estimate_cost as _est_cost
@@ -597,6 +605,11 @@ class _BlockDecision:
     split_into: List[str] = field(default_factory=list)  # non-empty → replace stuck step with these
     redecompose: bool = False  # True → re-decompose this step into sub-steps
     metacognitive_reason: str = ""  # why we chose this action (Phase 62 logging)
+    # True → the step is dead but the RUN advances to its remaining steps
+    # (token_runaway). Explicit because the terminal handler coerces a falsy
+    # loop_status to "stuck" — a bare loop_status="" silently became a full
+    # run stop (merge-gate review 2026-07-27, on top of the codex round).
+    advance: bool = False
 
 
 def _navigator_act_blocked_step(
@@ -856,12 +869,13 @@ def _handle_blocked_step(
         return _BlockDecision(
             retry=False,
             hint="",
-            loop_status="",      # empty: flow is "normal", the loop advances
+            loop_status="",
             stuck_reason="",
             metacognitive_reason=(
                 "token runaway — per-call ingest ceiling crossed; retrying would "
                 "replay the same ingest, so the step is abandoned and the run continues"
             ),
+            advance=True,        # the step dies; the run does NOT
         )
 
     # NEED_INFO: step explicitly requests more context (Phase 62 deliverable 4)

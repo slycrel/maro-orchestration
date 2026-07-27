@@ -1449,8 +1449,14 @@ def _execute_main_loop(
                 stuck_reason = _blk_reason
                 break
             else:  # "normal" — terminal failure, fall through
-                loop_status = _blk_status
-                stuck_reason = _blk_reason
+                # An empty status means the STEP is dead but the run advances
+                # (token_runaway). Adopting "" here would clobber the loop's
+                # "done" and corrupt the final run status; adopting "stuck"
+                # would kill the run — the exact contract the brake's
+                # "step dies, run continues" guarantee forbids.
+                if _blk_status:
+                    loop_status = _blk_status
+                    stuck_reason = _blk_reason
 
         step_outcomes.append(step_from_decompose(
             step_text, item_index,

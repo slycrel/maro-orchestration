@@ -1482,10 +1482,26 @@ def _build_stream_cost_probe(default_model: str = ""):
 # or the bill. Enforcement therefore lives in (1) what the CLI is configured
 # to admit per tool call and (2) killing the process on runaway accumulation.
 
-# Per-call uncached-ingest ceiling (tokens). 300K = 1.5x the 200K/step
-# decomposition_too_broad diagnostic watermark, ~7x what a healthy fetch-CLI
-# step ingests, and would have cut the 2.14M specimen at ~1/7 of its burn.
+# Per-call uncached-ingest ceiling (tokens). Measured, not reasoned
+# (2026-07-27, 123 cost-metered steps on this box): fresh ingest is bounded
+# above by provider_cost/$3-per-M (MID floor; cache_creation and output only
+# push the true value lower), giving healthy p50=69K / p95=259K, with the
+# pathology band at 337-478K — exactly the four grinder steps the brake
+# exists for (run 3's 2.14M-recorded tire step among them). 300K sits above
+# healthy p95 and at the bottom of that band. Do NOT calibrate against raw
+# run-log tokens_in: that metric includes cache reads (excluded here) and,
+# pre-2026-07-27, a per-content-block double-count.
 _FRESH_INPUT_CEILING_DEFAULT = 300_000
+
+# Per-call WEIGHTED-ingest ceiling (tokens): fresh + cache_read/10, i.e.
+# input-side cost expressed in fresh-token equivalents. Closes the
+# transcript-amplification hole the fresh ceiling cannot see (adversarial
+# review 2026-07-27): 250K fresh then twenty re-reads of that cached
+# transcript is ~5M input tokens while total_fresh never moves — but it is
+# 750K weighted. 600K = ~2.3x the measured healthy p95 bound (259K), above
+# every step observed on this box (max 478K), so it fires only on the
+# amplification shape. The fresh ceiling owns the grinder band.
+_WEIGHTED_INPUT_CEILING_DEFAULT = 600_000
 
 # Per-tool-call Bash output cap (chars) handed to the CLI. 24000 chars
 # (~6K tokens) keeps the fetch CLI's own capped output (~20.3K chars
@@ -1509,6 +1525,23 @@ def _fresh_input_ceiling() -> int:
                                    _FRESH_INPUT_CEILING_DEFAULT) or 0))
     except Exception:
         return _FRESH_INPUT_CEILING_DEFAULT
+
+
+def _weighted_input_ceiling() -> int:
+    """Resolve the weighted-ingest ceiling: env > config > default; <=0 disables."""
+    raw = os.environ.get("MARO_SUBPROCESS_WEIGHTED_INPUT_CEILING")
+    if raw is not None:
+        try:
+            return max(0, int(raw))
+        except ValueError:
+            log.warning("MARO_SUBPROCESS_WEIGHTED_INPUT_CEILING=%r not an int; "
+                        "falling back to config/default", raw)
+    try:
+        from config import get as _cfg_get
+        return max(0, int(_cfg_get("llm.subprocess.weighted_input_ceiling_tokens",
+                                   _WEIGHTED_INPUT_CEILING_DEFAULT) or 0))
+    except Exception:
+        return _WEIGHTED_INPUT_CEILING_DEFAULT
 
 
 def _bash_output_cap_env() -> Optional[Dict[str, Optional[str]]]:
@@ -1556,22 +1589,29 @@ def _build_step_token_brake(default_model: str = ""):
     the call's stream-json assistant events — deduped per API message id,
     because the CLI emits one assistant event per content block with the
     same usage — and returns a TokenRunawayError once the total crosses the
-    ceiling (the runner kills the process group and raises it). Cache READS
-    deliberately don't count: they are the 0.1x-priced echo of prior ingest,
-    and counting them would fire on legitimately long multi-turn steps.
+    fresh ceiling (the runner kills the process group and raises it). Cache
+    READS don't count as fresh: they are the 0.1x-priced echo of prior
+    ingest, and counting them at face value would fire on legitimately long
+    multi-turn steps. But excluding them entirely leaves transcript
+    amplification unbounded (adversarial review 2026-07-27), so a second
+    WEIGHTED ceiling prices them at their cost ratio: fresh + cache_read/10
+    against _weighted_input_ceiling(). Either ceiling kills; the error's
+    `trigger` field says which fired.
 
     On kill, the call's estimated spend (which DOES include cache reads and
     output) is accrued into the run cost meter when one is armed, so the
     runaway cost circuit's accounting doesn't lose the killed call.
     """
     ceiling = _fresh_input_ceiling()
-    if ceiling <= 0:
+    weighted_ceiling = _weighted_input_ceiling()
+    if ceiling <= 0 and weighted_ceiling <= 0:
         return None
     try:
         from metrics import estimate_cost
     except Exception:
         estimate_cost = None
-    state: Dict[str, Any] = {"by_id": {}, "anon_fresh": 0, "anon_est": 0.0}
+    state: Dict[str, Any] = {"by_id": {}, "anon_fresh": 0, "anon_read": 0,
+                             "anon_est": 0.0}
 
     def _probe(events):
         for ev in events:
@@ -1598,9 +1638,9 @@ def _build_step_token_brake(default_model: str = ""):
                     return 0
 
             fresh = _num("input_tokens") + _num("cache_creation_input_tokens")
+            cache_read = _num("cache_read_input_tokens")
             est = 0.0
             if estimate_cost is not None:
-                cache_read = _num("cache_read_input_tokens")
                 try:
                     est = estimate_cost(
                         fresh + cache_read,
@@ -1614,27 +1654,49 @@ def _build_step_token_brake(default_model: str = ""):
                     est = 0.0
             key = msg.get("id")
             if key:
-                prev = state["by_id"].get(key, (0, 0.0))
-                state["by_id"][key] = (max(prev[0], fresh), max(prev[1], est))
+                prev = state["by_id"].get(key, (0, 0, 0.0))
+                state["by_id"][key] = (max(prev[0], fresh),
+                                       max(prev[1], cache_read),
+                                       max(prev[2], est))
             else:
                 state["anon_fresh"] += fresh
+                state["anon_read"] += cache_read
                 state["anon_est"] += est
         total_fresh = state["anon_fresh"] + sum(
-            f for f, _ in state["by_id"].values())
-        if total_fresh < ceiling:
+            f for f, _, _ in state["by_id"].values())
+        total_read = state["anon_read"] + sum(
+            r for _, r, _ in state["by_id"].values())
+        # Weighted = input-side cost in fresh-token equivalents (reads are
+        # 0.1x-priced). Fires only on the amplification shape the fresh
+        # ceiling is blind to.
+        total_weighted = total_fresh + total_read // 10
+        fresh_fired = ceiling > 0 and total_fresh >= ceiling
+        weighted_fired = weighted_ceiling > 0 and total_weighted >= weighted_ceiling
+        if not fresh_fired and not weighted_fired:
             return None
         total_est = state["anon_est"] + sum(
-            e for _, e in state["by_id"].values())
+            e for _, _, e in state["by_id"].values())
         meter = _RUN_COST_METER.get()
         if meter is not None:
             with meter["lock"]:
                 meter["spent_usd"] += total_est
         from llm_errors import TokenRunawayError
+        if fresh_fired:
+            log.warning(
+                "step token brake: %d uncached input tokens ingested by one "
+                "subprocess call >= ceiling %d — killing subprocess",
+                total_fresh, ceiling)
+            return TokenRunawayError(total_fresh, ceiling,
+                                     estimated_cost_usd=total_est,
+                                     weighted_input_tokens=total_weighted)
         log.warning(
-            "step token brake: %d uncached input tokens ingested by one "
-            "subprocess call >= ceiling %d — killing subprocess",
-            total_fresh, ceiling)
-        return TokenRunawayError(total_fresh, ceiling, estimated_cost_usd=total_est)
+            "step token brake: weighted ingest %d (fresh %d + cache_read/10) "
+            ">= ceiling %d — killing subprocess",
+            total_weighted, total_fresh, weighted_ceiling)
+        return TokenRunawayError(total_fresh, weighted_ceiling,
+                                 estimated_cost_usd=total_est,
+                                 weighted_input_tokens=total_weighted,
+                                 trigger="weighted")
 
     return _probe
 

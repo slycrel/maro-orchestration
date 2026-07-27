@@ -70,6 +70,7 @@ def _assistant_event(fresh=0, cache_creation=0, cache_read=0, out=10,
 @pytest.fixture
 def _clean_brake_env(monkeypatch):
     monkeypatch.delenv("MARO_SUBPROCESS_FRESH_INPUT_CEILING", raising=False)
+    monkeypatch.delenv("MARO_SUBPROCESS_WEIGHTED_INPUT_CEILING", raising=False)
     monkeypatch.delenv("MARO_BASH_MAX_OUTPUT_CHARS", raising=False)
     monkeypatch.delenv("BASH_MAX_OUTPUT_LENGTH", raising=False)
 
@@ -83,9 +84,14 @@ class TestBrakeUnit:
         # Always-on: unlike the cost probe, no meter needs to be armed.
         assert _build_step_token_brake("sonnet") is not None
 
-    def test_env_zero_disables(self, monkeypatch, _clean_brake_env):
+    def test_env_zero_on_both_ceilings_disables(self, monkeypatch, _clean_brake_env):
         monkeypatch.setenv("MARO_SUBPROCESS_FRESH_INPUT_CEILING", "0")
+        monkeypatch.setenv("MARO_SUBPROCESS_WEIGHTED_INPUT_CEILING", "0")
         assert _build_step_token_brake("sonnet") is None
+
+    def test_fresh_zero_alone_keeps_weighted_armed(self, monkeypatch, _clean_brake_env):
+        monkeypatch.setenv("MARO_SUBPROCESS_FRESH_INPUT_CEILING", "0")
+        assert _build_step_token_brake("sonnet") is not None
 
     def test_under_ceiling_returns_none(self, monkeypatch, _clean_brake_env):
         monkeypatch.setenv("MARO_SUBPROCESS_FRESH_INPUT_CEILING", "1000")
@@ -108,11 +114,14 @@ class TestBrakeUnit:
         exc = probe([_assistant_event(fresh=10, cache_creation=1500, mid="m1")])
         assert isinstance(exc, TokenRunawayError)
 
-    def test_cache_reads_do_not_count(self, monkeypatch, _clean_brake_env):
+    def test_cache_reads_do_not_count_as_fresh(self, monkeypatch, _clean_brake_env):
         monkeypatch.setenv("MARO_SUBPROCESS_FRESH_INPUT_CEILING", "1000")
+        monkeypatch.setenv("MARO_SUBPROCESS_WEIGHTED_INPUT_CEILING", "0")
         probe = _build_step_token_brake("claude-sonnet-4-6")
         # A long legitimate step re-reads its transcript every turn — cheap
-        # (0.1x) and NOT new ingest. Must never trip the brake.
+        # (0.1x) and NOT new ingest. Must never trip the FRESH ceiling.
+        # (Read pressure at scale is ceiling #2's job — TestWeightedCeiling —
+        # priced at its actual cost ratio instead of face value.)
         events = [_assistant_event(fresh=10, cache_read=10_000_000, mid=f"m{i}")
                   for i in range(20)]
         assert probe(events) is None
@@ -154,6 +163,65 @@ class TestBrakeUnit:
         assert _FRESH_INPUT_CEILING_DEFAULT > 200_000
 
 
+class TestWeightedCeiling:
+    """Ceiling #2 (merge-gate addition, 2026-07-27): fresh + cache_read/10.
+
+    Closes the transcript-amplification hole the codex review flagged: 250K
+    fresh then twenty re-reads of that cached transcript is ~5M input tokens
+    while total_fresh never moves. Weighted ingest is input-side cost in
+    fresh-token equivalents, so the measured healthy distribution (p95 bound
+    259K over 123 cost-metered steps on this box) calibrates it directly;
+    600K default = ~2.3x that bound, above every step ever observed here."""
+
+    def test_amplification_fires_weighted_trigger(self, monkeypatch, _clean_brake_env):
+        monkeypatch.setenv("MARO_SUBPROCESS_WEIGHTED_INPUT_CEILING", "1000")
+        probe = _build_step_token_brake("claude-sonnet-4-6")
+        exc = probe([_assistant_event(fresh=10, cache_read=5000, mid="m1"),
+                     _assistant_event(fresh=10, cache_read=5000, mid="m2")])
+        assert isinstance(exc, TokenRunawayError)
+        assert exc.trigger == "weighted"
+        assert exc.weighted_input_tokens == 20 + 10_000 // 10
+        assert exc.fresh_input_tokens == 20
+        assert "weighted" in str(exc)
+
+    def test_reads_under_weighted_ceiling_no_fire(self, monkeypatch, _clean_brake_env):
+        monkeypatch.setenv("MARO_SUBPROCESS_WEIGHTED_INPUT_CEILING", "1000")
+        probe = _build_step_token_brake("claude-sonnet-4-6")
+        assert probe([_assistant_event(fresh=10, cache_read=5000, mid="m1")]) is None
+
+    def test_weighted_dedupes_reads_by_message_id(self, monkeypatch, _clean_brake_env):
+        """Per-content-block echo carries identical usage — reads dedupe like fresh."""
+        monkeypatch.setenv("MARO_SUBPROCESS_WEIGHTED_INPUT_CEILING", "1000")
+        probe = _build_step_token_brake("claude-sonnet-4-6")
+        ev = _assistant_event(fresh=10, cache_read=9000, mid="m1")
+        assert probe([ev, ev, ev]) is None  # 10 + 900 counted once, not 3x
+
+    def test_weighted_zero_disables_weighted_only(self, monkeypatch, _clean_brake_env):
+        monkeypatch.setenv("MARO_SUBPROCESS_WEIGHTED_INPUT_CEILING", "0")
+        monkeypatch.setenv("MARO_SUBPROCESS_FRESH_INPUT_CEILING", "1000")
+        probe = _build_step_token_brake("claude-sonnet-4-6")
+        # Unbounded reads with weighted off: documented residual, no fire.
+        assert probe([_assistant_event(fresh=10, cache_read=50_000_000, mid="m1")]) is None
+        # Fresh ceiling still owns the grinder shape.
+        exc = probe([_assistant_event(fresh=2000, mid="m2")])
+        assert isinstance(exc, TokenRunawayError)
+        assert exc.trigger == "fresh"
+
+    def test_fresh_trigger_reports_weighted_too(self, monkeypatch, _clean_brake_env):
+        monkeypatch.setenv("MARO_SUBPROCESS_FRESH_INPUT_CEILING", "1000")
+        probe = _build_step_token_brake("claude-sonnet-4-6")
+        exc = probe([_assistant_event(fresh=1500, cache_read=1000, mid="m1")])
+        assert isinstance(exc, TokenRunawayError)
+        assert exc.trigger == "fresh"
+        assert exc.weighted_input_tokens == 1500 + 100
+
+    def test_default_sits_above_every_observed_step(self, _clean_brake_env):
+        from llm import _WEIGHTED_INPUT_CEILING_DEFAULT
+        # Measured max on this box (pathology band top): 478K weighted bound.
+        assert _WEIGHTED_INPUT_CEILING_DEFAULT > 478_000
+        assert _WEIGHTED_INPUT_CEILING_DEFAULT > _FRESH_INPUT_CEILING_DEFAULT
+
+
 # ---------------------------------------------------------------------------
 # Probe composition
 # ---------------------------------------------------------------------------
@@ -167,6 +235,7 @@ class TestProbeComposition:
 
     def test_disabled_brake_and_no_meter_is_none(self, monkeypatch, _clean_brake_env):
         monkeypatch.setenv("MARO_SUBPROCESS_FRESH_INPUT_CEILING", "0")
+        monkeypatch.setenv("MARO_SUBPROCESS_WEIGHTED_INPUT_CEILING", "0")
         assert _build_stream_probes("sonnet", agentic=True) is None
 
     def test_cost_probe_wins_when_both_fire(self, monkeypatch, _clean_brake_env):
@@ -411,6 +480,57 @@ class TestRunawayIsNotRetried:
         """The special case must not disarm normal recovery."""
         d = self._decide("adapter_timeout")
         assert d.retry is True
+
+
+class TestRunawayAdvancesAtTheFlowSeam:
+    """Merge-gate round (2026-07-27), on top of the codex round: the decision
+    object said loop_status="" but the terminal handler coerced falsy to
+    "stuck" and loop_execute breaks on "stuck" — so the fix stopped the retry
+    and then killed the RUN instead. The codex-round pin asserted the decision
+    object, not the flow; this class pins the flow."""
+
+    def _run(self, outcome, monkeypatched_decision=None, monkeypatch=None):
+        from loop_types import LoopContext
+        import loop_blocked as _lb
+        if monkeypatched_decision is not None:
+            monkeypatch.setattr(_lb, "_handle_blocked_step",
+                                lambda *a, **kw: monkeypatched_decision)
+        blk = _lb.BlockedStepContext(
+            step_text="research tire prices", step_idx=2, step_result="",
+            step_elapsed=100, outcome=outcome, item_index=-1, iteration=1,
+            step_adapter=None, step_retries={}, step_tier_overrides={},
+            failure_chain=[], step_outcomes=[], remaining_steps=["a later step"],
+            remaining_indices=[3], manifest_steps=[],
+        )
+        ctx = LoopContext(loop_id="x", project="p", goal="g")
+        result = _lb._process_blocked_step(ctx, blk)
+        return result, blk
+
+    def test_token_runaway_flow_is_normal_with_empty_status(self):
+        outcome = {"status": "blocked", "error_class": "token_runaway",
+                   "stuck_reason": "mid-step token brake: ...", "result": "",
+                   "tokens_in": 300_000, "provider_cost_usd": 0.9}
+        (flow, _idx, status, _reason, *_rest), blk = self._run(outcome)
+        assert flow == "normal"
+        assert status == "", "empty status = record the step, advance the run"
+        assert blk.remaining_steps == ["a later step"], "no re-queue"
+        assert blk.step_retries == {}, "no retry accounting"
+
+    def test_ordinary_terminal_still_coerces_to_stuck(self, monkeypatch):
+        """Other constructors rely on the falsy-coercion; only advance=True
+        may bypass it."""
+        import loop_blocked as _lb
+        stuck_decision = _lb._BlockDecision(
+            retry=False, hint="", loop_status="", stuck_reason="exhausted",
+            metacognitive_reason="terminal",
+        )
+        outcome = {"status": "blocked", "error_class": "adapter_timeout",
+                   "stuck_reason": "exhausted", "result": ""}
+        (flow, _idx, status, reason, *_rest), _blk = self._run(
+            outcome, monkeypatched_decision=stuck_decision, monkeypatch=monkeypatch)
+        assert flow == "normal"
+        assert status == "stuck"
+        assert reason == "exhausted"
 
 
 class TestDisableOverridesInheritedVar:
