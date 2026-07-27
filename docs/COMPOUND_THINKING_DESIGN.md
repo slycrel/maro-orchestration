@@ -528,10 +528,78 @@ objective." No — he invented it earlier: the term entered the project in
 position or capability** — a detour to a landmark off the goal's subgraph
 that improves vantage or the tech tree.
 
+## 14. Diagnosis at the failure boundary (Jeremy + fable, 2026-07-27)
+
+The scientific method was already here in pieces without the name:
+stop-verdicts-as-observations (§13b) is provisional truth, recon flavor
+(§4) is the experiment, the VOI gate is experiment economics, and the
+navigator vantage rule (shipped 2026-07-27) is the evidence requirement.
+The missing organ is **diagnosis**: nothing forces a failed pass to
+produce a causal hypothesis before it becomes a verdict.
+
+**The diagnosis question:** *what would have to be different for this
+pass to succeed?* The answer types into a small cause set — missing
+capability/tool/access (acquirable), missing information (recon-able),
+wrong approach (re-plannable), terrain (genuinely refuted), transient
+(retriable). A verdict recorded without a typed cause is the smell.
+
+**Falsifiability as the excuse-killer.** "I can't" must name the
+specific missing thing and the experiment that would prove it's really
+missing. Excuses name nothing specific, so they fail diagnosis;
+boil-the-ocean prompts are the same failure inverted — asking for
+everything because the one thing was never named. Both die under one
+rule (Jeremy: excuses masquerading as roadblocks are the failure family
+to guard).
+
+**Ownership split (Jeremy's tweak, the load-bearing part):** the step
+DIAGNOSES and RECOMMENDS; the planner DECIDES and ROUTES. A failing
+step may substantiate its hypothesis with evidence gatherable inside
+its already-granted scope and budget (the `which <tool>` class — that's
+making the recommendation falsifiable, not routing). But the
+discriminating experiment as a plan move, the side-quest spawn, and the
+revisit are map operations the step does not own. Two reasons this
+split is structural, not stylistic:
+
+1. **Dedup only exists at the map.** Three steps blocked on the same
+   missing capability must become ONE side-quest; steps can't see each
+   other, so inline experimentation yields N uncoordinated experiments.
+   Family-ROI within a single plan requires central routing.
+2. **The planner may route away regardless.** A blocked step's
+   recommendation is one input; the planner can know the goal no longer
+   needs that step at all. Letting the step self-serve its experiment
+   pre-empts a reroute decision that was never the step's to make
+   (delegation-boundary razor: routing is parent-taste).
+
+**Verdict semantics stay clean:** the step exits
+`blocked_on(cause, what-would-be-different, proposed-experiment)` — an
+observation. The planner's routing choice — run the micro-test as a
+recon step / spawn the side-quest / reroute away / honest stop — is a
+separately recorded decision with its own owner. The blocked step
+remains a landmark with a reopen condition (§13b) and is revisited when
+the side-quest lands its new capability or data.
+
+**Side-quests as run-scale learning:** lessons are learning at memory
+scale; capability-acquisition side-quests are the same loop at action
+scale ("literally learning a language to cross the chasm" — Jeremy).
+The failure-pattern corpus (24 entries / 6 families) is the eventual
+learned prior over causes; that upgrade waits for verified-outcome
+density, per §10's calibration question.
+
+**Build placement:** diagnosis is recon-flavored by nature — this is
+§9.2's failure-boundary face, not a new chunk. Ships with recon flavor
+in `star` (a `blocked_on` typed field on failed completion + the
+diagnosis question in the star contract), after the §9.4 stop-verdict
+split per the decided build order.
+
 ### Status
 
 13a–13c are decided (GOAL_BRAIN Decisions, 2026-07-23). The partial
 approval of the same date opens implementation on the three-way-agreed set
 (§9.4 stop-verdict split + §9.2 recon flavor, exercised in `star` first);
 everything else in §9/§10 remains discussion material for the artifacts
-conversation.
+conversation. 2026-07-27: agenda items 1/2/3/5 decided (build order
+confirmed; coherence rides existing seams, upgrade BACKLOG'd; escalation
+single-chasm + family-ROI line; external interrupt = run event, not a
+fifth verdict; item 4 cross-goal map scope deliberately open) — and §14
+added: diagnosis at the failure boundary, step-recommends /
+planner-routes.

@@ -4337,3 +4337,14 @@ Dormant (deliberately parked, not dropped):
   product delivered, reopen: raise cap or continue" — not "failed").
   Item 4 (one-map cross-goal scope) stays deliberately open pending
   continuation-menu data.
+
+- **2026-07-27 — Decision (Jeremy): diagnosis ownership split — the step
+  diagnoses and recommends; the planner decides and routes.** A failing
+  step types its cause ("what would have to be different?"), may
+  substantiate within its already-granted scope/budget, and exits
+  blocked_on(cause, delta, proposed-experiment) as an observation. The
+  discriminating experiment as a plan move, side-quest spawn, reroute-
+  away, and the revisit are map operations owned by the planner —
+  because dedup across blocked steps only exists at the map (three
+  steps missing one capability = ONE side-quest), and because the
+  planner may route away regardless. Design doc §14.
