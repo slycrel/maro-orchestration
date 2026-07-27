@@ -107,9 +107,16 @@ _URL_RE = re.compile(
 # Core fetch + strip
 # ---------------------------------------------------------------------------
 
-def _http_get(url: str, timeout: int = _MAX_URL_FETCH_SECS, ua: str = _UA_STANDARD,
-              max_bytes: int = 500_000) -> Tuple[int, str]:
-    """Return (status_code, text). Never raises."""
+def _http_get_bytes(url: str, timeout: int = _MAX_URL_FETCH_SECS, ua: str = _UA_STANDARD,
+                    max_bytes: int = 500_000) -> Tuple[int, bytes, str]:
+    """Return (status_code, body_bytes, charset). Never raises.
+
+    The single origin-egress point in this module. Returns undecoded bytes so
+    the capture path can store exactly what the server sent — decoding with
+    `errors="replace"` and re-encoding as UTF-8 (what this used to do before
+    handing bytes to the capture) silently rewrites any non-UTF-8 page, which
+    defeats the point of keeping the raw file for later re-extraction.
+    """
     try:
         req = urllib.request.Request(
             url,
@@ -122,11 +129,20 @@ def _http_get(url: str, timeout: int = _MAX_URL_FETCH_SECS, ua: str = _UA_STANDA
             m = re.search(r"charset=([^\s;]+)", ct, re.I)
             if m:
                 charset = m.group(1).strip()
-            return resp.status, raw.decode(charset, errors="replace")
+            return resp.status, raw, charset
     except urllib.error.HTTPError as e:
-        return e.code, ""
+        return e.code, b"", "utf-8"
     except Exception:
-        return 0, ""
+        return 0, b"", "utf-8"
+
+
+def _http_get(url: str, timeout: int = _MAX_URL_FETCH_SECS, ua: str = _UA_STANDARD,
+              max_bytes: int = 500_000) -> Tuple[int, str]:
+    """Return (status_code, text). Never raises. Thin decode over _http_get_bytes."""
+    status, raw, charset = _http_get_bytes(url, timeout=timeout, ua=ua, max_bytes=max_bytes)
+    if not raw:
+        return status, ""
+    return status, raw.decode(charset, errors="replace")
 
 
 def _resolve_redirect(url: str, _depth: int = 0) -> str:
@@ -564,9 +580,9 @@ def is_safe_public_url(url: str) -> bool:
                 or ip.is_reserved or ip.is_multicast or ip.is_unspecified)
 
 
-def capture_raw(url: str, *, html: Optional[str] = None,
+def capture_raw(url: str, *, body: Optional[bytes] = None,
                 timeout: int = _MAX_URL_FETCH_SECS) -> Optional[Path]:
-    """Fetch `url`'s raw bytes and store them on disk. Returns the path or None.
+    """Store `url`'s raw bytes on disk. Returns the path or None.
 
     Kept deliberately separate from the text-extraction chain: the markdown
     tiers return *converted* text, so the original HTML (JSON-LD blocks, price
@@ -574,8 +590,10 @@ def capture_raw(url: str, *, html: Optional[str] = None,
     without a re-fetch. A later step can grep/parse the captured file directly —
     full fidelity on disk, zero extra tokens in context.
 
-    Pass `html` when the caller already downloaded the page (the raw-HTTP tier)
+    Pass `body` when the caller already downloaded the page (the raw-HTTP tier)
     so capture costs no extra request; omit it and the page is fetched once.
+    Bytes, not str: storing a decoded-and-re-encoded copy would misrepresent
+    any non-UTF-8 page as UTF-8.
 
     Content-addressed by URL hash, so a repeat fetch of the same URL reuses the
     existing file instead of re-downloading. Never raises.
@@ -583,7 +601,7 @@ def capture_raw(url: str, *, html: Optional[str] = None,
     cdir = capture_dir()
     if cdir is None:
         return None
-    if html is None and not is_safe_public_url(url):
+    if body is None and not is_safe_public_url(url):
         # Capture would be a second, unproxied request straight from this host —
         # the SSRF primitive. No policy pass, no fetch.
         return None
@@ -607,10 +625,11 @@ def capture_raw(url: str, *, html: Optional[str] = None,
         if budget and _captured_bytes(cdir) >= budget:
             return None  # quota exhausted — surfaced by the caller's note
 
-        if html is not None:
-            status, body = 200, html
+        if body is not None:
+            status = 200
         else:
-            status, body = _http_get(url, timeout=timeout, max_bytes=_MAX_CAPTURE_BYTES)
+            status, body, _charset = _http_get_bytes(
+                url, timeout=timeout, max_bytes=_MAX_CAPTURE_BYTES)
         if status != 200 or not body:
             return None
 
@@ -621,7 +640,7 @@ def capture_raw(url: str, *, html: Optional[str] = None,
         # raised and silently returned None.
         fd, tmp_name = tempfile.mkstemp(dir=str(cdir), prefix=f".{digest}-", suffix=".tmp")
         try:
-            with os.fdopen(fd, "w", encoding="utf-8", errors="replace") as fh:
+            with os.fdopen(fd, "wb") as fh:
                 fh.write(body)
             os.replace(tmp_name, path)
         except Exception:
@@ -767,7 +786,7 @@ def _is_login_wall(text: str) -> bool:
     return "log in" in lower and "sign up" in lower and len(text) < 500
 
 
-def _capture_note(url: str, *, html: Optional[str] = None) -> str:
+def _capture_note(url: str, *, body: Optional[bytes] = None) -> str:
     """Capture the raw page and return a one-line pointer (or "").
 
     The pointer is the whole point: ~15 tokens telling a later step that full
@@ -776,7 +795,7 @@ def _capture_note(url: str, *, html: Optional[str] = None) -> str:
     try:
         if not _capture_enabled():
             return ""
-        path = capture_raw(url, html=html)
+        path = capture_raw(url, body=body)
     except Exception:
         return ""  # capture is a convenience — it must never fail a fetch
     if path is None:
@@ -817,44 +836,61 @@ def fetch_url_content(url: str) -> str:
     if _X_POST_RE.search(url):
         return fetch_x_tweet(url)
 
+    # Extraction and capture are separate concerns with ONE join point at the
+    # end. They used to be interleaved — three returns each calling
+    # _capture_note() — which is how the capture re-fetch became a hidden side
+    # effect of "get me the text", and with it the SSRF path and the silent
+    # second origin request (adversarial review 2026-07-27, architect lens).
+    text, origin_bytes = _extract_text(url)
+    if text.startswith("["):
+        return text  # a bracketed diagnostic, not content — nothing to capture
+    return f"[Content from {url}]\n{text}{_capture_note(url, body=origin_bytes)}"
+
+
+def _extract_text(url: str) -> Tuple[str, Optional[bytes]]:
+    """Return (text_or_bracketed_diagnostic, origin_bytes_if_we_have_them).
+
+    Pure extraction — no disk writes, no capture. The second element is the
+    origin response when a tier already downloaded it, so the caller can
+    capture without paying for a second request.
+    """
     # Tier 1 — Jina Reader (clean markdown, handles JS rendering)
     jina_content = _jina_fetch(url)
     if jina_content and len(jina_content) > 100 and not _is_login_wall(jina_content):
-        return f"[Content from {url}]\n{jina_content}{_capture_note(url)}"
+        return jina_content, None
 
     # Tier 2 — Cloudflare markdown.new. Jina 403s/rate-limits on some hosts;
     # without a second markdown tier those pages fall through to raw HTML,
     # which is what blew a single step to 2.14M input tokens.
     cf_content = _cf_markdown_fetch(url)
     if cf_content and len(cf_content) > 100 and not _is_login_wall(cf_content):
-        return f"[Content from {url}]\n{cf_content}{_capture_note(url)}"
+        return cf_content, None
 
     # Tier 3 — raw HTTP + HTML stripping (sites that block both markdown tiers).
     # Read to the capture cap, not the 500KB in-context cap: this same response
     # is what gets captured, and a 500KB prefix stored as "the raw page" hides
     # any JSON-LD past that offset. Text extraction caps itself at 20k chars.
-    status, html = _http_get(url, max_bytes=_MAX_CAPTURE_BYTES)
+    status, raw, charset = _http_get_bytes(url, max_bytes=_MAX_CAPTURE_BYTES)
     if status == 0:
-        return f"[Could not connect to {url}]"
+        return f"[Could not connect to {url}]", None
     if status in (401, 402, 403):
         return (
             f"[Access to {url} blocked (HTTP {status} — "
             "authentication or subscription required). "
             "Content unavailable without login.]"
-        )
+        ), None
     if status == 404:
-        return f"[Page not found: {url} (HTTP 404)]"
+        return f"[Page not found: {url} (HTTP 404)]", None
     if status != 200:
-        return f"[HTTP {status} fetching {url}]"
-    if not html:
-        return f"[Empty response from {url}]"
+        return f"[HTTP {status} fetching {url}]", None
+    if not raw:
+        return f"[Empty response from {url}]", None
 
-    text = _html_to_text(html)
+    text = _html_to_text(raw.decode(charset, errors="replace"))
     if not text:
-        return f"[No readable text found at {url}]"
+        return f"[No readable text found at {url}]", raw
 
-    # This tier already holds the bytes — capture without a second request.
-    return f"[Content from {url}]\n{text}{_capture_note(url, html=html)}"
+    return text, raw
 
 
 # ---------------------------------------------------------------------------
