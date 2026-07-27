@@ -260,10 +260,17 @@ Operational rules:
   rule; extraction quality becomes the tuning knob — the good kind,
   because raw is still on disk.
 
+**Amendment (same day): in-process work persists too.** Not just step
+products — intermediate results, partial transforms, and working state
+go to disk, so a later examination can make the *re-start vs start-over*
+call from durable evidence instead of re-deriving from scratch. The
+same distinction the project-continuation menu made at the goal seam,
+applied inside the run.
+
 Decree recorded in GOAL_BRAIN Decisions (2026-07-27) and the runtime
-decision store (59a5bcd9). Kin to the run-visibility arc: same instinct
-("make all inputs/outputs/artifacts visible"), formalized at the
-data-flow layer.
+decision store (59a5bcd9; amendment 559b1519). Kin to the run-visibility
+arc: same instinct ("make all inputs/outputs/artifacts visible"),
+formalized at the data-flow layer.
 
 ### Goal Lineage (Ancestry)
 

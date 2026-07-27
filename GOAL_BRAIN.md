@@ -4305,3 +4305,12 @@ Dormant (deliberately parked, not dropped):
   token-reduction work persisting raw before transforming; a
   worker-reachable fetch verb (fetch → sources/ artifact + index →
   extracted view) is the named next lift.
+
+- **2026-07-27 — Decree amendment (Jeremy): in-process work persists
+  too.** Artifacts-over-streams covers step products; extended to the
+  work-in-progress itself — intermediate results, partial transforms,
+  working state — persisted so a later examination can make the
+  "re-start vs start-over" call from evidence instead of re-deriving
+  from scratch. Same distinction the project-continuation fix made at
+  the goal seam, applied inside the run. Dropping intermediates as
+  "unnecessary" is the same optimization working against us.
