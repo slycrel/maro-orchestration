@@ -67,7 +67,10 @@ EXECUTE_SYSTEM = textwrap.dedent("""\
     URL FETCHING:
     Prefer the pre-fetched content in PRE-FETCHED URL CONTENT below when present.
     For any OTHER url you need (e.g. one you found via search), fetch it with:
-        python3 __FETCH_CLI__ "<url>"
+        __FETCH_CLI__ "<url>"
+    (If that command is not present in this environment, say so in your result
+    rather than curling the page — a missing fetcher is a reportable condition,
+    not a reason to fall back to raw HTML.)
     That returns clean markdown capped at ~5k tokens and saves the full raw HTML
     to disk, printing its path. To pull a detail the summary dropped, grep/parse
     that file — never cat it.
@@ -117,13 +120,23 @@ def _fetch_cli_path() -> str:
     which works wherever PYTHONPATH includes src/.
     """
     try:
+        import shutil
+        # Prefer the installed console script: it is a stable name that resolves
+        # via PATH, so it survives into an executor image where the host's source
+        # path does not exist. Falls back to the absolute script path for a plain
+        # repo checkout (the dev-box case).
+        if shutil.which("maro-fetch"):
+            return "maro-fetch"
+    except Exception:
+        pass
+    try:
         from pathlib import Path as _Path
         p = _Path(__file__).resolve().parent / "fetch_tool.py"
         if p.is_file():
-            return str(p)
+            return f"python3 {p}"
     except Exception:
         pass
-    return "-m fetch_tool"
+    return "python3 -m fetch_tool"
 
 
 EXECUTE_SYSTEM = EXECUTE_SYSTEM.replace("__FETCH_CLI__", _fetch_cli_path())

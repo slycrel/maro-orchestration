@@ -1124,6 +1124,22 @@ def _run_subprocess_safe(cmd, *, input=None, timeout=600,
     # MARO_ALLOW_MAIN_PUSH=1 itself when explicitly authorized to push.
     child_env = dict(os.environ)
     child_env["MARO_WORKER_RUN"] = "1"
+
+    # Resolve the raw-capture dir HERE, in the parent, and hand it down
+    # explicitly. web_fetch.capture_dir() reads runs.current_run_dir(), which is
+    # a ContextVar — process-local. The `python3 fetch_tool.py` the worker runs
+    # is a fresh process, so it would see None and silently fall back to the
+    # workspace-global output/fetch-raw: captures not run-scoped, and stale
+    # cross-run reuse of the URL-hash cache (verified parent/child split).
+    if "MARO_FETCH_CAPTURE_DIR" not in child_env:
+        try:
+            from runs import current_run_dir
+            _rd = current_run_dir()
+            if _rd is not None:
+                child_env["MARO_FETCH_CAPTURE_DIR"] = str(Path(_rd) / "fetch-raw")
+        except Exception:
+            pass
+
     if env_extra:
         child_env.update(env_extra)
     try:

@@ -52,6 +52,13 @@ ALLOWED_DELETION_SITES = {
         "user-invoked: the user clearing their own kill switch",
     ("llm.py", "_run_subprocess_safe"):
         "ephemeral: temp prompt file for subprocess adapter",
+    ("web_fetch.py", "capture_raw"):
+        "ephemeral: (a) unlinks its own just-created capture temp file when the "
+        "write fails, and (b) unlinks a non-regular entry squatting the capture "
+        "path — that entry is an attacker-planted symlink, not run/user data, "
+        "and unlinking a symlink never touches its target (adversarial review "
+        "2026-07-27: reusing it leaked the target's path to the model, which "
+        "the execute prompt instructs to parse it)",
     ("run_lease.py", "acquire_run_lease"):
         "ephemeral: removes the empty lease file this same call just "
         "created when flock fails (a present-unheld lease reads as "

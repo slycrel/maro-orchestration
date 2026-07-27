@@ -122,6 +122,22 @@ class TestCloudflareTierParsing:
         self._resp(monkeypatch, '{"result": {"markdown": "# From JSON"}}')
         assert web_fetch._cf_markdown_fetch("https://example.com") == "# From JSON"
 
+    def test_string_result_envelope(self, monkeypatch):
+        """`{"success":true,"result":"# md"}` is the shape Cloudflare's own
+        Markdown endpoint documents; treating it as a failure sent a valid
+        response to the raw-HTML fallback."""
+        self._resp(monkeypatch, '{"success": true, "result": "# From string"}')
+        assert web_fetch._cf_markdown_fetch("https://example.com") == "# From string"
+
+    def test_proxy_tiers_refuse_private_and_credentialed_urls(self, monkeypatch):
+        """Handing an internal or credentialed URL to a third party discloses it."""
+        monkeypatch.setattr(web_fetch.urllib.request, "urlopen",
+                            lambda *a, **k: pytest.fail("must not contact the proxy"))
+        for bad in ("http://192.168.0.1/x", "http://169.254.169.254/",
+                    "https://tok:secret@example.com/x", "http://localhost/x"):
+            assert web_fetch._cf_markdown_fetch(bad) == "", bad
+            assert web_fetch._jina_fetch(bad) == "", bad
+
     def test_failure_returns_empty_never_raises(self, monkeypatch):
         def _boom(*a, **k):
             raise OSError("network down")
@@ -192,6 +208,65 @@ class TestCapture:
         web_fetch.capture_raw(url)
 
         assert victim.read_text() == "ORIGINAL", "symlink redirected the capture write"
+
+    def test_planted_symlink_at_final_path_is_not_reused(self, capture_env, monkeypatch, tmp_path):
+        """A symlinked <digest>.html would otherwise be 'reused' and its path
+        handed to the model, which the prompt tells to parse it — turning the
+        capture store into a local-file disclosure primitive."""
+        import hashlib
+        import os
+
+        secret = tmp_path / "secret.txt"
+        secret.write_text("SUPER-SECRET-TOKEN")
+        capture_env.mkdir(parents=True, exist_ok=True)
+        url = "https://evil.example.com/y"
+        digest = hashlib.sha256(url.encode()).hexdigest()[:16]
+        os.symlink(secret, capture_env / f"{digest}.html")
+
+        monkeypatch.setattr(web_fetch, "_http_get", lambda *a, **k: (200, "<html>fresh</html>"))
+        path = web_fetch.capture_raw(url)
+
+        assert path is not None
+        assert not path.is_symlink()
+        assert "SUPER-SECRET-TOKEN" not in path.read_text()
+        assert secret.read_text() == "SUPER-SECRET-TOKEN"
+
+    def test_symlinked_capture_dir_is_refused(self, tmp_path, monkeypatch):
+        """A capture dir symlinked into <rundir>/build/ would put attacker HTML
+        in the tree viz_server serves."""
+        real = tmp_path / "build"
+        real.mkdir()
+        link = tmp_path / "fetch-raw"
+        link.symlink_to(real, target_is_directory=True)
+        monkeypatch.setenv("MARO_FETCH_CAPTURE_DIR", str(link))
+        assert web_fetch.capture_dir() is None
+
+    def test_capture_respects_byte_budget(self, capture_env, monkeypatch):
+        capture_env.mkdir(parents=True, exist_ok=True)
+        (capture_env / "old.html").write_text("x" * 5000)
+        monkeypatch.setenv("MARO_FETCH_CAPTURE_BUDGET", "1000")
+        monkeypatch.setattr(web_fetch, "_http_get", lambda *a, **k: (200, "<html>new</html>"))
+        assert web_fetch.capture_raw("https://example.com/new") is None
+
+    def test_manifest_redacts_credentials_and_query(self, capture_env, monkeypatch):
+        """The manifest outlives the run — a presigned signature must not sit
+        in plaintext on disk."""
+        monkeypatch.setattr(web_fetch, "_http_get", lambda *a, **k: (200, "<html>x</html>"))
+        web_fetch.capture_raw("https://example.com/o?X-Amz-Signature=DEADBEEF")
+        manifest = (capture_env / "index.jsonl").read_text()
+        assert "DEADBEEF" not in manifest
+        assert "<redacted>" in manifest
+
+    def test_capture_refuses_private_and_credentialed_urls(self, capture_env, monkeypatch):
+        """capture_raw fetches directly from this host — the SSRF primitive."""
+        monkeypatch.setattr(web_fetch, "_http_get",
+                            lambda *a, **k: pytest.fail("must not fetch a blocked URL"))
+        for bad in ("http://169.254.169.254/latest/meta-data/",
+                    "http://192.168.1.5/admin",
+                    "http://127.0.0.1:8080/",
+                    "https://user:pw@example.com/x",
+                    "file:///etc/passwd"):
+            assert web_fetch.capture_raw(bad) is None, bad
 
     def test_capture_disabled_by_env(self, capture_env, monkeypatch):
         monkeypatch.setenv("MARO_FETCH_CAPTURE", "0")
@@ -264,13 +339,28 @@ class TestCLI:
 # ---------------------------------------------------------------------------
 
 class TestExecutePromptWiring:
-    def test_prompt_names_a_real_resolvable_cli(self):
+    def test_prompt_names_a_cli_that_actually_runs(self):
+        """Not just 'the path exists' — run it.
+
+        The first version of this test asserted host-side file existence, which
+        proves nothing about whether a worker can invoke the command. Executing
+        it is the cheapest honest proof. (Still host-only: whether the command
+        resolves inside the executor container is a separate, unverified
+        question — tracked in BACKLOG, not asserted here.)
+        """
+        import shlex
+        import subprocess
+
         from step_exec import EXECUTE_SYSTEM, _fetch_cli_path
+
         assert "__FETCH_CLI__" not in EXECUTE_SYSTEM, "sentinel left unreplaced"
         resolved = _fetch_cli_path()
-        assert resolved.endswith("fetch_tool.py"), resolved
-        assert Path(resolved).is_file()
-        assert resolved in EXECUTE_SYSTEM
+        assert resolved in EXECUTE_SYSTEM, "prompt does not name the resolved command"
+
+        proc = subprocess.run(shlex.split(resolved) + ["--help"],
+                              capture_output=True, text=True, timeout=60)
+        assert proc.returncode == 0, f"{resolved} --help failed: {proc.stderr[:400]}"
+        assert "--no-capture" in proc.stdout
 
     def test_prompt_forbids_curling_pages_into_context(self):
         from step_exec import EXECUTE_SYSTEM
