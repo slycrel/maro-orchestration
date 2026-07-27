@@ -41,6 +41,15 @@ def is_learnable_outcome(outcome: Mapping[str, Any]) -> bool:
     """
     if outcome.get("audit_incomplete") or outcome.get("audit_repair_required"):
         return False
+    # A cap-bounded ending with no positive goal verdict is not success
+    # evidence: budget-pressure landing synthesis flips status to "done" at
+    # the cap (stop-path survey 2026-07-23); the typed stop verdict keeps the
+    # cap-hit visible, so unverified-done + out-of-budget fails closed here.
+    if (
+        outcome.get("stop_verdict") == "out-of-budget"
+        and outcome.get("goal_achieved") is not True
+    ):
+        return False
     if "success_class" in outcome:
         return outcome.get("success_class") in _LEARNABLE_SUCCESS_CLASSES
     return (

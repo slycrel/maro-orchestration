@@ -60,10 +60,13 @@ from decision_prior import (
     _DECISION_LESSON_CAP,
 )
 from outcome_policy import is_learnable_outcome
+from stop_verdicts import INTERRUPT_STATUSES
 
 _SUCCESS_STATUSES = {"done", "complete", "completed"}
 # "incomplete" = closure demoted a finished run (work ended, goal not met) —
 # partial, not unknown (burn-in batch 1 surfaced it landing in "unknown").
+# When the demotion carries a judged not-achieved verdict, classify_outcome
+# rebuckets it to done-not-achieved before this set applies.
 _PARTIAL_STATUSES = {"partial", "restart", "incomplete"}
 _FAIL_STATUSES = {"stuck", "error", "failed", "blocked"}
 
@@ -180,13 +183,36 @@ def classify_outcome(rd: Path, meta: dict, card: dict) -> None:
         cls = "done-not-achieved"   # finished but verdict says it didn't land
     elif status in _SUCCESS_STATUSES:
         cls = "done-unverified"
+    elif status == "incomplete" and achieved is False:
+        # Closure/provenance demoted a finished run on a judged not-achieved
+        # verdict — that IS done-not-achieved; the status flip must not
+        # launder it into "partial" (stop-path survey 2026-07-23,
+        # conflation: demotions bypassed the done-not-achieved bucket).
+        cls = "done-not-achieved"
     elif status in _PARTIAL_STATUSES:
         cls = "partial"
     elif status in _FAIL_STATUSES:
         cls = "failed"
+    elif status in INTERRUPT_STATUSES:
+        # Process-level ending (kill switch, stranded owner, busy refusal,
+        # awaiting input) — carries no goal evidence, and shouldn't fall
+        # into "unknown" (survey: four statuses landed there).
+        cls = "interrupted"
     else:
         cls = "unknown"
     card["success_class"] = cls
+    # Typed stop verdict (§13b) — why the run ended, riding beside status.
+    # Stamped at the break site; status-derived fallback covers process-level
+    # endings that predate stamping or end outside the loop's stamp rail.
+    _stop_verdict = str(meta.get("stop_verdict") or "")
+    _stop_evidence = str(meta.get("stop_evidence") or "")
+    if not _stop_verdict and status in INTERRUPT_STATUSES:
+        _stop_verdict = "external-interrupt"
+        _stop_evidence = f"derived from status={status}"
+    if _stop_verdict:
+        card["stop_verdict"] = _stop_verdict
+        if _stop_evidence:
+            card["stop_evidence"] = _stop_evidence
     card["status"] = status
     card["goal_achieved"] = achieved
     card["goal_verdict_summary"] = meta.get("goal_verdict_summary")
@@ -982,7 +1008,10 @@ def rescue_partial(rd: Path, meta: dict, card: dict) -> None:
     and where it got stuck — so a follow-up run or a human can resume from
     there instead of restarting cold. Shares the card with index_decision_prior
     (#3), which references this block via `resume_from` when present."""
-    if card.get("success_class") != "partial":
+    # Demoted runs (status "incomplete") keep their salvage even when a judged
+    # verdict rebuckets them to done-not-achieved (chunk-9 #4): the retry
+    # wants the done-steps/artifact inventory either way.
+    if card.get("success_class") != "partial" and card.get("status") != "incomplete":
         return
     rescue: dict = {}
     log = _load_loop_log(rd)
@@ -1193,7 +1222,8 @@ _CURATOR_SPECS: List[CuratorSpec] = [
                           "audit_repair_required", "total_cost_usd"),
                 optional_provides=("goal_verdict_downgrade_reason",
                                    "goal_verdict_gaps",
-                                   "clarification_question")),
+                                   "clarification_question",
+                                   "stop_verdict", "stop_evidence")),
     CuratorSpec(inventory_assets, provides=("inventory", "mineable")),
     CuratorSpec(excerpt_result,
                 optional_provides=("result_excerpt", "result_path")),

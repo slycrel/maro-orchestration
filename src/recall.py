@@ -101,6 +101,9 @@ class PriorAttempt:
     # Judged goal verdict from run metadata (SF-2): True/False when a verdict
     # exists, None = unjudged — done ≠ achieved.
     goal_achieved: Optional[bool] = None
+    # Typed stop verdict from run metadata (§13b): why the run ended.
+    # "external-interrupt" = process-level ending, not goal evidence.
+    stop_verdict: str = ""
 
 
 @dataclass
@@ -160,7 +163,12 @@ class RecallResult:
             if a.goal_achieved is True:
                 return False
             # Unjudged: absence means "not judged", not "failed" — fall back
-            # to process status.
+            # to process status. External interrupts (kill switch, stranded
+            # owner, busy refusal, awaiting input) carry no goal evidence and
+            # must not arm the repeat-guard (§13b): the goal wasn't disproven,
+            # the process was cut down around it.
+            if a.stop_verdict == "external-interrupt":
+                return False
             return a.status != "done"
 
         cutoff = datetime.now(timezone.utc) - timedelta(minutes=window_minutes)
@@ -205,6 +213,14 @@ class RecallResult:
                 breakdown += (
                     f"; goal verdicts: {_n_true} achieved, "
                     f"{_n_false} NOT achieved, rest unjudged"
+                )
+            _n_int = sum(
+                1 for a in self.prior_attempts
+                if a.stop_verdict == "external-interrupt"
+            )
+            if _n_int:
+                breakdown += (
+                    f"; {_n_int} externally interrupted (not goal evidence)"
                 )
             parts.append(
                 f"Prior attempts at this goal (recent window): "
@@ -403,13 +419,22 @@ def find_prior_attempts(
         else:
             continue
         _ga = meta.get("goal_achieved")
+        _sv = str(meta.get("stop_verdict") or "")
+        _status = str(meta.get("status") or "unknown")
+        if not _sv:
+            # Status-derived fallback (mirrors run_curation.classify_outcome)
+            # for runs that predate break-site stamping.
+            from stop_verdicts import INTERRUPT_STATUSES as _ISTAT
+            if _status in _ISTAT:
+                _sv = "external-interrupt"
         attempts.append(PriorAttempt(
             goal=prompt,
             handle_id=handle_id,
-            status=str(meta.get("status") or "unknown"),
+            status=_status,
             when=started,
             match=match,
             goal_achieved=_ga if isinstance(_ga, bool) else None,
+            stop_verdict=_sv,
         ))
     attempts.sort(key=lambda a: a.when, reverse=True)
     return attempts

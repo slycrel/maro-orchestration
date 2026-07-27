@@ -225,6 +225,8 @@ def _build_result_and_finalize(
         interrupts_applied=interrupts_applied,
         injections=list(ctx.injections),
         stuck_reason=stuck_reason,
+        stop_verdict=ctx.stop_verdict,
+        stop_evidence=ctx.stop_evidence,
         total_tokens_in=total_tokens_in,
         total_tokens_out=total_tokens_out,
         elapsed_ms=elapsed_total,
@@ -308,6 +310,7 @@ def _build_result_and_finalize(
         defer_learning=getattr(ctx, "defer_learning", False),
         measurement_class=ctx.measurement_class,
         handle_id=ctx.handle_id,
+        stop_verdict=ctx.stop_verdict,
     )
 
     # Checkpoints are KEPT on completion (retention decree, 2026-07-10).
@@ -345,6 +348,11 @@ def _build_result_and_finalize(
                     (result.stuck_reason + "; " if result.stuck_reason else "")
                     + f"container clone merge failed — work preserved: {_cmerge.detail}"
                 )
+                if not result.stop_verdict:
+                    # Landing machinery failed after the goal work — infra,
+                    # not a mid-goal shortfall (survey: "partial" merged them).
+                    result.stop_verdict = "external-interrupt"
+                    result.stop_evidence = f"container clone merge failed: {_cmerge.detail}"[:500]
         except Exception as _cc_exc:
             # A merge-back exception must NOT be reported as a clean 'done' — the
             # worker's clone work never reached the fence. Downgrade and name the
@@ -358,6 +366,9 @@ def _build_result_and_finalize(
                 + f"container clone merge errored — work preserved in "
                 + f"{getattr(_clone, 'path', '?')} (branch {getattr(_clone, 'branch', '?')}): {_cc_exc}"
             )
+            if not result.stop_verdict:
+                result.stop_verdict = "external-interrupt"
+                result.stop_evidence = f"container clone merge errored: {_cc_exc}"[:500]
         ctx.container_clone = None
 
     # busy_policy=worktree: merge the run's isolated worktree back into the
@@ -379,9 +390,28 @@ def _build_result_and_finalize(
                     + f"worktree merge failed — work preserved on {_merge.branch}: "
                     + _merge.detail
                 )
+                if not result.stop_verdict:
+                    result.stop_verdict = "external-interrupt"
+                    result.stop_evidence = (
+                        f"worktree merge failed — work preserved on "
+                        f"{_merge.branch}: {_merge.detail}"
+                    )[:500]
         except Exception as _wt_exc:
             log.warning("run worktree finalize error: %s", _wt_exc)
         ctx.run_worktree = None
+
+    # Persist the typed stop verdict where run_curation reads (metadata.json).
+    # After the merge-back blocks above — they can add a verdict of their own.
+    # Stamped unconditionally: empty clears a stale verdict from an earlier
+    # restarted loop so metadata always reflects THIS ending, not the first.
+    try:
+        from runs import stamp_run_metadata as _stamp_stop_meta
+        _stamp_stop_meta({
+            "stop_verdict": result.stop_verdict,
+            "stop_evidence": result.stop_evidence,
+        })
+    except Exception as _sv_exc:
+        log.debug("stop-verdict metadata stamp failed: %s", _sv_exc)
 
     # Release loop lock — the admission slot first (per-project flock),
     # then the global informational lockfile.
@@ -434,6 +464,7 @@ def _finalize_loop(
     defer_learning: bool = False,
     measurement_class: str = "",
     handle_id: str = "",
+    stop_verdict: str = "",
 ) -> None:
     """Run all post-loop side effects after the main execution loop ends.
 
@@ -583,6 +614,7 @@ def _finalize_loop(
             defer_lessons=defer_learning and loop_status == "done",
             measurement_class=measurement_class,
             handle_id=handle_id,
+            stop_verdict=stop_verdict,
         )
         # Meta-Harness steal: persist step-level traces so the evolver proposer
         # sees full execution context, not just aggregate summaries.

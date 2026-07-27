@@ -363,10 +363,16 @@ def attribute_batch(outcomes: List[dict], adapter=None) -> AttributionReport:
     # Filter to failures. Verdict-preferred (SF-2): a run judged
     # goal_achieved=False failed even when its status is "done" (done ≠
     # achieved) — those runs deserve failure attribution too. Unjudged done
-    # runs are not failures (absence means "not judged").
+    # runs are not failures (absence means "not judged"). External interrupts
+    # (kill switch, dead backend, infra failure) are excluded unless a judged
+    # failure verdict exists: attributing a skill for the outage that cut the
+    # run down is cause-blind blame (§13b, stop-path survey 2026-07-23).
     failed = [
         o for o in outcomes
-        if o.get("status") in ("stuck", "error", "blocked")
+        if (
+            o.get("status") in ("stuck", "error", "blocked")
+            and o.get("stop_verdict") != "external-interrupt"
+        )
         or o.get("goal_achieved") is False
     ]
     # Analyze up to 20 most recent

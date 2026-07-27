@@ -64,6 +64,12 @@ class Outcome:
     goal_achieved: Optional[bool] = None
     goal_verdict_source: str = ""   # "closure" | "closure_unverifiable" | "provenance" | "now_self_verdict" | ""
     goal_verdict_confidence: Optional[float] = None  # closure judge confidence, when judged
+    # Typed stop verdict (stop_verdicts.py vocabulary; "" = none recorded).
+    # Sibling to goal_verdict_source: WHY the run stopped, machine-readable —
+    # so learning consumers can tell "cap too low" from "goal impossible"
+    # from "backend died" without parsing stuck_reason prose (stop-path
+    # survey 2026-07-23, conflation 1).
+    stop_verdict: str = ""
     loop_id: str = ""               # join key to runs/*/metadata.json for post-closure annotation
     dry_run: bool = False            # excludes synthetic dry-run lessons from production funnel metrics
     lesson_extraction_status: str = ""  # "deferred" | "completed" | "failed" | legacy unknown
@@ -431,6 +437,8 @@ def _verdict_row(obj: Any) -> Dict[str, Any]:
         row.pop("measurement_class")
     if "handle_id" in row and not row["handle_id"]:
         row.pop("handle_id")
+    if "stop_verdict" in row and not row["stop_verdict"]:
+        row.pop("stop_verdict")
     return row
 
 
@@ -456,6 +464,7 @@ def record_outcome(
     lesson_extraction_count: int = 0,
     measurement_class: str = "",
     handle_id: str = "",
+    stop_verdict: str = "",
 ) -> Outcome:
     """Record the outcome of a completed run.
 
@@ -507,6 +516,7 @@ def record_outcome(
         lesson_extraction_count=max(0, int(lesson_extraction_count)),
         measurement_class=measurement_class,
         handle_id=handle_id,
+        stop_verdict=stop_verdict,
     )
 
     # Append to outcomes ledger
@@ -659,6 +669,54 @@ def stamp_outcome_verdict(
                 "write_failed", attempts=attempt, error=str(exc))
         _maybe_emit_contradiction_candidate(loop_id, updated.get("row") or {})
         return OutcomeVerdictStampResult("updated", attempts=attempt)
+
+
+def stamp_outcome_stop_verdict(loop_id: str, stop_verdict: str) -> bool:
+    """Post-hoc stop-verdict stamp on the newest outcomes row for loop_id.
+
+    The reachable-but-not-worth-it verdict is decided AFTER the run closed
+    (director escalation "close" — a later value/cost judgment about a run
+    that ended "stuck"), so it must land on the row post-hoc, the same way
+    closure verdicts do. Merge-only: never touches goal-verdict fields.
+    Returns True when a row was updated. Best-effort — False on any miss.
+    """
+    if not loop_id or not stop_verdict:
+        return False
+    path = _outcomes_path()
+    from file_lock import atomic_write, locked_write
+    hit = {"v": False}
+
+    def _stamp(old: str) -> str:
+        lines = old.splitlines()
+        for i in range(len(lines) - 1, -1, -1):
+            line = lines[i].strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(row, dict) and row.get("loop_id") == loop_id:
+                row["stop_verdict"] = stop_verdict
+                lines[i] = json.dumps(row)
+                hit["v"] = True
+                break
+        return "\n".join(lines) + ("\n" if lines else "")
+
+    try:
+        with locked_write(path):
+            try:
+                old = path.read_text(encoding="utf-8")
+            except FileNotFoundError:
+                return False
+            new = _stamp(old)
+            if hit["v"]:
+                atomic_write(path, new)
+    except OSError as exc:
+        log.warning("stamp_outcome_stop_verdict failed for loop %s: %s",
+                    loop_id, exc)
+        return False
+    return hit["v"]
 
 
 def _maybe_emit_contradiction_candidate(loop_id: str, row: dict) -> None:

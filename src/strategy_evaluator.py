@@ -64,6 +64,12 @@ def _outcome_weight(outcome: Any) -> float:
         return 1.0
     if ga is False:
         return 0.0
+    # Unjudged external interrupts (kill switch, dead backend, infra failure)
+    # score neutral, not failure: a run cut down mid-flight often lands
+    # status="stuck" (weight 0.0), but the stop carried no goal evidence
+    # (§13b) — scoring it 0.0 would blame the strategy for the outage.
+    if getattr(outcome, "stop_verdict", "") == "external-interrupt":
+        return 0.5
     return _STATUS_WEIGHTS.get(outcome.status, 0.5)
 
 # Stop words for TF-IDF tokenization

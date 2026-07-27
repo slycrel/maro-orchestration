@@ -397,6 +397,16 @@ def run_agent_loop(
                 )
             except Exception:
                 pass
+            # Infra failure, not a goal verdict — the goal was never attempted
+            # (stop-path survey: "stuck" here read downstream as goal failure).
+            try:
+                from runs import stamp_run_metadata as _stamp_fence_meta
+                _stamp_fence_meta({
+                    "stop_verdict": "external-interrupt",
+                    "stop_evidence": _fence_msg[:500],
+                })
+            except Exception:
+                pass
             return LoopResult(
                 loop_id=ctx.loop_id,
                 goal=ctx.goal,
@@ -404,6 +414,8 @@ def run_agent_loop(
                 steps=[],
                 status="stuck",
                 stuck_reason=_fence_msg,
+                stop_verdict="external-interrupt",
+                stop_evidence=_fence_msg,
                 elapsed_ms=int((time.monotonic() - ctx.started_at) * 1000),
             )
 

@@ -153,11 +153,52 @@ def test_classify_partial(workspace):
     assert card["success_class"] == "partial"
 
 
-def test_classify_incomplete_is_partial(workspace):
-    # closure-demoted runs (status "incomplete") were falling to "unknown"
+def test_classify_judged_demotion_is_done_not_achieved(workspace):
+    # Chunk-9 #4 (2026-07-27): a closure/provenance demotion carries a judged
+    # not-achieved verdict — the status flip to "incomplete" must not launder
+    # it into "partial" (stop-path survey conflation: demotions bypassed the
+    # done-not-achieved bucket). Supersedes the earlier partial pin.
     _finish("h000000a", "g", "incomplete", achieved=False)
     card = curate_run("h000000a")
+    assert card["success_class"] == "done-not-achieved"
+
+
+def test_classify_unjudged_incomplete_stays_partial(workspace):
+    _finish("h000000b", "g", "incomplete")  # no verdict stamped
+    card = curate_run("h000000b")
     assert card["success_class"] == "partial"
+
+
+@pytest.mark.parametrize("status", [
+    "interrupted", "stranded", "refused_busy", "clarification_needed",
+])
+def test_classify_interrupt_family(workspace, status):
+    # Chunk-9 #4: the four process-level endings get their own class instead
+    # of falling into "unknown", and derive an external-interrupt stop
+    # verdict when the run predates break-site stamping.
+    hid = f"h00i{abs(hash(status)) % 10000:04d}"
+    _finish(hid, "g", status)
+    card = curate_run(hid)
+    assert card["success_class"] == "interrupted"
+    assert card["stop_verdict"] == "external-interrupt"
+    assert card["stop_evidence"] == f"derived from status={status}"
+
+
+def test_classify_passes_stamped_stop_verdict_through(workspace):
+    rd = create_run_dir(
+        "h00000sv", prompt="g", lane="agenda", model="claude",
+        extra_metadata={"stop_verdict": "out-of-budget",
+                        "stop_evidence": "max_iterations ceiling"})
+    finalize_run("h00000sv", status="stuck")
+    card = curate_run("h00000sv")
+    assert card["stop_verdict"] == "out-of-budget"
+    assert card["stop_evidence"] == "max_iterations ceiling"
+
+
+def test_classify_no_stop_verdict_key_when_none(workspace):
+    _finish("h00000nv", "g", "done", achieved=True)
+    card = curate_run("h00000nv")
+    assert "stop_verdict" not in card
 
 
 def test_card_costs_from_loop_ids(workspace, monkeypatch):
@@ -799,12 +840,14 @@ class TestRescuePartial:
         assert "partial_rescue" not in card
 
     def test_incomplete_status_gets_rescue(self, workspace):
-        # closure-demoted "incomplete" classifies as partial (existing behavior).
+        # Chunk-9 #4: a judged demotion rebuckets to done-not-achieved, but
+        # the salvage block survives — the retry wants the done-steps and
+        # artifact inventory either way.
         rd = _finish("h0000r3", "demoted", "incomplete", achieved=False)
         _write_loop_log(rd, [("x", "done"), ("y", "blocked")],
                         stuck_reason="blocked on auth")
         card = curate_run("h0000r3")
-        assert card["success_class"] == "partial"
+        assert card["success_class"] == "done-not-achieved"
         assert card["partial_rescue"]["n_done"] == 1
 
 

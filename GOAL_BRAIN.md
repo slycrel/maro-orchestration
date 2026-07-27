@@ -4365,3 +4365,26 @@ Dormant (deliberately parked, not dropped):
   above the adapter seam); remediation acc5eda; merge-gate round caught
   the remediation's own run-stop coercion. Record:
   docs/history/2026-07-27-token-brake-adversarial-review.md.
+
+- **2026-07-27 — Decisions (fable, AFK session, under Jeremy's item-5
+  decree + delegated design authority): chunk-9 #4 stop-verdict split
+  implementation calls.** (1) Interrupt marker shares the stop_verdict
+  FIELD with the four verdicts, one-field-two-channels: evidence-backed
+  verdicts stamp first-write-wins at their break sites, so a supported
+  verdict always owns the field before interrupt machinery runs;
+  external-interrupt lands only when no map observation existed
+  (structurally outside GOAL_VERDICTS — the decree's two-channel intent
+  with precedence instead of a second field; mechanical rename
+  available if the literal shape is preferred). (2) Cross-layer stamp
+  policies: handle demotions DEFER to a loop-stamped verdict (same stop
+  event, closest site wins); director escalation close OVERWRITES with
+  `[refines: …]` evidence (later better-informed judgment ending the
+  chain — defer would make reachable-but-not-worth-it dead code on the
+  max-depth path). (3) Landing-synthesis learnability closed:
+  out-of-budget with no positive goal verdict is not a learning seed
+  (outcome_policy). (4) Judged demotions rebucket incomplete →
+  done-not-achieved at classify_outcome; salvage block survives.
+  (5) New success_class "interrupted" replaces the 4-status "unknown"
+  hole; recall repeat-guard, strategy weights, and failure attribution
+  stop reading interrupts as goal evidence. Record:
+  docs/history/2026-07-27-stop-verdict-split.md.

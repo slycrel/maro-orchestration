@@ -2085,10 +2085,39 @@ deferred rather than silently dropped:
   goal_achieved=False skips lesson crystallization, so the system's best
   run taught it nothing. Belongs to the stop-verdict/compound-thinking
   agenda (chunk 9), not a quick fix.
+  *Chunk-9 #4 update (2026-07-27):* the typed stop verdict now rides
+  beside status — a cap-stuck run carries `out-of-budget` with evidence,
+  so consumers can tell it from a goal-failure stuck (and the four
+  raw-status consumers were rewired to honor it). REMAINING: the
+  success_class itself still maps cap-stuck → "failed"; rebucketing
+  cap-stuck-with-deliverables (e.g. to partial, or closure-on-stop
+  judging the deliverable) is a separate judged decision — the tire
+  run 4 needle doc (2026-07-27) is the live specimen.
 - **Closure fail-open posture.** With skip_detail now recorded, the
   remaining question is design: should closure return complete=True when
   the goal carries an explicit output contract and verification never
   ran? Ties into the stop-path survey's fail-open conflations.
+- **Stop-verdict deliberate cuts (chunk-9 #4, 2026-07-27).** Seams left
+  unstamped, each a scoped follow-up, none load-bearing for the
+  choke-point accounting that shipped
+  (docs/history/2026-07-27-stop-verdict-split.md):
+  - *Parallel/fan-out lane* — `loop_parallel` builds its LoopResult
+    outside `_build_result_and_finalize`; a branch-level stop verdict
+    needs an aggregation rule (which branch's ending IS the run's?).
+  - *Navigator escalate* — who-decides-next, not a stop; stamp only if
+    a navigator decision ever terminates a run directly.
+  - *DirectorResult/WorkerResult + build_loop_runner vocabularies* —
+    separate status vocabularies with their own consumers
+    (handle_queue.py drain, director review loop); unify or bridge
+    when those consumers need typed endings.
+  - *NOW-lane lost-the-plot stamp* — `_verify_now_outcome` demotions
+    reach the right success_class via the choke-point rebucket
+    (incomplete + judged False); the metadata verdict stamp itself is
+    a 5-line add to `_run_now`'s metadata write when wanted.
+  - *Outcome-row ordering gap* — the ledger row is written before the
+    merge-back blocks, so a merge-failure external-interrupt reaches
+    LoopResult + metadata.json but not the row (pre-existing ordering;
+    `stamp_outcome_stop_verdict` exists if a consumer ever needs it).
 - **Persona auto-selection misroute.** Run 3 routed to creative-director
   (conf 0.8) for a spec/pricing research task. Harmless here; worth a
   look if it recurs on research-shaped goals.

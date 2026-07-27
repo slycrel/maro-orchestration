@@ -2,7 +2,34 @@
 
 What to do next, in what order. Updated each session. Deferred ideas live in BACKLOG.md; completed phase history in docs/history/ROADMAP_ARCHIVE.md (ROADMAP.md is a stub). This file is the executable queue.
 
-Last updated: 2026-07-22 — **swarm-review arc, chunk 8 SHIPPED — final
+Last updated: 2026-07-27 — **chunk-9 #4 stop-verdict split SHIPPED**
+(AFK session per Jeremy's build order: #4 first, then #2 recon flavor in
+star). Typed stop verdicts (src/stop_verdicts.py: out-of-budget /
+thesis-refuted / reachable-but-not-worth-it / lost-the-plot, plus the
+external-interrupt event marker per Jeremy's item-5 decree — NOT a fifth
+verdict; evidence-backed verdicts win the field first-write-wins, the
+marker lands only when no map observation existed) now ride
+beside status through the full rail: break-site `ctx.stamp_stop`
+(first-write-wins) → LoopResult → metadata.json → outcome row → run
+card. ~20 break sites stamped (loop_init/execute/post_step/blocked/
+finalize, agent_loop fence, handle demotions → lost-the-plot, director
+escalation close → reachable-but-not-worth-it via post-hoc
+overwrite-with-refines). Choke-point fixes: new success_class
+"interrupted" (the 4-status "unknown" hole), judged demotions rebucket
+to done-not-achieved (status flip no longer launders them to
+"partial"), card passthrough + derived fallback. Four raw-status
+consumers rewired (outcome_policy landing-synthesis learnability,
+recall repeat-guard disarm, strategy_evaluator neutral weight,
+attribution cause-blind blame). Record:
+docs/history/2026-07-27-stop-verdict-split.md; cuts in BACKLOG.
+Same session: **tire-goal rerun needle**
+(docs/history/2026-07-27-tire-rerun-needle.md) — run 4 DELIVERED the
+full answer at the series' lowest cost ($1.74 metrics / $2.49 meter vs
+baseline $2.14/$3.00), 16% fewer input tokens; brake armed, never fired
+(warm-start confound noted; honest claims only). **Next: chunk-9 #2 —
+recon flavor in star** (incl. §14 diagnosis/blocked_on ownership split).
+
+Previous checkpoint — 2026-07-22 **swarm-review arc, chunk 8 SHIPPED — final
 chunk** (plan: `~/.claude/plans/abundant-gathering-lagoon.md`). Chunk 8
 (enforcement pin, made mechanical per the checkpoint): **(1)** DEFAULTS.md
 **reverse census** — `test_every_documented_key_has_a_reader` in

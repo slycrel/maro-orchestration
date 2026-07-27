@@ -363,6 +363,7 @@ def _check_loop_interrupts(
             log.warning("loop %s stopping — kill switch active: %s", ctx.loop_id, _ks_msg)
             loop_status = "interrupted"
             stuck_reason = f"kill switch: {_ks_msg}"
+            ctx.stamp_stop("external-interrupt", stuck_reason)
             if ctx.verbose:
                 print("[maro] kill switch active — stopping loop", file=sys.stderr, flush=True)
     except Exception as _exc:
@@ -377,6 +378,9 @@ def _check_loop_interrupts(
             log.warning("loop %s wall-clock timeout after %.0fs", ctx.loop_id, _elapsed_secs)
             loop_status = "interrupted"
             stuck_reason = f"wall-clock timeout ({ctx.loop_timeout_secs:.0f}s)"
+            # A preset time cap, not a human stop — the survey flagged the
+            # shared "interrupted" label as its ambiguity; the verdict splits it.
+            ctx.stamp_stop("out-of-budget", stuck_reason)
             if ctx.verbose:
                 print(f"[maro] wall-clock timeout after {_elapsed_secs:.0f}s — stopping", file=sys.stderr, flush=True)
 
@@ -453,6 +457,7 @@ def _check_loop_interrupts(
                 if should_stop:
                     loop_status = "interrupted"
                     stuck_reason = f"stopped by {intr.source}: {intr.message[:80]}"
+                    ctx.stamp_stop("external-interrupt", stuck_reason)
                     if ctx.verbose:
                         print(
                             f"[maro] interrupt: stop requested by {intr.source}",

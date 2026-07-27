@@ -577,6 +577,36 @@ def _stamp_verdict_tracked(stamp_call, *, loop_id: str, label: str,
         _breadcrumb_verdict_stamp_failure(loop_id, label, detail)
 
 
+def _stamp_stop_on_demotion(loop_result, verdict: str, evidence: str) -> None:
+    """Stamp a stop verdict when the handle demotes a "done" run (§13b).
+
+    First-write-wins extends across layers: a verdict stamped at the loop's
+    own break site (e.g. landing-synthesis out-of-budget) outranks the
+    handle-level demotion — the site closest to the stop evidence wins.
+    Writes all three homes the loop-level rail already uses: the result
+    object, run metadata.json, and the outcome-ledger row.
+    """
+    if getattr(loop_result, "stop_verdict", ""):
+        return
+    loop_result.stop_verdict = verdict
+    loop_result.stop_evidence = (evidence or "")[:500]
+    try:
+        from runs import stamp_run_metadata
+        stamp_run_metadata({
+            "stop_verdict": verdict,
+            "stop_evidence": loop_result.stop_evidence,
+        })
+    except Exception as exc:
+        log.debug("stop-verdict metadata stamp failed on demotion: %s", exc)
+    try:
+        from memory_ledger import stamp_outcome_stop_verdict
+        _lid = getattr(loop_result, "loop_id", "") or ""
+        if _lid:
+            stamp_outcome_stop_verdict(_lid, verdict)
+    except Exception as exc:
+        log.debug("stop-verdict outcome stamp failed on demotion: %s", exc)
+
+
 # ---------------------------------------------------------------------------
 # Core handle function
 # ---------------------------------------------------------------------------
@@ -2032,6 +2062,13 @@ def _handle_impl(
                         loop_result.stuck_reason = (
                             f"provenance: claimed input/output(s) not found: {_prov_missing}"
                         )
+                    # The run believed it was done; deterministic provenance
+                    # says the claimed inputs/outputs don't exist — the map
+                    # diverged from the territory (§13b lost-the-plot).
+                    _stamp_stop_on_demotion(
+                        loop_result, "lost-the-plot",
+                        f"provenance: claimed input/output(s) not found: {_prov_missing}",
+                    )
                     try:
                         from runs import write_metadata as _wm_prov
                         from runs import current_run_dir as _crd_prov
@@ -2105,6 +2142,11 @@ def _handle_impl(
                     loop_result.stuck_reason = (
                         f"closure verification: {str(_closure.summary)[:300]}"
                     )
+                _stamp_stop_on_demotion(
+                    loop_result, "lost-the-plot",
+                    f"closure contradicts done (conf={_closure.confidence:.2f}): "
+                    f"{str(_closure.summary)[:300]}",
+                )
 
             # Record the goal verdict as its own metadata dimension — process
             # status ("did the run finish") and goal achievement ("did it
@@ -2434,6 +2476,12 @@ def _handle_impl(
                                                 "post-escalate closure verification: "
                                                 f"{str(_post_closure.summary)[:300]}"
                                             )
+                                        _stamp_stop_on_demotion(
+                                            loop_result, "lost-the-plot",
+                                            "post-escalate closure contradicts done "
+                                            f"(conf={_post_closure.confidence:.2f}): "
+                                            f"{str(_post_closure.summary)[:300]}",
+                                        )
                                 if verbose and _post_closure is not None:
                                     print(
                                         f"[maro:{handle_id}] post-escalate closure: "

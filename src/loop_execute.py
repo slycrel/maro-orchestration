@@ -313,6 +313,7 @@ def _execute_main_loop(
             )
             if _ceiling_suffix:
                 stuck_reason += _ceiling_suffix
+            ctx.stamp_stop("out-of-budget", stuck_reason)
             break
 
         # Mid-loop budget bump: when 75%+ of budget is consumed, there are still
@@ -378,6 +379,15 @@ def _execute_main_loop(
                 # Track replan in manifest so it's visible
                 _manifest_steps.append(f"[REPLAN — budget pressure] {_synth_step[:80]}")
                 _replan_count += 1
+                # The run will likely end "done" via the synthesis step — the
+                # verdict is what keeps this cap-hit visible instead of
+                # laundering it into a clean success (survey conflation 2).
+                ctx.stamp_stop(
+                    "out-of-budget",
+                    f"budget-pressure landing: replaced remaining steps with "
+                    f"synthesis at {_remaining_budget} iteration(s) left, "
+                    f"{_done_count} steps done",
+                )
                 log.info("budget-aware landing: replaced %d remaining steps with synthesis step "
                          "(budget=%d iterations left, %d steps done)",
                          len(remaining_steps), _remaining_budget, _done_count)
@@ -865,6 +875,7 @@ def _execute_main_loop(
             if remaining_steps:
                 loop_status = "stuck"
                 stuck_reason = _budget_note
+                ctx.stamp_stop("out-of-budget", _budget_note)
             else:
                 log.warning("budget exceeded on final step (run kept done): %s",
                             _budget_note)
@@ -887,6 +898,7 @@ def _execute_main_loop(
                 if remaining_steps:
                     loop_status = "stuck"
                     stuck_reason = _budget_note
+                    ctx.stamp_stop("out-of-budget", _budget_note)
                     log.warning("cost hard stop: %s", stuck_reason)
                 else:
                     log.warning("cost budget exceeded on final step "
@@ -909,6 +921,7 @@ def _execute_main_loop(
             loop_status = "stuck"
             stuck_reason = (outcome.get("stuck_reason")
                             or "runaway cost circuit tripped mid-step")
+            ctx.stamp_stop("out-of-budget", stuck_reason)
             log.warning("runaway cost circuit stop: %s", stuck_reason)
             if verbose:
                 print(f"[maro] {stuck_reason}", file=sys.stderr, flush=True)
@@ -1333,6 +1346,10 @@ def _execute_main_loop(
 
             loop_status = "stuck"
             stuck_reason = f"same outcome '{step_status}' on '{step_text}' repeated 3 times"
+            # The repeat itself is the convergence evidence: the avenue stopped
+            # changing the outcome (survey: preset count, but the semantic is
+            # "attempts no longer move anything" — nearest verdict by design).
+            ctx.stamp_stop("thesis-refuted", stuck_reason)
             step_outcomes.append(step_from_decompose(
                 step_text, item_index,
                 status="blocked",

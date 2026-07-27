@@ -305,6 +305,9 @@ def _process_blocked_step(ctx: LoopContext, blk: BlockedStepContext) -> tuple:
             retry=False, hint="", loop_status="stuck",
             stuck_reason=f"re-decompose failed after {_prior_retries} retries: {outcome.get('stuck_reason', 'blocked')}",
             metacognitive_reason="re-decompose failed — terminal",
+            # Recovery tooling broke, not the goal (survey: recorded
+            # identically to genuine exhaustion — this splits it).
+            stop_verdict="external-interrupt",
         )
         # Fall through to terminal handler below
 
@@ -328,6 +331,9 @@ def _process_blocked_step(ctx: LoopContext, blk: BlockedStepContext) -> tuple:
                 if ctx.verbose:
                     print(f"[maro] adapter appears hung ({consecutive_max_timeouts} consecutive "
                           f"ceiling timeouts) — stopping loop", file=sys.stderr, flush=True)
+                # Backend-dead, not goal failure (survey: this seam then fed
+                # skill-failure attribution for a dead backend).
+                ctx.stamp_stop("external-interrupt", _stuck_reason)
                 return ("break", step_idx, "stuck", _stuck_reason,
                         consecutive_max_timeouts, _recovery_delta, replan_count)
         else:
@@ -375,6 +381,13 @@ def _process_blocked_step(ctx: LoopContext, blk: BlockedStepContext) -> tuple:
     # "step dies, run continues" contract into a silent full-run stop).
     _loop_status = "" if _decision.advance else (_decision.loop_status or "stuck")
     _stuck_reason = _decision.stuck_reason or outcome.get("stuck_reason", "blocked")
+    if _decision.stop_verdict and not _decision.advance:
+        # metacognitive_reason carries the structured evidence (converging,
+        # sibling_rate, diagnosis) that previously died in this object.
+        ctx.stamp_stop(
+            _decision.stop_verdict,
+            _decision.metacognitive_reason or _stuck_reason,
+        )
     failure_chain.append(f"step {step_idx} terminal: {_stuck_reason[:80]}")
     if item_index >= 0:
         try:
@@ -387,29 +400,37 @@ def _process_blocked_step(ctx: LoopContext, blk: BlockedStepContext) -> tuple:
                   file=sys.stderr, flush=True)
         else:
             print(f"[maro] step {step_idx} stuck after retry: {_stuck_reason}", file=sys.stderr, flush=True)
-    try:
-        from skills import attribute_failure_to_skills, find_matching_skills, record_variant_outcome, record_skill_outcome
-        from metrics import estimate_cost as _est_cost
-        attribute_failure_to_skills(step_text, _stuck_reason, goal=ctx.goal)
-        _fail_cost = _est_cost(
-            int(outcome.get("tokens_in", 0)),
-            int(outcome.get("tokens_out", 0)),
-            getattr(step_adapter, "model_key", None),
-            cache_read_tokens=int(outcome.get("cache_read_tokens", 0)),
-        )
-        for _sk in find_matching_skills(step_text + " " + ctx.goal, use_router=False, project=ctx.project):
-            if getattr(_sk, "variant_of", None) is not None:
-                record_variant_outcome(_sk.id, success=False)
-            # Phase 59: record failure telemetry per skill
-            record_skill_outcome(
-                _sk.id,
-                success=False,
-                cost_usd=_fail_cost,
-                latency_ms=float(step_elapsed),
+    if _decision.stop_verdict == "external-interrupt":
+        # Backend death / broken recovery tooling / missing external input:
+        # the skills that matched this step taught nothing about the failure.
+        # Cause-blind attribution here was the survey's "where conflation
+        # propagates into learning" seam — skip it for process-level stops.
+        log.info("skill-failure attribution skipped for step %d "
+                 "(stop_verdict=external-interrupt)", step_idx)
+    else:
+        try:
+            from skills import attribute_failure_to_skills, find_matching_skills, record_variant_outcome, record_skill_outcome
+            from metrics import estimate_cost as _est_cost
+            attribute_failure_to_skills(step_text, _stuck_reason, goal=ctx.goal)
+            _fail_cost = _est_cost(
+                int(outcome.get("tokens_in", 0)),
+                int(outcome.get("tokens_out", 0)),
+                getattr(step_adapter, "model_key", None),
+                cache_read_tokens=int(outcome.get("cache_read_tokens", 0)),
             )
-    except Exception as _exc:
-        # Affects the evolver's per-skill telemetry — silent loss skews learning.
-        log.warning("skill outcome recording failed for stuck step %d: %s", step_idx, _exc)
+            for _sk in find_matching_skills(step_text + " " + ctx.goal, use_router=False, project=ctx.project):
+                if getattr(_sk, "variant_of", None) is not None:
+                    record_variant_outcome(_sk.id, success=False)
+                # Phase 59: record failure telemetry per skill
+                record_skill_outcome(
+                    _sk.id,
+                    success=False,
+                    cost_usd=_fail_cost,
+                    latency_ms=float(step_elapsed),
+                )
+        except Exception as _exc:
+            # Affects the evolver's per-skill telemetry — silent loss skews learning.
+            log.warning("skill outcome recording failed for stuck step %d: %s", step_idx, _exc)
     try:
         from metrics import record_step_cost
         record_step_cost(
@@ -610,6 +631,12 @@ class _BlockDecision:
     # loop_status to "stuck" — a bare loop_status="" silently became a full
     # run stop (merge-gate review 2026-07-27, on top of the codex round).
     advance: bool = False
+    # Typed stop verdict (stop_verdicts.py) for terminal decisions. The
+    # terminal handler stamps it onto ctx (with metacognitive_reason as the
+    # evidence) so the structured stop cause survives past the LoopResult
+    # boundary instead of dying in this in-flight object (stop-path survey
+    # wiring observation, 2026-07-23). Empty = seam not classified.
+    stop_verdict: str = ""
 
 
 def _navigator_act_blocked_step(
@@ -945,6 +972,10 @@ def _handle_blocked_step(
                 "escalate for the real input rather than fabricating one."
             ),
             metacognitive_reason="missing external input — honest fail, do not fabricate",
+            # Awaiting-input hold: possibility untested, nothing learned about
+            # the goal (survey: "none of the four fit" — the process-level
+            # verdict is the honest home; reopens when the input arrives).
+            stop_verdict="external-interrupt",
         )
 
     # Combined exec+analyze steps are structurally wrong — retrying identically
@@ -990,6 +1021,9 @@ def _handle_blocked_step(
                 "Consider narrowing the step scope or switching to an API adapter."
             ),
             metacognitive_reason="timeout and split-recovery failed — terminal",
+            # Root cause is the preset per-step time cap; one failed recovery
+            # is not avenues-exhausted (survey conflation note on this seam).
+            stop_verdict="out-of-budget",
         )
 
     # Phase 44+45 bridge: after N retries, consult the rich diagnosis
@@ -1014,6 +1048,7 @@ def _handle_blocked_step(
                     retry=False, hint="", loop_status="stuck",
                     stuck_reason=f"retry_churn after {replan_count} re-decompositions",
                     metacognitive_reason=f"diagnose_loop: retry_churn exhausted ({_meta})",
+                    stop_verdict="thesis-refuted",
                 )
             if _fc == "decomposition_too_broad" and replan_count < _REDECOMPOSE_THRESHOLD:
                 log.info("diagnosis (decomposition_too_broad) — re-decomposing (%s)", _meta)
@@ -1126,4 +1161,8 @@ def _handle_blocked_step(
             f"exhausted: {prior_retries} retries, {replan_count} re-decompositions, "
             f"converging={converging}, sibling_rate={sibling_rate:.0%}"
         ),
+        # The convergence evidence (converging/sibling_rate above) rides to
+        # the outcome row as stop_evidence — the survey's "closest real
+        # thesis-refuted", previously dropped at the LoopResult boundary.
+        stop_verdict="thesis-refuted",
     )

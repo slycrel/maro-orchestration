@@ -405,6 +405,7 @@ def reflect_and_record(
     defer_lessons: bool = False,
     measurement_class: str = "",
     handle_id: str = "",
+    stop_verdict: str = "",
 ) -> Outcome:
     """Reflect on a completed run and record the outcome + lessons.
 
@@ -500,6 +501,7 @@ def reflect_and_record(
         lesson_extraction_count=len(lessons),
         measurement_class=measurement_class,
         handle_id=handle_id,
+        stop_verdict=stop_verdict,
     )
 
     _log_lesson_extraction(

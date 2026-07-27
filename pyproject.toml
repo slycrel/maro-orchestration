@@ -230,6 +230,7 @@ py-modules = [
     "slow_update_scheduler",
     "sprint_contract",
     "step_exec",
+    "stop_verdicts",
     "strategy_evaluator",
     "task_store",
     "team",

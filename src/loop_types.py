@@ -174,6 +174,12 @@ class LoopResult:
     status: str          # "done" | "stuck" | "error" | "interrupted" | "restart"
     steps: List[StepOutcome] = field(default_factory=list)
     stuck_reason: Optional[str] = None
+    # Typed stop verdict (stop_verdicts.py) + evidence. Empty = none recorded.
+    # Note a verdict can coexist with status="done": the landing synthesis
+    # ends an out-of-budget run "done", and the verdict is what keeps that
+    # cap-hit visible (stop-path survey conflation 2).
+    stop_verdict: str = ""
+    stop_evidence: str = ""
     total_tokens_in: int = 0
     total_tokens_out: int = 0
     elapsed_ms: int = 0
@@ -212,6 +218,8 @@ class LoopResult:
         ]
         if self.stuck_reason:
             lines.append(f"stuck_reason={self.stuck_reason!r}")
+        if self.stop_verdict:
+            lines.append(f"stop_verdict={self.stop_verdict}")
         if self.log_path:
             lines.append(f"log={self.log_path}")
         return "\n".join(lines)
@@ -401,6 +409,12 @@ class LoopContext:
     # Status
     loop_status: str = "done"  # "done" | "stuck" | "interrupted" | "error"
     stuck_reason: Optional[str] = None
+    # Typed stop verdict (stop_verdicts.py vocabulary) + its evidence, set at
+    # the break site that decides the run's ending. Empty = no verdict (clean
+    # success, or a stop seam not yet wired). Rides beside stuck_reason —
+    # the verdict is the machine-readable WHY, stuck_reason stays the prose.
+    stop_verdict: str = ""
+    stop_evidence: str = ""
     phase: str = LoopPhase.INIT
 
     # Token/cost tracking
@@ -475,6 +489,19 @@ class LoopContext:
     run_lease: Optional[Any] = None  # held run-lifetime lease (run_lease.RunLease); released at finalize
     run_worktree: Optional[Any] = None  # busy_policy=worktree isolation (worktree.Worktree); merged at finalize
     container_clone: Optional[Any] = None  # containerized self-dev scratch clone (worktree.ScratchClone); merged at finalize
+
+    def stamp_stop(self, verdict: str, evidence: str = "") -> None:
+        """Record the typed stop verdict for this run's ending.
+
+        First write wins: the break site that decided the stop knows the
+        specific cause; later wrap-up machinery (terminal blocked-exit,
+        finalize) must not overwrite it with a generic one. Evidence is
+        bounded — it's a citation, not a transcript.
+        """
+        if self.stop_verdict:
+            return
+        self.stop_verdict = verdict
+        self.stop_evidence = (evidence or "")[:500]
 
 
 @dataclass

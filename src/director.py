@@ -1109,6 +1109,61 @@ def _advance_origin_with_checkin(task, new_depth) -> tuple:
     return origin, should_fire
 
 
+def _stamp_close_stop_verdict(loop_id: str, *, depth: int, confidence: int,
+                              reasoning: str) -> None:
+    """Record a judged escalation close as a typed stop verdict (§13b).
+
+    "close" is the one seam where reachable-but-not-worth-it gets decided
+    (stop-path survey 2026-07-23: recorded nowhere before this). Post-hoc
+    refinement: the escalated run usually carries out-of-budget from its own
+    cap break — the director's close is a later, better-informed judgment
+    ending the whole chain, so it overwrites, keeping the prior verdict
+    visible in evidence. Type-derived reopen condition: the cost/value
+    estimate moves.
+    """
+    if not loop_id:
+        return
+    evidence = (
+        f"director escalation close at depth {depth} "
+        f"(confidence {confidence}/10): {reasoning}"
+    )[:500]
+    try:
+        from runs import resolve_run_dir
+        _rd = resolve_run_dir(loop_id)
+    except Exception:
+        _rd = None
+    if _rd is not None:
+        try:
+            import json as _json
+            from file_lock import locked_rmw
+
+            def _merge(old: str) -> str:
+                try:
+                    existing = _json.loads(old) if old else {}
+                except Exception:
+                    existing = {}
+                if not isinstance(existing, dict):
+                    existing = {}
+                _prior = existing.get("stop_verdict") or ""
+                _note = (
+                    f" [refines: {_prior}]"
+                    if _prior and _prior != "reachable-but-not-worth-it"
+                    else ""
+                )
+                existing["stop_verdict"] = "reachable-but-not-worth-it"
+                existing["stop_evidence"] = (evidence + _note)[:500]
+                return _json.dumps(existing, indent=2, default=str)
+
+            locked_rmw(_rd / "metadata.json", _merge)
+        except Exception as exc:
+            log.debug("close stop-verdict metadata stamp failed: %s", exc)
+    try:
+        from memory_ledger import stamp_outcome_stop_verdict
+        stamp_outcome_stop_verdict(loop_id, "reachable-but-not-worth-it")
+    except Exception as exc:
+        log.debug("close stop-verdict outcome stamp failed: %s", exc)
+
+
 def handle_escalation(
     task: dict,
     *,
@@ -1323,6 +1378,14 @@ def handle_escalation(
             reasoning = f"enqueue failed: {exc}"
 
     elif action in ("close", "surface"):
+        if action == "close":
+            # Judged close = reachable-but-not-worth-it, stamped onto the
+            # escalated run + its outcome row. Surface stays unstamped: the
+            # operator hasn't decided anything yet.
+            _stamp_close_stop_verdict(
+                parent_id, depth=depth, confidence=confidence,
+                reasoning=reasoning,
+            )
         # Write a summary artifact for the operator
         try:
             import os

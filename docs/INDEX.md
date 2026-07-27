@@ -23,6 +23,10 @@ BACKLOG, VISION, CLAUDE, README…) are living by definition and carry no frontm
 | What happened to factory mode / the Bitter Lesson experiment / mode:thin? | `history/2026-07-21-factory-adjudication.md` (branch archived as tag `archive/factory-2026-03-31`; thin/minimal kept as instruments) |
 | What did the chunk-1 adversarial review find? (residual cheap paths, strict finding-code boundary) | `history/2026-07-21-chunk1-adversarial-review.md` (6 fixed / 1 rejected; 0/7 reviewer claims hallucinated) |
 | What did the chunk-2 adversarial review find? (LLM-under-lock, soft compression guard, dedup-before-rank) | `history/2026-07-21-chunk2-adversarial-review.md` (6 findings, all accepted ≥ in part; 0/6 hallucinated) |
+| Where can a run stop, and what conflations did the seam map find? | `history/2026-07-23-stop-path-survey.md` (~50 seams / 11 families vs the four stop verdicts) |
+| The mid-step token brake (ceilings, calibration, review verdicts)? | `history/2026-07-27-token-brake-adversarial-review.md` (fresh 300K + weighted 600K; trap-metric warning) |
+| How are typed stop verdicts wired? (break sites, precedence, consumers) | `history/2026-07-27-stop-verdict-split.md` (chunk-9 #4; external-interrupt = event marker per decree, not a fifth verdict) |
+| Did the tire-goal rerun move the needle after the brake land? | `history/2026-07-27-tire-rerun-needle.md` (run 4 delivered; brake armed, never fired; warm-start confound) |
 | What are we deliberately NOT building? | `ARCHITECTURE_NON_GOALS.md` |
 | What should Maro be able to do? (example goals, test corpus, pre-installed skill target) | `CAPABILITIES.md` (living catalog — add real asks as they happen) |
 | Two-box / Hermes dispatch, interactive goals, effort-based spend UX, mid-flight injection? | `SESSION_PROTOCOL_DESIGN.md` (dormant-design; the 2026-07-15 skeleton, iterate there) |

@@ -31,6 +31,23 @@ DEFAULT_PER_RUN_USD = 5.0
 DEFAULT_DAILY_USD = 25.0
 
 
+def _stamp_refusal_verdict(verdict: str, evidence: str) -> None:
+    """Persist a pre-start refusal's stop verdict to run metadata.
+
+    Pre-start refusals return a LoopResult without ever reaching
+    _build_result_and_finalize (which owns the normal metadata stamp), so
+    they stamp here. No-op when no run-dir is pinned (bare library calls).
+    """
+    try:
+        from runs import stamp_run_metadata
+        stamp_run_metadata({
+            "stop_verdict": verdict,
+            "stop_evidence": (evidence or "")[:500],
+        })
+    except Exception:
+        pass
+
+
 def _budget_gate(ctx, *, goal: str, project: Optional[str], dry_run: bool):
     """Budget gates (substrate-trial hardening, 2026-07-01). Two layers:
 
@@ -95,6 +112,7 @@ def _budget_gate(ctx, *, goal: str, project: Optional[str], dry_run: bool):
                     })
                 except Exception:
                     pass
+                _stamp_refusal_verdict("out-of-budget", _msg)
                 return LoopResult(
                     loop_id=ctx.loop_id,
                     goal=goal,
@@ -102,6 +120,8 @@ def _budget_gate(ctx, *, goal: str, project: Optional[str], dry_run: bool):
                     steps=[],
                     status="stuck",
                     stuck_reason=_msg,
+                    stop_verdict="out-of-budget",
+                    stop_evidence=_msg,
                     total_tokens_in=0,
                     total_tokens_out=0,
                     elapsed_ms=0,
@@ -200,6 +220,8 @@ def _initialize_loop(
         if _ks_active():
             _ks_msg = _ks_reason() or "kill switch engaged"
             log.warning("loop refused to start — kill switch active: %s", _ks_msg)
+            _stamp_refusal_verdict(
+                "external-interrupt", f"kill switch active: {_ks_msg}")
             return ctx, LoopResult(
                 loop_id=ctx.loop_id,
                 goal=goal,
@@ -207,6 +229,8 @@ def _initialize_loop(
                 steps=[],
                 status="interrupted",
                 stuck_reason=f"kill switch active: {_ks_msg}",
+                stop_verdict="external-interrupt",
+                stop_evidence=f"kill switch active: {_ks_msg}",
                 total_tokens_in=0,
                 total_tokens_out=0,
                 elapsed_ms=0,
@@ -319,6 +343,7 @@ def _initialize_loop(
                 log.warning("loop refused: %s", _busy)
                 if verbose:
                     print(f"[maro] {_busy}", file=sys.stderr, flush=True)
+                _stamp_refusal_verdict("external-interrupt", str(_busy))
                 return ctx, LoopResult(
                     loop_id=ctx.loop_id,
                     goal=goal,
@@ -326,6 +351,8 @@ def _initialize_loop(
                     steps=[],
                     status="refused_busy",
                     stuck_reason=str(_busy),
+                    stop_verdict="external-interrupt",
+                    stop_evidence=str(_busy),
                     total_tokens_in=0,
                     total_tokens_out=0,
                     elapsed_ms=0,
