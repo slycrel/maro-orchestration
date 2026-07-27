@@ -3146,6 +3146,22 @@ class TestOutputProvenanceGuard:
         assert _claimed_input_paths("read /tmp/run/scratch.csv and analyze") == []
         assert _claimed_input_paths("load the data from the database") == []   # no path token
 
+    def test_prose_slash_is_not_a_claimed_path(self):
+        # 4d20b559 regression: a tire-spec phrase ("load range/index") matched
+        # the input-claim regex — 'load' as verb, 'range/index' as path — and
+        # demoted a delivered research run. Prose slashes are not paths.
+        from handle import _claimed_input_paths, _claimed_output_paths
+        goal = ("For each: exact brand/model, exact size, load range/index, "
+                "concrete current price or honest current price range")
+        assert _claimed_input_paths(goal) == []
+        assert _claimed_output_paths(goal) == []
+        # Slash tokens with real path evidence still claim: extension...
+        assert _claimed_input_paths("read data/config.yaml and summarize") == \
+            ["data/config.yaml"]
+        # ...and explicit anchors (absolute non-transient path, still missing).
+        assert _claimed_input_paths("read /srv/data/reports and summarize") == \
+            ["/srv/data/reports"]
+
     def test_input_provenance_disabled(self, monkeypatch):
         import config
         from handle import _verify_now_outcome

@@ -49,12 +49,37 @@ def _clean_path_token(tok: str) -> str:
     return tok.strip().strip("`'\"()").rstrip(".,;:")
 
 
+def _path_shaped(tok: str) -> bool:
+    """True when a slash-containing token plausibly names a filesystem path
+    rather than prose that happens to contain a slash — "load range/index"
+    (a tire spec) and "budget/mid-tier" both match the claim regexes' verb
+    + token shape but name nothing on any disk (4d20b559: a goal's tire-spec
+    phrase demoted a delivered run). Evidence accepted: an explicit anchor,
+    a file extension on the final segment, or a first segment that exists as
+    a directory under a provenance base. Prose slashes have none of these."""
+    if tok.startswith(("/", "./", "../", "~/")):
+        return True
+    if _EXT_RE.search(tok):
+        return True
+    first = tok.split("/", 1)[0]
+    if not first:
+        return False
+    for b in _output_provenance_bases():
+        try:
+            if (b / first).is_dir():
+                return True
+        except Exception:
+            pass
+    return False
+
+
 def _claimed_output_paths(goal: str) -> List[str]:
     """Dir-qualified output paths the goal asks to be written (user said *where*)."""
     out: List[str] = []
     for m in _OUTPUT_CLAIM_RE.finditer(goal or ""):
         tok = _clean_path_token(m.group("path"))
-        if "/" in tok and tok not in ("/", "./", "../") and not tok.endswith("/"):
+        if ("/" in tok and tok not in ("/", "./", "../")
+                and not tok.endswith("/") and _path_shaped(tok)):
             out.append(tok)
     return out
 
@@ -81,6 +106,8 @@ def _claimed_input_paths(goal: str) -> List[str]:
             continue                      # bare name — ambiguous
         if any(seg in low for seg in _TRANSIENT_SEGMENTS):
             continue                      # may be gone by verdict time
+        if not _path_shaped(tok):
+            continue                      # prose slash ("load range/index")
         out.append(tok)
     return out
 
