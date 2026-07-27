@@ -491,8 +491,25 @@ def capture_raw(url: str, *, html: Optional[str] = None,
             status, body = _http_get(url, timeout=timeout, max_bytes=_MAX_CAPTURE_BYTES)
         if status != 200 or not body:
             return None
+        # O_NOFOLLOW|O_EXCL, not write_text(): the capture dir sits in the
+        # worker-writable workspace, and a worker that pre-plants a symlink at
+        # this exact tmp name would otherwise redirect the write and overwrite
+        # an arbitrary host file with bytes it chose (verified exploitable
+        # before this guard). Same trust boundary as C3's untrusted-clone work:
+        # content the worker influences never gets a followed path.
         tmp = path.with_suffix(".html.tmp")
-        tmp.write_text(body, encoding="utf-8", errors="replace")
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+        try:
+            fd = os.open(tmp, flags, 0o600)
+        except FileExistsError:
+            # Stale or planted — drop it and retry once, still refusing symlinks.
+            try:
+                os.unlink(tmp)
+            except OSError:
+                return None
+            fd = os.open(tmp, flags, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8", errors="replace") as fh:
+            fh.write(body)
         os.replace(tmp, path)
 
         try:

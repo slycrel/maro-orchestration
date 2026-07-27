@@ -170,6 +170,29 @@ class TestCapture:
         assert path.name.endswith(".html") and "/" not in path.stem
         assert ".." not in path.name
 
+    def test_planted_symlink_cannot_redirect_the_write(self, capture_env, monkeypatch, tmp_path):
+        """The capture dir is worker-writable; a planted symlink must not
+        turn a capture into an arbitrary-file overwrite.
+
+        Verified exploitable before the O_NOFOLLOW|O_EXCL guard: write_text()
+        followed the symlink and replaced the victim's contents with bytes the
+        fetched page controlled.
+        """
+        import hashlib
+        import os
+
+        victim = tmp_path / "victim.txt"
+        victim.write_text("ORIGINAL")
+        capture_env.mkdir(parents=True, exist_ok=True)
+        url = "https://evil.example.com/x"
+        digest = hashlib.sha256(url.encode()).hexdigest()[:16]
+        os.symlink(victim, capture_env / f"{digest}.html.tmp")
+
+        monkeypatch.setattr(web_fetch, "_http_get", lambda *a, **k: (200, "<html>PWNED</html>"))
+        web_fetch.capture_raw(url)
+
+        assert victim.read_text() == "ORIGINAL", "symlink redirected the capture write"
+
     def test_capture_disabled_by_env(self, capture_env, monkeypatch):
         monkeypatch.setenv("MARO_FETCH_CAPTURE", "0")
         monkeypatch.setattr(web_fetch, "_jina_fetch", lambda u, **k: "m" * 200)
