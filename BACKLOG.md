@@ -1937,6 +1937,39 @@ wiring-inventory checks CANNOT ship the same way yet, per the checkpoint:
 When either registry ships, the census follows in the same chunk
 (consumer-first: convention and enforcer land together).
 
+### Tire-runs tangent — deferred findings (2026-07-27, Opus independent review)
+
+From the three Poe-dispatched tire-research runs (record:
+`docs/history/2026-07-27-tire-runs-examination.md`). The four
+runtime fixes + closure-skip observability shipped same day; these are
+the bigger design items that came out of the same evidence, deliberately
+deferred rather than silently dropped:
+
+- **Token-lean fetch for subprocess workers + mid-step token brake.**
+  Run 3 step 4 burned 2.14M input tokens ($1.21) curling raw retailer
+  HTML; the capped Jina path (`web_fetch.py`) is architecturally
+  unreachable from the `claude -p` backend (`fetch_tool.py` docstring
+  says subprocess workers "have their own fetch tools") — the live
+  backend on this box bypasses the one seam that would contain the
+  blowup. The 200K/step figure is diagnostic, not a brake. Cost control
+  has to live at the substrate boundary.
+- **Success accounting vs answer quality.** `stuck → failed`
+  (`run_curation.py`) even when partial_rescue holds contract-meeting
+  deliverables — run 3 recorded "failed" with 2 of 3 tiers purchase-ready,
+  and the rescue summary surfaced only one. The Opus review's headline:
+  execution got monotonically better across the three runs while the
+  recorded verdict got monotonically worse. Also gates learning:
+  goal_achieved=False skips lesson crystallization, so the system's best
+  run taught it nothing. Belongs to the stop-verdict/compound-thinking
+  agenda (chunk 9), not a quick fix.
+- **Closure fail-open posture.** With skip_detail now recorded, the
+  remaining question is design: should closure return complete=True when
+  the goal carries an explicit output contract and verification never
+  ran? Ties into the stop-path survey's fail-open conflations.
+- **Persona auto-selection misroute.** Run 3 routed to creative-director
+  (conf 0.8) for a spec/pricing research task. Harmless here; worth a
+  look if it recurs on research-shaped goals.
+
 ### Swarm-review chunk-1 batch adds (2026-07-21)
 
 Recorded in one pass per the checkpoint decree ("add all BACKLOG entries
