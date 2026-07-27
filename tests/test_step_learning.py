@@ -160,16 +160,63 @@ class TestProvisionalLifecycle:
 
     def test_provisional_context_does_not_clear_flag(self):
         text = "Batch the API calls to stay under the rate limit"
-        record_tiered_lesson(text, task_type="agenda",
-                             outcome="step-verified", source_goal="g",
-                             provisional=True)
+        first = record_tiered_lesson(text, task_type="agenda",
+                                     outcome="step-verified", source_goal="g",
+                                     provisional=True)
+        before_sessions = first.sessions_validated
+        before_score = first.score
         tl = record_tiered_lesson(text, task_type="agenda",
                                   outcome="step-verified", source_goal="g2",
                                   provisional=True)
-        # The observation still reinforces — but two failed-run sightings
-        # are not confirmation.
+        # The observation still reinforces score — but two failed-run
+        # sightings are not confirmation: the flag stays, and
+        # sessions_validated (the promotion/confidence counter) does not
+        # move. Without the split, three provisional sightings would carry
+        # promotion-grade validation while hidden, and the first
+        # confirmation would promote to LONG immediately (review 2026-07-27).
         assert tl.provisional is True
         assert tl.times_reinforced == 1
+        assert tl.sessions_validated == before_sessions
+        assert tl.score > before_score
+
+    def test_excluded_from_graveyard_and_resurrection(self):
+        from knowledge_web import search_graveyard
+        record_tiered_lesson(
+            "Provisional graveyard bait", task_type="agenda",
+            outcome="step-verified", source_goal="g", provisional=True)
+        record_tiered_lesson(
+            "Confirmed graveyard control", task_type="agenda",
+            outcome="done", source_goal="g")
+        # Window widened so both fresh rows are score-eligible: only the
+        # confirmed row may surface, even with resurrect=True (resurrection
+        # reinforces confirming=True — a topic match must not confirm).
+        hits = search_graveyard("graveyard", min_score=0.0, max_score=2.0,
+                                resurrect=True)
+        texts = [h.lesson for h in hits]
+        assert "Confirmed graveyard control" in texts
+        assert "Provisional graveyard bait" not in texts
+        rows = load_tiered_lessons(tier=MemoryTier.MEDIUM, limit=None, raw=True)
+        bait = next(r for r in rows if r.lesson == "Provisional graveyard bait")
+        assert bait.provisional is True
+        assert bait.times_reinforced == 0
+
+    def test_promote_lesson_refuses_provisional_directly(self):
+        from knowledge_web import promote_lesson
+        tl = record_tiered_lesson(
+            "Eligible but provisional, promoted by hand", task_type="agenda",
+            outcome="step-verified", source_goal="g", provisional=True)
+        path = _tiered_lessons_path(MemoryTier.MEDIUM)
+        rows = [json.loads(l) for l in path.read_text().splitlines() if l.strip()]
+        rows[0]["score"] = PROMOTE_MIN_SCORE + 0.1
+        rows[0]["sessions_validated"] = PROMOTE_MIN_SESSIONS
+        path.write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+        # The CLI (`maro memory promote`) calls promote_lesson directly —
+        # the guard must live at the promotion boundary, not only in the
+        # reinforce-hook/decay-cycle callers.
+        assert promote_lesson(tl.lesson_id) is False
+        assert load_tiered_lessons(tier=MemoryTier.LONG, limit=None, raw=True) == []
+        rows = load_tiered_lessons(tier=MemoryTier.MEDIUM, limit=None, raw=True)
+        assert [r.provisional for r in rows] == [True]
 
     def test_provisional_never_promotes_to_long(self):
         record_tiered_lesson(
@@ -259,7 +306,7 @@ class TestExtractStepLessons:
         from memory import extract_step_lessons
         payload = json.dumps([
             {"lesson": "Fetch the sitemap before crawling", "type": "execution"},
-            {"lesson": "The goal landed perfectly", "type": "recovery"},
+            {"lesson": "Retry the fetch once with backoff", "type": "recovery"},
         ])
         adapter = _FakeAdapter(payload)
         n = extract_step_lessons(
@@ -319,3 +366,73 @@ def test_record_step_trace_persists_confidence(tmp_path):
     steps = traces["oid-1"]["steps"]
     assert steps[0]["confidence"] == "strong"
     assert "confidence" not in steps[1]
+
+
+# ---------------------------------------------------------------------------
+# Closure-lane runs defer run-level extraction for ALL statuses
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("status,expected_defer", [
+    ("done", True),
+    ("stuck", True),   # pre-review this extracted immediately, verdict-blind
+    ("partial", True),
+])
+def test_finalize_defers_lessons_for_all_closure_lane_statuses(
+        monkeypatch, status, expected_defer):
+    """A stuck run later judged goal_achieved=True is achieved-not-done —
+    extracting at finalize (verdict unknown) recorded its lessons
+    failure-framed into confirmed injection surfaces (adversarial review
+    2026-07-27, three-lens consensus). All closure-lane statuses defer."""
+    from loop_finalize import _finalize_loop
+    captured = {}
+
+    def fake_reflect(goal, status, result_summary, task_type, project, **kw):
+        captured.update(kw)
+
+    import memory
+    monkeypatch.setattr(memory, "reflect_and_record", fake_reflect)
+    _finalize_loop(
+        loop_id="fl-defer",
+        goal="g",
+        project="p",
+        loop_status=status,
+        step_outcomes=[],
+        adapter=None,
+        dry_run=False,
+        verbose=False,
+        total_tokens_in=1,
+        total_tokens_out=1,
+        elapsed_ms=1,
+        had_no_matching_skill=False,
+        defer_learning=True,
+    )
+    assert captured.get("defer_lessons") is expected_defer
+
+
+def test_finalize_extracts_immediately_when_no_closure_will_run(monkeypatch):
+    """defer_learning=False (no closure lane) keeps the fail-safe: immediate
+    extraction, any status."""
+    from loop_finalize import _finalize_loop
+    captured = {}
+
+    def fake_reflect(goal, status, result_summary, task_type, project, **kw):
+        captured.update(kw)
+
+    import memory
+    monkeypatch.setattr(memory, "reflect_and_record", fake_reflect)
+    _finalize_loop(
+        loop_id="fl-nodefer",
+        goal="g",
+        project="p",
+        loop_status="stuck",
+        step_outcomes=[],
+        adapter=None,
+        dry_run=False,
+        verbose=False,
+        total_tokens_in=1,
+        total_tokens_out=1,
+        elapsed_ms=1,
+        had_no_matching_skill=False,
+        defer_learning=False,
+    )
+    assert captured.get("defer_lessons") is False

@@ -20,8 +20,16 @@ clears the flag, decay disposes of the rest). Deliberate cuts:
 side-quest + blocked_on learning wait for their runtime seams. 24 new
 pins (tests/test_step_learning.py) + one deliberate pin inversion
 (test_outcome_policy stuck+True → learnable). Record:
-docs/history/2026-07-27-per-step-learning.md. **Next: chunk 9/10
-compound-thinking continuation** (per Jeremy's same directive).
+docs/history/2026-07-27-per-step-learning.md. **Adversarial review DONE
+same day** (3 Codex lenses vs d1b442c, CONTESTED → remediated; 6/7
+verified, 0 hallucinated — thirteenth clean round): all closure-lane
+statuses defer run-level extraction (verdict-blind stuck-run lessons —
+three-lens HIGH), graveyard provisional exclusion (resurrection was
+also clearing the flag), sessions_validated confirmed-context-only,
+promote_lesson boundary guard; trust-aware classification BACKLOG'd.
+Record: docs/history/2026-07-27-per-step-learning-adversarial-review.md.
+**Next: chunk 9/10 compound-thinking continuation** (per Jeremy's same
+directive).
 
 Previous checkpoint — 2026-07-27 — **chunk-9 #4 stop-verdict split SHIPPED**
 (AFK session per Jeremy's build order: #4 first, then #2 recon flavor in

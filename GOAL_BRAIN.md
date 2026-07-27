@@ -4434,3 +4434,22 @@ Dormant (deliberately parked, not dropped):
   Independent convergence noted: Jeremy's work-box handoff doc arrived
   at the same confirmed/provisional gate the same week. Record:
   docs/history/2026-07-27-per-step-learning.md.
+- **2026-07-27 (session, per-chunk review discipline): per-step-learning
+  adversarial review DONE** (3 Codex lenses vs d1b442c, CONTESTED →
+  remediated same session; 6/7 distinct findings verified, 0
+  hallucinated — thirteenth clean round). Fixed: ALL closure-lane
+  statuses now defer run-level extraction (three-lens consensus HIGH —
+  stuck-later-judged-True runs were recording failure-framed confirmed
+  lessons verdict-blind at finalize; deferred rail was already
+  verdict-aware), graveyard provisional exclusion (leak worse than
+  reported: resurrection reinforces confirming=True, so a topic match
+  also CLEARED the flag), sessions_validated moves only on
+  confirmed-context reinforcement (provisional sightings no longer
+  accrue promotion-grade validation), promote_lesson boundary guard
+  (CLI path), test no longer pins a goal-success claim as recordable,
+  stamp-after-success docstring honesty. Rejected: deterministic
+  semantic filter on lesson text (provisional lifecycle IS the
+  structural control), atomicity/no-retry (retriable by design),
+  verdict_trust bypass as chunk defect (consistent with pre-existing
+  siblings; BACKLOG'd as the real architecture question). Record:
+  docs/history/2026-07-27-per-step-learning-adversarial-review.md.

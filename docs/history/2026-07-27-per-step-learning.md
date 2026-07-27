@@ -98,10 +98,13 @@ census-enforced).
 ### 4. Call sites (`loop_finalize`)
 
 - **Immediate lane** (`_finalize_loop`, after `record_step_trace`): fires when
-  `loop_status != "done"` — the failure-shaped endings whose extraction was
-  never deferred. Verdict unknown here; if closure later judges achieved=True
-  the run also becomes learnable, and the provisional lessons remain valid
-  (verified steps are verified regardless).
+  `loop_status != "done"`. Verdict unknown here; if closure later judges
+  achieved=True the run also becomes learnable, and the provisional lessons
+  remain valid (verified steps are verified regardless). *Post-review note:*
+  run-level extraction now ALSO defers for non-done closure-lane runs (the
+  review's three-lens HIGH — see the companion review record); the step-lesson
+  immediate lane stays at finalize because provisional evidence is
+  verdict-independent by construction.
 - **Post-verdict lane** (`run_deferred_learning`, before the skill half):
   fires when the stamped row fails `is_learnable_outcome` — the judged-False
   deferred runs. Final loop only (earlier attempts' steps are gone, same cut

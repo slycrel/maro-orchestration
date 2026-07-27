@@ -2102,6 +2102,20 @@ deferred rather than silently dropped:
   evidence lives in `build/loop-*-log.json`, NOT metadata — heavier
   read). Forward runs carry the verdict; the open call is vocabulary
   (new class vs verdict-aware readers).
+- **Trust-aware success classification (design question, per-step-learning
+  review 2026-07-27, Architect finding — rejected as a chunk defect,
+  real as architecture).** `classify_outcome` and `is_learnable_outcome`
+  consume raw `goal_achieved` without consulting `verdict_trust()` — ALL
+  verdict branches, not just the new achieved-not-done ones (done+True →
+  "success" is equally trust-blind). A DIRECTIONAL (confidence < 0.7)
+  judged verdict can therefore set a gating success_class, while the
+  seams with teeth (V2 cadence windows, contradiction emitter's era-10
+  single-gate law, evolver scans) correctly filter on trust. Question:
+  should curation-time classification apply the same law (e.g. a
+  directional verdict classifies as if unjudged), or is label-layer
+  trust-blindness fine because every learning consumer re-checks? If
+  changed, it's a consumer census across all verdict branches at once —
+  rows carry `goal_verdict_confidence`, so the data is already there.
 - **Closure fail-open posture.** With skip_detail now recorded, the
   remaining question is design: should closure return complete=True when
   the goal carries an explicit output contract and verification never

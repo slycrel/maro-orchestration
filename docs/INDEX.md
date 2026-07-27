@@ -31,6 +31,7 @@ BACKLOG, VISION, CLAUDE, README…) are living by definition and carry no frontm
 | What did the chunk-9 #2 adversarial review find? (dedup key, reject-bridge, substantiation line) | `history/2026-07-27-chunk9-2-adversarial-review.md` (6 findings, 6/6 verified, all accepted; twelfth clean round) |
 | Did the tire-goal rerun move the needle after the brake land? | `history/2026-07-27-tire-rerun-needle.md` (run 4 delivered; brake armed, never fired; warm-start confound) |
 | Per-step learning from failed runs? (provisional lessons, achieved-not-done, promote-on-evidence) | `history/2026-07-27-per-step-learning.md` (learn at verification granularity, inject conservatively; asymmetric bar) |
+| What did the per-step learning adversarial review find? (verdict-blind extraction, graveyard leak, validation accrual) | `history/2026-07-27-per-step-learning-adversarial-review.md` (7 findings, 6/7 verified, 0 hallucinated; thirteenth clean round) |
 | What are we deliberately NOT building? | `ARCHITECTURE_NON_GOALS.md` |
 | What should Maro be able to do? (example goals, test corpus, pre-installed skill target) | `CAPABILITIES.md` (living catalog — add real asks as they happen) |
 | Two-box / Hermes dispatch, interactive goals, effort-based spend UX, mid-flight injection? | `SESSION_PROTOCOL_DESIGN.md` (dormant-design; the 2026-07-15 skeleton, iterate there) |

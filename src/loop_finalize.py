@@ -625,9 +625,15 @@ def _finalize_loop(
             # unjudged with its loop_id, and stamp_outcome_verdict() stamps
             # the verdict onto it once closure has judged.
             loop_id=loop_id,
-            # data-r2-01: when the caller will run closure, a "done" run's
-            # lessons wait for the verdict (extract_deferred_lessons).
-            defer_lessons=defer_learning and loop_status == "done",
+            # data-r2-01: when the caller will run closure, lessons wait for
+            # the verdict (extract_deferred_lessons). ALL statuses defer, not
+            # just "done" (2026-07-27 adversarial review, three-lens
+            # consensus): a stuck run later judged goal_achieved=True is
+            # achieved-not-done, and extracting before the verdict recorded
+            # its lessons failure-framed into confirmed injection surfaces.
+            # When no closure will run (defer_learning=False) extraction
+            # stays immediate — the fail-safe path is unchanged.
+            defer_lessons=defer_learning,
             measurement_class=measurement_class,
             handle_id=handle_id,
             stop_verdict=stop_verdict,
@@ -837,9 +843,11 @@ def finalize_deferred_learning(
     outcomes row (stamp_outcome_verdict). Two halves:
 
     - Lessons: extract_deferred_lessons() per loop — reads each row back,
-      verdict included, and extracts failure-flavored lessons for a
-      done-but-not-achieved run. Idempotent (rows with lessons are skipped),
-      so it's safe to pass loops that didn't defer.
+      verdict included, and frames extraction by the verdict: failure-
+      flavored for done-but-not-achieved, achievement-aware for
+      achieved-not-done (since 2026-07-27 ALL closure-lane statuses defer,
+      not just "done"). Idempotent (rows with lessons are skipped), so it's
+      safe to pass loops that didn't defer.
     - Skills: crystallization + synthesis for the final loop_result, skipped
       when the row's verdict is a judged False — a run that didn't deliver
       must not crystallize its pattern. Unjudged (verdict absent) keeps the

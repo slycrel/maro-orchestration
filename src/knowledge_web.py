@@ -380,21 +380,26 @@ def _reinforce_tiered_lesson(tl: TieredLesson, *, tier: str,
 
     Per-step learning (2026-07-27): ``confirming=False`` marks a reinforcement
     arriving from a provisional context (a step-verified extraction on a
-    non-learnable run). It still bumps score/sessions — the observation is
-    real — but it cannot clear an existing provisional flag; only a confirmed
-    context does (promote-on-evidence).
+    non-learnable run). It bumps score — the observation is real — but it is
+    NOT validation: sessions_validated (the promotion/confidence counter)
+    only moves on confirmed-context reinforcement, and the provisional flag
+    only clears on one (promote-on-evidence). Without that split, a lesson
+    sighted in three failed runs would carry promotion-grade
+    sessions_validated while hidden, and its first confirmation would
+    promote it to LONG immediately (adversarial review 2026-07-27).
     """
     if confirming and tl.provisional:
         tl.provisional = False
         log.info("provisional lesson %s confirmed by a learnable-context re-record",
                  tl.lesson_id)
     tl.score = reinforce_score(tl.score)
-    tl.sessions_validated += 1
+    if confirming:
+        tl.sessions_validated += 1
+        # F5: multi-session confidence promotion
+        if tl.sessions_validated >= 3:
+            tl.confidence = max(tl.confidence, _CONFIDENCE_MULTI_SESSION)
     tl.times_reinforced += 1
     tl.last_reinforced = _current_date()
-    # F5: multi-session confidence promotion
-    if tl.sessions_validated >= 3:
-        tl.confidence = max(tl.confidence, _CONFIDENCE_MULTI_SESSION)
     # Replace the mutated lesson under the lock (raw stored scores for all
     # bystanders — a non-raw load would persist decay, compounding on each
     # write; an unlocked load would drop concurrent updates).
@@ -708,6 +713,12 @@ def search_graveyard(
         for tl in lessons:
             if tl.score >= max_score:
                 continue
+            # Provisional lessons are excluded from every injection surface,
+            # and resurrection reinforces confirming=True — a topic match is
+            # not the learnable-context re-record that may clear the flag
+            # (adversarial review 2026-07-27).
+            if tl.provisional:
+                continue
             text = tl.lesson.lower()
             match_ratio = sum(1 for kw in keywords if kw in text) / max(len(keywords), 1)
             if match_ratio > 0:
@@ -720,6 +731,8 @@ def search_graveyard(
     archived_ids: set = set()
     for tl in _load_archived_lessons():
         if tl.lesson_id in live_ids:
+            continue
+        if tl.provisional:  # same exclusion as the live scan above
             continue
         text = tl.lesson.lower()
         match_ratio = sum(1 for kw in keywords if kw in text) / max(len(keywords), 1)
@@ -773,6 +786,13 @@ def promote_lesson(lesson_id: str) -> bool:
     if not target:
         return False
     if target.score < PROMOTE_MIN_SCORE or target.sessions_validated < PROMOTE_MIN_SESSIONS:
+        return False
+    if target.provisional:
+        # Guard at the promotion boundary itself, not only in the callers
+        # (_post_reinforce_hooks / run_decay_cycle): the CLI calls this
+        # directly, and LONG is decay-free — an unconfirmed row reaching it
+        # would be permanent (adversarial review 2026-07-27).
+        log.info("promote_lesson: %s is provisional (unconfirmed) — not promoting", lesson_id)
         return False
     # ...but the record that moves tiers is the stored (raw) one — popped
     # from MEDIUM under the lock so concurrent updates aren't dropped.

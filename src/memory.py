@@ -459,8 +459,11 @@ def extract_step_lessons(
     Idempotent per run via the ``step_lesson_count`` stamp on the outcomes
     row (run_deferred_learning is called for loops that didn't defer — the
     stamp keeps a failure-shaped run from re-paying the extraction call on
-    every post-closure pass). One LLM call, capped at
-    _STEP_LESSON_MAX_STEPS steps. Never raises.
+    every post-closure pass). The stamp lands only after a SUCCESSFUL pass:
+    a transient LLM failure deliberately leaves the row unstamped so a later
+    pass retries instead of forfeiting the learning permanently. One LLM
+    call per successful pass, capped at _STEP_LESSON_MAX_STEPS steps.
+    Never raises.
 
     Returns the number of provisional lessons recorded (0 = pass skipped or
     nothing usable).
