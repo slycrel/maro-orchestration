@@ -275,22 +275,51 @@ def _recent_projects_menu(limit: int = 5) -> List[Dict[str, str]]:
         root = projects_root()
         if not root.is_dir():
             return []
-        dirs = sorted((d for d in root.iterdir() if d.is_dir()),
-                      key=lambda d: d.stat().st_mtime, reverse=True)[:limit]
-        now = _time.time()
-        for d in dirs:
-            age_h = max(0.0, (now - d.stat().st_mtime) / 3600.0)
-            age = f"{age_h:.0f}h ago" if age_h < 48 else f"{age_h / 24:.0f}d ago"
-            hint = ""
+        root_resolved = root.resolve()
+
+        def _touched(d) -> float:
+            # A project the run wrote into may only bump NEXT.md, not the
+            # dir inode — rank by whichever is fresher.
+            t = d.stat().st_mtime
             try:
-                for line in (d / "NEXT.md").read_text(encoding="utf-8").splitlines():
-                    line = line.strip().lstrip(">").strip()
-                    if line and not line.startswith("#") and line.lower() != "mission:":
-                        hint = line[:140]
-                        break
+                t = max(t, (d / "NEXT.md").stat().st_mtime)
+            except OSError:
+                pass
+            return t
+
+        candidates = []
+        for d in root.iterdir():
+            # Per-entry isolation: one unstat-able/symlinked-away entry must
+            # not cost the navigator the whole menu.
+            try:
+                if not d.is_dir():
+                    continue
+                # is_dir() follows symlinks — a link pointing outside the
+                # projects root would otherwise become a nameable target
+                # that the binder later re-trusts.
+                if not d.resolve().is_relative_to(root_resolved):
+                    continue
+                candidates.append((_touched(d), d))
             except Exception:
+                continue
+        candidates.sort(key=lambda t: t[0], reverse=True)
+        now = _time.time()
+        for mtime, d in candidates[:limit]:
+            try:
+                age_h = max(0.0, (now - mtime) / 3600.0)
+                age = f"{age_h:.0f}h ago" if age_h < 48 else f"{age_h / 24:.0f}d ago"
                 hint = ""
-            out.append({"name": d.name, "age": age, "hint": hint})
+                try:
+                    for line in (d / "NEXT.md").read_text(encoding="utf-8").splitlines():
+                        line = line.strip().lstrip(">").strip()
+                        if line and not line.startswith("#") and line.lower() != "mission:":
+                            hint = line[:140]
+                            break
+                except Exception:
+                    hint = ""
+                out.append({"name": d.name, "age": age, "hint": hint})
+            except Exception:
+                continue
     except Exception:
         return []
     return out

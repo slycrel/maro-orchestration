@@ -808,6 +808,30 @@ class TestNavigatorProjectContinuation:
         assert cap["project"] is None
         assert "project" not in cap["origin"]["dispatch_navigator"]
 
+    def test_symlink_escape_pick_is_ignored(self, monkeypatch, tmp_path):
+        # Adversarial-review F1: is_dir() follows symlinks, so a projects/
+        # entry linking outside the root would otherwise pass the existence
+        # check and bind run state to an arbitrary directory.
+        outside = tmp_path / "outside-root"
+        outside.mkdir()
+        proj = tmp_path / "projects"
+        proj.mkdir(parents=True, exist_ok=True)
+        (proj / "linked").symlink_to(outside, target_is_directory=True)
+        cap = self._run(monkeypatch, tmp_path,
+                        {"instruction": "go", "project": "linked"})
+        assert cap["project"] is None
+
+    def test_existing_dir_not_on_menu_is_ignored(self, monkeypatch, tmp_path):
+        # Adversarial-review F2: the menu is the offer, not a hint about the
+        # namespace — a name the navigator was never shown does not bind even
+        # when the dir exists. Rejection = pre-menu behavior (fresh slug).
+        (tmp_path / "projects" / "prior-tire-research").mkdir(parents=True)
+        monkeypatch.setattr("navigator_shadow._recent_projects_menu",
+                            lambda *a, **kw: [])
+        cap = self._run(monkeypatch, tmp_path,
+                        {"instruction": "go", "project": "prior-tire-research"})
+        assert cap["project"] is None
+
 
 class TestRecallDispatchGuard:
     """handle_task refuses to re-run a goal whose recent attempts all failed
@@ -3223,6 +3247,30 @@ class TestOutputProvenanceGuard:
         # ...and explicit anchors (absolute non-transient path, still missing).
         assert _claimed_input_paths("read /srv/data/reports and summarize") == \
             ["/srv/data/reports"]
+
+    def test_known_gap_prose_slash_with_coincidental_dir_still_claims(self):
+        # KNOWN GAP, accepted (2026-07-27 adversarial review, F4a): the
+        # _path_shaped gate counts "first segment exists as a dir under a
+        # provenance base" as path evidence, so prose whose first word
+        # coincidentally names a real top-level dir ("src", "docs") is still
+        # claimed and can re-demote a delivered run. Accepted because dir
+        # existence IS the evidence class the gate runs on; dropping it would
+        # blind the gate to real extensionless paths. If this pin fails, the
+        # gate's evidence rules changed — re-review the 4d20b559 regression.
+        from handle import _claimed_input_paths
+        assert _claimed_input_paths(
+            "read src/nonexistent-prose-token and act on it") == \
+            ["src/nonexistent-prose-token"]
+
+    def test_known_gap_extensionless_missing_relative_input_not_claimed(self):
+        # KNOWN GAP, accepted (2026-07-27 adversarial review, F4b): the flip
+        # side of the prose-slash fix — a fabricated relative input with no
+        # extension and no existing first segment is indistinguishable from
+        # prose, so the missing-input demotion can no longer fire on it.
+        # Accepted: the 4d20b559 false demotion of a delivered run was the
+        # costlier error; absolute/anchored fabrications still demote.
+        from handle import _claimed_input_paths
+        assert _claimed_input_paths("read notes9931/summary and analyze") == []
 
     def test_input_provenance_disabled(self, monkeypatch):
         import config

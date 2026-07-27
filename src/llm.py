@@ -1818,8 +1818,21 @@ class ClaudeSubprocessAdapter(_JSONToolPromptMixin, LLMAdapter):
         # caller's parse-fallback remains the contract-quality gate below it.
         _env_extra = None
         if no_tools and max_tokens:
-            _env_extra = {"CLAUDE_CODE_MAX_OUTPUT_TOKENS":
-                          str(max(int(max_tokens), _OUTPUT_CAP_FLOOR))}
+            _cap = max(int(max_tokens), _OUTPUT_CAP_FLOOR)
+            # output_cap_tokens: opt-in CLI-cap headroom for contract calls
+            # that must REASON over a full goal (decompose lanes, cuts,
+            # scope). The env cap counts THINKING tokens, so their
+            # answer-sized max_tokens (512-1200 → 1500 floor) hard-killed
+            # every such call on real-sized goals (runs 4d20b559/1bfd0894).
+            # A kwarg, not a max_tokens raise: API backends ignore it, so
+            # their output cap — and spend behavior — is unchanged, and
+            # tight caps on loosely-parsed calls (cobalt-pine rewrite
+            # guard) stay tight unless a caller explicitly opts in.
+            try:
+                _cap = max(_cap, int(kwargs.get("output_cap_tokens") or 0))
+            except Exception:
+                pass
+            _env_extra = {"CLAUDE_CODE_MAX_OUTPUT_TOKENS": str(_cap)}
 
         prompt = _delta_prompt if _resume_id else full_prompt
         if _resume_id:

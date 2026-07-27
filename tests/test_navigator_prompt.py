@@ -1212,3 +1212,39 @@ class TestRecentProjectsMenu:
         monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
         from navigator_shadow import _recent_projects_menu
         assert _recent_projects_menu() == []
+
+    def test_menu_filters_symlink_escapes_and_survives_bad_entries(
+            self, monkeypatch, tmp_path):
+        # Adversarial-review F1/F5: an entry symlinked outside the projects
+        # root must not become a nameable target, and no single bad entry
+        # (dangling link) may cost the navigator the rest of the menu.
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        proj = tmp_path / "projects"
+        proj.mkdir()
+        (proj / "real-project").mkdir()
+        (proj / "linked").symlink_to(outside, target_is_directory=True)
+        (proj / "dangling").symlink_to(tmp_path / "gone")
+        from navigator_shadow import _recent_projects_menu
+        assert [m["name"] for m in _recent_projects_menu()] == ["real-project"]
+
+    def test_menu_ranks_by_next_md_activity(self, monkeypatch, tmp_path):
+        # Adversarial-review F6: a run that only rewrote NEXT.md doesn't bump
+        # the dir inode — ranking is max(dir mtime, NEXT.md mtime) so the
+        # project with the freshest work sorts first.
+        import os
+        import time
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        proj = tmp_path / "projects"
+        old = proj / "old-but-active"
+        old.mkdir(parents=True)
+        newer = proj / "recently-touched"
+        newer.mkdir()
+        (old / "NEXT.md").write_text("# NEXT\n\nfresh follow-up work\n")
+        now = time.time()
+        os.utime(old, (now - 7 * 86400, now - 7 * 86400))     # stale inode
+        os.utime(newer, (now - 3600, now - 3600))
+        from navigator_shadow import _recent_projects_menu
+        assert [m["name"] for m in _recent_projects_menu()] == \
+            ["old-but-active", "recently-touched"]

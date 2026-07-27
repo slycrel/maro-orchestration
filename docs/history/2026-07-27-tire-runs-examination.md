@@ -79,24 +79,39 @@ adjudicated.
 1. `6f5bce2` provenance — `_path_shaped()` gate: slash tokens count as
    claimed paths only with an anchor, extension, or existing base dir.
    Pinned against the live run-2 goal text.
-2. `a0bb16d` planner/scope — `GOAL_REASONING_MAX_TOKENS = 4000` for
-   cuts + all five decompose lanes; scope defaults 1200 → 4000. The
-   subprocess cap counts thinking; parsers stay the contract gate;
-   tight caps on loosely-parsed calls (rewrite) unchanged.
+2. `a0bb16d` planner/scope, reworked post-review — `output_cap_tokens`
+   kwarg (4000 via `GOAL_REASONING_MAX_TOKENS`) on cuts + all five
+   decompose lanes + scope. Only the subprocess adapter's env-cap block
+   reads it (headroom-only: `max(cap, kwarg)`); call sites keep their
+   original answer-sized `max_tokens`, so API-backend requests are
+   byte-identical — the first draft raised `max_tokens` itself, which
+   the adversarial review flagged unanimously as an API spend-behavior
+   change. The subprocess cap counts thinking; parsers stay the
+   contract gate; tight caps on loosely-parsed calls (rewrite)
+   unchanged.
 3. `348b601` navigator — vantage rule (judgment rule 6 + escalate
    contract): a claimed runtime capability limit needs runtime evidence
    (a failed attempt in the input); absent that, execute. Prompt-only,
    pin test on the sent system message.
 4. `3be1aa1` dispatch — continuation-aware project routing: the
    existing dispatch navigator call sees a recent-projects menu
-   (name/age/NEXT.md hint, mtime top-5) and may name one in its execute
-   payload; handle_task binds the pick only if it names an existing
-   project dir, stamps origin, passes it to handle(). Non-dispatch
-   navigator prompts stay byte-identical.
+   (name/age/NEXT.md hint, top-5 by max(dir, NEXT.md) mtime) and may
+   name one in its execute payload; handle_task binds the pick only if
+   it names a menu entry that is a real project dir resolving inside
+   the projects root (symlink escapes filtered at both the menu builder
+   and the binder, per review), stamps origin, passes it to handle().
+   Non-dispatch navigator prompts stay byte-identical.
 5. closure — skip observability: the swallowed exception now logs at
    warning and lands in the skip event as `skip_detail`;
    `skip_reason="exception"` stays pinned. Fail-open posture unchanged
    (design question, deferred).
+
+Post-land adversarial review (3 Codex lenses, per-chunk discipline):
+docs/history/2026-07-27-tire-runs-adversarial-review.md — 6 findings,
+3/3 spot-verified mechanisms real, remediated same session (symlink
+containment, menu membership, output_cap_tokens rework, menu
+robustness/ranking, two known-gap pins on the `_path_shaped`
+residuals).
 
 Deferred findings (token-lean fetch/mid-step brake, success accounting
 vs answer quality, fail-open posture, persona misroute) → BACKLOG

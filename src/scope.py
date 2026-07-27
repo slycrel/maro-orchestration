@@ -41,6 +41,15 @@ from typing import List, Optional
 
 log = logging.getLogger(__name__)
 
+
+def _goal_reasoning_cap() -> int:
+    """planner.GOAL_REASONING_MAX_TOKENS via late import (no module cycle)."""
+    try:
+        from planner import GOAL_REASONING_MAX_TOKENS
+        return int(GOAL_REASONING_MAX_TOKENS)
+    except Exception:
+        return 4000
+
 # ---------------------------------------------------------------------------
 # Inversion prompt
 # ---------------------------------------------------------------------------
@@ -526,11 +535,7 @@ def generate_resolved_intent(
     goal: str,
     adapter,
     *,
-    # 4000 not answer-sized: on the subprocess backend max_tokens becomes the
-    # CLAUDE_CODE_MAX_OUTPUT_TOKENS cap, which counts THINKING tokens — 1200
-    # (→1500 floor) killed scope on both real-goal runs 4d20b559/1bfd0894.
-    # Same rationale as planner.GOAL_REASONING_MAX_TOKENS.
-    max_tokens: int = 4000,
+    max_tokens: int = 1200,
     temperature: float = 0.3,
     ancestry_context: str = "",
     allow_proxy_fallback: bool = True,
@@ -593,11 +598,7 @@ def generate_scope(
     goal: str,
     adapter,
     *,
-    # 4000 not answer-sized: on the subprocess backend max_tokens becomes the
-    # CLAUDE_CODE_MAX_OUTPUT_TOKENS cap, which counts THINKING tokens — 1200
-    # (→1500 floor) killed scope on both real-goal runs 4d20b559/1bfd0894.
-    # Same rationale as planner.GOAL_REASONING_MAX_TOKENS.
-    max_tokens: int = 4000,
+    max_tokens: int = 1200,
     temperature: float = 0.3,
     ancestry_context: str = "",
     allow_proxy_fallback: bool = True,
@@ -641,6 +642,11 @@ def generate_scope(
             temperature=temperature,
             no_tools=True,
             purpose="scope",
+            # CLI-cap headroom only (llm.py output_cap_tokens): the
+            # subprocess cap counts thinking and 1200 (→1500 floor) killed
+            # scope on both real-goal runs 4d20b559/1bfd0894. API backends
+            # ignore this kwarg — their output cap stays max_tokens.
+            output_cap_tokens=_goal_reasoning_cap(),
         )
     except Exception as exc:
         log.warning("scope: adapter.complete failed: %s", exc)

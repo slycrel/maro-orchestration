@@ -236,8 +236,19 @@ def handle_task(
                                 .get("project") or "").strip()
                     if _cand and "/" not in _cand and "\\" not in _cand \
                             and ".." not in _cand:
+                        from navigator_shadow import _recent_projects_menu
                         from orch_items import projects_root as _proots
-                        if (_proots() / _cand).is_dir():
+                        # The pick must name a menu entry — the menu is the
+                        # offer, not a hint about the namespace. Recomputing
+                        # it here can race a just-deleted project; rejection
+                        # then equals pre-menu behavior (fresh slug), which
+                        # is the safe side. resolve() containment guards the
+                        # symlink case is_dir() alone would follow.
+                        _root = _proots()
+                        _target = _root / _cand
+                        if (_cand in {m.get("name") for m in _recent_projects_menu()}
+                                and _target.is_dir()
+                                and _target.resolve().is_relative_to(_root.resolve())):
                             _nav_project = _cand
                             if isinstance(_origin.get("dispatch_navigator"), dict):
                                 _origin["dispatch_navigator"]["project"] = _cand

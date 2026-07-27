@@ -350,6 +350,44 @@ def test_subprocess_no_tools_cap_above_floor_passes_through(monkeypatch):
     assert env_extra == {"CLAUDE_CODE_MAX_OUTPUT_TOKENS": "9000"}
 
 
+def test_subprocess_output_cap_tokens_widens_env_cap_only(monkeypatch):
+    """output_cap_tokens gives contract calls that must REASON over a full
+    goal (decompose lanes, cuts, scope) CLI-cap headroom without touching
+    max_tokens: the CLI cap counts thinking tokens, so answer-sized caps
+    killed planning on real goals (4d20b559, 1bfd0894). API backends get
+    the same answer-sized max_tokens as before and absorb the kwarg —
+    their spend behavior is byte-identical."""
+    a = ClaudeSubprocessAdapter()
+    mock_result = MagicMock()
+    mock_result.returncode = 0
+    mock_result.stdout = _make_subprocess_output("ok")
+    mock_result.stderr = ""
+
+    with patch("llm._run_subprocess_safe", return_value=mock_result) as mock_run:
+        a.complete([LLMMessage("user", "decompose this goal")], no_tools=True,
+                   max_tokens=700, output_cap_tokens=4000)
+
+    env_extra = mock_run.call_args.kwargs["env_extra"]
+    assert env_extra == {"CLAUDE_CODE_MAX_OUTPUT_TOKENS": "4000"}
+
+
+def test_subprocess_output_cap_tokens_never_tightens(monkeypatch):
+    """The kwarg is headroom only — a stale/low value cannot lower the cap
+    below what max_tokens/the floor would have set."""
+    a = ClaudeSubprocessAdapter()
+    mock_result = MagicMock()
+    mock_result.returncode = 0
+    mock_result.stdout = _make_subprocess_output("ok")
+    mock_result.stderr = ""
+
+    with patch("llm._run_subprocess_safe", return_value=mock_result) as mock_run:
+        a.complete([LLMMessage("user", "summarize")], no_tools=True,
+                   max_tokens=9000, output_cap_tokens=100)
+
+    env_extra = mock_run.call_args.kwargs["env_extra"]
+    assert env_extra == {"CLAUDE_CODE_MAX_OUTPUT_TOKENS": "9000"}
+
+
 def test_subprocess_agentic_call_not_token_capped(monkeypatch):
     """Agentic (tool-holding) calls stay uncapped: their multi-turn output
     legitimately exceeds utility-sized caps, and the CLI's overrun behavior
