@@ -4693,4 +4693,10 @@ Dormant (deliberately parked, not dropped):
   worked toward I suspect." His summary of the batch: "all claims and
   doc-guidance as much as anything." All four park reasons now stated
   falsifiably in Dormant threads (this doc) for the next census to
-  test.
+  test. *(Same-session addendum: drift find #6 — director-clarification
+  YOLO half "anchored nowhere current" — resolved as a census
+  overcount: `SESSION_PROTOCOL_DESIGN.md` carries ask-on-ambiguity +
+  YOLO opt-out + user-level defaults in both its msg-4 table row (:130)
+  and its inputs section (:477); the ACTIVE SP arc owns it. With #5 and
+  #7 closed earlier, **all seven census drift finds are now
+  dispositioned**.)*
