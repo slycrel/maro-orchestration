@@ -34,6 +34,7 @@ BACKLOG, VISION, CLAUDE, README…) are living by definition and carry no frontm
 | What did the per-step learning adversarial review find? (verdict-blind extraction, graveyard leak, validation accrual) | `history/2026-07-27-per-step-learning-adversarial-review.md` (7 findings, 6/7 verified, 0 hallucinated; thirteenth clean round) |
 | What does an escalation payload carry? (single-chasm decision line, family-ROI recurrence line) | `history/2026-07-27-escalation-payload.md` (§9.6 simple-first; three emit sites; telegram leads with the ask) |
 | What did the §9.6 adversarial review find? (diagnose_loop side effect, unreadable-ledger false "first", useless count cap) | `history/2026-07-27-escalation-payload-adversarial-review.md` (3 findings, 3/3 verified, 0 hallucinated; fourteenth clean round) |
+| What open threads exist, in what state? (premise-drift finds, ACTIVE/PARKED split, marker-convention rules) | `history/2026-07-28-thread-census.md` (star use #3; 56 threads / 7 states; 7 premise-drifts, 1 closed on the spot; 8 doc currency fixes; 10/10 sweep spot-checks held) |
 | What are we deliberately NOT building? | `ARCHITECTURE_NON_GOALS.md` |
 | What should Maro be able to do? (example goals, test corpus, pre-installed skill target) | `CAPABILITIES.md` (living catalog — add real asks as they happen) |
 | Two-box / Hermes dispatch, interactive goals, effort-based spend UX, mid-flight injection? | `SESSION_PROTOCOL_DESIGN.md` (dormant-design; the 2026-07-15 skeleton, iterate there) |

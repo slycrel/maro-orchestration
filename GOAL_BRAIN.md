@@ -2341,13 +2341,27 @@ Active:
 Dormant (deliberately parked, not dropped):
 - Thread Architecture implementation (`arch/thread-navigator`) — parked pending
   goal-brain sequencing; fix-in-place arc takes precedence.
+  **Census 2026-07-28: park reason EXPIRED** — sequencing is COMPLETE (this
+  section, above). Premise-drift find #3; the park may still be right, but it
+  needs a current reason or a resurrection call. In the proposed cleanup batch
+  (`docs/history/2026-07-28-thread-census.md` §2).
 - Phase 65 deeper constraint-orchestration expansion — deferred; the
   single-persona ResolvedIntent MVE was enabled on the audited runtime box in
   2026-07-09, while this unconfigured M1 and fresh installs remain OFF.
+  *(Census 2026-07-28: reason restated falsifiably — parked because the
+  "1-shot-first frame" question is unresolved (CONSTRAINT_ORCHESTRATION_REVIEW
+  :239 = REASSESS_LINEAGE:106). Still true; healthy park.)*
 - Mage correspondence memory — v1 sketch exists (typed-edge graph walk, sympathy
   weights); downstream of recall() shape.
+  **Census 2026-07-28: park reason EXPIRED** — recall() shape shipped
+  2026-06-10/11 (this section, above). Premise-drift find #4; in the cleanup
+  batch.
 - Backlogged repairs: 10 pre-existing test failures; fragile fail-safes in
   parallel/DAG step runners (BACKLOG.md, 2026-06-10).
+  **Census 2026-07-28: claim STALE** — the suite has been green through the
+  entire swarm arc (land.sh gates on it). Premise-drift find #5; the
+  test-failures half needs strike-or-verify, the fail-safe-fragility half may
+  still be real. In the cleanup batch.
 
 ## Open questions (system-maintained)
 
@@ -4559,3 +4573,34 @@ Dormant (deliberately parked, not dropped):
   multi-year work projects to learn thinking patterns — parked behind
   the boundary decree; narrated-pattern capture (like this session) is
   the sanctioned form.
+
+- **2026-07-28 — Thread census LANDED (star use #3) + house-style
+  iteration protocol (Jeremy).** (1) Census:
+  `docs/history/2026-07-28-thread-census.md` — 56 threads / 7 states
+  across BACKLOG, GOAL_BRAIN, MILESTONES, 123 docs, auto-memories.
+  Headline: **7 premise-drift finds** (heartbeat-gate design on removed
+  local-model substrate; next-leap packaging with cleared blocker;
+  thread-arch + Mage park reasons expired; "10 pre-existing test
+  failures" claim stale; director-clarification YOLO half unanchored;
+  BACKLOG's own C4 entry claiming container off — the last resolved on
+  the spot: box ON since 2026-07-16, **C4 CLOSED**, entry archived to
+  BACKLOG_DONE). 8 doc surfaces currency-fixed in the census commit.
+  Convention rules the census validated: history docs never carry live
+  markers; doc-archival explicitly sweeps forward obligations; park
+  reasons stated as falsifiable claims. The 6-thread drift cleanup
+  batch + ACTIVE/PARKED split (cap 7) + proposals 2–4 await Jeremy.
+  (2) **Jeremy clarification (decree-class, runtime-piped):** the
+  recorded workflow spec is a partial dump — ">30 years... reflexes
+  and intuitions I likely can't directly name"; iteration protocol =
+  after a pass or two he shares real work changes and we **quiz him on
+  the thought process** — "I'm a much better question answerer than an
+  essay writer." Piped to the runtime journal as: questions/escalations
+  to Jeremy should be quiz-shaped, never essay prompts. (3) His
+  work-side **CodeLikeJeremy skill PoC** offered and mined as
+  house-style pattern input (machine-local zip; artifacts stay out per
+  boundary decree; six stealable patterns in the BACKLOG house-style
+  entry — headline: a style doc with a regression harness).
+  (4) Method note for future recon delegation: the strict
+  verbatim-quote + file:line + open-vs-closed-disposition contract
+  produced the first 10/10-clean spot-verification sample in this
+  repo's recorded history (prior 30–78% hallucination) — reuse it.

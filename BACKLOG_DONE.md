@@ -8,7 +8,23 @@ Last split: 2026-04-16 (session 34).
 
 ---
 
-## Archived from BACKLOG 2026-07-27 (Jeremy's archiving pass)
+## Archived from BACKLOG 2026-07-28 (thread census — drift find #7)
+
+### C4 container flip — CLOSED 2026-07-16, discovered closed 2026-07-28
+
+The retained flip stub (burn-in trail archived 2026-07-27, below) read
+"The box runs `container: off` — the flip stays Jeremy's call." The
+thread census checked the live box: `executor.container: on` since
+2026-07-16 — Jeremy flipped it the morning after Hermes dispatch went
+live (SESSION_PROTOCOL_DESIGN §11 Q7: "I'm fine flipping it on… better
+in-practice testing on that harder, more secure edge"; all runs, no
+per-origin split). Fresh-install default stays OFF per
+CONTAINER_BURN_IN.md §6 — that half was a made decision, not a pending
+one. The primary work queue carried an already-decided Jeremy-gate for
+12 days; recorded as premise-drift find #7 in
+`docs/history/2026-07-28-thread-census.md`. Bookkeeping completed in
+the census commit: CONTAINER_EXECUTOR_DESIGN §9 C4-CLOSED note +
+SECURITY_MODEL §2 correction.
 
 Jeremy (2026-07-27, AFK note): "consider archiving on the backlog, I
 think it's getting pretty big." Everything below moved intact from

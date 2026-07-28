@@ -438,7 +438,9 @@ registers in `docs/DEFAULTS.md` per the defaults-registry decree.
 
 > **RATIFIED 2026-07-12 (Jeremy, all 8 as written — GOAL_BRAIN Decisions
 > 2026-07-12).** Numbers stay tunable; the shape is the commitment.
-> Implementation (§7 chunks 1–4) is unblocked and queued in MILESTONES.
+> Implementation (§7 chunks 1–4) shipped 2026-07-13 (see BACKLOG_DONE +
+> `docs/MIGRATION.md`); §7.5 post-1.0 hardening stays deferred by decree.
+> *(Line updated 2026-07-28, thread census — previously said "queued.")*
 
 1. **§2b — Packs exclude raw runs by default** (`--include-runs <id>` opt-in
    with per-run review). Privacy surface + evidence doesn't transfer.

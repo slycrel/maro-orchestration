@@ -123,6 +123,14 @@ Skills are procedural: "here's how to run the research loop." Even an `establish
 
 ## Open Questions (as of 2026-03)
 
+> **2026-07-28 (thread census):** superseded-in-part. The memory
+> direction was decided 2026-07-07 (memory-as-module behind
+> `src/memory_port.py`; see `docs/history/2026-07-04-memory-decision-brief.md`
+> and the memory-module arc). Read these four questions as historical
+> inputs to that decision, not as a live queue — the still-live
+> descendants (decay-trust unbuilt halves, Stage 4→5 promotion) are
+> tracked in THREAD_ARCHITECTURE #8 and BACKLOG.
+
 **Q: Should long-tier lessons decay?**
 Current decision: no. Medium decays; long is explicit promotion and stays until forgotten or canonized. Rationale: if something made it to long, it earned its place. Decay would require re-validation continuously, which is overhead without clear benefit.
 

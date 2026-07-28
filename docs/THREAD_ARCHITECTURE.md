@@ -4,7 +4,7 @@ status: dormant-design
 
 # Thread Architecture
 
-**Status:** Active design space. Sketched 2026-04-26 → 2026-04-27 in a planning-mode conversation between Jeremy and Claude. No implementation yet — this doc is the reference + decision log + open-question list. Branch: `arch/thread-navigator`.
+**Status:** Active design space. Sketched 2026-04-26 → 2026-04-27 in a planning-mode conversation between Jeremy and Claude. No implementation *arc* run yet, but 4 of the 9 open decisions below have since resolved in place (see §Open decisions annotations) and all 9 were adjudicated 2026-07 (Thread Architecture decisions brief). The original park reason ("pending goal-brain sequencing") expired when sequencing completed — re-adjudication queued via the 2026-07-28 thread census. Branch: `arch/thread-navigator`.
 
 **Companion docs:**
 - `docs/conversations/2026-04-26-thread-architecture.md` — literal conversation transcript that produced this doc. Read it for tone, examples, and where each idea came from.

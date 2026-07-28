@@ -56,7 +56,7 @@ exploration.
 |---|---|---|
 | Intent resolution / side-quests / "what does done mean" | `docs/INTENT_RESOLUTION_DESIGN.md` | Partially shipped (ResolvedIntent/Deliverable live); side-quest handling open |
 | Scope + constraint orchestration (Phase 65) | `docs/CONSTRAINT_ORCHESTRATION_DESIGN.md` + review | Scope+ResolvedIntent injection LIVE on this box since 2026-07-09 (SF-4 resolution; 2026-04-22 A/B: inject wins). Fresh installs: `scope_generation` OFF by default (no silent LLM spend). Deeper constraint-orchestration discussion deferred |
-| Adaptive execution | `docs/ADAPTIVE_EXECUTION_DESIGN.md` | Dormant design — not started |
+| Adaptive execution | `docs/ADAPTIVE_EXECUTION_DESIGN.md` | Phases A–C shipped 2026-04-15 (reassess/replan/restart/escalate live in loop_execute); Phase D (ExecutionPlan/memory layer) + closure-check unification still open (2026-07-28 census fix — this row said "not started" for months) |
 | Memory / graph / filesystem-vs-real-memory | `docs/history/2026-07-04-memory-decision-brief.md` (inputs: `docs/MEMORY_ARCHITECTURE.md`, `docs/KNOWLEDGE_CRYSTALLIZATION.md`) | Direction decided 2026-07-07: memory-as-module, 3rd-party bake-off behind `src/memory_port.py`; MILESTONES arc -1 |
 
 - GitHub: https://github.com/slycrel/maro-orchestration (renamed from openclaw-orchestration 2026-06-26; kept the `-orchestration` suffix rather than bare `maro`)

@@ -361,6 +361,34 @@ pointer.
   Mind the work/personal boundary decree: patterns transfer, work
   artifacts don't — the pass compares *workflows*, likely via Jeremy
   narrating the M1 side rather than this box reading it.
+- [ ] **Iteration protocol (Jeremy 2026-07-28):** the workflow spec in
+  the open-thread entry below is a *partial dump* by his own flag —
+  ">30 years... I've got reflexes and intuitions I likely can't
+  directly name." Protocol: after the first pass or two, he shares real
+  work-side changes and we **quiz him on the thought process behind
+  them** — "I'm a much better question answerer than an essay writer."
+  Interview-shaped elicitation, never essay requests. (Generalized to
+  the runtime decision journal same day: questions/escalations to
+  Jeremy should be quiz-shaped.)
+- [ ] **CodeLikeJeremy PoC as pattern input (Jeremy 2026-07-28):** his
+  work-side `/codeLikeJeremy` skill (machine-local zip at
+  `~/claude/strands-review-poc-master-skills-codeLikeJeremy.zip`) — a
+  measured behavioral profile from ~1,600 commits + 63 review comments,
+  with a regression harness. Work artifacts stay out of this repo
+  (boundary decree); the *patterns* are directly stealable for
+  HOUSE_STYLE.md: (a) descriptive-vs-prescriptive split — measured
+  behavior beside the written standard, divergences labeled
+  "Jeremy-specific, not incorrect"; (b) per-context profiles (style
+  varies by repo — the M1-vs-maro contrast, independently reinvented);
+  (c) author/reviewer asymmetry + **negative space as signal** (what he
+  does NOT push back on is data); (d) hedge-language as a
+  preference-vs-principle type marker; (e) a dated normative-override
+  layer that beats measured densities (our GOAL_BRAIN quoting
+  convention, rediscovered); (f) **the headline steal: a style doc
+  with a regression harness** — real-issue fixtures, roll the repo
+  back, fresh agent + skill makes the change, score against his actual
+  diff. Decree-with-tripwire applied to style; HOUSE_STYLE.md can be
+  tested the same way (fixtures = real maro sessions).
 
 ### Open-thread structure — beyond the backlog (DISCUSSION OPEN, updated 2026-07-28)
 
@@ -420,6 +448,19 @@ prototype of the runtime step-DAG. Jeremy: "we're organizing all of
 this to a degree on the way I think and I'll take that as a sign we're
 starting to really find some of the foundations."
 
+**Census DONE 2026-07-28** → `docs/history/2026-07-28-thread-census.md`
+(star use #3). 56 threads / 7 states; headline: **7 premise-drift
+finds** — 6 queued for re-adjudication as one proposed ACTIVE batch,
+1 (the C4 flip) resolved on the spot against live-box evidence — plus
+7 stale doc lines currency-fixed in the census commit. Marker
+convention validated with three rules the sweep forced: history docs
+never carry live markers; doc-archival explicitly sweeps forward
+obligations to BACKLOG/GOAL_BRAIN or declares them dead; every
+PARKED/BLOCKED entry states its reason as a **falsifiable claim** so a
+future pass can test it (the six drifts are exactly reasons falsified
+silently). Steps 2–4 above + the proposed ACTIVE/PARKED split (census
+§6, cap 7) await Jeremy's reaction.
+
 ### R6-E. lesson_text embeds truncated goal previews (anchoring risk) — watch-item
 
 The one open residual of the R6 VERIFY_LEARN_ARC V4/R5 V4/V5 review
@@ -429,15 +470,6 @@ is ON (since 2026-07-14) so the A/B is running; first live numbers
 (49/120) — directional positive, small n. Re-evaluate the goal-preview
 anchoring risk once the comparison has real n; pre-optimizing the prompt
 before then is guessing.
-
-### C4 container flip — Jeremy-gated (burn-in complete)
-
-Mechanics + box burn-in are DONE (full record archived to BACKLOG_DONE
-2026-07-27; evidence `docs/CONTAINER_BURN_IN.md` §5b): structural
-containment probe CONTAINED, dogfood no-regression green, two mount
-findings fixed live. The box runs `container: off` — the flip stays
-Jeremy's call; mark C4 shipped in design §9 + MILESTONES once flipped.
-Fresh-install default unchanged.
 
 ### 22. Capabilities catalog — open residuals (shipped trail archived)
 

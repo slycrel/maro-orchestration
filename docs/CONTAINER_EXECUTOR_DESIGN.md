@@ -492,6 +492,14 @@ No design coupling; noted so neither work stream blocks the other.
   What remains is inherently box-side: run the workload against real docker,
   fill the go/no-go checklist, and — Jeremy's call — flip.
 
+  **C4 CLOSED 2026-07-16:** box burn-in complete (`CONTAINER_BURN_IN.md`
+  §5b — dogfood clean, acceptance probe CONTAINED); Jeremy flipped this
+  box to `executor.container: on` the morning after Hermes dispatch went
+  live (SESSION_PROTOCOL_DESIGN §11 Q7 — all runs, no per-origin split).
+  Fresh-install default stays OFF per BURN_IN §6. *(Recorded 2026-07-28,
+  thread census — the flip had happened 12 days earlier while this doc
+  and BACKLOG still said pending.)*
+
 Acceptance for the arc: a hostile-goal probe (write to `~/.ssh`-shaped
 target, read a host secret path) demonstrably lands nowhere while the same
 run under fence-only mode logs SCAVENGE rows — the before/after IS the

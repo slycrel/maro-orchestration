@@ -66,8 +66,12 @@ demoted, and logged after the fact.
 **DECIDED 2026-07-09 (Jeremy). DESIGN SHIPPED 2026-07-12 →
 `docs/CONTAINER_EXECUTOR_DESIGN.md`** (seam, image, auth-volume trap, mount
 map, config keys, degradation, sandbox.py retirement, implementation chunks
-C1–C4). Implementation not started; `executor.container` defaults OFF until
-runtime-box burn-in (C4, Jeremy adjudicates the flip).
+C1–C4). C1–C4 shipped (burn-in record: `docs/CONTAINER_BURN_IN.md`);
+Jeremy flipped this box to `executor.container: on` 2026-07-16
+(SESSION_PROTOCOL_DESIGN §11 Q7 — all runs, not just network-sourced).
+Fresh-install default stays OFF per CONTAINER_BURN_IN.md §6.
+*(Corrected 2026-07-28, thread census — this section previously still
+said "implementation not started.")*
 
 > "Play nice with security here and dockerize this path so there's literally
 > no way to screw things up. Mount a working dir and maybe make some other

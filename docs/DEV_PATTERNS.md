@@ -24,8 +24,11 @@ era citations are the receipts (`docs/KNOWLEDGE_JOURNEY.md`).
 2. **Consumer-first.** Every store, emitter, or signal names its acting
    consumer in the same plan — no write side without its read side landing
    together. The repo's most-repeated wound: six half-closed loops in six
-   eras. *(era 10; V2/V5 shipped this way · deterministic-home: wiring
-   census, chunk 8 — this check leaves when the census assertion lands)*
+   eras. *(era 10; V2/V5 shipped this way · deterministic-home: the
+   DEFAULTS half landed chunk 8 (`test_every_documented_key_has_a_reader`);
+   the stores/guards census half is still BACKLOG'd behind a registration
+   convention — this check leaves when THAT lands, not before.
+   Tag re-pointed 2026-07-28, thread census.)*
 3. **Decree-with-tripwire.** Every principle adopted names the test that
    could fail it, ideally landing first and failing. A principle without a
    tripwire waits to be rediscovered. *(the meta-finding, era 12 ·

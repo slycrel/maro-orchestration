@@ -477,9 +477,10 @@ building each stage:
 - **Director clarification design** (`project_director_clarification`:
   ask-on-ambiguity, YOLO opt-out, user-level defaults) — msg 4 is its
   transport; §5's clarify-during-planning is its new timing.
-- **Portable learning** (chunks 1–4 shipped; 8 provisional decisions await
-  Jeremy) — §7's sync flow is the next chunk when the arc needs it.
-- **Hosted-free small-LLM tier** (BACKLOG #25, awaiting API keys) — candidate
+- **Portable learning** (chunks 1–4 shipped; all 8 decisions ratified
+  2026-07-12) — §7's sync flow is the next chunk when the arc needs it.
+- **Hosted-free small-LLM tier** (LIVE on this box since 2026-07-16 —
+  gemini-flash-lite/groq ladder; was "awaiting API keys") — candidate
   lane for cheap protocol chatter (effort phrasing, progress summaries) that
   shouldn't burn the main quota.
 - **Time blindness** (Vision) — interactive sessions make "the system's sense
