@@ -439,6 +439,55 @@ def test_write_runs_index_handles_no_runs(monkeypatch, tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# reading page (docs/READING_QUEUE.md → reading.html, 2026-07-28)
+# ---------------------------------------------------------------------------
+
+def test_parse_reading_queue_takes_queue_section_only():
+    text = (
+        "# Reading Queue\n\nprose intro\n\n## Queue\n\n"
+        "| Added | Doc | Why / decision needed |\n"
+        "|---|---|---|\n"
+        "| 2026-07-28 | docs/history/census.md | decide splits |\n"
+        "\n## Done\n\n"
+        "| Added | Doc | Resolved |\n|---|---|---|\n"
+        "| 2026-07-01 | docs/old.md | read |\n"
+    )
+    assert lr._parse_reading_queue(text) == [
+        {"added": "2026-07-28", "doc": "docs/history/census.md", "why": "decide splits"}
+    ]
+
+
+def test_write_reading_page_links_github(monkeypatch, tmp_path):
+    qdoc = tmp_path / "READING_QUEUE.md"
+    qdoc.write_text(
+        "## Queue\n\n| Added | Doc | Why |\n|---|---|---|\n"
+        "| 2026-07-28 | docs/history/census.md | decide splits |\n"
+    )
+    monkeypatch.setattr(lr, "_READING_QUEUE_DOC", qdoc)
+    out = lr.write_reading_page(tmp_path)
+    content = Path(out).read_text()
+    # Not self-hosted: rows link to the GitHub-rendered copy on main.
+    assert "https://github.com/slycrel/maro-orchestration/blob/main/docs/history/census.md" in content
+    assert "decide splits" in content
+    assert 'href="index.html"' in content  # nav tab back to Runs
+
+
+def test_write_reading_page_missing_queue_doc_is_nonfatal(monkeypatch, tmp_path):
+    monkeypatch.setattr(lr, "_READING_QUEUE_DOC", tmp_path / "nope.md")
+    out = lr.write_reading_page(tmp_path)
+    assert "Queue is empty" in Path(out).read_text()
+
+
+def test_runs_index_carries_reading_tab_and_writes_reading_page(monkeypatch, tmp_path):
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+    import runs
+    lr.write_runs_index(force=True)
+    root = Path(runs.runs_root())
+    assert 'href="reading.html"' in (root / "index.html").read_text()
+    assert (root / "reading.html").exists()
+
+
+# ---------------------------------------------------------------------------
 # 2026-07-08 adversarial review fixes
 # ---------------------------------------------------------------------------
 

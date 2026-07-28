@@ -4604,3 +4604,33 @@ Dormant (deliberately parked, not dropped):
   verbatim-quote + file:line + open-vs-closed-disposition contract
   produced the first 10/10-clean spot-verification sample in this
   repo's recorded history (prior 30–78% hallucination) — reuse it.
+
+- **2026-07-28 — Census decisions ratified + quiz-decree amended +
+  docs-surfacing detour (Jeremy).** (1) **Quiz-decree amendment
+  (decree-class, runtime-piped 83f06acf superseding e2124d71):** Jeremy:
+  "'never' is pretty strong... use the style that's best to get the
+  answer; actionable unlocks are better questions, I like to ramble and
+  answer more open-ended questions with talking about context." Style
+  matches purpose — concrete options for actionable unlocks, open-ended
+  welcome for context-gathering. (2) **ACTIVE set adopted as proposed**
+  ("Sure, sounds good"): census §6 split — threads 1–5 (session-protocol
+  arc, NOW rung, house-style, thread-structure, chunk-9 remainder) +
+  drift-cleanup batch + 1 free slot, cap 7. Free-slot trio (closure-check
+  unification, depth-cap unification, backend-resilience pair) all
+  sanctioned to examine, no order preference. Drift-batch items 1–4 held
+  for his walkthrough decisions (he asked for plain-language context —
+  shorthand alone didn't land; calibration data for future decision
+  asks). (3) **Docs-surfacing detour (decree-class):** reading .md over
+  ssh is a bad surface for him — the viz server gains a **Reading tab**
+  (`reading.html` beside the runs index) listing landed docs awaiting
+  his read/decision; rows link to the **GitHub-rendered copy on main**,
+  nothing self-hosted ("better just as a link to the github-pushed
+  artifact so we don't reinvent the wheel"). Source of truth =
+  `docs/READING_QUEUE.md` (living); rendered by loop_report at every
+  index regeneration; `reading.html` allowlisted by exact name in
+  viz_server. End-of-chunk discipline gains: when a landed doc awaits a
+  Jeremy decision, add a Queue row in the same commit. (4) **Dev
+  captain's log approved** ("thanks for not letting this slip") —
+  `docs/DEV_LOG.md` started this session: append-only, newest-first, one
+  paragraph + a Surprised-by line per session close (he loves the
+  surprise angle: "there are always angles that surprise").

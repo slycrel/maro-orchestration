@@ -2,9 +2,10 @@
 
 Design: BACKLOG.md "General-purpose visualization server". The core safety
 property under test is the path allowlist (`_resolve_allowed_path`): only
-"index.html" at the document root and "<run-dir-name>/build/**" are
-servable — everything else (source/, artifact/, metadata.json, traversal
-attempts) must be denied before any filesystem access.
+the named top-level pages ("index.html", "reading.html"),
+"<run-dir-name>/build/**", and prose "<run-dir-name>/artifact/*" files are
+servable — everything else (source/, artifact/ payloads, metadata.json,
+traversal attempts) must be denied before any filesystem access.
 """
 
 import sys
@@ -43,6 +44,19 @@ def rundir_root(tmp_path):
 
 def test_allows_root_index(rundir_root):
     assert vs._resolve_allowed_path("/index.html", rundir_root) == (rundir_root / "index.html").resolve()
+
+
+def test_allows_root_reading_page(rundir_root):
+    """The Reading tab (docs/READING_QUEUE.md rendered by loop_report) sits
+    next to index.html at the document root — 2026-07-28 docs-surfacing."""
+    assert vs._resolve_allowed_path("/reading.html", rundir_root) == (rundir_root / "reading.html").resolve()
+
+
+def test_denies_arbitrary_root_files(rundir_root):
+    """Top-level allowance is by exact name, not by extension — a stray file
+    dropped in runs_root must not become servable."""
+    assert vs._resolve_allowed_path("/evil.html", rundir_root) is None
+    assert vs._resolve_allowed_path("/metadata.json", rundir_root) is None
 
 
 def test_allows_build_report(rundir_root):

@@ -367,9 +367,12 @@ pointer.
   directly name." Protocol: after the first pass or two, he shares real
   work-side changes and we **quiz him on the thought process behind
   them** — "I'm a much better question answerer than an essay writer."
-  Interview-shaped elicitation, never essay requests. (Generalized to
-  the runtime decision journal same day: questions/escalations to
-  Jeremy should be quiz-shaped.)
+  Interview-shaped elicitation for actionable unlocks; open-ended
+  questions stay welcome for context-gathering — his same-day
+  correction: "'never' is pretty strong... I like to ramble and answer
+  more open-ended questions with talking about context." (Runtime
+  journal amended accordingly: 83f06acf supersedes e2124d71 — style
+  matched to purpose, not quiz-always.)
 - [ ] **CodeLikeJeremy PoC as pattern input (Jeremy 2026-07-28):** his
   work-side `/codeLikeJeremy` skill (machine-local zip at
   `~/claude/strands-review-poc-master-skills-codeLikeJeremy.zip`) — a

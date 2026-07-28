@@ -43,6 +43,8 @@ BACKLOG, VISION, CLAUDE, README…) are living by definition and carry no frontm
 | What config flags exist, their defaults, why, and flip effects? | `DEFAULTS.md` (census-enforced by `tests/test_defaults_doc.py`) |
 | Where may workers write? (write fence) | `BOUNDED_WORKSPACE.md` |
 | What events go to the captain's log? | `CAPTAINS_LOG_EVENTS.md` |
+| What landed docs await Jeremy's read/decision? | `READING_QUEUE.md` (living; renders to the viz server's Reading tab at every index regeneration — GitHub links, nothing self-hosted) |
+| What happened in recent dev sessions? (narrative + surprises) | `DEV_LOG.md` (living; append-only dev captain's log, newest first) |
 | How does the navigator decide? | `NAVIGATOR_SCHEMA.md`; memory slice: `RECALL_DESIGN.md` |
 | How does an external substrate (OpenClaw/Hermes) call us? | `SUBSTRATE_INTEGRATION.md` |
 | Two-box Hermes-interface + Maro-orchestrator PoC recipe? | `../deploy/hermes/TWO_BOX_POC.md` (+ `../deploy/hermes/README.md` for the dispatch lane) |

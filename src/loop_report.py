@@ -580,6 +580,11 @@ details.global-ctx summary { cursor: pointer; color: var(--dim); font-size: 15px
 .footer-nav { margin-top: 16px; font-size: 13px; color: var(--dim); }
 .idx-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap; }
 .idx-header h1 { margin: 0 0 4px; }
+.nav-tabs { display: flex; gap: 4px; margin: 0 0 14px; border-bottom: 1px solid var(--border); }
+.nav-tabs a { padding: 5px 14px; color: var(--dim); text-decoration: none; font-size: 15px;
+              border: 1px solid transparent; border-bottom: none; border-radius: 6px 6px 0 0; }
+.nav-tabs a.active { color: var(--text); background: var(--panel); border-color: var(--border); }
+.nav-tabs a:hover { color: var(--text); }
 details.legend { flex-shrink: 0; max-width: 420px; text-align: right; }
 details.legend summary { cursor: pointer; color: var(--dim); font-size: 15px; }
 details.legend .meta { margin-top: 8px; line-height: 1.9; text-align: left; }
@@ -1512,6 +1517,16 @@ _INDEX_FILTER_JS = """
 """
 
 
+def _nav_tabs(active: str) -> str:
+    """Top-level page tabs shared by the runs index and the reading page."""
+    parts = []
+    for href, label, key in (("index.html", "Runs", "runs"),
+                             ("reading.html", "Reading", "reading")):
+        cls = ' class="active"' if key == active else ""
+        parts.append(f'<a{cls} href="{href}">{label}</a>')
+    return '<div class="nav-tabs">' + "".join(parts) + "</div>"
+
+
 def _render_index_html(summaries: List[dict]) -> str:
     rows = []
     statuses_seen: Dict[str, str] = {}  # raw effective-status value -> display label
@@ -1590,6 +1605,7 @@ def _render_index_html(summaries: List[dict]) -> str:
 <html><head><meta charset="utf-8"><title>Maro runs</title>
 <style>{_CSS}</style></head>
 <body>
+{_nav_tabs("runs")}
 <div class="idx-header">
 <div><h1>Runs</h1><div class="meta">{len(summaries)} run(s), newest first</div></div>
 <details class="legend"><summary>What do Status / Lane mean?</summary>
@@ -1657,9 +1673,101 @@ def write_runs_index(*, force: bool = False) -> Optional[str]:
         # follow-up debounced call, defeating the point of debouncing.
         with _index_write_lock:
             _last_index_write[key] = now
+        write_reading_page(root)
         return str(out)
     except Exception:
         log.warning("runs index write failed", exc_info=True)
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Reading page — repo docs queued for Jeremy, served next to the runs index
+# ---------------------------------------------------------------------------
+
+_READING_QUEUE_DOC = Path(__file__).resolve().parent.parent / "docs" / "READING_QUEUE.md"
+_GITHUB_BLOB_BASE = "https://github.com/slycrel/maro-orchestration/blob/main/"
+
+
+def _parse_reading_queue(text: str) -> List[dict]:
+    """Rows of the '## Queue' table in docs/READING_QUEUE.md.
+
+    Forgiving by design — the queue is a hand-edited file: any 3+-cell
+    table row inside the Queue section counts; header and separator rows
+    are skipped; other sections (Done) are ignored.
+    """
+    entries: List[dict] = []
+    in_queue = False
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            in_queue = stripped.lstrip("# ").lower().startswith("queue")
+            continue
+        if not in_queue or not stripped.startswith("|"):
+            continue
+        cells = [c.strip() for c in stripped.strip("|").split("|")]
+        if len(cells) < 3:
+            continue
+        if cells[0].lower() == "added" or set(cells[0]) <= set("-: "):
+            continue
+        entries.append({"added": cells[0], "doc": cells[1], "why": cells[2]})
+    return entries
+
+
+def _render_reading_html(entries: List[dict]) -> str:
+    rows = []
+    for e in entries:
+        doc = e["doc"].strip("`")
+        href = _GITHUB_BLOB_BASE + doc.lstrip("/")
+        rows.append(
+            "<tr>"
+            f'<td class="meta">{_esc(e["added"])}</td>'
+            f'<td><a href="{_esc(href)}" target="_blank" rel="noopener">{_esc(doc)}</a></td>'
+            f'<td>{_esc(e["why"])}</td>'
+            "</tr>"
+        )
+    body_rows = "".join(rows) if rows else (
+        '<tr><td colspan="3" class="meta">Queue is empty — nothing awaiting a read.</td></tr>'
+    )
+    return f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Maro reading queue</title>
+<style>{_CSS}</style></head>
+<body>
+{_nav_tabs("reading")}
+<div class="idx-header">
+<div><h1>Reading</h1><div class="meta">{len(entries)} doc(s) awaiting a read/decision — links open the GitHub-rendered copy on main</div></div>
+</div>
+<table class="idx-table">
+<tr><th>Added</th><th>Doc</th><th>Why / decision needed</th></tr>
+{body_rows}
+</table>
+</body></html>
+"""
+
+
+def write_reading_page(root: Optional[Path] = None) -> Optional[str]:
+    """Render docs/READING_QUEUE.md into `runs_root()/reading.html`. Never raises.
+
+    The queue is repo-side truth, hand-edited and landed alongside the docs
+    it points at; this just makes it reachable from the run-visibility
+    server without SSH. Links go to GitHub's rendered copy on main —
+    nothing is self-hosted (Jeremy 2026-07-28: "better just as a link to
+    the github-pushed artifact so we don't reinvent the wheel").
+    """
+    try:
+        if root is None:
+            from runs import runs_root
+            root = runs_root()
+        root = Path(root)
+        root.mkdir(parents=True, exist_ok=True)
+        try:
+            text = _READING_QUEUE_DOC.read_text(encoding="utf-8")
+        except OSError:
+            text = ""
+        out = root / "reading.html"
+        _atomic_write_text(out, _render_reading_html(_parse_reading_queue(text)))
+        return str(out)
+    except Exception:
+        log.warning("reading page write failed", exc_info=True)
         return None
 
 
