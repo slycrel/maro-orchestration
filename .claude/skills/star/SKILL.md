@@ -272,3 +272,16 @@ its own:
 - **Adjudicate at swarm-review arc end** (or after 5 uses, whichever
   first) — verdict written to GOAL_BRAIN Decisions either way. No silent
   half-death.
+
+**ADJUDICATED 2026-07-28 (Jeremy): KEEP.** At 2 uses, both met the keep
+signal (use 1: stop-path survey seam map — ~50 seams/11 families the
+normal flow hadn't surfaced; use 2: recon/diagnosis contract + cap-stuck
+numbers). No kill signal fired. Standing intent: keep growing the skill
+as the workflow evolves. Anti-prompt-soup rules now in force: additions
+must be contract changes or distilled principles (war stories go to
+history docs, this file gets the rule + a pointer); consolidation pass
+when the file doubles or ~3 arcs pass, whichever first, archiving the
+prior version (playbook-curation discipline); the DEV_PATTERNS
+graduation valve applies — anything that gains a deterministic home
+(census/test) leaves this file. A runtime port of this contract is
+proposed as the NOW retry rung — see BACKLOG "NOW retry rung".

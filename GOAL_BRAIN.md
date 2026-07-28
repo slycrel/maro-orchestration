@@ -4503,3 +4503,30 @@ Dormant (deliberately parked, not dropped):
   shape; the orch.py-trio removal residual now rides the Phase 38
   subpackage entry. Verified no-loss by line set-difference (every
   removed line present in the archive).
+
+- **2026-07-28 — Decisions (Jeremy): star KEEP + NOW retry rung +
+  both-lane testing + house-style doc.** (1) Star dev-skill alpha
+  adjudicated **KEEP** at 2 uses ("I'd like to keep it around and keep
+  growing the skill as we continue to evolve our workflow") — both uses
+  met the pre-registered keep signal; verdict + anti-prompt-soup
+  maintenance rules recorded in `.claude/skills/star/SKILL.md`
+  (additions = distilled principles only; consolidate on double-or-3-
+  arcs with archive-before-rewrite; DEV_PATTERNS graduation valve).
+  (2) **NOW retry rung approved as a build item** ("I like the rung"):
+  failure-class-routed ladder NOW → artifact-seeded retry / runtime
+  star → AGENDA; corpus-scan findings, prereqs (NOW provenance
+  stamping; `_is_complex_directive` reachability check — zero live
+  firings found), and the pre-registered 3-arm experiment live in the
+  BACKLOG entry "NOW retry rung". (3) **Decree: experiment matrices run
+  BOTH lanes** — the mature workspace (with accrued learning) and a
+  freshly minted workspace (without); learning-delta is a first-class
+  measurement axis, not a confound. Runtime-piped same day. (4) "We
+  should write down our dev approach... house style is meaningfully
+  impactful... hard to replicate in a vacuum on a new machine" →
+  HOUSE_STYLE doc BACKLOG'd with proposed shape (consolidate the
+  workflow loop; import the machine-local feedback-class auto-memories
+  into the repo — the un-replicable half; own maintenance cadence).
+  (5) Open-thread structure discussion OPENED (linear chat vs
+  branching work; "not sure just adding to the backlog is quite
+  enough") — census-first proposal in BACKLOG "Open-thread structure";
+  no structure committed until the census shows the real shape.

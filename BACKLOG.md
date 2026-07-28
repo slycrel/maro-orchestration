@@ -269,6 +269,107 @@ Container-on day-one findings (2026-07-16, two dispatched verification runs):
   exit's record guarantee).
 
 
+### NOW retry rung — failure-class-routed ladder: NOW → artifact retry / star → AGENDA (OPENED 2026-07-28, Jeremy)
+
+Jeremy's ask: a middle rung between a failed NOW one-shot and a full
+AGENDA run — "run it alongside a failed NOW result; I wonder what the
+success rate would be over a strictly prompted NOW... or if the 'here's
+the failure artifacts, try again' is just as good." Agreed hypothesis:
+route by failure shape — shallow failures (missing detail, format,
+unfetched link) → artifact-seeded NOW retry; structural failures
+(multi-verb pipeline, needs tools/verification, "a single completion
+can't do the work") → star-shaped mini-orchestration (runtime port of
+the `.claude/skills/star` contract: master owns taste+judgement,
+serial, 0..n discovered steps, typed stops); star-stuck → full AGENDA.
+The §9.6 family-ROI line is the router's evidence base.
+
+What exists today (verified in handle.py 2026-07-28): pre-execution
+`_is_complex_directive` now→agenda escalation (default ON — but zero
+live firing records found in metadata/memory/logs; verify reachability
+before building on it); post-execution `_verify_now_outcome`
+self-verdict demotion (task-path only; interactive keeps raw speed);
+`_now_escalation_context` stash carries the failed quick answer into an
+escalated agenda run. The rung slots between demotion and full
+escalation.
+
+**2026-07-28 corpus scan** (726 runs/ metadata files):
+- 195 NOW runs: 59 done / 7 incomplete / 129 error — errors are ALL
+  2026-05 broken-era noise ("Define success criteria" repeated), not
+  signal.
+- **Organic failure corpus ≈ 1.** Six of the 7 incompletes are one
+  synthetic demotion-fix test (2026-06-11 nonexistent-binary); the one
+  real case is the 2026-07-02 'comm' ask ("actually run them" —
+  tool-requiring, exactly the structural class the rung targets).
+- Real-world NOW asks on record (~6, mostly succeeded because easy):
+  Manti gas, HTTP 429, worth-my-time link triage, what-time-is-it,
+  system status, BST one-liner. `docs/CAPABILITIES.md` Tier 1–2 rows
+  are the richer seed corpus — Manti Run 1 is the archetype (NOW
+  answered from stale model knowledge, FAILED the contract; later fixed
+  by pre-routing; the rung is the post-execution answer for what
+  routing doesn't catch).
+- Side-find: NOW runs carry NO provenance stamps
+  (organic/smoke/control stamping shipped for loop runs only) — the
+  organic corpus is smoke-contaminated ("say the word ok"). Stamp NOW
+  runs before any organic A/B.
+
+- [ ] Verify `_is_complex_directive` escalation actually fires live
+  (reachability check before building the ladder around it).
+- [ ] Provenance-stamp NOW-lane runs (prereq for organic measurement).
+- [ ] Build the rung: on NOW demotion, route by failure shape → (i)
+  artifact-seeded NOW retry (ask + failed answer + demotion reason) or
+  (ii) runtime star executor; star-stuck → AGENDA with full context.
+  Consumer-first: ships with liveness test + captain's-log events.
+- [ ] Pre-registered experiment, 3 arms on the same seeds: (a) plain
+  re-prompt, (b) artifact-seeded retry, (c) artifact-seeded star.
+  Prediction on record (2026-07-28): (b) beats (a) clearly; (b) ≈ (c)
+  on shallow failures, (c) wins on structural. Seeds: CAPABILITIES
+  Tier 1–2 asks + authored structural-failure NOW asks (organic corpus
+  too thin). Score on the done-vs-achieved ledger.
+- [ ] **Both-lane requirement (Jeremy decree 2026-07-28):** run the
+  matrix in the mature workspace (with accrued learning) AND a freshly
+  minted workspace (without) — learning-delta is a first-class
+  measurement axis. Reuse the benchmark-cell isolation machinery
+  (twentieth pass).
+
+### Dev-approach "house style" doc + intentionality loop (OPENED 2026-07-28, Jeremy)
+
+Jeremy: "We should write down our dev approach somewhere in a guidance
+doc... our learned-over-time 'house style' is meaningfully impactful,
+and maybe deserves its own intentionality loop... would be hard to
+replicate in a vacuum on a new machine."
+
+Gap analysis (2026-07-28): much exists but is scattered — CLAUDE.md
+(discipline rules), docs/DEV_PATTERNS.md (taste/judgement),
+docs/CODING_NOTES.md (coding posture), the adversarial-review + star
+skills — and the genuinely un-replicable part is the ~25
+feedback_*/project_* auto-memories in `~/.claude` (machine-local, NOT
+in the repo). Proposed shape (awaiting Jeremy's reaction): one
+`docs/HOUSE_STYLE.md` that (a) writes down the workflow loop itself
+(chunk → land → cross-model adversarial review → verify-before-fix →
+fix → record; SF-13; census tripwires; consumer-first; end-of-chunk
+discipline), (b) imports the durable feedback-class memories into the
+repo where they're portable, (c) carries its own maintenance cadence +
+adjudication gate (same discipline as the star skill), with CLAUDE.md
+reduced to the entry pointer.
+
+### Open-thread structure — beyond the backlog (DISCUSSION OPENED 2026-07-28, Jeremy)
+
+Jeremy: work fans out consequences faster than the linear chat walks
+them; partially-opened paths never get fully revisited and it has
+bitten us; "I'm not sure just adding to 'the backlog' is quite enough."
+Framing agreed in-session: retention is solved (BACKLOG_DONE +
+dev-recall + history docs) — **attention** is the gap; BACKLOG is a
+flat list whose triage requires manual whole-file reads. Proposal on
+the table (2026-07-28 session notes + GOAL_BRAIN): (1) one-time thread
+census across BACKLOG / GOAL_BRAIN open threads / history-doc
+residuals / wiring-inventory surprises → deduped inventory with parent
+provenance + state (untouched / partially-walked / blocked-on-Jeremy)
++ last-touched; (2) durable structure decided FROM the census evidence
+— likely a lightweight thread ledger with parent edges (dev-side
+mirror of the runtime side-quest DAG, §13d) + a staleness surfacer
+(rank the K oldest untouched threads at session start) + a
+residual-names-its-anchor tripwire. Census first, tool second.
+
 ### R6-E. lesson_text embeds truncated goal previews (anchoring risk) — watch-item
 
 The one open residual of the R6 VERIFY_LEARN_ARC V4/R5 V4/V5 review
