@@ -2356,12 +2356,16 @@ Dormant (deliberately parked, not dropped):
   **Census 2026-07-28: park reason EXPIRED** — recall() shape shipped
   2026-06-10/11 (this section, above). Premise-drift find #4; in the cleanup
   batch.
-- Backlogged repairs: 10 pre-existing test failures; fragile fail-safes in
-  parallel/DAG step runners (BACKLOG.md, 2026-06-10).
-  **Census 2026-07-28: claim STALE** — the suite has been green through the
-  entire swarm arc (land.sh gates on it). Premise-drift find #5; the
-  test-failures half needs strike-or-verify, the fail-safe-fragility half may
-  still be real. In the cleanup batch.
+- ~~Backlogged repairs: 10 pre-existing test failures; fragile fail-safes in
+  parallel/DAG step runners (BACKLOG.md, 2026-06-10).~~
+  **RESOLVED 2026-07-28 (drift find #5 closed both halves):** test-failures
+  half — full `scripts/test-safe.sh` run exit 0 same day (the 2026-06-11
+  root-cause fixes in BACKLOG_DONE closed them; the line here just never
+  followed). Fail-safe-fragility half — resolved by deletion: swarm chunk 1
+  removed per-step adapter re-tiering from the parallel/DAG runners entirely
+  (`loop_parallel.py` passes the session adapter through; the one surviving
+  re-tier site `loop_execute.py:_select_step_adapter` fail-safes by explicit
+  contract on `dry_run`/non-LLMAdapter, not by accident).
 
 ## Open questions (system-maintained)
 
@@ -4634,3 +4638,18 @@ Dormant (deliberately parked, not dropped):
   `docs/DEV_LOG.md` started this session: append-only, newest-first, one
   paragraph + a Surprised-by line per session close (he loves the
   surprise angle: "there are always angles that surprise").
+  (5) **Free-slot trio examined same session (AFK loose-ends
+  authorization); outcome: the slot goes to closure-check unification
+  (census #30) by elimination.** #31 depth-cap unification was already
+  shipped 2026-07-12 (3abc4f0, `loop_types.MAX_RESTART_DEPTH` +
+  tripwire test) and #32's both halves already shipped 2026-07-09
+  (951d49e in-flight checkpoint stamping; 37ba4ba heartbeat
+  stranded-state sweep calling `recover_stale_claims`) — both census
+  threads faithfully inherited stale "still open" annotations from
+  BACKEND_RESILIENCE_DESIGN.md, now currency-fixed there. Method
+  lesson: the 10/10-clean recon contract verified quote-*accuracy*, not
+  claim-*currency* — a doc's own status line is just another falsifiable
+  claim. #30 verified genuinely open (`ClosureVerdict` +
+  `verify_goal_completion` still live beside `director_evaluate`;
+  3 call sites). Drift find #5 also closed both halves (suite exit 0;
+  fragile seam deleted in swarm chunk 1 — see Dormant threads).

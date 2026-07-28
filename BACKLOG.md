@@ -461,8 +461,17 @@ never carry live markers; doc-archival explicitly sweeps forward
 obligations to BACKLOG/GOAL_BRAIN or declares them dead; every
 PARKED/BLOCKED entry states its reason as a **falsifiable claim** so a
 future pass can test it (the six drifts are exactly reasons falsified
-silently). Steps 2–4 above + the proposed ACTIVE/PARKED split (census
-§6, cap 7) await Jeremy's reaction.
+silently). **Split RATIFIED 2026-07-28** ("Sure, sounds good"): ACTIVE =
+threads 1–5 + drift-cleanup batch + 1 free slot, cap 7. Same day
+(loose-ends pass): drift find #5 closed both halves (suite exit 0 +
+fragile seam deleted in swarm chunk 1); free-slot trio examined — census
+#31 (depth-cap) and #32 (backend-resilience pair) were ALREADY SHIPPED
+(2026-07-12 / 2026-07-09; stale doc annotations inherited by the sweep,
+BACKEND_RESILIENCE_DESIGN.md currency-fixed), so **the free slot =
+closure-check unification (census #30)**: fold `verify_goal_completion`
+into `director_evaluate(trigger="closure")`, retire `ClosureVerdict`
+(3 call sites: cli.py:566, handle.py:1855/2020). Drift-batch items 1–4
+still await Jeremy's walkthrough decisions.
 
 ### R6-E. lesson_text embeds truncated goal previews (anchoring risk) — watch-item
 

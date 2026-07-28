@@ -26,8 +26,16 @@ including the headline steal: a style doc with a regression harness. Then
 a detour on his "reading .md over ssh isn't a perfect experience" — the
 viz server gained a Reading tab (docs/READING_QUEUE.md → reading.html,
 GitHub-rendered links, nothing self-hosted), live at maro.feifdom.com
-same session. **Surprised by:** the recon-delegation contract
+same session. AFK loose-ends pass closed drift find #5 (full suite exit
+0; the fragile parallel-runner seam turned out deleted by swarm chunk 1)
+and examined the free-slot trio: two of three (depth-cap #31,
+backend-resilience #32) were already shipped weeks ago behind stale doc
+annotations, so the free slot goes to closure-check unification (#30) by
+elimination. **Surprised by:** the recon-delegation contract
 (verbatim-quote + file:line + disposition) producing the repo's first
 10/10-clean spot-verification sample — the historical 30–78%
 hallucination rate apparently wasn't a model property but a
-contract-shape property.
+contract-shape property. And its immediate qualifier: perfect
+quote-accuracy still inherited two stale "still open" doc annotations
+into the census as live threads — currency is a separate check from
+accuracy.

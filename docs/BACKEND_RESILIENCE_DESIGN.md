@@ -15,8 +15,18 @@ Judgment calls are tagged `DECISION (provisional)` — greppable.
 > four review-flagged decisions stand as written (auth/billing one-failover
 > + always-notify; auto-resume cap 1/run; resume surface CLI-first with
 > notify carrying the command; depth-cap inconsistency to be unified to one
-> documented number — small chunk + tripwire, still open). Slices 1–3
-> shipped 2026-07-09; auto-resume stays post-1.0.
+> documented number — small chunk + tripwire). Slices 1–3 shipped
+> 2026-07-09; auto-resume stays post-1.0.
+>
+> **Currency (2026-07-28 census follow-up):** the depth-cap unification
+> SHIPPED same day as ratification (3abc4f0 → `loop_types.MAX_RESTART_DEPTH`,
+> tripwired by `tests/test_depth_cap_unified.py`) — the "still open" that
+> used to sit in this block outlived the work by 16 days and got faithfully
+> re-inventoried as census thread #31. Likewise the gap table below
+> describes the PRE-slice state: in-flight-step visibility shipped in
+> slice 2 (951d49e, `checkpoint.py` `in_flight_index`) and
+> `recover_stale_claims` gained its scheduled caller in slice 3 (37ba4ba,
+> the heartbeat stranded-state sweep). Read the table as history, not gaps.
 
 ## The problem, clearly
 
