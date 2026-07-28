@@ -343,32 +343,82 @@ Gap analysis (2026-07-28): much exists but is scattered — CLAUDE.md
 docs/CODING_NOTES.md (coding posture), the adversarial-review + star
 skills — and the genuinely un-replicable part is the ~25
 feedback_*/project_* auto-memories in `~/.claude` (machine-local, NOT
-in the repo). Proposed shape (awaiting Jeremy's reaction): one
-`docs/HOUSE_STYLE.md` that (a) writes down the workflow loop itself
-(chunk → land → cross-model adversarial review → verify-before-fix →
-fix → record; SF-13; census tripwires; consumer-first; end-of-chunk
-discipline), (b) imports the durable feedback-class memories into the
-repo where they're portable, (c) carries its own maintenance cadence +
-adjudication gate (same discipline as the star skill), with CLAUDE.md
-reduced to the entry pointer.
+in the repo). Proposed shape (shape approved 2026-07-28 — "glad this is in the
+backlog and think this will be good to have written down; and assume
+it will continue to evolve"): one `docs/HOUSE_STYLE.md` that (a) writes
+down the workflow loop itself (chunk → land → cross-model adversarial
+review → verify-before-fix → fix → record; SF-13; census tripwires;
+consumer-first; end-of-chunk discipline), (b) imports the durable
+feedback-class memories into the repo where they're portable, (c)
+carries its own maintenance cadence + adjudication gate (same
+discipline as the star skill), with CLAUDE.md reduced to the entry
+pointer.
 
-### Open-thread structure — beyond the backlog (DISCUSSION OPENED 2026-07-28, Jeremy)
+- [ ] **M1-contrast pass (Jeremy 2026-07-28):** "Would be interesting
+  to contrast my M1 local workflow with the maro box workflow... I
+  think there's overlap but it's not going to be quite the same, maybe
+  that's worth a pass as well to surface some additional insight."
+  Mind the work/personal boundary decree: patterns transfer, work
+  artifacts don't — the pass compares *workflows*, likely via Jeremy
+  narrating the M1 side rather than this box reading it.
+
+### Open-thread structure — beyond the backlog (DISCUSSION OPEN, updated 2026-07-28)
 
 Jeremy: work fans out consequences faster than the linear chat walks
 them; partially-opened paths never get fully revisited and it has
 bitten us; "I'm not sure just adding to 'the backlog' is quite enough."
 Framing agreed in-session: retention is solved (BACKLOG_DONE +
 dev-recall + history docs) — **attention** is the gap; BACKLOG is a
-flat list whose triage requires manual whole-file reads. Proposal on
-the table (2026-07-28 session notes + GOAL_BRAIN): (1) one-time thread
-census across BACKLOG / GOAL_BRAIN open threads / history-doc
-residuals / wiring-inventory surprises → deduped inventory with parent
-provenance + state (untouched / partially-walked / blocked-on-Jeremy)
-+ last-touched; (2) durable structure decided FROM the census evidence
-— likely a lightweight thread ledger with parent edges (dev-side
-mirror of the runtime side-quest DAG, §13d) + a staleness surfacer
-(rank the K oldest untouched threads at session start) + a
-residual-names-its-anchor tripwire. Census first, tool second.
+flat list whose triage requires manual whole-file reads. Also his
+verdict on the obvious alternative: "I had hoped that a simple sort of
+epic/issue style flat backlog with sub-items was enough, but fighting
+those branches eventually overwhelms me and I lose the plot."
+
+**Design inputs — Jeremy's own dev workflow IS the requirements spec
+(2026-07-28, near-verbatim):** he stubs modules/classes/methods first —
+the skeleton is the plan, living in the medium of the work itself;
+`//todo` comments are attachment points for "thoughts along the way
+that need referenced later but no concrete attachment point in the
+organization itself"; he "sees a path through", architects the module
+shapes surfacing that path, then digs into details; he spirals over
+modules to refine path thinking where unknowns remain, trusting the
+skeleton to hold everything he's not currently touching. Standing
+constraint (his recurring gut-feel, restated this session): keep
+Claude's persistence-shaped thinking and his **timeline/story-shaped
+memory** aligned — the structure needs BOTH views.
+
+**Proposal v2 (2026-07-28, awaiting Jeremy's reaction):**
+1. **Thread census first** (unchanged) — sweep BACKLOG / GOAL_BRAIN
+   open threads / history-doc residuals / wiring-inventory surprises
+   into a deduped inventory with parent provenance, state (untouched /
+   partially-walked / blocked-on-Jeremy), last-touched. Now also
+   produces the initial ACTIVE/PARKED split and validates the marker
+   convention against the real thread shapes found. Census before
+   structure — prior passes at this problem (graph-memory direction,
+   recursive-orchestration memory, thread architecture) committed to
+   shape before knowing the territory.
+2. **Narrative spine** — a dev-lane captain's log (append-only, one
+   paragraph per session close: what happened, what it opened, what it
+   parked). Timeline-shaped for Jeremy's memory; entries name thread
+   slugs so the two views link. Near-zero cost; end-of-chunk
+   discipline gains one line.
+3. **Attachment-point markers** — the `//todo` translation:
+   `THREAD[slug]` markers in docs/code at the point of relevance; a
+   deterministic collector generates the map + staleness ranking
+   (markers are the durable copy; the view is regenerable). BACKLOG
+   then holds arcs/epics only; leaf threads live where they attach —
+   position carries the context that flat entries must rebuild in
+   prose.
+4. **Working-set cap** — explicit ACTIVE set (3–7 threads, the
+   spiral), everything else PARKED (trusted skeleton); the surfacer
+   proposes promotions only when ACTIVE has room. Attention budget as
+   a first-class constraint, not a virtue.
+
+Runtime mirror (deliberate, not coincidence): see Vision entry
+"Step-skeleton parallelization" — the dev-side structure is the cheap
+prototype of the runtime step-DAG. Jeremy: "we're organizing all of
+this to a degree on the way I think and I'll take that as a sign we're
+starting to really find some of the foundations."
 
 ### R6-E. lesson_text embeds truncated goal previews (anchoring risk) — watch-item
 
@@ -914,6 +964,29 @@ the rejected design (a documented trap) and the deliberately-deferred shapes.
   test command from setup needs intent modeling, and fix-then-succeed is
   legitimate. Revisit only with a sharper signal (e.g. matching the claimed test
   count against the real `tool_result`), not a looser gate.
+
+### Step-skeleton parallelization — refinable contracts, reopen-as-normal (vision, 2026-07-28, Jeremy)
+
+Jeremy, verbatim: "For maro I envision a point where we parallelize
+chunks of work that are all step-shaped (rather than what I think is a
+super linear path we are currently taking through everything). Router
+maybe needs to be smarter in order to do that; there's a front loading
+component there and a 'redo but with re-shaping' context there as well
+when we find step dependencies and need to revisit/refine 'finished'
+step work. Which feels like a different way to organize/approach a
+sidequest really, so maybe there's something there."
+
+Reading (agreed in-session): decompose emits a **contract skeleton** —
+step stubs with broad-brush contracts that harden as work proceeds
+(mirrors Jeremy's stub-then-spiral dev workflow) — and reopening a
+"finished" step on a discovered dependency is a **normal move, not a
+failure**. Hooks already shipped: §13b revisitable milestones (stop
+verdicts carry evidence + reopen conditions), §13d side-quest DAG
+proposal, goal ancestry, recursion decree (sub-goal spawning never
+foreclosed). Belongs to the thread-architecture implementation arc —
+design input, not a build item yet. Pairs with the Actionable Stack
+"Open-thread structure" entry: same shape, built twice deliberately
+(dev-lane prototype first, runtime second).
 
 ### DESIGN SPACE — Thread Architecture (2026-04-26 sketch; narrow navigator SHIPPED, full reframe unbuilt)
 

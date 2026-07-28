@@ -4530,3 +4530,32 @@ Dormant (deliberately parked, not dropped):
   branching work; "not sure just adding to the backlog is quite
   enough") — census-first proposal in BACKLOG "Open-thread structure";
   no structure committed until the census shows the real shape.
+
+- **2026-07-28 — Design inputs (Jeremy, second round): his dev
+  workflow as the spec for thread structure + step-skeleton runtime
+  vision.** (1) His dev mental model recorded near-verbatim as the
+  requirements spec for the open-thread structure (BACKLOG entry
+  updated): stubs first — the skeleton IS the plan, in the medium of
+  the work; `//todo` = attachment points for thoughts with "no
+  concrete attachment point in the organization itself"; "see a path
+  through" → architect the shape → dig in; spiral over modules to burn
+  down unknowns. Flat epic/issue trees fail him: "fighting those
+  branches eventually overwhelms me and I lose the plot." Standing
+  constraint restated: align Claude's persistence-shaped thinking with
+  his timeline/story-shaped memory — the structure needs both views
+  (thread graph + narrative spine). Proposal v2 (census →
+  narrative spine → attachment-point markers + collector →
+  ACTIVE/PARKED working-set cap) awaits his reaction. (2) Runtime
+  vision captured verbatim in BACKLOG Vision "Step-skeleton
+  parallelization": parallelized step-shaped work, smarter router,
+  front-loading + "redo but with re-shaping" on discovered
+  dependencies, "a different way to approach a sidequest" — read as
+  contract-skeleton decompose + reopen-as-normal; feeds the
+  thread-architecture arc, not a build item yet. The dev/runtime rhyme
+  is deliberate ("we're organizing all of this to a degree on the way
+  I think"). (3) House-style entry gains the M1-vs-maro-box workflow
+  contrast pass (work/personal boundary: patterns transfer, artifacts
+  don't). (4) Offer noted, not acted on: pointing Claude at his
+  multi-year work projects to learn thinking patterns — parked behind
+  the boundary decree; narrated-pattern capture (like this session) is
+  the sanctioned form.
