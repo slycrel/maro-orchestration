@@ -470,8 +470,15 @@ fragile seam deleted in swarm chunk 1); free-slot trio examined — census
 BACKEND_RESILIENCE_DESIGN.md currency-fixed), so **the free slot =
 closure-check unification (census #30)**: fold `verify_goal_completion`
 into `director_evaluate(trigger="closure")`, retire `ClosureVerdict`
-(3 call sites: cli.py:566, handle.py:1855/2020). Drift-batch items 1–4
-still await Jeremy's walkthrough decisions.
+(3 call sites: cli.py:566, handle.py:1855/2020). **Drift batch
+ADJUDICATED same day (Jeremy)** — all four re-parked on falsifiable
+reasons (GOAL_BRAIN Dormant threads + Decisions 2026-07-28): heartbeat
+gate re-based on hosted-free; next-leap packaging capacity-parked with
+**first claim on the next free ACTIVE slot**; thread-arch flows
+as-we-go via the census-tested Remaining-pieces ledger
+(THREAD_ARCHITECTURE.md L1–L5); Mage parks under the graph-memory
+direction. Census follow-ups all closed — nothing from the census
+awaits Jeremy anymore except the ACTIVE work itself.
 
 ### R6-E. lesson_text embeds truncated goal previews (anchoring risk) — watch-item
 

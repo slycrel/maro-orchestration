@@ -31,11 +31,18 @@ same session. AFK loose-ends pass closed drift find #5 (full suite exit
 and examined the free-slot trio: two of three (depth-cap #31,
 backend-resilience #32) were already shipped weeks ago behind stale doc
 annotations, so the free slot goes to closure-check unification (#30) by
-elimination. **Surprised by:** the recon-delegation contract
-(verbatim-quote + file:line + disposition) producing the repo's first
-10/10-clean spot-verification sample — the historical 30–78%
-hallucination rate apparently wasn't a model property but a
-contract-shape property. And its immediate qualifier: perfect
+elimination. Jeremy adjudicated the drift batch
+on return: all four re-parked on falsifiable reasons — his summary "all
+claims and doc-guidance as much as anything" — with thread-arch getting
+the Remaining-pieces ledger (THREAD_ARCHITECTURE.md L1–L5, census-tested)
+as the answer to "I'm a little concerned it will get lost," and next-leap
+packaging holding first claim on the next free slot. The reading queue's
+first row completed its full lifecycle (queued → read → decided → Done)
+within one day of the feature existing. **Surprised by:** the
+recon-delegation contract (verbatim-quote + file:line + disposition)
+producing the repo's first 10/10-clean spot-verification sample — the
+historical 30–78% hallucination rate apparently wasn't a model property
+but a contract-shape property. And its immediate qualifier: perfect
 quote-accuracy still inherited two stale "still open" doc annotations
 into the census as live threads — currency is a separate check from
 accuracy.

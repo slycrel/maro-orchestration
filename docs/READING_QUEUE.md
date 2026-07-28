@@ -19,9 +19,9 @@ it; the queue's history is part of the decision record).
 
 | Added | Doc | Why / decision needed |
 |---|---|---|
-| 2026-07-28 | docs/history/2026-07-28-thread-census.md | Thread census (star use #3): premise-drift finds in §2; ACTIVE/PARKED split proposal in §6 |
 
 ## Done
 
 | Added | Doc | Resolved |
 |---|---|---|
+| 2026-07-28 | docs/history/2026-07-28-thread-census.md | 2026-07-28 — split ratified (cap 7), drift batch adjudicated (all four re-parked falsifiably), free slot = closure-check unification |

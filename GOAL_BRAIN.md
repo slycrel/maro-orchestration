@@ -2339,12 +2339,28 @@ Active:
   read seam (pre-existing agent_loop behavior, kept identical).
 
 Dormant (deliberately parked, not dropped):
-- Thread Architecture implementation (`arch/thread-navigator`) — parked pending
-  goal-brain sequencing; fix-in-place arc takes precedence.
-  **Census 2026-07-28: park reason EXPIRED** — sequencing is COMPLETE (this
-  section, above). Premise-drift find #3; the park may still be right, but it
-  needs a current reason or a resurrection call. In the proposed cleanup batch
-  (`docs/history/2026-07-28-thread-census.md` §2).
+- Thread Architecture implementation (`arch/thread-navigator`) —
+  **RE-ADJUDICATED by Jeremy 2026-07-28 (drift find #3): flow-as-we-go, no
+  standalone arc.** Pieces land inside other arcs as consumers appear; his
+  loss concern ("I'm a little concerned it will get lost") is answered by
+  the **Remaining pieces ledger** in `docs/THREAD_ARCHITECTURE.md` (L1–L5,
+  each anchored; census-tested; pieces leave only by ship or explicit
+  retirement, never silence). Falsifiable park reason: no dedicated arc
+  UNTIL the ledger's open rows read as implementation detail rather than
+  moving spec — L5 (per-turn cutover) is the moving-spec marker.
+- Heartbeat gate (free pre-check before a wakeup earns a paid run; "the real
+  work is the context assembler, not the model") — **RE-BASED + RE-PARKED by
+  Jeremy 2026-07-28 (drift find #1)**: design now targets the hosted-free
+  rung (original qwen/ollama substrate removed 2026-07-21, swarm chunk 1).
+  Falsifiable park reason: heartbeat LLM spend is not a live pain — revive
+  when it shows up in the discretion readout's EFFORT headline.
+- Next-leap auto persona/skill packaging — **RE-PARKED as capacity-parked by
+  Jeremy 2026-07-28 (drift find #2), with FIRST CLAIM on the next free
+  ACTIVE slot.** Both original blockers cleared: token/process layer stable
+  (Phase 62 brake, artifacts-over-streams, token brake 2026-07-27) and
+  maro-pack (2026-07-13) supplies the packaging substrate. Falsifiable park
+  reason: ACTIVE is at Jeremy's cap of 7 — nothing blocks the work but a
+  slot.
 - Phase 65 deeper constraint-orchestration expansion — deferred; the
   single-persona ResolvedIntent MVE was enabled on the audited runtime box in
   2026-07-09, while this unconfigured M1 and fresh installs remain OFF.
@@ -2352,10 +2368,14 @@ Dormant (deliberately parked, not dropped):
   "1-shot-first frame" question is unresolved (CONSTRAINT_ORCHESTRATION_REVIEW
   :239 = REASSESS_LINEAGE:106). Still true; healthy park.)*
 - Mage correspondence memory — v1 sketch exists (typed-edge graph walk, sympathy
-  weights); downstream of recall() shape.
-  **Census 2026-07-28: park reason EXPIRED** — recall() shape shipped
-  2026-06-10/11 (this section, above). Premise-drift find #4; in the cleanup
-  batch.
+  weights). **RE-PARKED by Jeremy 2026-07-28 (drift find #4) under the
+  graph-memory direction**: "in the direction of guidance as much as
+  implementation... the overall ask isn't necessarily something that gets
+  'done', just worked toward." Falsifiable park reason: graph memory is the
+  declared longer-term lane (retrieval-handle work comes first,
+  project_retrieval_graph_memory_direction); the sketch is design input to
+  that lane, not a scheduled build. Implementation jumps are sanctioned when
+  a slice earns its place — no completion state expected.
 - ~~Backlogged repairs: 10 pre-existing test failures; fragile fail-safes in
   parallel/DAG step runners (BACKLOG.md, 2026-06-10).~~
   **RESOLVED 2026-07-28 (drift find #5 closed both halves):** test-failures
@@ -4653,3 +4673,24 @@ Dormant (deliberately parked, not dropped):
   `verify_goal_completion` still live beside `director_evaluate`;
   3 call sites). Drift find #5 also closed both halves (suite exit 0;
   fragile seam deleted in swarm chunk 1 — see Dormant threads).
+
+- **2026-07-28 — Drift batch ADJUDICATED (Jeremy, all four; census
+  drift finds #1–#4 closed).** (1) Heartbeat gate: re-park on corrected
+  premise — design targets hosted-free; build when heartbeat spend
+  actually hurts ("1a"). (2) Next-leap packaging: capacity-park with
+  first claim on the next free ACTIVE slot; blocker excuse dead, the
+  priority call is the real reason ("2a agree"). (3) Thread-arch:
+  **flow-as-we-go ratified** — "assuming we can actually re-flow the
+  work, let's do this as we go; I'm a little concerned it will get
+  lost. your call on doc + over time vs park for later." Claude's call
+  = doc + over time: the Remaining pieces ledger (L1–L5) added to
+  THREAD_ARCHITECTURE.md, census-tested, pieces leave only by ship or
+  explicit retirement; promote to a dedicated arc only when what's left
+  is implementation detail, not moving spec. (4) Mage: re-park under
+  the graph-memory direction — "in the direction of guidance as much as
+  implementation; I'm ok if we want to jump into implementation, but
+  the overall ask isn't necessarily something that gets 'done', just
+  worked toward I suspect." His summary of the batch: "all claims and
+  doc-guidance as much as anything." All four park reasons now stated
+  falsifiably in Dormant threads (this doc) for the next census to
+  test.

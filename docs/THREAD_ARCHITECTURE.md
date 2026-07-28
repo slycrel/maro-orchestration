@@ -4,7 +4,7 @@ status: dormant-design
 
 # Thread Architecture
 
-**Status:** Active design space. Sketched 2026-04-26 → 2026-04-27 in a planning-mode conversation between Jeremy and Claude. No implementation *arc* run yet, but 4 of the 9 open decisions below have since resolved in place (see §Open decisions annotations) and all 9 were adjudicated 2026-07 (Thread Architecture decisions brief). The original park reason ("pending goal-brain sequencing") expired when sequencing completed — re-adjudication queued via the 2026-07-28 thread census. Branch: `arch/thread-navigator`.
+**Status:** Active design space. Sketched 2026-04-26 → 2026-04-27 in a planning-mode conversation between Jeremy and Claude. All 9 open decisions below are resolved/dispositioned (annotations inline). No standalone implementation arc — **ratified by Jeremy 2026-07-28 (census drift find #3): re-flow the work as we go**, pieces landing inside other arcs as consumers appear, with his named concern that piecemeal absorption loses pieces silently. The fix for that concern is the **§Remaining pieces ledger** below: every unshipped piece is enumerated with a current anchor, and the thread census tests the ledger like any other falsifiable claim. Promote to a dedicated arc only if/when what's left is demonstrably implementation detail rather than moving spec. Branch: `arch/thread-navigator`.
 
 **Companion docs:**
 - `docs/conversations/2026-04-26-thread-architecture.md` — literal conversation transcript that produced this doc. Read it for tone, examples, and where each idea came from.
@@ -274,7 +274,7 @@ The navigator doesn't *force* planning on every thread (today's bug). It also do
 These are the questions we deferred. Ordered roughly by load-bearing-ness.
 
 1. **Navigator's prompt + decision schema.** The single most load-bearing artifact. State it sees, decisions it returns, return-shape for *idunno* vs concrete moves, how it represents thread state compactly. Drafting this will force concrete answers to a lot of the rest.
-   *Schema half resolved 2026-06-11 → `docs/NAVIGATOR_SCHEMA.md` + `src/navigator.py` (goal-brain sequencing step 4). Prompt half is step 5.*
+   *Schema half resolved 2026-06-11 → `docs/NAVIGATOR_SCHEMA.md` + `src/navigator.py` (goal-brain sequencing step 4). Prompt half SHIPPED same day as step 5 (GOAL_BRAIN Decisions 2026-06-11: "Navigator prompt + shadow replay shipped"). Fully resolved — 2026-07-28 currency fix; this line read as pending for six weeks after the ship.*
 
 2. **How forks rejoin.** Sync vs async. Failure semantics (one child fails → parent retries that one? abandons? promotes failure?). Partial-collate when only some children return. Probably needs a couple of worked examples (kanji, reddit/marketplace) before pinning.
    *Schema-layer half resolved 2026-06-11 (NAVIGATOR_SCHEMA.md): v1 join is sync; failed children stay visible in `open_children`; partial-collate is legal; close must disposition every open child. Retry-vs-abandon policy stays navigator judgment (step-5 prompt).*
@@ -299,6 +299,26 @@ These are the questions we deferred. Ordered roughly by load-bearing-ness.
 
 9. **`/loop` and similar streaming primitives.** How "always-on" + "long-running" + "user-paced" (Telegram threads, chat, async) interact with the per-turn navigator model. Probably fine; worth a worked example.
    *Dispositioned 2026-07-09: not a decision — trace one real /loop session against the per-turn model, close or escalate on actual friction (queued in MILESTONES).*
+
+---
+
+## Remaining pieces ledger (2026-07-28 — the anti-loss mechanism)
+
+Jeremy's 2026-07-28 ratification chose flow-as-we-go over a standalone
+arc, with the explicit worry "I'm a little concerned it will get lost."
+This table is the answer: every piece of this design not yet shipped,
+with its current anchor. Rules: a piece leaves this table only by
+shipping (annotate with commit/date) or by an explicit retirement
+decision — never by silence. The thread census re-walks this table;
+an unanchored or stale row is a census finding.
+
+| # | Piece | State (falsifiable) | Anchor |
+|---|---|---|---|
+| L1 | Ancestry write-side unification (thread_brain + ancestry.json → one record at fork time) | Open; named fork-implementation prerequisite | BACKLOG "Ancestry write-side unification" entry (2026-07-21, chunk-3 note) |
+| L2 | Stage 5→language-form demotion path (rules demote to Stage 2/3 artifacts, not just 5→4) | Open; input to memory arc | BACKLOG crystallization-demotion entry ("language-form demotion path is the part still open") |
+| L3 | Fork/sub-thread mechanics as a runnable primitive (fork+collate, three-way ownership contract) | Design note shipped (chunk 3, §Sub-threads companion note); implementation not started; prerequisite = L1 | This ledger + GOAL_BRAIN open threads |
+| L4 | Navigator improvement — the crystallization-attribution "how" beyond per-run lessons (open decision #6 residue) | Partially resolved: verify→learn V1–V5 closed 2026-07-14, `lesson_inject` ON with A/B watch; deeper attribution design dormant BY DECREE (no successor arc) — dormant, not lost | GOAL_BRAIN Decisions 2026-07-14 (verify→learn close) |
+| L5 | Full per-turn reframe cutover (navigator authoritative each turn, personas navigator-selected per turn, director reduced to escalation+kickoff) | Horizon piece — the "moving spec" half; shipped subset = decide-at-dispatch + planning-depth judgment + lesson injection; per-turn cutover unscheduled by design | This ledger (deliberately unscheduled; promote per header rule) |
 
 ---
 
