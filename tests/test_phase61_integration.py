@@ -290,10 +290,16 @@ class TestAdapterFallbackChain:
         monkeypatch.setenv("CLAUDE_BIN", str(fake))
 
     def test_subprocess_adapter_builds_when_requested(self):
-        """build_adapter(model='subprocess') returns a ClaudeSubprocessAdapter."""
-        from llm import build_adapter, ClaudeSubprocessAdapter
+        """build_adapter(model='subprocess') reaches the subprocess adapter.
+
+        The auto path always wraps in FailoverAdapter (record/meter seam),
+        single backend included — the subprocess adapter sits inside.
+        """
+        from llm import build_adapter, ClaudeSubprocessAdapter, FailoverAdapter
         adapter = build_adapter(model="subprocess")
-        assert isinstance(adapter, ClaudeSubprocessAdapter)
+        assert isinstance(adapter, FailoverAdapter)
+        assert adapter.backend == "subprocess"
+        assert any(isinstance(a, ClaudeSubprocessAdapter) for a in adapter._adapters)
 
     def test_build_adapter_returns_something_always(self):
         """build_adapter() never raises — always returns a usable adapter."""
@@ -304,13 +310,15 @@ class TestAdapterFallbackChain:
         assert hasattr(adapter, "complete")
 
     def test_openrouter_adapter_not_built_without_key(self, monkeypatch):
-        """Without OPENROUTER_API_KEY, build_adapter() falls back to subprocess."""
+        """Without OPENROUTER_API_KEY, build_adapter() falls back to subprocess
+        (wrapped — the auto path always returns a FailoverAdapter)."""
         monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
         monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-        from llm import build_adapter, ClaudeSubprocessAdapter
+        from llm import build_adapter, ClaudeSubprocessAdapter, FailoverAdapter
         adapter = build_adapter()
-        # Should fall back to subprocess (the always-available adapter)
-        assert isinstance(adapter, ClaudeSubprocessAdapter)
+        assert isinstance(adapter, FailoverAdapter)
+        assert adapter.backend == "subprocess"
+        assert any(isinstance(a, ClaudeSubprocessAdapter) for a in adapter._adapters)
 
 
 # ---------------------------------------------------------------------------
