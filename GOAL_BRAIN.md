@@ -4914,3 +4914,25 @@ Dormant (deliberately parked, not dropped):
       correctness, the M1 for exploration. **M1-contrast pass CLOSED**
       (archived to BACKLOG_DONE); its four residual items live under their
       own names.
+- **2026-07-29 — mini2 executes-locally: ACCEPTED RISK, parked falsifiably
+  (Jeremy, same day raised).** Claude surfaced his own aside as a gap; he
+  clarified it was a disposition, not a shrug: *"that was me essentially
+  saying 'yep, it's a gap, that's a problem for future me'; writing that off
+  as something I'll deal with if it happens and I don't think it's likely to
+  happen... and difficult to guard against. I'm aware I'm playing with fire,
+  and you couldn't know, but I've been running
+  `--dangerously-skip-permissions` on the orchestrator box for about 5
+  months now — I'm living on a few edges, this is one I'm not worried
+  about."* Consistent with the documented trusted-operator model
+  (`docs/SECURITY_MODEL.md`), which already records the executor's
+  skip-permissions posture and the blast-radius argument the container
+  executor arc was built to answer — so this is a known edge being held
+  deliberately, not an undocumented one. Park reason stated falsifiably in
+  BACKLOG per the drift-batch discipline (reopen if mini2 grows a
+  `~/.maro/workspace`, gains landing credentials, gains a second user, or
+  starts carrying work whose failure isn't cheaply reversible). **General
+  lesson for future passes:** a gap Jeremy names in passing is not
+  automatically an item — ask whether it is an unnoticed hazard or an
+  accepted one before writing it up as work. The write-up was still worth
+  it: it converted an implicit risk acceptance into a recorded one with
+  reopen conditions.

@@ -354,18 +354,28 @@ carries its own maintenance cadence + adjudication gate (same
 discipline as the star skill), with CLAUDE.md reduced to the entry
 pointer.
 
-- [ ] **mini2 executes-locally detection (Jeremy 2026-07-29, his own
-  observation):** on whether the poe-mini might run maro off its reference
-  copy instead of asking the orchestrator — *"I suppose it could choose to
-  do that and I'd likely find out later about that."* The 2026-07-20
-  zero-creds decree is enforced **by construction for push** (https
-  fetch-only clone, no credentials → cannot land code) but nothing prevents
-  or surfaces mini2 *running* maro locally. Same failure shape as the
-  out-of-the-box invariant (declared, never tripwired) and the git hooks
-  that were silently dead for a month post-rename. Surfacing is cheap and
-  matches the retention decree (surface, don't gate): a box that runs maro
-  grows a `~/.maro/workspace` — report its presence on mini2, don't block
-  it. Context: `docs/history/2026-07-28-m1-vs-box-workflow-contrast.md` §8.2.
+- [~] **mini2 executes-locally detection — PARKED as accepted risk (Jeremy
+  2026-07-29, same day it was raised).** The gap is real and stated: the
+  2026-07-20 zero-creds decree is enforced **by construction for push only**
+  (https fetch-only clone, no credentials → cannot land code); nothing
+  prevents or surfaces mini2 *running* maro off its reference copy.
+  Jeremy's disposition, unprompted and explicit: *"that was me essentially
+  saying 'yep, it's a gap, that's a problem for future me'; writing that off
+  as something I'll deal with if it happens and I don't think it's likely to
+  happen... and difficult to guard against. I'm aware I'm playing with fire
+  ... I've been running `--dangerously-skip-permissions` on the orchestrator
+  box for about 5 months now — I'm living on a few edges, this is one I'm
+  not worried about."* Consistent with the documented trusted-operator model
+  (`docs/SECURITY_MODEL.md`), not a divergence from it.
+  **Falsifiable park reason** (census: test these, don't re-argue the
+  premise) — reopen if any becomes true: (a) mini2 grows a
+  `~/.maro/workspace`, i.e. it actually ran something; (b) mini2 gains any
+  credential that could land code; (c) anyone other than Jeremy gets access
+  to mini2; (d) the poe lane starts carrying work whose failure isn't
+  cheaply reversible. Until then the surfacing check (report a
+  `~/.maro/workspace` on mini2, never gate) stays unbuilt **by decision, not
+  by omission**. Context:
+  `docs/history/2026-07-28-m1-vs-box-workflow-contrast.md` §8.2.
 - [ ] **Declare the out-of-the-box invariant + tripwire it (Jeremy
   2026-07-28, DECREE):** *"Functionality that we add should presume that
   it's 'out of the box' functionality for the project day 1 — unless it's
