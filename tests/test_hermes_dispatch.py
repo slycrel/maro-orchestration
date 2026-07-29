@@ -139,3 +139,46 @@ def test_status_surfaces_clarification_question_from_card(tmp_path, monkeypatch,
     out = json.loads(capsys.readouterr().out)
     assert out["clarification_question"] == "Which thread should I reference?"
     assert out["goal_verdict_gaps"] == ["thread content never fetched"]
+
+
+def test_enqueue_typed_envelope_shows_ask_and_meta(tmp_path, monkeypatch, capsys):
+    """A maro-dispatch/v1 payload enqueues the RAW payload (handle_task
+    re-parses it) while the dispatch record displays the user's ask and an
+    envelope summary — the record is for humans, the queue is for the box."""
+    mod = _load_dispatch(tmp_path, monkeypatch)
+    enqueued = []
+    fake_hq = types.ModuleType("handle_queue")
+    fake_hq.enqueue_goal = lambda goal: enqueued.append(goal) or "job-env"
+    monkeypatch.setitem(sys.modules, "handle_queue", fake_hq)
+    monkeypatch.setattr(mod.subprocess, "Popen", lambda *a, **kw: None)
+
+    payload = json.dumps({
+        "envelope": "maro-dispatch/v1",
+        "user_ask": "summarize the gist",
+        "operator_context": "pasted in Telegram",
+        "attached_artifacts": [{"name": "ref.md", "content": "x"}],
+    })
+    assert mod.cmd_enqueue(payload) == 0
+    assert enqueued == [payload], "queue must carry the raw payload"
+    rec = json.loads((tmp_path / "hermes-dispatch" / "job-env.json").read_text())
+    assert rec["goal"] == "summarize the gist"
+    assert rec["envelope"]["artifacts"] == ["ref.md"]
+    assert rec["envelope"]["version"] == "maro-dispatch/v1"
+
+
+def test_enqueue_malformed_envelope_refused_at_boundary(tmp_path, monkeypatch, capsys):
+    """Declared envelope + broken shape = refused in seconds at enqueue with
+    exit 2 and nothing queued — not discovered inside a detached worker."""
+    mod = _load_dispatch(tmp_path, monkeypatch)
+    enqueued = []
+    fake_hq = types.ModuleType("handle_queue")
+    fake_hq.enqueue_goal = lambda goal: enqueued.append(goal) or "job-bad"
+    monkeypatch.setitem(sys.modules, "handle_queue", fake_hq)
+    monkeypatch.setattr(mod.subprocess, "Popen", lambda *a, **kw: None)
+
+    bad = json.dumps({"envelope": "maro-dispatch/v1"})  # no user_ask
+    assert mod.cmd_enqueue(bad) == 2
+    assert not enqueued, "malformed envelope must not be enqueued"
+    out = json.loads(capsys.readouterr().out)
+    assert out["status"] == "error"
+    assert "envelope" in out["error"]

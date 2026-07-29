@@ -87,6 +87,30 @@ def _emit(obj: dict) -> int:
 
 def cmd_enqueue(goal: str) -> int:
     from handle_queue import enqueue_goal
+    from dispatch_envelope import (
+        ENVELOPE_VERSION, EnvelopeError, parse_dispatch_payload)
+
+    # Typed envelope intake (docs/DISPATCH_ENVELOPE.md): validate at the
+    # boundary so a malformed envelope is refused in seconds at enqueue —
+    # not discovered minutes later inside a detached worker. The queue task
+    # still carries the raw payload (handle_task re-parses it); the dispatch
+    # record's display goal is the user's ask, not the JSON wrapper.
+    display = goal
+    env_meta = None
+    try:
+        env = parse_dispatch_payload(goal)
+    except EnvelopeError as exc:
+        _emit({"status": "error",
+               "error": f"malformed dispatch envelope: {exc}"})
+        return 2
+    if env is not None:
+        display = env.user_ask
+        env_meta = {
+            "version": ENVELOPE_VERSION,
+            "operator_context_chars": len(env.operator_context),
+            "constraints": len(env.operator_constraints),
+            "artifacts": [str(a.get("name")) for a in env.attached_artifacts],
+        }
 
     job_id = enqueue_goal(goal)
     rec = {
@@ -94,12 +118,14 @@ def cmd_enqueue(goal: str) -> int:
         # Display copy — the queue task holds the full text. Mark the cut so
         # a truncated goal can't pass for the whole thing (2026-07-16: a goal
         # cut mid-word read as if the dispatch had mangled it).
-        "goal": goal[:500] + ("…" if len(goal) > 500 else ""),
+        "goal": display[:500] + ("…" if len(display) > 500 else ""),
         "status": "dispatched",
         "handle_id": None,
         "dispatched_at": _now(),
         "source": "hermes-ssh",
     }
+    if env_meta:
+        rec["envelope"] = env_meta
     _write_rec(rec)
 
     log = (DISPATCH_DIR / f"{job_id}.log").open("a")

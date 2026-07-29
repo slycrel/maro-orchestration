@@ -118,11 +118,30 @@ def handle_task(
 
     else:
         log.info("handle_task routing %s job_id=%s via handle()", source or "unknown", job_id)
+        # Typed dispatch envelope (docs/DISPATCH_ENVELOPE.md): when the reason
+        # is a maro-dispatch/v1 payload, the goal everything downstream sees —
+        # recall guard, navigator, handle(), closure, lesson extraction — is
+        # user_ask; operator framing rides a dedicated context channel into
+        # the run prompt and nowhere else. Prose reasons pass through
+        # untouched (parse returns None). A declared-but-malformed envelope
+        # raises out of here on purpose: the dispatcher is a machine, and the
+        # worker/drain fail() path is the loud channel.
+        from dispatch_envelope import (
+            ENVELOPE_VERSION, parse_dispatch_payload, operator_block,
+            store_attachments)
+        _operator_ctx = None
+        _env = parse_dispatch_payload(reason)
+        if _env is not None:
+            reason = _env.user_ask
+            _stored = store_attachments(_env, key=job_id)
+            _operator_ctx = operator_block(_env, _stored) or None
         # Carry ancestry across the requeue boundary: the task's origin (if its
         # creator recorded one) plus queue-level identity. Without this, a
         # requeued goal arrives at handle() indistinguishable from fresh user
         # input (goal-brain pressure test, 2026-06-10, finding 1).
         _origin = Origin(task.get("origin") or {})
+        if _env is not None:
+            _origin.setdefault("dispatch_envelope", ENVELOPE_VERSION)
         _origin.setdefault("source", source or "task_store")
         _origin.setdefault("job_id", job_id)
         if task.get("parent_job_id"):
@@ -270,6 +289,7 @@ def handle_task(
                     pass
         return _handle_mod.handle(reason, adapter=adapter, dry_run=dry_run,
                                   verbose=verbose, origin=_origin,
+                                  operator_context=_operator_ctx,
                                   project=_nav_project or None)
 
 

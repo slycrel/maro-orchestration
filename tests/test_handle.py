@@ -4674,3 +4674,56 @@ class TestAnswerFirstDeferredLearning:
         assert ran == [1, 2]
         assert "t-hid" not in _POST_NOTIFY_LEARNING
         assert _drain_deferred_learning("t-hid") == 0
+
+
+class TestOperatorContextChannel:
+    """Dispatch-envelope operator channel (docs/DISPATCH_ENVELOPE.md):
+    operator framing reaches the loop as ancestry context while the goal
+    string handed to the loop stays the user's ask verbatim — the structural
+    exclusion that keeps operator prose out of closure and lesson extraction
+    (the db37d525 contamination class, closed by construction)."""
+
+    def _fake_loop_result(self):
+        from agent_loop import LoopResult, StepOutcome
+        return LoopResult(
+            loop_id="test-op", project="test-proj", goal="build X",
+            status="done", stuck_reason=None,
+            steps=[StepOutcome(index=0, text="step", status="done",
+                               result="output", iteration=0)],
+        )
+
+    def _closure(self):
+        from director import ClosureVerdict
+        return ClosureVerdict(complete=True, confidence=0.9, gaps=[],
+                              summary="verified", checks_run=2, checks_passed=2)
+
+    def test_operator_context_rides_ancestry_not_goal(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        _stub_build_adapter(monkeypatch)
+        from unittest.mock import patch, MagicMock
+
+        goals, loop_kwargs = [], []
+
+        def _fake_run(goal, *a, **kw):
+            goals.append(goal)
+            loop_kwargs.append(kw)
+            return self._fake_loop_result()
+
+        gate = MagicMock()
+        gate.escalate = False
+        gate.contested_claims = []
+        op_block = ("== Operator dispatch context (advisory) ==\n"
+                    "OPMARKER: came in via Telegram\n== End operator context ==")
+        with patch("agent_loop.run_agent_loop", side_effect=_fake_run), \
+             patch("intent.check_goal_clarity", return_value={"clear": True}), \
+             patch("director.verify_goal_completion", return_value=self._closure()), \
+             patch("quality_gate.run_quality_gate", return_value=gate):
+            handle("build X", force_lane="agenda", dry_run=False,
+                   operator_context=op_block)
+
+        assert goals, "run_agent_loop was not invoked"
+        assert "OPMARKER" not in goals[0], (
+            "operator context leaked into the goal string")
+        extra = loop_kwargs[0].get("ancestry_context_extra", "")
+        assert "OPMARKER" in extra, (
+            "operator context did not reach ancestry_context_extra")

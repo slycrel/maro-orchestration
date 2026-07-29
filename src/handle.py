@@ -623,6 +623,7 @@ def handle(
     verbose: bool = False,
     channel: Optional["ConversationChannel"] = None,
     prior_context: Optional[str] = None,
+    operator_context: Optional[str] = None,
     origin: Optional[Origin] = None,
     persona: Optional[str] = None,
     measurement_class: Optional[str] = None,
@@ -655,6 +656,7 @@ def handle(
             verbose=verbose,
             channel=channel,
             prior_context=prior_context,
+            operator_context=operator_context,
             origin=origin,
             persona=persona,
             measurement_class=measurement_class,
@@ -769,6 +771,7 @@ def _handle_impl(
     verbose: bool = False,
     channel: Optional["ConversationChannel"] = None,
     prior_context: Optional[str] = None,
+    operator_context: Optional[str] = None,
     origin: Optional[Origin] = None,
     persona: Optional[str] = None,
     measurement_class: Optional[str] = None,
@@ -1531,6 +1534,12 @@ def _handle_impl(
                 f"== Prior run context (for continuation) ==\n{prior_context}\n"
                 f"== End prior context — continue from here =="
             )
+        # Dispatch-envelope operator channel (docs/DISPATCH_ENVELOPE.md):
+        # advisory operator framing rides context, never the goal — lesson
+        # extraction receives the goal only, so this text is structurally
+        # unlearnable. Arrives pre-labeled (dispatch_envelope.operator_block).
+        if operator_context:
+            _extra_ctx_parts.append(operator_context)
         # NOW→AGENDA verdict escalation: the failed quick answer rides along
         # so the orchestrated run doesn't re-answer from model knowledge.
         if _now_escalation_context:

@@ -67,16 +67,25 @@ scaffolding becoming lessons. Nothing breaks; typed dispatches just get
 better separation. Detection is cheap and unambiguous — payload parses as
 a JSON object with `"envelope": "maro-dispatch/v1"`.
 
-## Where it lands (build sketch, not built)
+## Where it lands (1+2 SHIPPED 2026-07-29; 3+4 not built)
 
-1. **Maro intake seam** — `deploy/hermes/dispatch.py enqueue` (and the
-   local enqueue path) detect the envelope, store it whole in the dispatch
-   record, and pass `user_ask` as the goal. `operator_context` /
-   `operator_constraints` enter the run prompt under explicit labels;
-   `attached_artifacts` land in the run dir before step 1.
-2. **Lesson-extraction seam** — extraction receives only `user_ask` +
-   outcome as source material; operator fields are structurally absent
-   (this is what "cannot be prompted away" means).
+1. **Maro intake seam — SHIPPED** (`src/dispatch_envelope.py`):
+   `dispatch.py cmd_enqueue` validates at the boundary (malformed
+   declared envelope → exit 2, nothing queued; dispatch record displays
+   `user_ask` + envelope meta while the queue task carries the raw
+   payload) and `handle_queue.handle_task` re-parses it — recall guard,
+   navigator, `handle()`, closure, and lessons all key on `user_ask`.
+   `operator_context`/`operator_constraints` enter the run prompt as one
+   labeled advisory block via the new `operator_context` param on
+   `handle()` (rides `ancestry_context_extra`, AGENDA lane only — same
+   contract as `prior_context`). `attached_artifacts` land under
+   `output/dispatch-artifacts/<job_id>/` with sha256+source provenance
+   sidecars (run-dir landing is the artifacts-travel rider).
+2. **Lesson-extraction seam — SHIPPED** by construction: extraction
+   (`reflect_and_record`) receives only `user_ask` + outcome; operator
+   fields ride a channel that never reaches it. Pinned by an interface
+   test (test_dispatch_envelope.py::TestExtractionSeamPin) — this is
+   what "cannot be prompted away" means.
 3. **Poe side** — the maro-dispatch skill (deploy/hermes/
    mini2-maro-dispatch-SKILL.md) teaches envelope construction; changes
    reach mini2 via the propose lane. Poe-side prose guidance is
@@ -85,7 +94,7 @@ a JSON object with `"envelope": "maro-dispatch/v1"`.
    can render "you asked / Poe dispatched" side by side, which is the
    observability Jeremy asked for when the tire framing surprised him.
 
-Build order note: (1)+(2) are box-side and self-contained; (3) requires
+Build order note: (1)+(2) shipped box-side 2026-07-29; (3) requires
 the mini2 propose lane; (4) rides the existing run-visibility surfaces.
-BACKLOG holds the entry; the provenance gate already covers the
-contamination class in the meantime.
+BACKLOG holds the remaining halves (Poe skill, delivery-loop rendering,
+artifacts-travel rider).

@@ -304,22 +304,38 @@ Container-on day-one findings (2026-07-16, two dispatched verification runs):
   exit's record guarantee).
 
 
-### Typed dispatch envelope — channel separation at the dispatch boundary (OPENED 2026-07-29, Jeremy-decreed direction)
+### Typed dispatch envelope — channel separation at the dispatch boundary (OPENED 2026-07-29, Jeremy-decreed direction; box-side intake SHIPPED 2026-07-29)
 
 Spec is written: **`docs/DISPATCH_ENVELOPE.md`**. Follow-on to the
 db37d525 contamination repair (provenance gate SHIPPED 2026-07-29 —
 the load-bearing mint-side fix; this is the channel-separation half).
 A dispatch payload may be typed JSON — `user_ask` (verbatim, the goal
 closure judges), `operator_context` (labeled advisory, never learnable),
-`attached_artifacts` (land in the run's fetch-raw/ with provenance),
+`attached_artifacts` (stored with provenance sidecars),
 `operator_constraints` (scoped-to-run, structurally barred from lesson
 extraction). Prose dispatches keep working conservatively. UX decree
 (Jeremy 2026-07-28): machine-to-machine ONLY — never force a human into
 the envelope; "we're going to want the direct ask and the prompt
-separately." Build order per spec: box-side intake seam
-(deploy/hermes/dispatch.py + local enqueue) and extraction-seam
-structural exclusion first; Poe-side skill teaching via propose lane;
-then "you asked / Poe dispatched" delivery-loop rendering.
+separately."
+
+**Box-side intake SHIPPED 2026-07-29** (spec steps 1+2):
+`src/dispatch_envelope.py` (parse fail-loud on declared-but-malformed,
+labeled `operator_block` renderer, attachment store under
+`output/dispatch-artifacts/<job_id>/` with sha256+source sidecars,
+basename-only names); `handle_queue.handle_task` re-parses the task
+reason so recall guard / navigator / handle() / closure / lessons all
+key on `user_ask` (origin stamped `dispatch_envelope`); new
+`operator_context` param on `handle()` rides `_extra_ctx_parts` →
+`ancestry_context_extra` (context channel, never the goal — extraction
+exclusion falls out because `reflect_and_record` receives goal only,
+pinned by interface test); `dispatch.py cmd_enqueue` validates at the
+boundary (malformed → exit 2, nothing queued; record displays user_ask
++ envelope meta, queue carries raw payload). 34 tests
+(test_dispatch_envelope.py + hermes/handle pins). Remaining halves:
+Poe-side skill teaching via propose lane; "you asked / Poe dispatched"
+delivery-loop rendering; artifacts-travel rider below. Note: like
+prior_context, the operator channel reaches AGENDA-lane runs only —
+the NOW lane has no ancestry context by existing contract.
 
 **Artifacts-travel-with-dispatch rider** (same spec, §attached_artifacts):
 the artifacts-over-streams decree's fetch-to-disk verb applied at the
@@ -798,12 +814,20 @@ session-reuse spike/prototype all SHIPPED (full trail archived to
 BACKLOG_DONE 2026-07-27; canonical measurements in
 `docs/CAPABILITIES.md`). Still open:
 
-- [ ] **Errand-envelope target (~1–3 min / cents) remains open.** Best
-  post-fix run: 6 steps, 16m43s, $1.52 (Run 3, 2026-07-11). Next lever
-  on record: one clean post-fix run re-measuring the warm between-step
-  pool (expected ~47s/step → ~12-15s), then decide whether the
-  closure ∥ quality-gate safe pair is still worth building. Boot-tax
-  prompt half + answer-first delivery already shipped.
+- [ ] **Errand-envelope target (~1–3 min / cents): re-measure DONE
+  2026-07-29, target still open but the lever changed.** Clean live run
+  (0c833432-hardy-haven): 6 steps, **7m12s** wall vs the 16m43s July-11
+  baseline — the warm-pool fix landed as predicted (tight-loop
+  between-call gaps 15–23s ≈ 12–15s pool + model time; 24 calls captured
+  in build/calls, first live proof of the always-wrap record seam).
+  Verdict on the next lever: closure plan→verdict→quality gate ran ~8s
+  serial — the closure ∥ quality-gate safe pair is NOT worth building.
+  The actual tail is the adversarial claim review (~57s, and it fired
+  live, contesting unverified version/format/line-count claims — working
+  as designed). Remaining distance to 1–3 min is step count × model
+  time, i.e. plan-shape (fewer, fatter steps for errand-class goals),
+  not orchestration overhead. Boot-tax prompt half + answer-first
+  delivery already shipped.
 - [ ] **Standing habit:** capture real asks as-phrased into
   `docs/CAPABILITIES.md` (also the CLAUDE.md capability-capture rule
   since 2026-07-11).
