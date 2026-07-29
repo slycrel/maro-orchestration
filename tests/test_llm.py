@@ -308,16 +308,15 @@ def test_subprocess_complete_no_tools_disables_all_tools(monkeypatch):
     assert "--disallowedTools" not in cmd
 
 
-def test_subprocess_no_tools_enforces_max_tokens_via_env(monkeypatch):
-    """no_tools utility calls pass CLAUDE_CODE_MAX_OUTPUT_TOKENS so the CLI
-    hard-enforces the requested cap. The -p flag set has no token-cap flag,
-    so max_tokens was silently ignored — a 256-cap goal-rewrite call returned
-    2489 tokens of prose and mangled the goal (cobalt-pine, 2026-07-16).
-
-    Contract-sized caps are FLOORED at _OUTPUT_CAP_FLOOR: the CLI cap counts
-    thinking tokens, so a 300-cap scope call hard-errored before the model
-    could reason (run 75a88777). The floor keeps runaway protection while
-    un-decapitating thinking; caller parse-fallback stays the contract gate."""
+def test_subprocess_no_tools_uniform_output_ceiling(monkeypatch):
+    """no_tools calls all get ONE CLI output ceiling — a runaway
+    circuit-breaker, not per-call contract enforcement (Jeremy decree
+    2026-07-29). The CLI cap counts thinking tokens, so the old
+    max(max_tokens, floor) + opt-in-headroom scheme decapitated reasoning
+    at every call site that didn't know to opt in: closure verification
+    and lesson extraction were silently dead 07-27→07-29 on the 1500
+    floor. max_tokens no longer influences the env cap; contract quality
+    lives in caller parse-fallbacks."""
     import llm as llm_mod
     a = ClaudeSubprocessAdapter()
     mock_result = MagicMock()
@@ -325,67 +324,49 @@ def test_subprocess_no_tools_enforces_max_tokens_via_env(monkeypatch):
     mock_result.stdout = _make_subprocess_output("ok")
     mock_result.stderr = ""
 
-    with patch("llm._run_subprocess_safe", return_value=mock_result) as mock_run:
-        a.complete([LLMMessage("user", "classify this")], no_tools=True,
-                   max_tokens=256)
+    for kwargs in ({"max_tokens": 256}, {"max_tokens": 9000}, {}):
+        with patch("llm._run_subprocess_safe", return_value=mock_result) as mock_run:
+            a.complete([LLMMessage("user", "classify this")], no_tools=True,
+                       **kwargs)
+        env_extra = mock_run.call_args.kwargs["env_extra"]
+        assert env_extra == {
+            "CLAUDE_CODE_MAX_OUTPUT_TOKENS": str(llm_mod._NO_TOOLS_OUTPUT_CEILING)}
 
-    env_extra = mock_run.call_args.kwargs["env_extra"]
-    assert env_extra == {
-        "CLAUDE_CODE_MAX_OUTPUT_TOKENS": str(llm_mod._OUTPUT_CAP_FLOOR)}
 
-
-def test_subprocess_no_tools_cap_above_floor_passes_through(monkeypatch):
-    """A requested cap above the floor is used as-is."""
+def test_subprocess_timeout_preserves_kill_reason_and_partial_output():
+    """A liveness-watchdog kill must not be reported as a wall-clock
+    timeout: run ba58f96c stalled (no output/CPU for 180s), was killed at
+    469s elapsed, and the old rethrow said "timed out after 600s" —
+    introspection and split-recovery then diagnosed a failure that never
+    happened. The RuntimeError carries the watchdog's actual reason and
+    the partial output, so the kill never destroys the only copy."""
+    import subprocess as _sp
     a = ClaudeSubprocessAdapter()
-    mock_result = MagicMock()
-    mock_result.returncode = 0
-    mock_result.stdout = _make_subprocess_output("ok")
-    mock_result.stderr = ""
+    texc = _sp.TimeoutExpired(["claude"], 600, output="partial stream", stderr="")
+    texc.maro_kill_reason = (
+        "liveness timeout: no output or CPU activity for 180s (elapsed=469s)")
 
-    with patch("llm._run_subprocess_safe", return_value=mock_result) as mock_run:
-        a.complete([LLMMessage("user", "summarize")], no_tools=True,
-                   max_tokens=9000)
+    with patch("llm._run_subprocess_safe", side_effect=texc):
+        with pytest.raises(RuntimeError) as ei:
+            a.complete([LLMMessage("user", "go")], no_tools=True)
 
-    env_extra = mock_run.call_args.kwargs["env_extra"]
-    assert env_extra == {"CLAUDE_CODE_MAX_OUTPUT_TOKENS": "9000"}
+    msg = str(ei.value)
+    assert "liveness timeout" in msg
+    assert "elapsed=469s" in msg
+    assert "timed out" in msg  # loop_blocked/llm_errors match on this
+    assert ei.value.maro_partial_output == "partial stream"
 
 
-def test_subprocess_output_cap_tokens_widens_env_cap_only(monkeypatch):
-    """output_cap_tokens gives contract calls that must REASON over a full
-    goal (decompose lanes, cuts, scope) CLI-cap headroom without touching
-    max_tokens: the CLI cap counts thinking tokens, so answer-sized caps
-    killed planning on real goals (4d20b559, 1bfd0894). API backends get
-    the same answer-sized max_tokens as before and absorb the kwarg —
-    their spend behavior is byte-identical."""
+def test_subprocess_timeout_without_kill_reason_reports_wall_clock():
+    """A plain TimeoutExpired (no watchdog annotation) still reports the
+    wall-clock limit."""
+    import subprocess as _sp
     a = ClaudeSubprocessAdapter()
-    mock_result = MagicMock()
-    mock_result.returncode = 0
-    mock_result.stdout = _make_subprocess_output("ok")
-    mock_result.stderr = ""
 
-    with patch("llm._run_subprocess_safe", return_value=mock_result) as mock_run:
-        a.complete([LLMMessage("user", "decompose this goal")], no_tools=True,
-                   max_tokens=700, output_cap_tokens=4000)
-
-    env_extra = mock_run.call_args.kwargs["env_extra"]
-    assert env_extra == {"CLAUDE_CODE_MAX_OUTPUT_TOKENS": "4000"}
-
-
-def test_subprocess_output_cap_tokens_never_tightens(monkeypatch):
-    """The kwarg is headroom only — a stale/low value cannot lower the cap
-    below what max_tokens/the floor would have set."""
-    a = ClaudeSubprocessAdapter()
-    mock_result = MagicMock()
-    mock_result.returncode = 0
-    mock_result.stdout = _make_subprocess_output("ok")
-    mock_result.stderr = ""
-
-    with patch("llm._run_subprocess_safe", return_value=mock_result) as mock_run:
-        a.complete([LLMMessage("user", "summarize")], no_tools=True,
-                   max_tokens=9000, output_cap_tokens=100)
-
-    env_extra = mock_run.call_args.kwargs["env_extra"]
-    assert env_extra == {"CLAUDE_CODE_MAX_OUTPUT_TOKENS": "9000"}
+    with patch("llm._run_subprocess_safe",
+               side_effect=_sp.TimeoutExpired(["claude"], 600)):
+        with pytest.raises(RuntimeError, match="wall-clock timeout after 600s"):
+            a.complete([LLMMessage("user", "go")], no_tools=True)
 
 
 def test_subprocess_agentic_call_not_token_capped(monkeypatch):

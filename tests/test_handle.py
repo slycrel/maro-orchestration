@@ -2015,16 +2015,18 @@ class TestClosureRestart:
 
     def test_skipped_closure_not_recorded_as_achieved(self, monkeypatch, tmp_path):
         """Burn-in batch-4 regression: the fail-open null verdict
-        (complete=True, checks_run=0, 'Verification skipped.') must not be
-        written as goal_achieved=True — no checks means unverified, not
-        blessed. A rate-limit-stuck run had been recorded as achieved."""
+        (unjudged, checks_run=0, 'Verification did not run.') must not be
+        written as goal_achieved — no checks means unverified, not blessed
+        and not failed. A rate-limit-stuck run had been recorded as
+        achieved under the old complete=True skip shape."""
         self._setup(monkeypatch, tmp_path)
         from unittest.mock import patch
         import runs as runs_mod
 
         stuck_result = self._fake_loop_result(status="stuck")
-        null_verdict = self._fake_closure(True, 0.5, checks_run=0)
-        null_verdict.summary = "Verification skipped."
+        null_verdict = self._fake_closure(False, 0.0, checks_run=0)
+        null_verdict.judged = False
+        null_verdict.summary = "Verification did not run."
 
         with patch("agent_loop.run_agent_loop", return_value=stuck_result), \
              patch("intent.check_goal_clarity", return_value={"clear": True}), \

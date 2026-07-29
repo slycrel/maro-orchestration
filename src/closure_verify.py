@@ -628,10 +628,18 @@ def verify_goal_completion(
         except Exception:
             pass
 
+    # The skip verdict is UNJUDGED, not complete: verification never ran, so
+    # it carries no evidence in either direction. It was complete=True/0.5
+    # until 2026-07-29, which let four days of closure crashes (the CLI
+    # output-cap bug) log "treating as complete" while the completion
+    # contract was silently dead — the exact partial-masquerading-as-result
+    # failure closure exists to catch. Consumers already gate on
+    # checks_run > 0 (recording) and judged (demotion), so nothing reads
+    # complete=False here as disproof.
     _null = ClosureVerdict(
-        complete=True, confidence=0.5, gaps=[],
-        summary="Verification skipped.", checks_run=0, checks_passed=0,
-        inconclusive_count=0,
+        complete=False, confidence=0.0, gaps=[],
+        summary="Verification did not run.", checks_run=0, checks_passed=0,
+        inconclusive_count=0, judged=False,
     )
 
     # Emit CLOSURE_VERDICT for any early-exit path so the captain's log always
@@ -681,8 +689,9 @@ def verify_goal_completion(
                 summary=f"Closure skipped ({reason}): verification did not run",
                 context={
                     "goal_preview": goal[:200],
-                    "complete": True,
-                    "confidence": 0.5,
+                    "complete": None,
+                    "judged": False,
+                    "confidence": 0.0,
                     "checks_run": 0,
                     "checks_passed": 0,
                     "gap_count": 0,
@@ -695,7 +704,7 @@ def verify_goal_completion(
                     ) if diagnosis is not None else "",
                     "diagnosis_gap_downgrade": "",
                     "commands": [],
-                    "summary": "Verification skipped.",
+                    "summary": "Verification did not run.",
                     "skip_reason": reason,
                     **({"skip_detail": detail[:300]} if detail else {}),
                 },
@@ -1272,7 +1281,7 @@ def verify_goal_completion(
         # closure this way and nobody could see why — the throwing exception
         # was invisible and the run fell to the provenance regex alone).
         log.warning("closure check error — verification did not run, "
-                    "treating as complete (%s: %s)",
+                    "verdict is unjudged (%s: %s)",
                     type(exc).__name__, exc, exc_info=True)
         _emit_skip("exception", detail=f"{type(exc).__name__}: {exc}")
         return _null

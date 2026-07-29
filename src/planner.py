@@ -20,17 +20,6 @@ from llm_parse import extract_json
 
 log = logging.getLogger("maro.planner")
 
-# CLI-cap headroom (llm.py output_cap_tokens) for the no_tools contract
-# calls that reason over a full goal (cuts + every decompose lane + scope).
-# The subprocess backend's CLAUDE_CODE_MAX_OUTPUT_TOKENS cap counts THINKING
-# tokens, so an answer-sized max_tokens (512/1024 → 1500 floor) killed these
-# calls on real-sized goals (runs 4d20b559/1bfd0894: every decompose lane
-# died at the floor, leaving a heuristic 2-step plan). Passed as a kwarg so
-# API backends (which cap output only) are untouched — their max_tokens
-# stays answer-sized. The strict step/CUT parser stays the contract gate.
-GOAL_REASONING_MAX_TOKENS = 4000
-
-
 # ---------------------------------------------------------------------------
 # Anti-sycophancy rules (injected into every planning prompt)
 # ---------------------------------------------------------------------------
@@ -271,7 +260,6 @@ def draw_cuts(
             temperature=0.2,
             no_tools=True,
             purpose="cuts",
-            output_cap_tokens=GOAL_REASONING_MAX_TOKENS,
         )
     except Exception as exc:
         log.warning("cuts: adapter.complete failed: %s", exc)
@@ -928,8 +916,7 @@ def decompose(
     if _goal_scope in ("wide", "deep"):
         try:
             _staged_kwargs: dict = {"max_tokens": 512, "temperature": 0.2,
-                                    "no_tools": True, "purpose": "decompose-staged",
-                                    "output_cap_tokens": GOAL_REASONING_MAX_TOKENS}
+                                    "no_tools": True, "purpose": "decompose-staged"}
             if thinking_budget:
                 _staged_kwargs["thinking_budget"] = thinking_budget
             _staged_system = _STAGED_PASS_SYSTEM
@@ -963,7 +950,6 @@ def decompose(
                 temperature=0.3,
                 no_tools=True,
                 purpose="decompose-narrow",
-                output_cap_tokens=GOAL_REASONING_MAX_TOKENS,
             )
             simple_steps = parse_steps(resp.content.strip(), max_steps)
             if simple_steps:
@@ -980,7 +966,6 @@ def decompose(
                 [LLMMessage("system", system), LLMMessage("user", user_msg)],
                 max_tokens=1024,
                 temperature=0.7,
-                output_cap_tokens=GOAL_REASONING_MAX_TOKENS,  # higher temp for diversity
                 no_tools=True,
                 purpose="decompose-candidate",
             )
@@ -996,7 +981,6 @@ def decompose(
             )
             _compose_kwargs: dict = {
                 "max_tokens": 1024,
-                "output_cap_tokens": GOAL_REASONING_MAX_TOKENS,
                 "temperature": 0.1,
                 "no_tools": True,
                 "purpose": "decompose-compose",
@@ -1053,7 +1037,6 @@ def decompose(
             temperature=0.2,
             no_tools=True,
             purpose="decompose-single",
-            output_cap_tokens=GOAL_REASONING_MAX_TOKENS,
         )
         parsed = parse_steps(resp.content.strip(), max_steps)
         if parsed:

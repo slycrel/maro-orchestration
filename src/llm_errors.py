@@ -221,13 +221,14 @@ def classify_error(exc: Exception, backend: str = "") -> ErrorInfo:
     if any(p in msg for p in _INPUT_PATTERNS):
         return _mk(INPUT_TOO_LARGE)
 
-    # A capped no_tools utility call overran CLAUDE_CODE_MAX_OUTPUT_TOKENS
-    # (the 2026-07-16 hard-error cap). The request is malformed for ANY
-    # backend — the contract call wants more tokens than its caller allowed —
-    # so failover would just re-run it on a billed backend (azure-finch
-    # 2026-07-17: routing call → OpenRouter 402 alert spam → OpenAI). Must
-    # outrank the generic "subprocess failed" shape below. Propagate raw;
-    # every capped call site has a parse-fallback that handles the exception.
+    # A no_tools utility call overran CLAUDE_CODE_MAX_OUTPUT_TOKENS. Since
+    # 2026-07-29 that env cap is one uniform runaway ceiling (llm.py
+    # _NO_TOOLS_OUTPUT_CEILING), not per-call contract enforcement, so
+    # tripping it means a genuine generation runaway — failover would just
+    # re-run the runaway on a billed backend (azure-finch 2026-07-17:
+    # routing call → OpenRouter 402 alert spam → OpenAI). Must outrank the
+    # generic "subprocess failed" shape below. Propagate raw; utility call
+    # sites have parse-fallbacks that handle the exception.
     if "output token maximum" in msg:
         return _mk(OUTPUT_CAP_EXCEEDED)
 

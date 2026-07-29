@@ -5139,3 +5139,29 @@ Dormant (deliberately parked, not dropped):
   byte-identical to the pre-landing commit, proving the tree was stale
   rather than holding another session's uncommitted work. That check is the
   difference between converging and destroying.
+
+- **2026-07-29 — Token-cap decree (Jeremy): "I don't love the token
+  limits per step; too much like magic numbers and not enough like
+  'data driven' behavior. I do think we need to have some caps due to
+  context management, but maybe we need to stop trying to manage those
+  up front and start trying to be more clever about what we pull in
+  from a large doc."** Context: the third self-diagnosis dispatch
+  (task-...bdff7e56, run ba58f96c) post-mortem — closure verification
+  and lesson extraction had been silently dead since 07-27 on the
+  no_tools CLI cap's 1500 floor (thinking tokens count against the
+  cap; every call site that didn't pass the output_cap_tokens opt-in
+  got decapitated), and a decompose call died at the 4000 opt-in the
+  same run. Applied same day: per-call cap scheme replaced by ONE
+  uniform runaway ceiling (`llm.py _NO_TOOLS_OUTPUT_CEILING = 16000`)
+  — caps are containment circuit-breakers, never contract enforcement;
+  contract quality lives in parse-fallbacks. Corollaries shipped in the
+  same chunk: subprocess kill reasons preserved verbatim (liveness
+  stall vs wall-clock were conflated, so recovery retried the wrong
+  diagnosis), killed-call partial output surfaced into the blocked
+  result (DEAD_ENDS "Attempted:" was empty), closure skip/exception
+  verdicts are now unjudged instead of "treating as complete". The
+  "be more clever about what we pull in from a large doc" half is NOT
+  built here — it lands on the existing retrieval-handle direction
+  (token-explosion arc); step 3 of ba58f96c died reading a 292KB
+  session transcript in one agentic call, which is that problem, not a
+  cap problem.

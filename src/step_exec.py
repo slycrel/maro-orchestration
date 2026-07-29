@@ -1225,6 +1225,14 @@ def execute_step(
         # diagnoses/notify/stuck_reason consumers can render the fix directly
         # (BACKEND_RESILIENCE_DESIGN §2; the old corpus had to re-infer
         # adapter_timeout from "0 tokens after 600491ms").
+        # A killed subprocess's partial output (llm.py attaches it on
+        # timeout/runaway kills) is the only record of what the step did
+        # before dying — the tail, not "", becomes the blocked result so
+        # DEAD_ENDS "Attempted:" and recovery see real evidence.
+        _partial = str(getattr(exc, "maro_partial_output", "") or "")
+        _partial_result = (
+            f"[partial output before kill]\n{_partial[-2000:]}" if _partial else ""
+        )
         try:
             from llm_errors import classify_error, is_actionable
             _einfo = classify_error(exc)
@@ -1237,7 +1245,7 @@ def execute_step(
                 "stuck_reason": _stuck,
                 "error_class": _einfo.error_class,
                 "user_action": _einfo.user_action,
-                "result": "",
+                "result": _partial_result,
                 "tokens_in": 0,
                 "tokens_out": 0,
             }
@@ -1255,7 +1263,7 @@ def execute_step(
             return {
                 "status": "blocked",
                 "stuck_reason": f"LLM call failed: {exc}",
-                "result": "",
+                "result": _partial_result,
                 "tokens_in": 0,
                 "tokens_out": 0,
             }

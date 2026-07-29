@@ -1189,6 +1189,16 @@ BM25 alone is what we run on today; (b) any index needs a staleness/provenance c
 (sources-on-disk assertion) or it rots invisibly. `lat.md/` + `lat_inject.py` fate also
 folds into this decision (see docs/INDEX.md note).
 
+Fresh evidence + decree (2026-07-29, token-cap decree — see GOAL_BRAIN): run
+ba58f96c (third self-diagnosis dispatch) step 3 asked one agentic call to
+digest a 292KB session transcript and got liveness-killed at 469s; steps 1–2
+had already burned 1.7M tokens re-reading prior-run jsonls. Jeremy: "stop
+trying to manage those [token caps] up front and start trying to be more
+clever about what we pull in from a large doc." That is THIS item: a
+retrieval handle over large artifacts (read the slice you need, not the file)
+is the fix; the cap-side half (uniform runaway ceiling, no per-call magic
+numbers) already shipped in the same-day cap-and-kill-reason chunk.
+
 ### Design constraint: decay trust, never data
 
 - [x] **Retention-decree audit — 3 violations found and FIXED 2026-07-10**

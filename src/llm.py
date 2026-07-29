@@ -1373,6 +1373,28 @@ def _run_subprocess_safe(cmd, *, input=None, timeout=600,
     return subprocess.CompletedProcess(cmd, proc.returncode, stdout, "")
 
 
+def _subprocess_timeout_error(binary: str, exc: subprocess.TimeoutExpired,
+                              timeout) -> RuntimeError:
+    """Build the RuntimeError for a killed subprocess WITHOUT losing why.
+
+    `_run_subprocess_safe` kills for two distinct reasons — wall-clock
+    ceiling vs liveness stall (no output/CPU for N seconds) — and attaches
+    the real one as `maro_kill_reason`. The old rethrow flattened both to
+    "timed out after {timeout}s", so run ba58f96c's liveness stall at 469s
+    elapsed was reported as a 600s wall-clock timeout and every downstream
+    layer (introspect, split-recovery, DEAD_ENDS) diagnosed the wrong
+    failure. Partial output rides along as `maro_partial_output` so the
+    kill never destroys the only copy of what the call produced.
+    """
+    reason = (getattr(exc, "maro_kill_reason", "")
+              or f"wall-clock timeout after {timeout}s")
+    err = RuntimeError(f"{binary} subprocess timed out: {reason}")
+    err.maro_partial_output = (  # type: ignore[attr-defined]
+        getattr(exc, "output", None)
+        or getattr(exc, "maro_partial_output", "") or "")
+    return err
+
+
 def _build_stream_cost_probe(default_model: str = ""):
     """Stream-side half of the runaway cost circuit (BACKLOG #23e residual).
 
@@ -1989,12 +2011,20 @@ class _JSONToolPromptMixin:
         return ToolCall(name=tool_name, arguments=args)
 
 
-# Floor for the CLAUDE_CODE_MAX_OUTPUT_TOKENS hard cap on no_tools calls.
-# The CLI cap counts thinking tokens, so contract-sized caps (128/300) kill
-# the call before the model can reason. 1500 matches what run_curation's
-# answer cap independently converged on (dapper-heron: "a tight cap doesn't
-# shorten the answer, it decapitates it").
-_OUTPUT_CAP_FLOOR = 1500
+# Uniform CLAUDE_CODE_MAX_OUTPUT_TOKENS ceiling for no_tools calls: a
+# runaway circuit-breaker, NOT contract enforcement (Jeremy decree
+# 2026-07-29: per-call token limits are magic numbers; caps exist for
+# containment only). The CLI cap counts THINKING tokens, so any
+# answer-sized cap decapitates reasoning instead of bounding prose — the
+# old max(max_tokens, 1500-floor) + opt-in-headroom scheme silently killed
+# every call site that didn't know to opt in (closure verification and
+# lesson extraction were dead 07-27→07-29; a decompose call died at the
+# 4000 opt-in on 07-29). Contract quality is enforced where it actually
+# works: extract_json parse-fallbacks at each caller plus the
+# FailoverAdapter requested-cap overrun warning. Sized ~4x the largest
+# observed legitimate reasoning burn (>4000 thinking tokens) and under the
+# CLI's 32000 default, so only a genuine runaway trips it.
+_NO_TOOLS_OUTPUT_CEILING = 16000
 
 
 class ClaudeSubprocessAdapter(_JSONToolPromptMixin, LLMAdapter):
@@ -2143,40 +2173,23 @@ class ClaudeSubprocessAdapter(_JSONToolPromptMixin, LLMAdapter):
                     _session_turns = 0
                 _session_state["signature"] = _session_signature
 
-        # Enforce max_tokens on utility (no_tools) calls via the CLI's
-        # CLAUDE_CODE_MAX_OUTPUT_TOKENS env var — the -p flag set has no
-        # per-call token cap, so the signature's max_tokens was silently
-        # ignored (cobalt-pine 2026-07-16: a 256-cap rewrite call returned
-        # 2489 tokens of prose and mangled the goal). Overrun becomes a hard
-        # CLI error, not truncation — the right direction for JSON-only
-        # contract calls, whose callers all fall back safely. Agentic calls
-        # are deliberately uncapped: their multi-turn output legitimately
-        # exceeds any utility-sized cap and an error would kill real work.
-        #
-        # Floor at _OUTPUT_CAP_FLOOR: the CLI cap counts THINKING tokens, so
-        # a 128/300-token contract cap hard-errors before the model can even
-        # reason (run 75a88777: scope's 300-cap call died, degrading the whole
-        # run's scope). The floor un-decapitates thinking while keeping the
-        # runaway guard: a genuine prose runaway still exceeds it, and the
-        # caller's parse-fallback remains the contract-quality gate below it.
+        # Utility (no_tools) calls get one uniform CLI output ceiling
+        # (_NO_TOOLS_OUTPUT_CEILING — see its comment for the decree and
+        # the graveyard of the per-call scheme this replaces). The env var
+        # is the only cap the -p flag set honors, and it counts thinking
+        # tokens, so it is a containment brake only; the signature's
+        # max_tokens stays advisory on this backend, enforced by each
+        # caller's parse-fallback (cobalt-pine's rewrite guard is a JSON
+        # contract + referent check in intent.py, not this cap) and
+        # surfaced by the FailoverAdapter overrun warning. Agentic calls
+        # are deliberately uncapped: multi-turn output legitimately
+        # exceeds any utility-sized ceiling and an error would kill real
+        # work.
         _env_extra = None
-        if no_tools and max_tokens:
-            _cap = max(int(max_tokens), _OUTPUT_CAP_FLOOR)
-            # output_cap_tokens: opt-in CLI-cap headroom for contract calls
-            # that must REASON over a full goal (decompose lanes, cuts,
-            # scope). The env cap counts THINKING tokens, so their
-            # answer-sized max_tokens (512-1200 → 1500 floor) hard-killed
-            # every such call on real-sized goals (runs 4d20b559/1bfd0894).
-            # A kwarg, not a max_tokens raise: API backends ignore it, so
-            # their output cap — and spend behavior — is unchanged, and
-            # tight caps on loosely-parsed calls (cobalt-pine rewrite
-            # guard) stay tight unless a caller explicitly opts in.
-            try:
-                _cap = max(_cap, int(kwargs.get("output_cap_tokens") or 0))
-            except Exception:
-                pass
-            _env_extra = {"CLAUDE_CODE_MAX_OUTPUT_TOKENS": str(_cap)}
-        elif not no_tools:
+        if no_tools:
+            _env_extra = {
+                "CLAUDE_CODE_MAX_OUTPUT_TOKENS": str(_NO_TOOLS_OUTPUT_CEILING)}
+        else:
             # Agentic calls: cap per-tool-call Bash output at the CLI boundary
             # (BASH_MAX_OUTPUT_LENGTH — oversized output is persisted to a
             # file and only a capped slice reaches the model's context). The
@@ -2199,8 +2212,8 @@ class ClaudeSubprocessAdapter(_JSONToolPromptMixin, LLMAdapter):
                 cmd, input=prompt, timeout=_timeout, cwd=_cwd,
                 stream_probe=_build_stream_probes(model_str, agentic=not no_tools),
                 container_name=_container_name, env_extra=_env_extra)
-        except subprocess.TimeoutExpired:
-            raise RuntimeError(f"claude subprocess timed out after {_timeout}s")
+        except subprocess.TimeoutExpired as _texc:
+            raise _subprocess_timeout_error("claude", _texc, _timeout)
         except FileNotFoundError:
             raise RuntimeError(f"claude binary not found at {self.claude_bin}")
 
@@ -2224,8 +2237,8 @@ class ClaudeSubprocessAdapter(_JSONToolPromptMixin, LLMAdapter):
                     env_extra=_env_extra,
                     stream_probe=_build_stream_probes(model_str, agentic=not no_tools),
                     container_name=_container_name)
-            except subprocess.TimeoutExpired:
-                raise RuntimeError(f"claude subprocess timed out after {_timeout}s")
+            except subprocess.TimeoutExpired as _texc:
+                raise _subprocess_timeout_error("claude", _texc, _timeout)
             except FileNotFoundError:
                 raise RuntimeError(f"claude binary not found at {self.claude_bin}")
             cmd = fresh_cmd
@@ -2546,8 +2559,8 @@ class CodexCLIAdapter(_JSONToolPromptMixin, LLMAdapter):
         _cwd = kwargs.get("cwd") or get_default_subprocess_cwd()
         try:
             result = _run_subprocess_safe(cmd, input=prompt, timeout=_timeout, cwd=_cwd)
-        except subprocess.TimeoutExpired:
-            raise RuntimeError(f"codex subprocess timed out after {_timeout}s")
+        except subprocess.TimeoutExpired as _texc:
+            raise _subprocess_timeout_error("codex", _texc, _timeout)
         except FileNotFoundError:
             raise RuntimeError(f"codex binary not found at {self.codex_bin}")
 

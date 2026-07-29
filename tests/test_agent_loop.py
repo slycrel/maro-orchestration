@@ -188,6 +188,34 @@ def test_execute_step_stuck_on_api_failure():
     assert "LLM call failed" in outcome["stuck_reason"]
 
 
+def test_execute_step_blocked_carries_partial_output():
+    """A killed subprocess's partial output (llm.py attaches it to the
+    rethrown RuntimeError) must survive into the blocked outcome's result —
+    run ba58f96c's DEAD_ENDS recorded an empty "Attempted:" because the
+    kill destroyed the only copy of what the step produced."""
+    class KilledAdapter:
+        def complete(self, messages, **kwargs):
+            exc = RuntimeError(
+                "claude subprocess timed out: liveness timeout: no output "
+                "or CPU activity for 180s (elapsed=469s)")
+            exc.maro_partial_output = "read memo section 3 of 6..."
+            raise exc
+
+    outcome = _execute_step(
+        goal="test",
+        step_text="do something",
+        step_num=1,
+        total_steps=1,
+        completed_context=[],
+        adapter=KilledAdapter(),
+        tools=[],
+    )
+    assert outcome["status"] == "blocked"
+    assert "liveness timeout" in outcome["stuck_reason"]
+    assert "read memo section 3 of 6" in outcome["result"]
+    assert outcome["result"].startswith("[partial output before kill]")
+
+
 # ---------------------------------------------------------------------------
 # run_agent_loop
 # ---------------------------------------------------------------------------

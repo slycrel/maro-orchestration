@@ -1136,23 +1136,23 @@ class TestDetectDiagnosisGap:
 class TestVerifyGoalCompletion:
     """Tests for verify_goal_completion — director closure check."""
 
-    def test_dry_run_returns_complete(self):
+    def test_dry_run_returns_unjudged(self):
         verdict = verify_goal_completion("build X", [], None, dry_run=True)
-        assert verdict.complete is True
+        assert verdict.judged is False
         assert verdict.checks_run == 0
 
-    def test_no_adapter_returns_complete(self):
+    def test_no_adapter_returns_unjudged(self):
         verdict = verify_goal_completion("build X", [], None)
-        assert verdict.complete is True
+        assert verdict.judged is False
 
-    def test_no_checks_returns_complete(self, monkeypatch):
+    def test_no_checks_returns_unjudged(self, monkeypatch):
         """If director generates no checks (research goal), skip verification."""
         from unittest.mock import MagicMock, patch
         adapter = MagicMock()
         adapter.complete.return_value = MagicMock()
         with patch("closure_verify.extract_json", return_value={"checks": []}):
             verdict = verify_goal_completion("summarize this article", [], adapter)
-        assert verdict.complete is True
+        assert verdict.judged is False
         assert verdict.checks_run == 0
 
     def test_empty_workspace_path_falls_back_to_run_scoped_cwd(self, monkeypatch, tmp_path):
@@ -1394,15 +1394,20 @@ class TestVerifyGoalCompletion:
         emitted_types = [c.args[0] for c in channel.emit.call_args_list]
         assert "verification" in emitted_types
 
-    def test_exception_returns_complete(self):
-        """Exceptions are swallowed — never blocks execution."""
+    def test_exception_returns_unjudged(self):
+        """Exceptions are swallowed — never blocks execution, but the
+        verdict must be UNJUDGED, not complete: four days of closure
+        crashes (07-27→07-29 output-cap bug) logged "treating as
+        complete" while the completion contract was silently dead."""
         from unittest.mock import MagicMock, patch
 
         adapter = MagicMock()
         adapter.complete.side_effect = RuntimeError("API down")
 
         result = verify_goal_completion("build X", [], adapter)
-        assert result.complete is True
+        assert result.judged is False
+        assert result.complete is False
+        assert result.checks_run == 0
 
     # ------------------------------------------------------------------
     # Regression: CLOSURE_VERDICT must be emitted on ALL early-exit paths

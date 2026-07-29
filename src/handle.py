@@ -2184,11 +2184,12 @@ def _handle_impl(
             # deliver what was asked") are different facts; status alone
             # conflated them until 2026-06-11.
             # Only when closure actually ran checks. The fail-open null
-            # verdict (complete=True, "Verification skipped.", checks_run=0)
-            # exists so closure errors never block execution — recording it
-            # would bless unverified work as achieved (burn-in batch 4,
-            # 2026-07-02: a rate-limit-stuck run got goal_achieved=True from
-            # a skipped verification). No checks → no verdict → unverified.
+            # verdict (unjudged, "Verification did not run.", checks_run=0
+            # — complete=False carries no evidence) exists so closure errors
+            # never block execution — recording it would bless unverified
+            # work as achieved (burn-in batch 4, 2026-07-02: a
+            # rate-limit-stuck run got goal_achieved=True from a skipped
+            # verification). No checks → no verdict → unverified.
             # Unjudged verdicts additionally omit goal_achieved: when every
             # non-passing check was inconclusive (verifier syntax error,
             # permission wall, missing tool), the verdict has no disproof in
