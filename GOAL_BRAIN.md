@@ -5097,3 +5097,45 @@ Dormant (deliberately parked, not dropped):
   attempts in order). Extends the 2026-07-27 artifacts-over-streams
   decree from "caps never destroy the only copy" to "persist along the
   way, affirmatively."
+- **2026-07-29 — Clean-checkout tripwire SHIPPED; out-of-the-box invariant
+  now has teeth (Jeremy: "agree, sure, let's do that").** First enforcement
+  of the 2026-07-28 decree. `tests/_checkout_tripwire.py` +
+  `pytest_sessionstart/finish` in `tests/conftest.py` +
+  `tests/test_clean_checkout_tripwire.py` (7 tests): snapshot the tree at
+  session start, compare at finish, **fail the run** if the suite added
+  files. Additions only — modifications to tracked files are already
+  `git status`-visible, while an untracked drop into a gitignored dir is
+  not, and that is where every known violation landed. `output/` and
+  `memory/` are deliberately never pruned. Escape hatch
+  `MARO_ALLOW_CHECKOUT_WRITES=1`. Mechanism lives in its own module
+  specifically so it could be tested — the 2026-06-25 lesson that a guard
+  nobody exercises is indistinguishable from no guard.
+  **It caught a real leak within the hour, and the leak proves the decree's
+  point better than the tripwire does:** on its first run in a fresh
+  worktree it flagged `output/operator-status.json`, left behind by
+  `tests/test_build_loop_script.py`. That file **already existed in the dev
+  checkout**, so it never registered as an addition there — only a tree
+  without it could reveal it. The earlier same-day fix had cleaned the run
+  dirs, heartbeat records and build-loop status/lock, i.e. exactly the
+  artifacts visible locally; the one artifact invisible locally is the one
+  that survived. Fixed; full suite passes from a genuinely clean worktree.
+  **Two decisions closed the same session:** (a) **checkout rename
+  SKIPPED** — *"let's skip the rename, agree it's not worth the effort"*;
+  the cost is 93 sessions of `--resume` history (Claude Code keys them by
+  path, and a symlink does not help because `os.getcwd()` resolves it) for
+  a cosmetic directory name. Weighed and rejected, not deferred — do not
+  re-raise. (b) **Session wrapped deliberately with three items open** on
+  the parent invariant: the fresh-workspace half (entry points against an
+  empty `~/.maro/workspace` — a design call, since it means real spend or
+  careful mocking), the learning-gated exemption marker (**no consumer yet
+  — nothing currently declares itself learning-gated, so building it now
+  would be speculative**), and writing the invariant into HOUSE_STYLE.md
+  (its own item, its own pass). None are loose ends; all are new builds.
+  **Process note worth keeping:** this chunk was landed under the
+  same-day concurrent-session norm (CLAUDE.md "shared tree rules", written
+  partly in response to this session's own earlier rebase wedge) — worktree
+  up front, rebase there, `scripts/land.sh`, then converge. Before running
+  `git checkout -- .` on the shared tree, every modified file was verified
+  byte-identical to the pre-landing commit, proving the tree was stale
+  rather than holding another session's uncommitted work. That check is the
+  difference between converging and destroying.

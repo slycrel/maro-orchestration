@@ -548,7 +548,12 @@ pointer.
       `.jsonl` embeds `"cwd": "/Users/jeremy/claude/openclaw-orchestration"`
       internally, so the rename is best-effort — and his own fallback
       ("worst case we go spelunking in jsonl files") is correct, they are
-      plain JSONL. **Rename itself still not done — left as his call.**
+      plain JSONL. **DECIDED 2026-07-29 — rename SKIPPED** (Jeremy: *"let's
+      skip the rename, agree it's not worth the effort"*). The checkout stays
+      `openclaw-orchestration`; the GitHub repo is `maro-orchestration` and
+      the local directory name is cosmetic. Do not re-raise: the cost is 93
+      sessions of `--resume` history for a directory name, and that trade was
+      weighed and rejected, not deferred.
   (4) **Run corpus — not evidence, and the real find was a leak.** The
       audit killed the premise: all 107 runs were **byte-identically
       trivial** — every `item.txt` == `"repo local"`, every status `done`,
