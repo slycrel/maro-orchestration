@@ -43,6 +43,13 @@ measurable delta (both arms at ceiling; see
 `docs/history/2026-07-21-phase05-battery.md`) — it ships on cost≈zero
 grounds, not benchmark evidence.
 
+**House style:** `docs/HOUSE_STYLE.md` is the written-down dev approach —
+the workflow loop (shape → build → verify → document → land →
+cross-model adversarial review → verify-before-fix → fix → record) and
+the standing invariants with their tripwires (out-of-the-box decree,
+consumer-first, SF-13, data retention). This file stays the session
+entry pointer; the approach itself lives there.
+
 **Coding posture:** read `docs/CODING_NOTES.md` before shipping. This repo
 is heavily iterating — principles for keeping seams visible and rework
 cheap live there (registry vs dispatch, 3-is-fine/4-wants-extraction,

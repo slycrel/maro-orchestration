@@ -428,12 +428,25 @@ escalation.
   measurement axis. Reuse the benchmark-cell isolation machinery
   (twentieth pass).
 
-### Dev-approach "house style" doc + intentionality loop (OPENED 2026-07-28, Jeremy)
+### Dev-approach "house style" doc + intentionality loop (OPENED 2026-07-28, Jeremy; v1 SHIPPED 2026-07-29)
 
 Jeremy: "We should write down our dev approach somewhere in a guidance
 doc... our learned-over-time 'house style' is meaningfully impactful,
 and maybe deserves its own intentionality loop... would be hard to
 replicate in a vacuum on a new machine."
+
+**v1 SHIPPED 2026-07-29** — `docs/HOUSE_STYLE.md` from repo-visible
+material only (part (a) of the approved shape): the workflow loop
+(shape → build → verify → document → land → cross-model review →
+verify-before-fix → fix → record), standing invariants each labeled
+with its tripwire or honestly prose-only (out-of-the-box decree +
+clean-checkout tripwire, DEFAULTS census, consumer-first, SF-13, data
+retention, compiled-truth), pointer table to DEV_PATTERNS/CODING_NOTES/
+CLAUDE.md, maintenance rule (tripwire-or-labeled; prose shrinks to a
+pointer when the deterministic home ships). CLAUDE.md entry pointer
+added. **Still open (needs Jeremy):** (b) importing the feedback-class
+auto-memories from ~/.claude, interview-elicited gaps, codeLikeJeremy
+pattern steals + the regression-harness idea (see item below).
 
 Gap analysis (2026-07-28): much exists but is scattered — CLAUDE.md
 (discipline rules), docs/DEV_PATTERNS.md (taste/judgement),
