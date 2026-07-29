@@ -472,6 +472,22 @@ def test_write_reading_page_links_github(monkeypatch, tmp_path):
     assert 'href="index.html"' in content  # nav tab back to Runs
 
 
+def test_reading_page_accepts_markdown_link_doc_cells(monkeypatch, tmp_path):
+    """Concurrent sessions write the Doc cell both as a bare path and as a
+    full markdown link (M1 lane, 2026-07-28) — both must render as a real
+    anchor, not a GitHub-prefixed mangling of the link syntax."""
+    qdoc = tmp_path / "READING_QUEUE.md"
+    qdoc.write_text(
+        "## Queue\n\n| Added | Doc | Why |\n|---|---|---|\n"
+        "| 2026-07-28 | [M1 contrast](https://github.com/slycrel/maro-orchestration/blob/main/docs/history/contrast.md) | questions back |\n"
+    )
+    monkeypatch.setattr(lr, "_READING_QUEUE_DOC", qdoc)
+    content = Path(lr.write_reading_page(tmp_path)).read_text()
+    assert 'href="https://github.com/slycrel/maro-orchestration/blob/main/docs/history/contrast.md"' in content
+    assert ">M1 contrast</a>" in content
+    assert "[M1 contrast]" not in content
+
+
 def test_write_reading_page_missing_queue_doc_is_nonfatal(monkeypatch, tmp_path):
     monkeypatch.setattr(lr, "_READING_QUEUE_DOC", tmp_path / "nope.md")
     out = lr.write_reading_page(tmp_path)
@@ -485,6 +501,47 @@ def test_runs_index_carries_reading_tab_and_writes_reading_page(monkeypatch, tmp
     root = Path(runs.runs_root())
     assert 'href="reading.html"' in (root / "index.html").read_text()
     assert (root / "reading.html").exists()
+
+
+# ---------------------------------------------------------------------------
+# dev-log page (docs/DEV_LOG.md → dev-log.html, 2026-07-28)
+# ---------------------------------------------------------------------------
+
+def test_write_devlog_page_renders_dates_and_inline_md(monkeypatch, tmp_path):
+    doc = tmp_path / "DEV_LOG.md"
+    doc.write_text(
+        "---\nstatus: living\n---\n\n# Dev Captain's Log\n\nintro prose\n\n"
+        "## 2026-07-28\n\n"
+        "**Evening — a title** — threads: `slug-one`. Body with a\n"
+        "[link](docs/history/thing.md) and <angle> chars.\n"
+    )
+    monkeypatch.setattr(lr, "_DEV_LOG_DOC", doc)
+    out = lr.write_devlog_page(tmp_path)
+    content = Path(out).read_text()
+    assert "<h2>2026-07-28</h2>" in content
+    assert "<strong>Evening — a title</strong>" in content
+    assert "<code>slug-one</code>" in content
+    # Relative doc links resolve to the GitHub-rendered copy on main.
+    assert "https://github.com/slycrel/maro-orchestration/blob/main/docs/history/thing.md" in content
+    assert "&lt;angle&gt;" in content  # HTML-escaped, not injected
+    assert 'href="index.html"' in content  # nav tabs present
+    # The doc's own h1 is dropped — the page header names the tab.
+    assert "<h1>Dev log</h1>" in content and "Dev Captain" not in content.split("devlog")[-1]
+
+
+def test_write_devlog_page_missing_doc_is_nonfatal(monkeypatch, tmp_path):
+    monkeypatch.setattr(lr, "_DEV_LOG_DOC", tmp_path / "nope.md")
+    out = lr.write_devlog_page(tmp_path)
+    assert Path(out).exists()
+
+
+def test_runs_index_writes_devlog_page_too(monkeypatch, tmp_path):
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+    import runs
+    lr.write_runs_index(force=True)
+    root = Path(runs.runs_root())
+    assert 'href="dev-log.html"' in (root / "index.html").read_text()
+    assert (root / "dev-log.html").exists()
 
 
 # ---------------------------------------------------------------------------

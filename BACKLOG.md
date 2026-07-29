@@ -471,7 +471,27 @@ never carry live markers; doc-archival explicitly sweeps forward
 obligations to BACKLOG/GOAL_BRAIN or declares them dead; every
 PARKED/BLOCKED entry states its reason as a **falsifiable claim** so a
 future pass can test it (the six drifts are exactly reasons falsified
-silently). **Split RATIFIED 2026-07-28** ("Sure, sounds good"): ACTIVE =
+silently). **Proposals 2–4 ADJUDICATED 2026-07-28 (Jeremy, same evening):**
+(2) Narrative spine RATIFIED after reading the first real entry
+("that's pretty good, I like that it's terse but cites references") —
+with same-day amendments shipped: date headers for multi-day
+run-on sessions, plain-language rule (gloss codenames on first use),
+and a viz-server Dev log tab next to Runs/Reading ("gives me a 1-stop
+shop to go find references"). (3) `THREAD[slug]` markers + collector
+DECLINED for now — "let's keep the existing setup... let's not
+overengineer our dev workflow that's already becoming a bit intense";
+the census + falsifiable-park-reasons discipline stands alone.
+**Revisit rider (falsifiable):** the next thread census re-asks this
+question with fresh drift data; any lost-thread/premise-drift
+incident before then reopens it immediately. (4) Cap mechanics:
+self-serve promotion with notification BLESSED ("happy to have your
+help here"); Jeremy explicitly reserves tossing prioritization to the
+wind for his own agendas — that's legitimate, never a process
+violation; Claude surfaces genuine priority questions when they'd
+change the dev cycle. His standing concern to design against: "being
+able to keep tabs on everything."
+
+**Split RATIFIED 2026-07-28** ("Sure, sounds good"): ACTIVE =
 threads 1–5 + drift-cleanup batch + 1 free slot, cap 7. Same day
 (loose-ends pass): drift find #5 closed both halves (suite exit 0 +
 fragile seam deleted in swarm chunk 1); free-slot trio examined — census
@@ -619,6 +639,21 @@ refresh attempt — see BACKLOG_DONE for the reconciliation note).
 ---
 
 ## Vision / Deferred
+
+### Verbal UX for orchestration (2026-07-28, Jeremy — revisit trigger named)
+
+Jeremy, during the compound-thinking spitfire: "we sort of started
+hand-waving at a verbal UX for all of this. If we don't have a backlog
+item to revisit this (later, after we start seeing larger successes
+more often), maybe as part of optimization when real time makes more
+sense." No such item existed — this is it. Not a build item: revisit
+when (a) larger successes are landing often enough that interaction
+cadence, not capability, is the bottleneck, or (b) a real-time
+optimization pass makes latency work worthwhile anyway. Prior art
+touchpoint: GOAL_BRAIN:2174's note that voice UX masks planning
+latency. Ties to the escalation-surface decree (the substrate
+go-between IS the surface) — a verbal surface would be another face of
+the same go-between, not a new channel architecture.
 
 ### Two small refactors from the 2026-07-18 adversarial review (low, grab when nearby)
 

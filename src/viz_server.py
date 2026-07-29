@@ -15,7 +15,7 @@ listing, defaults to loopback-only. `<run-dir>/source/` and `<run-dir>/artifact/
 (prompt text, raw `git bundle`/`git log`/`git diff` output — unlike
 `build/calls/*.json`, these are NOT secret-scrubbed) are never reachable:
 the handler allowlists exactly the loop_report-written top-level pages
-(`index.html`, `reading.html`) plus `<run-dir-name>/build/**` and prose
+(`index.html`, `reading.html`, `dev-log.html`) plus `<run-dir-name>/build/**` and prose
 `<run-dir-name>/artifact/` deliverables, denying everything else before
 touching the filesystem.
 """
@@ -46,9 +46,9 @@ def _resolve_allowed_path(url_path: str, root: Path) -> Optional[Path]:
     Allowlist (default-deny everything else) — checks *shape* only, not
     existence; a permitted-but-missing file is left to the caller (which
     404s it the normal way) rather than reported as 403:
-      - "index.html" / "reading.html" at the document root (the two
-        loop_report-written cross-run pages; named exactly — arbitrary
-        root-level files stay denied)
+      - "index.html" / "reading.html" / "dev-log.html" at the document
+        root (the loop_report-written cross-run pages; named exactly —
+        arbitrary root-level files stay denied)
       - "<run-dir-name>/build/**" (any file under a run-dir's build/ subtree)
       - "<run-dir-name>/artifact/*.{md,txt,html,json,csv}" — curated
         deliverable copies placed by run_curation.locate_deliverables (the
@@ -64,7 +64,7 @@ def _resolve_allowed_path(url_path: str, root: Path) -> Optional[Path]:
         return None
     if not segments:
         return None
-    if len(segments) == 1 and segments[0] in ("index.html", "reading.html"):
+    if len(segments) == 1 and segments[0] in ("index.html", "reading.html", "dev-log.html"):
         candidate = root / segments[0]
         base = root
     elif len(segments) >= 3 and segments[1] == "build":

@@ -21,6 +21,7 @@ import html
 import json
 import logging
 import os
+import re
 import shutil
 import threading
 import time as _time
@@ -1518,10 +1519,11 @@ _INDEX_FILTER_JS = """
 
 
 def _nav_tabs(active: str) -> str:
-    """Top-level page tabs shared by the runs index and the reading page."""
+    """Top-level page tabs shared by the runs index, reading, and dev-log pages."""
     parts = []
     for href, label, key in (("index.html", "Runs", "runs"),
-                             ("reading.html", "Reading", "reading")):
+                             ("reading.html", "Reading", "reading"),
+                             ("dev-log.html", "Dev log", "devlog")):
         cls = ' class="active"' if key == active else ""
         parts.append(f'<a{cls} href="{href}">{label}</a>')
     return '<div class="nav-tabs">' + "".join(parts) + "</div>"
@@ -1674,6 +1676,7 @@ def write_runs_index(*, force: bool = False) -> Optional[str]:
         with _index_write_lock:
             _last_index_write[key] = now
         write_reading_page(root)
+        write_devlog_page(root)
         return str(out)
     except Exception:
         log.warning("runs index write failed", exc_info=True)
@@ -1717,7 +1720,15 @@ def _render_reading_html(entries: List[dict]) -> str:
     rows = []
     for e in entries:
         doc = e["doc"].strip("`")
-        href = _GITHUB_BLOB_BASE + doc.lstrip("/")
+        # Hand-edited file: the Doc cell may be a bare repo path or a full
+        # markdown link (concurrent sessions have written both shapes).
+        m = _MD_LINK_RE.fullmatch(doc)
+        if m:
+            doc, href = m.group(1), m.group(2)
+            if not href.startswith(("http://", "https://")):
+                href = _GITHUB_BLOB_BASE + href.lstrip("/")
+        else:
+            href = _GITHUB_BLOB_BASE + doc.lstrip("/")
         rows.append(
             "<tr>"
             f'<td class="meta">{_esc(e["added"])}</td>'
@@ -1768,6 +1779,110 @@ def write_reading_page(root: Optional[Path] = None) -> Optional[str]:
         return str(out)
     except Exception:
         log.warning("reading page write failed", exc_info=True)
+        return None
+
+
+_DEV_LOG_DOC = Path(__file__).resolve().parent.parent / "docs" / "DEV_LOG.md"
+
+_MD_LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)\s]+)\)")
+_MD_BOLD_RE = re.compile(r"\*\*([^*]+)\*\*")
+_MD_CODE_RE = re.compile(r"`([^`]+)`")
+
+
+def _md_inline(text: str) -> str:
+    """Escape, then apply the three inline forms DEV_LOG actually uses."""
+    out = _esc(text)
+
+    def _link(m: "re.Match[str]") -> str:
+        href = m.group(2)
+        if not href.startswith(("http://", "https://")):
+            href = _GITHUB_BLOB_BASE + href.lstrip("/")
+        return f'<a href="{href}" target="_blank" rel="noopener">{m.group(1)}</a>'
+
+    out = _MD_LINK_RE.sub(_link, out)
+    out = _MD_BOLD_RE.sub(r"<strong>\1</strong>", out)
+    out = _MD_CODE_RE.sub(r"<code>\1</code>", out)
+    return out
+
+
+def _render_devlog_html(text: str) -> str:
+    """Minimal Markdown→HTML for the dev captain's log — headers, bold,
+    code spans, links, paragraphs. Deliberately not a Markdown engine
+    (swipe-code-over-deps): the log is prose paragraphs under date
+    headers and this covers exactly that."""
+    lines = text.splitlines()
+    if lines and lines[0].strip() == "---":  # frontmatter
+        for i in range(1, len(lines)):
+            if lines[i].strip() == "---":
+                lines = lines[i + 1:]
+                break
+    blocks: List[str] = []
+    para: List[str] = []
+
+    def flush() -> None:
+        if para:
+            blocks.append("<p>" + _md_inline(" ".join(para)) + "</p>")
+            para.clear()
+
+    for line in lines:
+        s = line.strip()
+        if not s:
+            flush()
+            continue
+        if s.startswith("## "):
+            flush()
+            blocks.append(f"<h2>{_md_inline(s[3:])}</h2>")
+            continue
+        if s.startswith("# "):  # doc title — the page header carries it
+            flush()
+            continue
+        if set(s) <= set("-") and len(s) >= 3:
+            flush()
+            continue
+        para.append(s)
+    flush()
+    body = "\n".join(blocks)
+    return f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Maro dev log</title>
+<style>{_CSS}
+.devlog {{ max-width: 72em; }}
+.devlog p {{ line-height: 1.55; margin: 0.7em 0; }}
+.devlog h2 {{ margin: 1.6em 0 0.4em; border-bottom: 1px solid #8884; padding-bottom: 0.2em; }}
+</style></head>
+<body>
+{_nav_tabs("devlog")}
+<div class="idx-header">
+<div><h1>Dev log</h1><div class="meta">Dev captain&#x27;s log — newest first, one entry per session close (<a href="{_GITHUB_BLOB_BASE}docs/DEV_LOG.md" target="_blank" rel="noopener">source on GitHub</a>)</div></div>
+</div>
+<div class="devlog">
+{body}
+</div>
+</body></html>
+"""
+
+
+def write_devlog_page(root: Optional[Path] = None) -> Optional[str]:
+    """Render docs/DEV_LOG.md into `runs_root()/dev-log.html`. Never raises.
+
+    Same contract as write_reading_page: repo-side doc is the truth, this
+    is the SSH-free view (Jeremy 2026-07-28: "surface this doc same as the
+    reading list in a tab... gives me a 1-stop shop to go find references").
+    """
+    try:
+        if root is None:
+            from runs import runs_root
+            root = runs_root()
+        root = Path(root)
+        root.mkdir(parents=True, exist_ok=True)
+        try:
+            text = _DEV_LOG_DOC.read_text(encoding="utf-8")
+        except OSError:
+            text = ""
+        out = root / "dev-log.html"
+        _atomic_write_text(out, _render_devlog_html(text))
+        return str(out)
+    except Exception:
+        log.warning("dev-log page write failed", exc_info=True)
         return None
 
 

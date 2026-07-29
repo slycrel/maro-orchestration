@@ -617,3 +617,56 @@ telegram leads with the ask —
 `history/2026-07-27-escalation-payload.md`). "Complex later" (per-chasm
 capability-investment scoring, side-quest recommendation) stays
 discussion material with §9.7/§9.9/§10.
+
+**2026-07-28 — the §9/§10 soft set adjudicated (Jeremy's spitfire
+pass; his framing: "leaning on you to remember the full context and
+make a judgement call on if I'm being too surface level").**
+
+- **§9.1 landmark graph → LENS, not schema.** "Gut says that's lens,
+  not schema" — with one binding caveat: **any given run must be
+  visualizable as a map on demand** ("I don't think that's an
+  impractical ask"). N-dimensional routes/side-quests and overlapping
+  top-level dimensions (his examples: Zelda, Master of Magic, dungeon
+  floors, portals) are acknowledged as possible-but-not-now. Matches
+  the fable/Codex convergence (defer; never-as-store). The lens
+  stays; a `--map` visualization rides run data whenever we want it.
+- **§9.3 structural declare-blocked → GREENLIT.** "Let's try it and we
+  can pivot if needed." This is now the next build item inside the
+  chunk-9 ACTIVE thread (after closure-check unification, which owns
+  the free slot): measure frontier convergence/stall cheaply enough to
+  drive a stop decoupled from budget; stall-as-evidence principle
+  already adopted. Star-first per the established build order.
+- **§9.7 milestone memory → all-global to start; scoping is the known
+  hard part.** His articulation of the real problem: the line between
+  a language learned and "a language specific to a context (klingon
+  won't have much use globally)," and how up/downgrades move
+  goal → global → goal. "Feels like we can get away with all learned
+  behavior as global to start, but context always matters, so IDK if
+  that will be enough in the longer term." Note: the scoped/
+  hierarchical direction this converges on is already recorded as the
+  recursive-orchestration-memory constraint (memory scoped to the
+  recursion level that owns it) — the two discussions are one
+  discussion when it happens.
+- **§9.8 capability investment → DEFAULT-YES.** "Assume yes unless
+  good evidence surfaces to say no" — each such case leads to at
+  least one prompt forward, with user-based escalation possible.
+  Tangent captured: verbal UX now has a real BACKLOG entry (Vision)
+  with his revisit trigger (after larger successes are routine /
+  real-time optimization).
+- **§9.9 backward-chaining → later, with appetite** ("I don't
+  remember this but I like all the words").
+- **§10 taste calibration → flagged LOAD-BEARING, needs its own
+  discussion.** "Probably deserves a bigger discussion and my gut
+  says this is going to be hard to get right (and keep simple)."
+  Not sliced now; do not fold it into a build chunk casually.
+- **Cross-goal map scope → empirical.** "Feels more like picking a
+  problem set than a preferred path forward" — pairs with §9.7's
+  global-vs-goal question; pick one and try it when that discussion
+  happens.
+
+Lead's judgment call (per his ask): the surface answers on 9.1, 9.3,
+9.8, 9.9 are decision-grade as given. The one genuine discussion owed
+is **§10 calibration together with the §9.7/cross-goal scoping
+question** — they are the same conversation (what knowledge earns
+globality, and how outcomes feed calibration), and it should happen
+before any §9.7 build, not after.

@@ -52,6 +52,12 @@ def test_allows_root_reading_page(rundir_root):
     assert vs._resolve_allowed_path("/reading.html", rundir_root) == (rundir_root / "reading.html").resolve()
 
 
+def test_allows_root_devlog_page(rundir_root):
+    """The Dev log tab (docs/DEV_LOG.md rendered by loop_report) is the third
+    exact-name top-level page — 2026-07-28 narrative-spine ratification."""
+    assert vs._resolve_allowed_path("/dev-log.html", rundir_root) == (rundir_root / "dev-log.html").resolve()
+
+
 def test_denies_arbitrary_root_files(rundir_root):
     """Top-level allowance is by exact name, not by extension — a stray file
     dropped in runs_root must not become servable."""

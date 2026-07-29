@@ -4700,3 +4700,47 @@ Dormant (deliberately parked, not dropped):
   and its inputs section (:477); the ACTIVE SP arc owns it. With #5 and
   #7 closed earlier, **all seven census drift finds are now
   dispositioned**.)*
+
+- **2026-07-28 — Telegram-runs review + proposals 2–4 + compound-
+  thinking spitfire (Jeremy, evening round).** (1) **Telegram runs
+  reviewed** (tawny-ferret/Karpathy-wiki, dapper-oak/Erdős-workflow) —
+  evidence record: `docs/history/2026-07-28-telegram-runs-review.md`.
+  Headline finds, lead-verified: Poe's "already recovered" scaffolding
+  claim was false (no gist text anywhere in the run); Poe's
+  anti-escalation boilerplate has compiled into the lesson store
+  (lesson `db37d525`) and recall now injects it — the dispatch-escalate
+  pathway the runs were meant to diagnose is no longer exercised;
+  quality_gate is scope-blind (zero `scope` refs) while closure_verify
+  consumes pre-registered scope; both run_cards under-report cost ~2×
+  vs their loop logs. **Dispositions deferred to the forked review
+  session** (Jeremy has his own view of the Poe conversation to bring).
+  (2) **Narrative spine RATIFIED** ("that's pretty good... terse but
+  cites references") with amendments shipped same session: date
+  headers (his sessions span days), plain-language rule (gloss
+  codenames on first use — "sometimes I'm scratching my head a little
+  at obvious-to-you terminology"), and a viz Dev log tab
+  (docs/DEV_LOG.md → dev-log.html, "1-stop shop to go find
+  references"). (3) **Markers/collector DECLINED for now** — "let's
+  not overengineer our dev workflow that's already becoming a bit
+  intense"; revisit rider = next census re-asks with fresh drift data,
+  any lost-thread incident reopens immediately. (4) **Cap mechanics:
+  self-serve promotion with notification blessed**; his agenda-jumps
+  are legitimate by declaration ("I'll sometimes toss the general
+  prioritization to the wind... I'm good with that"); Claude surfaces
+  genuine priority questions; his standing design concern = "being
+  able to keep tabs on everything." (5) **Compound-thinking soft set
+  adjudicated** (full record in COMPOUND_THINKING_DESIGN.md Status
+  2026-07-28): §9.1 lens-not-schema with runs-visualizable-on-demand
+  caveat; §9.3 declare-blocked GREENLIT ("let's try it and we can
+  pivot"); §9.7 all-global to start, scoping named the hard part
+  (klingon line) and joined to the recursive-orchestration-memory
+  constraint; §9.8 capability-investment DEFAULT-YES (one prompt
+  forward + possible user escalation); §9.9 later; **§10 calibration
+  flagged load-bearing — needs its own discussion** ("hard to get
+  right (and keep simple)"); cross-goal scope = empirical, pairs with
+  §9.7. Lead's judgment (per his explicit delegation): only §10 +
+  §9.7/cross-goal scoping need a real conversation — same
+  conversation, before any §9.7 build. (6) Verbal-UX tangent captured
+  as a BACKLOG Vision entry with his revisit trigger (larger successes
+  routine / real-time optimization). (7) Session mechanics: review
+  discussion forks via `claude --resume <session> --fork-session`.
