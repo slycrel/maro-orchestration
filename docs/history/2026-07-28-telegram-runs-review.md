@@ -1,5 +1,5 @@
 ---
-status: history
+status: record
 ---
 
 # Review — the two Telegram-dispatched self-diagnosis runs (2026-07-28)

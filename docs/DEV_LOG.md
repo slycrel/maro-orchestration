@@ -20,6 +20,36 @@ Dev log tab at maro.feifdom.com alongside Runs and Reading.
 
 ## 2026-07-28
 
+**Late evening — closure-check unification shipped (the free-slot
+build)** — threads: `closure-unification`, `adaptive-execution`,
+`compound-thinking`. With Jeremy holding the two discussion lanes (the
+forked telegram-runs review, the M1 workflow contrast), this branch
+took the build lane and shipped the census-assigned free-slot chunk:
+closure-check unification. The census one-liner said "fold
+`verify_goal_completion` into `director_evaluate`, retire
+`ClosureVerdict`" — the pre-reads said otherwise. The April design
+spec predates months of verdict-integrity burn-in (the judged
+tri-state that keeps verifier failures from blaming the goal,
+deterministic downgrades, the positive-evidence restart gate), all of
+it living on the verdict object the spec wanted retired, consumed at
+four call sites, not the three the census counted. So the honest
+unification is a decision layer: `director.evaluate_closure()` runs
+the untouched evidence pipeline and deterministically maps the verdict
+into the director's shared action vocabulary; the verdict rides the
+decision as its evidence record. Handle's restart gate now consumes
+the decision's action — pinned by a test that would catch it silently
+re-deriving from verdict fields — and the choke point is where §9.3
+declare-blocked verdicts (greenlit earlier tonight) and a possible
+gate-reads-scope check plug in later. Existing closure tests all
+passed unchanged through the new layer, by design, not luck: the
+monkeypatch seam (`director.verify_goal_completion`) was chosen as the
+call target precisely so the old suite would exercise the new path.
+**Surprised by:** how asymmetric the two "unified" functions turned
+out — the census framed them as siblings, but one is a single cheap
+JSON decision and the other is a three-phase pipeline wearing four
+layers of burn-in armor; the real unification content was never the
+fold, it was giving the armor a shared vocabulary.
+
 **Evening — telegram-runs review, proposals 2–4 adjudicated, chunk-9
 spitfire** — threads: `telegram-runs-review`, `open-thread-structure`,
 `compound-thinking`, `dev-log`. Reviewed the two self-diagnosis runs

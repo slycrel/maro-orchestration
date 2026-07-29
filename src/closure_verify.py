@@ -1,8 +1,13 @@
 """Director closure check — goal-level completion verification (Phase 65+).
 
-Extracted from director.py (docs/REFACTOR_PLAN.md Tier 3): the
-verify_goal_completion subsystem is self-contained with one caller
-(handle.py), so this is a pure move — no behavior change.
+Extracted from director.py (docs/REFACTOR_PLAN.md Tier 3) as a pure move.
+This module is the EVIDENCE pipeline: plan checks → run them mechanically →
+verdict, plus the verdict-integrity machinery accreted since (judged
+tri-state, deterministic downgrades, env-noise caps, verdict-first
+summaries). The DECISION layer lives in director.evaluate_closure()
+(closure trigger of the adaptive-execution seam, 2026-07-28) — all
+production callers (handle.py's three closure sites, cli.py's parity pass)
+go through it; ClosureVerdict rides the decision as its evidence record.
 """
 
 from __future__ import annotations

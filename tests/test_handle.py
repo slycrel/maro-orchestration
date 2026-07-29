@@ -2266,6 +2266,49 @@ class TestClosureRestart:
 
         assert len(calls) == 1
 
+    def test_restart_gate_consumes_decision_action(self, monkeypatch, tmp_path):
+        """Liveness pin (closure unification 2026-07-28): handle's restart
+        gate reads decision.action from director.evaluate_closure — it must
+        NOT re-derive restart-worthiness from the verdict fields. The verdict
+        here is shaped so the retired inline gate would have said no-restart
+        (all checks passed = narrative-only), while the decision says
+        restart: the restart firing proves the decision is what's consumed.
+        The re-run's ancestry must carry the decision's restart_context, not
+        a handle-side rebuild."""
+        self._setup(monkeypatch, tmp_path)
+        from unittest.mock import patch
+        from director import DirectorDecision
+
+        done_result = self._fake_loop_result(status="done")
+        calls = []
+        def _fake_run(*args, **kwargs):
+            calls.append(kwargs.copy())
+            return done_result
+
+        narrative_shape = self._fake_closure(False, 0.85, gaps=["gap A"])
+        narrative_shape.checks_passed = narrative_shape.checks_run
+        restart_decision = DirectorDecision(
+            action="restart", reasoning="closure found gaps",
+            restart_context="DECISION-CONTEXT: address gap A",
+            closure_verdict=narrative_shape,
+        )
+        ok_decision = DirectorDecision(
+            action="continue", reasoning="goal achieved",
+            closure_verdict=self._fake_closure(True, 0.9),
+        )
+        decision_seq = [restart_decision, ok_decision]
+
+        with patch("agent_loop.run_agent_loop", side_effect=_fake_run), \
+             patch("intent.check_goal_clarity", return_value={"clear": True}), \
+             patch("director.evaluate_closure",
+                   side_effect=lambda *a, **k: decision_seq.pop(0)), \
+             self._no_quality_gate():
+            handle("build X", force_lane="agenda", dry_run=False)
+
+        assert len(calls) == 2, "decision action=restart must drive the re-run"
+        assert "DECISION-CONTEXT: address gap A" in calls[1].get(
+            "ancestry_context_extra", "")
+
     def test_inconclusive_closure_does_not_restart(self, monkeypatch, tmp_path):
         """Inconclusive verification should not trigger a closure restart loop."""
         self._setup(monkeypatch, tmp_path)

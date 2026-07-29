@@ -550,9 +550,15 @@ fragile seam deleted in swarm chunk 1); free-slot trio examined — census
 #31 (depth-cap) and #32 (backend-resilience pair) were ALREADY SHIPPED
 (2026-07-12 / 2026-07-09; stale doc annotations inherited by the sweep,
 BACKEND_RESILIENCE_DESIGN.md currency-fixed), so **the free slot =
-closure-check unification (census #30)**: fold `verify_goal_completion`
-into `director_evaluate(trigger="closure")`, retire `ClosureVerdict`
-(3 call sites: cli.py:566, handle.py:1855/2020). **Drift batch
+closure-check unification (census #30)** — SHIPPED 2026-07-28: unified
+at the decision layer as `director.evaluate_closure()` (deterministic
+verdict→DirectorDecision mapping, zero new LLM calls); the census's
+literal fold ("retire `ClosureVerdict`", 3 call sites) turned out stale
+on both counts — four call sites (post-escalate re-verify was
+uncounted), and the verdict carries burn-in verdict-integrity machinery
+every consumer stamps from, so it survives as the evidence record on
+`DirectorDecision.closure_verdict` (spec correction recorded in
+ADAPTIVE_EXECUTION_DESIGN.md Trigger Point 3). **Drift batch
 ADJUDICATED same day (Jeremy)** — all four re-parked on falsifiable
 reasons (GOAL_BRAIN Dormant threads + Decisions 2026-07-28): heartbeat
 gate re-based on hosted-free; next-leap packaging capacity-parked with

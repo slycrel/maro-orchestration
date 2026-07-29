@@ -134,8 +134,30 @@ For Phase A: only `continue` and `adjust` actions are wired. `replan`, `restart`
 ### 2. Strategic threshold — periodic convergence check (Phase B)
 Every K steps unconditionally (not just on failure signals). Evaluates whether the approach is still converging toward the original goal. Can return `adjust` or `replan`. Introduces `ExecutionPlan` approach metadata.
 
-### 3. Closure — after loop returns "done" (Phase C, unify interface)
-Currently `verify_goal_completion()` in `director.py`. This becomes a `DirectorDecision` with action `continue` (goal achieved) or `adjust`/`replan` (gaps found, needs more work). The `ClosureVerdict` dataclass is retired.
+### 3. Closure — after loop returns "done" (Phase C — unified 2026-07-28)
+`director.evaluate_closure()` — runs the `verify_goal_completion` evidence
+pipeline (lives in `closure_verify.py`) and DETERMINISTICALLY maps the verdict
+into the shared `DirectorDecision` vocabulary: `restart` when gaps have
+ground-truth support (≥1 hard-failed check, conf ≥ 0.6, no inconclusives —
+the positive-evidence gate), `continue` otherwise, with reasoning stating why
+(achieved / unverified / unjudged / narrative-only gaps / below confidence).
+No additional LLM call — closure's own verdict LLM already judged.
+
+**Spec correction (2026-07-28):** the original text here said the
+`ClosureVerdict` dataclass is retired. That spec predates the verdict-integrity
+machinery that accreted on the verdict through burn-in (judged tri-state,
+deterministic downgrades, env-noise confidence caps, verdict-first summaries,
+check tallies) — machinery every consumer's stamping/demotion logic branches
+on, which a bare action/reasoning decision cannot carry. `ClosureVerdict` is
+retired as the *decision interface* (all four production call sites — handle's
+main/re-verify/post-escalate and cli's parity pass — consume
+`DirectorDecision` now) but survives as the *evidence record*, riding the
+decision as `DirectorDecision.closure_verdict`. Policy gates (the
+`closure_restart` config flag, `MAX_RESTART_DEPTH`, only-restart-from-"done")
+stay caller-side: the director recommends, the caller disposes.
+`evaluate_closure` is the single choke point where post-loop verdicts are
+judged — future stop-verdict declarations (§9.3 declare-blocked) and a
+gate-reads-scope check would plug in at this layer.
 
 ---
 
@@ -183,7 +205,7 @@ Phase B adds checks unconditionally when enabled. Phase C adds one call at closu
 
 | Existing mechanism | Relationship |
 |---|---|
-| `verify_goal_completion()` | Phase C: becomes `director_evaluate(trigger="closure")` |
+| `verify_goal_completion()` | Phase C: evidence pipeline behind `evaluate_closure()` — the closure trigger of this seam (sibling entry point, not `director_evaluate(trigger="closure")`: closure's inputs are post-loop-shaped — steps with results, scope, diagnosis — not `EvaluationContext`) |
 | Ralph verify (per-step) | Trigger signal for director check, not replaced |
 | Inspector friction | Additional trigger signal |
 | Quality gate | Unchanged — output quality, not goal completeness |
@@ -218,8 +240,12 @@ Phase B adds checks unconditionally when enabled. Phase C adds one call at closu
 - `restart` increments `director_replan_count` toward budget ceiling
 - Full 5-action system prompt with guidance for each action
 
-**Phase C leftover (deferred):**
-- Unify `verify_goal_completion` → `director_evaluate(trigger="closure")`; retire `ClosureVerdict`
+**Phase C leftover (shipped 2026-07-28):** ✓
+- Closure unified at the decision layer: `director.evaluate_closure()` maps
+  the verdict into `DirectorDecision` deterministically; all four call sites
+  consume the decision. `ClosureVerdict` retained as the evidence record on
+  `DirectorDecision.closure_verdict` — see the spec correction under Trigger
+  Point 3 for why retirement-as-specified was no longer honest.
 
 **Phase D:**
 - Memory layer: record approach + outcome per goal type

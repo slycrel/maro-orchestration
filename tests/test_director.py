@@ -2915,6 +2915,115 @@ class TestDirectorEvaluate:
         assert "evaluation skipped" not in result.reasoning
 
 
+class TestEvaluateClosure:
+    """Closure trigger of the adaptive-execution seam (unified 2026-07-28).
+
+    evaluate_closure runs the verify_goal_completion pipeline and maps the
+    verdict into the DirectorDecision vocabulary DETERMINISTICALLY — the
+    mapping predicate must stay verbatim-equivalent to the closure-restart
+    gate that shipped inline in handle.py (BACKLOG #5 positive-evidence
+    rule and the inconclusive/unjudged exclusions)."""
+
+    def _verdict(self, complete, confidence, *, gaps=None, checks_run=2,
+                 checks_passed=None, inconclusive_count=0, judged=True):
+        from director import ClosureVerdict
+        return ClosureVerdict(
+            complete=complete, confidence=confidence, gaps=gaps or [],
+            summary="Goal not achieved." if not complete else "Goal achieved.",
+            checks_run=checks_run,
+            checks_passed=(
+                checks_passed if checks_passed is not None
+                else (checks_run if complete else 0)),
+            inconclusive_count=inconclusive_count, judged=judged,
+        )
+
+    def _evaluate(self, verdict, **kwargs):
+        from unittest.mock import patch
+        from director import evaluate_closure
+        with patch("director.verify_goal_completion",
+                   return_value=verdict) as vgc:
+            decision = evaluate_closure("build X", [], None, **kwargs)
+        return decision, vgc
+
+    def test_restart_worthy_gaps_map_to_restart(self):
+        v = self._verdict(False, 0.85, gaps=["server never started"])
+        decision, _ = self._evaluate(v)
+        assert decision.action == "restart"
+        assert decision.closure_verdict is v
+        # restart_context is the gap context the loop re-runs with — it must
+        # carry the gaps, the summary, and the check tally.
+        assert "server never started" in decision.restart_context
+        assert "Goal not achieved." in decision.restart_context
+        assert "0/2 checks passed" in decision.restart_context
+
+    def test_complete_maps_to_continue(self):
+        decision, _ = self._evaluate(self._verdict(True, 0.9))
+        assert decision.action == "continue"
+        assert decision.closure_verdict.complete is True
+
+    def test_narrative_only_gaps_map_to_continue(self):
+        """BACKLOG #5 positive-evidence rule: all checks passed → the gaps
+        have no ground-truth support → never restart."""
+        v = self._verdict(False, 0.85, gaps=["could be more polished"],
+                          checks_passed=2)
+        decision, _ = self._evaluate(v)
+        assert decision.action == "continue"
+        assert "unsupported by checks" in decision.reasoning
+
+    def test_low_confidence_maps_to_continue(self):
+        decision, _ = self._evaluate(
+            self._verdict(False, 0.3, gaps=["maybe a problem"]))
+        assert decision.action == "continue"
+
+    def test_inconclusive_checks_map_to_continue(self):
+        v = self._verdict(False, 0.8, gaps=["unclear"],
+                          checks_passed=1, inconclusive_count=1)
+        decision, _ = self._evaluate(v)
+        assert decision.action == "continue"
+
+    def test_unjudged_verdict_maps_to_continue(self):
+        v = self._verdict(False, 0.8, gaps=["probe failed"],
+                          checks_passed=1, inconclusive_count=1, judged=False)
+        decision, _ = self._evaluate(v)
+        assert decision.action == "continue"
+        assert "unjudged" in decision.reasoning
+
+    def test_no_checks_map_to_continue(self):
+        decision, _ = self._evaluate(
+            self._verdict(False, 0.8, checks_run=0, checks_passed=0))
+        assert decision.action == "continue"
+        assert "unverified" in decision.reasoning
+
+    def test_evidence_always_attached(self):
+        """Every decision carries the full verdict — consumers stamp run
+        metadata / outcomes rows / demotion from the evidence, not the
+        action."""
+        for v in (self._verdict(True, 0.9),
+                  self._verdict(False, 0.85, gaps=["g"]),
+                  self._verdict(False, 0.3)):
+            decision, _ = self._evaluate(v)
+            assert decision.closure_verdict is v
+
+    def test_kwargs_pass_through_to_pipeline(self):
+        """The decision layer forwards every closure input unchanged — a
+        dropped kwarg (scope, diagnosis, loop_id...) would silently degrade
+        the evidence pipeline for all four call sites."""
+        _, vgc = self._evaluate(
+            self._verdict(True, 0.9),
+            workspace_path="/w", scope="SCOPE", resolved_intent="RI",
+            diagnosis="DIAG", loop_id="lid-1", project="proj-1",
+            dry_run=True,
+        )
+        kwargs = vgc.call_args.kwargs
+        assert kwargs["workspace_path"] == "/w"
+        assert kwargs["scope"] == "SCOPE"
+        assert kwargs["resolved_intent"] == "RI"
+        assert kwargs["diagnosis"] == "DIAG"
+        assert kwargs["loop_id"] == "lid-1"
+        assert kwargs["project"] == "proj-1"
+        assert kwargs["dry_run"] is True
+
+
 class TestDetectNextLedgerGap:
     """BACKLOG #6: NEXT.md ledger vs repo activity divergence at closure.
     Deterministic and advisory — surfaced, never flips the verdict itself."""

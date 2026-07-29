@@ -4844,3 +4844,30 @@ Dormant (deliberately parked, not dropped):
      maro-orchestration` https fetch-only), and whether "develop against
      that same copy" relaxes the 2026-07-20 zero-creds/propose-only decree
      for mini2. The doc rewrite is blocked on this answer alone.
+
+- **2026-07-28 — Closure-check unification SHIPPED (census #30, the
+  ACTIVE free slot; build lane while Jeremy holds the forked review +
+  M1 discussions).** Unified at the DECISION layer, not the census's
+  literal fold: `director.evaluate_closure()` runs the untouched
+  `verify_goal_completion` evidence pipeline and deterministically
+  (zero new LLM calls) maps the verdict into the shared
+  `DirectorDecision` vocabulary — `restart` on ground-truth-supported
+  gaps (the shipped positive-evidence gate verbatim: ≥1 hard-failed
+  check, conf ≥ 0.6, no inconclusives), `continue` otherwise with
+  honest reasoning. The April spec's "retire `ClosureVerdict`"
+  predates the verdict-integrity machinery burn-in accreted on it
+  (judged tri-state, deterministic downgrades, env caps, verdict-first
+  summaries) — every consumer stamps from that evidence, so the
+  verdict survives as `DirectorDecision.closure_verdict` (evidence
+  record) while retiring as the decision interface. Four call sites
+  (census counted 3 — post-escalate re-verify was uncounted) all route
+  through the choke point; policy gates (closure_restart flag,
+  MAX_RESTART_DEPTH, only-from-done) stay caller-side — director
+  recommends, caller disposes. Seams designed-not-built at
+  `evaluate_closure`: §9.3 declare-blocked verdicts get judged here
+  when they ship; gate-reads-scope joins here if the forked review
+  routes it. Existing closure tests flowed through unchanged
+  (monkeypatch pass-through was a design constraint); new: mapping
+  suite + a liveness pin that handle consumes decision.action, not
+  re-derived verdict fields. Spec correction recorded in
+  ADAPTIVE_EXECUTION_DESIGN.md Trigger Point 3; CLAUDE.md row updated.

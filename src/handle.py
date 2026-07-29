@@ -1851,8 +1851,8 @@ def _handle_impl(
             except Exception:
                 _closure_diag = None
             try:
-                from director import verify_goal_completion
-                _closure = verify_goal_completion(
+                from director import evaluate_closure
+                _closure_decision = evaluate_closure(
                     message,
                     loop_result.steps,
                     adapter,
@@ -1864,7 +1864,9 @@ def _handle_impl(
                     loop_id=getattr(loop_result, "loop_id", "") or "",
                     project=project or getattr(loop_result, "project", "") or "",
                 )
+                _closure = _closure_decision.closure_verdict
             except Exception:
+                _closure_decision = None
                 _closure = None
 
             try:
@@ -1874,32 +1876,20 @@ def _handle_impl(
                 _closure_restart = True
 
             _depth = _loop_kwargs.get("continuation_depth", 0)
-            # Positive-evidence gate (BACKLOG #5): a re-run costs a full loop, so
-            # narrative-only gaps don't justify it. If every deterministic check
-            # the verifier ran actually passed, the "gaps" have no ground-truth
-            # support — log and stand pat rather than double the run.
-            _checks_contradict = (
-                _closure is not None
-                and _closure.checks_run > 0
-                and _closure.checks_passed >= _closure.checks_run
-                and not _closure.complete
-            )
-            if _checks_contradict:
-                log.info(
-                    "handle: closure gaps unsupported by checks (%d/%d passed) — "
-                    "skipping restart on narrative-only gaps",
-                    _closure.checks_passed, _closure.checks_run,
-                )
+            # Evidence judgment (restart-worthy gaps vs narrative-only gaps vs
+            # unjudged) lives in director.evaluate_closure — the unified
+            # closure trigger of the adaptive-execution seam. What stays here
+            # is orchestration policy: the closure_restart config flag, the
+            # restart-depth ceiling, and only-escalate-from-"done" (stuck/
+            # partial already know work isn't complete — re-running via this
+            # path would double-recover).
             if (
                 _closure_restart
+                and _closure_decision is not None
+                and _closure_decision.action == "restart"
                 and _closure is not None
-                and not _closure.complete
-                and _closure.confidence >= 0.6
-                and _closure.checks_run > 0
-                and _closure.checks_passed < _closure.checks_run  # at least one check FAILED
-                and getattr(_closure, "inconclusive_count", 0) == 0
                 and _depth < MAX_RESTART_DEPTH
-                and loop_result.status == "done"  # only escalate from "done" — stuck/partial already know they're incomplete
+                and loop_result.status == "done"
             ):
                 # The first attempt's closure verdict is consumed as the
                 # restart trigger, then `_closure` is replaced by the second
@@ -1976,13 +1966,12 @@ def _handle_impl(
                             "\n\n⚠️ Closure restart refused: " + _stamp_reason
                         ),
                     )
-                _gap_lines = "\n".join(f"- {g}" for g in _closure.gaps) or "(none specified)"
-                _closure_ctx = (
-                    f"The previous run declared done, but closure verification found gaps.\n"
-                    f"Summary: {_closure.summary}\n"
-                    f"Gaps:\n{_gap_lines}\n"
-                    f"Verification: {_closure.checks_passed}/{_closure.checks_run} checks passed.\n"
-                    f"Address the gaps before declaring done again."
+                # Gap context is built by evaluate_closure (restart_context on
+                # the decision) — the same seam a §9.3 declare-blocked verdict
+                # would populate.
+                _closure_ctx = _closure_decision.restart_context or (
+                    f"The previous run declared done, but closure verification "
+                    f"found gaps.\nSummary: {_closure.summary}"
                 )
                 _closure_ancestry = (
                     _loop_kwargs.get("ancestry_context_extra", "")
@@ -2015,9 +2004,12 @@ def _handle_impl(
                     # Re-verify the restarted loop — its declared status is
                     # exactly as unverified as the first loop's was. Without
                     # this, a restart that re-declares done sticks regardless
-                    # of whether the gaps were addressed.
+                    # of whether the gaps were addressed. Evidence-only read:
+                    # the decision's action is deliberately ignored here — a
+                    # second restart is the depth-gated outer gate's call, not
+                    # this re-verdict's.
                     try:
-                        _closure = verify_goal_completion(
+                        _closure = evaluate_closure(
                             message,
                             loop_result.steps,
                             adapter,
@@ -2028,7 +2020,7 @@ def _handle_impl(
                             diagnosis=None,
                             loop_id=getattr(loop_result, "loop_id", "") or "",
                             project=project or getattr(loop_result, "project", "") or "",
-                        )
+                        ).closure_verdict
                     except Exception:
                         _closure = None  # fail open: no re-verdict, no demotion
                 except Exception as _cr_exc:
@@ -2399,7 +2391,7 @@ def _handle_impl(
                         # have no closure record at all (2026-04-26 audit finding).
                         if not dry_run:
                             try:
-                                from director import verify_goal_completion as _verify_post_escalate
+                                from director import evaluate_closure as _evaluate_post_escalate
                                 from introspect import diagnose_loop as _diag_post_escalate
                                 _post_diag = None
                                 try:
@@ -2410,7 +2402,10 @@ def _handle_impl(
                                         )
                                 except Exception:
                                     _post_diag = None
-                                _post_closure = _verify_post_escalate(
+                                # Evidence-only read: the escalated re-run is
+                                # the version we ship — its verdict feeds
+                                # stamping/demotion, never another restart.
+                                _post_closure = _evaluate_post_escalate(
                                     message,
                                     loop_result.steps,
                                     _escalated_adapter,
@@ -2421,7 +2416,7 @@ def _handle_impl(
                                     diagnosis=_post_diag,
                                     loop_id=getattr(loop_result, "loop_id", "") or "",
                                     project=project or getattr(loop_result, "project", "") or "",
-                                )
+                                ).closure_verdict
                                 if (
                                     _post_closure is not None
                                     and _post_closure.checks_run > 0

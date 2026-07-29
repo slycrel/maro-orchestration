@@ -546,13 +546,15 @@ def _closure_verdict_pass(goal_str: str, result, *, dry_run: bool = False):
     third-party harness driving `maro run`/`maro resume` otherwise gets
     structurally-verified-only "done" with no goal_achieved verdict anywhere.
 
-    Honesty-only parity: no closure-restart machinery, verdict stamped onto
-    the outcomes row (loop-keyed; these lanes have no run-dir), done demoted
-    to incomplete when a judged verdict contradicts it (same gate as
-    handle.py: judged, confidence >= 0.7). If closure can't run (no adapter,
-    LLM error), the verdict is simply absent — run history classifies that as
-    done-unverified, never as verified done. Mutates result.status /
-    result.stuck_reason in place; returns the ClosureVerdict or None.
+    Honesty-only parity: no closure-restart machinery (evaluate_closure's
+    action is deliberately ignored — these lanes read evidence only), verdict
+    stamped onto the outcomes row (loop-keyed; these lanes have no run-dir),
+    done demoted to incomplete when a judged verdict contradicts it (same
+    gate as handle.py: judged, confidence >= 0.7). If closure can't run (no
+    adapter, LLM error), the verdict is simply absent — run history
+    classifies that as done-unverified, never as verified done. Mutates
+    result.status / result.stuck_reason in place; returns the ClosureVerdict
+    or None.
     """
     _steps = getattr(result, "steps", None) or []
     if (dry_run
@@ -560,16 +562,16 @@ def _closure_verdict_pass(goal_str: str, result, *, dry_run: bool = False):
             or not any(s.status == "done" for s in _steps)):
         return None
     try:
-        from director import verify_goal_completion
+        from director import evaluate_closure
         from llm import build_adapter, MODEL_CHEAP
         _cl_adapter = build_adapter(model=MODEL_CHEAP)
-        _verdict = verify_goal_completion(
+        _verdict = evaluate_closure(
             goal_str,
             _steps,
             _cl_adapter,
             loop_id=result.loop_id or "",
             project=result.project or "",
-        )
+        ).closure_verdict
     except Exception as _cl_exc:
         print(f"[maro] closure verification unavailable ({_cl_exc}) — "
               "run stays done-unverified", file=sys.stderr)

@@ -1532,7 +1532,7 @@ class EvaluationContext:
 
 @dataclass
 class DirectorDecision:
-    """Decision returned by director_evaluate()."""
+    """Decision returned by director_evaluate() and evaluate_closure()."""
     action: str                                   # continue | adjust | replan | restart | escalate
     reasoning: str                                # one sentence — logged + shown in channel
     revised_steps: Optional[List[str]] = None     # for 'adjust'
@@ -1540,6 +1540,12 @@ class DirectorDecision:
     restart_context: Optional[str] = None         # for 'restart' (Phase C+)
     user_question: Optional[str] = None           # for 'escalate' (Phase C+)
     next_check_in: int = 3                        # steps before next mandatory check
+    # Closure trigger only: the full evidence record behind the decision.
+    # Consumers that stamp verdicts (run metadata, outcomes rows, demotion)
+    # read this — the action alone is deliberately not enough to record a
+    # verdict, because recording honesty (judged tri-state, downgrade
+    # reasons, check counts) lives on the evidence, not the decision.
+    closure_verdict: Optional[ClosureVerdict] = None
 
 
 def director_evaluate(
@@ -1666,6 +1672,151 @@ def director_evaluate(
     except Exception:
         log.debug("director_evaluate error — returning continue", exc_info=True)
         return _continue_on_error
+
+
+def evaluate_closure(
+    goal: str,
+    steps: list,
+    adapter,
+    *,
+    workspace_path: str = "",
+    channel=None,
+    dry_run: bool = False,
+    scope=None,
+    resolved_intent=None,
+    diagnosis=None,
+    loop_id: str = "",
+    project: str = "",
+) -> DirectorDecision:
+    """The closure trigger of the adaptive-execution seam (ADAPTIVE_EXECUTION_
+    DESIGN Phase C leftover, unified 2026-07-28).
+
+    Runs the verify_goal_completion evidence pipeline unchanged, then maps
+    the verdict into the shared DirectorDecision vocabulary DETERMINISTICALLY
+    — no additional LLM call; closure's own verdict LLM already judged. The
+    original design ("becomes director_evaluate(trigger='closure')") predates
+    the verdict-integrity machinery (judged tri-state, deterministic
+    downgrades, positive-evidence gate), so the evidence record survives on
+    decision.closure_verdict rather than being retired with it.
+
+    Action mapping:
+      - "restart"  — judged failure with ground-truth support: at least one
+        check hard-failed (not inconclusive), confidence >= 0.6. Same
+        predicate the closure-restart gate shipped with (BACKLOG #5
+        positive-evidence rule: narrative-only gaps never justify doubling
+        the run). restart_context carries the gap context verbatim.
+      - "continue" — everything else, with reasoning stating why: achieved,
+        unverified (no checks ran), unjudged (probes inconclusive, not
+        disproof), narrative-only gaps, or below restart confidence.
+
+    The director recommends; callers dispose. Policy gates stay caller-side
+    on purpose: the closure_restart config flag, MAX_RESTART_DEPTH, and
+    only-restart-from-"done" are orchestration policy, not evidence
+    judgment. Sites that cannot act on a restart (the post-restart
+    re-verify, the post-escalate verdict, the CLI honesty-parity pass) read
+    closure_verdict and ignore the action by design.
+
+    Seam note (designed, not built): this is the single choke point where
+    post-loop verdicts are judged — §9.3 structural declare-blocked verdicts
+    plug in here when they ship, and a gate-reads-scope check would join at
+    this layer if that lands.
+    """
+    verdict = verify_goal_completion(
+        goal,
+        steps,
+        adapter,
+        workspace_path=workspace_path,
+        channel=channel,
+        dry_run=dry_run,
+        scope=scope,
+        resolved_intent=resolved_intent,
+        diagnosis=diagnosis,
+        loop_id=loop_id,
+        project=project,
+    )
+
+    restart_worthy = (
+        not verdict.complete
+        and verdict.confidence >= 0.6
+        and verdict.checks_run > 0
+        and verdict.checks_passed < verdict.checks_run  # >=1 check hard-FAILED
+        and getattr(verdict, "inconclusive_count", 0) == 0
+    )
+    if restart_worthy:
+        gap_lines = "\n".join(f"- {g}" for g in verdict.gaps) or "(none specified)"
+        restart_context = (
+            f"The previous run declared done, but closure verification found gaps.\n"
+            f"Summary: {verdict.summary}\n"
+            f"Gaps:\n{gap_lines}\n"
+            f"Verification: {verdict.checks_passed}/{verdict.checks_run} checks passed.\n"
+            f"Address the gaps before declaring done again."
+        )
+        decision = DirectorDecision(
+            action="restart",
+            reasoning=(
+                f"closure found gaps with ground-truth support "
+                f"({verdict.checks_passed}/{verdict.checks_run} checks passed, "
+                f"conf={verdict.confidence:.2f})"
+            ),
+            restart_context=restart_context,
+            closure_verdict=verdict,
+        )
+    elif verdict.checks_run <= 0:
+        decision = DirectorDecision(
+            action="continue",
+            reasoning="closure ran no checks — run stays unverified",
+            closure_verdict=verdict,
+        )
+    elif verdict.complete:
+        decision = DirectorDecision(
+            action="continue",
+            reasoning=f"goal achieved (conf={verdict.confidence:.2f})",
+            closure_verdict=verdict,
+        )
+    elif not getattr(verdict, "judged", True):
+        decision = DirectorDecision(
+            action="continue",
+            reasoning=(
+                "verdict unjudged — non-passing checks were inconclusive "
+                "(verifier failure, not disproof)"
+            ),
+            closure_verdict=verdict,
+        )
+    elif verdict.checks_passed >= verdict.checks_run:
+        # Positive-evidence gate (BACKLOG #5): every deterministic check the
+        # verifier ran actually passed, so the "gaps" have no ground-truth
+        # support — log and stand pat rather than double the run.
+        log.info(
+            "evaluate_closure: gaps unsupported by checks (%d/%d passed) — "
+            "narrative-only gaps don't justify restart",
+            verdict.checks_passed, verdict.checks_run,
+        )
+        decision = DirectorDecision(
+            action="continue",
+            reasoning=(
+                f"gaps unsupported by checks "
+                f"({verdict.checks_passed}/{verdict.checks_run} passed) — "
+                "narrative-only gaps don't justify restart"
+            ),
+            closure_verdict=verdict,
+        )
+    else:
+        decision = DirectorDecision(
+            action="continue",
+            reasoning=(
+                f"gaps below restart bar (conf={verdict.confidence:.2f}, "
+                f"inconclusive={getattr(verdict, 'inconclusive_count', 0)})"
+            ),
+            closure_verdict=verdict,
+        )
+    log.info(
+        "evaluate_closure: action=%s complete=%s judged=%s conf=%.2f "
+        "checks=%d/%d — %s",
+        decision.action, verdict.complete, getattr(verdict, "judged", True),
+        verdict.confidence, verdict.checks_passed, verdict.checks_run,
+        decision.reasoning[:120],
+    )
+    return decision
 
 
 # ---------------------------------------------------------------------------
