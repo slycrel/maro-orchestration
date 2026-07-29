@@ -1,3 +1,7 @@
+---
+status: living
+---
+
 # House Style — the dev approach itself
 
 **What this is.** Jeremy (2026-07-28): "our learned-over-time 'house

@@ -128,6 +128,7 @@ py-modules = [
     "decision_prior",
     "director",
     "discretion_readout",
+    "dispatch_envelope",
     "doctor",
     "escalation_context",
     "eval",
