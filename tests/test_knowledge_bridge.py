@@ -392,3 +392,56 @@ class TestReflectAndRecordK4Integration:
                     dry_run=True,
                 )
                 mock_k4.assert_not_called()
+
+
+class TestCandidateInvisibilityPin:
+    """Liveness pin for battery finding V3 (2026-07-21; re-verified in the
+    2026-07-29 wiring-claims docket): bridge-minted nodes are born
+    NODE_CANDIDATE and NO promote path exists anywhere in src/, so the live
+    recall chain (recall.py → inject_knowledge_for_goal → query_knowledge →
+    ACTIVE-only load) can never surface them. These tests state the gap as
+    fact — promotion criteria are Jeremy's call (BACKLOG). When a promote
+    path ships, the structural pin below fails on purpose: update it to
+    exercise promotion instead of absence."""
+
+    def test_bridge_written_nodes_invisible_to_live_recall_chain(self, tmp_workspace):
+        from knowledge_bridge import outcome_to_knowledge
+        from knowledge_web import (
+            NODE_CANDIDATE, inject_knowledge_for_goal, load_knowledge_nodes)
+
+        outcome = FakeOutcome()
+        assert outcome_to_knowledge(outcome, adapter=None, dry_run=False) >= 1
+
+        # (a) The write happened, and every bridge-minted node is a candidate.
+        everything = load_knowledge_nodes(status=None)  # type: ignore[arg-type]
+        bridged = [n for n in everything if n.author == "knowledge_bridge"]
+        assert bridged, "bridge wrote nothing — pin's premise broken"
+        assert all(n.status == NODE_CANDIDATE for n in bridged)
+
+        # (b) The default loader (status=ACTIVE) filters out every one.
+        assert load_knowledge_nodes() == [], (
+            "a bridge-minted node reached the ACTIVE default read — either a "
+            "promote path shipped (update this pin) or candidate status broke")
+
+        # (c) End-to-end: the recall-surface injection sees nothing, even for
+        # a goal that is a verbatim restatement of the recorded lesson.
+        block = inject_knowledge_for_goal(
+            "verify step independence before parallel execution")
+        assert block == "", (
+            "recall injection surfaced a candidate node — invisibility "
+            "contract changed; re-adjudicate the V3 finding")
+
+    def test_no_promote_path_exists(self):
+        # Structural half: nothing in the two owning modules can move a node
+        # candidate → active today. This is the tripwire that forces whoever
+        # builds promotion to also revisit the invisibility pin above.
+        import knowledge_bridge
+        import knowledge_web
+
+        for mod in (knowledge_bridge, knowledge_web):
+            offenders = [name for name in dir(mod)
+                         if "promote" in name.lower() and "node" in name.lower()]
+            assert not offenders, (
+                f"{mod.__name__} grew a node-promotion symbol {offenders} — "
+                "wire it through the V3 pin (candidate invisibility) before "
+                "trusting bridged knowledge in recall")
