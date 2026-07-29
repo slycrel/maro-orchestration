@@ -48,6 +48,28 @@ def test_stage3_data_no_candidates_on_empty(monkeypatch, tmp_path):
     assert result.get("canon_candidates", 0) == 0
 
 
+def test_stage3_data_renders_top_rows_when_candidates_exist(monkeypatch):
+    # get_canon_candidates returns dict rows; stage 3 must not fall back to
+    # {"error": ...} the moment there is something to report (the old attr
+    # access broke exactly and only on the non-empty path).
+    rows = [
+        {"lesson_id": f"l{i}", "lesson": f"lesson text {i} " * 10,
+         "times_applied": 20 - i, "task_types_seen": ["build", "ops", "research"],
+         "score": 0.9, "sessions_validated": 4, "recorded_at": "2026-07-01",
+         "recommendation": "PROMOTE TO AGENTS.md — identity-level pattern"}
+        for i in range(5)
+    ]
+    import memory
+    monkeypatch.setattr(memory, "get_canon_candidates", lambda **kw: rows)
+    result = knowledge._stage3_data()
+    assert "error" not in result
+    assert result["canon_candidates"] == 5
+    assert len(result["top"]) == 3
+    assert result["top"][0]["times_applied"] == 20
+    assert result["top"][0]["lesson"].startswith("lesson text 0")
+    assert len(result["top"][0]["lesson"]) <= 80
+
+
 # ---------------------------------------------------------------------------
 # _stage4_data
 # ---------------------------------------------------------------------------

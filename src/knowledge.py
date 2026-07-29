@@ -63,12 +63,14 @@ def _stage3_data() -> dict:
     """Canon candidates (long-tier lessons ready for AGENTS.md promotion)."""
     try:
         from memory import get_canon_candidates
+        # Returns dict rows (already sorted by times_applied desc) — attribute
+        # access here made stage 3 error out exactly when candidates existed.
         candidates = get_canon_candidates()
         return {
             "canon_candidates": len(candidates),
             "top": [
-                {"lesson": c.content[:80], "times_applied": c.times_applied}
-                for c in sorted(candidates, key=lambda x: x.times_applied, reverse=True)[:3]
+                {"lesson": c["lesson"][:80], "times_applied": c["times_applied"]}
+                for c in candidates[:3]
             ],
         }
     except Exception as e:
@@ -279,7 +281,7 @@ def print_promote_actions() -> None:
     if not _fmt_error(s3) and s3["canon_candidates"]:
         print(f"  Stage 3→identity (long→AGENTS.md): {s3['canon_candidates']} candidate(s)")
         print(f"    maro-memory canon-candidates  # review first")
-        print(f"    maro-memory canonize <id>     # HUMAN GATE — edits AGENTS.md")
+        print(f"    # HUMAN GATE — no auto-writer by design; promote by editing AGENTS.md by hand")
         print()
 
     if not _fmt_error(s4) and s4["promote_ready"]:
