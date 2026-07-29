@@ -2025,19 +2025,21 @@ specced-never-executed; closure-latency-before-notify (11). None is
 load-bearing for chunks 3-5 (review-confirmed); pull individually on a
 real trigger, don't sweep.
 
-**Wiring-inventory surprises (2026-07-21, agent-reported — every claim
-below is UNVERIFIED by the adjudicating session; per verify-before-fix,
-re-verify against the tree before acting. Full table:
-`docs/history/2026-07-21-wiring-inventory.md`):**
+**Wiring-inventory surprises (2026-07-21 agent-reported; **VERIFIED
+2026-07-29** — verify-before-fix pass adjudicated all 8 against the
+tree: 7 CONFIRMED, 1 mischaracterized. Full docket with current
+line numbers + smallest consumer-first next move per row:
+`docs/history/2026-07-29-wiring-claims-verification.md`. Items stay
+open — verification ≠ repair; each needs a wire-or-retire decision):**
 
-- [ ] `task_ledger.jsonl` WRITE-ORPHAN — appended every step (loop_execute.py:1386, ~2978 rows), `load_task_ledger` has zero callers
-- [ ] Outcome-compression pipeline DEAD — `compress_old_outcomes`/`load_compressed_batches`/`load_outcomes_with_context` zero callers; outcomes.jsonl grows unbounded
-- [ ] `knowledge_edges.jsonl` dead both ends — live writer requires `skills_used` which memory.py:515/679 omit; reader zero callers; 2124 frozen rows
-- [ ] `times_applied += 1` in-memory only (knowledge_web.py:1505) — ACTIVE-node usage evidence discarded, never persisted
-- [ ] Persona template memory seam live but dormant — no persona file contains `{{ standing_rules }}`/`{{ recent_lessons }}`
-- [ ] `hypotheses.jsonl` has no runtime injection reader (pack.py CLI only) — hypotheses invisible to recall until graduated
-- [ ] Verification calibration cluster independently dead — `verification_accuracy`/`calibrated_alignment_threshold` uncalled, beyond the known record/load pair
-- [ ] `RULE_GRADUATED` second phantom event in recall.py:54 — only emitter is CLI-only
+- [ ] `task_ledger.jsonl` WRITE-ORPHAN — **VERIFIED**: writer live (loop_execute.py:1377), `load_task_ledger` has zero runtime callers (def + re-export + tests only)
+- [ ] Outcome-compression pipeline DEAD at runtime — **VERIFIED**, with nuance: fully unit-tested (test_memory.py:527-705), zero runtime callers — the "a test exists proves nothing" case; outcomes.jsonl grows unbounded
+- [ ] `knowledge_edges.jsonl` dead both ends — **VERIFIED**: writer gated on `skills_used` (knowledge_bridge.py:397-400) which both live call sites (memory.py:717/:881) omit; `build_wiki_link_edges` + `load_knowledge_edges` zero callers
+- [ ] `times_applied += 1` in-memory only — **VERIFIED** at knowledge_web.py:1787 (`inject_knowledge_for_goal`); never written back, ACTIVE-node usage evidence discarded (tiered-lesson path persists; node path never got the equivalent)
+- [ ] Persona template memory seam dormant — **VERIFIED + worse**: persona.py:412 imports nonexistent `intent.classify_intent` → always excepts → task_type permanently "general"; AND no persona file uses the template vars
+- [ ] `hypotheses.jsonl` no runtime injection reader — **VERIFIED** (pack.py CLI only; other hits are prose/docstrings); internal confirm→promote loop intact — arguably working as designed
+- [ ] Verification calibration cluster dead — **VERIFIED + extended**: one copy (knowledge_lens.py:1264/1349/1383), zero runtime callers of writer OR consumers; only tests touch it → Phase 60 "DONE" shipped symbols+tests without the runtime wiring
+- [x] `RULE_GRADUATED` "second phantom event" — **MISCHARACTERIZED, closed as record-fix**: emitter exists and works (`maro-knowledge graduate` → rules.py:271-273), just zero live firings ever; right in practice, wrong in mechanism — nothing to build (docket row 8)
 - [ ] Director/dispatch context omits the playbook (wiring row 17) — CONFIRMED structurally 2026-07-21 (chunk 2): `RecallResult.as_context_block` renders only lessons/standing_rules/decisions/knowledge; playbook (+ graveyard, failure_notes, learning_activity) reach only the loop slice via `as_loop_block`. The playbook module docstring claimed director injection for months. Decide whether the director prompt should carry playbook wisdom (and which other substrates), then wire with a liveness test — consumer-first.
 - [x] Record-mode never fires on single-backend boxes — CONFIRMED 2026-07-21, **SHIPPED 2026-07-29** (autonomous batch): `build_adapter(auto)` now always wraps in `FailoverAdapter`, len==1 included — the wrapper is the one seam carrying record-mode capture, the runaway-cost meter, and the utility-call cap warning, and the bare-adapter fast path left all three dark on subprocess-only boxes (`n_calls: 0` on every run despite record-mode default-ON; evidence: run c772366a-wily-badger). The `MARO_BACKEND` env override (still the auto path) wraps too. Pins inverted in test_llm.py (single-backend → wrapped, backend property forwards). Side-find fixed in the same commit: both `cross_ref.py` adapter fallbacks passed a model tier as the positional *backend* arg (`build_adapter("cheap")` → AssertionError → caught → silent empty-report/dry-run degrade every time the fallback path ran); now `model=` keyword, call-shape pinned in test_cross_ref.py.
 - [ ] Ancestry write-side unification (recursion prerequisite) — thread_brain and ancestry.json are separate write paths; at fork time they must be one record or children inherit divergent truth. Named a fork-implementation prerequisite in the THREAD_ARCHITECTURE fork-contract note (2026-07-21, chunk 3); GOAL_BRAIN open thread. Deliberately NOT part of the swarm-review arc — queue for the thread-architecture implementation arc.

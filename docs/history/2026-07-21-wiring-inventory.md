@@ -20,6 +20,13 @@ rule (~30-78% of unverified reviewer claims historically wrong), verify
 each claim against the tree before acting on it. BACKLOG entries for the
 surprises carry the same flag.
 
+**VERIFICATION PASS DONE 2026-07-29:** all 8 surprises adjudicated
+against the tree — 7 CONFIRMED, 1 (RULE_GRADUATED) mischaracterized.
+See `2026-07-29-wiring-claims-verification.md` for the docket with
+current line numbers, nuances, and per-row next moves; several
+non-surprise rows (14, 17, 19, and the 2/7 recall-store finding) were
+repaired by swarm-review chunks 2-6 after this table was written.
+
 **Vocabulary:** CLOSED-LOOP (live writer + live reader), WRITE-ORPHAN
 (live writer, no reader), READ-ORPHAN (live reader, no writer), DEAD
 (neither end live). "LIVE" = reachable from the runtime loop; evidence
