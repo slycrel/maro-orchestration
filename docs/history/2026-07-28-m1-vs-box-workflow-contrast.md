@@ -2,7 +2,14 @@
 status: record
 ---
 
-# M1-local vs maro-box workflow — first contrast pass (2026-07-28)
+# M1-local vs maro-box workflow — contrast pass (2026-07-28/29)
+
+> **Read §7 and §8 first if you want the conclusions.** §§1–6 are the
+> first pass as written on 2026-07-28, kept as the record; §7 is Jeremy's
+> answers, and §8 is the corrected picture his answers produced. The first
+> pass's spine — "two lanes" — is superseded there, deliberately in place
+> rather than edited away: how the reconstruction was wrong is part of what
+> the exercise was measuring.
 
 BACKLOG "M1-contrast pass": *"Would be interesting to contrast my M1 local
 workflow with the maro box workflow... I think there's overlap but it's not
@@ -210,11 +217,92 @@ Discovery/auto-seek stays deferred. The code-as-data *"modpack on a game"*
 idea is parked by his own call: *"the conservative approach is the safe one
 we've implemented and I'm ok sticking with that for the moment."*
 
-### Still open — the rewrite blocks here
+### Resolved 2026-07-29 — and the answer reshapes §8 below
 
-Which 2014 Mac Mini is the *"live test prototype with a single ongoing repo
-that allows our poe-as-telegram bot to use the orchestration"* — box A (Linux
-Mint, the orchestrator) or box B (Monterey, Hermes/Telegram, whose clone is
-https fetch-only by construction)? And does *"develop against that same
-copy"* relax mini2's 2026-07-20 zero-creds/propose-only decree? Sections 1–6
-get restructured around three contexts once that is answered.
+Jeremy: *"the poe-mini (mini2) doesn't have direct maro access outside of
+calling the other machine to get things done... The orchestrator 2014 mini is
+where poe calls into, and is the box that's doing the dev work we're
+discussing between this machine (the M1) and the general headless
+orchestration dev work. The monterey-poe box might have a copy of the code for
+reference, but it shouldn't be using that to run anything, it should be asking
+the orchestration box to do things."* No decree moves. §8 replaces the
+three-contexts guess with what this actually implies.
+
+---
+
+## 8. The corrected picture — two machines, three kinds of evidence
+
+The doc above compares two lanes. The follow-up round said three contexts.
+Both are wrong. There are **two machines that matter to dev work**, and
+**three kinds of evidence**, and one machine carries two of them.
+
+| Context | Kind of evidence it can produce | What it structurally cannot |
+|---|---|---|
+| **M1** (this host) | Diffs; interactive probes of the local toolchain (three live probes settled `BASH_MAX_OUTPUT_LENGTH` in this arc, correcting a false finding of mine) | Execute real runs; calibrate anything |
+| **Orchestrator mini** (2014, Linux Mint) — *two hats* | Executed runs + measured thresholds, **and** real-user traffic arriving from Poe | Interactive toolchain probing |
+| **mini2** (2014, Monterey, Poe/Hermes/Telegram) | Not a dev context — it is **the user**. Holds no execution; asks the orchestrator | Anything; by design it runs nothing |
+
+So the third thing is not a third machine. **The third kind of evidence is
+real-user traffic, and it lands on the same box that does the headless dev
+work.** That single fact carries the rest of this section.
+
+### 8.1 The dual role is a feature and a hazard, and the hazard was found twice the same night
+
+*Feature:* real usage arrives where the work happens. No separate deployment,
+no staging gap — the box that ships the change is the box a real user hits.
+That is why live-usage evidence is even available to this project at its size.
+
+*Hazard:* test runs and real runs share one workspace. Run data cannot be
+reasoned from unless something distinguishes them. This is not hypothetical
+and not this document's discovery — a concurrent session landed
+`docs/history/2026-07-28-telegram-runs-review.md` the same evening naming
+**"Poe scaffolding contamination"** in the run corpus. Two sessions, working
+independently, hit the same seam within hours. That convergence is the
+strongest evidence in this document that the seam is real, and it is exactly
+the convergent-diagnosis pattern §1 step 2 recorded on the M1 side.
+
+### 8.2 mini2's posture is policy without detection
+
+Jeremy, unprompted, on whether mini2 might execute from its reference copy:
+*"I suppose it could choose to do that and I'd likely find out later about
+that."*
+
+The 2026-07-20 zero-creds decree is enforced **by construction for push** —
+the clone is https fetch-only and holds no credentials, so it cannot land
+code. Nothing enforces or surfaces mini2 *running* maro locally. That is the
+same failure shape as two other items this project has already been bitten
+by: the out-of-the-box invariant (declared, never tripwired, silently false
+for months) and the git hooks that were dead for a month after the rename
+while everyone assumed they were live.
+
+Cheap surfacing exists and matches the retention decree (surface, let the
+operator decide): a box that runs maro grows a `~/.maro/workspace`. Its
+presence on mini2 is a one-line fact to report, not a gate to build.
+
+### 8.3 What replaces the withdrawn merge gate
+
+Nothing hierarchical — per decree. Each context contributes only the evidence
+it can produce, and the *"interleaved workflow"* Jeremy asked for is **evidence
+flowing to whoever needs it**, not one box certifying another:
+
+- M1 → diffs, and probes of tool behavior nothing else can run interactively.
+- Box → executed runs, measured thresholds, and real-user traffic.
+- The interleave = seeded run data the M1 can execute against, which is the
+  same mechanism the out-of-the-box invariant needs. **One item, not two.**
+
+### 8.4 The honest answer to "is one just better categorically?"
+
+He asked directly — *"I suppose it's possible one is just better than the
+other categorically, I'm not sure, thus the check."* The answer is no, but
+not because they are balanced:
+
+- The M1 is **strictly weaker on evidence** — it produces one of the three
+  kinds and can calibrate nothing.
+- The M1 is **strictly stronger on iteration speed and on probing the local
+  toolchain**, and it is the only context where being wrong early is cheap
+  (§3.1: it changed target repo on turn two off a pasted screenshot).
+- The box is the **only source of two of the three evidence kinds**.
+
+If you had to keep one for *correctness*, keep the box. For *speed of
+exploration*, keep the M1. They are not redundant and neither dominates —
+which is the finding the exercise was run to test.

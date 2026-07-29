@@ -4871,3 +4871,46 @@ Dormant (deliberately parked, not dropped):
   suite + a liveness pin that handle consumes decision.action, not
   re-derived verdict fields. Spec correction recorded in
   ADAPTIVE_EXECUTION_DESIGN.md Trigger Point 3; CLAUDE.md row updated.
+- **2026-07-29 — M1-contrast open question RESOLVED; the contrast's spine
+  is "two machines, three kinds of evidence" (Jeremy).** No decree moves.
+  *"The poe-mini (mini2) doesn't have direct maro access outside of calling
+  the other machine to get things done... The orchestrator 2014 mini is
+  where poe calls into, and is the box that's doing the dev work we're
+  discussing between this machine (the M1) and the general headless
+  orchestration dev work. The monterey-poe box might have a copy of the
+  code for reference, but it shouldn't be using that to run anything, it
+  should be asking the orchestration box to do things."* So both prior
+  framings were wrong: the first pass's "two lanes" and the follow-up
+  round's "three contexts". **The orchestrator mini wears two hats** — it
+  is simultaneously the headless dev/run-review box and the live endpoint
+  Poe calls into; mini2 is not a dev context at all, it is the *user*.
+  Three consequences, written up in the doc's new §8:
+  (a) **The dual role is a feature and a hazard.** Real usage arrives where
+      the work happens (no staging gap at this project's size), but test
+      runs and real-user runs share one workspace, so run data cannot be
+      reasoned from unless something distinguishes them. **Independently
+      confirmed the same evening by a concurrent session** —
+      `docs/history/2026-07-28-telegram-runs-review.md` names "Poe
+      scaffolding contamination" without knowledge of this pass. Two
+      sessions, same seam, hours apart.
+  (b) **mini2's posture is policy without detection** — Jeremy's own
+      unprompted flag: *"I suppose it could choose to do that and I'd
+      likely find out later about that."* Zero-creds is enforced by
+      construction for *push* only; nothing surfaces mini2 *running* maro
+      off its reference copy. Third instance of the declared-but-untested
+      failure shape this week (out-of-the-box invariant; post-rename dead
+      git hooks). Surfacing is one line — a box that runs maro grows a
+      `~/.maro/workspace` — and per the retention decree it surfaces
+      rather than gates. New BACKLOG item.
+  (c) **The "interleave" is evidence flow, not hierarchy.** M1 contributes
+      diffs + interactive toolchain probes; the box contributes executed
+      runs, measured thresholds, and real-user traffic; the connective
+      tissue is seeded run data the M1 can execute against — **the same
+      mechanism the out-of-the-box invariant needs, so it is one item, not
+      two.** Answer to his categorical check ("possible one is just better
+      than the other, thus the check"): no, but not because they are
+      balanced — the M1 is strictly weaker on evidence and strictly
+      stronger on iteration speed and interactive probing; keep the box for
+      correctness, the M1 for exploration. **M1-contrast pass CLOSED**
+      (archived to BACKLOG_DONE); its four residual items live under their
+      own names.

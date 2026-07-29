@@ -354,38 +354,18 @@ carries its own maintenance cadence + adjudication gate (same
 discipline as the star skill), with CLAUDE.md reduced to the entry
 pointer.
 
-- [ ] **M1-contrast pass (Jeremy 2026-07-28):** "Would be interesting
-  to contrast my M1 local workflow with the maro box workflow... I
-  think there's overlap but it's not going to be quite the same, maybe
-  that's worth a pass as well to surface some additional insight."
-  Mind the work/personal boundary decree: patterns transfer, work
-  artifacts don't — the pass compares *workflows*, likely via Jeremy
-  narrating the M1 side rather than this box reading it.
-  **First pass written 2026-07-28 FROM the M1 side** (the vantage the box
-  can't supply):
-  `docs/history/2026-07-28-m1-vs-box-workflow-contrast.md`. Grounded in the
-  `token-lean-fetch` arc rather than recollection. Headline: the M1 lane
-  reviews *diffs*, the box lane reviews *runs* — demonstrated, not asserted,
-  by the run-continues gap that three M1-side adversarial reviewers all
-  missed and the box-side merge gate caught. Also: thresholds can only be
-  calibrated box-side, so the M1 lane should ship them observe-only. Ends in
-  4 questions for Jeremy per the iteration protocol — it is deliberately
-  half a document until he answers them.
-  **ANSWERED 2026-07-28 (full adjudication in GOAL_BRAIN Decisions).** Net
-  of his answers: the *diff-review vs run-review* observation SURVIVES, its
-  proposed remedy does NOT — no merge gate, no master/slave between boxes;
-  the fix is giving the M1 the ability to run a run (clean clone + seeded
-  data), not a hierarchy. The observe-only threshold rule is REJECTED as too
-  heavy (replacement: provenance-marked numbers + a paired falsifiable
-  follow-up). And the doc's spine is wrong: **it compares two lanes when
-  Jeremy runs three contexts** — it omitted the Poe/Telegram live-prototype
-  entirely, the only one with a real user and therefore the only source of
-  live-usage rather than test evidence. His reframe: *"they're different
-  contexts that happen to look the same"*; the goal is an interleaved
-  workflow taking the benefits of each, not clone-ing the boxes. **Rewrite
-  BLOCKED on one open question:** which 2014 Mac Mini is the "live test
-  prototype", and whether "develop against that same copy" relaxes mini2's
-  2026-07-20 zero-creds/propose-only decree.
+- [ ] **mini2 executes-locally detection (Jeremy 2026-07-29, his own
+  observation):** on whether the poe-mini might run maro off its reference
+  copy instead of asking the orchestrator — *"I suppose it could choose to
+  do that and I'd likely find out later about that."* The 2026-07-20
+  zero-creds decree is enforced **by construction for push** (https
+  fetch-only clone, no credentials → cannot land code) but nothing prevents
+  or surfaces mini2 *running* maro locally. Same failure shape as the
+  out-of-the-box invariant (declared, never tripwired) and the git hooks
+  that were silently dead for a month post-rename. Surfacing is cheap and
+  matches the retention decree (surface, don't gate): a box that runs maro
+  grows a `~/.maro/workspace` — report its presence on mini2, don't block
+  it. Context: `docs/history/2026-07-28-m1-vs-box-workflow-contrast.md` §8.2.
 - [ ] **Declare the out-of-the-box invariant + tripwire it (Jeremy
   2026-07-28, DECREE):** *"Functionality that we add should presume that
   it's 'out of the box' functionality for the project day 1 — unless it's

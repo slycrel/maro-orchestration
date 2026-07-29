@@ -4889,3 +4889,75 @@ substantive findings drove the absent/error split, durable quarantine,
 `loop_ids` preservation, checked metadata writes, exact operator reason, and
 false-return coverage. A broader delivered-attempt persistence inconsistency is
 tracked separately as EXT-AUDIT-2 rather than hidden by this boundary fix.
+
+---
+
+## Archived from BACKLOG 2026-07-29 (M1-contrast pass complete)
+
+### M1-contrast pass — SHIPPED 2026-07-28/29
+
+*Jeremy 2026-07-28:* "Would be interesting to contrast my M1 local workflow
+with the maro box workflow... I think there's overlap but it's not going to
+be quite the same, maybe that's worth a pass as well to surface some
+additional insight." Work/personal boundary decree respected throughout —
+patterns transfer, work artifacts don't; the pass compares *workflows*.
+
+**Deliverable:** `docs/history/2026-07-28-m1-vs-box-workflow-contrast.md`.
+Written FROM the M1 side (the vantage the box cannot supply), grounded in the
+`token-lean-fetch` arc rather than recollection, then answered by Jeremy and
+corrected. Structure is deliberate: §§1–6 are the first pass kept as the
+record, §7 his answers, §8 the corrected picture — *how the reconstruction
+was wrong is part of what the exercise measured*, so the wrong spine stays
+in place rather than being edited away.
+
+**What the first pass got right:** diff review cannot see a defect that
+exists only in the composition of two layers; only executing the thing can.
+Demonstrated, not asserted — this arc's `loop_status=""` + terminal handler
+coercing falsy → `"stuck"` killed whole runs, three M1-side adversarial
+reviewers missed it, box-side execution caught it. Also: the green suite is
+near-useless as a land-safety proxy on security/contract-shaped changes
+(6612 and 6642 green, zero of two REJECT rounds' findings caught) — a fourth
+and fifth replication of the C1–C4 container lesson.
+
+**What it got wrong, and the corrections (all Jeremy's):**
+1. *Remedy withdrawn.* It proposed the M1 stop certifying cross-layer work
+   and hand it to a box-side gate. Decree: **no merge gate, no master/slave
+   between boxes** ("outside of maybe a multi-box delegation of sorts which
+   hasn't even been discussed"). It was also a category error — the one
+   merge gate that exists (Hermes/mini2 propose-only) exists because an
+   agent that can rewrite its own orchestration needs a human at
+   merge-to-main, not because one dev box certifies another.
+2. *Observe-only thresholds REJECTED as too heavy* — "we can hypothesize and
+   make a best guess, then create follow-up work to confirm or pivot."
+3. *Spine wrong twice.* First pass said two lanes; the follow-up round
+   guessed three contexts; the truth is **two machines and three kinds of
+   evidence**, with the orchestrator mini wearing two hats — it is both the
+   headless dev box and the live endpoint Poe calls into. mini2 is not a dev
+   context at all; it is the *user*, holds no execution, and asks the
+   orchestrator ("might have a copy of the code for reference, but it
+   shouldn't be using that to run anything").
+
+**The findings that outlived the doc** (now their own BACKLOG items): the
+out-of-the-box invariant + tripwire; threshold provenance replacing
+observe-only; M1 workspace re-setup; mini2 executes-locally detection.
+
+**Sharpest single finding (§8.1):** the orchestrator box's dual role puts
+test runs and real-user runs in one workspace, so run data cannot be
+reasoned from unless something distinguishes them — and a *concurrent
+session* landed `docs/history/2026-07-28-telegram-runs-review.md` naming
+"Poe scaffolding contamination" the same evening. Two sessions hit the same
+seam within hours, independently. That convergence is the strongest evidence
+in the document that the seam is real.
+
+**Jeremy's framing, which supersedes the doc's own:** "just because I'm using
+2 boxes with different contexts, we shouldn't feel tied to one or the other —
+they're different contexts that happen to look the same"; the goal is "an
+interleaved workflow taking the benefits of both," not making the boxes
+clones. His check — "it's possible one is just better than the other
+categorically, I'm not sure, thus the check" — is answered in §8.4: no, but
+not because they're balanced. The M1 is strictly weaker on evidence (one of
+three kinds, calibrates nothing) and strictly stronger on iteration speed and
+interactive toolchain probing; the box is the only source of two of the three
+kinds. Keep the box for correctness, the M1 for exploration speed.
+
+Full adjudication: GOAL_BRAIN Decisions 2026-07-28.
