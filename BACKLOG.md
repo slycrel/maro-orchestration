@@ -1848,9 +1848,19 @@ deferred rather than silently dropped:
     not instruction; anything that must bind worker behavior belongs in
     EXECUTE_SYSTEM). Wiring `load_full()` at the executor is still open —
     the "stop implying it" half is done, the "wire it" half is not.
-  - **SSRF depth.** `is_safe_public_url()` is literal-address only; a
-    hostname resolving to a private address still passes. Full defense
-    is resolve-then-pin-the-socket at the HTTP layer.
+  - ~~**SSRF depth.**~~ **FIXED 2026-07-29** (autonomous batch; codex
+    trio unanimous DO_NOW). Resolve-then-pin shipped at the HTTP layer:
+    `_vet_resolved_ips` (all-or-nothing — a [public, private] split
+    answer is treated as rebinding-shaped and refused outright) +
+    `_PinnedHTTP(S)Connection` (connects to the vetted IP, never a
+    second DNS answer; TLS still validates against the NAME) +
+    `_SafeRedirectHandler` (re-gates every hop). Writing it surfaced a
+    WORSE pre-existing hole: `fetch_url_content`'s Tier-3 raw fetch
+    called `_http_get_bytes` with no gate at all, so a private-literal
+    URL the proxy tiers refused fell through to a DIRECT fetch —
+    `_http_get_bytes` now owns its own gate. `_resolve_redirect`'s
+    manual hop-follower pinned + gated too. 17 regression tests; live
+    check: example.com 200 via pin, 169.254.169.254 refused.
   - ~~**`viz_server` symlink containment.**~~ **FIXED 2026-07-28.**
     Containment was checked against the runs root only, and every denied
     sibling (`source/`, `fetch-raw/`, `metadata.json`) also lives under

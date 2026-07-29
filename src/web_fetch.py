@@ -24,8 +24,10 @@ X-specific strategy (in priority order):
 from __future__ import annotations
 
 import html as html_lib
+import http.client
 import os
 import re
+import socket
 import stat
 import subprocess
 import tempfile
@@ -117,12 +119,18 @@ def _http_get_bytes(url: str, timeout: int = _MAX_URL_FETCH_SECS, ua: str = _UA_
     handing bytes to the capture) silently rewrites any non-UTF-8 page, which
     defeats the point of keeping the raw file for later re-extraction.
     """
+    if not is_safe_public_url(url):
+        # Own gate at the egress point, not only at callers: Tier-3 raw
+        # fetch reached here with NO caller-side gate at all (2026-07-29),
+        # so a private-literal URL the proxy tiers refused fell through to
+        # a direct fetch. The pinned opener below closes the DNS half.
+        return 0, b"", "utf-8"
     try:
         req = urllib.request.Request(
             url,
             headers={"User-Agent": ua, "Accept": "text/html,application/xhtml+xml,*/*;q=0.8"},
         )
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with _pinned_opener().open(req, timeout=timeout) as resp:
             raw = resp.read(max_bytes)  # default cap 500KB raw
             charset = "utf-8"
             ct = resp.headers.get("Content-Type", "")
@@ -153,8 +161,11 @@ def _resolve_redirect(url: str, _depth: int = 0) -> str:
     """
     if _depth > 5:
         return url
+    # Each hop is arbitrary attacker-influenceable egress (Location points
+    # wherever the previous server says) — gate it like any other fetch.
+    if not is_safe_public_url(url):
+        return url
     try:
-        import http.client
         parsed = urllib.parse.urlparse(url)
         host = parsed.netloc
         path = parsed.path or "/"
@@ -163,10 +174,10 @@ def _resolve_redirect(url: str, _depth: int = 0) -> str:
 
         if parsed.scheme == "https":
             import ssl
-            conn = http.client.HTTPSConnection(host, timeout=5,
-                                               context=ssl.create_default_context())
+            conn = _PinnedHTTPSConnection(host, timeout=5,
+                                          context=ssl.create_default_context())
         else:
-            conn = http.client.HTTPConnection(host, timeout=5)
+            conn = _PinnedHTTPConnection(host, timeout=5)
 
         conn.request("HEAD", path, headers={"User-Agent": _UA_REDIRECT})
         resp = conn.getresponse()
@@ -543,19 +554,29 @@ def _safe_manifest_url(url: str) -> str:
 # Outbound URL policy — one gate for every egress in this module
 # ---------------------------------------------------------------------------
 
+def _is_public_ip(ip) -> bool:
+    """Shared predicate for the literal gate and the resolver vetting —
+    keeping them in lockstep is the point of extracting it."""
+    return not (ip.is_private or ip.is_loopback or ip.is_link_local
+                or ip.is_reserved or ip.is_multicast or ip.is_unspecified)
+
+
 def is_safe_public_url(url: str) -> bool:
     """True if `url` is an ordinary public http(s) URL safe to fetch or proxy.
 
     Every outbound path in this module runs through here: the proxy tiers hand
-    the URL to a third party, and the capture path fetches it directly. Without
-    a gate, a worker (or a redirect from an attacker-controlled page) can point
-    either at loopback, RFC1918, link-local, or cloud-metadata addresses and
-    have the response persisted to disk with a pointer handed back to the model.
+    the URL to a third party, and the direct-fetch paths run it before egress.
+    Without a gate, a worker (or a redirect from an attacker-controlled page)
+    can point either at loopback, RFC1918, link-local, or cloud-metadata
+    addresses and have the response persisted to disk with a pointer handed
+    back to the model.
 
-    Literal-address checks only — no DNS resolution, so a hostname that resolves
-    to a private address still passes. That is a deliberate scope line: full
-    SSRF defense needs resolve-then-pin-the-socket, which belongs at the HTTP
-    layer, not here. This blocks the direct and redirect-to-literal cases.
+    Literal-address checks only — no DNS resolution here, so a hostname that
+    resolves to a private address still passes THIS gate. The direct-fetch
+    layer closes that half: _http_get_bytes and _resolve_redirect connect via
+    the pinned classes below, which resolve, vet every address, and connect
+    to the vetted IP only (no second lookup — DNS rebinding between check and
+    connect buys nothing).
     """
     try:
         parsed = urllib.parse.urlsplit(url)
@@ -575,9 +596,97 @@ def is_safe_public_url(url: str) -> bool:
         import ipaddress
         ip = ipaddress.ip_address(host)
     except ValueError:
-        return True  # a name, not a literal — allowed (see docstring caveat)
-    return not (ip.is_private or ip.is_loopback or ip.is_link_local
-                or ip.is_reserved or ip.is_multicast or ip.is_unspecified)
+        return True  # a name — the resolver vetting below owns this case
+    return _is_public_ip(ip)
+
+
+def _vet_resolved_ips(host: str) -> list:
+    """Resolve `host` and return its addresses iff every one is public.
+
+    Refusal is all-or-nothing: a split answer ([public, private]) is treated
+    as hostile (rebinding / split-horizon smuggling), not as a tiebreak —
+    returns [] and the connection is refused. Resolution failure also refuses.
+    """
+    import ipaddress
+    try:
+        infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
+    except OSError:
+        return []
+    ips: list = []
+    for info in infos:
+        addr = str(info[4][0]).split("%", 1)[0]  # drop IPv6 zone id
+        try:
+            ip = ipaddress.ip_address(addr)
+        except ValueError:
+            return []
+        if not _is_public_ip(ip):
+            return []
+        if addr not in ips:
+            ips.append(addr)
+    return ips
+
+
+class _PinnedHTTPConnection(http.client.HTTPConnection):
+    """Connects to a resolve-time-vetted IP, never a fresh DNS answer."""
+
+    def connect(self):
+        ips = _vet_resolved_ips(self.host)
+        if not ips:
+            raise OSError(f"refusing non-public or unresolvable host: {self.host!r}")
+        last_err = None
+        for addr in ips:  # getaddrinfo order; all entries already vetted
+            try:
+                self.sock = socket.create_connection((addr, self.port), self.timeout)
+                return
+            except OSError as e:
+                last_err = e
+        raise last_err
+
+
+class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+    def connect(self):
+        ips = _vet_resolved_ips(self.host)
+        if not ips:
+            raise OSError(f"refusing non-public or unresolvable host: {self.host!r}")
+        last_err = None
+        raw = None
+        for addr in ips:
+            try:
+                raw = socket.create_connection((addr, self.port), self.timeout)
+                break
+            except OSError as e:
+                last_err = e
+        if raw is None:
+            raise last_err
+        # SNI + certificate validation against the NAME — pinning must not
+        # weaken TLS to connect-by-IP semantics.
+        self.sock = self._context.wrap_socket(raw, server_hostname=self.host)
+
+
+class _SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Re-gates every redirect hop — a public page 302ing to metadata/RFC1918
+    is the classic indirection the literal gate alone can't see."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if not is_safe_public_url(newurl):
+            raise urllib.error.HTTPError(
+                newurl, code, "redirect to non-public URL refused", headers, fp)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+class _PinnedHTTPHandler(urllib.request.HTTPHandler):
+    def http_open(self, req):
+        return self.do_open(_PinnedHTTPConnection, req)
+
+
+class _PinnedHTTPSHandler(urllib.request.HTTPSHandler):
+    def https_open(self, req):
+        return self.do_open(_PinnedHTTPSConnection, req, context=self._context)
+
+
+def _pinned_opener() -> urllib.request.OpenerDirector:
+    return urllib.request.build_opener(
+        _PinnedHTTPHandler, _PinnedHTTPSHandler, _SafeRedirectHandler)
 
 
 def capture_raw(url: str, *, body: Optional[bytes] = None,

@@ -330,3 +330,164 @@ def test_fetch_x_tweet_falls_through_when_thread_empty(monkeypatch):
                         lambda url, max_chars=8000: "j" * 300)
     out = web_fetch.fetch_x_tweet("https://x.com/someone/status/100")
     assert "via Jina" in out
+
+
+# ---------------------------------------------------------------------------
+# Outbound URL policy — literal gate + resolve-then-pin (SSRF defense)
+# ---------------------------------------------------------------------------
+
+from web_fetch import (
+    is_safe_public_url,
+    _vet_resolved_ips,
+    _PinnedHTTPConnection,
+    _SafeRedirectHandler,
+    _http_get_bytes,
+    _resolve_redirect,
+)
+
+
+class TestLiteralGate:
+    def test_public_urls_pass(self):
+        assert is_safe_public_url("https://example.com/page")
+        assert is_safe_public_url("http://93.184.216.34/")
+
+    def test_private_and_special_literals_refused(self):
+        for url in (
+            "http://127.0.0.1:8080/",          # loopback
+            "http://10.0.0.5/",                # RFC1918
+            "http://192.168.1.1/router",       # RFC1918
+            "http://169.254.169.254/latest/",  # link-local / cloud metadata
+            "http://[::1]/",                   # v6 loopback
+            "http://0.0.0.0/",                 # unspecified
+        ):
+            assert not is_safe_public_url(url), url
+
+    def test_non_http_schemes_refused(self):
+        assert not is_safe_public_url("file:///etc/passwd")
+        assert not is_safe_public_url("ftp://example.com/x")
+        assert not is_safe_public_url("gopher://example.com/")
+
+    def test_credentials_in_url_refused(self):
+        assert not is_safe_public_url("https://user:pass@example.com/")
+
+    def test_internal_suffixes_refused(self):
+        assert not is_safe_public_url("http://docs.internal/x")
+        assert not is_safe_public_url("http://nas.local/share")
+
+
+class TestResolverVetting:
+    def _fake_gai(self, addrs):
+        return lambda host, port, **kw: [
+            (2, 1, 6, "", (a, 0)) for a in addrs
+        ]
+
+    def test_all_public_returns_addresses(self, monkeypatch):
+        import socket as _socket
+        monkeypatch.setattr(_socket, "getaddrinfo",
+                            self._fake_gai(["93.184.216.34", "93.184.216.35"]))
+        assert _vet_resolved_ips("example.com") == ["93.184.216.34", "93.184.216.35"]
+
+    def test_private_answer_refused(self, monkeypatch):
+        import socket as _socket
+        monkeypatch.setattr(_socket, "getaddrinfo", self._fake_gai(["10.0.0.5"]))
+        assert _vet_resolved_ips("internal.example.com") == []
+
+    def test_split_answer_refused_entirely(self, monkeypatch):
+        # [public, private] is rebinding/split-horizon shaped — no tiebreak.
+        import socket as _socket
+        monkeypatch.setattr(_socket, "getaddrinfo",
+                            self._fake_gai(["93.184.216.34", "192.168.1.10"]))
+        assert _vet_resolved_ips("evil.example.com") == []
+
+    def test_resolution_failure_refused(self, monkeypatch):
+        import socket as _socket
+        def boom(host, port, **kw):
+            raise OSError("no resolver")
+        monkeypatch.setattr(_socket, "getaddrinfo", boom)
+        assert _vet_resolved_ips("nx.example.com") == []
+
+    def test_duplicates_collapsed(self, monkeypatch):
+        import socket as _socket
+        monkeypatch.setattr(_socket, "getaddrinfo",
+                            self._fake_gai(["93.184.216.34", "93.184.216.34"]))
+        assert _vet_resolved_ips("example.com") == ["93.184.216.34"]
+
+
+class TestPinnedConnect:
+    def test_connects_to_vetted_ip_not_fresh_dns(self, monkeypatch):
+        import web_fetch as wf
+        seen = {}
+        monkeypatch.setattr(wf, "_vet_resolved_ips", lambda h: ["203.0.113.7"])
+        def fake_connect(addr, timeout=None):
+            seen["addr"] = addr
+            return object()
+        monkeypatch.setattr(wf.socket, "create_connection", fake_connect)
+        conn = _PinnedHTTPConnection("example.com", 8080, timeout=5)
+        conn.connect()
+        assert seen["addr"] == ("203.0.113.7", 8080)
+
+    def test_refuses_when_resolver_refuses(self, monkeypatch):
+        import web_fetch as wf
+        monkeypatch.setattr(wf, "_vet_resolved_ips", lambda h: [])
+        called = []
+        monkeypatch.setattr(wf.socket, "create_connection",
+                            lambda *a, **kw: called.append(a))
+        conn = _PinnedHTTPConnection("internal.example.com", 80, timeout=5)
+        with pytest.raises(OSError):
+            conn.connect()
+        assert not called  # refused before any socket was opened
+
+
+class TestRedirectReGate:
+    def _hop(self, newurl):
+        import io
+        import urllib.request as ur
+        h = _SafeRedirectHandler()
+        req = ur.Request("https://public.example.com/start")
+        return h.redirect_request(req, io.BytesIO(b""), 302, "Found",
+                                  {"location": newurl}, newurl)
+
+    def test_redirect_to_private_refused(self):
+        import urllib.error
+        for target in ("http://169.254.169.254/latest/meta-data/",
+                       "http://127.0.0.1:6379/",
+                       "file:///etc/passwd"):
+            with pytest.raises(urllib.error.HTTPError):
+                self._hop(target)
+
+    def test_redirect_to_public_allowed(self):
+        req = self._hop("https://other.example.com/dest")
+        assert req is not None
+        assert req.full_url == "https://other.example.com/dest"
+
+
+class TestEgressRefusals:
+    def test_http_get_bytes_refuses_private_literal_without_network(self, monkeypatch):
+        import web_fetch as wf
+        called = []
+        monkeypatch.setattr(wf.socket, "create_connection",
+                            lambda *a, **kw: called.append(a))
+        status, raw, charset = _http_get_bytes("http://127.0.0.1:9/x")
+        assert (status, raw) == (0, b"")
+        assert not called
+
+    def test_http_get_bytes_refuses_hostname_resolving_private(self, monkeypatch):
+        import socket as _socket
+        import web_fetch as wf
+        monkeypatch.setattr(
+            _socket, "getaddrinfo",
+            lambda host, port, **kw: [(2, 1, 6, "", ("192.168.7.7", 0))])
+        called = []
+        monkeypatch.setattr(wf.socket, "create_connection",
+                            lambda *a, **kw: called.append(a))
+        status, raw, charset = _http_get_bytes("http://rebind.example.com/")
+        assert (status, raw) == (0, b"")
+        assert not called
+
+    def test_resolve_redirect_refuses_private_start_without_network(self, monkeypatch):
+        import web_fetch as wf
+        called = []
+        monkeypatch.setattr(wf.socket, "create_connection",
+                            lambda *a, **kw: called.append(a))
+        assert _resolve_redirect("http://10.1.2.3/hop") == "http://10.1.2.3/hop"
+        assert not called
