@@ -20,6 +20,33 @@ Dev log tab at maro.feifdom.com alongside Runs and Reading.
 
 ## 2026-07-29
 
+**§9.3 structural declare-blocked ships (star + runtime)** — threads:
+`compound-thinking`, `adaptive-execution`, `star`. The chunk-9
+remainder build, ratified by Jeremy's "proceed as you've outlined."
+Star half first per the build order: the ledger gained a Map Δ column
+and a two-consecutive-Δ0 stall trigger — the one decision star left to
+vibes (§3's own observation) now fires structurally, with typed-stop-
+or-justified-continuation as the forced choice. Runtime half extends
+the Phase 62 seam one level up exactly as §12 nudge 1 prescribed:
+`ClosureVerdict.failed_checks` + `closure_fingerprint()` (twin of
+`_error_fingerprint`), `evaluate_closure(prior_verdict=...)` mapping an
+identical-fingerprint restart to `action="declare-blocked"` with a
+thesis-refuted recommendation, handle stamping it first-write-wins —
+stall-driven stop, decoupled from MAX_RESTART_DEPTH, zero new LLM
+calls, fails open. The star exercise (restart-stall recon, 1/4
+delegations, spot-verified clean) grounded the ship record honestly:
+10 closure restarts live, all depth 1, and in both fully-recoverable
+pairs the checks were REGENERATED with different wording — v1's
+command-identity match would not have fired there. Shipped anyway on
+fail-open grounds with the log line as the pivot readout; coarsening
+BACKLOG'd evidence-gated. **Surprised by:** the recon overturning the
+BACKLOG entry I'd written an hour earlier — the main-gate join I
+described as "parent_loop_id → run metadata" is impossible as written
+because metadata.json carries no restart lineage at all; the ancestry
+lives only in captain's-log LOOP_CREATED events. The persistence map I
+assumed and the one that exists diverged exactly where the design
+leaned on it.
+
 **Contamination repair — the provenance gate ships (forked review
 session, part 2)** — threads: `dispatch-contamination`,
 `memory-knowledge`, `hermes-swap`. Jeremy granted all three asks from

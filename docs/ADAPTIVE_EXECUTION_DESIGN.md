@@ -156,8 +156,17 @@ decision as `DirectorDecision.closure_verdict`. Policy gates (the
 `closure_restart` config flag, `MAX_RESTART_DEPTH`, only-restart-from-"done")
 stay caller-side: the director recommends, the caller disposes.
 `evaluate_closure` is the single choke point where post-loop verdicts are
-judged — future stop-verdict declarations (§9.3 declare-blocked) and a
-gate-reads-scope check would plug in at this layer.
+judged. The first stop-verdict declaration landed there 2026-07-29: **§9.3
+structural declare-blocked** — `ClosureVerdict.failed_checks` +
+`closure_fingerprint()` (the plan-level twin of `loop_blocked._error_
+fingerprint`) let the post-restart re-verify compare the restarted attempt's
+hard failures against the pre-restart verdict's (`prior_verdict` kwarg); an
+identical fingerprint maps to `action="declare-blocked"` carrying a
+`thesis-refuted` stop recommendation (`DirectorDecision.stop_verdict`/
+`stop_evidence`), which handle stamps through the first-write-wins rail —
+the stop is driven by stall evidence, not the restart-depth budget. Fails
+open: no prior verdict or empty fingerprints → the normal restart mapping.
+A gate-reads-scope check would still plug in at this layer.
 
 ---
 

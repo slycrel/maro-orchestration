@@ -223,7 +223,9 @@ routing decision lands its new capability or data.
   §3a/§13b). A run that doesn't reach done ends with one of four stop
   verdicts, each recorded with its **evidence** and its **reopen
   condition** — a stop verdict is a cached observation, not a permanent
-  fact (Jeremy 2026-07-23: dead ends don't stay dead):
+  fact (Jeremy 2026-07-23: dead ends don't stay dead). *When* to declare
+  one is no longer left to taste alone — see the structural-stall
+  trigger below:
   - **thesis-refuted** — avenues exhausted, nothing connects; evidence =
     what was tried. Reopens on a new landmark or vantage.
   - **reachable-but-not-worth-it** — a path was found but its discovered
@@ -238,10 +240,38 @@ routing decision lands its new capability or data.
   over unrun checks is the failure mode this whole instrument exists to
   catch.
 
+## Structural stall — the declare-blocked trigger (§9.3, 2026-07-29)
+
+The ledger's **Map Δ** column records what each judged result actually
+changed: deliverable progress, or a **named** map edit (new landmark or
+edge, a resolved or newly-surfaced unknown, a reachability-and-cost
+estimate). The FIRST failure of an approach is a map edit — an edge
+marked impassable; the *same* failure again is not, and scores Δ 0. A
+second task blocked on the same named missing thing is likewise Δ 0
+(the dedup-at-the-map rule, restated as measurement). This is Phase
+62's `_is_converging` one level up: map-edit rate, per compound-thinking
+§12 nudge 1.
+
+**Trigger: two consecutive judged rows with Δ 0 = structural stall.**
+The master must then do one of two things, on the record:
+
+- declare the appropriate typed stop (Honest exit) citing the zero-Δ
+  streak as its evidence, or
+- write a routing row naming the NEW avenue the next task opens — a
+  different frontier, vantage, or approach, not the same probe run
+  louder. That row is what separates justified persistence from
+  ralphing.
+
+Silently delegating past a fired trigger is a contract violation. The
+trigger is deliberately decoupled from budget — it can fire on
+delegation 3 of 8. Which verdict to declare stays judgement: a stall
+while probing usually feeds thesis-refuted; a stall that surfaced a
+cost feeds reachable-but-not-worth-it.
+
 ## Run ledger (required, in the final reply)
 
-| # | Task (outcome) | Flavor | Criteria stated? | Verdict | Surprise |
-|---|----------------|--------|------------------|---------|----------|
+| # | Task (outcome) | Flavor | Criteria stated? | Verdict | Map Δ | Surprise |
+|---|----------------|--------|------------------|---------|-------|----------|
 
 Close the ledger with the **result block** (the node's bounded output):
 - **Deliverables**: each named artifact — path + one-line description.

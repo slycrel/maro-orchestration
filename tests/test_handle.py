@@ -2309,6 +2309,56 @@ class TestClosureRestart:
         assert "DECISION-CONTEXT: address gap A" in calls[1].get(
             "ancestry_context_extra", "")
 
+    def test_restart_boundary_consumes_declare_blocked(self, monkeypatch, tmp_path):
+        """§9.3 liveness pin: when the post-restart re-verify decision is
+        declare-blocked (identical failure fingerprint across the restart),
+        handle stamps the typed stop through the first-write-wins rail —
+        and the re-verify call must carry the pre-restart verdict as
+        prior_verdict (the convergence baseline). The stamp must survive
+        the demotion machinery that runs after it (first-write-wins gives
+        the structural verdict the field)."""
+        self._setup(monkeypatch, tmp_path)
+        from unittest.mock import patch
+        from director import DirectorDecision
+
+        done_result = self._fake_loop_result(status="done")
+        calls = []
+        def _fake_run(*args, **kwargs):
+            calls.append(kwargs.copy())
+            return done_result
+
+        first_verdict = self._fake_closure(False, 0.85, gaps=["gap A"])
+        second_verdict = self._fake_closure(False, 0.85, gaps=["gap A"])
+        restart_decision = DirectorDecision(
+            action="restart", reasoning="closure found gaps",
+            restart_context="address gap A",
+            closure_verdict=first_verdict,
+        )
+        blocked_decision = DirectorDecision(
+            action="declare-blocked",
+            reasoning="restart failed the identical checks",
+            closure_verdict=second_verdict,
+            stop_verdict="thesis-refuted",
+            stop_evidence="same hard-failed checks across attempts: false",
+        )
+        decision_seq = [restart_decision, blocked_decision]
+        eval_kwargs = []
+        def _fake_eval(*a, **k):
+            eval_kwargs.append(k)
+            return decision_seq.pop(0)
+
+        with patch("agent_loop.run_agent_loop", side_effect=_fake_run), \
+             patch("intent.check_goal_clarity", return_value={"clear": True}), \
+             patch("director.evaluate_closure", side_effect=_fake_eval), \
+             self._no_quality_gate():
+            handle("build X", force_lane="agenda", dry_run=False)
+
+        assert len(calls) == 2, "the restart itself must still fire"
+        assert eval_kwargs[1].get("prior_verdict") is first_verdict, (
+            "re-verify must pass the pre-restart verdict as the baseline")
+        assert done_result.stop_verdict == "thesis-refuted"
+        assert "same hard-failed checks" in done_result.stop_evidence
+
     def test_inconclusive_closure_does_not_restart(self, monkeypatch, tmp_path):
         """Inconclusive verification should not trigger a closure restart loop."""
         self._setup(monkeypatch, tmp_path)

@@ -1447,6 +1447,7 @@ def handle_escalation(
 
 from closure_verify import (  # noqa: E402
     ClosureVerdict,
+    closure_fingerprint,
     verify_goal_completion,
     _classify_precondition,
     _run_precondition_preflight,
@@ -1533,7 +1534,7 @@ class EvaluationContext:
 @dataclass
 class DirectorDecision:
     """Decision returned by director_evaluate() and evaluate_closure()."""
-    action: str                                   # continue | adjust | replan | restart | escalate
+    action: str                                   # continue | adjust | replan | restart | escalate | declare-blocked (closure only)
     reasoning: str                                # one sentence — logged + shown in channel
     revised_steps: Optional[List[str]] = None     # for 'adjust'
     new_approach: Optional[str] = None            # for 'replan' (Phase B+)
@@ -1546,6 +1547,12 @@ class DirectorDecision:
     # verdict, because recording honesty (judged tri-state, downgrade
     # reasons, check counts) lives on the evidence, not the decision.
     closure_verdict: Optional[ClosureVerdict] = None
+    # Closure trigger only (§9.3): typed stop recommendation riding an
+    # action="declare-blocked" decision. The director recommends; the
+    # caller stamps through its existing first-write-wins rail
+    # (stop_verdicts.py vocabulary).
+    stop_verdict: str = ""
+    stop_evidence: str = ""
 
 
 def director_evaluate(
@@ -1687,6 +1694,7 @@ def evaluate_closure(
     diagnosis=None,
     loop_id: str = "",
     project: str = "",
+    prior_verdict: Optional[ClosureVerdict] = None,
 ) -> DirectorDecision:
     """The closure trigger of the adaptive-execution seam (ADAPTIVE_EXECUTION_
     DESIGN Phase C leftover, unified 2026-07-28).
@@ -1705,6 +1713,15 @@ def evaluate_closure(
         predicate the closure-restart gate shipped with (BACKLOG #5
         positive-evidence rule: narrative-only gaps never justify doubling
         the run). restart_context carries the gap context verbatim.
+      - "declare-blocked" — restart-worthy failure whose closure fingerprint
+        (hard-failed check commands) is IDENTICAL to ``prior_verdict``'s
+        (§9.3 structural declare-blocked, built 2026-07-29): the restart
+        made zero map edits, so restarting again is evidence-free. The
+        plan-level twin of Phase 62's step-level convergence brake
+        (loop_blocked._is_converging) — the stop is driven by stall
+        evidence, not budget. stop_verdict/stop_evidence carry the typed
+        recommendation (thesis-refuted + the repeated commands); fails
+        open when prior_verdict is absent or either fingerprint is empty.
       - "continue" — everything else, with reasoning stating why: achieved,
         unverified (no checks ran), unjudged (probes inconclusive, not
         disproof), narrative-only gaps, or below restart confidence.
@@ -1712,14 +1729,14 @@ def evaluate_closure(
     The director recommends; callers dispose. Policy gates stay caller-side
     on purpose: the closure_restart config flag, MAX_RESTART_DEPTH, and
     only-restart-from-"done" are orchestration policy, not evidence
-    judgment. Sites that cannot act on a restart (the post-restart
-    re-verify, the post-escalate verdict, the CLI honesty-parity pass) read
-    closure_verdict and ignore the action by design.
+    judgment. Sites that cannot act on a restart (the post-escalate
+    verdict, the CLI honesty-parity pass) read closure_verdict and ignore
+    the action by design; the post-restart re-verify consumes exactly the
+    declare-blocked action (it holds the prior verdict) and ignores
+    "restart".
 
-    Seam note (designed, not built): this is the single choke point where
-    post-loop verdicts are judged — §9.3 structural declare-blocked verdicts
-    plug in here when they ship, and a gate-reads-scope check would join at
-    this layer if that lands.
+    Seam note (designed, not built): a gate-reads-scope check would join
+    at this layer if that lands.
     """
     verdict = verify_goal_completion(
         goal,
@@ -1742,7 +1759,33 @@ def evaluate_closure(
         and verdict.checks_passed < verdict.checks_run  # >=1 check hard-FAILED
         and getattr(verdict, "inconclusive_count", 0) == 0
     )
-    if restart_worthy:
+    _fp_now = closure_fingerprint(verdict)
+    _fp_prior = (
+        closure_fingerprint(prior_verdict) if prior_verdict is not None else ""
+    )
+    if restart_worthy and _fp_now and _fp_now == _fp_prior:
+        # §9.3 structural declare-blocked: the attempt failed the identical
+        # check commands as the attempt it restarted from — plan-level
+        # convergence stopped. Another restart would be evidence-free, the
+        # exact class the step-level brake already refuses (chunk-7 readout:
+        # 0 evidence-free retries in 1,253 metacognitive decisions).
+        _cmds = "; ".join(verdict.failed_checks[:3])
+        decision = DirectorDecision(
+            action="declare-blocked",
+            reasoning=(
+                f"restart failed the identical checks as its parent attempt "
+                f"(fingerprint {_fp_now}) — plan-level stall, restarting "
+                f"again is evidence-free"
+            ),
+            closure_verdict=verdict,
+            stop_verdict="thesis-refuted",
+            stop_evidence=(
+                f"closure restart reproduced the identical failure "
+                f"fingerprint {_fp_now} — same hard-failed checks across "
+                f"attempts: {_cmds}"
+            ),
+        )
+    elif restart_worthy:
         gap_lines = "\n".join(f"- {g}" for g in verdict.gaps) or "(none specified)"
         restart_context = (
             f"The previous run declared done, but closure verification found gaps.\n"

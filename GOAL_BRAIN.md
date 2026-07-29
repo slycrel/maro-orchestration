@@ -5014,3 +5014,20 @@ Dormant (deliberately parked, not dropped):
   `~/.claude/projects/-Users-jeremy-claude-openclaw-orchestration/`); and
   whether to prune `output/runs/`' 208 repo-local dev runs, noting that
   corpus is the M1's *only* run-shaped evidence per the contrast doc §8.
+- **2026-07-29 — §9.3 structural declare-blocked v1 SHIPPED (star +
+  runtime, the chunk-9 remainder build; greenlight "let's try it and we
+  can pivot if needed" recorded above).** Both halves extend the Phase
+  62 convergence seam per §12 nudge 1 — no invented signal. Star: Map Δ
+  ledger column + two-consecutive-Δ0 structural stall trigger (typed
+  stop with the streak as evidence, or an on-the-record routing row
+  naming the new avenue) — the one declare-blocked decision star left
+  to vibes now has a fired trigger. Runtime: ClosureVerdict.failed_checks
+  + closure_fingerprint() (plan-level twin of _error_fingerprint);
+  evaluate_closure(prior_verdict=...) maps an identical-fingerprint
+  restart-worthy verdict to action="declare-blocked" carrying a
+  thesis-refuted stop recommendation; handle's post-restart re-verify
+  consumes it and stamps first-write-wins — the stop is driven by stall
+  evidence, decoupled from MAX_RESTART_DEPTH. Fails open (no baseline /
+  empty fingerprints → normal restart mapping). Cuts BACKLOG'd by name:
+  main-gate prior-verdict join, redecompose plan-fingerprint
+  convergence.

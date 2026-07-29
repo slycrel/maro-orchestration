@@ -1996,6 +1996,10 @@ def _handle_impl(
                         )
                     except Exception:
                         pass
+                # The pre-restart verdict is the convergence baseline the
+                # re-verify compares against (§9.3): held here because the
+                # re-verify below replaces `_closure`.
+                _pre_restart_closure = _closure
                 try:
                     loop_result = run_agent_loop(message, **_closure_kwargs)
                     elapsed = int((time.monotonic() - started_at) * 1000)
@@ -2004,12 +2008,17 @@ def _handle_impl(
                     # Re-verify the restarted loop — its declared status is
                     # exactly as unverified as the first loop's was. Without
                     # this, a restart that re-declares done sticks regardless
-                    # of whether the gaps were addressed. Evidence-only read:
-                    # the decision's action is deliberately ignored here — a
-                    # second restart is the depth-gated outer gate's call, not
-                    # this re-verdict's.
+                    # of whether the gaps were addressed. A "restart" action
+                    # is deliberately ignored here (a second restart is the
+                    # depth-gated outer gate's call), but "declare-blocked"
+                    # IS consumed (§9.3): identical failure fingerprint
+                    # across the restart means plan-level stall — stamp the
+                    # typed stop with its structural evidence. First-write-
+                    # wins: stamping before the demotion machinery below
+                    # lets thesis-refuted (structural, evidence-bearing)
+                    # outrank the generic demotion verdict.
                     try:
-                        _closure = evaluate_closure(
+                        _reverify_decision = evaluate_closure(
                             message,
                             loop_result.steps,
                             adapter,
@@ -2020,7 +2029,22 @@ def _handle_impl(
                             diagnosis=None,
                             loop_id=getattr(loop_result, "loop_id", "") or "",
                             project=project or getattr(loop_result, "project", "") or "",
-                        ).closure_verdict
+                            prior_verdict=_pre_restart_closure,
+                        )
+                        _closure = _reverify_decision.closure_verdict
+                        if (
+                            _reverify_decision.action == "declare-blocked"
+                            and _reverify_decision.stop_verdict
+                        ):
+                            log.info(
+                                "handle: closure restart declared blocked — %s",
+                                _reverify_decision.reasoning,
+                            )
+                            _stamp_stop_on_demotion(
+                                loop_result,
+                                _reverify_decision.stop_verdict,
+                                _reverify_decision.stop_evidence,
+                            )
                     except Exception:
                         _closure = None  # fail open: no re-verdict, no demotion
                 except Exception as _cr_exc:

@@ -1515,6 +1515,38 @@ tracked signal with a readout. Consumer-first both times: the upgrade
 needs evidence of misses, not vibes. Decision 704420c7; design
 §6/§10 "Coherence vs done-means" (COMPOUND_THINKING_DESIGN.md).
 
+### §9.3 declare-blocked — named v1 cuts (2026-07-29)
+
+The §9.3 structural declare-blocked v1 shipped at the closure-restart
+boundary (evaluate_closure `prior_verdict` fingerprint comparison; see
+COMPOUND_THINKING_DESIGN 2026-07-29 addendum). Two extensions cut by
+name, consumer-first when their evidence arrives:
+
+1. **Main-gate prior-verdict join.** The main closure gate at
+   continuation_depth>0 has no baseline in hand — declining an
+   evidence-free restart BEFORE it fires (rather than declaring blocked
+   after) needs a persistence join. Recon correction (2026-07-29,
+   docs/history/2026-07-29-restart-stall-recon.md): run metadata.json
+   carries NO loop_reason/parent_loop_id — the join material is the
+   captain's-log LOOP_CREATED event (context.parent_loop_id), and
+   failed_checks aren't persisted outside `build/calls/` transcripts,
+   so the join likely wants a failed_checks/fingerprint stamp added to
+   run metadata first. Zero depth≥2 restarts exist live today — build
+   when the restart-boundary declaration's log line shows the case
+   occurring.
+2. **Redecompose plan-fingerprint convergence** (loop_blocked). The
+   `_REDECOMPOSE_THRESHOLD = 2` cap is budget-shaped; the structural
+   twin is: fingerprint successive decompositions and stop
+   re-decomposing when the PLANS stop changing, not when the counter
+   hits 2. Same shape as §9.3, one seam over.
+3. **Fingerprint coarsening.** Live recon: in both fully-recoverable
+   historical restart pairs, closure checks were LLM-regenerated with
+   different wording — command-identity matching missed them. If the
+   declare-blocked log line shows near-miss stalls (same target
+   artifact, different command text), coarsen the fingerprint material
+   to the failed check's target artifact. Evidence-gated; don't build
+   on n=2.
+
 ### Tire-runs tangent — deferred findings (2026-07-27, Opus independent review)
 
 From the three Poe-dispatched tire-research runs (record:

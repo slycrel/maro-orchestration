@@ -670,3 +670,41 @@ is **§10 calibration together with the §9.7/cross-goal scoping
 question** — they are the same conversation (what knowledge earns
 globality, and how outcomes feed calibration), and it should happen
 before any §9.7 build, not after.
+
+**2026-07-29 — §9.3 v1 SHIPPED (star + runtime, per the greenlight
+above).** Both halves follow §12 nudge 1: extend the Phase 62 seam, don't
+invent a signal.
+
+- **Star (prompting, first per the build order):** the skill's ledger
+  gained a **Map Δ** column and a structural-stall trigger — two
+  consecutive judged rows with Δ 0 fire the declare-blocked decision
+  point: typed stop with the zero-Δ streak as evidence, or a routing row
+  naming the genuinely new avenue. A repeat of a known failure is Δ 0;
+  a FIRST failure is a real map edit. The one decision star left to
+  vibes (§3's observation) now has a fired trigger and an audit trail.
+- **Runtime:** the closure-restart boundary — the plan-level analog of
+  the step brake. `ClosureVerdict.failed_checks` + `closure_fingerprint()`
+  (twin of `_error_fingerprint`); `evaluate_closure(prior_verdict=...)`
+  maps an identical-fingerprint restart-worthy verdict to
+  `action="declare-blocked"` with a thesis-refuted stop recommendation;
+  handle's re-verify consumes it and stamps first-write-wins. Zero new
+  LLM calls; fails open without a baseline. Stop driven by stall
+  evidence, decoupled from `MAX_RESTART_DEPTH`.
+- **Live-data honesty (star exercise, docs/history/2026-07-29-restart-
+  stall-recon.md):** 10 closure restarts exist in live data (all depth 1,
+  none deeper). In the 2 pairs whose per-check records survive, the
+  restarted attempt's checks were REGENERATED with different wording —
+  no failing command recurred verbatim, so v1's command-identity
+  fingerprint would not have fired on either historical pair. Shipped
+  anyway because it is fail-open (a mismatch costs nothing — the restart
+  proceeds as today) and deterministic canonical checks (`pytest -q`,
+  `test -f <path>`) do recur in other run classes; the declare-blocked
+  log line is the readout that says whether to pivot the fingerprint
+  material (Jeremy's greenlight framing: try it, pivot if needed).
+- **Cut by name (BACKLOG'd):** the main-gate prior-verdict join (declining
+  a restart at depth>0 entry — join material lives in captain's-log
+  LOOP_CREATED events, NOT run metadata.json, per the recon; zero live
+  depth≥2 instances today); redecompose plan-fingerprint convergence in
+  loop_blocked (stop re-decomposing when successive plans stop changing,
+  not when the counter hits 2); fingerprint coarsening (command identity →
+  failed-check target artifact) if the log line shows near-miss stalls.

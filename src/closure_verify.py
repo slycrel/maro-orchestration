@@ -16,7 +16,7 @@ import json
 import logging
 import re
 import textwrap
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
@@ -163,6 +163,31 @@ class ClosureVerdict:
     # goal_achieved=false beside a positive narrative reads as cause, not
     # contradiction (run d2f4e2f4: the reason lived only in the worker log).
     downgrade_reason: str = ""
+    # Commands of hard-FAILED checks (outcome == "fail" only — inconclusive
+    # is a verifier failure, not goal evidence). Feeds closure_fingerprint()
+    # so restart convergence can be judged structurally (§9.3): a restart
+    # that fails the identical commands made zero map edits.
+    failed_checks: List[str] = field(default_factory=list)
+
+
+def closure_fingerprint(verdict: "ClosureVerdict") -> str:
+    """Stable fingerprint of a verdict's hard failures (§9.3).
+
+    The plan-level twin of ``loop_blocked._error_fingerprint``: two
+    closure verdicts with the same fingerprint mean the second attempt
+    failed the identical check commands — the restart made zero map
+    edits, so restarting again is evidence-free. Deterministic, zero LLM
+    calls, order-insensitive. Returns "" when the verdict has no
+    hard-failed checks; callers must treat "" as no-signal, never as a
+    match. getattr-defensive like the seam's other verdict reads — duck-
+    typed verdicts (test stubs, pre-field records) fingerprint to "".
+    """
+    _failed = getattr(verdict, "failed_checks", None) or []
+    if not _failed:
+        return ""
+    import hashlib
+    _norm = sorted(" ".join(str(c).split())[:200] for c in _failed)
+    return hashlib.md5("|".join(_norm).encode("utf-8")).hexdigest()[:12]
 
 
 # Leading verdict restatement the LLM prose may open with — stripped before
@@ -1081,6 +1106,11 @@ def verify_goal_completion(
             inconclusive_count=len(inconclusive_checks),
             judged=judged,
             downgrade_reason=downgrade_reason,
+            failed_checks=[
+                safe_str(r.get("command", ""))[:200]
+                for r in check_results
+                if r.get("outcome") == "fail" and r.get("command")
+            ],
         )
 
         # Emit needs_work if gaps found

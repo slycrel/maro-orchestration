@@ -1203,6 +1203,29 @@ class TestVerifyGoalCompletion:
         # Verdict comes from the mocked data, not the subprocess result
         assert isinstance(result, ClosureVerdict)
 
+    def test_failed_checks_records_hard_fails_only(self, tmp_path):
+        """failed_checks (§9.3 fingerprint material) carries commands of
+        outcome=="fail" rows only — an inconclusive probe (exit 127 =
+        verifier tooling, not goal evidence) must not enter it, and
+        passing checks obviously don't."""
+        from unittest.mock import MagicMock, patch
+        adapter = MagicMock()
+        adapter.complete.side_effect = [MagicMock(), MagicMock()]
+        checks = [
+            {"description": "hard fail", "command": "false"},
+            {"description": "passes", "command": "true"},
+            {"description": "verifier tooling missing",
+             "command": "definitely_not_a_real_command_xyz"},
+        ]
+        verdict_data = {"complete": False, "confidence": 0.9,
+                        "gaps": ["broken"], "summary": "not done"}
+        with patch("closure_verify.extract_json",
+                   side_effect=[{"checks": checks}, verdict_data]):
+            with patch("closure_verify.content_or_empty", return_value="{}"):
+                result = verify_goal_completion(
+                    "build a thing", [], adapter, workspace_path=str(tmp_path))
+        assert result.failed_checks == ["false"]
+
     def test_failed_checks_surface_gaps(self, monkeypatch, tmp_path):
         """Failed checks + director verdict with gaps → needs_work emitted."""
         from unittest.mock import MagicMock, patch
@@ -2925,7 +2948,8 @@ class TestEvaluateClosure:
     rule and the inconclusive/unjudged exclusions)."""
 
     def _verdict(self, complete, confidence, *, gaps=None, checks_run=2,
-                 checks_passed=None, inconclusive_count=0, judged=True):
+                 checks_passed=None, inconclusive_count=0, judged=True,
+                 failed_checks=None):
         from director import ClosureVerdict
         return ClosureVerdict(
             complete=complete, confidence=confidence, gaps=gaps or [],
@@ -2935,6 +2959,7 @@ class TestEvaluateClosure:
                 checks_passed if checks_passed is not None
                 else (checks_run if complete else 0)),
             inconclusive_count=inconclusive_count, judged=judged,
+            failed_checks=failed_checks or [],
         )
 
     def _evaluate(self, verdict, **kwargs):
@@ -3054,6 +3079,80 @@ class TestEvaluateClosure:
         assert kwargs["loop_id"] == "lid-1"
         assert kwargs["project"] == "proj-1"
         assert kwargs["dry_run"] is True
+
+    # -- §9.3 structural declare-blocked (2026-07-29) --
+
+    def test_identical_fingerprint_declares_blocked(self):
+        """A restart-worthy verdict whose failure fingerprint matches the
+        pre-restart verdict's maps to declare-blocked with a thesis-refuted
+        stop recommendation: the restart failed the identical checks, so
+        restarting again is evidence-free (plan-level twin of Phase 62's
+        step convergence brake). Whitespace variance must not defeat the
+        match — the fingerprint normalizes it."""
+        prior = self._verdict(False, 0.85, gaps=["server never started"],
+                              failed_checks=["curl -sf localhost:8000"])
+        v = self._verdict(False, 0.9, gaps=["server still not started"],
+                          failed_checks=["curl   -sf  localhost:8000"])
+        decision, _ = self._evaluate(v, prior_verdict=prior)
+        assert decision.action == "declare-blocked"
+        assert decision.stop_verdict == "thesis-refuted"
+        assert "curl" in decision.stop_evidence
+        assert "identical failure fingerprint" in decision.stop_evidence
+        assert decision.closure_verdict is v
+
+    def test_differing_fingerprint_still_restarts(self):
+        """A restart that failed DIFFERENT checks made a map edit — the
+        error landscape changed, so the normal restart mapping stands."""
+        prior = self._verdict(False, 0.85, gaps=["tests fail"],
+                              failed_checks=["pytest -q"])
+        v = self._verdict(False, 0.85, gaps=["report missing"],
+                          failed_checks=["test -f report.md"])
+        decision, _ = self._evaluate(v, prior_verdict=prior)
+        assert decision.action == "restart"
+        assert decision.stop_verdict == ""
+
+    def test_no_prior_verdict_restarts(self):
+        """Without a convergence baseline there is no stall signal — the
+        first restart-worthy verdict always maps to restart."""
+        v = self._verdict(False, 0.85, gaps=["gap"], failed_checks=["false"])
+        decision, _ = self._evaluate(v)
+        assert decision.action == "restart"
+
+    def test_empty_fingerprints_fail_open(self):
+        """Fingerprint "" is no-signal, never a match (verdicts recorded
+        before failed_checks existed deserialize to []): declare-blocked
+        must not fire on empty == empty."""
+        prior = self._verdict(False, 0.85, gaps=["gap"], failed_checks=[])
+        v = self._verdict(False, 0.85, gaps=["gap"], failed_checks=[])
+        decision, _ = self._evaluate(v, prior_verdict=prior)
+        assert decision.action == "restart"
+
+
+class TestClosureFingerprint:
+    """closure_fingerprint — the deterministic §9.3 stall-signal material
+    (plan-level twin of loop_blocked._error_fingerprint)."""
+
+    def _v(self, failed):
+        from closure_verify import ClosureVerdict
+        return ClosureVerdict(
+            complete=False, confidence=0.9, gaps=[], summary="",
+            checks_run=max(len(failed), 1), checks_passed=0,
+            failed_checks=failed)
+
+    def test_order_and_whitespace_insensitive(self):
+        from closure_verify import closure_fingerprint
+        a = self._v(["pytest -q", "test -f  out.md"])
+        b = self._v(["test -f out.md", "pytest  -q"])
+        assert closure_fingerprint(a) == closure_fingerprint(b) != ""
+
+    def test_different_commands_differ(self):
+        from closure_verify import closure_fingerprint
+        assert (closure_fingerprint(self._v(["pytest -q"]))
+                != closure_fingerprint(self._v(["ls out"])))
+
+    def test_empty_is_no_signal(self):
+        from closure_verify import closure_fingerprint
+        assert closure_fingerprint(self._v([])) == ""
 
 
 class TestDetectNextLedgerGap:
