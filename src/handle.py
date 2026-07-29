@@ -1856,6 +1856,11 @@ def _handle_impl(
         _closure_eligible_statuses = ("done", "partial", "stuck", "restart")
         _ran_any_step = any(getattr(s, "status", "") == "done"
                             for s in (loop_result.steps or []))
+        # Defined unconditionally: the quality gate below reads _closure for
+        # escalate reconciliation, and its run conditions only happen to
+        # mirror this block's — don't let that coupling become a NameError.
+        _closure = None
+        _closure_decision = None
         if (not dry_run
                 and loop_result.status in _closure_eligible_statuses
                 and _ran_any_step):
@@ -2396,7 +2401,67 @@ def _handle_impl(
                         loop_id=getattr(loop_result, "loop_id", None),
                     )
                 _contested_claims = _gate_verdict.contested_claims or []
-                if _gate_verdict.escalate and loop_result.status == "done":
+                # Verdict reconciliation (2026-07-29, ead11c12-nimble-shore):
+                # closure runs executed probes over the delivered artifacts;
+                # the gate judges a few-KB excerpt. When both have spoken and
+                # they disagree, the one that read more evidence wins — the
+                # gate escalated a run whose closure had just passed 5/5 at
+                # 0.88, and the forced re-run burned the cost budget. Same
+                # 0.7 bar as the demotion path: closure's authority to
+                # overturn a "done" and to defend one are symmetric. The
+                # dissent is recorded (QUALITY_GATE_OVERRULED), never lost —
+                # stack, don't substitute.
+                try:
+                    from config import get as _qg_config_get
+                    _closure_overrule = bool(
+                        _qg_config_get("quality_gate.closure_overrule", True))
+                except Exception:
+                    _closure_overrule = True
+                _closure_defends = (
+                    _closure is not None
+                    and getattr(_closure, "judged", True)
+                    and _closure.complete
+                    and _closure.checks_run > 0
+                    and _closure.confidence >= 0.7
+                )
+                if (_gate_verdict.escalate and loop_result.status == "done"
+                        and _closure_overrule and _closure_defends):
+                    _gate_note = (
+                        f"\n\n⚠️ Quality gate: ESCALATE overruled by closure "
+                        f"verdict ({_closure.checks_passed}/{_closure.checks_run}"
+                        f" checks, conf {_closure.confidence:.2f}) — "
+                        f"{_gate_verdict.reason}"
+                    )
+                    if verbose:
+                        print(f"[maro:{handle_id}] quality gate: ESCALATE "
+                              f"overruled by closure verdict "
+                              f"({_closure.checks_passed}/{_closure.checks_run} "
+                              f"checks, conf {_closure.confidence:.2f})",
+                              file=sys.stderr, flush=True)
+                    try:
+                        from captains_log import log_event as _qg_log_event
+                        from captains_log import QUALITY_GATE_OVERRULED
+                        _qg_log_event(
+                            QUALITY_GATE_OVERRULED,
+                            message[:120],
+                            f"gate ESCALATE vs closure "
+                            f"{_closure.checks_passed}/{_closure.checks_run}"
+                            f"@{_closure.confidence:.2f} — closure wins, "
+                            f"no re-run",
+                            context={
+                                "gate_reason": str(_gate_verdict.reason)[:400],
+                                "closure_checks_run": int(_closure.checks_run),
+                                "closure_checks_passed": int(
+                                    _closure.checks_passed),
+                                "closure_confidence": float(
+                                    _closure.confidence),
+                                "closure_summary": str(_closure.summary)[:300],
+                            },
+                            loop_id=getattr(loop_result, "loop_id", None),
+                        )
+                    except Exception:
+                        pass
+                elif _gate_verdict.escalate and loop_result.status == "done":
                     _cur_tier = model or getattr(adapter, "model_key", None)
                     if not isinstance(_cur_tier, str):
                         _cur_tier = "mid"  # execution floor since 2026-07-21
@@ -2415,6 +2480,7 @@ def _handle_impl(
                         # retrying, so they must exist before it plans.
                         _drain_deferred_learning(handle_id)
                         _escalated_adapter = build_adapter(model=_next_tier)
+                        _pre_escalation_loop = loop_result
                         _pre_escalation_loop_id = getattr(loop_result, "loop_id", None)
                         _escalated_project = (
                             project or getattr(loop_result, "project", "") or ""
@@ -2438,14 +2504,59 @@ def _handle_impl(
                         if getattr(loop_result, "loop_id", ""):
                             _run_loop_ids.append(loop_result.loop_id)
                         _post_audit_failed = False
-                        _gate_note = f"\n\n✅ Quality gate escalated to {_next_tier} — re-run complete."
-                        _contested_claims = []  # fresh run — don't append stale claims
+                        # Escalation only fires from a "done" parent, so a
+                        # re-run that dies (budget breaker, stuck, empty) must
+                        # not replace delivered work with its own corpse —
+                        # ead11c12-nimble-shore (2026-07-29) shipped
+                        # "[no output] / Stuck" to the dispatch lane while two
+                        # complete memos sat on disk. The parent stays the
+                        # shipped version unless the re-run finished with
+                        # results of its own.
+                        _rerun_shipped = (
+                            getattr(loop_result, "status", "") == "done"
+                            and any(
+                                getattr(s, "status", "") == "done"
+                                and getattr(s, "result", None)
+                                for s in (loop_result.steps or [])
+                            )
+                        )
+                        if _rerun_shipped:
+                            _gate_note = f"\n\n✅ Quality gate escalated to {_next_tier} — re-run complete."
+                            _contested_claims = []  # fresh run — don't append stale claims
+                        else:
+                            _dead_reason = (
+                                getattr(loop_result, "stuck_reason", None)
+                                or f"status={getattr(loop_result, 'status', '?')}"
+                            )
+                            _dead_loop_id = getattr(loop_result, "loop_id", "") or ""
+                            _dead_rerun_loop = loop_result
+                            loop_result = _pre_escalation_loop
+                            # Parent ships → its contested claims still apply;
+                            # its closure verdict (stamped before the gate ran)
+                            # stays the run's verdict — no post-escalate
+                            # re-stamp from the dead re-run's state.
+                            _gate_note = (
+                                f"\n\n⚠️ Quality gate escalated to {_next_tier}, "
+                                f"but the re-run did not complete "
+                                f"({_dead_reason}) — shipping the original "
+                                f"loop's output; its closure verdict stands."
+                            )
+                            log.info(
+                                "handle: escalated re-run %s died (%s) — "
+                                "reverting to pre-escalation loop %s for delivery",
+                                _dead_loop_id, _dead_reason,
+                                _pre_escalation_loop_id,
+                            )
 
                         # Re-run closure on the escalated loop. Without this, only the
                         # initial loop's closure verdict shows up in the captain's log
                         # — the escalated re-run (which is the version we ship) would
                         # have no closure record at all (2026-04-26 audit finding).
-                        if not dry_run:
+                        # Only when the re-run is actually the shipped version:
+                        # on revert the parent's verdict already stands and a
+                        # fresh judgment of the dead re-run would re-stamp the
+                        # run from work we are not delivering.
+                        if not dry_run and _rerun_shipped:
                             try:
                                 from director import evaluate_closure as _evaluate_post_escalate
                                 from introspect import diagnose_loop as _diag_post_escalate
@@ -2546,10 +2657,16 @@ def _handle_impl(
                         # defer_learning=True. Complete that contract after
                         # the escalated verdict is available (or unjudged),
                         # otherwise the shipped retry never extracts lessons.
+                        # On revert the contract belongs to the dead re-run
+                        # (the reverted parent was already drained pre-retry)
+                        # — and a died-on-budget loop is a real lesson source.
                         if not _post_audit_failed:
                             try:
                                 from loop_finalize import finalize_deferred_learning as _fdl_post
-                                _dl_post_result = loop_result
+                                _dl_post_result = (
+                                    loop_result if _rerun_shipped
+                                    else _dead_rerun_loop
+                                )
                                 _dl_post_adapter = _escalated_adapter
                                 _dl_post_project = _escalated_project
                                 _defer_learning_post_notify(

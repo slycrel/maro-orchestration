@@ -163,6 +163,7 @@ FENCE_EXTENDED = "FENCE_EXTENDED"  # per-run: fence widened to path(s) the goal 
 # Run transparency: loop lifecycle + quality-gate decisions
 LOOP_CREATED = "LOOP_CREATED"  # every loop spawn — reason, parent_loop_id, slug, max_steps
 QUALITY_GATE_VERDICT = "QUALITY_GATE_VERDICT"  # PASS / ESCALATE — most important escalation signal
+QUALITY_GATE_OVERRULED = "QUALITY_GATE_OVERRULED"  # gate ESCALATE vs judged closure pass: the excerpt-fed gate does not overrule executed probes — dissent recorded, no re-run (2026-07-29)
 
 # Second-family gate check (swarm-review chunk 5a, stack-don't-substitute).
 # One per paid-gate PASS while hosted-free is available: a different model
@@ -254,6 +255,7 @@ EVENT_TYPES = {
     CLAIM_VERIFIER_OUTCOME, FABRICATION_DETECTED, SCAVENGE_DETECTED, FENCE_WRITE_BLOCKED,
     FENCE_EXTENDED,
     LOOP_CREATED, QUALITY_GATE_VERDICT, QUALITY_GATE_SECOND_FAMILY,
+    QUALITY_GATE_OVERRULED,
     QUALITY_GATE_COUNCIL, QUALITY_GATE_CROSS_REF, STEP_TOO_BROAD,
     RECALL_PERFORMED, RECALL_GUARD_TRIPPED,
     NAVIGATOR_DECIDED, NAVIGATOR_ACTED, NAVIGATOR_ADJUDICATED,

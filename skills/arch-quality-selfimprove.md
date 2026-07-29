@@ -37,7 +37,14 @@ Configurable thresholds via config.yml. Produces InspectorReport with severity c
 
 ### Quality Gate (quality_gate.py)
 Multi-pass review system. 5 passes:
-1. PASS/ESCALATE verdict (mandatory)
+1. PASS/ESCALATE verdict (mandatory). Since 2026-07-29 an ESCALATE on a
+   "done" run is **reconciled against the closure verdict in handle.py**:
+   judged + complete + conf ≥ 0.7 closure (executed probes over the
+   delivered artifacts) overrules the excerpt-fed gate — dissent lands as
+   QUALITY_GATE_OVERRULED, no re-run (killswitch
+   `quality_gate.closure_overrule`). And an escalate re-run that dies
+   (budget breaker, stuck, empty) no longer replaces the done parent —
+   the parent ships, annotated with the re-run's death reason.
 1.5. Hosted-free second-family check (chunk 5a, 2026-07-21): on a Pass-1
    PASS, one Groq/Gemini call judges the same payload. **Stack, don't
    substitute** — dissent lands as a QUALITY_GATE_SECOND_FAMILY event +

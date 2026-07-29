@@ -4961,3 +4961,45 @@ interactive toolchain probing; the box is the only source of two of the three
 kinds. Keep the box for correctness, the M1 for exploration speed.
 
 Full adjudication: GOAL_BRAIN Decisions 2026-07-28.
+
+## Quality-gate vs closure reconciliation + escalate-death delivery gap — completed 2026-07-29
+
+Both defects surfaced by the self-diagnosis re-dispatch (task-…21e45b3c, run
+ead11c12-nimble-shore) the same morning the cap/kill-reason fixes landed —
+those fixes held (no timeout, judged verdicts, honest stuck reason), which is
+exactly what let the cascade move downstream and expose these two.
+
+**1. Less-informed verifier overruled the more-informed one — FIXED.**
+Closure passed loop 715da7d3's memo 5/5 at 0.88 (executed probes over the
+delivered artifacts); 40s later the mid-source quality gate judged from a
+2.5KB excerpt (`input_chars: 2483` vs a 12.5KB memo + 70KB artifacts),
+issued ESCALATE at exactly threshold, and burned ~$1 on a redundant power
+re-run. The memo it escalated had itself named quality_gate.py's single
+0.75 scalar as the shared root cause of both prior diagnoses — the gate
+reproduced the failure mode against its own diagnosis run. Fix: verdict
+reconciliation in handle.py — a judged, complete closure verdict at
+conf ≥ 0.7 (the same bar closure needs to *demote* a done; defend and
+overturn are symmetric) overrules a gate ESCALATE on a done run. The
+dissent lands as a QUALITY_GATE_OVERRULED captain's-log row with both
+sides recorded — stack, don't substitute. Killswitch
+`quality_gate.closure_overrule` (docs/DEFAULTS.md). No closure / unjudged
+/ conf < 0.7 → escalate exactly as before. The deeper fix (feed the gate
+the artifacts, not an excerpt) folds into the retrieval-handle arc.
+
+**2. Escalate-death buried the parent loop's delivered work — FIXED.**
+The power re-run hit the cost circuit-breaker after its step 1 had already
+regenerated the full memo; final result shipped "[no output] ⚠️ Stuck" to
+the dispatch lane while two complete memos sat on disk (delivery-loop
+decree violation). Fix: escalation only fires from a "done" parent, so a
+re-run that ends not-done (or done-but-empty) no longer replaces
+loop_result — the parent ships, annotated with the re-run's honest death
+reason; the parent's closure verdict stands (no post-escalate re-stamp
+from the corpse); the dead re-run still gets its deferred-learning
+finalization (a died-on-budget loop is a real lesson source). A re-run
+that finishes with results keeps the existing ship-the-retry behavior.
+
+Tests: TestClosureOverrulesGateEscalate (defend / low-conf / unjudged /
+killswitch) + TestEscalateRerunDeathRevert (parent ships, done-but-empty,
+learning targets dead loop, live re-run regression guard); the five
+TestPostEscalateClosure tests now give the initial loop a non-defending
+verdict (0.65) to keep the escalate path reachable.

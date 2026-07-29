@@ -2687,6 +2687,11 @@ class TestPostEscalateClosure:
     captain's log only carried the *initial* loop's CLOSURE_VERDICT, so the
     actual delivered work had no closure record. handle.py now runs a second
     verify_goal_completion after the escalated loop returns.
+
+    Since 2026-07-29 a judged complete closure at conf >= 0.7 overrules the
+    gate escalate (TestClosureOverrulesGateEscalate), so every test here
+    gives the *initial* loop a non-defending verdict (conf 0.65) to keep the
+    escalate path reachable.
     """
 
     def _setup(self, monkeypatch, tmp_path):
@@ -2733,9 +2738,13 @@ class TestPostEscalateClosure:
             return run_results.pop(0)
 
         verify_calls = []
+        verify_results = [
+            self._fake_closure(complete=True, confidence=0.65),  # initial: non-defending
+            self._fake_closure(complete=True, confidence=0.9),   # post-escalate
+        ]
         def _fake_verify(*args, **kwargs):
             verify_calls.append(kwargs)
-            return self._fake_closure(complete=True, confidence=0.9)
+            return verify_results.pop(0)
 
         from memory_ledger import OutcomeVerdictStampResult
         with patch("agent_loop.run_agent_loop", side_effect=_fake_run), \
@@ -2795,7 +2804,7 @@ class TestPostEscalateClosure:
         def _fake_verify(*args, **kwargs):
             call_count["n"] += 1
             if call_count["n"] == 1:
-                return self._fake_closure(complete=True, confidence=0.9)
+                return self._fake_closure(complete=True, confidence=0.65)
             raise RuntimeError("boom")  # second call (post-escalate) fails
 
         with patch("agent_loop.run_agent_loop", side_effect=_fake_run), \
@@ -2822,7 +2831,7 @@ class TestPostEscalateClosure:
         escalated = self._fake_loop_result(status="done", loop_id="lr-escalated")
         run_results = [initial, escalated]
         closures = [
-            self._fake_closure(complete=True, confidence=0.9),
+            self._fake_closure(complete=True, confidence=0.65),
             self._fake_closure(complete=False, confidence=0.95),
         ]
 
@@ -2862,7 +2871,7 @@ class TestPostEscalateClosure:
             "no behavioral probe and no logged waiver")
         downgraded.summary = "Downgraded to not-achieved — no behavioral probe."
         closures = [
-            self._fake_closure(complete=True, confidence=0.9),  # initial, clean
+            self._fake_closure(complete=True, confidence=0.65),  # initial, non-defending
             downgraded,                                          # post-escalate
         ]
 
@@ -2897,11 +2906,15 @@ class TestPostEscalateClosure:
             OutcomeVerdictStampResult(
                 "write_failed", attempts=2, error="ledger readonly"),
         ))
+        closures = [
+            self._fake_closure(True, 0.65),  # initial: non-defending
+            self._fake_closure(True, 0.9),   # post-escalate
+        ]
         with patch("agent_loop.run_agent_loop",
                    side_effect=lambda *a, **k: results.pop(0)), \
              patch("intent.check_goal_clarity", return_value={"clear": True}), \
              patch("director.verify_goal_completion",
-                   return_value=self._fake_closure(True, 0.9)), \
+                   side_effect=lambda *a, **k: closures.pop(0)), \
              patch("memory.stamp_outcome_verdict",
                    side_effect=lambda *a, **k: next(stamps)), \
              patch("loop_finalize.finalize_deferred_learning") as learning, \
@@ -2917,6 +2930,299 @@ class TestPostEscalateClosure:
             call.args and call.args[0].loop_id == "lr-escalated"
             for call in learning.call_args_list
         )
+
+
+# ---------------------------------------------------------------------------
+# Verdict reconciliation + escalate-death delivery (2026-07-29,
+# ead11c12-nimble-shore): the gate judged a 2.5KB excerpt and escalated a run
+# whose closure had just passed 5/5@0.88; the forced power re-run blew the
+# cost budget after regenerating the memo, and the final result shipped
+# "[no output] / Stuck" while two complete memos sat on disk.
+# ---------------------------------------------------------------------------
+
+class TestClosureOverrulesGateEscalate:
+    """A judged, complete closure verdict at conf >= 0.7 (the same bar
+    closure needs to demote a done) defends a done run against a gate
+    ESCALATE: dissent is logged as QUALITY_GATE_OVERRULED, no re-run."""
+
+    def _setup(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+
+    def _fake_loop_result(self, status="done", loop_id="lr-1", steps=None,
+                          stuck_reason=None):
+        from agent_loop import LoopResult, StepOutcome
+        if steps is None:
+            steps = [StepOutcome(index=0, text="step", status="done",
+                                 result="delivered output", iteration=0)]
+        return LoopResult(
+            loop_id=loop_id, project="proj", goal="build X",
+            status=status, stuck_reason=stuck_reason, steps=steps,
+        )
+
+    def _fake_closure(self, complete=True, confidence=0.9, judged=True):
+        from director import ClosureVerdict
+        return ClosureVerdict(
+            complete=complete, confidence=confidence,
+            gaps=[], summary="ok", checks_run=5,
+            checks_passed=(5 if complete else 0), judged=judged,
+        )
+
+    def _escalating_gate(self):
+        from unittest.mock import patch, MagicMock
+        verdict = MagicMock()
+        verdict.escalate = True
+        verdict.contested_claims = []
+        verdict.reason = "excerpt looked incomplete"
+        return patch("quality_gate.run_quality_gate", return_value=verdict)
+
+    def test_defended_done_skips_escalate_rerun(self, monkeypatch, tmp_path):
+        self._setup(monkeypatch, tmp_path)
+        from unittest.mock import patch, MagicMock
+
+        run_calls = []
+        def _fake_run(*args, **kwargs):
+            run_calls.append(kwargs.copy())
+            return self._fake_loop_result(loop_id="lr-initial")
+
+        events = []
+        with patch("agent_loop.run_agent_loop", side_effect=_fake_run), \
+             patch("intent.check_goal_clarity", return_value={"clear": True}), \
+             patch("director.verify_goal_completion",
+                   return_value=self._fake_closure(complete=True,
+                                                   confidence=0.88)), \
+             patch("captains_log.log_event",
+                   side_effect=lambda *a, **k: events.append(a) or {}), \
+             patch("llm.build_adapter", return_value=MagicMock()), \
+             self._escalating_gate():
+            result = handle("build X", force_lane="agenda", model="cheap",
+                            dry_run=False)
+
+        assert len(run_calls) == 1, (
+            f"defended done must not re-run — got {len(run_calls)} loop runs"
+        )
+        assert result.status == "done"
+        assert "overruled by closure" in result.result
+        assert "delivered output" in result.result
+        assert any(a and a[0] == "QUALITY_GATE_OVERRULED" for a in events), (
+            "overrule dissent must land in the captain's log"
+        )
+
+    def test_low_confidence_closure_does_not_overrule(
+            self, monkeypatch, tmp_path):
+        self._setup(monkeypatch, tmp_path)
+        from unittest.mock import patch, MagicMock
+
+        run_results = [
+            self._fake_loop_result(loop_id="lr-initial"),
+            self._fake_loop_result(loop_id="lr-escalated"),
+        ]
+        run_calls = []
+        def _fake_run(*args, **kwargs):
+            run_calls.append(kwargs.copy())
+            return run_results.pop(0)
+
+        with patch("agent_loop.run_agent_loop", side_effect=_fake_run), \
+             patch("intent.check_goal_clarity", return_value={"clear": True}), \
+             patch("director.verify_goal_completion",
+                   return_value=self._fake_closure(complete=True,
+                                                   confidence=0.65)), \
+             patch("loop_finalize.finalize_deferred_learning"), \
+             patch("llm.build_adapter", return_value=MagicMock()), \
+             self._escalating_gate():
+            handle("build X", force_lane="agenda", model="cheap",
+                   dry_run=False)
+
+        assert len(run_calls) == 2, (
+            "closure below the 0.7 bar must not block the escalate re-run"
+        )
+
+    def test_unjudged_closure_does_not_overrule(self, monkeypatch, tmp_path):
+        """An unjudged verdict carries no probe evidence — it has no
+        authority to defend, same as it has none to demote."""
+        self._setup(monkeypatch, tmp_path)
+        from unittest.mock import patch, MagicMock
+
+        run_results = [
+            self._fake_loop_result(loop_id="lr-initial"),
+            self._fake_loop_result(loop_id="lr-escalated"),
+        ]
+        run_calls = []
+        def _fake_run(*args, **kwargs):
+            run_calls.append(kwargs.copy())
+            return run_results.pop(0)
+
+        with patch("agent_loop.run_agent_loop", side_effect=_fake_run), \
+             patch("intent.check_goal_clarity", return_value={"clear": True}), \
+             patch("director.verify_goal_completion",
+                   return_value=self._fake_closure(complete=True,
+                                                   confidence=0.9,
+                                                   judged=False)), \
+             patch("loop_finalize.finalize_deferred_learning"), \
+             patch("llm.build_adapter", return_value=MagicMock()), \
+             self._escalating_gate():
+            handle("build X", force_lane="agenda", model="cheap",
+                   dry_run=False)
+
+        assert len(run_calls) == 2
+
+    def test_killswitch_off_restores_escalate(self, monkeypatch, tmp_path):
+        self._setup(monkeypatch, tmp_path)
+        from unittest.mock import patch, MagicMock
+        import config
+
+        _real_get = config.get
+        def _cfg(key, default=None):
+            if key == "quality_gate.closure_overrule":
+                return False
+            return _real_get(key, default)
+        monkeypatch.setattr(config, "get", _cfg)
+
+        run_results = [
+            self._fake_loop_result(loop_id="lr-initial"),
+            self._fake_loop_result(loop_id="lr-escalated"),
+        ]
+        run_calls = []
+        def _fake_run(*args, **kwargs):
+            run_calls.append(kwargs.copy())
+            return run_results.pop(0)
+
+        with patch("agent_loop.run_agent_loop", side_effect=_fake_run), \
+             patch("intent.check_goal_clarity", return_value={"clear": True}), \
+             patch("director.verify_goal_completion",
+                   return_value=self._fake_closure(complete=True,
+                                                   confidence=0.88)), \
+             patch("loop_finalize.finalize_deferred_learning"), \
+             patch("llm.build_adapter", return_value=MagicMock()), \
+             self._escalating_gate():
+            handle("build X", force_lane="agenda", model="cheap",
+                   dry_run=False)
+
+        assert len(run_calls) == 2, "killswitch off must restore the re-run"
+
+
+class TestEscalateRerunDeathRevert:
+    """Escalation only fires from a done parent. A re-run that dies (budget
+    breaker, stuck, empty) must not replace delivered work with its own
+    corpse — the parent ships, annotated with what happened."""
+
+    def _setup(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+
+    def _fake_loop_result(self, status="done", loop_id="lr-1", steps=None,
+                          stuck_reason=None):
+        from agent_loop import LoopResult, StepOutcome
+        if steps is None:
+            steps = [StepOutcome(index=0, text="step", status="done",
+                                 result="the delivered memo", iteration=0)]
+        return LoopResult(
+            loop_id=loop_id, project="proj", goal="build X",
+            status=status, stuck_reason=stuck_reason, steps=steps,
+        )
+
+    def _fake_closure(self, complete=True, confidence=0.65):
+        # Non-defending on purpose: conf below the 0.7 overrule bar so the
+        # escalate re-run actually happens.
+        from director import ClosureVerdict
+        return ClosureVerdict(
+            complete=complete, confidence=confidence,
+            gaps=[], summary="ok", checks_run=2,
+            checks_passed=(2 if complete else 0),
+        )
+
+    def _escalating_gate(self):
+        from unittest.mock import patch, MagicMock
+        verdict = MagicMock()
+        verdict.escalate = True
+        verdict.contested_claims = []
+        verdict.reason = "weak coverage"
+        return patch("quality_gate.run_quality_gate", return_value=verdict)
+
+    def _run(self, escalated_result, monkeypatch, tmp_path):
+        from unittest.mock import patch, MagicMock
+
+        run_results = [
+            self._fake_loop_result(status="done", loop_id="lr-initial"),
+            escalated_result,
+        ]
+        verify_calls = []
+        def _fake_verify(*args, **kwargs):
+            verify_calls.append(kwargs)
+            return self._fake_closure()
+
+        with patch("agent_loop.run_agent_loop",
+                   side_effect=lambda *a, **k: run_results.pop(0)), \
+             patch("intent.check_goal_clarity", return_value={"clear": True}), \
+             patch("director.verify_goal_completion",
+                   side_effect=_fake_verify), \
+             patch("loop_finalize.finalize_deferred_learning") as _learning, \
+             patch("llm.build_adapter", return_value=MagicMock()), \
+             self._escalating_gate():
+            result = handle("build X", force_lane="agenda", model="cheap",
+                            dry_run=False)
+        learning_calls = [
+            call.args[0] for call in _learning.call_args_list if call.args
+        ]
+        return result, verify_calls, learning_calls
+
+    def test_dead_rerun_ships_parent_output(self, monkeypatch, tmp_path):
+        self._setup(monkeypatch, tmp_path)
+        dead = self._fake_loop_result(
+            status="stuck", loop_id="lr-escalated", steps=[],
+            stuck_reason="cost_budget=$2.00 + slush=$0.40 exceeded",
+        )
+        result, verify_calls, _ = self._run(dead, monkeypatch, tmp_path)
+
+        assert result.status == "done", (
+            f"parent's done must ship, got {result.status!r}"
+        )
+        assert "the delivered memo" in result.result
+        assert "re-run did not complete" in result.result
+        assert "cost_budget" in result.result
+        assert "[no output]" not in result.result
+        # Post-escalate closure skipped on revert: the parent's verdict
+        # already stands — one closure call, for the initial loop.
+        assert len(verify_calls) == 1
+
+    def test_rerun_done_but_empty_reverts(self, monkeypatch, tmp_path):
+        self._setup(monkeypatch, tmp_path)
+        empty = self._fake_loop_result(
+            status="done", loop_id="lr-escalated", steps=[],
+        )
+        result, _, _ = self._run(empty, monkeypatch, tmp_path)
+        assert result.status == "done"
+        assert "the delivered memo" in result.result
+        assert "re-run did not complete" in result.result
+
+    def test_dead_rerun_learning_targets_dead_loop(
+            self, monkeypatch, tmp_path):
+        """The dead re-run ran with defer_learning=True — its learning
+        contract still completes (a died-on-budget loop is a real lesson
+        source), against the dead loop, not the reverted parent."""
+        self._setup(monkeypatch, tmp_path)
+        dead = self._fake_loop_result(
+            status="stuck", loop_id="lr-escalated", steps=[],
+            stuck_reason="cost budget exceeded",
+        )
+        _, _, learning_calls = self._run(dead, monkeypatch, tmp_path)
+        assert any(
+            getattr(lr, "loop_id", "") == "lr-escalated"
+            for lr in learning_calls
+        ), "deferred learning must finalize the dead re-run's contract"
+
+    def test_live_rerun_still_ships(self, monkeypatch, tmp_path):
+        """Regression guard: a re-run that finishes with results keeps the
+        existing behavior — it is the shipped version."""
+        self._setup(monkeypatch, tmp_path)
+        from agent_loop import StepOutcome
+        live = self._fake_loop_result(
+            status="done", loop_id="lr-escalated",
+            steps=[StepOutcome(index=0, text="retry step", status="done",
+                               result="stronger output", iteration=0)],
+        )
+        result, verify_calls, _ = self._run(live, monkeypatch, tmp_path)
+        assert "stronger output" in result.result
+        assert "re-run complete" in result.result
+        assert len(verify_calls) == 2  # initial + post-escalate
 
 
 # ---------------------------------------------------------------------------

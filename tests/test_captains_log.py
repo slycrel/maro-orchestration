@@ -325,7 +325,11 @@ class TestEventTypes:
         # chunk-5b evidence-path council rounds (per-seat lens/verdict/codes,
         # free-vs-paid confirmation) and gate cross-ref lanes (strict: acts,
         # research hosted-free lane flag-only).
-        assert len(EVENT_TYPES) == 71
+        # +1 (2026-07-29): QUALITY_GATE_OVERRULED — verdict reconciliation:
+        # a judged complete closure (conf >= 0.7) defends a done run against
+        # a gate ESCALATE; the dissent is recorded instead of a re-run
+        # (ead11c12-nimble-shore: excerpt-fed gate vs 5/5@0.88 closure).
+        assert len(EVENT_TYPES) == 72
 
     def test_previously_unregistered_events_in_set(self):
         from captains_log import EVOLVER_REVERTED, EVOLVER_VERIFY, PLAYBOOK_UPDATED
