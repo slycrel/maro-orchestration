@@ -674,7 +674,7 @@ def recall(
                 # timestamp absent renders byte-identically).
                 _stamp_ages = age_stamps_enabled()
                 _age_stamped_any = False
-                _lines = ["## Lessons from Prior Runs (apply these)"]
+                _lines = ["## Lessons from Prior Runs (weigh by their receipts)"]
                 _budget = len(_lines[0])
                 for _l in _lessons:
                     # Verdict-preferred (SF-2): a lesson from a run judged
@@ -689,7 +689,20 @@ def recall(
                     _suffix = (age_suffix(getattr(_l, "recorded_at", "")
                                           or getattr(_l, "last_reinforced", "") or "")
                                if _stamp_ages else "")
-                    _line = f"- {_icon} {_l.lesson}{_suffix}"
+                    # Certainty receipt (Jeremy decree 2026-07-29): entries
+                    # cite the evidence behind them or read as what they are —
+                    # a single observation. Fields ride the TieredLesson row;
+                    # flat-store rows have none and genuinely ARE one
+                    # observation, so the honest fallback needs no plumbing.
+                    _rein = int(getattr(_l, "times_reinforced", 0) or 0)
+                    _sess = int(getattr(_l, "sessions_validated", 0) or 0)
+                    _appl = int(getattr(_l, "times_applied", 0) or 0)
+                    _rparts = ([f"reinforced {_rein}x"] if _rein else []) \
+                        + ([f"{_sess} sessions"] if _sess else []) \
+                        + ([f"applied {_appl}x"] if _appl else [])
+                    _receipt = (" (" + ", ".join(_rparts) + ")") if _rparts \
+                        else " (observed once)"
+                    _line = f"- {_icon} {_l.lesson}{_receipt}{_suffix}"
                     # Budget-aware selection (chunk-6 review): a lesson is
                     # cited ONLY if its line is actually rendered. The old
                     # truncate-after-the-fact could drop trailing lines while

@@ -281,7 +281,10 @@ class _AgedLesson:
     recorded_at = "2026-02-01T00:00:00+00:00"
 
 
-_LEGACY_LESSON_BLOCK = "## Lessons from Prior Runs (apply these)\n- ✓ the aged lesson"
+# "(observed once)" is the certainty receipt for a row with no reinforcement
+# counters (2026-07-29 decree) — _AgedLesson has none, like flat-store rows.
+_LEGACY_LESSON_BLOCK = ("## Lessons from Prior Runs (weigh by their receipts)\n"
+                        "- ✓ the aged lesson (observed once)")
 
 
 def _toggleable_flag(monkeypatch):
@@ -323,7 +326,8 @@ class TestRecallLoopSliceAgeStamps:
         _force_flag(monkeypatch, True)
         r, event_ctx = _recall_capturing(monkeypatch, _AgedLesson())
         assert re.search(
-            r"- ✓ the aged lesson \(learned 2026-02-01 — .+ ago\)$",
+            r"- ✓ the aged lesson \(observed once\) "
+            r"\(learned 2026-02-01 — .+ ago\)$",
             r.lessons)
         assert event_ctx.get("age_stamped") is True
 
@@ -368,6 +372,38 @@ class TestRecallLoopSliceAgeStamps:
         assert r_on.lessons == r_off.lessons
         assert "(learned" not in r_on.lessons
         assert "age_stamped" not in ctx_on
+
+
+class _ReinforcedLesson:
+    """TieredLesson-shaped row with reinforcement counters — receipt source."""
+    outcome = "done"
+    lesson = "the seasoned lesson"
+    recorded_at = "2026-02-01T00:00:00+00:00"
+    times_reinforced = 3
+    sessions_validated = 2
+    times_applied = 1
+
+
+class TestRecallLoopSliceReceipts:
+    """Certainty-not-authority receipts (2026-07-29 decree): injected lessons
+    cite their reinforcement evidence; rows without counters read as the
+    single observations they are. Rendered receipts are flag-independent."""
+
+    def test_counters_render_as_receipt(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        r, _ = _recall_capturing(monkeypatch, _ReinforcedLesson())
+        assert ("- ✓ the seasoned lesson "
+                "(reinforced 3x, 2 sessions, applied 1x)") in r.lessons
+
+    def test_receipt_precedes_age_suffix(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        _force_flag(monkeypatch, True)
+        r, _ = _recall_capturing(monkeypatch, _ReinforcedLesson())
+        assert re.search(
+            r"- ✓ the seasoned lesson "
+            r"\(reinforced 3x, 2 sessions, applied 1x\) "
+            r"\(learned 2026-02-01 — .+ ago\)$",
+            r.lessons)
 
 
 # ---------------------------------------------------------------------------

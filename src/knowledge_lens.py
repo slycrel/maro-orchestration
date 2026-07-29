@@ -523,7 +523,7 @@ def inject_standing_rules(domain: str = "") -> str:
 
     Decay-by-invalidation v0 (2026-06-11): a rule with recorded contradictions
     is *contested* — still injected (data never decays), but demoted from
-    "apply unconditionally" to a verify-before-relying block until the next
+    the confirmed tier to a verify-before-relying block until the next
     re-fight resolves it (refight_rule, run from the evolver cycle).
 
     Freshness signal (same day): an uncontradicted rule that hasn't been
@@ -561,8 +561,17 @@ def standing_rules_with_ids(domain: str = "") -> tuple:
              and _rule_is_stale(r, staleness_days=staleness_days)]
     lines: List[str] = []
     if fresh:
-        lines.append("### Standing Rules (apply unconditionally)")
-        lines.extend(f"- {r.rule}" for r in fresh)
+        # Certainty-not-authority (Jeremy decree 2026-07-29): a
+        # learned-with-evidence entry cites the artifacts backing it rather
+        # than asserting rank — "more than an abstract theory, less than a
+        # fact". The receipts ARE the message; injection mechanics unchanged.
+        lines.append("### Standing Rules (graduated by repeated confirmation)")
+        lines.extend(
+            f"- {r.rule} (confirmed {r.confirmations}x; "
+            f"last verified {(r.last_verified or r.promoted_at)[:10]}; "
+            f"from {max(len(r.source_lesson_ids), 1)} lesson"
+            f"{'s' if max(len(r.source_lesson_ids), 1) != 1 else ''})"
+            for r in fresh)
     if stale:
         lines.append(
             f"### Stale rules (unverified for {staleness_days}+ days — "

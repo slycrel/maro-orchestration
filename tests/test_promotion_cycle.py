@@ -310,12 +310,47 @@ class TestStandingRulesInjection:
         assert "Rule for proj-a." in a_only
         assert "Rule for proj-b." not in a_only
 
+    def test_fresh_rule_renders_certainty_receipt(self, tmp_path):
+        """Certainty-not-authority (2026-07-29 decree): the confirmed tier
+        cites its backing — confirmations, last-verified anchor, source-lesson
+        count — instead of asserting rank. Pre-decree it rendered bare."""
+        from datetime import datetime, timezone
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        rows = [StandingRule(
+            rule_id="r-rcpt", rule="Always pin the resolved IP.",
+            source_lesson_id="l-1", domain="", confirmations=4,
+            contradictions=0, promoted_at="2026-07-01",
+            last_applied="", last_verified=f"{today}T09:00:00+00:00",
+            source_lesson_ids=["l-1", "l-2", "l-3"],
+        ).to_dict()]
+        (tmp_path / "standing_rules.jsonl").write_text(
+            json.dumps(rows[0]) + "\n")
+        result = inject_standing_rules()
+        assert ("- Always pin the resolved IP. (confirmed 4x; "
+                f"last verified {today}; from 3 lessons)") in result
+
+    def test_unconfirmed_fresh_rule_receipt_falls_back_to_promotion(self, tmp_path):
+        """confirmations=0 renders honestly (the certainty gradient in data);
+        legacy rows with only source_lesson_id count as 1 lesson."""
+        from datetime import datetime, timezone
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        rows = [StandingRule(
+            rule_id="r-new", rule="Prefer rsync over scp.",
+            source_lesson_id="l-9", domain="", confirmations=0,
+            contradictions=0, promoted_at=today, last_applied="",
+        ).to_dict()]
+        (tmp_path / "standing_rules.jsonl").write_text(
+            json.dumps(rows[0]) + "\n")
+        result = inject_standing_rules()
+        assert ("- Prefer rsync over scp. (confirmed 0x; "
+                f"last verified {today}; from 1 lesson)") in result
+
     def test_contested_rule_moves_to_verify_block(self, tmp_path):
         observe_pattern("Always fetch via Jina.", "fetch")
         observe_pattern("Always fetch via Jina.", "fetch")
         contradict_pattern("Always fetch via Jina.", "fetch")
         result = inject_standing_rules()
-        assert "apply unconditionally" not in result
+        assert "graduated by repeated confirmation" not in result
         assert "verify before relying" in result
         assert "Always fetch via Jina." in result
         assert "contradicted 1x" in result
@@ -327,7 +362,7 @@ class TestStandingRulesInjection:
         observe_pattern("Always run pyflakes before commit.", "build")
         contradict_pattern("Always fetch via Jina.", "fetch")
         result = inject_standing_rules()
-        solid_pos = result.index("apply unconditionally")
+        solid_pos = result.index("graduated by repeated confirmation")
         contested_pos = result.index("verify before relying")
         assert solid_pos < contested_pos
         assert result.index("pyflakes") < contested_pos
@@ -395,7 +430,7 @@ class TestRefightRule:
         assert len(reloaded) == 1
         assert reloaded[0].contradictions == 0
         assert reloaded[0].confirmations == rule.confirmations
-        assert "apply unconditionally" in inject_standing_rules()
+        assert "graduated by repeated confirmation" in inject_standing_rules()
 
     def test_revise_replaces_text_and_resets_record(self, tmp_path):
         from memory import refight_rule
@@ -564,14 +599,14 @@ class TestStaleRules:
     def test_fresh_rule_applies_unconditionally(self, tmp_path):
         _promote_rule()
         result = inject_standing_rules()
-        assert "apply unconditionally" in result
+        assert "graduated by repeated confirmation" in result
         assert "Stale rules" not in result
 
     def test_unverified_rule_goes_stale(self, tmp_path):
         rule = _promote_rule()
         _backdate_rule(rule.rule_id, last_verified="2026-01-01")
         result = inject_standing_rules()
-        assert "apply unconditionally" not in result
+        assert "graduated by repeated confirmation" not in result
         assert "Stale rules" in result
         assert "verify before relying" in result
         assert "last verified 2026-01-01" in result
@@ -587,7 +622,7 @@ class TestStaleRules:
         _backdate_rule(rule.rule_id, last_verified="2026-01-01")
         observe_pattern(rule.rule, rule.domain)
         result = inject_standing_rules()
-        assert "apply unconditionally" in result
+        assert "graduated by repeated confirmation" in result
         assert "Stale rules" not in result
 
     def test_contested_takes_precedence_over_stale(self, tmp_path):
@@ -604,7 +639,7 @@ class TestStaleRules:
         ten_days_ago = (datetime.now(timezone.utc)
                         - timedelta(days=10)).strftime("%Y-%m-%d")
         _backdate_rule(rule.rule_id, last_verified=ten_days_ago)
-        assert "apply unconditionally" in inject_standing_rules()  # default 30d
+        assert "graduated by repeated confirmation" in inject_standing_rules()  # default 30d
         with patch("config.get", side_effect=lambda key, default=None:
                    5 if key == "knowledge.rule_staleness_days" else default):
             assert "Stale rules" in inject_standing_rules()
@@ -614,7 +649,7 @@ class TestStaleRules:
         _backdate_rule(rule.rule_id, last_verified="2026-01-01")
         with patch("config.get", side_effect=lambda key, default=None:
                    0 if key == "knowledge.rule_staleness_days" else default):
-            assert "apply unconditionally" in inject_standing_rules()
+            assert "graduated by repeated confirmation" in inject_standing_rules()
 
 
 # ---------------------------------------------------------------------------
