@@ -4744,3 +4744,103 @@ Dormant (deliberately parked, not dropped):
   as a BACKLOG Vision entry with his revisit trigger (larger successes
   routine / real-time optimization). (7) Session mechanics: review
   discussion forks via `claude --resume <session> --fork-session`.
+- **2026-07-28 — M1-contrast pass ANSWERED (Jeremy, all four questions
+  + a follow-up round; `docs/history/2026-07-28-m1-vs-box-workflow-contrast.md`
+  goes from half a document to two-sided).** Headline reframe in his own
+  words: **"just because I'm using 2 boxes with different contexts, we
+  shouldn't feel tied to one or the other — they're different contexts
+  that happen to look the same."** The exercise's purpose was "to help us
+  firm up what we might be missing, not push each box to be clones of each
+  other, but an interleaved workflow taking the benefits of both (assuming
+  there are some — I suppose it's possible one is just better than the
+  other categorically, I'm not sure, thus the check)."
+  1. **DECREE — out-of-the-box invariant, newly declared:** *"Functionality
+     that we add should presume that it's 'out of the box' functionality
+     for the project day 1 — unless it's specifically functionality gated
+     on prior learning data for whatever reason."* Corollary he stated
+     first: *"in general the work we're doing should be able to be verified
+     on a clean clone of the maro repository"*, and *"some learning-based
+     functionality will need data added to properly test it."* He flagged
+     it as an assumption he'd never bothered to state — *"I don't think
+     that was a bad assumption, but maybe it needs to be declared?"* It
+     needs declaring **with a tripwire**, not just a sentence: this exact
+     invariant was silently violated for months and caught only by the
+     2026-07-09 docker clean-machine trial (flat `src/` layout → pip
+     installed zero modules, every entry point ModuleNotFoundError, masked
+     locally by `PYTHONPATH=src`). Precedent for the shape: DEFAULTS.md +
+     its census tripwire, but for *runtime data* rather than config.
+  2. **DECREE — no merge gate, no master/slave between boxes:** *"I don't
+     really want a merge gate or a master/slave style work relationship
+     between boxes, outside of maybe a multi-box delegation of sorts which
+     hasn't even been discussed."* Claude's §3.3 proposal (M1 stops
+     certifying cross-layer work, hands it to a box-side gate) is
+     **WITHDRAWN** — and was a category error: the one merge gate that
+     exists (Hermes/mini2 propose-only, decreed 2026-07-20) exists because
+     an agent that can rewrite its own orchestration needs a human at
+     merge-to-main, which has nothing to do with one dev box certifying
+     another's work. What survives is non-institutional and stands:
+     **diff review cannot see composition defects; only executing the
+     thing can** (this arc's proof: `loop_status=""` + a terminal handler
+     coercing falsy → `"stuck"`; three M1-side adversarial reviewers
+     missed it). The remedy is therefore *give the M1 the ability to run a
+     run* — which is item 1's clean-clone + seeded-data problem, not a
+     hierarchy.
+  3. **DECREE — threshold rule rejected as too heavy:** *"feels heavy; we
+     can hypothesize and make a best guess, then create follow-up work to
+     confirm or pivot."* The observe-only-until-box-calibrated proposal is
+     dead. Replacement (Claude's, accepted-shape pending his read): a
+     magic number lands with its **provenance marked** (`reasoned` vs
+     `measured`) plus a paired backlog row naming the measurement that
+     would confirm or pivot it — the drift-batch falsifiable-reparking
+     discipline applied to numbers. No gate, one line per threshold.
+  4. **Portable learning — NO scope amendment; the shipped design already
+     covers his ask.** He had forgotten it was built: *"thanks, I had
+     forgotten we had actually built that out, nice to have a PoC here
+     rather than a backlog item to point to."* His "friends (or internet
+     friends) could share data and level each other up" resolves to
+     one-way publish — *"someone posting to reddit or X, sharing a learned
+     set of data that is genuinely useful and helpful to a subset of
+     interested people"* — which `maro-pack export`/`seal` + hand-import
+     already supports, and which stays safe precisely because ratified
+     decision #3 refuses cross-user confirmation inflation. Genuinely
+     deferred, unchanged: *"publishing capabilities and browsing or
+     auto-seeking other maro runs instead of full self-discovery. Lots of
+     pitfalls there, but sure sounds nice"* — discovery/auto-seek remains
+     PORTABLE_LEARNING_DESIGN §7.5 post-1.0, hive-mind still out.
+  5. **Code-as-data ("modpack") — conservative approach AFFIRMED, parked
+     with a handle.** His framing: *"sort of a modpack on a game; possible
+     orchestration levelling up over time."* Verdict: *"the conservative
+     approach is the safe one we've implemented and I'm ok sticking with
+     that for the moment... no need to add an additional layer of
+     complexity to our semi-unproven learning capabilities already"* — it
+     *"definitely needs the proper guardrails... and may or may not even
+     be a good idea."* Ratified decision "Stage-5 travels as language,
+     never as .py" therefore STANDS. His recollection that a partial
+     pathway already exists is correct and is ratified decision #4:
+     skills/personas never auto-adopt, quarantine + `maro-pack adopt`, one
+     `--all` command of friction — his *"official pending some kind of
+     user review that's appropriately fuzzy, with the practicality of
+     useful things being auto-defaulted in."*
+  6. **DECREE — workspace hygiene:** *"we should generally have a
+     workspace on any given box rather than litter copies of the repo all
+     over without purpose... I think we'd do well to re-set up our
+     workspace for a reusable location on the M1, we have a sort of
+     randomly set up repo right now."* Confirmed concretely on the M1:
+     **two live workspaces** — `~/.maro/workspace/` (real; `runs/`,
+     `memory/`, `correspondence.db`, touched 2026-07-27) and
+     `.run-workspace/` inside the checkout (gitignored, mostly frozen
+     2026-06-21 plus two 2026-07-14 session dirs) — and the checkout is
+     still named `openclaw-orchestration` long after the rename.
+  7. **The contrast doc's spine is WRONG and gets rewritten: two lanes →
+     three contexts.** It compared M1 vs maro box and omitted the
+     Poe/Telegram live-prototype context entirely — the only one with a
+     real user in it, and so the only source of live-usage evidence rather
+     than test evidence. Jeremy: *"The 2014 iMac is our 'live' test
+     prototype with a single ongoing repo that allows our poe-as-telegram
+     bot to use the orchestration and we can examine poe's runs as well as
+     develop against that same copy."* **OPEN — the one question not yet
+     answered:** which 2014 Mac Mini this names (box A, Linux Mint,
+     orchestrator; or box B, Monterey, Hermes/Telegram, `~/.hermes/repos/
+     maro-orchestration` https fetch-only), and whether "develop against
+     that same copy" relaxes the 2026-07-20 zero-creds/propose-only decree
+     for mini2. The doc rewrite is blocked on this answer alone.

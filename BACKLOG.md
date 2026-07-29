@@ -371,6 +371,58 @@ pointer.
   calibrated box-side, so the M1 lane should ship them observe-only. Ends in
   4 questions for Jeremy per the iteration protocol — it is deliberately
   half a document until he answers them.
+  **ANSWERED 2026-07-28 (full adjudication in GOAL_BRAIN Decisions).** Net
+  of his answers: the *diff-review vs run-review* observation SURVIVES, its
+  proposed remedy does NOT — no merge gate, no master/slave between boxes;
+  the fix is giving the M1 the ability to run a run (clean clone + seeded
+  data), not a hierarchy. The observe-only threshold rule is REJECTED as too
+  heavy (replacement: provenance-marked numbers + a paired falsifiable
+  follow-up). And the doc's spine is wrong: **it compares two lanes when
+  Jeremy runs three contexts** — it omitted the Poe/Telegram live-prototype
+  entirely, the only one with a real user and therefore the only source of
+  live-usage rather than test evidence. His reframe: *"they're different
+  contexts that happen to look the same"*; the goal is an interleaved
+  workflow taking the benefits of each, not clone-ing the boxes. **Rewrite
+  BLOCKED on one open question:** which 2014 Mac Mini is the "live test
+  prototype", and whether "develop against that same copy" relaxes mini2's
+  2026-07-20 zero-creds/propose-only decree.
+- [ ] **Declare the out-of-the-box invariant + tripwire it (Jeremy
+  2026-07-28, DECREE):** *"Functionality that we add should presume that
+  it's 'out of the box' functionality for the project day 1 — unless it's
+  specifically functionality gated on prior learning data for whatever
+  reason"*; corollary, *"the work we're doing should be able to be verified
+  on a clean clone of the maro repository."* He flagged it as an assumption
+  he'd never stated — *"maybe it needs to be declared?"* Declare it in
+  HOUSE_STYLE.md (entry pointer in CLAUDE.md) **with a tripwire, not just a
+  sentence**: this invariant was silently violated for months and caught
+  only by the 2026-07-09 docker clean-machine trial (flat `src/` → pip
+  installed zero modules; masked locally by `PYTHONPATH=src`). Shape to
+  steal: DEFAULTS.md + its census tripwire, but for *runtime data* instead
+  of config — a fresh-workspace check that entry points behave against an
+  empty `~/.maro/workspace`, and an explicit marker on the exemption
+  (learning-gated functionality must declare itself and degrade gracefully
+  when the data isn't there). Ties to the M1's inability to review runs
+  (M1-contrast pass above): seeded test-run data is the same missing piece.
+- [ ] **Threshold provenance instead of observe-only (Jeremy 2026-07-28):**
+  replaces the rejected "M1 never ships a live threshold" rule — *"we can
+  hypothesize and make a best guess, then create follow-up work to confirm
+  or pivot."* A magic number lands marked `reasoned` or `measured`, plus a
+  paired backlog row naming the measurement that would confirm or pivot it
+  (the drift-batch falsifiable-reparking discipline, applied to numbers).
+  Shape accepted in principle, mechanism unbuilt; first candidates are this
+  arc's three (fresh ceiling, weighted ceiling, Bash cap).
+- [ ] **M1 workspace re-setup (Jeremy 2026-07-28, DECREE):** *"we should
+  generally have a workspace on any given box rather than litter copies of
+  the repo all over without purpose... we'd do well to re-set up our
+  workspace for a reusable location on the M1, we have a sort of randomly
+  set up repo right now."* Confirmed state: **two live workspaces on the
+  M1** — `~/.maro/workspace/` (real; `runs/`, `memory/`,
+  `correspondence.db`, touched 2026-07-27) and `.run-workspace/` inside the
+  checkout (gitignored, mostly frozen 2026-06-21 plus two 2026-07-14 session
+  dirs) — plus the checkout is still named `openclaw-orchestration` long
+  after the rename. Decide one canonical location, migrate or delete the
+  other (nothing is deleted without a look — retention decree), rename the
+  checkout.
 - [ ] **Iteration protocol (Jeremy 2026-07-28):** the workflow spec in
   the open-thread entry below is a *partial dump* by his own flag —
   ">30 years... I've got reflexes and intuitions I likely can't

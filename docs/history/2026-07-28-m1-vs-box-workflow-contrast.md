@@ -143,3 +143,78 @@ better question answerer than an essay writer"):
 4. What do you do on the M1 that this reconstruction *missed* entirely? The
    session is one sample and a self-report — the failure mode of §3.3 applies
    to this document too.
+
+---
+
+## 7. Jeremy's answers (2026-07-28) — and what they do to §§1–6
+
+All four answered the same day, plus a follow-up round. Full adjudication in
+GOAL_BRAIN Decisions 2026-07-28; this section records what changes *here*.
+
+**The reframe that supersedes the whole spine.** In his words: *"just because
+I'm using 2 boxes with different contexts, we shouldn't feel tied to one or
+the other — they're different contexts that happen to look the same."* And on
+the purpose of the exercise: *"to help us firm up what we might be missing,
+not push each box to be clones of each other, but an interleaved workflow
+taking the benefits of both (assuming there are some — I suppose it's possible
+one is just better than the other categorically, I'm not sure, thus the
+check)."*
+
+**§3.3 — half right, and the useful half is not the half this doc emphasised.**
+The observation SURVIVES: diff review cannot see a defect that exists only in
+the composition of two layers; only executing the thing can. The proposed
+remedy is WITHDRAWN. Jeremy: *"I don't really want a merge gate or a
+master/slave style work relationship between boxes, outside of maybe a
+multi-box delegation of sorts which hasn't even been discussed."* It was also
+a category error on this document's part — the one merge gate that exists
+(Hermes/mini2 propose-only, decreed 2026-07-20) exists because an agent that
+can rewrite its own orchestration needs a human at merge-to-main, which has
+nothing to do with one dev box certifying another's work. The real remedy is
+**give the M1 the ability to run a run** — clean clone plus seeded data — not
+a hierarchy.
+
+**§3.4 — REJECTED as too heavy.** *"we can hypothesize and make a best guess,
+then create follow-up work to confirm or pivot."* Replacement: a magic number
+lands with its provenance marked (`reasoned` vs `measured`) and a paired
+backlog row naming the measurement that would confirm or pivot it.
+
+**§3.1 — answered structurally rather than as a habit question,** by the
+out-of-the-box decree below: cheap reversal matters less than every context
+being able to verify the same work.
+
+**§5 / §6.4 — what this reconstruction missed: an entire context.** It
+compares two lanes; Jeremy runs three. The Poe/Telegram live prototype
+appears nowhere above, and it is the only context with a *real user* in it —
+therefore the only source of live-usage evidence rather than test evidence.
+His own fair hit on question 4: *"I feel like you've both told me that you've
+missed things and now are asking what you missed."* His substantive answer:
+the gap is *"simple test-based run data, which we can generate if we want
+to"*, and ideally shared rather than forcing a pairing.
+
+**New decree this pass produced — the out-of-the-box invariant:**
+*"Functionality that we add should presume that it's 'out of the box'
+functionality for the project day 1 — unless it's specifically functionality
+gated on prior learning data for whatever reason."* Corollary: *"the work
+we're doing should be able to be verified on a clean clone of the maro
+repository."* He had never stated it — *"I don't think that was a bad
+assumption, but maybe it needs to be declared?"* — and it needs a tripwire,
+because it was silently violated for months until the 2026-07-09 docker
+clean-machine trial found pip had never installed a single module.
+
+**Portable learning — no amendment needed; already shipped.** *"thanks, I had
+forgotten we had actually built that out, nice to have a PoC here rather than
+a backlog item to point to."* His "internet friends" resolves to one-way
+publish (*"someone posting to reddit or X, sharing a learned set of data that
+is genuinely useful"*), which `maro-pack export`/`seal` supports today.
+Discovery/auto-seek stays deferred. The code-as-data *"modpack on a game"*
+idea is parked by his own call: *"the conservative approach is the safe one
+we've implemented and I'm ok sticking with that for the moment."*
+
+### Still open — the rewrite blocks here
+
+Which 2014 Mac Mini is the *"live test prototype with a single ongoing repo
+that allows our poe-as-telegram bot to use the orchestration"* — box A (Linux
+Mint, the orchestrator) or box B (Monterey, Hermes/Telegram, whose clone is
+https fetch-only by construction)? And does *"develop against that same
+copy"* relax mini2's 2026-07-20 zero-creds/propose-only decree? Sections 1–6
+get restructured around three contexts once that is answered.
