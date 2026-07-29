@@ -3728,6 +3728,43 @@ class TestNowArtifactRetryRung:
         assert result.status == "incomplete"
         assert m_run.call_count == 1
 
+    def test_errored_retry_escalation_context_stays_honest(
+            self, monkeypatch, tmp_path):
+        # 2026-07-29 adversarial review (3/3 lens consensus): when the rung
+        # fired but the retry ERRORED, the escalation context must not claim
+        # two judged attempts — the retry was never judged.
+        _setup(monkeypatch, tmp_path)
+        monkeypatch.setenv("MARO_YOLO", "true")
+        self._cfg(monkeypatch, artifact_retry=True,
+                  escalate_on_not_achieved=True)
+        attempt1 = {"status": "done", "result": "Try searching Google Maps.",
+                    "tokens_in": 7, "tokens_out": 3}
+        retry_err = {"status": "error", "result": "boom",
+                     "tokens_in": 0, "tokens_out": 0, "elapsed_ms": 5}
+        from agent_loop import LoopResult, StepOutcome
+        fake = LoopResult(
+            loop_id="test-lr-rung-err", project="test-proj-rung-err",
+            goal="where can I buy X near Y", status="done",
+            steps=[StepOutcome(index=0, text="step 1", status="done",
+                               result="Maverik in Ephraim", iteration=0)],
+        )
+        with patch("handle._run_now", side_effect=[attempt1, retry_err]), \
+             patch("intent.classify", return_value=ClassifyResult("now", 0.9, "simple", introspects_self=False)), \
+             patch("intent.check_goal_clarity", return_value={"clear": True}), \
+             patch("agent_loop.run_agent_loop", return_value=fake) as m_loop:
+            result = handle(
+                "where can I buy X near Y",
+                adapter=self._verdict_adapter_seq(False),
+                dry_run=False,
+                origin=self._ORIGIN,
+            )
+        assert result.lane == "agenda"
+        _ctx = m_loop.call_args.kwargs.get("ancestry_context_extra", "")
+        assert "TWO quick single-shot" not in _ctx
+        assert "errored out before it could be judged" in _ctx
+        # And the escalation carries attempt 1's answer, not the error text.
+        assert "Google Maps" in _ctx
+
     def test_errored_retry_keeps_attempt1_answer(self, monkeypatch, tmp_path):
         # A retry that errored out must not replace a real (if insufficient)
         # answer. Verdict adapter has exactly one response — an errored retry

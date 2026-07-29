@@ -233,8 +233,32 @@ def test_result_emits_delivery_block_for_envelope_only(tmp_path, monkeypatch, ca
     assert mod.cmd_result("job-env-done") == 0
     out = json.loads(capsys.readouterr().out)
     assert out["delivery"]["you_asked"] == "summarize the gist"
+    assert out["delivery"]["verbatim"] is True
     assert out["delivery"]["dispatched_with"]["artifacts"] == ["ref.md"]
 
     assert mod.cmd_result("job-prose-done") == 0
     out = json.loads(capsys.readouterr().out)
     assert "delivery" not in out
+
+
+def test_result_legacy_envelope_rec_marks_fallback_nonverbatim(
+        tmp_path, monkeypatch, capsys):
+    """An envelope rec minted before user_ask was stored falls back to the
+    display goal — and must say so (verbatim=False), so the renderer can
+    tell a verbatim ask from a lossy 500-char copy."""
+    mod = _load_dispatch(tmp_path, monkeypatch)
+    (tmp_path / "hermes-dispatch").mkdir(parents=True)
+    (tmp_path / "hermes-dispatch" / "job-legacy.json").write_text(json.dumps({
+        "job_id": "job-legacy",
+        "status": "done",
+        "handle_id": None,
+        "goal": "old truncated display goal…",
+        "envelope": {"version": "maro-dispatch/v1",
+                     "operator_context_chars": 0,
+                     "constraints": 0,
+                     "artifacts": []},
+    }))
+    assert mod.cmd_result("job-legacy") == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["delivery"]["you_asked"] == "old truncated display goal…"
+    assert out["delivery"]["verbatim"] is False

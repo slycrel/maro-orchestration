@@ -128,6 +128,21 @@ def test_render_is_report_only_and_honest(monkeypatch, tmp_path):
     assert "no stats row" in text         # thin-evidence reason visible
 
 
+def test_scoped_report_labels_workspace_wide_coverage(monkeypatch, tmp_path):
+    # --persona filters the cells but coverage stays workspace-wide; the
+    # render must say so instead of letting global numbers pose as the
+    # persona's evidence (2026-07-29 adversarial review).
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    mem = _seed(tmp_path)
+    from packaging_readout import build_readout, render_markdown
+    r = build_readout(mem)
+    r["personas"] = {"test-packager": r["personas"]["test-packager"]}
+    r["coverage"]["scoped_to_persona"] = "test-packager"
+    text = render_markdown(r)
+    assert "workspace-wide" in text
+    assert "test-other" not in text.split("## test-packager")[1]
+
+
 def test_empty_workspace_degrades_honestly(monkeypatch, tmp_path):
     monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
     (tmp_path / "memory").mkdir()

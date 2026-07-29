@@ -26,7 +26,13 @@ dispatched on, four row buckets:
                          usage evidence to judge either way.
 - (cell header)        — the goal-achieved verdict mix for the cell's own
                          outcomes, so "this persona succeeds here" claims
-                         carry their denominator.
+                         carry their denominator. Deliberately NOT folded
+                         into the skill buckets: the buckets are
+                         skill-level evidence, the cell mix is
+                         persona-level evidence, and combining them into
+                         one verdict is slice-2 policy this report must
+                         not pre-decide. A cell whose own outcomes are
+                         all-failed gets an explicit CAUTION line.
 
 Evidence joins (each reported with its hit rate — a dead join is a
 finding, not an omission):
@@ -58,6 +64,9 @@ from typing import Any, Dict, List, Optional
 INCLUDE_MIN_USES = 5
 INCLUDE_MIN_SUCCESS = 0.70
 # Exclude bar: enough uses to mean something, failing more than winning.
+# READOUT-ONLY heuristic — no production path uses this threshold (the
+# runtime's own negative signal is the circuit breaker, 3 consecutive
+# failures). Named here so slice 2 argues with a visible number.
 EXCLUDE_MIN_USES = 3
 EXCLUDE_MAX_SUCCESS = 0.50
 # Named display cap per bucket (never silent — the render prints how many
@@ -307,11 +316,19 @@ def render_markdown(readout: Dict[str, Any]) -> str:
     lines.append("")
     lines.append("## Coverage (input honesty)")
     vt = cov["verdict_totals"]
+    if cov.get("scoped_to_persona"):
+        lines.append(
+            f"NOTE: report scoped to persona "
+            f"'{cov['scoped_to_persona']}' — coverage figures below are "
+            "workspace-wide, not this persona's evidence.")
+        lines.append("")
     lines.append(
         f"- dispatch rows: {cov['dispatch_rows']} "
         f"({cov['unique_goals']} unique goals; "
         f"{cov['joined_goals']} joined to outcomes, "
-        f"{cov['unjoined_goals']} unjoined)")
+        f"{cov['unjoined_goals']} unjoined; join key = exact 120-char "
+        "goal prefix, the dispatch writer's own truncation rule — "
+        "distinct goals sharing a 120-char prefix would merge)")
     lines.append(
         f"- joined outcome verdicts: {vt['true']} achieved / "
         f"{vt['false']} not-achieved / {vt['unverdicted']} unverdicted "
@@ -352,9 +369,14 @@ def render_markdown(readout: Dict[str, Any]) -> str:
             lines.append("")
             lines.append(
                 f"### {name} × {ttype} — {cell['goals']} goals "
-                f"(verdicts: {cell['achieved_true']} achieved / "
+                f"(outcome rows: {cell['achieved_true']} achieved / "
                 f"{cell['achieved_false']} not / "
                 f"{cell['unverdicted']} unverdicted)")
+            if cell["achieved_false"] > 0 and cell["achieved_true"] == 0:
+                lines.append(
+                    "- CAUTION: this cell's own outcome evidence argues "
+                    "AGAINST packaging here (0 achieved) — the skill "
+                    "buckets below are skill-level evidence only")
             for bucket in ("would_include", "would_exclude",
                            "insufficient_evidence"):
                 rows = cell[bucket]
@@ -396,6 +418,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         readout["personas"] = {
             k: v for k, v in readout["personas"].items()
             if k == args.persona}
+        # Coverage is computed workspace-wide; stamp the scope so the
+        # render labels it instead of letting global numbers pose as this
+        # persona's evidence.
+        readout["coverage"]["scoped_to_persona"] = args.persona
     if args.json:
         # Skill objects were already flattened to plain rows in build.
         print(json.dumps(readout, indent=2, default=str))

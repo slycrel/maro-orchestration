@@ -1139,6 +1139,7 @@ def _handle_impl(
         # this box's workspace config. Attempt 1 above stays fully recorded
         # (artifact + outcome row); the retry writes its own alongside.
         _rung_fired = False
+        _rung_retry_judged = False
         if (outcome.get("goal_achieved") is False and not force_lane
                 and not dry_run):
             _rung_enabled = False
@@ -1191,8 +1192,12 @@ def _handle_impl(
                 # A retry that errored out must not replace a real (if
                 # insufficient) answer; anything else becomes the delivered
                 # outcome — even unrecovered, it is the later, seeded attempt.
+                # An errored retry was never JUDGED — the escalation context
+                # below must not claim two judged failures (2026-07-29
+                # adversarial review, 3/3 lens consensus).
                 if _retry.get("status") != "error":
                     outcome = _retry
+                    _rung_retry_judged = "goal_achieved" in _retry
                 elapsed = int((time.monotonic() - started_at) * 1000)
                 _write_now_artifact(
                     handle_id, message, _retry.get("result", ""),
@@ -1269,9 +1274,11 @@ def _handle_impl(
                 ("TWO quick single-shot (NOW lane) attempts at this request "
                  "were already made — the second seeded with the first's "
                  "failure — and both were judged NOT to have fulfilled it"
-                 if _rung_fired else
+                 if _rung_retry_judged else
                  "A quick single-shot (NOW lane) attempt at this request was "
-                 "already made and judged NOT to have fulfilled it")
+                 "already made and judged NOT to have fulfilled it"
+                 + (" (an artifact-seeded retry was attempted but errored "
+                    "out before it could be judged)" if _rung_fired else ""))
                 + (" (claimed inputs/outputs missing on disk: "
                    f"{outcome.get('provenance_missing')})"
                    if outcome.get("provenance_missing") else "")

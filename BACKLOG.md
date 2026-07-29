@@ -440,6 +440,12 @@ inspectable before any behavior changes.
   no-silent-spend posture): persona spec gains a packaged-skills field
   fed from would_include rows; gated on the router fix + a fatter
   verdicted denominator (156 unverdicted rows carry no signal).
+- [ ] Durable dispatch→outcome join: persona-dispatch-log rows carry no
+  loop_id/handle_id, so the readout joins on the 120-char goal prefix
+  (writer's own truncation rule; exact but collision-prone for goals
+  sharing a long prefix — 2026-07-29 adversarial review, 3-lens
+  convergence). Stamp handle_id at dispatch write; readout upgrades to
+  the durable key automatically once rows carry it.
 
 ### Dev-approach "house style" doc + intentionality loop (OPENED 2026-07-28, Jeremy; v1 SHIPPED 2026-07-29)
 

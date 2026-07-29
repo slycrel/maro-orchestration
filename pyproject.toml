@@ -201,6 +201,7 @@ py-modules = [
     "orch_items",
     "outcome_policy",
     "pack",
+    "packaging_readout",
     "persona",
     "persona_dispatch",
     "planner",

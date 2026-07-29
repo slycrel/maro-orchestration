@@ -1,6 +1,9 @@
+---
+status: record
+---
+
 # Settled-chunks triage — first run of the adversary-trio skill
 
-status: record
 date: 2026-07-29
 
 First live run of `.claude/skills/adversary-trio/SKILL.md` (forced-opposed

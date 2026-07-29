@@ -97,9 +97,11 @@ a JSON object with `"envelope": "maro-dispatch/v1"`.
 Build order note: (1)+(2) shipped box-side 2026-07-29; (3) requires
 the mini2 propose lane; (4) box-side half SHIPPED 2026-07-29 —
 `dispatch.py cmd_result` emits a `delivery` block (`you_asked` verbatim
-+ `dispatched_with` envelope meta) for envelope dispatches only, and
-the dispatch record keeps `user_ask` untruncated past the 500-char
-display copy. The box never phrases the human message (machine-to-
++ `verbatim` flag + `dispatched_with` envelope meta) for envelope
+dispatches only, and the dispatch record keeps `user_ask` untruncated
+past the 500-char display copy. `verbatim: false` marks the
+compatibility fallback (an envelope rec minted before `user_ask` was
+stored falls back to the lossy display goal — the renderer can tell). The box never phrases the human message (machine-to-
 machine decree); Poe's renderer consumes the block. BACKLOG holds the
 remaining halves (Poe skill, artifacts-travel rider).
 

@@ -239,8 +239,13 @@ def cmd_result(job_id: str) -> int:
     # renders the human message from this; the box never phrases it (UX
     # decree 2026-07-28: machine-to-machine only).
     if rec.get("envelope"):
+        # verbatim=False marks the compatibility fallback: an envelope rec
+        # minted before user_ask was stored falls back to the 500-char
+        # display goal — the renderer must be able to tell a verbatim ask
+        # from a lossy display copy (2026-07-29 adversarial review).
         out["delivery"] = {
             "you_asked": rec.get("user_ask") or rec.get("goal", ""),
+            "verbatim": bool(rec.get("user_ask")),
             "dispatched_with": rec["envelope"],
         }
     return _emit(out)
