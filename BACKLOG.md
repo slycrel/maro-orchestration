@@ -296,9 +296,14 @@ exclusion falls out because `reflect_and_record` receives goal only,
 pinned by interface test); `dispatch.py cmd_enqueue` validates at the
 boundary (malformed → exit 2, nothing queued; record displays user_ask
 + envelope meta, queue carries raw payload). 34 tests
-(test_dispatch_envelope.py + hermes/handle pins). Remaining halves:
-Poe-side skill teaching via propose lane; "you asked / Poe dispatched"
-delivery-loop rendering; artifacts-travel rider below. Note: like
+(test_dispatch_envelope.py + hermes/handle pins). **Delivery rendering
+box-side SHIPPED 2026-07-29** (trio-triage DO_NOW 3/3): `cmd_result`
+emits a `delivery` block (`you_asked` verbatim + `dispatched_with`
+envelope meta) for envelope dispatches only; dispatch record keeps
+`user_ask` untruncated past the 500-char display copy; prose keeps the
+pre-envelope contract. Remaining halves: Poe-side skill teaching via
+propose lane (renders the block into the human message);
+artifacts-travel rider below. Note: like
 prior_context, the operator channel reaches AGENDA-lane runs only —
 the NOW lane has no ancestry context by existing contract.
 

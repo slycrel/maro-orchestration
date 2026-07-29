@@ -103,8 +103,10 @@ def cmd_enqueue(goal: str) -> int:
         _emit({"status": "error",
                "error": f"malformed dispatch envelope: {exc}"})
         return 2
+    user_ask = None
     if env is not None:
         display = env.user_ask
+        user_ask = env.user_ask
         env_meta = {
             "version": ENVELOPE_VERSION,
             "operator_context_chars": len(env.operator_context),
@@ -126,6 +128,11 @@ def cmd_enqueue(goal: str) -> int:
     }
     if env_meta:
         rec["envelope"] = env_meta
+        # The verbatim ask, untruncated — `goal` above is a display copy and
+        # loses anything past 500 chars, but the delivery loop must be able
+        # to say "you asked X" against the user's actual words ("we're going
+        # to want the direct ask and the prompt separately", 2026-07-28).
+        rec["user_ask"] = user_ask
     _write_rec(rec)
 
     log = (DISPATCH_DIR / f"{job_id}.log").open("a")
@@ -223,7 +230,20 @@ def cmd_result(job_id: str) -> int:
                       "note": "still in flight — poll status again later"})
     handle_id = rec.get("handle_id")
     card = _run_card(handle_id) if handle_id else None
-    return _emit({"job_id": job_id, "dispatch": rec, "run_card": card})
+    out = {"job_id": job_id, "dispatch": rec, "run_card": card}
+    # Delivery block — the machine-readable "you asked / Poe dispatched"
+    # separation for typed-envelope dispatches (docs/DISPATCH_ENVELOPE.md).
+    # Present ONLY when an envelope carried the run: that's when an ask
+    # distinct from the dispatched prompt exists. Prose dispatches keep the
+    # pre-envelope contract (the whole payload IS the ask). The far side
+    # renders the human message from this; the box never phrases it (UX
+    # decree 2026-07-28: machine-to-machine only).
+    if rec.get("envelope"):
+        out["delivery"] = {
+            "you_asked": rec.get("user_ask") or rec.get("goal", ""),
+            "dispatched_with": rec["envelope"],
+        }
+    return _emit(out)
 
 
 def cmd_list() -> int:

@@ -182,3 +182,59 @@ def test_enqueue_malformed_envelope_refused_at_boundary(tmp_path, monkeypatch, c
     out = json.loads(capsys.readouterr().out)
     assert out["status"] == "error"
     assert "envelope" in out["error"]
+
+
+def test_enqueue_envelope_keeps_verbatim_ask_past_truncation(tmp_path, monkeypatch, capsys):
+    """`goal` is a 500-char display copy; the delivery loop needs the user's
+    actual words, so an envelope dispatch also stores `user_ask` verbatim
+    ("the direct ask and the prompt separately", 2026-07-28)."""
+    mod = _load_dispatch(tmp_path, monkeypatch)
+    fake_hq = types.ModuleType("handle_queue")
+    fake_hq.enqueue_goal = lambda goal: "job-long-ask"
+    monkeypatch.setitem(sys.modules, "handle_queue", fake_hq)
+    monkeypatch.setattr(mod.subprocess, "Popen", lambda *a, **kw: None)
+
+    long_ask = "please compare " + "z" * 600
+    payload = json.dumps({
+        "envelope": "maro-dispatch/v1",
+        "user_ask": long_ask,
+        "operator_context": "from Telegram",
+    })
+    assert mod.cmd_enqueue(payload) == 0
+    rec = json.loads((tmp_path / "hermes-dispatch" / "job-long-ask.json").read_text())
+    assert rec["goal"].endswith("…") and len(rec["goal"]) == 501
+    assert rec["user_ask"] == long_ask
+
+
+def test_result_emits_delivery_block_for_envelope_only(tmp_path, monkeypatch, capsys):
+    """cmd_result carries a `delivery` block (you_asked / dispatched_with)
+    for envelope dispatches only — prose dispatches keep the pre-envelope
+    contract where the whole payload is the ask."""
+    mod = _load_dispatch(tmp_path, monkeypatch)
+    (tmp_path / "hermes-dispatch").mkdir(parents=True)
+    (tmp_path / "hermes-dispatch" / "job-env-done.json").write_text(json.dumps({
+        "job_id": "job-env-done",
+        "status": "done",
+        "handle_id": None,
+        "goal": "summarize the gist",
+        "user_ask": "summarize the gist",
+        "envelope": {"version": "maro-dispatch/v1",
+                     "operator_context_chars": 17,
+                     "constraints": 0,
+                     "artifacts": ["ref.md"]},
+    }))
+    (tmp_path / "hermes-dispatch" / "job-prose-done.json").write_text(json.dumps({
+        "job_id": "job-prose-done",
+        "status": "done",
+        "handle_id": None,
+        "goal": "plain prose goal",
+    }))
+
+    assert mod.cmd_result("job-env-done") == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["delivery"]["you_asked"] == "summarize the gist"
+    assert out["delivery"]["dispatched_with"]["artifacts"] == ["ref.md"]
+
+    assert mod.cmd_result("job-prose-done") == 0
+    out = json.loads(capsys.readouterr().out)
+    assert "delivery" not in out
