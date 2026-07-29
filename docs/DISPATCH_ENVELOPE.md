@@ -98,3 +98,19 @@ Build order note: (1)+(2) shipped box-side 2026-07-29; (3) requires
 the mini2 propose lane; (4) rides the existing run-visibility surfaces.
 BACKLOG holds the remaining halves (Poe skill, delivery-loop rendering,
 artifacts-travel rider).
+
+## Residual risk — echo-through-output (known gap, 2026-07-29 review)
+
+The extraction seam guarantees operator text never enters
+`reflect_and_record` as *input*. It does NOT guarantee operator text
+never reaches a lesson at all: the model reads the labeled advisory
+block, may echo its content into step output or `result_summary`, and
+extraction legitimately reads those. The provenance gate
+(`lesson_provenance.py`) quarantines prompt-authority PHRASING; a clean
+echo ("the operator noted X") carries no such phrasing and passes. This
+is accepted, not fixed: every context channel (prior_context, recall
+lessons, playbook) shares the same echo path, and closing it would mean
+filtering model output against context strings — a censorship seam with
+its own failure modes. The mitigation stack is: labeled-advisory framing
+(the model knows it's not the ask), provenance gate (catches authority
+transfer), and lesson decay (echoes that don't help die in ~7 days).

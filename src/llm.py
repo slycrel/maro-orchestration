@@ -3195,12 +3195,15 @@ def build_adapter(
             return _explicit
         return FailoverAdapter([_explicit])
 
-    # Explicit api_key overrides — try Anthropic first, then OpenRouter
+    # Explicit api_key overrides — try Anthropic first, then OpenRouter.
+    # Still the auto path: the wrap is the record/meter/cap-warning seam,
+    # and an explicit key must not opt out of it (2026-07-29 review find —
+    # this branch was the one bare-adapter escape left after always-wrap).
     if api_key:
         key_prefix = api_key[:6]
         if key_prefix.startswith("sk-ant"):
-            return AnthropicSDKAdapter(api_key=api_key, model=model)
-        return OpenRouterAdapter(api_key=api_key, model=model)
+            return FailoverAdapter([AnthropicSDKAdapter(api_key=api_key, model=model)])
+        return FailoverAdapter([OpenRouterAdapter(api_key=api_key, model=model)])
 
     # Walk the configured backend order, build all available adapters, and
     # return a FailoverAdapter that tries each in priority order at runtime.

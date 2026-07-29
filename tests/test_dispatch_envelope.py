@@ -37,6 +37,20 @@ class TestParse:
     def test_non_json_braces_returns_none(self):
         assert parse_dispatch_payload("{not json at all") is None
 
+    def test_truncated_declared_envelope_fails_loud(self):
+        # A payload that names the contract version but doesn't parse is a
+        # mangled typed dispatch, not prose — running it as a goal would
+        # execute the truncation. Fail loud (2026-07-29 review find).
+        truncated = _payload()[:-10]
+        assert ENVELOPE_VERSION in truncated
+        with pytest.raises(EnvelopeError):
+            parse_dispatch_payload(truncated)
+
+    def test_non_json_without_version_mention_is_still_prose(self):
+        # The loud path is scoped to payloads that NAME the contract; ordinary
+        # brace-leading prose stays on the fallback lane.
+        assert parse_dispatch_payload('{"half": "an object"') is None
+
     def test_json_without_version_key_returns_none(self):
         # A goal that happens to BE a JSON object is still prose to us —
         # only the version key opts into the contract.
@@ -234,6 +248,35 @@ class TestHandleTaskIntake:
         stored = list((tmp_path / "output" / "dispatch-artifacts"
                        / "job-art").glob("ref.md"))
         assert stored and stored[0].read_text() == "reference body"
+
+
+class TestEnqueueGoalBoundary:
+    def test_malformed_envelope_refused_before_queueing(
+            self, monkeypatch, tmp_path):
+        # Same contract as dispatch.py cmd_enqueue: a broken typed payload
+        # bounces to its sender at enqueue time, never sits queued.
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        import task_store
+        queued = []
+        monkeypatch.setattr(task_store, "enqueue",
+                            lambda **kw: queued.append(kw) or {"job_id": "j1"})
+        from handle_queue import enqueue_goal
+        with pytest.raises(EnvelopeError):
+            enqueue_goal(json.dumps({"envelope": ENVELOPE_VERSION}))
+        assert not queued, "malformed envelope must never be queued"
+
+    def test_valid_envelope_and_prose_both_enqueue(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        import task_store
+        queued = []
+        monkeypatch.setattr(task_store, "enqueue",
+                            lambda **kw: queued.append(kw) or {"job_id": "j1"})
+        from handle_queue import enqueue_goal
+        enqueue_goal(_payload())          # typed, well-formed
+        enqueue_goal("just do the thing")  # prose fallback lane
+        assert len(queued) == 2
+        # Raw payload rides the queue untouched — intake parses at drain time.
+        assert queued[0]["reason"] == _payload()
 
 
 class TestExtractionSeamPin:

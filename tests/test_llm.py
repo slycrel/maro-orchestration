@@ -1416,15 +1416,19 @@ def test_build_adapter_no_backends_raises(monkeypatch):
 
 
 def test_build_adapter_explicit_api_key_openrouter(monkeypatch):
+    from llm import FailoverAdapter
     monkeypatch.setattr("llm._load_env_file", lambda *a, **kw: {})
     a = build_adapter(api_key="sk-or-test-key")
-    assert isinstance(a, OpenRouterAdapter)
+    assert isinstance(a, FailoverAdapter)
+    assert any(isinstance(x, OpenRouterAdapter) for x in a._adapters)
 
 
 def test_build_adapter_explicit_api_key_anthropic(monkeypatch):
+    from llm import FailoverAdapter
     monkeypatch.setattr("llm._load_env_file", lambda *a, **kw: {})
     a = build_adapter(api_key="sk-ant-test-key")
-    assert isinstance(a, AnthropicSDKAdapter)
+    assert isinstance(a, FailoverAdapter)
+    assert any(isinstance(x, AnthropicSDKAdapter) for x in a._adapters)
 
 
 def test_build_adapter_model_passed_through():

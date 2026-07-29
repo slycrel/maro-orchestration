@@ -438,6 +438,36 @@ class TestPinnedConnect:
         assert not called  # refused before any socket was opened
 
 
+class TestPinnedOpenerConstruction:
+    def test_env_proxies_are_disabled(self, monkeypatch):
+        # With http_proxy/https_proxy set, a default ProxyHandler would route
+        # via the proxy — pinning/vetting the PROXY host while the proxy
+        # resolves the real target unvetted (2026-07-29 review find).
+        # _pinned_opener passes ProxyHandler({}), which registers zero
+        # protocol methods (so it never appears in opener.handlers) but
+        # suppresses build_opener's default env-reading ProxyHandler. The
+        # observable contract: under ambient proxy env, NO ProxyHandler is
+        # installed — one appearing means env routing regressed live.
+        import urllib.request as ur
+        import web_fetch as wf
+        monkeypatch.setenv("http_proxy", "http://10.0.0.9:3128")
+        monkeypatch.setenv("https_proxy", "http://10.0.0.9:3128")
+        opener = wf._pinned_opener()
+        proxy_handlers = [h for h in opener.handlers
+                          if isinstance(h, ur.ProxyHandler)]
+        assert not proxy_handlers, (
+            f"env-reading ProxyHandler live in pinned opener: "
+            f"{[h.proxies for h in proxy_handlers]}")
+
+    def test_pinned_and_redirect_handlers_installed(self):
+        import web_fetch as wf
+        opener = wf._pinned_opener()
+        types = {type(h) for h in opener.handlers}
+        assert wf._PinnedHTTPHandler in types
+        assert wf._PinnedHTTPSHandler in types
+        assert wf._SafeRedirectHandler in types
+
+
 class TestRedirectReGate:
     def _hop(self, newurl):
         import io

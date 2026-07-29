@@ -318,8 +318,8 @@ def run_thinkback(
     # Build adapter if not provided
     if adapter is None:
         try:
-            from llm import build_adapter
-            adapter = build_adapter("cheap")
+            from llm import build_adapter, MODEL_CHEAP
+            adapter = build_adapter(model=MODEL_CHEAP)
         except Exception as exc:
             log.warning("thinkback: could not build adapter: %s", exc)
             return run_thinkback(loop_result, dry_run=True)
@@ -507,7 +507,7 @@ def _cli_main(argv=None) -> int:
     if not args.dry_run:
         try:
             from llm import build_adapter
-            adapter = build_adapter(args.model)
+            adapter = build_adapter(model=args.model)
         except Exception as exc:
             print(f"WARNING: could not build adapter ({exc}), using dry-run mode", flush=True)
 

@@ -576,7 +576,10 @@ def is_safe_public_url(url: str) -> bool:
     layer closes that half: _http_get_bytes and _resolve_redirect connect via
     the pinned classes below, which resolve, vet every address, and connect
     to the vetted IP only (no second lookup — DNS rebinding between check and
-    connect buys nothing).
+    connect buys nothing). The proxy tiers (Jina/Cloudflare) get literal-gate
+    checks only by design: they egress from the PROVIDER's network, so a name
+    resolving privately there can't reach our LAN — the asymmetry is the
+    threat model, not a gap.
     """
     try:
         parsed = urllib.parse.urlsplit(url)
@@ -685,7 +688,12 @@ class _PinnedHTTPSHandler(urllib.request.HTTPSHandler):
 
 
 def _pinned_opener() -> urllib.request.OpenerDirector:
+    # ProxyHandler({}) — an EMPTY mapping, not the default env-reading one.
+    # With http_proxy/https_proxy set, urllib would route via the proxy and
+    # the pin would vet the PROXY host while the proxy resolves the real
+    # target unvetted (2026-07-29 review find). Direct-connect only.
     return urllib.request.build_opener(
+        urllib.request.ProxyHandler({}),
         _PinnedHTTPHandler, _PinnedHTTPSHandler, _SafeRedirectHandler)
 
 

@@ -400,7 +400,14 @@ def enqueue_goal(
     This is the user-facing "drop goals here" API. Each goal runs through
     ``handle()`` in order — the director gets full discretion over how to
     decompose and execute each one.
+
+    Malformed typed envelopes are refused HERE, not at drain time — a bad
+    payload should bounce to its sender, not sit queued until handle_task
+    hits it hours later (2026-07-29 review find, same contract as
+    dispatch.py cmd_enqueue).
     """
+    from dispatch_envelope import parse_dispatch_payload
+    parse_dispatch_payload(reason or goal)  # raises EnvelopeError if declared-but-broken
     from task_store import enqueue
     task = enqueue(
         lane="agenda",

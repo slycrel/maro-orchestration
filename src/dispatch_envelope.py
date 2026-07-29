@@ -66,6 +66,14 @@ def parse_dispatch_payload(payload) -> Optional[DispatchEnvelope]:
     try:
         data = json.loads(text)
     except json.JSONDecodeError:
+        # A `{`-leading payload that names the contract version but fails to
+        # parse is almost certainly a truncated/corrupted typed dispatch —
+        # silently running it as prose would execute a mangled goal
+        # (2026-07-29 review find). Machine-to-machine: fail loud.
+        if ENVELOPE_VERSION in text:
+            raise EnvelopeError(
+                f"payload mentions {ENVELOPE_VERSION} but is not valid JSON "
+                "(truncated or corrupted dispatch?)")
         return None
     if not isinstance(data, dict) or data.get("envelope") != ENVELOPE_VERSION:
         return None

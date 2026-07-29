@@ -432,15 +432,24 @@ class TestCandidateInvisibilityPin:
             "contract changed; re-adjudicate the V3 finding")
 
     def test_no_promote_path_exists(self):
-        # Structural half: nothing in the two owning modules can move a node
+        # Structural half: nothing in the owning modules can move a node
         # candidate → active today. This is the tripwire that forces whoever
         # builds promotion to also revisit the invisibility pin above.
+        # Verbs "promote"/"activate" × nouns "node"/"candidate" (2026-07-29
+        # review find widened the net; "active" != "activate" so the existing
+        # ACTIVE-status readers don't false-positive).
+        import knowledge
         import knowledge_bridge
         import knowledge_web
 
-        for mod in (knowledge_bridge, knowledge_web):
-            offenders = [name for name in dir(mod)
-                         if "promote" in name.lower() and "node" in name.lower()]
+        verbs = ("promote", "activate")
+        nouns = ("node", "candidate")
+        for mod in (knowledge, knowledge_bridge, knowledge_web):
+            offenders = [
+                name for name in dir(mod)
+                if any(v in name.lower() for v in verbs)
+                and any(n in name.lower() for n in nouns)
+            ]
             assert not offenders, (
                 f"{mod.__name__} grew a node-promotion symbol {offenders} — "
                 "wire it through the V3 pin (candidate invisibility) before "
