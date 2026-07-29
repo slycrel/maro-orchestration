@@ -42,6 +42,13 @@ the guard beat the retrain so cleanly — a ranking with no spread is
 worse than no ranking, and the cheap deterministic check that says so
 covers every future degeneracy cause, not just these two.
 
+Same afternoon, the review's other 3-lens finding closed: persona
+dispatch rows now stamp the run's handle_id, and the readout joins
+dispatch→outcomes on it (goal-prefix stays as legacy fallback, hit rate
+reported in coverage). Both landed with Jeremy's M1 parallel-runner
+cleanup merged underneath — first landing race resolved in a worktree
+per the shared-tree rules, worked as written.
+
 **Settled-chunks batch — four trio-triaged items shipped, and the trio
 became a skill** — threads: `adversary-trio`, `dispatch-envelope`,
 `knowledge-receipts`, `now-retry-rung`, `next-leap-packaging`. Jeremy's
