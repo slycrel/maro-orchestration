@@ -5000,7 +5000,7 @@ Dormant (deliberately parked, not dropped):
   failing in the wild, three days after being decreed and found by doing
   unrelated janitorial work: three landed docs cite evidence a clean clone
   cannot see.** `BACKLOG_DONE.md` ×3 and `MILESTONES.md` ×1 cite
-  `output/adversarial-review-2026-07-13-*.md`; two 2026-07-14 history docs
+  `docs/history/2026-07-13-adversarial-review-*.md`; two 2026-07-14 history docs
   cited `.run-workspace/`; `docs/LOCAL_VALIDATOR.md:138` names repo
   `.venv-mlx` as a default. The citations are not wrong, they are
   *unreachable* — which is precisely what "verifiable on a clean clone"

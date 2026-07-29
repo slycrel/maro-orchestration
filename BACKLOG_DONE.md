@@ -277,7 +277,7 @@ the facades.
 3-reviewer (Skeptic/Architect/Minimalist) pass over `git diff b2dc34d..HEAD`
 (recursive-goal check-in, planning-depth shadow, `director_evaluate`
 skip/error split, R1 architectural cleanup already archived to
-BACKLOG_DONE). Full reports: `output/adversarial-review-2026-07-13-batch1-{skeptic,architect,minimalist}.md`
+BACKLOG_DONE). Full reports: `docs/history/2026-07-13-adversarial-review-batch1-{skeptic,architect,minimalist}.md`
 (machine-local, never in git; **not present on the M1** as of 2026-07-29 —
 check the orchestrator box before treating this citation as reachable).
 Five real bugs/gaps fixed live, with regression tests:
@@ -361,7 +361,7 @@ architectural cleanup, and R3's own fixes), per the closing instruction of
 this session's `/goal`: "run the adversarial-review against the entire
 changeset across all the chunks." Run via the actual `/adversarial-review`
 skill (Codex reviewers, cross-model, not internal subagents). Reports:
-`output/adversarial-review-2026-07-13-final-{skeptic,architect,minimalist}.md`
+`docs/history/2026-07-13-adversarial-review-final-{skeptic,architect,minimalist}.md`
 (machine-local, never in git; **not present on the M1** as of 2026-07-29 —
 check the orchestrator box before treating this citation as reachable).
 
@@ -1117,7 +1117,7 @@ stand on their own). Sequencing constraint that survives the de-1.0 pass:
   artifact-sha256 tamper check, path-traversal guard, malformed-row
   containment, provenance nesting, `adopt()` TOCTOU, dict-key
   scrubbing, `maro-import` action field, skill-tier reset); full
-  verdict in `output/adversarial-review-2026-07-13-portable-learning.md`
+  verdict in `docs/history/2026-07-13-adversarial-review-portable-learning.md`
   (gitignored, box-local, not in git history).
   **Known-gap deferred from that review:** artifact filenames /
   manifest `path` strings / `REVIEW.md` headings are not

@@ -462,7 +462,7 @@ pointer.
   this is that decree failing in the wild, found by doing this work): **three
   separate landed docs cite evidence a clean clone cannot see.**
   `BACKLOG_DONE.md` ×3 and `MILESTONES.md` ×1 cite
-  `output/adversarial-review-2026-07-13-*.md`; two 2026-07-14 history docs
+  `docs/history/2026-07-13-adversarial-review-*.md`; two 2026-07-14 history docs
   cited `.run-workspace/` (now repointed and explicitly marked
   machine-local); `docs/LOCAL_VALIDATOR.md:138` names repo `.venv-mlx` as a
   default that only exists here. The citations aren't wrong, they're

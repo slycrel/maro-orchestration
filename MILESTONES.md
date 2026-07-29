@@ -1404,7 +1404,7 @@ Truth anchor: GOAL_BRAIN.md Threads. History: docs/history/ROADMAP_ARCHIVE.md.
       live filenames from quarantined names, not something to rush into
       the same pass. Full 169-file suite + `tests/test_pack.py` (57) green
       after fixes. Full verdict + Lead Judgment:
-      `output/adversarial-review-2026-07-13-portable-learning.md`
+      `docs/history/2026-07-13-adversarial-review-portable-learning.md`
       (gitignored, box-local).
    8. Opportunistic riders: time-blindness first slice + perspective
       end-user seat (BACKLOG Vision vehicles, sized 2026-07-12).
