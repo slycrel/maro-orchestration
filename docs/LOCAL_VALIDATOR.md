@@ -3,6 +3,13 @@ status: record
 note: local rung REMOVED 2026-07-21 (swarm-review chunk 1, Jeremy decree
   "local LLMs are in the way for now"). Body below is the methodology
   record as it stood before removal — do not treat as current wiring.
+  2026-07-29: the orphaned `.venv-mlx` this doc referenced was deleted from
+  the M1 checkout (307MB, ~70% of it, unreferenced by any live code — a
+  residue of the removal arc). Reviving is now a one-liner rather than a
+  reconstruction: `docs/data/venv-mlx-requirements-2026-07-29.txt` is the
+  exact pinned manifest (mlx 0.31.2 / mlx_lm 0.31.3 / transformers 5.12.1).
+  The bake-off *results* this doc's methodology produced are likewise no
+  longer machine-local — see `docs/data/validator-bakeoff-*.json`.
 ---
 
 # Local Validator — zero-cost first-pass validation (RETIRED 2026-07-21)

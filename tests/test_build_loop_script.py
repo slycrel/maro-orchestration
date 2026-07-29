@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -35,6 +36,20 @@ def test_build_loop_shell_wrapper_runs_cli(tmp_path):
     )
     worker.chmod(0o755)
 
+    # This test's whole point is the repo-local fallback, so the loop really
+    # does write run artifacts into the checkout. Snapshot what was there
+    # first: the cleanup below must remove only what this run produced.
+    runs_dir = repo_root / "output" / "runs"
+    heartbeat_dir = repo_root / "output" / "heartbeat" / "runs"
+    leak_dirs = (runs_dir, heartbeat_dir)
+    pre_existing = {
+        d: ({p.name for p in d.iterdir()} if d.exists() else set()) for d in leak_dirs
+    }
+    status_file = repo_root / "output" / "build-loop-status.json"
+    lock_file = repo_root / "output" / "build-loop.lock"
+    status_pre_existed = status_file.exists()
+    lock_pre_existed = lock_file.exists()
+
     env = os.environ.copy()
     env.pop("OPENCLAW_WORKSPACE", None)
     env.pop("MARO_WORKSPACE", None)
@@ -60,6 +75,24 @@ def test_build_loop_shell_wrapper_runs_cli(tmp_path):
             child.unlink()
         repo_project.rmdir()
         worker.unlink(missing_ok=True)
+        # Outputs, not just inputs: without this the suite left artifacts in
+        # the checkout every time it ran -- 107 run dirs and 110 heartbeat
+        # records had piled up by 2026-07-29, every one of them the same
+        # synthetic "repo local" item.
+        for leak_dir in leak_dirs:
+            if not leak_dir.exists():
+                continue
+            for path in leak_dir.iterdir():
+                if path.name in pre_existing[leak_dir]:
+                    continue
+                if path.is_dir():
+                    shutil.rmtree(path, ignore_errors=True)
+                else:
+                    path.unlink(missing_ok=True)
+        if not status_pre_existed:
+            status_file.unlink(missing_ok=True)
+        if not lock_pre_existed:
+            lock_file.unlink(missing_ok=True)
 
 
 def test_build_loop_shell_wrapper_accepts_trailing_workspace_dir(tmp_path):

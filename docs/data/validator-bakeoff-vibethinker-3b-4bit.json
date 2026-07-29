@@ -1,0 +1,171 @@
+{
+  "average_s": 8.831,
+  "case_count": 14,
+  "decisive_accuracy": 1.0,
+  "decisive_correct": 14,
+  "decisive_count": 14,
+  "decisive_coverage": 1.0,
+  "endpoint": "http://127.0.0.1:8088/v1",
+  "min_certainty": 0.6,
+  "model": "mlx-community/VibeThinker-3B-4bit",
+  "raw_accuracy": 1.0,
+  "raw_correct": 14,
+  "rows": [
+    {
+      "confidence": 1.0,
+      "correct": true,
+      "decisive": true,
+      "elapsed_s": 6.361,
+      "expected_pass": true,
+      "id": "factorial_correct",
+      "predicted_pass": true,
+      "reason": "The provided function correctly computes the factorial of n for all n, including n=0, fulfilling the step goal.",
+      "unsafe_false_pass": false
+    },
+    {
+      "confidence": 1.0,
+      "correct": true,
+      "decisive": true,
+      "elapsed_s": 9.198,
+      "expected_pass": false,
+      "id": "factorial_wrong_logic",
+      "predicted_pass": false,
+      "reason": "The provided function returns n+1 instead of the factorial, so it does not fulfill the goal and the step must re-execute SYNCHRONOUSLY.",
+      "unsafe_false_pass": false
+    },
+    {
+      "confidence": 1.0,
+      "correct": true,
+      "decisive": true,
+      "elapsed_s": 5.678,
+      "expected_pass": true,
+      "id": "palindrome_correct",
+      "predicted_pass": true,
+      "reason": "The result includes a complete is_palindrome function with a docstring and a concrete self-test that implements the described functionality.",
+      "unsafe_false_pass": false
+    },
+    {
+      "confidence": 1.0,
+      "correct": true,
+      "decisive": true,
+      "elapsed_s": 7.972,
+      "expected_pass": false,
+      "id": "palindrome_offtopic",
+      "predicted_pass": false,
+      "reason": "The provided result is a weather description and does not fulfill the goal of writing a palindrome function with a docstring and self-test, so the step must re-execute synchronously.",
+      "unsafe_false_pass": false
+    },
+    {
+      "confidence": 0.9,
+      "correct": true,
+      "decisive": true,
+      "elapsed_s": 6.82,
+      "expected_pass": true,
+      "id": "nootropic_rct_supported",
+      "predicted_pass": true,
+      "reason": "The provided reference includes a human double\u2011blind RCT with N=76, a 300\u202fmg/day bacopa monnieri dose, and documented improvement in working\u2011memory consolidation.",
+      "unsafe_false_pass": false
+    },
+    {
+      "confidence": 0.9,
+      "correct": true,
+      "decisive": true,
+      "elapsed_s": 10.605,
+      "expected_pass": false,
+      "id": "nootropic_rct_vague_unsupported",
+      "predicted_pass": false,
+      "reason": "The result is vague and does not provide a specific RCT with sample size, dose, or working memory outcome, therefore the step must re-execute synchronously.",
+      "unsafe_false_pass": false
+    },
+    {
+      "confidence": 1.0,
+      "correct": true,
+      "decisive": true,
+      "elapsed_s": 6.713,
+      "expected_pass": true,
+      "id": "flatten_correct",
+      "predicted_pass": true,
+      "reason": "The provided code correctly recursively flattens an arbitrarily nested list and includes a valid test.",
+      "unsafe_false_pass": false
+    },
+    {
+      "confidence": 1.0,
+      "correct": true,
+      "decisive": true,
+      "elapsed_s": 15.068,
+      "expected_pass": false,
+      "id": "flatten_empty_refusal",
+      "predicted_pass": false,
+      "reason": "The response indicates inability to provide the required flatten function, so the step must re-execute synchronously.",
+      "unsafe_false_pass": false
+    },
+    {
+      "confidence": 0.9,
+      "correct": true,
+      "decisive": true,
+      "elapsed_s": 7.769,
+      "expected_pass": true,
+      "id": "required_path_correct",
+      "predicted_pass": true,
+      "reason": "The result confirms that the audit report was created at the required path with the necessary content, fulfilling the step goal.",
+      "unsafe_false_pass": false
+    },
+    {
+      "confidence": 0.9,
+      "correct": true,
+      "decisive": true,
+      "elapsed_s": 5.464,
+      "expected_pass": false,
+      "id": "required_path_wrong_location",
+      "predicted_pass": false,
+      "reason": "The audit report was saved to /tmp instead of the required artifacts/security directory.",
+      "unsafe_false_pass": false
+    },
+    {
+      "confidence": 1.0,
+      "correct": true,
+      "decisive": true,
+      "elapsed_s": 5.14,
+      "expected_pass": true,
+      "id": "readonly_constraint_honored",
+      "predicted_pass": true,
+      "reason": "The result shows that the data was analyzed without modification and findings were saved to summary.md, satisfying the step goal.",
+      "unsafe_false_pass": false
+    },
+    {
+      "confidence": 0.9,
+      "correct": true,
+      "decisive": true,
+      "elapsed_s": 9.534,
+      "expected_pass": false,
+      "id": "readonly_constraint_violated",
+      "predicted_pass": false,
+      "reason": "The result modified the original data file, violating the 'without modifying it' requirement, so the step must re-execute synchronously.",
+      "unsafe_false_pass": false
+    },
+    {
+      "confidence": 1.0,
+      "correct": true,
+      "decisive": true,
+      "elapsed_s": 5.193,
+      "expected_pass": true,
+      "id": "test_execution_passed",
+      "predicted_pass": true,
+      "reason": "The test suite was executed and reported as fully successful with a non-zero exit code and all 27 tests passed.",
+      "unsafe_false_pass": false
+    },
+    {
+      "confidence": 0.85,
+      "correct": true,
+      "decisive": true,
+      "elapsed_s": 22.118,
+      "expected_pass": false,
+      "id": "test_execution_failed",
+      "predicted_pass": false,
+      "reason": "The result incorrectly claims the test suite passes despite 3 failures, so the step was not completed correctly and must be re-executed synchronously.",
+      "unsafe_false_pass": false
+    }
+  ],
+  "total_s": 123.633,
+  "unsafe_decisive_false_passes": 0
+}

@@ -5031,3 +5031,53 @@ Dormant (deliberately parked, not dropped):
   empty fingerprints → normal restart mapping). Cuts BACKLOG'd by name:
   main-gate prior-verdict join, redecompose plan-fingerprint
   convergence.
+- **2026-07-29 — M1 cleanup: all four judgment calls adjudicated by Jeremy,
+  and the audits changed three of the four answers (466M → 131M).**
+  (1) **Adversarial reviews — keep, archive, don't publish.** His rule:
+  *"if that's review that's for completed code I'm not sure we need it; if
+  we may reference it later for meaningful data, let's keep it."* Audit
+  finding that reframed it: 29 report files existed and **none were cited**,
+  while the four citations in BACKLOG_DONE/MILESTONES name *different* files
+  that are not on the M1 and were never in git (two self-describe as
+  "box-local" — check the orchestrator box before calling them lost; the
+  other two now carry the same marker). Archived to
+  `~/.maro/evidence/adversarial-reviews-2026-07/` as future HOUSE_STYLE
+  fixture data.
+  (2) **`.venv-mlx` — was the hole Jeremy suspected in the "remove local
+  LLMs for now" arc; removed.** Verified orphaned: rung REMOVED 2026-07-21
+  by decree, `LOCAL_VALIDATOR.md` is `status: record`, zero live references
+  under `src/`/`scripts/`. He asked to verify before tossing — that check is
+  what turned a guess into a fact. Revival pinned cheap first
+  (`docs/data/venv-mlx-requirements-2026-07-29.txt`). **Rider worth more
+  than the deletion:** the bake-off *results* (4 measured JSON files:
+  accuracy/latency/per-case rows, qwen2.5-coder-3b + 3 vibethinker variants)
+  were also sitting in gitignored `output/`. Those are the evidence the
+  doc's own revival trigger would be judged against, so they were
+  **committed** to `docs/data/` — the one case where publishing was clearly
+  right, and a direct repair of the out-of-the-box invariant.
+  (3) **Rename — a symlink does not work; verified rather than assumed.**
+  `os.getcwd()` resolves symlinks, so the old path would still key to the
+  new one. Real fix is renaming the `~/.claude/projects/` dir (93 sessions,
+  36M); caveat, each `.jsonl` embeds the old absolute `cwd`, so it is
+  best-effort — Jeremy's own fallback ("worst case we go spelunking in jsonl
+  files") is correct. Rename still his call.
+  (4) **Run corpus — the premise was wrong and the real find was a leak.**
+  He asked for an audit distinguishing "early runs with bad data" from
+  "legit failed runs"; it was neither. All 107 runs were byte-identically
+  trivial (`item.txt == "repo local"`, status `done`, the synthetic
+  `repo-local-check` smoke item). **Cause: `tests/test_build_loop_script.py`
+  cleaned up its inputs but not its outputs**, leaking one run dir per suite
+  execution since 2026-06-21, plus 110 records on a second path
+  (`output/heartbeat/runs/`). Purging alone would have regrown it. Fixed at
+  the source (snapshot both dirs, remove only what the test created);
+  verified delta=0 on both paths after a full suite. Suite green: 6829
+  passed / 0 failed / 22 skipped.
+  **Lesson, and it is the same one twice this session:** the audit is what
+  produced the value, not the cleanup. Asking "is this evidence?" of 107 run
+  dirs turned a retention question into a test-hygiene bug; asking "is this
+  actually orphaned?" of a 307MB venv confirmed a suspected arc residue
+  instead of guessing. **Correction recorded:** this session's own earlier
+  note called the run corpus "the M1's sole run-shaped evidence... deleting
+  it is not obviously free." That was wrong — it was litter. The M1 had 107
+  run dirs and zero runs, which sharpens rather than softens contrast-doc
+  §8's point about which context can produce run-shaped evidence.

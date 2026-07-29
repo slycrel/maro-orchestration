@@ -480,6 +480,63 @@ pointer.
   repo-local dev runs — prune or keep as the M1's only local run corpus
   (note: that corpus is the M1's *sole* run-shaped evidence, per the
   contrast doc's §8 — deleting it is not obviously free).
+  **ALL FOUR RESOLVED 2026-07-29 (Jeremy adjudicated; 466M → 131M).** Each
+  answer changed once the data was actually looked at:
+  (1) **Reviews — kept, archived out of the repo** (his rule: *"if that's
+      review that's for completed code I'm not sure we need it; if we may
+      reference it later for meaningful data, let's keep it"*). 29 report
+      files existed and **not one of them was cited by anything**; the four
+      citations in BACKLOG_DONE/MILESTONES name *different* files that are
+      **not on the M1 at all and were never in git** (two of the four
+      already self-describe as "box-local", so check the orchestrator box
+      before calling them lost — the other two now carry the same marker).
+      The surviving 29 are the sort of thing HOUSE_STYLE's regression
+      harness would want as fixtures, so they live in
+      `~/.maro/evidence/adversarial-reviews-2026-07/` rather than being
+      deleted or published.
+  (2) **`.venv-mlx` — was exactly the hole he suspected, removed.** The
+      local rung was REMOVED 2026-07-21 by decree ("local LLMs are in the
+      way for now"), `LOCAL_VALIDATOR.md` is `status: record`, and **zero
+      live code under `src/` or `scripts/` references mlx** — the 307MB venv
+      was pure residue. Deleted only after pinning revival cheap:
+      `docs/data/venv-mlx-requirements-2026-07-29.txt` (mlx 0.31.2 / mlx_lm
+      0.31.3 / transformers 5.12.1), noted in LOCAL_VALIDATOR.md's header.
+      **Rider:** the bake-off *results* were sitting in gitignored `output/`
+      too — 4 measured JSON files (accuracy/latency/per-case rows for
+      qwen2.5-coder-3b and three vibethinker variants). Those are the data
+      the doc's revival trigger would be judged against, so they were
+      **promoted into the repo** at `docs/data/validator-bakeoff-*.json` —
+      the one place committing was clearly right.
+  (3) **Rename — symlink does NOT work, but the fix is trivial anyway.**
+      Verified: `os.getcwd()` resolves symlinks (`PWD` keeps the link path,
+      `getcwd()` returns the real one), so a symlink at the old location
+      would still key sessions to the new path. The actual fix is to rename
+      `~/.claude/projects/-Users-jeremy-claude-openclaw-orchestration/`
+      (93 sessions, 36M) to match the new path key. Caveat found: each
+      `.jsonl` embeds `"cwd": "/Users/jeremy/claude/openclaw-orchestration"`
+      internally, so the rename is best-effort — and his own fallback
+      ("worst case we go spelunking in jsonl files") is correct, they are
+      plain JSONL. **Rename itself still not done — left as his call.**
+  (4) **Run corpus — not evidence, and the real find was a leak.** The
+      audit killed the premise: all 107 runs were **byte-identically
+      trivial** — every `item.txt` == `"repo local"`, every status `done`,
+      every one the synthetic `repo-local-check` smoke item. Not "early runs
+      with bad data" and not "legit failed runs"; the same nothing, 107
+      times. **Cause: `tests/test_build_loop_script.py` cleaned up its
+      inputs but not its outputs**, leaking one run dir per suite execution
+      since 2026-06-21 (plus 110 matching `output/heartbeat/runs/` records
+      on a second path). Purging without fixing that would have regrown it.
+      Fixed by snapshotting both output dirs before the subprocess and
+      removing only what the test itself created — verified delta=0 on both
+      paths, and the loose `build-loop-status.json`/`.lock` it also dropped
+      are now cleaned when the test created them. One specimen of each kept
+      in `~/.maro/evidence/m1-repo-local-smoke-specimen/`; the rest purged.
+  **Correction to this item's own earlier text:** it claimed the corpus was
+  "the M1's sole run-shaped evidence, deleting it is not obviously free."
+  That was wrong — it was test litter, and deleting it cost nothing. The
+  M1's lack of run-shaped evidence (contrast doc §8) is unchanged by this,
+  which if anything sharpens the point: the M1 had 107 run dirs and zero
+  runs.
 - [ ] **Iteration protocol (Jeremy 2026-07-28):** the workflow spec in
   the open-thread entry below is a *partial dump* by his own flag —
   ">30 years... I've got reflexes and intuitions I likely can't

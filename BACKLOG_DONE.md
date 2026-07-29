@@ -277,7 +277,9 @@ the facades.
 3-reviewer (Skeptic/Architect/Minimalist) pass over `git diff b2dc34d..HEAD`
 (recursive-goal check-in, planning-depth shadow, `director_evaluate`
 skip/error split, R1 architectural cleanup already archived to
-BACKLOG_DONE). Full reports: `output/adversarial-review-2026-07-13-batch1-{skeptic,architect,minimalist}.md`.
+BACKLOG_DONE). Full reports: `output/adversarial-review-2026-07-13-batch1-{skeptic,architect,minimalist}.md`
+(machine-local, never in git; **not present on the M1** as of 2026-07-29 —
+check the orchestrator box before treating this citation as reachable).
 Five real bugs/gaps fixed live, with regression tests:
 
 - **`director_evaluate`'s masked-failure fix only covered one of two code
@@ -359,7 +361,9 @@ architectural cleanup, and R3's own fixes), per the closing instruction of
 this session's `/goal`: "run the adversarial-review against the entire
 changeset across all the chunks." Run via the actual `/adversarial-review`
 skill (Codex reviewers, cross-model, not internal subagents). Reports:
-`output/adversarial-review-2026-07-13-final-{skeptic,architect,minimalist}.md`.
+`output/adversarial-review-2026-07-13-final-{skeptic,architect,minimalist}.md`
+(machine-local, never in git; **not present on the M1** as of 2026-07-29 —
+check the orchestrator box before treating this citation as reachable).
 
 All three reviewers scoped their attention (per instruction) to what R3
 hadn't reviewed yet — R3's own fix commit (`f837c06`) and the
