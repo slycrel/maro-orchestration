@@ -575,9 +575,15 @@ def test_run_evolver_wires_skill_candidate_sweep():
 
     _sc_flagged_run("h0e00005")
     outcomes = [_make_outcome()] * 5
+    # build_adapter must be stubbed: the sweep constructs a real adapter
+    # before reaching the patched extract_skills, and on a backend-less box
+    # (CI) that raises — the sweep then correctly leaves the candidate
+    # unconsumed and the wiring assertion fails. Passed locally only because
+    # this box has a live backend; red on every CI push 07-13 → 07-29.
     with patch("evolver.load_outcomes", return_value=outcomes), \
          patch("evolver._llm_analyze", return_value=([], [])), \
          patch("evolver.scan_outcomes_for_signals", return_value=[]), \
+         patch("evolver.build_adapter", return_value=MagicMock()), \
          patch("skills.extract_skills", return_value=[]):
         run_evolver(dry_run=False, verbose=False, notify=False,
                     scan_skill_candidates=True)
