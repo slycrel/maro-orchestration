@@ -239,3 +239,63 @@ def test_autostart_failure_is_nonfatal(autostart_env, monkeypatch):
         raise OSError("no exec for you")
     monkeypatch.setattr(subprocess, "Popen", _boom)
     assert vs.ensure_running() is False
+
+
+# ---------------------------------------------------------------------------
+# Symlink containment (adversarial review 2026-07-27)
+# ---------------------------------------------------------------------------
+#
+# The allowlist used to check only that the RESOLVED path stayed under the runs
+# root. Every denied sibling (source/, fetch-raw/, metadata.json) is also under
+# the runs root, so a symlink inside build/ satisfied the check and was served.
+# That mattered once raw page captures landed in <rundir>/fetch-raw/: the target
+# is unscrubbed third-party HTML, and serving it hands any script inside it to
+# the operator's browser as same-origin content.
+
+def test_build_symlink_into_capture_dir_is_denied(rundir_root):
+    import os
+    rd = rundir_root / "eager-otter"
+    (rd / "fetch-raw").mkdir(parents=True, exist_ok=True)
+    evil = rd / "fetch-raw" / "abc123.html"
+    evil.write_text("<script>exfiltrate()</script>")
+    os.symlink(evil, rd / "build" / "report.html")
+    assert vs._resolve_allowed_path("/eager-otter/build/report.html", rundir_root) is None
+
+
+def test_build_symlink_outside_the_runs_root_is_denied(rundir_root, tmp_path):
+    import os
+    secret = tmp_path / "secret.txt"
+    secret.write_text("SECRET")
+    os.symlink(secret, rundir_root / "eager-otter" / "build" / "leak.html")
+    assert vs._resolve_allowed_path("/eager-otter/build/leak.html", rundir_root) is None
+
+
+def test_artifact_symlink_into_capture_dir_is_denied(rundir_root):
+    import os
+    rd = rundir_root / "eager-otter"
+    (rd / "fetch-raw").mkdir(parents=True, exist_ok=True)
+    evil = rd / "fetch-raw" / "def456.html"
+    evil.write_text("<script>x</script>")
+    os.symlink(evil, rd / "artifact" / "deliverable.html")
+    assert vs._resolve_allowed_path("/eager-otter/artifact/deliverable.html", rundir_root) is None
+
+
+def test_symlinked_build_dir_itself_is_denied(rundir_root):
+    """Redirecting the whole subtree must fail the same way one file does."""
+    import os
+    rd2 = rundir_root / "sneaky-vole"
+    rd2.mkdir(parents=True)
+    (rd2 / "real").mkdir()
+    (rd2 / "real" / "page.html").write_text("x")
+    os.symlink(rundir_root / "eager-otter" / "source", rd2 / "build")
+    # build/ resolves to source/ — a denied sibling, not a build subtree.
+    assert vs._resolve_allowed_path("/sneaky-vole/build/metadata.json", rundir_root) is None
+
+
+def test_legitimate_build_and_artifact_files_still_serve(rundir_root):
+    """The containment tightening must not break the normal case."""
+    assert vs._resolve_allowed_path(
+        "/eager-otter/build/loop-abc-report.html", rundir_root) is not None
+    assert vs._resolve_allowed_path(
+        "/eager-otter/build/calls/call-00001.json", rundir_root) is not None
+    assert vs._resolve_allowed_path("/index.html", rundir_root) is not None

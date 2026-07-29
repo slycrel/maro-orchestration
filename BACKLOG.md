@@ -1460,22 +1460,28 @@ deferred rather than silently dropped:
     certainly does not. Needs a real-docker E2E that runs a research goal
     with `executor.container=on` and asserts the fetch command ran.
     Until then, container workers may still fall back to curl.
-  - **`skill_loader` progressive disclosure is not wired.** The module
-    docstring claims "full body loaded on demand when the step executor
-    resolves a skill match", but `load_full()` has exactly one production
-    caller (`scope.py`, hardcoded to `resolve_ambiguity`). So the four
-    research-skill bodies edited here reach no worker — the
-    EXECUTE_SYSTEM block is the only load-bearing instruction. Either
-    wire progressive disclosure at the executor or stop implying it.
+  - **`skill_loader` progressive disclosure is not wired.** `load_full()`
+    has exactly one production caller (`scope.py`, hardcoded to
+    `resolve_ambiguity`); the step executor never calls it, so a matched
+    skill's BODY never reaches the worker — only the summary reaches the
+    planner. **Docstring corrected 2026-07-28** to mark step 2 PARTIALLY
+    WIRED and state the consequence (skill-body prose is documentation,
+    not instruction; anything that must bind worker behavior belongs in
+    EXECUTE_SYSTEM). Wiring `load_full()` at the executor is still open —
+    the "stop implying it" half is done, the "wire it" half is not.
   - **SSRF depth.** `is_safe_public_url()` is literal-address only; a
     hostname resolving to a private address still passes. Full defense
     is resolve-then-pin-the-socket at the HTTP layer.
-  - **`viz_server` symlink containment.** A `build/report.html` symlinked
-    to `../fetch-raw/<digest>.html` passes the allowlist shape check and
-    resolves inside the runs root, so it is served. Pre-existing, but
-    captures give it attacker-controlled content to point at. Fix is to
-    require the resolved target to stay inside the resolved `build/`
-    subtree and reject symlinked path components.
+  - ~~**`viz_server` symlink containment.**~~ **FIXED 2026-07-28.**
+    Containment was checked against the runs root only, and every denied
+    sibling (`source/`, `fetch-raw/`, `metadata.json`) also lives under
+    that root — so a `build/report.html` symlinked to
+    `../fetch-raw/<digest>.html` was served, handing unscrubbed
+    third-party HTML to the operator's browser as same-origin content.
+    Now checked against the specific allowed subtree, AND the subtree
+    itself must sit at its literal path: writing the test surfaced a
+    second hole where symlinking `<run>/build` -> `<run>/source` put every
+    denied sibling back in reach. 5 regression tests.
 - **Success accounting vs answer quality.** `stuck → failed`
   (`run_curation.py`) even when partial_rescue holds contract-meeting
   deliverables — run 3 recorded "failed" with 2 of 3 tiers purchase-ready,

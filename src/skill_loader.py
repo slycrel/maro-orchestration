@@ -13,7 +13,20 @@ Skills as first-class markdown files with YAML frontmatter:
 
 Progressive disclosure model:
   1. Summaries (name + description + triggers) injected into decompose prompt for all roles.
-  2. Full body loaded on demand when the step executor resolves a skill match.
+     LIVE — loop_planning calls get_summaries_block()/find_matching().
+  2. Full body loaded on demand when a caller resolves a skill match.
+     PARTIALLY WIRED — `load_full()` has exactly ONE production caller today
+     (scope.py, hardcoded to "resolve_ambiguity"). The step executor does NOT
+     call it, so a matched skill's BODY never reaches the worker executing the
+     step: only the summary reaches the planner. Anything a skill body says
+     about how to do the work is therefore documentation, not instruction —
+     if it must bind worker behavior it has to live in step_exec's
+     EXECUTE_SYSTEM prompt instead.
+
+     Found 2026-07-27 while adding fetch guidance to four research skills:
+     the edits were inert for exactly this reason. Wiring load_full() at the
+     executor is a live BACKLOG item; until then this section describes the
+     intended model, not the shipped one.
 
 This supplements (does not replace) the JSONL-based skills.py system — skills.py handles
 auto-promoted runtime skills; skill_loader handles hand-authored / curated skills.

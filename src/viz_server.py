@@ -66,20 +66,44 @@ def _resolve_allowed_path(url_path: str, root: Path) -> Optional[Path]:
         return None
     if len(segments) == 1 and segments[0] in ("index.html", "reading.html"):
         candidate = root / segments[0]
+        base = root
     elif len(segments) >= 3 and segments[1] == "build":
         candidate = root.joinpath(*segments)
+        base = root / segments[0] / "build"
     elif (len(segments) == 3 and segments[1] == "artifact"
           and Path(segments[2]).suffix.lower()
           in (".md", ".txt", ".html", ".json", ".csv")):
         candidate = root.joinpath(*segments)
+        base = root / segments[0] / "artifact"
     else:
         return None
 
     # Defense in depth alongside SimpleHTTPRequestHandler's own `..`-stripping
     # in translate_path — belt and suspenders, not a replacement for it.
+    #
+    # Containment is checked against the SPECIFIC allowed subtree, not merely
+    # against `root`. Checking `root` only was satisfied by anything anywhere
+    # under the runs root — including the sibling dirs this allowlist exists to
+    # keep unserved. A `build/report.html` symlinked to `../fetch-raw/<hash>.html`
+    # resolved to a path still under root and was served, handing raw captured
+    # third-party HTML (and any script in it) to the operator's browser as
+    # same-origin content. Captures made that reachable; the hole predates them.
     root_real = root.resolve()
-    candidate_real = candidate.resolve()
-    if root_real != candidate_real and root_real not in candidate_real.parents:
+    try:
+        base_real = base.resolve()
+        candidate_real = candidate.resolve()
+    except OSError:
+        return None
+
+    # The allowed subtree must sit exactly where the allowlist says it does.
+    # Checking only "base is somewhere under root" was not enough: symlinking
+    # `<run>/build` -> `<run>/source` resolves to a path that IS under root, so
+    # every denied sibling became reachable through it. Requiring the literal
+    # location means neither the run dir nor the subtree dir can be redirected.
+    expected_base = root_real.joinpath(*base.relative_to(root).parts)
+    if base_real != expected_base:
+        return None
+    if base_real != candidate_real and base_real not in candidate_real.parents:
         return None
     return candidate_real
 
