@@ -1204,7 +1204,7 @@ class TestVerifyGoalCompletion:
         assert isinstance(result, ClosureVerdict)
 
     def test_failed_checks_records_hard_fails_only(self, tmp_path):
-        """failed_checks (§9.3 fingerprint material) carries commands of
+        """failed_checks (§9.3 fingerprint material) carries signatures of
         outcome=="fail" rows only — an inconclusive probe (exit 127 =
         verifier tooling, not goal evidence) must not enter it, and
         passing checks obviously don't."""
@@ -1224,7 +1224,7 @@ class TestVerifyGoalCompletion:
             with patch("closure_verify.content_or_empty", return_value="{}"):
                 result = verify_goal_completion(
                     "build a thing", [], adapter, workspace_path=str(tmp_path))
-        assert result.failed_checks == ["false"]
+        assert result.failed_checks == ["false => exit 1"]
 
     def test_failed_checks_surface_gaps(self, monkeypatch, tmp_path):
         """Failed checks + director verdict with gaps → needs_work emitted."""
@@ -3153,6 +3153,44 @@ class TestClosureFingerprint:
     def test_empty_is_no_signal(self):
         from closure_verify import closure_fingerprint
         assert closure_fingerprint(self._v([])) == ""
+
+
+class TestFailedCheckSignature:
+    """_failed_check_signature — §9.3 fingerprint material carries failure
+    identity, not just probe identity (adversarial review 2026-07-29: a
+    broad command like `pytest -q` failing on DIFFERENT tests across
+    attempts must not fingerprint as the same stall)."""
+
+    def test_same_command_different_output_differ(self):
+        from closure_verify import _failed_check_signature, closure_fingerprint
+        row_a = {"command": "pytest -q", "exit_code": 1,
+                 "stdout": "FAILED test_alpha", "stderr": ""}
+        row_b = {"command": "pytest -q", "exit_code": 1,
+                 "stdout": "FAILED test_beta", "stderr": ""}
+        sig_a, sig_b = _failed_check_signature(row_a), _failed_check_signature(row_b)
+        assert sig_a != sig_b
+        assert (closure_fingerprint(self._v([sig_a]))
+                != closure_fingerprint(self._v([sig_b])))
+
+    def test_signature_shape(self):
+        from closure_verify import _failed_check_signature
+        sig = _failed_check_signature(
+            {"command": "curl -s localhost/health", "exit_code": 7,
+             "stdout": "", "stderr": "connection refused"})
+        assert sig == "curl -s localhost/health => exit 7: connection refused"
+
+    def test_no_output_is_command_and_exit_only(self):
+        from closure_verify import _failed_check_signature
+        sig = _failed_check_signature(
+            {"command": "false", "exit_code": 1, "stdout": "", "stderr": ""})
+        assert sig == "false => exit 1"
+
+    def _v(self, failed):
+        from closure_verify import ClosureVerdict
+        return ClosureVerdict(
+            complete=False, confidence=0.9, gaps=[], summary="",
+            checks_run=max(len(failed), 1), checks_passed=0,
+            failed_checks=failed)
 
 
 class TestDetectNextLedgerGap:

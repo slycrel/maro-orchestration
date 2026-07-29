@@ -1519,8 +1519,14 @@ needs evidence of misses, not vibes. Decision 704420c7; design
 
 The §9.3 structural declare-blocked v1 shipped at the closure-restart
 boundary (evaluate_closure `prior_verdict` fingerprint comparison; see
-COMPOUND_THINKING_DESIGN 2026-07-29 addendum). Two extensions cut by
-name, consumer-first when their evidence arrives:
+COMPOUND_THINKING_DESIGN 2026-07-29 addendum). Post-land adversarial
+review (docs/history/2026-07-29-declare-blocked-adversarial-review.md):
+CONTESTED → remediated same session, 2/2 findings verified real —
+status honesty now rides the declaration (a declared-blocked "done"
+demotes to incomplete regardless of the 0.7 confidence bar), and
+fingerprint material is now command+exit+output-slice signatures, so
+broad commands failing differently no longer false-stall. Extensions
+cut by name, consumer-first when their evidence arrives:
 
 1. **Main-gate prior-verdict join.** The main closure gate at
    continuation_depth>0 has no baseline in hand — declining an
@@ -1539,13 +1545,16 @@ name, consumer-first when their evidence arrives:
    twin is: fingerprint successive decompositions and stop
    re-decomposing when the PLANS stop changing, not when the counter
    hits 2. Same shape as §9.3, one seam over.
-3. **Fingerprint coarsening.** Live recon: in both fully-recoverable
-   historical restart pairs, closure checks were LLM-regenerated with
-   different wording — command-identity matching missed them. If the
-   declare-blocked log line shows near-miss stalls (same target
-   artifact, different command text), coarsen the fingerprint material
-   to the failed check's target artifact. Evidence-gated; don't build
-   on n=2.
+3. **Fingerprint coarsening (artifact-level half).** Live recon: in
+   both fully-recoverable historical restart pairs, closure checks were
+   LLM-regenerated with different wording — identity matching missed
+   them. The false-POSITIVE half was fixed in the 2026-07-29 review
+   remediation (signatures now carry failure output, so broad commands
+   failing differently no longer collide); what remains cut is the
+   loosening direction: if the declare-blocked log line shows near-miss
+   stalls (same target artifact, different command text), coarsen the
+   fingerprint material to the failed check's target artifact.
+   Evidence-gated; don't build on n=2.
 
 ### Tire-runs tangent — deferred findings (2026-07-27, Opus independent review)
 

@@ -2316,7 +2316,14 @@ class TestClosureRestart:
         and the re-verify call must carry the pre-restart verdict as
         prior_verdict (the convergence baseline). The stamp must survive
         the demotion machinery that runs after it (first-write-wins gives
-        the structural verdict the field)."""
+        the structural verdict the field).
+
+        Confidence is deliberately 0.65 — inside the [0.6, 0.7) band the
+        2026-07-29 adversarial review flagged: restart-worthy starts at
+        0.6 but the generic confidence demotion gates at 0.7, so status
+        honesty here must come from the declare-blocked consume branch
+        itself (a run that hard-failed the same checks twice is not
+        "done" at any confidence)."""
         self._setup(monkeypatch, tmp_path)
         from unittest.mock import patch
         from director import DirectorDecision
@@ -2327,8 +2334,8 @@ class TestClosureRestart:
             calls.append(kwargs.copy())
             return done_result
 
-        first_verdict = self._fake_closure(False, 0.85, gaps=["gap A"])
-        second_verdict = self._fake_closure(False, 0.85, gaps=["gap A"])
+        first_verdict = self._fake_closure(False, 0.65, gaps=["gap A"])
+        second_verdict = self._fake_closure(False, 0.65, gaps=["gap A"])
         restart_decision = DirectorDecision(
             action="restart", reasoning="closure found gaps",
             restart_context="address gap A",
@@ -2358,6 +2365,9 @@ class TestClosureRestart:
             "re-verify must pass the pre-restart verdict as the baseline")
         assert done_result.stop_verdict == "thesis-refuted"
         assert "same hard-failed checks" in done_result.stop_evidence
+        assert done_result.status == "incomplete", (
+            "a declared-blocked run must not report done — status honesty "
+            "must not depend on the 0.7 confidence demotion bar")
 
     def test_inconclusive_closure_does_not_restart(self, monkeypatch, tmp_path):
         """Inconclusive verification should not trigger a closure restart loop."""

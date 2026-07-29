@@ -2040,6 +2040,21 @@ def _handle_impl(
                                 "handle: closure restart declared blocked — %s",
                                 _reverify_decision.reasoning,
                             )
+                            # Status honesty rides the declaration: the
+                            # evidence behind declare-blocked is deterministic
+                            # (the same hard-failed checks across BOTH
+                            # attempts), stronger than the LLM-confidence bar
+                            # the generic demotion below gates on — without
+                            # this, a verdict in [0.6, 0.7) stamps
+                            # thesis-refuted on a run that still reports done.
+                            # Non-done statuses (stuck, failed) are already
+                            # honest; only "done" gets demoted.
+                            if loop_result.status == "done":
+                                loop_result.status = "incomplete"
+                                if loop_result.stuck_reason is None:
+                                    loop_result.stuck_reason = (
+                                        _reverify_decision.stop_evidence[:300]
+                                    )
                             _stamp_stop_on_demotion(
                                 loop_result,
                                 _reverify_decision.stop_verdict,

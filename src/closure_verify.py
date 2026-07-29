@@ -163,11 +163,31 @@ class ClosureVerdict:
     # goal_achieved=false beside a positive narrative reads as cause, not
     # contradiction (run d2f4e2f4: the reason lived only in the worker log).
     downgrade_reason: str = ""
-    # Commands of hard-FAILED checks (outcome == "fail" only — inconclusive
+    # Signatures of hard-FAILED checks (outcome == "fail" only — inconclusive
     # is a verifier failure, not goal evidence). Feeds closure_fingerprint()
     # so restart convergence can be judged structurally (§9.3): a restart
-    # that fails the identical commands made zero map edits.
+    # that fails identically made zero map edits.
     failed_checks: List[str] = field(default_factory=list)
+
+
+def _failed_check_signature(row: dict) -> str:
+    """Fingerprint material for one hard-failed check (§9.3): the command
+    plus exit code plus a bounded slice of its failure output.
+
+    Output is included so a broad command (``pytest -q``) failing on
+    DIFFERENT tests across attempts fingerprints differently — the
+    identity being matched is the failure, not the probe name, mirroring
+    ``loop_blocked._error_fingerprint`` which hashes reason|result
+    content. Nondeterministic output (timestamps, tmp paths) can only
+    make fingerprints DIFFER, which fails open to a normal restart.
+    """
+    cmd = safe_str(row.get("command", ""))[:200]
+    out = " ".join(
+        (safe_str(row.get("stderr", "")) + " " + safe_str(row.get("stdout", ""))).split()
+    )
+    if out:
+        return f"{cmd} => exit {row.get('exit_code')}: {out[:200]}"
+    return f"{cmd} => exit {row.get('exit_code')}"
 
 
 def closure_fingerprint(verdict: "ClosureVerdict") -> str:
@@ -175,18 +195,19 @@ def closure_fingerprint(verdict: "ClosureVerdict") -> str:
 
     The plan-level twin of ``loop_blocked._error_fingerprint``: two
     closure verdicts with the same fingerprint mean the second attempt
-    failed the identical check commands — the restart made zero map
-    edits, so restarting again is evidence-free. Deterministic, zero LLM
-    calls, order-insensitive. Returns "" when the verdict has no
-    hard-failed checks; callers must treat "" as no-signal, never as a
-    match. getattr-defensive like the seam's other verdict reads — duck-
-    typed verdicts (test stubs, pre-field records) fingerprint to "".
+    failed identically — same commands, same failure output — so the
+    restart made zero map edits and restarting again is evidence-free.
+    Deterministic, zero LLM calls, order-insensitive. Returns "" when
+    the verdict has no hard-failed checks; callers must treat "" as
+    no-signal, never as a match. getattr-defensive like the seam's other
+    verdict reads — duck-typed verdicts (test stubs, pre-field records)
+    fingerprint to "".
     """
     _failed = getattr(verdict, "failed_checks", None) or []
     if not _failed:
         return ""
     import hashlib
-    _norm = sorted(" ".join(str(c).split())[:200] for c in _failed)
+    _norm = sorted(" ".join(str(c).split())[:500] for c in _failed)
     return hashlib.md5("|".join(_norm).encode("utf-8")).hexdigest()[:12]
 
 
@@ -1107,7 +1128,7 @@ def verify_goal_completion(
             judged=judged,
             downgrade_reason=downgrade_reason,
             failed_checks=[
-                safe_str(r.get("command", ""))[:200]
+                _failed_check_signature(r)
                 for r in check_results
                 if r.get("outcome") == "fail" and r.get("command")
             ],

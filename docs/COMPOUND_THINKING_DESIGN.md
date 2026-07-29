@@ -708,3 +708,15 @@ invent a signal.
   loop_blocked (stop re-decomposing when successive plans stop changing,
   not when the counter hits 2); fingerprint coarsening (command identity →
   failed-check target artifact) if the log line shows near-miss stalls.
+- **Post-land adversarial review (2026-07-29, CONTESTED → remediated;
+  docs/history/2026-07-29-declare-blocked-adversarial-review.md):** two
+  verified findings, both fixed. (1) Three-lens consensus: in the
+  [0.6, 0.7) confidence band, declare-blocked stamped thesis-refuted on
+  a run that still returned status="done" (the generic demotion gates
+  at 0.7) — the consume branch now demotes done → incomplete itself,
+  because the structural evidence (identical hard-failed checks twice)
+  outranks any confidence bar. (2) Fingerprint material is now
+  `command => exit N: <output slice>` signatures, not bare commands — a
+  broad command failing on DIFFERENT tests across attempts no longer
+  fingerprints as a stall (the truer twin: `_error_fingerprint` hashes
+  failure content, not probe names).

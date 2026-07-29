@@ -20,6 +20,30 @@ Dev log tab at maro.feifdom.com alongside Runs and Reading.
 
 ## 2026-07-29
 
+**§9.3 review round — status honesty joins the declaration** — threads:
+`compound-thinking`, `adaptive-execution`. Post-land codex review of
+0965a7c (skeptic/architect/minimalist): 2/2 findings verified real, 0
+hallucinated — eleventh clean round, both accepted and fixed. The
+headline was a three-lens consensus: the declare-blocked stamp
+(thesis-refuted, structural evidence) could land on a run that still
+reported status="done", because status demotion belonged to a separate
+rail gated at confidence ≥ 0.7 while the restart predicate starts at
+0.6 — a run could be simultaneously "done" and declared blocked in
+that band. Fixed by making the consume branch demote status itself:
+the evidence behind declare-blocked is deterministic (the same hard
+check failed in BOTH attempts), which outranks any LLM-confidence bar
+— verified-done beats reported-done, the same principle the demotion
+rail was built on. Second find (architect): command-only fingerprints
+would false-stall a broad command (`pytest -q`) that failed on
+DIFFERENT tests across attempts — the one direction (fail-closed) the
+design promised to avoid; fingerprint material is now
+command+exit+output-slice, the truer twin of `_error_fingerprint`,
+which hashes failure content rather than probe names. **Surprised
+by:** my own BACKLOG entry nearly argued me out of the second fix —
+"fingerprint coarsening is evidence-gated" was written about
+*loosening* the match, and the reviewer's finding was the opposite
+defect wearing the same word.
+
 **§9.3 structural declare-blocked ships (star + runtime)** — threads:
 `compound-thinking`, `adaptive-execution`, `star`. The chunk-9
 remainder build, ratified by Jeremy's "proceed as you've outlined."
