@@ -5181,3 +5181,22 @@ Dormant (deliberately parked, not dropped):
   (trio ratifying the session's own conservative prior) is the failure
   mode to watch — adversary panels decorrelate arguments, not
   dispositions.
+
+- **2026-07-29 — B design frame (Jeremy), knowledge injection is
+  certainty-not-authority: "a learned-with-evidence recommendation
+  should essentially have the artifacts to back it up and mention
+  those, rather than just offer an opinion... it's more of a measure
+  of certainty on the position than it is on authority... authoritative
+  statements are in my mind the less useful framing; thinking of our
+  scientific method a little, it might be more than an abstract theory
+  at that point, but less than a fact."** Context: opening the deferred
+  trio item B (playbook→director substrate mix). Design consequence:
+  injected knowledge (playbook entries, lessons, rules) rides as
+  advisory positions that CITE their artifacts (run IDs, outcomes,
+  times-applied) — an entry that can't cite receipts reads as opinion;
+  the orchestrator keeps full judgment either way ("appropriate for
+  the orchestrator to make the right/wrong call regardless of the info
+  given"). No authority ladder gets built; the existing
+  candidate→contested→graduated tiers are the theory→fact gradient
+  already. Not yet implemented — this is the frame for the B
+  conversation/build.
