@@ -1,10 +1,9 @@
 ---
 status: record
+date: 2026-07-29
 ---
 
 # Settled-chunks triage — first run of the adversary-trio skill
-
-date: 2026-07-29
 
 First live run of `.claude/skills/adversary-trio/SKILL.md` (forced-opposed
 dispositions: advocate/skeptic/scoper, 3× `codex exec`, all seats returned).
