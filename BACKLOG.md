@@ -453,12 +453,12 @@ inspectable before any behavior changes.
   fed from would_include rows; router fix landed 2026-07-29 — remaining
   gate is a fatter verdicted denominator (156 unverdicted rows carry
   no signal).
-- [ ] Durable dispatch→outcome join: persona-dispatch-log rows carry no
-  loop_id/handle_id, so the readout joins on the 120-char goal prefix
-  (writer's own truncation rule; exact but collision-prone for goals
-  sharing a long prefix — 2026-07-29 adversarial review, 3-lens
-  convergence). Stamp handle_id at dispatch write; readout upgrades to
-  the durable key automatically once rows carry it.
+- [x] Durable dispatch→outcome join SHIPPED 2026-07-29:
+  `record_persona_dispatch` stamps handle_id (handle.py passes the run's
+  id), readout joins handle_id-first with goal-prefix fallback for
+  legacy rows, coverage line reports the durable-join hit rate (0 at
+  ship — accrues as new dispatches land). Pinned both sides + an
+  end-to-end divergent-goal-text case where only the durable key joins.
 
 ### Dev-approach "house style" doc + intentionality loop (OPENED 2026-07-28, Jeremy; v1 SHIPPED 2026-07-29)
 

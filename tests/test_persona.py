@@ -731,6 +731,21 @@ class TestPersonaDispatchTracking:
         assert entries[0]["persona_name"] == "builder"
         assert entries[0]["is_fallback"] is False
 
+    def test_record_dispatch_stamps_handle_id(self, tmp_path, monkeypatch):
+        """handle_id is the durable join key to outcomes.jsonl — stamped
+        when provided, absent (not empty-string) on legacy-style calls."""
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        from persona import record_persona_dispatch, _dispatch_log_path
+        record_persona_dispatch("build a thing", "builder", 0.9,
+                                is_fallback=False, handle_id="abc12345")
+        record_persona_dispatch("build another", "builder", 0.9,
+                                is_fallback=False)
+        import json
+        p = _dispatch_log_path()
+        entries = [json.loads(l) for l in p.read_text().splitlines() if l.strip()]
+        assert entries[0]["handle_id"] == "abc12345"
+        assert "handle_id" not in entries[1]
+
     def test_record_dispatch_fallback_flag(self, tmp_path, monkeypatch):
         monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
         from persona import record_persona_dispatch, _dispatch_log_path

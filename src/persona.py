@@ -972,12 +972,17 @@ def record_persona_dispatch(
     confidence: float,
     *,
     is_fallback: bool = False,
+    handle_id: str = "",
 ) -> None:
     """Append a persona dispatch event to the dispatch log.
 
     Called from handle.py after persona_for_goal() selects a persona.
     When confidence < 0.75 or persona_name is the default, is_fallback=True
     signals that no strong match was found — a potential gap to author.
+
+    handle_id, when provided, is the durable join key to outcomes.jsonl
+    (which stamps the same id) — the 120-char goal_preview join is the
+    collision-prone fallback for rows predating the stamp.
     """
     import json as _json
     from datetime import datetime, timezone
@@ -988,6 +993,8 @@ def record_persona_dispatch(
         "is_fallback": is_fallback,
         "dispatched_at": datetime.now(timezone.utc).isoformat(),
     }
+    if handle_id:
+        entry["handle_id"] = handle_id
     try:
         from file_lock import locked_append
         p = _dispatch_log_path()

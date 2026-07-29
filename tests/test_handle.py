@@ -1558,6 +1558,10 @@ class TestPersonaForcingIntegration:
         _, _pname, _pconf = mock_dispatch.call_args.args
         assert _pname == "builder"
         assert mock_dispatch.call_args.kwargs.get("is_fallback") is False
+        # Durable-join stamp: the dispatch row must carry the run's handle_id
+        # so the packaging readout can join dispatch -> outcomes without the
+        # collision-prone goal-prefix fallback.
+        assert mock_dispatch.call_args.kwargs.get("handle_id")
 
     def test_unknown_forced_persona_falls_back_to_auto_selection(self, monkeypatch, tmp_path, caplog):
         import logging

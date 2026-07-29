@@ -1633,7 +1633,10 @@ def _handle_impl(
                 _is_fallback = not _forced_honored and (
                     _pconf < 0.75 or _pname == _DEFAULT_PERSONA
                 )
-                record_persona_dispatch(message, _pname, _pconf, is_fallback=_is_fallback)
+                record_persona_dispatch(
+                    message, _pname, _pconf,
+                    is_fallback=_is_fallback, handle_id=handle_id,
+                )
                 # Run-keyed copy: the global dispatch log can't answer
                 # "which persona did THIS run use" — metadata.json can.
                 from runs import stamp_run_metadata as _stamp_run_metadata

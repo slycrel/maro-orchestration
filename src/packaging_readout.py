@@ -36,8 +36,10 @@ dispatched on, four row buckets:
 
 Evidence joins (each reported with its hit rate — a dead join is a
 finding, not an omission):
-- persona-dispatch-log.jsonl goal_preview  -> outcomes.jsonl goal[:120]
-  (task_type + goal_achieved per dispatched goal)
+- persona-dispatch-log.jsonl -> outcomes.jsonl: handle_id when both rows
+  carry the stamp (durable, collision-free; dispatch rows stamp it since
+  2026-07-29), else goal_preview -> goal[:120] (legacy fallback;
+  task_type + goal_achieved per dispatched goal)
 - skills.jsonl (identity, triggers, circuit) -> skill-stats.jsonl by
   skill_id (the LIVE usage evidence — skills.jsonl's own use_count is
   unmaintained: 2/314 nonzero on this box 2026-07-29)
@@ -147,9 +149,12 @@ def build_readout(mem: Optional[Path] = None) -> Dict[str, Any]:
     stats_by_id = _load_stats_by_id(mem)
 
     out_by_prefix: Dict[str, List[Dict[str, Any]]] = {}
+    out_by_handle: Dict[str, List[Dict[str, Any]]] = {}
     out_loop_ids = set()
     for o in outcomes:
         out_by_prefix.setdefault(str(o.get("goal", ""))[:120], []).append(o)
+        if o.get("handle_id"):
+            out_by_handle.setdefault(str(o["handle_id"]), []).append(o)
         if o.get("loop_id"):
             out_loop_ids.add(o["loop_id"])
 
@@ -166,13 +171,16 @@ def build_readout(mem: Optional[Path] = None) -> Dict[str, Any]:
         name = d.get("persona_name", "") or "(unnamed)"
         gp = str(d.get("goal_preview", ""))
         rec = goals_by_persona.setdefault(name, {}).setdefault(
-            gp, {"dispatches": 0})
+            gp, {"dispatches": 0, "handle_ids": set()})
         rec["dispatches"] += 1
+        if d.get("handle_id"):
+            rec["handle_ids"].add(str(d["handle_id"]))
         if d.get("is_fallback"):
             fallback_by_persona[name] = fallback_by_persona.get(name, 0) + 1
 
     joined_goals = 0
     unjoined_goals = 0
+    joined_via_handle = 0
     verdict_totals = {"true": 0, "false": 0, "unverdicted": 0}
 
     try:
@@ -217,7 +225,16 @@ def build_readout(mem: Optional[Path] = None) -> Dict[str, Any]:
             key=lambda kv: -sum(g["dispatches"] for g in kv[1].values())):
         cells: Dict[str, Dict[str, Any]] = {}
         for goal, rec in goals.items():
-            joined = out_by_prefix.get(goal, [])
+            # Durable join first: dispatch rows stamped with handle_id join
+            # outcomes on the same stamp. Legacy rows (no stamp, or the
+            # outcome side predates its own handle_id field) fall back to
+            # the exact 120-char goal-prefix join.
+            joined = [o for hid in sorted(rec.get("handle_ids", ()))
+                      for o in out_by_handle.get(hid, [])]
+            if joined:
+                joined_via_handle += 1
+            else:
+                joined = out_by_prefix.get(goal, [])
             if joined:
                 joined_goals += 1
             else:
@@ -292,6 +309,7 @@ def build_readout(mem: Optional[Path] = None) -> Dict[str, Any]:
             "dispatch_rows": len(dispatch),
             "unique_goals": sum(p["unique_goals"] for p in personas.values()),
             "joined_goals": joined_goals,
+            "joined_via_handle": joined_via_handle,
             "unjoined_goals": unjoined_goals,
             "outcome_rows": len(outcomes),
             "verdict_totals": verdict_totals,
@@ -326,9 +344,11 @@ def render_markdown(readout: Dict[str, Any]) -> str:
         f"- dispatch rows: {cov['dispatch_rows']} "
         f"({cov['unique_goals']} unique goals; "
         f"{cov['joined_goals']} joined to outcomes, "
-        f"{cov['unjoined_goals']} unjoined; join key = exact 120-char "
-        "goal prefix, the dispatch writer's own truncation rule — "
-        "distinct goals sharing a 120-char prefix would merge)")
+        f"{cov['unjoined_goals']} unjoined; "
+        f"{cov.get('joined_via_handle', 0)} joined via the durable "
+        "handle_id stamp, the rest via exact 120-char goal prefix — the "
+        "legacy fallback where distinct goals sharing a prefix would "
+        "merge)")
     lines.append(
         f"- joined outcome verdicts: {vt['true']} achieved / "
         f"{vt['false']} not-achieved / {vt['unverdicted']} unverdicted "

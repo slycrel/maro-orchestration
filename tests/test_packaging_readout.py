@@ -152,3 +152,48 @@ def test_empty_workspace_degrades_honestly(monkeypatch, tmp_path):
     assert r["personas"] == {}
     # Renders without raising; still names the never-dispatched personas.
     assert "NO dispatch evidence" in render_markdown(r)
+
+
+def test_durable_handle_join_beats_goal_prefix(monkeypatch, tmp_path):
+    """A dispatch row stamped with handle_id joins its outcome even when the
+    goal texts diverge (the exact case where the 120-char prefix join fails),
+    and unstamped rows still fall back to the prefix join."""
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    mem = tmp_path / "memory"
+    mem.mkdir(parents=True, exist_ok=True)
+
+    disp = [
+        # Stamped: goal_preview matches NO outcome goal — only handle_id joins.
+        {"goal_preview": "the operator's paraphrased ask", "persona_name":
+         "test-durable", "confidence": 0.9, "is_fallback": False,
+         "handle_id": "h-durable", "dispatched_at": "2026-07-29T00:00:00+00:00"},
+        # Legacy: no stamp, joins via exact goal prefix.
+        {"goal_preview": "an old-style dispatched goal", "persona_name":
+         "test-durable", "confidence": 0.9, "is_fallback": False,
+         "dispatched_at": "2026-07-29T00:01:00+00:00"},
+    ]
+    (mem / "persona-dispatch-log.jsonl").write_text(
+        "\n".join(json.dumps(r) for r in disp) + "\n")
+
+    outs = [
+        {"goal": "the goal as the run recorded it (different text)",
+         "task_type": "research", "status": "done", "goal_achieved": True,
+         "handle_id": "h-durable"},
+        {"goal": "an old-style dispatched goal", "task_type": "agenda",
+         "status": "done", "goal_achieved": False},
+    ]
+    (mem / "outcomes.jsonl").write_text(
+        "\n".join(json.dumps(r) for r in outs) + "\n")
+
+    from packaging_readout import build_readout
+    r = build_readout(mem)
+
+    cov = r["coverage"]
+    assert cov["joined_goals"] == 2
+    assert cov["joined_via_handle"] == 1
+    assert cov["unjoined_goals"] == 0
+
+    cells = r["personas"]["test-durable"]["cells"]
+    # The stamped goal landed in its outcome's task_type cell with a verdict.
+    assert cells["research"]["achieved_true"] == 1
+    assert cells["agenda"]["achieved_false"] == 1
