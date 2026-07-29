@@ -23,6 +23,41 @@ full triage: 2026-07-04.
 
 Ordered open work that matters. Top of the list is next.
 
+### Quality-gate vs closure-verdict reconciliation + escalate-death delivery gap (2026-07-29, re-run ead11c12-nimble-shore)
+
+Evidence from the self-diagnosis re-dispatch (task-…21e45b3c, run
+ead11c12-nimble-shore) — the cap/kill-reason fixes all held (no timeout,
+judged closure verdicts, honest stuck reason); the failure moved downstream
+and exposed two new defects:
+
+- [ ] **Less-informed verifier overrules more-informed one.** Closure
+  verification passed 5/5 probes at 0.88 on loop 715da7d3's memo; 40s later
+  the mid-source quality gate judged from a **2.5KB excerpt**
+  (`input_chars: 2483` vs a 12.5KB memo + 70KB artifacts) and issued
+  ESCALATE at exactly threshold (0.75), claiming the architecture mapping
+  was missing — a section the closure probes had just confirmed exists.
+  No reconciliation step exists between the two verdicts; the excerpt-fed
+  gate won and spent ~$1 on a redundant power re-run. The memo itself
+  names quality_gate.py's single confidence_threshold=0.75 scalar as the
+  shared root cause of both prior diagnoses — the gate then reproduced
+  that exact failure mode against its own diagnosis run. Fix shape:
+  when a judged closure verdict and the quality gate disagree, the one
+  that read more evidence should win (or trigger reconciliation, not
+  auto-escalate); also the gate reading an excerpt of a durable artifact
+  is the artifacts-over-streams gap again.
+- [ ] **Escalate-death buries the parent loop's achieved deliverable.**
+  The power re-run hit the cost circuit-breaker after step 1 (correct,
+  honest stop: $3.00 vs $2.00+$0.40) — but its step 1 had ALREADY
+  regenerated the full memo (escalated project artifacts/DIAGNOSIS_MEMO.md,
+  13.6KB), and loop 1's 5/5-verified RESULT.md sat in build/. Final
+  run_card: failed / goal_achieved=False; dispatch result_excerpt:
+  "[no output] ⚠️ Stuck". Poe sees "stuck, no output" while two complete
+  memos exist on disk. Violates the delivery-loop decree (2026-07-17:
+  user must hear the outcome in plain words where they asked). Fix shape:
+  when a child/escalate loop dies, `result` must surface the best
+  delivered artifact from the run lineage, not the dead child's empty
+  output.
+
 ### SP. Session-protocol arc — two-box Hermes dispatch, interactive goals, effort UX (OPENED 2026-07-15, Jeremy)
 
 The umbrella for the next big lane; full skeleton + stance decrees in
