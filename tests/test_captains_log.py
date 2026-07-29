@@ -329,7 +329,10 @@ class TestEventTypes:
         # a judged complete closure (conf >= 0.7) defends a done run against
         # a gate ESCALATE; the dissent is recorded instead of a re-run
         # (ead11c12-nimble-shore: excerpt-fed gate vs 5/5@0.88 closure).
-        assert len(EVENT_TYPES) == 72
+        # +1 (2026-07-29): NOW_ARTIFACT_RETRY — NOW retry rung: a self-verdict
+        # failure gets one artifact-seeded second shot in the same lane before
+        # any agenda escalation (now_lane.artifact_retry, default OFF).
+        assert len(EVENT_TYPES) == 73
 
     def test_previously_unregistered_events_in_set(self):
         from captains_log import EVOLVER_REVERTED, EVOLVER_VERIFY, PLAYBOOK_UPDATED

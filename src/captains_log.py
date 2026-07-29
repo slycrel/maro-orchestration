@@ -200,6 +200,14 @@ STEP_TOO_BROAD = "STEP_TOO_BROAD"
 RECALL_PERFORMED = "RECALL_PERFORMED"
 RECALL_GUARD_TRIPPED = "RECALL_GUARD_TRIPPED"
 
+# NOW retry rung, shallow half (BACKLOG "NOW retry rung", 2026-07-29): one per
+# artifact-seeded NOW retry — a self-verdict failure got a second one-shot with
+# the failed answer + demotion reason attached. Records whether the retry
+# recovered; the readout question is "does artifact-seeding beat re-prompting"
+# (pre-registered 3-arm experiment feeds on these rows). Evidence only;
+# nothing reads it for control flow.
+NOW_ARTIFACT_RETRY = "NOW_ARTIFACT_RETRY"
+
 # Navigator instrumentation (goal-brain step 4, docs/NAVIGATOR_SCHEMA.md).
 # One per navigator invocation, shadow or live: input digest, decision, tier,
 # and (in shadow mode) what the static pipeline actually did — the divergence
@@ -257,7 +265,7 @@ EVENT_TYPES = {
     LOOP_CREATED, QUALITY_GATE_VERDICT, QUALITY_GATE_SECOND_FAMILY,
     QUALITY_GATE_OVERRULED,
     QUALITY_GATE_COUNCIL, QUALITY_GATE_CROSS_REF, STEP_TOO_BROAD,
-    RECALL_PERFORMED, RECALL_GUARD_TRIPPED,
+    RECALL_PERFORMED, RECALL_GUARD_TRIPPED, NOW_ARTIFACT_RETRY,
     NAVIGATOR_DECIDED, NAVIGATOR_ACTED, NAVIGATOR_ADJUDICATED,
     VALIDATOR_SHADOWED, VALIDATION_LADDER,
 }

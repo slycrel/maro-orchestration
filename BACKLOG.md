@@ -382,10 +382,17 @@ escalation.
   passes `measurement_class` onto the durable outcome row. Historical
   corpus stays unstamped — any organic A/B should filter to
   prospective rows, as verdict-gap-stats already does.
-- [ ] Build the rung: on NOW demotion, route by failure shape → (i)
-  artifact-seeded NOW retry (ask + failed answer + demotion reason) or
-  (ii) runtime star executor; star-stuck → AGENDA with full context.
-  Consumer-first: ships with liveness test + captain's-log events.
+- [x] Build the rung — **shallow half SHIPPED 2026-07-29** (trio-triage
+  PARTIAL verdict: artifact-seeded retry only; star port explicitly
+  OUT). On NOW self-verdict demotion: one seeded NOW retry (ask +
+  failed answer[:1500] + demotion reason), re-judged against the
+  ORIGINAL ask; complex directives skip (structural → escalation);
+  errored retry keeps attempt 1's answer; both attempts fully recorded
+  (`-retry` artifact + outcome row + `NOW_ARTIFACT_RETRY` event).
+  Gated `now_lane.artifact_retry` (default OFF, ON this box). A
+  still-failed retry falls through to `escalate_on_not_achieved`
+  unchanged, escalation context names both attempts. The star-executor
+  arm (ii) stays open below with the experiment.
 - [ ] Pre-registered experiment, 3 arms on the same seeds: (a) plain
   re-prompt, (b) artifact-seeded retry, (c) artifact-seeded star.
   Prediction on record (2026-07-28): (b) beats (a) clearly; (b) ≈ (c)

@@ -201,6 +201,7 @@ Written by `captains_log.log_event(...)`. Every entry has the four required fiel
 |-------|-----------|------------------|---------------|
 | `RECALL_PERFORMED` | recall.py:425 | goal_preview | Every `recall()` call (crystallization substrate). |
 | `RECALL_GUARD_TRIPPED` | handle.py:2298 | goal_preview, job_id | The dispatch guard refused to re-run a goal whose recent attempts all failed (the ~25× repeat-burn protection). |
+| `NOW_ARTIFACT_RETRY` | handle.py (NOW lane, post-verdict) | goal_preview, recovered, provenance_missing (when the demotion was provenance-driven) | A self-verdict NOW failure got one artifact-seeded retry (ask + failed answer + demotion reason) before any agenda escalation. `recovered` says whether the retry's own verdict judged it fulfilled. Shallow failures only — complex directives skip the rung. Gated by `now_lane.artifact_retry` (default OFF). |
 | `WORKER_SLICE_INJECTED` | director.py:483 | ticket_id, worker_type, items_count, thread_scope, goal_brain_included, memory_block_len, age_stamped (only when stamped) | The director injected a recalled memory slice into a worker ticket (A/B observability for the worker recall slice). |
 
 ### Navigator (goal-brain)

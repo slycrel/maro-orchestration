@@ -3568,6 +3568,192 @@ class TestNowVerdictEscalation:
         m_loop.assert_not_called()
 
 
+class TestNowArtifactRetryRung:
+    """NOW artifact-retry rung (BACKLOG "NOW retry rung" 2026-07-28;
+    trio-triage PARTIAL 2026-07-29): a self-verdict failure gets ONE
+    artifact-seeded second shot in the same lane before any agenda
+    escalation. Config-gated (now_lane.artifact_retry, default OFF — same
+    no-silent-spend posture as escalate_on_not_achieved); complex directives
+    skip the rung (structural failures escalate, they don't retry); an
+    errored retry never replaces attempt 1's real answer; both attempts stay
+    fully recorded (data retention)."""
+
+    _ORIGIN = {"parent_handle_id": "abc", "source": "user_goal"}
+
+    def _verdict_adapter_seq(self, *fulfilled):
+        """Adapter whose judge verdicts come in sequence — one per
+        _verify_now_outcome call. An unexpected extra verdict call fails
+        loudly (StopIteration) instead of silently passing."""
+        adapter = MagicMock()
+        adapter.model_key = "cheap"
+        resps = []
+        for f in fulfilled:
+            resp = MagicMock()
+            resp.content = '{"fulfilled": %s}' % ("true" if f else "false")
+            resp.input_tokens = 5
+            resp.output_tokens = 2
+            resps.append(resp)
+        adapter.complete.side_effect = resps
+        return adapter
+
+    def _cfg(self, monkeypatch, **overrides):
+        import config as config_mod
+        _orig = config_mod.get
+        keymap = {f"now_lane.{k}": v for k, v in overrides.items()}
+
+        def _get(key, default=None, *a, **kw):
+            if key in keymap:
+                return keymap[key]
+            return _orig(key, default, *a, **kw)
+
+        monkeypatch.setattr(config_mod, "get", _get)
+
+    def test_default_off_single_attempt(self, monkeypatch, tmp_path):
+        # Fresh-install posture: no flag, no second call — behavior is the
+        # pre-rung demoted NOW result.
+        _setup(monkeypatch, tmp_path)
+        canned = {"status": "done", "result": "You could try searching.",
+                  "tokens_in": 7, "tokens_out": 3}
+        with patch("handle._run_now", return_value=canned) as m_run, \
+             patch("intent.classify", return_value=ClassifyResult("now", 0.9, "simple", introspects_self=False)):
+            result = handle(
+                "where can I buy X near Y",
+                adapter=self._verdict_adapter_seq(False),
+                dry_run=False,
+                origin=self._ORIGIN,
+            )
+        assert result.lane == "now"
+        assert result.status == "incomplete"
+        assert m_run.call_count == 1
+
+    def test_rung_fires_and_recovers(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        self._cfg(monkeypatch, artifact_retry=True)
+        attempt1 = {"status": "done",
+                    "result": "You could try searching Google Maps.",
+                    "tokens_in": 7, "tokens_out": 3}
+        retry = {"status": "done",
+                 "result": "Maverik in Ephraim, 7.3 miles.",
+                 "tokens_in": 9, "tokens_out": 4, "elapsed_ms": 120}
+        with patch("handle._run_now", side_effect=[attempt1, retry]) as m_run, \
+             patch("intent.classify", return_value=ClassifyResult("now", 0.9, "simple", introspects_self=False)), \
+             patch("agent_loop.run_agent_loop",
+                   side_effect=AssertionError("must not escalate")):
+            result = handle(
+                "where can I buy X near Y",
+                adapter=self._verdict_adapter_seq(False, True),
+                dry_run=False,
+                origin=self._ORIGIN,
+            )
+        assert result.lane == "now"
+        assert result.status == "done"
+        assert "Maverik" in (result.result or "")
+        assert m_run.call_count == 2
+        # The seeded retry carries the original ask + the failed answer.
+        seeded = m_run.call_args_list[1].args[0]
+        assert "where can I buy X near Y" in seeded
+        assert "Prior attempt (judged insufficient)" in seeded
+        assert "Google Maps" in seeded
+        # Both attempts keep their artifacts (data-retention rule).
+        from runs import run_dir
+        art_dir = run_dir(result.handle_id) / "artifact"
+        assert (art_dir / f"now-{result.handle_id}.json").exists()
+        assert (art_dir / f"now-{result.handle_id}-retry.json").exists()
+        # Event landed in the captain's log with the recovery verdict.
+        log = (tmp_path / "memory" / "captains_log.jsonl").read_text()
+        assert "NOW_ARTIFACT_RETRY" in log
+        assert '"recovered": true' in log
+
+    def test_still_failed_retry_falls_to_escalation(self, monkeypatch, tmp_path):
+        # The rung and the verdict escalation compose: retry fires first;
+        # when it also fails, the existing escalation runs on the POST-retry
+        # outcome and its context names both attempts.
+        _setup(monkeypatch, tmp_path)
+        monkeypatch.setenv("MARO_YOLO", "true")
+        self._cfg(monkeypatch, artifact_retry=True,
+                  escalate_on_not_achieved=True)
+        attempt1 = {"status": "done", "result": "Try searching Google Maps.",
+                    "tokens_in": 7, "tokens_out": 3}
+        retry = {"status": "done", "result": "Still no idea, sorry.",
+                 "tokens_in": 9, "tokens_out": 4, "elapsed_ms": 120}
+        from agent_loop import LoopResult, StepOutcome
+        fake = LoopResult(
+            loop_id="test-lr-rung",
+            project="test-proj-rung",
+            goal="where can I buy X near Y",
+            status="done",
+            steps=[StepOutcome(index=0, text="step 1", status="done",
+                               result="Maverik in Ephraim", iteration=0)],
+        )
+        with patch("handle._run_now", side_effect=[attempt1, retry]) as m_run, \
+             patch("intent.classify", return_value=ClassifyResult("now", 0.9, "simple", introspects_self=False)), \
+             patch("intent.check_goal_clarity", return_value={"clear": True}), \
+             patch("agent_loop.run_agent_loop", return_value=fake) as m_loop:
+            result = handle(
+                "where can I buy X near Y",
+                adapter=self._verdict_adapter_seq(False, False),
+                dry_run=False,
+                origin=self._ORIGIN,
+            )
+        assert result.lane == "agenda"
+        assert m_run.call_count == 2
+        _ctx = m_loop.call_args.kwargs.get("ancestry_context_extra", "")
+        assert "TWO quick single-shot" in _ctx
+        # The escalation carries the post-retry insufficient answer.
+        assert "Still no idea" in _ctx
+
+    def test_complex_directive_skips_rung(self, monkeypatch, tmp_path):
+        # Only-reachable combo: escalate_to_director OFF lets a complex
+        # message reach the NOW lane at all; a structural failure must not
+        # burn a seeded retry (a single completion still can't do the work).
+        _setup(monkeypatch, tmp_path)
+        self._cfg(monkeypatch, artifact_retry=True,
+                  escalate_to_director=False)
+        msg = ("research the top five options, compare their pricing and "
+               "features side by side, then write a recommendation memo "
+               "summarizing what you found for the team")
+        canned = {"status": "done", "result": "Here is a shallow answer.",
+                  "tokens_in": 7, "tokens_out": 3}
+        with patch("handle._run_now", return_value=canned) as m_run, \
+             patch("intent.classify", return_value=ClassifyResult("now", 0.9, "simple", introspects_self=False)), \
+             patch("agent_loop.run_agent_loop",
+                   side_effect=AssertionError("must not escalate")):
+            result = handle(
+                msg,
+                adapter=self._verdict_adapter_seq(False),
+                dry_run=False,
+                origin=self._ORIGIN,
+            )
+        assert result.lane == "now"
+        assert result.status == "incomplete"
+        assert m_run.call_count == 1
+
+    def test_errored_retry_keeps_attempt1_answer(self, monkeypatch, tmp_path):
+        # A retry that errored out must not replace a real (if insufficient)
+        # answer. Verdict adapter has exactly one response — an errored retry
+        # must not be judged either.
+        _setup(monkeypatch, tmp_path)
+        self._cfg(monkeypatch, artifact_retry=True)
+        attempt1 = {"status": "done", "result": "Try searching Google Maps.",
+                    "tokens_in": 7, "tokens_out": 3}
+        retry_err = {"status": "error", "result": "boom",
+                     "tokens_in": 0, "tokens_out": 0, "elapsed_ms": 5}
+        with patch("handle._run_now", side_effect=[attempt1, retry_err]) as m_run, \
+             patch("intent.classify", return_value=ClassifyResult("now", 0.9, "simple", introspects_self=False)), \
+             patch("agent_loop.run_agent_loop",
+                   side_effect=AssertionError("must not escalate")):
+            result = handle(
+                "where can I buy X near Y",
+                adapter=self._verdict_adapter_seq(False),
+                dry_run=False,
+                origin=self._ORIGIN,
+            )
+        assert result.lane == "now"
+        assert m_run.call_count == 2
+        assert "Google Maps" in (result.result or "")
+        assert result.status == "incomplete"
+
+
 class TestOutputProvenanceGuard:
     """Deterministic done!=achieved guard: when the goal names a dir-qualified
     output path that never landed, demote regardless of the text narrative.

@@ -1127,6 +1127,118 @@ def _handle_impl(
             except Exception:
                 pass  # outcome recording must never block the NOW response
 
+        # NOW retry rung, shallow half (BACKLOG "NOW retry rung" 2026-07-28;
+        # trio-triage PARTIAL 2026-07-29). A self-verdict failure gets ONE
+        # artifact-seeded second shot in the same lane before any agenda
+        # escalation: the ask rides again with the failed answer + demotion
+        # reason attached. Shallow failures only — a complex directive is a
+        # structural failure (a single completion can't do the work) and
+        # skips straight to the escalation below. Default OFF on fresh
+        # installs (an extra LLM call on the strength of one cheap verdict —
+        # same no-silent-spend posture as escalate_on_not_achieved); ON in
+        # this box's workspace config. Attempt 1 above stays fully recorded
+        # (artifact + outcome row); the retry writes its own alongside.
+        _rung_fired = False
+        if (outcome.get("goal_achieved") is False and not force_lane
+                and not dry_run):
+            _rung_enabled = False
+            try:
+                from config import get as _rr_cfg_get
+                _rung_enabled = bool(
+                    _rr_cfg_get("now_lane.artifact_retry", False))
+            except Exception:
+                _rung_enabled = False
+            if _rung_enabled and not _is_complex_directive(message):
+                _rung_fired = True
+                _fail_reason = (
+                    "it claimed inputs/outputs that are not on disk: "
+                    f"{outcome.get('provenance_missing')}"
+                    if outcome.get("provenance_missing")
+                    else "it did not deliver what the request asked for")
+                _seeded = (
+                    f"{message}\n\n"
+                    "== Prior attempt (judged insufficient) ==\n"
+                    "A first quick answer was judged NOT to fulfill this "
+                    f"request — {_fail_reason}. Do not repeat its approach; "
+                    "fix what it missed and answer the request itself. The "
+                    "insufficient answer was:\n"
+                    + str(outcome.get("result", ""))[:1500])
+                log.info("handle: NOW artifact-retry rung firing for: %s",
+                         message[:80])
+                _retry = _run_now(_seeded, handle_id, adapter, verbose=verbose)
+                if _retry.get("status") == "done":
+                    # Judge against the ORIGINAL ask — the seeded wrapper is
+                    # scaffolding, not the request.
+                    _retry = _verify_now_outcome(
+                        message, _retry, adapter, wall_start=wall_started_at)
+                _recovered = _retry.get("goal_achieved") is True
+                try:
+                    from captains_log import log_event as _rr_log_event
+                    from captains_log import NOW_ARTIFACT_RETRY as _RR_EVT
+                    _ctx = {"goal_preview": message[:120],
+                            "recovered": _recovered}
+                    if outcome.get("provenance_missing"):
+                        _ctx["provenance_missing"] = \
+                            outcome["provenance_missing"]
+                    _rr_log_event(
+                        _RR_EVT, subject=handle_id,
+                        summary=("artifact-seeded NOW retry "
+                                 + ("recovered" if _recovered
+                                    else "did not recover")),
+                        context=_ctx, loop_id=handle_id)
+                except Exception:
+                    pass
+                # A retry that errored out must not replace a real (if
+                # insufficient) answer; anything else becomes the delivered
+                # outcome — even unrecovered, it is the later, seeded attempt.
+                if _retry.get("status") != "error":
+                    outcome = _retry
+                elapsed = int((time.monotonic() - started_at) * 1000)
+                _write_now_artifact(
+                    handle_id, message, _retry.get("result", ""),
+                    _retry.get("elapsed_ms", 0), suffix="-retry")
+                try:
+                    from runs import write_metadata as _wm_rr
+                    from runs import current_run_dir as _crd_rr
+                    _rd_rr = _crd_rr()
+                    if _rd_rr is not None:
+                        _extra_rr = {"now_artifact_retry": (
+                            "recovered" if _recovered else "unrecovered")}
+                        if "goal_achieved" in outcome:
+                            _extra_rr["goal_achieved"] = \
+                                bool(outcome["goal_achieved"])
+                            _extra_rr["goal_verdict_source"] = \
+                                "now_self_verdict"
+                        _wm_rr(_rd_rr, handle_id=handle_id,
+                               prompt=_raw_input, extra=_extra_rr)
+                except Exception:
+                    pass
+                if not dry_run:
+                    try:
+                        from memory import record_outcome as _record_retry
+                        _r_judged = "goal_achieved" in _retry
+                        _record_retry(
+                            goal=message,
+                            status=_retry["status"],
+                            summary=str(_retry.get("result", ""))[:500],
+                            task_type="now",
+                            tokens_in=_retry.get("tokens_in", 0),
+                            tokens_out=_retry.get("tokens_out", 0),
+                            elapsed_ms=_retry.get("elapsed_ms", 0),
+                            model=model or "",
+                            goal_achieved=(bool(_retry["goal_achieved"])
+                                           if _r_judged else None),
+                            goal_verdict_source=(
+                                ("provenance"
+                                 if _retry.get("provenance_missing")
+                                 else "now_self_verdict")
+                                if _r_judged else ""),
+                            measurement_class=measurement_class,
+                            handle_id=handle_id,
+                        )
+                    except Exception:
+                        pass
+
         # NOW→AGENDA verdict escalation (BACKLOG 22 follow-up, Jeremy
         # 2026-07-11 "we should just do this"): a NOW answer the self-verdict
         # judged not-achieved becomes a regular AGENDA run with the failed
@@ -1154,8 +1266,12 @@ def _handle_impl(
             lane = "agenda"
             reason = reason + " [now→agenda: self-verdict not-achieved, escalated with NOW context]"
             _now_escalation_context = (
-                "A quick single-shot (NOW lane) attempt at this request was "
-                "already made and judged NOT to have fulfilled it"
+                ("TWO quick single-shot (NOW lane) attempts at this request "
+                 "were already made — the second seeded with the first's "
+                 "failure — and both were judged NOT to have fulfilled it"
+                 if _rung_fired else
+                 "A quick single-shot (NOW lane) attempt at this request was "
+                 "already made and judged NOT to have fulfilled it")
                 + (" (claimed inputs/outputs missing on disk: "
                    f"{outcome.get('provenance_missing')})"
                    if outcome.get("provenance_missing") else "")
@@ -2783,8 +2899,13 @@ def _write_now_artifact(
     message: str,
     result: str,
     elapsed_ms: int,
+    suffix: str = "",
 ) -> Optional[str]:
-    """Write the NOW-lane result into the run dir's artifact/ subtree."""
+    """Write the NOW-lane result into the run dir's artifact/ subtree.
+
+    `suffix` distinguishes same-handle attempts (the artifact-retry rung
+    passes "-retry") — attempt 1's artifact must never be overwritten
+    (data-retention rule)."""
     try:
         # The run dir is created at the top of every handle() call; its
         # artifact/ subtree is where run products belong. If the current-run
@@ -2796,7 +2917,7 @@ def _write_now_artifact(
             _rd = _run_dir_art(handle_id)
         artifacts_dir = _rd / "artifact"
         artifacts_dir.mkdir(parents=True, exist_ok=True)
-        fname = f"now-{handle_id}.json"
+        fname = f"now-{handle_id}{suffix}.json"
         path = artifacts_dir / fname
         payload = {
             "handle_id": handle_id,
