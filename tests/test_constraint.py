@@ -57,91 +57,47 @@ def test_clean_summarize_step():
 
 
 # ---------------------------------------------------------------------------
-# HIGH risk — blocked
+# Risk classification — HIGH blocks, MEDIUM is allowed-but-flagged
 # ---------------------------------------------------------------------------
 
-def test_high_rm_rf():
+@pytest.mark.parametrize("step,risk", [
+    ("Use shutil.rmtree to delete the old build directory", "HIGH"),
+    ("Execute DROP TABLE users to clean up the database", "HIGH"),
+    ("Read credentials from ~/.env to get the API key", "HIGH"),
+    ("Copy .ssh/id_rsa to the backup location", "HIGH"),
+    ("Write the updated config to /etc/poe/config.yaml", "HIGH"),
+    ("Push the changes with git push --force to origin", "HIGH"),
+    ("Run eval(user_input) to process the dynamic expression", "HIGH"),
+    ("Wipe all data from the disk partition", "HIGH"),
+    ("Run DELETE FROM sessions WHERE expires < now()", "MEDIUM"),
+    ("Send a message to the Slack channel with the findings", "MEDIUM"),
+    ("Write the updated preferences to ~/.config/poe/prefs.json", "MEDIUM"),
+])
+def test_risk_level_classification(step, risk):
+    result = check_step_constraints(step)
+    assert result.risk_level == risk
+    # The tier's whole point: HIGH refuses, MEDIUM proceeds with a flag.
+    if risk == "HIGH":
+        assert result.blocked
+    else:
+        assert result.allowed
+
+
+# Kept out of the table above: these two also pin the FLAG NAME, which is a
+# different contract than the risk tier (the flag is what downstream reads).
+
+def test_rm_rf_flags_destructive_op():
     result = check_step_constraints("Clean up by running rm -rf /tmp/old_data")
     assert result.blocked
     assert result.risk_level == "HIGH"
     assert any(f.name == "destructive_op" for f in result.flags)
 
 
-def test_high_shutil_rmtree():
-    result = check_step_constraints("Use shutil.rmtree to delete the old build directory")
-    assert result.blocked
-    assert result.risk_level == "HIGH"
-
-
-def test_high_drop_table():
-    result = check_step_constraints("Execute DROP TABLE users to clean up the database")
-    assert result.blocked
-    assert result.risk_level == "HIGH"
-
-
-def test_high_secret_env():
-    result = check_step_constraints("Read credentials from ~/.env to get the API key")
-    assert result.blocked
-    assert result.risk_level == "HIGH"
-
-
-def test_high_ssh_key():
-    result = check_step_constraints("Copy .ssh/id_rsa to the backup location")
-    assert result.blocked
-    assert result.risk_level == "HIGH"
-
-
-def test_high_write_etc():
-    result = check_step_constraints("Write the updated config to /etc/poe/config.yaml")
-    assert result.blocked
-    assert result.risk_level == "HIGH"
-
-
-def test_high_git_push_force():
-    result = check_step_constraints("Push the changes with git push --force to origin")
-    assert result.blocked
-    assert result.risk_level == "HIGH"
-
-
-def test_high_eval():
-    result = check_step_constraints("Run eval(user_input) to process the dynamic expression")
-    assert result.blocked
-    assert result.risk_level == "HIGH"
-
-
-def test_high_wipe_disk():
-    result = check_step_constraints("Wipe all data from the disk partition")
-    assert result.blocked
-    assert result.risk_level == "HIGH"
-
-
-# ---------------------------------------------------------------------------
-# MEDIUM risk — allowed but flagged
-# ---------------------------------------------------------------------------
-
-def test_medium_openclaw_json():
+def test_openclaw_json_flags_secret_access():
     result = check_step_constraints("Read openclaw.json to extract the Telegram token")
     assert result.allowed
     assert result.risk_level == "MEDIUM"
     assert any(f.name == "secret_access" for f in result.flags)
-
-
-def test_medium_delete_from():
-    result = check_step_constraints("Run DELETE FROM sessions WHERE expires < now()")
-    assert result.allowed
-    assert result.risk_level == "MEDIUM"
-
-
-def test_medium_send_message():
-    result = check_step_constraints("Send a message to the Slack channel with the findings")
-    assert result.allowed
-    assert result.risk_level == "MEDIUM"
-
-
-def test_medium_write_to_config():
-    result = check_step_constraints("Write the updated preferences to ~/.config/poe/prefs.json")
-    assert result.allowed
-    assert result.risk_level == "MEDIUM"
 
 
 # ---------------------------------------------------------------------------

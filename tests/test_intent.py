@@ -15,30 +15,18 @@ from intent import ClassifyResult, classify, _heuristic_classify
 # ---------------------------------------------------------------------------
 
 class TestHeuristicNOW:
-    def test_simple_question(self):
-        lane, conf, reason = _heuristic_classify("what time is it?")
+    @pytest.mark.parametrize("message,min_conf", [
+        pytest.param("what time is it?", 0.5, id="simple_question"),
+        pytest.param("hello", 0.0, id="short_message"),
+        pytest.param("write a haiku about the ocean", 0.0, id="write_haiku"),
+        pytest.param("translate this to Spanish: hello world", 0.0, id="translate"),
+        pytest.param("summarize this paragraph quickly", 0.0, id="quick_summary"),
+        pytest.param("who is Elon Musk?", 0.0, id="factual_question"),
+    ])
+    def test_routes_now(self, message, min_conf):
+        lane, conf, _ = _heuristic_classify(message)
         assert lane == "now"
-        assert conf >= 0.5
-
-    def test_short_message(self):
-        lane, _, _ = _heuristic_classify("hello")
-        assert lane == "now"
-
-    def test_write_haiku(self):
-        lane, _, _ = _heuristic_classify("write a haiku about the ocean")
-        assert lane == "now"
-
-    def test_translate(self):
-        lane, _, _ = _heuristic_classify("translate this to Spanish: hello world")
-        assert lane == "now"
-
-    def test_quick_summary(self):
-        lane, _, _ = _heuristic_classify("summarize this paragraph quickly")
-        assert lane == "now"
-
-    def test_factual_question(self):
-        lane, _, _ = _heuristic_classify("who is Elon Musk?")
-        assert lane == "now"
+        assert conf >= min_conf
 
 
 class TestFileOutputOverride:
@@ -253,26 +241,17 @@ class TestLiveDataOverride:
 
 
 class TestHeuristicAGENDA:
-    def test_research(self):
-        lane, conf, reason = _heuristic_classify("research winning polymarket prediction strategies")
+    @pytest.mark.parametrize("message,min_conf", [
+        pytest.param("research winning polymarket prediction strategies", 0.5, id="research"),
+        pytest.param("build a research report on competitor pricing", 0.0, id="build"),
+        pytest.param("analyze the X posting patterns of top crypto accounts", 0.0, id="analyze"),
+        pytest.param("monitor BTC price movements and alert on unusual patterns", 0.0, id="monitor"),
+        pytest.param("deep dive into Polymarket resolution patterns", 0.0, id="deep_dive"),
+    ])
+    def test_routes_agenda(self, message, min_conf):
+        lane, conf, _ = _heuristic_classify(message)
         assert lane == "agenda"
-        assert conf >= 0.5
-
-    def test_build(self):
-        lane, _, _ = _heuristic_classify("build a research report on competitor pricing")
-        assert lane == "agenda"
-
-    def test_analyze(self):
-        lane, _, _ = _heuristic_classify("analyze the X posting patterns of top crypto accounts")
-        assert lane == "agenda"
-
-    def test_monitor(self):
-        lane, _, _ = _heuristic_classify("monitor BTC price movements and alert on unusual patterns")
-        assert lane == "agenda"
-
-    def test_deep_dive(self):
-        lane, _, _ = _heuristic_classify("deep dive into Polymarket resolution patterns")
-        assert lane == "agenda"
+        assert conf >= min_conf
 
 
 class TestHeuristicEdgeCases:
@@ -288,10 +267,13 @@ class TestHeuristicEdgeCases:
         )
         assert lane == "agenda"
 
-    def test_confidence_range(self):
-        for msg in ["hi", "research X", "build Y", "what is Z?", "monitor W"]:
-            _, conf, _ = _heuristic_classify(msg)
-            assert 0.0 <= conf <= 1.0
+    # Was a for-loop inside one test, which stops at the first bad message and
+    # hides the rest; as rows, each message reports independently.
+    @pytest.mark.parametrize("msg", ["hi", "research X", "build Y",
+                                     "what is Z?", "monitor W"])
+    def test_confidence_range(self, msg):
+        _, conf, _ = _heuristic_classify(msg)
+        assert 0.0 <= conf <= 1.0
 
 
 # ---------------------------------------------------------------------------

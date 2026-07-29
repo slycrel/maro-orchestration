@@ -37,75 +37,65 @@ from loop_blocked import _handle_blocked_step, _escape_pattern_hint
 # ---------------------------------------------------------------------------
 
 class TestAsyncEscapeDetector:
-    def test_live_specimen_phrasing(self):
-        # run 89cb097a, X-search step
-        result = ("I've started a Monitor that will notify me when the "
-                  "subprocess completes. The search is running.")
-        assert result_signals_async_escape(result)
-
-    def test_background_job_promise(self):
-        result = ("Launched the sweep in the background; once it finishes "
-                  "the results will land in artifacts/.")
-        assert result_signals_async_escape(result)
-
-    def test_will_be_notified(self):
-        assert result_signals_async_escape(
-            "The fetch is queued and I will be notified when it completes.")
-
-    def test_waiting_as_end_state(self):
-        assert result_signals_async_escape(
-            "Now waiting for the subprocess to complete.")
-
-    def test_results_available_once(self):
-        assert result_signals_async_escape(
-            "Results will be available once the job completes.")
-
-    def test_past_tense_narration_passes(self):
+    # Promises-to-finish-later (True) and the legitimate phrasings that must
+    # NOT trip the detector (False), kept in one table so the false-positive
+    # guards stay visibly adjacent to what they guard against.
+    @pytest.mark.parametrize("result,flagged", [
+        # run 89cb097a, X-search step — the live specimen this guard exists for
+        pytest.param("I've started a Monitor that will notify me when the "
+                     "subprocess completes. The search is running.",
+                     True, id="live_specimen_89cb097a"),
+        pytest.param("Launched the sweep in the background; once it finishes "
+                     "the results will land in artifacts/.",
+                     True, id="background_job_promise"),
+        pytest.param("The fetch is queued and I will be notified when it completes.",
+                     True, id="will_be_notified"),
+        pytest.param("Now waiting for the subprocess to complete.",
+                     True, id="waiting_as_end_state"),
+        pytest.param("Results will be available once the job completes.",
+                     True, id="results_available_once"),
         # Finished work narrated with "after waiting" is not a promise.
-        result = ("After waiting for the tests to complete, all 142 passed. "
-                  "Saved output to artifacts/test_run.txt.")
-        assert not result_signals_async_escape(result)
-
-    def test_legit_long_lived_server_result_passes(self):
+        pytest.param("After waiting for the tests to complete, all 142 passed. "
+                     "Saved output to artifacts/test_run.txt.",
+                     False, id="past_tense_narration"),
         # The long-lived-process contract: spawn + probe + observed result.
-        result = ("Spawned the server in the background (PID 4312). Probed "
-                  "readiness: curl http://localhost:8080/health returned 200. "
-                  "Server is listening; killed it after the check.")
-        assert not result_signals_async_escape(result)
-
-    def test_ordinary_result_passes(self):
-        assert not result_signals_async_escape(
-            "Read planner.py; decompose() routes narrow goals to single-shot.")
+        pytest.param("Spawned the server in the background (PID 4312). Probed "
+                     "readiness: curl http://localhost:8080/health returned 200. "
+                     "Server is listening; killed it after the check.",
+                     False, id="legit_long_lived_server"),
+        pytest.param("Read planner.py; decompose() routes narrow goals to single-shot.",
+                     False, id="ordinary_result"),
+    ])
+    def test_async_escape_detection(self, result, flagged):
+        # The detector returns the MATCHED PHRASE (truthy) or "" — asserting on
+        # bool() keeps the original truthiness contract and surfaces the phrase
+        # in the failure message.
+        matched = result_signals_async_escape(result)
+        assert bool(matched) == flagged, f"matched={matched!r}"
 
 
 class TestEnvLimitationDetector:
-    def test_live_specimen_phrasing(self):
-        # run 8a20665f step 3
-        result = ("Since the execution environment does not provide Read, "
-                  "Bash, or local file access, I based this analysis on the "
-                  "step description alone.")
-        assert result_claims_env_limitation(result)
-
-    def test_no_filesystem_access(self):
-        assert result_claims_env_limitation(
-            "I don't have access to the filesystem in this context.")
-
-    def test_cannot_run_commands(self):
-        assert result_claims_env_limitation(
-            "I cannot execute commands here, so the test run is skipped.")
-
-    def test_tools_not_available(self):
-        assert result_claims_env_limitation(
-            "The Bash tool is not available in this environment.")
-
-    def test_ordinary_result_passes(self):
-        assert not result_claims_env_limitation(
-            "Fetched 13 posts; 4 mention the API change. Saved to artifacts/.")
-
-    def test_gpu_style_claims_pass(self):
+    @pytest.mark.parametrize("result,flagged", [
+        # run 8a20665f step 3 — the $0.93 specimen this guard exists for
+        pytest.param("Since the execution environment does not provide Read, "
+                     "Bash, or local file access, I based this analysis on the "
+                     "step description alone.",
+                     True, id="live_specimen_8a20665f"),
+        pytest.param("I don't have access to the filesystem in this context.",
+                     True, id="no_filesystem_access"),
+        pytest.param("I cannot execute commands here, so the test run is skipped.",
+                     True, id="cannot_run_commands"),
+        pytest.param("The Bash tool is not available in this environment.",
+                     True, id="tools_not_available"),
+        pytest.param("Fetched 13 posts; 4 mention the API change. Saved to artifacts/.",
+                     False, id="ordinary_result"),
         # Only file/shell/tool-access claims — other limitations are legit.
-        assert not result_claims_env_limitation(
-            "The environment has no GPU, so inference ran on CPU.")
+        pytest.param("The environment has no GPU, so inference ran on CPU.",
+                     False, id="gpu_style_claim"),
+    ])
+    def test_env_limitation_detection(self, result, flagged):
+        matched = result_claims_env_limitation(result)
+        assert bool(matched) == flagged, f"matched={matched!r}"
 
 
 # ---------------------------------------------------------------------------

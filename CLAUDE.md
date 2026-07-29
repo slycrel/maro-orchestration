@@ -102,7 +102,7 @@ See `docs/ARCHITECTURE_OVERVIEW.md` for the full map with intent-vs-implementati
 ## Repo layout
 
 ```
-src/                 All production Python (~130 flat modules; REFACTOR_PLAN Tier 4 = subpackage plan)
+src/                 All production Python (~158 flat modules; REFACTOR_PLAN Tier 4 = subpackage plan)
   agent_loop.py      Core loop entry (physical phases split into loop_*.py modules)
   handle.py          Entry point — routes to NOW or AGENDA lane
   intent.py          Goal classifier (NOW vs AGENDA)

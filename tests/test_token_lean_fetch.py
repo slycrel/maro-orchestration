@@ -129,14 +129,22 @@ class TestCloudflareTierParsing:
         self._resp(monkeypatch, '{"success": true, "result": "# From string"}')
         assert web_fetch._cf_markdown_fetch("https://example.com") == "# From string"
 
-    def test_proxy_tiers_refuse_private_and_credentialed_urls(self, monkeypatch):
-        """Handing an internal or credentialed URL to a third party discloses it."""
+    @pytest.mark.parametrize("bad", [
+        pytest.param("http://192.168.0.1/x", id="rfc1918"),
+        pytest.param("http://169.254.169.254/", id="cloud_metadata"),
+        pytest.param("https://tok:secret@example.com/x", id="credentialed"),
+        pytest.param("http://localhost/x", id="localhost"),
+    ])
+    def test_proxy_tiers_refuse_private_and_credentialed_urls(self, monkeypatch, bad):
+        """Handing an internal or credentialed URL to a third party discloses it.
+
+        Row-per-URL rather than a loop: a loop stops at the first regression
+        and hides whether the remaining classes still hold.
+        """
         monkeypatch.setattr(web_fetch.urllib.request, "urlopen",
                             lambda *a, **k: pytest.fail("must not contact the proxy"))
-        for bad in ("http://192.168.0.1/x", "http://169.254.169.254/",
-                    "https://tok:secret@example.com/x", "http://localhost/x"):
-            assert web_fetch._cf_markdown_fetch(bad) == "", bad
-            assert web_fetch._jina_fetch(bad) == "", bad
+        assert web_fetch._cf_markdown_fetch(bad) == "", bad
+        assert web_fetch._jina_fetch(bad) == "", bad
 
     def test_failure_returns_empty_never_raises(self, monkeypatch):
         def _boom(*a, **k):
@@ -257,16 +265,23 @@ class TestCapture:
         assert "DEADBEEF" not in manifest
         assert "<redacted>" in manifest
 
-    def test_capture_refuses_private_and_credentialed_urls(self, capture_env, monkeypatch):
-        """capture_raw fetches directly from this host — the SSRF primitive."""
+    @pytest.mark.parametrize("bad", [
+        pytest.param("http://169.254.169.254/latest/meta-data/", id="cloud_metadata"),
+        pytest.param("http://192.168.1.5/admin", id="rfc1918"),
+        pytest.param("http://127.0.0.1:8080/", id="loopback"),
+        pytest.param("https://user:pw@example.com/x", id="credentialed"),
+        pytest.param("file:///etc/passwd", id="file_scheme"),
+    ])
+    def test_capture_refuses_private_and_credentialed_urls(self, capture_env,
+                                                           monkeypatch, bad):
+        """capture_raw fetches directly from this host — the SSRF primitive.
+
+        Row-per-URL so a regression in one address class can't be masked by an
+        earlier one short-circuiting the loop.
+        """
         monkeypatch.setattr(web_fetch, "_http_get_bytes",
                             lambda *a, **k: pytest.fail("must not fetch a blocked URL"))
-        for bad in ("http://169.254.169.254/latest/meta-data/",
-                    "http://192.168.1.5/admin",
-                    "http://127.0.0.1:8080/",
-                    "https://user:pw@example.com/x",
-                    "file:///etc/passwd"):
-            assert web_fetch.capture_raw(bad) is None, bad
+        assert web_fetch.capture_raw(bad) is None, bad
 
     def test_capture_stores_bytes_verbatim_not_reencoded_text(self, capture_env, monkeypatch):
         """A non-UTF-8 page must land on disk exactly as the server sent it.

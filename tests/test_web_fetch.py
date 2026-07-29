@@ -351,16 +351,19 @@ class TestLiteralGate:
         assert is_safe_public_url("https://example.com/page")
         assert is_safe_public_url("http://93.184.216.34/")
 
-    def test_private_and_special_literals_refused(self):
-        for url in (
-            "http://127.0.0.1:8080/",          # loopback
-            "http://10.0.0.5/",                # RFC1918
-            "http://192.168.1.1/router",       # RFC1918
-            "http://169.254.169.254/latest/",  # link-local / cloud metadata
-            "http://[::1]/",                   # v6 loopback
-            "http://0.0.0.0/",                 # unspecified
-        ):
-            assert not is_safe_public_url(url), url
+    # One row per address class. As a for-loop this stopped at the first
+    # refusal that regressed, so a second broken class stayed invisible until
+    # the first was fixed — bad property for an SSRF gate.
+    @pytest.mark.parametrize("url", [
+        pytest.param("http://127.0.0.1:8080/", id="loopback"),
+        pytest.param("http://10.0.0.5/", id="rfc1918_10"),
+        pytest.param("http://192.168.1.1/router", id="rfc1918_192"),
+        pytest.param("http://169.254.169.254/latest/", id="link_local_cloud_metadata"),
+        pytest.param("http://[::1]/", id="v6_loopback"),
+        pytest.param("http://0.0.0.0/", id="unspecified"),
+    ])
+    def test_private_and_special_literals_refused(self, url):
+        assert not is_safe_public_url(url), url
 
     def test_non_http_schemes_refused(self):
         assert not is_safe_public_url("file:///etc/passwd")

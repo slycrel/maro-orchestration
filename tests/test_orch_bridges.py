@@ -73,27 +73,21 @@ def _make_execution(**overrides) -> ExecutionResult:
 # ---------------------------------------------------------------------------
 
 class TestEnsureNonemptyArtifactName:
-    def test_returns_value_when_nonempty(self):
-        assert _ensure_nonempty_artifact_name("payload.json", "default.json") == "payload.json"
-
-    def test_strips_whitespace(self):
-        assert _ensure_nonempty_artifact_name("  result.json  ", "default.json") == "result.json"
-
-    def test_returns_default_for_none(self):
-        assert _ensure_nonempty_artifact_name(None, "default.json") == "default.json"
-
-    def test_returns_default_for_empty_string(self):
-        assert _ensure_nonempty_artifact_name("", "default.json") == "default.json"
-
-    def test_returns_default_for_whitespace_only(self):
-        assert _ensure_nonempty_artifact_name("   ", "default.json") == "default.json"
-
-    def test_coerces_non_string_to_string(self):
-        assert _ensure_nonempty_artifact_name(42, "default.json") == "42"
-
-    def test_returns_default_for_zero(self):
-        # str(0) == "0" which is non-empty, so returns "0"
-        assert _ensure_nonempty_artifact_name(0, "default.json") == "default.json"
+    @pytest.mark.parametrize("raw,expected", [
+        pytest.param("payload.json", "payload.json", id="nonempty"),
+        pytest.param("  result.json  ", "result.json", id="strips_whitespace"),
+        pytest.param(None, "default.json", id="none"),
+        pytest.param("", "default.json", id="empty_string"),
+        pytest.param("   ", "default.json", id="whitespace_only"),
+        pytest.param(42, "42", id="coerces_non_string"),
+        # The implementation is `str(raw or "").strip()`, so the FALSY-ness of
+        # raw decides, not its str(): 0 short-circuits to the default even
+        # though str(0) == "0" is non-empty. (The comment that used to sit here
+        # claimed the opposite of what this test asserts.)
+        pytest.param(0, "default.json", id="zero_is_falsy_not_the_string_0"),
+    ])
+    def test_ensure_nonempty_artifact_name(self, raw, expected):
+        assert _ensure_nonempty_artifact_name(raw, "default.json") == expected
 
 
 # ---------------------------------------------------------------------------
@@ -534,12 +528,14 @@ class TestLoadWorkerSessionManifest:
         with pytest.raises(ValueError, match="invalid worker session args"):
             _load_worker_session_manifest(path)
 
-    def test_working_dir_aliases(self, tmp_path):
-        for alias in ("working_directory", "working_dir", "workingDirectory", "workDir", "cwd"):
-            path = tmp_path / f"worker_{alias}.json"
-            path.write_text(json.dumps({"command": "run.sh", alias: "mydir"}), encoding="utf-8")
-            spec = _load_worker_session_manifest(path)
-            assert spec.working_directory == "mydir"
+    @pytest.mark.parametrize("alias", ["working_directory", "working_dir",
+                                       "workingDirectory", "workDir", "cwd"])
+    def test_working_dir_aliases(self, tmp_path, alias):
+        # Row-per-alias: as a loop, one dropped alias masked every later one.
+        path = tmp_path / f"worker_{alias}.json"
+        path.write_text(json.dumps({"command": "run.sh", alias: "mydir"}), encoding="utf-8")
+        spec = _load_worker_session_manifest(path)
+        assert spec.working_directory == "mydir"
 
 
 # ---------------------------------------------------------------------------

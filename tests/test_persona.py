@@ -417,40 +417,47 @@ def test_all_builtin_personas_parse_without_error():
 # persona_for_goal — Phase 31 auto-selection
 # ---------------------------------------------------------------------------
 
-def test_persona_for_goal_research_keyword():
-    name, conf = persona_for_goal("research and summarise the latest LLM orchestration frameworks")
-    assert name == "research-assistant-deep-synth"
-    assert conf >= 0.70
-
-
-def test_persona_for_goal_psychology_keyword():
-    name, conf = persona_for_goal("what does psychology say about grit and persistence in agents")
-    assert name == "psyche-researcher"
-    assert conf >= 0.75
-
-
-def test_persona_for_goal_build_keyword():
-    name, conf = persona_for_goal("implement a WebSocket handler for real-time updates")
-    assert name == "builder"
-    assert conf >= 0.70
-
-
-def test_persona_for_goal_ops_keyword():
-    name, conf = persona_for_goal("monitor the heartbeat service and diagnose why alerts are noisy")
-    assert name == "ops"
-    assert conf >= 0.70
-
-
-def test_persona_for_goal_finance_keyword():
-    name, conf = persona_for_goal("analyse the polymarket odds on the 2026 election")
-    assert name == "finance-analyst"
-    assert conf >= 0.75
-
-
-def test_persona_for_goal_default_on_no_match():
-    name, conf = persona_for_goal("do something miscellaneous")
-    assert name == "research-assistant-deep-synth"  # default
-    assert conf >= 0.0
+# The keyword-routing table. Each row is an independently reported case
+# (`...[ops]`), so a route that regresses still names the persona it broke.
+@pytest.mark.parametrize("goal,expected,min_conf", [
+    pytest.param("research and summarise the latest LLM orchestration frameworks",
+                 "research-assistant-deep-synth", 0.70, id="research"),
+    pytest.param("what does psychology say about grit and persistence in agents",
+                 "psyche-researcher", 0.75, id="psychology"),
+    pytest.param("implement a WebSocket handler for real-time updates",
+                 "builder", 0.70, id="build"),
+    pytest.param("monitor the heartbeat service and diagnose why alerts are noisy",
+                 "ops", 0.70, id="ops"),
+    pytest.param("analyse the polymarket odds on the 2026 election",
+                 "finance-analyst", 0.75, id="finance"),
+    # No keyword hit → the default persona, and confidence is allowed to floor.
+    pytest.param("do something miscellaneous",
+                 "research-assistant-deep-synth", 0.0, id="default_on_no_match"),
+    pytest.param("Research the tweet at https://x.com/user/status/123 and "
+                 "summarise what they say",
+                 "research-assistant-deep-synth", 0.70, id="tweet_goal"),
+    # -- Phase 31: extended routing --
+    pytest.param("research symptoms and treatments for insomnia and sleep health",
+                 "health-researcher", 0.70, id="health"),
+    pytest.param("review this contract for GDPR compliance and liability clauses",
+                 "legal-researcher", 0.70, id="legal"),
+    pytest.param("build a strategic roadmap for the next milestone prioritization",
+                 "strategist", 0.70, id="strategy"),
+    pytest.param("write creative marketing copy and brand narrative for the campaign",
+                 "creative-director", 0.70, id="creative"),
+    pytest.param("scrape and extract structured data from the site using playwright",
+                 "scrapling-adaptive-web-recon", 0.70, id="scraping"),
+    pytest.param("the codebase is too complex, simplify and remove dead code",
+                 "simplifier", 0.70, id="simplifier"),
+    pytest.param("review this design and identify the failure modes and weaknesses",
+                 "critic", 0.70, id="critic"),
+    pytest.param("design the system architecture for scalable distributed microservices",
+                 "systems-design-architect-coach", 0.70, id="systems_design"),
+])
+def test_persona_for_goal_routes_keyword(goal, expected, min_conf):
+    name, conf = persona_for_goal(goal)
+    assert name == expected
+    assert conf >= min_conf
 
 
 def test_persona_for_goal_validates_against_registry():
@@ -471,66 +478,17 @@ def test_persona_for_goal_returns_tuple():
     assert 0.0 <= conf <= 1.0
 
 
-def test_persona_for_goal_tweet_goal():
-    name, conf = persona_for_goal(
-        "Research the tweet at https://x.com/user/status/123 and summarise what they say"
-    )
-    assert name == "research-assistant-deep-synth"
-    assert conf >= 0.70
-
 
 # ---------------------------------------------------------------------------
 # Phase 31: extended persona routing (health, legal, strategy, creative, etc.)
 # ---------------------------------------------------------------------------
 
-def test_persona_for_goal_health_keyword():
-    name, conf = persona_for_goal("research symptoms and treatments for insomnia and sleep health")
-    assert name == "health-researcher"
-    assert conf >= 0.70
 
 
-def test_persona_for_goal_legal_keyword():
-    name, conf = persona_for_goal("review this contract for GDPR compliance and liability clauses")
-    assert name == "legal-researcher"
-    assert conf >= 0.70
 
 
-def test_persona_for_goal_strategy_keyword():
-    name, conf = persona_for_goal("build a strategic roadmap for the next milestone prioritization")
-    assert name == "strategist"
-    assert conf >= 0.70
 
 
-def test_persona_for_goal_creative_keyword():
-    name, conf = persona_for_goal("write creative marketing copy and brand narrative for the campaign")
-    assert name == "creative-director"
-    assert conf >= 0.70
-
-
-def test_persona_for_goal_scraping_keyword():
-    name, conf = persona_for_goal("scrape and extract structured data from the site using playwright")
-    assert name == "scrapling-adaptive-web-recon"
-    assert conf >= 0.70
-
-
-def test_persona_for_goal_simplifier_keyword():
-    name, conf = persona_for_goal("the codebase is too complex, simplify and remove dead code")
-    assert name == "simplifier"
-    assert conf >= 0.70
-
-
-def test_persona_for_goal_critic_keyword():
-    name, conf = persona_for_goal("review this design and identify the failure modes and weaknesses")
-    assert name == "critic"
-    assert conf >= 0.70
-
-
-def test_persona_for_goal_systems_design_keyword():
-    name, conf = persona_for_goal(
-        "design the system architecture for scalable distributed microservices"
-    )
-    assert name == "systems-design-architect-coach"
-    assert conf >= 0.70
 
 
 # ===========================================================================
