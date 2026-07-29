@@ -698,9 +698,13 @@ invent a signal.
   fingerprint would not have fired on either historical pair. Shipped
   anyway because it is fail-open (a mismatch costs nothing — the restart
   proceeds as today) and deterministic canonical checks (`pytest -q`,
-  `test -f <path>`) do recur in other run classes; the declare-blocked
-  log line is the readout that says whether to pivot the fingerprint
-  material (Jeremy's greenlight framing: try it, pivot if needed).
+  `test -f <path>`) do recur in other run classes. Jeremy's adjudication
+  (2026-07-29): "fix the lineage, not the wording" — no fuzzy
+  coarsening; instead every attempt's verdict + fingerprint + per-check
+  evidence now persists to build/closure_verdicts.jsonl and loop
+  lineage to metadata.json `loops[]` (the persist-the-artifacts
+  decree), so hit/miss-rate is measurable offline rather than inferred
+  from a lucky log line.
 - **Cut by name (BACKLOG'd):** the main-gate prior-verdict join (declining
   a restart at depth>0 entry — join material lives in captain's-log
   LOOP_CREATED events, NOT run metadata.json, per the recon; zero live

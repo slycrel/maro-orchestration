@@ -1226,6 +1226,53 @@ class TestVerifyGoalCompletion:
                     "build a thing", [], adapter, workspace_path=str(tmp_path))
         assert result.failed_checks == ["false => exit 1"]
 
+    def test_verdict_persisted_to_run_dir(self, tmp_path):
+        """Liveness pin (Jeremy 2026-07-29: persist the artifacts): every
+        closure verdict appends its full evidence — per-check rows,
+        failed-check signatures, fingerprint — to the run dir's
+        build/closure_verdicts.jsonl. This is the §9.3 join material
+        nothing else persists (captain's log truncates commands and has
+        no per-check pass/fail; record-mode transcripts only exist on
+        multi-backend boxes)."""
+        import json as _json
+        from unittest.mock import MagicMock, patch
+        import runs as runs_mod
+        from closure_verify import closure_fingerprint
+
+        rd = tmp_path / "run-under-test"
+        runs_mod.set_current_run_dir(rd)
+        adapter = MagicMock()
+        adapter.complete.side_effect = [MagicMock(), MagicMock()]
+        checks = [
+            {"description": "hard fail", "command": "false"},
+            {"description": "passes", "command": "true"},
+        ]
+        verdict_data = {"complete": False, "confidence": 0.9,
+                        "gaps": ["broken"], "summary": "not done"}
+        try:
+            with patch("closure_verify.extract_json",
+                       side_effect=[{"checks": checks}, verdict_data]):
+                with patch("closure_verify.content_or_empty", return_value="{}"):
+                    result = verify_goal_completion(
+                        "build a thing", [], adapter,
+                        workspace_path=str(tmp_path), loop_id="loop9999")
+        finally:
+            runs_mod.set_current_run_dir(None)
+
+        jl = rd / "build" / "closure_verdicts.jsonl"
+        assert jl.exists()
+        rows = [_json.loads(l) for l in jl.read_text().splitlines() if l]
+        assert len(rows) == 1
+        row = rows[0]
+        assert row["loop_id"] == "loop9999"
+        assert row["complete"] is False
+        assert row["failed_checks"] == result.failed_checks
+        assert row["fingerprint"] == closure_fingerprint(result) != ""
+        outcomes = {r["command"]: r["outcome"] for r in row["check_results"]}
+        assert outcomes == {"false": "fail", "true": "pass"}
+        assert all("exit_code" in r and "stdout" in r and "stderr" in r
+                   for r in row["check_results"])
+
     def test_failed_checks_surface_gaps(self, monkeypatch, tmp_path):
         """Failed checks + director verdict with gaps → needs_work emitted."""
         from unittest.mock import MagicMock, patch

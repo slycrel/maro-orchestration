@@ -1189,6 +1189,56 @@ def verify_goal_completion(
         except Exception:
             pass
 
+        # Persist the full verdict + per-check evidence into the run dir
+        # (Jeremy 2026-07-29: "I want all of the artifacts we can
+        # persisted" — for testing/debugging and for showing the path a
+        # run took to its answer). Append-only JSONL: a restarted run's
+        # parent and child verdicts land in the same file in order,
+        # which is the §9.3 join material nothing else persists — the
+        # captain's log truncates commands and carries no per-check
+        # pass/fail, and record-mode call transcripts only exist on
+        # multi-backend boxes (2026-07-29 recon: 7 of 10 live restart
+        # pairs had no recoverable child-side checks anywhere).
+        # Best-effort — persistence must never affect the verdict path.
+        try:
+            from datetime import datetime, timezone
+            from runs import current_run_dir
+            from file_lock import locked_append
+            _rd = current_run_dir()
+            if _rd is not None:
+                _row = {
+                    "ts": datetime.now(timezone.utc).isoformat(),
+                    "loop_id": loop_id or "",
+                    "complete": complete,
+                    "confidence": confidence,
+                    "checks_run": checks_run,
+                    "checks_passed": checks_passed,
+                    "inconclusive_count": len(inconclusive_checks),
+                    "judged": judged,
+                    "downgrade_reason": downgrade_reason,
+                    "gaps": [str(g)[:300] for g in gaps],
+                    "summary": summary[:500],
+                    "failed_checks": list(verdict.failed_checks),
+                    "fingerprint": closure_fingerprint(verdict),
+                    "check_results": [
+                        {
+                            "description": safe_str(r.get("description", ""))[:300],
+                            "command": safe_str(r.get("command", ""))[:300],
+                            "exit_code": r.get("exit_code"),
+                            "outcome": r.get("outcome", ""),
+                            "stdout": safe_str(r.get("stdout", ""))[:500],
+                            "stderr": safe_str(r.get("stderr", ""))[:300],
+                        }
+                        for r in check_results
+                    ],
+                }
+                locked_append(
+                    _rd / "build" / "closure_verdicts.jsonl",
+                    json.dumps(_row, default=str),
+                )
+        except Exception:
+            pass
+
         return verdict
 
     except Exception as exc:

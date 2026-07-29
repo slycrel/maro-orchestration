@@ -20,6 +20,31 @@ Dev log tab at maro.feifdom.com alongside Runs and Reading.
 
 ## 2026-07-29
 
+**Persist-the-artifacts chunk — lineage and closure evidence become
+durable** — threads: `compound-thinking`, `adaptive-execution`,
+`artifacts-over-streams`. Jeremy's adjudication of the §9.3 fragility
+finding: "we should fix the lineage, not the wording — I want all of
+the artifacts we can persisted," for debugging/dev work and for
+showing a doubting user the path a run took (decree recorded,
+a07c6c74; the fuzzy fingerprint-coarsening BACKLOG item declined in
+its favor). Two writers shipped: every loop a run dir hosts now
+appends its lineage — loop_id, loop_reason, parent_loop_id,
+continuation_depth, created_at — to metadata.json `loops[]` (restart
+ancestry previously lived ONLY in captain's-log events; zero of 728
+live run dirs carried it), and every closure verdict appends its full
+evidence — per-check command/exit/outcome/output rows, failed-check
+signatures, fingerprint — to build/closure_verdicts.jsonl (per-check
+detail previously survived only in record-mode call transcripts,
+which don't exist on single-backend boxes; 7 of 10 live restart pairs
+had no recoverable child checks anywhere). Both writers best-effort,
+both liveness-pinned. Consequences: the §9.3 main-gate join's
+material is now a local read of the same run dir, and the
+fingerprint's live hit/miss-rate becomes measurable offline instead
+of argued about. **Surprised by:** how small the fix was once named —
+two append writers, ~sixty lines, against a gap three separate
+recon/audit passes had walked past because the captain's log
+*looked* like coverage.
+
 **§9.3 review round — status honesty joins the declaration** — threads:
 `compound-thinking`, `adaptive-execution`. Post-land codex review of
 0965a7c (skeptic/architect/minimalist): 2/2 findings verified real, 0

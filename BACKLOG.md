@@ -1588,30 +1588,31 @@ cut by name, consumer-first when their evidence arrives:
 1. **Main-gate prior-verdict join.** The main closure gate at
    continuation_depth>0 has no baseline in hand — declining an
    evidence-free restart BEFORE it fires (rather than declaring blocked
-   after) needs a persistence join. Recon correction (2026-07-29,
-   docs/history/2026-07-29-restart-stall-recon.md): run metadata.json
-   carries NO loop_reason/parent_loop_id — the join material is the
-   captain's-log LOOP_CREATED event (context.parent_loop_id), and
-   failed_checks aren't persisted outside `build/calls/` transcripts,
-   so the join likely wants a failed_checks/fingerprint stamp added to
-   run metadata first. Zero depth≥2 restarts exist live today — build
-   when the restart-boundary declaration's log line shows the case
-   occurring.
+   after) needs a persistence join. **Join material now exists
+   (2026-07-29 persist-the-artifacts chunk, Jeremy's "fix the lineage"
+   call):** metadata.json `loops[]` carries loop_reason/parent_loop_id/
+   continuation_depth per loop, and build/closure_verdicts.jsonl
+   carries every verdict's failed-check signatures + fingerprint in
+   order — the join is now a local read of the SAME run dir. Zero
+   depth≥2 restarts exist live today — build when the restart-boundary
+   declaration's log line (or offline analysis of the persisted
+   fingerprints) shows the case occurring.
 2. **Redecompose plan-fingerprint convergence** (loop_blocked). The
    `_REDECOMPOSE_THRESHOLD = 2` cap is budget-shaped; the structural
    twin is: fingerprint successive decompositions and stop
    re-decomposing when the PLANS stop changing, not when the counter
    hits 2. Same shape as §9.3, one seam over.
-3. **Fingerprint coarsening (artifact-level half).** Live recon: in
-   both fully-recoverable historical restart pairs, closure checks were
-   LLM-regenerated with different wording — identity matching missed
-   them. The false-POSITIVE half was fixed in the 2026-07-29 review
-   remediation (signatures now carry failure output, so broad commands
-   failing differently no longer collide); what remains cut is the
-   loosening direction: if the declare-blocked log line shows near-miss
-   stalls (same target artifact, different command text), coarsen the
-   fingerprint material to the failed check's target artifact.
-   Evidence-gated; don't build on n=2.
+3. **Fingerprint coarsening — DECLINED (Jeremy 2026-07-29: "fix the
+   lineage, not the wording").** Live recon: in both fully-recoverable
+   historical restart pairs, closure checks were LLM-regenerated with
+   different wording — identity matching missed them. The
+   false-POSITIVE half was fixed in the 2026-07-29 review remediation
+   (signatures now carry failure output, so broad commands failing
+   differently no longer collide). The loosening direction (fuzzy
+   wording/artifact matching) is declined in favor of persistence:
+   build/closure_verdicts.jsonl now keeps every attempt's fingerprint
+   and per-check evidence, so miss-rate is measurable offline instead
+   of argued about. Reopen only with that measurement in hand.
 
 ### Tire-runs tangent — deferred findings (2026-07-27, Opus independent review)
 

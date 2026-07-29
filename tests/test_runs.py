@@ -790,3 +790,46 @@ def test_concurrent_first_lookup_runs_one_migration(workspace, monkeypatch):
         assert first.result(timeout=5) is True
         assert second.result(timeout=5) is True
     assert scans["count"] == 1
+
+
+class TestStampRunLoopLineage:
+    """metadata["loops"] — the run dir's self-describing loop ancestry
+    (Jeremy 2026-07-29: persist the artifacts; restart lineage previously
+    lived only in captain's-log LOOP_CREATED events — zero of 728 live
+    run dirs carried it)."""
+
+    def test_appends_in_order_and_dedups_by_loop_id(self, workspace):
+        import runs as runs_mod
+        rd = create_run_dir("lineage01", prompt="goal")
+        runs_mod.set_current_run_dir(rd)
+        try:
+            first = {"loop_id": "aaaa1111", "loop_reason": "initial",
+                     "parent_loop_id": "", "continuation_depth": 0,
+                     "created_at": "2026-07-29T00:00:00+00:00"}
+            child = {"loop_id": "bbbb2222", "loop_reason": "closure_restart",
+                     "parent_loop_id": "aaaa1111", "continuation_depth": 1,
+                     "created_at": "2026-07-29T00:05:00+00:00"}
+            runs_mod.stamp_run_loop_lineage(first)
+            runs_mod.stamp_run_loop_lineage(first)  # dedup: no double entry
+            runs_mod.stamp_run_loop_lineage(child)
+            meta = json.loads((rd / "metadata.json").read_text())
+            assert meta["loops"] == [first, child]
+        finally:
+            runs_mod.set_current_run_dir(None)
+
+    def test_no_active_run_is_noop(self, workspace):
+        import runs as runs_mod
+        runs_mod.set_current_run_dir(None)
+        assert runs_mod.stamp_run_loop_lineage(
+            {"loop_id": "cccc3333", "loop_reason": "initial"}) is None
+
+    def test_missing_loop_id_is_noop(self, workspace):
+        import runs as runs_mod
+        rd = create_run_dir("lineage02", prompt="goal")
+        runs_mod.set_current_run_dir(rd)
+        try:
+            assert runs_mod.stamp_run_loop_lineage({"loop_reason": "x"}) is None
+            meta = json.loads((rd / "metadata.json").read_text())
+            assert "loops" not in meta
+        finally:
+            runs_mod.set_current_run_dir(None)

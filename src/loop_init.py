@@ -214,6 +214,21 @@ def _initialize_loop(
     except Exception as _ev_exc:
         log.debug("captains_log LOOP_CREATED emit failed: %s", _ev_exc)
 
+    # Lineage into the run dir itself, not only the captain's log — the
+    # run's metadata is its self-describing record, and restart ancestry
+    # lived nowhere in any of 728 live run dirs (2026-07-29 recon).
+    try:
+        from runs import stamp_run_loop_lineage
+        stamp_run_loop_lineage({
+            "loop_id": ctx.loop_id,
+            "loop_reason": loop_reason,
+            "parent_loop_id": parent_loop_id or "",
+            "continuation_depth": continuation_depth,
+            "created_at": ctx.start_ts,
+        })
+    except Exception:
+        pass
+
     # Kill switch check — refuse to start if sentinel is present
     try:
         from killswitch import is_active as _ks_active, read_reason as _ks_reason

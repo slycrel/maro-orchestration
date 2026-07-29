@@ -5081,3 +5081,19 @@ Dormant (deliberately parked, not dropped):
   it is not obviously free." That was wrong — it was litter. The M1 had 107
   run dirs and zero runs, which sharpens rather than softens contrast-doc
   §8's point about which context can produce run-shaped evidence.
+- **2026-07-29 — Persist-the-artifacts decree (Jeremy): "I want all of
+  the artifacts we can persisted... I continue to think we pay too much
+  lip service here and not enough persisting along the way."** Two named
+  reasons: testing/debugging/dev work, and showing the work to a user
+  who doesn't believe or wants to go deep on how an answer was reached.
+  Stated while adjudicating the §9.3 fingerprint fragility finding — his
+  call was "fix the lineage, not the wording": build durable lineage +
+  evidence persistence instead of fuzzy wording-coarsening (the BACKLOG
+  coarsening item is declined in favor of this). First application
+  shipped same day: metadata.json `loops[]` lineage (loop_id /
+  loop_reason / parent_loop_id / continuation_depth / created_at, every
+  loop a run dir hosts) + build/closure_verdicts.jsonl (full closure
+  verdict + per-check evidence + fingerprint, append-only, both restart
+  attempts in order). Extends the 2026-07-27 artifacts-over-streams
+  decree from "caps never destroy the only copy" to "persist along the
+  way, affirmatively."

@@ -443,6 +443,51 @@ def stamp_run_metadata(fields: dict) -> Optional[Path]:
         return None
 
 
+def stamp_run_loop_lineage(entry: dict) -> Optional[Path]:
+    """Append a loop-lineage entry to the active run's metadata.json.
+
+    A run dir can host several loops — the initial attempt plus closure
+    restarts and continuations reuse the same handle run dir — so
+    lineage is a list: metadata["loops"], append-only, deduped by
+    loop_id. Restart ancestry previously lived ONLY in captain's-log
+    LOOP_CREATED events (2026-07-29 recon: zero of 728 live run dirs
+    carried any of loop_reason/parent_loop_id/continuation_depth); this
+    makes the run dir self-describing (Jeremy 2026-07-29: persist the
+    artifacts along the way — for debugging, offline analysis, and
+    showing the path a run took). Best-effort, never raises.
+    """
+    try:
+        rd = current_run_dir()
+        if rd is None or not entry or not entry.get("loop_id"):
+            return None
+        meta_path = rd / "metadata.json"
+
+        def _merge(old: str) -> str:
+            try:
+                existing = json.loads(old) if old else {}
+            except Exception:
+                existing = {}
+            if not isinstance(existing, dict):
+                existing = {}
+            loops = existing.get("loops")
+            if not isinstance(loops, list):
+                loops = []
+            if not any(
+                isinstance(e, dict) and e.get("loop_id") == entry.get("loop_id")
+                for e in loops
+            ):
+                loops.append(entry)
+            existing["loops"] = loops
+            index_run_dir(rd, existing)
+            return json.dumps(existing, indent=2, default=str)
+
+        from file_lock import locked_rmw
+        locked_rmw(meta_path, _merge)
+        return meta_path
+    except Exception:
+        return None
+
+
 def stamp_run_audit_failure(fields: dict) -> Optional[Path]:
     """Append/upsert one loop's audit repair while preserving other loops.
 

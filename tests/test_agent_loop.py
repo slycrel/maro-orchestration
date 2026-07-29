@@ -254,6 +254,38 @@ def test_loop_emits_loop_created_event(monkeypatch, tmp_path):
     assert child[-1]["related_ids"] == ["parent01"]
 
 
+def test_loop_stamps_lineage_in_run_metadata(monkeypatch, tmp_path):
+    """Liveness pin (Jeremy 2026-07-29: persist the artifacts): every loop
+    a run dir hosts appends its lineage to metadata["loops"] — the initial
+    attempt AND a closure restart in the same run dir. Restart ancestry
+    must be recoverable from the run dir alone, not only the captain's
+    log (2026-07-29 recon: zero of 728 live run dirs carried it)."""
+    import json as _json
+    _setup_workspace(monkeypatch, tmp_path)
+    import runs as runs_mod
+    rd = runs_mod.create_run_dir("lineagerun", prompt="two-loop goal")
+    runs_mod.set_current_run_dir(rd)
+    try:
+        run_agent_loop("two-loop goal", project="t-lineage", dry_run=True)
+        run_agent_loop(
+            "two-loop goal", project="t-lineage", dry_run=True,
+            loop_reason="closure_restart", parent_loop_id="parent01",
+            continuation_depth=1,
+        )
+    finally:
+        runs_mod.set_current_run_dir(None)
+    meta = _json.loads((rd / "metadata.json").read_text())
+    loops = meta.get("loops")
+    assert isinstance(loops, list) and len(loops) == 2
+    assert loops[0]["loop_reason"] == "initial"
+    assert loops[0]["parent_loop_id"] == ""
+    assert loops[1]["loop_reason"] == "closure_restart"
+    assert loops[1]["parent_loop_id"] == "parent01"
+    assert loops[1]["continuation_depth"] == 1
+    assert loops[0]["loop_id"] and loops[1]["loop_id"]
+    assert loops[0]["created_at"]
+
+
 def test_loop_auto_slugs_project(monkeypatch, tmp_path):
     _setup_workspace(monkeypatch, tmp_path)
     result = run_agent_loop(
