@@ -181,8 +181,10 @@ def test_explicit_cost_budget_wins_over_config(monkeypatch):
 
 def test_no_budget_config_gets_safe_default_caps(monkeypatch):
     """1.0 posture (2026-07-09): a fresh install with no budget config is
-    capped at the hardcoded defaults, never uncapped."""
+    capped at the hardcoded defaults, never uncapped. (p90 pinned to None so
+    the auto-mode path deterministically lands on the floor.)"""
     import loop_init
+    _pin_p90(monkeypatch, None)
     ctx, refusal = _run_gate(monkeypatch, {})
     assert refusal is None
     assert ctx.cost_budget == loop_init.DEFAULT_PER_RUN_USD
@@ -235,3 +237,141 @@ def test_dry_run_skips_gates(monkeypatch):
                              spent=100.0, dry_run=True)
     assert refusal is None
     assert ctx.cost_budget is None
+
+
+# ---------------------------------------------------------------------------
+# Data-driven thresholds (Jeremy decree 2026-07-29): when budget.per_run_usd
+# is ABSENT the breaker is max(floor, 4x p90 of successful-run costs) and the
+# warn line is max($2.50, p90). Explicit config numbers stay static; 0/null
+# stays the uncapped opt-out.
+# ---------------------------------------------------------------------------
+
+def _pin_p90(monkeypatch, value):
+    monkeypatch.setattr(metrics, "successful_run_cost_p90",
+                        lambda limit=None: value)
+
+
+class TestAutoBudget:
+    def test_thin_history_uses_floor(self, monkeypatch):
+        import loop_init
+        _pin_p90(monkeypatch, None)
+        ctx, refusal = _run_gate(monkeypatch, {})
+        assert refusal is None
+        assert ctx.cost_budget == loop_init.DEFAULT_PER_RUN_USD
+
+    def test_hot_history_scales_breaker(self, monkeypatch):
+        """p90 above floor/4 — the breaker follows what success costs."""
+        _pin_p90(monkeypatch, 5.0)
+        ctx, _ = _run_gate(monkeypatch, {})
+        assert ctx.cost_budget == 20.0
+
+    def test_floor_governs_cheap_history(self, monkeypatch):
+        """4x p90 below the floor — the floor wins (today's box: p90≈$1.21)."""
+        import loop_init
+        _pin_p90(monkeypatch, 1.21)
+        ctx, _ = _run_gate(monkeypatch, {})
+        assert ctx.cost_budget == loop_init.DEFAULT_PER_RUN_USD
+
+    def test_explicit_config_stays_static(self, monkeypatch):
+        """An operator-set number is a static cap — history never inflates it."""
+        _pin_p90(monkeypatch, 5.0)
+        ctx, _ = _run_gate(monkeypatch, {"budget.per_run_usd": 2.5})
+        assert ctx.cost_budget == 2.5
+
+    def test_zero_still_uncapped_despite_history(self, monkeypatch):
+        _pin_p90(monkeypatch, 5.0)
+        ctx, refusal = _run_gate(monkeypatch,
+                                 {"budget.per_run_usd": 0,
+                                  "budget.daily_usd": 0}, spent=1000.0)
+        assert refusal is None
+        assert ctx.cost_budget is None
+
+
+class TestWarnLine:
+    def test_auto_warn_floor_on_thin_history(self, monkeypatch):
+        import loop_init
+        _pin_p90(monkeypatch, None)
+        ctx, _ = _run_gate(monkeypatch, {})
+        assert ctx.cost_warn_usd == loop_init.WARN_FLOOR_USD
+
+    def test_auto_warn_follows_p90(self, monkeypatch):
+        """p90 above the $2.50 floor — warn at the top-decile boundary."""
+        _pin_p90(monkeypatch, 4.0)
+        ctx, _ = _run_gate(monkeypatch, {})
+        assert ctx.cost_warn_usd == 4.0
+        assert ctx.cost_budget == 16.0
+
+    def test_explicit_warn_static(self, monkeypatch):
+        _pin_p90(monkeypatch, 4.0)
+        ctx, _ = _run_gate(monkeypatch, {"budget.warn_usd": 1.0})
+        assert ctx.cost_warn_usd == 1.0
+
+    def test_warn_zero_disables(self, monkeypatch):
+        _pin_p90(monkeypatch, 4.0)
+        ctx, _ = _run_gate(monkeypatch, {"budget.warn_usd": 0})
+        assert ctx.cost_warn_usd == 0.0
+
+    def test_warn_clamped_below_budget(self, monkeypatch):
+        """A warn line at/above the breaker is useless — clamp to 80%."""
+        _pin_p90(monkeypatch, None)
+        ctx, _ = _run_gate(monkeypatch, {"budget.per_run_usd": 2.0,
+                                         "budget.warn_usd": 5.0})
+        assert ctx.cost_warn_usd == pytest.approx(1.6)
+
+    def test_uncapped_run_sets_no_warn(self, monkeypatch):
+        _pin_p90(monkeypatch, 4.0)
+        ctx, _ = _run_gate(monkeypatch, {"budget.per_run_usd": 0,
+                                         "budget.daily_usd": 0})
+        assert getattr(ctx, "cost_warn_usd", None) is None
+
+    def test_explicit_caller_budget_still_gets_warn_line(self, monkeypatch):
+        _pin_p90(monkeypatch, 4.0)
+        ctx, _ = _run_gate(monkeypatch, {}, cost_budget=9.0)
+        assert ctx.cost_budget == 9.0
+        assert ctx.cost_warn_usd == 4.0
+
+
+class TestSuccessfulRunCostP90:
+    """metrics.successful_run_cost_p90 — the history scan behind auto mode."""
+
+    def _write_cards(self, root, specs):
+        for i, (cls, cost) in enumerate(specs):
+            rd = root / f"run-{i:03d}"
+            rd.mkdir(parents=True)
+            card = {"success_class": cls, "total_cost_usd": cost}
+            (rd / "run_card.json").write_text(json.dumps(card))
+
+    def _p90(self, monkeypatch, tmp_path, specs):
+        import runs
+        monkeypatch.setattr(runs, "runs_root", lambda: tmp_path)
+        monkeypatch.setattr(metrics, "_run_cost_p90_cache", {})
+        self._write_cards(tmp_path, specs)
+        return metrics.successful_run_cost_p90()
+
+    def test_p90_over_success_classes(self, monkeypatch, tmp_path):
+        specs = [("success", float(i)) for i in range(1, 11)]  # $1..$10
+        assert self._p90(monkeypatch, tmp_path, specs) == 9.0
+
+    def test_failed_runs_excluded(self, monkeypatch, tmp_path):
+        specs = ([("success", 1.0)] * 8) + [("failed", 100.0),
+                                            ("partial", 50.0)]
+        assert self._p90(monkeypatch, tmp_path, specs) == 1.0
+
+    def test_done_unverified_counts_as_success(self, monkeypatch, tmp_path):
+        specs = [("done-unverified", 2.0)] * 8
+        assert self._p90(monkeypatch, tmp_path, specs) == 2.0
+
+    def test_thin_history_returns_none(self, monkeypatch, tmp_path):
+        specs = [("success", 1.0)] * (metrics.RUN_COST_MIN_SAMPLES - 1)
+        assert self._p90(monkeypatch, tmp_path, specs) is None
+
+    def test_null_cost_skipped(self, monkeypatch, tmp_path):
+        """Pre-2026-07-02 cards have total_cost_usd: null — not a $0 sample."""
+        specs = ([("success", 3.0)] * 8) + [("success", None)] * 5
+        assert self._p90(monkeypatch, tmp_path, specs) == 3.0
+
+    def test_missing_runs_root_returns_none(self, monkeypatch, tmp_path):
+        import runs
+        monkeypatch.setattr(runs, "runs_root", lambda: tmp_path / "nope")
+        monkeypatch.setattr(metrics, "_run_cost_p90_cache", {})
+        assert metrics.successful_run_cost_p90() is None

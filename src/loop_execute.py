@@ -883,9 +883,10 @@ def _execute_main_loop(
                 print(f"[maro] {_budget_note}", file=sys.stderr, flush=True)
             break
 
-        # Cost budget — warn at 80%, hard stop at budget + 20% slush.
-        # Truthiness (not `is not None`): 0 means uncapped, same as the
-        # budget.per_run_usd convention — and 0.0 must never reach the division.
+        # Cost budget — early warn at the gate's warn line, hard stop at
+        # budget + 20% slush. Truthiness (not `is not None`): 0 means
+        # uncapped, same as the budget.per_run_usd convention — and 0.0 must
+        # never reach the division.
         if cost_budget and _total_cost > 0:
             _cost_pct = _total_cost / cost_budget * 100
             _slush = cost_budget * 0.2
@@ -906,10 +907,33 @@ def _execute_main_loop(
                 if verbose:
                     print(f"[maro] {_budget_note}", file=sys.stderr, flush=True)
                 break
-            elif _cost_pct >= 80 and not ctx.cost_warned:
-                log.warning("cost approaching budget: $%.4f / $%.2f (%.0f%%)",
-                            _total_cost, cost_budget, _cost_pct)
-                ctx.cost_warned = True
+            else:
+                # Warn line: the gate's data-driven threshold when set (None
+                # means the gate never ran — fall back to the legacy 80%;
+                # 0.0 is the explicit budget.warn_usd: 0 opt-out).
+                _warn_at = getattr(ctx, "cost_warn_usd", None)
+                if _warn_at is None:
+                    _warn_at = cost_budget * 0.8
+                if _warn_at and _total_cost >= _warn_at and not ctx.cost_warned:
+                    log.warning("cost past typical territory: $%.4f >= warn "
+                                "$%.2f (budget $%.2f, %.0f%%)",
+                                _total_cost, _warn_at, cost_budget, _cost_pct)
+                    ctx.cost_warned = True
+                    # Delivery-lane advisory in EFFORT language — dollars are
+                    # the internal unit, the user hears effort (2026-07-17
+                    # spend-UX decree). Non-blocking; never derails the step.
+                    if getattr(ctx, "channel", None) is not None:
+                        try:
+                            ctx.channel.emit(
+                                "effort_note",
+                                text=("Still working — this run has gone "
+                                      "deeper than most past successful runs "
+                                      "(top ~10% by effort). There's headroom "
+                                      "left, and the runaway breaker is armed "
+                                      "if it stops converging."),
+                            )
+                        except Exception:
+                            log.debug("effort_note emit failed", exc_info=True)
 
         # Runaway cost circuit tripped MID-step (BACKLOG #23e): the adapter
         # seam refused a call because run spend crossed multiplier x

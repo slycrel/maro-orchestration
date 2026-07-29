@@ -27,8 +27,17 @@ log = logging.getLogger("maro.loop")
 
 # Safe-by-default spend caps (2026-07-09, 1.0 posture). A fresh install must
 # never run uncapped; config overrides, 0/null disables. See docs/DEFAULTS.md.
-DEFAULT_PER_RUN_USD = 5.0
+# Raised $5 -> $10 (Jeremy decree 2026-07-29): the breaker is a circuit-breaker
+# for pathological runs, not a cost optimizer — a sanctioned power-tier step
+# alone can cost ~$3 (3a4e2692 died at $3.00 vs a $2.40 cap holding a
+# finished memo). When budget.per_run_usd is absent the cap is data-driven:
+# max(floor, KILL x p90 of successful runs) — history says what "well past
+# anything that ever worked" costs; the floors keep a cold-start box sane.
+DEFAULT_PER_RUN_USD = 10.0
 DEFAULT_DAILY_USD = 25.0
+WARN_FLOOR_USD = 2.50           # early-warn floor: "left typical territory"
+KILL_P90_MULTIPLIER = 4.0       # breaker = 4x the p90 successful-run cost
+_CONFIG_ABSENT = object()       # distinguishes missing key from explicit null
 
 
 def _stamp_refusal_verdict(verdict: str, evidence: str) -> None:
@@ -85,14 +94,59 @@ def _budget_gate(ctx, *, goal: str, project: Optional[str], dry_run: bool):
                         key, raw, default)
             return default
 
+    def _history_p90():
+        """p90 cost of recent successful runs, or None on thin history."""
+        try:
+            import metrics as _metrics_hist
+            return _metrics_hist.successful_run_cost_p90()
+        except Exception:
+            return None
+
+    _p90 = None
     try:
         if ctx.cost_budget is None:
-            _per_run = _coerce_cap("budget.per_run_usd", DEFAULT_PER_RUN_USD)
-            if _per_run > 0:
-                ctx.cost_budget = _per_run
-                log.info("cost_budget defaulted from config: $%.2f", ctx.cost_budget)
+            from config import get as _budget_get
+            _raw = _budget_get("budget.per_run_usd", _CONFIG_ABSENT)
+            if _raw is _CONFIG_ABSENT:
+                # Auto mode (key absent): breaker scales with what success
+                # actually costs on this box — max(floor, 4x p90). An explicit
+                # config number stays static; 0/null stays the uncapped opt-out.
+                _p90 = _history_p90()
+                if _p90:
+                    ctx.cost_budget = max(DEFAULT_PER_RUN_USD,
+                                          KILL_P90_MULTIPLIER * float(_p90))
+                    log.info("cost_budget auto: $%.2f (p90 of successful runs "
+                             "$%.2f x %.0f, floor $%.2f)", ctx.cost_budget,
+                             _p90, KILL_P90_MULTIPLIER, DEFAULT_PER_RUN_USD)
+                else:
+                    ctx.cost_budget = DEFAULT_PER_RUN_USD
+                    log.info("cost_budget auto: $%.2f (floor — run history too "
+                             "thin for percentiles)", ctx.cost_budget)
+            else:
+                _per_run = _coerce_cap("budget.per_run_usd", DEFAULT_PER_RUN_USD)
+                if _per_run > 0:
+                    ctx.cost_budget = _per_run
+                    log.info("cost_budget defaulted from config: $%.2f",
+                             ctx.cost_budget)
     except Exception as _budget_exc:
         log.warning("budget gate: per-run cap check failed: %s", _budget_exc)
+    try:
+        # Early-warn line ("this run left typical territory") — advisory only,
+        # enforced nowhere; the mid-loop check emits one effort-language note.
+        if ctx.cost_budget and getattr(ctx, "cost_warn_usd", None) is None:
+            from config import get as _warn_get
+            _raw_warn = _warn_get("budget.warn_usd", _CONFIG_ABSENT)
+            if _raw_warn is _CONFIG_ABSENT:
+                if _p90 is None:
+                    _p90 = _history_p90()
+                _warn = max(WARN_FLOOR_USD, float(_p90 or 0.0))
+            else:
+                _warn = _coerce_cap("budget.warn_usd", WARN_FLOOR_USD)
+            if _warn and _warn >= ctx.cost_budget:
+                _warn = ctx.cost_budget * 0.8  # warn must precede the breaker
+            ctx.cost_warn_usd = _warn
+    except Exception as _warn_exc:
+        log.warning("budget gate: warn-line check failed: %s", _warn_exc)
     try:
         _daily_cap = _coerce_cap("budget.daily_usd", DEFAULT_DAILY_USD)
         if _daily_cap > 0:

@@ -429,6 +429,10 @@ class LoopContext:
     cost_budget: Optional[float] = None
     token_budget: Optional[int] = None
     cost_warned: bool = False  # per-run cost-approaching-budget warn-once flag
+    # Early-warn line set by the budget gate (auto: max($2.50, p90 of
+    # successful runs)). None = gate never ran (legacy 80%-of-budget warn);
+    # 0.0 = explicitly disabled via budget.warn_usd: 0.
+    cost_warn_usd: Optional[float] = None
 
     # Retry state
     step_retries: Dict[str, int] = field(default_factory=dict)

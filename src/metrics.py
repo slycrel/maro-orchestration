@@ -235,6 +235,57 @@ def spend_today() -> float:
         return 0.0
 
 
+# Data-driven budget thresholds (Jeremy decree 2026-07-29): the warn line
+# means "you've left typical territory" (p90 of successful runs), the kill
+# line means "well past anything that ever worked" (4x p90). Success classes
+# match run_curation's success_class stamps for delivered work.
+RUN_COST_SUCCESS_CLASSES = ("success", "done-unverified")
+RUN_COST_MIN_SAMPLES = 8
+RUN_COST_CARD_LIMIT = 200
+_RUN_COST_CACHE_TTL_S = 900.0
+_run_cost_p90_cache: dict = {}
+
+
+def successful_run_cost_p90(limit: int = RUN_COST_CARD_LIMIT) -> Optional[float]:
+    """p90 of total_cost_usd across recent successful run cards.
+
+    Feeds the budget gate's auto thresholds (loop_init._budget_gate). Returns
+    None when history is too thin (< RUN_COST_MIN_SAMPLES cards with a
+    recorded cost in a success class) — callers fall back to the static
+    floors. Cached ~15 min per process: the distribution moves per run, not
+    per step, and the gate runs once per loop. Never raises.
+    """
+    try:
+        _now = time.monotonic()
+        _hit = _run_cost_p90_cache.get(limit)
+        if _hit and _now - _hit[0] < _RUN_COST_CACHE_TTL_S:
+            return _hit[1]
+        from runs import runs_root
+        root = runs_root()
+        if not root.is_dir():
+            return None
+        cards = sorted(root.glob("*/run_card.json"),
+                       key=lambda p: p.stat().st_mtime, reverse=True)[:limit]
+        vals: List[float] = []
+        for card_path in cards:
+            try:
+                card = json.loads(card_path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            cost = card.get("total_cost_usd")
+            if cost and card.get("success_class") in RUN_COST_SUCCESS_CLASSES:
+                vals.append(float(cost))
+        if len(vals) < RUN_COST_MIN_SAMPLES:
+            result = None
+        else:
+            vals.sort()
+            result = vals[int(0.9 * (len(vals) - 1))]
+        _run_cost_p90_cache[limit] = (_now, result)
+        return result
+    except Exception:
+        return None
+
+
 def spend_for_loops(loop_ids) -> float:
     """Total recorded USD spend for the given loop id(s) (cost-per-run).
 

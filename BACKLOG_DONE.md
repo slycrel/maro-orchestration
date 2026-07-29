@@ -8,7 +8,42 @@ Last split: 2026-04-16 (session 34).
 
 ---
 
-## Archived from BACKLOG 2026-07-28 (thread census — drift find #7)
+## Data-driven cost thresholds — SHIPPED 2026-07-29 (decree-direct, no BACKLOG item)
+
+Jeremy (2026-07-29, after the escalate-death fix landed): raise the kill
+to ~$10 with a surfaced ~$2.50 warning; "much more interested in the
+data driven values"; considered removing the cap entirely on the Max
+plan but agreed caps stay as circuit-breakers (API-failover backend is
+real dollars; runaway loops are what the breaker is for — extends the
+2026-07-29 token-cap decree "caps = circuit-breakers, not tuning
+knobs").
+
+Shipped: `budget.per_run_usd` ABSENT now means auto —
+`max($10 floor, 4 × p90 of successful-run costs)` via new
+`metrics.successful_run_cost_p90()` (run-card scan: success_class in
+success/done-unverified with recorded total_cost_usd, ≥8 samples,
+~15-min cache). Explicit number stays a static cap; 0/null stays
+uncapped. New `budget.warn_usd` (absent = `max($2.50, p90)`) sets
+`ctx.cost_warn_usd`; crossing it warn-once logs dollars internally and
+emits ONE `effort_note` on the conversation channel in effort language
+with no dollars (2026-07-17 spend-UX decree). Floor raised $5→$10
+because a sanctioned power-tier step alone costs ~$3: escalated re-run
+3a4e2692 died at $3.00 against the box's $2.40 cap while holding a
+finished memo. Box config overrides ($2/run, $10/day) removed the same
+day so auto mode governs; daily stays at the $25 repo default.
+
+Diagnosis correction recorded: the earlier "cumulative budget defunded
+the re-run" theory was wrong — `total_cost_usd` initializes per
+`run_agent_loop` call, so every sanctioned re-run already gets a fresh
+budget (handle.py's `_loop_kwargs` never passes `cost_budget`, so the
+gate re-defaults from config per loop). The real defect was only the
+breaker being too low for a deliberate power-tier escalation; the
+raised/auto breaker is the whole fix.
+
+Live numbers at ship time (28 successful-class cards): p90 = $1.21 →
+both floors govern (warn $2.50, kill $10) — Jeremy's gut numbers were
+~2× and ~8× the observed p90. As power-tier runs accrue, the thresholds
+follow the distribution with no further decree needed.
 
 ### C4 container flip — CLOSED 2026-07-16, discovered closed 2026-07-28
 

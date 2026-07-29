@@ -117,7 +117,10 @@ Per-model, per-step-type cost tracking to `memory/step-costs.jsonl`:
 - Token counts, elapsed ms, goal preview, model used
 - `tool_cost_report.py` for operator-facing summaries
 
-**Gap:** Cost is recorded after-the-fact. No real-time budget enforcement ("stop, you've spent $5 on this goal") — only loop-level `cost_budget` parameter with coarse checking.
+Budget enforcement (stale-gap corrected 2026-07-29 — real-time enforcement exists):
+- Per-run breaker: `budget.per_run_usd` — absent = auto `max($10, 4 × p90 of successful-run costs)` via `metrics.successful_run_cost_p90()` (run-card scan, ≥8 samples, ~15-min cache); explicit number = static cap; 0/null = uncapped. Enforced between steps at budget + 20% slush (loop_execute), mid-step by the runaway circuit (`budget.runaway_multiplier` × budget, adapter-seam pre-call refusal).
+- Warn line: `budget.warn_usd` — absent = auto `max($2.50, p90)`. Advisory, warn-once: dollars in the log, one `effort_note` on the conversation channel in effort language, no dollars (spend-UX decree 2026-07-17).
+- Daily cross-run gate: `budget.daily_usd` ($25) on `metrics.spend_today()` before any tokens are spent.
 
 ## Test Isolation (session 17)
 

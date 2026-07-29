@@ -1971,6 +1971,41 @@ def test_cost_budget_exceeded_on_final_step_keeps_done(monkeypatch, tmp_path):
     assert not (result.stuck_reason and "cost_budget" in result.stuck_reason)
 
 
+@pytest.mark.slow
+def test_cost_warn_emits_effort_note_to_channel(monkeypatch, tmp_path):
+    """Crossing the warn line surfaces ONE effort-language note on the
+    conversation channel — no dollars in the user-facing text (2026-07-17
+    spend-UX decree: dollars are internal units) — and never stops the run."""
+    _setup_workspace(monkeypatch, tmp_path)
+    from pre_flight import PlanReview
+    from unittest.mock import patch as _patch, MagicMock
+    import config as config_mod
+    ch = MagicMock()
+    _real_get = config_mod.get
+    monkeypatch.setattr(
+        config_mod, "get",
+        lambda k, d=None: (0.000001 if k == "budget.warn_usd"
+                           else _real_get(k, d)))
+    _pf = PlanReview(scope="narrow", scope_note="test")
+    with _patch("pre_flight.review_plan", return_value=_pf):
+        result = run_agent_loop(
+            "cheap task",
+            project="cost-warn-test",
+            adapter=_DryRunAdapter(),
+            dry_run=False,
+            cost_budget=50.0,  # breaker far away — only the warn line trips
+            channel=ch,
+        )
+    assert result.status == "done", (
+        f"warn line must not stop the run: {result.status!r}")
+    notes = [c for c in ch.emit.call_args_list
+             if c.args and c.args[0] == "effort_note"]
+    assert len(notes) == 1, f"expected exactly one effort_note, got {len(notes)}"
+    text = notes[0].kwargs.get("text", "")
+    assert "$" not in text
+    assert "deeper than most" in text
+
+
 # ---------------------------------------------------------------------------
 # Phase 35 P2: HITL tier wiring in _execute_step
 # ---------------------------------------------------------------------------

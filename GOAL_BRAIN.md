@@ -5200,3 +5200,24 @@ Dormant (deliberately parked, not dropped):
   candidate→contested→graduated tiers are the theory→fact gradient
   already. Not yet implemented — this is the frame for the B
   conversation/build.
+
+- **2026-07-29 — Cost-threshold decree (Jeremy): kill ~$10, surfaced
+  warning ~$2.50, "much more interested in the data driven values...
+  let's do both per your recommendation."** He weighed removing the
+  per-run cap entirely on the Max plan ("we are losing as much
+  opportunity time as we are token cost... this should be fast and
+  cheap") and agreed caps stay as circuit-breakers, not cost
+  optimizers — API-failover backend is real dollars, and pathological
+  loops are what the breaker exists for (extends the 2026-07-29
+  token-cap "caps = circuit-breakers" decree). Shipped same day:
+  `budget.per_run_usd` absent = auto `max($10, 4 × p90 of
+  successful-run costs)` (`metrics.successful_run_cost_p90`, run-card
+  scan), new `budget.warn_usd` absent = auto `max($2.50, p90)`;
+  crossing the warn line emits one `effort_note` on the conversation
+  channel in effort language with no dollars (spend-UX decree
+  2026-07-17 applied). Box overrides ($2/run, $10/day) removed so auto
+  governs; daily cap stays $25 repo default. Diagnosis correction on
+  the record: budgets were already per-loop — the escalated re-run
+  3a4e2692 wasn't defunded by cumulative spend, it was a $3.00
+  power-tier step against a $2.40 cap; the raised/auto breaker is the
+  whole fix.

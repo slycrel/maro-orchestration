@@ -68,7 +68,7 @@ _STARTER_CONFIG = """\
 #model:
 #  backend_order: [%(backend_order)s]
 
-# --- Spend caps (defaults: $%(per_run).0f/run, $%(daily).0f/day; 0 = uncapped) ---------------------
+# --- Spend caps (unset = auto: $%(per_run).0f/run floor scaled by run history, $%(daily).0f/day; 0 = uncapped) ---
 #budget:
 #  per_run_usd: %(per_run).1f
 #  daily_usd: %(daily).1f
