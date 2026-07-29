@@ -20,6 +20,42 @@ Dev log tab at maro.feifdom.com alongside Runs and Reading.
 
 ## 2026-07-29
 
+**Settled-chunks batch — four trio-triaged items shipped, and the trio
+became a skill** — threads: `adversary-trio`, `dispatch-envelope`,
+`knowledge-receipts`, `now-retry-rung`, `next-leap-packaging`. Jeremy's
+"get through some of these chunks... and maybe make a skill? for the
+trio" produced both halves. The skill first:
+`.claude/skills/adversary-trio/SKILL.md` packages the forced-opposed
+review panel (advocate/skeptic/scoper — three Codex seats given opposed
+dispositions, not three costumes on one caution) with a keep/kill
+adjudication ledger; its first run (recorded in
+`docs/history/2026-07-29-settled-chunks-trio-triage.md`) materially
+re-scoped and re-ordered the four settled items versus the solo prior —
+run 1 of 5 keep-signal fired. The four chunks, in the trio's order:
+(4) envelope delivery rendering — `cmd_result` now emits a `delivery`
+block ({you_asked verbatim, dispatched_with}) for typed-envelope
+dispatches only, so the human boundary shows the ask and the operator
+prompt separately; (2) certainty receipts — injected lessons and
+standing rules now cite their backing (confirmations, last-verified,
+reinforcement counts) or read as "observed once"; zero plumbing, the
+fields already rode the injected objects; (3) NOW artifact-retry rung
+(shallow half) — one seeded same-lane retry on a self-verdict failure,
+re-judged against the original ask, both attempts fully recorded,
+gated `now_lane.artifact_retry` default OFF (star port + 3-arm matrix
+explicitly out per triage); (1) next-leap packaging slice 1 —
+report-only `packaging_readout` CLI (persona × goal-type would-include /
+would-exclude / insufficient-evidence buckets over the live selector +
+skill-stats). The readout's first live run caught a real one: the
+trained skill router is degenerate — the same 3 skills score 0.992 for
+every goal, so slice-2 wiring would package identical skills into every
+persona (BACKLOG'd as a slice-2 blocker). Also surfaced: skills.jsonl
+`use_count` is not the evidence store (2/314 nonzero; skill-stats.jsonl
+is), and the persona-outcomes→outcomes loop_id join is stone dead
+(0/40). **Surprised by:** the readout paying for itself on its first
+execution — built to inspect packaging evidence, it instead found that
+the selector the packaging would sit on has been returning a constant
+answer, which nothing else in the system was positioned to notice.
+
 **Autonomous batch — trio-adjudicated work items shipped without Jeremy**
 — threads: `dispatch-envelope`, `house-style`, `knowledge-liveness`.
 Jeremy's standing directive ("implement the work items available without

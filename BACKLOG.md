@@ -405,6 +405,42 @@ escalation.
   measurement axis. Reuse the benchmark-cell isolation machinery
   (twentieth pass).
 
+### Next-leap: auto persona+skill packaging (ARC OPENED 2026-07-29, first-claim pull; slice 1 SHIPPED 2026-07-29)
+
+The capacity-parked next-leap item, pulled into the free ACTIVE slot
+2026-07-29 (claim condition met by the closure-unification ship; Jeremy's
+"your coined terminology, not mine" cleared the over-cautious defer).
+Trio-triage verdict governs the shape: **readout-first** — evolver
+outcome data isn't causal evidence yet, so make the would-be packaging
+inspectable before any behavior changes.
+
+- [x] **Slice 1 — packaging readout (report-only) SHIPPED 2026-07-29**:
+  `src/packaging_readout.py` + CLI (`PYTHONPATH=src python3 -m
+  packaging_readout [--persona N] [--json]`). Persona × goal-type cells
+  with would_include / would_exclude / insufficient_evidence buckets;
+  evidence = the LIVE selector's own picks (find_matching_skills) joined
+  to skill-stats.jsonl (the real usage store — skills.jsonl use_count is
+  unmaintained, 2/314 nonzero), plus a supplementary open-circuit scan
+  the live selector can't show. Coverage block reports every join's hit
+  rate: dispatch→outcomes 133/140 goals; persona-outcomes loop_id join
+  DEAD (0/40); verdicted outcomes thin (22 achieved / 18 not / 156
+  unverdicted). Liveness-tested (real writers, no read-side mocks) +
+  live-verified non-empty on this box.
+- [ ] **Slice 1 catch — the skill router is degenerate (BLOCKS slice 2):**
+  live run shows the SAME 3 skills ("Codebase-to-Proposal Gap Mapping",
+  "Framework-to-Architecture Gap Mapping", "Headless Branch Setup")
+  match EVERY goal for EVERY persona; verified at the seam —
+  `router.route_skills` scores all three 0.992 regardless of goal, so
+  top_k is constant and keyword/tf-idf fallbacks never fire. Wiring
+  packaging today would bundle the same 3 skills into every persona.
+  Fix or bypass the router (retrain, calibration gate, or
+  keyword-first) before slice 2; the readout is the regression
+  instrument.
+- [ ] **Slice 2 — wire packaging behind a flag** (default OFF,
+  no-silent-spend posture): persona spec gains a packaged-skills field
+  fed from would_include rows; gated on the router fix + a fatter
+  verdicted denominator (156 unverdicted rows carry no signal).
+
 ### Dev-approach "house style" doc + intentionality loop (OPENED 2026-07-28, Jeremy; v1 SHIPPED 2026-07-29)
 
 Jeremy: "We should write down our dev approach somewhere in a guidance
