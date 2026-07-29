@@ -228,6 +228,13 @@ def ingest_lessons_to_store(
                             # not this mirror, is the primary injection
                             # surface and sees confirmation immediately.
                             continue
+                        if lesson.get("minted_from") == "prompt":
+                            # Provenance gate (2026-07-29): quarantined
+                            # prompt-derived lessons never enter worker
+                            # recall. Same ingest-once lag as provisional;
+                            # rows quarantined AFTER ingest are handled by
+                            # invalidate_lesson_mirror().
+                            continue
                         item = _lesson_to_memory_item(lesson)
                         if store.get(item.id, include_invalid=True) is not None:
                             continue  # already ingested (offset lost/reset)
@@ -262,6 +269,32 @@ def ingest_lessons_to_store(
                     ingested_count, source_path.name)
 
     return stats
+
+
+def invalidate_lesson_mirror(lesson_id: str, content: str,
+                             *, reason: str = "quarantined",
+                             store: Optional[SqliteMemoryStore] = None) -> bool:
+    """Best-effort invalidation of a lesson's mirror copy in the worker-recall
+    store. The bridge is ingest-once by offset, so a row quarantined AFTER
+    ingest leaves a servable sqlite copy behind — this is the cleanup verb
+    for that copy (adversarial review 2026-07-29). The id derivation must
+    stay in lockstep with _lesson_to_memory_item. Returns True if a live
+    item was invalidated; False if absent, already invalid, or on any error.
+    """
+    try:
+        if store is None:
+            store = SqliteMemoryStore(_memory_store_path())
+        item_id = hashlib.sha1(
+            f"{lesson_id}|{content}".encode("utf-8")
+        ).hexdigest()[:12]
+        if store.get(item_id) is None:
+            return False
+        store.invalidate(item_id, reason)
+        return True
+    except Exception as exc:
+        log.warning("memory_bridge: mirror invalidation failed for %s: %s",
+                    lesson_id[:8], exc)
+        return False
 
 
 def recall_for_worker(

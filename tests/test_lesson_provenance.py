@@ -336,3 +336,99 @@ def test_tripwire_scaffolded_goal_extraction_lands_quarantined(monkeypatch, tmp_
         assert hit.lesson != DB37D525
     for l in load_lessons(task_type="agenda", limit=10):
         assert l.lesson != DB37D525
+
+
+# ---------------------------------------------------------------------------
+# Adversarial-review round 2 (2026-07-29): killswitch re-arm via dedup clear,
+# truncated-goal starvation, seed-reader and canon surfaces.
+# ---------------------------------------------------------------------------
+
+def test_killswitch_off_rerecord_does_not_clear_tiered(monkeypatch, tmp_path):
+    # With the gate off, a duplicate write carries minted_from="" — that must
+    # not earn citizenship. Only an affirmatively outcome-classified re-record
+    # clears quarantine; otherwise disabling the killswitch re-arms stamped
+    # rows via the next duplicate write.
+    _setup(monkeypatch, tmp_path)
+    record_tiered_lesson(DB37D525, "agenda", "done", source_goal=TIRE_GOAL)
+    stored = load_tiered_lessons(tier=MemoryTier.MEDIUM, limit=None, raw=True)
+    assert stored[0].minted_from == MINTED_FROM_PROMPT
+    monkeypatch.setattr(lesson_provenance, "provenance_gate_enabled", lambda: False)
+    record_tiered_lesson(DB37D525, "agenda", "done", source_goal="unrelated later run")
+    stored = load_tiered_lessons(tier=MemoryTier.MEDIUM, limit=None, raw=True)
+    assert stored[0].minted_from == MINTED_FROM_PROMPT
+
+
+def test_killswitch_off_rerecord_does_not_clear_flat(monkeypatch, tmp_path):
+    _setup(monkeypatch, tmp_path)
+    _store_lesson("agenda", "done", DB37D525, source_goal=TIRE_GOAL)
+    monkeypatch.setattr(lesson_provenance, "provenance_gate_enabled", lambda: False)
+    _store_lesson("agenda", "done", DB37D525, source_goal="unrelated later run")
+    stored = load_lessons(task_type="agenda", limit=10, include_quarantined=True)
+    assert stored[0].minted_from == MINTED_FROM_PROMPT
+
+
+def test_tiered_full_goal_classification_stores_excerpt(monkeypatch, tmp_path):
+    # Scaffolding past char 120 of the goal must still reach the classifier
+    # (callers pass the full goal; the row stores the 120-char excerpt).
+    # Pre-fix, callers truncated to goal[:120] and this lesson minted clean.
+    _setup(monkeypatch, tmp_path)
+    goal = ("Research the best all-weather tires for a 2019 Subaru Outback "
+            "including price ranges, retailer availability and warranty terms "
+            "for each brand. "
+            "Do NOT escalate or stop merely because a linked page cannot be accessed.")
+    assert "escalate" not in goal[:120]
+    lesson = ("Do not stop research when a linked page is inaccessible; "
+              "continue with recovered facts and produce the deliverable.")
+    tl = record_tiered_lesson(lesson, "agenda", "done", source_goal=goal)
+    assert tl.minted_from == MINTED_FROM_PROMPT
+    stored = load_tiered_lessons(tier=MemoryTier.MEDIUM, limit=None, raw=True)
+    assert len(stored[0].source_goal) <= 120
+
+
+def test_seed_lesson_block_skips_quarantined(monkeypatch, tmp_path):
+    # The extractor's style-example seed must never showcase a quarantined
+    # lesson — that would teach the extractor the exact style the gate exists
+    # to catch.
+    _setup(monkeypatch, tmp_path)
+    from memory import _seed_lesson_block
+    from knowledge_web import set_lesson_minted_from
+    bad = record_tiered_lesson(
+        "QUARANTINED STYLE EXAMPLE lesson text.", "agenda", "done",
+        source_goal="g", tier=MemoryTier.LONG)
+    # Reinforce so the quarantined row outranks the clean one on score.
+    record_tiered_lesson(
+        "QUARANTINED STYLE EXAMPLE lesson text.", "agenda", "done",
+        source_goal="g", tier=MemoryTier.LONG)
+    assert set_lesson_minted_from(bad.lesson_id, "prompt",
+                                  tier=MemoryTier.LONG) is True
+    block = _seed_lesson_block("agenda")
+    assert "QUARANTINED STYLE EXAMPLE" not in block
+    clean = record_tiered_lesson(
+        "A clean outcome-derived example lesson.", "agenda", "done",
+        source_goal="g", tier=MemoryTier.LONG)
+    assert clean.lesson_id != bad.lesson_id
+    block = _seed_lesson_block("agenda")
+    assert "A clean outcome-derived example" in block
+
+
+def test_canon_candidates_skip_quarantined(monkeypatch, tmp_path):
+    # A quarantined row with stale canon hits must not be recommended for
+    # AGENTS.md identity promotion.
+    _setup(monkeypatch, tmp_path)
+    from knowledge_web import get_canon_candidates, set_lesson_minted_from
+    tl = record_tiered_lesson(
+        "Canon-grade lesson applied across task types.", "agenda", "done",
+        source_goal="g", tier=MemoryTier.LONG)
+    stats_path = tmp_path / "memory" / "canon_stats.jsonl"
+    stats_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(stats_path, "a", encoding="utf-8") as fh:
+        for tt in ("agenda", "research"):
+            fh.write(json.dumps({"lesson_id": tl.lesson_id,
+                                 "task_type": tt,
+                                 "tier": MemoryTier.LONG}) + "\n")
+    cands = get_canon_candidates(min_hits=2, min_task_types=2)
+    assert any(c["lesson_id"] == tl.lesson_id for c in cands)
+    assert set_lesson_minted_from(tl.lesson_id, "prompt",
+                                  tier=MemoryTier.LONG) is True
+    cands = get_canon_candidates(min_hits=2, min_task_types=2)
+    assert not any(c["lesson_id"] == tl.lesson_id for c in cands)

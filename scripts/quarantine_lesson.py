@@ -49,6 +49,33 @@ def main() -> int:
         return 1
     print(f"lesson {args.lesson_id}: minted_from={minted_from!r} stamped in "
           f"{', '.join(hits)}")
+
+    if not args.clear:
+        # The worker-recall sqlite mirror is ingest-once by offset — a row
+        # quarantined after ingest leaves a servable copy behind. Invalidate
+        # it too (adversarial review 2026-07-29). Best-effort: the JSONL
+        # stamp above is the primary record either way.
+        from knowledge_web import load_tiered_lessons
+        from memory_ledger import load_lessons
+        from memory_bridge import invalidate_lesson_mirror
+        contents = []
+        try:
+            for tier in (MemoryTier.MEDIUM, MemoryTier.LONG):
+                for tl in load_tiered_lessons(tier=tier, min_score=0.0,
+                                              limit=None, raw=True):
+                    if tl.lesson_id == args.lesson_id:
+                        contents.append(tl.lesson)
+        except Exception:
+            pass
+        try:
+            for fl in load_lessons(limit=100000, include_quarantined=True):
+                if fl.lesson_id == args.lesson_id:
+                    contents.append(fl.lesson)
+        except Exception:
+            pass
+        for content in contents:
+            if invalidate_lesson_mirror(args.lesson_id, content):
+                print(f"lesson {args.lesson_id}: worker-recall mirror copy invalidated")
     return 0
 
 

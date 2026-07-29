@@ -1085,9 +1085,13 @@ def _store_lesson(
                 return ex
             # Exact match: reinforce without touching confidence (it's already there)
             ex.times_reinforced += 1
-            if ex.minted_from == "prompt":
+            if ex.minted_from == "prompt" and minted_from == "outcome":
                 # Outcome-derived re-record clears quarantine — mirrors the
-                # tiered _reinforce_tiered_lesson citizenship rule.
+                # tiered _reinforce_tiered_lesson citizenship rule. The
+                # incoming record must be affirmatively outcome-classified:
+                # an unclassified "" (gate off) must not clear, or disabling
+                # the killswitch re-arms stamped rows via the next duplicate
+                # write (adversarial review 2026-07-29).
                 ex.minted_from = "outcome"
                 log.info("quarantined flat lesson %s cleared by an "
                          "outcome-derived re-record", ex.lesson_id)
@@ -1102,7 +1106,7 @@ def _store_lesson(
             # Reinforce existing lesson and persist the update
             ex.times_reinforced += 1
             ex.confidence = min(1.0, ex.confidence + 0.05)
-            if ex.minted_from == "prompt":
+            if ex.minted_from == "prompt" and minted_from == "outcome":
                 ex.minted_from = "outcome"  # same citizenship rule as above
                 log.info("quarantined flat lesson %s cleared by an "
                          "outcome-derived re-record", ex.lesson_id)

@@ -219,6 +219,29 @@ _REFLECT_SYSTEM = textwrap.dedent("""\
 _LESSON_TYPES = frozenset({"execution", "planning", "recovery", "verification", "cost"})
 
 
+def _seed_lesson_block(task_type: str) -> str:
+    """S2 seed-reader: render the top clean LONG lesson as a style example
+    for the extractor prompt. Skips quarantined rows — a prompt-derived
+    lesson used as the "high-quality example" would teach the extractor the
+    exact style the provenance gate exists to catch (adversarial review
+    2026-07-29). Returns "" when no clean seed exists."""
+    try:
+        seed_lessons = load_tiered_lessons(
+            MemoryTier.LONG, task_type=task_type, min_score=0.7, limit=3)
+        seed_lessons = [s for s in seed_lessons
+                        if getattr(s, "minted_from", "") != "prompt"]
+        if not seed_lessons:
+            return ""
+        seed = seed_lessons[0]
+        return (
+            f"\nHigh-quality lesson example (emulate this style and specificity):\n"
+            f'  {{"lesson": "{seed.lesson[:120]}", "type": "{seed.lesson_type or "execution"}"}}'
+            f"  [reinforced {seed.times_reinforced}x, applied {seed.times_applied}x, score={seed.score:.2f}]"
+        )
+    except Exception:
+        return ""
+
+
 def extract_lessons_via_llm(
     goal: str,
     status: str,
@@ -253,19 +276,8 @@ def extract_lessons_via_llm(
 
     from llm import LLMMessage
 
-    # S2: Seed-reader bootstrapping — load top-1 long-tier lesson as style example
-    seed_block = ""
-    try:
-        seed_lessons = load_tiered_lessons(MemoryTier.LONG, task_type=task_type, min_score=0.7, limit=1)
-        if seed_lessons:
-            seed = seed_lessons[0]
-            seed_block = (
-                f"\nHigh-quality lesson example (emulate this style and specificity):\n"
-                f'  {{"lesson": "{seed.lesson[:120]}", "type": "{seed.lesson_type or "execution"}"}}'
-                f"  [reinforced {seed.times_reinforced}x, applied {seed.times_applied}x, score={seed.score:.2f}]"
-            )
-    except Exception:
-        pass
+    # S2: Seed-reader bootstrapping — top clean long-tier lesson as style example
+    seed_block = _seed_lesson_block(task_type)
 
     # S3: ATIF feedback — pass reinforcement stats for this task_type
     atif_block = ""
@@ -539,7 +551,9 @@ def extract_step_lessons(
                 lesson_text=lesson_text,
                 task_type=task_type,
                 outcome="step-verified",
-                source_goal=goal[:120],
+                # Full goal — the provenance gate classifies on it; the
+                # store truncates the row's excerpt itself.
+                source_goal=goal,
                 tier=MemoryTier.MEDIUM,
                 k_samples=1,
                 lesson_type=lesson_type,
@@ -646,7 +660,7 @@ def reflect_and_record(
                     lesson_text=lesson_text,
                     task_type=task_type,
                     outcome=status,
-                    source_goal=goal[:120],
+                    source_goal=goal,
                     tier=MemoryTier.MEDIUM,
                     k_samples=1,  # single extraction → 0.5 confidence (F5)
                     lesson_type=lesson_type,
@@ -829,7 +843,7 @@ def extract_deferred_lessons(
                     lesson_text=lesson_text,
                     task_type=outcome.task_type,
                     outcome=outcome.status,
-                    source_goal=outcome.goal[:120],
+                    source_goal=outcome.goal,
                     tier=MemoryTier.MEDIUM,
                     k_samples=1,
                     lesson_type=lesson_type,

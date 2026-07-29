@@ -300,10 +300,11 @@ def record_tiered_lesson(
     except ImportError:
         pass
 
-    # Provenance gate: classify at the choke point. source_goal may be
-    # caller-truncated (120 chars), but the tire-incident scaffolding sat in
-    # the first line of the goal — and the two lesson-text signals need no
-    # goal at all. Never blocks recording.
+    # Provenance gate: classify at the choke point, on the FULL source_goal.
+    # Callers must not pre-truncate — scaffolding past char 120 of a goal
+    # would starve the echo signal (adversarial review 2026-07-29); the row
+    # itself stores the conventional 120-char excerpt below. Never blocks
+    # recording.
     if not minted_from:
         try:
             from lesson_provenance import (classify_lesson_provenance,
@@ -336,7 +337,8 @@ def record_tiered_lesson(
                              "(provenance gate)", ex.lesson_id)
                     return ex
                 return _reinforce_tiered_lesson(
-                    ex, tier=MemoryTier.LONG, confirming=not provisional)
+                    ex, tier=MemoryTier.LONG, confirming=not provisional,
+                    incoming_minted_from=minted_from)
             max_sim = max(max_sim, sim)
 
     # Scan-and-append is one critical section (review finding: the dedup
@@ -355,7 +357,8 @@ def record_tiered_lesson(
                              "(provenance gate)", ex.lesson_id)
                     return ex
                 return _reinforce_tiered_lesson(
-                    ex, tier=tier, confirming=not provisional)
+                    ex, tier=tier, confirming=not provisional,
+                    incoming_minted_from=minted_from)
             max_sim = max(max_sim, sim)
 
         # Chunk 6: novelty term — a lesson unlike anything stored starts above
@@ -384,7 +387,9 @@ def record_tiered_lesson(
             task_type=task_type,
             outcome=outcome,
             lesson=lesson_text,
-            source_goal=source_goal,
+            # Row stores the conventional 120-char excerpt; classification
+            # above already saw the full goal.
+            source_goal=source_goal[:120],
             confidence=confidence,
             tier=tier,
             score=score,
@@ -424,7 +429,8 @@ def _append_tiered_lesson(tl: TieredLesson, *, tier: str) -> None:
 
 
 def _reinforce_tiered_lesson(tl: TieredLesson, *, tier: str,
-                             confirming: bool = True) -> TieredLesson:
+                             confirming: bool = True,
+                             incoming_minted_from: str = "") -> TieredLesson:
     """Reinforce an existing lesson: bump score and sessions_validated, rewrite file.
 
     ``tl.score`` is expected to be the *effective* (decay-derived) score —
@@ -447,12 +453,16 @@ def _reinforce_tiered_lesson(tl: TieredLesson, *, tier: str,
         tl.provisional = False
         log.info("provisional lesson %s confirmed by a learnable-context re-record",
                  tl.lesson_id)
-    if confirming and tl.minted_from == "prompt":
+    if confirming and incoming_minted_from == "outcome" and tl.minted_from == "prompt":
         # An outcome-derived confirming re-record means the same knowledge
         # was independently derived from an actual outcome — it earns
         # citizenship (mirrors the provisional promote-on-evidence clear).
         # Prompt-derived re-records never reach here: record_tiered_lesson
-        # returns early on their dedup match.
+        # returns early on their dedup match. The incoming record must be
+        # affirmatively outcome-classified: an unclassified "" (gate off,
+        # or the applied-reinforcement path) must not clear quarantine —
+        # otherwise disabling the killswitch re-arms stamped rows via the
+        # next duplicate write (adversarial review 2026-07-29).
         tl.minted_from = "outcome"
         log.info("quarantined lesson %s cleared by an outcome-derived re-record",
                  tl.lesson_id)
@@ -1467,6 +1477,10 @@ def get_canon_candidates(
             continue
         lesson = lesson_map.get(lid)
         if not lesson:
+            continue
+        if _is_quarantined(lesson):
+            # A quarantined row can accumulate stale canon hits from before
+            # its stamp — never recommend it for AGENTS.md identity.
             continue
         candidates.append({
             "lesson_id": lid,

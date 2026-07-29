@@ -86,6 +86,31 @@ from the same incident Maro learned "obey scaffolding" from; two
 learning systems reinforcing each other's worst lesson through one
 shared prompt, each invisible to the other.
 
+**Provenance gate round 2 — adversarial review closes five holes** —
+threads: `dispatch-boundary`, `memory`. Post-land codex review of the
+gate (skeptic/architect/minimalist), findings verified per the
+~30–50%-hallucinated rule: 5 of 7 survived. Two were high and real:
+(1) the killswitch could re-arm quarantined rows — with the gate off a
+duplicate write carried `minted_from=""`, and both stores' dedup-clear
+branches accepted any non-prompt value as citizenship; clears now
+require an affirmative `"outcome"`. (2) the worker-recall sqlite
+mirror (memory_bridge) ingested with no minted_from filter — the next
+director run would have re-injected db37d525 into worker prompts
+through the one surface the gate didn't cover; ingest now skips
+quarantined rows and `invalidate_lesson_mirror()` cleans copies
+ingested before a stamp (live mirror verified clean — last ingest
+predates the mint). Also fixed: tiered mint callers truncated
+`source_goal` to 120 chars, starving the scaffolding-echo signal
+(callers now pass full goals, the store truncates the row excerpt);
+the extractor's LONG style-example seed and `get_canon_candidates`
+didn't filter quarantine. Rejected as designed: text-only
+obedience-shaped lessons can't earn citizenship via re-record — that's
+the quarantine bias working; the escape hatch is the explicit `--clear`
+verb. **Surprised by:** the mirror finding — "every injection surface"
+was audited on the JSONL stores while a sqlite copy of the same data
+sat behind a bridge, one director run away from serving the exact
+lesson we'd just quarantined.
+
 ## 2026-07-28
 
 **Late evening — closure-check unification shipped (the free-slot
