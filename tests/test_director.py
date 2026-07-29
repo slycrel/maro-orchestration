@@ -944,6 +944,12 @@ class TestDetectBehavioralGap:
         # test_declared_runtime_shape_arms_signal2_without_keyword_hint below
         # (adversarial-review finding, 2026-07-12: this test's original name
         # implied it covered declared shape when it didn't).
+        #
+        # Also standing in for the deleted
+        # test_unshaped_deliverable_falls_back_to_keyword_inference (2026-07-29):
+        # that test had byte-identical setup and only `assert reason`, a strict
+        # subset of the assertions here, so it could never fail on its own. Its
+        # claim — B1 left the legacy/unshaped path alone — is this test.
         class _FakeScope:
             failure_modes = ["Server does not respond to /health under load"]
         intent = self._intent(
@@ -1017,17 +1023,6 @@ class TestDetectBehavioralGap:
         intent = self._intent(
             ("docs/notes.md", "planning notes", "document"),
             ("cmd/server/main.go", "HTTP server binary", "runtime"),
-        )
-        reason = self._call(scope=_FakeScope(), resolved_intent=intent)
-        assert reason
-
-    def test_unshaped_deliverable_falls_back_to_keyword_inference(self):
-        # No shape declared at all — original keyword-regex behavior stands,
-        # confirming B1 didn't change the legacy/unshaped path.
-        class _FakeScope:
-            failure_modes = ["Server does not respond to /health under load"]
-        intent = self._intent(
-            ("cmd/server/main.go", "HTTP server binary serving /ws and /static/"),
         )
         reason = self._call(scope=_FakeScope(), resolved_intent=intent)
         assert reason

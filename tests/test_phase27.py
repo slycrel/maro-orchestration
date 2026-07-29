@@ -254,9 +254,15 @@ def test_graveyard_lessons_resurrected_during_loop(monkeypatch, tmp_path):
     assert kanji_lesson.score > 0.3
 
 
-def test_graveyard_injection_verbose_log(monkeypatch, tmp_path, capsys):
-    """Loop logs graveyard resurrection when verbose=True."""
-    import sys, io
+def test_graveyard_injection_verbose_log(monkeypatch, tmp_path):
+    """Loop logs graveyard resurrection when verbose=True.
+
+    The log site (loop_planning.py, `if verbose and graveyard_count:`) is
+    deterministic, so this asserts the line — it previously captured stderr,
+    dropped it, and ended in `assert True`, which made the test unable to fail
+    for any reason other than a crash.
+    """
+    import io
     monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
     _make_lesson(tmp_path, "kanji brush technique", score=0.35)
 
@@ -266,9 +272,8 @@ def test_graveyard_injection_verbose_log(monkeypatch, tmp_path, capsys):
     run_agent_loop("paint kanji art", project="kanji-log-test", dry_run=True, verbose=True)
     log = captured.getvalue()
 
-    # If there was a graveyard hit, should mention "resurrecting"
-    # (may not fire if keywords don't match — just verify loop completed)
-    assert True  # loop ran without error; resurrection is best-effort
+    assert "resurrecting" in log, f"no resurrection log emitted; stderr was:\n{log}"
+    assert "graveyard lesson(s) for goal" in log
 
 
 def test_no_resurrection_when_graveyard_empty(monkeypatch, tmp_path):

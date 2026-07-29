@@ -740,6 +740,14 @@ def worker_session_bridge(
     )
 
 
+# How long a timed-out session's process group gets to honor SIGTERM before
+# the bridge escalates to SIGKILL. Module-level and named (rather than a bare
+# 5.0 at the call site) so the escalation can be exercised without a test
+# paying the full production grace — the branch under test is "grace elapsed
+# without exit -> SIGKILL", which is identical at 0.2s and at 5.0s.
+TERMINATE_GRACE_SECONDS = 5.0
+
+
 def session_execution_bridge(
     session_command: str,
     *,
@@ -970,7 +978,7 @@ def session_execution_bridge(
         try:
             stdout_text, stderr_text = proc.communicate(timeout=timeout_seconds)
         except subprocess.TimeoutExpired as exc:
-            _terminate_process_group(proc.pid, grace_seconds=5.0)
+            _terminate_process_group(proc.pid, grace_seconds=TERMINATE_GRACE_SECONDS)
             stdout_text, stderr_text = proc.communicate()
 
             stdout_text = stdout_text if isinstance(stdout_text, str) else (

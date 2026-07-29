@@ -4,6 +4,7 @@ import time
 from pathlib import Path
 
 import orch
+import orch_bridges
 import pytest
 
 
@@ -381,8 +382,16 @@ def test_worker_session_bridge_manifest_command_list(monkeypatch, tmp_path):
 @pytest.mark.slow
 def test_session_execution_bridge_timeout_kills_lingering_child_processes(monkeypatch, tmp_path):
     monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    # The child below ignores SIGTERM on purpose, so this test always burns the
+    # FULL escalation grace — at the production 5.0s it was the single slowest
+    # test in the suite (6.2s) and, under `-n`, a floor on total wall time.
+    # Shortening the grace exercises the same branch: SIGTERM ignored, grace
+    # elapses, SIGKILL lands.
+    monkeypatch.setattr(orch_bridges, "TERMINATE_GRACE_SECONDS", 0.2)
     _mkproj(tmp_path, "demo", "- [ ] first\n", priority=3)
 
+    child_lifetime = 60          # the SIGTERM-ignoring child's own sleep
+    started = time.monotonic()
     tick = orch.run_tick(
         "demo",
         worker="tester",
@@ -394,7 +403,7 @@ def test_session_execution_bridge_timeout_kills_lingering_child_processes(monkey
             "child = subprocess.Popen([\n"
             "    sys.executable,\n"
             "    '-c',\n"
-            "    'import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(60)',\n"
+            f"    'import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep({child_lifetime})',\n"
             "])\n"
             "(artifact_dir / 'child.pid').write_text(str(child.pid), encoding='utf-8')\n"
             "signal.pause()\n"
@@ -402,11 +411,22 @@ def test_session_execution_bridge_timeout_kills_lingering_child_processes(monkey
             timeout_seconds=0.1,
         ),
     )
+    elapsed = time.monotonic() - started
 
     assert tick is not None
     assert tick.validation.status == "blocked"
     artifact_root = orch.resolve_artifact_path(tick.run.artifact_path)
     child_pid = int((artifact_root / "child.pid").read_text(encoding="utf-8").strip())
+
+    # The child must have been KILLED, not merely outlived. Without this bound
+    # the test passes even with SIGKILL escalation removed: communicate() holds
+    # the pipe open until the grandchild exits on its own, so the liveness poll
+    # below then finds it already gone and the whole thing "passes" in 60s.
+    # Verified 2026-07-29 by disabling the escalation — old test: pass in 60s;
+    # with this bound: fail.
+    assert elapsed < child_lifetime / 4, (
+        f"bridge took {elapsed:.1f}s for a {child_lifetime}s child — the "
+        "SIGTERM-ignoring process group was waited out, not SIGKILLed")
 
     deadline = time.time() + 2.0
     while time.time() < deadline:

@@ -299,7 +299,8 @@ class TestRedditDispatcher:
             m.return_value = ChannelResult(channel="reddit", query="q", items=[])
             from channels import reddit_search
             result = reddit_search("neural net")
-        json.loads(result)
+        json.loads(result)  # should not raise
+        m.assert_called_once_with("neural net", subreddit=None, limit=5)
 
 
 class TestFetchChannelDispatcher:
