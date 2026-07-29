@@ -261,8 +261,15 @@ detached HEAD):
    (the primary tree holds it) — work on a temp branch or detached from
    `origin/main`; land.sh doesn't care. After landing, converge the
    shared tree's stale `main` with `git fetch origin && git reset --mixed
-   origin/main` — ref/index only, tree untouched; your landed edits drop
-   out of `git status` because the tree content now matches HEAD.
+   origin/main` — ref/index only, tree untouched. **Then materialize:**
+   work landed from a worktree never updates the shared working tree —
+   your new files show as `D`, your edits as stale `M`, and the live
+   runtime (which runs from this checkout) keeps executing pre-land
+   code (found 2026-07-29: the SSRF fix was landed but not live). For
+   each dirty path, `git hash-object` it and compare against recent
+   commits' blobs (`git rev-parse <commit>:<path>`): matches an
+   ancestor → stale, safe to `git checkout -- <path>`; matches none →
+   another session's real uncommitted work, leave it alone.
 3. In the shared tree: stage explicit paths only (never `git add -A` /
    `git commit -a`), eyeball `git status` for strangers before every
    commit, and don't touch shared living docs (GOAL_BRAIN.md, BACKLOG.md,
