@@ -120,7 +120,7 @@ src/                 All production Python (~130 flat modules; REFACTOR_PLAN Tie
   constraint.py      Pre-execution constraint enforcement
   ...
 
-tests/               pytest suite (run via bash scripts/test-safe.sh; counts change weekly)
+tests/               pytest suite (run via bash scripts/test-safe.sh; counts change weekly; zero skips is the invariant)
 scripts/             smoke.sh, audit-phases.sh, enqueue.sh
 personas/            YAML persona specs
 docs/                Architecture, memory systems, self-reflection design
@@ -196,14 +196,19 @@ cd /home/clawd/claude/maro-orchestration
 python3 -m pytest tests/test_agent_loop.py -q
 
 # Tests — full suite (use this one — caps CPU to 2 cores + nice 15)
-# Runs in 40-file chunks so progress is visible; won't tip over the box.
+# Runs ONE parallel pytest sized to the core budget: 2 workers pinned to the
+# 2 allowed cores here, `auto` on an unrestricted host. Won't tip over the box.
 bash scripts/test-safe.sh
 
 # Fast feedback lane (explicitly skips @pytest.mark.slow)
 bash scripts/test-safe.sh --fast
 
+# Force the old sequential chunked path (ordering-dependent failure hunting)
+bash scripts/test-safe.sh --jobs 1
+
 # Tests — full suite, raw (only when the box is idle / no TUI running)
-python3 -m pytest tests/ -q
+python3 -m pytest tests/ -q          # serial, ~2m
+python3 -m pytest tests/ -q -n auto  # parallel, ~20s on an 8-core host
 
 # Tests — with coverage (enforces 70% floor per .coveragerc)
 bash scripts/test-cov.sh
