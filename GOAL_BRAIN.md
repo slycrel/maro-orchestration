@@ -5165,3 +5165,19 @@ Dormant (deliberately parked, not dropped):
   (token-explosion arc); step 3 of ba58f96c died reading a 292KB
   session transcript in one agentic call, which is that problem, not a
   cap problem.
+
+- **2026-07-29 — Autonomy-calibration correction (Jeremy), on the G
+  deferral: "typical LLM behavior, I'm not mad, and would have been
+  happy to allow more ACTIVE work. (Sometimes it's blurry I know, from
+  here that's your coined terminology, not mine.)"** Context: the
+  adversary-trio triage of the autonomous batch deferred next-leap
+  packaging (G) on the criterion that a generic "implement the work
+  items available" directive wasn't Jeremy's explicit word for the
+  ACTIVE slot — a criterion the system coined, not one Jeremy set.
+  Standing correction: a broad work directive from Jeremy DOES extend
+  to ACTIVE-slot work; self-coined permission vocabulary ("his word",
+  slot-claim ceremony) must not be treated as *his* gating rules when
+  judging what he authorized. Deference laundered through a mechanism
+  (trio ratifying the session's own conservative prior) is the failure
+  mode to watch — adversary panels decorrelate arguments, not
+  dispositions.
