@@ -17,11 +17,40 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-INSTALLED_HOOK = REPO_ROOT / ".git" / "hooks" / "pre-push"
 SOURCE_HOOK = REPO_ROOT / "scripts" / "hooks" / "pre-push"
 
+
+def _git_common_dir() -> "Path | None":
+    """The git dir that actually holds `hooks/` — worktree or not.
+
+    In a LINKED WORKTREE `.git` is a file pointing at
+    `<primary>/.git/worktrees/<name>`, so the old `(REPO_ROOT/'.git').is_dir()`
+    gate read False and skipped this entire tripwire — in exactly the setup
+    CLAUDE.md tells sessions to use for shared-tree work. Worse, hooks are NOT
+    per-worktree: git runs the COMMON dir's `hooks/pre-push`, so the old
+    `.git/hooks` path would have been wrong even had the gate passed.
+    `--git-common-dir` is the single query that answers correctly from either.
+    """
+    try:
+        proc = subprocess.run(
+            ["git", "rev-parse", "--git-common-dir"],
+            cwd=REPO_ROOT, capture_output=True, text=True, timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0 or not proc.stdout.strip():
+        return None
+    common = Path(proc.stdout.strip())
+    if not common.is_absolute():
+        common = REPO_ROOT / common
+    return common.resolve()
+
+
+GIT_COMMON_DIR = _git_common_dir()
+INSTALLED_HOOK = (GIT_COMMON_DIR or REPO_ROOT / ".git") / "hooks" / "pre-push"
+
 pytestmark = pytest.mark.skipif(
-    not (REPO_ROOT / ".git").is_dir(), reason="not a git checkout"
+    GIT_COMMON_DIR is None, reason="not a git checkout"
 )
 
 MAIN_PUSH_LINE = (

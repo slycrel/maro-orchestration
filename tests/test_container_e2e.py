@@ -49,6 +49,33 @@ def _image_available() -> bool:
     return ok
 
 
+def _image_skip_reason() -> str:
+    """Why the image tier is skipping — distinguishing 'never built' from
+    'built, but at a stale pin'.
+
+    The image tag tracks CLAUDE_CLI_VERSION, so every re-pin silently turns
+    this tier into skips until someone rebuilds. A flat "not built" sends
+    the operator looking for the wrong problem (it hid a 2.1.207-vs-2.1.210
+    drift on the dev Mac); naming the stale tags they DO have makes the one
+    required action obvious.
+    """
+    import subprocess
+    stale = ""
+    try:
+        out = subprocess.run(
+            ["docker", "images", "--format", "{{.Repository}}:{{.Tag}}",
+             ce.DEFAULT_IMAGE.split(":")[0]],
+            capture_output=True, text=True, timeout=10,
+        )
+        found = [t for t in out.stdout.split() if t != ce.DEFAULT_IMAGE]
+        if found:
+            stale = f" (stale tags present: {', '.join(sorted(found))})"
+    except Exception:
+        pass
+    return (f"executor image {ce.DEFAULT_IMAGE} not built{stale} — "
+            f"run `maro-bootstrap container-setup`")
+
+
 pytestmark = pytest.mark.skipif(
     not _docker_available(),
     reason="real docker daemon not reachable — this tier is box-only, never CI",
@@ -266,10 +293,12 @@ class TestNetworkIsolation:
 # Executor image — baked toolset + identity (needs the image, NOT auth)
 # ---------------------------------------------------------------------------
 
-@pytest.mark.skipif(
-    not _image_available(),
-    reason="executor image not built — run `maro-bootstrap container-setup`",
-)
+# skipif evaluates `reason` eagerly, so only pay for the stale-tag probe when
+# the tier is actually going to skip.
+_IMAGE_OK = _image_available()
+
+
+@pytest.mark.skipif(not _IMAGE_OK, reason="" if _IMAGE_OK else _image_skip_reason())
 class TestExecutorImage:
     def test_baked_toolset_present(self):
         # The design's env-dependency contract: git/python3/curl/claude/node.

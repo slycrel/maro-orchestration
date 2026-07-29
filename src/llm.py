@@ -936,15 +936,21 @@ def _session_cpu_ticks(leader_pid: int) -> int:
     macOS's BSD ps turns out to mean something else and does NOT equal the
     session leader's own pid the way it does on Linux.
 
-    2026-07-15: hybrid. The ps-only version traded away resolution: ps's
-    `time` column is whole seconds, so the rescue only fired when session
-    CPU crossed an integer-second boundary inside a liveness window — with
-    `liveness_timeout` < ~1s the signal was effectively dead on an idle box
-    (BACKLOG "CPU-liveness rescue is second-granularity blind"). Now: on
-    Linux, read /proc/<pid>/stat utime+stime directly (clock ticks, ~10ms
-    resolution); if /proc is absent (macOS) or the sweep fails, fall back
-    to the 2026-07-08 ps implementation unchanged — the portability fix is
-    preserved.
+    2026-07-15: hybrid. The ps-only version traded away resolution *on
+    Linux*, where `ps -o time` is whole seconds (``hh:mm:ss``) — so the
+    rescue only fired when session CPU crossed an integer-second boundary
+    inside a liveness window, and with `liveness_timeout` < ~1s the signal
+    was effectively dead on an idle box (BACKLOG "CPU-liveness rescue is
+    second-granularity blind"). Now: on Linux, read /proc/<pid>/stat
+    utime+stime directly (clock ticks, ~10ms resolution); if /proc is
+    absent (macOS) or the sweep fails, fall back to the 2026-07-08 ps
+    implementation unchanged — the portability fix is preserved.
+
+    Note the granularity problem was never universal: BSD/macOS `ps` emits
+    ``mm:ss.cc``, i.e. centiseconds, which `_parse_ps_cpu_time` already
+    consumes. So the macOS fallback lane is sub-second on its own merits,
+    not a degraded tier — verified against a live busy process by
+    `test_session_cpu_ticks_sees_sub_second_cpu_advance`.
 
     Unit contract: returns an int in centiseconds regardless of source
     (ticks converted via SC_CLK_TCK; ps seconds * 100). Callers only

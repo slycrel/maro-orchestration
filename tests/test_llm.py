@@ -1038,8 +1038,9 @@ def test_run_subprocess_safe_liveness_spares_cpu_busy_silent_process():
 
 
 # --- _session_cpu_ticks hybrid CPU source (2026-07-15) --------------------
-# ps's `time` column is whole seconds; the /proc fast path reads clock ticks
-# (~10ms) so the CPU-liveness rescue works with sub-second liveness windows.
+# Linux's `ps -o time` is whole seconds, so the /proc fast path (clock ticks,
+# ~10ms) is what buys sub-second liveness windows there. BSD/macOS `ps` emits
+# mm:ss.cc natively, so the fallback lane is sub-second without /proc.
 
 def test_parse_proc_stat_cpu_ticks_real_format_line():
     """Parser extracts utime+stime from a real-format /proc/<pid>/stat line."""
@@ -1070,14 +1071,48 @@ def test_parse_proc_stat_cpu_ticks_evil_comm():
     assert _parse_proc_stat_cpu_ticks(line) == 10
 
 
-@pytest.mark.skipif(not os.path.isdir("/proc"), reason="requires Linux /proc")
-def test_parse_proc_stat_cpu_ticks_live_self():
-    """The parser handles this process's own live /proc stat line."""
-    from llm import _parse_proc_stat_cpu_ticks
+def test_native_cpu_time_source_parses_live_format():
+    """The parser for THIS host's CPU-time source handles a real, live line.
 
-    with open("/proc/self/stat") as f:
-        ticks = _parse_proc_stat_cpu_ticks(f.read())
-    assert isinstance(ticks, int) and ticks >= 0
+    Format-drift guard, and deliberately not skipped off-Linux: each platform
+    has a native source and both parsers ship, so each host tests its own.
+    Linux → /proc/<pid>/stat (clock ticks); macOS/BSD → `ps -o time=`
+    (``[[dd-]hh:]mm:ss[.cc]``). Previously this was `/proc`-only + skipif,
+    which left `_parse_ps_cpu_time` — the parser macOS actually runs in
+    production — with no live-format coverage at all.
+    """
+    import subprocess as sp
+    from llm import _PROC_PATH, _parse_proc_stat_cpu_ticks, _parse_ps_cpu_time
+
+    if _PROC_PATH.is_dir():
+        ticks = _parse_proc_stat_cpu_ticks((_PROC_PATH / "self" / "stat").read_text())
+        assert isinstance(ticks, int) and ticks >= 0
+        return
+
+    out = sp.run(["ps", "-o", "pid=,time=", "-p", str(os.getpid())],
+                 capture_output=True, text=True, timeout=5)
+    pid_str, time_str = out.stdout.split(None, 1)
+    assert int(pid_str) == os.getpid()
+    seconds = _parse_ps_cpu_time(time_str.strip())
+    assert isinstance(seconds, float) and seconds >= 0.0
+
+
+@pytest.mark.parametrize("text,expected", [
+    ("0:00.40", 0.4),            # macOS/BSD: mm:ss.cc — the centisecond case
+    ("43:00.50", 2580.5),        # macOS/BSD: minutes + centiseconds
+    ("00:00:07", 7.0),           # Linux: hh:mm:ss, whole seconds
+    ("158:20", 9500.0),          # bare mm:ss
+    ("2-03:04:05", 183845.0),    # dd-hh:mm:ss (long-lived process)
+])
+def test_parse_ps_cpu_time_covers_every_shipped_format(text, expected):
+    """`_parse_ps_cpu_time` spans both platforms' `ps -o time` shapes.
+
+    It is the production parser on macOS and had no direct coverage — only
+    the mocked fallback test, which fed it one hand-written string.
+    """
+    from llm import _parse_ps_cpu_time
+
+    assert _parse_ps_cpu_time(text) == pytest.approx(expected)
 
 
 def test_session_cpu_ticks_proc_converts_ticks_to_centiseconds(monkeypatch, tmp_path):
@@ -1103,13 +1138,21 @@ def test_session_cpu_ticks_proc_converts_ticks_to_centiseconds(monkeypatch, tmp_
     assert llm._session_cpu_ticks_proc(4242) == (7 + 3) * 100 // clk_tck
 
 
-@pytest.mark.skipif(not os.path.isdir("/proc"), reason="requires Linux /proc")
-def test_session_cpu_ticks_proc_sub_second_resolution():
-    """The /proc path sees CPU accumulate inside a 0.3s window — the
-    resolution claim that ps's 1-second `time` column cannot honor."""
+def test_session_cpu_ticks_sees_sub_second_cpu_advance():
+    """`_session_cpu_ticks` sees CPU accumulate inside a 0.35s window.
+
+    This is the contract the liveness rescue actually depends on — a
+    sub-second `liveness_timeout` must be able to observe CPU motion — so it
+    is asserted against the PUBLIC hybrid entry point on whatever source the
+    host resolves to, not against the Linux branch alone. Linux gets it from
+    /proc clock ticks; macOS gets it from `ps`, whose BSD `time` column is
+    ``mm:ss.cc`` — centiseconds, not the whole seconds Linux's `ps` emits.
+    Formerly `/proc`-only + skipif, so the macOS path this box ships on was
+    never exercised against a live process.
+    """
     import subprocess as sp
     import time
-    from llm import _session_cpu_ticks_proc
+    from llm import _session_cpu_ticks
 
     child = sp.Popen(
         ["python3", "-c",
@@ -1118,9 +1161,9 @@ def test_session_cpu_ticks_proc_sub_second_resolution():
         stdout=sp.DEVNULL, stderr=sp.DEVNULL,
     )
     try:
-        first = _session_cpu_ticks_proc(child.pid)
+        first = _session_cpu_ticks(child.pid)
         time.sleep(0.35)
-        second = _session_cpu_ticks_proc(child.pid)
+        second = _session_cpu_ticks(child.pid)
     finally:
         child.kill()
         child.wait()
