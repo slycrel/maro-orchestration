@@ -37,9 +37,38 @@ import _checkout_tripwire
 _ACTIVE_ENV = "MARO_PYTEST_ACTIVE"
 
 
+def _is_own_xdist_worker(active: str) -> bool:
+    """True only for a `-n` worker of the very pytest run that set the marker.
+
+    xdist fans ONE session out across processes, which is the opposite of the
+    recursion this guard exists to stop — but a worker has its own pid, so the
+    naive check would exit(2) every worker and make `-n auto` unusable.
+
+    Being an xdist worker is not sufficient on its own: a `claude -p` (or
+    evolver) subprocess launched from inside a worker inherits
+    PYTEST_XDIST_WORKER too, and letting that through would reopen the exact
+    fork-bomb hole. So we also require this process to be a DIRECT child of
+    the marked pytest — execnet's popen gateway spawns workers straight from
+    the controller, while a recursive grandchild's ppid is the worker's pid.
+    Workers deliberately leave the marker pointing at the controller (see
+    pytest_configure) so that ppid check keeps discriminating one level down.
+    """
+    if not os.environ.get("PYTEST_XDIST_WORKER"):
+        return False
+    try:
+        return os.getppid() == int(active)
+    except (TypeError, ValueError):
+        return False
+
+
 def pytest_configure(config):
     active = os.environ.get(_ACTIVE_ENV)
     if active and active != str(os.getpid()):
+        if _is_own_xdist_worker(active):
+            # Legitimate fan-out. Do NOT re-stamp the marker with this
+            # worker's pid — leaving the controller's pid in place is what
+            # makes a pytest spawned FROM this worker still get blocked.
+            return
         pytest.exit(
             f"Recursive pytest blocked: parent pytest pid={active} is already "
             "running against this tree. Full-suite recursion causes runaway "
@@ -69,6 +98,13 @@ _tripwire_baseline: "set[str] | None" = None
 def pytest_sessionstart(session):
     global _tripwire_baseline
     if os.environ.get(_checkout_tripwire.ALLOW_ENV):
+        return
+    if os.environ.get("PYTEST_XDIST_WORKER"):
+        # The controller brackets the whole run — its baseline is taken before
+        # any worker starts and its comparison after all of them finish, which
+        # is exactly the window the tripwire wants. A per-worker snapshot would
+        # walk the repo 2N extra times AND report every OTHER worker's
+        # in-flight writes as this worker's leak.
         return
     _tripwire_baseline = _checkout_tripwire.snapshot(_REPO_ROOT)
 
