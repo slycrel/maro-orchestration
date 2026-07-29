@@ -1198,6 +1198,11 @@ clever about what we pull in from a large doc." That is THIS item: a
 retrieval handle over large artifacts (read the slice you need, not the file)
 is the fix; the cap-side half (uniform runaway ceiling, no per-call magic
 numbers) already shipped in the same-day cap-and-kill-reason chunk.
+Accepted residual (Jeremy, same day): the 16000 ceiling is itself a magic
+number — "fixing magic numbers with magic numbers … we will likely still
+have to revisit that later." Revisit lands here: when the retrieval handle
+exists, the right ceiling question becomes measurable (observed no_tools
+output distribution) instead of guessed.
 
 ### Design constraint: decay trust, never data
 
