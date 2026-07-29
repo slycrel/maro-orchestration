@@ -19,6 +19,7 @@ it; the queue's history is part of the decision record).
 
 | Added | Doc | Why / decision needed |
 |---|---|---|
+| 2026-07-28 | [M1 vs box workflow contrast](https://github.com/slycrel/maro-orchestration/blob/main/docs/history/2026-07-28-m1-vs-box-workflow-contrast.md) | First M1-side pass for the M1-contrast item. Ends in 4 questions; the doc is half-finished until answered. Load-bearing claim to confirm or reject: M1 reviews diffs, box reviews runs — so the M1 lane should stop trying to certify cross-layer behavior. |
 
 ## Done
 

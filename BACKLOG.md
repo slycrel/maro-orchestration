@@ -361,6 +361,16 @@ pointer.
   Mind the work/personal boundary decree: patterns transfer, work
   artifacts don't — the pass compares *workflows*, likely via Jeremy
   narrating the M1 side rather than this box reading it.
+  **First pass written 2026-07-28 FROM the M1 side** (the vantage the box
+  can't supply):
+  `docs/history/2026-07-28-m1-vs-box-workflow-contrast.md`. Grounded in the
+  `token-lean-fetch` arc rather than recollection. Headline: the M1 lane
+  reviews *diffs*, the box lane reviews *runs* — demonstrated, not asserted,
+  by the run-continues gap that three M1-side adversarial reviewers all
+  missed and the box-side merge gate caught. Also: thresholds can only be
+  calibrated box-side, so the M1 lane should ship them observe-only. Ends in
+  4 questions for Jeremy per the iteration protocol — it is deliberately
+  half a document until he answers them.
 - [ ] **Iteration protocol (Jeremy 2026-07-28):** the workflow spec in
   the open-thread entry below is a *partial dump* by his own flag —
   ">30 years... I've got reflexes and intuitions I likely can't
