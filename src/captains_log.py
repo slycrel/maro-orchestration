@@ -49,6 +49,7 @@ ISLAND_CULLED = "ISLAND_CULLED"
 # Knowledge crystallization
 LESSON_RECORDED = "LESSON_RECORDED"
 LESSON_REINFORCED = "LESSON_REINFORCED"
+LESSON_QUARANTINED = "LESSON_QUARANTINED"  # provenance-gate stamp (prompt-derived) set/cleared by hand
 LESSON_EXTRACTION = "LESSON_EXTRACTION"  # per-outcome funnel intake state/counts
 LESSON_DECAYED = "LESSON_DECAYED"
 LESSON_RECOVERED = "LESSON_RECOVERED"  # reserved: Stage 2→3 lesson recovery, no emitter yet (BACKLOG #8)

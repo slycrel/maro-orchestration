@@ -58,6 +58,7 @@ exploration.
 | Scope + constraint orchestration (Phase 65) | `docs/CONSTRAINT_ORCHESTRATION_DESIGN.md` + review | Scope+ResolvedIntent injection LIVE on this box since 2026-07-09 (SF-4 resolution; 2026-04-22 A/B: inject wins). Fresh installs: `scope_generation` OFF by default (no silent LLM spend). Deeper constraint-orchestration discussion deferred |
 | Adaptive execution | `docs/ADAPTIVE_EXECUTION_DESIGN.md` | Phases A–C shipped 2026-04-15 (reassess/replan/restart/escalate live in loop_execute); closure-check unification SHIPPED 2026-07-28 (`director.evaluate_closure` decision layer, ClosureVerdict kept as evidence record — see doc's spec correction); Phase D (ExecutionPlan/memory layer) still open |
 | Memory / graph / filesystem-vs-real-memory | `docs/history/2026-07-04-memory-decision-brief.md` (inputs: `docs/MEMORY_ARCHITECTURE.md`, `docs/KNOWLEDGE_CRYSTALLIZATION.md`) | Direction decided 2026-07-07: memory-as-module, 3rd-party bake-off behind `src/memory_port.py`; MILESTONES arc -1 |
+| Dispatch boundary / cross-agent authority | `docs/DISPATCH_ENVELOPE.md` | Provenance gate SHIPPED 2026-07-29 (`src/lesson_provenance.py` — prompt-derived lessons quarantined at mint, `minted_from` stamp, answers the db37d525 contamination); typed envelope specced, build in BACKLOG |
 
 - GitHub: https://github.com/slycrel/maro-orchestration (renamed from openclaw-orchestration 2026-06-26; kept the `-orchestration` suffix rather than bare `maro`)
 - Machine: Ubuntu headless, user `clawd`, `/home/clawd/claude/maro-orchestration/`

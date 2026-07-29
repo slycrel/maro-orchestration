@@ -185,6 +185,12 @@ class Lesson:
     # Only stamped when the verdict is already known at write time.
     goal_achieved: Optional[bool] = None
     goal_verdict_source: str = ""
+    # Provenance gate (2026-07-29, lesson_provenance.py): "" (legacy) |
+    # "outcome" | "prompt". "prompt" = generalized from dispatch-prompt
+    # instruction text — quarantined from injection (load_lessons default),
+    # kept on disk and visible in readouts. Absent key stays off the row
+    # (_verdict_row), same discipline as the verdict fields.
+    minted_from: str = ""
 
 
 @dataclass
@@ -450,6 +456,8 @@ def _verdict_row(obj: Any) -> Dict[str, Any]:
         row.pop("stop_verdict")
     if "stop_evidence" in row and not row["stop_evidence"]:
         row.pop("stop_evidence")
+    if "minted_from" in row and not row["minted_from"]:
+        row.pop("minted_from")
     return row
 
 
@@ -1031,8 +1039,16 @@ def _store_lesson(
     confidence: float = 0.7,
     goal_achieved: Optional[bool] = None,
     goal_verdict_source: str = "",
+    minted_from: str = "",
 ) -> Lesson:
-    """Append a lesson to the lessons ledger, or reinforce existing near-duplicate."""
+    """Append a lesson to the lessons ledger, or reinforce existing near-duplicate.
+
+    Provenance gate (2026-07-29): ``minted_from`` is classified here at the
+    choke point when the caller leaves it "" — source_goal is the FULL goal
+    on this path, so the scaffolding-echo signal has everything it needs. A
+    prompt-derived lesson matching an existing row is ignored (no
+    reinforcement): instruction text must not move persistent state.
+    """
     import uuid
 
     # Sanitize: reject lessons that look like prompt injection
@@ -1047,20 +1063,49 @@ def _store_lesson(
             source_goal=source_goal,
             confidence=0.0,
         )
+    if not minted_from:
+        try:
+            from lesson_provenance import (classify_lesson_provenance,
+                                           provenance_gate_enabled)
+            if provenance_gate_enabled():
+                minted_from = classify_lesson_provenance(lesson, source_goal)
+        except Exception:
+            minted_from = ""
     # Pass 1: fast exact-text dedup (no limit — prevents unbounded accumulation)
     # Pass 2: near-duplicate check within recent 100 lessons (word-overlap ≥ 0.8)
-    existing = load_lessons(task_type=task_type, limit=500)
+    # include_quarantined — dedup must see quarantined rows or a re-minted
+    # prompt-derived lesson would append a fresh live duplicate.
+    existing = load_lessons(task_type=task_type, limit=500,
+                            include_quarantined=True)
     for ex in existing:
         if ex.lesson == lesson:
+            if minted_from == "prompt":
+                log.info("prompt-derived flat re-record of %s ignored "
+                         "(provenance gate)", ex.lesson_id)
+                return ex
             # Exact match: reinforce without touching confidence (it's already there)
             ex.times_reinforced += 1
+            if ex.minted_from == "prompt":
+                # Outcome-derived re-record clears quarantine — mirrors the
+                # tiered _reinforce_tiered_lesson citizenship rule.
+                ex.minted_from = "outcome"
+                log.info("quarantined flat lesson %s cleared by an "
+                         "outcome-derived re-record", ex.lesson_id)
             _rewrite_lessons_file(task_type, existing)
             return ex
     for ex in existing[:100]:
         if _text_similarity(ex.lesson, lesson) > 0.8:
+            if minted_from == "prompt":
+                log.info("prompt-derived flat re-record of %s ignored "
+                         "(provenance gate)", ex.lesson_id)
+                return ex
             # Reinforce existing lesson and persist the update
             ex.times_reinforced += 1
             ex.confidence = min(1.0, ex.confidence + 0.05)
+            if ex.minted_from == "prompt":
+                ex.minted_from = "outcome"  # same citizenship rule as above
+                log.info("quarantined flat lesson %s cleared by an "
+                         "outcome-derived re-record", ex.lesson_id)
             _rewrite_lessons_file(task_type, existing)
             return ex
 
@@ -1073,10 +1118,76 @@ def _store_lesson(
         confidence=confidence,
         goal_achieved=goal_achieved,
         goal_verdict_source=goal_verdict_source,
+        minted_from=minted_from,
     )
+    if minted_from == "prompt":
+        log.info("flat lesson %s quarantined at mint (prompt-derived): %s",
+                 l.lesson_id, lesson[:80])
     from file_lock import locked_append
     locked_append(_lessons_path(), json.dumps(_verdict_row(l)))
     return l
+
+
+def set_flat_lesson_minted_from(lesson_id: str, minted_from: str,
+                                *, reason: str = "") -> bool:
+    """Stamp minted_from on a stored flat-ledger lesson — the quarantine
+    (and unquarantine) maintenance verb for the legacy store. The row stays
+    on disk; it only leaves the injection surfaces (load_lessons default).
+    Returns True if the lesson was found and stamped.
+    """
+    if minted_from not in ("", "outcome", "prompt"):
+        raise ValueError(f"invalid minted_from: {minted_from!r}")
+    path = _lessons_path()
+    if not path.exists():
+        return False
+    hit = {"lesson": ""}
+
+    def _stamp(old: str) -> str:
+        lines = []
+        for line in old.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            try:
+                row = json.loads(stripped)
+            except json.JSONDecodeError:
+                lines.append(line)
+                continue
+            if isinstance(row, dict) and row.get("lesson_id") == lesson_id:
+                if minted_from:
+                    row["minted_from"] = minted_from
+                else:
+                    row.pop("minted_from", None)
+                hit["lesson"] = str(row.get("lesson", ""))
+                lines.append(json.dumps(row))
+            else:
+                lines.append(line)
+        return "\n".join(lines) + ("\n" if lines else "")
+
+    from file_lock import locked_rmw
+    try:
+        locked_rmw(path, _stamp)
+    except OSError as exc:
+        log.warning("set_flat_lesson_minted_from: rewrite failed for %s: %s",
+                    lesson_id, exc)
+        return False
+    if not hit["lesson"]:
+        return False
+    try:
+        from captains_log import log_event, LESSON_QUARANTINED
+        log_event(
+            event_type=LESSON_QUARANTINED,
+            subject=lesson_id,
+            summary=(f"Flat lesson {lesson_id} minted_from set to "
+                     f"{minted_from or 'unset'}: {hit['lesson'][:100]}"),
+            context={"store": "flat", "minted_from": minted_from,
+                     "reason": reason},
+        )
+    except Exception:
+        pass
+    log.info("set_flat_lesson_minted_from: %s → %r%s", lesson_id,
+             minted_from, f" — {reason}" if reason else "")
+    return True
 
 
 def _rewrite_lessons_file(task_type: str, updated_lessons: List[Lesson]) -> None:
@@ -1134,6 +1245,7 @@ def load_lessons(
     limit: int = 10,
     *,
     query: Optional[str] = None,
+    include_quarantined: bool = False,
 ) -> List[Lesson]:
     """Load relevant lessons from the lessons ledger.
 
@@ -1144,6 +1256,10 @@ def load_lessons(
         query: If provided, rank lessons by TF-IDF relevance to this query
             before returning (fetches 3x limit internally, then ranks down).
             Without query, returns most recent first.
+        include_quarantined: Default False — prompt-derived (quarantined)
+            lessons stay out of every consumer that injects into prompts
+            (recall top-up, bootstrap_context, inject_lessons_for_task).
+            Readout/maintenance surfaces opt in.
 
     Returns:
         List of Lesson objects.
@@ -1164,6 +1280,8 @@ def load_lessons(
                 if task_type and l.task_type != task_type:
                     continue
                 if outcome_filter and l.outcome != outcome_filter:
+                    continue
+                if not include_quarantined and l.minted_from == "prompt":
                     continue
                 lessons.append(l)
             except Exception:

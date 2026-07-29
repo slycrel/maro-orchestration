@@ -163,6 +163,7 @@ py-modules = [
     "knowledge_web",
     "lat_inject",
     "lens_ablation",
+    "lesson_provenance",
     "listener_core",
     "llm",
     "llm_errors",

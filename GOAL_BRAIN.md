@@ -4936,3 +4936,47 @@ Dormant (deliberately parked, not dropped):
   accepted one before writing it up as work. The write-up was still worth
   it: it converted an implicit risk acceptance into a recorded one with
   reopen conditions.
+- **2026-07-29 — Contamination repair adjudicated + SHIPPED (Jeremy, the
+  forked review session; all three asks granted, then built same
+  session).** The db37d525 incident (a Poe dispatch prompt's
+  anti-escalation scaffolding minted into a stored lesson, injected
+  verbatim into unrelated run dapper-oak) is the first observed
+  instruction-text-rewrites-persistent-state failure. Correction to the
+  2026-07-28 entry, from Jeremy's Telegram logs: Poe's "already
+  recovered" claim was TRUE on mini2 (xurl/curl fetches visible) —
+  false-in-effect on this box because the dispatch boundary has no
+  artifact channel. Diagnosis shifted accordingly: not "Poe lied,"
+  the protocol lost the artifact. (1) **DECREE — three-piece direction
+  agreed**: lesson-mint provenance gate (maro-side, load-bearing) +
+  typed dispatch envelope + artifacts-travel-with-dispatch. His
+  channel-separation framing: "we can't just prompt that or we're
+  adding the same potential problems in a different flavor." UX
+  decree within it: the envelope is machine-to-machine ONLY — "I kinda
+  don't love the UX forcing the envelope and this seems to prove we're
+  going to want the direct ask and the prompt separately." (2)
+  **DECREE — quarantine, not delete**: "I fully agree this needs to be
+  extracted. Kinda reminds me of mcaffee quarantining files back in
+  the day." (3) **DECREE — priority NOW**: "we need to prioritize this
+  now, before we do further damage... I'm already concerned about the
+  unknown unknowns in the learning system, let's not ignore the known
+  holes that surface." Maro-side guards preferred "if we can keep them
+  sane... that's the priority." SHIPPED same session: provenance gate
+  (src/lesson_provenance.py; minted_from stamp at both storage choke
+  points; quarantine mirrors the provisional-lesson exclusions at
+  every injection surface + promotion; killswitch
+  knowledge.provenance_gate_enabled gates classification only, never
+  re-arms stamped rows; 24 pin tests incl. the incident-replay
+  tripwire, classifier grounded on the four real minted lessons —
+  db37d525 quarantines, bae0851f/00d4fc7e/08fed9e8 stay clean, so the
+  gate discriminates rather than blanket-blocks); live rows db37d525
+  (flat) + 9d6b63fe (tiered twin) quarantined via
+  scripts/quarantine_lesson.py and verified unservable; envelope spec
+  docs/DISPATCH_ENVELOPE.md + BACKLOG entry (build later, gate covers
+  the contamination class meanwhile); maro-dispatch skill 0.2.0
+  (the orchestrator-onboarding skill he remembered =
+  deploy/hermes/mini2-maro-dispatch-SKILL.md) — new goal-authoring
+  rules (user ask verbatim, no behavior-steering scaffolding,
+  recovered content labeled as reference, follow-ups are proposals
+  not dispatches), Poe's live self-patches folded back into the repo
+  copy with its scaffolding-authoring advice rewritten, installed to
+  mini2 with the pre-merge copy backed up.

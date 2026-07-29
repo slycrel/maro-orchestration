@@ -113,6 +113,13 @@ class TieredLesson:
     # from LONG promotion until a confirmed-context re-record clears the flag
     # (promote-on-evidence); decay disposes of the unconfirmed rest.
     provisional: bool = False
+    # Provenance gate (2026-07-29, lesson_provenance.py): "" (legacy pre-gate
+    # rows, treated as outcome-derived) | "outcome" | "prompt". "prompt" marks
+    # a lesson generalized from dispatch-prompt instruction text rather than
+    # from an observed outcome — quarantined from every injection surface and
+    # from LONG promotion (same surfaces as provisional), visible in readouts,
+    # cleared only by an outcome-derived confirming re-record.
+    minted_from: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -209,6 +216,13 @@ def _novelty_term_enabled() -> bool:
         return True
 
 
+def _is_quarantined(tl: "TieredLesson") -> bool:
+    """Prompt-derived lessons are quarantined from every injection surface
+    and from promotion (lesson_provenance gate). Legacy ""/"outcome" rows
+    are full citizens."""
+    return tl.minted_from == "prompt"
+
+
 def confidence_from_k_samples(k_samples: int) -> float:
     """Map extraction method to standardized initial confidence (Feynman F5).
 
@@ -236,6 +250,7 @@ def record_tiered_lesson(
     evidence_sources: Optional[List[str]] = None,
     lesson_type: str = "",
     provisional: bool = False,
+    minted_from: str = "",
 ) -> TieredLesson:
     """Record a new lesson at the given tier.
 
@@ -257,6 +272,13 @@ def record_tiered_lesson(
         reinforces it WITHOUT counting as confirmation; a confirmed
         (non-provisional) recording matching an existing provisional lesson
         clears its flag — promote-on-evidence.
+    Provenance gate (2026-07-29): ``minted_from`` is classified here at the
+        choke point when the caller leaves it "" — every mint path (reflect,
+        deferred, per-step, evolver, prereq, CLI) is covered without
+        call-site churn; an explicit caller value is trusted. A
+        prompt-derived recording that dedup-matches an existing lesson is
+        IGNORED (no reinforcement, no confirmation, no flag-clearing):
+        instruction text must not move persistent state.
     """
     import uuid
 
@@ -278,6 +300,19 @@ def record_tiered_lesson(
     except ImportError:
         pass
 
+    # Provenance gate: classify at the choke point. source_goal may be
+    # caller-truncated (120 chars), but the tire-incident scaffolding sat in
+    # the first line of the goal — and the two lesson-text signals need no
+    # goal at all. Never blocks recording.
+    if not minted_from:
+        try:
+            from lesson_provenance import (classify_lesson_provenance,
+                                           provenance_gate_enabled)
+            if provenance_gate_enabled():
+                minted_from = classify_lesson_provenance(lesson_text, source_goal)
+        except Exception:
+            minted_from = ""
+
     # Session 40 M2: a lesson the system already promoted to LONG and has now
     # re-learned is a production re-confirmation, not new knowledge. Reinforce
     # the long-tier record (which feeds the standing-rule pipeline) instead of
@@ -294,6 +329,12 @@ def record_tiered_lesson(
         for ex in load_tiered_lessons(tier=MemoryTier.LONG, task_type=None, limit=None):
             sim = _text_similarity(ex.lesson, lesson_text)
             if ex.task_type == task_type and sim > 0.8:
+                if minted_from == "prompt":
+                    # Least-privilege: an instruction-derived re-record must
+                    # not reinforce, confirm, or clear anything.
+                    log.info("prompt-derived re-record of %s ignored "
+                             "(provenance gate)", ex.lesson_id)
+                    return ex
                 return _reinforce_tiered_lesson(
                     ex, tier=MemoryTier.LONG, confirming=not provisional)
             max_sim = max(max_sim, sim)
@@ -308,6 +349,11 @@ def record_tiered_lesson(
         for ex in load_tiered_lessons(tier=tier, task_type=None, limit=None):
             sim = _text_similarity(ex.lesson, lesson_text)
             if ex.task_type == task_type and sim > 0.8:
+                if minted_from == "prompt":
+                    # Same least-privilege rule as the LONG pre-scan above.
+                    log.info("prompt-derived re-record of %s ignored "
+                             "(provenance gate)", ex.lesson_id)
+                    return ex
                 return _reinforce_tiered_lesson(
                     ex, tier=tier, confirming=not provisional)
             max_sim = max(max_sim, sim)
@@ -324,7 +370,11 @@ def record_tiered_lesson(
         # deserves its testing window), but the ceiling (0.9) stays under the
         # confirmed floor so a provisional row can never outrank a confirmed
         # one at equal age.
-        base = PROVISIONAL_ENTRY_SCORE if provisional else 1.0
+        # Quarantined (prompt-derived) rows enter at the same reduced base:
+        # they are never injected or reinforced, so decay disposes of them
+        # in about a week unless an outcome-derived re-record clears them.
+        base = (PROVISIONAL_ENTRY_SCORE
+                if (provisional or minted_from == "prompt") else 1.0)
         score = base
         if _novelty_term_enabled():
             score = base + NOVELTY_BONUS * novelty
@@ -344,8 +394,12 @@ def record_tiered_lesson(
             lesson_type=lesson_type if lesson_type in _LESSON_TYPES else "",
             novelty=round(novelty, 4),
             provisional=provisional,
+            minted_from=minted_from,
         )
         _append_tiered_lesson(tl, tier=tier)
+        if minted_from == "prompt":
+            log.info("lesson %s quarantined at mint (prompt-derived): %s",
+                     tl.lesson_id, lesson_text[:80])
 
     # Captain's log
     try:
@@ -355,7 +409,8 @@ def record_tiered_lesson(
             subject=tl.lesson_id,
             summary=f"New {tier} lesson (confidence: {confidence:.2f}): {lesson_text[:100]}",
             context={"tier": tier, "task_type": task_type, "confidence": confidence,
-                     "lesson_type": lesson_type, "novelty": tl.novelty, "score": score},
+                     "lesson_type": lesson_type, "novelty": tl.novelty, "score": score,
+                     "minted_from": minted_from},
         )
     except Exception:
         pass
@@ -391,6 +446,15 @@ def _reinforce_tiered_lesson(tl: TieredLesson, *, tier: str,
     if confirming and tl.provisional:
         tl.provisional = False
         log.info("provisional lesson %s confirmed by a learnable-context re-record",
+                 tl.lesson_id)
+    if confirming and tl.minted_from == "prompt":
+        # An outcome-derived confirming re-record means the same knowledge
+        # was independently derived from an actual outcome — it earns
+        # citizenship (mirrors the provisional promote-on-evidence clear).
+        # Prompt-derived re-records never reach here: record_tiered_lesson
+        # returns early on their dedup match.
+        tl.minted_from = "outcome"
+        log.info("quarantined lesson %s cleared by an outcome-derived re-record",
                  tl.lesson_id)
     tl.score = reinforce_score(tl.score)
     if confirming:
@@ -431,7 +495,8 @@ def _post_reinforce_hooks(tl: TieredLesson, *, tier: str) -> TieredLesson:
         # permanent without ever having been verified in a learnable run.
         if (tl.score >= PROMOTE_MIN_SCORE
                 and tl.sessions_validated >= PROMOTE_MIN_SESSIONS
-                and not tl.provisional):
+                and not tl.provisional
+                and not _is_quarantined(tl)):
             try:
                 if promote_lesson(tl.lesson_id):
                     tl.tier = MemoryTier.LONG
@@ -713,11 +778,11 @@ def search_graveyard(
         for tl in lessons:
             if tl.score >= max_score:
                 continue
-            # Provisional lessons are excluded from every injection surface,
-            # and resurrection reinforces confirming=True — a topic match is
-            # not the learnable-context re-record that may clear the flag
-            # (adversarial review 2026-07-27).
-            if tl.provisional:
+            # Provisional and quarantined lessons are excluded from every
+            # injection surface, and resurrection reinforces confirming=True
+            # — a topic match is not the learnable-context re-record that
+            # may clear either flag (adversarial review 2026-07-27).
+            if tl.provisional or _is_quarantined(tl):
                 continue
             text = tl.lesson.lower()
             match_ratio = sum(1 for kw in keywords if kw in text) / max(len(keywords), 1)
@@ -732,7 +797,7 @@ def search_graveyard(
     for tl in _load_archived_lessons():
         if tl.lesson_id in live_ids:
             continue
-        if tl.provisional:  # same exclusion as the live scan above
+        if tl.provisional or _is_quarantined(tl):  # same exclusion as the live scan above
             continue
         text = tl.lesson.lower()
         match_ratio = sum(1 for kw in keywords if kw in text) / max(len(keywords), 1)
@@ -773,6 +838,46 @@ def forget_lesson(lesson_id: str, tier: str = MemoryTier.MEDIUM) -> bool:
     return removed["hit"]
 
 
+def set_lesson_minted_from(lesson_id: str, minted_from: str,
+                           *, tier: str = MemoryTier.MEDIUM,
+                           reason: str = "") -> bool:
+    """Stamp minted_from on a stored tiered lesson — the quarantine (and
+    unquarantine) maintenance verb. Quarantine keeps the row on disk and
+    visible in readouts; it only leaves every injection surface. Rewrites
+    under the lock via _mutate_tiered_lessons (raw stored scores preserved).
+    Returns True if the lesson was found and stamped.
+    """
+    if minted_from not in ("", "outcome", "prompt"):
+        raise ValueError(f"invalid minted_from: {minted_from!r}")
+    hit = {"tl": None}
+
+    def _stamp(lessons: List[TieredLesson]) -> List[TieredLesson]:
+        for l in lessons:
+            if l.lesson_id == lesson_id:
+                l.minted_from = minted_from
+                hit["tl"] = l
+        return lessons
+
+    _mutate_tiered_lessons(tier, _stamp)
+    if hit["tl"] is None:
+        return False
+    try:
+        from captains_log import log_event, LESSON_QUARANTINED
+        log_event(
+            event_type=LESSON_QUARANTINED,
+            subject=lesson_id,
+            summary=(f"Lesson {lesson_id} minted_from set to "
+                     f"{minted_from or 'unset'}: {hit['tl'].lesson[:100]}"),
+            context={"tier": tier, "minted_from": minted_from,
+                     "reason": reason},
+        )
+    except Exception:
+        pass
+    log.info("set_lesson_minted_from: %s (%s) → %r%s", lesson_id, tier,
+             minted_from, f" — {reason}" if reason else "")
+    return True
+
+
 def promote_lesson(lesson_id: str) -> bool:
     """Promote a medium-tier lesson to long-tier.
 
@@ -793,6 +898,11 @@ def promote_lesson(lesson_id: str) -> bool:
         # directly, and LONG is decay-free — an unconfirmed row reaching it
         # would be permanent (adversarial review 2026-07-27).
         log.info("promote_lesson: %s is provisional (unconfirmed) — not promoting", lesson_id)
+        return False
+    if _is_quarantined(target):
+        # Same boundary guard: a prompt-derived row reaching decay-free LONG
+        # would make the contamination permanent.
+        log.info("promote_lesson: %s is quarantined (prompt-derived) — not promoting", lesson_id)
         return False
     # ...but the record that moves tiers is the stored (raw) one — popped
     # from MEDIUM under the lock so concurrent updates aren't dropped.
@@ -858,9 +968,11 @@ def run_decay_cycle(
     for tl in effective:
         if (tl.score >= PROMOTE_MIN_SCORE
                 and tl.sessions_validated >= PROMOTE_MIN_SESSIONS
-                and not tl.provisional):
-            # not-provisional mirrors _post_reinforce_hooks — the backstop
-            # must not promote what the reinforcement path refuses to.
+                and not tl.provisional
+                and not _is_quarantined(tl)):
+            # not-provisional/not-quarantined mirrors _post_reinforce_hooks —
+            # the backstop must not promote what the reinforcement path
+            # refuses to.
             promoted_ids.append(tl.lesson_id)
         elif tl.score < GC_THRESHOLD:
             gc_ids.append(tl.lesson_id)
@@ -1128,14 +1240,15 @@ def inject_tiered_lessons(
     # Load candidate lessons — fetch a wider pool when using TF-IDF ranking
     _pool_multiplier = 3 if goal else 1
 
-    # Provisional lessons are excluded from every injection surface until a
-    # confirmed-context re-record clears the flag (per-step learning
-    # 2026-07-27). LONG can't hold provisional rows (promotion is guarded),
-    # but the filter is uniform so the invariant doesn't depend on it.
+    # Provisional and quarantined (prompt-derived) lessons are excluded from
+    # every injection surface until a confirmed/outcome-derived re-record
+    # clears the flag (per-step learning 2026-07-27; provenance gate
+    # 2026-07-29). LONG can't hold either (promotion is guarded), but the
+    # filter is uniform so the invariant doesn't depend on it.
     long_candidates = [t for t in load_tiered_lessons(
         tier=MemoryTier.LONG, task_type=task_type, min_score=0.0,
         limit=max_long * _pool_multiplier,
-    ) if not t.provisional]
+    ) if not (t.provisional or _is_quarantined(t))]
     if goal and len(long_candidates) > max_long:
         _ranker = _hybrid_rank if _USE_HYBRID else _tfidf_rank
         long_candidates = _ranker(goal, long_candidates, top_k=max_long)
@@ -1151,7 +1264,7 @@ def inject_tiered_lessons(
     medium_candidates = [t for t in load_tiered_lessons(
         tier=MemoryTier.MEDIUM, task_type=task_type, min_score=0.3,
         limit=max_medium * _pool_multiplier,
-    ) if not t.provisional]
+    ) if not (t.provisional or _is_quarantined(t))]
     if goal and len(medium_candidates) > max_medium:
         _ranker = _hybrid_rank if _USE_HYBRID else _tfidf_rank
         medium_candidates = _ranker(goal, medium_candidates, top_k=max_medium)
@@ -1188,6 +1301,7 @@ def query_lessons(
     tiers: Optional[List[str]] = None,
     min_score: float = 0.0,
     include_provisional: bool = False,
+    include_quarantined: bool = False,
 ) -> List[TieredLesson]:
     """Retrieve the top-N lessons most relevant to `query` via hybrid retrieval.
 
@@ -1205,6 +1319,9 @@ def query_lessons(
         include_provisional: Default False — provisional (step-verified,
                      unconfirmed) lessons stay out of retrieval until a
                      confirmed-context re-record clears the flag.
+        include_quarantined: Default False — prompt-derived (quarantined)
+                     lessons stay out of retrieval; readout surfaces that
+                     want to SHOW quarantine contents opt in.
 
     Returns:
         List of TieredLesson objects (most relevant first).
@@ -1230,6 +1347,8 @@ def query_lessons(
         )
         if not include_provisional:
             pool = [t for t in pool if not t.provisional]
+        if not include_quarantined:
+            pool = [t for t in pool if not _is_quarantined(t)]
         candidates.extend(pool)
 
     if not candidates:

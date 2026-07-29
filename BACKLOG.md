@@ -269,6 +269,31 @@ Container-on day-one findings (2026-07-16, two dispatched verification runs):
   exit's record guarantee).
 
 
+### Typed dispatch envelope — channel separation at the dispatch boundary (OPENED 2026-07-29, Jeremy-decreed direction)
+
+Spec is written: **`docs/DISPATCH_ENVELOPE.md`**. Follow-on to the
+db37d525 contamination repair (provenance gate SHIPPED 2026-07-29 —
+the load-bearing mint-side fix; this is the channel-separation half).
+A dispatch payload may be typed JSON — `user_ask` (verbatim, the goal
+closure judges), `operator_context` (labeled advisory, never learnable),
+`attached_artifacts` (land in the run's fetch-raw/ with provenance),
+`operator_constraints` (scoped-to-run, structurally barred from lesson
+extraction). Prose dispatches keep working conservatively. UX decree
+(Jeremy 2026-07-28): machine-to-machine ONLY — never force a human into
+the envelope; "we're going to want the direct ask and the prompt
+separately." Build order per spec: box-side intake seam
+(deploy/hermes/dispatch.py + local enqueue) and extraction-seam
+structural exclusion first; Poe-side skill teaching via propose lane;
+then "you asked / Poe dispatched" delivery-loop rendering.
+
+**Artifacts-travel-with-dispatch rider** (same spec, §attached_artifacts):
+the artifacts-over-streams decree's fetch-to-disk verb applied at the
+dispatch boundary — recovery products (like Poe's xurl-fetched gist that
+never crossed the SSH lane in the incident) ride INTO the run dir with
+`source_url`/`recovered_by` stamps instead of being paraphrased into goal
+prose. Touches the mini2 dispatch gate (payload size, propose lane), so
+it's the bigger, later half.
+
 ### NOW retry rung — failure-class-routed ladder: NOW → artifact retry / star → AGENDA (OPENED 2026-07-28, Jeremy)
 
 Jeremy's ask: a middle rung between a failed NOW one-shot and a full

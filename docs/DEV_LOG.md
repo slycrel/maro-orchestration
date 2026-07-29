@@ -18,6 +18,47 @@ still live in BACKLOG/GOAL_BRAIN; a session that ends conversationally
 still gets a line (same spirit as SF-13). Rendered to the viz server's
 Dev log tab at maro.feifdom.com alongside Runs and Reading.
 
+## 2026-07-29
+
+**Contamination repair — the provenance gate ships (forked review
+session, part 2)** — threads: `dispatch-contamination`,
+`memory-knowledge`, `hermes-swap`. Jeremy granted all three asks from
+part 1 of this forked session — direction (channel separation +
+maro-side guards), extraction of the contaminated lesson ("reminds me
+of mcaffee quarantining files back in the day"), and priority ("before
+we do further damage") — so this session built the repair. The
+incident, glossed: Poe (the Telegram concierge on the second Mac Mini)
+wrote a dispatch prompt containing anti-escalation orders ("Do NOT
+escalate or stop merely because a linked page cannot be accessed");
+Maro's lesson extractor generalized those ORDERS into stored lesson
+`db37d525` ("when a prompt explicitly says... treat that as a hard
+constraint"), and the recall system injected that lesson into the next,
+unrelated run. Instruction text had rewritten persistent memory. The
+fix is a provenance gate (`src/lesson_provenance.py`): every minted
+lesson is classified outcome-derived vs prompt-derived by a few
+documented regexes, and prompt-derived ones are quarantined — stored
+and visible in readouts, but excluded from every surface that injects
+lessons into prompts, barred from permanent-tier promotion, unable to
+reinforce existing lessons. The classifier's ground truth is the four
+real lessons the incident minted: the contaminated one must trip it,
+its three outcome-shaped siblings must not — the gate discriminates,
+it doesn't blanket-block. The live store rows (`db37d525` flat +
+`9d6b63fe` tiered twin) are quarantined and verified unservable.
+Alongside: a typed dispatch envelope spec (docs/DISPATCH_ENVELOPE.md
+— user ask verbatim, operator context labeled, artifacts travel with
+provenance; machine-to-machine only per Jeremy's UX call), and the
+maro-dispatch skill (the "skill we provide to help an orchestrator get
+started" he remembered) got goal-authoring rules — while merging, we
+found Poe had self-patched its live copy with advice to write
+recovery-ladder directives INTO goals, i.e. instructions to produce
+exactly the scaffolding class that caused the incident; folded the good
+parts back, rewrote that part, installed 0.2.0 to mini2 with a backup.
+**Surprised by:** the self-patch find — the contamination loop had a
+third leg nobody was looking at. Poe learned "write firmer scaffolding"
+from the same incident Maro learned "obey scaffolding" from; two
+learning systems reinforcing each other's worst lesson through one
+shared prompt, each invisible to the other.
+
 ## 2026-07-28
 
 **Late evening — closure-check unification shipped (the free-slot
