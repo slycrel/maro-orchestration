@@ -438,6 +438,48 @@ pointer.
   after the rename. Decide one canonical location, migrate or delete the
   other (nothing is deleted without a look — retention decree), rename the
   checkout.
+  **DONE 2026-07-29 (the consolidation half; Jeremy: "let's clean up the
+  workspace and run with the best practices as far as the maro conventions
+  on this box").** `~/.maro/workspace/` is now the M1's ONLY workspace.
+  Actions, nothing deleted that wasn't provably regenerable: (a) the second
+  workspace `.run-workspace/` moved **intact** to
+  `~/.maro/evidence/m1-repo-run-workspace/` — deliberately *not* merged into
+  the live workspace, since it carries its own `captains_log.jsonl` and
+  merging foreign learning data during the Poe-contamination arc is the
+  exact mistake that arc is about; (b) repo-local `memory/` (2 files frozen
+  2026-06-21) archived to `~/.maro/evidence/m1-repo-memory-2026-06-21/`;
+  (c) stale `output/build-loop.lock` removed (dead PID, its run had
+  completed); (d) `.pytest_cache`, `.coverage`, `__pycache__` purged
+  (regenerable). 466M → 434M, working tree clean, **suite green on the M1
+  after the move: 6805 passed / 0 failed / 0 errors / 22 skipped, 119s**
+  (removing repo-local `memory/` broke nothing — tests do write there via
+  `OPENCLAW_WORKSPACE`, but they recreate it, confirming the isolation
+  CLAUDE.md claims).
+  **New convention this established:** `~/.maro/evidence/` — machine-local
+  archived evidence that landed docs cite, kept *beside* the workspace so
+  `~/.maro/workspace/` keeps matching the documented layout exactly.
+  **Finding that outranks the cleanup** (see the out-of-the-box item above —
+  this is that decree failing in the wild, found by doing this work): **three
+  separate landed docs cite evidence a clean clone cannot see.**
+  `BACKLOG_DONE.md` ×3 and `MILESTONES.md` ×1 cite
+  `output/adversarial-review-2026-07-13-*.md`; two 2026-07-14 history docs
+  cited `.run-workspace/` (now repointed and explicitly marked
+  machine-local); `docs/LOCAL_VALIDATOR.md:138` names repo `.venv-mlx` as a
+  default that only exists here. The citations aren't wrong, they're
+  *unreachable* — which is precisely what "verifiable on a clean clone"
+  forbids. **Still open, deliberately left for Jeremy** (each is a judgment
+  call, not a cleanup step): (1) do cited adversarial-review reports get
+  committed so a clean clone can check the claim, or do citations get marked
+  machine-local like the two above? — committing publishes to a public repo,
+  which is his call; (2) `.venv-mlx` is 307M (70% of the checkout) and is
+  referenced by LOCAL_VALIDATOR.md as a default — keep or drop; (3) the
+  checkout rename `openclaw-orchestration` → `maro-orchestration` **has a
+  real cost**: Claude Code keys session history by path, so renaming orphans
+  `~/.claude/projects/-Users-jeremy-claude-openclaw-orchestration/` and
+  loses `--resume` history for this project; (4) `output/runs/` holds 208
+  repo-local dev runs — prune or keep as the M1's only local run corpus
+  (note: that corpus is the M1's *sole* run-shaped evidence, per the
+  contrast doc's §8 — deleting it is not obviously free).
 - [ ] **Iteration protocol (Jeremy 2026-07-28):** the workflow spec in
   the open-thread entry below is a *partial dump* by his own flag —
   ">30 years... I've got reflexes and intuitions I likely can't

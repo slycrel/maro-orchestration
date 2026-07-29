@@ -4980,3 +4980,37 @@ Dormant (deliberately parked, not dropped):
   not dispatches), Poe's live self-patches folded back into the repo
   copy with its scaffolding-authoring advice rewritten, installed to
   mini2 with the pre-merge copy backed up.
+- **2026-07-29 — M1 consolidated to one workspace (Jeremy: "let's clean up
+  the workspace and run with the best practices as far as the maro
+  conventions on this box").** `~/.maro/workspace/` is now the M1's only
+  workspace. The second one (`.run-workspace/` inside the checkout) moved
+  **intact** to a new `~/.maro/evidence/` location — deliberately NOT merged
+  into the live workspace, because it carries its own `captains_log.jsonl`
+  and merging foreign learning data during the Poe-contamination arc would
+  be the exact mistake that arc exists to fix. Frozen repo-local `memory/`
+  archived the same way; only provably-regenerable things were deleted
+  (caches, a stale lock whose PID was dead and whose run had completed).
+  466M → 434M; suite green after the move (6805 passed / 0 failed / 22
+  skipped) — which also confirms CLAUDE.md's test-isolation claim, since
+  removing repo-local `memory/` broke nothing.
+  **New convention:** `~/.maro/evidence/` sits *beside* the workspace rather
+  than inside it, so `~/.maro/workspace/` keeps matching the documented
+  layout exactly.
+  **The finding that outranks the cleanup — the out-of-the-box decree
+  failing in the wild, three days after being decreed and found by doing
+  unrelated janitorial work: three landed docs cite evidence a clean clone
+  cannot see.** `BACKLOG_DONE.md` ×3 and `MILESTONES.md` ×1 cite
+  `output/adversarial-review-2026-07-13-*.md`; two 2026-07-14 history docs
+  cited `.run-workspace/`; `docs/LOCAL_VALIDATOR.md:138` names repo
+  `.venv-mlx` as a default. The citations are not wrong, they are
+  *unreachable* — which is precisely what "verifiable on a clean clone"
+  forbids. The two history docs are repointed and now say so explicitly;
+  the rest is Jeremy's call because it involves publishing to a public repo.
+  **Four judgment calls deliberately left to him** (BACKLOG item): commit
+  cited review reports vs mark citations machine-local; `.venv-mlx` (307M,
+  70% of the checkout, referenced as a documented default) keep or drop;
+  the checkout rename, which **costs Claude Code session history** (sessions
+  are keyed by path — renaming orphans
+  `~/.claude/projects/-Users-jeremy-claude-openclaw-orchestration/`); and
+  whether to prune `output/runs/`' 208 repo-local dev runs, noting that
+  corpus is the M1's *only* run-shaped evidence per the contrast doc §8.

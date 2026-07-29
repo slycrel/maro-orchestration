@@ -28,8 +28,11 @@ Reproducible runner: `scripts/session-reuse-spike.py`.
   prompt-cache entry across arms or replications.
 - Correctness is gated: exact scalar answers and a complete four-field JSON
   synthesis. A fast arm that forgets state does not pass.
-- Raw JSON for every call plus `summary.json` is retained locally under
-  `.run-workspace/session-reuse-spike-20260714/`.
+- Raw JSON for every call plus `summary.json` is retained **machine-locally on
+  the M1** (not in the repo — a clean clone cannot check this citation) under
+  `~/.maro/evidence/m1-repo-run-workspace/session-reuse-spike-20260714/`.
+  *(Moved 2026-07-29 from the repo-local `.run-workspace/` when the M1 was
+  consolidated to one workspace; content unchanged.)*
 
 The first attempted run is retained as a failed protocol specimen. Its wording
 (`forbidden action` plus repetitive `inert padding`) triggered prompt-injection

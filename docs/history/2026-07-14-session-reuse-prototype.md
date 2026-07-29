@@ -19,8 +19,11 @@ expanded after the first two steps, so the treatment had two bounded segments.
 Each segment was expected to start fresh and resume once. Automatic validation
 and adaptive execution were disabled; deferred learning removed post-run lesson
 spend. The treatment ran first, reversing the order of the earlier exploratory
-pair. Raw workspaces are retained under ignored
-`.run-workspace/session-prototype-ab/rep2-{treatment,control}`.
+pair. Raw workspaces are retained **machine-locally on the M1** (not in the repo — a
+clean clone cannot check this citation) under
+`~/.maro/evidence/m1-repo-run-workspace/session-prototype-ab/rep2-{treatment,control}`.
+*(Moved 2026-07-29 from the repo-local `.run-workspace/` when the M1 was
+consolidated to one workspace; content unchanged.)*
 
 Correctness was checked directly: both `FACTS.md` and `FINAL_REPORT.md` contain
 all four source facts and both verification steps reported exact agreement with
