@@ -20,6 +20,39 @@ Dev log tab at maro.feifdom.com alongside Runs and Reading.
 
 ## 2026-07-29
 
+**Autonomous batch — trio-adjudicated work items shipped without Jeremy**
+— threads: `dispatch-envelope`, `house-style`, `knowledge-liveness`.
+Jeremy's standing directive ("implement the work items available without
+me... I'll check back in when I can") ran through a Codex adversary-trio
+triage of the eight open items: unanimous DO_NOW on dispatch-envelope
+box-side intake, SSRF resolve-then-pin, and the errand re-measure;
+PARTIAL on the wiring-claims docket (verify-only), HOUSE_STYLE.md v1
+(repo-visible only), and the NODE_CANDIDATE invisibility pin (no promote
+path — criteria are Jeremy's); DEFERRED B (playbook→director substrate
+mix is a prompt-authority design call) and G (next-leap packaging needs
+his explicit word, not a generic directive). All six actionable items
+shipped and landed: typed `maro-dispatch/v1` intake (user_ask IS the
+goal everywhere; operator context rides the ancestry channel pre-labeled;
+extraction exclusion by construction, interface-pinned; attachments to
+dispatch-artifacts/ with provenance sidecars; malformed declared
+envelopes bounce at every boundary), the docket verified 7/8 wiring
+claims with one mischaracterization caught (RULE_GRADUATED has a working
+CLI emitter, zero live firings), and the errand re-measure showed 7m12s
+vs 16m43s with safe-pair NOT the lever — the tail is adversarial claim
+review, remaining distance is plan-shape. Combined post-land codex
+review (3 lenses vs the whole batch, CONTESTED, 0 hallucinated code
+claims — thirteenth clean round;
+docs/history/2026-07-29-autonomous-batch-adversarial-review.md) found
+three real HIGHs, all the same species — a correct mechanism with one
+unwired entry point: the explicit-api_key branch escaped always-wrap,
+the SSRF pin trusted ambient proxy env, truncated declared envelopes
+fell silently to prose. All fixed same session with tests.
+**Surprised by:** the suite-wrapper incident — a trailing `echo
+"exit=$?"` masked the suite's exit code, the task notification reported
+success, and main went red for ~2 minutes until the census tripwires
+(frontmatter, packaging) caught my own new files. The tripwire system
+worked exactly as designed, against its author.
+
 **Persist-the-artifacts chunk — lineage and closure evidence become
 durable** — threads: `compound-thinking`, `adaptive-execution`,
 `artifacts-over-streams`. Jeremy's adjudication of the §9.3 fragility
