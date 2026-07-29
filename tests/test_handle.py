@@ -1823,6 +1823,31 @@ class TestNowDirectorEscalation:
         complex_msg = "implement a full REST API with authentication and then deploy it to production"
         assert _is_complex_directive(complex_msg)
 
+    def test_escalation_stamps_now_escalated_metadata(self, monkeypatch, tmp_path):
+        """A complex-directive NOW→agenda flip must leave a durable trace.
+        The 2026-07-28 recon greped 726 live runs for firings and found
+        zero — but nothing was ever persisted at flip time, so absence of
+        records was structurally guaranteed. This stamp (mirroring
+        now_verdict_escalated) makes that grep conclusive."""
+        self._setup(monkeypatch, tmp_path)
+        import json
+        from unittest.mock import patch
+        from handle import handle
+
+        msg = ("research the top 5 LLM providers and implement a "
+               "benchmarking framework then summarize the results")
+        with patch("intent.classify", return_value=("now", 0.9, "simple", False)):
+            result = handle(msg, dry_run=True)
+        assert result.lane == "agenda"
+        assert "now→agenda" in result.classification_reason
+        metas = list((tmp_path / "runs").glob("*/metadata.json"))
+        assert metas, "open_run should have created a run dir"
+        stamped = [json.loads(m.read_text()) for m in metas]
+        assert any(m.get("now_escalated") is True for m in stamped), \
+            f"no metadata carries now_escalated: {stamped}"
+        assert all(m.get("lane") == "agenda" for m in stamped
+                   if m.get("now_escalated"))
+
 
 # ---------------------------------------------------------------------------
 # Phase 64C: director restart re-run

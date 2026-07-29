@@ -1040,9 +1040,14 @@ def _handle_impl(
                 from runs import current_run_dir as _crd_esc
                 _rd_esc = _crd_esc()
                 if _rd_esc is not None:
+                    # now_escalated mirrors now_verdict_escalated below: the
+                    # 2026-07-28 recon greped 726 runs for firings and found
+                    # zero, but nothing durable was ever written — this stamp
+                    # makes absence-of-records mean absence-of-firings.
                     _write_meta_esc(
                         _rd_esc, handle_id=handle_id, prompt=_raw_input,
                         lane="agenda", model=model,
+                        extra={"now_escalated": True},
                     )
             except Exception:
                 pass

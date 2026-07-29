@@ -337,9 +337,30 @@ escalation.
   organic corpus is smoke-contaminated ("say the word ok"). Stamp NOW
   runs before any organic A/B.
 
-- [ ] Verify `_is_complex_directive` escalation actually fires live
-  (reachability check before building the ladder around it).
-- [ ] Provenance-stamp NOW-lane runs (prereq for organic measurement).
+- [x] Verify `_is_complex_directive` escalation actually fires live —
+  **DONE 2026-07-29 (autonomous batch), with a twist.** The gate IS
+  live-reachable: config default ON, and `force_lane` (which bypasses
+  it) is only ever passed by eval.py and the CLI `--lane` flag —
+  dispatch/telegram traffic flows through it. But the zero-firings
+  recon was structurally inconclusive: NOTHING durable was written at
+  flip time (`classification_reason` is a HandleResult field, not
+  metadata), so never-fired and fired-invisibly were indistinguishable.
+  Fixed: the flip-time metadata write now stamps `now_escalated: true`
+  (mirroring the verdict-escalation's existing `now_verdict_escalated`),
+  pinned by `test_escalation_stamps_now_escalated_metadata`. Best
+  current read: zero firings because the upstream classifier already
+  routes complex directives to agenda (the escalation is a backstop for
+  classifier misses, and those are rare post-BLE-fix) — now measurable
+  instead of argued.
+- [x] Provenance-stamp NOW-lane runs — **ALREADY LIVE, checkbox was
+  stale (verified 2026-07-29).** Both halves shipped with the
+  `open_run` unification after the 2026-07-28 scan: `open_run` stamps
+  `measurement_class` into run metadata before lane routing (verified
+  on live runs dba0386d/08f214c3, both `mc=organic`; older runs
+  predate it), and the NOW-lane `record_outcome` call (handle.py)
+  passes `measurement_class` onto the durable outcome row. Historical
+  corpus stays unstamped — any organic A/B should filter to
+  prospective rows, as verdict-gap-stats already does.
 - [ ] Build the rung: on NOW demotion, route by failure shape → (i)
   artifact-seeded NOW retry (ask + failed answer + demotion reason) or
   (ii) runtime star executor; star-stuck → AGENDA with full context.
