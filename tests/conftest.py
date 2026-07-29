@@ -6,10 +6,17 @@ override this (monkeypatch wins over os.environ in the same scope).
 
 The recursion guard (pytest_configure) refuses to start a second pytest
 session if one is already active in the process tree. See rationale below.
+
+The clean-checkout tripwire (pytest_sessionstart/finish) fails the run if the
+suite left new files behind in the working tree. See rationale below.
 """
 
 import os
+from pathlib import Path
+
 import pytest
+
+import _checkout_tripwire
 
 
 # ---------------------------------------------------------------------------
@@ -44,9 +51,46 @@ def pytest_configure(config):
     os.environ[_ACTIVE_ENV] = str(os.getpid())
 
 
+# ---------------------------------------------------------------------------
+# Clean-checkout tripwire
+# ---------------------------------------------------------------------------
+#
+# Enforces the test-suite half of Jeremy's 2026-07-28 out-of-the-box decree:
+# snapshot the working tree at session start, compare at session finish, fail
+# the run if the suite ADDED anything. Rationale, prior violations, and the
+# pruning rules live in tests/_checkout_tripwire.py — kept there rather than
+# inline so the mechanism can be exercised by a test rather than trusted.
+
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+
+_tripwire_baseline: "set[str] | None" = None
+
+
+def pytest_sessionstart(session):
+    global _tripwire_baseline
+    if os.environ.get(_checkout_tripwire.ALLOW_ENV):
+        return
+    _tripwire_baseline = _checkout_tripwire.snapshot(_REPO_ROOT)
+
+
 def pytest_sessionfinish(session, exitstatus):
     if os.environ.get(_ACTIVE_ENV) == str(os.getpid()):
         os.environ.pop(_ACTIVE_ENV, None)
+
+    if _tripwire_baseline is None:
+        return
+    added = sorted(_checkout_tripwire.snapshot(_REPO_ROOT) - _tripwire_baseline)
+    if not added:
+        return
+
+    message = _checkout_tripwire.format_report(added)
+    reporter = session.config.pluginmanager.get_plugin("terminalreporter")
+    if reporter is not None:
+        reporter.write_line(message, red=True)
+    else:  # pragma: no cover - terminalreporter is always present under pytest
+        print(message)
+    if exitstatus == 0:
+        session.exitstatus = 1
 
 # API key env vars that should never leak into tests.  Tests that need a real
 # adapter explicitly set these; everything else gets isolation for free.

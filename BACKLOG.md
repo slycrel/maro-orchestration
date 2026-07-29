@@ -418,6 +418,38 @@ pointer.
   (learning-gated functionality must declare itself and degrade gracefully
   when the data isn't there). Ties to the M1's inability to review runs
   (M1-contrast pass above): seeded test-run data is the same missing piece.
+  **FIRST TRIPWIRE SHIPPED 2026-07-29** (Jeremy: *"agree, sure, let's do
+  that"*) — the **clean-checkout tripwire**: `tests/_checkout_tripwire.py`
+  (mechanism) + `pytest_sessionstart`/`sessionfinish` in `tests/conftest.py`
+  (wiring) + `tests/test_clean_checkout_tripwire.py` (7 tests). Snapshots the
+  working tree at session start, compares at finish, and **fails the run** if
+  the suite added files; only additions are flagged, since modifications to
+  tracked files are already `git status`-visible while untracked drops into a
+  gitignored dir are not — which is exactly where both known violations
+  landed. Prunes only regenerable noise (`.git`, `__pycache__`,
+  `.pytest_cache`, `.venv*`, `*.pyc`, `.coverage`) and **deliberately does
+  not prune `output/` or `memory/`**, the two dirs the real leaks went to.
+  Escape hatch `MARO_ALLOW_CHECKOUT_WRITES=1`. Verified three ways rather
+  than assumed: unit tests on the pruning rules, end-to-end scoped pytest
+  runs proving a littering test fails and a clean one doesn't, and — the
+  decisive one — **the historical bug was temporarily reintroduced and the
+  tripwire caught it**, naming all 7 files across both leak paths while the
+  tests themselves still reported pass, exit code 1. Full suite green with it
+  armed, no false positives across 6800+ tests. The mechanism lives in its
+  own module rather than inline in conftest specifically so it could be
+  tested — the 2026-06-25 lesson that a guard nobody exercises (every git
+  hook, dead for a month behind a stale `core.hooksPath`) is
+  indistinguishable from no guard. **Still open on this item:** the
+  fresh-workspace half (entry points against an empty `~/.maro/workspace`),
+  the learning-gated exemption marker, and writing the invariant down in
+  HOUSE_STYLE.md — this tripwire covers the suite-hygiene half only.
+  **Happy accident worth keeping** (Jeremy 2026-07-29: *"thankful for happy
+  accidents"*): the M1 has **no maro config at all** — no `~/.maro/config.yml`
+  and no workspace `config.yml` — so anything run here uses pure fresh-install
+  defaults. That makes this dev host, unplanned, the closest thing to a
+  clean-install test bed the project has, and it cheapens the §8 "give the M1
+  the ability to run a run" item: no new infrastructure, just seeded data and
+  a `maro-bootstrap install`.
 - [ ] **Threshold provenance instead of observe-only (Jeremy 2026-07-28):**
   replaces the rejected "M1 never ships a live threshold" rule — *"we can
   hypothesize and make a best guess, then create follow-up work to confirm
