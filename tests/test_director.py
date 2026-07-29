@@ -3004,6 +3004,38 @@ class TestEvaluateClosure:
             decision, _ = self._evaluate(v)
             assert decision.closure_verdict is v
 
+    def test_no_production_caller_bypasses_the_decision_layer(self):
+        """Migration tripwire (adversarial review 2026-07-29, Architect):
+        the closure test suites monkeypatch director.verify_goal_completion,
+        so a call site regressing from evaluate_closure back to the raw
+        pipeline would keep passing every existing test while silently
+        bypassing the decision layer — and any future closure policy that
+        lands there (§9.3 declare-blocked, gate-reads-scope). Pin the
+        migration mechanically: no production module outside the seam
+        (closure_verify.py defines the pipeline, director.py's
+        evaluate_closure is its one sanctioned caller) may CALL
+        verify_goal_completion. Imports alone are fine — calls are the
+        regression."""
+        import ast
+        from pathlib import Path
+        src = Path(__file__).resolve().parent.parent / "src"
+        offenders = []
+        for py in sorted(src.glob("*.py")):
+            if py.name in ("closure_verify.py", "director.py"):
+                continue
+            tree = ast.parse(py.read_text(), filename=str(py))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Call):
+                    f = node.func
+                    name = (f.id if isinstance(f, ast.Name)
+                            else f.attr if isinstance(f, ast.Attribute)
+                            else "")
+                    if name == "verify_goal_completion":
+                        offenders.append(f"{py.name}:{node.lineno}")
+        assert not offenders, (
+            "production call sites must go through director.evaluate_closure, "
+            f"not verify_goal_completion directly — {offenders}")
+
     def test_kwargs_pass_through_to_pipeline(self):
         """The decision layer forwards every closure input unchanged — a
         dropped kwarg (scope, diagnosis, loop_id...) would silently degrade

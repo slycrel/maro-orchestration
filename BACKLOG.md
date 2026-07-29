@@ -558,7 +558,13 @@ on both counts — four call sites (post-escalate re-verify was
 uncounted), and the verdict carries burn-in verdict-integrity machinery
 every consumer stamps from, so it survives as the evidence record on
 `DirectorDecision.closure_verdict` (spec correction recorded in
-ADAPTIVE_EXECUTION_DESIGN.md Trigger Point 3). **Drift batch
+ADAPTIVE_EXECUTION_DESIGN.md Trigger Point 3). Adversarial review DONE
+2026-07-29 (3 Codex lenses vs d9f9968, PASS with one fix — first-try
+PASS; 3/3 findings cited real code, 0 hallucinated; 1 accepted →
+AST census tripwire pinning that no production caller bypasses
+evaluate_closure, mutation-proven; 2 rejected as documented design.
+Record: docs/history/2026-07-29-closure-unification-adversarial-review.md).
+**Drift batch
 ADJUDICATED same day (Jeremy)** — all four re-parked on falsifiable
 reasons (GOAL_BRAIN Dormant threads + Decisions 2026-07-28): heartbeat
 gate re-based on hosted-free; next-leap packaging capacity-parked with
