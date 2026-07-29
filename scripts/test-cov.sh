@@ -34,6 +34,14 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+# pytest-cov combines per-worker data itself, so the coverage run parallelizes
+# like the plain suite does (~3m -> ~45s here). Optional: without xdist this
+# falls back to the sequential run unchanged.
+JOBS=""
+if "$PYTHON" -c "import xdist" >/dev/null 2>&1; then
+    JOBS="-n auto"
+fi
+
 # Run with coverage. --cov-fail-under is read from .coveragerc but we pass
 # it explicitly here so it's obvious when the floor is being enforced.
 exec "$PYTHON" -m pytest "$TARGET" \
@@ -41,4 +49,5 @@ exec "$PYTHON" -m pytest "$TARGET" \
     --cov=src \
     --cov-report=term-missing:skip-covered \
     ${HTML} \
+    ${JOBS} \
     -q --tb=line
