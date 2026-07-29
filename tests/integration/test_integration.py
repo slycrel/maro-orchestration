@@ -116,17 +116,17 @@ class TestNowLaneHeuristic:
     def test_short_question_routes_to_now(self, monkeypatch, tmp_path):
         """Heuristic classify routes obvious NOW questions to NOW."""
         from intent import classify
-        lane, confidence, reason, _ = classify("what time is it?", adapter=None)
-        assert lane == "now"
-        assert confidence > 0.0
+        r = classify("what time is it?", adapter=None)
+        assert r.lane == "now"
+        assert r.confidence > 0.0
 
     def test_long_research_routes_to_agenda(self, monkeypatch, tmp_path):
         """Heuristic classify routes research goals to AGENDA."""
         from intent import classify
-        lane, confidence, reason, _ = classify(
+        r = classify(
             "Research and analyze the top 10 winning strategies across 500 Polymarket markets"
         )
-        assert lane == "agenda"
+        assert r.lane == "agenda"
 
 
 # ---------------------------------------------------------------------------

@@ -9,17 +9,18 @@ heuristic keyword matching if the LLM call fails.
 
 Usage:
     from intent import classify
-    lane, confidence, reason, introspects_self = classify("what time is it?")
-    # → ("now", 0.95, "Simple factual question", False)
+    result = classify("what time is it?")
+    # → ClassifyResult(lane="now", confidence=0.95,
+    #                  reason="Simple factual question", ...)
 
-    lane, confidence, reason, introspects_self = classify(
-        "why did your last run fail?")
-    # → ("agenda", 0.9, "Requires reading run records", True)
+    result = classify("why did your last run fail?")
+    # → result.lane == "agenda", result.introspects_self is True
 """
 
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from typing import Tuple
 from llm_parse import extract_json, safe_float, safe_str, content_or_empty
 
@@ -31,23 +32,38 @@ from llm_parse import extract_json, safe_float, safe_str, content_or_empty
 Lane = str  # "now" | "agenda"
 
 
+@dataclass(frozen=True)
+class ClassifyResult:
+    """Named routing facts for one inbound message.
+
+    Call sites read attributes, never unpack positionally — the next
+    routing fact is a defaulted field here, not a shape change at every
+    consumer. Deliberately not iterable so a stale tuple-unpack site
+    fails loudly instead of silently misassigning fields.
+    """
+
+    lane: Lane
+    confidence: float
+    reason: str
+    # True when a correct answer depends on live/local data the NOW lane
+    # cannot fetch. Previously computed but swallowed inside classify();
+    # exposed so callers can see why an override fired (or didn't).
+    needs_live_data: bool = False
+    # The goal asks about THIS system's own runs/behavior/source (decree
+    # 2026-07-18). Fails open to False on the heuristic path — isolation
+    # is the safe default.
+    introspects_self: bool = False
+
+
 def classify(
     message: str,
     *,
     adapter=None,
     dry_run: bool = False,
-) -> Tuple[Lane, float, str, bool]:
+) -> ClassifyResult:
     """Classify a message as NOW or AGENDA lane.
 
-    Returns:
-        (lane, confidence, reason, introspects_self)
-        - lane: "now" or "agenda"
-        - confidence: 0.0–1.0
-        - reason: one-sentence explanation
-        - introspects_self: the goal asks about THIS system's own runs/
-          behavior/source (decree 2026-07-18: such runs get read-only run
-          records + maro source inside the executor container). Fails open
-          to False on the heuristic path — isolation is the safe default.
+    Returns a ClassifyResult — see its field docs for semantics.
     """
     # Deterministic link-triage shortcut, ahead of any LLM opinion
     # (conversational-compute decree, 2026-07-17): the canonical "is this
@@ -56,9 +72,9 @@ def classify(
     # example, then stack the clarification gate on top. Conservative on
     # purpose: triage phrasing + a URL + no file deliverable + a short ask.
     if _is_link_triage(message):
-        return ("now", 0.9,
-                "Link triage — provided link is pre-fetched and read inline",
-                False)
+        return ClassifyResult(
+            "now", 0.9,
+            "Link triage — provided link is pre-fetched and read inline")
 
     needs_live_data = False
     introspects_self = False
@@ -78,11 +94,12 @@ def classify(
     # routed NOW, answered inline, and the self-verdict correctly demoted the
     # run — honest negative, wrong lane.
     if lane == "now" and _requires_file_output(message):
-        return (
+        return ClassifyResult(
             "agenda",
             max(confidence, 0.8),
             "Names a file deliverable — NOW lane cannot write files",
-            introspects_self,
+            needs_live_data=needs_live_data,
+            introspects_self=introspects_self,
         )
 
     # Capability override, same class as the file-output one above: NOW is a
@@ -101,13 +118,16 @@ def classify(
     if (lane == "now" and needs_live_data
             and _config_get("now_lane.live_data_routing", True)
             and not _message_has_url(message)):
-        return (
+        return ClassifyResult(
             "agenda",
             max(confidence, 0.8),
             "Needs live external data — NOW lane cannot fetch it",
-            introspects_self,
+            needs_live_data=True,
+            introspects_self=introspects_self,
         )
-    return (lane, confidence, reason, introspects_self)
+    return ClassifyResult(lane, confidence, reason,
+                          needs_live_data=needs_live_data,
+                          introspects_self=introspects_self)
 
 
 def _message_has_url(message: str) -> bool:

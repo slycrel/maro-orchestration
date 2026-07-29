@@ -899,12 +899,18 @@ the same go-between, not a new channel architecture.
   3-wants-extraction edge; if a third NOW surface appears or the enrichment
   pattern changes again, extract a shared pure builder (structured state in,
   (system, user) out) into web_fetch or a small now_lane module.
-- **`intent.classify()`'s widening tuple wants a dataclass.** The 3→4-tuple
-  migration let conductor unpack-and-discard `introspects_self` without type
-  pressure (the review's one confirmed High). A `ClassifyResult` with named
-  routing facts (lane, confidence, reason, needs_live_data, introspects_self)
-  would make the next field addition a non-event. Do it as its own tiny
-  chunk, not mid-feature.
+- ~~**`intent.classify()`'s widening tuple wants a dataclass.**~~ SHIPPED
+  2026-07-29 (autonomous batch): frozen `ClassifyResult` dataclass with the
+  five named routing facts; `classify()` returns it on all four paths,
+  handle/conductor read attributes, all test unpacks + mock patches
+  migrated. Deliberately NOT iterable (stale tuple-unpack fails loudly —
+  pinned in test_classify_returns_named_result). Bonus: `needs_live_data`
+  is now exposed to callers instead of being swallowed inside classify(),
+  and the file-output override no longer drops it. Side-find while
+  migrating: `persona.py:412` imports nonexistent `intent.classify_intent`
+  → always excepts → `task_type` template var is permanently "general" —
+  this CONFIRMS the wiring-inventory "persona template seam dormant" claim
+  (item in the 8-claim verify list).
 
 ### Time blindness — LLMs don't experience ideas over time (2026-07-11, Jeremy)
 

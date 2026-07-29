@@ -955,7 +955,9 @@ def _handle_impl(
                     _classify_adapter = build_adapter(model=_ambr("classifier"))
                 except Exception:
                     _classify_adapter = adapter  # fall back to the run adapter
-        lane, confidence, reason, introspects_self = classify(message, adapter=_classify_adapter, dry_run=dry_run)
+        _cls = classify(message, adapter=_classify_adapter, dry_run=dry_run)
+        lane, confidence, reason, introspects_self = (
+            _cls.lane, _cls.confidence, _cls.reason, _cls.introspects_self)
 
     if verbose:
         print(f"[maro:{handle_id}] classified lane={lane} confidence={confidence:.2f}: {reason}", file=sys.stderr, flush=True)

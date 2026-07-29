@@ -24,6 +24,7 @@ from conductor import (
     _NOW_SYSTEM,
 )
 from llm import MODEL_CHEAP, MODEL_MID, MODEL_POWER
+from intent import ClassifyResult
 
 
 # ---------------------------------------------------------------------------
@@ -224,7 +225,7 @@ def test_poe_handle_dry_run_now():
 def test_poe_handle_now_intent():
     """NOW message → routed_to=now_lane."""
     adapter = _mock_adapter("2+2 is 4")
-    with patch("conductor.classify", return_value=("now", 0.95, "simple question", False)):
+    with patch("conductor.classify", return_value=ClassifyResult("now", 0.95, "simple question", introspects_self=False)):
         with patch("conductor.evaluate_action") as mock_eval:
             mock_decision = MagicMock()
             mock_decision.requires_human = False
@@ -237,7 +238,7 @@ def test_poe_handle_now_intent():
 def test_poe_handle_agenda_intent():
     """AGENDA message → routed_to=mission or director."""
     adapter = _mock_adapter("task completed")
-    with patch("conductor.classify", return_value=("agenda", 0.85, "multi-step", False)):
+    with patch("conductor.classify", return_value=ClassifyResult("agenda", 0.85, "multi-step", introspects_self=False)):
         with patch("conductor.evaluate_action") as mock_eval:
             mock_decision = MagicMock()
             mock_decision.requires_human = False
@@ -282,7 +283,7 @@ def test_poe_handle_goal_map_message():
 def test_poe_handle_requires_human_escalation():
     """When autonomy tier requires human, return escalation message."""
     adapter = _mock_adapter("ok")
-    with patch("conductor.classify", return_value=("agenda", 0.8, "multi-step", False)):
+    with patch("conductor.classify", return_value=ClassifyResult("agenda", 0.8, "multi-step", introspects_self=False)):
         with patch("conductor.evaluate_action") as mock_eval:
             mock_decision = MagicMock()
             mock_decision.requires_human = True

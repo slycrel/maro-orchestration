@@ -492,7 +492,9 @@ def conduct(
     _introspects = False
     if classify is not None and adapter is not None:
         try:
-            lane, confidence, reason, _introspects = classify(message, adapter=adapter)
+            _cls = classify(message, adapter=adapter)
+            lane, confidence, reason = _cls.lane, _cls.confidence, _cls.reason
+            _introspects = _cls.introspects_self
         except Exception:
             lane = "agenda"
 
