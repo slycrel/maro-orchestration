@@ -1336,8 +1336,10 @@ def test_build_adapter_auto_prefers_anthropic(monkeypatch):
 
 
 def test_build_adapter_auto_falls_back_to_subprocess(monkeypatch):
-    """Single available backend returns the adapter directly (no FailoverAdapter wrapper)."""
-    from llm import DEFAULT_BACKEND_ORDER
+    """Single available backend is STILL wrapped: FailoverAdapter.complete is
+    the record-mode / cost-meter / cap-warning seam, and a bare adapter left
+    subprocess-only boxes with n_calls: 0 despite record-mode default-ON."""
+    from llm import DEFAULT_BACKEND_ORDER, FailoverAdapter
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
@@ -1346,7 +1348,10 @@ def test_build_adapter_auto_falls_back_to_subprocess(monkeypatch):
     monkeypatch.setattr("llm._load_env_file", lambda *a, **kw: {})
     monkeypatch.setattr("llm._get_backend_order", lambda: list(DEFAULT_BACKEND_ORDER))
     a = build_adapter("auto")
-    assert isinstance(a, ClaudeSubprocessAdapter)  # single backend, no wrapper
+    assert isinstance(a, FailoverAdapter)
+    assert len(a._adapters) == 1
+    assert isinstance(a._adapters[0], ClaudeSubprocessAdapter)
+    assert a.backend == "subprocess"  # property forwards the active adapter
 
 
 def test_build_adapter_honors_configured_backend_order(monkeypatch):
@@ -1370,8 +1375,11 @@ def test_build_adapter_skips_unavailable_backends_in_order(monkeypatch):
     monkeypatch.setattr("llm._load_env_file", lambda *a, **kw: {})
     monkeypatch.setattr("llm._get_backend_order", lambda: ["openrouter", "subprocess", "anthropic"])
     a = build_adapter("auto")
-    # Only anthropic available → single adapter, no wrapper
-    assert isinstance(a, AnthropicSDKAdapter)
+    # Only anthropic available → single adapter, still wrapped (record seam)
+    from llm import FailoverAdapter
+    assert isinstance(a, FailoverAdapter)
+    assert isinstance(a._adapters[0], AnthropicSDKAdapter)
+    assert a.backend == "anthropic"
 
 
 def test_get_backend_order_uses_default_when_unset(monkeypatch):
@@ -1616,13 +1624,18 @@ class TestRateLimitMultiCycleRetry:
 # ---------------------------------------------------------------------------
 
 def test_maro_backend_env_var_selects_openrouter(monkeypatch):
-    """MARO_BACKEND=openrouter should route auto-detect to OpenRouter."""
+    """MARO_BACKEND=openrouter should route auto-detect to OpenRouter —
+    wrapped, because MARO_BACKEND is still the auto path and must keep the
+    record/meter seam."""
+    from llm import FailoverAdapter
     monkeypatch.setenv("MARO_BACKEND", "openrouter")
     monkeypatch.setattr("llm._load_env_file", lambda *a, **kw: {"OPENROUTER_API_KEY": "sk-or-test"})
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.setattr("llm._claude_bin_available", lambda: False)
     a = build_adapter("auto")
-    assert isinstance(a, OpenRouterAdapter)
+    assert isinstance(a, FailoverAdapter)
+    assert isinstance(a._adapters[0], OpenRouterAdapter)
+    assert a.backend == "openrouter"
 
 
 def test_maro_backend_env_var_ignored_when_explicit_backend(monkeypatch):

@@ -300,8 +300,8 @@ def run_cross_ref(
 
     if adapter is None:
         try:
-            from llm import build_adapter
-            adapter = build_adapter("cheap")
+            from llm import MODEL_CHEAP, build_adapter
+            adapter = build_adapter(model=MODEL_CHEAP)
         except Exception as exc:
             log.warning("cross_ref: could not build adapter: %s", exc)
             elapsed = int((time.monotonic() - t0) * 1000)
@@ -395,7 +395,7 @@ def _cli_main(argv=None) -> int:
     if not args.dry_run:
         try:
             from llm import build_adapter
-            adapter = build_adapter(args.model)
+            adapter = build_adapter(model=args.model)
         except Exception as exc:
             print(f"WARNING: could not build adapter ({exc}), using dry-run mode", flush=True)
             args.dry_run = True

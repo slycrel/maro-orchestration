@@ -3188,7 +3188,12 @@ def build_adapter(
     # MARO_BACKEND env var overrides auto-detection priority without forcing a specific key
     _maro_backend = os.environ.get("MARO_BACKEND", "").strip().lower()
     if _maro_backend and _maro_backend != "auto":
-        return build_adapter(backend=_maro_backend, model=model, api_key=api_key, timeout=timeout)
+        _explicit = build_adapter(backend=_maro_backend, model=model, api_key=api_key, timeout=timeout)
+        # Still the auto path — the seam guarantee below (record/meter/cap
+        # warning) must survive the recursion through the explicit branch.
+        if isinstance(_explicit, FailoverAdapter):
+            return _explicit
+        return FailoverAdapter([_explicit])
 
     # Explicit api_key overrides — try Anthropic first, then OpenRouter
     if api_key:
@@ -3245,10 +3250,13 @@ def build_adapter(
             f"Tried backend_order={order!r}."
         )
 
-    if len(available) == 1:
-        return available[0]  # single backend — no wrapper overhead
-
-    log.debug("build_adapter(auto): %d backends available, using FailoverAdapter: %s",
+    # Always wrap, single backend included: FailoverAdapter.complete is the
+    # one seam carrying record-mode capture, the runaway-cost meter, and the
+    # utility-call cap warning — a bare adapter leaves all three dark. The
+    # old len==1 fast path meant subprocess-only boxes ran with n_calls: 0
+    # on every run despite record-mode default-ON (2026-07-21 wiring
+    # inventory, confirmed on run c772366a-wily-badger).
+    log.debug("build_adapter(auto): %d backend(s) available, using FailoverAdapter: %s",
               len(available), [a.backend for a in available])
     return FailoverAdapter(available)
 

@@ -404,3 +404,29 @@ class TestQualityGateCrossRefField:
             cross_ref=report,
         )
         assert isinstance(v.cross_ref, CrossRefReport)
+
+
+class TestAdapterFallbackCallShape:
+    def test_fallback_builds_by_model_keyword(self, monkeypatch):
+        """run_cross_ref's adapter fallback must pass the tier as model=, not
+        as the positional backend arg — build_adapter("cheap") asserts on the
+        unknown backend, so the old call silently degraded every fallback
+        path to an empty report."""
+        import llm
+        from cross_ref import run_cross_ref
+
+        seen = {}
+
+        def _fake_build_adapter(*args, **kwargs):
+            seen["args"] = args
+            seen["kwargs"] = kwargs
+            fake = MagicMock()
+            fake.complete.return_value = MagicMock(content="[]")
+            return fake
+
+        monkeypatch.setattr(llm, "build_adapter", _fake_build_adapter)
+        report = run_cross_ref("The sky is blue.")
+        assert seen, "fallback never tried to build an adapter"
+        assert not seen["args"], "backend must not be passed positionally"
+        assert seen["kwargs"].get("model") == llm.MODEL_CHEAP
+        assert report is not None
