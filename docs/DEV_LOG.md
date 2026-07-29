@@ -20,6 +20,28 @@ Dev log tab at maro.feifdom.com alongside Runs and Reading.
 
 ## 2026-07-29
 
+**Degenerate skill router — root-caused and benched** — thread:
+`next-leap-packaging`. The packaging readout's day-one catch (same 3
+skills @0.992 for every goal) turned out to be two structural defects,
+not one: the training corpus is 99.4% positive (166/167 — success_rate
+labels over a store where nearly everything succeeds), AND
+`route_skills` never puts the goal into the feature vector — it scores
+`skill.description` alone, so the model's output is a goal-independent
+per-skill prior by construction. The docstring claimed the goal was
+"used as query context"; it was dead code's promise. Fix is a
+discrimination guard, not a retrain: score spread < 0.05 across the
+candidate set → results degrade to keyword-method, and
+`find_matching_skills`' existing router check falls through to
+goal-sensitive matching. Live delta before/after: haiku goal went from
+"Codebase-to-Proposal Gap Mapping" to `haiku_to_file`; the readout's
+would_include buckets went from one constant trio to 46 distinct
+skills in builder×agenda. Goal-aware retraining is BACKLOG'd honestly:
+skill-stats rows carry no goal text, so the model *cannot* learn
+(goal, skill) → outcome until the store records goals. Surprised-by:
+the guard beat the retrain so cleanly — a ranking with no spread is
+worse than no ranking, and the cheap deterministic check that says so
+covers every future degeneracy cause, not just these two.
+
 **Settled-chunks batch — four trio-triaged items shipped, and the trio
 became a skill** — threads: `adversary-trio`, `dispatch-envelope`,
 `knowledge-receipts`, `now-retry-rung`, `next-leap-packaging`. Jeremy's

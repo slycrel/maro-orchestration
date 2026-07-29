@@ -426,20 +426,33 @@ inspectable before any behavior changes.
   DEAD (0/40); verdicted outcomes thin (22 achieved / 18 not / 156
   unverdicted). Liveness-tested (real writers, no read-side mocks) +
   live-verified non-empty on this box.
-- [ ] **Slice 1 catch — the skill router is degenerate (BLOCKS slice 2):**
-  live run shows the SAME 3 skills ("Codebase-to-Proposal Gap Mapping",
-  "Framework-to-Architecture Gap Mapping", "Headless Branch Setup")
-  match EVERY goal for EVERY persona; verified at the seam —
-  `router.route_skills` scores all three 0.992 regardless of goal, so
-  top_k is constant and keyword/tf-idf fallbacks never fire. Wiring
-  packaging today would bundle the same 3 skills into every persona.
-  Fix or bypass the router (retrain, calibration gate, or
-  keyword-first) before slice 2; the readout is the regression
-  instrument.
+- [x] **Slice 1 catch — degenerate router FIXED 2026-07-29:** root cause
+  was two structural defects, both verified live: (1) training corpus
+  99.4% positive (166/167 rows — labels bucket success_rate>0.6→1.0
+  over a store where nearly everything succeeds), so the classifier
+  predicts ~0.992 for everything; (2) `route_skills` vectorizes
+  `skill.description` only — the goal NEVER enters scoring, so scores
+  are a goal-independent per-skill prior (a haiku goal and a pytest
+  goal got identical top-3). Fix: discrimination guard in
+  `route_skills` (score spread < DISCRIMINATION_EPSILON across ≥2
+  candidates → results degrade to method="keyword", so
+  find_matching_skills' existing router check falls through to
+  goal-sensitive keyword/tf-idf matching). Deterministic, reversible,
+  no retraining. Live delta: research goal → research skills, pytest
+  goal → Test-Driven Code Fix, haiku → haiku_to_file; readout buckets
+  went from one constant trio to 46 distinct would_include skills in
+  builder×agenda alone. 4 pin tests incl. end-to-end consumer pin.
+- [ ] **Goal-aware router needs new training data**: skill-stats.jsonl
+  rows carry no goal text, so the model structurally cannot learn
+  (goal, skill) → outcome. If the router is ever to out-rank keyword
+  matching, record the goal (or its 120-char prefix) on skill-stats
+  rows at outcome time first; until then the guard keeps the model
+  honest by benching it.
 - [ ] **Slice 2 — wire packaging behind a flag** (default OFF,
   no-silent-spend posture): persona spec gains a packaged-skills field
-  fed from would_include rows; gated on the router fix + a fatter
-  verdicted denominator (156 unverdicted rows carry no signal).
+  fed from would_include rows; router fix landed 2026-07-29 — remaining
+  gate is a fatter verdicted denominator (156 unverdicted rows carry
+  no signal).
 - [ ] Durable dispatch→outcome join: persona-dispatch-log rows carry no
   loop_id/handle_id, so the readout joins on the 120-char goal prefix
   (writer's own truncation rule; exact but collision-prone for goals

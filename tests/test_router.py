@@ -379,6 +379,80 @@ def test_route_skills_sorted_by_score(monkeypatch, tmp_path):
         assert results[i].score >= results[i + 1].score
 
 
+def test_route_skills_degenerate_scores_fall_back_to_keyword(monkeypatch, tmp_path):
+    """Near-flat model scores carry no ranking signal → keyword fallback.
+
+    Pins the 2026-07-29 live finding: a model trained on 99.4%-positive
+    labels scored every (goal, skill) pair ~0.992, making top_k an arbitrary
+    constant trio for every goal. The guard must degrade such results to
+    method="keyword" so find_matching_skills' router check falls through.
+    """
+    _setup_workspace(monkeypatch, tmp_path)
+    pytest.importorskip("sklearn")
+    import router
+
+    mock_model = MagicMock()
+    mock_model.classes_ = [0.0, 1.0]
+    mock_model.predict_proba.return_value = [[0.008, 0.992]]
+    mock_vec = MagicMock()
+    mock_vec.transform.return_value = MagicMock()
+
+    skills = [_make_skill(f"sk{i:03d}", f"skill {i}", f"desc {i}") for i in range(5)]
+    with patch.object(router, "load_router", return_value=(mock_model, mock_vec)):
+        results = router.route_skills("any goal", skills, top_k=3)
+
+    assert len(results) == 3
+    assert all(r.method == "keyword" for r in results)
+    assert all(r.score == pytest.approx(0.5) for r in results)
+
+
+def test_route_skills_discriminating_scores_keep_router(monkeypatch, tmp_path):
+    """Scores with real spread stay method='router' — the guard is inert."""
+    _setup_workspace(monkeypatch, tmp_path)
+    pytest.importorskip("sklearn")
+    import router
+
+    scores = [0.3, 0.9, 0.6]
+    call_count = [0]
+
+    def mock_proba(vec):
+        s = scores[call_count[0] % len(scores)]
+        call_count[0] += 1
+        return [[1 - s, s]]
+
+    mock_model = MagicMock()
+    mock_model.classes_ = [0.0, 1.0]
+    mock_model.predict_proba.side_effect = mock_proba
+    mock_vec = MagicMock()
+    mock_vec.transform.return_value = MagicMock()
+
+    skills = [_make_skill(f"sk{i:03d}", f"skill {i}", f"desc {i}") for i in range(3)]
+    with patch.object(router, "load_router", return_value=(mock_model, mock_vec)):
+        results = router.route_skills("any goal", skills, top_k=3)
+
+    assert all(r.method == "router" for r in results)
+    assert results[0].score == pytest.approx(0.9)
+
+
+def test_route_skills_single_candidate_skips_spread_guard(monkeypatch, tmp_path):
+    """One candidate has no spread to measure — router scoring stands."""
+    _setup_workspace(monkeypatch, tmp_path)
+    pytest.importorskip("sklearn")
+    import router
+
+    mock_model = MagicMock()
+    mock_model.classes_ = [0.0, 1.0]
+    mock_model.predict_proba.return_value = [[0.008, 0.992]]
+    mock_vec = MagicMock()
+    mock_vec.transform.return_value = MagicMock()
+
+    with patch.object(router, "load_router", return_value=(mock_model, mock_vec)):
+        results = router.route_skills("any goal", [_make_skill()], top_k=3)
+
+    assert len(results) == 1
+    assert results[0].method == "router"
+
+
 # ---------------------------------------------------------------------------
 # maybe_retrain
 # ---------------------------------------------------------------------------
@@ -515,6 +589,43 @@ def test_find_matching_skills_uses_router(monkeypatch, tmp_path):
 
     assert route_called[0] is True
     assert len(result) >= 1
+
+
+def test_find_matching_skills_degenerate_model_reaches_keyword_match(monkeypatch, tmp_path):
+    """End-to-end: a degenerate model must NOT decide skill selection.
+
+    With a constant-probability model loaded, find_matching_skills should
+    fall through the guard to keyword matching and return the skill whose
+    trigger actually matches the goal — not an arbitrary router trio.
+    """
+    _setup_workspace(monkeypatch, tmp_path)
+    pytest.importorskip("sklearn")
+    from skills import find_matching_skills, save_skill
+    import router
+
+    matching = _make_skill(
+        "sk-match", "polymarket research", "researches prediction markets",
+        ["polymarket", "prediction market"],
+    )
+    decoy = _make_skill(
+        "sk-decoy", "branch setup", "sets up git branches",
+        ["git branch", "checkout"],
+    )
+    save_skill(matching)
+    save_skill(decoy)
+
+    mock_model = MagicMock()
+    mock_model.classes_ = [0.0, 1.0]
+    mock_model.predict_proba.return_value = [[0.008, 0.992]]
+    mock_vec = MagicMock()
+    mock_vec.transform.return_value = MagicMock()
+
+    with patch.object(router, "load_router", return_value=(mock_model, mock_vec)):
+        result = find_matching_skills("research polymarket edges", use_router=True)
+
+    ids = [s.id for s in result]
+    assert "sk-match" in ids
+    assert "sk-decoy" not in ids
 
 
 def test_find_matching_skills_router_fallback(monkeypatch, tmp_path):

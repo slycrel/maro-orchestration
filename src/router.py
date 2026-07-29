@@ -55,6 +55,9 @@ except ImportError:
 
 MIN_TRAINING_SAMPLES = 50    # below this, fall back to keyword matching
 RETRAIN_EVERY_N = 50         # retrain when skill-stats grows by this many entries
+DISCRIMINATION_EPSILON = 0.05  # min score spread across candidates for the
+                               # model's ranking to carry signal; below it,
+                               # route_skills degrades to keyword fallback
 
 # ---------------------------------------------------------------------------
 # Data model
@@ -355,13 +358,22 @@ def route_skills(
     """Score candidate skills by predicted success probability.
 
     Args:
-        goal:       Goal string (used as query context).
+        goal:       Goal string. NOT part of model scoring today — the model
+                    is trained on skill text only (description +
+                    trigger_patterns vs the skill's own success rate), so its
+                    scores are a per-skill prior, identical for every goal.
+                    Goal-aware scoring needs (goal, skill, outcome) training
+                    rows that skill-stats does not yet record.
         candidates: List of Skill objects to score.
         top_k:      Maximum results to return.
 
     Returns:
         List of RouteResult sorted by score descending.
-        method="router" if model was used, "keyword" if fallback.
+        method="router" if model was used, "keyword" if fallback — including
+        when the model's scores are non-discriminating (spread below
+        DISCRIMINATION_EPSILON), so consumers checking method=="router" fall
+        through to goal-sensitive matching instead of an arbitrary constant
+        top-k.
     """
     if not candidates:
         return []
@@ -396,6 +408,29 @@ def route_skills(
                     score=0.5,
                     method="keyword",
                 ))
+        # Discrimination guard: a near-flat score surface means the model is
+        # ranking on noise (observed live 2026-07-29: 99.4%-positive training
+        # labels + goal-independent features → every goal scored the same 3
+        # skills at 0.992). A ranking with no spread is worse than no ranking —
+        # degrade to keyword fallback so consumers route around the model.
+        model_scores = [r.score for r in results if r.method == "router"]
+        if len(model_scores) >= 2 and (
+            max(model_scores) - min(model_scores) < DISCRIMINATION_EPSILON
+        ):
+            logger.debug(
+                "[router] non-discriminating model scores (spread %.4f over "
+                "%d candidates) — keyword fallback",
+                max(model_scores) - min(model_scores), len(model_scores),
+            )
+            return [
+                RouteResult(
+                    skill_id=s.id,
+                    skill_name=s.name,
+                    score=0.5,
+                    method="keyword",
+                )
+                for s in candidates[:top_k]
+            ]
         results.sort(key=lambda r: r.score, reverse=True)
         return results[:top_k]
 
