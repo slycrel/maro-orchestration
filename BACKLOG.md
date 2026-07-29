@@ -1947,7 +1947,11 @@ These four are kept (not deleted) this triage pending verification against curre
   consumption the shared run/closure lifecycle (not by teaching this report to
   bless the earlier partial pass). This belongs with the dedicated
   Verify→Learn/closure design arc; it is too large to smuggle into a stats
-  report.
+  report. **2026-07-29 rider (persist-the-artifacts review, minimalist):**
+  the same `scoped_run_dir(None)` detachment also means queued continuations
+  persist NO `loops[]` lineage and no closure_verdicts.jsonl — both new
+  writers key off `current_run_dir()` and will start working here the moment
+  this lane gets its run-dir lifecycle; nothing extra to build then.
 
 - [~] **`decomposition_too_broad` residual.** (verify before dropping) The cache-aware conversion (2026-06-22) removed the observed noise source; remaining open question is whether a step doing genuinely >200K *fresh* tokens on an otherwise-successful run should warn at all, or only when the loop also shows stress (blocked steps / budget exhaustion). Revisit only if a real fresh-heavy run flags spuriously. (Full block archived to BACKLOG_DONE; this is the residual watch-item.)
 

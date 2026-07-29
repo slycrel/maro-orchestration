@@ -640,7 +640,39 @@ def verify_goal_completion(
     # the silent early returns where no checks were generated, no results came
     # back, or an unexpected exception was caught.  dry_run / no-adapter are
     # intentional skips and don't need a log entry.
+    def _persist_verdict_row(row: dict) -> None:
+        # Persist-the-artifacts decree (Jeremy 2026-07-29): every closure
+        # outcome — full verdict or named skip — leaves a durable row in
+        # the run dir's build/closure_verdicts.jsonl, secret-scrubbed like
+        # every other persisted run record (runs.py call records set the
+        # precedent). Best-effort — must never affect the verdict path.
+        try:
+            from datetime import datetime, timezone
+            from runs import current_run_dir
+            from file_lock import locked_append
+            from secret_scrub import scrub
+            _rd = current_run_dir()
+            if _rd is not None:
+                _full = scrub({
+                    "ts": datetime.now(timezone.utc).isoformat(),
+                    "loop_id": loop_id or "",
+                    **row,
+                })
+                locked_append(
+                    _rd / "build" / "closure_verdicts.jsonl",
+                    json.dumps(_full, default=str),
+                )
+        except Exception:
+            pass
+
     def _emit_skip(reason: str, detail: str = "") -> None:
+        # A skipped verification is itself an outcome worth persisting:
+        # without the row, "closure never ran" and "closure ran and
+        # produced nothing" are indistinguishable from the run dir alone.
+        _persist_verdict_row({
+            "skipped": reason,
+            **({"skip_detail": detail[:300]} if detail else {}),
+        })
         try:
             from captains_log import log_event as _le, CLOSURE_VERDICT as _CV
             _le(
@@ -1199,45 +1231,38 @@ def verify_goal_completion(
         # pass/fail, and record-mode call transcripts only exist on
         # multi-backend boxes (2026-07-29 recon: 7 of 10 live restart
         # pairs had no recoverable child-side checks anywhere).
-        # Best-effort — persistence must never affect the verdict path.
-        try:
-            from datetime import datetime, timezone
-            from runs import current_run_dir
-            from file_lock import locked_append
-            _rd = current_run_dir()
-            if _rd is not None:
-                _row = {
-                    "ts": datetime.now(timezone.utc).isoformat(),
-                    "loop_id": loop_id or "",
-                    "complete": complete,
-                    "confidence": confidence,
-                    "checks_run": checks_run,
-                    "checks_passed": checks_passed,
-                    "inconclusive_count": len(inconclusive_checks),
-                    "judged": judged,
-                    "downgrade_reason": downgrade_reason,
-                    "gaps": [str(g)[:300] for g in gaps],
-                    "summary": summary[:500],
-                    "failed_checks": list(verdict.failed_checks),
-                    "fingerprint": closure_fingerprint(verdict),
-                    "check_results": [
-                        {
-                            "description": safe_str(r.get("description", ""))[:300],
-                            "command": safe_str(r.get("command", ""))[:300],
-                            "exit_code": r.get("exit_code"),
-                            "outcome": r.get("outcome", ""),
-                            "stdout": safe_str(r.get("stdout", ""))[:500],
-                            "stderr": safe_str(r.get("stderr", ""))[:300],
-                        }
-                        for r in check_results
-                    ],
+        # target_file_content rides along because it is the ground-truth
+        # evidence the verdict LLM actually judged — a failed grep row
+        # without it cannot show WHY the verdict went the way it did.
+        _persist_verdict_row({
+            "complete": complete,
+            "confidence": confidence,
+            "checks_run": checks_run,
+            "checks_passed": checks_passed,
+            "inconclusive_count": len(inconclusive_checks),
+            "judged": judged,
+            "downgrade_reason": downgrade_reason,
+            "gaps": [str(g)[:300] for g in gaps],
+            "summary": summary[:500],
+            "failed_checks": list(verdict.failed_checks),
+            "fingerprint": closure_fingerprint(verdict),
+            "check_results": [
+                {
+                    "description": safe_str(r.get("description", ""))[:300],
+                    "command": safe_str(r.get("command", ""))[:300],
+                    "exit_code": r.get("exit_code"),
+                    "outcome": r.get("outcome", ""),
+                    "stdout": safe_str(r.get("stdout", ""))[:500],
+                    "stderr": safe_str(r.get("stderr", ""))[:300],
+                    **(
+                        {"target_file_content":
+                         safe_str(r.get("target_file_content"))[:2000]}
+                        if r.get("target_file_content") else {}
+                    ),
                 }
-                locked_append(
-                    _rd / "build" / "closure_verdicts.jsonl",
-                    json.dumps(_row, default=str),
-                )
-        except Exception:
-            pass
+                for r in check_results
+            ],
+        })
 
         return verdict
 

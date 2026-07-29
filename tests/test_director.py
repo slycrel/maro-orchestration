@@ -1273,6 +1273,79 @@ class TestVerifyGoalCompletion:
         assert all("exit_code" in r and "stdout" in r and "stderr" in r
                    for r in row["check_results"])
 
+    def test_skip_paths_persist_row(self, tmp_path):
+        """Adversarial review 2026-07-29 (skeptic+architect consensus): a
+        skipped verification is itself an outcome — without a persisted
+        row, "closure never ran" and "closure ran and produced nothing"
+        are indistinguishable from the run dir alone."""
+        import json as _json
+        from unittest.mock import MagicMock, patch
+        import runs as runs_mod
+
+        rd = tmp_path / "run-skip"
+        runs_mod.set_current_run_dir(rd)
+        adapter = MagicMock()
+        adapter.complete.side_effect = [MagicMock()]
+        try:
+            with patch("closure_verify.extract_json",
+                       side_effect=[{"checks": []}]):
+                with patch("closure_verify.content_or_empty", return_value="{}"):
+                    result = verify_goal_completion(
+                        "research something", [], adapter,
+                        workspace_path=str(tmp_path), loop_id="loopskip")
+        finally:
+            runs_mod.set_current_run_dir(None)
+        assert result.checks_run == 0  # the null verdict
+        rows = [_json.loads(l) for l in
+                (rd / "build" / "closure_verdicts.jsonl")
+                .read_text().splitlines() if l]
+        assert len(rows) == 1
+        assert rows[0]["skipped"] == "no_checks_generated"
+        assert rows[0]["loop_id"] == "loopskip"
+
+    def test_persisted_row_scrubs_secrets_and_keeps_file_evidence(self, tmp_path):
+        """Adversarial review 2026-07-29: (1) persisted rows must carry
+        target_file_content — the ground-truth excerpt the verdict LLM
+        actually judged (minimalist/skeptic consensus); (2) everything
+        persisted goes through secret_scrub like every other run record
+        (minimalist) — the file's stated purpose includes showing it to
+        users."""
+        import json as _json
+        from unittest.mock import MagicMock, patch
+        import runs as runs_mod
+
+        probe_file = tmp_path / "evidence.txt"
+        probe_file.write_text(
+            "the deliverable content marker\n"
+            "api_key: sk-ant-abcdefghij0123456789\n")
+        rd = tmp_path / "run-evidence"
+        runs_mod.set_current_run_dir(rd)
+        adapter = MagicMock()
+        adapter.complete.side_effect = [MagicMock(), MagicMock()]
+        checks = [{"description": "marker present",
+                   "command": "grep -q definitely_absent_marker evidence.txt"}]
+        verdict_data = {"complete": False, "confidence": 0.9,
+                        "gaps": ["marker missing"], "summary": "not done"}
+        try:
+            with patch("closure_verify.extract_json",
+                       side_effect=[{"checks": checks}, verdict_data]):
+                with patch("closure_verify.content_or_empty", return_value="{}"):
+                    verify_goal_completion(
+                        "add the marker", [], adapter,
+                        workspace_path=str(tmp_path), loop_id="loopev")
+        finally:
+            runs_mod.set_current_run_dir(None)
+        rows = [_json.loads(l) for l in
+                (rd / "build" / "closure_verdicts.jsonl")
+                .read_text().splitlines() if l]
+        assert len(rows) == 1
+        (check_row,) = rows[0]["check_results"]
+        assert check_row["outcome"] == "fail"
+        evidence = check_row.get("target_file_content", "")
+        assert "the deliverable content marker" in evidence
+        assert "[REDACTED]" in evidence
+        assert "sk-ant-abcdefghij0123456789" not in _json.dumps(rows[0])
+
     def test_failed_checks_surface_gaps(self, monkeypatch, tmp_path):
         """Failed checks + director verdict with gaps → needs_work emitted."""
         from unittest.mock import MagicMock, patch

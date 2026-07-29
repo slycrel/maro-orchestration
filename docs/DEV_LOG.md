@@ -40,10 +40,22 @@ had no recoverable child checks anywhere). Both writers best-effort,
 both liveness-pinned. Consequences: the §9.3 main-gate join's
 material is now a local read of the same run dir, and the
 fingerprint's live hit/miss-rate becomes measurable offline instead
-of argued about. **Surprised by:** how small the fix was once named —
-two append writers, ~sixty lines, against a gap three separate
-recon/audit passes had walked past because the captain's log
-*looked* like coverage.
+of argued about. Post-land codex review (3 lenses, 4/4 verified real,
+0 hallucinated — twelfth clean round;
+docs/history/2026-07-29-persist-artifacts-adversarial-review.md)
+caught the chunk failing its own decree three ways, all fixed same
+session: skipped verifications persisted nothing (skip rows now
+written), the ground-truth file excerpts the verdict LLM judges were
+dropped from the rows (now carried), and the evidence went to disk
+unscrubbed while every other persisted record passes secret_scrub
+(now scrubbed — the sharpest catch, given the precedent sat twenty
+lines from code read the same day). Fourth finding accepted-as-noted:
+queued continuations detach from run dirs on purpose, so both writers
+are inert there until that lane gets the shared run lifecycle
+(existing BACKLOG item, rider added). **Surprised by:** how small the
+fix was once named — two append writers, ~sixty lines, against a gap
+three separate recon/audit passes had walked past because the
+captain's log *looked* like coverage.
 
 **§9.3 review round — status honesty joins the declaration** — threads:
 `compound-thinking`, `adaptive-execution`. Post-land codex review of
