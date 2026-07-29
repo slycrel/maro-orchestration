@@ -117,3 +117,9 @@ outcomes → SF-13 (GOAL_BRAIN Decisions line + runtime
   fix it, the mechanism doesn't work.
 - Adjudicate after 5 runs; verdict → GOAL_BRAIN Decisions. No silent
   half-death (playbook / Stage-5 / factory lineage rule).
+
+## Run ledger
+
+| # | Date | Input | Keep/kill evidence |
+|---|------|-------|--------------------|
+| 1 | 2026-07-29 | 4 settled work items (docs/history/2026-07-29-settled-chunks-trio-triage.md) | KEEP-signal fired: panel re-scoped G (arc-open → report-only readout) and re-ordered 4→2→3→1 vs solo prior "G first"; opposed-seat unanimity on item 4; honest concessions both directions. Post-hoc: all four verdicts held through build — the readout-first G verdict paid off immediately (degenerate-router catch). |
