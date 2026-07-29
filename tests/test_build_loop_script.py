@@ -45,10 +45,16 @@ def test_build_loop_shell_wrapper_runs_cli(tmp_path):
     pre_existing = {
         d: ({p.name for p in d.iterdir()} if d.exists() else set()) for d in leak_dirs
     }
-    status_file = repo_root / "output" / "build-loop-status.json"
-    lock_file = repo_root / "output" / "build-loop.lock"
-    status_pre_existed = status_file.exists()
-    lock_pre_existed = lock_file.exists()
+    # operator-status.json is the one that hid: it already existed in the dev
+    # checkout, so the leak was only visible from a clean tree — which is the
+    # whole point of the out-of-the-box invariant. Found by the clean-checkout
+    # tripwire the first time it ran in a fresh worktree, 2026-07-29.
+    loose_files = (
+        repo_root / "output" / "build-loop-status.json",
+        repo_root / "output" / "build-loop.lock",
+        repo_root / "output" / "operator-status.json",
+    )
+    loose_pre_existed = {f: f.exists() for f in loose_files}
 
     env = os.environ.copy()
     env.pop("OPENCLAW_WORKSPACE", None)
@@ -89,10 +95,9 @@ def test_build_loop_shell_wrapper_runs_cli(tmp_path):
                     shutil.rmtree(path, ignore_errors=True)
                 else:
                     path.unlink(missing_ok=True)
-        if not status_pre_existed:
-            status_file.unlink(missing_ok=True)
-        if not lock_pre_existed:
-            lock_file.unlink(missing_ok=True)
+        for loose in loose_files:
+            if not loose_pre_existed[loose]:
+                loose.unlink(missing_ok=True)
 
 
 def test_build_loop_shell_wrapper_accepts_trailing_workspace_dir(tmp_path):
