@@ -5221,3 +5221,10 @@ Dormant (deliberately parked, not dropped):
   3a4e2692 wasn't defunded by cumulative spend, it was a $3.00
   power-tier step against a $2.40 cap; the raised/auto breaker is the
   whole fix.
+- **2026-07-29** — Telegram brief-updates permission (Jeremy, decree-class):
+  Claude MAY send brief updates to the maro Telegram alerting channel
+  (`notify_telegram.send`, same ops lane as run events) for interesting
+  angles found while pulling threads autonomously — "not required unless
+  it's an interesting angle, I'll catch up either way". Sparing use:
+  substantive finds, not status noise (noise-masquerading-as-communication
+  is a named frustration). First use: the degenerate-router root cause.
