@@ -230,6 +230,40 @@ Act, don't ask. Forgiveness over permission. Ask first only for: spending real m
 
 ---
 
+## Concurrent sessions — shared tree rules
+
+Multiple Claude sessions often run in this checkout at once. `git status`
+showing files you didn't touch means another session is mid-chunk. Rules,
+learned the hard way (2026-07-29: an `--autostash` rebase in the shared
+tree while another session kept writing wedged the sequencer and left a
+detached HEAD):
+
+1. **Never run tree-mutating git ops (rebase, checkout, `reset
+   --hard`/`--keep`, stash) in the shared tree while it holds another
+   session's uncommitted work.** These rewrite working-tree files and
+   assume a single actor. If you need one (push refused → rebase), do it
+   in a worktree instead. `reset --mixed`/`--soft` and `branch -f` move
+   refs only and are safe.
+2. **Worktree when dirty:** if the tree is dirty with someone else's work
+   and your chunk involves more than additive edits to your own files,
+   take a worktree up front — `EnterWorktree` tool if available, else
+   `git worktree add ../maro-wt-<slug> origin/main`. Work, commit, land
+   with `scripts/land.sh` (ref-only push — worktree-safe by
+   construction), then `git worktree remove` it. Worktrees share the
+   object store; they're cheap. Note: a worktree can't check out `main`
+   (the primary tree holds it) — work on a temp branch or detached from
+   `origin/main`; land.sh doesn't care. After landing, converge the
+   shared tree's stale `main` with `git fetch origin && git reset --mixed
+   origin/main` — ref/index only, tree untouched; your landed edits drop
+   out of `git status` because the tree content now matches HEAD.
+3. In the shared tree: stage explicit paths only (never `git add -A` /
+   `git commit -a`), eyeball `git status` for strangers before every
+   commit, and don't touch shared living docs (GOAL_BRAIN.md, BACKLOG.md,
+   DEV_LOG.md) in a commit while another session has them dirty — your
+   staged copy would carry their half-written hunks.
+4. Landing races are fine: land.sh is ff-only; if you lose the race,
+   rebase **in a worktree** and land again.
+
 ## End-of-chunk discipline
 
 When a chunk of work is done (milestone delivered, bug fixed, feature shipped — not every tiny edit), always:
