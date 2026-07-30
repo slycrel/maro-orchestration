@@ -5268,3 +5268,20 @@ Dormant (deliberately parked, not dropped):
   Shipped 2026-07-30: `src/system_health.py` (DECLARED_PROCESSES
   liveness registry, 6 probes, report-only, killswitch
   `health.probes_enabled`) + HOUSE_STYLE declared-liveness rule.
+- **2026-07-30** — Decree-dynamic working agreement (Jeremy): "Let's
+  leave it on me for now to ask (like I did this time) and you should
+  proceed as normal. I'll attempt to speak up sooner when I think
+  something is off… I'm concerned that if my words aren't good enough,
+  you'll take it and run with it." Reading "proceed as normal" as:
+  keep the current autonomy posture, don't shift into asking-mode; he
+  owns requesting the design-space view pre-implementation. Two
+  Claude-side practice changes adopted in response (not machinery):
+  (1) Decisions-line captures now make the *reading* visible — when a
+  line resolves an ambiguity his phrasing left open, the resolution is
+  named ("reading X as Y") so interpretation drift is catchable at
+  capture time; this entry is the first instance. (2) Jeremy's silence
+  is held as "playing out, unconfirmed", not endorsement — he
+  sometimes withholds a concern until he can tell signal from shadow.
+  Half-formed "something smells off about X" messages are explicitly
+  actionable. Not piped to the runtime decision journal: this governs
+  the dev relationship, not goal runs.
