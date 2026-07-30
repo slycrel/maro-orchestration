@@ -290,8 +290,9 @@ class TestDecomposeUserContextInjection:
         decompose("check the config", adapter, max_steps=4)
 
         combined = "\n".join(adapter.system_prompts).lower()
-        for marker in ("jeremy", "slycrel", "retatrutide", "edgar_allen_bot"):
-            assert marker not in combined
+        leaked = [m for m in ("jeremy", "slycrel", "retatrutide", "edgar_allen_bot")
+                  if m in combined]
+        assert not leaked, f"personal data leaked into a fresh install: {leaked}"
 
 
 class TestGoalPriorityOrder:

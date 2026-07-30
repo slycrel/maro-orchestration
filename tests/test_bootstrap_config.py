@@ -43,9 +43,9 @@ def test_template_is_valid_yaml_and_all_commented(tmp_path, monkeypatch):
 
 def test_template_documents_the_load_bearing_keys():
     rendered = render_starter_config()
-    for key in ("backend_order", "per_run_usd", "daily_usd", "notify",
-                "TELEGRAM_BOT_TOKEN", "DEFAULTS.md"):
-        assert key in rendered, f"starter template lost mention of {key}"
+    missing = [k for k in ("backend_order", "per_run_usd", "daily_usd", "notify",
+                           "TELEGRAM_BOT_TOKEN", "DEFAULTS.md") if k not in rendered]
+    assert not missing, f"starter template lost mention of: {missing}"
 
 
 def test_template_values_match_code_constants():

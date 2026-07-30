@@ -469,28 +469,31 @@ def test_check_skill_promotion_threshold_boundary(monkeypatch):
     assert result_low is False
 
 
-def test_pass_at_k_range(monkeypatch):
+# The (rate, k) grid as rows — pytest builds the cross product, so a value
+# that escapes [0,1] names its own rate AND k instead of failing the whole
+# nested loop at whichever combination happened to come first.
+@pytest.mark.parametrize("k", [1, 2, 3, 5, 10])
+@pytest.mark.parametrize("rate", [0.0, 0.25, 0.5, 0.75, 1.0])
+def test_pass_at_k_range(monkeypatch, rate, k):
     """pass@k always returns a float in [0.0, 1.0]."""
-    for rate in [0.0, 0.25, 0.5, 0.75, 1.0]:
-        monkeypatch.setattr(
-            "metrics.get_all_skill_stats",
-            lambda r=rate: [_make_skill_stats("skill-range", r)]
-        )
-        for k in [1, 2, 3, 5, 10]:
-            result = compute_pass_at_k("skill-range", k=k)
-            assert 0.0 <= result <= 1.0
+    monkeypatch.setattr(
+        "metrics.get_all_skill_stats",
+        lambda: [_make_skill_stats("skill-range", rate)]
+    )
+    result = compute_pass_at_k("skill-range", k=k)
+    assert 0.0 <= result <= 1.0
 
 
-def test_pass_all_k_range(monkeypatch):
+@pytest.mark.parametrize("k", [1, 2, 3, 5, 10])
+@pytest.mark.parametrize("rate", [0.0, 0.25, 0.5, 0.75, 1.0])
+def test_pass_all_k_range(monkeypatch, rate, k):
     """pass^k always returns a float in [0.0, 1.0]."""
-    for rate in [0.0, 0.25, 0.5, 0.75, 1.0]:
-        monkeypatch.setattr(
-            "metrics.get_all_skill_stats",
-            lambda r=rate: [_make_skill_stats("skill-range2", r)]
-        )
-        for k in [1, 2, 3, 5, 10]:
-            result = compute_pass_all_k("skill-range2", k=k)
-            assert 0.0 <= result <= 1.0
+    monkeypatch.setattr(
+        "metrics.get_all_skill_stats",
+        lambda: [_make_skill_stats("skill-range2", rate)]
+    )
+    result = compute_pass_all_k("skill-range2", k=k)
+    assert 0.0 <= result <= 1.0
 
 
 # ---------------------------------------------------------------------------

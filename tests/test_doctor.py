@@ -88,7 +88,11 @@ class TestRunDoctor:
         output = capsys.readouterr().out
 
         assert isinstance(result, bool)
-        for required in (
+        # Collect-then-assert rather than a loop: run_doctor() is expensive
+        # enough not to repeat per surface, but a refactor that drops three
+        # surfaces should name all three, not just the alphabetically-first.
+        lowered = output.lower()
+        missing = [s for s in (
             "Tool registry",
             "skills",
             "bughunter",
@@ -98,8 +102,8 @@ class TestRunDoctor:
             "Config paths on this box",
             "Stale machine state",
             "Memory index sync",
-        ):
-            assert required.lower() in output.lower()
+        ) if s.lower() not in lowered]
+        assert not missing, f"doctor report lost surfaces: {missing}"
         assert str(tmp_path / "output" / "escalations.jsonl") in output
 
     def test_stale_machine_state_detected_but_not_failing(self, capsys, monkeypatch, tmp_path):

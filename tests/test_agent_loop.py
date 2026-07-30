@@ -1502,20 +1502,20 @@ def test_handle_blocked_step_timeout_pure_exec_still_terminates():
     assert "split" in decision.stuck_reason.lower() or "separate" in decision.stuck_reason.lower()
 
 
-def test_handle_blocked_step_timeout_matches_both_adapters():
+@pytest.mark.parametrize("reason", [
+    "claude subprocess timed out after 300s",
+    "codex subprocess timed out after 300s",
+    "LLM call failed: claude subprocess timed out after 900s",
+])
+def test_handle_blocked_step_timeout_matches_both_adapters(reason):
     """Both claude and codex timeout messages trigger the no-retry path."""
-    for reason in [
-        "claude subprocess timed out after 300s",
-        "codex subprocess timed out after 300s",
-        "LLM call failed: claude subprocess timed out after 900s",
-    ]:
-        decision = _handle_blocked_step(
-            step_text="run tests",
-            outcome={"stuck_reason": reason, "result": ""},
-            prior_retries=0,
-            adapter=None,
-        )
-        assert decision.retry is False, f"Expected no retry for: {reason!r}"
+    decision = _handle_blocked_step(
+        step_text="run tests",
+        outcome={"stuck_reason": reason, "result": ""},
+        prior_retries=0,
+        adapter=None,
+    )
+    assert decision.retry is False, f"Expected no retry for: {reason!r}"
 
 
 def test_handle_blocked_step_network_timeout_still_retries():

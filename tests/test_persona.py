@@ -141,8 +141,9 @@ def test_registry_caches_loaded_persona(tmp_path):
 def test_builtin_personas_exist():
     registry = PersonaRegistry(personas_dir=PERSONAS_DIR)
     names = registry.list()
-    for required in ["researcher", "builder", "critic", "ops", "summarizer", "strategist"]:
-        assert required in names, f"Built-in persona missing: {required}"
+    missing = [p for p in ["researcher", "builder", "critic", "ops",
+                           "summarizer", "strategist"] if p not in names]
+    assert not missing, f"Built-in personas missing: {missing}"
 
 
 def test_researcher_persona_fields():

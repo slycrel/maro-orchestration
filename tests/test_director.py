@@ -844,13 +844,13 @@ class TestDetectBehavioralGap:
         # When the LLM already said incomplete, the downgrade path is moot.
         assert self._call(complete=False, summary="runtime was not performed") == ""
 
-    def test_behavioral_probe_present_never_flags(self):
-        # Any behavioral modality (http/ws/browser/process) clears the gap.
-        for mod in ("http", "ws", "browser", "process"):
-            assert self._call(
-                modality_dist={mod: 1, "static": 3},
-                summary="runtime validation was not performed",
-            ) == ""
+    # Any behavioral modality (http/ws/browser/process) clears the gap.
+    @pytest.mark.parametrize("mod", ["http", "ws", "browser", "process"])
+    def test_behavioral_probe_present_never_flags(self, mod):
+        assert self._call(
+            modality_dist={mod: 1, "static": 3},
+            summary="runtime validation was not performed",
+        ) == ""
 
     def test_slycrel_go_exact_admission_flags(self):
         # The exact phrasing from the 2026-04-17 slycrel-go run.
@@ -1808,18 +1808,22 @@ class TestVerifyGoalCompletion:
         assert _classify_precondition("port 8080") == "opaque"
         assert _classify_precondition("") == "opaque"
 
-    def test_precondition_classifies_sentinel_non_values_opaque(self):
+    @pytest.mark.parametrize("sentinel", ["none", "None", "NONE", "n/a", "N/A",
+                                          "-", "tbd", "(none)", "null"])
+    def test_precondition_classifies_sentinel_non_values_opaque(self, sentinel):
         """Sentinel strings are not commands — must not get shutil.which'd.
 
         Regression: 2026-04-26 scope A/B closure preflight ran
         `shutil.which("none")` and reported it as a missing command, polluting
         the closure check feed with synthetic failures.
+
+        Row-per-sentinel: as a loop, a classifier change that broke several
+        spellings at once showed up as a single failure naming only the first.
         """
         from director import _classify_precondition
-        for sentinel in ("none", "None", "NONE", "n/a", "N/A", "-", "tbd", "(none)", "null"):
-            assert _classify_precondition(sentinel) == "opaque", (
-                f"sentinel {sentinel!r} must be opaque, not classified as command/path"
-            )
+        assert _classify_precondition(sentinel) == "opaque", (
+            f"sentinel {sentinel!r} must be opaque, not classified as command/path"
+        )
 
     def test_precondition_classifies_go_module_paths_opaque(self):
         """Go module paths (and other import paths) are not filesystem paths.

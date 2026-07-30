@@ -9,6 +9,8 @@ invisibly).
 
 from pathlib import Path
 
+import pytest
+
 from memory_jsonl import JsonlMemoryStore
 from memory_port import MemoryItem
 from memory_sqlite import SqliteMemoryStore
@@ -80,8 +82,11 @@ class TestBiTemporal:
 
 
 class TestFtsHygiene:
-    def test_fts_operators_in_query_do_not_raise(self, tmp_path):
+    # Row-per-query: each is a distinct way to make FTS5 choke, and a loop
+    # stops at the first one that starts raising.
+    @pytest.mark.parametrize("q", ['AND OR NOT', 'a NEAR/3 b', '"unclosed',
+                                   'col:foo*', '(((('])
+    def test_fts_operators_in_query_do_not_raise(self, tmp_path, q):
         s = SqliteMemoryStore(tmp_path / "m")
         _add(s, "NEAR the fence AND the gate")
-        for q in ('AND OR NOT', 'a NEAR/3 b', '"unclosed', 'col:foo*', '(((('):
-            assert isinstance(s.recall(q), list)
+        assert isinstance(s.recall(q), list)

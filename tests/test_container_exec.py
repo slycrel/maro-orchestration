@@ -328,8 +328,8 @@ class TestContainerName:
     def test_sanitizes_illegal_chars(self):
         n = ce.container_name("a/b c:d", 0)
         assert n.startswith("maro-exec-")
-        for bad in ("/", " ", ":"):
-            assert bad not in n
+        leaked = [c for c in ("/", " ", ":") if c in n]
+        assert not leaked, f"illegal chars survived sanitization: {leaked} in {n!r}"
 
 
 class TestBuildRunCommand:

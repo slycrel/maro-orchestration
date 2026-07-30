@@ -422,14 +422,21 @@ class TestUserFileResolution:
         assert cfg.get("yolo") == "true"
         assert cfg.get("max_steps") == "5"
 
-    def test_repo_templates_ship_no_personal_data(self):
+    @pytest.mark.parametrize("name", ["GOALS.md", "CONTEXT.md", "SIGNALS.md",
+                                      "CONFIG.md"])
+    def test_repo_templates_ship_no_personal_data(self, name):
         """The shipped user/ templates must stay neutral (SF-5/docs-02):
-        no operator identity or personal details in the repo copies."""
+        no operator identity or personal details in the repo copies.
+
+        Row-per-template, and every marker reported at once — a leak that hits
+        two files with three markers should say so, not surface one at a time
+        across four fix-and-rerun cycles.
+        """
         import config as config_mod
-        for name in ("GOALS.md", "CONTEXT.md", "SIGNALS.md", "CONFIG.md"):
-            path = config_mod.repo_user_dir() / name
-            assert path.exists(), f"shipped template missing: {name}"
-            text = path.read_text(encoding="utf-8").lower()
-            for marker in ("jeremy", "slycrel", "retatrutide", "tirzepatide",
-                           "bpc-157", "epitalon", "edgar_allen_bot"):
-                assert marker not in text, f"personal data marker '{marker}' in user/{name}"
+        path = config_mod.repo_user_dir() / name
+        assert path.exists(), f"shipped template missing: {name}"
+        text = path.read_text(encoding="utf-8").lower()
+        leaked = [m for m in ("jeremy", "slycrel", "retatrutide", "tirzepatide",
+                              "bpc-157", "epitalon", "edgar_allen_bot")
+                  if m in text]
+        assert not leaked, f"personal data markers {leaked} in user/{name}"

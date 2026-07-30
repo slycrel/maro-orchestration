@@ -126,7 +126,8 @@ class TestPlaybookInjection:
         assert block.count("Always verify outputs") == 1
         assert "*(from evolver:dup-01)*" in block
 
-    def test_inject_budget_is_a_hard_cap(self, tmp_path):
+    @pytest.mark.parametrize("budget", [120, 300, 800])
+    def test_inject_budget_is_a_hard_cap(self, tmp_path, budget):
         """Chunk-2 review F4 pin: len(result) <= max_chars, top header
         included — callers (recall.py) trust the cap."""
         spam = "- Be more concise *(from evolver:test-00)*\n" * 40
@@ -137,9 +138,8 @@ class TestPlaybookInjection:
             "- Route flaky network steps to the ops worker. "
             "*(from evolver:abc-01)*\n"
         )
-        for budget in (120, 300, 800):
-            block = inject_playbook(max_chars=budget)
-            assert len(block) <= budget
+        block = inject_playbook(max_chars=budget)
+        assert len(block) <= budget
 
     def test_inject_newer_learned_renders_above_older(self, tmp_path):
         """Chunk-2 review F6 pin: ranking must be visible in the rendered

@@ -460,9 +460,10 @@ class TestEvalGeneration:
             assert result.benchmark_id == b["id"]
 
     def test_scoring_criteria_exist_for_common_failures(self):
-        for cls in ("empty_model_output", "artifact_missing", "setup_failure",
-                     "decomposition_too_broad"):
-            assert cls in _FAILURE_SCORING
+        missing = [c for c in ("empty_model_output", "artifact_missing",
+                               "setup_failure", "decomposition_too_broad")
+                   if c not in _FAILURE_SCORING]
+        assert not missing, f"no scoring criteria for: {missing}"
 
 
 class TestEvalPersistence:

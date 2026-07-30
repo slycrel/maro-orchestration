@@ -56,10 +56,12 @@ def _nav_input(**kw):
 class TestRenderInput:
     def test_sections_always_present(self):
         text = render_input(_nav_input())
-        for header in ("## Goal (verbatim)", "## Goal context", "## Ancestry",
-                       "## Turn", "## Last work turn", "## Open children",
-                       "## What the system already knows"):
-            assert header in text
+        # Collect-then-assert: one render, but a template that drops three
+        # sections reports all three instead of stopping at the first.
+        missing = [h for h in ("## Goal (verbatim)", "## Goal context", "## Ancestry",
+                               "## Turn", "## Last work turn", "## Open children",
+                               "## What the system already knows") if h not in text]
+        assert not missing, f"navigator prompt lost sections: {missing}"
         assert "(none — no work has run yet)" in text
         assert "(nothing relevant on record)" in text
 

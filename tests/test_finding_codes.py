@@ -11,12 +11,12 @@ from finding_codes import (
 
 
 class TestFindingCodes:
-    def test_seed_vocabulary_present(self):
-        for code in ("CITATION_INVERSION", "PHANTOM_SYMBOL",
-                     "THEORY_MECHANISM", "GAP_UNDERSTATED"):
-            assert code in FINDING_CODES
-            definition, hint = FINDING_CODES[code]
-            assert definition and hint
+    @pytest.mark.parametrize("code", ["CITATION_INVERSION", "PHANTOM_SYMBOL",
+                                      "THEORY_MECHANISM", "GAP_UNDERSTATED"])
+    def test_seed_vocabulary_present(self, code):
+        assert code in FINDING_CODES
+        definition, hint = FINDING_CODES[code]
+        assert definition and hint
 
     def test_stamp_round_trip(self):
         line = stamp("PHANTOM_SYMBOL", "`reframe_intent` — zero src/ hits")

@@ -27,9 +27,9 @@ class TestCreate:
         assert path is not None
         text = path.read_text()
         assert "ship the thing" in text
-        for header in ("## Intent", "## Compiled truth", "## Decisions",
-                       "## Threads", "## Open questions"):
-            assert header in text
+        missing = [h for h in ("## Intent", "## Compiled truth", "## Decisions",
+                               "## Threads", "## Open questions") if h not in text]
+        assert not missing, f"thread brain seeded without sections: {missing}"
         assert "thread opened" in text
 
     def test_goal_is_verbatim_not_paraphrased(self, tmp_path):

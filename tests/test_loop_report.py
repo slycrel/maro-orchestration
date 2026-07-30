@@ -1326,8 +1326,10 @@ def test_index_html_includes_filter_bar_and_row_data_attrs(monkeypatch, tmp_path
     content = Path(out).read_text()
 
     # filter controls present
-    for control_id in ("f-goal", "f-status", "f-lane", "f-since", "f-until", "f-clear", "f-count"):
-        assert f'id="{control_id}"' in content
+    missing = [c for c in ("f-goal", "f-status", "f-lane", "f-since",
+                           "f-until", "f-clear", "f-count")
+               if f'id="{c}"' not in content]
+    assert not missing, f"index.html lost filter controls: {missing}"
 
     # row carries lowercased goal text + status/lane/date for JS filtering
     assert 'data-goal="fix the flaky login test"' in content

@@ -2528,33 +2528,38 @@ class TestScanCanonCandidates:
             else:
                 sys.modules["memory"] = orig
 
-    def test_suggestion_confidence_scales_with_hits(self):
-        """More applications → higher confidence, capped at 0.95."""
+    @pytest.mark.parametrize("times_applied", [10, 20, 30])
+    def test_suggestion_confidence_scales_with_hits(self, times_applied):
+        """More applications → higher confidence, capped at 0.95.
+
+        Row-per-count: the loop also leaked on failure — an assert inside it
+        skipped the remaining counts entirely, and only the sys.modules
+        restore was protected.
+        """
         import sys, types
         from evolver import scan_canon_candidates
-        for times_applied in [10, 20, 30]:
-            fake_mem = types.ModuleType("memory")
-            fake_mem.get_canon_candidates = lambda **kw: [{
-                "lesson_id": "x",
-                "lesson": "test lesson",
-                "task_type": "research",
-                "score": 0.9,
-                "times_applied": times_applied,
-                "task_types_seen": ["research", "build", "ops"],
-                "sessions_validated": 3,
-                "recorded_at": "2026-01-01",
-            }]
-            orig = sys.modules.get("memory")
-            sys.modules["memory"] = fake_mem
-            try:
-                result = scan_canon_candidates()
-            finally:
-                if orig is None:
-                    sys.modules.pop("memory", None)
-                else:
-                    sys.modules["memory"] = orig
-            assert len(result) == 1
-            assert result[0].confidence <= 0.95
+        fake_mem = types.ModuleType("memory")
+        fake_mem.get_canon_candidates = lambda **kw: [{
+            "lesson_id": "x",
+            "lesson": "test lesson",
+            "task_type": "research",
+            "score": 0.9,
+            "times_applied": times_applied,
+            "task_types_seen": ["research", "build", "ops"],
+            "sessions_validated": 3,
+            "recorded_at": "2026-01-01",
+        }]
+        orig = sys.modules.get("memory")
+        sys.modules["memory"] = fake_mem
+        try:
+            result = scan_canon_candidates()
+        finally:
+            if orig is None:
+                sys.modules.pop("memory", None)
+            else:
+                sys.modules["memory"] = orig
+        assert len(result) == 1
+        assert result[0].confidence <= 0.95
 
     def test_handles_import_error_gracefully(self, monkeypatch):
         """Returns [] if memory module is unavailable."""

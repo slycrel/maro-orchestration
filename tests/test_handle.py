@@ -1252,16 +1252,20 @@ class TestNavigatorDispatchCutover:
         assert calls == [self.GOAL]
         assert result.status == "done"
 
-    def test_non_dispatch_moves_fall_through_to_execute(self, monkeypatch, tmp_path):
+    # The loop already rebuilt every patch per move, so rows are a straight
+    # lift — and each move now reports on its own instead of the first
+    # regression hiding the rest.
+    @pytest.mark.parametrize("move", ["extend", "fork", "collate", "idunno"])
+    def test_non_dispatch_moves_fall_through_to_execute(self, monkeypatch,
+                                                        tmp_path, move):
         _setup(monkeypatch, tmp_path)
         import handle as handle_mod
-        for move in ("extend", "fork", "collate", "idunno"):
-            calls = []
-            self._patch_shadow_returning(monkeypatch, self._decision(move, 0.99))
-            self._patch_handle(monkeypatch, calls)
-            self._patch_act_config(monkeypatch)
-            handle_mod.handle_task(self._task(), dry_run=False)
-            assert calls == [self.GOAL], f"{move} must not act at dispatch"
+        calls = []
+        self._patch_shadow_returning(monkeypatch, self._decision(move, 0.99))
+        self._patch_handle(monkeypatch, calls)
+        self._patch_act_config(monkeypatch)
+        handle_mod.handle_task(self._task(), dry_run=False)
+        assert calls == [self.GOAL], f"{move} must not act at dispatch"
 
     def test_guard_takes_precedence_over_navigator(self, monkeypatch, tmp_path):
         """A tripped guard refuses before the navigator's decision is consulted."""
@@ -1385,14 +1389,19 @@ class TestApplyPrefixes:
         r = _apply_prefixes("effort:mid ultraplan: do complex thing")
         assert r.model_tier == "mid"  # effort:mid wins (first non-empty tier wins)
 
-    def test_prefix_registry_covers_all_known_prefixes(self):
-        """Sanity: all 11 known prefixes are in the registry."""
+    @pytest.mark.parametrize("expected", ["effort:low", "effort:mid",
+                                          "effort:high", "mode:thin", "btw:",
+                                          "ultraplan:", "direct:", "ralph:",
+                                          "verify:", "pipeline:", "strict:"])
+    def test_prefix_registry_covers_all_known_prefixes(self, expected):
+        """Sanity: every known prefix is in the registry.
+
+        Row-per-prefix, not a loop: drop three prefixes and a loop reports
+        only the first, so the other two ride along unnoticed.
+        """
         from handle import _PREFIX_REGISTRY
         prefixes = {r.prefix for r in _PREFIX_REGISTRY}
-        for expected in ["effort:low", "effort:mid", "effort:high", "mode:thin",
-                          "btw:", "ultraplan:", "direct:", "ralph:", "verify:",
-                          "pipeline:", "strict:"]:
-            assert expected in prefixes, f"Missing prefix: {expected}"
+        assert expected in prefixes, f"Missing prefix: {expected}"
 
 
 # ---------------------------------------------------------------------------

@@ -106,13 +106,14 @@ class TestActBlockedStep:
             goal="g", step_text="s", step_idx=1)
         assert out is None
 
-    def test_non_escalate_moves_fall_through(self, monkeypatch):
+    @pytest.mark.parametrize("move", ["execute", "extend", "fork", "close",
+                                      "collate"])
+    def test_non_escalate_moves_fall_through(self, monkeypatch, move):
         monkeypatch.setattr("config.get", _cfg({"navigator.act_blocked_step": True}))
-        for move in ("execute", "extend", "fork", "close", "collate"):
-            out = _lb._navigator_act_blocked_step(
-                _nav(move=move, confidence=0.99), _forward_decision(),
-                goal="g", step_text="s", step_idx=1)
-            assert out is None, move
+        out = _lb._navigator_act_blocked_step(
+            _nav(move=move, confidence=0.99), _forward_decision(),
+            goal="g", step_text="s", step_idx=1)
+        assert out is None, move
 
     def test_terminal_heuristic_not_double_acted(self, monkeypatch):
         """If the heuristic already stopped, its honest reason stands."""

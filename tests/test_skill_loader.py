@@ -161,10 +161,11 @@ class TestSkillSummary:
             triggers=triggers or ["research", "investigate"],
         )
 
-    def test_matches_role_empty_allows_all(self):
+    @pytest.mark.parametrize("role", ["worker", "short", "inspector",
+                                      "director", "verifier"])
+    def test_matches_role_empty_allows_all(self, role):
         s = self._make(roles=[])
-        for role in ["worker", "short", "inspector", "director", "verifier"]:
-            assert s.matches_role(role), f"should allow {role}"
+        assert s.matches_role(role), f"should allow {role}"
 
     def test_matches_role_specific(self):
         s = self._make(roles=["worker", "short"])

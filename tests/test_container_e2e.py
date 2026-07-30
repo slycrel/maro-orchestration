@@ -300,11 +300,13 @@ _IMAGE_OK = _image_available()
 
 @pytest.mark.skipif(not _IMAGE_OK, reason="" if _IMAGE_OK else _image_skip_reason())
 class TestExecutorImage:
-    def test_baked_toolset_present(self):
-        # The design's env-dependency contract: git/python3/curl/claude/node.
-        for tool in ("git", "python3", "curl", "claude", "node"):
-            r = _docker(["run", "--rm", ce.DEFAULT_IMAGE, "sh", "-c", f"command -v {tool}"])
-            assert r.returncode == 0 and r.stdout.strip(), f"{tool} missing from image"
+    # The design's env-dependency contract: git/python3/curl/claude/node.
+    # Already one `docker run` per tool, so rows cost nothing extra and a
+    # rebuild that drops two tools now names both.
+    @pytest.mark.parametrize("tool", ["git", "python3", "curl", "claude", "node"])
+    def test_baked_toolset_present(self, tool):
+        r = _docker(["run", "--rm", ce.DEFAULT_IMAGE, "sh", "-c", f"command -v {tool}"])
+        assert r.returncode == 0 and r.stdout.strip(), f"{tool} missing from image"
 
     def test_baked_cli_version_matches_pin(self):
         r = _docker(["run", "--rm", ce.DEFAULT_IMAGE, "claude", "--version"])
