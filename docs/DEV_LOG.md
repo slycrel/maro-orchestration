@@ -20,6 +20,38 @@ Dev log tab at maro.feifdom.com alongside Runs and Reading.
 
 ## 2026-07-29
 
+**Skill-stats measurement honesty — run-verdict attribution shipped** —
+thread: `next-leap-packaging` / `measurement-honesty`. The disease
+under the router symptom: skill "success" has meant "a step completed
+while this skill keyword-matched the step text" — bystander credit,
+per-step × per-run, failures only on hard-block — which is how the
+store reached 99.4% positive and the top skills sit at 852 uses @
+~1.0. Worse, every outcome was double-counted (`update_skill_utility`
+recorded stats internally while both live callers also recorded them
+directly). Shipped, in Jeremy's approved order (thread 1 of 3): the
+double-count fix; an honest counter pair on SkillStats
+(injected_runs / injected_successes / injected_success_rate) recorded
+at the closure-verdict seam — when `stamp_outcome_verdict` lands a
+FULL-trust verdict (era-10 `verdict_trust` single-gate law), each
+skill in the run's `source/skills_manifest.jsonl` (skills that
+ACTUALLY entered a prompt, written at injection time) gets the run's
+goal verdict as its label, idempotent across verdict re-stamps via a
+`source/skill_attribution.json` marker; and the packaging readout now
+prefers the honest regime wherever it exists, labeling every rendered
+number `[run-verdict evidence]` vs `[legacy step counts]`. Legacy
+counters keep accruing (single-count now) so breakers/escalation stay
+fed; consumer migration is a BACKLOG item with the consumers named.
+Side effect worth knowing: the attribution markers give (goal, skill,
+verdict) joins on disk — the training data the goal-aware router
+retrain was blocked on now accretes for free. Pinned end-to-end: seam
+gates (FULL / directional / unjudged / no-manifest / no-run-dir /
+re-stamp / manifest dedup), counter math, utility-writes-no-stats,
+readout regime preference. Suite green via test-safe.sh (exit 0).
+**Surprised by:** the fix needed zero new plumbing — the injection
+manifest (shipped for A/B variant routing) and the verdict seam (shipped
+for contradiction wiring) were already the two halves of honest
+attribution; nobody had ever joined them.
+
 **Degenerate skill router — root-caused and benched** — thread:
 `next-leap-packaging`. The packaging readout's day-one catch (same 3
 skills @0.992 for every goal) turned out to be two structural defects,

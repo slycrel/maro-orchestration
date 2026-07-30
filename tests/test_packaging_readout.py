@@ -197,3 +197,45 @@ def test_durable_handle_join_beats_goal_prefix(monkeypatch, tmp_path):
     # The stamped goal landed in its outcome's task_type cell with a verdict.
     assert cells["research"]["achieved_true"] == 1
     assert cells["agenda"]["achieved_false"] == 1
+
+
+def test_run_verdict_evidence_beats_legacy_counters(monkeypatch, tmp_path):
+    """Regime-preference pin (2026-07-29 measurement-honesty fix): a skill
+    with abundant inflated legacy evidence (10 uses @ 100% — keyword-matched
+    step completions) but honest run-verdict evidence at 40% over 5 verdicted
+    runs must bucket as would_exclude, and the render must say which regime
+    the number came from."""
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    mem = _seed(tmp_path)
+
+    from skill_types import Skill
+    from skills import (save_skill, record_skill_outcome,
+                        record_skill_injection_outcome)
+    save_skill(Skill(
+        id="sk-inflated", name="inflated polymarket helper",
+        trigger_patterns=["polymarket"], description="d",
+        steps_template=["s"], source_loop_ids=[],
+        created_at="2026-07-29T00:00:00+00:00"))
+    for _ in range(10):                      # legacy: clears the include bar
+        record_skill_outcome("sk-inflated", True)
+    for achieved in [True, True, False, False, False]:   # honest: 40%
+        record_skill_injection_outcome("sk-inflated", achieved)
+
+    from packaging_readout import build_readout, render_markdown
+    r = build_readout(mem)
+
+    cell = r["personas"]["test-packager"]["cells"]["research"]
+    exclude_rows = {row["skill_id"]: row for row in cell["would_exclude"]}
+    assert "sk-inflated" in exclude_rows
+    row = exclude_rows["sk-inflated"]
+    assert row["injected_runs"] == 5
+    assert abs(row["injected_success_rate"] - 0.4) < 1e-6
+    # sk-strong has legacy-only evidence and still buckets on it.
+    include_ids = {row["skill_id"] for row in cell["would_include"]}
+    assert "sk-strong" in include_ids
+
+    assert r["coverage"]["skills_with_run_verdict_evidence"] == 1
+
+    text = render_markdown(r)
+    assert "[run-verdict evidence]" in text
+    assert "[legacy step counts]" in text

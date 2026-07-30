@@ -927,6 +927,69 @@ def record_skill_outcome(
             logger.warning("[skills] record_skill_outcome write failed: %s", e)
 
 
+def record_skill_injection_outcome(skill_id: str, goal_achieved: bool) -> None:
+    """Record a run-verdict outcome for a skill that was actually injected.
+
+    The honest counter pair to record_skill_outcome: called at closure-verdict
+    time (memory_ledger.stamp_outcome_verdict) for each skill in the run's
+    skills_manifest.jsonl — skills that genuinely entered a prompt — with the
+    run's FULL-trust goal verdict as the label. Contrast: the legacy counters
+    credit keyword-matched bystanders with step completions (~1.0 base rate),
+    which is how the store reached 99.4% positive and starved the router.
+    """
+    from file_lock import locked_write
+
+    path = _skill_stats_path()
+
+    with locked_write(path):
+        all_records: dict = {}
+        if path.exists():
+            try:
+                for line in path.read_text(encoding="utf-8").splitlines():
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        d = json.loads(line)
+                        sid = d.get("skill_id", "")
+                        if sid:
+                            all_records[sid] = d
+                    except Exception:
+                        continue
+            except Exception:
+                pass
+
+        if skill_id in all_records:
+            stats = SkillStats.from_dict(all_records[skill_id])
+        else:
+            skill_name = skill_id
+            try:
+                for sk in load_skills():
+                    if sk.id == skill_id:
+                        skill_name = sk.name
+                        break
+            except Exception:
+                pass
+            stats = SkillStats(skill_id=skill_id, skill_name=skill_name)
+
+        stats.injected_runs += 1
+        if goal_achieved:
+            stats.injected_successes += 1
+        stats.injected_success_rate = (
+            stats.injected_successes / max(stats.injected_runs, 1))
+        stats.last_injected_verdict_at = datetime.now(timezone.utc).isoformat()
+
+        all_records[skill_id] = stats.to_dict()
+        try:
+            path.write_text(
+                "\n".join(json.dumps(d) for d in all_records.values()) + "\n",
+                encoding="utf-8",
+            )
+        except Exception as e:
+            logger.warning(
+                "[skills] record_skill_injection_outcome write failed: %s", e)
+
+
 def get_skills_needing_escalation() -> List[SkillStats]:
     """Return skill stats where success_rate < ESCALATION_THRESHOLD."""
     return [s for s in get_all_skill_stats() if s.success_rate < ESCALATION_THRESHOLD]
@@ -961,9 +1024,12 @@ def update_skill_utility(
         failure_reason: The stuck_reason string (only stored on failure, max 5 kept).
         step_text: The step/goal text (optional). Used to detect INPUT_MISMATCH when
             a skill trained on web/URL content is invoked with plain-text input.
-    """
-    record_skill_outcome(skill_id, success)
 
+    Does NOT write skill-stats: both live call paths (loop_post_step done,
+    loop_blocked via attribute_failure_to_skills) call record_skill_outcome
+    themselves with cost/latency — the internal call this function used to
+    make double-counted every outcome (found 2026-07-29).
+    """
     skills = load_skills()
     target = next((s for s in skills if s.id == skill_id), None)
     if target is None:

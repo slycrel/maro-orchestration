@@ -447,7 +447,45 @@ inspectable before any behavior changes.
   (goal, skill) → outcome. If the router is ever to out-rank keyword
   matching, record the goal (or its 120-char prefix) on skill-stats
   rows at outcome time first; until then the guard keeps the model
-  honest by benching it.
+  honest by benching it. UPDATE 2026-07-29: the run-verdict attribution
+  markers (`<run-dir>/source/skill_attribution.json`, shipped with the
+  measurement-honesty fix below) join loop_id → outcomes.jsonl goal
+  text — (goal, skill, verdict) triples now exist on disk; a retrain
+  can be built from them without touching the stats schema.
+- [x] **Skill-stats measurement honesty SHIPPED 2026-07-29** (the
+  disease under the router symptom): legacy counters credit every
+  keyword-matched skill with a step completion (bystander attribution,
+  per-step × per-run, failures only on hard-block) — 99.4%-positive
+  store, top "skills" at 852 uses @ ~1.0. Shipped: (1) double-count
+  fix — `update_skill_utility` no longer writes stats rows internally
+  (both live callers already call `record_skill_outcome` directly);
+  (2) honest counter pair on SkillStats
+  (injected_runs/injected_successes/injected_success_rate) recorded at
+  the closure-verdict seam (`stamp_outcome_verdict` →
+  `_maybe_record_skill_injection_outcomes`) for skills ACTUALLY in the
+  run's `source/skills_manifest.jsonl`, label = the run's FULL-trust
+  goal verdict (era-10 verdict_trust gate), idempotent via
+  `source/skill_attribution.json` marker (verdicts are re-stampable);
+  (3) packaging readout prefers the honest regime whenever
+  injected_runs > 0 and labels which regime each number came from.
+  Legacy counters keep accruing (single-count now) so existing
+  consumers stay fed. Pinned: counter math, no-stats-from-utility,
+  seam end-to-end (FULL/directional/unjudged/idempotent re-stamp/
+  manifest dedup/no-manifest/no-run-dir), readout regime preference.
+- [ ] **Migrate legacy-rate consumers onto injected counters**
+  (consumer-first, one at a time, each with its own liveness check):
+  every consumer below still reads the inflated legacy success_rate —
+  (a) `get_skills_needing_escalation` + needs_escalation flag
+  (skills.py — escalation threshold 0.4 is unreachable when the store
+  is 99.4% positive, so redesign never triggers); (b) router
+  `build_training_data` labels (router.py:142-206 — blocked on the
+  goal-capture item above, the guard benches it meanwhile);
+  (c) pack.py portable-learning export `claimed_success_rate` (ships
+  inflated claims to other boxes); (d) skill_loader.py Stats section +
+  cli.py skills-list display (operator-facing numbers); (e) evolver
+  promotion/variant scoring reads Skill.success_rate/utility (same
+  provenance). Rule: a consumer migrates when injected_runs gives it a
+  real denominator — don't starve breakers on day-one sparse data.
 - [ ] **Slice 2 — wire packaging behind a flag** (default OFF,
   no-silent-spend posture): persona spec gains a packaged-skills field
   fed from would_include rows; router fix landed 2026-07-29 — remaining

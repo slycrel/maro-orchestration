@@ -42,7 +42,12 @@ finding, not an omission):
   task_type + goal_achieved per dispatched goal)
 - skills.jsonl (identity, triggers, circuit) -> skill-stats.jsonl by
   skill_id (the LIVE usage evidence — skills.jsonl's own use_count is
-  unmaintained: 2/314 nonzero on this box 2026-07-29)
+  unmaintained: 2/314 nonzero on this box 2026-07-29). Two counter
+  regimes per stats row: injected_runs/injected_success_rate (honest —
+  actually-injected skills labeled by FULL-trust run verdicts, recorded
+  at stamp_outcome_verdict since 2026-07-29) preferred wherever present;
+  legacy total_uses/success_rate (keyword-matched step completions,
+  ~1.0 base rate — inflated) as labeled fallback.
 - persona-outcomes.jsonl loop_id -> outcomes.jsonl loop_id (measured 0/40
   live at time of writing; reported, not silently dropped)
 
@@ -129,6 +134,19 @@ def _bucket_for(skill: Any, stats: Optional[Dict[str, Any]]) -> str:
     if getattr(skill, "circuit_state", "closed") == "open":
         return "would_exclude"
     if stats is None:
+        return "insufficient_evidence"
+    # Run-verdict evidence first (2026-07-29): injected_runs counts
+    # FULL-trust verdicted runs where the skill was actually in the prompt
+    # manifest. Once ANY exists, it wins — sparse honest evidence over
+    # abundant inflated evidence (the legacy counters credit keyword-matched
+    # bystanders with step completions at a ~1.0 base rate).
+    inj_runs = int(stats.get("injected_runs", 0) or 0)
+    if inj_runs > 0:
+        inj_rate = float(stats.get("injected_success_rate", 0.0) or 0.0)
+        if inj_runs >= EXCLUDE_MIN_USES and inj_rate < EXCLUDE_MAX_SUCCESS:
+            return "would_exclude"
+        if inj_runs >= INCLUDE_MIN_USES and inj_rate >= INCLUDE_MIN_SUCCESS:
+            return "would_include"
         return "insufficient_evidence"
     uses = int(stats.get("total_uses", 0) or 0)
     rate = float(stats.get("success_rate", 0.0) or 0.0)
@@ -279,6 +297,11 @@ def build_readout(mem: Optional[Path] = None) -> Dict[str, Any]:
                     "total_uses": int((st or {}).get("total_uses", 0) or 0),
                     "success_rate": round(float(
                         (st or {}).get("success_rate", 0.0) or 0.0), 3),
+                    "injected_runs": int(
+                        (st or {}).get("injected_runs", 0) or 0),
+                    "injected_success_rate": round(float(
+                        (st or {}).get("injected_success_rate", 0.0) or 0.0),
+                        3),
                     "has_stats": st is not None,
                     "circuit_state": getattr(sk, "circuit_state", "closed"),
                 }
@@ -315,6 +338,9 @@ def build_readout(mem: Optional[Path] = None) -> Dict[str, Any]:
             "verdict_totals": verdict_totals,
             "skills_selector_available": find_matching_skills is not None,
             "skill_stats_rows": len(stats_by_id),
+            "skills_with_run_verdict_evidence": sum(
+                1 for s in stats_by_id.values()
+                if int(s.get("injected_runs", 0) or 0) > 0),
             "persona_outcomes_rows": len(pers_outcomes),
             "persona_outcomes_loop_join_hits": po_join_hits,
             "personas_without_dispatch_evidence": undispatched,
@@ -354,8 +380,13 @@ def render_markdown(readout: Dict[str, Any]) -> str:
         f"{vt['false']} not-achieved / {vt['unverdicted']} unverdicted "
         "— unverdicted rows carry no packaging signal")
     lines.append(
-        f"- skill evidence: {cov['skill_stats_rows']} skill-stats rows "
-        "(skills.jsonl use_count is NOT the evidence store)")
+        f"- skill evidence: {cov['skill_stats_rows']} skill-stats rows, "
+        f"{cov.get('skills_with_run_verdict_evidence', 0)} with run-verdict "
+        "evidence — the honest counters (actually-injected skills labeled "
+        "by FULL-trust goal verdicts); legacy uses/success_rate count "
+        "keyword-matched step completions at a ~1.0 base rate and are "
+        "shown only where no run-verdict evidence exists yet (skills.jsonl "
+        "use_count is NOT the evidence store)")
     lines.append(
         f"- persona-outcomes loop_id join: "
         f"{cov['persona_outcomes_loop_join_hits']}/"
@@ -405,9 +436,16 @@ def render_markdown(readout: Dict[str, Any]) -> str:
                     continue
                 lines.append(f"- {bucket}:")
                 for r in rows[:DISPLAY_ROWS_PER_BUCKET]:
-                    extra = ("no stats row" if not r["has_stats"] else
-                             f"{r['total_uses']} uses @ "
-                             f"{r['success_rate']:.0%}")
+                    if not r["has_stats"]:
+                        extra = "no stats row"
+                    elif r.get("injected_runs", 0) > 0:
+                        extra = (f"{r['injected_runs']} verdicted run(s) @ "
+                                 f"{r['injected_success_rate']:.0%} "
+                                 "[run-verdict evidence]")
+                    else:
+                        extra = (f"{r['total_uses']} uses @ "
+                                 f"{r['success_rate']:.0%} "
+                                 "[legacy step counts]")
                     circ = ("" if r["circuit_state"] == "closed"
                             else f", circuit {r['circuit_state']}")
                     lines.append(

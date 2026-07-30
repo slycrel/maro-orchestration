@@ -33,6 +33,7 @@ from skills import (
     get_skills_needing_escalation,
     increment_use,
     load_skills,
+    record_skill_injection_outcome,
     record_skill_outcome,
     run_skill_tests,
     save_skill,
@@ -642,6 +643,61 @@ def test_record_skill_outcome_needs_escalation_flag(monkeypatch, tmp_path):
         stats = get_skill_stats(skill.id)
         assert stats is not None
         assert stats.needs_escalation is True
+
+
+# ---------------------------------------------------------------------------
+# Run-verdict injection counters (2026-07-29 measurement-honesty fix)
+# ---------------------------------------------------------------------------
+
+def test_record_skill_injection_outcome_counter_math(monkeypatch, tmp_path):
+    """True, True, False → runs=3, successes=2, rate 2/3; legacy counters
+    stay untouched — the two regimes never bleed into each other."""
+    _setup_workspace(monkeypatch, tmp_path)
+    with patch("skills._skill_stats_path", return_value=tmp_path / "skill-stats.jsonl"):
+        skill = _make_skill("injection counter")
+        save_skill(skill)
+        record_skill_injection_outcome(skill.id, goal_achieved=True)
+        record_skill_injection_outcome(skill.id, goal_achieved=True)
+        record_skill_injection_outcome(skill.id, goal_achieved=False)
+        stats = get_skill_stats(skill.id)
+        assert stats is not None
+        assert stats.injected_runs == 3
+        assert stats.injected_successes == 2
+        assert abs(stats.injected_success_rate - 2 / 3) < 1e-9
+        assert stats.last_injected_verdict_at != ""
+        assert stats.total_uses == 0 and stats.successes == 0
+
+
+def test_record_skill_injection_outcome_creates_row_for_unknown(
+        monkeypatch, tmp_path):
+    """A skill with no prior stats row gets one created (name falls back to
+    the id when the library can't resolve it)."""
+    _setup_workspace(monkeypatch, tmp_path)
+    with patch("skills._skill_stats_path", return_value=tmp_path / "skill-stats.jsonl"):
+        record_skill_injection_outcome("sk-ghost", goal_achieved=False)
+        stats = get_skill_stats("sk-ghost")
+        assert stats is not None
+        assert stats.skill_name == "sk-ghost"
+        assert stats.injected_runs == 1 and stats.injected_successes == 0
+        assert stats.injected_success_rate == 0.0
+
+
+def test_update_skill_utility_does_not_write_stats(monkeypatch, tmp_path):
+    """Double-count pin (2026-07-29): update_skill_utility used to call
+    record_skill_outcome internally while both live callers also called it
+    directly — every outcome counted twice. Utility/breaker updates must
+    leave skill-stats untouched."""
+    _setup_workspace(monkeypatch, tmp_path)
+    with patch("skills._skill_stats_path", return_value=tmp_path / "skill-stats.jsonl"):
+        from skills import update_skill_utility
+        skill = _make_skill("utility no stats")
+        save_skill(skill)
+        update_skill_utility(skill.id, success=True)
+        update_skill_utility(skill.id, success=False, failure_reason="boom")
+        assert get_skill_stats(skill.id) is None
+        # The utility side itself still moved.
+        reloaded = next(s for s in load_skills() if s.id == skill.id)
+        assert reloaded.utility_score != 1.0
 
 
 # ---------------------------------------------------------------------------

@@ -65,6 +65,15 @@ class SkillStats:
     total_cost_usd: float = 0.0
     avg_latency_ms: float = 0.0
     avg_confidence: float = 1.0   # average confidence tag across uses (1.0 = no data yet)
+    # Run-verdict evidence (2026-07-29): counted at closure-verdict time for
+    # skills that were ACTUALLY in the run's injected-prompt manifest, label
+    # = the run's FULL-trust goal verdict. The legacy counters above credit
+    # keyword-matched bystanders with step completions (~1.0 base rate) —
+    # inflated; consumers should prefer these where present.
+    injected_runs: int = 0        # verdicted runs where this skill was injected
+    injected_successes: int = 0   # of those, goal_achieved True
+    injected_success_rate: float = 0.0  # successes / max(injected_runs, 1)
+    last_injected_verdict_at: str = ""
 
     def to_dict(self) -> dict:
         return {
@@ -79,6 +88,10 @@ class SkillStats:
             "total_cost_usd": self.total_cost_usd,
             "avg_latency_ms": self.avg_latency_ms,
             "avg_confidence": self.avg_confidence,
+            "injected_runs": self.injected_runs,
+            "injected_successes": self.injected_successes,
+            "injected_success_rate": self.injected_success_rate,
+            "last_injected_verdict_at": self.last_injected_verdict_at,
         }
 
     @classmethod
@@ -95,6 +108,10 @@ class SkillStats:
             total_cost_usd=float(d.get("total_cost_usd", 0.0)),
             avg_latency_ms=float(d.get("avg_latency_ms", 0.0)),
             avg_confidence=float(d.get("avg_confidence", 1.0)),
+            injected_runs=int(d.get("injected_runs", 0)),
+            injected_successes=int(d.get("injected_successes", 0)),
+            injected_success_rate=float(d.get("injected_success_rate", 0.0)),
+            last_injected_verdict_at=str(d.get("last_injected_verdict_at", "")),
         )
 
     def efficiency_score(self) -> float:

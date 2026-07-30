@@ -689,6 +689,7 @@ def stamp_outcome_verdict(
             return OutcomeVerdictStampResult(
                 "write_failed", attempts=attempt, error=str(exc))
         _maybe_emit_contradiction_candidate(loop_id, updated.get("row") or {})
+        _maybe_record_skill_injection_outcomes(loop_id, updated.get("row") or {})
         return OutcomeVerdictStampResult("updated", attempts=attempt)
 
 
@@ -891,6 +892,77 @@ def _maybe_emit_contradiction_candidate(loop_id: str, row: dict) -> None:
     except Exception:
         log.debug(
             "contradiction-candidate emit failed for %s", loop_id,
+            exc_info=True)
+
+
+def _maybe_record_skill_injection_outcomes(loop_id: str, row: dict) -> None:
+    """Run-verdict skill attribution (2026-07-29 measurement-honesty fix):
+    when a FULL-trust closure verdict lands, credit it to the skills that
+    were ACTUALLY injected into the run's prompts — the run dir's
+    source/skills_manifest.jsonl, written at each injection site — not the
+    keyword-matched bystanders the legacy per-step counters credit.
+
+    Gates, in order:
+    - goal_achieved is a real bool (None = unjudged, nothing to attribute);
+    - verdict_trust(row) == FULL — the era-10 single-gate law, same as the
+      contradiction emitter beside this: learning counters must not be fed
+      by low-confidence or verifier's-own-failure verdicts;
+    - the STAMPED LOOP's run dir resolves durably (runs.resolve_run_dir,
+      never the ambient ContextVar — chunk-4 review F6) and holds a
+      non-empty manifest;
+    - idempotence marker: verdicts can be re-stamped (audit_repair /
+      audit_policy), and a re-stamp must not double-count — the first
+      successful attribution writes source/skill_attribution.json to the
+      run dir and later stamps skip.
+
+    Never raises: attribution is telemetry, and a failure must not perturb
+    the verdict stamp it rides on.
+    """
+    try:
+        if not isinstance(row.get("goal_achieved"), bool):
+            return
+        if verdict_trust(row) != VERDICT_TRUST_FULL:
+            return
+        import runs as _runs
+        rd = _runs.resolve_run_dir(loop_id)
+        if rd is None:
+            return
+        manifest = Path(rd) / "source" / "skills_manifest.jsonl"
+        if not manifest.is_file():
+            return
+        marker = Path(rd) / "source" / "skill_attribution.json"
+        if marker.exists():
+            return
+        skill_ids: list = []
+        seen: set = set()
+        for line in manifest.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            for entry in rec.get("skills") or []:
+                sid = str(entry.get("id", "") or "")
+                if sid and sid not in seen:
+                    seen.add(sid)
+                    skill_ids.append(sid)
+        if not skill_ids:
+            return
+        achieved = bool(row["goal_achieved"])
+        from skills import record_skill_injection_outcome
+        for sid in skill_ids:
+            record_skill_injection_outcome(sid, achieved)
+        marker.write_text(json.dumps({
+            "loop_id": loop_id,
+            "goal_achieved": achieved,
+            "skill_ids": skill_ids,
+            "attributed_at": datetime.now(timezone.utc).isoformat(),
+        }), encoding="utf-8")
+    except Exception:
+        log.debug(
+            "skill-injection attribution failed for %s", loop_id,
             exc_info=True)
 
 
