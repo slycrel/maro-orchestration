@@ -275,14 +275,18 @@ def test_gather_log_markers_splits_attributed_and_global(monkeypatch, tmp_path):
     monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
     import captains_log
     captains_log.log_event("STEP_TOO_BROAD", "step 1", "attributed entry", loop_id="loopA")
-    captains_log.log_event("METACOGNITIVE_DECISION", "reflection", "global entry", loop_id=None)
+    captains_log.log_event("MEMORY_CONSOLIDATED", "consolidation", "user-lane global entry", loop_id=None)
+    captains_log.log_event("METACOGNITIVE_DECISION", "reflection", "system-lane global entry", loop_id=None)
     captains_log.log_event("STEP_TOO_BROAD", "other loop", "different loop entry", loop_id="loopB")
 
     attributed, global_entries = lr._gather_log_markers("loopA", "2020-01-01T00:00:00+00:00")
     assert len(attributed) == 1
     assert attributed[0]["subject"] == "step 1"
     subjects = [e["subject"] for e in global_entries]
-    assert "reflection" in subjects
+    assert "consolidation" in subjects
+    # Run activity is the user-surfaced lane (2026-07-29 audience decree):
+    # system-lane diagnostics stay in the log but out of the report section.
+    assert "reflection" not in subjects
     assert "other loop" not in subjects  # attributed to a different loop, not global
 
 
@@ -299,7 +303,7 @@ def test_gather_log_markers_global_filter_handles_mixed_utc_offsets(monkeypatch,
 
     same_instant_different_offset = {
         "timestamp": "2019-12-31T23:00:00-01:00",
-        "event_type": "METACOGNITIVE_DECISION",
+        "event_type": "MEMORY_CONSOLIDATED",
         "subject": "cross-offset entry",
         "summary": "",
     }
@@ -315,7 +319,7 @@ def test_write_run_report_includes_decision_points_and_global_context(monkeypatc
     monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
     import captains_log
     captains_log.log_event("QUALITY_GATE_VERDICT", "escalate", "gate flagged this run", loop_id="markloop")
-    captains_log.log_event("METACOGNITIVE_DECISION", "reflection", "cross-run note", loop_id=None)
+    captains_log.log_event("MEMORY_CONSOLIDATED", "reflection", "cross-run note", loop_id=None)
 
     lr.write_run_report(
         project="p", loop_id="markloop", goal="goal",
@@ -767,6 +771,8 @@ def test_gather_log_markers_prefers_run_slice(monkeypatch, tmp_path):
          "subject": "skillX", "summary": "no loop id"},
         {"timestamp": "2026-07-01T00:00:30+00:00", "event_type": "DIAGNOSIS",
          "subject": "sibling", "summary": "other loop", "loop_id": "otherloop"},
+        {"timestamp": "2026-07-01T00:00:40+00:00", "event_type": "RULE_GRADUATED",
+         "subject": "rule-sib", "summary": "other loop, user lane", "loop_id": "otherloop"},
     ])
     # Poison the global-log path: if the slice is preferred, load_log is never called.
     import captains_log
@@ -776,8 +782,11 @@ def test_gather_log_markers_prefers_run_slice(monkeypatch, tmp_path):
     attributed, activity = lr._gather_log_markers("sliceloop", "2026-07-01T00:00:00+00:00", build)
     assert [e["subject"] for e in attributed] == ["gate"]
     subjects = [e["subject"] for e in activity]
-    assert "skillX" in subjects        # unattributed meta stays visible
-    assert "sibling" in subjects       # sibling-loop entries are run context, not dropped
+    assert "skillX" in subjects        # unattributed user-lane meta stays visible
+    # Run activity is the user-surfaced lane (2026-07-29 audience decree):
+    # sibling diagnostics are system-lane; sibling user-lane events stay.
+    assert "sibling" not in subjects
+    assert "rule-sib" in subjects
 
 
 def test_gather_log_markers_falls_back_to_load_log_without_slice(monkeypatch, tmp_path):

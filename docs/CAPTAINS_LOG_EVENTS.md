@@ -17,6 +17,7 @@ An append-only, human-readable changelog of what the **learning system** decides
 - **File:** `~/.maro/workspace/memory/captains_log.jsonl` (one JSON object per line).
 - **Rotation:** size-gated, riding on `log_event` (no cron — the no-scheduler invariant). When the active file exceeds `captains_log.rotate_mb` (default 5), all but the most recent `captains_log.rotate_keep` (default 1000) entries move to a timestamped archive `captains_log.<stamp>.jsonl`. Data is never deleted. The rotation itself emits `LOG_ROTATED`.
 - **Readers:** the hot-path reader (`load_log`) reads the active file only; archaeology readers (`query_log`, `timeline`, `event_slice`) span archives.
+- **Audience lanes (2026-07-29 dual-contract decree):** every entry is stamped `audience: "user"` or `"system"` at write time. The user lane (membership set `USER_SURFACED_EVENTS` in `captains_log.py`) is what the log was originally for — "data surfaced to the user about what the system had done." The system lane is the blessed secondary contract: an immutable event stream that consumers (e.g. the contradiction adjudicator) may read as a queue. Reading as a queue is fine; the log itself is immutable. Unstamped historical rows resolve retroactively via `event_audience()` (registry fallback by type). Filter with `maro-log --events --audience user|system`.
 
 ### Human event viewer
 
@@ -218,6 +219,13 @@ Written by `captains_log.log_event(...)`. Every entry has the four required fiel
 |-------|-----------|------------------|---------------|
 | `VALIDATOR_SHADOWED` | validation_shadow.py:85 | step_class, step_preview, local_passed, local_confidence, local_source, paid_passed, paid_confidence, paid_source, agreement, escalated | One per validated step while `validate.shadow_eval` is on: local (free) vs paid verdict on the same result. Decide-only; nothing reads it for control flow. |
 | `VALIDATION_LADDER` | step_exec.py (`_log_validation_ladder`) | tier, source, passed, confidence, local_elapsed_ms, paid_elapsed_ms, input_chars | One per `verify_step` call: which ladder tier decided (hosted-free-decisive / escalated / paid) plus latency and payload size. Diagnostic only; `python3 -m validator_roi` aggregates. |
+
+### System self-health (2026-07-29 monitoring decree)
+
+| Event | Emitter(s) | `context` fields | When it fires |
+|-------|-----------|------------------|---------------|
+| `SUBSYSTEM_SILENT` | system_health.py (`_narrate_transition`) | expectation, evidence | A declared dynamic process (see `DECLARED_PROCESSES`) transitions OK→SILENT — wired but not observably executing per its probe. Fires once per transition, never repeats while the state holds. `subject` = process name. User-surfaced. |
+| `SUBSYSTEM_RECOVERED` | system_health.py (`_narrate_transition`) | expectation, evidence | The same process transitions SILENT→OK. Fires once per transition. `subject` = process name. User-surfaced. |
 
 ---
 

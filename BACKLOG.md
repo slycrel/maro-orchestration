@@ -547,7 +547,25 @@ inspectable before any behavior changes.
   persona-outcome tracking is ever rebuilt, do it at the verdict seam
   like the skill-injection counters.
 
-### Subsystem liveness / self-health monitoring (Jeremy decree 2026-07-29 — "probably load bearing in the future, nice to have for now")
+### Subsystem liveness / self-health monitoring (Jeremy decree 2026-07-29 — "probably load bearing in the future, nice to have for now") — **v1 SHIPPED 2026-07-30**
+
+**v1 shipped 2026-07-30** — `src/system_health.py`: DECLARED_PROCESSES
+liveness registry (6 declared processes = the sweep's four finds plus
+the run-ref join and closure-verdict stamping), cheap deterministic
+probes riding loop_finalize beside run_skill_maintenance (Jeremy's
+correction: "not a cron, let's hook into our startup/closure of the
+goals… that we decided with skills months ago"), snapshot at
+`memory/system_health.json` (the seeded maro-level systemic-metadata
+home — state in the store, transitions in the log), SUBSYSTEM_SILENT /
+SUBSYSTEM_RECOVERED user-surfaced transition events (edge-triggered on
+narration state, never repeats while held), report-only, killswitch
+`health.probes_enabled`, CLI `python3 -m system_health [--probe]`.
+Rode in with the captain's-log audience adornment (dual-contract
+decree) and the HOUSE_STYLE declared-liveness rule (new dynamic
+process ⇒ declare it with a probe). Still open below: the fuller
+declared-writer/consumer/join-key registry shape, and census-grade
+enforcement (a probe per new process is review-enforced prose until
+then).
 
 Jeremy, on the arena-sweep finds: "this is why grafana and ops
 monitoring is a thing… we need a way to ensure the system itself is

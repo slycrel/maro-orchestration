@@ -5241,3 +5241,30 @@ Dormant (deliberately parked, not dropped):
   times_applied) are the questions. BACKLOG item filed same day
   (liveness registry + declared-vs-observed health readout sketch);
   design-first, no build commitment yet.
+- **2026-07-29** — Captain's-log dual contract (Jeremy, decree-class):
+  "I had envisioned the captain's log originally as data surfaced to
+  the user about what the system had done… it keeps getting confused
+  for a streaming event log, which is very similar, but different. So
+  let's lean into that, and adorn the events that should be surfaced to
+  the user, for a clean dual path here… I'm ok with this used as a
+  queue, but IMO the log itself should be immutable." Implementation:
+  `USER_SURFACED_EVENTS` registry + `audience` stamp at write time
+  (`event_audience()` resolves unstamped historical rows), user lane =
+  the original narration contract (run-report "Run activity" + CLI
+  `--audience user` read it), system lane = the blessed immutable
+  event stream that consumers (contradiction adjudicator) may read as
+  a queue. Immutability holds: rotation archives, never deletes.
+- **2026-07-29** — Maro-level systemic metadata gets its first home
+  (Jeremy, decree-class, same conversation): meta-data "systemic,
+  outside of the scope of a goal run… has never had a real home. This
+  can be a good starting place for that" — skills/memory architecture
+  is functional data, not metadata. Home seeded as
+  `memory/system_health.json` (state in the store, transitions in the
+  log); expected to expand. Cadence per his correction: "not a cron,
+  let's hook into our startup/closure of the goals to do this
+  maintenance work" — probes ride loop_finalize beside
+  run_skill_maintenance. maro-doctor is a bootstrapping tool, not this
+  surface; the old monitoring webpage precursor is also not it.
+  Shipped 2026-07-30: `src/system_health.py` (DECLARED_PROCESSES
+  liveness registry, 6 probes, report-only, killswitch
+  `health.probes_enabled`) + HOUSE_STYLE declared-liveness rule.

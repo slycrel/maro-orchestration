@@ -702,6 +702,15 @@ def _finalize_loop(
         except Exception as _maint_exc:
             log.debug("skill maintenance failed (non-critical): %s", _maint_exc)
 
+        # Liveness probes (2026-07-29): same no-cron cadence decision as
+        # skill maintenance — health rides goal-run closure. Report-only;
+        # internally shielded, but belt-and-suspenders here too.
+        try:
+            from system_health import run_health_probes
+            run_health_probes()
+        except Exception as _health_exc:
+            log.debug("health probes failed (non-critical): %s", _health_exc)
+
     # BACKLOG #13 (2026-07-03): evolver's 5 statistical scanners, per-run
     # instead of per-heartbeat-tick — "app, not OS": no daemon, no LLM calls
     # (safe at this cadence), observational only (never auto-applies). Gives

@@ -87,6 +87,17 @@ tripwired rules fire (decree-with-tripwire, DEV_PATTERNS).
 - **Data retention:** never auto-delete run/user data; archive-before-
   rewrite (playbook curation keeps `playbook_history/`); the path is
   part of the result. *Tripwire:* prose-only; enforced by review.
+- **Declared liveness (2026-07-29 monitoring decree):** shipping a new
+  dynamic process — anything that's supposed to keep firing on live
+  runs after the shipping session ends (a writer at a cadence, a
+  lifecycle stage, an A/B loop) — includes declaring it in
+  `DECLARED_PROCESSES` (`src/system_health.py`) with a probe that can
+  observe it actually executing. The case law: the A/B variant
+  subsystem sat wired-but-never-executed for four months behind green
+  tests because nothing watched whether it *ran*. *Tripwire:* the
+  probes themselves (`SUBSYSTEM_SILENT` fires when a declared process
+  stops observably executing); coverage of *new* processes is
+  review-enforced prose until a census exists.
 - **Compiled truth beats narrative:** GOAL_BRAIN.md wins over any other
   doc when they disagree; narrative snapshots rot (the CLAUDE.md
   "current state" section sat stale for months and was removed rather

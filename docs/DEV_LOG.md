@@ -18,6 +18,45 @@ still live in BACKLOG/GOAL_BRAIN; a session that ends conversationally
 still gets a line (same spirit as SF-13). Rendered to the viz server's
 Dev log tab at maro.feifdom.com alongside Runs and Reading.
 
+## 2026-07-30
+
+**System self-health lane v1 + captain's-log dual contract** — the
+monitoring decree went from BACKLOG sketch to shipped in one chunk,
+after Jeremy's 60%-overlap correction reshaped the design: not a cron
+(probes ride goal-run finalization beside skill maintenance — the same
+cadence decision made for skills months ago), not the captain's log as
+a load-bearing store (his original vision: "data surfaced to the user
+about what the system had done" — it kept getting "confused for a
+streaming event log, which is very similar, but different"), not
+maro-doctor (a bootstrapping tool), not the old dashboard precursor.
+Two deliverables. (1) The dual contract: every log entry now carries an
+`audience` stamp — `USER_SURFACED_EVENTS` membership = the narration
+lane (run-report "Run activity" and CLI `--audience user` now read only
+that lane); everything else is the system lane, a blessed immutable
+event stream consumers may read as a queue (the contradiction
+adjudicator already does; rotation archives, never deletes).
+`event_audience()` resolves the 14K+ pre-stamp rows by registry
+fallback. (2) `src/system_health.py`: DECLARED_PROCESSES liveness
+registry — six dynamic processes (the sweep's four wired-but-silent
+finds plus the run-ref join and closure stamping) each declare what
+"alive" looks like and ship a cheap deterministic probe; state lands in
+`memory/system_health.json` (the first real home for maro-level
+systemic metadata, per the same conversation), transitions narrate as
+user-surfaced SUBSYSTEM_SILENT/SUBSYSTEM_RECOVERED events,
+edge-triggered on what the user was last told (a held state never
+repeats; streak probes arriving via UNKNOWN still narrate). Report-only
+by design; killswitch `health.probes_enabled`. HOUSE_STYLE gains the
+declared-liveness rule: shipping a new dynamic process includes
+declaring it with a probe. Live baseline cycle is clean (2 OK-baseline,
+2 OK, 2 UNKNOWN-watching).
+**Surprised by:** my own transition logic had the exact defect class
+this lane exists to catch — `{prev, curr} == {OK, SILENT}` looked
+correct, tested green on the obvious path, and could never fire for the
+streak probes (they arrive at SILENT via UNKNOWN, so the pair-equality
+check silently never matched). Caught only by writing the
+UNKNOWN→SILENT test before trusting the harness. The monitoring code
+needed monitoring.
+
 ## 2026-07-29
 
 **Arena sweep → A/B variants un-starved + persona-outcomes retired** —

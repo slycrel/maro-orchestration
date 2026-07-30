@@ -300,10 +300,24 @@ def _gather_log_markers(
     if not loop_id:
         return [], []
 
+    # Audience decree (2026-07-29): the run_activity section is the report's
+    # user-surfaced narrative ("what the learning system did during this
+    # run"), so it renders only user-adorned events — system bookkeeping and
+    # queue entries stay in the jsonl for machinery, not the report. The
+    # attributed list stays unfiltered: it is this run's own diagnostic
+    # record, not the narrative lane.
+    def _user_lane(entries):
+        try:
+            from captains_log import event_audience
+            return [e for e in entries if event_audience(e) == "user"]
+        except Exception:
+            return entries
+
     slice_entries = _read_log_slice(report_dir)
     if slice_entries is not None:
         attributed = [e for e in slice_entries if e.get("loop_id") == loop_id]
-        activity = [e for e in slice_entries if e.get("loop_id") != loop_id]
+        activity = _user_lane(
+            [e for e in slice_entries if e.get("loop_id") != loop_id])
         return attributed, activity
 
     try:
@@ -333,7 +347,7 @@ def _gather_log_markers(
     ]
     attributed.reverse()       # load_log is most-recent-first; report reads chronologically
     global_entries.reverse()
-    return attributed, global_entries
+    return attributed, _user_lane(global_entries)
 
 
 def _slot_markers(markers: List[dict], windows: List[Dict[str, Any]], approx: bool) -> Dict[int, List[int]]:

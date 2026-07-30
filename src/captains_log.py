@@ -4,6 +4,28 @@ Append-only event stream tracking every action the learning pipeline takes.
 Not raw data (that's outcomes.jsonl). Not aggregated metrics (that's the dashboard).
 A human-readable changelog of what the system decided about its own knowledge.
 
+Dual contract (Jeremy decree, 2026-07-29 — ends years of quiet drift between
+the two roles):
+
+1. PRIMARY: data surfaced to the user about what the system has done.
+   Events carrying that duty are adorned — membership in
+   USER_SURFACED_EVENTS, stamped as ``audience: "user"`` on the row.
+   User-facing renders (run reports' activity section, ``maro-log
+   --audience user``) read only the adorned lane.
+2. BLESSED SECONDARY: an immutable event stream that system lanes may
+   consume as data — including as a durable queue (the contradiction
+   adjudicator reads pending CONTRADICTION_CANDIDATE events; refight
+   reads adjudicated events). Unadorned events default to
+   ``audience: "system"``: bookkeeping, per-step diagnostics, queue
+   entries. New event types are system unless deliberately adorned —
+   the user lane stays curated by default.
+
+Immutability is a hard property of the stream: events are never edited or
+deleted. Rotation only moves old entries to timestamped archives beside the
+active file (query_log spans archives, so nothing is ever hidden from
+history), and state changes are expressed as NEW events (e.g. adjudicated
+answers candidate), never by rewriting old ones.
+
 Usage:
     from captains_log import log_event, render_log, EVENT_TYPES
 
@@ -242,6 +264,14 @@ VALIDATOR_SHADOWED = "VALIDATOR_SHADOWED"
 # control flow.
 VALIDATION_LADDER = "VALIDATION_LADDER"
 
+# System self-health (2026-07-29): a declared dynamic process transitioned
+# between alive and silent. Emitted by system_health.run_health_probes at
+# goal-run finalization — transition-only (no repeat spam while a state
+# holds). SILENT means "wired but not observably executing" (the
+# use_count/A/B-variant defect class), not an error.
+SUBSYSTEM_SILENT = "SUBSYSTEM_SILENT"
+SUBSYSTEM_RECOVERED = "SUBSYSTEM_RECOVERED"
+
 EVENT_TYPES = {
     SKILL_SYNTHESIZED, SKILL_SYNTHESIS_REJECTED, SKILL_PROMOTED, SKILL_DEMOTED, SKILL_REWRITE,
     SKILL_CIRCUIT_OPEN, SKILL_CIRCUIT_HALF_OPEN, SKILL_CIRCUIT_CLOSED,
@@ -268,7 +298,44 @@ EVENT_TYPES = {
     RECALL_PERFORMED, RECALL_GUARD_TRIPPED, NOW_ARTIFACT_RETRY,
     NAVIGATOR_DECIDED, NAVIGATOR_ACTED, NAVIGATOR_ADJUDICATED,
     VALIDATOR_SHADOWED, VALIDATION_LADDER,
+    SUBSYSTEM_SILENT, SUBSYSTEM_RECOVERED,
 }
+
+# ---------------------------------------------------------------------------
+# Audience adornment (Jeremy decree 2026-07-29 — see module docstring)
+# ---------------------------------------------------------------------------
+# Events adorned here are the user-surfaced lane: low-volume, decision-shaped
+# facts about what the system did to its own knowledge/behavior — the log's
+# PRIMARY identity. Everything else is "system": bookkeeping, per-step
+# diagnostics, queue entries. Adorn deliberately; absence is the default, so
+# a new event type never leaks into the user lane by accident.
+
+USER_SURFACED_EVENTS = frozenset({
+    # skill lifecycle decisions
+    SKILL_SYNTHESIZED, SKILL_PROMOTED, SKILL_DEMOTED, SKILL_REWRITE,
+    SKILL_CIRCUIT_OPEN, SKILL_CIRCUIT_CLOSED, SKILL_VARIANT_CREATED,
+    AB_RETIRED, ISLAND_CULLED,
+    # knowledge lifecycle decisions
+    HYPOTHESIS_PROMOTED, HYPOTHESIS_CONTRADICTED, STANDING_RULE_CONTRADICTED,
+    RULE_GRADUATED, RULE_DEMOTED, RULE_REFOUGHT, RULE_VERIFIED,
+    CONTRADICTION_ADJUDICATED, MEMORY_CONSOLIDATED, PLAYBOOK_CURATED,
+    # self-modification decisions
+    EVOLVER_APPLIED, EVOLVER_REVERTED, EVOLVER_VERDICT,
+    GRADUATION_PROPOSED, GRADUATION_VERIFIED,
+    NAVIGATOR_ADJUDICATED,
+    # honesty findings the operator should hear
+    FABRICATION_DETECTED, SUBSYSTEM_SILENT, SUBSYSTEM_RECOVERED,
+})
+
+
+def event_audience(entry: Dict[str, Any]) -> str:
+    """Audience for a log row: the stamped field when present, else the
+    registry by event type — so the dual path applies retroactively to the
+    full historical corpus (rows written before adornment shipped)."""
+    aud = entry.get("audience")
+    if aud in ("user", "system"):
+        return aud
+    return "user" if entry.get("event_type") in USER_SURFACED_EVENTS else "system"
 
 # ---------------------------------------------------------------------------
 # Path
@@ -408,6 +475,8 @@ def log_event(
         "event_type": event_type,
         "subject": subject,
         "summary": summary,
+        "audience": ("user" if event_type in USER_SURFACED_EVENTS
+                     else "system"),
     }
     if context:
         entry["context"] = context
@@ -1028,6 +1097,11 @@ def main() -> None:
     parser.add_argument("--type", dest="event_type", help="Filter by event type prefix (e.g. SKILL, EVOLVER)")
     parser.add_argument("--subject", help="Filter by subject substring")
     parser.add_argument("--limit", type=int, default=20, help="Max entries (default: 20, 0=unlimited)")
+    parser.add_argument("--audience", choices=("user", "system", "all"),
+                        default="all",
+                        help="Filter by audience lane: 'user' = events "
+                        "adorned for user surfacing, 'system' = internal "
+                        "bookkeeping/queue events (default: all)")
     parser.add_argument("--json", action="store_true", help="Output raw JSON instead of rendered text")
     parser.add_argument("--git", action="store_true", help="Show correlated git commits")
     parser.add_argument("--timeline", action="store_true", help="Show event count timeline")
@@ -1096,6 +1170,9 @@ def main() -> None:
             subject=args.subject,
             limit=args.limit,
         )
+
+    if args.audience != "all":
+        entries = [e for e in entries if event_audience(e) == args.audience]
 
     if not entries:
         print("No log entries found.")

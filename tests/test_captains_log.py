@@ -332,7 +332,10 @@ class TestEventTypes:
         # +1 (2026-07-29): NOW_ARTIFACT_RETRY — NOW retry rung: a self-verdict
         # failure gets one artifact-seeded second shot in the same lane before
         # any agenda escalation (now_lane.artifact_retry, default OFF).
-        assert len(EVENT_TYPES) == 73
+        # +2 (2026-07-29): SUBSYSTEM_SILENT / SUBSYSTEM_RECOVERED — system
+        # self-health transition narration (monitoring decree): a declared
+        # dynamic process stops observably executing / starts again.
+        assert len(EVENT_TYPES) == 75
 
     def test_previously_unregistered_events_in_set(self):
         from captains_log import EVOLVER_REVERTED, EVOLVER_VERIFY, PLAYBOOK_UPDATED
@@ -1011,3 +1014,56 @@ class TestRotation:
         )
         # 50 fill + 2 triggers + 2 LOG_ROTATED entries, nothing lost
         assert total == 54
+
+
+# ---------------------------------------------------------------------------
+# Audience lanes (2026-07-29 dual-contract decree)
+# ---------------------------------------------------------------------------
+
+class TestAudienceLanes:
+    """The captain's log carries two contracts: user-surfaced narration
+    (adorned lane) and an immutable system event stream. Membership in
+    USER_SURFACED_EVENTS decides the stamp at write time."""
+
+    def test_user_surfaced_events_is_subset_of_event_types(self):
+        from captains_log import USER_SURFACED_EVENTS
+        stray = USER_SURFACED_EVENTS - EVENT_TYPES
+        assert stray == frozenset(), (
+            f"USER_SURFACED_EVENTS members missing from EVENT_TYPES: {stray}")
+
+    def test_audience_stamped_at_write_user_lane(self, _tmp_log):
+        log_event(SKILL_PROMOTED, "some-skill", "promoted")
+        entry = load_log(limit=1)[0]
+        assert entry["audience"] == "user"
+
+    def test_audience_stamped_at_write_system_lane(self, _tmp_log):
+        log_event(LESSON_RECORDED, "some-lesson", "recorded")
+        entry = load_log(limit=1)[0]
+        assert entry["audience"] == "system"
+
+    def test_event_audience_retroactive_fallback(self):
+        """14K+ historical rows predate the stamp — event_audience must
+        resolve them by type via the registry."""
+        from captains_log import event_audience
+        assert event_audience(
+            {"event_type": SKILL_PROMOTED}) == "user"
+        assert event_audience(
+            {"event_type": LESSON_RECORDED}) == "system"
+        assert event_audience({"event_type": "NEVER_SEEN"}) == "system"
+
+    def test_explicit_stamp_wins_over_registry(self):
+        """A stamped row keeps its lane even if the registry moves later —
+        the stamp is the write-time record."""
+        from captains_log import event_audience
+        assert event_audience(
+            {"event_type": LESSON_RECORDED, "audience": "user"}) == "user"
+        assert event_audience(
+            {"event_type": SKILL_PROMOTED, "audience": "system"}) == "system"
+
+    def test_subsystem_health_events_are_user_surfaced(self):
+        from captains_log import (
+            USER_SURFACED_EVENTS, SUBSYSTEM_SILENT, SUBSYSTEM_RECOVERED)
+        assert SUBSYSTEM_SILENT in EVENT_TYPES
+        assert SUBSYSTEM_RECOVERED in EVENT_TYPES
+        assert SUBSYSTEM_SILENT in USER_SURFACED_EVENTS
+        assert SUBSYSTEM_RECOVERED in USER_SURFACED_EVENTS
