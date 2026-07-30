@@ -245,23 +245,61 @@ class TestClosureVerdictsProbe:
         status, evidence, obs = sh._probe_closure_verdicts({})
         assert status == OK
         assert "baseline" in evidence
-        assert obs == {"done": 2, "unverdicted": 1}
+        assert obs["unverdicted_ids"] == ["aaaa1111"]
 
-    def test_growth_vs_prior_is_silent(self, monkeypatch):
+    def test_new_id_is_silent(self, monkeypatch):
         monkeypatch.setattr(sh, "_recent_outcomes", lambda limit=50: [
             _outcome_row("aaaa1111"), _outcome_row("cccc3333")])
-        prior = {"history": [{"done": 1, "unverdicted": 1}]}
+        prior = {"history": [
+            {"done": 1, "unverdicted": 1, "unverdicted_ids": ["aaaa1111"]}]}
         status, evidence, _ = sh._probe_closure_verdicts(prior)
         assert status == SILENT
         assert "accreting" in evidence
+        assert "cccc3333" in evidence
+
+    def test_window_slide_same_count_still_silent(self, monkeypatch):
+        """2026-07-30 review (Skeptic F3): old unverdicted run scrolls out
+        of the recency window just as a new one appears — same count,
+        brand-new silent failure. Identity tracking must catch it."""
+        monkeypatch.setattr(sh, "_recent_outcomes", lambda limit=50: [
+            _outcome_row("cccc3333")])  # aaaa1111 scrolled out; count still 1
+        prior = {"history": [
+            {"done": 1, "unverdicted": 1, "unverdicted_ids": ["aaaa1111"]}]}
+        status, _, _ = sh._probe_closure_verdicts(prior)
+        assert status == SILENT
 
     def test_stable_backlog_is_ok(self, monkeypatch):
         monkeypatch.setattr(sh, "_recent_outcomes", lambda limit=50: [
             _outcome_row("aaaa1111"), _outcome_row("cccc3333")])
-        prior = {"history": [{"done": 2, "unverdicted": 2}]}
+        prior = {"history": [
+            {"done": 2, "unverdicted": 2,
+             "unverdicted_ids": ["aaaa1111", "cccc3333"], "new_ids": []}]}
         status, evidence, _ = sh._probe_closure_verdicts(prior)
         assert status == OK
-        assert "not growing" in evidence
+        assert "no new ids" in evidence
+
+    def test_recent_growth_holds_the_alarm(self, monkeypatch):
+        """No SILENT/RECOVERED ping-pong: the cycle after an accretion is
+        acknowledged stays SILENT until the growth ages out of the window."""
+        monkeypatch.setattr(sh, "_recent_outcomes", lambda limit=50: [
+            _outcome_row("aaaa1111"), _outcome_row("cccc3333")])
+        prior = {"history": [
+            {"done": 2, "unverdicted": 2,
+             "unverdicted_ids": ["aaaa1111", "cccc3333"],
+             "new_ids": ["cccc3333"]}]}
+        status, evidence, _ = sh._probe_closure_verdicts(prior)
+        assert status == SILENT
+        assert "holding" in evidence
+
+    def test_preid_history_gets_baseline_not_false_alarm(self, monkeypatch):
+        """History rows from before id tracking shipped carry only counts —
+        upgrading must re-baseline, not alarm on every current id."""
+        monkeypatch.setattr(sh, "_recent_outcomes", lambda limit=50: [
+            _outcome_row("aaaa1111")])
+        prior = {"history": [{"done": 1, "unverdicted": 1}]}
+        status, evidence, _ = sh._probe_closure_verdicts(prior)
+        assert status == OK
+        assert "baseline" in evidence
 
     def test_fresh_rows_get_grace(self, monkeypatch):
         # Recorded 5 minutes ago — closure may still be in flight.
@@ -280,65 +318,100 @@ class TestClosureVerdictsProbe:
         assert "2/2" in evidence
 
 
+def _seed_log_row(event_type, subject, hours_ago, context=None):
+    """Append a raw log row so tests control the timestamp."""
+    from captains_log import _log_path
+    row = {
+        "timestamp": (datetime.now(timezone.utc)
+                      - timedelta(hours=hours_ago)).isoformat(),
+        "event_type": event_type,
+        "subject": subject,
+        "summary": "seeded",
+    }
+    if context:
+        row["context"] = context
+    path = _log_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(row) + "\n")
+
+
 class TestVariantAbProbe:
-    def _patch_skills(self, monkeypatch, *, frontier, variants):
-        skill_objs = ([types.SimpleNamespace(variant_of=None)] * frontier
-                      + [types.SimpleNamespace(variant_of="parent") for _ in range(variants)])
+    def _patch_skills(self, monkeypatch, *, frontier):
+        skill_objs = [types.SimpleNamespace(variant_of=None)] * max(frontier, 1)
         import skills as skills_mod
         monkeypatch.setattr(skills_mod, "load_skills", lambda: skill_objs)
         monkeypatch.setattr(
             skills_mod, "frontier_skills",
             lambda all_skills, **kw: all_skills[:frontier])
 
-    def test_variants_exist_is_ok(self, monkeypatch):
-        self._patch_skills(monkeypatch, frontier=2, variants=1)
-        status, _, _ = sh._probe_variant_ab({})
-        assert status == OK
-
     def test_empty_frontier_owes_nothing(self, monkeypatch):
-        self._patch_skills(monkeypatch, frontier=0, variants=0)
+        self._patch_skills(monkeypatch, frontier=0)
         status, evidence, _ = sh._probe_variant_ab({})
         assert status == OK
         assert "no variants owed" in evidence
 
     def test_streak_required_before_silent(self, monkeypatch):
-        self._patch_skills(monkeypatch, frontier=3, variants=0)
-        # Cycles 1..STREAK-1: watching (UNKNOWN)
+        self._patch_skills(monkeypatch, frontier=3)
         prior = {}
         for i in range(STREAK_FOR_SILENT - 1):
             status, _, obs = sh._probe_variant_ab(prior)
             assert status == UNKNOWN, f"cycle {i + 1} should still be watching"
-            hist = prior.get("history", []) + [obs]
-            prior = {"history": hist}
-        # Cycle STREAK: the streak completes
+            prior = {"history": prior.get("history", []) + [obs]}
         status, evidence, _ = sh._probe_variant_ab(prior)
         assert status == SILENT
         assert "not firing" in evidence
+        assert "0 variants ever" in evidence
 
-    def test_streak_broken_by_variant_resets(self, monkeypatch):
-        self._patch_skills(monkeypatch, frontier=3, variants=0)
+    def test_recent_creation_breaks_the_freeze(self, monkeypatch):
+        self._patch_skills(monkeypatch, frontier=3)
+        _seed_log_row("SKILL_VARIANT_CREATED", "some-variant", hours_ago=2)
+        prior = {"history": [
+            {"frontier": 3, "variant_events": 0},
+            {"frontier": 3, "variant_events": 0}]}
+        status, evidence, _ = sh._probe_variant_ab(prior)
+        assert status == OK
+        assert "created" in evidence
+
+    def test_old_variant_does_not_mask_stopped_generator(self, monkeypatch):
+        """2026-07-30 review (Minimalist F1): one historical variant must
+        not make the probe OK forever — a count frozen across the streak
+        with the last creation beyond the grace window is SILENT."""
+        self._patch_skills(monkeypatch, frontier=3)
+        _seed_log_row("SKILL_VARIANT_CREATED", "old-variant",
+                      hours_ago=(sh.VARIANT_STALE_DAYS + 2) * 24)
+        prior = {"history": [
+            {"frontier": 3, "variant_events": 1},
+            {"frontier": 3, "variant_events": 1}]}
+        status, evidence, _ = sh._probe_variant_ab(prior)
+        assert status == SILENT
+        assert "no new variant since" in evidence
+
+    def test_frozen_count_within_grace_is_ok(self, monkeypatch):
+        self._patch_skills(monkeypatch, frontier=3)
+        _seed_log_row("SKILL_VARIANT_CREATED", "fresh-variant", hours_ago=20)
+        prior = {"history": [
+            {"frontier": 3, "variant_events": 1},
+            {"frontier": 3, "variant_events": 1}]}
+        status, evidence, _ = sh._probe_variant_ab(prior)
+        assert status == OK
+        assert "grace window" in evidence
+
+    def test_preupgrade_history_keeps_watching(self, monkeypatch):
+        """Old-format history rows (variants counts, no variant_events)
+        must not complete a streak."""
+        self._patch_skills(monkeypatch, frontier=3)
         prior = {"history": [
             {"frontier": 3, "variants": 0},
-            {"frontier": 2, "variants": 1},  # a variant existed mid-window
-        ]}
+            {"frontier": 3, "variants": 0}]}
         status, _, _ = sh._probe_variant_ab(prior)
         assert status == UNKNOWN
 
 
 class TestContradictionProbe:
     def _seed_event(self, tmp_path, event_type, loop_id, hours_ago):
-        """Append a raw log row so we control the timestamp."""
-        from captains_log import _log_path
-        row = {
-            "timestamp": (datetime.now(timezone.utc)
-                          - timedelta(hours=hours_ago)).isoformat(),
-            "event_type": event_type,
-            "subject": loop_id,
-            "summary": "seeded",
-            "context": {"loop_id": loop_id},
-        }
-        with open(_log_path(), "a", encoding="utf-8") as f:
-            f.write(json.dumps(row) + "\n")
+        _seed_log_row(event_type, loop_id, hours_ago,
+                      context={"loop_id": loop_id})
 
     def test_no_candidates_is_unknown(self, tmp_path):
         status, _, _ = sh._probe_contradiction_lifecycle({})
@@ -364,6 +437,125 @@ class TestContradictionProbe:
         status, evidence, _ = sh._probe_contradiction_lifecycle({})
         assert status == SILENT
         assert "not" in evidence and "draining" in evidence
+
+
+class TestLessonReceiptsProbe:
+    def _cite(self, tmp_path, monkeypatch, cited_loop):
+        """Empty memory dir (receipt sum 0) + one recent run citing lessons."""
+        monkeypatch.setattr(sh, "_memory_dir", lambda: tmp_path / "mem")
+        if cited_loop is None:
+            monkeypatch.setattr(sh, "_recent_outcomes", lambda limit=50: [])
+            return
+        monkeypatch.setattr(
+            sh, "_recent_outcomes", lambda limit=50: [_outcome_row(cited_loop)])
+        src = tmp_path / f"src-{cited_loop}"
+        src.mkdir(parents=True, exist_ok=True)
+        (src / "recall_citations.json").write_text(
+            json.dumps({"lesson_ids": ["l1"], "rule_ids": []}))
+        monkeypatch.setattr(sh, "_run_source", lambda lid: src)
+
+    def test_new_citing_run_with_frozen_sum_is_silent(self, monkeypatch, tmp_path):
+        self._cite(tmp_path, monkeypatch, "runB")
+        prior = {"history": [
+            {"receipt_sum": 0, "last_cited_loop": "runA"},
+            {"receipt_sum": 0, "last_cited_loop": "runA"}]}
+        status, evidence, _ = sh._probe_lesson_receipts(prior)
+        assert status == SILENT
+        assert "not reaching disk" in evidence
+
+    def test_stale_citation_is_not_a_false_alarm(self, monkeypatch, tmp_path):
+        """2026-07-30 review (Minimalist F2): the same old cited run sitting
+        in the recency window owes nothing new — a frozen sum is OK."""
+        self._cite(tmp_path, monkeypatch, "runA")
+        prior = {"history": [
+            {"receipt_sum": 0, "last_cited_loop": "runA"},
+            {"receipt_sum": 0, "last_cited_loop": "runA"}]}
+        status, evidence, _ = sh._probe_lesson_receipts(prior)
+        assert status == OK
+        assert "no new citations owed" in evidence
+
+    def test_first_citation_after_none_counts_as_advance(self, monkeypatch, tmp_path):
+        self._cite(tmp_path, monkeypatch, "runB")
+        prior = {"history": [
+            {"receipt_sum": 0, "last_cited_loop": None},
+            {"receipt_sum": 0, "last_cited_loop": None}]}
+        status, _, _ = sh._probe_lesson_receipts(prior)
+        assert status == SILENT
+
+    def test_moving_sum_is_ok(self, monkeypatch, tmp_path):
+        self._cite(tmp_path, monkeypatch, "runB")
+        prior = {"history": [
+            {"receipt_sum": 5, "last_cited_loop": "runA"},
+            {"receipt_sum": 8, "last_cited_loop": "runA"}]}
+        status, evidence, _ = sh._probe_lesson_receipts(prior)
+        assert status == OK
+        assert "moving" in evidence
+
+    def test_preupgrade_history_keeps_watching(self, monkeypatch, tmp_path):
+        self._cite(tmp_path, monkeypatch, "runB")
+        prior = {"history": [
+            {"receipt_sum": 0, "recent_run_cited_lessons": True},
+            {"receipt_sum": 0, "recent_run_cited_lessons": True}]}
+        status, _, _ = sh._probe_lesson_receipts(prior)
+        assert status == UNKNOWN
+
+
+# ---------------------------------------------------------------------------
+# Review fixes (2026-07-30 adversarial round)
+# ---------------------------------------------------------------------------
+
+class TestReviewFixes:
+    def test_narration_sheds_ambient_loop_id(self, monkeypatch):
+        """Architect F1: probes run inside loop_finalize's loop_id_scope —
+        transitions are global process state and must not be attributed to
+        the run that hosted the probe cycle."""
+        from captains_log import loop_id_scope
+        monkeypatch.setattr(
+            sh, "DECLARED_PROCESSES", [_decl(_seq_probe([SILENT]))])
+        with loop_id_scope("host-run-123"):
+            run_health_probes()
+        events = _events(SUBSYSTEM_SILENT)
+        assert len(events) == 1
+        assert "loop_id" not in events[0]
+
+    def test_failed_snapshot_write_defers_narration(self, monkeypatch):
+        """Skeptic F2: narrating before the snapshot persists would repeat
+        the same transition forever if the write fails — the log must only
+        say what the durable state machine remembers telling."""
+        monkeypatch.setattr(
+            sh, "DECLARED_PROCESSES", [_decl(_seq_probe([SILENT, SILENT]))])
+        real_write = sh._write_snapshot
+
+        def boom(snapshot):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(sh, "_write_snapshot", boom)
+        summary = run_health_probes()
+        assert summary.get("error")
+        assert _events(SUBSYSTEM_SILENT) == []  # nothing narrated
+        monkeypatch.setattr(sh, "_write_snapshot", real_write)
+        run_health_probes()
+        assert len(_events(SUBSYSTEM_SILENT)) == 1  # narrated exactly once
+
+    def test_snapshot_write_rides_the_file_lock(self, monkeypatch):
+        """Skeptic F1 / Architect F2: the cycle is a read-modify-write of
+        shared state — it must hold the snapshot's lock, not rely on bare
+        atomic_write."""
+        import file_lock
+        held_during_write = {}
+        real_write = sh._write_snapshot
+
+        def spy_write(snapshot):
+            lock_key = str(
+                (sh._snapshot_path().parent
+                 / (sh._snapshot_path().name + ".lock")).resolve())
+            held_during_write["locked"] = lock_key in file_lock._get_held()
+            real_write(snapshot)
+
+        monkeypatch.setattr(sh, "_write_snapshot", spy_write)
+        monkeypatch.setattr(sh, "DECLARED_PROCESSES", [_decl(_seq_probe([OK]))])
+        run_health_probes()
+        assert held_during_write.get("locked") is True
 
 
 # ---------------------------------------------------------------------------

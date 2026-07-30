@@ -57,6 +57,21 @@ check silently never matched). Caught only by writing the
 UNKNOWN→SILENT test before trusting the harness. The monitoring code
 needed monitoring.
 
+*Post-land adversarial review, same day* (3 Codex lenses vs 2c34742,
+CONTESTED → remediated; 8/8 verified, 0 hallucinated —
+docs/history/2026-07-30-health-lane-adversarial-review.md): unlocked
+snapshot read-modify-write (the repo's own atomic_write docstring names
+the rule); narrate-before-persist; ambient loop_id contaminating
+transition events into run attribution; closure count-compare missing
+window slides (fixed with id tracking + hold-while-growing to kill
+SILENT/RECOVERED ping-pong); variant probe OK-forever after one
+historical variant (now cumulative event count + 7d staleness — which
+also surfaced 696 test-fixture SKILL_VARIANT_CREATED leaks from a
+2026-04-10 archive, tolerated honestly); receipts false-alarm on stale
+citations; `--audience` dead on `--events`/`--timeline`; `--limit 0`
+broken. Plus one self-found live bug pre-review: CLI limit-before-filter
+made `--audience user --limit 3` return nothing on a real log.
+
 ## 2026-07-29
 
 **Arena sweep → A/B variants un-starved + persona-outcomes retired** —

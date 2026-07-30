@@ -60,6 +60,11 @@ STREAK_FOR_SILENT = 3
 # (the queue drains at run finalization, so an idle box legitimately holds
 # pending candidates — age, not existence, is the signal).
 CANDIDATE_STARVATION_HOURS = 48
+# Grace before a frozen variant-creation count under a non-empty frontier
+# counts as stopped-firing (evolver mints variants at its own cadence —
+# several goal runs can finalize between mints; days, not cycles, is the
+# right unit for "the generator broke").
+VARIANT_STALE_DAYS = 7
 
 
 # ---------------------------------------------------------------------------
@@ -228,30 +233,55 @@ def _probe_contradiction_lifecycle(prior: Dict[str, Any]) -> Tuple[str, str, dic
 
 
 def _probe_variant_ab(prior: Dict[str, Any]) -> Tuple[str, str, dict]:
-    """A persistently non-empty frontier must eventually produce A/B
-    variants — the subsystem that sat starved from birth until 2026-07-29."""
+    """A persistently non-empty frontier must keep producing A/B variants
+    — the subsystem that sat starved from birth until 2026-07-29.
+
+    Tracks the cumulative SKILL_VARIANT_CREATED event count, not current
+    variant skills: lifetime existence of one old variant must not mask a
+    generator that broke later (2026-07-30 review), and retirement culling
+    variant skills must not re-arm a false alarm. SILENT needs the count
+    frozen across the streak AND the last creation older than
+    VARIANT_STALE_DAYS (evolver-cadence grace); a never-fired subsystem
+    has no last creation, so the streak alone decides it."""
     from skills import load_skills, frontier_skills
+    from captains_log import query_log, SKILL_VARIANT_CREATED
     all_skills = load_skills()
     frontier = len(frontier_skills(all_skills))
-    variants = sum(1 for s in all_skills if s.variant_of is not None)
-    obs = {"frontier": frontier, "variants": variants}
-    if variants > 0:
-        return OK, f"{variants} variant(s) exist (frontier {frontier})", obs
+    events = query_log(event_type=SKILL_VARIANT_CREATED, limit=0)
+    created = len(events)
+    last_created = max((e.get("timestamp", "") for e in events), default="")
+    obs = {"frontier": frontier, "variant_events": created}
     if frontier == 0:
         return OK, "frontier empty — no variants owed", obs
     window = _history_of(prior)[-(STREAK_FOR_SILENT - 1):] + [obs]
-    if (len(window) >= STREAK_FOR_SILENT
-            and all(h.get("frontier", 0) > 0 and h.get("variants", 0) == 0
-                    for h in window)):
+    if len(window) < STREAK_FOR_SILENT or any(
+            "variant_events" not in h for h in window):
+        return UNKNOWN, (
+            f"frontier {frontier}, {created} variant(s) ever created — "
+            f"watching ({len(window)}/{STREAK_FOR_SILENT} cycles observed)"), obs
+    frozen = len({h.get("variant_events") for h in window}) == 1
+    frontier_held = all(h.get("frontier", 0) > 0 for h in window)
+    stale = True
+    if last_created:
+        try:
+            age = datetime.now(timezone.utc) - datetime.fromisoformat(last_created)
+            stale = age > timedelta(days=VARIANT_STALE_DAYS)
+        except Exception:
+            stale = True
+    if frozen and frontier_held and stale:
+        detail = ("0 variants ever created" if not created else
+                  f"no new variant since {last_created[:10]}")
         return SILENT, (
             f"frontier non-empty ({frontier} skill(s)) across "
-            f"{len(window)} consecutive probe cycles with 0 variants "
-            "created — the frontier→variant path is not firing "
-            "(check evolver frontier logs; strategy pre-score PASS "
-            "skips are one legitimate cause worth ruling out)"), obs
-    return UNKNOWN, (
-        f"frontier {frontier}, 0 variants — watching "
-        f"({len(window)}/{STREAK_FOR_SILENT} cycles observed)"), obs
+            f"{len(window)} consecutive probe cycles, {detail} — the "
+            "frontier→variant path is not firing (check evolver frontier "
+            "logs; strategy pre-score PASS skips are one legitimate cause "
+            "worth ruling out)"), obs
+    if frozen and frontier_held:
+        return OK, (
+            f"last variant {last_created[:10]} within the "
+            f"{VARIANT_STALE_DAYS}d grace window (frontier {frontier})"), obs
+    return OK, f"{created} variant(s) created (frontier {frontier})", obs
 
 
 def _probe_lesson_receipts(prior: Dict[str, Any]) -> Tuple[str, str, dict]:
@@ -275,7 +305,12 @@ def _probe_lesson_receipts(prior: Dict[str, Any]) -> Tuple[str, str, dict]:
                 total += int(json.loads(line).get("times_applied", 0) or 0)
             except Exception:
                 continue
-    cited = False
+    # Newest run that actually cited lessons — receipts are only owed when
+    # NEW citations happen. A single old cited run sitting in the recency
+    # window must not turn "nothing newly owed" into a false SILENT
+    # (2026-07-30 review), so the streak condition is "citing run CHANGED
+    # while the sum stayed frozen", not "any cited run exists".
+    last_cited_loop = None
     for row in reversed(_recent_outcomes(limit=20)):
         src = _run_source(str(row["loop_id"]))
         if src is None:
@@ -285,24 +320,30 @@ def _probe_lesson_receipts(prior: Dict[str, Any]) -> Tuple[str, str, dict]:
             continue
         try:
             if json.loads(cit.read_text(encoding="utf-8")).get("lesson_ids"):
-                cited = True
+                last_cited_loop = str(row["loop_id"])
                 break
         except Exception:
             continue
-    obs = {"receipt_sum": total, "recent_run_cited_lessons": cited}
+    obs = {"receipt_sum": total, "last_cited_loop": last_cited_loop}
     window = _history_of(prior)[-(STREAK_FOR_SILENT - 1):] + [obs]
-    if len(window) < STREAK_FOR_SILENT:
+    if len(window) < STREAK_FOR_SILENT or any(
+            "last_cited_loop" not in h for h in window):
         return UNKNOWN, (
             f"receipt sum {total} — watching "
             f"({len(window)}/{STREAK_FOR_SILENT} cycles observed)"), obs
     sums = {h.get("receipt_sum") for h in window}
-    any_cited = any(h.get("recent_run_cited_lessons") for h in window)
-    if any_cited and len(sums) == 1:
+    cited_loops = [h.get("last_cited_loop") for h in window]
+    non_null = [c for c in cited_loops if c]
+    # Citations advanced during the window: the citing run changed, or a
+    # first citation appeared after a no-citation observation.
+    advanced = (len(set(non_null)) >= 2
+                or (bool(non_null) and cited_loops[0] is None))
+    if advanced and len(sums) == 1:
         return SILENT, (
-            f"runs cited lessons across {len(window)} probe cycles but "
+            f"new runs cited lessons across {len(window)} probe cycles but "
             f"times_applied sum stayed frozen at {total} — receipts are "
             "not reaching disk"), obs
-    return OK, f"receipt sum {total} ({'moving' if len(sums) > 1 else 'no citations owed'})", obs
+    return OK, f"receipt sum {total} ({'moving' if len(sums) > 1 else 'no new citations owed'})", obs
 
 
 def _probe_closure_verdicts(prior: Dict[str, Any]) -> Tuple[str, str, dict]:
@@ -324,26 +365,49 @@ def _probe_closure_verdicts(prior: Dict[str, Any]) -> Tuple[str, str, dict]:
         except Exception:
             pass
         unverdicted.append(str(r.get("loop_id", ""))[:8])
-    obs = {"done": len(done_rows), "unverdicted": len(unverdicted)}
+    obs = {"done": len(done_rows), "unverdicted": len(unverdicted),
+           "unverdicted_ids": unverdicted}
     prior_hist = _history_of(prior)
-    prior_count = prior_hist[-1].get("unverdicted") if prior_hist else None
-    if prior_count is None and unverdicted:
-        # First observation: a pre-existing backlog is a baseline, not a
-        # new finding (the historical rows are already on record) — SILENT
+    # Identity-based growth (2026-07-30 review): count comparison misses a
+    # window slide where an old unverdicted run scrolls out of the recency
+    # window just as a new one appears — same count, brand-new silent
+    # failure. Track the ids; new id = growth. History entries predating
+    # id tracking get baseline treatment rather than a false alarm.
+    known_ids: set = set()
+    ids_tracked = False
+    for h in prior_hist:
+        if isinstance(h.get("unverdicted_ids"), list):
+            ids_tracked = True
+            known_ids.update(h["unverdicted_ids"])
+    if unverdicted and not ids_tracked:
+        # First observation (or first since id tracking shipped): a
+        # pre-existing backlog is a baseline, not a new finding — SILENT
         # here would flip to a spurious "recovered" next cycle.
         return OK, (
             f"baseline: {len(unverdicted)}/{len(done_rows)} known "
             f"done-without-closure row(s) (e.g. {unverdicted[0]}) — "
-            "watching for growth"), obs
-    if unverdicted and prior_count is not None and len(unverdicted) > prior_count:
+            "watching for new ids"), obs
+    new_ids = [i for i in unverdicted if i not in known_ids]
+    obs["new_ids"] = new_ids
+    # Hold the alarm while growth is recent instead of flipping back to OK
+    # the cycle after an accretion is acknowledged — otherwise an ongoing
+    # breakage narrates SILENT/RECOVERED ping-pong. RECOVERED here means
+    # "no new unverdicted runs for STREAK_FOR_SILENT cycles".
+    recent_growth = any(
+        h.get("new_ids") for h in prior_hist[-(STREAK_FOR_SILENT - 1):])
+    if new_ids:
         return SILENT, (
-            f"{len(unverdicted)}/{len(done_rows)} recent done runs carry no "
-            f"closure verdict in the outcomes store (e.g. {unverdicted[0]}) "
-            "— done-without-closure is accreting"), obs
+            f"{len(new_ids)} new done run(s) with no closure verdict in "
+            f"the outcomes store (e.g. {new_ids[0]}) — done-without-closure "
+            "is accreting"), obs
+    if recent_growth:
+        return SILENT, (
+            f"done-without-closure accreted within the last "
+            f"{STREAK_FOR_SILENT} probe cycles — holding until quiet"), obs
     if unverdicted:
         return OK, (
             f"{len(unverdicted)} known done-without-closure row(s), "
-            "not growing"), obs
+            f"no new ids in {STREAK_FOR_SILENT} cycles"), obs
     return OK, f"{len(done_rows)}/{len(done_rows)} recent done runs verdicted", obs
 
 
@@ -424,60 +488,76 @@ def run_health_probes(*, verbose: bool = False) -> Dict[str, Any]:
             summary["skipped"] = "health.probes_enabled is off"
             return summary
 
-        snapshot = load_snapshot()
-        processes = snapshot.get("processes")
-        if not isinstance(processes, dict):
-            processes = {}
-            snapshot["processes"] = processes
+        # The whole cycle is one read-modify-write of the snapshot; hold
+        # its lock throughout so concurrent finalizers serialize instead
+        # of both reading narrated=None and double-narrating / last-writer-
+        # winning the history (atomic_write alone does not lock). Probes
+        # only READ other stores, so no lock-ordering cycle is possible.
+        from file_lock import locked_write
+        pending_narrations: List[Tuple[ProcessDeclaration, str, str]] = []
+        with locked_write(_snapshot_path()):
+            snapshot = load_snapshot()
+            processes = snapshot.get("processes")
+            if not isinstance(processes, dict):
+                processes = {}
+                snapshot["processes"] = processes
 
-        for decl in DECLARED_PROCESSES:
-            prior = processes.get(decl.name)
-            prior = prior if isinstance(prior, dict) else {}
-            try:
-                status, evidence, obs = decl.probe(prior)
-            except Exception as exc:
-                status, evidence, obs = (
-                    UNKNOWN, f"probe failed: {str(exc)[:120]}", {})
-            summary["ran"] += 1
-            if status == SILENT:
-                summary["silent"].append(decl.name)
+            for decl in DECLARED_PROCESSES:
+                prior = processes.get(decl.name)
+                prior = prior if isinstance(prior, dict) else {}
+                try:
+                    status, evidence, obs = decl.probe(prior)
+                except Exception as exc:
+                    status, evidence, obs = (
+                        UNKNOWN, f"probe failed: {str(exc)[:120]}", {})
+                summary["ran"] += 1
+                if status == SILENT:
+                    summary["silent"].append(decl.name)
 
-            prev_status = prior.get("status")
-            now = datetime.now(timezone.utc).isoformat()
-            entry = dict(prior)  # unknown keys survive (data retention)
-            history = _history_of(prior)
-            if obs:
-                obs = {**obs, "at": now}
-                history = (history + [obs])[-HISTORY_KEEP:]
-            entry.update({
-                "status": status,
-                "evidence": evidence,
-                "description": decl.description,
-                "expectation": decl.expectation,
-                "history": history,
-                "checked_at": now,
-            })
+                prev_status = prior.get("status")
+                now = datetime.now(timezone.utc).isoformat()
+                entry = dict(prior)  # unknown keys survive (data retention)
+                history = _history_of(prior)
+                if obs:
+                    obs = {**obs, "at": now}
+                    history = (history + [obs])[-HISTORY_KEEP:]
+                entry.update({
+                    "status": status,
+                    "evidence": evidence,
+                    "description": decl.description,
+                    "expectation": decl.expectation,
+                    "history": history,
+                    "checked_at": now,
+                })
 
-            # Edge-trigger on what the user was last told, not on raw
-            # status pairs: streak probes arrive at SILENT via UNKNOWN,
-            # and a probe that breaks (SILENT→UNKNOWN→OK) must still
-            # narrate the recovery.
-            narrated = prior.get("narrated")
-            went_silent = status == SILENT and narrated != "silent"
-            recovered = status == OK and narrated == "silent"
-            if went_silent or recovered:
-                entry["last_transition"] = {
-                    "from": prev_status, "to": status, "at": now}
-                entry["narrated"] = "silent" if went_silent else "ok"
-                summary["transitions"] += 1
-                _narrate_transition(decl, status, evidence)
-            processes[decl.name] = entry
-            if verbose:
-                print(f"[health] {decl.name}: {status} — {evidence}")
+                # Edge-trigger on what the user was last told, not on raw
+                # status pairs: streak probes arrive at SILENT via UNKNOWN,
+                # and a probe that breaks (SILENT→UNKNOWN→OK) must still
+                # narrate the recovery.
+                narrated = prior.get("narrated")
+                went_silent = status == SILENT and narrated != "silent"
+                recovered = status == OK and narrated == "silent"
+                if went_silent or recovered:
+                    entry["last_transition"] = {
+                        "from": prev_status, "to": status, "at": now}
+                    entry["narrated"] = "silent" if went_silent else "ok"
+                    pending_narrations.append((decl, status, evidence))
+                processes[decl.name] = entry
+                if verbose:
+                    print(f"[health] {decl.name}: {status} — {evidence}")
 
-        snapshot["updated_at"] = datetime.now(timezone.utc).isoformat()
-        snapshot["cycle"] = int(snapshot.get("cycle", 0) or 0) + 1
-        _write_snapshot(snapshot)
+            snapshot["updated_at"] = datetime.now(timezone.utc).isoformat()
+            snapshot["cycle"] = int(snapshot.get("cycle", 0) or 0) + 1
+            _write_snapshot(snapshot)
+
+        # Narrate only after the snapshot recording narrated= persisted:
+        # a failed write must not leave the log claiming the user was told
+        # while the state machine forgot (it would re-narrate forever).
+        # The reverse trade — write succeeds, log append fails, the line
+        # is lost — is accepted: the snapshot still shows SILENT.
+        summary["transitions"] = len(pending_narrations)
+        for decl, status, evidence in pending_narrations:
+            _narrate_transition(decl, status, evidence)
     except Exception as exc:
         logger.debug("health probe cycle failed (non-fatal): %s", exc)
         summary["error"] = str(exc)[:200]
@@ -486,21 +566,27 @@ def run_health_probes(*, verbose: bool = False) -> Dict[str, Any]:
 
 def _narrate_transition(decl: ProcessDeclaration, status: str, evidence: str) -> None:
     try:
-        from captains_log import log_event, SUBSYSTEM_SILENT, SUBSYSTEM_RECOVERED
-        if status == SILENT:
-            log_event(
-                SUBSYSTEM_SILENT,
-                subject=decl.name,
-                summary=(f"{decl.description} went silent: {evidence}"),
-                context={"expectation": decl.expectation, "evidence": evidence},
-            )
-        else:
-            log_event(
-                SUBSYSTEM_RECOVERED,
-                subject=decl.name,
-                summary=(f"{decl.description} recovered: {evidence}"),
-                context={"expectation": decl.expectation, "evidence": evidence},
-            )
+        from captains_log import (
+            log_event, loop_id_scope, SUBSYSTEM_SILENT, SUBSYSTEM_RECOVERED)
+        # Health transitions are global process state, not evidence produced
+        # by the run whose finalization happened to host the probe cycle —
+        # shed the ambient loop_id_scope so run reports don't claim them
+        # as attributed run events.
+        with loop_id_scope(None):
+            if status == SILENT:
+                log_event(
+                    SUBSYSTEM_SILENT,
+                    subject=decl.name,
+                    summary=(f"{decl.description} went silent: {evidence}"),
+                    context={"expectation": decl.expectation, "evidence": evidence},
+                )
+            else:
+                log_event(
+                    SUBSYSTEM_RECOVERED,
+                    subject=decl.name,
+                    summary=(f"{decl.description} recovered: {evidence}"),
+                    context={"expectation": decl.expectation, "evidence": evidence},
+                )
     except Exception:
         pass
 

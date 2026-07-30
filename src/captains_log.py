@@ -626,9 +626,11 @@ def load_log(
 
             entries.append(entry)
 
-    # Most recent first, limited
+    # Most recent first, limited (0 = unlimited, matching query_log /
+    # event_slice — before 2026-07-30 limit=0 returned nothing here, which
+    # broke the CLI's documented `--limit 0`)
     entries.reverse()
-    return entries[:limit]
+    return entries[:limit] if limit > 0 else entries
 
 
 def render_entry(entry: Dict[str, Any]) -> str:
@@ -881,6 +883,7 @@ def event_slice(
     limit: int = 20,
     sort_by: str = "timestamp",
     order: str = "desc",
+    audience: str = "all",
 ) -> List[Dict[str, Any]]:
     """Return a sortable, bounded per-event timeline across active + archives.
 
@@ -905,6 +908,10 @@ def event_slice(
         subject=subject,
         limit=0,
     )
+    if audience in ("user", "system"):
+        # Lane filter before sort/limit so `--audience user --limit N`
+        # means the newest N user-lane events, not a post-hoc subset.
+        entries = [e for e in entries if event_audience(e) == audience]
 
     pairs = [
         ({
@@ -1120,6 +1127,9 @@ def main() -> None:
         parser.error("--git is not available with --events; use normal query mode")
     if args.events and args.timeline:
         parser.error("--events and --timeline are mutually exclusive")
+    if args.timeline and args.audience != "all":
+        parser.error("--audience is not available with --timeline "
+                     "(aggregate counts are not lane-filtered)")
 
     if args.events:
         rows = event_slice(
@@ -1131,6 +1141,7 @@ def main() -> None:
             limit=args.limit,
             sort_by=args.sort or "timestamp",
             order=args.order or "desc",
+            audience=args.audience,
         )
         if not rows:
             print("No events found.")
@@ -1153,6 +1164,14 @@ def main() -> None:
             print(f"{bucket['date']}  {bucket['total']:>5} events  [{top_types}]")
         return
 
+    # The audience filter runs post-fetch: fetch wide so `--audience user
+    # --limit N` means "newest N user-lane events", not "user-lane events
+    # among the newest N of everything" (which is usually empty — system-
+    # lane events dominate the tail). limit 0 stays unlimited.
+    fetch_limit = args.limit
+    if args.audience != "all" and args.limit:
+        fetch_limit = max(args.limit, 5000)
+
     # Query mode (full-text search)
     if args.query or args.until:
         entries = query_log(
@@ -1161,18 +1180,20 @@ def main() -> None:
             until=args.until,
             event_type=args.event_type,
             subject=args.subject,
-            limit=args.limit,
+            limit=fetch_limit,
         )
     else:
         entries = load_log(
             since=args.since,
             event_type=args.event_type,
             subject=args.subject,
-            limit=args.limit,
+            limit=fetch_limit,
         )
 
     if args.audience != "all":
         entries = [e for e in entries if event_audience(e) == args.audience]
+        if args.limit:
+            entries = entries[:args.limit]
 
     if not entries:
         print("No log entries found.")

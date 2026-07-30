@@ -1067,3 +1067,57 @@ class TestAudienceLanes:
         assert SUBSYSTEM_RECOVERED in EVENT_TYPES
         assert SUBSYSTEM_SILENT in USER_SURFACED_EVENTS
         assert SUBSYSTEM_RECOVERED in USER_SURFACED_EVENTS
+
+    def test_cli_audience_limit_applies_after_filter(self, monkeypatch, capsys):
+        """`--audience user --limit N` must mean "newest N user-lane
+        events" — not "user-lane events among the newest N of everything",
+        which is usually empty because system-lane events dominate the
+        tail (found live 2026-07-30: --audience user --limit 3 returned
+        nothing on a 14K-row log)."""
+        for i in range(5):
+            log_event(LESSON_RECORDED, f"lesson-{i}", "system lane filler")
+        log_event(SKILL_PROMOTED, "the-user-event", "user lane")
+        for i in range(5):
+            log_event(LESSON_RECORDED, f"tail-{i}", "system lane tail")
+        monkeypatch.setattr(
+            sys, "argv", ["maro-log", "--audience", "user", "--limit", "3", "--json"])
+        from captains_log import main
+        main()
+        rows = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+        assert [r["subject"] for r in rows] == ["the-user-event"]
+
+    def test_cli_events_mode_honors_audience(self, monkeypatch, capsys):
+        """2026-07-30 review (all three lenses): --events accepted
+        --audience but returned before the filter — the doc promises
+        `maro-log --events --audience user` works."""
+        log_event(SKILL_PROMOTED, "user-evt", "user lane")
+        log_event(LESSON_RECORDED, "system-evt", "system lane")
+        monkeypatch.setattr(
+            sys, "argv",
+            ["maro-log", "--events", "--audience", "user", "--json"])
+        from captains_log import main
+        main()
+        rows = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+        assert [r["subject"] for r in rows] == ["user-evt"]
+
+    def test_cli_timeline_rejects_audience(self, monkeypatch):
+        monkeypatch.setattr(
+            sys, "argv", ["maro-log", "--timeline", "--audience", "user"])
+        from captains_log import main
+        with pytest.raises(SystemExit) as exc:
+            main()
+        assert exc.value.code == 2
+
+    def test_cli_audience_with_limit_zero_returns_all(self, monkeypatch, capsys):
+        """--limit 0 is documented unlimited; the audience slice must not
+        truncate it to nothing (2026-07-30 review, Minimalist)."""
+        for i in range(3):
+            log_event(SKILL_PROMOTED, f"user-{i}", "user lane")
+        log_event(LESSON_RECORDED, "sys-0", "system lane")
+        monkeypatch.setattr(
+            sys, "argv", ["maro-log", "--audience", "user", "--limit", "0", "--json"])
+        from captains_log import main
+        main()
+        rows = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+        assert len(rows) == 3
+        assert all(r["subject"].startswith("user-") for r in rows)
