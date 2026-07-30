@@ -489,8 +489,31 @@ inspectable before any behavior changes.
 - [ ] **Slice 2 — wire packaging behind a flag** (default OFF,
   no-silent-spend posture): persona spec gains a packaged-skills field
   fed from would_include rows; router fix landed 2026-07-29 — remaining
-  gate is a fatter verdicted denominator (156 unverdicted rows carry
-  no signal).
+  gate is a fatter verdicted denominator. UPDATE 2026-07-29 (census +
+  backfill): the denominator is now real — 30 FULL-trust runs
+  backfilled through the attribution seam, 21 skills carry injected
+  counters, top skills at 18–19 verdicted runs. Honest data moved the
+  picture: the former would_include trio sits at 0.67–0.68, BELOW the
+  0.70 include bar — packaging on legacy counters would have shipped
+  skills the run-verdict evidence doesn't support. Denominator grows
+  organically now that the seam fires live (index v2 fix).
+- [ ] **NOW + evolver_verify lanes are verdict-blind (census
+  2026-07-29)**: both record outcomes without loop_id (NOW: 20 rows;
+  evolver_verify: 5, still accruing), so stamp_outcome_verdict can
+  never land on them — they are permanent "unverdicted" rows. Decide
+  per lane whether a verdict is even meaningful (NOW one-shots are
+  conversational; evolver_verify arguably self-verdicts), THEN wire
+  loop_id stamping or an explicit exempt marker — an honest
+  denominator needs rows to be verdictable-or-exempt, not silently
+  neither.
+- [ ] **"done" runs occasionally skip closure silently (census
+  2026-07-29)**: 5 of 51 loop_id-era agenda rows are status=done with
+  no verdict in EITHER store (outcomes row and run metadata both
+  unjudged — closure never ran, not a stamp miss); 2 are from
+  2026-07-29 morning, so it's live, low-rate. Candidate tripwire: at
+  run finalization, a done run with no goal_verdict_source gets a
+  captain's-log honesty event so the gap is visible instead of
+  accreting quietly.
 - [x] Durable dispatch→outcome join SHIPPED 2026-07-29:
   `record_persona_dispatch` stamps handle_id (handle.py passes the run's
   id), readout joins handle_id-first with goal-prefix fallback for

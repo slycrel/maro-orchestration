@@ -20,6 +20,46 @@ Dev log tab at maro.feifdom.com alongside Runs and Reading.
 
 ## 2026-07-29
 
+**Unverdicted-rows census → run-index v2 fix → verdict-seam backfill**
+— thread: `measurement-honesty` (3 of 3 in Jeremy's approved order).
+The census question was "which lane skips verdicts?" The readout's 156
+was the dispatch-joined subset; the full store is 1,408/1,448
+unverdicted, in three distinct populations. (1) Historical: 1,397 rows
+have no loop_id at all — 1,272 from April plus everything before
+loop_id stamping shipped on 2026-07-10; unverdictable by construction,
+an era boundary not a bug. (2) Structural, live: the NOW lane (20
+rows) and evolver_verify (5 rows, one today) still record outcomes
+without loop_id, so a verdict can never land on them — needs a
+decide-then-wire pass, BACKLOG'd. (3) The live agenda lane since
+07-10 runs 40/51 verdicted (78%); misses are stuck/interrupted/restart
+runs (closure rides completion — the stop-path survey's "statuses fall
+to unknown" finding) plus 5 "done" rows where closure silently never
+judged, BACKLOG'd as a tripwire candidate. THE census side-find
+outranks the census: `resolve_run_dir(loop_id)` was dead for EVERY
+live run — the loops ledger stamps `loop_ids` (plural) + `loops`
+lineage, but the run-ref index only read the singular `loop_id` key
+that nothing writes anymore. Blast radius: the chunk-4 contradiction
+emitter and this morning's skill attribution both join by loop_id at
+the verdict seam and silently no-op'd on live data (0
+CONTRADICTION_CANDIDATE events ever fired) while their tests passed
+against a patched resolver. Fixed (run-ref-index v2, plural-aware
+refs, landed e6a2e70), then backfilled by replaying the shipped seam
+functions over all 30 FULL-trust verdicted rows: 30/30 attribution
+markers written, 21 skills now carry honest injected counters, and
+the first-ever live CONTRADICTION_CANDIDATE fired (a failed run that
+had been injected with 4 rules + 3 lessons — adjudication will pick
+it up at evolver cadence). The honest headline: the router's constant
+trio — Headless Branch Setup, Fixture-Based Behavior Verification,
+Incremental Feature Scoping — sits at 0.67–0.68 real success over
+18–19 verdicted runs, versus the legacy ~1.00; all three fall BELOW
+the 0.70 packaging include bar that their inflated counters sailed
+over. **Surprised by:** the very defect class thread 1 was built to
+catch (tests green, live path dead) applied to thread 1 itself — the
+resolver-patching test idiom every seam test inherits from chunk 4
+is exactly what let two shipped verdict-seam consumers go dead
+without a single failing test; a live-fire probe on real data found
+in minutes what the suite structurally cannot.
+
 **Lesson + node receipts un-starved — times_applied finally accrues on
 the live path** — thread: `measurement-honesty` (2 of 3 in Jeremy's
 approved order). The finding: 0 of 338 lessons had ever recorded a
