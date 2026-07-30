@@ -5285,3 +5285,11 @@ Dormant (deliberately parked, not dropped):
   Half-formed "something smells off about X" messages are explicitly
   actionable. Not piped to the runtime decision journal: this governs
   the dev relationship, not goal runs.
+- **2026-07-30** — Amendment to the above, same conversation (Jeremy):
+  "Silence isn't consent, but it's not disagreement either, it's
+  literally 'I trust your judgement.'" The prior entry's "playing out,
+  unconfirmed" reading was too dark — trust is the base rate of his
+  silence; watching-a-concern-mature is the exception, and he is "not
+  silently judging you for three weeks." First live catch for the
+  visible-reading practice: the engraved reading was corrected within
+  one turn of capture.
