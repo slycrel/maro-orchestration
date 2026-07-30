@@ -1375,6 +1375,43 @@ class TestInjectKnowledgeForGoal:
         assert "Test Isolation" in result
         assert "Relevant Knowledge" in result
 
+    def test_rendered_node_receipt_persists(self, tmp_path):
+        """Receipt write-back pin (2026-07-29): the old injection bump
+        mutated the deserialized copy and dropped it — 1/647 live nodes
+        ever accrued times_applied, and the query-scoring boost keyed on
+        it was dead. A rendered node's receipt must survive a reload;
+        unrendered nodes must not accrue; unknown row keys must survive
+        the rewrite (data retention)."""
+        import json as _json
+        kw.append_knowledge_node(KnowledgeNode(
+            node_id="rk1", node_type="principle", title="Socket Reuse",
+            description="reuse sockets across polling loops",
+            confidence=0.8,
+        ))
+        kw.append_knowledge_node(KnowledgeNode(
+            node_id="rk2", node_type="principle", title="Unrelated Node",
+            description="entirely different domain content: gardening",
+            confidence=0.8,
+        ))
+        # Simulate a future-schema row: extra key must survive the rewrite.
+        p = kw._knowledge_nodes_path()
+        rows = [_json.loads(l) for l in
+                p.read_text(encoding="utf-8").splitlines() if l.strip()]
+        rows[0]["future_key"] = "keep me"
+        p.write_text("\n".join(_json.dumps(r) for r in rows) + "\n",
+                     encoding="utf-8")
+
+        result = kw.inject_knowledge_for_goal(
+            "reuse sockets polling loops", max_nodes=1)
+        assert "Socket Reuse" in result
+
+        by_id = {n.node_id: n for n in kw.load_knowledge_nodes()}
+        assert by_id["rk1"].times_applied == 1
+        assert by_id["rk2"].times_applied == 0
+        raw = {_json.loads(l)["node_id"]: _json.loads(l) for l in
+               p.read_text(encoding="utf-8").splitlines() if l.strip()}
+        assert raw["rk1"]["future_key"] == "keep me"
+
 
 # ===========================================================================
 # memory_status

@@ -20,6 +20,39 @@ Dev log tab at maro.feifdom.com alongside Runs and Reading.
 
 ## 2026-07-29
 
+**Lesson + node receipts un-starved — times_applied finally accrues on
+the live path** — thread: `measurement-honesty` (2 of 3 in Jeremy's
+approved order). The finding: 0 of 338 lessons had ever recorded a
+times_applied receipt despite the writer existing AND the recall
+render literally promising "applied Nx" receipts per the certainty-
+receipt decree — every lesson rendered "(observed once)" forever. Root
+cause: the recall loop slice (THE live main-loop lesson surface since
+the chunk-6 rewire) built its own render and never called
+`knowledge_web._increment_times_applied`; the only surface that did
+call it (`inject_tiered_lessons`) has no live loop callers. Fixed in
+recall.py under the same law as citations: a lesson is "applied" ONLY
+if its line was actually rendered into the prompt (budget-dropped
+lessons accrue nothing — phantom receipts would be the same dishonesty
+as phantom citations). Flat-store rows carry no tier and honestly stay
+"observed once". Second dead write found in the same pass:
+`inject_knowledge_for_goal` bumped `node.times_applied` on the
+deserialized copy and dropped it (1/647 live nodes ever accrued; the
+query-scoring boost keyed on times_applied was dead by construction) —
+fixed with a locked raw-dict rewrite where unknown row keys survive
+(data retention). Both live-verified on this box: one real loop recall
+put receipts on medium+long tier rows and knowledge nodes, and the
+live runtime (running from this checkout) is accruing them on real
+runs already. Downstream now reachable for the first time: the
+canon-candidates pathway gates on times_applied >= 10, and lesson
+receipts render honestly from the next injection on. Pinned:
+rendered-lesson accrual + next-render receipt text, budget-dropped
+no-receipt, node receipt persistence + unrendered-node isolation +
+future-key survival. **Surprised by:** the render and the receipt
+writer were built by different eras and never introduced — the line
+format PROMISED the receipt ("applied Nx") while the code path made
+it unreachable; the promise shipped before the plumbing, and nothing
+could fail because zero is a rendering-valid receipt.
+
 **Skill-stats measurement honesty — run-verdict attribution shipped** —
 thread: `next-leap-packaging` / `measurement-honesty`. The disease
 under the router symptom: skill "success" has meant "a step completed

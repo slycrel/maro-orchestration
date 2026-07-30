@@ -1632,6 +1632,44 @@ def append_knowledge_edge(edge: KnowledgeEdge) -> None:
     locked_append(p, json.dumps(asdict(edge), sort_keys=True))
 
 
+def _bump_node_times_applied(node_ids: List[str]) -> None:
+    """Persist a times_applied increment for each rendered node.
+
+    The injection surface used to bump the deserialized copy only —
+    1/647 live nodes ever showed times_applied > 0, and the query-time
+    receipt boost (times_applied in _score) was dead by construction.
+    Operates on raw dicts so unknown keys survive the rewrite (the
+    dataclass filter is a READ convenience, never a write filter).
+    """
+    if not node_ids:
+        return
+    wanted = set(node_ids)
+    p = _knowledge_nodes_path()
+    from file_lock import atomic_write, locked_write
+    try:
+        with locked_write(p):
+            try:
+                lines = p.read_text(encoding="utf-8").splitlines()
+            except FileNotFoundError:
+                return
+            out: List[str] = []
+            for line in lines:
+                stripped = line.strip()
+                if stripped:
+                    try:
+                        d = json.loads(stripped)
+                        if isinstance(d, dict) and d.get("node_id") in wanted:
+                            d["times_applied"] = int(
+                                d.get("times_applied", 0) or 0) + 1
+                            line = json.dumps(d, sort_keys=True)
+                    except json.JSONDecodeError:
+                        pass
+                out.append(line)
+            atomic_write(p, "\n".join(out) + ("\n" if out else ""))
+    except OSError as exc:
+        log.warning("knowledge_node: times_applied bump failed: %s", exc)
+
+
 def load_knowledge_nodes(
     *,
     node_type: Optional[str] = None,
@@ -1775,6 +1813,7 @@ def inject_knowledge_for_goal(
 
     lines: List[str] = ["## Relevant Knowledge"]
     chars = 0
+    applied_ids: List[str] = []
     for node in nodes:
         entry = f"- [{node.node_type}] {node.title}: {node.description[:200]}"
         if node.sources:
@@ -1783,10 +1822,15 @@ def inject_knowledge_for_goal(
             break
         lines.append(entry)
         chars += len(entry)
-        # Track application
-        node.times_applied += 1
+        applied_ids.append(node.node_id)
 
-    return "\n".join(lines) if len(lines) > 1 else ""
+    if len(lines) <= 1:
+        return ""
+    # Track application — persisted (2026-07-29): the old in-place bump
+    # mutated the deserialized copy and dropped it, so the receipt (and
+    # the times_applied boost in query scoring) never accrued.
+    _bump_node_times_applied(applied_ids)
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------

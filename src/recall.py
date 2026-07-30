@@ -632,6 +632,7 @@ def recall(
         lessons_cited: List[str] = []
         lesson_ids_cited: List[str] = []
         rules_cited: List[str] = []
+        _applied_pairs: List[tuple] = []  # (lesson_id, tier) — rendered only
         try:
             from memory import load_lessons, _MAX_LESSON_INJECT_CHARS
             from knowledge_web import query_lessons
@@ -718,11 +719,30 @@ def recall(
                     _lid = getattr(_l, "lesson_id", "") or ""
                     if _lid:
                         lesson_ids_cited.append(_lid)
+                        _tier = getattr(_l, "tier", "") or ""
+                        if _tier:
+                            _applied_pairs.append((_lid, _tier))
                 if len(_lines) > 1:
                     result.lessons = "\n".join(_lines)
                     if _age_stamped_any:
                         # Rides into RECALL_PERFORMED via **sources below.
                         sources["age_stamped"] = True
+                    # Receipt write-back (2026-07-29): this render is THE
+                    # live main-loop lesson surface, and it bypassed the
+                    # times_applied writer — every "applied Nx" receipt the
+                    # lines above promise rendered as "(observed once)"
+                    # forever (0/338 live rows had times_applied > 0).
+                    # Same law as citations: a lesson is "applied" ONLY if
+                    # its line was actually rendered. Flat-store rows carry
+                    # no tier and genuinely ARE one observation — skipped
+                    # by construction above.
+                    if _applied_pairs:
+                        try:
+                            from knowledge_web import _increment_times_applied
+                            _increment_times_applied(
+                                _applied_pairs, task_type="agenda")
+                        except Exception:
+                            pass
         except Exception:
             try:
                 from memory import inject_lessons_for_task

@@ -462,6 +462,57 @@ class TestLoopSlice:
         assert r.lessons.count("prefer rsync over scp") == 1
         assert "legacy flat-only lesson" in r.lessons
 
+    def test_rendered_lesson_gets_times_applied_receipt(
+            self, monkeypatch, tmp_path):
+        """Receipt write-back pin (2026-07-29): the loop slice is THE live
+        lesson surface and it bypassed the times_applied writer — all 338
+        live rows sat at 0 while the render promised "applied Nx" receipts.
+        A rendered tiered lesson must accrue times_applied, and the accrued
+        count must surface in the NEXT render's receipt."""
+        _setup(monkeypatch, tmp_path)
+        import memory
+        from knowledge_web import record_tiered_lesson, load_tiered_lessons
+
+        tl = record_tiered_lesson(
+            "receipts accrue on the live loop path",
+            task_type="agenda", outcome="done", source_goal="g1")
+        monkeypatch.setattr(memory, "load_lessons", lambda **kw: [])
+
+        r1 = recall("receipts on the live loop path", slice="loop")
+        assert "receipts accrue" in r1.lessons
+
+        rows = [l for l in load_tiered_lessons(tier=tl.tier, min_score=0.0)
+                if l.lesson_id == tl.lesson_id]
+        assert rows and rows[0].times_applied == 1
+
+        r2 = recall("receipts on the live loop path", slice="loop")
+        assert "applied 1x" in r2.lessons
+        rows = [l for l in load_tiered_lessons(tier=tl.tier, min_score=0.0)
+                if l.lesson_id == tl.lesson_id]
+        assert rows[0].times_applied == 2
+
+    def test_unrendered_lesson_gets_no_receipt(self, monkeypatch, tmp_path):
+        """Same law as citations: applied = rendered. A lesson whose line
+        falls outside the injection budget must NOT accrue times_applied
+        (the pre-fix failure mode in reverse — phantom receipts would be
+        the same dishonesty as phantom citations)."""
+        _setup(monkeypatch, tmp_path)
+        import memory
+        from knowledge_web import record_tiered_lesson, load_tiered_lessons
+
+        tl = record_tiered_lesson(
+            "budget-dropped lesson about network retries",
+            task_type="agenda", outcome="done", source_goal="g1")
+        monkeypatch.setattr(memory, "load_lessons", lambda **kw: [])
+        # Budget fits the header only — every lesson line is dropped.
+        monkeypatch.setattr(memory, "_MAX_LESSON_INJECT_CHARS", 60)
+
+        r = recall("network retries", slice="loop")
+        assert "budget-dropped lesson" not in (r.lessons or "")
+        rows = [l for l in load_tiered_lessons(tier=tl.tier, min_score=0.0)
+                if l.lesson_id == tl.lesson_id]
+        assert rows and rows[0].times_applied == 0
+
     def test_agenda_match_does_not_mask_other_type_tiered_lessons(
             self, monkeypatch, tmp_path):
         """Chunk-6 review pin: the untyped tiered query is a TOP-UP, not an
