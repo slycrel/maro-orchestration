@@ -49,6 +49,28 @@ def _image_available() -> bool:
     return ok
 
 
+def _built_executor_tags() -> "list[str]":
+    """Every locally-built `maro-executor:*` tag, newest-agnostic, sorted.
+
+    Returns [] when docker can't be asked — callers treat that as "nothing
+    built" rather than guessing.
+    """
+    try:
+        out = subprocess.run(
+            ["docker", "images", "--format", "{{.Repository}}:{{.Tag}}",
+             ce.DEFAULT_IMAGE.split(":")[0]],
+            capture_output=True, text=True, timeout=10,
+        )
+    except Exception:
+        return []
+    return sorted(t for t in out.stdout.split() if t and t != "<none>:<none>")
+
+
+def _stale_executor_tags() -> "list[str]":
+    """Built executor tags that are NOT the current CLAUDE_CLI_VERSION pin."""
+    return [t for t in _built_executor_tags() if t != ce.DEFAULT_IMAGE]
+
+
 def _image_skip_reason() -> str:
     """Why the image tier is skipping — distinguishing 'never built' from
     'built, but at a stale pin'.
@@ -57,22 +79,12 @@ def _image_skip_reason() -> str:
     this tier into skips until someone rebuilds. A flat "not built" sends
     the operator looking for the wrong problem (it hid a 2.1.207-vs-2.1.210
     drift on the dev Mac); naming the stale tags they DO have makes the one
-    required action obvious.
+    required action obvious. The stale case is ALSO a hard failure — see
+    test_built_image_is_not_stale_against_the_pin.
     """
-    import subprocess
-    stale = ""
-    try:
-        out = subprocess.run(
-            ["docker", "images", "--format", "{{.Repository}}:{{.Tag}}",
-             ce.DEFAULT_IMAGE.split(":")[0]],
-            capture_output=True, text=True, timeout=10,
-        )
-        found = [t for t in out.stdout.split() if t != ce.DEFAULT_IMAGE]
-        if found:
-            stale = f" (stale tags present: {', '.join(sorted(found))})"
-    except Exception:
-        pass
-    return (f"executor image {ce.DEFAULT_IMAGE} not built{stale} — "
+    stale = _stale_executor_tags()
+    suffix = f" (stale tags present: {', '.join(stale)})" if stale else ""
+    return (f"executor image {ce.DEFAULT_IMAGE} not built{suffix} — "
             f"run `maro-bootstrap container-setup`")
 
 
@@ -80,6 +92,35 @@ pytestmark = pytest.mark.skipif(
     not _docker_available(),
     reason="real docker daemon not reachable — this tier is box-only, never CI",
 )
+
+def test_built_image_is_not_stale_against_the_pin():
+    """A built-but-stale executor image is a FAILURE, not a skip.
+
+    The image tag is derived from CLAUDE_CLI_VERSION, so bumping the pin
+    without rebuilding silently converts the whole TestExecutorImage tier
+    into skips — a green run that quietly stopped checking the image. That
+    is exactly what happened on the dev Mac (pin moved to 2.1.210, image
+    still 2.1.207) and it survived because a skip reads as "fine here".
+
+    The three states are deliberately NOT treated alike:
+      - no executor image at all -> skip. The container executor is opt-in
+        (`executor.container: off` by default); never having built it is a
+        legitimate configuration, not a defect.
+      - image present at the pin -> pass.
+      - images present but NONE at the pin -> fail. Someone built this
+        before and the pin moved out from under it; the setup is stale and
+        the tier it gates is silently not running.
+    """
+    built = _built_executor_tags()
+    if not built:
+        pytest.skip("executor image never built — container executor is opt-in")
+    assert ce.DEFAULT_IMAGE in built, (
+        f"executor image is STALE: pin is CLAUDE_CLI_VERSION={ce.CLAUDE_CLI_VERSION} "
+        f"(wants {ce.DEFAULT_IMAGE}) but the only built tags are "
+        f"{', '.join(built)}.\nThe image tier is skipping instead of testing. "
+        f"Rebuild with:\n\n{ce.build_command()}\n"
+    )
+
 
 _ALPINE = "alpine:latest"
 # Unique per test-process run so parallel/other runs never collide or clobber.
