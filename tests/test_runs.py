@@ -597,6 +597,53 @@ def test_resolve_run_dir_by_handle_and_loop_id(workspace):
     assert resolve_run_dir("") is None
 
 
+def test_resolve_run_dir_by_plural_loops_ledger_keys(workspace):
+    """Run-ref-index v2 pin (2026-07-29): the loops-ledger era stamps
+    metadata.loop_ids (plural, handle.py) and the metadata.loops lineage
+    ledger — the singular loop_id key stopped being written, and v1's
+    ref extraction read ONLY the singular key. Every live run was
+    unreachable by loop_id, which silently no-op'd every loop_id-keyed
+    consumer at the verdict seam (contradiction candidates, skill
+    attribution) — 0 CONTRADICTION_CANDIDATE events ever fired live
+    while the pinned tests passed against a patched resolver."""
+    from runs import (open_run, resolve_run_dir, stamp_run_metadata,
+                      stamp_run_loop_lineage, set_current_run_dir)
+    try:
+        rd = open_run("pluralcase", prompt="g", lane="agenda")
+        # As handle.py stamps at run close: plural list, no singular key.
+        stamp_run_metadata({"loop_ids": ["loopFIRST", "loopRESTART"]})
+        # As the lineage ledger stamps per loop.
+        stamp_run_loop_lineage({
+            "loop_id": "loopLINEAGE", "loop_reason": "closure_restart",
+            "parent_loop_id": "loopFIRST", "continuation_depth": 1,
+        })
+    finally:
+        set_current_run_dir(None)
+    assert resolve_run_dir("loopFIRST") == rd
+    assert resolve_run_dir("loopRESTART") == rd
+    assert resolve_run_dir("loopLINEAGE") == rd
+
+
+def test_plural_loop_lookup_never_scans_metadata(workspace, monkeypatch):
+    """Plural refs must be published at stamp time (index_run_dir), not
+    recovered by the one-time migration scan — new runs land after the
+    marker exists."""
+    import runs as runs_mod
+    from runs import (open_run, resolve_run_dir, stamp_run_metadata,
+                      set_current_run_dir)
+    try:
+        rd = open_run("pluralindexed", prompt="g")
+        stamp_run_metadata({"loop_ids": ["loopPLURAL"]})
+    finally:
+        set_current_run_dir(None)
+
+    def no_scan(root):
+        raise AssertionError("indexed lookup scanned legacy metadata")
+
+    monkeypatch.setattr(runs_mod, "_scan_legacy_run_dirs", no_scan)
+    assert resolve_run_dir("loopPLURAL") == rd
+
+
 def test_resolve_run_dir_by_pre_resume_loop_id(workspace):
     """A resumed run overwrites metadata.loop_id with the new attempt's id
     (see cli._cmd_resume) — the crash-time loop_id the operator actually has

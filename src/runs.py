@@ -82,7 +82,14 @@ def run_dir(handle_id: str) -> Path:
     return runs_root() / f"{handle_id}-{nickname(handle_id)}"
 
 
-_RUN_INDEX_DIR = ".run-ref-index-v1"
+# v2 (2026-07-29): refs include the plural loops-ledger keys (loop_ids +
+# loops[].loop_id). The loops ledger stopped stamping the singular
+# metadata.loop_id, so every v1-indexed run was unreachable by loop_id —
+# which silently no-op'd every loop_id-keyed consumer at the verdict seam
+# (contradiction candidates, skill attribution). The version bump forces
+# one full re-migration on first miss; the v1 dir is an orphaned cache,
+# left in place.
+_RUN_INDEX_DIR = ".run-ref-index-v2"
 _RUN_INDEX_MARKER = ".migrated"
 
 
@@ -98,6 +105,18 @@ def _index_entry_path(ref: str, root: Optional[Path] = None) -> Path:
 
 def _metadata_refs(meta: dict) -> set:
     refs = {str(meta.get("handle_id") or ""), str(meta.get("loop_id") or "")}
+    # Loops-ledger keys: a run dir hosts several loops (initial + closure
+    # restarts/continuations), recorded as metadata.loop_ids (handle.py)
+    # and the metadata.loops lineage ledger. Each loop id must be a durable
+    # index key — the outcomes store and the verdict seam join by loop_id.
+    loop_ids = meta.get("loop_ids")
+    if isinstance(loop_ids, list):
+        refs.update(str(lid or "") for lid in loop_ids)
+    loops = meta.get("loops")
+    if isinstance(loops, list):
+        refs.update(
+            str(e.get("loop_id") or "")
+            for e in loops if isinstance(e, dict))
     origin = meta.get("origin") if isinstance(meta.get("origin"), dict) else {}
     refs.add(str(origin.get("resumed_from") or ""))
     return {ref for ref in refs if ref}

@@ -150,9 +150,10 @@ def find_pending_audits(
         candidate = _candidate(run_dir, loop_ref=handle_ref) if run_dir is not None else None
         if candidate is not None:
             return [candidate]
-        # ``loop_ids`` is not a durable run-index key, so loop references need
-        # a scan. Manual targeting searches all runs rather than reporting a
-        # false success for an older record.
+        # ``loop_ids`` became a durable run-index key in run-ref-index v2
+        # (2026-07-29); the scan below stays as the safety net for runs that
+        # crashed before their loop was stamped. Manual targeting searches
+        # all runs rather than reporting a false success for an older record.
         root = runs_root()
         if not root.is_dir():
             return []
