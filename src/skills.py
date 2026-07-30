@@ -223,14 +223,12 @@ def save_skill(skill: Skill) -> None:
         )
 
 
-def increment_use(skill_id: str) -> None:
-    """Increment use_count for a skill by id."""
-    skills = load_skills()
-    for skill in skills:
-        if skill.id == skill_id:
-            skill.use_count += 1
-            save_skill(skill)
-            return
+# NOTE: increment_use (the only Skill.use_count writer) was removed
+# 2026-07-29 — it never had a caller, so use_count sat at 0 for 312/314
+# live skills and silently starved the frontier gate (and the whole A/B
+# variant subsystem behind it). frontier_skills now gates on the honest
+# SkillStats.injected_runs counters instead. The use_count field stays on
+# the dataclass for serialization/display compat; treat it as legacy-frozen.
 
 
 # ---------------------------------------------------------------------------
@@ -1407,32 +1405,43 @@ FRONTIER_HIGH = 0.70  # above this → healthy skill (leave alone)
 
 
 def frontier_skills(skills: Optional[List["Skill"]] = None, *, min_uses: int = 3) -> List["Skill"]:
-    """Return skills in the 'frontier zone' (Agent0 steal: target 40–70% utility_score).
+    """Return skills in the 'frontier zone' (Agent0 steal: target 40–70% success).
 
     The frontier zone is the sweet spot: skills that are consistently challenging
     but not broken — analogous to Agent0's R_unc reward targeting tasks near 50%
     solve-rate. The evolver should prioritise rewriting these skills over either
     very low performers (already in circuit-open state) or top performers (working well).
 
+    Evidence basis is the run-verdict injected counters
+    (SkillStats.injected_runs / injected_success_rate): skills that actually
+    entered a prompt, labeled by FULL-trust goal verdicts. The original gate
+    read Skill.use_count, whose only writer never had a caller — the gate
+    returned [] on live data forever, which silently starved the entire A/B
+    variant subsystem downstream (0 variants ever created in 314 skills,
+    found 2026-07-29). Legacy use_count is deliberately NOT a fallback:
+    no honest evidence, no rewrite candidacy.
+
     Args:
         skills:    Skill list (loaded from disk if None).
-        min_uses:  Minimum use_count to have reliable utility_score data.
+        min_uses:  Minimum injected_runs (verdicted injections) for reliable data.
 
     Returns:
-        Skills with FRONTIER_LOW <= utility_score <= FRONTIER_HIGH,
-        sorted ascending by utility_score (hardest first).
+        Skills with FRONTIER_LOW <= injected_success_rate <= FRONTIER_HIGH,
+        sorted ascending by injected_success_rate (hardest first).
     """
     if skills is None:
         skills = load_skills()
-    frontier = [
-        s for s in skills
-        if (
-            s.use_count >= min_uses
-            and s.circuit_state != "open"  # open-circuit handled by skills_needing_rewrite
-            and FRONTIER_LOW <= s.utility_score <= FRONTIER_HIGH
-        )
-    ]
-    return sorted(frontier, key=lambda s: s.utility_score)
+    stats_by_id = {st.skill_id: st for st in get_all_skill_stats()}
+    frontier = []
+    for s in skills:
+        st = stats_by_id.get(s.id)
+        if st is None or st.injected_runs < min_uses:
+            continue
+        if s.circuit_state == "open":  # open-circuit handled by skills_needing_rewrite
+            continue
+        if FRONTIER_LOW <= st.injected_success_rate <= FRONTIER_HIGH:
+            frontier.append(s)
+    return sorted(frontier, key=lambda s: stats_by_id[s.id].injected_success_rate)
 
 
 # ---------------------------------------------------------------------------

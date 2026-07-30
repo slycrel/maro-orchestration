@@ -590,20 +590,6 @@ def conduct(
                 introspection_access=_introspects,
             )
 
-            # Phase 31: record persona outcome for feedback loop
-            if _persona_name_selected:
-                try:
-                    from persona import record_persona_outcome
-                    record_persona_outcome(
-                        persona_name=_persona_name_selected,
-                        goal=message,
-                        status=loop_result.status,
-                        confidence=_persona_conf_selected,
-                        loop_id=loop_result.loop_id,
-                    )
-                except Exception:
-                    pass
-
             done_steps = sum(1 for s in loop_result.steps if s.status == "done")
             summary = (
                 "Task completed.\n"

@@ -809,46 +809,14 @@ def persona_to_dict(spec: PersonaSpec) -> Dict[str, Any]:
     return d
 
 
-# ---------------------------------------------------------------------------
-# Phase 31: Persona feedback loop
-# ---------------------------------------------------------------------------
-
-def record_persona_outcome(
-    persona_name: str,
-    goal: str,
-    status: str,  # "done" | "stuck" | "unknown"
-    *,
-    confidence: float = 0.0,
-    loop_id: str = "",
-) -> bool:
-    """Record the outcome of a persona-routed loop to persona-outcomes.jsonl.
-
-    Used by the evolver to correlate persona selection quality with success.
-    Never raises — returns True if write succeeded, False otherwise.
-    """
-    from datetime import datetime, timezone
-
-    try:
-        import orch
-        out_path = orch.memory_dir() / "persona-outcomes.jsonl"
-    except Exception:
-        return False
-
-    entry = {
-        "persona": persona_name,
-        "goal": goal[:120],
-        "status": status,
-        "confidence": round(confidence, 3),
-        "loop_id": loop_id,
-        "recorded_at": datetime.now(timezone.utc).isoformat(),
-    }
-    try:
-        from file_lock import locked_append
-        locked_append(out_path, json.dumps(entry))
-        return True
-    except Exception:
-        return False
-
+# NOTE: record_persona_outcome (Phase 31) was removed 2026-07-29. Its store
+# (persona-outcomes.jsonl) had been dead since 2026-04-04 — the sole call
+# site sat on the unexercised conductor path, and 0/40 rows ever joined an
+# outcome by loop_id. Persona→outcome evidence now rides the durable
+# handle_id join in packaging_readout. The jsonl file stays on disk as
+# historical data (data-retention rule); if persona-outcome tracking is
+# rebuilt, do it at the verdict seam (stamp_outcome_verdict) like the
+# skill-injection counters, not on a routing path.
 
 
 # ---------------------------------------------------------------------------

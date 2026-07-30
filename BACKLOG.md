@@ -486,6 +486,10 @@ inspectable before any behavior changes.
   promotion/variant scoring reads Skill.success_rate/utility (same
   provenance). Rule: a consumer migrates when injected_runs gives it a
   real denominator — don't starve breakers on day-one sparse data.
+  FIRST CONSUMER MIGRATED 2026-07-29: the frontier gate
+  (`frontier_skills`) now reads injected_runs/injected_success_rate —
+  see the A/B-variant entry below. (e) partially done (variant
+  candidacy); promotion scoring still legacy.
 - [ ] **Slice 2 — wire packaging behind a flag** (default OFF,
   no-silent-spend posture): persona spec gains a packaged-skills field
   fed from would_include rows; router fix landed 2026-07-29 — remaining
@@ -520,6 +524,64 @@ inspectable before any behavior changes.
   legacy rows, coverage line reports the durable-join hit rate (0 at
   ship — accrues as new dispatches land). Pinned both sides + an
   end-to-end divergent-goal-text case where only the durable key joins.
+- [x] **A/B variant subsystem un-starved SHIPPED 2026-07-29** (arena
+  sweep headline): the whole Agent0 variant lifecycle (frontier rewrite
+  → create_skill_variant → 50/50 routing → record_variant_outcome →
+  retire_losing_variants) was wired end-to-end on live paths with green
+  tests and had NEVER executed — `frontier_skills` gated on
+  `use_count >= 3`, and `increment_use` (the only use_count writer) had
+  zero callers since birth (2/314 nonzero live, both leaked test
+  fixtures). Fix: frontier gate reads
+  SkillStats.injected_runs/injected_success_rate (honest verdicted
+  evidence; first legacy-rate consumer migrated), `increment_use`
+  removed (use_count legacy-frozen on the dataclass), pin test:
+  legacy use_count confers no candidacy. Live effect: the router's
+  former constant trio (0.67–0.68 over 18–19 verdicted runs) lands in
+  the 0.4–0.7 frontier band — the first organic A/B variants will
+  target exactly the most-used below-bar skills.
+- [x] **persona-outcomes.jsonl retired 2026-07-29**: writer removed
+  (`record_persona_outcome` + conductor call site — sole caller sat on
+  the unexercised conductor path; store dead since 2026-04-04, 0/40
+  loop_id join). Superseded by the durable handle_id dispatch join.
+  File kept on disk as historical data (data-retention rule). If
+  persona-outcome tracking is ever rebuilt, do it at the verdict seam
+  like the skill-injection counters.
+
+### Subsystem liveness / self-health monitoring (Jeremy decree 2026-07-29 — "probably load bearing in the future, nice to have for now")
+
+Jeremy, on the arena-sweep finds: "this is why grafana and ops
+monitoring is a thing… we need a way to ensure the system itself is
+active and working, especially if we're going to allow it to modify
+itself (and eventual code/mod/organic support)." Explicitly NOT
+wall-of-monitors ops dashboards — system self-health. He notes he
+wanted this at a basic IT level early on and it didn't land, "most
+likely because it was an answer without any questions."
+
+The questions now exist. One week of live-fire probing found four
+dynamic processes that were wired, green-tested, and silently inert:
+the contradiction emitter (dead loop_id→run-dir join, 0 events ever),
+the A/B variant subsystem (use_count write-orphan starved the frontier
+gate, 0 variants ever), persona-outcomes (writer on a dead path since
+April), and times_applied receipts (bumped in-memory copies, never
+persisted). Common shape: **writers that fire, consumers that don't,
+joins that silently miss** — the failure class tests structurally
+cannot catch (suites patch the joins; production data never crosses
+them).
+
+Shape sketch (design-first, not committed): a liveness registry where
+each dynamic process declares its writer, consumer, join key, and
+freshness expectation ("variants: expect create events within N
+maintenance cycles of a non-empty frontier"), plus a periodic health
+readout comparing declared vs observed (store row growth, event
+counts, join hit rates, last-fired timestamps) that surfaces
+"wired-but-silent" as a first-class finding. Prior art in-repo: the
+chunk-8 stores/guards census (BACKLOG'd with the same
+registration-convention prerequisite), packaging_readout's live
+join-health lines (measured the persona-outcomes join dead — right
+idea, report-only), heartbeat, and the DEFAULTS reverse census
+(declared-vs-observed enforced by pytest). Load-bearing once
+self-modification lands: a system that changes itself must be able to
+notice a subsystem it just killed.
 
 ### Dev-approach "house style" doc + intentionality loop (OPENED 2026-07-28, Jeremy; v1 SHIPPED 2026-07-29)
 

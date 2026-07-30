@@ -625,7 +625,7 @@ def run_skill_maintenance(
     try:
         _frontier = frontier_skills()
         if _frontier and verbose:
-            print(f"[evolver] frontier skills (40-70% utility): {[s.id for s in _frontier[:2]]}", file=sys.stderr)
+            print(f"[evolver] frontier skills (40-70% verdicted success): {[s.id for s in _frontier[:2]]}", file=sys.stderr)
         if not dry_run and adapter is not None:
             for skill in _frontier[:2]:  # max 2 frontier rewrites per cycle
                 if skill.id not in rewrite_candidates:  # don't double-rewrite

@@ -1,9 +1,10 @@
 """Liveness tests for packaging_readout (next-leap slice 1, report-only).
 
-Consumer-first discipline: the readout is the CONSUMER of four live stores
-(persona-dispatch-log, outcomes, skills+skill-stats, persona-outcomes);
-these tests seed real rows through the real writers where one exists and
-assert the report actually reads them — no read-side mocks.
+Consumer-first discipline: the readout is the CONSUMER of three live stores
+(persona-dispatch-log, outcomes, skills+skill-stats); these tests seed real
+rows through the real writers where one exists and assert the report
+actually reads them — no read-side mocks. (persona-outcomes was retired
+2026-07-29 — writer removed, store dead since 2026-04-04.)
 """
 
 import json
@@ -52,12 +53,6 @@ def _seed(tmp_path):
     (mem / "outcomes.jsonl").write_text(
         "\n".join(json.dumps(r) for r in outs) + "\n")
 
-    # persona-outcomes with a loop_id that does NOT join (the live store's
-    # measured state) — the coverage block must say so.
-    (mem / "persona-outcomes.jsonl").write_text(json.dumps(
-        {"persona": "researcher", "goal": goal_a, "status": "done",
-         "loop_id": "loop-nowhere"}) + "\n")
-
     # Skills through the real writer (schema-safe), stats through the real
     # recorder: strong (include bar), broken (open circuit), thin (no
     # stats row).
@@ -88,9 +83,9 @@ def test_readout_reads_all_four_stores(monkeypatch, tmp_path):
     assert cov["joined_goals"] == 2 and cov["unjoined_goals"] == 1
     assert cov["verdict_totals"] == {
         "true": 1, "false": 1, "unverdicted": 1}
-    assert cov["persona_outcomes_loop_join_hits"] == 0
-    assert cov["persona_outcomes_rows"] == 1
     assert cov["skills_selector_available"] is True
+    # persona-outcomes retired 2026-07-29 — its keys must be gone, not zero
+    assert "persona_outcomes_rows" not in cov
     # Repo personas never dispatched in this workspace are named, not
     # dropped.
     assert "data-analyst" in cov["personas_without_dispatch_evidence"]
@@ -121,7 +116,7 @@ def test_render_is_report_only_and_honest(monkeypatch, tmp_path):
     from packaging_readout import build_readout, render_markdown
     text = render_markdown(build_readout(mem))
     assert "REPORT-ONLY" in text
-    assert "dead join" in text            # persona-outcomes 0/1
+    assert "persona-outcomes" not in text  # retired 2026-07-29, not rendered
     assert "test-packager × research" in text
     assert "polymarket research" in text  # would_include row rendered
     assert "circuit open" in text         # exclusion reason visible

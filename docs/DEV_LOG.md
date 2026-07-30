@@ -20,6 +20,34 @@ Dev log tab at maro.feifdom.com alongside Runs and Reading.
 
 ## 2026-07-29
 
+**Arena sweep → A/B variants un-starved + persona-outcomes retired** —
+Jeremy's "anything else in this arena?" turned up the sweep's headline:
+the entire Agent0 A/B variant subsystem (frontier rewrite →
+create_skill_variant → 50/50 routing → record_variant_outcome →
+retire_losing_variants) was wired end-to-end on live paths, green
+tests, and had never executed once — `frontier_skills` gated on
+`use_count >= 3` while `increment_use`, the only use_count writer, had
+zero callers since birth (2/314 nonzero live, both leaked test
+fixtures). Approved fixes shipped: frontier gate now reads the honest
+SkillStats.injected_runs/injected_success_rate (first legacy-rate
+consumer migrated; pin test says legacy use_count confers no
+candidacy), `increment_use` removed. Live effect: the former router
+trio (0.67–0.68 over 18–19 verdicted runs) lands inside the 0.4–0.7
+frontier band, so the first organic variants will target exactly the
+most-used below-bar skills. Also retired persona-outcomes.jsonl
+(writer on the dead conductor path since 2026-04-04, 0/40 join;
+superseded by the handle_id join; file kept, data retention). Sweep
+also live-fired the first CONTRADICTION_ADJUDICATED event ever
+(backfilled candidate → verdict "undecided" → correctly no mutation;
+the judge's own reasoning named the inject≠apply gap for rules).
+Jeremy decree captured (GOAL_BRAIN + decision journal + BACKLOG):
+subsystem self-health monitoring is a future lane — wired-but-silent
+must become detectable, load-bearing once self-modification lands.
+Surprised-by: one missing caller silently killed a five-function
+subsystem for four months while every unit test stayed green — and the
+judge LLM independently articulated the same evidence gap
+(injected-vs-applied) that the receipts work exists to close.
+
 **Unverdicted-rows census → run-index v2 fix → verdict-seam backfill**
 — thread: `measurement-honesty` (3 of 3 in Jeremy's approved order).
 The census question was "which lane skips verdicts?" The readout's 156

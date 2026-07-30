@@ -18,7 +18,6 @@ from persona import (
     build_persona_system_prompt,
     persona_to_dict,
     persona_for_goal,
-    record_persona_outcome,
 )
 
 PERSONAS_DIR = Path(__file__).parent.parent / "personas"
@@ -492,39 +491,8 @@ def test_persona_for_goal_returns_tuple():
 
 
 
-# ===========================================================================
-# Phase 31: Persona feedback loop tests
-# ===========================================================================
-
-def test_record_persona_outcome_writes_to_file(monkeypatch, tmp_path):
-    """record_persona_outcome writes a jsonl entry to persona-outcomes.jsonl."""
-    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
-    ok = record_persona_outcome(
-        persona_name="researcher",
-        goal="summarize AI research papers",
-        status="done",
-        confidence=0.85,
-        loop_id="abc123",
-    )
-    assert ok is True
-    out_path = tmp_path / "memory" / "persona-outcomes.jsonl"
-    assert out_path.exists()
-    entry = json.loads(out_path.read_text().strip())
-    assert entry["persona"] == "researcher"
-    assert entry["status"] == "done"
-    assert entry["confidence"] == 0.85
-    assert entry["loop_id"] == "abc123"
-    assert "recorded_at" in entry
-
-
-def test_record_persona_outcome_goal_truncated(monkeypatch, tmp_path):
-    """record_persona_outcome truncates long goals to 120 chars."""
-    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
-    long_goal = "x" * 200
-    record_persona_outcome("builder", long_goal, "done")
-    out_path = tmp_path / "memory" / "persona-outcomes.jsonl"
-    entry = json.loads(out_path.read_text().strip())
-    assert len(entry["goal"]) <= 120
+# (Phase 31 record_persona_outcome tests removed 2026-07-29 with the
+# function — store dead since 2026-04-04, superseded by the handle_id join.)
 
 
 # ===========================================================================

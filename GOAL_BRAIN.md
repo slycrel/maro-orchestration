@@ -5228,3 +5228,16 @@ Dormant (deliberately parked, not dropped):
   it's an interesting angle, I'll catch up either way". Sparing use:
   substantive finds, not status noise (noise-masquerading-as-communication
   is a named frustration). First use: the degenerate-router root cause.
+- **2026-07-29** — Subsystem self-health monitoring is a real future
+  lane (Jeremy, decree-class, on the arena-sweep finds): "we need a way
+  to ensure the system itself is active and working, especially if
+  we're going to allow it to modify itself (and eventual code/mod/
+  organic support). Probably load bearing in the future, nice to have
+  for now." Explicitly NOT ops-dashboard monitoring for support staff —
+  the system verifying its own dynamic processes are alive. He'd wanted
+  this at a basic IT level early on; it didn't land because "it was an
+  answer without any questions" — the sweep's dead-subsystem finds
+  (contradiction emitter, A/B variants, persona-outcomes,
+  times_applied) are the questions. BACKLOG item filed same day
+  (liveness registry + declared-vs-observed health readout sketch);
+  design-first, no build commitment yet.

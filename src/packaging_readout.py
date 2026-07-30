@@ -48,8 +48,10 @@ finding, not an omission):
   at stamp_outcome_verdict since 2026-07-29) preferred wherever present;
   legacy total_uses/success_rate (keyword-matched step completions,
   ~1.0 base rate — inflated) as labeled fallback.
-- persona-outcomes.jsonl loop_id -> outcomes.jsonl loop_id (measured 0/40
-  live at time of writing; reported, not silently dropped)
+- persona-outcomes.jsonl: RETIRED 2026-07-29 — writer removed (store dead
+  since 2026-04-04; 0/40 rows ever joined an outcome by loop_id;
+  superseded by the handle_id join above). The file stays on disk as
+  historical data and contributes nothing here.
 
 Skill matching previews the REAL selector: skills.find_matching_skills
 with its default router/keyword/tf-idf ladder, project="" (global view —
@@ -163,23 +165,14 @@ def build_readout(mem: Optional[Path] = None) -> Dict[str, Any]:
 
     dispatch = _read_jsonl(mem / "persona-dispatch-log.jsonl")
     outcomes = _read_jsonl(mem / "outcomes.jsonl")
-    pers_outcomes = _read_jsonl(mem / "persona-outcomes.jsonl")
     stats_by_id = _load_stats_by_id(mem)
 
     out_by_prefix: Dict[str, List[Dict[str, Any]]] = {}
     out_by_handle: Dict[str, List[Dict[str, Any]]] = {}
-    out_loop_ids = set()
     for o in outcomes:
         out_by_prefix.setdefault(str(o.get("goal", ""))[:120], []).append(o)
         if o.get("handle_id"):
             out_by_handle.setdefault(str(o["handle_id"]), []).append(o)
-        if o.get("loop_id"):
-            out_loop_ids.add(o["loop_id"])
-
-    # Join health: persona-outcomes -> outcomes via loop_id. Historically
-    # dead (0/40) — computed live so recovery shows up here on its own.
-    po_join_hits = sum(
-        1 for p in pers_outcomes if p.get("loop_id") in out_loop_ids)
 
     # Unique goals per persona (a repeated dispatch of the same goal is one
     # evidence goal; its outcome rows still all count in the verdict mix).
@@ -341,8 +334,6 @@ def build_readout(mem: Optional[Path] = None) -> Dict[str, Any]:
             "skills_with_run_verdict_evidence": sum(
                 1 for s in stats_by_id.values()
                 if int(s.get("injected_runs", 0) or 0) > 0),
-            "persona_outcomes_rows": len(pers_outcomes),
-            "persona_outcomes_loop_join_hits": po_join_hits,
             "personas_without_dispatch_evidence": undispatched,
         },
         "personas": personas,
@@ -387,13 +378,6 @@ def render_markdown(readout: Dict[str, Any]) -> str:
         "keyword-matched step completions at a ~1.0 base rate and are "
         "shown only where no run-verdict evidence exists yet (skills.jsonl "
         "use_count is NOT the evidence store)")
-    lines.append(
-        f"- persona-outcomes loop_id join: "
-        f"{cov['persona_outcomes_loop_join_hits']}/"
-        f"{cov['persona_outcomes_rows']} — "
-        + ("dead join, persona-outcomes contributes nothing yet"
-           if cov["persona_outcomes_loop_join_hits"] == 0
-           else "partially live"))
     if not cov["skills_selector_available"]:
         lines.append("- WARNING: skills selector unavailable — every "
                      "bucket below is empty for that reason, not for "

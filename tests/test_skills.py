@@ -31,7 +31,6 @@ from skills import (
     get_all_skill_stats,
     get_skill_stats,
     get_skills_needing_escalation,
-    increment_use,
     load_skills,
     record_skill_injection_outcome,
     record_skill_outcome,
@@ -363,41 +362,8 @@ def test_extract_skills_accepts_curated_success_class(monkeypatch, tmp_path):
     assert rejected == []
 
 
-# ---------------------------------------------------------------------------
-# increment_use
-# ---------------------------------------------------------------------------
-
-def test_increment_use(monkeypatch, tmp_path):
-    """use_count incremented in file."""
-    _setup_workspace(monkeypatch, tmp_path)
-    skill = _make_skill("increment test")
-    skill.use_count = 0
-    save_skill(skill)
-    increment_use(skill.id)
-    skills = load_skills()
-    updated = [s for s in skills if s.id == skill.id][0]
-    assert updated.use_count == 1
-
-
-def test_increment_use_multiple_times(monkeypatch, tmp_path):
-    """use_count accumulates across multiple calls."""
-    _setup_workspace(monkeypatch, tmp_path)
-    skill = _make_skill("multi increment")
-    skill.use_count = 0
-    save_skill(skill)
-    increment_use(skill.id)
-    increment_use(skill.id)
-    increment_use(skill.id)
-    skills = load_skills()
-    updated = [s for s in skills if s.id == skill.id][0]
-    assert updated.use_count == 3
-
-
-def test_increment_use_nonexistent_id(monkeypatch, tmp_path):
-    """increment_use with unknown id doesn't raise."""
-    _setup_workspace(monkeypatch, tmp_path)
-    # Should not raise
-    increment_use("nonexistent-skill-id")
+# (increment_use tests removed 2026-07-29 with the function — see skills.py
+# note: use_count is legacy-frozen; frontier gating moved to injected_runs.)
 
 
 # ---------------------------------------------------------------------------
@@ -1631,7 +1597,12 @@ class TestSkillValidationHarness:
 # ---------------------------------------------------------------------------
 
 class TestFrontierSkills:
-    def _make_skill(self, id_, utility_score, use_count=5, circuit_state="closed"):
+    """Frontier gate reads the honest injected counters (2026-07-29): a
+    skill is a rewrite candidate only with >= min_uses verdicted injections
+    and an injected_success_rate inside the 40-70% band. Stats are seeded
+    through the real writer, not fixture rows."""
+
+    def _make_skill(self, id_, utility_score=0.5, use_count=0, circuit_state="closed"):
         from skills import Skill
         return Skill(
             id=id_, name=f"skill_{id_}", description=f"skill {id_}",
@@ -1644,59 +1615,100 @@ class TestFrontierSkills:
             circuit_state=circuit_state,
         )
 
-    def test_returns_frontier_zone_skills(self):
-        from skills import frontier_skills, FRONTIER_LOW, FRONTIER_HIGH
+    def _seed_stats(self, skill_id, runs, successes):
+        for i in range(runs):
+            record_skill_injection_outcome(skill_id, goal_achieved=(i < successes))
+
+    def _stats_patch(self, tmp_path):
+        from unittest.mock import patch
+        return patch("skills._skill_stats_path",
+                     return_value=tmp_path / "skill-stats.jsonl")
+
+    def test_returns_frontier_zone_skills(self, monkeypatch, tmp_path):
+        from skills import frontier_skills
+        _setup_workspace(monkeypatch, tmp_path)
         skills = [
-            self._make_skill("low", 0.1),    # below frontier — not included
-            self._make_skill("frontier", 0.55),  # in frontier zone — included
-            self._make_skill("high", 0.9),   # above frontier — not included
+            self._make_skill("low"),       # 10% verdicted success — below band
+            self._make_skill("frontier"),  # 55% — in band
+            self._make_skill("high"),      # 90% — above band
         ]
-        result = frontier_skills(skills)
+        with self._stats_patch(tmp_path):
+            self._seed_stats("low", 10, 1)
+            self._seed_stats("frontier", 20, 11)
+            self._seed_stats("high", 10, 9)
+            result = frontier_skills(skills)
         ids = [s.id for s in result]
         assert "frontier" in ids
         assert "low" not in ids
         assert "high" not in ids
 
-    def test_excludes_open_circuit(self):
+    def test_excludes_open_circuit(self, monkeypatch, tmp_path):
         from skills import frontier_skills
+        _setup_workspace(monkeypatch, tmp_path)
         skills = [
-            self._make_skill("open_frontier", 0.55, circuit_state="open"),
-            self._make_skill("closed_frontier", 0.55, circuit_state="closed"),
+            self._make_skill("open_frontier", circuit_state="open"),
+            self._make_skill("closed_frontier", circuit_state="closed"),
         ]
-        result = frontier_skills(skills)
+        with self._stats_patch(tmp_path):
+            self._seed_stats("open_frontier", 20, 11)
+            self._seed_stats("closed_frontier", 20, 11)
+            result = frontier_skills(skills)
         ids = [s.id for s in result]
         assert "open_frontier" not in ids  # open-circuit handled by skills_needing_rewrite
         assert "closed_frontier" in ids
 
-    def test_excludes_below_min_uses(self):
+    def test_excludes_below_min_uses(self, monkeypatch, tmp_path):
         from skills import frontier_skills
+        _setup_workspace(monkeypatch, tmp_path)
         skills = [
-            self._make_skill("new", 0.55, use_count=1),   # not enough data
-            self._make_skill("mature", 0.55, use_count=5), # enough data
+            self._make_skill("new"),     # 1 verdicted injection — not enough data
+            self._make_skill("mature"),  # 5 — enough
         ]
-        result = frontier_skills(skills, min_uses=3)
+        with self._stats_patch(tmp_path):
+            self._seed_stats("new", 2, 1)
+            self._seed_stats("mature", 5, 3)
+            result = frontier_skills(skills, min_uses=3)
         ids = [s.id for s in result]
         assert "new" not in ids
         assert "mature" in ids
 
-    def test_sorted_ascending_by_utility(self):
+    def test_sorted_ascending_by_injected_rate(self, monkeypatch, tmp_path):
         from skills import frontier_skills
+        _setup_workspace(monkeypatch, tmp_path)
         skills = [
-            self._make_skill("s1", 0.65),
-            self._make_skill("s2", 0.45),
-            self._make_skill("s3", 0.55),
+            self._make_skill("s1"),  # 0.65
+            self._make_skill("s2"),  # 0.45
+            self._make_skill("s3"),  # 0.55
         ]
-        result = frontier_skills(skills)
-        scores = [s.utility_score for s in result]
-        assert scores == sorted(scores)  # ascending = hardest first
+        with self._stats_patch(tmp_path):
+            self._seed_stats("s1", 20, 13)
+            self._seed_stats("s2", 20, 9)
+            self._seed_stats("s3", 20, 11)
+            result = frontier_skills(skills)
+        assert [s.id for s in result] == ["s2", "s3", "s1"]  # hardest first
 
-    def test_loads_from_disk_if_none(self):
+    def test_loads_from_disk_if_none(self, monkeypatch, tmp_path):
         from skills import frontier_skills
         from unittest.mock import patch
-        skills = [self._make_skill("disk_skill", 0.55)]
-        with patch("skills.load_skills", return_value=skills):
-            result = frontier_skills(None)
+        _setup_workspace(monkeypatch, tmp_path)
+        skills = [self._make_skill("disk_skill")]
+        with self._stats_patch(tmp_path):
+            self._seed_stats("disk_skill", 20, 11)
+            with patch("skills.load_skills", return_value=skills):
+                result = frontier_skills(None)
         assert any(s.id == "disk_skill" for s in result)
+
+    def test_legacy_use_count_confers_no_candidacy(self, monkeypatch, tmp_path):
+        """Pin for the 2026-07-29 fix: heavy legacy use_count + in-band
+        utility_score (the OLD gate's inclusion criteria) means nothing
+        without verdicted injections — use_count must never be resurrected
+        as frontier evidence."""
+        from skills import frontier_skills
+        _setup_workspace(monkeypatch, tmp_path)
+        skills = [self._make_skill("legacy_only", utility_score=0.55, use_count=100)]
+        with self._stats_patch(tmp_path):
+            result = frontier_skills(skills)
+        assert result == []
 
 
 # ---------------------------------------------------------------------------
