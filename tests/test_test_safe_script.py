@@ -73,7 +73,7 @@ def test_test_safe_uses_nice_without_taskset(tmp_path):
     assert "taskset unavailable" in result.stderr
     assert result.command_log == (
         f"nice:-n 15 {result.fake_python} -m pytest "
-        "tests/test_run_curation.py -m not slow or slow --tb=short -q\n"
+        "tests/test_run_curation.py -m not slow or slow --tb=short -q -rs\n"
     )
 
 
@@ -84,7 +84,7 @@ def test_test_safe_adds_affinity_when_taskset_exists(tmp_path):
     assert "cores=0,1, nice=15" in result.stderr
     assert result.command_log == (
         f"nice:-n 15 taskset -c 0,1 {result.fake_python} -m pytest "
-        "tests/test_run_curation.py -m not slow or slow --tb=short -q\n"
+        "tests/test_run_curation.py -m not slow or slow --tb=short -q -rs\n"
     )
 
 
@@ -99,7 +99,7 @@ def test_test_safe_cli_resource_overrides_reach_command(tmp_path):
     assert "cores=2,3, nice=7" in result.stderr
     assert result.command_log == (
         f"nice:-n 7 taskset -c 2,3 {result.fake_python} -m pytest "
-        "tests/test_run_curation.py -m not slow or slow --tb=short -q\n"
+        "tests/test_run_curation.py -m not slow or slow --tb=short -q -rs\n"
     )
 
 
@@ -110,7 +110,7 @@ def test_test_safe_fast_mode_reaches_pytest(tmp_path):
     assert "mode=fast" in result.stderr
     assert result.command_log == (
         f"nice:-n 15 {result.fake_python} -m pytest "
-        "tests/test_run_curation.py -m not slow --tb=short -q\n"
+        "tests/test_run_curation.py -m not slow --tb=short -q -rs\n"
     )
 
 
@@ -133,7 +133,7 @@ def test_test_safe_sizes_worker_pool_to_the_core_budget(
 
     assert result.returncode == 0, result.stderr
     assert f"-n {expected_n}" in result.stderr, result.stderr
-    assert f"-m not slow or slow -n {expected_n} --tb=short -q" in result.command_log, (
+    assert f"-m not slow or slow -n {expected_n} --tb=short -q -rs" in result.command_log, (
         result.command_log)
 
 
