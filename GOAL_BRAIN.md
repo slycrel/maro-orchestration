@@ -5369,3 +5369,34 @@ Dormant (deliberately parked, not dropped):
   argument, seed-outflow + shifting-the-burden, model collapse +
   Algorithm Distillation + off-policy eval). Full record + Appendix B
   in docs/history/2026-07-30-taste-lens-panel.md.
+- **2026-07-31** — Panel round 2 (Jeremy: "Want to try 2 more full
+  panels, one on sol xhigh and one on opus 5 xhigh?" — his gut
+  pre-registered: sonnet breadth, opus/fable depth, higher codex
+  models grate). Same five prompts verbatim, inputs pinned at 810d3f0
+  (blob SHAs in the record), measured quantity = new material beyond
+  the record. Scored: saturation REFUTED (both arms denser than round
+  1 — frontier-xhigh found a lower stratum); sol-spec/opus-conceptual
+  split REFUTED (opus did both at once); Jeremy's opus-depth gut
+  SUPPORTED (opus-xhigh the standout arm of all four: most surgical,
+  grounded in our specific incidents, in-character). **Design
+  consequences accepted**: (1) camera-readout method OVERTURNED by
+  six-lens consensus — retrospective clustering demoted to hypothesis
+  generation; upgraded to log-forward (axes + candidate framings with
+  discard reasons), controlled one-axis replays, replay-twice
+  divergence calibration first. (2) Immersion caveat — coherence
+  never smoothing of error-relevant signal (14c amended). (3)
+  Practice-arena contract gains balancing-arm clauses: exploration
+  reps on successes, variety-ratio monoculture alarm, seed-edit
+  cadence below framing→verdict delay. (4) opus-ml eval ladder
+  adopted as cheapest next actions when the arc activates: judge
+  backfill over 1,448 rows + ~50 Jeremy-calibrated labels (κ>0.6
+  gate), log axes now, overfit-one-batch (Jeremy hand-writes cards
+  for 3 known failures — can't-flip = kill). **Held for Jeremy**:
+  14a's method-vs-world scope axis contested from both model families
+  (structural invariance vs semantic category; n=40 single-family
+  artifact risk) — settled conclusion, so re-examine, don't silently
+  amend. Meta-finding: frontier-xhigh lenses shipped falsifiers with
+  their findings (the "nothing provable" pattern inverted at that
+  tier) — argument for spending expensive models on design review
+  specifically. Full round-2 section + Appendices C/D:
+  docs/history/2026-07-30-taste-lens-panel.md.

@@ -914,19 +914,45 @@ was the distillation's, more than his.
 
 - The practice-arena honesty contract (what makes a rep-manufacturing
   loop's feedback trustworthy; relation to benchmark-cell isolation
-  and the 3-arm experiment's both-lane decree).
+  and the 3-arm experiment's both-lane decree). Panel round 2 added
+  three clauses: an exploration arm on *successful* runs (the seed
+  loop's only balancing arm), variety-ratio monitoring (framing
+  signatures per unit situation diversity — the monoculture alarm),
+  and seed-edit cadence capped below framing→verdict delay.
 - Immersion mechanics for the assembler (what "right LOD per fork"
-  means concretely; relation to retrieval-not-caps).
+  means concretely; relation to retrieval-not-caps). Round-2 caveat,
+  accepted: immersion = coherence of the world, never smoothing of
+  error-relevant signal — contradictions, uncertainty, and
+  omitted-state markers are content the render must foreground.
 - The camera readout (14d's reconstruct-don't-build) — spec written by
   committee in the lens panel: ONE fork-replay readout whose column
   families are the five lens instruments (frame capture / practice
   arena / shot list / loop map / bandit fork-log); first question it
-  answers is engine-failure vs player-failure.
+  answers is engine-failure vs player-failure. **Amended by panel
+  round 2** (six-lens consensus): retrospective clustering is demoted
+  to hypothesis generation — logs contain only selected framings,
+  never rejected counterfactuals, and unmeasured nondeterminism
+  confounds clusters. Upgraded method: log camera axes + candidate
+  framings (with discard reasons) as structured fields going forward;
+  controlled one-axis-varied replays as the validation instrument;
+  replay-twice divergence calibration before trusting any cluster.
 - Method-vs-world scope stamping + earned globality (14a — waits on
   verdict-pipe widening; NOW and evolver_verify lanes are
-  verdict-blind per the census).
+  verdict-blind per the census). **Contested by panel round 2** from
+  both model families: transferability may follow structural
+  invariance across regimes rather than semantic category, and
+  current "global methodology" may be an n=40 single-family artifact.
+  Held open for Jeremy — settled conclusion, so re-examine, don't
+  silently amend.
 - The five-lens panel verdict — RESOLVED same day: **PASS**. Five
   distinct missing-concepts, unanimous reconstruct-before-build,
   contrast surfaced against both participants (Jeremy's vantage
   essence and the shared 14f claim). Ledger + harvest:
-  docs/history/2026-07-30-taste-lens-panel.md.
+  docs/history/2026-07-30-taste-lens-panel.md. Extended 2026-07-31:
+  a sonnet-5 replication arm, then two frontier-xhigh arms
+  (gpt-5.6-sol, Opus 5) — round 2 overturned the readout method
+  (above), contested 14a, and delivered the arc's first kill criteria
+  (κ>0.6 judge gate, overfit-one-batch flip test, think-aloud
+  disagreement rate). Round 2's findings arrived with falsifiers
+  attached — the "nothing provable" pattern inverted at the frontier
+  tier.
