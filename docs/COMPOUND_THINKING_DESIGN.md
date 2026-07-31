@@ -955,4 +955,13 @@ was the distillation's, more than his.
   (κ>0.6 judge gate, overfit-one-batch flip test, think-aloud
   disagreement rate). Round 2's findings arrived with falsifiers
   attached — the "nothing provable" pattern inverted at the frontier
-  tier.
+  tier. Round 3 (same model+tier, post-fix tree) tested Jeremy's
+  review-to-fixpoint practice: design review did NOT converge —
+  fixes-as-prose grow the reviewed surface instead of shrinking it —
+  and the panel loop is CLOSED by its own reflexive finding: next
+  artifact must be a measurement, not a document. Held for Jeremy
+  from round 3: verdicts expressed in camera-axis vocabulary
+  (outcome→process feedback, touches 14f), seed optimization at
+  n=30–100 (touches 14b), "good run" defined independently of its
+  own done-means, and the observation-repair ablation on the three
+  canonical failures as the first measurement.

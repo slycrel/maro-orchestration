@@ -5413,3 +5413,35 @@ Dormant (deliberately parked, not dropped):
   converge to lows like code review, or does an unbounded design
   space keep yielding new highs at fixed model+tier? (Round 1→2 yield
   rose, but the tier jump confounds it.)
+- **2026-07-31** — Panel round 3, the fixpoint test (overnight, Opus 5
+  xhigh, post-fix tree at a35aafa; pre-registered F1-F3): **design
+  review did not converge** — 1/3 predictions survived. Round 3
+  attacked the round-2 accepted fixes with new arguments
+  (counterfactual logging = chooser self-report, needs an EXOGENOUS
+  variety arm; log selection PROPENSITIES not prose reasons →
+  off-policy evaluation offline; byte-exact record/replay is
+  prerequisite to the controlled-replay instrument — "there is no
+  tape") and produced new overturn-grade findings at fixed
+  model+tier (outcome-vs-process feedback: verdicts in camera-axis
+  vocabulary or 14f's compile loop plateaus; frozen weights ≠ frozen
+  policy — seed optimization converges at n=30-100; "good run" never
+  defined independently of its own done-means, which CAUSES the 3%
+  verdict density; NMS analogy structurally dead — missing axes, not
+  wrong settings, are the card's real failure mode and no
+  retrospective readout can see them; verdict-blind lanes are
+  plumbing deferred behind a design). **Why no convergence,
+  reflexive**: the panel's own systems lens — this design loop's
+  measurable output across rounds is MORE open threads; code-review
+  fixes remove findings from the artifact, our fixes-as-prose grow
+  it. **Accepted, effective immediately**: balancing arm on the
+  review loop itself — panel CLOSED, no round 4, next
+  panel-adjacent artifact must be a measurement not a document; plus
+  amendments to my own round-2 acceptances (exogenous variety arm,
+  propensity logging, tape-before-replays, noise floor gates all
+  quantitative claims incl. navigator 58/41). **Held for Jeremy**:
+  verdicts-in-camera-vocabulary (14f), seed optimization (14b),
+  independent good-run definition (decree territory), and the
+  observation-repair ablation on Godot/db37d525/rewriter as the
+  first measurement (cheap, decisive, uses existing runs). 25 lens
+  outputs, 3 rounds, 2 families; record + Appendix E:
+  docs/history/2026-07-30-taste-lens-panel.md.

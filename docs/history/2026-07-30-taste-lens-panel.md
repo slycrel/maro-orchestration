@@ -1212,3 +1212,360 @@ Eval before mechanism, in this order.
 2. **Log the camera axes now** as structured fields at every fork. Zero risk, cheap. Reconstruction is lossy; in three months you'd have a real dataset instead.
 3. **Overfit one batch.** Before any composer: take three known-failed runs, have Jeremy *hand-write* the card that should have fixed each, replay. If hand-authored taste can't flip them, no learned composer will find it — the axes are wrong, or those failures weren't taste. Kill/continue on that single result.
 4. **Then the 200-line version.** `taste.py`: render a dict, format into the prompt, log it. No composer, no learning. "Learning" is Jeremy editing a YAML seed after reading the readout. At n=10, human-in-the-loop hill climbing beats automated search every time.
+
+---
+
+# Round 3 — the fixpoint test (2026-07-31, overnight)
+
+Jeremy's work practice on shipping code: adversarial review → fix
+criticals/highs + easy lows → re-run; converges to low-only findings
+by round 3, rarely 4. "We don't do that here due to time, but we
+probably could when it matters." This round imports it: same
+instrument as round 2's standout arm (Opus 5 xhigh, five verbatim
+lens prompts), inputs now the POST-FIX tree pinned at a35aafa (round-2
+amendments landed; design-doc blob 15c28cc3, panel-record blob
+0c1d7963). Pre-registered scoring rubric: each finding classed
+overturn (attacks an accepted decision with a NEW argument) /
+refinement / rehash / known-issue. Convergence = overturn count
+falling by round. Round 1→2 could not answer this (tier jump
+confound); this round holds model and tier fixed.
+
+## Predictions scored
+
+- **F1 — the round-2 accepted fixes hold, as fixed criticals do:
+  REFUTED.** Three of the fixes were themselves attacked with new
+  arguments. The counterfactual fix ("log candidate framings with
+  discard reasons"): systems — that is *self-report from the same
+  chooser whose blind spot you're measuring*; "a loop cannot observe
+  its own unexplored branch by interrogating itself"; requires an
+  exogenous variety source (randomized framing arm, second chooser,
+  adversarial framer). ml — discard *reasons* are prose; log
+  *selection propensities* per candidate instead, and every future
+  seed variant becomes scoreable offline against the entire run
+  history via importance weighting (off-policy evaluation) — no
+  replays, no spend. The controlled-replay instrument: engine — it
+  "presumes a tape you can rewind. There is no tape"; byte-exact
+  record/replay (assembled prompt, retrieval set, model + params,
+  keyed to run id) is the prerequisite, and every claim below the
+  measured noise floor is unfalsifiable, including navigator's
+  58%-vs-41%.
+- **F2 — 14a gets hit again (known-issue analog): CONFIRMED**, in its
+  sharpest form yet. expertise: method-vs-world is "the transfer
+  illusion, precisely... the single most-debunked claim in my field"
+  — Ericsson's digit-span subject reached 80+ digits and remained
+  ordinary at *letters*, same person, same month, same lab; our four
+  standing rules look global because n=40 in one family.
+- **F3 — convergence to refinement-grade: REFUTED. The alternative
+  won.** At fixed model + tier, round 3 produced new overturn-grade
+  findings against settled material beyond the fixes (below). Design
+  review did not converge the way Jeremy's shipping-code loop does.
+
+## Why it didn't converge — the panel diagnosed itself
+
+The systems lens, reflexively: "the purpose of a system is what it
+does. Across two panel rounds, this design loop's measurable output
+is *more open threads*, not fewer. §14g grew. That is a reinforcing
+loop with no balancing arm, and it will keep running because
+producing another lens round is cheaper than closing one." Proposed
+balancing arm: **no new open thread without closing one, and the next
+artifact must be a running measurement, not a document.**
+
+That is also the honest answer to the fixpoint question. Jeremy's
+work loop converges because a code-review fix *removes the finding
+from the artifact* — the reviewed object shrinks. Our round-2 "fixes"
+were prose amendments to design docs: they *grew* the reviewed
+surface. Convergence is a property of review-over-executable-change,
+not review-over-accreting-prose. Design review can start converging
+only when fixes become artifacts that can't be re-litigated —
+measurements taken, lanes closed, fields logged.
+
+## New round-3 material (fixed model, fixed tier — saturation still absent)
+
+- **expertise — outcome vs process feedback** (overturn-grade, aimed
+  at the arc's founding assumption): judgement is *outcome* feedback,
+  and Ericsson's most uncomfortable result is that outcome feedback
+  alone produces arrested development (experienced clinicians,
+  auditors, stockbrokers — decades of honest consequence-coupled
+  reps, not reliably better than novices). 14f's load-bearing
+  sentence ("System 2 is how System 1 gets compiled safely") is "the
+  recipe for a confident plateau." In experts the generator and the
+  evaluator are the *same object* — we architected them as separate
+  subsystems in different vocabularies. The fix is one schema change:
+  **express verdicts in the camera axes** ("zoom too coarse, focus
+  undefined", not "goal_achieved: false") — converts outcome feedback
+  to process feedback and makes the settings card load-bearing.
+  Counterweight, same lens: n<10 partially *rehabilitated* — DP gains
+  arrive as steps at representation changes, not smooth rep counts,
+  so small n is the right shape *if* each rep targets a
+  representation.
+- **ml — the never-run ablation** (attacks the evidentiary base):
+  "our worst failures are immersion breaks, not capability gaps" is a
+  falsifiable claim nobody tested. Hand-repair the *observation only*
+  on the Godot/db37d525/rewriter forks, replay against the same
+  model, count recoveries. ≥70% recover → the context assembler is
+  the whole roadmap; fewer → the three load-bearing anecdotes are
+  engine-blaming and 14c needs rewriting. "You have the runs. Nobody
+  ran it."
+- **ml — frozen weights ≠ frozen policy** (overturn on 14b, sharper
+  than sol's round-2 version): the seed IS a parameter vector,
+  discrete, in token space; reflective prompt optimization
+  (DSPy/GEPA-shaped) converges at 30–100 evaluations, so the
+  3%-verdict-density objection — an argument about supervising a big
+  model — does not apply to fitting ~500 tokens. "You talked yourself
+  out of the one learning method that actually works at your n, then
+  wrote a seven-primitive ledger to fill the gap." Plus **correlated
+  errors**: judge and player share a model family and failure basins;
+  measure κ(judge, Jeremy) and κ(judge, other-family) on 50 items —
+  same-family ensemble independence is near zero and "self-practice
+  is a hall of mirrors."
+- **systems — the arena reframe is a category error on a rate
+  limit**: verdict density is a *flow*, arena quality a *coefficient*
+  on it; 3% × honest = 3%. The census already localizes the leak (NOW
+  + evolver_verify verdict-blind) — "that's plumbing, not a research
+  question, and it's being deferred behind a design."
+- **systems — the unpulled leverage point is the goal**: nowhere is
+  "a good run" defined independently of that run's own done-means;
+  that absence *causes* the 3% verdict density. Six of seven
+  primitives sit at Meadows tiers 12–9; the paradigm-level move
+  (player inversion) is buried as ledger item 6.
+- **systems — requisite variety kills the NMS analogy structurally**:
+  No Man's Sky works because the same seed generates both world and
+  renderer — a closed system, variety matched by construction. Our
+  goals arrive from an open world the seed did not generate; the
+  variety deficit concentrates in the axes the seed lacks — so the
+  camera card's real failure mode is **missing axes, not wrong
+  settings**, exactly where any retrospective readout is blind.
+- **engine — overdraw as the first HUD number**: fraction of injected
+  context never cited or quoted in step output; prior 60–80%. "If it
+  is, half the taste problem is a culling problem you can attack
+  without touching the seed." Plus: no frame budget anywhere in 900
+  lines — a primitive that can't state its per-fork cost doesn't
+  ship; and 7 primitives whose "interactions are the machinery" = 21
+  pairwise couplings — "not a system, a bug farm"; declare a fixed
+  pipeline order (frame graph), don't let ordering emerge.
+- **DP — zoom is not distance**: focal length governs relations
+  *between* planes (compression), position governs occlusion and
+  parallax — two independent axes collapsed into one; the card cannot
+  express "same step size, different place to stand." **Exposure is a
+  conserved triangle** (aperture = depth-of-field = context-breadth,
+  coupled to light) spent on a scalar dial. **The light axis has no
+  shadow in it** — "most of my day is taking light away"; ledger
+  item 1 (negative space) never made it into the light axis, and
+  inject-everything is a 1:1 ratio, "no shape, no modeling."
+  Immersion → **specificity** ("actors deliver in front of sixty
+  people and a boom; don't build a coherent illusion — build marks").
+  **Coverage**: shoot the alternates and the counterfactuals are *on
+  the media*, not reconstructed; and "vantage-shift is cheap" is
+  backwards if reframing costs a context rebuild — shoot out a setup
+  before moving.
+
+Rehash bucket (correctly predicted material re-arriving): PVS,
+overfit-one-batch (ml: "the panel found it, you buried it in a §14g
+bullet"), think-aloud protocol (now with the de Groot pedigree).
+
+## Lead judgment (round 3)
+
+- **Accept the reflexive balancing arm, effective immediately**: no
+  round 4; no new open thread from this round without closing one;
+  the next panel-adjacent artifact must be a measurement, not a
+  document. This governs the review process itself, so it is mine to
+  accept.
+- **Accept, as amendments to my own round-2 acceptances** (same
+  authority, tightened by new argument): the counterfactual
+  instrument needs an *exogenous* variety source, not chooser
+  self-report; candidate logging carries *propensities*, not prose
+  reasons (off-policy evaluation is the payoff); byte-exact
+  record/replay precedes the controlled-replay instrument, and the
+  replay-twice noise floor gates every quantitative claim including
+  navigator's 58/41.
+- **Hold for Jeremy (his settled ground, re-examine don't amend)**:
+  verdicts-in-camera-vocabulary (touches 14f's core sentence — the
+  strongest single finding of the round); frozen-policy seed
+  optimization at n=30–100 (touches 14b's conclusion); "a good run"
+  defined independently of its own done-means (decree territory); the
+  observation-repair ablation on the three canonical failures (cheap,
+  decisive, uses existing runs — recommended as the FIRST measurement
+  under the balancing arm).
+- **Known-issue confirmed**: 14a, now carrying the strongest
+  citation-shaped attack of three rounds.
+
+## Fixpoint verdict
+
+Imported practice, tested once, honestly: **shipping-code convergence
+did not transfer to design review over prose.** 1 of 3 pre-registered
+predictions survived. The diagnosis — fixes that grow the artifact
+cannot converge — is itself the round's most actionable output, and
+it terminates the panel loop by its own logic. Twenty-five lens
+outputs across three rounds and two model families; the instrument's
+last finding was that it should stop running and be replaced by a
+measurement.
+
+Full verbatim outputs: Appendix E.
+
+---
+
+## Appendix E — round-3 fixpoint arm outputs (verbatim, Opus 5 xhigh)
+
+### Lens: engine-architect
+
+Read both. Notes from my side of the fence.
+
+## 1. The strongest idea: the player inversion
+
+Not because it's a good metaphor — because it relocates the bug. In shipping engines the renderer is almost never at fault; the fault is in what you handed it. All three of their worst failures (Godot font, db37d525, rewriter role-confusion) are the *same* bug class, and none of them are model bugs: they are state divergence between the authority and the view. That gives them a triage rule — engine failure or player failure? — that costs nothing and changes what you look at first when a run goes bad. Everything else in the doc is speculative. This one already pays rent.
+
+## 2. What they got wrong
+
+**They diagnosed netcode and prescribed rendering.** Desync is not fixed with LOD. It's fixed with an authoritative state, a tick, and reconciliation: the client predicts, the authority corrects, divergence is *detected* and rolled back. "Immersion rendering at the right LOD" is the wrong verb for the Godot saga. That run needed a divergence check against authority, not a prettier frame. §14c names the failure correctly and then walks away from the fix.
+
+**The camera metaphor is backwards.** In an engine you don't choose the camera — the player does. The engine's job is *visibility determination*: frustum cull, occlude, LOD-select. The expensive and interesting work is deciding what is **not** drawn. They filed negative-space as 1 of 7 primitives. In a renderer, culling *is* the renderer — it's where the frame time goes. Their "light" axis is the whole ballgame; "exposure" and "subject" are knobs on the side.
+
+**No frame budget anywhere in 900 lines.** Diffusion-style "steering pressure at every step" is a per-fork cost. What is it — tokens, ms, dollars? A framing card derived per fork by an extra model call is a draw call added to the hot loop. If a primitive can't state its per-fork cost, it doesn't ship.
+
+**"Reconstruct the card from run data" is retroactive profiling of an uninstrumented build.** Panel round 2 reached the right verdict for a shallower reason. The real problem: there is no deterministic replay. One-axis-varied replays, divergence calibration, kill criteria — every one of those presumes a tape you can rewind. There is no tape.
+
+**Seven primitives whose "interactions are the machinery" is 21 pairwise couplings.** That is not a system, it's a bug farm. Engines survive this with a fixed pipeline order, not a composer.
+
+## 3. The concept that should be on the table: PVS
+
+Precomputed potentially-visible sets. Quake's move was refusing to compute visibility per frame — too expensive, and mostly the same answer every time. Carve the world into cells offline, precompute per cell what *could* be visible, ship a lookup table; runtime cost is an index.
+
+Their retrieval ray-casts visibility on every fork. Instead: cluster goals into cells (goal family × phase), precompute per cell the set of memory/skill/context ever cited in a judged-successful run, and make the per-fork "light" decision a table lookup plus a small dynamic fringe. Zero per-fork model cost, deterministic, inspectable, and over-injection becomes a table a human can read.
+
+## 4. What I'd do next
+
+Ship the tape and the HUD. Nothing else.
+
+- **Record/replay.** Byte-exact assembled prompt, retrieval set, model + params, per fork, keyed to a run id. Then replay-twice and measure divergence. That's your noise floor; every claim below it is unfalsifiable, including the 58%-vs-41% number.
+- **One number on the HUD: overdraw** — fraction of injected context never cited or quoted in the step output. My prior is 60–80%. If it is, half the taste problem is a culling problem you can attack without touching the seed.
+- **Then one axis, one A/B, cheapest first** (light). Not the card, not the composer.
+- **Freeze the 7-primitive composer until there's a frame graph:** declared passes, declared read/write resources, fixed order. That the interactions are the machinery is exactly the argument for declaring the ordering, not letting it emerge.
+
+### Lens: expertise-researcher
+
+Read both. Responding in my own vocabulary, as asked.
+
+## 1. The strongest idea, for reasons that aren't yours
+
+Manufactured reps around known failure. But your justification — that judgement makes them trustworthy — is the weak half. The real prize is that you control the **curriculum**.
+
+The scarce resource in deliberate practice was never feedback. It's someone who can design the *next* rep: hard enough to fail informatively, narrow enough to isolate one deficiency. That's why DP historically required a teacher, and why almost nobody self-improves past journeyman without one — humans can't manufacture their own edge cases because the blind spot is the thing generating the reps. A system with logged failures and cheap re-execution has an advantage no violinist has: it can re-enter the same fork a hundred times with one variable moved. Your tire rerun series wasn't four data points, it was a *syllabus*.
+
+And n<10 is more defensible than the panel let you believe. Ericsson's own digit-span subject didn't improve smoothly with hours; he stepped — each jump arrived when he invented a new encoding scheme, and then plateaued until the next one. Gains come from representation changes, not rep counts. Small n is the right shape *if* each rep is aimed at a representation.
+
+## 2. What you got wrong
+
+**(a) You've built the feedback type that causes plateaus.** Judgement is *outcome* feedback: did it work. Ericsson's most uncomfortable result is that outcome feedback alone produces arrested development — experienced clinical psychologists, auditors, and stockbrokers, all with decades of consequence-coupled reps, are not reliably better than novices. Volume of honest outcome feedback does not compile System 1. What compiles it is *process* feedback: why the attempt failed, stated in the vocabulary of the skill. "goal_achieved: false" has no coordinates in framing space. Your 14f load-bearing sentence — System 2 is how System 1 gets compiled safely — is, in my literature, the recipe for a confident plateau.
+
+**(b) 14a's method-vs-world axis is the transfer illusion, precisely.** "Methodology is global because the self is in every context" is the single most-debunked claim in my field. Expertise is stubbornly domain-specific; far transfer essentially does not occur. The digit-span subject went to 80+ digits and remained ordinary at *letters* — same person, same month, same lab. "Learning to learn" and "critical thinking as a portable skill" are where education research goes to die. Your four standing rules look global because n=40 in one family, not because method transfers.
+
+**(c) Selecting the seed-edit "that survives" selects for easy.** Bjork's desirable difficulties: performance during practice is a poor and often *inverted* index of learning. A self-manufacturing arena with no difficulty model regresses to reps it can already almost do, which look like wins and teach nothing.
+
+## 3. The concept missing from your table: mental representations
+
+Not "compiled reps" — the structure that does the compiling. The field's core finding is that in experts, the generator and the evaluator are **the same object**. A master's ability to judge a position *is* their move-generation machinery run in another direction. You've architected taste and judgement as separate subsystems on separate substrates, so no amount of verdict density can ever move taste — the verdict is in a vocabulary the framer doesn't speak.
+
+Concrete consequence: express verdicts in the camera axes. Not "failed" but "zoom too coarse, focus undefined." That single change converts your outcome feedback into process feedback and makes the settings card load-bearing instead of decorative.
+
+## 4. What I'd do next
+
+Skip the retrospective readout — you already know logs hold only selected framings.
+
+Run **think-aloud protocol** (de Groot's method, still the standard). Twenty live forks; the model verbalizes its framing choice and rejected alternatives *at the fork*. Then have Jeremy narrate the same twenty. The expert–novice delta in those protocols is your seed — and knowledge elicitation is how transplanted taste actually gets extracted, rather than asserted.
+
+Then one falsifier: build a graded rep ladder on one failure family and check you can predict difficulty (target ~50–70% success). If you can't, you have naive repetition wearing DP's clothes.
+
+### Lens: cinematographer
+
+Read both. Notes from someone who does this for a living.
+
+## 1. The strongest idea, for my reasons
+
+The player inversion — harness as engine, model as performer. Not because of the game analogy, which I don't care about, but because it matches how a set actually produces a performance. Nobody gets a good take by giving the actor better notes. You get it by building the room: a mark on the floor, a real eyeline, a lit space that tells them where they are and where they're allowed to go. The performance is a consequence of the environment we constructed. Your three "worst failures" are the same three things that wreck takes on my sets — crossing the 180 (screen direction reverses, audience is lost), continuity divergence, and the actor handed the wrong sides. The performer was fine each time. The department failed.
+
+And adopting camera vocabulary literally is right for a reason nobody said: camera language *is* compiled taste. It exists because we had to make one person's eye executable by sixty people at 5 a.m. under a clock. It survived a century because it decomposes taste into a small, ordered set of decisions. That's exactly the artifact you're trying to build.
+
+## 2. What you got wrong
+
+**Zoom is not distance.** Your card treats zoom as "altitude / step size." Zooming and moving the camera produce different pictures. Focal length governs the relationship *between* planes — compression, how the background sits behind the subject. Position governs *occlusion and parallax* — what hides what. That's two independent axes and you collapsed them into one. It's the specific collapse that marks somebody who hasn't operated. In your terms: decomposition granularity and vantage are not the same knob, and your card can't express "same step size, different place to stand."
+
+**Exposure is not effort.** Exposure is a conserved triangle — aperture, shutter, ISO. You can't move one without paying in the others, and each payment changes the picture in a different way. Aperture is depth of field: how much stays sharp behind the subject. That's your context-breadth decision, and it's *coupled* to your light. You had a genuinely useful constrained-tradeoff structure sitting there and spent it on a scalar dial.
+
+**Your lighting is flat.** "Light = which context gets illuminated" is fill-everything, and it reads as amateur on screen for the same reason it will read as amateur in your prompts. Lighting is ratio and direction. Most of my day is *taking light away* — negative fill, flags, cutters. The shadow side is the composition. You put negative space in your primitives ledger as item one and then wrote a light axis that has no shadow in it. Relevance-ranked retrieval that injects everything is a 1:1 ratio: no shape, no modeling, nothing for the eye to grab.
+
+**And the immersion frame is romantic.** Actors deliver in front of sixty people, C-stands, and a boom in their peripheral vision. Immersion isn't the mechanism. *Specificity* is — a real prop, a real mark, a real eyeline. Don't build a coherent illusion for your player. Build marks.
+
+## 3. Missing: coverage
+
+There is no one angle that reveals the thing. That belief produces unusable footage. We shoot the master, the two-shot, the singles, the insert — the same beat from incompatible vantages — because the decision belongs in the edit, with information we don't have yet.
+
+Your round-2 panel found that your logs "contain only selected framings, never rejected counterfactuals." Coverage is the answer. Shoot the alternates. Then the counterfactuals are *on the media*, not reconstructed from a wish. Shooting ratio is the governor — and note the discipline that comes with it: you **shoot out a setup**. Every shot available from one camera position gets taken before you move, because moving is the expensive thing. Your "vantage-shift is cheap" is backwards if re-framing costs you a context rebuild.
+
+## 4. What I'd do
+
+A **lens test**, before the shoot. Three fork sites from failed runs. Pin everything, vary one axis across four values, no exceptions. That's your controlled one-axis replay, and it's a day's work.
+
+Then **dailies**: those sixteen results side by side, on one screen, viewed as pictures by a human in ten minutes. Metrics are the light meter; the eye is the eye.
+
+Then **camera reports**: log every take with its axis values, including the ones you didn't print — and circle the ones you did.
+
+### Lens: systems-thinker
+
+Read both. Here's the systems read.
+
+## 1. The strongest idea: the player inversion — but not for the reason recorded
+
+Its value isn't the immersion metaphor. It's that it **redraws the system boundary**. Before the inversion, the model sat *inside* the system as an improvable component, so every taste proposal was a disguised attempt to move a parameter you don't own. After it, the model is exogenous — a constant in the environment — and everything remaining is structure you control. That is a paradigm-level intervention in Meadows' ranking, and it behaves like one: it makes a class of interventions visible and retires another class. The failure reclassification is the diagnostic payoff — Godot/db37d525/rewriter moved from "capability, unfixable" to "structure, fixable," and structure is the second-highest tier on the list. Everything else in the 7-piece ledger is a mechanism. This is the only paradigm on the table, and the ledger buries it as item 6.
+
+## 2. What you got wrong
+
+**(a) The arena-quality reframe is a category error on a rate limit.** Verdict density is a *flow*. Arena quality is a *coefficient on that flow*. 3% × honest = 3%. You named the binding constraint and then reframed your way off it one turn later. The census already localizes the leak (NOW and evolver_verify lanes verdict-blind) — that's plumbing, not a research question, and it's being deferred behind a design.
+
+**(b) The counterfactual fix doesn't fix anything.** "Log candidate framings with discard reasons" collects self-report from the same chooser whose blind spot you're measuring. A loop cannot observe its own unexplored branch by interrogating itself. You need an exogenous variety source — randomized framing arm, second chooser, adversarial framer — or the information flow stays structurally one-sided no matter how many fields you add.
+
+**(c) A composer over parameters is still a parameter.** Six of your seven primitives sit at leverage tiers 12–9. The high-leverage point you've identified and are *not* pulling is the system **goal** (#3): nowhere is "a good run" defined independently of that run's own done-means. That absence isn't adjacent to the 3% verdict density — it *causes* it. Nothing in the structure forces the standard to be stated, so mostly it isn't.
+
+**(d) Reflexively: the purpose of a system is what it does.** Across two panel rounds, this design loop's measurable output is *more open threads*, not fewer. §14g grew. That is a reinforcing loop with no balancing arm, and it will keep running because producing another lens round is cheaper than closing one.
+
+## 3. Missing concept: Ashby's law of requisite variety
+
+A regulator must carry variety at least equal to the disturbance variety it absorbs. This kills the No Man's Sky analogy in a load-bearing way: NMS works because *the same seed generates both the world and the renderer* — a closed system, variety matched by construction. Your goals arrive from an open world the seed did not generate. A compact seed necessarily under-matches, and the deficit doesn't spread evenly — it concentrates in the axes the seed doesn't represent, which is exactly where a retrospective readout is blind, because absent axes leave no trace in the logs. So the camera card's real failure mode is *missing axes*, not wrong settings, and reconstruct-before-build cannot detect it. Requisite variety also hands you a build criterion the panel's "variety-ratio monitoring" gestures at without grounding: framing signatures ÷ situation variety, with a fixed axis count against growing situation variety read as a *scheduled* deficit, not an accident.
+
+## 4. What I'd do next
+
+1. **Instrument the flow before the stock.** Verdicts/week by lane, plus the framing→verdict delay *distribution* (you've capped cadence against a delay you've never measured). Then close the two verdict-blind lanes. Nothing downstream divides sensibly until that number moves.
+2. **Draw the loop map literally** — stocks, flows, delays, balancing arms — placing all seven primitives. Any piece with no balancing loop and no measured delay is a hazard, not a piece. One session, and it determines the composer's shape better than another panel will.
+3. **Add the exogenous variety arm** at some fraction of forks. It's simultaneously the honest counterfactual log and the seed loop's only balancing arm.
+4. **Put a balancing arm on this design loop**: no new open thread without closing one, and make the next artifact a running measurement rather than a document.
+
+### Lens: ml-pragmatist
+
+Read both. Responding as the ML person in the room.
+
+## 1. The strongest idea, for reasons that aren't yours
+
+The player inversion. Not because immersion is a nice metaphor — because it accidentally states the correct formal setup. You have a **frozen policy π and a controllable observation function**. That's a POMDP where you can't touch the actor, so every unit of engineering leverage lives in what o_t you hand it. That's not philosophy; it's a factorization, and it tells you where to spend.
+
+It also hands you a falsifiable claim you haven't run: "our worst failures are immersion breaks, not capability gaps." That's an **ablation**, and it's cheap. Take the Godot/db37d525/rewriter forks, hand-repair the observation only, replay against the same model, count recoveries. If the frozen player recovers ≥70%, the claim survives and the context assembler is your whole roadmap. If it doesn't, three of your load-bearing anecdotes are engine-blaming and §14c needs rewriting. You have the runs. Nobody ran it.
+
+## 2. What you got wrong
+
+**"The chooser is a frozen model, so taste can't be learned."** This is the load-bearing error in 14b, and it's a category mistake. Frozen weights ≠ frozen policy. The seed *is* a parameter vector — it's just discrete and lives in token space, so you optimize it with search instead of gradients. Reflective prompt optimization (DSPy/GEPA-shaped: run, collect failures, have the model propose seed mutations citing the failure, keep what wins on held-out) converges at **30–100 evaluations**, not thousands. Your 3% verdict-density objection is an argument about supervised signal for a big model; it is not an argument about fitting ~500 tokens. You talked yourself out of the one learning method that actually works at your n, then wrote a seven-primitive ledger to fill the gap.
+
+**No eval exists.** Two documents, ~1,400 lines of mechanism, and there is no held-out task set, no metric, no baseline number. The navigator 58%-vs-41% is the only number in either doc and it's uncontrolled. In my discipline this is the tell: when the mechanism section is 50× longer than the measurement section, the mechanism is unfalsifiable and will accrete. The 200-line version here isn't the composer — it's **30 frozen tasks, a pass rate, and a fixed-seed baseline**.
+
+**Your judge and your player are the same model family.** The panel said "verifier independence"; the sharper version is **correlated errors**. Same pretraining, same failure basins — the errors don't cancel, so your ensemble's effective independence is near zero and self-practice is a hall of mirrors. Measure it: κ(judge, Jeremy) and κ(judge, other-family judge) on 50 items. If cross-family κ collapses relative to same-family, your arena is scoring its own reflection.
+
+## 3. The concept that should be on your table
+
+**Off-policy evaluation with logged propensities.** Round 2 correctly killed retrospective clustering ("logs contain only selected framings"), and your fix — log candidates with discard reasons — is half of it. The missing half is a **score per candidate at decision time**. Log the candidate set *and* the selection propensity, and every future seed variant becomes scoreable **offline against your entire run history** via importance weighting — no replays, no LLM spend. That converts your validation bottleneck from a compute problem into a logging schema change you can ship this week. Discard *reasons* are prose; propensities are estimable counterfactuals. Take the second one.
+
+## 4. What I'd do, in order
+
+1. **Overfit-one-batch, first.** Hand-tune a seed *on* 20 tasks. If you can't beat baseline on the very set you tuned on, the seed lacks capacity to express taste and the camera-card program is dead for ~$20. Cheapest kill test you have; the panel found it, you buried it in a §14g bullet.
+2. **Build the 30-task held-out eval + baseline.** Nothing else ships until this number exists.
+3. **Judge κ, both directions.** κ<0.6 → stop; you're optimizing noise.
+4. **The 200-line optimizer.** One seed, five mutations per round, three rounds, ~540 runs.
+5. **Then** — and only if 1–4 clear — look at primitive #2. Not the composer over seven. One.
+
+Manufactured reps around known failures optimize the tail you can already simulate. Your eval set is what stops that; build it before the arena, not after.
