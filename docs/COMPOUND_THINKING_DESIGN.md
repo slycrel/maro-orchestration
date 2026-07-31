@@ -724,3 +724,192 @@ invent a signal.
   broad command failing on DIFFERENT tests across attempts no longer
   fingerprints as a stall (the truer twin: `_error_fingerprint` hashes
   failure content, not probe names).
+
+---
+
+## 14. The §10 conversation — taste, the camera, and the player (2026-07-30)
+
+The owed LOAD-BEARING discussion (flagged 07-28), taken together with
+§9.7 per the lead judgment that they are one conversation. Raw
+transcript: `docs/conversations/2026-07-30-taste-camera-player.md`.
+Companion experiment: `docs/history/2026-07-30-taste-lens-panel.md`.
+
+### 14a. What the live data said first
+
+The klingon problem hasn't arrived: five months of learning is almost
+entirely *methodology* (self-knowledge — global by nature, the self is
+in every context); world-knowledge is nearly absent from the stores.
+So "all-global to start" is what the data already is, and the primary
+scope axis is **method-vs-world**, not goal-vs-global. Scope should be
+evidence-derived (provenance stamped at mint, globality earned by
+foreign-context citation + judged success; chunk-4 contradiction is
+the demotion verb). But any citation-outcome join starves today: ~40
+judged verdicts in 1,448 outcome rows (~3%).
+
+### 14b. Jeremy's redirect: learning-from-experience ≠ taste
+
+"A lot of what you are describing feels a lot like LLM training. I'm
+not sure that's the angle here… I'm not sure that's going to cover
+taste and judgement." Attribution audit confirmed the training frame
+was partly Claude's editorializing ("accumulate" in §10's question was
+Claude's word; Jeremy's "most impactful for our project" carried a
+question mark the summary flattened). Settled split: **judgement is
+where outcome-coupled learning works** (verdicts, receipts,
+contradiction — built, and "likely the easier path as it's
+verification of an attempted [something]"); *taste* is the part the
+training frame can't reach. The chooser is a frozen model, so taste's
+movable parts are: what's in context at the fork, who is consultable
+at the fork, and the structure of the fork itself (what options get
+generated). Everything chunk 9 shipped is fork-structure work.
+
+### 14c. The player inversion (the frame that stuck)
+
+**The LLM is the player, not the engine.** The harness is the game
+engine; the model is the one being immersed. The engine's job is not
+truth-completeness — it is *immersion*: coherent,
+genuinely-useful-if-imperfect patterns rendered at the right level of
+detail so the player's native intelligence engages fully. Jeremy: "the
+illusion of the game engine + the experience of the player, creating
+that moment of immersion; ultimately it's all a lie, but there's truth
+in the patterns that are genuinely useful for the viewer… In this case
+that viewer is our LLM we're seeding to spark that joy." He had been
+pushing harness-as-engine for a while but could only articulate the
+discrepancy as "feels off."
+
+Evidence this frame explains: the system's worst failures are
+**immersion breaks, not capability gaps** — Godot font saga
+(agenda-state divergence), db37d525 (foreign lore in the wrong save),
+the rewriter role-confusion bug (the engine handing the player someone
+else's script). The model was fine in all three. Corollary: the
+context assembler IS the game engine; artifacts-over-streams (context
+= a view rendered over durable world-state at need) is
+level-of-detail rendering, named late. §10-taste = what the engine
+chooses to render at each fork.
+
+### 14d. The camera, taken literally
+
+Adopted as design language (Jeremy: "we need to frame our setup
+properly, in the language sense, which is using literal camera
+terminology"). Two distinct readings, both kept:
+
+- **Settings** (Claude's card): subject / zoom (altitude) / lens
+  (method, worker, persona) / light (context illuminated) / focus
+  (done-means) / exposure (effort) — a per-fork framing card derived
+  from a compact seed. Held loosely ("that's one option. :) I don't
+  hate it").
+- **Vantage** (Jeremy's essence): "with the right camera angle and
+  focus, you can pretty well capture anything" — the Battlefield
+  Earth telescope; there exists an angle from which the secret is
+  simply visible, and taste is knowing to go find it. Splits into
+  *moving the camera* (cheap, in-run: recon, re-frame, the re-scout
+  decision) and *building a new lens* (capability investment; the
+  render-to-LLM browser example). §8's observe→construct line gains a
+  taste reading: **a lens is worth building when many secrets share
+  the same angle.**
+
+Agreed first move, readout-first: **don't build the card — reconstruct
+it** from existing run data (zoom from decompose shape, lens from
+worker/persona stamps, light from RECALL_PERFORMED, exposure from
+tiers, focus from closure checks). Failures clustering by axis → the
+card earns building; no clusters → taste doesn't live in these axes,
+learned for the price of a report.
+
+### 14e. The primitives ledger (the not-literal-16)
+
+Simple pieces, none meaningful alone, composed into complexity —
+Jeremy's No Man's Sky "16". **Correction recorded (Jeremy): the
+pieces' interactions *are* the machinery**, or at least a fundamental
+part of it — "we're deep into systems territory… it's all connected."
+(Claude's original phrasing "complexity lives in the interactions, not
+the machinery" implied a separation he rejects.)
+
+Nuance (Jeremy, same day, on reading this summary): "the independent
+'simple' pieces are truly independent _in addition to_ being core
+integrated machinery." Both properties hold at once — a piece must
+stand alone (simple, separately buildable and testable) AND its
+interactions are first-class machinery. The engraved reading ("never
+design the composer as if the pieces were independent") overcorrected;
+he called the exchange "a bit of a useful misunderstanding overall" —
+worth keeping because the tension itself is load-bearing.
+
+1. **Negative-space reduction** — diffusion's negative prompt /
+   cuts-first; Jeremy flagged this one as a composable piece "we will
+   need similar tools for."
+2. **Vantage-shift** — cheap, in-run re-framing (recon flavor).
+3. **Lens-building** — capability investment (§9.8 default-yes).
+4. **Population priors** — coarse-grained humanity-behavior data as
+   transplanted taste ("we don't need trillions of data points if we
+   can find the right coarse-grained training data"; study public
+   internet behavior to find the shared angles; when-to-build vs
+   search decided there + deep cuts).
+5. **Seed-derived framing** — the settings card, one option.
+6. **Immersion rendering** — context-as-engine at the right LOD (14c).
+7. **Manufactured reps** — the 2..n vision (14f).
+
+The bet matching "it feels right that the mechanism is simple, and
+that's the key": §10's answer is a *simple composer over these
+primitives* — with the interactions understood as part of the
+machinery proper, not an emergent afterthought.
+
+### 14f. Reps: three cheats and the arena-quality reframe
+
+Human System 1 is compiled consequence-coupled reps at a volume closed
+to us (~3% verdict density). Jeremy holds both ends: "we don't need
+years of reps if we can seed the right patterns" AND "possible that
+there are no shortcuts... that the reps are the only way." Resolution
+on the table: reps may be the only way, but ours need not be organic
+or calendar-paced —
+
+1. **Transplanted seeds** — taste authored, not learned
+   (DEV_PATTERNS is compressed Jeremy + case law; codeLikeJeremy
+   shape).
+2. **Population priors** — humanity already did the reps; inherit the
+   compression.
+3. **Deliberate practice (manufactured reps)** — Jeremy's vision: "a
+   more mature learning system that can take something like 2..n
+   failed runs, review and add some reps and creativity, and come out
+   genuinely ahead without 'more data' using simply more reps (where
+   n<10)." Ericsson's actual finding: targeted reps around known
+   failure with immediate feedback, not volume. Accidental precedent:
+   the tire rerun series (four manufactured reps; run 4 delivered at
+   the series' lowest cost).
+
+Bottleneck reframed: not verdict density, not calendar time, but
+**arena quality** — manufactured reps only teach if feedback is
+honest, and honest feedback is verification. **Judgement (built, the
+easier path) is what makes manufactured taste-reps trustworthy: the
+system can practice against itself because it can verify itself.
+System 2 is how System 1 gets compiled safely.**
+
+**Amended by the five-lens panel (same day): necessary, not
+sufficient.** Three lenses independently qualified this claim —
+judgement criteria can be narrow/delayed/proxy-shaped (Goodharted
+reinforcing loop, systems-thinker), the verifier must be independent
+of the rep generator or the arena trains toward verifier quirks
+(simulator overfit, ml-pragmatist), and practice needs an explicit
+coach function or the system practices what is easy to simulate
+(expertise-researcher). Judgement is the *entry ticket* to
+manufactured reps; the honesty contract (14g) now has three named
+threats to answer. Record:
+docs/history/2026-07-30-taste-lens-panel.md.
+
+### 14g. Open threads out of this conversation
+
+- The practice-arena honesty contract (what makes a rep-manufacturing
+  loop's feedback trustworthy; relation to benchmark-cell isolation
+  and the 3-arm experiment's both-lane decree).
+- Immersion mechanics for the assembler (what "right LOD per fork"
+  means concretely; relation to retrieval-not-caps).
+- The camera readout (14d's reconstruct-don't-build) — spec written by
+  committee in the lens panel: ONE fork-replay readout whose column
+  families are the five lens instruments (frame capture / practice
+  arena / shot list / loop map / bandit fork-log); first question it
+  answers is engine-failure vs player-failure.
+- Method-vs-world scope stamping + earned globality (14a — waits on
+  verdict-pipe widening; NOW and evolver_verify lanes are
+  verdict-blind per the census).
+- The five-lens panel verdict — RESOLVED same day: **PASS**. Five
+  distinct missing-concepts, unanimous reconstruct-before-build,
+  contrast surfaced against both participants (Jeremy's vantage
+  essence and the shared 14f claim). Ledger + harvest:
+  docs/history/2026-07-30-taste-lens-panel.md.
