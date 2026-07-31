@@ -5400,3 +5400,16 @@ Dormant (deliberately parked, not dropped):
   tier) — argument for spending expensive models on design review
   specifically. Full round-2 section + Appendices C/D:
   docs/history/2026-07-30-taste-lens-panel.md.
+- **2026-07-31** — Review-to-fixpoint (Jeremy, decree-class, piped
+  637d58d9): his work practice on shipping code — adversarial review,
+  fix criticals/highs + easy lows, re-run; converges to low-only
+  findings by round 3 (rarely 4), and rounds 1-2 almost always find
+  highs. "We don't do that here due to time, but we probably could
+  when it matters." Standing option imported: for load-bearing work,
+  iterate review rounds unattended (his time is the constraint, not
+  compute). Empirical rider under test: round-3 fixpoint arm launched
+  same night (Opus 5 xhigh, five lenses, post-fix tree pinned at
+  a35aafa) with pre-registered predictions — does DESIGN review
+  converge to lows like code review, or does an unbounded design
+  space keep yielding new highs at fixed model+tier? (Round 1→2 yield
+  rose, but the tier jump confounds it.)
