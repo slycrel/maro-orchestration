@@ -439,10 +439,19 @@ from provenance import (
 )
 
 
+# Hard wall-clock budget for the interactive NOW judge (review F1): the
+# hosted-free ladder can serially wait out multiple provider timeouts on an
+# outage (20s+ each), and keep-raw-speed is the interactive contract. Normal
+# hosted-free verdicts are sub-second; 5s is generous headroom, not a tunable.
+_INTERACTIVE_JUDGE_BUDGET_S = 5.0
+
+
 def _interactive_now_verdict_enabled() -> bool:
     """Killswitch for the interactive NOW self-verdict (chunk B, 2026-07-31;
-    default ON, inert without hosted-free keys). Stringly 'false' tolerated
-    (chunk-5a quoted-killswitch lesson)."""
+    default ON, inert without hosted-free CONSENT — both keys and the
+    validate.hosted_free.enabled egress opt-in, which defaults false: a
+    credential proves authentication, not consent). Stringly 'false'
+    tolerated (chunk-5a quoted-killswitch lesson)."""
     try:
         from config import get as _cfg_get
     except Exception:
@@ -517,6 +526,13 @@ def _verify_now_outcome(
             return out
     except Exception as exc:
         log.debug("now-verify failed open (keeping done): %s", exc)
+        # Fail-open stays fail-open (status/verdict untouched), but the
+        # attempt-that-errored is marked so the ledger can distinguish a
+        # broken verdict pipe from a deliberately unjudged run (review F7:
+        # a keyed provider outage used to look identical to no-keys).
+        out = dict(outcome)
+        out["now_verify_error"] = str(exc)[:120]
+        return out
     # Failed open or no clear verdict: goal achievement stays unverified
     # (no goal_achieved key) — absence means "not judged", not "failed".
     return outcome
@@ -1098,8 +1114,9 @@ def _handle_impl(
             # Interactive half of the NOW verdict pipe (chunk B, 2026-07-31 —
             # panel round 3: "close the two verdict-blind lanes"). The
             # keep-raw-speed decision stands for the PAID adapter: the text
-            # judge rides hosted-free only (sub-second, $0, consent-gated by
-            # key presence — build returns None otherwise), and without it
+            # judge rides hosted-free only (sub-second, $0, consent-gated —
+            # build returns None without keys AND the explicit
+            # validate.hosted_free.enabled egress opt-in), and without it
             # only the free deterministic provenance guard runs. Different
             # judge family than the player is a feature, not a compromise
             # (correlated-errors finding, same panel).
@@ -1109,11 +1126,44 @@ def _handle_impl(
                 _hf_adapter = build_hosted_free_adapter()
             except Exception:
                 _hf_adapter = None
-            outcome = _verify_now_outcome(
-                message, outcome, _hf_adapter, wall_start=wall_started_at)
-            if (_hf_adapter is not None and "goal_achieved" in outcome
-                    and not outcome.get("provenance_missing")):
-                outcome["now_verify_family"] = "hosted_free"
+            if _hf_adapter is None:
+                # No consent/keys: deterministic provenance guard only.
+                outcome = _verify_now_outcome(
+                    message, outcome, None, wall_start=wall_started_at)
+            else:
+                # The judge runs on a daemon thread with a hard wall-clock
+                # budget (review F1): a hosted-free provider outage must not
+                # stall the interactive answer for the ladder's serial
+                # timeouts. The thread gets a snapshot copy of the outcome
+                # (no shared-dict race if abandoned); a daemon thread never
+                # blocks process exit for a one-shot CLI call.
+                import threading as _threading
+                _judge_out: list = []
+
+                def _run_judge(_snap=dict(outcome)):
+                    try:
+                        _judge_out.append(_verify_now_outcome(
+                            message, _snap, _hf_adapter,
+                            wall_start=wall_started_at))
+                    except Exception:
+                        pass  # _verify_now_outcome fails open; belt-and-braces
+
+                _judge_th = _threading.Thread(target=_run_judge, daemon=True)
+                _judge_th.start()
+                _judge_th.join(_INTERACTIVE_JUDGE_BUDGET_S)
+                if _judge_out:
+                    outcome = _judge_out[0]
+                    if ("goal_achieved" in outcome
+                            and not outcome.get("provenance_missing")):
+                        outcome["now_verify_family"] = "hosted_free"
+                else:
+                    # Budget breached: answer returns un-judged (raw speed
+                    # kept), marked as an attempted-but-failed verdict so
+                    # the ledger can see the broken pipe (review F7). The
+                    # free deterministic provenance guard still runs.
+                    outcome = dict(_verify_now_outcome(
+                        message, outcome, None, wall_start=wall_started_at))
+                    outcome["now_verify_error"] = "judge_timeout"
         elapsed = int((time.monotonic() - started_at) * 1000)
 
         # Goal verdict as its own metadata dimension (done != successful):
@@ -1168,7 +1218,13 @@ def _handle_impl(
                          else ("now_self_verdict_free"
                                if outcome.get("now_verify_family") == "hosted_free"
                                else "now_self_verdict"))
-                        if _now_judged else ""
+                        if _now_judged
+                        # Attempted-but-failed verdict (judge error/timeout):
+                        # a stamp with no goal_achieved — visible in the
+                        # ledger as a broken pipe, never as "unjudged by
+                        # design" (review F7).
+                        else ("now_self_verdict_error"
+                              if outcome.get("now_verify_error") else "")
                     ),
                     measurement_class=measurement_class,
                     handle_id=handle_id,

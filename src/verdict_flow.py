@@ -31,16 +31,22 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-# Sources whose verdict exists AT record time: the row's own elapsed_ms IS
-# the framing→verdict delay (verdict landed when the run finished), and
-# record→verdict is ~0. Everything else (closure family) lands later via
-# stamp_outcome_verdict and needs goal_verdict_at to be measurable.
+# Sources whose verdict CAN exist at record time: when such a row carries no
+# goal_verdict_at, the verdict landed when the run finished and the row's own
+# elapsed_ms IS the framing→verdict delay. A goal_verdict_at, when present,
+# always wins (review F5: agenda-lane provenance verdicts are stamped
+# post-record via stamp_outcome_verdict — source alone doesn't tell you when).
 VERDICT_AT_RECORD_SOURCES = (
     "provenance",
     "now_self_verdict",
     "now_self_verdict_free",
     "deterministic_tests",
 )
+
+# Attempted-but-failed verdicts (judge error/timeout): a stamp, not a verdict
+# event — excluded from flow counts and the delay distribution, surfaced in
+# the stamped-but-unverifiable table and a coverage counter instead.
+ERROR_SOURCES = ("now_self_verdict_error",)
 
 # Delay buckets (upper bound in seconds, label). Order matters.
 DELAY_BUCKETS: Tuple[Tuple[float, str], ...] = (
@@ -156,26 +162,43 @@ def compute_report(rows: List[Dict[str, Any]], weeks: int,
         else:
             st["never_stamped"] += 1
 
-        age_days = (now - ts).total_seconds() / 86400.0
-        if age_days <= weeks * 7:
-            wk = flow[_week_key(ts)][lane]
-            wk["rows"] += 1
-            if judged:
-                wk["judged"] += 1
+        window_days = weeks * 7
+        if (now - ts).total_seconds() / 86400.0 <= window_days:
+            flow[_week_key(ts)][lane]["recorded"] += 1
 
-        # ---- framing→verdict delay ----
+        # ---- verdict events: when did the verdict ARRIVE? ----
+        # (review F2/F3: bucketing verdicts by record week made a
+        # January row judged this week invisible, and dropped
+        # unverifiable stamps — which are verdict events — entirely.)
         if not (judged or stamped):
             continue
+        if not judged and source in ERROR_SOURCES:
+            cov["judge_error_rows"] += 1
+            continue
+        verdict_at = _parse_ts(row.get("goal_verdict_at"))
+        if verdict_at is not None:
+            verdict_time = verdict_at
+        elif source in VERDICT_AT_RECORD_SOURCES:
+            verdict_time = ts  # verdict landed when the row was recorded
+        else:
+            # Historical closure stamps predate the goal_verdict_at field
+            # (added 2026-07-31): neither the delay nor the arrival week
+            # was recorded. No backfill by decree.
+            cov["verdict_time_unknown"] += 1
+            continue
+
+        if (now - verdict_time).total_seconds() / 86400.0 <= window_days:
+            fl = flow[_week_key(verdict_time)][lane]
+            fl["verdicts"] += 1
+            fl["judged" if judged else "unverifiable"] += 1
+
+        # ---- framing→verdict delay ----
         elapsed_s = 0.0
         try:
             elapsed_s = max(0.0, float(row.get("elapsed_ms") or 0) / 1000.0)
         except (TypeError, ValueError):
             pass
-        verdict_at = _parse_ts(row.get("goal_verdict_at"))
-        if source in VERDICT_AT_RECORD_SOURCES:
-            delay_kind["at_record"] += 1
-            delay_buckets[_bucket_label(elapsed_s)] += 1
-        elif verdict_at is not None:
+        if verdict_at is not None:
             record_to_verdict = (verdict_at - ts).total_seconds()
             if record_to_verdict < 0:
                 cov["delay_negative"] += 1
@@ -184,9 +207,8 @@ def compute_report(rows: List[Dict[str, Any]], weeks: int,
             delays_stamped_later.append(record_to_verdict)
             delay_buckets[_bucket_label(record_to_verdict + elapsed_s)] += 1
         else:
-            # Historical closure stamps predate the goal_verdict_at field
-            # (added 2026-07-31): the delay genuinely was not recorded.
-            cov["delay_not_computable"] += 1
+            delay_kind["at_record"] += 1
+            delay_buckets[_bucket_label(elapsed_s)] += 1
 
     return {
         "coverage": dict(cov),
@@ -228,16 +250,22 @@ def render(report: Dict[str, Any], weeks: int, coverage: Dict[str, int],
             f"   never-stamped {st.get('never_stamped', 0):4d}")
 
     out.append("")
-    out.append(f"FLOW — verdicts/week by lane (last {weeks} weeks)")
+    out.append(f"FLOW — verdict events/week by lane (last {weeks} weeks)")
     if not report["flow"]:
         out.append("  (no rows in window)")
     for week in sorted(report["flow"]):
         lanes = report["flow"][week]
-        parts = [f"{lane} {c.get('judged', 0)}/{c.get('rows', 0)}"
-                 for lane, c in sorted(lanes.items())]
+        parts = []
+        for lane, c in sorted(lanes.items()):
+            verd = c.get("verdicts", 0)
+            unv = c.get("unverifiable", 0)
+            tag = f"{verd}verd" + (f"({unv}unv)" if unv else "")
+            parts.append(f"{lane} {c.get('recorded', 0)}rec {tag}")
         out.append(f"  {week}  " + "   ".join(parts))
-    out.append("  (judged/recorded, bucketed by record week — a verdict"
-               " stamped later still counts in its row's record week)")
+    out.append("  (rec = rows recorded that week; verd = verdict events"
+               " ARRIVING that week, judged + unverifiable — different"
+               " populations, not a ratio: a January row judged this week"
+               " is this week's verdict)")
 
     out.append("")
     out.append("VERDICT SOURCES (judged rows)")
@@ -266,16 +294,21 @@ def render(report: Dict[str, Any], weeks: int, coverage: Dict[str, int],
         med = later[len(later) // 2]
         out.append(f"  stamped-later record→verdict median: {med / 60.0:.1f}m"
                    f" (n={len(later)})")
-    nc = report["coverage"].get("delay_not_computable", 0)
+    nc = report["coverage"].get("verdict_time_unknown", 0)
     neg = report["coverage"].get("delay_negative", 0)
+    errs = report["coverage"].get("judge_error_rows", 0)
     out.append("")
     out.append("NOT COMPUTABLE")
     out.append(f"  {nc} verdict-bearing rows predate the goal_verdict_at"
-               " stamp (added 2026-07-31) — their delay was never recorded;"
-               " no backfill by decree")
+               " stamp (added 2026-07-31) — neither delay nor arrival week"
+               " was recorded; no backfill by decree")
     if neg:
         out.append(f"  {neg} rows with verdict stamped before record time"
-                   " (clock skew) — excluded from buckets")
+                   " (clock skew) — excluded from delay buckets")
+    if errs:
+        out.append(f"  {errs} attempted-but-failed verdicts (judge"
+                   " error/timeout) — a broken pipe signal, not verdict"
+                   " events; see stamped-but-unverifiable sources")
     return "\n".join(out)
 
 

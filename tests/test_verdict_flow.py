@@ -105,20 +105,70 @@ def test_stock_separates_lanes():
 # Flow: verdicts/week bucketed by record week, windowed
 # ---------------------------------------------------------------------------
 
-def test_flow_buckets_by_record_week_and_respects_window():
+def test_flow_counts_verdict_events_by_arrival_week():
+    # Review F2: verdict events bucket by when the verdict ARRIVED
+    # (goal_verdict_at; record time for at-record sources), not by the
+    # row's record week — a January row judged this week is this week's
+    # verdict event, and a record-week bucketing would hide it entirely.
     rows = [
-        _row(recorded_at="2026-07-30T10:00:00+00:00",  # W31, in window
-             goal_achieved=True, goal_verdict_source="closure"),
-        _row(recorded_at="2026-07-21T10:00:00+00:00"),  # W30, in window, unjudged
-        _row(recorded_at="2026-01-05T10:00:00+00:00",   # far outside 6 weeks
-             goal_achieved=True, goal_verdict_source="closure"),
+        # Recorded W30, verdict stamped W31 → recorded in W30, verdict in W31.
+        _row(recorded_at="2026-07-21T10:00:00+00:00",
+             goal_achieved=True, goal_verdict_source="closure",
+             goal_verdict_at="2026-07-30T10:00:00+00:00"),
+        # Recorded in January (outside window), judged W31 → verdict event
+        # in W31, no recorded count anywhere in the window.
+        _row(recorded_at="2026-01-05T10:00:00+00:00",
+             goal_achieved=False, goal_verdict_source="closure",
+             goal_verdict_at="2026-07-31T09:00:00+00:00"),
+        # At-record source, no stamp → verdict event in its record week.
+        _row(recorded_at="2026-07-30T11:00:00+00:00", task_type="now",
+             goal_achieved=False, goal_verdict_source="provenance",
+             elapsed_ms=1_000),
+        # Unjudged row → recorded only, no verdict event.
+        _row(recorded_at="2026-07-21T11:00:00+00:00"),
     ]
     report = compute_report(rows, weeks=6, now=NOW)
-    assert report["flow"]["2026-W31"]["agenda"] == {"rows": 1, "judged": 1}
-    assert report["flow"]["2026-W30"]["agenda"] == {"rows": 1}
-    assert "2026-W02" not in report["flow"]
-    # Stock still holds all three — stock is all-time by design.
+    assert report["flow"]["2026-W30"]["agenda"] == {"recorded": 2}
+    assert report["flow"]["2026-W31"]["agenda"] == {"verdicts": 2, "judged": 2}
+    assert report["flow"]["2026-W31"]["now"] == {
+        "recorded": 1, "verdicts": 1, "judged": 1}
+    # Stock still holds all four — stock is all-time by design.
     assert report["stock"]["agenda"]["rows"] == 3
+
+
+def test_flow_counts_unverifiable_stamps_as_verdict_events():
+    # Review F3: "judged, could not verify" is a verdict event — a week of
+    # closure_unverifiable stamps is a moving pipe, not a dead one.
+    rows = [_row(goal_verdict_source="closure_unverifiable",
+                 goal_verdict_at="2026-07-30T12:00:00+00:00")]
+    report = compute_report(rows, weeks=6, now=NOW)
+    assert report["flow"]["2026-W31"]["agenda"] == {
+        "recorded": 1, "verdicts": 1, "unverifiable": 1}
+
+
+def test_stamped_provenance_prefers_verdict_at_over_source():
+    # Review F5: agenda-lane provenance verdicts are stamped post-record —
+    # a goal_verdict_at always wins over the at-record source assumption.
+    rows = [_row(goal_achieved=False, goal_verdict_source="provenance",
+                 goal_verdict_at="2026-07-30T11:00:00+00:00",
+                 elapsed_ms=60_000)]
+    report = compute_report(rows, weeks=6, now=NOW)
+    assert report["delay_kind"] == {"stamped_later": 1}
+    # 1h stamp gap + 1m run → 1-6h bucket, not the <1m elapsed-only bucket.
+    assert report["delay_buckets"] == {"1-6h": 1}
+
+
+def test_judge_error_rows_counted_not_verdict_events():
+    # Review F7 consumer side: attempted-but-failed verdicts are a broken
+    # pipe signal — visible, but never counted as verdict events or delays.
+    rows = [_row(task_type="now",
+                 goal_verdict_source="now_self_verdict_error")]
+    report = compute_report(rows, weeks=6, now=NOW)
+    assert report["coverage"]["judge_error_rows"] == 1
+    assert report["flow"]["2026-W31"]["now"] == {"recorded": 1}
+    assert report["delay_buckets"] == {}
+    assert report["stock"]["now"]["stamped_unverifiable"] == 1
+    assert report["sources_unverifiable"] == {"now_self_verdict_error": 1}
 
 
 # ---------------------------------------------------------------------------
@@ -164,8 +214,10 @@ def test_stamped_later_delay_adds_run_duration():
 def test_historic_closure_without_stamp_is_not_computable():
     rows = [_row(goal_achieved=True, goal_verdict_source="closure")]
     report = compute_report(rows, weeks=6, now=NOW)
-    assert report["coverage"]["delay_not_computable"] == 1
+    assert report["coverage"]["verdict_time_unknown"] == 1
     assert report["delay_buckets"] == {}
+    # Unknown arrival week → excluded from flow verdict events too.
+    assert "verdicts" not in report["flow"].get("2026-W31", {}).get("agenda", {})
 
 
 def test_negative_delay_counted_not_bucketed():

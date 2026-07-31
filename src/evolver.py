@@ -916,6 +916,10 @@ def _verify_post_apply(applied_ids, run_id: str, *, verbose: bool = False) -> No
         _cmd += ["taskset", "-c", os.environ.get("TEST_CORES", "0,1")]
     _cmd += [sys.executable, "-m", "pytest", str(test_dir), "-q", "--tb=no", "-x"]
     _timeout_s = 900
+    # Wall-clock the verify pass: this duration IS the framing→verdict
+    # delay for the deterministic_tests source (review F4 — without it a
+    # 15-minute suite charts as <1m in verdict_flow).
+    _t0 = time.monotonic()
     try:
         result = subprocess.run(
             _cmd,
@@ -981,6 +985,7 @@ def _verify_post_apply(applied_ids, run_id: str, *, verbose: bool = False) -> No
             # 2026-07-31): done ≠ achieved needs the verdict on the row.
             goal_achieved=passed,
             goal_verdict_source="deterministic_tests",
+            elapsed_ms=int((time.monotonic() - _t0) * 1000),
         )
     except Exception:
         pass

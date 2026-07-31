@@ -5530,3 +5530,21 @@ never-stamped vs stamped-unverifiable split, delay buckets
 (<1m…>24h), honest not-computable block (37 historic closure rows
 predate the stamp). First live numbers: at-record verdicts 4, all
 pre-chunk NOW/evolver rows honestly unjudged going forward from here.
+
+- 2026-07-31 — Chunk-B adversarial review (3 Codex lenses vs 5f74d46):
+  REJECT-as-reviewed → remediated same session, 7/7 verified, 0
+  hallucinated — twelfth clean round. Unanimous high: the interactive
+  judge violated the chunk's own keep-raw-speed constraint (serial
+  provider timeouts) → daemon-thread judge under a hard 5s budget.
+  All-lens high: "verdicts/week" was rows-by-record-week → flow now
+  counts verdict EVENTS by arrival week (live effect: honest 4
+  known-arrival events, not 18/34-style historic-stamp illusions;
+  flow measurable from today forward). Also fixed: unverifiable
+  stamps count as verdict events; evolver elapsed_ms measured (was
+  fabricating <1m); goal_verdict_at wins over at-record source
+  assumption (agenda provenance stamps post-record); "inert without
+  keys" doc corrected to the real double consent gate (keys +
+  validate.hosted_free.enabled — coupling kept, it IS the consent
+  posture); judge failures stamp now_self_verdict_error so a broken
+  pipe never reads as unjudged-by-design. Record:
+  docs/history/2026-07-31-chunkb-adversarial-review.md.

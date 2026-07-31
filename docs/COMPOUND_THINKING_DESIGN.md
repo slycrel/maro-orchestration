@@ -950,8 +950,10 @@ was the distillation's, more than his.
   2026-07-31, Chunk B**: evolver_verify rows now carry the measured
   suite verdict (`deterministic_tests`), interactive NOW gets a
   hosted-free-family self-verdict (`now_self_verdict_free`, killswitch
-  `now_lane.interactive_self_verdict`, paid adapter never judges —
-  keep-raw-speed stands), and `stamp_outcome_verdict` stamps
+  `now_lane.interactive_self_verdict` — inert without hosted-free
+  consent: keys + `validate.hosted_free.enabled`; paid adapter never
+  judges, hard ~5s judge budget — keep-raw-speed stands), and
+  `stamp_outcome_verdict` stamps
   `goal_verdict_at` so the framing→verdict delay is measurable; flow
   readout `python3 -m verdict_flow` per round 3's "instrument the flow
   before the stock"). **Contested by panel round 2** from

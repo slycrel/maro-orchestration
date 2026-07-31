@@ -3505,6 +3505,60 @@ class TestNowStatusHonesty:
         assert row["goal_achieved"] is False
         assert row["goal_verdict_source"] == "now_self_verdict_free"
 
+    def test_interactive_now_judge_timeout_keeps_raw_speed(self, monkeypatch, tmp_path):
+        # Review F1: a hosted-free provider outage must not stall the
+        # interactive answer — the judge runs under a hard wall-clock
+        # budget; on breach the answer returns un-judged with the
+        # attempted-but-failed marker on the row (review F7).
+        _setup(monkeypatch, tmp_path)
+        import time as _time
+        from unittest.mock import MagicMock, patch
+        import handle as handle_mod
+        monkeypatch.setattr(handle_mod, "_INTERACTIVE_JUDGE_BUDGET_S", 0.05)
+        slow = MagicMock()
+
+        def _slow_complete(*a, **kw):
+            _time.sleep(0.6)
+            resp = MagicMock()
+            resp.content = '{"fulfilled": true}'
+            resp.input_tokens = 1
+            resp.output_tokens = 1
+            return resp
+
+        slow.complete.side_effect = _slow_complete
+        canned = {"status": "done", "result": "Here is the answer.",
+                  "tokens_in": 1, "tokens_out": 1}
+        t0 = _time.monotonic()
+        with patch("handle._run_now", return_value=canned), \
+             patch("intent.classify", return_value=ClassifyResult("now", 0.9, "simple", introspects_self=False)), \
+             patch("hosted_free.build_hosted_free_adapter", return_value=slow):
+            result = handle("do it", adapter=self._verdict_adapter(True),
+                            force_lane="now", dry_run=False)
+        assert _time.monotonic() - t0 < 3.0  # budget held, not the 0.6s judge
+        assert result.status == "done"
+        row = self._now_rows()[-1]
+        assert "goal_achieved" not in row
+        assert row["goal_verdict_source"] == "now_self_verdict_error"
+
+    def test_interactive_now_judge_error_marks_row(self, monkeypatch, tmp_path):
+        # Review F7: a judge that errors must not look like "unjudged by
+        # design" — the row carries the attempted-but-failed source.
+        _setup(monkeypatch, tmp_path)
+        from unittest.mock import MagicMock, patch
+        broken = MagicMock()
+        broken.complete.side_effect = RuntimeError("provider down")
+        canned = {"status": "done", "result": "Here is the answer.",
+                  "tokens_in": 1, "tokens_out": 1}
+        with patch("handle._run_now", return_value=canned), \
+             patch("intent.classify", return_value=ClassifyResult("now", 0.9, "simple", introspects_self=False)), \
+             patch("hosted_free.build_hosted_free_adapter", return_value=broken):
+            result = handle("do it", adapter=self._verdict_adapter(True),
+                            force_lane="now", dry_run=False)
+        assert result.status == "done"  # fail-open stays fail-open
+        row = self._now_rows()[-1]
+        assert "goal_achieved" not in row
+        assert row["goal_verdict_source"] == "now_self_verdict_error"
+
     def test_interactive_now_killswitch_off_skips_judging(self, monkeypatch, tmp_path):
         # now_lane.interactive_self_verdict=false disables the interactive
         # branch entirely — hosted-free is never even built. Stringly

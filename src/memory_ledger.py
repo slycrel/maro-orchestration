@@ -62,7 +62,7 @@ class Outcome:
     # a verdict exists, None = unjudged. Serialized as an ABSENT key when None
     # (never null) — absence means "not judged", not "failed".
     goal_achieved: Optional[bool] = None
-    goal_verdict_source: str = ""   # "closure" | "closure_unverifiable" | "provenance" | "now_self_verdict" | "now_self_verdict_free" | "deterministic_tests" | ""
+    goal_verdict_source: str = ""   # "closure" | "closure_unverifiable" | "provenance" | "now_self_verdict" | "now_self_verdict_free" | "now_self_verdict_error" | "deterministic_tests" | ""
     goal_verdict_confidence: Optional[float] = None  # closure judge confidence, when judged
     # Typed stop verdict (stop_verdicts.py vocabulary; "" = none recorded).
     # Sibling to goal_verdict_source: WHY the run stopped, machine-readable —
