@@ -5338,3 +5338,34 @@ Dormant (deliberately parked, not dropped):
   engine-failure vs player-failure. Full session transcript archived
   per Jeremy's request:
   docs/history/transcripts/2026-07-30-taste-session.jsonl.gz.
+- **2026-07-31** — Panel follow-ups (Jeremy): (a) **Battlefield Earth
+  clarified** — "wasn't the one single perfect angle — it was set up
+  to be a KNOWN angle... one of many possible ways to get that
+  information": the essence is engineered observability, not a magic
+  shot; the romanticization was the distillation's (§14f note).
+  (b) **n<10 conceded as guess-wish, bar lowered**: mid-goal the seed
+  needs only "enough of the diffused outline to get the 'player'
+  interested and working in the right direction until the next
+  render" — directional orientation in a refinement loop, not
+  compiled expertise. (c) **Nothing-provable pattern named**: the
+  panel rejected nothing "because there's nothing provable" — design
+  reviews are unfalsifiable-by-default (vs code reviews' 30-50%
+  verify-against-tree kill rate); lever = demand each design finding
+  name its falsifier. Recorded as recurring house pattern
+  (anti-hallucination memory updated). (d) **Replication arm run**
+  (his "worth trying on claude's models?"): same five prompts
+  verbatim on claude-sonnet-5 (codex arm was gpt-5.5 medium; box
+  codex default since moved to gpt-5.6-terra high). Pre-registered
+  predictions scored: data-first replicates (P1 ✓), Goodhart family
+  reappears escalated to named model-collapse + structural-vs-role
+  verifier independence (P2 ✓), concept slots diverge 4/5 (P3 ✓),
+  Claude-arm-softer-tone REFUTED (P4 ✗ — at least as sharp, more
+  literature-anchored). Known confound: Claude arm read the
+  post-panel tree (pin seed docs to a git blob next time). Yield
+  split: double-confirmed core (data-first, structural verifier
+  independence, coverage/variant-framings, mental representations,
+  bandit baseline) vs per-family frontier (rollback/desync + demo
+  recorder, desirable difficulty + naming problem, lighting-as-
+  argument, seed-outflow + shifting-the-burden, model collapse +
+  Algorithm Distillation + off-policy eval). Full record + Appendix B
+  in docs/history/2026-07-30-taste-lens-panel.md.

@@ -893,6 +893,23 @@ manufactured reps; the honesty contract (14g) now has three named
 threats to answer. Record:
 docs/history/2026-07-30-taste-lens-panel.md.
 
+Jeremy's post-panel refinements (2026-07-31): (1) n<10 "was totally a
+guess-wish and I wouldn't be surprised if it was wildly wrong" — but
+the bar is lower than the lenses assumed: mid-goal, the seed doesn't
+need robust intuition, "just enough of the diffused outline to get the
+'player' interested and working in the right direction until the next
+render." The n<10 target is directional orientation inside a
+refinement loop (diffusion coarse-to-fine × LOD), not compiled
+expertise — which is roughly what the two skeptic lenses' "library of
+scars" salvage delivers. (2) On the chosen-lie correction: his
+Battlefield Earth vantage "wasn't the one single perfect angle — it
+was set up to be a KNOWN angle... one of many possible ways to get
+that information." The essence is engineered observability — vantage
+points built in advance so the information is obtainable when needed —
+which is compatible with (and sharpened by) the DP's
+every-framing-conceals ledger; the "one magic angle" romanticization
+was the distillation's, more than his.
+
 ### 14g. Open threads out of this conversation
 
 - The practice-arena honesty contract (what makes a rep-manufacturing

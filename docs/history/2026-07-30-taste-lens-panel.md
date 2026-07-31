@@ -450,3 +450,206 @@ context_features, candidates, selected_action, selection_reason, cost, verifier_
 Fifth, implement the most boring policy possible: random exploration over candidate framings with a hand-written prior, then update action values by task cluster.
 
 If this does not beat the current heuristic chooser after 50-100 fork decisions, the primitives are probably wrong or the reward is too noisy. If it does beat baseline, then you have a real taste loop: simple policy, real feedback, measurable regret reduction. That is the mechanism I would trust.
+
+---
+
+# Replication arm — same five charges, Claude family (2026-07-31)
+
+Commissioned by Jeremy's follow-up ("worth trying this on… any of
+claude's models?"). Same five persona prompts **verbatim** (recovered
+from the session transcript), run serially as `claude -p` one-shots on
+**claude-sonnet-5**. The codex arm ran **gpt-5.5, medium reasoning
+effort** (verbatim from the codex config + rollout logs; Jeremy has
+since moved this box's codex default to gpt-5.6-terra, high effort —
+future codex reviews run on a newer model than this record). Master
+(selection, synthesis) remained Claude Fable 5 in both arms — the
+isolated variable is the lens model family.
+
+**Known confound, stated up front:** the Claude arm read the
+post-panel tree — §14 had already absorbed the codex panel's
+amendments (Goodhart/verifier-independence/coach in 14f, the readout
+spec in 14g) and Jeremy's post-panel refinements. Prompts were
+identical; the documents had grown. So cross-arm *convergence* claims
+are contaminated for any concept reachable from the updated docs
+(claude-expertise's "independently discovered" nod to simulator
+overfit is not independent — it read the amendment). The clean signal
+is the arm's **new** material. Next time: pin the seed docs to a git
+blob.
+
+## Pre-registered predictions (written into the runner script before any output existed) — scored
+
+- **P1 — data-first convergence replicates: CONFIRMED.** All five
+  Claude lenses again said start from existing run data, not new
+  machinery (demo recorder / tire-series transcript analysis / "pull
+  dailies" / causal loop diagram of actual forks / fit a model on the
+  1,448 rows "tonight"). Weak as independent evidence (both arms'
+  seed docs proposed reconstruct-first), strong as
+  no-lens-anywhere-objected.
+- **P2 — Goodhart/overfit family reappears: CONFIRMED, escalated.**
+  The Claude arm named the mechanism: **model collapse** (Shumailov)
+  — verifier degenerates in the same direction as the generator,
+  invisible from inside, "at ~3% verdict density this isn't a someday
+  risk — it's the first thing that happens." And sharpened the fix:
+  *role* independence (a second instance checking the first) is not
+  *structural* independence — same frozen model shares blind spots by
+  construction; you need an outside-the-loop signal or a different
+  instrument. (Which is an argument that the cross-family
+  second-family gate shipped in chunk 5a is load-bearing for the
+  practice arena, not just the quality gate.)
+- **P3 — novel-concept slots diverge: LARGELY CONFIRMED.** 4/5 named
+  different concepts (rollback netcode / desirable difficulty /
+  leverage-point hierarchy / Algorithm Distillation vs the codex
+  arm's interest management / mental representations / policy
+  resistance / contextual bandits). The 5th — **coverage** — appeared
+  in BOTH cinematographers (confound caveat applies, but the Claude
+  DP developed it into a build: 2-3 cheap variant framings per fork,
+  banked, judgement selects in post). Mental representations and
+  bandits also resurfaced cross-arm in non-concept slots.
+- **P4 — Claude arm softer in tone: REFUTED.** At least as sharp:
+  "beginner's mistake dressed up as elegance," "not practice,
+  retrieval-augmented prompting with a write-back step," "pirate-map
+  poetry," "about to reinvent badly." And more literature-anchored
+  (Shumailov, Laskin, Bjork, Garivier & Moulines). The prediction was
+  itself a family stereotype; it did not survive contact.
+
+## New material (not in the codex arm, not in the seed docs)
+
+| Lens | New contribution |
+|---|---|
+| engine-architect | **Authoritative-state vs render split** — "context assembler is the engine" collapses simulation and renderer into one thread; agenda-state divergence is a *desync*, and nothing authoritative exists mid-run to check the render against. **Demo recorder** (record input+state, run twice, diff — the divergent frame IS the bug report) as the arena-honesty answer. **Rollback reconciliation** (GGPO) as the missing correction protocol between verifier and renderer. **Hysteresis** on the zoom/decompose threshold before it thrashes. |
+| expertise-researcher | **Desirable difficulty (Bjork)** — performance≠learning; manufacture variants *structurally similar but superficially different*, never near-clones of the failure, plus an explicitly held-out transfer set. **The naming problem**: with a frozen chooser this is "curated retrieval + selection pressure on a prompt library," and calling it practice invites confusing "the seed got better" with "the player got better." Tire-series test: would run 4's fix have transferred to a held-out failure? If the four transcripts can't answer that, we don't know if it learned or matched. |
+| cinematographer | **Coverage as a build**: stop committing one framing per fork — shoot 2-3 cheap variant framings, bank them, let the existing judgement layer select in post. **Lighting-as-argument**: the ledger has an axis for what gets revealed but none for what the rendering *argues*; coherence is always coherent *toward* something — own the slant or lie by accident. Blocking is upstream of vantage. |
+| systems-thinker | **Seed stock has no outflow** — lessons decay but nothing retires a seed-edit that stops earning its keep ("compressed Jeremy quietly becomes compressed Jeremy circa three months ago"). **Shifting-the-burden**: the fast internal rep loop can atrophy pressure to widen the real verdict pipe (aimed squarely at the §14a thread). **Leverage-rank the primitives** (settings-card = parameters, immersion-rendering = information flow, lens-building = self-organization) — turns reconstruct-don't-build from instinct into principle. |
+| ml-pragmatist | **Fit the reconstruction, don't hand-write it**: logistic regression over the existing 1,448 outcome rows — "the fitted model's coefficients ARE the reconstruction, done in an afternoon." **Off-policy/counterfactual evaluation** over the 97% unjudged rows (verdict density is a variance problem, not a wall). **Algorithm Distillation** (Laskin 2022) as the actual literature on in-context "System 1 compilation" without weight updates, with empirical limits — a better anchor than gut n<10. Held-out adversarial verifier that never sees generator outputs during tuning: non-negotiable. |
+
+## Synthesis across both arms
+
+Ten lenses, two model families now split the harvest into:
+
+1. **A double-confirmed core** (confound-discounted but present in
+   both arms): start from existing run data; verifier independence
+   must be structural, not role-play; coverage/variant-framings;
+   mental-representation-shaped encoding of fork situations; the
+   bandit as the falsifiable baseline. This core deserves priority
+   weight when the arc activates.
+2. **A per-family frontier** — each family's priors contributed
+   distinct, non-overlapping instruments. Mixing families in a panel
+   buys breadth, not just decorrelation-against-error.
+
+The two sharpest cross-arm challenges to hold onto: the expertise
+lens's naming problem (seed-improvement ≠ player-improvement — keep
+the claims separate) and the ML lens's afternoon-sized dare (fit the
+regression before hand-designing any card).
+
+## Lead judgment (additions)
+
+- **Accept** the naming discipline: in all future docs, manufactured
+  reps improve the *seed/library*, not the player; say so.
+- **Accept** structural-verifier-independence as a named requirement
+  of the practice-arena honesty contract (the chunk-5a second-family
+  pattern is the existing house instrument for it).
+- **Accept** the demo-recorder/held-out-transfer-set/seed-outflow
+  trio as spec lines for the fork-replay readout when it's built.
+- **Hold** the regression-tonight dare as the readout's likely first
+  implementation step — it IS reconstruct-don't-build, in executable
+  form.
+- **Hold** Algorithm Distillation as a read-before-building reference
+  for the rep loop; verify the citation before leaning on it.
+
+---
+
+## Appendix B — Claude-arm outputs (verbatim, claude-sonnet-5)
+
+### engine-architect (claude arm)
+
+## 1. The strongest idea, and why
+
+Immersion-as-LOD is the one piece of this conversation that's actually load-bearing engineering, not metaphor. LOD isn't an aesthetic choice — it's what you do when your triangle budget is fixed and the scene isn't. You don't render the distant mountain at full tessellation because you *can't*, and the discipline of picking what detail survives the cut is exactly a context window under a token budget. That gives them something they don't otherwise have: a known failure taxonomy. LOD systems fail in specific, named ways — popping (visible detail-level jump), silhouette break (the collapsed mesh no longer reads as the object), and LOD bias mismatch between systems that disagree about what distance means. Their own bug list — the Godot font saga, the foreign-lore leak — are silhouette breaks and popping by another name. That's a much stronger claim than "immersion," because it comes with a test: does the rendered context still read as the same object it's a reduction of.
+
+## 2. What they got wrong
+
+They're running renderer and simulation on the same thread and don't seem to notice. A real engine keeps world-state (the simulation, authoritative) separate from what gets rendered to the client (a view, lossy, budgeted). Their "context assembler is the game engine" line collapses those into one component. That's the exact architecture that made early lockstep RTS netcode a nightmare — every peer simulates *and* renders from local state, so there's no ground truth to reconcile against when things diverge, only vibes about whose state is right. Their "agenda-state divergence" bug is a desync. Desyncs get root-caused by diffing two state streams against a single authoritative log, not by reasoning about what the player experienced. They have judgement (verdicts) which is *sort of* a source of truth after the fact, but nothing authoritative *during* the run that the render can be checked against mid-flight.
+
+Second miss, smaller but concrete: the zoom axis (leap vs. decompose) has no hysteresis. Any LOD switch driven by a raw threshold thrashes at the boundary — you get popping every time the metric wobbles across the line. If altitude decisions flip near their threshold with no dead band, that's a bug they haven't hit yet only because they haven't instrumented it.
+
+## 3. What's missing from their table
+
+Rollback netcode — GGPO-style client-side prediction with reconciliation. The player (LLM) acts on a locally rendered, necessarily-incomplete state. When authoritative state disagrees — a verdict, a surprise, a contradiction — you don't re-derive the whole scene, you roll back to the last agreed frame and resimulate forward with the correction applied. This is a precise, existing answer to their open question "how do surprises correct behavior mid-run," and it's sharper than either the training frame Jeremy rejected or the camera-settings card: it names what state gets kept authoritative, what triggers a rollback, and how far back you go. Right now they have a verifier and a renderer and nothing describing the correction protocol between them.
+
+## 4. What I'd do next
+
+Before building the camera card, build the demo recorder. Every engine debugs desync the same way: record the full input+state stream deterministically, run twice, diff. The frame where the two runs disagree *is* the bug report — no interpretation needed. That directly answers their "arena honesty contract" thread with fifteen-year-old tech instead of a new mechanism. Second: instrument frame budget — token/latency cost per fork — as a first-class metric before touching axes; you don't tune LOD bias before you know your triangle count. Third: put a hysteresis band on the zoom threshold before it ships, not after the first thrash bug gets filed. Camera work is worthless if the engine underneath it can't tell you when the frame it just rendered was a lie.
+
+### expertise-researcher (claude arm)
+
+Now I have the full picture. Here's my read as an expertise-acquisition researcher.
+
+1. **The strongest idea, by my lights: they already discovered that they can't afford organic reps, and turned to *manufactured* deliberate practice — but the strongest single move buried in there is the honesty-contract dependency (14f/14g), not the manufacturing itself.** Ericsson's actual finding (not the popular "10,000 hours" caricature) is that deliberate practice requires three things simultaneously: a task at the edge of current competence, immediate informative feedback, and enough repetition to refine a mental representation. Most people who invoke Ericsson skip straight to "more reps" and miss that feedback quality is the rate-limiting reagent — bad feedback doesn't slow learning, it *teaches the wrong thing*, confidently. Jeremy and Claude landed on exactly this when the panel forced the amendment: judgement is the "entry ticket," not the guarantee. That's the right instinct, arrived at honestly (via adversarial correction rather than getting it right the first time), which is rarer than getting it right.
+
+2. **What they got wrong, or underweighted: mental representations, not "reps," are the actual unit of expertise, and nothing here builds one.** Chess masters don't have more board-positions memorized as isolated facts — they have a compressed relational structure (chunks) that lets a new position get *classified* against prior structure in milliseconds. Ericsson's whole point is that deliberate practice works because it refines a *representation*, and the representation is the thing that transfers. Your "seed" (DEV_PATTERNS, the camera axes) is written prose, not a representation the frozen model can update through use — it's a prior injected at the fork, re-read fresh every time, never restructured by what happened. That's fine as a rep-cheat (§14f-1, transplanted seed), but it's not itself a mechanism for compiling new reps into anything durable, because you have no representational substrate to write into. "The chooser is frozen" isn't just a taste-limitation you noted in passing (14b) — it is the single fact that rules out real skill compilation. Everything downstream of it is retrieval-augmentation dressed as practice, not practice. That's not a criticism of the plan, it's a naming problem: call it what it is (curated retrieval + selection pressure on a prompt library) so you don't later confuse "the seed got better" with "the player got better," which is a different claim with different failure modes.
+
+3. **The concept that should be on the table and isn't: desirable difficulty (Bjork), specifically the distinction between performance and learning.** Deliberate practice literature has a sharp, counterintuitive finding: interventions that *improve* immediate performance (repeating the same failure mode, blocked practice, easy feedback) often *harm* retention and transfer, while interventions that *hurt* immediate performance (interleaving, spacing, harder variants, testing-not-restudy) improve it. Your manufactured-reps plan (§14f-3, "synthesize variations around the failure, run them cheap, keep the seed-edit that survives") is a selection process over performance on synthetic variants — and selection-for-performance is exactly the mechanism that overfits to whatever the practice arena makes easy to measure (the ml-pragmatist lens's "simulator overfit" concern, independently discovered — good, that's convergent validity). Desirable difficulty gives you a design lever the panel didn't: don't manufacture variants *near* the failure, manufacture variants that are *structurally similar but superficially different* (interleaved contexts, not repeated ones), because that's what forces the seed-edit to generalize rather than memorize the specific failure signature. This is testable and cheap to add to the arena spec you're already writing.
+
+4. **What I'd do next, concretely:** before building any rep-manufacturing loop, write down — for the tire-rerun series specifically, since it's your only real specimen — what changed between run 1 and run 4 that a *held-out, structurally different* failure would have needed the same fix to generalize to. If you can't answer that from the existing four transcripts, you don't yet know whether run 4 "learned" or just "matched." Then design the practice arena's variant-generator around forced surface variation (different tooling, different phrasing, different failure symptom, same underlying cause) rather than variation-around-the-same-failure, and track a transfer test set explicitly held separate from the training variants — the one methodological habit every deliberate-practice program in sports and music enforces and the one your design doesn't yet mention.
+
+### cinematographer (claude arm)
+
+## 1. The strongest idea — and why, from behind the eyepiece
+
+The keeper is 14d's vantage/settings split, but not for the reason they gave it. On a real set, "where do I put the camera" and "how do I expose what I see" are decided by different people at different moments — the director and I block the scene and pick the setup before the gaffer and I ever touch a stop or a gel. Vantage is a *staging* decision: where in the space does the truth of the scene actually happen. Settings are a *rendering* decision: given that I'm standing there, how do I make it legible. Collapsing those into one seven-item settings card (14e's ledger) is a beginner's mistake dressed up as elegance — it treats "what to point at" and "how to render it" as siblings when one is upstream of the other and constrains it. Keeping them split, as 14d ultimately does, is the correct instinct even if they don't fully know why yet.
+
+## 2. What they missed — lighting isn't in the room
+
+Their "light" axis ("which context gets illuminated into the prompt") is a metering concept, not a lighting concept. Visibility and lighting are not the same thing. I can light a face so you see every pore, or light the same face so half of it disappears into shadow and the *absence* is the story — both are fully "illuminated" in their sense, and they say opposite things. Lighting is an argument: key direction implies causality, hard vs. soft implies threat vs. safety, ratio implies mood. Nothing in their ledger has an axis for what the rendering *argues* — only for what gets revealed. That's a real gap, and it's the same gap that shows up as their treating "coherent, useful pattern" as sufficient — coherence isn't neutral, it's always coherent *toward* something, and somebody has to own that slant on purpose or the engine is lying by accident instead of by design.
+
+Second miss: blocking. Vantage-shift (14e #2) is described as camera movement, but on set the camera moves *after* blocking decides where in space the actors carry the scene. You don't hunt for the one angle that reveals the secret (their Battlefield Earth read, which Jeremy himself walked back on 07-31 — good, he was right to). You stage the scene so the truth is available from more than one place, then the camera picks. Blocking is upstream of vantage and it's simply not on their table.
+
+## 3. What's missing entirely — coverage
+
+This is the big one. No production shoots a scene from one setup and trusts it. You shoot the master, then singles, then a two-shot, then inserts — deliberately redundant angles of the *same* action — because the person who knows what the scene needs is the editor, in the cutting room, weeks later, with the whole film in view. The camera crew doesn't try to guess the cut. They bank options; judgement happens downstream with more context than the set ever had.
+
+Their whole architecture commits at the fork: one seed, one settings card, one render. That's shooting single-camera with no coverage and hoping the dailies cut themselves. Given they already have a working judgement layer sitting idle for exactly this kind of decision, the obvious craft move is: stop committing one framing per fork. Shoot two or three cheap variant framings — different worker, different persona, different zoom — bank them uncut, and let judgement do the selection in post instead of asking taste to be right in real time. That's not a new subsystem, it's coverage, and it's the standard answer to "the single angle might be wrong."
+
+## 4. What I'd do next
+
+Skip the card. Pull dailies. Take the manufactured-rep runs (the tire series) and any other multi-attempt runs you've already got, and review them the way I'd sit with a director over raw footage: were these ever *different* angles on the same problem, or the same angle shot four times hoping for a better take? My bet is the latter. Then pilot true coverage on a small batch — 2–3 cheap variant framings per fork, banked, judged after — before spending a token on the settings-card machinery. You'll learn whether the problem was framing or exposure, and you'll learn it from real film, not from a lighting diagram.
+
+### systems-thinker (claude arm)
+
+## 1. The strongest idea, and why (in my vocabulary)
+
+The player inversion is a **leverage-point move**, not just a nice metaphor. Meadows ranks intervening in a system's *rules* and *information flows* well above intervening in its *parameters* — and for months this team had, without saying so, been tuning parameters on an unchangeable actor (the frozen model). The inversion relocates the intervention surface to the context assembler: a rule-and-information-flow layer that decides what the player *sees* at each fork. That's a jump up Meadows' hierarchy, and it's why it explains failures the parameter-view couldn't: Godot-font, db37d525, the rewriter bug are not stock problems (missing capability) — they're **information-flow problems**, wrong or foreign material entering the loop at the wrong point. This is POSIWID in miniature: the system's purpose is revealed by what it renders, not by what the model is theoretically capable of. Locating taste in the engine rather than the player is the only framing in the transcript that is falsifiable against your own incident log, and it survived that test.
+
+## 2. What systems thinking catches that they missed
+
+**A reinforcing loop with no named balancing loop.** Manufactured reps → judged verdict → seed edit → next rep is a classic reinforcing loop, and reinforcing loops left ungoverned don't converge, they run away toward whatever the loop can most easily satisfy — usually a proxy, not the goal. The lens panel's "Goodharted reinforcing loop" catch is the right instinct, but the fix on the table ("verifier independent of generator") is *role*-independence, not *structural* independence. Two instances of the same frozen model checking each other share blind spots by construction — correlated failure, not independent witnesses. That's a monoculture risk, and monocultures are exactly what balancing loops are supposed to interrupt. Without an outside-the-loop signal (real verified outcomes, or a genuinely different instrument), this reinforcing loop will optimize toward internally-coherent, externally-untested taste — fast and confident and wrong.
+
+**A stock with inflow and no outflow.** The seed accumulates edits from reps. Lessons in the knowledge store have a decay/demotion verb (§14a mentions it explicitly). The *seed itself* — the camera settings, DEV_PATTERNS-shaped material — has no symmetric outflow described anywhere. A stock that only accumulates drifts silently; this is how "compressed Jeremy" quietly becomes "compressed Jeremy circa three months ago." If reps can edit the seed, something must also be able to retire a seed-edit that stops earning its keep.
+
+**Shortening a delay without preserving what the delay was doing.** Real verified-outcome density is ~3%, arriving on a slow, honest, real-world delay. Manufactured reps compress that delay by substituting self-verification. Fine in principle — but a fast internal loop substituting for a slow external one is precisely the setup for the "shifting the burden" archetype: the quick internal fix (judgement-checks-itself) feels like progress and gradually atrophies pressure to actually widen the real verdict pipe, because the system no longer *needs* to.
+
+## 3. The concept missing from the table
+
+**Leverage points as a ranked hierarchy**, applied to their own ledger. All seven primitives are currently listed as peers. They aren't. Settings-card parameters (subject/zoom/lens/light/focus/exposure) are low leverage — cheap to tune, cheap to get wrong, cheap to fix. Immersion-rendering (what the engine chooses to show) is a structural/information-flow lever — higher leverage, which is why the player-inversion insight lives there. Lens-building is a *capacity for self-organization* — the ability to grow new structure — which Meadows ranks higher still, and it's the one thing in the ledger that isn't really about any single fork at all. Ranking the primitives this way would validate "reconstruct don't build" on principled grounds (don't spend first on the lowest-leverage layer) rather than on instinct alone.
+
+## 4. What I'd do next
+
+Before building the readout as an axis-cluster report, build it as a **causal loop diagram of actual forks** — nodes are the seven primitives, edges are "changing X at this fork changed the judged outcome," weighted by frequency. That operationalizes Jeremy's correction (interactions *are* the machinery) as data rather than leaving it a slogan. Alongside it, instrument the real lag between a taste decision and its judged consequence — that number tells you whether the manufactured-rep loop can safely close within a run or whether you're building a fast thermostat on a slow sensor.
+
+### ml-pragmatist (claude arm)
+
+## 1. Strongest idea — and why, in my terms
+
+The player/engine split is the real result here, but not because it's evocative (camera, immersion). It's because a frozen policy plus a controllable observation function is just a POMDP where you've correctly decided not to touch π_θ and instead hand-engineer O(s)→o. That's the right move whenever you can't backprop through the thing making decisions — it's what prompt engineering has always been, except they've noticed it generalizes into a systems-level design axis instead of staying a one-off trick. Once you name it that way, "grey fog decay" stops being pirate-map poetry and becomes exactly a belief-state update with a forgetting factor — the same math as discounted/sliding-window UCB or a Kalman filter's uncertainty growth between observations. That's 15-year-old off-the-shelf math (Garivier & Moulines on non-stationary bandits), not something to re-derive from No Man's Sky.
+
+## 2. What they got wrong / missed
+
+"Manufactured reps," "compiled reps," System 1/System 2 — this is vocabulary borrowed wholesale from a substrate (persistent weight change) they explicitly don't have. There is no gradient step anywhere in this design. Every "rep" evaporates at the end of its context window; the only thing that survives across reps is whatever text gets written back into the seed or library. That's not practice, it's retrieval-augmented prompting with a write-back step — a fine mechanism, but the borrowed vocabulary hides the actual risk. A frozen model "practicing against itself" with a self-generated verifier is precisely the setup that produces model collapse in the literature (Shumailov et al.): a system training on its own outputs without a fresh anchor to ground truth drifts, and the drift is invisible from inside because the verifier degenerates in the same direction as the generator. The panel's "verifier independence" note is reaching for this without the name. At ~3% verdict density this isn't a someday risk — it's the first thing that happens, and it happens quietly.
+
+## 3. A concept from my field that should be on the table
+
+Algorithm Distillation (Laskin et al., 2022) is the paper this conversation is reaching for without knowing it exists. It distills entire (state, action, reward) learning histories into a sequence model's context, such that feeding the history in at test time produces in-context policy improvement — zero weight updates. That is the literature on whether "System 1 compilation" can happen without touching weights, and it comes with hard empirical findings about how much history is needed and where it stops working — a far better starting point than guessing n<10 from gut feel.
+
+## 4. What I'd do next, concretely
+
+Skip building the seven-primitive composer. Build the 200-line version first: pick 5–8 discrete values per movable camera axis (zoom, lens, light, exposure — subject and focus are structural, leave them out), treat every fork as a contextual bandit — context = whatever's already logged, action = the axis tuple, reward = judged verdict where one exists. Fit a trivial reward model (logistic regression, not a network) offline over the existing 1,448 outcome rows tonight, before commissioning a hand-written "reconstruction" report — the fitted model's coefficients *are* the reconstruction, done in an afternoon instead of a lens panel. And the 97% of rows with no judged verdict aren't dead weight to wait out — that's exactly the regime off-policy/counterfactual evaluation exists for (importance-weighted estimators over logged bandit feedback), a solved problem this design is about to reinvent badly by treating verdict density as a hard wall instead of a variance problem. Only once that model's feature weights say an axis actually matters would I let anyone hand-design a settings card around it. And before any self-play/manufactured-rep loop ships: one held-out, adversarial verifier that never sees the generator's outputs during its own tuning — non-negotiable, or you get collapse and no instrument in the system will tell you it happened.
