@@ -2217,6 +2217,26 @@ open — verification ≠ repair; each needs a wire-or-retire decision):**
 - [x] Record-mode never fires on single-backend boxes — CONFIRMED 2026-07-21, **SHIPPED 2026-07-29** (autonomous batch): `build_adapter(auto)` now always wraps in `FailoverAdapter`, len==1 included — the wrapper is the one seam carrying record-mode capture, the runaway-cost meter, and the utility-call cap warning, and the bare-adapter fast path left all three dark on subprocess-only boxes (`n_calls: 0` on every run despite record-mode default-ON; evidence: run c772366a-wily-badger). The `MARO_BACKEND` env override (still the auto path) wraps too. Pins inverted in test_llm.py (single-backend → wrapped, backend property forwards). Side-find fixed in the same commit: both `cross_ref.py` adapter fallbacks passed a model tier as the positional *backend* arg (`build_adapter("cheap")` → AssertionError → caught → silent empty-report/dry-run degrade every time the fallback path ran); now `model=` keyword, call-shape pinned in test_cross_ref.py.
 - [ ] Ancestry write-side unification (recursion prerequisite) — thread_brain and ancestry.json are separate write paths; at fork time they must be one record or children inherit divergent truth. Named a fork-implementation prerequisite in the THREAD_ARCHITECTURE fork-contract note (2026-07-21, chunk 3); GOAL_BRAIN open thread. Deliberately NOT part of the swarm-review arc — queue for the thread-architecture implementation arc.
 
+### LeAct acceptance filter for minted reasoning traces (2026-07-31, from dispatched run 4125f34e-azure-haven)
+
+- [ ] Steal from LeAct (arXiv 2607.21856), surfaced by the Hermes minimal-prompt
+  research run: keep a sampled reasoning trace only if it **measurably raises
+  the probability of reproducing a known-correct action** — an outcome-gated
+  acceptance filter on explanations, not just on changes. Mapped onto us:
+  `thinkback.py` (single-run LLM narration, no quantitative filter),
+  `evolver.py` (LLM pattern-spotting, no trained selection objective), and
+  the near-miss `VERIFY_LEARN_ARC` — which gates learning on MEASURED outcome
+  but verifies applied CHANGES, not REASONING TRACES. The gap: nothing applies
+  the measurable-improvement filter to the explanations thinkback/evolver
+  mint, so a plausible-but-wrong narrative ships as a lesson exactly like a
+  validated one (same failure family as the ablation's confabulation finding —
+  confident wrong theories defeat retrospective review). Minimum experiment:
+  score a minted trace by whether injecting it improves replay outcome on the
+  run family it was minted from (the navigator A/B rails already exist).
+  Consumer-first: the filter's verdict must gate minting or tiering, not just
+  annotate. No successor-arc decree stands (verify-learn closed V1–V5) — this
+  queues as a discrete item, not an arc reopen.
+
 ### Standing test-goal menu (future ideas)
 
 - [ ] **Polymarket behavioral test** — "Analyze 400M+ Polymarket trades to find behavioral patterns among top wallets — what do winners do differently?" (from hrundel75 link)
