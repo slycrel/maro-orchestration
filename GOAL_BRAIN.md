@@ -5445,3 +5445,22 @@ Dormant (deliberately parked, not dropped):
   first measurement (cheap, decisive, uses existing runs). 25 lens
   outputs, 3 rounds, 2 families; record + Appendix E:
   docs/history/2026-07-30-taste-lens-panel.md.
+- **2026-07-31** — Dispatch operating split (Jeremy, decree-class):
+  Hermes instructed to stop over-prompting. The split: Jeremy =
+  natural, sometimes incomplete intent; Hermes = supplies only
+  missing references and safety/scope boundaries; Maro = figures out
+  retrieval, relevance, decomposition, evidence, and synthesis.
+  "Over-specifying converts Maro into a narrow executor of my
+  analysis plan and conceals whether it can actually perform the
+  research-and-synthesis behavior you want... If it fails this
+  version, that is much more useful diagnostic evidence than another
+  carefully engineered prompt." First probe: task-20260731T143920Z-
+  ff9bde7d (X-link contrast vs maro repo, research-only). Connects to
+  the panel's diffused-outline thread (minimal seed = enough to get
+  the player working in the right direction) and the ablation logic
+  (minimal-prompt failures are measurements). Same morning: Jeremy
+  playing Switzerland on the round-3 held items — right-pieces vs
+  go-deeper delegated to Claude; implementation authorized "in your
+  judged correct order today." Claude's ruling: pieces are right,
+  panel stays closed; order = observation-repair ablation first, then
+  log-forward instrumentation, then verdict-blind lanes.
