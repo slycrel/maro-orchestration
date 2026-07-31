@@ -1,5 +1,5 @@
 ---
-status: history
+status: record
 ---
 
 # Five-lens persona panel over the taste conversation (2026-07-30)

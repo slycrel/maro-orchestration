@@ -936,6 +936,15 @@ was the distillation's, more than his.
   framings (with discard reasons) as structured fields going forward;
   controlled one-axis-varied replays as the validation instrument;
   replay-twice divergence calibration before trusting any cluster.
+  **Log-forward half SHIPPED 2026-07-31 (Chunk A)**: the recall
+  loop-slice lesson-selection fork logs candidate sets with raw ranker
+  scores + shares (round-3 propensity correction: scores, not prose
+  discard reasons), chosen IDs, and substrate sizes to run-keyed
+  `source/camera_frames.jsonl` (`src/camera_log.py`, killswitch
+  `camera.frame_log_enabled`); consumer `python3 -m camera_readout`
+  (axis composition, candidate stats, verdict join, crude overdraw v1).
+  Selection behavior unchanged (test-pinned). Replay instruments still
+  open — and gated on the tape per round 3.
 - Method-vs-world scope stamping + earned globality (14a — waits on
   verdict-pipe widening; NOW and evolver_verify lanes are
   verdict-blind per the census). **Contested by panel round 2** from

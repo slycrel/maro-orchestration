@@ -5482,3 +5482,20 @@ fresh-axis wrong theory (texture filtering) with no load-verification step.
 catch it; only widening the observation channel can (Chunk A camera frames,
 context assembler). Secondary: broken observations ~2× wall-clock in 2/3
 families even when the outcome recovers (n tiny, advisory).
+
+### 2026-07-31 — Chunk A shipped: camera frames log-forward (recall lesson-selection fork)
+Round-3 disposition made real, instrumentation-only by construction:
+`query_lessons_scored`/`hybrid_rank_scored`/`_tfidf_rank_scored` surface the
+scores rankers always computed (plain functions are now strip(scored) —
+equivalence test-pinned); `src/camera_log.py` writes one frame per loop-slice
+recall to run-keyed `source/camera_frames.jsonl` (candidates per source with
+raw scores + score_share honestly labeled not-probabilities, flat top-ups
+score=None, chosen==rendered IDs, substrate-size axes; killswitch
+`camera.frame_log_enabled` default ON; never raises; no-run-dir frames drop).
+Selection semantics byte-identical (n=10 fetch is the road-not-taken window;
+first-3 selection pinned vs query_lessons top-3). Consumer ships same chunk:
+`python3 -m camera_readout` — coverage, axis composition, candidate/chosen
+stats, run_card verdict join, crude overdraw v1 (echo-proxy, labeled upper
+bound). Suite green incl. two pre-existing census breaks fixed in-chunk
+(status:record frontmatter ×3, py-modules camera_log/camera_readout/
+system_health). Frames accrue as instrumented runs execute.

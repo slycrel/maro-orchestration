@@ -70,30 +70,25 @@ def _doc_text(doc: Any) -> str:
     return str(doc)
 
 
-def bm25_rank(
+def bm25_rank_scored(
     query: str,
     docs: List[T],
     *,
     top_k: Optional[int] = None,
-) -> List[T]:
-    """Rank docs by BM25 score against query.
+) -> List[tuple]:
+    """(doc, score) variant of bm25_rank — identical ordering and truncation.
 
-    Pure stdlib — no external dependencies. O(N * |query|) time.
-
-    Args:
-        query: Query string.
-        docs: List of documents (TieredLesson objects or strings).
-        top_k: Return only top-K results. None = return all, ranked.
-
-    Returns:
-        Docs sorted by descending BM25 score. Zero-score docs included last.
+    The score is the raw BM25 score (unbounded, corpus-relative — an
+    ordinal signal, not a probability). The no-signal path (query
+    tokenizes to nothing) mirrors bm25_rank exactly: ALL docs in input
+    order, top_k ignored, score 0.0.
     """
     if not docs:
         return []
 
     query_terms = _tokenize(query)
     if not query_terms:
-        return docs  # no signal — return as-is
+        return [(d, 0.0) for d in docs]  # no signal — input order, unscored
 
     # Tokenize all docs
     doc_tokens: List[List[str]] = [_tokenize(_doc_text(d)) for d in docs]
@@ -129,8 +124,29 @@ def bm25_rank(
 
     scored = [((_bm25_score(i), doc)) for i, doc in enumerate(docs)]
     scored.sort(key=lambda x: x[0], reverse=True)
-    ranked = [doc for _, doc in scored]
-    return ranked[:top_k] if top_k is not None else ranked
+    pairs = [(doc, s) for s, doc in scored]
+    return pairs[:top_k] if top_k is not None else pairs
+
+
+def bm25_rank(
+    query: str,
+    docs: List[T],
+    *,
+    top_k: Optional[int] = None,
+) -> List[T]:
+    """Rank docs by BM25 score against query.
+
+    Pure stdlib — no external dependencies. O(N * |query|) time.
+
+    Args:
+        query: Query string.
+        docs: List of documents (TieredLesson objects or strings).
+        top_k: Return only top-K results. None = return all, ranked.
+
+    Returns:
+        Docs sorted by descending BM25 score. Zero-score docs included last.
+    """
+    return [d for d, _ in bm25_rank_scored(query, docs, top_k=top_k)]
 
 
 def tfidf_rank(
@@ -200,31 +216,24 @@ def tfidf_rank(
     return ranked[:top_k] if top_k is not None else ranked
 
 
-def rrf_rank(
+def rrf_rank_scored(
     rankings: List[List[T]],
     *,
     k: int = 60,
     top_k: Optional[int] = None,
-) -> List[T]:
-    """Reciprocal Rank Fusion of multiple ranked lists.
+) -> List[tuple]:
+    """(doc, score) variant of rrf_rank — identical ordering and truncation.
 
-    Combines N ranked lists without needing score normalization.
-    rrf_score(d) = Σ_i 1 / (k + rank_i(d))
-
-    Docs not present in a ranking are treated as rank = len(that_ranking) + 1.
-
-    Args:
-        rankings: List of ranked document lists (all containing the same docs).
-        k: Smoothing constant (default 60, standard in the literature).
-        top_k: Return only top-K fused results.
-
-    Returns:
-        Fused ranking by descending RRF score.
+    Score is the RRF score (Σ 1/(k+rank), so ~1/(k+0)..N/(k+0) scale —
+    dimensionless and only meaningful within one call's result). The
+    single-ranking path scores each doc 1/(k+rank), preserving rrf_rank's
+    order and its `if top_k` (falsy = full list) truncation quirk.
     """
     if not rankings:
         return []
     if len(rankings) == 1:
-        return rankings[0][:top_k] if top_k else rankings[0]
+        pairs = [(d, 1.0 / (k + pos)) for pos, d in enumerate(rankings[0])]
+        return pairs[:top_k] if top_k else pairs
 
     # Collect all unique docs (preserving identity via id())
     all_docs: Dict[int, T] = {}
@@ -248,8 +257,73 @@ def rrf_rank(
         rrf_scores.append((score, doc))
 
     rrf_scores.sort(key=lambda x: x[0], reverse=True)
-    result = [doc for _, doc in rrf_scores]
-    return result[:top_k] if top_k is not None else result
+    pairs = [(doc, s) for s, doc in rrf_scores]
+    return pairs[:top_k] if top_k is not None else pairs
+
+
+def rrf_rank(
+    rankings: List[List[T]],
+    *,
+    k: int = 60,
+    top_k: Optional[int] = None,
+) -> List[T]:
+    """Reciprocal Rank Fusion of multiple ranked lists.
+
+    Combines N ranked lists without needing score normalization.
+    rrf_score(d) = Σ_i 1 / (k + rank_i(d))
+
+    Docs not present in a ranking are treated as rank = len(that_ranking) + 1.
+
+    Args:
+        rankings: List of ranked document lists (all containing the same docs).
+        k: Smoothing constant (default 60, standard in the literature).
+        top_k: Return only top-K fused results.
+
+    Returns:
+        Fused ranking by descending RRF score.
+    """
+    return [d for d, _ in rrf_rank_scored(rankings, k=k, top_k=top_k)]
+
+
+def hybrid_rank_scored(
+    query: str,
+    docs: List[T],
+    *,
+    top_k: Optional[int] = None,
+    recency_key: Optional[str] = None,
+) -> List[tuple]:
+    """(doc, score) variant of hybrid_rank — identical ordering/truncation.
+
+    Score semantics depend on the path taken: RRF score when a recency
+    ranking fuses, raw BM25 otherwise. Either way scores are ordinal and
+    comparable only WITHIN one call's result — consumers wanting shares
+    should normalize per candidate set, and must not read them as
+    probabilities.
+    """
+    if not docs:
+        return []
+
+    bm25_pairs = bm25_rank_scored(query, docs)
+    bm25_ranking = [d for d, _ in bm25_pairs]
+
+    # Try to build a recency ranking
+    _rkey = recency_key
+    if _rkey is None and docs and hasattr(docs[0], "created_at"):
+        _rkey = "created_at"
+
+    if _rkey:
+        try:
+            recency_ranking = sorted(
+                docs,
+                key=lambda d: getattr(d, _rkey, "") or "",
+                reverse=True,  # newest first
+            )
+            return rrf_rank_scored(
+                [bm25_ranking, recency_ranking], top_k=top_k)
+        except Exception:
+            pass  # fall through to pure BM25
+
+    return bm25_pairs[:top_k] if top_k is not None else bm25_pairs
 
 
 def hybrid_rank(
@@ -274,25 +348,5 @@ def hybrid_rank(
     Returns:
         Fused ranking (or pure BM25 if recency unavailable).
     """
-    if not docs:
-        return []
-
-    bm25_ranking = bm25_rank(query, docs)
-
-    # Try to build a recency ranking
-    _rkey = recency_key
-    if _rkey is None and docs and hasattr(docs[0], "created_at"):
-        _rkey = "created_at"
-
-    if _rkey:
-        try:
-            recency_ranking = sorted(
-                docs,
-                key=lambda d: getattr(d, _rkey, "") or "",
-                reverse=True,  # newest first
-            )
-            return rrf_rank([bm25_ranking, recency_ranking], top_k=top_k)
-        except Exception:
-            pass  # fall through to pure BM25
-
-    return bm25_ranking[:top_k] if top_k is not None else bm25_ranking
+    return [d for d, _ in hybrid_rank_scored(
+        query, docs, top_k=top_k, recency_key=recency_key)]

@@ -1,3 +1,7 @@
+---
+status: record
+---
+
 # Observation-Repair Ablation — Measurement #1 (2026-07-31)
 
 **Status: history — completed measurement.** The first artifact after the

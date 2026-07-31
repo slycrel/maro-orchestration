@@ -633,11 +633,19 @@ def recall(
         lesson_ids_cited: List[str] = []
         rules_cited: List[str] = []
         _applied_pairs: List[tuple] = []  # (lesson_id, tier) — rendered only
+        _cam_candidates: Dict[str, list] = {}  # source -> [(lesson, score|None)]
         try:
             from memory import load_lessons, _MAX_LESSON_INJECT_CHARS
-            from knowledge_web import query_lessons
+            from knowledge_web import query_lessons_scored
             from age_stamp import age_stamps_enabled, age_suffix
-            _lessons = list(query_lessons(goal, n=3, task_type="agenda"))
+            # Chunk A camera frames: fetch a WIDER scored window (10) than
+            # the selection window (3) so the frame records the road not
+            # taken. Selection semantics below are byte-identical to the
+            # pre-chunk-A first-3 windows — instrumentation, not behavior.
+            _scored_agenda = query_lessons_scored(
+                goal, n=10, task_type="agenda")
+            _cam_candidates["agenda"] = _scored_agenda
+            _lessons = [_l for _l, _ in _scored_agenda[:3]]
             if len(_lessons) < 3:
                 # Untyped/other-type tiered writers (evolver, verify-learn,
                 # prereq) TOP UP — an existing agenda match must not mask
@@ -645,7 +653,9 @@ def recall(
                 # top-up below can never recover them). Dedup by lesson_id
                 # — the untyped query is a superset of the agenda one.
                 _have_ids = {getattr(_l, "lesson_id", "") for _l in _lessons}
-                for _t in query_lessons(goal, n=3):
+                _scored_untyped = query_lessons_scored(goal, n=10)
+                _cam_candidates["untyped"] = _scored_untyped
+                for _t, _ in _scored_untyped[:3]:
                     if len(_lessons) >= 3:
                         break
                     if _t.lesson_id in _have_ids:
@@ -658,6 +668,7 @@ def recall(
                 # masked general flat-only lessons while slots stayed open).
                 _flat = ((load_lessons(task_type="agenda", query=goal, limit=3) or [])
                          + (load_lessons(task_type="general", query=goal, limit=3) or []))
+                _cam_candidates["flat"] = [(_f, None) for _f in _flat]
                 _seen = {str(_l.lesson).strip().lower() for _l in _lessons}
                 for _f in _flat:
                     if len(_lessons) >= 3:
@@ -846,6 +857,62 @@ def recall(
                     }, indent=2))
             except Exception as exc:
                 log.debug("recall: citation file write failed: %s", exc)
+
+        # Camera frame (Chunk A): log the lesson-selection fork FORWARD —
+        # the candidate sets the selector saw (raw scores + shares), what
+        # actually rendered (durable IDs), and the substrate sizes around
+        # it. Append-per-recall is correct (each recall = one frame); the
+        # readout joins frames to run_card verdicts by run dir.
+        try:
+            from camera_log import log_fork_frame
+            from knowledge_web import ranker_name
+            try:
+                from memory import _MAX_LESSON_INJECT_CHARS as _cam_budget
+            except Exception:
+                _cam_budget = None
+            _cands_payload = {
+                _src_name: [{
+                    "lesson_id": getattr(_c, "lesson_id", "") or "",
+                    "text": str(getattr(_c, "lesson", _c))[:160],
+                    "score": (round(_s, 6)
+                              if isinstance(_s, (int, float)) else None),
+                } for _c, _s in _pairs]
+                for _src_name, _pairs in _cam_candidates.items()
+            }
+            if log_fork_frame(
+                "recall.lesson_selection",
+                query=goal,
+                axes={
+                    "slice": slice,
+                    "project": project or "",
+                    "thread_source": sources.get("thread_source", ""),
+                    "substrate_chars": {
+                        "lessons": len(result.lessons or ""),
+                        "standing_rules": len(result.standing_rules or ""),
+                        "decisions": len(result.decisions or ""),
+                        "graveyard": len(result.graveyard or ""),
+                        "failure_notes": len(result.failure_notes or ""),
+                        "learning_activity": len(result.learning_activity or ""),
+                        "playbook": len(result.playbook or ""),
+                        "knowledge": len(result.knowledge or ""),
+                    },
+                },
+                candidates=_cands_payload,
+                chosen={
+                    "lesson_ids": lesson_ids_cited,
+                    "previews": lessons_cited,
+                    "rule_ids": rules_cited,
+                },
+                extra={
+                    "ranker": ranker_name(),
+                    "render_budget_chars": _cam_budget,
+                    "selection_window": 3,
+                    "fetch_window": 10,
+                },
+            ):
+                sources["camera_frame"] = True
+        except Exception as exc:
+            log.debug("recall: camera frame failed: %s", exc)
 
     sources["elapsed_ms"] = int((time.monotonic() - t0) * 1000)
 

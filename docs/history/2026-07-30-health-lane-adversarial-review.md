@@ -1,5 +1,5 @@
 ---
-status: history
+status: record
 ---
 
 # Adversarial review — system self-health lane v1 + audience adornment (2026-07-30)

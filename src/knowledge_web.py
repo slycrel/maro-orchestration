@@ -37,9 +37,17 @@ from memory_ledger import _memory_dir, _text_similarity
 # Hybrid retrieval (BM25 + RRF) — graceful fallback to TF-IDF if unavailable
 try:
     from hybrid_search import hybrid_rank as _hybrid_rank
+    from hybrid_search import hybrid_rank_scored as _hybrid_rank_scored
     _USE_HYBRID = True
 except ImportError:  # pragma: no cover
     _USE_HYBRID = False
+
+
+def ranker_name() -> str:
+    """Which ranker family query_lessons uses — "hybrid" (BM25+RRF) or
+    "tfidf". Camera-frame logging records this so logged scores stay
+    interpretable (the two families are on different scales)."""
+    return "hybrid" if _USE_HYBRID else "tfidf"
 
 # ---------------------------------------------------------------------------
 # Lesson taxonomy + citation penalty (from Phase 59/60)
@@ -1150,32 +1158,24 @@ def _tokenize(text: str) -> List[str]:
     ]
 
 
-def _tfidf_rank(
+def _tfidf_rank_scored(
     query: str,
     lessons: List[TieredLesson],
     *,
     top_k: Optional[int] = None,
-) -> List[TieredLesson]:
-    """Rank lessons by TF-IDF cosine similarity to query.
-
-    Pure stdlib — no sklearn, no numpy. Uses Counter for term frequency,
-    log-IDF for inverse document frequency, cosine similarity for ranking.
-
-    Args:
-        query: Goal or step text used as the query document.
-        lessons: List of TieredLesson objects to rank.
-        top_k: Return only the top-K matches. None = return all, ranked.
-
-    Returns:
-        Lessons sorted by descending cosine similarity to query.
-        Lessons with zero similarity are still included (sorted last).
+) -> List[tuple]:
+    """(lesson, score) variant of _tfidf_rank — identical ordering and
+    truncation. Score is cosine similarity in [0, 1] AFTER the Phase 60
+    citation penalty (uncited lessons × _CITATION_PENALTY), i.e. the exact
+    number the ranking sorted on. The no-signal path mirrors _tfidf_rank:
+    all lessons in input order, top_k ignored, score 0.0.
     """
     if not lessons:
         return []
 
     query_terms = _tokenize(query)
     if not query_terms:
-        return lessons  # no query signal — return as-is
+        return [(l, 0.0) for l in lessons]  # no query signal — input order
 
     # Build corpus: query + all lesson texts
     docs: List[List[str]] = [query_terms]
@@ -1217,8 +1217,31 @@ def _tfidf_rank(
         scores.append((sim, lesson))
 
     scores.sort(key=lambda x: x[0], reverse=True)
-    ranked = [l for _, l in scores]
-    return ranked[:top_k] if top_k is not None else ranked
+    pairs = [(l, s) for s, l in scores]
+    return pairs[:top_k] if top_k is not None else pairs
+
+
+def _tfidf_rank(
+    query: str,
+    lessons: List[TieredLesson],
+    *,
+    top_k: Optional[int] = None,
+) -> List[TieredLesson]:
+    """Rank lessons by TF-IDF cosine similarity to query.
+
+    Pure stdlib — no sklearn, no numpy. Uses Counter for term frequency,
+    log-IDF for inverse document frequency, cosine similarity for ranking.
+
+    Args:
+        query: Goal or step text used as the query document.
+        lessons: List of TieredLesson objects to rank.
+        top_k: Return only the top-K matches. None = return all, ranked.
+
+    Returns:
+        Lessons sorted by descending cosine similarity to query.
+        Lessons with zero similarity are still included (sorted last).
+    """
+    return [l for l, _ in _tfidf_rank_scored(query, lessons, top_k=top_k)]
 
 
 # ---------------------------------------------------------------------------
@@ -1302,6 +1325,58 @@ def inject_tiered_lessons(
     return "## Tiered Lessons\n\n" + "\n".join(parts)
 
 
+def query_lessons_scored(
+    query: str,
+    *,
+    n: int = 3,
+    task_type: Optional[str] = None,
+    lesson_type: Optional[str] = None,
+    tiers: Optional[List[str]] = None,
+    min_score: float = 0.0,
+    include_provisional: bool = False,
+    include_quarantined: bool = False,
+) -> List[tuple]:
+    """(lesson, score) variant of query_lessons — same pool, same ranking,
+    same truncation; the ranker's internal score is surfaced instead of
+    discarded (Chunk A camera-frame logging needs the road not taken).
+
+    Score semantics follow ranker_name(): "hybrid" = RRF when recency
+    fuses / raw BM25 otherwise; "tfidf" = citation-penalised cosine.
+    Ordinal within one call's result — NOT probabilities; normalize per
+    candidate set if a share is wanted.
+    """
+    if tiers is None:
+        tiers = [MemoryTier.LONG, MemoryTier.MEDIUM]
+
+    _ranker_scored = _hybrid_rank_scored if _USE_HYBRID else _tfidf_rank_scored
+
+    candidates: List[TieredLesson] = []
+    for tier in tiers:
+        # limit=None — rank over the FULL live store (chunk-6 review): the
+        # old n*5 cap was applied to a score-sorted load, so a relevant
+        # lesson sitting below the top decayed scores was invisible to the
+        # ranker. Relevance filtering is the ranker's job; the store stays
+        # bounded by decay + GC, not by hiding rows from retrieval.
+        pool = load_tiered_lessons(
+            tier=tier,
+            task_type=task_type,
+            lesson_type=lesson_type,
+            min_score=min_score,
+            limit=None,
+        )
+        if not include_provisional:
+            pool = [t for t in pool if not t.provisional]
+        if not include_quarantined:
+            pool = [t for t in pool if not _is_quarantined(t)]
+        candidates.extend(pool)
+
+    if not candidates:
+        return []
+
+    ranked = _ranker_scored(query, candidates, top_k=n)
+    return ranked[:n]
+
+
 def query_lessons(
     query: str,
     *,
@@ -1336,36 +1411,12 @@ def query_lessons(
     Returns:
         List of TieredLesson objects (most relevant first).
     """
-    if tiers is None:
-        tiers = [MemoryTier.LONG, MemoryTier.MEDIUM]
-
-    _ranker = _hybrid_rank if _USE_HYBRID else _tfidf_rank
-
-    candidates: List[TieredLesson] = []
-    for tier in tiers:
-        # limit=None — rank over the FULL live store (chunk-6 review): the
-        # old n*5 cap was applied to a score-sorted load, so a relevant
-        # lesson sitting below the top decayed scores was invisible to the
-        # ranker. Relevance filtering is the ranker's job; the store stays
-        # bounded by decay + GC, not by hiding rows from retrieval.
-        pool = load_tiered_lessons(
-            tier=tier,
-            task_type=task_type,
-            lesson_type=lesson_type,
-            min_score=min_score,
-            limit=None,
-        )
-        if not include_provisional:
-            pool = [t for t in pool if not t.provisional]
-        if not include_quarantined:
-            pool = [t for t in pool if not _is_quarantined(t)]
-        candidates.extend(pool)
-
-    if not candidates:
-        return []
-
-    ranked = _ranker(query, candidates, top_k=n)
-    return ranked[:n]
+    return [l for l, _ in query_lessons_scored(
+        query, n=n, task_type=task_type, lesson_type=lesson_type,
+        tiers=tiers, min_score=min_score,
+        include_provisional=include_provisional,
+        include_quarantined=include_quarantined,
+    )]
 
 
 def _increment_times_applied(
