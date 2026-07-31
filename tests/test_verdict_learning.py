@@ -184,6 +184,25 @@ def test_annotate_unverifiable_leaves_goal_achieved_absent(monkeypatch, tmp_path
     assert row["goal_verdict_source"] == "closure_unverifiable"
 
 
+def test_annotate_stamps_goal_verdict_at(monkeypatch, tmp_path):
+    # Chunk B (2026-07-31): without a stamp time the framing→verdict delay
+    # is unmeasurable. Unverifiable stamps get it too — "judged, could not
+    # verify" is itself a verdict event.
+    _setup(monkeypatch, tmp_path)
+    from datetime import datetime
+    record_outcome("goal a", "done", "s", loop_id="lp-at1")
+    record_outcome("goal b", "done", "s", loop_id="lp-at2")
+    stamp_outcome_verdict("lp-at1", goal_achieved=True, goal_verdict_source="closure")
+    stamp_outcome_verdict("lp-at2", goal_achieved=None,
+                          goal_verdict_source="closure_unverifiable")
+    rows = {r["loop_id"]: r for r in _raw_rows()}
+    for lid in ("lp-at1", "lp-at2"):
+        stamped = datetime.fromisoformat(rows[lid]["goal_verdict_at"])
+        recorded = datetime.fromisoformat(rows[lid]["recorded_at"])
+        assert stamped.tzinfo is not None
+        assert stamped >= recorded
+
+
 def test_annotate_none_preserves_existing_false(monkeypatch, tmp_path):
     _setup(monkeypatch, tmp_path)
     record_outcome("goal", "done", "s", loop_id="lp-4")

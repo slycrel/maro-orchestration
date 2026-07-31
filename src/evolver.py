@@ -976,6 +976,11 @@ def _verify_post_apply(applied_ids, run_id: str, *, verbose: bool = False) -> No
             status="done" if passed else "stuck",
             summary=f"Post-mutation test suite: {'PASSED' if passed else 'FAILED'}. {summary}{_revert_summary}",
             task_type="evolver_verify",
+            # The test suite IS the judge here — this lane was verdict-blind
+            # while holding a measured deterministic verdict (chunk B,
+            # 2026-07-31): done ≠ achieved needs the verdict on the row.
+            goal_achieved=passed,
+            goal_verdict_source="deterministic_tests",
         )
     except Exception:
         pass

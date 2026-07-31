@@ -3438,17 +3438,99 @@ class TestNowStatusHonesty:
         assert meta["goal_achieved"] is True
         assert meta["goal_verdict_source"] == "now_self_verdict"
 
-    def test_interactive_now_skips_verification(self, monkeypatch, tmp_path):
+    def _now_rows(self):
+        from memory_ledger import _outcomes_path
+        return [json.loads(line)
+                for line in _outcomes_path().read_text(encoding="utf-8").splitlines()
+                if line.strip()]
+
+    def test_interactive_now_paid_adapter_never_judges(self, monkeypatch, tmp_path):
+        # Renamed from test_interactive_now_skips_verification (chunk B,
+        # 2026-07-31): interactive NOW is judged now, but the keep-raw-speed
+        # decision stands for the PAID adapter — the judge rides hosted-free
+        # only. Without hosted-free, only the free deterministic provenance
+        # guard runs and the row stays honestly unjudged.
         _setup(monkeypatch, tmp_path)
         from unittest.mock import patch
         canned = {"status": "done", "result": "cannot be done",
                   "tokens_in": 1, "tokens_out": 1}
         adapter = self._verdict_adapter(False)
-        with patch("handle._run_now", return_value=canned):
-            with patch("intent.classify", return_value=ClassifyResult("now", 0.9, "simple", introspects_self=False)):
-                result = handle("do it", adapter=adapter, force_lane="now", dry_run=False)
+        with patch("handle._run_now", return_value=canned), \
+             patch("intent.classify", return_value=ClassifyResult("now", 0.9, "simple", introspects_self=False)), \
+             patch("hosted_free.build_hosted_free_adapter", return_value=None):
+            result = handle("do it", adapter=adapter, force_lane="now", dry_run=False)
         assert result.status == "done"
         adapter.complete.assert_not_called()
+        row = self._now_rows()[-1]
+        assert row["task_type"] == "now"
+        assert "goal_achieved" not in row  # no judge available → unjudged
+
+    def test_interactive_now_judged_by_hosted_free_family(self, monkeypatch, tmp_path):
+        # The interactive verdict pipe (chunk B): a hosted-free adapter
+        # judges the answer and the row records the free-family source —
+        # a different judge family than the player, on purpose.
+        _setup(monkeypatch, tmp_path)
+        from unittest.mock import patch
+        canned = {"status": "done", "result": "Here is the answer: 42.",
+                  "tokens_in": 1, "tokens_out": 1}
+        paid = self._verdict_adapter(True)
+        free = self._verdict_adapter(True)
+        with patch("handle._run_now", return_value=canned), \
+             patch("intent.classify", return_value=ClassifyResult("now", 0.9, "simple", introspects_self=False)), \
+             patch("hosted_free.build_hosted_free_adapter", return_value=free):
+            result = handle("what is the answer", adapter=paid,
+                            force_lane="now", dry_run=False)
+        assert result.status == "done"
+        paid.complete.assert_not_called()
+        free.complete.assert_called_once()
+        row = self._now_rows()[-1]
+        assert row["goal_achieved"] is True
+        assert row["goal_verdict_source"] == "now_self_verdict_free"
+
+    def test_interactive_now_demoted_by_hosted_free_family(self, monkeypatch, tmp_path):
+        # Status honesty reaches the interactive lane too: a free-family
+        # not-fulfilled verdict demotes done → incomplete, same as task-path.
+        _setup(monkeypatch, tmp_path)
+        from unittest.mock import patch
+        canned = {"status": "done", "result": "The goal is incomplete.",
+                  "tokens_in": 1, "tokens_out": 1}
+        with patch("handle._run_now", return_value=canned), \
+             patch("intent.classify", return_value=ClassifyResult("now", 0.9, "simple", introspects_self=False)), \
+             patch("hosted_free.build_hosted_free_adapter",
+                   return_value=self._verdict_adapter(False)):
+            result = handle("do it", adapter=self._verdict_adapter(True),
+                            force_lane="now", dry_run=False)
+        assert result.status == "incomplete"
+        row = self._now_rows()[-1]
+        assert row["goal_achieved"] is False
+        assert row["goal_verdict_source"] == "now_self_verdict_free"
+
+    def test_interactive_now_killswitch_off_skips_judging(self, monkeypatch, tmp_path):
+        # now_lane.interactive_self_verdict=false disables the interactive
+        # branch entirely — hosted-free is never even built. Stringly
+        # "false" on purpose (chunk-5a quoted-killswitch lesson).
+        _setup(monkeypatch, tmp_path)
+        from unittest.mock import patch
+        import config as config_mod
+        _orig = config_mod.get
+
+        def _cfg(key, default=None, *a, **kw):
+            if key == "now_lane.interactive_self_verdict":
+                return "false"
+            return _orig(key, default, *a, **kw)
+
+        monkeypatch.setattr(config_mod, "get", _cfg)
+        canned = {"status": "done", "result": "cannot be done",
+                  "tokens_in": 1, "tokens_out": 1}
+        with patch("handle._run_now", return_value=canned), \
+             patch("intent.classify", return_value=ClassifyResult("now", 0.9, "simple", introspects_self=False)), \
+             patch("hosted_free.build_hosted_free_adapter") as m_build:
+            result = handle("do it", adapter=self._verdict_adapter(False),
+                            force_lane="now", dry_run=False)
+        assert result.status == "done"
+        m_build.assert_not_called()
+        row = self._now_rows()[-1]
+        assert "goal_achieved" not in row
 
 
 class TestNowVerdictEscalation:

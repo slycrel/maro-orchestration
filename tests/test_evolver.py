@@ -826,6 +826,42 @@ def test_verify_post_apply_does_not_revert_on_test_success(tmp_path):
     assert reverted_ids == []
 
 
+def test_verify_post_apply_records_deterministic_verdict(tmp_path):
+    # Chunk B (2026-07-31): the evolver_verify lane was verdict-blind while
+    # holding a measured deterministic verdict — the suite result IS the
+    # judge, so the outcome row must carry goal_achieved (done ≠ achieved).
+    from evolver import _verify_post_apply
+
+    fake_pass = MagicMock()
+    fake_pass.returncode = 0
+    fake_pass.stdout = "ok"
+    fake_pass.stderr = ""
+    fake_fail = MagicMock()
+    fake_fail.returncode = 1
+    fake_fail.stdout = "FAILED"
+    fake_fail.stderr = ""
+
+    recorded = []
+
+    with patch("subprocess.run", return_value=fake_pass), \
+         patch("memory_ledger.record_outcome",
+               side_effect=lambda **kw: recorded.append(kw)):
+        _verify_post_apply(["s1"], "run-v1", verbose=False)
+    with patch("subprocess.run", return_value=fake_fail), \
+         patch("evolver.revert_suggestion",
+               return_value={"reverted": True, "category": "c", "detail": "d"}), \
+         patch("memory_ledger.record_outcome",
+               side_effect=lambda **kw: recorded.append(kw)):
+        _verify_post_apply(["s1"], "run-v2", verbose=False)
+
+    assert len(recorded) == 2
+    for row in recorded:
+        assert row["task_type"] == "evolver_verify"
+        assert row["goal_verdict_source"] == "deterministic_tests"
+    assert recorded[0]["goal_achieved"] is True
+    assert recorded[1]["goal_achieved"] is False
+
+
 def test_verify_post_apply_accepts_legacy_int_count(tmp_path):
     # Backward-compat: older callers/tests pass an int count. Still accepted,
     # but no revert happens because we don't have the IDs. This preserves the

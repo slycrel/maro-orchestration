@@ -257,6 +257,7 @@ py-modules = [
     "tool_search",
     "validation_shadow",
     "validator_roi",
+    "verdict_flow",
     "verification_agent",
     "viz_server",
     "web_fetch",

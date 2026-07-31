@@ -439,12 +439,30 @@ from provenance import (
 )
 
 
+def _interactive_now_verdict_enabled() -> bool:
+    """Killswitch for the interactive NOW self-verdict (chunk B, 2026-07-31;
+    default ON, inert without hosted-free keys). Stringly 'false' tolerated
+    (chunk-5a quoted-killswitch lesson)."""
+    try:
+        from config import get as _cfg_get
+    except Exception:
+        return True
+    val = _cfg_get("now_lane.interactive_self_verdict", True)
+    if isinstance(val, str):
+        return val.strip().lower() not in ("false", "off", "no", "0", "")
+    return bool(val)
+
+
 def _verify_now_outcome(
     message: str, outcome: Dict[str, Any], adapter,
     wall_start: Optional[float] = None,
 ) -> Dict[str, Any]:
     """Demote an autonomous NOW 'done' to 'incomplete' when the response itself
-    reports failure. Fails open — any error keeps the original status."""
+    reports failure. Fails open — any error keeps the original status.
+
+    adapter=None runs the deterministic provenance guard ONLY (free, no
+    latency class change) and skips the text judge — the interactive lane
+    uses this when no hosted-free judge is available."""
     # Deterministic provenance guard, ahead of the text judge: if the goal named
     # an input that isn't on disk or an output that never landed, the goal is not
     # achieved regardless of how the response narrates it. Catches what the
@@ -465,6 +483,8 @@ def _verify_now_outcome(
             _missing,
         )
         return out
+    if adapter is None:
+        return outcome  # provenance guard only — no judge available
     try:
         from llm import LLMMessage
         from llm_parse import extract_json
@@ -1072,6 +1092,28 @@ def _handle_impl(
         if origin is not None and not dry_run and outcome.get("status") == "done":
             outcome = _verify_now_outcome(
                 message, outcome, adapter, wall_start=wall_started_at)
+        elif (origin is None and not dry_run
+                and outcome.get("status") == "done"
+                and _interactive_now_verdict_enabled()):
+            # Interactive half of the NOW verdict pipe (chunk B, 2026-07-31 —
+            # panel round 3: "close the two verdict-blind lanes"). The
+            # keep-raw-speed decision stands for the PAID adapter: the text
+            # judge rides hosted-free only (sub-second, $0, consent-gated by
+            # key presence — build returns None otherwise), and without it
+            # only the free deterministic provenance guard runs. Different
+            # judge family than the player is a feature, not a compromise
+            # (correlated-errors finding, same panel).
+            _hf_adapter = None
+            try:
+                from hosted_free import build_hosted_free_adapter
+                _hf_adapter = build_hosted_free_adapter()
+            except Exception:
+                _hf_adapter = None
+            outcome = _verify_now_outcome(
+                message, outcome, _hf_adapter, wall_start=wall_started_at)
+            if (_hf_adapter is not None and "goal_achieved" in outcome
+                    and not outcome.get("provenance_missing")):
+                outcome["now_verify_family"] = "hosted_free"
         elapsed = int((time.monotonic() - started_at) * 1000)
 
         # Goal verdict as its own metadata dimension (done != successful):
@@ -1087,7 +1129,11 @@ def _handle_impl(
                         _rd_now, handle_id=handle_id, prompt=_raw_input,
                         extra={
                             "goal_achieved": bool(outcome["goal_achieved"]),
-                            "goal_verdict_source": "now_self_verdict",
+                            "goal_verdict_source": (
+                                "provenance" if outcome.get("provenance_missing")
+                                else ("now_self_verdict_free"
+                                      if outcome.get("now_verify_family") == "hosted_free"
+                                      else "now_self_verdict")),
                         },
                     )
             except Exception:
@@ -1118,7 +1164,10 @@ def _handle_impl(
                     model=model or "",
                     goal_achieved=(bool(outcome["goal_achieved"]) if _now_judged else None),
                     goal_verdict_source=(
-                        ("provenance" if outcome.get("provenance_missing") else "now_self_verdict")
+                        ("provenance" if outcome.get("provenance_missing")
+                         else ("now_self_verdict_free"
+                               if outcome.get("now_verify_family") == "hosted_free"
+                               else "now_self_verdict"))
                         if _now_judged else ""
                     ),
                     measurement_class=measurement_class,

@@ -5508,3 +5508,25 @@ system_health). Frames accrue as instrumented runs execute.
   "nothing chosen"), torn lines counted, stale-run-dir orphan guard,
   raw unrounded scores. Record:
   docs/history/2026-07-31-chunka-adversarial-review.md.
+
+### 2026-07-31 — Chunk B shipped: verdict-blind lanes closed + verdict-flow readout
+Panel round 3's prescription executed in its stated order ("instrument the
+flow before the stock — then close the two verdict-blind lanes"). Live
+census first: agenda flow is healthy since W28 (18/34 → 6/12 judged); the
+3% all-time stock is April-era pre-verdict rows (no backfill, by decree) —
+the real live leaks were evolver_verify (measured suite verdict never
+plumbed to the row) and NOW (judge machinery task-path-only). Closures:
+(1) `_verify_post_apply` records `goal_achieved=passed,
+goal_verdict_source="deterministic_tests"` — the suite IS the judge;
+(2) interactive NOW judged via hosted-free family ONLY
+(`now_self_verdict_free`; killswitch `now_lane.interactive_self_verdict`
+default ON, inert without keys; paid adapter never judges — keep-raw-speed
+stands; provenance guard alone when unkeyed); (3) `stamp_outcome_verdict`
+stamps `goal_verdict_at` (unverifiable stamps included — "judged, could
+not verify" is a verdict event), making framing→verdict delay measurable
+for the first time. Readout `python3 -m verdict_flow`: stock/flow
+separated, verdicts/week by lane, source tabulation,
+never-stamped vs stamped-unverifiable split, delay buckets
+(<1m…>24h), honest not-computable block (37 historic closure rows
+predate the stamp). First live numbers: at-record verdicts 4, all
+pre-chunk NOW/evolver rows honestly unjudged going forward from here.

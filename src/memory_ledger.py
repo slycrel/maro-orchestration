@@ -62,7 +62,7 @@ class Outcome:
     # a verdict exists, None = unjudged. Serialized as an ABSENT key when None
     # (never null) — absence means "not judged", not "failed".
     goal_achieved: Optional[bool] = None
-    goal_verdict_source: str = ""   # "closure" | "closure_unverifiable" | "provenance" | "now_self_verdict" | ""
+    goal_verdict_source: str = ""   # "closure" | "closure_unverifiable" | "provenance" | "now_self_verdict" | "now_self_verdict_free" | "deterministic_tests" | ""
     goal_verdict_confidence: Optional[float] = None  # closure judge confidence, when judged
     # Typed stop verdict (stop_verdicts.py vocabulary; "" = none recorded).
     # Sibling to goal_verdict_source: WHY the run stopped, machine-readable —
@@ -653,6 +653,12 @@ def stamp_outcome_verdict(
             if goal_achieved is not None:
                 row["goal_achieved"] = bool(goal_achieved)
             row["goal_verdict_source"] = goal_verdict_source
+            # When the verdict landed (chunk B, 2026-07-31): the row's own ts
+            # is record time; without this stamp the framing→verdict delay —
+            # the flow number the whole learning pipeline divides by — is
+            # unmeasurable. Unverifiable stamps get it too: "judged, could
+            # not verify" is itself a verdict event.
+            row["goal_verdict_at"] = datetime.now(timezone.utc).isoformat()
             if goal_verdict_confidence is not None:
                 row["goal_verdict_confidence"] = float(goal_verdict_confidence)
             lines[target_idx] = json.dumps(row)

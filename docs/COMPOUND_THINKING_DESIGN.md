@@ -945,9 +945,16 @@ was the distillation's, more than his.
   (axis composition, candidate stats, verdict join, crude overdraw v1).
   Selection behavior unchanged (test-pinned). Replay instruments still
   open — and gated on the tape per round 3.
-- Method-vs-world scope stamping + earned globality (14a — waits on
-  verdict-pipe widening; NOW and evolver_verify lanes are
-  verdict-blind per the census). **Contested by panel round 2** from
+- Method-vs-world scope stamping + earned globality (14a — was waiting
+  on verdict-pipe widening; **the two verdict-blind lanes CLOSED
+  2026-07-31, Chunk B**: evolver_verify rows now carry the measured
+  suite verdict (`deterministic_tests`), interactive NOW gets a
+  hosted-free-family self-verdict (`now_self_verdict_free`, killswitch
+  `now_lane.interactive_self_verdict`, paid adapter never judges —
+  keep-raw-speed stands), and `stamp_outcome_verdict` stamps
+  `goal_verdict_at` so the framing→verdict delay is measurable; flow
+  readout `python3 -m verdict_flow` per round 3's "instrument the flow
+  before the stock"). **Contested by panel round 2** from
   both model families: transferability may follow structural
   invariance across regimes rather than semantic category, and
   current "global methodology" may be an n=40 single-family artifact.
