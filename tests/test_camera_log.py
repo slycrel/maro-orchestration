@@ -178,6 +178,62 @@ class TestCameraLog:
                               chosen={"lesson_ids": ["a"]}) is False
         assert not list(tmp_path.rglob("camera_frames.jsonl"))
 
+    def test_stale_run_dir_drops_frame_no_orphan(self, monkeypatch, tmp_path):
+        # Review F7: a ContextVar pointing at a deleted/never-created run
+        # dir must NOT be resurrected as an orphan by the frame write.
+        _setup(monkeypatch, tmp_path)
+        import runs
+        stale = tmp_path / "runs" / "r-deleted"  # never created
+        monkeypatch.setattr(runs, "current_run_dir", lambda: stale)
+        from camera_log import log_fork_frame
+        assert log_fork_frame("recall.lesson_selection",
+                              chosen={"lesson_ids": ["a"]}) is False
+        assert not stale.exists()
+
+    def test_camera_uses_short_lock_timeout(self, monkeypatch, tmp_path):
+        # Review F1: the camera must never wait the global 30s file-lock
+        # deadline — a stuck lock costs the frame, not the recall.
+        _setup(monkeypatch, tmp_path)
+        self._pin_run_dir(monkeypatch, tmp_path)
+        import file_lock
+        import camera_log
+        captured = {}
+
+        def fake_append(path, line, *, timeout_s=None):
+            captured["timeout_s"] = timeout_s
+
+        monkeypatch.setattr(file_lock, "locked_append", fake_append)
+        assert camera_log.log_fork_frame("recall.lesson_selection") is True
+        assert captured["timeout_s"] == camera_log._LOCK_TIMEOUT_S
+        assert captured["timeout_s"] <= 5.0
+
+    def test_locked_append_timeout_override_fails_fast(self, monkeypatch,
+                                                       tmp_path):
+        # The seam behind F1: a per-call deadline override beats the
+        # configured 30s default when the lock is genuinely held.
+        _setup(monkeypatch, tmp_path)
+        import threading
+        import time
+        from file_lock import locked_write, locked_append, FileLockTimeout
+        target = tmp_path / "contended.jsonl"
+        entered = threading.Event()
+        release = threading.Event()
+
+        def holder():
+            with locked_write(target):
+                entered.set()
+                release.wait(timeout=10)
+
+        t = threading.Thread(target=holder, daemon=True)
+        t.start()
+        assert entered.wait(timeout=5)
+        start = time.monotonic()
+        with pytest.raises(FileLockTimeout):
+            locked_append(target, "x", timeout_s=0.2)
+        assert time.monotonic() - start < 5.0  # not the 30s default
+        release.set()
+        t.join(timeout=5)
+
     def test_garbage_never_raises(self, monkeypatch, tmp_path):
         _setup(monkeypatch, tmp_path)
         self._pin_run_dir(monkeypatch, tmp_path)
@@ -222,6 +278,12 @@ class TestRecallCameraLiveness:
         agenda = frame["candidates"]["agenda"]
         assert any(c["lesson_id"] == tl.lesson_id for c in agenda)
         assert all(isinstance(c["score"], (int, float)) for c in agenda)
+        # Review F4: logged scores are the ranker's RAW output, unrounded.
+        from knowledge_web import query_lessons_scored
+        raw = {l.lesson_id: s for l, s in query_lessons_scored(
+            "rsync trees", n=10, task_type="agenda")}
+        for c in agenda:
+            assert c["score"] == raw[c["lesson_id"]]
         assert frame["extra"]["ranker"] in ("hybrid", "tfidf")
         assert frame["axes"]["substrate_chars"]["lessons"] > 0
         # The RECALL_PERFORMED stamp records that a frame was dropped.
@@ -252,3 +314,94 @@ class TestRecallCameraLiveness:
         expected = [l.lesson_id for l in query_lessons(
             "socket retry backoff strategy", n=3, task_type="agenda")]
         assert ctx["lesson_ids_cited"] == expected
+
+    def test_fallback_frame_marked_degraded(self, monkeypatch, tmp_path):
+        """Review F5: when ranked selection dies and the legacy injector
+        renders lessons, the frame must say so — not record a false
+        'nothing chosen' against a run that DID render lessons."""
+        _setup(monkeypatch, tmp_path)
+        import memory
+        import knowledge_web
+        import runs as runs_module
+        from recall import recall
+
+        def _boom(*a, **kw):
+            raise RuntimeError("ranked retrieval down")
+
+        monkeypatch.setattr(knowledge_web, "query_lessons_scored", _boom)
+        monkeypatch.setattr(
+            memory, "inject_lessons_for_task",
+            lambda *a, **kw: "## Lessons from Prior Runs\n- legacy line")
+        rd = tmp_path / "runs" / "r-degraded"
+        rd.mkdir(parents=True)
+        monkeypatch.setattr(runs_module, "current_run_dir", lambda: rd)
+
+        with patch("captains_log.log_event"):
+            r = recall("anything at all", slice="loop")
+
+        assert "legacy line" in r.lessons
+        frames = (rd / "source" / "camera_frames.jsonl").read_text() \
+            .strip().splitlines()
+        assert len(frames) == 1
+        frame = json.loads(frames[0])
+        assert frame["extra"]["degraded"] == "legacy_fallback"
+        assert frame["chosen"]["lesson_ids"] == []
+        # The rendered-but-uncited lessons still show in the axes.
+        assert frame["axes"]["substrate_chars"]["lessons"] > 0
+
+
+class TestCameraReadout:
+    """Review F2/F3/F6 pins on the consumer: untyped selections join the
+    verdict section, torn lines are counted not hidden, and score means
+    never mix ranker families."""
+
+    def _mk_run(self, root, name, frames, card=None, torn=False):
+        rd = root / name
+        (rd / "source").mkdir(parents=True)
+        lines = [json.dumps(f) for f in frames]
+        if torn:
+            lines.append("{this line is not json")
+        (rd / "source" / "camera_frames.jsonl").write_text(
+            "\n".join(lines) + "\n")
+        if card is not None:
+            (rd / "run_card.json").write_text(json.dumps(card))
+        return rd
+
+    @staticmethod
+    def _frame(ranker, source, lesson_id, score, chosen):
+        return {
+            "ts": "2026-07-31T00:00:00+00:00",
+            "fork": "recall.lesson_selection",
+            "query_preview": "q",
+            "axes": {"substrate_chars": {"lessons": 10}},
+            "candidates": {source: [{
+                "lesson_id": lesson_id, "text": "text of the lesson",
+                "score": score, "score_share": 1.0}]},
+            "chosen": {"lesson_ids": chosen, "previews": []},
+            "extra": {"ranker": ranker},
+        }
+
+    def test_untyped_join_torn_count_family_split(self, tmp_path, capsys):
+        root = tmp_path / "runs"
+        root.mkdir()
+        # Run 1: agenda empty, chosen came from scored UNTYPED (F2) —
+        # plus one torn line (F3). Run 2: different ranker family (F6).
+        self._mk_run(root, "r1",
+                     [self._frame("hybrid", "untyped", "u1", 2.0, ["u1"])],
+                     card={"goal_achieved": True}, torn=True)
+        self._mk_run(root, "r2",
+                     [self._frame("tfidf", "agenda", "a1", 0.5, ["a1"])],
+                     card={"goal_achieved": True})
+        import camera_readout
+        assert camera_readout.main(["--runs-root", str(root)]) == 0
+        out = capsys.readouterr().out
+        # F3: torn line surfaced, not silently dropped.
+        assert "1 unparsable frame line(s) skipped" in out
+        # F6: one verdict row per ranker family, never a blended mean.
+        rows = [l for l in out.splitlines() if l.strip().startswith("achieved")]
+        assert len(rows) == 2
+        hybrid_row = next(l for l in rows if "[hybrid" in l)
+        tfidf_row = next(l for l in rows if "[tfidf" in l)
+        # F2: the untyped selection carries its score into the join.
+        assert "chosen 2.0000" in hybrid_row
+        assert "chosen 0.5000" in tfidf_row

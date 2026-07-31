@@ -103,13 +103,17 @@ def _get_held() -> set:
 
 
 @contextmanager
-def locked_write(path: Path) -> Generator[None, None, None]:
+def locked_write(path: Path, *, timeout_s: float | None = None) -> Generator[None, None, None]:
     """Acquire an exclusive lock on path.lock, yield, then release.
 
     Uses a separate .lock file so the data file can be safely rewritten.
     Waits up to the configured deadline (default 30s), then raises
     FileLockTimeout — unless fail-open is enabled, in which case it logs
     a WARNING and proceeds unlocked (the pre-2026-07 behavior).
+
+    timeout_s overrides the configured deadline for this call only —
+    best-effort writers (camera frames) use a short deadline so a stuck
+    lock costs them the frame, not the run.
 
     For reentrant calls (same thread already holds the lock), skips
     acquisition to avoid deadlock.
@@ -130,7 +134,7 @@ def locked_write(path: Path) -> Generator[None, None, None]:
     try:
         lock_path.parent.mkdir(parents=True, exist_ok=True)
         lock_fd = open(lock_path, "w")
-        deadline_s = _lock_timeout_s()
+        deadline_s = timeout_s if timeout_s is not None else _lock_timeout_s()
         start = time.monotonic()
         sleep_s = 0.05  # mild backoff: 0.05 → 0.5s cap
         while True:
@@ -248,7 +252,7 @@ def atomic_write(path: Path, content: str, *, encoding: str = "utf-8") -> None:
         raise
 
 
-def locked_append(path: Path, line: str) -> None:
+def locked_append(path: Path, line: str, *, timeout_s: float | None = None) -> None:
     """Append a newline-terminated line to path atomically via flock.
 
     Acquires the same .lock file used by locked_write(), so append and
@@ -256,9 +260,10 @@ def locked_append(path: Path, line: str) -> None:
     — this function adds the newline.
 
     Fail-closed like locked_write: raises FileLockTimeout past the deadline
-    (unless fail-open is enabled).
+    (unless fail-open is enabled). timeout_s overrides the deadline for
+    this call (see locked_write).
     """
-    with locked_write(path):
+    with locked_write(path, timeout_s=timeout_s):
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "a", encoding="utf-8") as fh:
             fh.write(line + "\n")

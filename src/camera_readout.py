@@ -49,11 +49,15 @@ def _tokens(text: str) -> set:
     }
 
 
-def _load_frames(run_dir: Path) -> List[Dict[str, Any]]:
+def _load_frames(run_dir: Path) -> tuple:
+    """Returns (frames, n_torn). Torn/unparsable lines are counted, not
+    hidden — silently dropping them would present lost data as lower
+    activity (adversarial-review 2026-07-31 F3)."""
     fp = run_dir / "source" / "camera_frames.jsonl"
     if not fp.exists():
-        return []
+        return [], 0
     frames = []
+    n_torn = 0
     for line in fp.read_text(encoding="utf-8", errors="replace").splitlines():
         line = line.strip()
         if not line:
@@ -61,8 +65,8 @@ def _load_frames(run_dir: Path) -> List[Dict[str, Any]]:
         try:
             frames.append(json.loads(line))
         except Exception:
-            continue  # torn line — skip, coverage section shows totals
-    return frames
+            n_torn += 1
+    return frames, n_torn
 
 
 def _result_text(card: Dict[str, Any]) -> str:
@@ -119,8 +123,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         run_dirs = run_dirs[:args.limit]
 
     per_run: List[Dict[str, Any]] = []
+    n_torn_total = 0
     for rd in run_dirs:
-        frames = _load_frames(rd)
+        frames, n_torn = _load_frames(rd)
+        n_torn_total += n_torn
         if not frames:
             continue
         card = None
@@ -135,6 +141,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     print("== Camera readout ==")
     print(f"runs scanned: {len(run_dirs)}   runs with frames: {len(per_run)}"
           f"   frames: {n_frames}")
+    if n_torn_total:
+        print(f"  WARNING: {n_torn_total} unparsable frame line(s) skipped "
+              f"— counts below undercount actual activity")
     if not per_run:
         print("no camera frames yet — the writer ships with this readout; "
               "frames appear as instrumented runs execute.")
@@ -206,6 +215,10 @@ def main(argv: Optional[List[str]] = None) -> int:
               f"(n={len(chosen_shares)})")
 
     # -- 4. verdict join ----------------------------------------------------
+    # Scored sources cover the full selection chain: agenda leads, untyped
+    # tops up (recall.py) — an agenda-empty run's untyped selections are
+    # real scored choices, not join misses (F2). Buckets split by ranker
+    # family because raw scores are unitless across families (F6).
     print("\n== Verdict join (run_card.goal_achieved) ==")
     by_verdict: defaultdict = defaultdict(lambda: {"frames": 0, "tops": [],
                                                    "chosen": []})
@@ -214,27 +227,32 @@ def main(argv: Optional[List[str]] = None) -> int:
         if r["card"] is not None:
             ga = r["card"].get("goal_achieved")
             v = {True: "achieved", False: "not-achieved"}.get(ga, "unjudged")
-        bucket = by_verdict[v]
         for f in r["frames"]:
+            ranker = str((f.get("extra") or {}).get("ranker") or "?")
+            bucket = by_verdict[(v, ranker)]
             bucket["frames"] += 1
-            agenda = (f.get("candidates") or {}).get("agenda") or []
-            scores = [c["score"] for c in agenda
-                      if isinstance(c.get("score"), (int, float))]
-            if scores:
-                bucket["tops"].append(max(scores))
+            scored_cands = [
+                c for source in ("agenda", "untyped")
+                for c in (f.get("candidates") or {}).get(source) or []
+                if isinstance(c.get("score"), (int, float))]
+            if scored_cands:
+                bucket["tops"].append(max(c["score"] for c in scored_cands))
             ids = set((f.get("chosen") or {}).get("lesson_ids") or [])
-            bucket["chosen"].extend(
-                c["score"] for c in agenda
-                if c.get("lesson_id") in ids
-                and isinstance(c.get("score"), (int, float)))
-    for v, b in sorted(by_verdict.items()):
+            seen_chosen = set()
+            for c in scored_cands:
+                lid = c.get("lesson_id")
+                if lid in ids and lid not in seen_chosen:
+                    bucket["chosen"].append(c["score"])
+                    seen_chosen.add(lid)
+    for (v, ranker), b in sorted(by_verdict.items()):
         top = (f"top-cand {sum(b['tops'])/len(b['tops']):.4f}"
                if b["tops"] else "top-cand —")
         cho = (f"chosen {sum(b['chosen'])/len(b['chosen']):.4f}"
                if b["chosen"] else "chosen —")
-        print(f"  {v:13s} frames {b['frames']:4d}   mean {top}   mean {cho}")
-    print("  (scores are raw ranker scores — comparable within one ranker "
-          "family only)")
+        print(f"  {v:13s} [{ranker:6s}] frames {b['frames']:4d}   "
+              f"mean {top}   mean {cho}")
+    print("  (scores are raw ranker scores — rows are per ranker family; "
+          "never compare across families)")
 
     # -- 5. crude overdraw v1 ----------------------------------------------
     print("\n== Overdraw v1 (chosen-but-never-echoed in result text) ==")

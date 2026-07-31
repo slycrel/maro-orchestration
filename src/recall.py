@@ -634,6 +634,7 @@ def recall(
         rules_cited: List[str] = []
         _applied_pairs: List[tuple] = []  # (lesson_id, tier) — rendered only
         _cam_candidates: Dict[str, list] = {}  # source -> [(lesson, score|None)]
+        _cam_degraded = ""  # set when ranked selection fell back to legacy
         try:
             from memory import load_lessons, _MAX_LESSON_INJECT_CHARS
             from knowledge_web import query_lessons_scored
@@ -755,6 +756,11 @@ def recall(
                         except Exception:
                             pass
         except Exception:
+            # Legacy fallback renders lessons WITHOUT citations or scored
+            # candidates — the camera frame below must say so, or it records
+            # a false "nothing chosen" against a run that did render lessons
+            # (adversarial-review 2026-07-31 F5).
+            _cam_degraded = "legacy_fallback"
             try:
                 from memory import inject_lessons_for_task
                 result.lessons = inject_lessons_for_task("agenda", goal, max_lessons=3)
@@ -874,11 +880,22 @@ def recall(
                 _src_name: [{
                     "lesson_id": getattr(_c, "lesson_id", "") or "",
                     "text": str(getattr(_c, "lesson", _c))[:160],
-                    "score": (round(_s, 6)
-                              if isinstance(_s, (int, float)) else None),
+                    # Raw, unrounded — the frame's data contract (F4).
+                    "score": (_s if isinstance(_s, (int, float)) else None),
                 } for _c, _s in _pairs]
                 for _src_name, _pairs in _cam_candidates.items()
             }
+            _cam_extra = {
+                "ranker": ranker_name(),
+                "render_budget_chars": _cam_budget,
+                "selection_window": 3,
+                "fetch_window": 10,
+            }
+            if _cam_degraded:
+                # Ranked selection died mid-flight; candidates show what it
+                # saw before dying, chosen is empty because the legacy path
+                # records no citations. The frame is honest, not blind.
+                _cam_extra["degraded"] = _cam_degraded
             if log_fork_frame(
                 "recall.lesson_selection",
                 query=goal,
@@ -903,12 +920,7 @@ def recall(
                     "previews": lessons_cited,
                     "rule_ids": rules_cited,
                 },
-                extra={
-                    "ranker": ranker_name(),
-                    "render_budget_chars": _cam_budget,
-                    "selection_window": 3,
-                    "fetch_window": 10,
-                },
+                extra=_cam_extra,
             ):
                 sources["camera_frame"] = True
         except Exception as exc:

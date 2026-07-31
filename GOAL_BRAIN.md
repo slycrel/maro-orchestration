@@ -5499,3 +5499,12 @@ stats, run_card verdict join, crude overdraw v1 (echo-proxy, labeled upper
 bound). Suite green incl. two pre-existing census breaks fixed in-chunk
 (status:record frontmatter ×3, py-modules camera_log/camera_readout/
 system_health). Frames accrue as instrumented runs execute.
+
+- 2026-07-31 — Chunk-A adversarial review (3 Codex lenses vs 184e8b2):
+  CONTESTED, 7/7 verified, 0 hallucinated — eleventh clean round. All
+  accepted + fixed: per-call file-lock timeout override (camera 2s, never
+  the 30s default), verdict join walks agenda+untyped and splits by
+  ranker family, degraded-fallback frames marked (no false
+  "nothing chosen"), torn lines counted, stale-run-dir orphan guard,
+  raw unrounded scores. Record:
+  docs/history/2026-07-31-chunka-adversarial-review.md.

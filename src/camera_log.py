@@ -12,12 +12,14 @@ readouts join frames to run_card verdicts by run dir; see
 camera_readout.py, the consumer this store ships with).
 
 Score honesty: `score` is the ranker's raw ordinal score (BM25 / RRF /
-citation-penalised cosine — see knowledge_web.ranker_name()).
-`score_share` is score/sum(positive scores) WITHIN one candidate set — a
-normalized share for readout convenience, NOT a probability and NOT a
-sampling propensity (selection is deterministic top-k today). Candidates
-from unscored sources (flat-store top-ups) carry score=None and are never
-assigned fake mass.
+citation-penalised cosine — see knowledge_web.ranker_name()), stored
+unrounded. `score_share` is score/sum(positive scores) WITHIN one
+candidate set, rounded to 4dp for the log (a tied triple stores 0.3333
+each — shares are readout convenience, not an exactly-normalized
+distribution), NOT a probability and NOT a sampling propensity
+(selection is deterministic top-k today). Candidates from unscored
+sources (flat-store top-ups) carry score=None and are never assigned
+fake mass.
 
 Never raises: any failure logs at debug and returns False — a broken
 camera must not take down the run it is filming. Killswitch:
@@ -32,6 +34,11 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 log = logging.getLogger(__name__)
+
+# Best-effort writer: a stuck camera lock costs the frame, never 30s of
+# the recall it is filming (adversarial-review 2026-07-31 F1). The default
+# file_lock deadline protects data stores; frames are droppable telemetry.
+_LOCK_TIMEOUT_S = 2.0
 
 
 def _frame_log_enabled() -> bool:
@@ -102,6 +109,10 @@ def log_fork_frame(
         rd = runs.current_run_dir()
         if rd is None:
             return False  # no run to key the frame to — drop, don't orphan
+        if not Path(rd).is_dir():
+            # Stale ContextVar pointing at a deleted/never-created run dir:
+            # writing would resurrect the dir as an orphan. Drop the frame.
+            return False
         frame = {
             "ts": datetime.now(timezone.utc).isoformat(),
             "fork": fork,
@@ -116,7 +127,8 @@ def log_fork_frame(
         src.mkdir(parents=True, exist_ok=True)
         from file_lock import locked_append
         locked_append(src / "camera_frames.jsonl",
-                      json.dumps(frame, ensure_ascii=False))
+                      json.dumps(frame, ensure_ascii=False),
+                      timeout_s=_LOCK_TIMEOUT_S)
         return True
     except Exception as exc:
         log.debug("camera frame drop (%s): %s", fork, exc)
