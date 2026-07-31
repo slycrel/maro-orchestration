@@ -5464,3 +5464,21 @@ Dormant (deliberately parked, not dropped):
   judged correct order today." Claude's ruling: pieces are right,
   panel stays closed; order = observation-repair ablation first, then
   log-forward instrumentation, then verdict-blind lanes.
+
+### 2026-07-31 — Observation-repair ablation (measurement #1) — thesis survives, with a twist
+The panel's decreed next-artifact-is-a-measurement ran: 3 canonical failures
+× broken-vs-repaired observation × 2 replays, real seams, today's player
+(docs/history/2026-07-31-observation-repair-ablation.md; harness + raw at
+~/.maro/experiments/observation-repair-2026-07-31/). Pre-registered ≥70%
+repaired-arm recovery: **6/6 (100%) — player-inversion thesis survives; the
+context assembler stays the roadmap.** Twist, per the pre-registered
+broken-arm clause: rewriter/cobalt-pine and db37d525 broken arms
+self-rescued 2/2 each — both anecdotes NO LONGER REPRODUCE (engine fixes
+since + player drift indistinguishable) and are retired as live evidence.
+The load-bearing contrast is godot: broken 0/2, repaired 2/2 — and the
+broken arms did NOT loop on the same axis; they confidently invented a
+fresh-axis wrong theory (texture filtering) with no load-verification step.
+**Missing axes → confabulation, not repetition** — convergence brakes can't
+catch it; only widening the observation channel can (Chunk A camera frames,
+context assembler). Secondary: broken observations ~2× wall-clock in 2/3
+families even when the outcome recovers (n tiny, advisory).
