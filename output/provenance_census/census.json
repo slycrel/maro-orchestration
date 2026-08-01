@@ -1,8 +1,8 @@
 {
-  "generated_at": "2026-08-01T05:22:33.706577+00:00",
+  "generated_at": "2026-08-01T06:33:12.932388+00:00",
   "workspace": "/home/clawd/.maro/workspace",
   "host": "jeremy-Macmini-2014",
-  "git_commit": "861ab28b0b35",
+  "git_commit": "001bd449dc7d",
   "window": "all history",
   "era_boundary": "2026-07-29",
   "runs": {
@@ -1020,6 +1020,552 @@
       "attribution": [
         "source/skill_attribution.json 5.6%"
       ]
+    }
+  },
+  "monthly": {
+    "months": [
+      "2026-04",
+      "2026-05",
+      "2026-06",
+      "2026-07"
+    ],
+    "runs_per_month": {
+      "2026-04": 2,
+      "2026-05": 476,
+      "2026-06": 141,
+      "2026-07": 114
+    },
+    "artifacts": {
+      "metadata.json": {
+        "2026-04": {
+          "n": 2,
+          "present": 2,
+          "pct": 100.0,
+          "thin": true
+        },
+        "2026-05": {
+          "n": 476,
+          "present": 476,
+          "pct": 100.0,
+          "thin": false
+        },
+        "2026-06": {
+          "n": 141,
+          "present": 141,
+          "pct": 100.0,
+          "thin": false
+        },
+        "2026-07": {
+          "n": 114,
+          "present": 114,
+          "pct": 100.0,
+          "thin": false
+        }
+      },
+      "source/prompt.txt": {
+        "2026-04": {
+          "n": 2,
+          "present": 2,
+          "pct": 100.0,
+          "thin": true
+        },
+        "2026-05": {
+          "n": 476,
+          "present": 476,
+          "pct": 100.0,
+          "thin": false
+        },
+        "2026-06": {
+          "n": 141,
+          "present": 141,
+          "pct": 100.0,
+          "thin": false
+        },
+        "2026-07": {
+          "n": 114,
+          "present": 114,
+          "pct": 100.0,
+          "thin": false
+        }
+      },
+      "source/environment.json": {
+        "2026-04": {
+          "n": 2,
+          "present": 0,
+          "pct": 0.0,
+          "thin": true
+        },
+        "2026-05": {
+          "n": 476,
+          "present": 0,
+          "pct": 0.0,
+          "thin": false
+        },
+        "2026-06": {
+          "n": 141,
+          "present": 0,
+          "pct": 0.0,
+          "thin": false
+        },
+        "2026-07": {
+          "n": 114,
+          "present": 68,
+          "pct": 59.6,
+          "thin": false
+        }
+      },
+      "source/scope.md": {
+        "2026-04": {
+          "n": 2,
+          "present": 2,
+          "pct": 100.0,
+          "thin": true
+        },
+        "2026-05": {
+          "n": 321,
+          "present": 57,
+          "pct": 17.8,
+          "thin": false
+        },
+        "2026-06": {
+          "n": 107,
+          "present": 80,
+          "pct": 74.8,
+          "thin": false
+        },
+        "2026-07": {
+          "n": 105,
+          "present": 84,
+          "pct": 80.0,
+          "thin": false
+        }
+      },
+      "source/resolved_intent.md": {
+        "2026-04": {
+          "n": 2,
+          "present": 2,
+          "pct": 100.0,
+          "thin": true
+        },
+        "2026-05": {
+          "n": 321,
+          "present": 57,
+          "pct": 17.8,
+          "thin": false
+        },
+        "2026-06": {
+          "n": 107,
+          "present": 80,
+          "pct": 74.8,
+          "thin": false
+        },
+        "2026-07": {
+          "n": 105,
+          "present": 84,
+          "pct": 80.0,
+          "thin": false
+        }
+      },
+      "source/recall_citations.json": {
+        "2026-04": {
+          "n": 2,
+          "present": 0,
+          "pct": 0.0,
+          "thin": true
+        },
+        "2026-05": {
+          "n": 321,
+          "present": 0,
+          "pct": 0.0,
+          "thin": false
+        },
+        "2026-06": {
+          "n": 107,
+          "present": 0,
+          "pct": 0.0,
+          "thin": false
+        },
+        "2026-07": {
+          "n": 105,
+          "present": 11,
+          "pct": 10.5,
+          "thin": false
+        }
+      },
+      "source/skills_manifest.jsonl": {
+        "2026-04": {
+          "n": 2,
+          "present": 0,
+          "pct": 0.0,
+          "thin": true
+        },
+        "2026-05": {
+          "n": 321,
+          "present": 0,
+          "pct": 0.0,
+          "thin": false
+        },
+        "2026-06": {
+          "n": 107,
+          "present": 0,
+          "pct": 0.0,
+          "thin": false
+        },
+        "2026-07": {
+          "n": 105,
+          "present": 58,
+          "pct": 55.2,
+          "thin": false
+        }
+      },
+      "build/calls/": {
+        "2026-04": {
+          "n": 2,
+          "present": 0,
+          "pct": 0.0,
+          "thin": true
+        },
+        "2026-05": {
+          "n": 476,
+          "present": 0,
+          "pct": 0.0,
+          "thin": false
+        },
+        "2026-06": {
+          "n": 141,
+          "present": 0,
+          "pct": 0.0,
+          "thin": false
+        },
+        "2026-07": {
+          "n": 114,
+          "present": 92,
+          "pct": 80.7,
+          "thin": false
+        }
+      },
+      "build/captains_log_slice.jsonl": {
+        "2026-04": {
+          "n": 2,
+          "present": 2,
+          "pct": 100.0,
+          "thin": true
+        },
+        "2026-05": {
+          "n": 321,
+          "present": 319,
+          "pct": 99.4,
+          "thin": false
+        },
+        "2026-06": {
+          "n": 107,
+          "present": 59,
+          "pct": 55.1,
+          "thin": false
+        },
+        "2026-07": {
+          "n": 105,
+          "present": 97,
+          "pct": 92.4,
+          "thin": false
+        }
+      },
+      "build/<loop>-plan.md": {
+        "2026-04": {
+          "n": 2,
+          "present": 2,
+          "pct": 100.0,
+          "thin": true
+        },
+        "2026-05": {
+          "n": 321,
+          "present": 309,
+          "pct": 96.3,
+          "thin": false
+        },
+        "2026-06": {
+          "n": 107,
+          "present": 93,
+          "pct": 86.9,
+          "thin": false
+        },
+        "2026-07": {
+          "n": 105,
+          "present": 101,
+          "pct": 96.2,
+          "thin": false
+        }
+      },
+      "build/<loop>-log.json": {
+        "2026-04": {
+          "n": 2,
+          "present": 2,
+          "pct": 100.0,
+          "thin": true
+        },
+        "2026-05": {
+          "n": 321,
+          "present": 308,
+          "pct": 96.0,
+          "thin": false
+        },
+        "2026-06": {
+          "n": 107,
+          "present": 58,
+          "pct": 54.2,
+          "thin": false
+        },
+        "2026-07": {
+          "n": 105,
+          "present": 95,
+          "pct": 90.5,
+          "thin": false
+        }
+      },
+      "build/<loop>-step-*.md": {
+        "2026-04": {
+          "n": 2,
+          "present": 0,
+          "pct": 0.0,
+          "thin": true
+        },
+        "2026-05": {
+          "n": 321,
+          "present": 2,
+          "pct": 0.6,
+          "thin": false
+        },
+        "2026-06": {
+          "n": 107,
+          "present": 34,
+          "pct": 31.8,
+          "thin": false
+        },
+        "2026-07": {
+          "n": 105,
+          "present": 52,
+          "pct": 49.5,
+          "thin": false
+        }
+      },
+      "build/<loop>-report.html": {
+        "2026-04": {
+          "n": 2,
+          "present": 2,
+          "pct": 100.0,
+          "thin": true
+        },
+        "2026-05": {
+          "n": 321,
+          "present": 308,
+          "pct": 96.0,
+          "thin": false
+        },
+        "2026-06": {
+          "n": 107,
+          "present": 58,
+          "pct": 54.2,
+          "thin": false
+        },
+        "2026-07": {
+          "n": 105,
+          "present": 95,
+          "pct": 90.5,
+          "thin": false
+        }
+      },
+      "build/checkpoint.json": {
+        "2026-04": {
+          "n": 2,
+          "present": 0,
+          "pct": 0.0,
+          "thin": true
+        },
+        "2026-05": {
+          "n": 321,
+          "present": 0,
+          "pct": 0.0,
+          "thin": false
+        },
+        "2026-06": {
+          "n": 107,
+          "present": 0,
+          "pct": 0.0,
+          "thin": false
+        },
+        "2026-07": {
+          "n": 105,
+          "present": 50,
+          "pct": 47.6,
+          "thin": false
+        }
+      },
+      "run_card.json": {
+        "2026-04": {
+          "n": 2,
+          "present": 0,
+          "pct": 0.0,
+          "thin": true
+        },
+        "2026-05": {
+          "n": 476,
+          "present": 0,
+          "pct": 0.0,
+          "thin": false
+        },
+        "2026-06": {
+          "n": 141,
+          "present": 0,
+          "pct": 0.0,
+          "thin": false
+        },
+        "2026-07": {
+          "n": 114,
+          "present": 106,
+          "pct": 93.0,
+          "thin": false
+        }
+      },
+      "source/skill_attribution.json": {
+        "2026-04": {
+          "n": 2,
+          "present": 0,
+          "pct": 0.0,
+          "thin": true
+        },
+        "2026-05": {
+          "n": 321,
+          "present": 0,
+          "pct": 0.0,
+          "thin": false
+        },
+        "2026-06": {
+          "n": 107,
+          "present": 0,
+          "pct": 0.0,
+          "thin": false
+        },
+        "2026-07": {
+          "n": 105,
+          "present": 30,
+          "pct": 28.6,
+          "thin": false
+        }
+      }
+    },
+    "since_first_seen": {
+      "metadata.json": {
+        "first_seen": "2026-04",
+        "n": 733,
+        "present": 733,
+        "pct": 100.0,
+        "thin": false
+      },
+      "source/prompt.txt": {
+        "first_seen": "2026-04",
+        "n": 733,
+        "present": 733,
+        "pct": 100.0,
+        "thin": false
+      },
+      "source/environment.json": {
+        "first_seen": "2026-07",
+        "n": 114,
+        "present": 68,
+        "pct": 59.6,
+        "thin": false
+      },
+      "source/scope.md": {
+        "first_seen": "2026-04",
+        "n": 535,
+        "present": 223,
+        "pct": 41.7,
+        "thin": false
+      },
+      "source/resolved_intent.md": {
+        "first_seen": "2026-04",
+        "n": 535,
+        "present": 223,
+        "pct": 41.7,
+        "thin": false
+      },
+      "source/recall_citations.json": {
+        "first_seen": "2026-07",
+        "n": 105,
+        "present": 11,
+        "pct": 10.5,
+        "thin": false
+      },
+      "source/skills_manifest.jsonl": {
+        "first_seen": "2026-07",
+        "n": 105,
+        "present": 58,
+        "pct": 55.2,
+        "thin": false
+      },
+      "build/calls/": {
+        "first_seen": "2026-07",
+        "n": 114,
+        "present": 92,
+        "pct": 80.7,
+        "thin": false
+      },
+      "build/captains_log_slice.jsonl": {
+        "first_seen": "2026-04",
+        "n": 535,
+        "present": 477,
+        "pct": 89.2,
+        "thin": false
+      },
+      "build/<loop>-plan.md": {
+        "first_seen": "2026-04",
+        "n": 535,
+        "present": 505,
+        "pct": 94.4,
+        "thin": false
+      },
+      "build/<loop>-log.json": {
+        "first_seen": "2026-04",
+        "n": 535,
+        "present": 463,
+        "pct": 86.5,
+        "thin": false
+      },
+      "build/<loop>-step-*.md": {
+        "first_seen": "2026-05",
+        "n": 533,
+        "present": 88,
+        "pct": 16.5,
+        "thin": false
+      },
+      "build/<loop>-report.html": {
+        "first_seen": "2026-04",
+        "n": 535,
+        "present": 463,
+        "pct": 86.5,
+        "thin": false
+      },
+      "build/checkpoint.json": {
+        "first_seen": "2026-07",
+        "n": 105,
+        "present": 50,
+        "pct": 47.6,
+        "thin": false
+      },
+      "run_card.json": {
+        "first_seen": "2026-07",
+        "n": 114,
+        "present": 106,
+        "pct": 93.0,
+        "thin": false
+      },
+      "source/skill_attribution.json": {
+        "first_seen": "2026-07",
+        "n": 105,
+        "present": 30,
+        "pct": 28.6,
+        "thin": false
+      }
     }
   },
   "run_detail": [
@@ -37751,6 +38297,23 @@
       "Read skills/arch-quality-selfimprove.md in this repo and write a faith",
       "Perform a self-diagnosis of Maro's current orchestration behavior agai",
       "Perform a second self-diagnosis of Maro's orchestration against the co"
-    ]
+    ],
+    "by_month": {
+      "2026-04": {
+        "total": 1272,
+        "no_loop_id": 1272,
+        "verdicted": 0
+      },
+      "2026-06": {
+        "total": 66,
+        "no_loop_id": 66,
+        "verdicted": 0
+      },
+      "2026-07": {
+        "total": 112,
+        "no_loop_id": 59,
+        "verdicted": 41
+      }
+    }
   }
 }

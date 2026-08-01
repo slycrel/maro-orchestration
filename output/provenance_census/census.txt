@@ -1,10 +1,10 @@
 ==========================================================================
 PROVENANCE CENSUS — what the runs actually wrote down
 ==========================================================================
-generated : 2026-08-01T05:22:33.706577+00:00
+generated : 2026-08-01T06:33:12.932388+00:00
 workspace : /home/clawd/.maro/workspace
 host      : jeremy-Macmini-2014
-commit    : 861ab28b0b35
+commit    : 001bd449dc7d
 window    : all history
 
 Runs scanned : 734  (settled 733, in-flight 1 — in-flight excluded from coverage)
@@ -14,23 +14,63 @@ By status    : {'done': 316, 'stuck': 168, 'error': 132, 'stranded': 57, 'incomp
 --------------------------------------------------------------------------
 ARTIFACT COVERAGE (settled runs, per-lane applicability honored)
 --------------------------------------------------------------------------
-artifact                          stage              have/appl    pct  post-era
-metadata.json                     intake               733/733 100.0%    100.0%
-source/prompt.txt                 intake               733/733 100.0%    100.0%
-source/environment.json           intake                68/733   9.3%    100.0%
-source/scope.md                   scoping              223/535  41.7%     87.5%
-source/resolved_intent.md         scoping              223/535  41.7%     87.5%
-source/recall_citations.json      recall                11/535   2.1%    100.0%
-source/skills_manifest.jsonl      skill-injection       58/535  10.8%    100.0%
-build/calls/                      llm-io                92/733  12.6%     50.0%
-build/captains_log_slice.jsonl    events               477/535  89.2%    100.0%
-build/<loop>-plan.md              planning             505/535  94.4%    100.0%
-build/<loop>-log.json             step-exec            463/535  86.5%    100.0%
-build/<loop>-step-*.md            step-exec             88/535  16.4%    100.0%
-build/<loop>-report.html          reporting            463/535  86.5%    100.0%
-build/checkpoint.json             step-exec             50/535   9.3%    100.0%
-run_card.json                     curation             106/733  14.5%    100.0%
-source/skill_attribution.json     attribution           30/535   5.6%     50.0%
+READ THE 'since' COLUMN, NOT 'all'. 'all' spans the whole workspace
+including runs written before a given writer existed, so a feature
+that shipped late reads as broken. 'since' starts at the first month
+the artifact was ever observed. '~' = thin denominator (<20 runs).
+
+artifact                          stage                  all    first     since
+metadata.json                     intake                100%  2026-04      100%
+source/prompt.txt                 intake                100%  2026-04      100%
+source/environment.json           intake                  9%  2026-07       60%
+source/scope.md                   scoping                42%  2026-04       42%
+source/resolved_intent.md         scoping                42%  2026-04       42%
+source/recall_citations.json      recall                  2%  2026-07       10%
+source/skills_manifest.jsonl      skill-injection        11%  2026-07       55%
+build/calls/                      llm-io                 13%  2026-07       81%
+build/captains_log_slice.jsonl    events                 89%  2026-04       89%
+build/<loop>-plan.md              planning               94%  2026-04       94%
+build/<loop>-log.json             step-exec              86%  2026-04       86%
+build/<loop>-step-*.md            step-exec              16%  2026-05       16%
+build/<loop>-report.html          reporting              86%  2026-04       86%
+build/checkpoint.json             step-exec               9%  2026-07       48%
+run_card.json                     curation               14%  2026-07       93%
+source/skill_attribution.json     attribution             6%  2026-07       29%
+
+--------------------------------------------------------------------------
+PER-MONTH COVERAGE — the load-bearing view
+--------------------------------------------------------------------------
+A whole-history rate pools runs from BEFORE a feature existed with
+runs that could have used it, and reads as a live outage. Read the
+month a feature ships as a step change; read a decline as a
+regression. '~' marks a cell with a thin denominator (<20 runs).
+
+artifact                             2026-04   2026-05   2026-06   2026-07
+(runs settled)                             2       476       141       114
+metadata.json                          ~100%      100%      100%      100%
+source/prompt.txt                      ~100%      100%      100%      100%
+source/environment.json                  ~0%        0%        0%       59%
+source/scope.md                        ~100%       17%       74%       80%
+source/resolved_intent.md              ~100%       17%       74%       80%
+source/recall_citations.json             ~0%        0%        0%       10%
+source/skills_manifest.jsonl             ~0%        0%        0%       55%
+build/calls/                             ~0%        0%        0%       80%
+build/captains_log_slice.jsonl         ~100%       99%       55%       92%
+build/<loop>-plan.md                   ~100%       96%       86%       96%
+build/<loop>-log.json                  ~100%       96%       54%       90%
+build/<loop>-step-*.md                   ~0%        0%       31%       49%
+build/<loop>-report.html               ~100%       96%       54%       90%
+build/checkpoint.json                    ~0%        0%        0%       47%
+run_card.json                            ~0%        0%        0%       93%
+source/skill_attribution.json            ~0%        0%        0%       28%
+
+--------------------------------------------------------------------------
+PER-MONTH VERDICTABILITY (outcomes.jsonl)
+--------------------------------------------------------------------------
+month           rows   no loop_id   blind %  verdicted
+2026-04         1272         1272    100.0%          0
+2026-06           66           66    100.0%          0
+2026-07          112           59     52.7%         41
 
 STAGES WITH INCOMPLETE PAPER TRAIL:
   attribution      source/skill_attribution.json 5.6%
@@ -63,8 +103,14 @@ inherited on the calling path. Both fail silently today.
   - 258859a8-calm-echo
 
 --------------------------------------------------------------------------
-VERDICTABILITY (outcomes.jsonl)
+VERDICTABILITY (outcomes.jsonl) — CROSS-CHECK ONLY
 --------------------------------------------------------------------------
+`python3 -m verdict_flow` is the authority here: it separates STOCK
+from FLOW and counts verdict EVENTS by arrival week. These totals are
+all-history stock and will read alarmingly low for the same reason the
+artifact table does — April-era rows predate verdict stamping and are
+not backfilled, by decree. Use the per-month table below, not the
+headline, and prefer verdict_flow over both.
 rows total                    : 1450
 no loop_id (unverdictable)    : 1397  (96.3%)
 carrying a verdict            : 41
