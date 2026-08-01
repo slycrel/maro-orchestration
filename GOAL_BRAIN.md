@@ -5566,3 +5566,24 @@ pre-chunk NOW/evolver rows honestly unjudged going forward from here.
   pre-read finding: the ENTIRE long tier (4 rows) got tenure via the
   recovery path re-minting identical template strings (sv 7-35 = machine
   restatement), and all pre-chunk-6 rows carry novelty 0.00.
+
+- **2026-07-31** — Paused-state design (Jeremy, decree-class, piped
+  7afe8b3a): runs get a PAUSED lifecycle state with a typed reason —
+  error-class (disk full, LLM unreachable, no tokens, power loss) or
+  operator-class (awaiting clarification, manual intervention). External
+  interrupt dissolves into paused rather than becoming a fifth stop
+  verdict ("is that a state that may or may not ever be finished?");
+  the four stop verdicts stand. Advisory judges never pause — they stamp
+  judge-error-and-continue (Chunk B pattern); only blocking dependencies
+  pause. Captured as COMPOUND_THINKING_DESIGN §13e.
+- **2026-07-31** — Fan-out chunking posture (Jeremy, decree-class, piped
+  8c7f5068): "an honest good enough with clear edges to upgrade
+  independently later, with work items to revisit, becomes our more
+  natural chunking points... I kinda feel like we're not fanning out like
+  we could." Build order delegated (he declines to be the blocker): §12
+  order stands (#4 stop-verdict split → #2 recon flavor, star-first),
+  executed as slices with named upgrade edges, independent lanes fanned
+  out to subagents (box OOM limits still respected). First fan-out same
+  session: stop-seam refresh audit + fail-open census audit launched as
+  background agents feeding slice 1. Coordination note: Jeremy has an M1
+  opus lane on a BACKLOG test item (auditing/bugfixes first).

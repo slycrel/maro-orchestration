@@ -528,6 +528,40 @@ objective." No — he invented it earlier: the term entered the project in
 position or capability** — a detour to a landmark off the goal's subgraph
 that improves vantage or the tech tree.
 
+### 13e. Paused is a state, not a verdict (Jeremy, 2026-07-31 — piped 7afe8b3a)
+
+The external-interrupt question from the 9a review dissolves: an interrupt
+is not a fifth stop verdict, it's a **lifecycle state** — `paused`, with a
+typed reason. Verdicts are observations about the map, recorded at an
+honest ending; paused observes the **substrate or the operator**, and a
+paused run "may or may not ever be finished" (Jeremy) — it can resume and
+later earn any of the four verdicts, or be abandoned in place. Two reason
+families:
+
+- **error-class** — the substrate can't continue: disk full, LLM
+  unreachable, no tokens available, power loss (that one stamped post-hoc
+  on recovery, since the writer was the thing that died).
+- **operator-class** — a human is in the loop: awaiting requested
+  clarification; manual intervention / plug-pull.
+
+Boundary with fail-open gates: a run pauses only when a **blocking**
+dependency is gone — the adapter doing the actual work. **Advisory**
+judges (quality gates, validators) never pause a run; they stamp
+judge-error-and-continue (the Chunk B `now_self_verdict_error` pattern).
+The repercussion still open there: most fail-open sites record the judge
+failure only as a prose reason string no consumer reads — closing that is
+its own slice, census first.
+
+The four stop verdicts (§3a) stand unchanged; paused is orthogonal and
+composes with all of them.
+
+**Build order resolved by delegation (Jeremy, 2026-07-31 — piped
+8c7f5068):** he declines to pick; the §12 proposed order stands (#4
+stop-verdict split → #2 recon flavor, exercised in `star` first), executed
+as honest-good-enough slices with named upgrade edges + revisit items, and
+independent lanes fanned out to subagents rather than serialized through
+him.
+
 ## 14. Diagnosis at the failure boundary (Jeremy + fable, 2026-07-27)
 
 The scientific method was already here in pieces without the name:
