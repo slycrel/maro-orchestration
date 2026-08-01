@@ -71,6 +71,10 @@ class Outcome:
     # survey 2026-07-23, conflation 1).
     stop_verdict: str = ""
     stop_evidence: str = ""         # bounded citation for the verdict (≤500 chars at stamp sites)
+    # Typed pause reason (§13e; stop_verdicts.py PAUSE_* vocabulary). "" =
+    # not paused / reason untyped. Sibling of stop_verdict: the paused state
+    # is a lifecycle observation, the verdict an ending observation.
+    pause_reason: str = ""
     loop_id: str = ""               # join key to runs/*/metadata.json for post-closure annotation
     dry_run: bool = False            # excludes synthetic dry-run lessons from production funnel metrics
     lesson_extraction_status: str = ""  # "deferred" | "completed" | "failed" | legacy unknown
@@ -456,6 +460,8 @@ def _verdict_row(obj: Any) -> Dict[str, Any]:
         row.pop("stop_verdict")
     if "stop_evidence" in row and not row["stop_evidence"]:
         row.pop("stop_evidence")
+    if "pause_reason" in row and not row["pause_reason"]:
+        row.pop("pause_reason")
     if "minted_from" in row and not row["minted_from"]:
         row.pop("minted_from")
     return row
@@ -485,6 +491,7 @@ def record_outcome(
     handle_id: str = "",
     stop_verdict: str = "",
     stop_evidence: str = "",
+    pause_reason: str = "",
 ) -> Outcome:
     """Record the outcome of a completed run.
 
@@ -538,6 +545,7 @@ def record_outcome(
         handle_id=handle_id,
         stop_verdict=stop_verdict,
         stop_evidence=(stop_evidence or "")[:500],
+        pause_reason=pause_reason,
     )
 
     # Append to outcomes ledger

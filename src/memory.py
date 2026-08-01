@@ -598,6 +598,7 @@ def reflect_and_record(
     handle_id: str = "",
     stop_verdict: str = "",
     stop_evidence: str = "",
+    pause_reason: str = "",
 ) -> Outcome:
     """Reflect on a completed run and record the outcome + lessons.
 
@@ -695,6 +696,7 @@ def reflect_and_record(
         handle_id=handle_id,
         stop_verdict=stop_verdict,
         stop_evidence=stop_evidence,
+        pause_reason=pause_reason,
     )
 
     _log_lesson_extraction(

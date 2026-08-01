@@ -594,6 +594,10 @@ def _backfill_stranded_run_cards(*, verbose: bool = False) -> list:
             meta["status"] = "stranded"
             meta["ended_at"] = meta.get("ended_at") or last_seen
             meta["stranded_detected_at"] = now.isoformat()
+            # §13e post-hoc stamp: the writer died (crash/power loss), so the
+            # sweep is the only place this pause reason can be recorded.
+            from stop_verdicts import PAUSE_ERR_WRITER_DIED
+            meta["pause_reason"] = PAUSE_ERR_WRITER_DIED
             from file_lock import atomic_write
             atomic_write(meta_path, _json.dumps(meta, indent=2))
             out.append(meta.get("handle_id") or rd.name)

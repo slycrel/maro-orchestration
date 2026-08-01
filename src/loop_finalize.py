@@ -227,6 +227,7 @@ def _build_result_and_finalize(
         stuck_reason=stuck_reason,
         stop_verdict=ctx.stop_verdict,
         stop_evidence=ctx.stop_evidence,
+        pause_reason=ctx.pause_reason,
         total_tokens_in=total_tokens_in,
         total_tokens_out=total_tokens_out,
         elapsed_ms=elapsed_total,
@@ -312,6 +313,7 @@ def _build_result_and_finalize(
         handle_id=ctx.handle_id,
         stop_verdict=ctx.stop_verdict,
         stop_evidence=ctx.stop_evidence,
+        pause_reason=ctx.pause_reason,
     )
 
     # Checkpoints are KEPT on completion (retention decree, 2026-07-10).
@@ -424,6 +426,7 @@ def _build_result_and_finalize(
         _stamp_stop_meta({
             "stop_verdict": result.stop_verdict,
             "stop_evidence": result.stop_evidence,
+            "pause_reason": result.pause_reason,
         })
     except Exception as _sv_exc:
         log.debug("stop-verdict metadata stamp failed: %s", _sv_exc)
@@ -481,6 +484,7 @@ def _finalize_loop(
     handle_id: str = "",
     stop_verdict: str = "",
     stop_evidence: str = "",
+    pause_reason: str = "",
 ) -> None:
     """Run all post-loop side effects after the main execution loop ends.
 
@@ -638,6 +642,7 @@ def _finalize_loop(
             handle_id=handle_id,
             stop_verdict=stop_verdict,
             stop_evidence=stop_evidence,
+            pause_reason=pause_reason,
         )
         # Meta-Harness steal: persist step-level traces so the evolver proposer
         # sees full execution context, not just aggregate summaries.

@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from loop_types import _configure_logging, _orch, LoopResult, LoopStateMachine
+from stop_verdicts import PAUSE_ERR_BUSY, PAUSE_OP_MANUAL
 from loop_artifacts import _goal_to_slug
 
 try:
@@ -300,6 +301,7 @@ def _initialize_loop(
                 stuck_reason=f"kill switch active: {_ks_msg}",
                 stop_verdict="external-interrupt",
                 stop_evidence=f"kill switch active: {_ks_msg}",
+                pause_reason=PAUSE_OP_MANUAL,
                 total_tokens_in=0,
                 total_tokens_out=0,
                 elapsed_ms=0,
@@ -422,6 +424,7 @@ def _initialize_loop(
                     stuck_reason=str(_busy),
                     stop_verdict="external-interrupt",
                     stop_evidence=str(_busy),
+                    pause_reason=PAUSE_ERR_BUSY,
                     total_tokens_in=0,
                     total_tokens_out=0,
                     elapsed_ms=0,

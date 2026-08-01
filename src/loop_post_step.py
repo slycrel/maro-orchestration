@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from ancestry import Origin
+from stop_verdicts import PAUSE_OP_MANUAL
 from loop_types import LoopContext, StepOutcome, _orch, MAX_RESTART_DEPTH
 from loop_artifacts import _write_plan_manifest
 from loop_planning import _shape_steps
@@ -364,6 +365,7 @@ def _check_loop_interrupts(
             loop_status = "interrupted"
             stuck_reason = f"kill switch: {_ks_msg}"
             ctx.stamp_stop("external-interrupt", stuck_reason)
+            ctx.stamp_pause(PAUSE_OP_MANUAL)
             if ctx.verbose:
                 print("[maro] kill switch active — stopping loop", file=sys.stderr, flush=True)
     except Exception as _exc:
@@ -458,6 +460,7 @@ def _check_loop_interrupts(
                     loop_status = "interrupted"
                     stuck_reason = f"stopped by {intr.source}: {intr.message[:80]}"
                     ctx.stamp_stop("external-interrupt", stuck_reason)
+                    ctx.stamp_pause(PAUSE_OP_MANUAL)
                     if ctx.verbose:
                         print(
                             f"[maro] interrupt: stop requested by {intr.source}",

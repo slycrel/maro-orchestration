@@ -60,7 +60,12 @@ from decision_prior import (
     _DECISION_LESSON_CAP,
 )
 from outcome_policy import is_learnable_outcome
-from stop_verdicts import INTERRUPT_STATUSES
+from stop_verdicts import (
+    INTERRUPT_STATUSES,
+    PAUSE_REASON_BY_STATUS,
+    VALID_PAUSE_REASONS,
+    pause_family,
+)
 
 _SUCCESS_STATUSES = {"done", "complete", "completed"}
 # "incomplete" = closure demoted a finished run (work ended, goal not met) —
@@ -221,6 +226,17 @@ def classify_outcome(rd: Path, meta: dict, card: dict) -> None:
         card["stop_verdict"] = _stop_verdict
         if _stop_evidence:
             card["stop_evidence"] = _stop_evidence
+    # Typed pause reason (§13e) — WHY the run is/was paused, orthogonal to the
+    # stop verdict (paused = lifecycle observation, may never finish). Explicit
+    # stamp wins; status-derived fallback covers pre-stamping runs, but only
+    # for statuses with one unambiguous cause — "interrupted" is deliberately
+    # absent from the map (guessing would fabricate provenance).
+    _pause = str(meta.get("pause_reason") or "")
+    if _pause not in VALID_PAUSE_REASONS:
+        _pause = PAUSE_REASON_BY_STATUS.get(status, "")
+    if _pause:
+        card["pause_reason"] = _pause
+        card["pause_family"] = pause_family(_pause)
     card["status"] = status
     card["goal_achieved"] = achieved
     card["goal_verdict_summary"] = meta.get("goal_verdict_summary")
@@ -1231,7 +1247,8 @@ _CURATOR_SPECS: List[CuratorSpec] = [
                 optional_provides=("goal_verdict_downgrade_reason",
                                    "goal_verdict_gaps",
                                    "clarification_question",
-                                   "stop_verdict", "stop_evidence")),
+                                   "stop_verdict", "stop_evidence",
+                                   "pause_reason", "pause_family")),
     CuratorSpec(inventory_assets, provides=("inventory", "mineable")),
     CuratorSpec(excerpt_result,
                 optional_provides=("result_excerpt", "result_path")),

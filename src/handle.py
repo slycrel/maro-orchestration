@@ -1493,7 +1493,11 @@ def _handle_impl(
                         # undiagnosable from the other side of the wire.
                         try:
                             from runs import stamp_run_metadata as _stamp_q
-                            _stamp_q({"clarification_question": _q})
+                            from stop_verdicts import PAUSE_OP_CLARIFICATION
+                            _stamp_q({
+                                "clarification_question": _q,
+                                "pause_reason": PAUSE_OP_CLARIFICATION,
+                            })
                         except Exception:
                             pass
                         elapsed = int((time.monotonic() - started_at) * 1000)

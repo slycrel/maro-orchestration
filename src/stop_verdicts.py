@@ -80,3 +80,48 @@ VALID_STOP_VALUES = GOAL_VERDICTS | {EXTERNAL_INTERRUPT}
 INTERRUPT_STATUSES = frozenset(
     ("interrupted", "stranded", "refused_busy", "clarification_needed")
 )
+
+# The paused family under its decree name (§13e, 2026-07-31, piped 7afe8b3a):
+# these statuses ARE the paused state — a run that "may or may not ever be
+# finished". Same set as INTERRUPT_STATUSES; both names kept because the
+# stop_verdict field's external-interrupt marker (2026-07-27 decree) and the
+# paused lifecycle state (2026-07-31 decree) are different layers over the
+# same rows.
+PAUSED_STATUSES = INTERRUPT_STATUSES
+
+# Typed pause reasons (§13e): WHY the run is paused, machine-readable.
+# Operator-class — a human is in the loop.
+PAUSE_OP_MANUAL = "manual-intervention"          # kill switch, operator stop directive
+PAUSE_OP_CLARIFICATION = "awaiting-clarification"
+# Error-class — the substrate can't continue.
+PAUSE_ERR_BUSY = "box-busy"                      # run lease / admission contention
+PAUSE_ERR_WRITER_DIED = "writer-died"            # stranded sweep: crash/power loss, stamped post-hoc
+PAUSE_ERR_LLM_UNREACHABLE = "llm-unreachable"    # vocabulary reserved; stamp sites are an upgrade edge
+PAUSE_ERR_NO_TOKENS = "no-tokens"                # vocabulary reserved; stamp sites are an upgrade edge
+PAUSE_ERR_DISK_FULL = "disk-full"                # vocabulary reserved; stamp sites are an upgrade edge
+
+PAUSE_REASONS_OPERATOR = frozenset((PAUSE_OP_MANUAL, PAUSE_OP_CLARIFICATION))
+PAUSE_REASONS_ERROR = frozenset((
+    PAUSE_ERR_BUSY, PAUSE_ERR_WRITER_DIED, PAUSE_ERR_LLM_UNREACHABLE,
+    PAUSE_ERR_NO_TOKENS, PAUSE_ERR_DISK_FULL,
+))
+VALID_PAUSE_REASONS = PAUSE_REASONS_OPERATOR | PAUSE_REASONS_ERROR
+
+# Status-derived fallback for rows whose writer predates reason stamping.
+# Only unambiguous statuses appear: "interrupted" is deliberately absent —
+# it covers kill switch, wall-clock timeout, and backend death, and guessing
+# among them would fabricate provenance.
+PAUSE_REASON_BY_STATUS = {
+    "clarification_needed": PAUSE_OP_CLARIFICATION,
+    "refused_busy": PAUSE_ERR_BUSY,
+    "stranded": PAUSE_ERR_WRITER_DIED,
+}
+
+
+def pause_family(reason: str) -> str:
+    """'operator' | 'error' for a valid pause reason, '' otherwise."""
+    if reason in PAUSE_REASONS_OPERATOR:
+        return "operator"
+    if reason in PAUSE_REASONS_ERROR:
+        return "error"
+    return ""

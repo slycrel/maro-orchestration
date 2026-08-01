@@ -180,6 +180,9 @@ class LoopResult:
     # cap-hit visible (stop-path survey conflation 2).
     stop_verdict: str = ""
     stop_evidence: str = ""
+    # Typed pause reason (stop_verdicts.py PAUSE_* vocabulary; §13e). Empty =
+    # not paused, or paused without a typed reason (pre-stamping writers).
+    pause_reason: str = ""
     total_tokens_in: int = 0
     total_tokens_out: int = 0
     elapsed_ms: int = 0
@@ -415,6 +418,10 @@ class LoopContext:
     # the verdict is the machine-readable WHY, stuck_reason stays the prose.
     stop_verdict: str = ""
     stop_evidence: str = ""
+    # Typed pause reason (stop_verdicts.py PAUSE_* vocabulary; §13e), set by
+    # stamp_pause() at the site that parks the run. Empty = not paused or
+    # reason untyped.
+    pause_reason: str = ""
     phase: str = LoopPhase.INIT
 
     # Token/cost tracking
@@ -515,6 +522,21 @@ class LoopContext:
             return
         self.stop_verdict = verdict
         self.stop_evidence = (evidence or "")[:500]
+
+    def stamp_pause(self, reason: str) -> None:
+        """Record the typed pause reason (§13e). First write wins, same
+        contract as stamp_stop: the break site knows the specific cause.
+        Off-vocabulary values are dropped to unstamped so the status-derived
+        fallback in classify_outcome still applies."""
+        if self.pause_reason:
+            return
+        from stop_verdicts import VALID_PAUSE_REASONS
+        if reason not in VALID_PAUSE_REASONS:
+            import logging
+            logging.getLogger("maro.loop").warning(
+                "stamp_pause: off-vocabulary reason %r dropped", reason)
+            return
+        self.pause_reason = reason
 
 
 @dataclass
