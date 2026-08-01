@@ -98,7 +98,7 @@ Written by `captains_log.log_event(...)`. Every entry has the four required fiel
 |-------|-----------|------------------|---------------|
 | `SKILL_SYNTHESIZED` | evolver.py:2620 | skill_id, goal, outcome | A new skill was synthesized from a successful outcome. |
 | `SKILL_SYNTHESIS_REJECTED` | evolver.py:2545 | gate, reason, goal, trigger_patterns | The 3-gate quality check rejected a skill candidate. |
-| `SKILL_PROMOTED` | skills.py:1203 | skill_id, utility, use_count | A provisional skill crossed the promotion threshold (5+ uses / 70%+ success). |
+| `SKILL_PROMOTED` | skills.py:1203 | skill_id, utility, use_count, validation | A provisional skill crossed the promotion threshold (5+ uses / 70%+ success). `validation`: "passed" (LLM harness judged it), "unjudged" (harness errored, fail-open let it through), "skipped" (no adapter — pre-2026-08-01 the production norm; the harness was dead code until the evolver call site passed its adapter). |
 | `SKILL_DEMOTED` | skills.py:1264 | skill_id, utility, circuit_state | A skill fell below the utility floor and was demoted. |
 | `SKILL_REWRITE` | *(none — see gaps)* | — | Intended: a skill definition was rewritten. Not currently emitted. |
 | `SKILL_CIRCUIT_OPEN` | skills.py:1001 | skill_id, utility_before, utility_after, consecutive_failures, consecutive_successes | A skill hit the consecutive-failure threshold; circuit breaker opened (skill disabled). |

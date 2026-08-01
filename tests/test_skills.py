@@ -1498,8 +1498,82 @@ class TestSkillValidationHarness:
                 raise RuntimeError("connection refused")
 
         result = validate_skill_for_promotion(self._make_skill(), BrokenAdapter())
-        # Fail-open: validation unavailable → allow promotion
+        # Fail-open: validation unavailable → allow promotion — but the
+        # record must say no judgment happened (§13e slice-2 pattern).
         assert result["valid"] is True
+        assert result["judged"] is False
+
+    def test_validate_real_verdict_is_judged(self):
+        from skills import validate_skill_for_promotion
+        import types
+
+        class Adapter:
+            def complete(self, messages, **kw):
+                return types.SimpleNamespace(
+                    content='{"valid": true, "reason": "solid", "repair_hint": ""}')
+
+        result = validate_skill_for_promotion(self._make_skill(), Adapter())
+        assert result["valid"] is True
+        assert result["judged"] is True
+
+    def _promote_and_capture_event(self, adapter):
+        from skills import maybe_auto_promote_skills
+        from unittest.mock import patch
+
+        skill = self._make_skill(use_count=10, utility_score=0.9)
+        events = []
+        with patch("skills.load_skills", return_value=[skill]), \
+             patch("skills._save_skills"), \
+             patch("skills.compute_skill_hash", return_value="hash123"), \
+             patch("captains_log.log_event",
+                   side_effect=lambda **kw: events.append(kw)):
+            result = maybe_auto_promote_skills(adapter=adapter)
+        return skill, result, events
+
+    def test_promoted_event_stamps_passed_validation(self):
+        import types
+        from unittest.mock import MagicMock
+        adapter = MagicMock()
+        adapter.complete.return_value = types.SimpleNamespace(
+            content='{"valid": true, "reason": "passes", "repair_hint": ""}')
+        skill, result, events = self._promote_and_capture_event(adapter)
+        assert skill.id in result
+        assert events[0]["context"]["validation"] == "passed"
+
+    def test_promoted_event_stamps_unjudged_on_fail_open(self):
+        class BrokenAdapter:
+            def complete(self, messages, **kw):
+                raise RuntimeError("connection refused")
+
+        skill, result, events = self._promote_and_capture_event(BrokenAdapter())
+        # Fail-open still promotes (graceful degradation to numeric gates) —
+        # but the event says the validation pass was never a judgment.
+        assert skill.id in result
+        assert events[0]["context"]["validation"] == "unjudged"
+
+    def test_promoted_event_stamps_skipped_without_adapter(self):
+        skill, result, events = self._promote_and_capture_event(None)
+        assert skill.id in result
+        assert events[0]["context"]["validation"] == "skipped"
+
+    def test_skill_maintenance_wires_adapter_into_promotion(
+            self, monkeypatch, tmp_path):
+        # Jeremy 2026-08-01 ("fix the promote validation"): the evolver call
+        # site passed no adapter since Phase 32, so the whole validation
+        # harness was dead code. Pin the wiring, not just the harness.
+        import skills as skills_module
+        from skill_lifecycle import run_skill_maintenance
+
+        seen = {}
+
+        def _capture(adapter=None, **kw):
+            seen["adapter"] = adapter
+            return []
+
+        monkeypatch.setattr(skills_module, "maybe_auto_promote_skills", _capture)
+        sentinel = object()
+        run_skill_maintenance(adapter=sentinel, dry_run=False)
+        assert seen.get("adapter") is sentinel
 
     def test_promote_without_adapter_skips_validation(self, monkeypatch, tmp_path):
         from skills import maybe_auto_promote_skills

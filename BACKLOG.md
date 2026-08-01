@@ -2548,14 +2548,15 @@ deferred rather than silently dropped:
   QualityVerdict + honest thread-brain `verify-error:` lines + GATE_ERROR
   events + inspector unjudged-alignment caps. The deliberate cuts, each
   independently upgradeable:
-  - **[JEREMY DECISION] Skill auto-promote validation is dead code** —
-    `skill_lifecycle.py:577` `maybe_auto_promote_skills()` passes no
-    adapter, so `skills.py` validation silently never runs and promotion
-    is numeric-gates-only (the census claim-3 fail-open can't even be
-    reached). Wiring the adapter that IS in scope at the call site
-    (`:556`) makes validation live for the first time = behavior change
-    (promotions can newly fail). Proposed default: pass the adapter.
-    NOT done in slice 2 (marker-only discipline).
+  - ~~[JEREMY DECISION] Skill auto-promote validation is dead code~~ —
+    **RESOLVED 2026-08-01, Jeremy: "let's fix the promote validation."**
+    Adapter wired at the evolver call site (production passes it via
+    loop_finalize → run_skill_maintenance), so the Voyager harness +
+    repair loop are live for the first time; promotions can newly fail
+    and be held provisional. Fail-open kept (validation error degrades
+    to the old numeric-gates-only behavior) but stamped: SKILL_PROMOTED
+    events carry `validation: passed|unjudged|skipped`. Pins in
+    test_skills.py::TestSkillValidationHarness.
   - *Learning writers are still judged-blind* — loop_post_step feeds
     `update_skill_utility(success=True)` / `record_variant_outcome` /
     `record_skill_outcome` off `passed` alone; an unjudged fail-open pass

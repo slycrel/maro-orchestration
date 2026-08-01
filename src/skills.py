@@ -1196,11 +1196,16 @@ def validate_skill_for_promotion(skill: "Skill", adapter: Any) -> Dict[str, Any]
                 "valid": bool(parsed.get("valid", False)),
                 "reason": str(parsed.get("reason", "")),
                 "repair_hint": str(parsed.get("repair_hint", "")),
+                "judged": True,
             }
     except Exception as exc:
         logging.getLogger("maro.skills.validate").debug("validate_skill_for_promotion failed: %s", exc)
     # Fail-open: if we can't validate, allow promotion (don't block the cycle)
-    return {"valid": True, "reason": "validation unavailable (fail-open)", "repair_hint": ""}
+    # — graceful degradation to the numeric-gates-only behavior this call
+    # had before the adapter was wired. judged=False so the promotion event
+    # can say the pass was never a judgment (§13e slice-2 pattern).
+    return {"valid": True, "reason": "validation unavailable (fail-open)",
+            "repair_hint": "", "judged": False}
 
 
 def maybe_auto_promote_skills(adapter: Any = None, max_repair_attempts: int = 3) -> List[str]:
@@ -1232,6 +1237,7 @@ def maybe_auto_promote_skills(adapter: Any = None, max_repair_attempts: int = 3)
             continue
 
         # Voyager/Agent0 steal: validation harness with repair loop
+        _validation = "skipped"  # no adapter → validation never ran
         if adapter is not None:
             _logger = logging.getLogger("maro.skills.promote")
             _candidate = skill
@@ -1240,6 +1246,10 @@ def maybe_auto_promote_skills(adapter: Any = None, max_repair_attempts: int = 3)
                 _result = validate_skill_for_promotion(_candidate, adapter)
                 if _result["valid"]:
                     _valid = True
+                    # "passed" = the LLM actually judged; "unjudged" = the
+                    # fail-open default let it through (validation errored).
+                    _validation = ("passed" if _result.get("judged", True)
+                                   else "unjudged")
                     if _attempt > 0:
                         # Repair succeeded — update the skill in our list
                         for i, s in enumerate(skills):
@@ -1280,7 +1290,8 @@ def maybe_auto_promote_skills(adapter: Any = None, max_repair_attempts: int = 3)
                 event_type=SKILL_PROMOTED,
                 subject=skill.name,
                 summary=f"Promoted provisional -> established. Utility: {skill.utility_score:.2f} over {skill.use_count} uses.",
-                context={"skill_id": skill.id, "utility": round(skill.utility_score, 3), "use_count": skill.use_count},
+                context={"skill_id": skill.id, "utility": round(skill.utility_score, 3), "use_count": skill.use_count,
+                         "validation": _validation},
                 related_ids=[f"skill:{skill.id}"],
             )
         except Exception:

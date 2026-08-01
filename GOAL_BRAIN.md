@@ -5610,6 +5610,13 @@ pre-chunk NOW/evolver rows honestly unjudged going forward from here.
   auto-promote validation wiring (claim 3) are flagged decisions in
   BACKLOG ("Fail-open judge-error edges"), not defaults.
   tests/test_judged_markers.py pins the boundary.
+- **2026-08-01** — Promote-validation wiring (Jeremy: "Let's fix the
+  promote validation"): the flagged proposed-default accepted — the
+  evolver call site now passes its adapter to maybe_auto_promote_skills,
+  making the Voyager validation harness + repair loop live for the first
+  time since Phase 32. Promotions can newly fail and be held provisional.
+  Fail-open kept as graceful degradation (numeric-gates-only), stamped:
+  SKILL_PROMOTED context carries validation=passed|unjudged|skipped.
 - **2026-07-31** — Slice-1 adversarial review (3 Codex lenses, CONTESTED
   → remediated same session; 11/11 verified, 0 hallucinated): pre-start
   refusal stamp now carries pause_reason (unanimous #1 — the kill-switch

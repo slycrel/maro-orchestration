@@ -574,7 +574,13 @@ def run_skill_maintenance(
 
     if not dry_run:
         try:
-            promoted = maybe_auto_promote_skills()
+            # Adapter wired 2026-08-01 (Jeremy: "fix the promote validation")
+            # — this call passed no adapter since Phase 32, so the Voyager
+            # validation harness in maybe_auto_promote_skills was DEAD CODE
+            # and promotion was numeric-gates-only (§13e slice-2 census,
+            # claim 3). With the adapter, promotions can newly fail
+            # validation and be held provisional (repair loop first).
+            promoted = maybe_auto_promote_skills(adapter=adapter)
             if promoted and verbose:
                 print(f"[evolver] auto-promoted skills: {promoted}", file=sys.stderr)
             # K4: record skill promotions in knowledge layer (non-blocking)
