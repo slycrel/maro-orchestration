@@ -473,6 +473,48 @@ capture**, which is what makes the rung amortize instead of evaporate.
     committed baseline; after fixes, re-run and diff rather than re-eyeball.
     Read the whole census before fixing anything — fixing the loudest row
     first is how you miss the pattern underneath it.
+
+    **CORRECTED BASELINE (box re-run 2026-08-01, commit 312b6a6, same 734
+    runs on the fixed instrument). Settled reading:**
+    | artifact | all | since | first seen | verdict |
+    |---|---|---|---|---|
+    | `build/calls/` | 13% | **81%** | 2026-07 | works; 19% live drop |
+    | `run_card.json` | 14% | **93%** | 2026-07 | fine |
+    | `captains_log_slice` | 89% | 89% | 2026-04 | fine |
+    | `plan.md` | 94% | 94% | 2026-04 | fine |
+    | `scope.md` / `resolved_intent` | 42% | 42% (**80% in July**) | 2026-04 | improving: May 17 → Jun 74 → Jul 80 |
+    | `skills_manifest.jsonl` | 11% | **55%** | 2026-07 | **BLOCKER** |
+    | `recall_citations.json` | 2% | **10%** | 2026-07 | **BLOCKER** |
+    | `skill_attribution.json` | 6% | 29% | 2026-07 | correct-by-design |
+
+    - [ ] **BLOCKERS for LT-1, confirmed not artifacts:** `recall_citations`
+      10% (n=105) and `skills_manifest` 55% (n=105) are the whole cold/warm
+      attribution rail — which lessons a run cited, which skills it was
+      given. At 10%, nine in ten runs cannot have an improvement attributed
+      to a lesson. **The batch cannot measure what it exists to measure
+      until these are fixed.** They are now the top of the fix list; record
+      mode is not.
+    - [ ] **EDGE 2 sharpened — it is a real silent drop, not early deaths.**
+      22 of 114 July runs captured zero LLM calls. Of those 22, **16
+      produced a plan** (decompose is an LLM call, so calls provably
+      happened) and **11 reached `status=done`** with a `run_card`. A
+      completed, planned, curated run with zero captured I/O cannot be
+      explained by dying early — recording silently dropped. The census now
+      computes this discriminator itself. NOW-lane drop rate (4/8) runs
+      higher than agenda (17/105) but n is small.
+    - **Verdictability resolved by the per-month table**: 2026-04 1272 rows
+      100% blind / 0 verdicted, 2026-06 66 rows 100% blind, **2026-07 112
+      rows 52.7% blind, 41 verdicted.** The 96.3% headline was 1272 April
+      rows. July's 52.7% still predates most of chunk B (shipped 07-31), so
+      the live rate should be read from `verdict_flow`, not here.
+    - [ ] **Store-history mismatch worth a look before LT-1 joins anything:**
+      outcomes.jsonl has 1272 rows stamped 2026-04 but the workspace holds
+      only 2 April run dirs, and **zero outcome rows for May** against 476
+      May runs. The two stores' histories do not line up, so the
+      runs↔outcomes joinable universe is roughly the July era (~112 rows /
+      114 runs), not 1450/734. Cause unverified — likely the outcomes ledger
+      predating run dirs, possibly a backfill stamp. Worth 10 minutes before
+      any cold/warm join is built on it.
   - [ ] **(d) Full provenance trace — the decree, and the review pass that
     precedes the batch.** Jeremy 2026-07-31: "we should be capturing each
     decision, LLM prompt and output, step plan, and other artifacts along

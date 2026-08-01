@@ -465,21 +465,66 @@ def render_text(report: Dict[str, Any]) -> str:
             add(f"{m:<12}{v['total']:>8}{v['no_loop_id']:>13}{pct:>9.1f}%{v['verdicted']:>11}")
         add("")
 
-    if agg["incomplete_stages"]:
-        add("STAGES WITH INCOMPLETE PAPER TRAIL:")
-        for stage, items in sorted(agg["incomplete_stages"].items()):
-            add(f"  {stage:<16} {', '.join(items)}")
+    # Same denominator discipline as the coverage table: this summary used to
+    # quote all-history percentages, which is the exact number that read a
+    # working feature as an outage. Rank by the since-first-seen rate instead.
+    incomplete = []
+    for key, s in sfs.items():
+        if s.get("pct") is None or s["pct"] >= 100.0:
+            continue
+        stage = report["runs"]["coverage"][key]["stage"]
+        incomplete.append((s["pct"], stage, key, s))
+    if incomplete:
+        add("-" * 74)
+        add("INCOMPLETE PAPER TRAIL — ranked by 'since first seen', worst first")
+        add("-" * 74)
+        for pct, stage, key, s in sorted(incomplete):
+            mark = "~" if s.get("thin") else ""
+            add(f"  {mark + format(pct, '.0f') + '%':>6}  {stage:<16} {key}"
+                f"   (since {s['first_seen']}, n={s['n']})")
         add("")
 
     add("-" * 74)
     add("EDGE 2 — silent record-mode drop")
     add("-" * 74)
-    if agg["zero_call_count"]:
-        add(f"{agg['zero_call_count']} settled run(s) captured ZERO LLM calls.")
-        add("Either recording was off, or the run-dir ContextVar was not")
-        add("inherited on the calling path. Both fail silently today.")
-        for name in agg["zero_call_runs"][:10]:
-            add(f"  - {name}")
+    calls_first = (sfs.get("build/calls/") or {}).get("first_seen")
+    _settled_rows = [r for r in report.get("run_detail", []) if r["settled"]]
+    in_era = [r for r in _settled_rows
+              if calls_first and _month_of(r) >= calls_first]
+    era_zero = [r for r in in_era if r["zero_calls"]]
+    if calls_first:
+        # The all-history count is NOT the finding: most zero-call runs simply
+        # predate record mode. Only runs since the writer first appeared can
+        # be a drop at all.
+        add(f"Record mode first observed {calls_first}. Runs BEFORE it cannot")
+        add("be drops — they are the permanently-blind historical corpus.")
+        add(f"  historical (pre-{calls_first}, unrecoverable): "
+            f"{agg['zero_call_count'] - len(era_zero)} run(s)")
+        add(f"  ACTUAL DROPS (since {calls_first}): {len(era_zero)} of "
+            f"{len(in_era)} run(s)"
+            + (f" — {100.0*len(era_zero)/len(in_era):.0f}%" if in_era else ""))
+        if era_zero:
+            # Discriminator: "the run died before making a call" would explain
+            # zero records innocently. A run that produced a PLAN provably made
+            # LLM calls (decompose is an LLM call), and one that reached `done`
+            # ran to completion. Those two counts separate an innocent early
+            # death from a genuine silent drop — ask it here so the reader
+            # doesn't have to.
+            planned = sum(1 for r in era_zero
+                          if r["applicable"].get("build/<loop>-plan.md")
+                          and r["present"].get("build/<loop>-plan.md"))
+            finished = sum(1 for r in era_zero if r["status"] == "done")
+            add(f"  of those drops: {planned} produced a PLAN (so LLM calls")
+            add(f"  provably happened) and {finished} reached status=done.")
+            if planned or finished:
+                add("  => NOT explained by runs dying early. Recording was off,")
+                add("     or the run-dir ContextVar was not inherited on the")
+                add("     calling path. Both fail silently today.")
+            for r in era_zero[:10]:
+                add(f"  - {r['run']}  ({r['lane']}, {r['status']})")
+    elif agg["zero_call_count"]:
+        add(f"{agg['zero_call_count']} settled run(s) captured ZERO LLM calls,")
+        add("and NO run has ever captured one — the writer may not exist here.")
     else:
         add("None — every settled run captured at least one LLM call.")
     add("")
