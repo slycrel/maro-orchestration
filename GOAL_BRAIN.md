@@ -5700,3 +5700,15 @@ pre-chunk NOW/evolver rows honestly unjudged going forward from here.
   (312b6a6 — seven decrees piped to the runtime journal; the sidequest's
   two rail numbers confirmed live: recall_citations 10% /
   skills_manifest 55% since-first-seen).
+- **2026-08-01** — CI red = signal, keep the census (Jeremy asked
+  "increase visibility or disable if noise" after
+  test_history_docs_are_records went red on CI). Adjudicated signal: the
+  red was two frontmatter-less history docs from a doc-only land, fixed
+  by a concurrent session (a11501e) within the hour — the tripwire did
+  its job. Resolution shipped (7da4597): land.sh pre-land structural
+  gate runs the frontmatter/DEFAULTS censuses against the exact SHA
+  being landed (temp worktree, diff-scoped, --skip-checks bypass) — the
+  doc-only lands that skip the suite are exactly the ones that leaked
+  this class to CI. Standing gap, Jeremy's half: the box's gh token is
+  dead (401), so Actions status is invisible from here; a re-minted
+  token (actions:read) unlocks a post-land CI watcher + Telegram-on-red.
