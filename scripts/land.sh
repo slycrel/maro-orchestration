@@ -5,7 +5,9 @@
 # Policy (Jeremy, 2026-07-20): PRs are the Poe/Hermes lane (deploy/hermes/,
 # mini2, dispatched-autonomous work under human review); the maro box lands its
 # own directed work directly. Reuses the SSH `origin` remote — no GitHub API
-# token needed (the gh token on this box is dead and stays moot for this path).
+# token needed for the push itself. A live gh token (re-minted 2026-08-01)
+# additionally enables the detached post-land CI watch (scripts/ci-watch.sh);
+# landing works fine without one, just blind to Actions.
 #
 # Safety by construction:
 #   - pushes to main ONLY as a fast-forward; GitHub itself rejects a non-ff, and
@@ -125,3 +127,13 @@ fi
 # ff-only push to main over SSH. Never --force on main.
 git push origin "${SHA}:refs/heads/main"
 echo "landed: origin/main -> ${SHA}"
+
+# Post-land CI watch (2026-08-01): detached watcher polls the Actions run
+# for this SHA and Telegram-pings ONLY on a red conclusion (green and
+# superseded-by-newer-push runs are silent). Needs a live gh token —
+# skipped quietly without one, landing itself never depends on it.
+if gh auth status >/dev/null 2>&1; then
+    ( setsid nohup "$(git rev-parse --show-toplevel)/scripts/ci-watch.sh" "$SHA" \
+        >>/tmp/ci-watch.log 2>&1 < /dev/null & ) || true
+    echo "ci-watch: spawned for ${SHA} (log: /tmp/ci-watch.log)"
+fi

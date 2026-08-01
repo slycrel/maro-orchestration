@@ -300,8 +300,10 @@ autonomous work — `deploy/hermes/`, `PROPOSE_LANE.md`), where an agent that co
 modify its own orchestration must have a human in the loop. The **maro box lands
 its own directed work directly to main** — you're already the human in the loop
 here. `scripts/land.sh` is ff-only and never force-pushes main, so it's safe
-alongside concurrent sessions. (`gh` PR creation is dead on this box — invalid
-token — and stays moot for this path; SSH push is the credential that works.)
+alongside concurrent sessions. SSH push is the landing credential; the `gh`
+token was re-minted 2026-08-01 (after a dead spell since ~07-17), which powers
+land.sh's post-land CI watch (`scripts/ci-watch.sh` — Telegram-pings on a red
+Actions conclusion, silent otherwise). PRs stay the Poe/Hermes lane only.
 
 Don't wait to be asked. Landing is cheap, forgetting is expensive.
 
