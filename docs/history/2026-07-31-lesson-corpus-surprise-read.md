@@ -1,3 +1,7 @@
+---
+status: record
+---
+
 # Lesson-corpus surprise read (2026-07-31)
 
 **Status: reading artifact** — snapshot of the live tiered lesson store

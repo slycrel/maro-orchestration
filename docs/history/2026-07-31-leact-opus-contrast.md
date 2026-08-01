@@ -1,3 +1,7 @@
+---
+status: record
+---
+
 # LeAct × maro — Opus-5 blind contrast, verified (2026-07-31)
 
 **Status: record.** Jeremy ran an Opus-5 cowork session blind over the LeAct
