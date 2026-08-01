@@ -5712,3 +5712,13 @@ pre-chunk NOW/evolver rows honestly unjudged going forward from here.
   this class to CI. Standing gap, Jeremy's half: the box's gh token is
   dead (401), so Actions status is invisible from here; a re-minted
   token (actions:read) unlocks a post-land CI watcher + Telegram-on-red.
+- **2026-08-01** — max_tokens stays ADVISORY on the subprocess backend
+  (Jeremy, after the cuts-lane smokes surfaced the 957>700 warning:
+  "I'm not sure we should be pushing so hard on the max_tokens angle,
+  for the moment I'm fine with it being advisory as opposed to
+  binding"). Don't build per-call token-cap enforcement unprompted —
+  the warning line is sufficient visibility, and the
+  caps-are-circuit-breakers posture (2026-07-29) is about spend
+  breakers, not truncating individual calls. Revisit only if overshoot
+  starts costing something real (spend breaker trips, context blowups
+  traced to it).
