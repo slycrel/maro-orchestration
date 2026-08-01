@@ -63,6 +63,11 @@ class StepVerdict:
     passed: bool
     reason: str
     confidence: float
+    # False = the judge never actually judged (transport failure, unparseable
+    # output) and `passed` is the fail-open default, not a verdict. Advisory
+    # judges stamp-and-continue (§13e boundary); consumers that learn from a
+    # pass must be able to tell a judged pass from an unjudged one.
+    judged: bool = True
 
 
 # ---------------------------------------------------------------------------
@@ -147,7 +152,8 @@ class VerificationAgent:
         except Exception as exc:
             log.debug("verify_step failed (non-fatal): %s", exc)
 
-        return StepVerdict(passed=True, reason="verify skipped (error)", confidence=0.0)
+        return StepVerdict(passed=True, reason="verify skipped (error)",
+                           confidence=0.0, judged=False)
 
 
 # ---------------------------------------------------------------------------

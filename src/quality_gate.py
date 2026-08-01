@@ -500,6 +500,10 @@ class QualityVerdict:
     council: Optional[CouncilVerdict] = None  # from LLM council (if run_council=True)
     cross_ref: Optional[Any] = None  # from cross-reference check (if run_cross_ref=True)
     second_family: Optional[dict] = None  # hosted-free second-family check (Pass 1.5); flag-only
+    # False = the gate never actually judged (no adapter / parse error) and
+    # "PASS" is the fail-open default, not a verdict (fail-open census
+    # 2026-07-31). Consumers that treat PASS as evidence must check this.
+    judged: bool = True
 
 
 def run_quality_gate(
@@ -553,7 +557,8 @@ def run_quality_gate(
         run_council: Whether to run the LLM council (3 additional critic calls).
     """
     if adapter is None:
-        return QualityVerdict("PASS", "no adapter — gate skipped", 0.0, False)
+        return QualityVerdict("PASS", "no adapter — gate skipped", 0.0, False,
+                              judged=False)
 
     # Build a compact summary of what the loop produced
     done_steps = [s for s in step_outcomes if getattr(s, "status", "") == "done"]
@@ -663,10 +668,62 @@ def run_quality_gate(
                 )
             except Exception as _ev_exc:
                 log.debug("captains_log quality_gate emit failed: %s", _ev_exc)
+        else:
+            # No JSON extracted (unparseable, no exception): the defaults
+            # above (verdict=PASS, confidence=0.0) flow to the final return —
+            # a third fail-open the 2026-07-31 census missed. Same honest-
+            # denominator stance as the except path below.
+            log.info("quality_gate pass1 produced no verdict — fail-open pass, unjudged")
+            try:
+                from captains_log import log_event, QUALITY_GATE_VERDICT
+                log_event(
+                    QUALITY_GATE_VERDICT,
+                    subject=goal[:120],
+                    summary="decision=GATE_ERROR (no verdict parsed, unjudged)",
+                    context={
+                        "decision": "GATE_ERROR",
+                        "verdict": "PASS",
+                        "confidence": 0.0,
+                        "escalate": False,
+                        "judged": False,
+                        "reason": "no JSON verdict extracted from gate response",
+                        "source": getattr(adapter, "model_key", "") or "unknown",
+                        "step_count": len(done_steps),
+                        "elapsed_ms": _gate_elapsed_ms,
+                    },
+                    loop_id=loop_id,
+                )
+            except Exception as _ev_exc:
+                log.debug("captains_log GATE_ERROR emit failed: %s", _ev_exc)
 
     except Exception as exc:
         log.debug("quality_gate pass1 failed (non-fatal): %s", exc)
-        return QualityVerdict("PASS", "gate parse error — defaulting to pass", 0.0, False)
+        # The gate FAILED rather than judged — emit the row anyway so the
+        # denominator stays honest (the chunk-5a NO_VERDICT stance, applied
+        # to pass 1): a gate that errors invisibly reads as "everything
+        # passed" in the readout. decision=GATE_ERROR flows into the same
+        # per-decision tallies as PASS/WEAK_ESCALATE/ESCALATE.
+        try:
+            from captains_log import log_event, QUALITY_GATE_VERDICT
+            log_event(
+                QUALITY_GATE_VERDICT,
+                subject=goal[:120],
+                summary="decision=GATE_ERROR (fail-open pass, unjudged)",
+                context={
+                    "decision": "GATE_ERROR",
+                    "verdict": "PASS",
+                    "confidence": 0.0,
+                    "escalate": False,
+                    "judged": False,
+                    "reason": str(exc)[:400],
+                    "source": getattr(adapter, "model_key", "") or "unknown",
+                },
+                loop_id=loop_id,
+            )
+        except Exception as _ev_exc:
+            log.debug("captains_log GATE_ERROR emit failed: %s", _ev_exc)
+        return QualityVerdict("PASS", "gate parse error — defaulting to pass",
+                              0.0, False, judged=False)
 
     # --- Pass 1.5: hosted-free second-family check (chunk 5a) ---
     # The paid gate reviews output its own model family produced —
@@ -907,7 +964,11 @@ def run_quality_gate(
             log.warning("quality_gate cross_ref pass failed: %s", exc)
 
     return QualityVerdict(verdict, reason, confidence, escalate, contested_claims,
-                          council_verdict, cross_ref_result, second_family)
+                          council_verdict, cross_ref_result, second_family,
+                          # Pass 1 judged only if it parsed a verdict; the
+                          # no-JSON fallthrough keeps the PASS default but
+                          # must not wear it as a judgment.
+                          judged=bool(data))
 
 
 # ---------------------------------------------------------------------------

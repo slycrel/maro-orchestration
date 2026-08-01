@@ -105,6 +105,10 @@ class ArtifactVerdict:
     changed_count: int = 0                               # files created/modified in project_dir
     reason: str = ""
     kind: str = ""  # "" | "missing-artifact" | "inert-output" | "execution-contradiction"
+    # False = the check errored and fabricated=False is the fail-open default,
+    # not a clean bill — previously indistinguishable from "no fabrication
+    # signal" to every reader (fail-open census 2026-07-31).
+    judged: bool = True
 
 
 def _clean_token(tok: str) -> str:
@@ -384,7 +388,7 @@ def check_fabrication(
             reason="no fabrication signal",
         )
     except Exception:
-        return ArtifactVerdict(False, reason="check error (fail-open)")
+        return ArtifactVerdict(False, reason="check error (fail-open)", judged=False)
 
 
 # ---------------------------------------------------------------------------
@@ -475,7 +479,7 @@ def check_execution_claim(result_text: str, tool_events: Optional[List[dict]]) -
             )
         return ArtifactVerdict(False, reason="execution claim consistent with transcript")
     except Exception:
-        return ArtifactVerdict(False, reason="exec check error (fail-open)")
+        return ArtifactVerdict(False, reason="exec check error (fail-open)", judged=False)
 
 
 # ---------------------------------------------------------------------------

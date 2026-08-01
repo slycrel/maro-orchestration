@@ -566,6 +566,27 @@ no-tokens / disk-full reasons; a live pause/resume lifecycle (today
 the project-level sheriff `.maro-paused` marker (same word, different
 lifecycle); the untyped merge-failure/fence interrupt paths.
 
+**Slice 2 SHIPPED 2026-07-31** (the "repercussion still open" above —
+fail-open census + typed judge-error marks). Census confirmed 5/5 claims:
+every advisory judge's fail-open default was indistinguishable from a
+judged pass to every consumer, so learning writers credited skills and
+the thread brain recorded "ralph-verified" for judgments that never
+happened. Fix: a `judged: bool = True` field on StepVerdict /
+ArtifactVerdict / QualityVerdict, set False at every fail-open site
+(including a third quality-gate path the census missed — the no-JSON
+fallthrough where pre-initialized PASS defaults reach the final return).
+Behavior stays fail-open everywhere; only records that were themselves
+forged changed: the ralph thread-brain line becomes a typed
+`verify-error:` line instead of `ralph-verified:`, the gate emits
+GATE_ERROR events for an honest denominator, and the inspector no longer
+grades "good" / stamps completion-delight from the unjudged 0.7
+alignment default (production norm: heartbeat runs it adapter-less).
+Learning writers still consume `passed` only — making skill credit
+judged-aware is a flagged decision, not a default. The skills.py:1203
+validation fail-open turned out DEAD (auto-promote never passes an
+adapter — validation silently never runs); wiring it is a behavior
+change, flagged to Jeremy in BACKLOG.
+
 **Build order resolved by delegation (Jeremy, 2026-07-31 — piped
 8c7f5068):** he declines to pick; the §12 proposed order stands (#4
 stop-verdict split → #2 recon flavor, exercised in `star` first), executed

@@ -493,14 +493,17 @@ def detect_friction_signals(outcome: dict) -> List[FrictionSignal]:
 # Goal alignment scoring
 # ---------------------------------------------------------------------------
 
-def assess_goal_alignment(goal: str, result_summary: str, adapter=None) -> float:
+def assess_goal_alignment(goal: str, result_summary: str, adapter=None) -> Optional[float]:
     """Score how well the result matched the goal, 0.0-1.0.
 
-    If no adapter: return 0.7 (assume moderate alignment — heuristic default).
+    If no adapter: return None — no judgment happened. (The old 0.7 default
+    equaled _ALIGNMENT_GOOD exactly, so every adapter-less inspection wore a
+    "good"-grade alignment score it never earned — fail-open census
+    2026-07-31. Callers pick their own display default.)
     With adapter: ask LLM for a numeric score.
     """
     if adapter is None:
-        return 0.7
+        return None
 
     try:
         prompt = (
@@ -557,8 +560,13 @@ def inspect_session(outcome: dict, adapter=None) -> SessionQuality:
     # Detect friction signals (heuristic, no LLM)
     friction_signals = detect_friction_signals(outcome)
 
-    # Assess goal alignment (LLM if available)
-    alignment_score = assess_goal_alignment(goal, summary, adapter=adapter)
+    # Assess goal alignment (LLM if available). None = never judged
+    # (adapter-less — the production norm for heartbeat inspections); keep
+    # the old 0.7 as a display value for report fields, but track judgment
+    # separately so an unjudged score can't clear _ALIGNMENT_GOOD bars.
+    _raw_alignment = assess_goal_alignment(goal, summary, adapter=adapter)
+    alignment_judged = _raw_alignment is not None
+    alignment_score = _raw_alignment if alignment_judged else 0.7
 
     # Determine delight signals — verdict-preferred (SF-2): goal_achieved
     # True/False is the judged verdict; None/absent = unjudged. A judged
@@ -569,7 +577,7 @@ def inspect_session(outcome: dict, adapter=None) -> SessionQuality:
     from outcome_policy import is_verdict_pending
     verdict_pending = is_verdict_pending(outcome)
     delight_signals: List[str] = []
-    if (status == "done" and alignment_score >= _ALIGNMENT_GOOD
+    if (status == "done" and alignment_judged and alignment_score >= _ALIGNMENT_GOOD
             and achieved is not False and not verdict_pending):
         delight_signals.append("task_completed_successfully")
     if achieved is True:
@@ -589,6 +597,12 @@ def inspect_session(outcome: dict, adapter=None) -> SessionQuality:
     if achieved is False and overall_quality == "good":
         overall_quality = "fair"
     if verdict_pending and overall_quality == "good":
+        overall_quality = "fair"
+    # An unjudged alignment (no adapter — production norm) can't earn "good"
+    # either: the 0.7 display default sits exactly at _ALIGNMENT_GOOD, so
+    # without this cap every adapter-less inspection of a done run graded
+    # "good" with zero evidence. Same fair-not-poor stance as above.
+    if not alignment_judged and overall_quality == "good":
         overall_quality = "fair"
 
     # LLM inspector notes (brief, optional)

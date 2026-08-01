@@ -1027,6 +1027,12 @@ def _execute_main_loop(
                             _ac_verdict = _ec_verdict
                     except Exception:
                         pass
+                if not _ac_verdict.judged:
+                    # Fail-open: the check errored; fabricated=False is a
+                    # default, not a clean bill. Typed and visible (§13e:
+                    # stamp judge-error-and-continue), never a block.
+                    log.info("artifact check unjudged (fail-open) step=%d: %s",
+                             step_idx, _ac_verdict.reason)
                 if _ac_verdict.fabricated:
                     log.warning(
                         "FABRICATION step=%d kind=%s: %s",

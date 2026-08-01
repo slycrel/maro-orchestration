@@ -203,9 +203,11 @@ def test_detect_friction_session_id_set():
 # Goal alignment assessment
 # ---------------------------------------------------------------------------
 
-def test_assess_alignment_no_adapter():
+def test_assess_alignment_no_adapter_returns_none():
+    # §13e slice 2: no adapter = no judgment. The old 0.7 default sat exactly
+    # at _ALIGNMENT_GOOD, so adapter-less inspections graded "good" unearned.
     score = assess_goal_alignment("research X", "Found information about X.", adapter=None)
-    assert score == 0.7
+    assert score is None
 
 
 def test_assess_alignment_mock_adapter():
@@ -232,10 +234,20 @@ def test_assess_alignment_exception_returns_default():
 # ---------------------------------------------------------------------------
 
 def test_inspect_session_good():
+    # "good" now requires a JUDGED alignment score (§13e slice 2).
+    adapter = _mock_adapter("0.85")
+    outcome = _make_outcome(status="done", summary="Research completed successfully.")
+    sq = inspect_session(outcome, adapter=adapter)
+    assert sq.overall_quality == "good"
+
+
+def test_inspect_session_unjudged_alignment_caps_at_fair():
+    # Adapter-less inspection (the production norm — heartbeat runs the
+    # inspector without an adapter) must not grade "good" on the 0.7
+    # display default: nothing judged the run.
     outcome = _make_outcome(status="done", summary="Research completed successfully.")
     sq = inspect_session(outcome, adapter=None)
-    # alignment=0.7 (default), no friction → good
-    assert sq.overall_quality == "good"
+    assert sq.overall_quality == "fair"
 
 
 def test_inspect_session_poor_high_friction():
@@ -268,9 +280,29 @@ def test_inspect_session_fair():
 
 
 def test_inspect_session_delight_signals():
+    # Completion delight requires a judged alignment (§13e slice 2).
+    adapter = _mock_adapter("0.9")
+    outcome = _make_outcome(status="done", summary="Task completed successfully.")
+    sq = inspect_session(outcome, adapter=adapter)
+    assert "task_completed_successfully" in sq.delight_signals
+
+
+def test_inspect_session_unjudged_no_completion_delight():
+    # No adapter → alignment never judged → no completion delight from the
+    # 0.7 display default. (The old behavior stamped delight on every
+    # adapter-less done run — a fabricated success signal.)
     outcome = _make_outcome(status="done", summary="Task completed successfully.")
     sq = inspect_session(outcome, adapter=None)
-    assert "task_completed_successfully" in sq.delight_signals
+    assert "task_completed_successfully" not in sq.delight_signals
+
+
+def test_inspect_session_verified_achievement_survives_unjudged_alignment():
+    # goal_achieved=True is JUDGED evidence (closure verdict) — it must keep
+    # its delight signal even when alignment itself went unjudged.
+    outcome = _make_outcome(status="done", summary="Task completed successfully.")
+    outcome["goal_achieved"] = True
+    sq = inspect_session(outcome, adapter=None)
+    assert "goal_verified_achieved" in sq.delight_signals
 
 
 def test_inspect_session_pending_verdict_is_not_success():

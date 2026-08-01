@@ -1857,7 +1857,9 @@ def verify_step(
                                 paid_verdict=verdict, escalated=True)
             except Exception:
                 pass
-        out = {"passed": verdict.passed, "reason": verdict.reason, "confidence": verdict.confidence}
+        out = {"passed": verdict.passed, "reason": verdict.reason,
+               "confidence": verdict.confidence,
+               "judged": getattr(verdict, "judged", True)}
         if _escalated:
             out["decision"] = "ESCALATED"
             out["source"] = "paid"
@@ -1905,7 +1907,8 @@ def verify_step(
     except Exception as exc:
         log.debug("verify_step failed (non-fatal): %s", exc)
 
-    return {"passed": True, "reason": "verify skipped (error)", "confidence": 0.0}
+    return {"passed": True, "reason": "verify skipped (error)", "confidence": 0.0,
+            "judged": False}
 
 
 # ---------------------------------------------------------------------------

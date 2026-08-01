@@ -851,21 +851,29 @@ def _run_ralph_verify(
             # brain (the navigator at blocked steps) see what is actually
             # done, not just claimed. Volume-conscious by construction: only
             # fires when ralph verify is enabled, one line per step, capped
-            # per run.
+            # per run. A fail-open pass (judged=False) is NOT a verified
+            # claim — writing "ralph-verified" for it would forge compiled
+            # truth; it gets a typed verify-error line instead (§13e:
+            # advisory judges stamp judge-error-and-continue).
+            _judged = _vr.get("judged", True)
             try:
                 _rd = _current_run_dir_safe()
                 if _rd is not None:
                     from thread_brain import append_compiled_truth, brain_path
+                    _marker = "ralph-verified:" if _judged else "verify-error:"
                     _brain = brain_path(_rd)
                     _n_prior = (
-                        _brain.read_text(encoding="utf-8").count("ralph-verified:")
+                        _brain.read_text(encoding="utf-8").count(_marker)
                         if _brain.exists() else 0
                     )
                     if _n_prior < _RALPH_TRUTH_CAP:
-                        append_compiled_truth(
-                            _rd,
-                            f"step {step_idx} ralph-verified: {step_text[:80]}",
+                        _line = (
+                            f"step {step_idx} ralph-verified: {step_text[:80]}"
+                            if _judged else
+                            f"step {step_idx} verify-error: unjudged fail-open "
+                            f"pass ({_vr.get('reason', '')[:60]})"
                         )
+                        append_compiled_truth(_rd, _line)
             except Exception:
                 pass
     except Exception:
