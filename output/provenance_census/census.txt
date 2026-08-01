@@ -1,0 +1,86 @@
+==========================================================================
+PROVENANCE CENSUS — what the runs actually wrote down
+==========================================================================
+generated : 2026-08-01T05:22:33.706577+00:00
+workspace : /home/clawd/.maro/workspace
+host      : jeremy-Macmini-2014
+commit    : 861ab28b0b35
+window    : all history
+
+Runs scanned : 734  (settled 733, in-flight 1 — in-flight excluded from coverage)
+By lane      : {'agenda': 536, 'now': 195, 'unknown': 3}
+By status    : {'done': 316, 'stuck': 168, 'error': 132, 'stranded': 57, 'incomplete': 36, 'clarification_needed': 24, '(none)': 1}
+
+--------------------------------------------------------------------------
+ARTIFACT COVERAGE (settled runs, per-lane applicability honored)
+--------------------------------------------------------------------------
+artifact                          stage              have/appl    pct  post-era
+metadata.json                     intake               733/733 100.0%    100.0%
+source/prompt.txt                 intake               733/733 100.0%    100.0%
+source/environment.json           intake                68/733   9.3%    100.0%
+source/scope.md                   scoping              223/535  41.7%     87.5%
+source/resolved_intent.md         scoping              223/535  41.7%     87.5%
+source/recall_citations.json      recall                11/535   2.1%    100.0%
+source/skills_manifest.jsonl      skill-injection       58/535  10.8%    100.0%
+build/calls/                      llm-io                92/733  12.6%     50.0%
+build/captains_log_slice.jsonl    events               477/535  89.2%    100.0%
+build/<loop>-plan.md              planning             505/535  94.4%    100.0%
+build/<loop>-log.json             step-exec            463/535  86.5%    100.0%
+build/<loop>-step-*.md            step-exec             88/535  16.4%    100.0%
+build/<loop>-report.html          reporting            463/535  86.5%    100.0%
+build/checkpoint.json             step-exec             50/535   9.3%    100.0%
+run_card.json                     curation             106/733  14.5%    100.0%
+source/skill_attribution.json     attribution           30/535   5.6%     50.0%
+
+STAGES WITH INCOMPLETE PAPER TRAIL:
+  attribution      source/skill_attribution.json 5.6%
+  curation         run_card.json 14.5%
+  events           build/captains_log_slice.jsonl 89.2%
+  intake           source/environment.json 9.3%
+  llm-io           build/calls/ 12.6%
+  planning         build/<loop>-plan.md 94.4%
+  recall           source/recall_citations.json 2.1%
+  reporting        build/<loop>-report.html 86.5%
+  scoping          source/scope.md 41.7%, source/resolved_intent.md 41.7%
+  skill-injection  source/skills_manifest.jsonl 10.8%
+  step-exec        build/<loop>-log.json 86.5%, build/<loop>-step-*.md 16.4%, build/checkpoint.json 9.3%
+
+--------------------------------------------------------------------------
+EDGE 2 — silent record-mode drop
+--------------------------------------------------------------------------
+641 settled run(s) captured ZERO LLM calls.
+Either recording was off, or the run-dir ContextVar was not
+inherited on the calling path. Both fail silently today.
+  - ead11c12-nimble-shore
+  - 384d2ebb-tawny-ferret
+  - dc8b85ef-dapper-oak
+  - 5b5d1e2b-icy-alder
+  - b52b7731-swift-echo
+  - 1bfd0894-noble-marsh
+  - 4d20b559-patient-nettle
+  - ed576a9b-lucid-haven
+  - c772366a-wily-badger
+  - 258859a8-calm-echo
+
+--------------------------------------------------------------------------
+VERDICTABILITY (outcomes.jsonl)
+--------------------------------------------------------------------------
+rows total                    : 1450
+no loop_id (unverdictable)    : 1397  (96.3%)
+carrying a verdict            : 41
+done + loop_id + NO verdict   : 6  (closure never ran)
+unverdictable by task_type    : {'agenda': 1256, 'general': 92, 'now': 20, 'research': 16, 'build': 8, 'evolver_verify': 5}
+    blind e.g. : research polymarket strategies
+    blind e.g. : write a haiku about autonomy
+    blind e.g. : analyze competitor pricing strategies
+    blind e.g. : test artifact writing
+    blind e.g. : complete all steps cleanly
+    no-verdict : Build a funnel_report runtime skill: write a skill-shaped .md artifact
+    no-verdict : Produce a ranked analysis of wall-clock time performance bottlenecks i
+    no-verdict : Read skills/arch-quality-selfimprove.md in this repo and write a faith
+    no-verdict : Perform a self-diagnosis of Maro's current orchestration behavior agai
+    no-verdict : Perform a second self-diagnosis of Maro's orchestration against the co
+
+==========================================================================
+Gaps found are the deliverable. Re-run after fixes and diff the JSON.
+==========================================================================

@@ -330,8 +330,23 @@ capture**, which is what makes the rung amortize instead of evaporate.
     rows are status=done with no verdict in either store (closure never
     ran, not a stamp miss); 2 were same-day, so it's live and low-rate.
     Captain's-log honesty event at finalize so the gap is visible.
-  - [x] **(c) Run-dir record census — TOOL BUILT 2026-07-31, awaiting a box
-    run.** `scripts/provenance_census.py` + `scripts/provenance-census.sh`.
+  - [x] **(c) Run-dir record census — TOOL BUILT 2026-07-31; BOX RUN DONE
+    same day.** Baseline committed (deliberate gitignore exception, per the
+    re-run+diff protocol below): `output/provenance_census/census.{json,txt}`
+    — 734 runs, commit 861ab28, generated 2026-08-01T05:22Z. Predictions
+    scored against the pre-registered table:
+    - `build/calls/` **came back otherwise** — 50.0% post-era (12.6% all),
+      EDGE 2 live and large: **641 settled runs captured ZERO LLM calls.**
+      By the table's own wording: record mode is effectively off in
+      production and we have been reasoning about prompts we never kept.
+    - outcomes `no_loop_id` **came back otherwise** — 96.3% (1397/1450),
+      far beyond NOW-lane-sized; unverdictable by task_type is dominated
+      by `agenda` (1256). Agenda runs are losing the join too.
+    - scope/resolved_intent 87.5% post-era, recall_citations 100% post-era,
+      skill_attribution low-by-design — all roughly as predicted.
+    - Environment.json/skills_manifest/checkpoint/run_card post-era at
+      100% but tiny all-history denominators; per-stage table in census.txt.
+    `scripts/provenance_census.py` + `scripts/provenance-census.sh`.
     Covers 16 artifacts across 10 harness stages (intake, scoping, recall,
     skill-injection, llm-io, events, planning, step-exec, reporting,
     curation, attribution), plus the verdictability join from
