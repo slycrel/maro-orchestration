@@ -320,12 +320,19 @@ capture**, which is what makes the rung amortize instead of evaporate.
 - [ ] **LT-0 — verdictability + paper-trail audit (PREREQ, blocks LT-1).**
   A batch that can't be examined afterward teaches nothing; the
   2026-07-29 packaging census already found real holes.
-  - [ ] **(a) Verdict-blind lanes.** NOW (20 rows) and evolver_verify (5,
-    accruing) record outcomes with no `loop_id`, so `stamp_outcome_verdict`
-    can never land — permanently unverdictable rows. Decide per lane
-    whether a verdict is even meaningful, THEN wire loop_id stamping or an
-    explicit exempt marker. (Claimed from the next-leap packaging item's
-    open bullet — same work, this arc is the consumer.)
+  - [x] **(a) Verdict-blind lanes — CLOSED 2026-07-31 by chunk B**
+    (concurrent session, not this arc; GOAL_BRAIN "Chunk B shipped:
+    verdict-blind lanes closed + verdict-flow readout"). `_verify_post_apply`
+    now stamps `goal_achieved` from the test suite (the suite IS the judge);
+    interactive NOW is judged via the hosted-free family only;
+    `stamp_outcome_verdict` stamps `goal_verdict_at` so framing→verdict
+    delay is measurable. **Its live census independently confirms this
+    arc's pooling correction from the other side** — "agenda flow is
+    healthy since W28 (18/34 → 6/12 judged); the 3% all-time stock is
+    April-era pre-verdict rows (no backfill, by decree)." So the census's
+    96.3%-unverdictable headline was stock, not a live leak.
+    **`python3 -m verdict_flow` is the authority on verdictability from
+    here — not this census**, which now says so in its own output.
   - [ ] **(b) done-without-closure tripwire.** 5 of 51 loop_id-era agenda
     rows are status=done with no verdict in either store (closure never
     ran, not a stamp miss); 2 were same-day, so it's live and low-rate.
@@ -399,8 +406,32 @@ capture**, which is what makes the rung amortize instead of evaporate.
     **BOX HANDOFF — run this, hand back `census.json`:**
     ```bash
     cd /home/clawd/claude/maro-orchestration
+    git pull
     setsid nohup bash scripts/provenance-census.sh &   # detached
     # artifacts → output/provenance_census/{census.json,census.txt}
+    ```
+    **Same trip — the SF-13 runtime pipe for this arc's decrees.** These
+    six are in GOAL_BRAIN.md already; `decisions.jsonl` lives in the
+    *workspace* memory dir, so the pipe only reaches recall when it runs
+    **on the box** — running it on the dev Mac would write to that
+    machine's fossil workspace and never surface to a run. Paste-ready:
+    ```bash
+    cd /home/clawd/claude/maro-orchestration
+    D() { PYTHONPATH=src python3 -m knowledge_lens decision "$1" --rationale "$2" --domain learning-tests; }
+    D "Live-learning test batch weights toward burning down CAPABILITIES.md target rows, not net-new goals" \
+      "The corpus problem is solved; the evidence problem is not. Every run should also settle a standing claim."
+    D "Instrumentation is a prerequisite to the learning batch, and wider than verdicts" \
+      "Audit what the runs should be writing down and aren't — at step edges and across harness layers — because we keep stumbling on data we thought we had but didn't."
+    D "Learning is measured as a cold-vs-warm re-run delta" \
+      "Every test goal runs twice, store cold then warm. Needs no new machinery and cannot be self-graded."
+    D "The capability ladder gets its own doc, separate from the goal catalog" \
+      "CAPABILITIES.md stays the goal well; docs/CAPABILITY_LADDER.md is the C0-C5 progression map and the blank-slate acceptance tests."
+    D "A failure is never a success: no goal may be graded pass-by-refusing" \
+      "An expected failure is a goal we haven't engineered or learned to solve yet. Reframe such goals with a positive deliverable; record a genuine miss as not-achieved and feed it to the ladder, so the store cannot learn that declining is what wins."
+    D "Trace the full run paper trail before spending on the batch" \
+      "Each decision, LLM prompt and output, step plan and artifact must be durable and reachable by the report, the tests, and post-hoc mining."
+    D "A coverage percentage is uninterpretable without knowing what its denominator contains" \
+      "The first census pooled 619 pre-record-mode runs with post-feature runs and scored a working feature as a production outage; a pre-registered prediction table does not protect against a denominator defect."
     ```
     Safe to run against a working box **by construction**: read-only,
     stdlib-only, and it deliberately does **not** import from `src` (the

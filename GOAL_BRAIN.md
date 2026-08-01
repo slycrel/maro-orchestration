@@ -5628,3 +5628,55 @@ pre-chunk NOW/evolver rows honestly unjudged going forward from here.
   Rejected: alias removal, reserved-reason deferral, pause_family
   deletion (consumer-first tension carried openly). Record:
   docs/history/2026-07-31-slice1-adversarial-review.md.
+- **2026-08-01** — Live-learning test arc opened (Jeremy, decree-class ×6;
+  BACKLOG "LT."; pipe to decisions.jsonl PENDING — must run on the box, see
+  below). **(1) Burndown over net-new:** the corpus problem is solved
+  (CAPABILITIES.md tiers + the 24-entry failure corpus); what's missing is
+  evidence, so weight the batch toward converting `target` rows to
+  verified-or-broken, net-new only where a corpus family is thin (3
+  tool-use/execution, 6 agency/trust). **(2) Instrumentation is a
+  prerequisite, and wider than verdicts:** "audit anything we might want
+  written down by the runs that isn't already… the more we can examine after
+  (or even during) the runs, the better; both at the edges of steps and in
+  the different processing layers." **(3) "Leveled up" = cold-vs-warm re-run
+  delta** — every test goal runs twice, store cold then warm; the delta is
+  the evidence. Doubles spend, needs no new machinery, can't be self-graded.
+  **(4) The capability ladder gets its own doc** (`docs/CAPABILITY_LADDER.md`,
+  C0–C5); CAPABILITIES.md stays the goal well. **(5) A failure is never a
+  success:** "an expected failure is just a goal we haven't engineered (or
+  learned) to solve yet, not a success." No goal may be graded
+  pass-by-refusing — reframe it with a positive deliverable (the evidence
+  trail, not the decline); a genuine miss is an unbuilt bridge, recorded
+  not-achieved and fed to the ladder. This is what keeps the cold/warm delta
+  honest: the store must not be able to learn "declining is what wins here."
+  **(6) Trace the work and write it all down, before the batch runs** — each
+  decision, LLM prompt and output, step plan, and artifact, durable and
+  reachable by all three consumers (report, tests, mining), "because we keep
+  stumbling on data that we thought we had but didn't."
+- **2026-08-01** — Census-reading correction (Claude, self-caught; no Jeremy
+  decree — recorded because the lesson is durable and the wrong number was
+  briefly in the repo). The first provenance-census box run scored
+  `build/calls/` as "record mode is effectively off in production — 641
+  settled runs captured ZERO LLM calls." **That reading was wrong, and the
+  defect was in the instrument.** A single late `ERA_BOUNDARY` (2026-07-29)
+  left n=8 in the post bucket and pooled 619 runs that PREDATE record mode
+  (shipped 2026-06-26) into the whole-history column, so a working feature
+  scored as an outage. Monthly series: 04 0%, 05 0% (n=476), 06 0% (n=141),
+  **07 80.7% (92/114)**. The real finding is ~19% of July runs still capture
+  zero calls (the EDGE-2 ContextVar/lane hole), plus the permanent fact that
+  the pre-2026-06-26 corpus is blind on LLM I/O and cannot be mined
+  retrospectively. **The pooled table also buried the actual batch
+  blockers:** `recall_citations.json` at 10% of July agenda runs and
+  `skills_manifest.jsonl` at 55% — the two artifacts that name which lessons
+  a run cited and which skills it was given, i.e. the entire cold/warm
+  attribution rail. Instrument fixed same day: per-month coverage + per-month
+  verdictability series, auto-inferred first-seen month with a "since"
+  column (the header now says to read `since`, not `all`), thin denominators
+  (<20 runs) marked `~`. **Durable rule: a coverage percentage is
+  uninterpretable without knowing what its denominator contains** — pooling
+  pre-feature runs with post-feature runs manufactures outages, and a
+  pre-registered prediction table does not protect against it. Chunk B's
+  independent live census reached the same conclusion from the other side
+  ("the 3% all-time stock is April-era pre-verdict rows"), which is also why
+  `python3 -m verdict_flow` — not this census — is the authority on
+  verdictability.

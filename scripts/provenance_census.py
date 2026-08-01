@@ -309,6 +309,34 @@ def monthly_coverage(runs: List[Dict[str, Any]]) -> Dict[str, Any]:
                         "pct": round(100.0 * hits / len(rows), 1),
                         "thin": len(rows) < THIN_DENOMINATOR}
         out["artifacts"][key] = cells
+
+    # Ship-month inference: the first month an artifact appears AT ALL is the
+    # earliest month the writer could have existed. Coverage before it is not a
+    # gap — the feature wasn't there. Reporting a "since first seen" rate is
+    # what separates "never shipped / shipped late" from "shipped and dropping",
+    # which is the exact distinction the first box run got wrong by pooling.
+    out["since_first_seen"] = {}
+    for spec in ARTIFACTS:
+        key = spec["key"]
+        cells = out["artifacts"][key]
+        first = next((m for m in months
+                      if cells.get(m) and cells[m]["present"] > 0), None)
+        if first is None:
+            out["since_first_seen"][key] = {
+                "first_seen": None, "n": 0, "present": 0, "pct": None,
+                "note": "never observed — writer may not exist yet",
+            }
+            continue
+        rows = [r for r in settled
+                if _month_of(r) >= first and r["applicable"][key]]
+        hits = sum(1 for r in rows if r["present"][key])
+        out["since_first_seen"][key] = {
+            "first_seen": first,
+            "n": len(rows),
+            "present": hits,
+            "pct": round(100.0 * hits / len(rows), 1) if rows else None,
+            "thin": len(rows) < THIN_DENOMINATOR,
+        }
     return out
 
 
@@ -377,15 +405,26 @@ def render_text(report: Dict[str, Any]) -> str:
     add("-" * 74)
     add("ARTIFACT COVERAGE (settled runs, per-lane applicability honored)")
     add("-" * 74)
-    add(f"{'artifact':<34}{'stage':<16}{'have/appl':>12}{'pct':>7}{'post-era':>10}")
+    add("READ THE 'since' COLUMN, NOT 'all'. 'all' spans the whole workspace")
+    add("including runs written before a given writer existed, so a feature")
+    add("that shipped late reads as broken. 'since' starts at the first month")
+    add("the artifact was ever observed. '~' = thin denominator (<%d runs)."
+        % THIN_DENOMINATOR)
+    add("")
+    sfs = (report.get("monthly") or {}).get("since_first_seen", {})
+    add(f"{'artifact':<34}{'stage':<16}{'all':>10}{'first':>9}{'since':>10}")
     for key, row in report["runs"]["coverage"].items():
         if not row["applicable_runs"]:
-            add(f"{key:<34}{row['stage']:<16}{'n/a':>12}{'-':>7}{'-':>10}")
+            add(f"{key:<34}{row['stage']:<16}{'n/a':>10}{'—':>9}{'—':>10}")
             continue
-        pct = "-" if row["pct"] is None else f"{row['pct']}%"
-        post = "-" if row["pct_post_era"] is None else f"{row['pct_post_era']}%"
-        add(f"{key:<34}{row['stage']:<16}"
-            f"{str(row['present']) + '/' + str(row['applicable_runs']):>12}{pct:>7}{post:>10}")
+        allpct = "-" if row["pct"] is None else f"{row['pct']:.0f}%"
+        s = sfs.get(key) or {}
+        first = s.get("first_seen") or "—"
+        if s.get("pct") is None:
+            since = "never"
+        else:
+            since = ("~" if s.get("thin") else "") + f"{s['pct']:.0f}%"
+        add(f"{key:<34}{row['stage']:<16}{allpct:>10}{first:>9}{since:>10}")
     add("")
 
     mon = report.get("monthly") or {}
@@ -447,8 +486,14 @@ def render_text(report: Dict[str, Any]) -> str:
 
     oc = report["outcomes"]
     add("-" * 74)
-    add("VERDICTABILITY (outcomes.jsonl)")
+    add("VERDICTABILITY (outcomes.jsonl) — CROSS-CHECK ONLY")
     add("-" * 74)
+    add("`python3 -m verdict_flow` is the authority here: it separates STOCK")
+    add("from FLOW and counts verdict EVENTS by arrival week. These totals are")
+    add("all-history stock and will read alarmingly low for the same reason the")
+    add("artifact table does — April-era rows predate verdict stamping and are")
+    add("not backfilled, by decree. Use the per-month table below, not the")
+    add("headline, and prefer verdict_flow over both.")
     add(f"rows total                    : {oc['total']}")
     add(f"no loop_id (unverdictable)    : {oc['no_loop_id']}  ({oc['unverdictable_pct']}%)")
     add(f"carrying a verdict            : {oc['verdicted']}")
