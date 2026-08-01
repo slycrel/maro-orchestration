@@ -5744,3 +5744,26 @@ pre-chunk NOW/evolver rows honestly unjudged going forward from here.
   Exemption-breadth + atomic-writer findings BACKLOG'd/deferred with
   named triggers. Record:
   docs/history/2026-08-01-recon-adversarial-review.md.
+- **2026-08-01** — UU-1-class + learning-altitudes directions (Jeremy, on
+  the cold-arm forensics; pipe to runtime journal owed on next box trip).
+  **(1) Silent record-loss edges:** "my gut knows [UU-1] is there in way
+  more edges than we think… we should fix those as they come up; might be
+  worth some error handling assumption checks as well. Happy path coding
+  isn't just a human problem, LLMs are as likely to do that as anyone."
+  Fix-as-found posture (no dedicated sweep decreed); idea captured,
+  explicitly flagged maybe-scope-creep by Jeremy: a **4th adversarial-
+  review persona — expert QA** owning error/kill/sad-path record loss
+  ("I bet [it] would find edges") — try on ONE review before
+  institutionalizing. **(2) UU-2 → architecture direction:** current
+  learning is "sort of a 1-trick pony, it's only trying to learn what we
+  told it to try learning"; wants goal-level "what the run overall
+  teaches" feeding the general learning system, scoped to greater-
+  orchestration vs class-of-work; lighthouse-through-the-fog metaphor =
+  recognize the KIND and carry approach knowledge for the kind.
+  Architected same day → `docs/RUN_TEACHINGS_DESIGN.md` (dormant-design,
+  reading queue): teaching kinds terrain/landmark-class/self, extraction
+  from the TRAIL not summary[:500] (the verified structural root cause,
+  three ways), scope field, probe-verified terrain, cuts-time injection.
+  4 provisional DECISIONs await ratification. Warm arm e2f4578b running
+  concurrently — its cost tier is the pre-registered live test of what
+  today's funnel can do without this design.

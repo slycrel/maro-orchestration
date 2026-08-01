@@ -783,6 +783,17 @@ capture**, which is what makes the rung amortize instead of evaporate.
   name/input/output (so "which URLs did the worker try" IS recoverable),
   closure_verdicts.jsonl, per-event captains-log slice, full-text artifacts.
   **Three unknown-unknowns found:**
+  *(UU-1-class direction, Jeremy 2026-08-01: "my gut knows [this] is there
+  in way more edges than we think… we should fix those as they come up;
+  might be worth some error handling assumption checks as well. Happy path
+  coding isn't just a human problem, LLMs are as likely to do that as
+  anyone." Two captures from that: (1) fix silent-loss edges as found, no
+  dedicated sweep yet; (2) **idea, explicitly maybe-scope-creep: a 4th
+  adversarial-review persona — expert QA** — whose lens is error paths,
+  kill paths, and sad-path record loss specifically. The existing 3 Codex
+  lenses keep finding logic/security issues; none owns "what happens to
+  the paper trail when this dies mid-flight." Jeremy: "I bet [it] would
+  find edges." Try it on ONE review before institutionalizing.)*
   - [ ] **(UU-1) Timeout-killed LLM calls leave NO call record.** Step 1
     ran 10 minutes, was killed at the 601s cap, and has ZERO bytes in
     `build/calls/` — `record_llm_call` rides the completed-call path only,
@@ -802,9 +813,17 @@ capture**, which is what makes the rung amortize instead of evaporate.
     (source_trail.md, per-step HTTP codes); the lesson funnel didn't
     distill it. The warm arm is now also a test of whether generic
     lessons + artifact reuse compensate for the missing operational
-    lesson. If warm comes in expensive, this is the first thing to fix —
-    and note the extraction prompt plausibly needs an "environment
-    facts" lesson type, not just task-strategy types.
+    lesson. **ARCHITECTED 2026-08-01 per Jeremy's direction ("1-trick
+    pony… what the run overall teaches… lighthouse through the fog") →
+    `docs/RUN_TEACHINGS_DESIGN.md`** (in the reading queue): root cause
+    is structural three ways — extraction input is `summary[:500]` so
+    the extractor never sees the trail; all 5 lesson_types are
+    strategy-shaped; no scope concept (box / project / goal-class /
+    global). Design: goal-level "what did this run teach" pass reading
+    the EVIDENCE layer, typed teachings (terrain / landmark-class /
+    self), probe-verifiable terrain facts, cuts-time injection, existing
+    store extended not replaced. Build waits on the doc's 4 provisional
+    DECISIONs; chunk 1's acceptance test is a phrase-varied warm re-run.
   - [ ] **(UU-3) This run planned WITHOUT any decompose-labeled call.**
     Zero decompose-candidate/compose purposes in the record — the 7-step
     plan was born from the `timeout-split` call (the killed step 1 got

@@ -38,6 +38,7 @@ BACKLOG, VISION, CLAUDE, README…) are living by definition and carry no frontm
 | What are we deliberately NOT building? | `ARCHITECTURE_NON_GOALS.md` |
 | What should Maro be able to do? (example goals, test corpus, pre-installed skill target) | `CAPABILITIES.md` (living catalog — add real asks as they happen) |
 | What do those goals add up to, and what's the next bridge? (C0–C5 checkpoints, per-chasm ladders, tech-tree nodes) | `CAPABILITY_LADDER.md` (progression map; CAPABILITIES.md stays the goal well) |
+| Why does the lesson funnel miss operational/terrain facts, and what's the fix? (teaching kinds/altitudes, goal-level extraction, scope, probe-verified terrain) | `RUN_TEACHINGS_DESIGN.md` (dormant-design; specimen = the $15 blocked-archives relearn, UU-2) |
 | Two-box / Hermes dispatch, interactive goals, effort-based spend UX, mid-flight injection? | `SESSION_PROTOCOL_DESIGN.md` (dormant-design; the 2026-07-15 skeleton, iterate there) |
 | How do subsystems X work in detail? | `../skills/arch-*.md` (mandatory pre-reads per CLAUDE.md) |
 | Coding style / seam principles for this repo? | `CODING_NOTES.md`; project artifacts: `CONVENTIONS.md` |

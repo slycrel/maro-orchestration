@@ -19,6 +19,7 @@ it; the queue's history is part of the decision record).
 
 | Added | Doc | Why / decision needed |
 |---|---|---|
+| 2026-08-01 | [Run teachings design](https://github.com/slycrel/maro-orchestration/blob/main/docs/RUN_TEACHINGS_DESIGN.md) | The UU-2 architecture you asked for (terrain/landmark-class/self teaching kinds, goal-level extraction from the TRAIL not the summary, scope + probe-verified terrain facts, cuts-time injection). Four provisional DECISIONs to ratify or veto — notably the mint-time probe shortcut past provisional, and store-extension over new-store. Chunk 1's acceptance test is the phrase-varied warm re-run. |
 | 2026-07-31 | [Lesson-corpus surprise read](https://github.com/slycrel/maro-orchestration/blob/main/docs/history/2026-07-31-lesson-corpus-surprise-read.md) | LeAct surprise-count diagnostic: count entries that SURPRISE you (not wrong ones — instructions in the doc). Zero = mirroring collapse confirmed; nonzero = the seed set a Δ-gate gets evaluated against. React in a new session with entry numbers. |
 
 ## Done
