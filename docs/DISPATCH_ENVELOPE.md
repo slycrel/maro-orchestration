@@ -86,16 +86,29 @@ a JSON object with `"envelope": "maro-dispatch/v1"`.
    fields ride a channel that never reaches it. Pinned by an interface
    test (test_dispatch_envelope.py::TestExtractionSeamPin) — this is
    what "cannot be prompted away" means.
-3. **Poe side** — the maro-dispatch skill (deploy/hermes/
-   mini2-maro-dispatch-SKILL.md) teaches envelope construction; changes
-   reach mini2 via the propose lane. Poe-side prose guidance is
-   complementary, never load-bearing — Poe self-patches its live skill.
+3. **Poe side — SHIPPED 2026-08-01** — the maro-dispatch skill
+   (deploy/hermes/mini2-maro-dispatch-SKILL.md v0.3.0) teaches envelope
+   construction (shape, field authority semantics, the write-file +
+   `dispatch $(cat ...)` invocation that survives SSH quoting, refuse-
+   don't-fallback on malformed) and delivery-block rendering (lead with
+   `you_asked` answered; `verbatim: false` → "as recorded", never quoted
+   as exact). Poe-side prose guidance is complementary, never
+   load-bearing — Poe self-patches its live skill.
 4. **Delivery loop** — with `user_ask` captured verbatim, the interface
    can render "you asked / Poe dispatched" side by side, which is the
    observability Jeremy asked for when the tire framing surprised him.
 
-Build order note: (1)+(2) shipped box-side 2026-07-29; (3) requires
-the mini2 propose lane; (4) box-side half SHIPPED 2026-07-29 —
+Build order note: (1)+(2) shipped box-side 2026-07-29; (3) SHIPPED
+2026-08-01 (repo copy is source of truth; install = the scp in the
+skill header); artifacts-travel rider SHIPPED 2026-08-01 —
+`runs.create_run_dir` copies the dispatch's stored attachments (with
+provenance sidecars) into `<run_dir>/fetch-raw/dispatch/` when origin
+carries the envelope marker (fail-soft: the operator block's
+dispatch-side paths still work on the subprocess lane). Named residual:
+a CONTAINERIZED worker still can't read either copy — the mount map
+hard-excludes the workspace, and the run dir isn't mounted; if the
+container lane flips on for dispatched runs, attachments need a landing
+under the mounted cwd (BACKLOG). (4) box-side half SHIPPED 2026-07-29 —
 `dispatch.py cmd_result` emits a `delivery` block (`you_asked` verbatim
 + `verbatim` flag + `dispatched_with` envelope meta) for envelope
 dispatches only, and the dispatch record keeps `user_ask` untruncated

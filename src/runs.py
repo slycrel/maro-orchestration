@@ -336,11 +336,25 @@ def create_run_dir(
         from file_lock import atomic_write
         atomic_write(prompt_path, prompt)
 
+    origin = (extra_metadata or {}).get("origin")
+    origin = origin if isinstance(origin, dict) else None
+
+    # Artifacts-travel rider (docs/DISPATCH_ENVELOPE.md): a run born from a
+    # typed dispatch gets the dispatch's attached artifacts copied into its
+    # own tree — the container executor can't see the workspace output dir,
+    # and a self-contained run tree is the artifacts-over-streams contract.
+    # Same rationale as the navigator rationale below: no run dir existed at
+    # dispatch time, so the linkage rides origin.
+    if origin and origin.get("dispatch_envelope") and origin.get("job_id"):
+        try:
+            from dispatch_envelope import land_in_run_dir
+            land_in_run_dir(rd, str(origin["job_id"]))
+        except Exception:
+            pass  # fail-soft twice over — the run must start regardless
+
     # Per-thread goal-brain — first call wins, same rule as prompt.txt.
     try:
         import thread_brain
-        origin = (extra_metadata or {}).get("origin")
-        origin = origin if isinstance(origin, dict) else None
         created = thread_brain.create_thread_brain(rd, goal=prompt, origin=origin)
         # Dispatch rationale (MILESTONES #3b): the navigator's live dispatch
         # decision rode in on origin because no run dir existed at decision

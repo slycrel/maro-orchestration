@@ -29,11 +29,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional, Sequence, Tuple
+
+log = logging.getLogger(__name__)
 
 ENVELOPE_VERSION = "maro-dispatch/v1"
 
@@ -116,6 +119,10 @@ def _safe_name(name: str) -> str:
     return base[:120]
 
 
+def _safe_key(key: str) -> str:
+    return re.sub(r"[^A-Za-z0-9._-]", "_", str(key)) or "dispatch"
+
+
 def store_attachments(env: DispatchEnvelope, *, key: str) -> List[dict]:
     """Write attached artifacts under output/dispatch-artifacts/<key>/.
 
@@ -128,8 +135,7 @@ def store_attachments(env: DispatchEnvelope, *, key: str) -> List[dict]:
     if not env.attached_artifacts:
         return []
     from config import output_dir
-    safe_key = re.sub(r"[^A-Za-z0-9._-]", "_", str(key)) or "dispatch"
-    dest = output_dir() / "dispatch-artifacts" / safe_key
+    dest = output_dir() / "dispatch-artifacts" / _safe_key(key)
     dest.mkdir(parents=True, exist_ok=True)
     stored: List[dict] = []
     taken: set = set()
@@ -157,6 +163,43 @@ def store_attachments(env: DispatchEnvelope, *, key: str) -> List[dict]:
         stored.append({"name": str(art.get("name")), "path": str(path),
                        "source": source})
     return stored
+
+
+def land_in_run_dir(run_dir, job_id: str) -> int:
+    """Copy this dispatch's stored attachments into the run dir
+    (<run_dir>/fetch-raw/dispatch/, provenance sidecars included).
+
+    The output/dispatch-artifacts/<job_id>/ copy is the dispatch-side
+    record; runs are self-contained artifact trees (artifacts-over-streams
+    decree), and the container executor hard-excludes the workspace root
+    from its mount map — the run-dir copy is the one that travels with the
+    run. Fail-soft by contract (unlike store_attachments): the operator
+    block already references the dispatch-side paths, so on the subprocess
+    lane a copy failure degrades self-containment rather than the run.
+    Idempotent: existing files are left alone. Returns files copied.
+    """
+    src = None
+    try:
+        from config import output_dir
+        src = output_dir() / "dispatch-artifacts" / _safe_key(job_id)
+        if not src.is_dir():
+            return 0
+        dest = Path(run_dir) / "fetch-raw" / "dispatch"
+        dest.mkdir(parents=True, exist_ok=True)
+        copied = 0
+        for f in sorted(src.iterdir()):
+            if not f.is_file():
+                continue
+            target = dest / f.name
+            if target.exists():
+                continue
+            target.write_bytes(f.read_bytes())
+            copied += 1
+        return copied
+    except Exception as exc:
+        log.warning("dispatch artifacts did not land in run dir (%s): %s",
+                    src, exc)
+        return 0
 
 
 def operator_block(env: DispatchEnvelope, stored: Sequence[dict] = ()) -> str:

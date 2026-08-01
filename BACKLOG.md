@@ -911,19 +911,32 @@ box-side SHIPPED 2026-07-29** (trio-triage DO_NOW 3/3): `cmd_result`
 emits a `delivery` block (`you_asked` verbatim + `dispatched_with`
 envelope meta) for envelope dispatches only; dispatch record keeps
 `user_ask` untruncated past the 500-char display copy; prose keeps the
-pre-envelope contract. Remaining halves: Poe-side skill teaching via
-propose lane (renders the block into the human message);
-artifacts-travel rider below. Note: like
+pre-envelope contract. Note: like
 prior_context, the operator channel reaches AGENDA-lane runs only —
 the NOW lane has no ancestry context by existing contract.
 
-**Artifacts-travel-with-dispatch rider** (same spec, §attached_artifacts):
-the artifacts-over-streams decree's fetch-to-disk verb applied at the
-dispatch boundary — recovery products (like Poe's xurl-fetched gist that
-never crossed the SSH lane in the incident) ride INTO the run dir with
-`source_url`/`recovered_by` stamps instead of being paraphrased into goal
-prose. Touches the mini2 dispatch gate (payload size, propose lane), so
-it's the bigger, later half.
+**~~Poe-side skill + delivery rendering~~ — SHIPPED 2026-08-01**:
+mini2-maro-dispatch-SKILL.md v0.3.0 teaches envelope construction
+(shape + field authority, the write-file `dispatch $(cat ...)`
+invocation that survives SSH quoting, refuse-don't-fallback on
+malformed JSON) and delivery-block rendering (lead with `you_asked`
+answered; `verbatim: false` renders "as recorded", never quoted as
+exact). Repo copy = source of truth; installed to mini2 via the
+header's scp path.
+
+**~~Artifacts-travel-with-dispatch rider~~ — SHIPPED 2026-08-01**
+(smaller than sketched — no gate changes needed; attachments already
+crossed the SSH lane inside the payload): `runs.create_run_dir` copies
+the dispatch's stored attachments + provenance sidecars into
+`<run_dir>/fetch-raw/dispatch/` when origin carries the envelope
+marker (the linkage rides origin because no run dir exists at dispatch
+time — the navigator-rationale pattern). Fail-soft: the operator
+block's dispatch-side paths still serve the subprocess lane if the
+copy fails. Named residual edge: a CONTAINERIZED worker can't read
+either copy — build_mount_map hard-excludes the workspace and the run
+dir isn't mounted; if the container lane flips on for dispatched runs,
+attachments need a landing under the mounted cwd (or prompt inlining
+with a size cap). Evidence-gated on the C4-BOX flip, don't pre-build.
 
 ### NOW retry rung — failure-class-routed ladder: NOW → artifact retry / star → AGENDA (OPENED 2026-07-28, Jeremy)
 

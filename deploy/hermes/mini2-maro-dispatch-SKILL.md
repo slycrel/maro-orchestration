@@ -1,7 +1,7 @@
 ---
 name: maro-dispatch
 description: "Dispatch autonomous goals to the Maro orchestrator on the maro box over SSH: send a goal, poll its status, fetch the final result. Use when the user asks to run/orchestrate a goal through maro, hand work to the other box, or check on a maro run."
-version: 0.2.0
+version: 0.3.0
 author: hermes-maro
 platforms: [macos]
 metadata:
@@ -86,8 +86,59 @@ to the user immediately — that is the receipt.
 
 Goals should be self-contained and outcome-shaped (what done looks like, any
 constraints). If the user's ask relies on context only you have (names,
-preferences, prior conversation), enrich the goal text with it before
-dispatching — Maro only sees what you send.
+preferences, prior conversation), enrich the dispatch with it — Maro only
+sees what you send. **Whenever you add ANYTHING around the user's ask, use
+the typed envelope below** — plain prose dispatch is for a bare,
+self-sufficient ask.
+
+## Typed dispatch envelope (use it whenever you enrich a dispatch)
+
+Maro's intake understands a typed JSON payload (live since 2026-07-29) that
+keeps your framing structurally separate from the user's ask. This matters
+because Maro LEARNS from goals: with the envelope, your context can never
+be mistaken for the user's words, closure judges against the ask alone, and
+your framing is structurally barred from becoming a stored lesson.
+
+```json
+{
+  "envelope": "maro-dispatch/v1",
+  "user_ask": "the user's request, VERBATIM — never your rewrite of it",
+  "operator_context": "your framing: what you recovered, what's unreachable from the maro box, relevant conversation context",
+  "attached_artifacts": [
+    {"name": "recovered-page.md", "content": "...full text...",
+     "source": "https://original.url/ (recovered by Poe 2026-08-01, URL 404s from the maro box)"}
+  ],
+  "operator_constraints": ["Use the attached copy; do not refetch the URL."]
+}
+```
+
+Field semantics — where the authority separation lives:
+
+- `user_ask` (required) — THE goal. The user's words, untouched. Status and
+  result reports quote it back; Maro verifies the outcome against it.
+- `operator_context` — advisory framing, labeled as operator-authored in
+  the run prompt. State FACTS ("the page 404s from the maro box"), never
+  behavior steering ("do not escalate because...").
+- `attached_artifacts` — recovered reference material. Each lands on disk
+  with a provenance sidecar (source + sha256) and travels into the run's
+  own artifact tree. Put the source URL and recovery note in `source`.
+- `operator_constraints` — bounds for THIS run only ("don't fetch external
+  URLs"). Never persisted, never applied to other runs.
+
+Sending: write the JSON to a file (any formatting; escaping stays correct),
+then substitute it into the dispatch verb:
+
+```bash
+cat > /tmp/maro-envelope.json <<'EOF'
+{"envelope": "maro-dispatch/v1", "user_ask": "...", "operator_context": "..."}
+EOF
+ssh maro-dispatch "dispatch $(cat /tmp/maro-envelope.json)"
+```
+
+A malformed declared envelope is REFUSED at enqueue (exit 2 with the parse
+error, nothing queued) — fix the JSON and resend; don't fall back to prose
+to dodge the error. Plain prose dispatch remains valid and unchanged for
+bare asks.
 
 ## Writing the goal text (added 2026-07-29 — learned the hard way)
 
@@ -99,11 +150,11 @@ stored lesson about obeying prompts, which then got injected into the next
 run. Maro now quarantines that lesson class automatically — but a
 well-shaped dispatch never triggers it. Rules:
 
-- **Keep the user's ask verbatim.** Put their words in the goal unchanged;
-  add your context AROUND them, clearly separated — never rewrite their ask
-  into your own framing. (A typed envelope for this separation is specced:
-  docs/DISPATCH_ENVELOPE.md in the maro repo. Until it lands, plain
-  labeled sections do the job.)
+- **Keep the user's ask verbatim.** Put their words in `user_ask` unchanged;
+  your context goes in `operator_context` — never rewrite their ask into
+  your own framing. The typed envelope (section above) is the live
+  mechanism for this separation; plain labeled sections are only for the
+  degenerate case where you add nothing at all.
 - **No behavior-steering scaffolding.** Don't tell Maro when not to
   escalate, stop, or ask for help ("do not escalate/stop because...", "you
   cannot use X as an excuse"). Maro has its own recovery and escalation
@@ -205,6 +256,19 @@ ssh maro-dispatch "result <job_id>"
 
 When finished, returns the dispatch record plus the full `run_card` JSON
 (goal, status, goal_achieved, verdict summary, artifact info, cost).
+
+For envelope dispatches the result also carries a `delivery` block — the
+machine-readable "you asked / dispatched with" separation:
+
+- `.delivery.you_asked` — the user's ask, verbatim and untruncated. **Open
+  your report to the user with THEIR ask answered**, not with run
+  mechanics: lead with the answer to `you_asked`, then the run outcome.
+- `.delivery.verbatim` — `true` means `you_asked` is the user's exact
+  words; `false` means it fell back to the 500-char display copy (an old
+  record) — say "your ask (as recorded)" rather than quoting it as exact.
+- `.delivery.dispatched_with` — envelope meta (context size, constraint
+  count, artifact names). Useful when the user asks "what did you send?" —
+  answer from this instead of reconstructing from memory.
 
 ## List recent dispatches
 

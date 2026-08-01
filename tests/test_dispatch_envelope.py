@@ -170,6 +170,73 @@ class TestStoreAttachments:
         assert not (tmp_path / "output" / "dispatch-artifacts").exists()
 
 
+class TestLandInRunDir:
+    """Artifacts-travel rider: the dispatch-side copy is the record; the
+    run-dir copy under fetch-raw/dispatch/ is the one that travels (the
+    container mount map hard-excludes the workspace output tree)."""
+
+    def _stored(self, monkeypatch, tmp_path, key="job-9"):
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        env = parse_dispatch_payload(_payload(attached_artifacts=[
+            {"name": "notes.md", "content": "hello",
+             "source": "https://example.com/notes"}]))
+        store_attachments(env, key=key)
+
+    def test_copies_artifacts_and_sidecars(self, monkeypatch, tmp_path):
+        from dispatch_envelope import land_in_run_dir
+        self._stored(monkeypatch, tmp_path)
+        rd = tmp_path / "runs" / "r1"
+        rd.mkdir(parents=True)
+        assert land_in_run_dir(rd, "job-9") == 2   # artifact + sidecar
+        landed = rd / "fetch-raw" / "dispatch"
+        assert (landed / "notes.md").read_text() == "hello"
+        side = json.loads(
+            (landed / "notes.md.provenance.json").read_text())
+        assert side["source"] == "https://example.com/notes"
+
+    def test_idempotent_second_call_copies_nothing(self, monkeypatch,
+                                                   tmp_path):
+        from dispatch_envelope import land_in_run_dir
+        self._stored(monkeypatch, tmp_path)
+        rd = tmp_path / "runs" / "r1"
+        rd.mkdir(parents=True)
+        assert land_in_run_dir(rd, "job-9") == 2
+        assert land_in_run_dir(rd, "job-9") == 0
+
+    def test_missing_dispatch_dir_is_quiet_zero(self, monkeypatch, tmp_path):
+        from dispatch_envelope import land_in_run_dir
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        rd = tmp_path / "runs" / "r1"
+        rd.mkdir(parents=True)
+        assert land_in_run_dir(rd, "never-stored") == 0
+        assert not (rd / "fetch-raw").exists()
+
+    def test_create_run_dir_lands_envelope_artifacts(self, monkeypatch,
+                                                     tmp_path):
+        # The live seam: origin carries dispatch_envelope + job_id (no run
+        # dir existed at dispatch time), create_run_dir does the landing.
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        self._stored(monkeypatch, tmp_path, key="job-live")
+        from dispatch_envelope import ENVELOPE_VERSION as _V
+        import runs as runs_mod
+        rd = runs_mod.create_run_dir(
+            "handle-env-1", prompt="summarize the gist",
+            extra_metadata={"origin": {"dispatch_envelope": _V,
+                                       "job_id": "job-live"}})
+        assert (rd / "fetch-raw" / "dispatch" / "notes.md").read_text() \
+            == "hello"
+
+    def test_create_run_dir_without_envelope_origin_lands_nothing(
+            self, monkeypatch, tmp_path):
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        self._stored(monkeypatch, tmp_path, key="job-x")
+        import runs as runs_mod
+        rd = runs_mod.create_run_dir(
+            "handle-env-2", prompt="a plain run",
+            extra_metadata={"origin": {"job_id": "job-x"}})
+        assert not (rd / "fetch-raw").exists()
+
+
 def _task(reason, job_id="job-env-1"):
     return {"job_id": job_id, "source": "user_goal", "reason": reason,
             "origin": {}}
