@@ -41,19 +41,27 @@ KILL_P90_MULTIPLIER = 4.0       # breaker = 4x the p90 successful-run cost
 _CONFIG_ABSENT = object()       # distinguishes missing key from explicit null
 
 
-def _stamp_refusal_verdict(verdict: str, evidence: str) -> None:
+def _stamp_refusal_verdict(verdict: str, evidence: str,
+                           pause_reason: str = "") -> None:
     """Persist a pre-start refusal's stop verdict to run metadata.
 
     Pre-start refusals return a LoopResult without ever reaching
     _build_result_and_finalize (which owns the normal metadata stamp), so
-    they stamp here. No-op when no run-dir is pinned (bare library calls).
+    they stamp here — including the §13e pause reason, or the explicit
+    typed stamp on the LoopResult evaporates (the kill-switch status
+    "interrupted" deliberately has no curation fallback, so metadata is
+    its only durable home — 2026-07-31 slice-1 adversarial review #1).
+    No-op when no run-dir is pinned (bare library calls).
     """
     try:
         from runs import stamp_run_metadata
-        stamp_run_metadata({
+        fields = {
             "stop_verdict": verdict,
             "stop_evidence": (evidence or "")[:500],
-        })
+        }
+        if pause_reason:
+            fields["pause_reason"] = pause_reason
+        stamp_run_metadata(fields)
     except Exception:
         pass
 
@@ -291,7 +299,8 @@ def _initialize_loop(
             _ks_msg = _ks_reason() or "kill switch engaged"
             log.warning("loop refused to start — kill switch active: %s", _ks_msg)
             _stamp_refusal_verdict(
-                "external-interrupt", f"kill switch active: {_ks_msg}")
+                "external-interrupt", f"kill switch active: {_ks_msg}",
+                pause_reason=PAUSE_OP_MANUAL)
             return ctx, LoopResult(
                 loop_id=ctx.loop_id,
                 goal=goal,
@@ -414,7 +423,8 @@ def _initialize_loop(
                 log.warning("loop refused: %s", _busy)
                 if verbose:
                     print(f"[maro] {_busy}", file=sys.stderr, flush=True)
-                _stamp_refusal_verdict("external-interrupt", str(_busy))
+                _stamp_refusal_verdict("external-interrupt", str(_busy),
+                                       pause_reason=PAUSE_ERR_BUSY)
                 return ctx, LoopResult(
                     loop_id=ctx.loop_id,
                     goal=goal,

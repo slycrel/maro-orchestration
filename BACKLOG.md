@@ -2485,6 +2485,47 @@ deferred rather than silently dropped:
   - *Residual raw-status reads* — strategy_evaluator/attribution are
     interrupt-aware but still consume raw status on non-interrupt rows;
     pause_family gives them a cleaner join when next touched.
+  - *Stranded outcome-ledger gap* (slice-1 review #5) — the sweep stamps
+    metadata only; a writer that died mid-finalize leaves an untyped (or
+    absent) outcome row. A ledger back-stamp wants the loop_id join the
+    LT arc is repairing; card provenance is already correct via metadata.
+  - *Legacy cards untyped* (slice-1 review #6) — run cards curated before
+    slice 1 (census: 57 stranded, 24 clarification_needed) never get the
+    fallback typing; `list_runs` returns stored cards verbatim.
+    Recuration under a drifted card schema is riskier than the value —
+    revisit only if a consumer needs typed history, denominators live in
+    `output/provenance_census/`.
+  - *Lifecycle predicates* (slice-1 review #8, architect) — when a
+    commanded pause ships, expose `is_paused_status()`/reason-derivation
+    from the pause domain instead of leaning on the INTERRUPT_STATUSES
+    alias in consumers.
+- **Fail-open judge-error edges (§13e slice 2 shipped 2026-07-31).**
+  `judged: bool` markers landed on StepVerdict/ArtifactVerdict/
+  QualityVerdict + honest thread-brain `verify-error:` lines + GATE_ERROR
+  events + inspector unjudged-alignment caps. The deliberate cuts, each
+  independently upgradeable:
+  - **[JEREMY DECISION] Skill auto-promote validation is dead code** —
+    `skill_lifecycle.py:577` `maybe_auto_promote_skills()` passes no
+    adapter, so `skills.py` validation silently never runs and promotion
+    is numeric-gates-only (the census claim-3 fail-open can't even be
+    reached). Wiring the adapter that IS in scope at the call site
+    (`:556`) makes validation live for the first time = behavior change
+    (promotions can newly fail). Proposed default: pass the adapter.
+    NOT done in slice 2 (marker-only discipline).
+  - *Learning writers are still judged-blind* — loop_post_step feeds
+    `update_skill_utility(success=True)` / `record_variant_outcome` /
+    `record_skill_outcome` off `passed` alone; an unjudged fail-open pass
+    still earns skill credit (matches the verify-off baseline, so it's
+    defensible — but now the `judged` bit is there to consume when we
+    decide credit should require a judgment).
+  - *Judged-denominator readout* — discretion_readout gate-family tables
+    now have GATE_ERROR rows + `judged` in event context; a
+    judged-vs-unjudged column would show how often the gate actually
+    judges in production (census said: parse errors are real).
+  - *`alignment_score_avg` mixes judged and display-default scores* —
+    inspector report aggregates still average the 0.7 unjudged display
+    value alongside real LLM scores; split or annotate when the report
+    is next touched.
 - **Persona auto-selection misroute.** Run 3 routed to creative-director
   (conf 0.8) for a spec/pricing research task. Harmless here; worth a
   look if it recurs on research-shaped goals.

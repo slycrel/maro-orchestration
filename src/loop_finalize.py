@@ -426,7 +426,13 @@ def _build_result_and_finalize(
         _stamp_stop_meta({
             "stop_verdict": result.stop_verdict,
             "stop_evidence": result.stop_evidence,
-            "pause_reason": result.pause_reason,
+            # `or None`: stamp_run_metadata skips None but writes "" — and a
+            # resumed run's fresh context has no pause_reason, so an
+            # unconditional "" would erase the stranded sweep's post-hoc
+            # writer-died stamp from the reused run dir (2026-07-31 slice-1
+            # adversarial review #2). Empty preserves history; a new typed
+            # reason still overwrites.
+            "pause_reason": result.pause_reason or None,
         })
     except Exception as _sv_exc:
         log.debug("stop-verdict metadata stamp failed: %s", _sv_exc)

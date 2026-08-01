@@ -196,6 +196,62 @@ def runs_env(tmp_path, monkeypatch):
     return tmp_path
 
 
+# ---------------------------------------------------------------------------
+# Slice-1 adversarial-review fixes (2026-07-31)
+# ---------------------------------------------------------------------------
+
+
+class TestReviewFixes:
+    def test_refusal_stamp_carries_pause_reason(self, runs_env, monkeypatch):
+        # Review #1: the pre-start kill-switch refusal returns before normal
+        # finalization and "interrupted" deliberately has no curation
+        # fallback — metadata is the ONLY durable home for its typed reason.
+        import runs as runs_module
+        rd = runs_env / "runs" / "hkz-a"
+        rd.mkdir(parents=True)
+        monkeypatch.setattr(runs_module, "current_run_dir", lambda: rd)
+        from loop_init import _stamp_refusal_verdict
+        _stamp_refusal_verdict("external-interrupt", "kill switch active: x",
+                               pause_reason=PAUSE_OP_MANUAL)
+        meta = json.loads((rd / "metadata.json").read_text())
+        assert meta["pause_reason"] == PAUSE_OP_MANUAL
+        assert meta["stop_verdict"] == "external-interrupt"
+
+    def test_finalize_empty_pause_preserves_stamped_history(
+            self, runs_env, monkeypatch):
+        # Review #2: a resumed run reuses the run dir the stranded sweep
+        # stamped writer-died into; its fresh context has no pause_reason.
+        # loop_finalize passes `result.pause_reason or None` — None must
+        # preserve, not erase, the stamped history.
+        import runs as runs_module
+        rd = runs_env / "runs" / "hrz-a"
+        rd.mkdir(parents=True)
+        (rd / "metadata.json").write_text(json.dumps(
+            {"handle_id": "hrz", "status": "stranded",
+             "pause_reason": PAUSE_ERR_WRITER_DIED}))
+        monkeypatch.setattr(runs_module, "current_run_dir", lambda: rd)
+        runs_module.stamp_run_metadata({
+            "stop_verdict": "goal-achieved",
+            "stop_evidence": "resumed and finished",
+            "pause_reason": "" or None,  # loop_finalize's exact expression
+        })
+        meta = json.loads((rd / "metadata.json").read_text())
+        assert meta["pause_reason"] == PAUSE_ERR_WRITER_DIED
+        assert meta["stop_verdict"] == "goal-achieved"
+
+    def test_record_outcome_drops_off_vocabulary_reason(self, workspace):
+        # Review #6: vocabulary holds at the ledger boundary too — an
+        # off-vocab string must not persist while curation silently falls
+        # back (stores disagreeing instead of rejecting at ingress).
+        from memory_ledger import _outcomes_path, record_outcome
+        record_outcome("g3", "stranded", "s", loop_id="lp-c",
+                       pause_reason="hdd-full")
+        rows = [json.loads(l) for l in
+                _outcomes_path().read_text().splitlines() if l.strip()]
+        row = next(r for r in rows if r.get("loop_id") == "lp-c")
+        assert "pause_reason" not in row
+
+
 def test_stranded_sweep_stamps_writer_died(runs_env):
     from heartbeat import _backfill_stranded_run_cards
     rd = runs_env / "runs" / "hpz-a"

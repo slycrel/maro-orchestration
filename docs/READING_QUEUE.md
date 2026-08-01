@@ -20,6 +20,7 @@ it; the queue's history is part of the decision record).
 | Added | Doc | Why / decision needed |
 |---|---|---|
 | 2026-07-31 | [Lesson-corpus surprise read](https://github.com/slycrel/maro-orchestration/blob/main/docs/history/2026-07-31-lesson-corpus-surprise-read.md) | LeAct surprise-count diagnostic: count entries that SURPRISE you (not wrong ones — instructions in the doc). Zero = mirroring collapse confirmed; nonzero = the seed set a Δ-gate gets evaluated against. React in a new session with entry numbers. |
+| 2026-08-01 | [BACKLOG § Fail-open judge-error edges](https://github.com/slycrel/maro-orchestration/blob/main/BACKLOG.md) | **One decision:** skill auto-promote validation is DEAD code — `maybe_auto_promote_skills()` never passes an adapter, so LLM validation silently never runs and promotion is numeric-gates-only. Wiring the in-scope adapter makes validation live for the first time = promotions can newly fail. Proposed default: wire it. Say go/no-go (or "promote without validation is fine, delete the dead path"). |
 
 ## Done
 

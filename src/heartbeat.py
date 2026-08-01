@@ -591,15 +591,37 @@ def _backfill_stranded_run_cards(*, verbose: bool = False) -> list:
                 continue  # owner process still running (closure window etc.)
             if _lease is None and not pid and age_secs < _STRANDED_NO_PID_AGE_SECS:
                 continue  # no owner evidence — wait for unambiguous age
-            meta["status"] = "stranded"
-            meta["ended_at"] = meta.get("ended_at") or last_seen
-            meta["stranded_detected_at"] = now.isoformat()
-            # §13e post-hoc stamp: the writer died (crash/power loss), so the
-            # sweep is the only place this pause reason can be recorded.
+            # Commit under the metadata lock with a status re-check: the
+            # liveness checks above run on an UNLOCKED read, and finalize's
+            # locked RMW can land a real status in the window — a whole-file
+            # overwrite here would replace a finished run's record with
+            # forged stranded/writer-died provenance (2026-07-31 slice-1
+            # adversarial review #3). Same last-writer hazard predates §13e;
+            # the pause stamp made it worth closing.
             from stop_verdicts import PAUSE_ERR_WRITER_DIED
-            meta["pause_reason"] = PAUSE_ERR_WRITER_DIED
-            from file_lock import atomic_write
-            atomic_write(meta_path, _json.dumps(meta, indent=2))
+            from file_lock import locked_rmw
+            _stamped = []
+
+            def _commit(old: str) -> str:
+                try:
+                    cur = _json.loads(old) if old else {}
+                except Exception:
+                    cur = {}
+                if not isinstance(cur, dict) or cur.get("status"):
+                    return old  # finalized while we were checking — leave it
+                cur["status"] = "stranded"
+                cur["ended_at"] = cur.get("ended_at") or last_seen
+                cur["stranded_detected_at"] = now.isoformat()
+                # §13e post-hoc stamp: the writer died (crash/power loss), so
+                # the sweep is the only place this pause reason can be
+                # recorded.
+                cur["pause_reason"] = PAUSE_ERR_WRITER_DIED
+                _stamped.append(True)
+                return _json.dumps(cur, indent=2)
+
+            locked_rmw(meta_path, _commit)
+            if not _stamped:
+                continue
             out.append(meta.get("handle_id") or rd.name)
             if verbose:
                 print(f"[heartbeat] sweep: run {rd.name} owner dead — "

@@ -519,6 +519,16 @@ def record_outcome(
     """
     import uuid
     from metrics import estimate_cost
+    # Vocabulary holds at every persistence boundary, not just the stamp
+    # rail: a direct caller's off-vocab string would live in the ledger
+    # while curation silently falls back — stores disagreeing instead of
+    # rejecting at ingress (2026-07-31 slice-1 adversarial review #6).
+    if pause_reason:
+        from stop_verdicts import VALID_PAUSE_REASONS
+        if pause_reason not in VALID_PAUSE_REASONS:
+            log.debug("record_outcome: dropping off-vocabulary pause_reason %r",
+                      pause_reason)
+            pause_reason = ""
     cost_usd = estimate_cost(tokens_in, tokens_out, model=model or None)
     outcome = Outcome(
         outcome_id=str(uuid.uuid4())[:8],

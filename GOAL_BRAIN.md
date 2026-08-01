@@ -5596,3 +5596,28 @@ pre-chunk NOW/evolver rows honestly unjudged going forward from here.
   named in BACKLOG ("Paused-state upgrade edges"). Side-find pinned: the
   reflect_and_record kwarg seam swallows TypeErrors via finalize's
   catch-all — a signature drift there silently zeroes all learning data.
+- **2026-07-31** — §13e slice 2 SHIPPED: fail-open judge-error marks.
+  Census verified 5/5 (first 0-hallucination audit round of this class) +
+  found a third quality-gate fail-open the census missed (no-JSON
+  fallthrough). `judged: bool = True` on StepVerdict/ArtifactVerdict/
+  QualityVerdict, False at every fail-open site; ralph thread-brain line
+  now types `verify-error:` instead of forging `ralph-verified:`; gate
+  emits GATE_ERROR events (honest denominator); inspector unjudged 0.7
+  alignment no longer earns "good"/completion-delight (it sat exactly at
+  _ALIGNMENT_GOOD — every adapter-less heartbeat inspection of a done
+  run graded good with zero evidence). Behavior held fail-open
+  everywhere else; learning-writer judged-awareness + the DEAD
+  auto-promote validation wiring (claim 3) are flagged decisions in
+  BACKLOG ("Fail-open judge-error edges"), not defaults.
+  tests/test_judged_markers.py pins the boundary.
+- **2026-07-31** — Slice-1 adversarial review (3 Codex lenses, CONTESTED
+  → remediated same session; 11/11 verified, 0 hallucinated): pre-start
+  refusal stamp now carries pause_reason (unanimous #1 — the kill-switch
+  reason evaporated, "interrupted" has no fallback by design); finalize
+  empty no longer erases stamped writer-died history (`or None` — resume
+  contract now real); stranded-sweep commit moved under the metadata
+  lock with in-lock status re-check (forged-provenance race, pre-existing
+  but §13e's business); ledger validates the pause vocabulary at ingress.
+  Rejected: alias removal, reserved-reason deferral, pause_family
+  deletion (consumer-first tension carried openly). Record:
+  docs/history/2026-07-31-slice1-adversarial-review.md.
