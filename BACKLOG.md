@@ -2665,8 +2665,20 @@ deferred rather than silently dropped:
     wiring claim_probe (chunk-5b read-only allowlist machinery) into
     recon verification is its own slice.
   - *Recon-aware readout* — discretion_readout has no recon tabulation
-    yet; outcome rows now carry the fields (recon share, recon
-    verify-fail rate vs commit, VOI-missing rate).
+    yet (recon share, recon verify-fail rate vs commit, VOI-missing
+    rate). The durable carrier is the step TEXT — the tag is the schema,
+    so any corpus that keeps step text (manifests, checkpoints,
+    StepOutcome.text in loop artifacts) yields flavor via
+    `planner.step_flavor`; the executor-dict `flavor`/`recon_decision`
+    stamp is in-process convenience, not the durable record. A typed
+    StepOutcome field is deliberately NOT added (dual source of truth;
+    2026-08-01 adversarial review F2 rejected).
+  - *Parallel/fan-out lanes skip step verification entirely* —
+    pre-existing lane property for ALL steps ("Ralph verify is not run
+    in parallel mode — session-level state"), which recon inherits: a
+    tagged step in a fan-out lane gets the map-edit execution contract
+    but no map-change verification. Upgrade rides whatever fixes
+    parallel-lane verification generally, not a recon-specific patch.
   - *Cuts-first probes untagged* — `_cuts_plan` probe steps are
     recon-shaped but predate the tag; tagging them would give boundary
     expansion honestly-verified probes (touches probe step text mid-run

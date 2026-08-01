@@ -725,7 +725,10 @@ def _enforce_step_ceiling(
                            f"The goal explicitly bounds the plan to at most "
                            f"{ceiling} steps. Merge/condense into at most "
                            f"{ceiling} steps, preserving the goal's full "
-                           f"intent and any verification step. Respond ONLY "
+                           f"intent and any verification step. Keep any "
+                           f"inline tags ([after:N], [boundary], "
+                           f"[recon: ...]) attached to the steps they ride. "
+                           f"Respond ONLY "
                            f"with a JSON array of step strings."),
             ],
             max_tokens=1024,
@@ -834,13 +837,17 @@ def decompose(
     # EMISSION only — with it off the planner is never taught the tag, so no
     # new recon steps appear; downstream detection (step_exec /
     # verification_agent) stays unconditional so markers already in flight
-    # keep their honest verification.
+    # keep their honest verification. Computed once — the staged-pass lane
+    # replaces `system` wholesale and needs the same teaching (2026-08-01
+    # adversarial review: wide/deep goals were never taught the tag).
+    _recon_emission_on = False
     try:
         from config import get as _cfg_get_recon
-        if bool(_cfg_get_recon("planner.recon_flavor", True)):
-            extras.append(RECON_FLAVOR_RULES)
+        _recon_emission_on = bool(_cfg_get_recon("planner.recon_flavor", True))
     except Exception:
         pass
+    if _recon_emission_on:
+        extras.append(RECON_FLAVOR_RULES)
 
     # Auto-inject user context if available (capped at 500 chars per file
     # to avoid inflating decomposition token cost). Resolution: workspace
@@ -993,6 +1000,8 @@ def decompose(
                 _staged_system += "\n\n" + _PRIORITY_DIRECTIVE
             if _step_ceiling is not None:
                 _staged_system += "\n\n" + _STEP_CEILING_DIRECTIVE.format(n=_step_ceiling)
+            if _recon_emission_on:
+                _staged_system += "\n\n" + RECON_FLAVOR_RULES
             resp = adapter.complete(
                 [LLMMessage("system", _staged_system),
                  LLMMessage("user", f"Goal: {goal}\n\nDecompose into 3-5 staged passes.")],
@@ -1065,6 +1074,9 @@ def decompose(
                         "(2) separation of commands from analysis, (3) atomic steps — one file or one "
                         "command per step, never merged. MORE steps is better than FEWER larger steps. "
                         "NEVER merge two steps that read different files, even if they seem related. "
+                        "Candidate steps may carry inline tags such as [after:N], [boundary], or "
+                        "[recon: ...] — keep each tag attached verbatim to any step you select or "
+                        "merge; never invent tags the candidates do not carry. "
                         "Output ONLY a JSON array of step strings."
                         + ("\n\n" + _PRIORITY_DIRECTIVE if _has_priority_order else "")
                         + ("\n\n" + _STEP_CEILING_DIRECTIVE.format(n=_step_ceiling)

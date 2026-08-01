@@ -29,7 +29,18 @@ maybe_auto_promote_skills, Voyager harness live first time since Phase
 instrument, seven decrees piped to the runtime journal; the cold/warm
 attribution rail reads recall_citations 10% / skills_manifest 55%
 since-first-seen — the LT-1 blockers, confirmed real coverage not
-denominator artifact).
+denominator artifact). **Adversarial review DONE same day** (3 Codex
+lenses vs 68ed793, REJECT-as-reviewed → remediated same session; 7/7
+code claims verified, 0 hallucinated — fifteenth clean round, though two
+findings overstated impact): staged-pass lane + composer/ceiling
+rewrites now teach/preserve the tag, five early returns stamped via one
+entry-detection helper, exec+analyze shaper skips recon steps like
+boundary. Rejected: typed StepOutcome fields (the tag rides
+StepOutcome.text — text is the durable carrier, dual truth refused),
+parallel-lane verify gap (pre-existing for ALL steps, named edge),
+factory_thin (adjudicated instrument), strip_recon_tag deletion (named
+edge). 6 new pins (22 total). Record:
+docs/history/2026-08-01-recon-flavor-adversarial-review.md.
 
 Previous checkpoint — 2026-07-27 — **§9.6 escalation payload SHIPPED
 simple-first** (continuing 9/10 per Jeremy's standing directive;

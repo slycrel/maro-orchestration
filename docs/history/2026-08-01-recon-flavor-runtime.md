@@ -103,3 +103,25 @@ in the census). Full suite via scripts/test-safe.sh before landing.
 
 One import fix riding along: `import re` moved to planner's top import
 block (was mid-file at :488, below the new module-level tag regex).
+
+## Post-land adversarial review (same day)
+
+3 Codex lenses vs 68ed793 — verdict as-reviewed "do not ship", remediated
+same session. Accepted + fixed: staged-pass lane (wide/deep goals) was
+never taught the tag and the multi-plan composer / step-ceiling re-ask
+could silently drop inline tags when rewriting steps; five early-return
+paths in execute_step (await ×2, constraint block, adapter death ×2)
+returned unstamped outcomes — detection now happens at function entry
+and every return routes through one `_stamp_flavor` helper;
+`_split_exec_analyze` rebuilt step text and destroyed the tag — recon
+steps now skip the shaper exactly like boundary steps. Rejected with
+rationale: typed StepOutcome flavor fields (the tag rides
+StepOutcome.text into every durable record — flavor is derivable by
+construction, and a parallel typed field is a dual source of truth);
+parallel-lane verification skip (pre-existing property for ALL steps,
+now a named edge); factory_thin bypass (adjudicated instrument, not
+mainline); strip_recon_tag deletion (already a named edge). The
+"outcome rows carry the fields" phrasing above is sharpened in BACKLOG:
+the durable carrier is the step TEXT; the dict stamp is in-process
+convenience. 6 new pins (22 total). Full record:
+docs/history/2026-08-01-recon-flavor-adversarial-review.md.

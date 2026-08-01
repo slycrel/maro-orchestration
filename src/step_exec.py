@@ -938,6 +938,27 @@ def execute_step(
     _step_t0 = time.monotonic()
     log.info("step_start %d/%d: %s", step_num, total_steps, step_text[:100])
 
+    # Recon flavor (compound-thinking §4): detection is unconditional — the
+    # planner.recon_flavor killswitch gates tag EMISSION only, so a marker
+    # that arrives from any source (planner, injected step, hand-written
+    # goal) gets the recon contract rather than a deliverable prompt.
+    # Detected at entry, ahead of every return path: a recon step that never
+    # ran (await timeout, constraint block, adapter death) is still a recon
+    # step to whoever reads the outcome (2026-08-01 adversarial review).
+    _flavor, _recon_voi = "commit", ""
+    try:
+        from planner import step_flavor as _step_flavor
+        _flavor, _recon_voi = _step_flavor(step_text)
+    except Exception:
+        pass
+
+    def _stamp_flavor(_d: Dict[str, Any]) -> Dict[str, Any]:
+        if _flavor == "recon":
+            _d["flavor"] = "recon"
+            if _recon_voi:
+                _d["recon_decision"] = _recon_voi[:200]
+        return _d
+
     # Events as first-class graph nodes: if step_text starts with "await:<kind>"
     # block this step until a typed event of that kind arrives (or timeout).
     # This makes external signals (Telegram, API, timer) first-class DAG nodes —
@@ -954,21 +975,21 @@ def execute_step(
             log.warning("step %d event router error: %s", step_num, _er)
             _ev = None
         if _ev is not None:
-            return {
+            return _stamp_flavor({
                 "status": "done",
                 "result": f"[event:{_event_kind}] {_ev.payload or '(no payload)'}",
                 "summary": f"Received {_event_kind} event from {_ev.source}",
                 "tokens_in": 0,
                 "tokens_out": 0,
                 "inject_steps": [],
-            }
-        return {
+            })
+        return _stamp_flavor({
             "status": "blocked",
             "stuck_reason": f"timeout after {_timeout_s:.0f}s waiting for event kind={_event_kind!r}",
             "result": "",
             "tokens_in": 0,
             "tokens_out": 0,
-        }
+        })
 
     from llm import LLMMessage
 
@@ -1047,13 +1068,13 @@ def execute_step(
             log.warning("step %d BLOCKED by constraint: %s (tier=%s risk=%s) elapsed=%.1fs",
                         step_num, _block_detail, _hp["tier"], _hp["risk_level"],
                         time.monotonic() - _step_t0)
-            return {
+            return _stamp_flavor({
                 "status": "blocked",
                 "stuck_reason": f"constraint violation ({_hp['risk_level']}, tier={_hp['tier']}): {_block_detail}",
                 "result": "",
                 "tokens_in": 0,
                 "tokens_out": 0,
-            }
+            })
         _tier = _hp["tier"]
         if _tier == ACTION_TIER_EXTERNAL:
             print(
@@ -1090,16 +1111,6 @@ def execute_step(
     _step_type = _classify_step(step_text)
     log.debug("step %d type=%s", step_num, _step_type)
 
-    # Recon flavor (compound-thinking §4): detection is unconditional — the
-    # planner.recon_flavor killswitch gates tag EMISSION only, so a marker
-    # that arrives from any source (planner, injected step, hand-written
-    # goal) gets the recon contract rather than a deliverable prompt.
-    _flavor, _recon_voi = "commit", ""
-    try:
-        from planner import step_flavor as _step_flavor
-        _flavor, _recon_voi = _step_flavor(step_text)
-    except Exception:
-        pass
     _recon_block = ""
     if _flavor == "recon":
         _recon_block = "\n\n" + _RECON_STEP_EXTRA.format(
@@ -1300,15 +1311,15 @@ def execute_step(
                 _blocked["tokens_in"] = int(_fresh)
                 _blocked["provider_cost_usd"] = float(
                     getattr(exc, "estimated_cost_usd", 0.0) or 0.0)
-            return _blocked
+            return _stamp_flavor(_blocked)
         except Exception:
-            return {
+            return _stamp_flavor({
                 "status": "blocked",
                 "stuck_reason": f"LLM call failed: {exc}",
                 "result": _partial_result,
                 "tokens_in": 0,
                 "tokens_out": 0,
-            }
+            })
 
     _provider_cost_usd = safe_float(getattr(resp, "cost_usd", 0.0))
     _executor_session_id = str(getattr(resp, "session_id", "") or "")
@@ -1733,12 +1744,9 @@ def execute_step(
         _outcome["executor_session_resumed"] = _executor_session_resumed
         # Flavor rides every outcome shape (done/blocked/error) — a recon
         # step that got stuck is still a recon step to every downstream
-        # reader (ledger, learning, readouts). Commit steps stay unstamped:
-        # absence = the default flavor, matching the step-string convention.
-        if _flavor == "recon":
-            _outcome["flavor"] = "recon"
-            if _recon_voi:
-                _outcome["recon_decision"] = _recon_voi[:200]
+        # reader. Commit steps stay unstamped: absence = the default
+        # flavor, matching the step-string convention.
+        _stamp_flavor(_outcome)
 
     return _outcome
 

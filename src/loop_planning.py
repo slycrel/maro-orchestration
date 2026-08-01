@@ -724,13 +724,21 @@ def _shape_steps(steps: List[str], *, label: str = "") -> List[str]:
     Safe to call at any plan-mutation point: inject_steps, replan, interrupt replace,
     initial plan, DAG insertion.
     """
-    from planner import is_boundary_step as _is_boundary
+    from planner import is_boundary_step as _is_boundary, step_flavor as _step_flavor
     shaped: List[str] = []
     for s in steps:
         # Boundary steps (cuts-first planning) are expanded before execution,
         # never run as-is — splitting one here would strand the [boundary]
         # tag on half a sentence. The expansion output is shaped normally.
         if _is_boundary(s):
+            shaped.append(s)
+            continue
+        # Recon steps are information work — the exec+analyze split exists
+        # for deliverable compound steps, and _split_exec_analyze rebuilds
+        # the text, which would strand or drop the [recon:] tag and hand
+        # both halves back to the deliverable verification question
+        # (2026-08-01 adversarial review). Same skip as boundary.
+        if _step_flavor(s)[0] == "recon":
             shaped.append(s)
             continue
         if _is_combined_exec_analyze(s):

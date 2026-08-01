@@ -105,6 +105,30 @@ class TestReconEmissionGate:
         # keep their honest treatment.
         assert step_flavor("Probe X [recon: decides Y]")[0] == "recon"
 
+    def test_staged_pass_lane_teaches_tag(self, monkeypatch):
+        # Wide/deep goals replace the assembled system prompt wholesale with
+        # _STAGED_PASS_SYSTEM — the teaching must follow it there
+        # (2026-08-01 adversarial review: the lane was never taught).
+        import planner
+        from planner import decompose, RECON_FLAVOR_RULES
+        monkeypatch.setattr(planner, "estimate_goal_scope", lambda goal: "wide")
+        adapter = _CapturingAdapter()
+        decompose("audit the whole codebase", adapter, max_steps=8)
+        assert any(RECON_FLAVOR_RULES in s for s in adapter.system_prompts)
+
+    def test_compose_prompt_preserves_inline_tags(self, monkeypatch):
+        # The multi-plan composer rewrites candidate steps with a fresh system
+        # prompt; it must be told to keep inline tags attached (it could
+        # silently drop [recon:]/[after:N]/[boundary] from every composed
+        # plan otherwise).
+        import planner
+        from planner import decompose
+        monkeypatch.setattr(planner, "estimate_goal_scope", lambda goal: "medium")
+        adapter = _CapturingAdapter()
+        decompose("refactor the config loader", adapter, max_steps=4)
+        assert any("keep each tag attached verbatim" in s
+                   for s in adapter.system_prompts)
+
 
 # ---------------------------------------------------------------------------
 # Execution contract + outcome stamp
@@ -192,6 +216,56 @@ class TestReconExecution:
         assert outcome["flavor"] == "recon"
         assert "recon_decision" not in outcome
 
+    def test_constraint_blocked_recon_still_stamped(self, tmp_path, monkeypatch):
+        # The HITL constraint check returns before the LLM ever runs — a
+        # recon probe denied there is still a recon step to the outcome
+        # reader (2026-08-01 adversarial review: early returns were
+        # unstamped).
+        import constraint
+        from step_exec import execute_step
+        monkeypatch.setattr(
+            constraint, "hitl_policy",
+            lambda *a, **k: {"allowed": False, "tier": "external",
+                             "risk_level": "high", "reason": "denied"})
+        adapter = _ExecCaptureAdapter()
+        outcome = execute_step(
+            goal="probe the vendor API",
+            step_text="Probe the vendor API [recon: decides the integration path]",
+            step_num=1,
+            total_steps=2,
+            completed_context=[],
+            adapter=adapter,
+            tools=[],
+            project_dir=str(tmp_path),
+        )
+        assert outcome["status"] == "blocked"
+        assert outcome["flavor"] == "recon"
+        assert outcome["recon_decision"] == "decides the integration path"
+
+    def test_adapter_error_recon_still_stamped(self, tmp_path):
+        # Adapter death is an outcome shape too — the blocked dict built in
+        # the exception handler must carry the flavor.
+        from step_exec import execute_step
+
+        class _DyingAdapter:
+            model_key = "test"
+
+            def complete(self, messages, **kwargs):
+                raise RuntimeError("transport down")
+
+        outcome = execute_step(
+            goal="refactor the loader",
+            step_text="Survey the loaders [recon: decides the target]",
+            step_num=1,
+            total_steps=2,
+            completed_context=[],
+            adapter=_DyingAdapter(),
+            tools=[],
+            project_dir=str(tmp_path),
+        )
+        assert outcome["status"] == "blocked"
+        assert outcome["flavor"] == "recon"
+
     def test_blocked_recon_step_still_stamped(self, tmp_path):
         # A recon step that got stuck is still a recon step to every
         # downstream reader — the stamp rides every outcome shape.
@@ -211,6 +285,36 @@ class TestReconExecution:
         )
         assert outcome["status"] == "blocked"
         assert outcome["flavor"] == "recon"
+
+
+# ---------------------------------------------------------------------------
+# Tag survival through plan transforms (the tag IS the schema — flavor is
+# derived from step text everywhere, so text-rewriting transforms are the
+# places the flavor can die)
+# ---------------------------------------------------------------------------
+
+class TestTagSurvival:
+    def test_shaper_skips_recon_steps(self):
+        # _split_exec_analyze rebuilds step text ("Run X…"/"Read the captured
+        # output…"), which strands or drops an inline tag — recon steps skip
+        # the split like boundary steps do (2026-08-01 adversarial review).
+        from loop_planning import _shape_steps
+        tagged = ("Run the full test suite and analyze the failures "
+                  "[recon: decides which repair path to take]")
+        assert _shape_steps([tagged]) == [tagged]
+        # The same text untagged IS split — the guard is the tag, not the
+        # phrasing.
+        assert len(_shape_steps([tagged.split(" [recon")[0]])) == 2
+
+    def test_tag_survives_dependency_parse(self):
+        # parse_dependencies strips [after:N] into the deps map; the recon
+        # tag must ride through into clean_steps — that string becomes
+        # StepOutcome.text, which is the durable record flavor derives from.
+        from planner import parse_dependencies, step_flavor
+        clean, deps = parse_dependencies(
+            ["Read the manifest", "Survey loaders [recon: decides the split] [after:1]"])
+        assert step_flavor(clean[1]) == ("recon", "decides the split")
+        assert deps[2] == {1}
 
 
 # ---------------------------------------------------------------------------
