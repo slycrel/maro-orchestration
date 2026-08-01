@@ -243,6 +243,76 @@ class TestReconSummary:
         assert "recon: 1 (50%)" in report
         assert "decides: decides X" in report
 
+    def test_non_dict_payload_counted_failed_not_crash(self, tmp_path):
+        # 2026-08-01 adversarial review: a valid-JSON list payload used to
+        # raise on d.get() OUTSIDE the try and kill the whole readout.
+        d = tmp_path / "r1" / "build"
+        d.mkdir(parents=True)
+        (d / "loop-x-log.json").write_text("[]", encoding="utf-8")
+        s = dr.recon_summary(tmp_path)
+        assert s["files_failed"] == 1
+        assert s["loops_scanned"] == 0
+
+    def test_non_list_steps_counted_failed_not_silent(self, tmp_path):
+        # Schema-invalid dict used to be silently dropped from loops while
+        # still counted in files_read — invisible denominator shrinkage.
+        d = tmp_path / "r1" / "build"
+        d.mkdir(parents=True)
+        (d / "loop-x-log.json").write_text(
+            json.dumps({"started_at": "2026-08-01T00:00:00+00:00",
+                        "steps": {"not": "a list"}}), encoding="utf-8")
+        s = dr.recon_summary(tmp_path)
+        assert s["files_failed"] == 1
+        assert s["files_read"] == 0
+
+    def test_missing_started_at_cannot_pool_the_cohort(self, tmp_path):
+        # A tagged loop with no timestamp used to sort FIRST ("" lexically),
+        # making the cohort ALL loops — the pooling defect itself.
+        d = tmp_path / "r1" / "build"
+        d.mkdir(parents=True)
+        (d / "loop-x-log.json").write_text(
+            json.dumps({"steps": [{"text": "probe [recon: decides X]",
+                                   "status": "done"}]}), encoding="utf-8")
+        _loop_log(tmp_path, "r2", "bbb", "2026-07-10T00:00:00+00:00",
+                  [("old untagged step", "done")])
+        s = dr.recon_summary(tmp_path)
+        assert s["files_failed"] == 1
+        assert s["first_seen"] is None          # unorderable → not cohorted
+
+    def test_mixed_utc_offsets_ordered_by_instant_not_string(self, tmp_path):
+        # Lexical sort puts "...08:00:00-04:00" (12:00 UTC) before
+        # "...11:00:00+00:00" — instant order is the reverse. The untagged
+        # 11:00 UTC loop must stay PRE-cohort.
+        _loop_log(tmp_path, "r1", "aaa", "2026-08-01T11:00:00+00:00",
+                  [("untagged step", "done")])
+        _loop_log(tmp_path, "r2", "bbb", "2026-08-01T08:00:00-04:00",
+                  [("probe [recon: decides X]", "done")])
+        s = dr.recon_summary(tmp_path)
+        assert s["pre_cohort_loops"] == 1
+        assert s["cohort_steps"] == 1
+
+    def test_no_tag_report_still_shows_failed_files(self, tmp_path):
+        # The "no recon-tagged step yet" line is the early-watch verdict —
+        # it must carry the incompleteness caveat, not just the else branch.
+        d = tmp_path / "r1" / "build"
+        d.mkdir(parents=True)
+        (d / "loop-x-log.json").write_text("not json", encoding="utf-8")
+        _loop_log(tmp_path, "r2", "bbb", "2026-07-10T00:00:00+00:00",
+                  [("plain step", "done")])
+        payload = dr.build_payload(events=[], step_entries=[],
+                                   runs_root=tmp_path)
+        report = dr.build_report(payload)
+        assert "no recon-tagged step" in report
+        assert "unreadable or invalid" in report
+
+    def test_missing_runs_root_is_unsourced_with_reason(self, tmp_path):
+        s = dr.recon_summary(tmp_path / "does-not-exist")
+        assert s["sourced"] is False
+        assert "does-not-exist" in s["reason"]
+        payload = dr.build_payload(events=[], step_entries=[],
+                                   runs_root=tmp_path / "does-not-exist")
+        assert "does-not-exist" in dr.build_report(payload)
+
     def test_log_dir_without_runs_root_leaves_recon_unsourced(self, tmp_path):
         # Same mixed-corpus review pin as step-costs, crosswise: an
         # alternate --log-dir must not silently pull the LIVE runs root.

@@ -186,3 +186,18 @@ BACKLOG edges closed). Per-step VERIFY verdicts still aren't durably
 joined to step identity; step status is the proxy, named in "Not
 computable today". First live run: 510 loops / 3035 steps scanned, zero
 tags yet — honest, the emission fix landed this morning.
+
+## Post-land adversarial review (same day, fourth slice)
+
+Both commits above went through the arc's standing review discipline
+(3 Codex lenses; 7/7 findings verified, 0 hallucinated; PASS with
+fixes). Headliners: the corpus reader's boundary was hardened (non-dict
+payloads crashed the readout; lexical timestamp sort could pool the
+whole pre-instrument corpus into the cohort via a missing `started_at`),
+the "no tags yet" report branch now carries the incompleteness caveat,
+and the cuts-lane fix's mechanism claim was corrected —
+RECON_FLAVOR_RULES DID ride extras into the draw_cuts prompt (zero tags
+emitted regardless); it's now filtered out, making `_cuts_plan` the
+lane's stated single emitter, with bare model-authored `[recon]` tags
+re-tagged deterministically. Full record:
+`2026-08-01-recon-adversarial-review.md`.

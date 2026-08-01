@@ -2775,6 +2775,19 @@ deferred rather than silently dropped:
     stripped, the decision as its own column). Viz step lists /
     thread-brain lines remain tag-inclusive — fine, the tag is
     informative there.
+  - *Recon flavor-carry through milestone expansion* — the expansion
+    exemption applies to EVERY recon-tagged step, not just cuts probes
+    (2026-08-01 adversarial review, Architect+Minimalist): a broad
+    prompt-emitted recon step flagged as a milestone now runs as one
+    oversized execution. Deliberate for now — expanding a recon step
+    sub-decomposes it into a commit-shaped sub-plan, destroying the VOI
+    question; oversized recon is an emitter-contract violation the recon
+    JUDGE + readout blocked/other buckets surface. Upgrade path if the
+    corpus shows broad recon in practice: carry flavor+VOI through
+    expansion instead of exempting. Related deferral: loop-log writes
+    are plain `write_text` (loop_artifacts.py:233) — racing readers see
+    partial JSON as a visible `files_failed` count; make atomic only if
+    live readouts show it persistently nonzero.
 - **Persona auto-selection misroute.** Run 3 routed to creative-director
   (conf 0.8) for a spec/pricing research task. Harmless here; worth a
   look if it recurs on research-shaped goals.

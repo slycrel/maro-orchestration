@@ -209,6 +209,17 @@ class TestCutsPlanReconTags:
         assert plan[0].count("[recon") == 1
         assert step_flavor(plan[0]) == ("recon", "decides X")
 
+    def test_bare_recon_probe_gets_deterministic_voi(self):
+        # 2026-08-01 adversarial review: a model-authored bare [recon] used
+        # to be preserved as-is — a permanent voi-missing row. It is
+        # re-tagged with the deterministic boundary-plan VOI instead.
+        cuts = Cuts(probes=["probe [recon]"], remainder="pick the backend")
+        plan = _cuts_plan(cuts, "the goal")
+        assert plan[0].count("[recon") == 1
+        flavor, voi = step_flavor(plan[0])
+        assert flavor == "recon"
+        assert "pick the backend" in voi
+
 
 # ---------------------------------------------------------------------------
 # decompose integration
@@ -272,6 +283,20 @@ class TestDecomposeCutsFirst:
         assert "verify ethanol-free availability" in voi
         assert is_boundary_step(steps[-1])
         assert step_flavor(steps[-1])[0] == "commit"
+
+    def test_cuts_prompt_excludes_recon_teaching(self, monkeypatch):
+        # 2026-08-01 adversarial review: RECON_FLAVOR_RULES rides `extras`
+        # BEFORE the cuts block, so it used to reach the draw_cuts system
+        # prompt — decompose-output-format noise in a JSON prompt, and it
+        # made _cuts_plan's single-emitter claim false. decompose filters
+        # it from the cuts context; other extras still ride (covered by
+        # test_context_extras_reach_system_prompt).
+        _cuts_config(monkeypatch, enabled=True, recon=True)
+        adapter, calls = _adapter_returning(_CUTS_JSON)
+        decompose("find non-ethanol gas near Manti", adapter, max_steps=8)
+        assert calls["systems"], "cuts call did not happen"
+        assert all("STEP FLAVOR — COMMIT vs RECON" not in s
+                   for s in calls["systems"])
 
     def test_recon_flavor_off_leaves_probes_untagged(self, monkeypatch):
         """Emission killswitch covers the cuts lane too — OFF means the

@@ -355,12 +355,15 @@ def _cuts_plan(cuts: Cuts, goal: str, *, tag_probes: bool = True) -> List[str]:
 
     Probes are recon by construction — each exists to collapse an unknown
     before the boundary plan is drawn — so they get the [recon: ...] tag
-    deterministically here, VOI = the boundary plan they inform. Prompt-side
-    teaching can't cover this lane: draw_cuts never sees RECON_FLAVOR_RULES,
-    and the cuts path returns before the taught decompose runs, so live
-    goals routed through cuts-first shipped textbook recon steps untagged
-    (2026-08-01 smokes). tag_probes rides the same `planner.recon_flavor`
-    emission killswitch as the teaching; detection stays unconditional.
+    deterministically here, VOI = the boundary plan they inform. This is the
+    SINGLE emitter for the cuts lane: decompose excludes RECON_FLAVOR_RULES
+    from the draw_cuts context (the teaching is decompose-output-format
+    noise inside the cuts JSON prompt), and the cuts path returns before
+    the taught decompose runs — live goals routed through cuts-first
+    shipped textbook recon steps untagged even with the rules riding the
+    cuts context (2026-08-01 smokes). tag_probes rides the same
+    `planner.recon_flavor` emission killswitch as the teaching; detection
+    stays unconditional.
     """
     remainder = cuts.remainder or f"complete the goal: {goal}"
     probes = list(cuts.probes)
@@ -369,11 +372,18 @@ def _cuts_plan(cuts: Cuts, goal: str, *, tag_probes: bool = True) -> List[str]:
         # (_RECON_RE stops at the first ']') — keep the VOI text
         # bracket-free and short.
         _voi = re.sub(r"[\[\]]", "", remainder)[:140].strip()
-        probes = [
-            p if step_flavor(p)[0] == "recon"
-            else f"{p} [recon: decides the boundary plan — {_voi}]"
-            for p in probes
-        ]
+
+        def _tag(p: str) -> str:
+            flavor, voi = step_flavor(p)
+            if flavor == "recon" and voi:
+                return p  # model-authored tag with a VOI — keep it
+            if flavor == "recon":
+                # Bare [recon] carries no decision — a permanent voi-missing
+                # row. Replace it with the deterministic tag.
+                p = strip_recon_tag(p)
+            return f"{p} [recon: decides the boundary plan — {_voi}]"
+
+        probes = [_tag(p) for p in probes]
     boundary = (
         f"Plan and complete the remaining bounded work using findings from "
         f"the prior steps: {remainder} {BOUNDARY_TAG}"
@@ -942,7 +952,11 @@ def decompose(
         except Exception:
             _cuts_on = False
         if _cuts_on:
-            cuts = draw_cuts(goal, adapter, context_extras="\n\n".join(extras))
+            # RECON_FLAVOR_RULES is excluded: it teaches the decompose
+            # OUTPUT format, which is noise inside the cuts JSON prompt —
+            # _cuts_plan is the lane's single (deterministic) tag emitter.
+            cuts = draw_cuts(goal, adapter, context_extras="\n\n".join(
+                x for x in extras if x is not RECON_FLAVOR_RULES))
             if cuts is not None and not cuts.is_empty():
                 try:
                     from captains_log import log_event, CUTS_DRAWN

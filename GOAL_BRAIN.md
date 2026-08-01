@@ -5722,3 +5722,25 @@ pre-chunk NOW/evolver rows honestly unjudged going forward from here.
   breakers, not truncating individual calls. Revisit only if overshoot
   starts costing something real (spend breaker trips, context blowups
   traced to it).
+- **2026-08-01** — Recon emission gap CLOSED end-to-end (Jeremy: "Let's
+  fix the tags" → "Let's keep going"). Three landings: (1) 9967c68 —
+  live goals routed through the cuts-first lane shipped textbook recon
+  probes untagged (the lane returns before the taught decompose);
+  `_cuts_plan` now tags probes deterministically (VOI = the boundary
+  plan), same `planner.recon_flavor` killswitch, milestone expansion
+  exempts recon steps. (2) 575aa65 — watch instrument:
+  `discretion_readout.recon_summary` tabulates the durable loop-log
+  corpus with SINCE-FIRST-SEEN denominators (the same-day LT-retraction
+  lesson applied at build time). (3) Post-land adversarial review (3
+  Codex lenses, PASS with fixes; 7/7 verified, 0 hallucinated): corpus
+  boundary hardened (non-dict payloads, schema-invalid files, tz-aware
+  instant ordering — a missing timestamp could have pooled the whole
+  pre-instrument corpus into the cohort), no-tag report branch now
+  carries the incompleteness caveat, RECON_FLAVOR_RULES filtered from
+  the draw_cuts context (the fix commit's "draw_cuts never sees the
+  rules" claim was FALSE — rules rode extras into the cuts prompt; zero
+  tags anyway, deterministic emitter now sole and stated correctly),
+  bare model-authored [recon] re-tagged with deterministic VOI.
+  Exemption-breadth + atomic-writer findings BACKLOG'd/deferred with
+  named triggers. Record:
+  docs/history/2026-08-01-recon-adversarial-review.md.

@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -329,20 +330,40 @@ def recon_summary(runs_root: Optional[Path] = None) -> Dict[str, Any]:
     if runs_root is None:
         from runs import runs_root as _live_runs_root
         runs_root = _live_runs_root()
+    root = Path(runs_root)
+    if not root.exists():
+        return {"sourced": False, "reason": f"runs root does not exist: {root}"}
+
+    def _parse_ts(raw: Any) -> Optional[datetime]:
+        """Cohort membership needs a real, orderable instant. Lexical string
+        sort mis-orders mixed UTC offsets and floats missing timestamps to
+        the front — which would pool pre-instrument loops into the cohort,
+        the exact denominator defect this function exists to avoid."""
+        try:
+            ts = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+        except Exception:
+            return None
+        return ts if ts.tzinfo else ts.replace(tzinfo=timezone.utc)
+
     loops: List[Dict[str, Any]] = []
     files_read = files_failed = 0
-    for p in sorted(Path(runs_root).glob("*/build/loop-*-log.json")):
+    for p in sorted(root.glob("*/build/loop-*-log.json")):
         try:
             d = json.loads(p.read_text(encoding="utf-8"))
         except Exception:
             files_failed += 1
             continue
-        files_read += 1
-        rows = d.get("steps") or []
-        if not isinstance(rows, list):
+        # Schema-invalid files (non-dict payload, non-list steps, missing or
+        # unparsable started_at) can't enter the denominators — count them
+        # with the unreadable, never drop them silently.
+        ts = _parse_ts(d.get("started_at")) if isinstance(d, dict) else None
+        rows = d.get("steps") if isinstance(d, dict) else None
+        if ts is None or not isinstance(rows, list):
+            files_failed += 1
             continue
+        files_read += 1
         loops.append({
-            "started_at": str(d.get("started_at") or ""),
+            "started_at": ts,
             "rows": [(str(r.get("text") or ""), str(r.get("status") or ""))
                      for r in rows if isinstance(r, dict)],
         })
@@ -363,7 +384,7 @@ def recon_summary(runs_root: Optional[Path] = None) -> Dict[str, Any]:
     if first_idx is None:
         return out
     cohort = loops[first_idx:]
-    out["first_seen"] = cohort[0]["started_at"]
+    out["first_seen"] = cohort[0]["started_at"].isoformat()
     out["pre_cohort_loops"] = first_idx
     by_flavor = {"recon": {"done": 0, "blocked": 0, "other": 0},
                  "commit": {"done": 0, "blocked": 0, "other": 0}}
@@ -588,13 +609,18 @@ def build_report(payload: Optional[Dict[str, Any]] = None) -> str:
     lines.append("")
     lines.append("## Recon steps (flavor corpus — since first tag)")
     if not rc.get("sourced"):
-        lines.append("not sourced: --log-dir given without --runs-root "
-                     "(refusing to mix live run logs into an archive readout)")
+        lines.append("not sourced: " + (
+            rc.get("reason")
+            or "--log-dir given without --runs-root "
+               "(refusing to mix live run logs into an archive readout)"))
     elif rc["first_seen"] is None:
         lines.append(f"no recon-tagged step in any loop log yet "
                      f"({rc['loops_scanned']} loop(s), "
                      f"{rc['steps_scanned']} step(s) scanned; emission "
                      f"shipped 2026-08-01 — corpus accrues from live runs)")
+        if rc.get("files_failed"):
+            lines.append(f"  ({rc['files_failed']} loop log(s) unreadable or "
+                         "invalid — the zero above could be incomplete)")
     else:
         share = (f"{rc['recon_share']:.0%}" if rc["recon_share"] is not None
                  else "n/a")
@@ -612,8 +638,8 @@ def build_report(payload: Optional[Dict[str, Any]] = None) -> str:
             decides = f" — decides: {s['decides']}" if s["decides"] else ""
             lines.append(f"  [recon] {s['text']}{decides}")
         if rc.get("files_failed"):
-            lines.append(f"  ({rc['files_failed']} loop log(s) UNREADABLE — "
-                         "denominators are incomplete)")
+            lines.append(f"  ({rc['files_failed']} loop log(s) unreadable or "
+                         "invalid — denominators are incomplete)")
 
     cov = p.get("input_coverage") or {}
     if cov:
