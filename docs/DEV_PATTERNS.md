@@ -76,6 +76,15 @@ era citations are the receipts (`docs/KNOWLEDGE_JOURNEY.md`).
    (adversarial review, verify loop, output criteria — all judgement) from
    removable (persona-as-routing, multi-plan ceremony — neither).
    *(Jeremy 2026-07-21 · deterministic-home: none yet)*
+7. **Tri-state boolean check.** Wherever a value is read then compared or
+   sorted: is ABSENT distinguished from EMPTY distinguished from a real
+   value? Coercing missing to a default ("" that sorts first, 0 that
+   counts, [] that passes) silently promotes absence to evidence.
+   Recurring instances: missing `started_at` lexically sorting a tagged
+   loop to the cohort front (2026-08-01 recon review), recall citations
+   absent-vs-zero, closure verdicts unjudged-vs-contested. *(Jeremy
+   2026-08-01, "missing != empty, and we're checking for a value" ·
+   deterministic-home: none yet)*
 
 ## Typed finding codes (the shared vocabulary for review findings)
 
