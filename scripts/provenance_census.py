@@ -349,23 +349,41 @@ def monthly_coverage(runs: List[Dict[str, Any]]) -> Dict[str, Any]:
             "step_shaped": bool(rows) and median < 100 and distinct < len(rows) / 2,
         }
 
+    # First-seen at DAY granularity, not month. Month buckets were still too
+    # coarse and produced the same class of error one scale down: the
+    # recall_citations writer shipped 2026-07-21, so a July bucket pooled 90
+    # runs where the file was IMPOSSIBLE with 15 where it was possible and
+    # reported 10% — the true post-ship rate was 73%. Same for
+    # skills_manifest (shipped 07-09): 55% pooled vs 94% since. Anchoring on
+    # the first run that actually produced the artifact removes the pooling.
+    #
+    # Caveat, stated because it bounds the claim: the first OBSERVED run is a
+    # proxy for the ship date, not the ship date itself. If the earliest runs
+    # after a writer shipped legitimately had nothing to record, this anchors
+    # late and reports a slightly optimistic rate. It is strictly better than
+    # month bucketing and still not a substitute for knowing the commit.
     out["since_first_seen"] = {}
     for spec in ARTIFACTS:
         key = spec["key"]
-        cells = out["artifacts"][key]
-        first = next((m for m in months
-                      if cells.get(m) and cells[m]["present"] > 0), None)
-        if first is None:
+        seen_ts = sorted(
+            str(r.get("started_at") or "")
+            for r in settled
+            if r["applicable"][key] and r["present"][key] and r.get("started_at")
+        )
+        if not seen_ts:
             out["since_first_seen"][key] = {
                 "first_seen": None, "n": 0, "present": 0, "pct": None,
                 "note": "never observed — writer may not exist yet",
             }
             continue
+        first_ts = seen_ts[0]
         rows = [r for r in settled
-                if _month_of(r) >= first and r["applicable"][key]]
+                if r["applicable"][key]
+                and str(r.get("started_at") or "") >= first_ts]
         hits = sum(1 for r in rows if r["present"][key])
         out["since_first_seen"][key] = {
-            "first_seen": first,
+            "first_seen": first_ts[:10],
+            "first_seen_ts": first_ts,
             "n": len(rows),
             "present": hits,
             "pct": round(100.0 * hits / len(rows), 1) if rows else None,

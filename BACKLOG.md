@@ -487,13 +487,65 @@ capture**, which is what makes the rung amortize instead of evaporate.
     | `recall_citations.json` | 2% | **10%** | 2026-07 | **BLOCKER** |
     | `skill_attribution.json` | 6% | 29% | 2026-07 | correct-by-design |
 
-    - [ ] **BLOCKERS for LT-1, confirmed not artifacts:** `recall_citations`
-      10% (n=105) and `skills_manifest` 55% (n=105) are the whole cold/warm
-      attribution rail — which lessons a run cited, which skills it was
-      given. At 10%, nine in ten runs cannot have an improvement attributed
-      to a lesson. **The batch cannot measure what it exists to measure
-      until these are fixed.** They are now the top of the fix list; record
-      mode is not.
+    - [x] ~~**BLOCKERS for LT-1, confirmed not artifacts:** `recall_citations`
+      10% and `skills_manifest` 55% … the batch cannot measure what it
+      exists to measure until these are fixed.~~ **RETRACTED 2026-08-01 —
+      this was wrong, and it was the SAME denominator defect a third and
+      fourth time, at finer granularity each time.** I asserted it twice
+      (here and in a commit message); the correction:
+      - `recall_citations.json`'s writer shipped **2026-07-21** (afe5c5a,
+        chunk-4 contradiction wiring). The July bucket pooled **90 runs
+        where the file was IMPOSSIBLE** with 15 where it was possible.
+        True post-ship rate: **11/15 = 73%**, not 10%.
+      - `skills_manifest.jsonl`'s writer shipped **2026-07-09** (f49f318).
+        Post-ship: **58/62 = 94%**, not 55%.
+      - `scope.md`'s 42% was the *other* defect: 18% across May's 321
+        step-shaped pseudo-runs vs **80% on July goal-runs**.
+      **Nothing in the paper trail is a blocker.** The rail is in far better
+      shape than I reported. What survives as a genuine gap is EDGE 2's
+      ~19% silent call-record drop (independently confirmed by the
+      plan-produced/reached-done discriminator, so not a ship-date artifact),
+      `step-*.md` at 50% of July runs, and `skill_attribution` at 57%
+      (by-design, FULL-trust only).
+      **The empty-case fix (landed 54ac079) is still correct and worth
+      keeping** — it converts an ambiguous absence into an explicit empty
+      record, which the cold arm of a cold/warm pair needs. But it is a
+      refinement for the residual 4/15 and 4/62 runs, **not an unblocking**.
+      Do not let the fix's existence imply the batch was blocked.
+      **Instrument fixed again:** first-seen now infers at **day**
+      granularity from the earliest run that actually produced the artifact,
+      not month. Documented caveat, because it bounds the claim: first-
+      OBSERVED is a proxy for the ship date and anchors late when early
+      post-ship runs legitimately had nothing to record — `recall_citations`
+      reads 100%/n=11 from 07-27 where the true 07-21 figure is 73%. Better
+      than months; still not a substitute for knowing the commit.
+    - [x] **LIVE VERIFICATION 2026-08-01 — run `fd00c7be-humble-ferret`
+      (agenda, local ledger census, 6m47s, $2.02).** The whole rail works
+      end to end on a real run: `recall_citations.json` present and
+      populated (4 rule ids + 3 lesson ids), `skills_manifest.jsonl` present
+      with BOTH stages (decompose 2 skills, curated_summaries 1),
+      `build/calls/` capturing 10 calls with **zero unlabeled purposes**,
+      `loop_id` on the outcome row, and a closure verdict
+      (`goal_achieved=True`, source `closure`, confidence 0.9). Deliverable
+      was faithful and self-critical (it flagged a 26.7% stuck rate in its
+      own sample — see the spin-off item below).
+      **EDGE 6 paid for itself immediately.** Per-layer token attribution,
+      previously unanswerable without prompt-sniffing:
+      `step-execute` 381,197 in (**87%**) vs the ENTIRE orchestration stack
+      (routing + clarity + scope + cuts + 3× decompose-candidate +
+      decompose-compose) at ~56,000 (13%). One step burned **273,738 input
+      tokens to run `wc -l` + `tail -3`**. That is the errand-envelope
+      problem measured and attributed rather than inferred — and it says
+      the lever is worker re-read churn inside the executor, not harness
+      overhead. Backend is subprocess `claude -p` by deliberate choice
+      (Jeremy 2026-08-01, "don't sweat the overruns"), so the repeated
+      max_tokens cap overruns are expected and not a defect to chase.
+      **NOT yet verified: the empty-case recording**, which is what the
+      fixes were actually about. This run cited lessons and matched skills,
+      so it exercised the populated path. The 10%/55% coverage came from
+      runs where nothing was injected; that half proves out either on a run
+      that matches nothing or by re-censusing once several August runs
+      exist and watching coverage move toward 100%.
     - [ ] **EDGE 2 sharpened — it is a real silent drop, not early deaths.**
       22 of 114 July runs captured zero LLM calls. Of those 22, **16
       produced a plan** (decompose is an LLM call, so calls provably
@@ -634,6 +686,23 @@ capture**, which is what makes the rung amortize instead of evaporate.
     the three consumers can actually see it — plus fixes for whatever is
     cheap, and a census tripwire so the table can't rot the way the
     event-contract doc did before its own tripwire landed.
+
+- [ ] **SPIN-OFF from the LT-0 verification run: stuck runs are not being
+  auto-recovered.** Found by the verification run's own deliverable
+  (`fd00c7be`, 2026-08-01) reading the live ledger, then corroborated by
+  the census: **last-30 rows = 21 done / 8 stuck / 1 restart**, and
+  whole-workspace = 168 stuck + 132 error + 57 stranded of 733 settled
+  (~43% done). The run's own words: *"the near-absence of `restart` (1/30)
+  alongside a substantial `stuck` count suggests stuck runs are largely
+  being left stuck rather than auto-recovered, which is worth checking
+  against whatever restart/recovery policy is supposed to be in place."*
+  Two readings and they need separating before anything is built: either
+  the restart predicate is too conservative and stuck runs that could
+  recover don't, or stuck is a correct terminal state here and the number
+  is just honest. Check the restart/auto-recovery policy against a sample
+  of the 8 stuck rows first — this is a diagnosis, not yet a defect.
+  (Filed here rather than as its own stack item because it came out of LT
+  work; promote it if the sample confirms a live gap.)
 
 - [ ] **LT-1 — the batch (8 goals, cold+warm pairs).** Mostly `target`
   rows from the catalog; two net-new from the thin families.
