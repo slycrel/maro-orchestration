@@ -317,15 +317,36 @@ def export_pack(
         files[f"artifacts/{rel}"] = scrubbed
         review_sections.append(_review_section(cls, rel, scrubbed))
 
-    def _add_jsonl_artifact(cls: str, rel: str, path: Path) -> None:
-        scrubbed_lines = [_scrub_jsonl_line(ln) for ln in _read_jsonl_rows(path)]
+    def _quarantined_row(line: str) -> bool:
+        try:
+            return json.loads(line).get("minted_from") == "prompt"
+        except json.JSONDecodeError:
+            return False
+
+    def _add_jsonl_artifact(cls: str, rel: str, path: Path, *,
+                            drop_quarantined: bool = False) -> None:
+        raw_rows = _read_jsonl_rows(path)
+        quarantined_skipped = 0
+        if drop_quarantined:
+            # Provenance-gate rows (minted_from="prompt") are quarantined from
+            # every local injection surface; a curated pack must not ship them
+            # to a box whose importer may not honor the stamp (0.8.0 predates
+            # the gate). Skipped, not scrubbed — the count rides the manifest.
+            kept = [ln for ln in raw_rows if not _quarantined_row(ln)]
+            quarantined_skipped = len(raw_rows) - len(kept)
+            raw_rows = kept
+        scrubbed_lines = [_scrub_jsonl_line(ln) for ln in raw_rows]
         if not scrubbed_lines:
             return  # skip empty artifacts — a young workspace has no rules yet
-        content = "".join(ln + "\n" for ln in scrubbed_lines)
-        artifacts.append({
+        entry = {
             "class": cls, "path": f"artifacts/{rel}",
-            "rows": len(scrubbed_lines), "sha256": _sha256_text(content),
-        })
+            "rows": len(scrubbed_lines),
+        }
+        if quarantined_skipped:
+            entry["quarantined_rows_skipped"] = quarantined_skipped
+        content = "".join(ln + "\n" for ln in scrubbed_lines)
+        entry["sha256"] = _sha256_text(content)
+        artifacts.append(entry)
         files[f"artifacts/{rel}"] = content
         review_sections.append(_review_section(cls, rel, content))
 
@@ -343,10 +364,12 @@ def export_pack(
     _add_jsonl_artifact("skill_records", "memory/skills.jsonl", mem_dir / "skills.jsonl")
     _add_jsonl_artifact("rules", "memory/standing_rules.jsonl", mem_dir / "standing_rules.jsonl")
     _add_jsonl_artifact("hypotheses", "memory/hypotheses.jsonl", mem_dir / "hypotheses.jsonl")
-    _add_jsonl_artifact("lessons", "memory/long/lessons.jsonl", mem_dir / "long" / "lessons.jsonl")
+    _add_jsonl_artifact("lessons", "memory/long/lessons.jsonl", mem_dir / "long" / "lessons.jsonl",
+                        drop_quarantined=True)
 
     if include_medium:
-        _add_jsonl_artifact("lessons_medium", "memory/medium/lessons.jsonl", mem_dir / "medium" / "lessons.jsonl")
+        _add_jsonl_artifact("lessons_medium", "memory/medium/lessons.jsonl", mem_dir / "medium" / "lessons.jsonl",
+                            drop_quarantined=True)
 
     if include_knowledge:
         _add_jsonl_artifact("knowledge_nodes", "memory/knowledge_nodes.jsonl", mem_dir / "knowledge_nodes.jsonl")
@@ -608,8 +631,16 @@ def _import_lessons(content: str, *, pack_name: str, label: str, pack_tag: str,
                      now: str, dry_run: bool) -> List[Dict[str, Any]]:
     """Lessons enter MEDIUM tier regardless of origin tier, score capped at 0.5
     (§3 arrival-trust table). Unreinforced, they self-compost under GC decay —
-    the border demotes, decay-trust-never-data does the rest."""
-    from knowledge_web import TieredLesson, MemoryTier, load_tiered_lessons, _append_tiered_lesson
+    the border demotes, decay-trust-never-data does the rest.
+
+    Provenance survives transport: a ``minted_from="prompt"`` stamp (the
+    lesson-provenance quarantine) carries through, and unstamped rows get the
+    same Tier-0 classification the local mint path applies — this write
+    bypasses ``record_tiered_lesson``'s choke point, so the gate is re-applied
+    here. Without this, export→import would launder a quarantined lesson into
+    an injectable one (the db37d525 contamination class, via transport)."""
+    from knowledge_web import (TieredLesson, MemoryTier, load_tiered_lessons,
+                               _append_tiered_lesson, _LESSON_TYPES)
 
     existing = (load_tiered_lessons(tier=MemoryTier.MEDIUM, limit=None, raw=True)
                 + load_tiered_lessons(tier=MemoryTier.LONG, limit=None, raw=True))
@@ -642,6 +673,18 @@ def _import_lessons(content: str, *, pack_name: str, label: str, pack_tag: str,
             }
             if row.get("imported"):
                 imported["original_provenance"] = row["imported"]
+            minted_from = str(row.get("minted_from") or "")
+            if not minted_from:
+                # Packs built before the provenance gate (< 2026-07-29) carry
+                # no stamp, and a foreign exporter may not filter.
+                try:
+                    from lesson_provenance import (classify_lesson_provenance,
+                                                   provenance_gate_enabled)
+                    if provenance_gate_enabled():
+                        minted_from = classify_lesson_provenance(
+                            lesson_text, row.get("source_goal", ""))
+                except Exception:
+                    minted_from = ""
             tl = TieredLesson(
                 lesson_id=new_id,
                 task_type=row.get("task_type", ""),
@@ -661,13 +704,17 @@ def _import_lessons(content: str, *, pack_name: str, label: str, pack_tag: str,
                 recorded_at=now,
                 evidence_sources=row.get("evidence_sources", []),
                 lesson_type=row.get("lesson_type", "") if row.get("lesson_type") in
-                {"execution", "planning", "recovery", "verification", "cost"} else "",
+                _LESSON_TYPES else "",
+                provisional=bool(row.get("provisional", False)),
+                minted_from=minted_from,
                 imported=imported,
             )
             if not dry_run:
                 _append_tiered_lesson(tl, tier=MemoryTier.MEDIUM)
             existing_ids.add(new_id)
-            results.append({"lesson_id": original_id, "new_id": new_id, "outcome": "imported_medium"})
+            outcome = ("imported_medium_quarantined" if minted_from == "prompt"
+                       else "imported_medium")
+            results.append({"lesson_id": original_id, "new_id": new_id, "outcome": outcome})
         except Exception as e:
             results.append({"lesson_id": original_id, "outcome": "malformed_skipped", "error": str(e)})
     return results

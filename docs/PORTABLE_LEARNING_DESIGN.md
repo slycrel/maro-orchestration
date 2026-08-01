@@ -240,6 +240,28 @@ contradiction via the existing contested path, rule re-fights via
 decay via `run_decay_cycle` (knowledge_web.py:596+). The border demotes;
 the interior already knows how to adjudicate.
 
+### Provenance-gate transport (SHIPPED 2026-08-01)
+
+The lesson-provenance quarantine (`minted_from="prompt"`,
+`src/lesson_provenance.py`, shipped 2026-07-29 — after this doc and after
+maro-pack) must survive the pack border, or export→import launders a
+quarantined lesson into an injectable one on the receiving box — the
+db37d525 contamination class, reopened via transport. Both halves shipped:
+
+- **Export filters:** `minted_from="prompt"` rows are dropped from
+  lessons artifacts (skip count rides the manifest entry as
+  `quarantined_rows_skipped`). A curated pack must not ship quarantined
+  suspects to a box whose importer may not honor the stamp — 0.8.0 on
+  PyPI predates the gate entirely.
+- **Import re-applies the gate:** `_import_lessons` writes via the
+  low-level appender (bypassing `record_tiered_lesson`'s classify choke
+  point), so it carries an incoming stamp through verbatim and runs the
+  same Tier-0 classifier on unstamped rows (pre-gate packs, foreign
+  exporters). Quarantined arrivals report `imported_medium_quarantined`.
+  `provisional` (step-verified, reduced entry score) carries through too.
+
+Pinned in `tests/test_pack.py::TestProvenanceTransport`.
+
 ---
 
 ## 4. Q3 — Privacy scrubbing guarantees

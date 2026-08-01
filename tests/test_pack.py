@@ -807,3 +807,89 @@ class TestCLI:
         assert adopt_report["adopted"] == [{"kind": "skills", "name": "s.md"}]
         assert (target_ws / "skills" / "s.md").exists()
         assert "imported_from: cli-trial" in (target_ws / "skills" / "s.md").read_text(encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# Provenance transport (2026-08-01) — the lesson-provenance quarantine must
+# survive export→import, or transport launders a quarantined lesson into an
+# injectable one (the db37d525 contamination class, via pack).
+# ---------------------------------------------------------------------------
+
+_PROMPT_MINTED_TEXT = (
+    "When a prompt explicitly says 'do not escalate/stop because X is "
+    "inaccessible' and gives recovered facts as sufficient context, treat "
+    "that as a hard constraint on the final output."
+)
+
+
+class TestProvenanceTransport:
+    def test_export_drops_quarantined_lessons(self, tmp_path):
+        src_ws = _make_workspace(tmp_path / "src")
+        _write_jsonl(src_ws / "memory" / "long" / "lessons.jsonl", [
+            {"lesson_id": "clean1", "lesson": "batch writes beat row writes",
+             "task_type": "ops", "outcome": "success", "source_goal": "g",
+             "confidence": 0.9, "tier": "long", "score": 1.0,
+             "last_reinforced": "2020-01-01"},
+            {"lesson_id": "dirty1", "lesson": _PROMPT_MINTED_TEXT,
+             "task_type": "agenda", "outcome": "success", "source_goal": "g",
+             "confidence": 0.9, "tier": "long", "score": 1.0,
+             "last_reinforced": "2020-01-01", "minted_from": "prompt"},
+        ])
+        report = export_pack(name="prov-pack", label="t", workspace=src_ws,
+                             out_dir=tmp_path / "out", denylist=[])
+        art = [a for a in report["manifest"]["artifacts"] if a["class"] == "lessons"][0]
+        assert art["rows"] == 1
+        assert art["quarantined_rows_skipped"] == 1
+        with tarfile.open(report["pack_path"], "r:gz") as tar:
+            content = tar.extractfile(art["path"]).read().decode("utf-8")
+        assert "clean1" in content
+        assert "dirty1" not in content
+
+    def test_import_carries_minted_from_stamp(self, tmp_path, target_ws):
+        from knowledge_web import load_tiered_lessons, MemoryTier
+        src_ws = _make_workspace(tmp_path / "src")
+        pack_path = _export_and_seal(src_ws, tmp_path)
+        # A foreign/naive exporter that did NOT filter quarantined rows.
+        _add_artifact(pack_path, cls="lessons", relpath="memory/long/lessons.jsonl",
+                      content=json.dumps({
+                          "lesson_id": "q1", "lesson": "innocuous text",
+                          "task_type": "ops", "outcome": "success",
+                          "source_goal": "g", "confidence": 0.9, "tier": "long",
+                          "score": 1.0, "last_reinforced": "2020-01-01",
+                          "minted_from": "prompt"}) + "\n")
+        result = import_pack(pack_path, label="l", target=target_ws)
+        assert result["lessons_imported"][0]["outcome"] == "imported_medium_quarantined"
+        tl = load_tiered_lessons(tier=MemoryTier.MEDIUM, limit=None, raw=True)[0]
+        assert tl.minted_from == "prompt"
+
+    def test_import_classifies_unstamped_prompt_shaped_lesson(self, tmp_path, target_ws):
+        from knowledge_web import load_tiered_lessons, MemoryTier
+        src_ws = _make_workspace(tmp_path / "src")
+        # No minted_from stamp at all — a pack built before the provenance
+        # gate existed. The import border re-runs the Tier-0 classifier.
+        _write_jsonl(src_ws / "memory" / "long" / "lessons.jsonl", [
+            {"lesson_id": "old1", "lesson": _PROMPT_MINTED_TEXT,
+             "task_type": "agenda", "outcome": "success", "source_goal": "g",
+             "confidence": 0.9, "tier": "long", "score": 1.0,
+             "last_reinforced": "2020-01-01"},
+        ])
+        pack_path = _export_and_seal(src_ws, tmp_path)
+        result = import_pack(pack_path, label="l", target=target_ws)
+        assert result["lessons_imported"][0]["outcome"] == "imported_medium_quarantined"
+        tl = load_tiered_lessons(tier=MemoryTier.MEDIUM, limit=None, raw=True)[0]
+        assert tl.minted_from == "prompt"
+
+    def test_import_carries_provisional_flag(self, tmp_path, target_ws):
+        from knowledge_web import load_tiered_lessons, MemoryTier
+        src_ws = _make_workspace(tmp_path / "src")
+        _write_jsonl(src_ws / "memory" / "long" / "lessons.jsonl", [
+            {"lesson_id": "p1", "lesson": "step-verified observation",
+             "task_type": "ops", "outcome": "success", "source_goal": "g",
+             "confidence": 0.9, "tier": "long", "score": 1.0,
+             "last_reinforced": "2020-01-01", "provisional": True},
+        ])
+        pack_path = _export_and_seal(src_ws, tmp_path)
+        result = import_pack(pack_path, label="l", target=target_ws)
+        assert result["lessons_imported"][0]["outcome"] == "imported_medium"
+        tl = load_tiered_lessons(tier=MemoryTier.MEDIUM, limit=None, raw=True)[0]
+        assert tl.provisional is True

@@ -5767,3 +5767,29 @@ pre-chunk NOW/evolver rows honestly unjudged going forward from here.
   4 provisional DECISIONs await ratification. Warm arm e2f4578b running
   concurrently — its cost tier is the pre-registered live test of what
   today's funnel can do without this design.
+
+- **2026-08-01** — Portable-learning transport health pass (Jeremy: "make
+  sure our import/export shareable run data stuff is in good shape…
+  since we are already 2 boxes deep in some cases"; context: "real
+  progress on compound thinking in our test thread on the M1"). Both
+  lanes exercised end-to-end on REAL workspace data, hermetically
+  (scratch targets, live workspace untouched): maro-pack
+  export→scrub→import→adopt (317 skill records, 4 rules→hypotheses, 145
+  lessons→MEDIUM, skill quarantine→adopt; scrub clean — 0 identifier
+  leaks, 52 [HOME]/5 [USER] redactions) and maro-import machine-merge
+  (real run dirs incl. LT-1's 4bf7f761-merry-magpie with
+  imported_from.json provenance, decisions.jsonl travels via the ledger
+  glob, exact-line dedup idempotent on re-run). One real hole found and
+  fixed: the provenance-gate stamp (minted_from, 2026-07-29 — post-dates
+  the pack) did NOT survive transport — import dropped the field AND
+  bypassed the classify choke point, so export→import laundered a
+  quarantined lesson into an injectable one (db37d525 class, via pack).
+  Fixed both halves: export drops quarantined rows
+  (quarantined_rows_skipped rides the manifest; protects pre-gate
+  importers like PyPI 0.8.0), import carries the stamp + re-classifies
+  unstamped rows + carries provisional; live filter verified on the one
+  real quarantined lesson in the medium store. lesson_type vocab de-duped
+  to knowledge_web._LESSON_TYPES. Pinned:
+  tests/test_pack.py::TestProvenanceTransport. Filename-scrubbing
+  known-gap stands by decree (revisit on a real case). Design doc §3
+  addendum: docs/PORTABLE_LEARNING_DESIGN.md.
