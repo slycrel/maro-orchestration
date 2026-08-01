@@ -893,3 +893,83 @@ class TestProvenanceTransport:
         assert result["lessons_imported"][0]["outcome"] == "imported_medium"
         tl = load_tiered_lessons(tier=MemoryTier.MEDIUM, limit=None, raw=True)[0]
         assert tl.provisional is True
+
+    def test_export_survives_non_object_jsonl_rows(self, tmp_path):
+        src_ws = _make_workspace(tmp_path / "src")
+        lessons = src_ws / "memory" / "long" / "lessons.jsonl"
+        lessons.parent.mkdir(parents=True, exist_ok=True)
+        lessons.write_text(
+            "null\n"
+            + json.dumps({"lesson_id": "ok1", "lesson": "clean", "task_type": "ops",
+                          "outcome": "success", "source_goal": "g", "confidence": 0.9,
+                          "tier": "long", "score": 1.0, "last_reinforced": "2020-01-01"})
+            + "\n", encoding="utf-8")
+        report = export_pack(name="null-row-pack", label="t", workspace=src_ws,
+                             out_dir=tmp_path / "out", denylist=[])
+        art = [a for a in report["manifest"]["artifacts"] if a["class"] == "lessons"][0]
+        assert art["rows"] == 2  # null row ships as before, scrubbed not dropped
+
+    def test_export_all_quarantined_emits_zero_row_entry(self, tmp_path):
+        src_ws = _make_workspace(tmp_path / "src")
+        _write_jsonl(src_ws / "memory" / "long" / "lessons.jsonl", [
+            {"lesson_id": "d1", "lesson": _PROMPT_MINTED_TEXT, "task_type": "agenda",
+             "outcome": "success", "source_goal": "g", "confidence": 0.9,
+             "tier": "long", "score": 1.0, "last_reinforced": "2020-01-01",
+             "minted_from": "prompt"},
+        ])
+        report = export_pack(name="all-q-pack", label="t", workspace=src_ws,
+                             out_dir=tmp_path / "out", denylist=[])
+        art = [a for a in report["manifest"]["artifacts"] if a["class"] == "lessons"][0]
+        assert art["rows"] == 0
+        assert art["quarantined_rows_skipped"] == 1
+
+    def test_import_normalizes_noncanonical_stamp(self, tmp_path, target_ws):
+        from knowledge_web import load_tiered_lessons, MemoryTier
+        src_ws = _make_workspace(tmp_path / "src")
+        pack_path = _export_and_seal(src_ws, tmp_path)
+        _add_artifact(pack_path, cls="lessons", relpath="memory/long/lessons.jsonl",
+                      content=json.dumps({
+                          "lesson_id": "nc1", "lesson": "innocuous text",
+                          "task_type": "ops", "outcome": "success",
+                          "source_goal": "g", "confidence": 0.9, "tier": "long",
+                          "score": 1.0, "last_reinforced": "2020-01-01",
+                          "minted_from": "Prompt "}) + "\n")
+        result = import_pack(pack_path, label="l", target=target_ws)
+        assert result["lessons_imported"][0]["outcome"] == "imported_medium_quarantined"
+        tl = load_tiered_lessons(tier=MemoryTier.MEDIUM, limit=None, raw=True)[0]
+        assert tl.minted_from == "prompt"  # exact enum, not the raw claim
+
+    def test_import_quarantines_despite_outcome_claim(self, tmp_path, target_ws):
+        from knowledge_web import load_tiered_lessons, MemoryTier
+        src_ws = _make_workspace(tmp_path / "src")
+        pack_path = _export_and_seal(src_ws, tmp_path)
+        # Foreign pack CLAIMS outcome provenance on a prompt-shaped lesson —
+        # conservative union: local Tier-0 classification wins.
+        _add_artifact(pack_path, cls="lessons", relpath="memory/long/lessons.jsonl",
+                      content=json.dumps({
+                          "lesson_id": "oc1", "lesson": _PROMPT_MINTED_TEXT,
+                          "task_type": "agenda", "outcome": "success",
+                          "source_goal": "g", "confidence": 0.9, "tier": "long",
+                          "score": 1.0, "last_reinforced": "2020-01-01",
+                          "minted_from": "outcome"}) + "\n")
+        result = import_pack(pack_path, label="l", target=target_ws)
+        assert result["lessons_imported"][0]["outcome"] == "imported_medium_quarantined"
+        tl = load_tiered_lessons(tier=MemoryTier.MEDIUM, limit=None, raw=True)[0]
+        assert tl.minted_from == "prompt"
+
+    def test_import_classifies_with_non_string_source_goal(self, tmp_path, target_ws):
+        from knowledge_web import load_tiered_lessons, MemoryTier
+        src_ws = _make_workspace(tmp_path / "src")
+        # Untyped pack JSON: source_goal is a number. The classifier must
+        # still run (coerced), not TypeError into a silent clean import.
+        _write_jsonl(src_ws / "memory" / "long" / "lessons.jsonl", [
+            {"lesson_id": "ns1", "lesson": _PROMPT_MINTED_TEXT,
+             "task_type": "agenda", "outcome": "success", "source_goal": 123,
+             "confidence": 0.9, "tier": "long", "score": 1.0,
+             "last_reinforced": "2020-01-01"},
+        ])
+        pack_path = _export_and_seal(src_ws, tmp_path)
+        result = import_pack(pack_path, label="l", target=target_ws)
+        assert result["lessons_imported"][0]["outcome"] == "imported_medium_quarantined"
+        tl = load_tiered_lessons(tier=MemoryTier.MEDIUM, limit=None, raw=True)[0]
+        assert tl.minted_from == "prompt"

@@ -255,12 +255,40 @@ db37d525 contamination class, reopened via transport. Both halves shipped:
   PyPI predates the gate entirely.
 - **Import re-applies the gate:** `_import_lessons` writes via the
   low-level appender (bypassing `record_tiered_lesson`'s classify choke
-  point), so it carries an incoming stamp through verbatim and runs the
-  same Tier-0 classifier on unstamped rows (pre-gate packs, foreign
-  exporters). Quarantined arrivals report `imported_medium_quarantined`.
+  point), so the gate is re-applied at the border. An incoming stamp is
+  a CLAIM in untrusted JSON: it is normalized to the known enum
+  ("prompt"/"outcome"; anything else discarded), the local Tier-0
+  classifier runs on EVERY row (inputs coerced to str — untyped JSON
+  must not TypeError into a silent clean import), and the conservative
+  union decides: either side saying "prompt" quarantines. Origin
+  citizenship (an "outcome" claim on prompt-shaped text) does not
+  survive the border — contested-by-birth applies to provenance too;
+  the row re-earns citizenship locally via outcome re-records.
+  Quarantined arrivals report `imported_medium_quarantined`.
   `provisional` (step-verified, reduced entry score) carries through too.
 
-Pinned in `tests/test_pack.py::TestProvenanceTransport`.
+Pinned in `tests/test_pack.py::TestProvenanceTransport` (2026-08-01
+adversarial review hardened the border: stamp-enum normalization,
+conservative union, non-object JSONL rows don't abort export, all-rows-
+quarantined still emits a zero-row manifest entry with the skip count).
+
+**Accepted residuals (named, not fixed):**
+
+- *Pre-fix laundered rows:* a box that imported a pack with the
+  pre-2026-08-01 importer holds unstamped copies; re-importing the same
+  pack reports `skipped_identical` and does not repair them (dedup runs
+  before stamping, and an existing local row is not contaminated by an
+  incoming claim — mirrors the flat-store rule). No such box exists:
+  the only real imports ever run (imports.jsonl) are 2026-07-09
+  workspace_import machine-merges, which predate maro-pack entirely.
+  Manual repair path if one surfaces: `set_lesson_minted_from`.
+- *Truncated evidence:* stores keep `source_goal[:120]` while mint-time
+  classification saw the full goal — a pre-gate row whose ONLY signal
+  is the scaffolding-echo rule (needs the marker in both lesson and
+  goal, possibly past char 120) can arrive unclassified. Not fixable at
+  the border (evidence destroyed at origin); quarantining all pre-gate
+  imports instead would make packs useless. The other two signals fire
+  on lesson text alone.
 
 ---
 

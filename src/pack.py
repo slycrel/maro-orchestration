@@ -319,9 +319,12 @@ def export_pack(
 
     def _quarantined_row(line: str) -> bool:
         try:
-            return json.loads(line).get("minted_from") == "prompt"
+            obj = json.loads(line)
         except json.JSONDecodeError:
             return False
+        # Valid-JSON non-object rows (null, [], "str") are not lessons but
+        # must not abort the export — they ship as before, scrubbed.
+        return isinstance(obj, dict) and obj.get("minted_from") == "prompt"
 
     def _add_jsonl_artifact(cls: str, rel: str, path: Path, *,
                             drop_quarantined: bool = False) -> None:
@@ -336,8 +339,11 @@ def export_pack(
             quarantined_skipped = len(raw_rows) - len(kept)
             raw_rows = kept
         scrubbed_lines = [_scrub_jsonl_line(ln) for ln in raw_rows]
-        if not scrubbed_lines:
+        if not scrubbed_lines and not quarantined_skipped:
             return  # skip empty artifacts — a young workspace has no rules yet
+        # When filtering emptied the artifact, still emit a zero-row entry:
+        # a reviewer must be able to tell "no lessons existed" from "all
+        # lessons were withheld".
         entry = {
             "class": cls, "path": f"artifacts/{rel}",
             "rows": len(scrubbed_lines),
@@ -673,18 +679,33 @@ def _import_lessons(content: str, *, pack_name: str, label: str, pack_tag: str,
             }
             if row.get("imported"):
                 imported["original_provenance"] = row["imported"]
-            minted_from = str(row.get("minted_from") or "")
-            if not minted_from:
-                # Packs built before the provenance gate (< 2026-07-29) carry
-                # no stamp, and a foreign exporter may not filter.
-                try:
-                    from lesson_provenance import (classify_lesson_provenance,
-                                                   provenance_gate_enabled)
-                    if provenance_gate_enabled():
-                        minted_from = classify_lesson_provenance(
-                            lesson_text, row.get("source_goal", ""))
-                except Exception:
-                    minted_from = ""
+            # An incoming stamp is a CLAIM in untrusted JSON, not provenance —
+            # normalize to the known enum ("prompt"/"outcome"), discard
+            # anything else ("Prompt ", garbage, non-strings). The retrieval
+            # quarantine matches the exact string "prompt", so a noncanonical
+            # value carried verbatim would silently pass every surface.
+            raw_stamp = row.get("minted_from")
+            incoming = raw_stamp.strip().lower() if isinstance(raw_stamp, str) else ""
+            if incoming not in ("prompt", "outcome"):
+                incoming = ""
+            # Always run the local Tier-0 classifier too (packs built before
+            # the gate carry no stamp; a foreign exporter may mis-stamp) and
+            # take the conservative union: either side saying "prompt"
+            # quarantines. Origin citizenship is a local promotion-history
+            # claim — contested-by-birth applies to provenance as well; the
+            # row can re-earn citizenship here via outcome re-records.
+            local_class = ""
+            try:
+                from lesson_provenance import (classify_lesson_provenance,
+                                               provenance_gate_enabled)
+                if provenance_gate_enabled():
+                    local_class = classify_lesson_provenance(
+                        str(row.get("lesson") or ""),
+                        str(row.get("source_goal") or ""))
+            except Exception:
+                local_class = ""
+            minted_from = ("prompt" if "prompt" in (incoming, local_class)
+                           else (incoming or local_class))
             tl = TieredLesson(
                 lesson_id=new_id,
                 task_type=row.get("task_type", ""),

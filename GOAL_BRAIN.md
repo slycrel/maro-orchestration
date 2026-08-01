@@ -5793,3 +5793,20 @@ pre-chunk NOW/evolver rows honestly unjudged going forward from here.
   tests/test_pack.py::TestProvenanceTransport. Filename-scrubbing
   known-gap stands by decree (revisit on a real case). Design doc §3
   addendum: docs/PORTABLE_LEARNING_DESIGN.md.
+
+- **2026-08-01** — Pack-transport adversarial review (post-land on
+  4d9f995; 2 Codex lenses, PASS with fixes; 6/6 verified, 0
+  hallucinated — streak holds). The laundering fix held; the border
+  still trusted the STAMP'S VALUE: noncanonical/foreign-claimed
+  minted_from carried verbatim past the exact-match quarantine (both
+  lenses independently), non-string source_goal TypeError'd into a
+  silent clean import, non-object JSONL rows crashed export (DEV_PATTERNS
+  #7 again — non-dict payload), all-quarantined artifacts vanished with
+  their skip count. All four fixed + pinned (stamp enum-normalized,
+  classifier runs on EVERY row, conservative union — either side saying
+  "prompt" quarantines; origin "outcome" citizenship does not survive
+  the border, contested-by-birth applies to provenance too). Two
+  residuals accepted with named triggers, both empirically grounded
+  (imports.jsonl: no real pack import has ever run — no laundered rows
+  exist anywhere). Record:
+  docs/history/2026-08-01-pack-transport-adversarial-review.md.
