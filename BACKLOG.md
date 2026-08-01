@@ -777,6 +777,48 @@ capture**, which is what makes the rung amortize instead of evaporate.
   paywalls — is this exact edge at full scale: capability acquisition as
   an authorized level-up, not a workaround.)
 
+  **Look-back forensics on the cold arm (Jeremy's ask, 2026-08-01 — "it's
+  the unknown unknowns that get ya"). What the archive holds well:** 32
+  call records w/ full prompts+responses, 146 tool_events with
+  name/input/output (so "which URLs did the worker try" IS recoverable),
+  closure_verdicts.jsonl, per-event captains-log slice, full-text artifacts.
+  **Three unknown-unknowns found:**
+  - [ ] **(UU-1) Timeout-killed LLM calls leave NO call record.** Step 1
+    ran 10 minutes, was killed at the 601s cap, and has ZERO bytes in
+    `build/calls/` — `record_llm_call` rides the completed-call path only,
+    so the run's single most expensive wall-clock event is unrecoverable
+    (prompt gone, partial output gone; the 08:31→08:42 hole in the call
+    sequence is the only trace). Fix direction: a stub record on the
+    kill/timeout path (purpose, elapsed, killed=true, prompt, partial
+    output if the transport can salvage it). This is EDGE-2-adjacent but
+    distinct: not a ContextVar drop, a code-path hole.
+  - [ ] **(UU-2) Lesson extraction favors strategy over operational
+    facts.** The cold run minted 3 lessons — all strategy-shaped
+    ("inconclusive verdict acceptable when the goal says so", "plans are
+    step budgets", "pre-digital-record claims…"). **None captured the
+    blocked-archives fact** (HathiTrust/Google Books/Archive.org
+    infrastructure-blocked) — the single highest-value operational fact
+    for any repeat, worth ~$15 of the $25. The trail HAS it
+    (source_trail.md, per-step HTTP codes); the lesson funnel didn't
+    distill it. The warm arm is now also a test of whether generic
+    lessons + artifact reuse compensate for the missing operational
+    lesson. If warm comes in expensive, this is the first thing to fix —
+    and note the extraction prompt plausibly needs an "environment
+    facts" lesson type, not just task-strategy types.
+  - [ ] **(UU-3) This run planned WITHOUT any decompose-labeled call.**
+    Zero decompose-candidate/compose purposes in the record — the 7-step
+    plan was born from the `timeout-split` call (the killed step 1 got
+    split into the numbered steps). So EDGE 4's mitigation ("plan
+    reasoning is recoverable from the labeled decompose calls") does NOT
+    hold for the timeout-split planning path; plan provenance for this
+    shape lives only in that one call's unstructured response. plan.md's
+    "Replans: 1" gives no hint the entire plan came from a split.
+  Minor wishes, noted not filed: call records carry start `ts` only (no
+  elapsed — per-call latency is adjacency-inferred, conflating pool time);
+  late step-execute calls balloon to 1.2M–1.9M tokens_in (the re-read
+  churn, now visible per-call — more errand-envelope evidence, not new
+  instrumentation).
+
   **Grading decree (Jeremy, 2026-07-31): a failure is never a success.**
   "An expected failure is just a goal we haven't engineered (or learned) to
   solve yet, not a success." Two consequences, both binding on the batch:
