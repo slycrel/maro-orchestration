@@ -233,3 +233,86 @@ def test_loop_log_includes_call_record(workspace, monkeypatch):
     log_path = orch_items.project_dir(proj) / "artifacts" / "loop-loop123-log.json"
     payload = json.loads(log_path.read_text(encoding="utf-8"))
     assert payload["steps"][0]["call_record"] == "/rd/build/calls/call-00001.json"
+
+
+# ---------------------------------------------------------------------------
+# UU-1 (BACKLOG LT arc): failed/killed attempts leave a record too.
+# The cold chlorination run's 10-minute killed step had ZERO bytes in
+# build/calls/ — record-mode rode the success path only.
+# ---------------------------------------------------------------------------
+
+def test_failed_call_leaves_error_record_with_partial_output(workspace):
+    """A timeout-killed attempt writes a stub record: error + partial output."""
+    import subprocess as _sp
+    from llm import FailoverAdapter
+
+    rd = create_run_dir("hid00044", prompt="killed goal")
+    set_current_run_dir(rd)
+
+    class _Killed:
+        backend = "subprocess"
+        model_key = "test"
+
+        def complete(self, messages, **kwargs):
+            exc = _sp.TimeoutExpired(cmd="claude -p", timeout=601,
+                                     output="partial output before kill")
+            exc.maro_kill_reason = "wall-clock timeout after 601s"
+            raise exc
+
+    fa = FailoverAdapter([_Killed()])
+    import pytest as _pytest
+    with _pytest.raises(Exception):
+        fa.complete([{"role": "user", "content": "hi"}], purpose="step-execute")
+
+    calls = sorted(_calls_dir(rd).glob("call-*.json"))
+    assert calls, "killed attempt must leave a record (UU-1)"
+    rec = json.loads(calls[-1].read_text())
+    assert "TimeoutExpired" in rec["error"]
+    assert "wall-clock timeout after 601s" in rec["error"]
+    assert rec["response"] == "partial output before kill"
+    assert rec["purpose"] == "step-execute"
+
+
+def test_failed_call_record_never_blocks_failover(workspace):
+    """The error-record write is best-effort: failover still succeeds."""
+    from llm import FailoverAdapter, LLMResponse
+
+    rd = create_run_dir("hid00045", prompt="failover goal")
+    set_current_run_dir(rd)
+
+    class _Dies:
+        backend = "primary"
+        model_key = "test"
+
+        def complete(self, messages, **kwargs):
+            # A failover-class error per llm_errors.classify_error (the
+            # subprocess-death shape) — a bare ConnectionError is classified
+            # request-bad and propagates instead of failing over.
+            raise RuntimeError("subprocess failed: claude -p crashed")
+
+    class _Works:
+        backend = "secondary"
+        model_key = "test"
+
+        def complete(self, messages, **kwargs):
+            return LLMResponse(content="rescued", input_tokens=1, output_tokens=1)
+
+    fa = FailoverAdapter([_Dies(), _Works()])
+    resp = fa.complete([{"role": "user", "content": "hi"}], purpose="now")
+    assert resp.content == "rescued"
+    recs = [json.loads(p.read_text()) for p in sorted(_calls_dir(rd).glob("call-*.json"))]
+    # Both the failed attempt AND the rescue are recorded, in order.
+    assert len(recs) == 2
+    assert "RuntimeError" in recs[0]["error"]
+    assert recs[0]["backend"] == "primary"
+    assert recs[1].get("error", "") == ""
+    assert recs[1]["response"] == "rescued"
+
+
+def test_success_records_carry_empty_error_field(workspace):
+    """Success-path records keep a falsy error field (consumer contract)."""
+    rd = create_run_dir("hid00046", prompt="ok goal")
+    set_current_run_dir(rd)
+    out = record_llm_call("p", "r")
+    rec = json.loads(out.read_text())
+    assert rec["error"] == ""

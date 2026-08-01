@@ -475,6 +475,7 @@ def record_outcome(
     task_type: str = "general",
     project: Optional[str] = None,
     lessons: Optional[List[str]] = None,
+    lesson_ids: Optional[List[str]] = None,
     tokens_in: int = 0,
     tokens_out: int = 0,
     elapsed_ms: int = 0,
@@ -565,9 +566,15 @@ def record_outcome(
     # Append to daily log
     _append_daily_log(outcome)
 
-    # Store lessons
-    for lesson_text in (lessons or []):
+    # Store lessons. `lesson_ids` (UU-4, parallel to `lessons`) carries the
+    # id each lesson already holds in the tiered store, so the flat row
+    # joins instead of minting a divergent uuid. Absent/short list → mint
+    # as before (legacy callers unchanged).
+    for _idx, lesson_text in enumerate(lessons or []):
         if lesson_text.strip():
+            _shared = ""
+            if lesson_ids and _idx < len(lesson_ids):
+                _shared = str(lesson_ids[_idx] or "")
             _store_lesson(
                 task_type=task_type,
                 outcome=status,
@@ -575,6 +582,7 @@ def record_outcome(
                 source_goal=goal,
                 goal_achieved=goal_achieved,
                 goal_verdict_source=goal_verdict_source,
+                lesson_id=_shared,
             )
 
     # Update MEMORY.md index
@@ -1136,6 +1144,7 @@ def _store_lesson(
     goal_achieved: Optional[bool] = None,
     goal_verdict_source: str = "",
     minted_from: str = "",
+    lesson_id: str = "",
 ) -> Lesson:
     """Append a lesson to the lessons ledger, or reinforce existing near-duplicate.
 
@@ -1209,8 +1218,13 @@ def _store_lesson(
             _rewrite_lessons_file(task_type, existing)
             return ex
 
+    # UU-4 (BACKLOG LT arc): a caller that dual-writes the same lesson to
+    # this ledger AND the tiered store may supply one shared id, so the two
+    # rows join. Fresh mints only — the reinforce path above returns the
+    # EXISTING row with its original id, and that id wins (the join then
+    # points at the row that actually holds the lesson).
     l = Lesson(
-        lesson_id=str(uuid.uuid4())[:8],
+        lesson_id=lesson_id or str(uuid.uuid4())[:8],
         task_type=task_type,
         outcome=outcome,
         lesson=lesson,

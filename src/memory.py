@@ -654,8 +654,18 @@ def reflect_and_record(
     # This closes the loop: lesson_type is preserved from extraction → tiered storage → injection.
     tiered_succeeded = 0
     tiered_failed = 0
+    # UU-4: one extraction event dual-writes each lesson (tiered store here,
+    # flat ledger inside record_outcome below). Mint ONE id per lesson and
+    # thread it through both writers so the rows join — before this, the
+    # same lesson carried independent uuid4 ids in each store and "was run
+    # A's lesson applied in run B?" was unanswerable by id (it cost the
+    # 2026-08-01 warm-arm forensics a wrong conclusion). Fresh mints only:
+    # a near-duplicate reinforce returns the existing row's id, which wins.
+    lesson_shared_ids: List[str] = []
     if not dry_run and typed_lessons:
+        import uuid as _uuid
         for lesson_text, lesson_type in typed_lessons:
+            _shared_id = str(_uuid.uuid4())[:8]
             try:
                 recorded = record_tiered_lesson(
                     lesson_text=lesson_text,
@@ -665,13 +675,18 @@ def reflect_and_record(
                     tier=MemoryTier.MEDIUM,
                     k_samples=1,  # single extraction → 0.5 confidence (F5)
                     lesson_type=lesson_type,
+                    lesson_id=_shared_id,
                 )
                 if getattr(recorded, "lesson_id", "") == "rejected":
                     tiered_failed += 1
                 else:
                     tiered_succeeded += 1
+                    # Reinforce path returns the pre-existing id — carry THAT
+                    # to the flat ledger so both point at the live row.
+                    _shared_id = getattr(recorded, "lesson_id", _shared_id) or _shared_id
             except Exception:
                 tiered_failed += 1  # recording must never block reflection
+            lesson_shared_ids.append(_shared_id)
 
     outcome = record_outcome(
         goal=goal,
@@ -680,6 +695,7 @@ def reflect_and_record(
         task_type=task_type,
         project=project,
         lessons=lessons,
+        lesson_ids=lesson_shared_ids or None,
         tokens_in=tokens_in,
         tokens_out=tokens_out,
         elapsed_ms=elapsed_ms,
@@ -838,8 +854,14 @@ def extract_deferred_lessons(
     # Same recording fan-out as the finalize-time path, minus row append.
     tiered_succeeded = 0
     tiered_failed = 0
+    # UU-4: same shared-id thread as reflect_and_record — this deferred path
+    # is the one the 2026-08-01 cold chlorination run actually took
+    # (mode=deferred), where the id divergence was observed live.
+    deferred_shared_ids: list = []
     if not dry_run:
+        import uuid as _uuid
         for lesson_text, lesson_type in typed_lessons:
+            _shared_id = str(_uuid.uuid4())[:8]
             try:
                 recorded = record_tiered_lesson(
                     lesson_text=lesson_text,
@@ -849,15 +871,21 @@ def extract_deferred_lessons(
                     tier=MemoryTier.MEDIUM,
                     k_samples=1,
                     lesson_type=lesson_type,
+                    lesson_id=_shared_id,
                 )
                 if getattr(recorded, "lesson_id", "") == "rejected":
                     tiered_failed += 1
                 else:
                     tiered_succeeded += 1
+                    _shared_id = getattr(recorded, "lesson_id", _shared_id) or _shared_id
             except Exception:
                 tiered_failed += 1  # recording must never block deferred delivery
-    for lesson_text in lessons:
+            deferred_shared_ids.append(_shared_id)
+    for _idx, lesson_text in enumerate(lessons):
         if lesson_text.strip():
+            _shared = ""
+            if _idx < len(deferred_shared_ids):
+                _shared = str(deferred_shared_ids[_idx] or "")
             _store_lesson(
                 task_type=outcome.task_type,
                 outcome=outcome.status,
@@ -865,6 +893,7 @@ def extract_deferred_lessons(
                 source_goal=outcome.goal,
                 goal_achieved=outcome.goal_achieved,
                 goal_verdict_source=outcome.goal_verdict_source,
+                lesson_id=_shared,
             )
     _log_lesson_extraction(
         outcome_id=outcome.outcome_id,

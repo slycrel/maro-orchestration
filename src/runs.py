@@ -893,6 +893,7 @@ def record_llm_call(prompt, response_text, *, backend="", model="",
                     tool_events=None, tokens_in=None, tokens_out=None,
                     max_tokens_requested=None,
                     purpose: str = "",
+                    error: str = "",
                     run_dir: Optional[Path] = None) -> Optional[Path]:
     """Persist one LLM call to `<run-dir>/build/calls/call-NNNNN.json` (scrubbed).
 
@@ -927,6 +928,14 @@ def record_llm_call(prompt, response_text, *, backend="", model="",
             # call record alone (not every backend enforces max_tokens).
             "max_tokens_requested": max_tokens_requested,
             "purpose": purpose or "",
+            # UU-1 (BACKLOG LT arc): failed/killed attempts get a record too.
+            # Before this, a timeout-killed call left ZERO bytes — the cold
+            # chlorination run's most expensive wall-clock event (10min step-1
+            # kill) was unrecoverable. On error records, `response` holds
+            # whatever partial output the transport salvaged and `error` names
+            # why it ended. Consumers treat error-records as attempts, not
+            # results. Scrubbed with everything else.
+            "error": str(error)[:500] if error else "",
             "ts": datetime.now(timezone.utc).isoformat(),
         })
         out = calls / f"call-{seq:05d}.json"

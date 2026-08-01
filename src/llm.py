@@ -745,6 +745,32 @@ class FailoverAdapter(LLMAdapter):
                 return result
             except Exception as exc:
                 last_exc = exc
+                # UU-1: record the FAILED attempt before anything else — a
+                # killed/timed-out call used to leave zero bytes in
+                # build/calls/ (record-mode rode the success path only), so
+                # the most expensive wall-clock events were unrecoverable.
+                # TimeoutExpired carries partial stdout (`output`); the probe
+                # kill path stamps `maro_partial_output` + `maro_kill_reason`.
+                # Best-effort by the same law as the success-path record:
+                # capture must never affect the request outcome.
+                try:
+                    from runs import record_llm_call as _rec_fail
+                    _partial = (getattr(exc, "maro_partial_output", None)
+                                or getattr(exc, "output", None) or "")
+                    if isinstance(_partial, bytes):
+                        _partial = _partial.decode("utf-8", errors="replace")
+                    _reason = getattr(exc, "maro_kill_reason", "") or str(exc)[:200]
+                    _rec_fail(
+                        self._render_for_record(messages),
+                        _partial,
+                        backend=getattr(adapter, "backend", ""),
+                        model=getattr(adapter, "model_key", "") or "",
+                        max_tokens_requested=max_tokens,
+                        purpose=_purpose,
+                        error=f"{type(exc).__name__}: {_reason}",
+                    )
+                except Exception:
+                    pass
                 from llm_errors import (AUTH_ACTIONABLE, BILLING_ACTIONABLE,
                                         BackendError, classify_error,
                                         is_actionable)

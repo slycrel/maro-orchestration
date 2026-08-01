@@ -810,3 +810,80 @@ class TestDecisionLiveness:
         r = recall("record the decree decisions line", slice="loop",
                    project="some-project")
         assert "GOAL_BRAIN Decisions line" in r.decisions
+
+
+class TestSharedLessonIds:
+    """UU-4 (BACKLOG LT arc): one extraction event dual-writes each lesson to
+    the tiered store and the flat ledger; the rows must share one id so
+    "was run A's lesson applied in run B?" is answerable by join. The
+    2026-08-01 warm-arm forensics reached a wrong conclusion because they
+    didn't."""
+
+    def test_fresh_mint_shares_id_across_stores(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        from memory import reflect_and_record
+
+        class _Adapter:
+            def complete(self, messages, **kwargs):
+                class _R:
+                    content = json.dumps([
+                        {"lesson": "Novel shared-id lesson about turnip futures",
+                         "type": "planning"}])
+                    input_tokens = 1
+                    output_tokens = 1
+                return _R()
+
+        reflect_and_record(
+            goal="a goal about turnip futures",
+            status="done",
+            result_summary="did the thing",
+            task_type="research",
+            adapter=_Adapter(),
+        )
+        # Flat ledger row
+        flat = [json.loads(l) for l in
+                (tmp_path / "memory" / "lessons.jsonl").read_text().splitlines()
+                if l.strip() and "turnip" in l]
+        assert flat, "flat ledger row missing"
+        # Tiered row (medium)
+        tiered_path = tmp_path / "memory" / "medium" / "lessons.jsonl"
+        tiered = [json.loads(l) for l in tiered_path.read_text().splitlines()
+                  if l.strip() and "turnip" in l]
+        assert tiered, "tiered row missing"
+        assert flat[-1]["lesson_id"] == tiered[-1]["lesson_id"], (
+            "fresh mint must share one id across stores (UU-4)")
+
+    def test_reinforce_keeps_existing_tiered_id(self, monkeypatch, tmp_path):
+        """Near-duplicate: the tiered store reinforces its EXISTING row; the
+        flat ledger must join to THAT id, not a fresh one."""
+        _setup(monkeypatch, tmp_path)
+        from memory import reflect_and_record, record_tiered_lesson, MemoryTier
+
+        pre = record_tiered_lesson(
+            "Novel shared-id lesson about turnip futures",
+            "research", "done", source_goal="earlier goal",
+            tier=MemoryTier.MEDIUM,
+        )
+
+        class _Adapter:
+            def complete(self, messages, **kwargs):
+                class _R:
+                    content = json.dumps([
+                        {"lesson": "Novel shared-id lesson about turnip futures",
+                         "type": "planning"}])
+                    input_tokens = 1
+                    output_tokens = 1
+                return _R()
+
+        reflect_and_record(
+            goal="a second goal about turnip futures",
+            status="done",
+            result_summary="did it again",
+            task_type="research",
+            adapter=_Adapter(),
+        )
+        flat = [json.loads(l) for l in
+                (tmp_path / "memory" / "lessons.jsonl").read_text().splitlines()
+                if l.strip() and "turnip" in l]
+        assert flat and flat[-1]["lesson_id"] == pre.lesson_id, (
+            "reinforce path must carry the existing tiered id to the flat row")

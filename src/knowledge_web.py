@@ -259,6 +259,7 @@ def record_tiered_lesson(
     lesson_type: str = "",
     provisional: bool = False,
     minted_from: str = "",
+    lesson_id: str = "",
 ) -> TieredLesson:
     """Record a new lesson at the given tier.
 
@@ -390,8 +391,11 @@ def record_tiered_lesson(
         if _novelty_term_enabled():
             score = base + NOVELTY_BONUS * novelty
 
+        # UU-4: shared-id support for dual-writing callers — fresh mints only;
+        # the near-duplicate reinforce path returns the existing row with its
+        # original id (see memory_ledger._store_lesson for the same contract).
         tl = TieredLesson(
-            lesson_id=str(uuid.uuid4())[:8],
+            lesson_id=lesson_id or str(uuid.uuid4())[:8],
             task_type=task_type,
             outcome=outcome,
             lesson=lesson_text,
