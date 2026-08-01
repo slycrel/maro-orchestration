@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import textwrap
 from pathlib import Path
 from typing import List, Optional
@@ -161,6 +162,64 @@ def is_boundary_step(step: str) -> bool:
 def strip_boundary_tag(step: str) -> str:
     """Remove the [boundary] tag from a step string."""
     return re.sub(_BOUNDARY_RE_STR, "", step or "").strip()
+
+
+# ---------------------------------------------------------------------------
+# Recon step flavor (compound-thinking §4/§9.2, graduated from star 2026-08-01)
+# ---------------------------------------------------------------------------
+# A recon step buys map edits (resolved/surfaced unknowns, edges, cost
+# estimates), not deliverable progress — so it gets a different execution
+# contract (step_exec) and a different verification question
+# (verification_agent). The flavor rides the step string as an inline tag,
+# like [after:N] and [boundary]: it survives manifests, checkpoint resume,
+# splits and injections with zero side-channel plumbing.
+#
+#   [recon: <the pending decision this answer informs>]   — typed, VOI named
+#   [recon]                                               — typed, VOI missing
+#
+# The VOI gate (star contract: "no decision named, no recon run") is
+# prompting-side: DECOMPOSE gets the rule via RECON_FLAVOR_RULES, gated on
+# `planner.recon_flavor`. Detection here is deliberately UNGATED (chunk-6
+# killswitch precedent: the switch kills emission, never measurement) — a
+# marker that arrives from any source is honored, and a bare [recon] keeps
+# its flavor rather than being silently demoted to a commit step that would
+# then be verified with the wrong question.
+
+_RECON_RE = re.compile(r"\[recon(?::\s*([^\]]*))?\]")
+
+
+def step_flavor(step: str) -> tuple:
+    """Classify a step string's flavor.
+
+    Returns (flavor, voi): ("recon", "<decision text>") for a tagged step
+    (voi "" when the tag names no decision), ("commit", "") otherwise.
+    """
+    if step:
+        m = _RECON_RE.search(step)
+        if m:
+            return "recon", (m.group(1) or "").strip()
+    return "commit", ""
+
+
+def strip_recon_tag(step: str) -> str:
+    """Remove the [recon...] tag from a step string."""
+    return _RECON_RE.sub("", step or "").strip()
+
+
+RECON_FLAVOR_RULES = textwrap.dedent("""\
+    STEP FLAVOR — COMMIT vs RECON:
+    Most steps are commit steps: they buy deliverable progress. Some steps
+    exist only to buy INFORMATION — a survey, a feasibility probe, reading
+    one file to learn its shape. Mark those with a [recon: ...] tag naming
+    the pending decision the answer informs:
+      "List all modules in src/ and categorize by function [recon: decides which modules the refactor steps target]"
+    The named decision is required (value-of-information gate): if you cannot
+    say which later choice the answer would change, the step is ritual
+    exploration — cut it or fold it into the step that needs the answer.
+    Commit steps stay unmarked. Recon steps are judged on whether they
+    actually changed the picture (new facts, surfaced unknowns, cost
+    estimates), not on deliverable progress — mark honestly.
+""").strip()
 
 
 @dataclass
@@ -426,8 +485,6 @@ DECOMPOSE_SYSTEM = DECOMPOSE_SYSTEM + "\n\n" + ANTI_SYCOPHANCY_RULES
 # step transcript contained a single twitter invocation. The static prompt
 # block above states the rule; this detector makes it loud for the specific
 # goal, and reaches the lanes the extras don't (staged-pass, compose).
-
-import re
 
 _PRIORITY_ORDER_RE = re.compile(
     r"\bin\s+(?:priority\s+order|order\s+of\s+priority)\b"
@@ -772,6 +829,18 @@ def decompose(
         except Exception:
             pass
     extras = [x for x in [skills_context, ancestry_context, lessons_context, cost_context] if x]
+
+    # Recon step flavor (compound-thinking §4/§9.2). The killswitch gates
+    # EMISSION only — with it off the planner is never taught the tag, so no
+    # new recon steps appear; downstream detection (step_exec /
+    # verification_agent) stays unconditional so markers already in flight
+    # keep their honest verification.
+    try:
+        from config import get as _cfg_get_recon
+        if bool(_cfg_get_recon("planner.recon_flavor", True)):
+            extras.append(RECON_FLAVOR_RULES)
+    except Exception:
+        pass
 
     # Auto-inject user context if available (capped at 500 chars per file
     # to avoid inflating decomposition token cost). Resolution: workspace

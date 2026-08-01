@@ -2,7 +2,36 @@
 
 What to do next, in what order. Updated each session. Deferred ideas live in BACKLOG.md; completed phase history in docs/history/ROADMAP_ARCHIVE.md (ROADMAP.md is a stub). This file is the executable queue.
 
-Last updated: 2026-07-27 — **§9.6 escalation payload SHIPPED
+Last updated: 2026-08-01 — **chunk-9 #2 recon flavor graduated to the
+runtime** (continuing Jeremy's delegated build order 8c7f5068 — star half
+shipped 2026-07-27, this is the src/ graduation "exercised in star first"
+was building toward). Flavor rides the step string as inline
+`[recon: <decision it informs>]` — the [after:N]/[boundary] convention,
+so it survives manifests/resume/splits with zero plumbing. planner:
+RECON_FLAVOR_RULES teach the tag + VOI gate in decompose (killswitch
+`planner.recon_flavor` gates EMISSION only; detection everywhere is
+unconditional — chunk-6 precedent). step_exec: tagged steps get the
+map-edit execution contract (both prompt lanes) + `flavor`/
+`recon_decision` stamped on every outcome shape. verification_agent:
+recon steps judged with the map-change question (_VERIFY_RECON_STEP_SYSTEM
+— honest negatives PASS, narration/unverifiable claims RETRY) at both
+ladder tiers by construction; verdict semantics unchanged. Bare [recon]
+keeps flavor (demotion = the wrong verification question). Cuts named in
+BACKLOG ("Recon-flavor upgrade edges"): no map store (§12 nudge 4), no
+structured map_edits field, no VOI hard-gate, no probe-armed verify, no
+blocked_on graduation (corpus-gated per the 07-27 record). 16 pins
+(tests/test_step_flavor.py). Record:
+docs/history/2026-08-01-recon-flavor-runtime.md. Same session:
+**promote-validation wired** (c45110c — adapter into
+maybe_auto_promote_skills, Voyager harness live first time since Phase
+32, SKILL_PROMOTED stamps validation: passed|unjudged|skipped) and
+**census M1 handoff closed** (312b6a6 — regenerated on the corrected
+instrument, seven decrees piped to the runtime journal; the cold/warm
+attribution rail reads recall_citations 10% / skills_manifest 55%
+since-first-seen — the LT-1 blockers, confirmed real coverage not
+denominator artifact).
+
+Previous checkpoint — 2026-07-27 — **§9.6 escalation payload SHIPPED
 simple-first** (continuing 9/10 per Jeremy's standing directive;
 implements his agenda item-3 decision verbatim: "single-chasm decision +
 one family-ROI context line; complex later"). New

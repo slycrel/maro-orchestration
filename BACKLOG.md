@@ -2602,6 +2602,36 @@ deferred rather than silently dropped:
     inspector report aggregates still average the 0.7 unjudged display
     value alongside real LLM scores; split or annotate when the report
     is next touched.
+- **Recon-flavor upgrade edges (chunk-9 #2 runtime slice shipped
+  2026-08-01, docs/history/2026-08-01-recon-flavor-runtime.md).** The
+  `[recon: <decision>]` tag + map-edit execution contract + map-change
+  verification question landed; the honest-good-enough boundary, each
+  edge independently upgradeable:
+  - *Structured map_edits return* — recon results are shaped by prompt
+    only; a `map_edits` field on complete_step (the chunk-3 `decisions`
+    pattern: validated, journaled, carried uncompressed) is the upgrade
+    when a consumer that reads structured map edits exists (reassess
+    seam, or the minimal map schema §12 nudge 4 says must emerge by
+    subtraction — never build the store first).
+  - *VOI hard-gate* — bare `[recon]` keeps its flavor with voi ""
+    (demoting it would hand the step the WRONG verification question);
+    outcome rows carry the denominator (`flavor` without
+    `recon_decision`). Gate at parse time only if live data shows
+    ritual-exploration recon surviving verification.
+  - *Probe-armed recon verification* — the recon verify question demands
+    claims name what settles them, but the verifier doesn't RUN probes;
+    wiring claim_probe (chunk-5b read-only allowlist machinery) into
+    recon verification is its own slice.
+  - *Recon-aware readout* — discretion_readout has no recon tabulation
+    yet; outcome rows now carry the fields (recon share, recon
+    verify-fail rate vs commit, VOI-missing rate).
+  - *Cuts-first probes untagged* — `_cuts_plan` probe steps are
+    recon-shaped but predate the tag; tagging them would give boundary
+    expansion honestly-verified probes (touches probe step text mid-run
+    — verify boundary-expansion carry first).
+  - *`strip_recon_tag` has no runtime consumer* — ships as the parser's
+    inverse (the [after:N] clean-display precedent); wire into display
+    surfaces (viz step lists, thread-brain lines) or drop at next touch.
 - **Persona auto-selection misroute.** Run 3 routed to creative-director
   (conf 0.8) for a spec/pricing research task. Harmless here; worth a
   look if it recurs on research-shaped goals.

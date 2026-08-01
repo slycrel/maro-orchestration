@@ -594,6 +594,27 @@ as honest-good-enough slices with named upgrade edges + revisit items, and
 independent lanes fanned out to subagents rather than serialized through
 him.
 
+**#2 runtime slice SHIPPED 2026-08-01** (recon flavor graduated from the
+star contract to src/, per "exercised in star first" — two star exercises
+proved the shape). The flavor rides the step string as an inline
+`[recon: <decision it informs>]` tag (the [after:N]/[boundary]
+convention — survives manifests, resume, splits, injections with zero
+side-channel plumbing). Consumers shipped together: decompose teaches
+the tag + the VOI rule as prompting (`planner.RECON_FLAVOR_RULES`,
+killswitch `planner.recon_flavor` gates EMISSION only — detection stays
+unconditional per the chunk-6 precedent); tagged steps get a map-edit
+execution contract (§4's return type: resolved/surfaced unknowns, edges
+naming what settles them, cost estimates) and the map-change
+verification question at every ladder tier (both tiers route through
+VerificationAgent — one detection covers hosted-free and paid by
+construction); `flavor`/`recon_decision` stamp every outcome shape.
+Deliberate cuts, tracked in BACKLOG: no landmark/map store (§12 nudge 4
+stands), no structured map_edits field or uncompressed carry, no VOI
+hard-gate (bare `[recon]` keeps its flavor — demotion would hand it the
+WRONG verification question), no probe execution at verify time, no
+blocked_on graduation (the 07-27 record's own gate: wait for the
+corpus). Record: docs/history/2026-08-01-recon-flavor-runtime.md.
+
 ## 14. Diagnosis at the failure boundary (Jeremy + fable, 2026-07-27)
 
 The scientific method was already here in pieces without the name:

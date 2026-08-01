@@ -321,6 +321,29 @@ _LONG_LIVED_PROCESS_EXTRA = textwrap.dedent("""\
 """).strip()
 
 
+# Recon step flavor (compound-thinking §4, graduated from the star contract
+# 2026-08-01): a [recon: ...] tagged step buys INFORMATION, not deliverable
+# progress. The executor is told what a recon return must contain; the
+# matching verification question lives in verification_agent. {voi} is the
+# pending decision the planner named in the tag.
+_RECON_STEP_EXTRA = textwrap.dedent("""\
+
+    RECON STEP — this step buys information, not deliverable progress.
+    It informs this pending decision: {voi}
+    Your result must be MAP EDITS, not narration:
+      - unknowns RESOLVED: what is now known, with the evidence (file, line,
+        command output) that establishes it
+      - unknowns SURFACED: what you discovered we don't know yet
+      - edges: claims about what connects / works / fails — each claim must
+        name what settles it (a command to run, a file to read, a check)
+      - reachability-and-cost estimates, when the question is feasibility
+    A recon result that changes nothing about the picture — a summary of
+    what was already known, or claims naming no way to check them — is a
+    failed step. Do NOT do the downstream work here; report what you
+    learned so the decision can be made.
+""").strip()
+
+
 # ---------------------------------------------------------------------------
 # Escape-pattern detectors (BACKLOG #23a / #23g)
 # ---------------------------------------------------------------------------
@@ -1067,6 +1090,23 @@ def execute_step(
     _step_type = _classify_step(step_text)
     log.debug("step %d type=%s", step_num, _step_type)
 
+    # Recon flavor (compound-thinking §4): detection is unconditional — the
+    # planner.recon_flavor killswitch gates tag EMISSION only, so a marker
+    # that arrives from any source (planner, injected step, hand-written
+    # goal) gets the recon contract rather than a deliverable prompt.
+    _flavor, _recon_voi = "commit", ""
+    try:
+        from planner import step_flavor as _step_flavor
+        _flavor, _recon_voi = _step_flavor(step_text)
+    except Exception:
+        pass
+    _recon_block = ""
+    if _flavor == "recon":
+        _recon_block = "\n\n" + _RECON_STEP_EXTRA.format(
+            voi=_recon_voi
+            or "(none named — surface what you judge decision-relevant)")
+        log.debug("step %d flavor=recon voi=%r", step_num, _recon_voi[:80])
+
     # Pre-check: detect data-heavy steps and inject stronger enforcement
     _data_heavy = _is_data_heavy_step(step_text)
     _pipeline_block = ""
@@ -1102,7 +1142,8 @@ def execute_step(
         f"{prefetch_block}"
         f"{_pipeline_block}"
         f"{_artifact_block}"
-        f"{_long_lived_block}\n\n"
+        f"{_long_lived_block}"
+        f"{_recon_block}\n\n"
         f"Complete this step now. Call complete_step when done or flag_stuck if blocked."
     )
     # When a compatible per-boundary Claude session is already live, all prior
@@ -1133,6 +1174,7 @@ def execute_step(
         f"{_pipeline_block}"
         f"{_artifact_block}"
         f"{_long_lived_block}"
+        f"{_recon_block}"
         f"{_incremental_block}\n\n"
         "Complete this step now. Call complete_step when done or flag_stuck if blocked."
     )
@@ -1689,6 +1731,14 @@ def execute_step(
         _outcome["provider_cost_usd"] = _provider_cost_usd
         _outcome["executor_session_id"] = _executor_session_id[:8]
         _outcome["executor_session_resumed"] = _executor_session_resumed
+        # Flavor rides every outcome shape (done/blocked/error) — a recon
+        # step that got stuck is still a recon step to every downstream
+        # reader (ledger, learning, readouts). Commit steps stay unstamped:
+        # absence = the default flavor, matching the step-string convention.
+        if _flavor == "recon":
+            _outcome["flavor"] = "recon"
+            if _recon_voi:
+                _outcome["recon_decision"] = _recon_voi[:200]
 
     return _outcome
 

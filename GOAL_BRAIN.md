@@ -5680,3 +5680,23 @@ pre-chunk NOW/evolver rows honestly unjudged going forward from here.
   ("the 3% all-time stock is April-era pre-verdict rows"), which is also why
   `python3 -m verdict_flow` — not this census — is the authority on
   verdictability.
+- **2026-08-01** — Chunk-9 #2 runtime slice SHIPPED (continuing the
+  delegated build order 8c7f5068; star half 2026-07-27). Recon is now a
+  typed step flavor in src/: inline `[recon: <decision it informs>]` tag
+  (the [after:N]/[boundary] convention — survives manifests/resume/
+  splits with zero plumbing), RECON_FLAVOR_RULES + VOI gate taught in
+  decompose behind `planner.recon_flavor` (EMISSION-only killswitch;
+  detection at every consumer unconditional per the chunk-6 precedent),
+  map-edit execution contract + `flavor`/`recon_decision` outcome stamp
+  on every outcome shape, and the map-change verification question
+  (_VERIFY_RECON_STEP_SYSTEM — honest negatives PASS) at both ladder
+  tiers by construction. Bare [recon] keeps flavor (demotion would
+  assign the deliverable question — the exact dishonesty this fixes).
+  Cuts as named upgrade edges in BACKLOG ("Recon-flavor upgrade edges");
+  blocked_on/§14 graduation stays corpus-gated per the 07-27 record's
+  own routing. 16 pins in tests/test_step_flavor.py. Record:
+  docs/history/2026-08-01-recon-flavor-runtime.md. Same session:
+  promote-validation wired (c45110c) and the census M1 handoff closed
+  (312b6a6 — seven decrees piped to the runtime journal; the sidequest's
+  two rail numbers confirmed live: recall_citations 10% /
+  skills_manifest 55% since-first-seen).

@@ -54,6 +54,40 @@ _VERIFY_STEP_SYSTEM = textwrap.dedent("""\
 """).strip()
 
 
+# Recon steps (a [recon: ...] tag in the step text) buy map edits, not
+# deliverable progress — so the verification question changes (compound-
+# thinking §4: "you check a recon return against 'did the map actually
+# change, and is that new edge real or hallucinated?'"). Same JSON contract
+# and verdict semantics as the standard prompt; only the question differs.
+_VERIFY_RECON_STEP_SYSTEM = textwrap.dedent("""\
+    You are a verification agent. A RECONNAISSANCE step in an autonomous task
+    just completed. Recon steps exist to buy information — their result is
+    judged on whether it actually changed the picture, not on deliverable
+    progress.
+
+    PASS: the result contains at least one concrete map edit —
+      - an unknown RESOLVED, with the evidence (file, line, command output)
+        that establishes it;
+      - an unknown SURFACED that was not part of the question;
+      - a claimed connection/edge that names what settles it (a command, a
+        file, a check someone could run);
+      - a reachability-and-cost estimate with its basis.
+    RETRY: the result is narration that changes nothing — a restatement of
+    what was already known, generic advice, or claims that name no way to
+    check them. A claimed edge that cannot be probed is hallucination-shaped:
+    say so in your reason.
+    RETRY also when the result PROMISES future or background completion
+    instead of reporting findings — a promise is not information; the step
+    must re-execute SYNCHRONOUSLY.
+
+    Respond with JSON only:
+    {"verdict": "PASS" or "RETRY", "reason": "one sentence", "confidence": 0.0-1.0}
+
+    Be strict but fair. A modest, honest finding ("X is not configured; the
+    edge is closed") is a real map edit and PASSES.
+""").strip()
+
+
 # ---------------------------------------------------------------------------
 # Result types
 # ---------------------------------------------------------------------------
@@ -117,6 +151,19 @@ class VerificationAgent:
         if not result.strip():
             return StepVerdict(passed=False, reason="empty result", confidence=1.0)
 
+        # Recon steps get the map-change question instead of the deliverable
+        # question. Detection from the step text itself (the tag rides the
+        # string through every pipeline stage), so all ladder tiers —
+        # hosted-free and paid — ask the same flavor-correct question with
+        # zero call-site changes.
+        _system = _VERIFY_STEP_SYSTEM
+        try:
+            from planner import step_flavor as _step_flavor
+            if _step_flavor(step_text)[0] == "recon":
+                _system = _VERIFY_RECON_STEP_SYSTEM
+        except Exception:
+            pass
+
         _evidence = ""
         if artifacts_note:
             _evidence = (
@@ -127,7 +174,7 @@ class VerificationAgent:
             from llm import LLMMessage
             resp = self._adapter.complete(
                 [
-                    LLMMessage("system", _VERIFY_STEP_SYSTEM),
+                    LLMMessage("system", _system),
                     LLMMessage("user",
                         f"Step goal: {step_text}\n\n"
                         f"Step result (first {self._max_input_chars} chars):\n"
