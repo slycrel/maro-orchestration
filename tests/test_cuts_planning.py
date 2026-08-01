@@ -20,6 +20,7 @@ from planner import (
     decompose,
     draw_cuts,
     is_boundary_step,
+    step_flavor,
     strip_boundary_tag,
 )
 
@@ -63,14 +64,18 @@ _BOUNDED_JSON = json.dumps({
 })
 
 
-def _cuts_config(monkeypatch, enabled=True):
-    """Point config.get('planner.cuts_first') at `enabled`, pass through the rest."""
+def _cuts_config(monkeypatch, enabled=True, recon=True):
+    """Point config.get('planner.cuts_first') at `enabled` and
+    'planner.recon_flavor' at `recon` (hermetic vs box config), pass through
+    the rest."""
     import config as _config
     _orig = _config.get
 
     def _fake_get(key, default=None):
         if key == "planner.cuts_first":
             return enabled
+        if key == "planner.recon_flavor":
+            return recon
         return _orig(key, default)
 
     monkeypatch.setattr(_config, "get", _fake_get)
@@ -148,8 +153,8 @@ class TestCutsPlan:
         cuts = Cuts(known_constraints=["c"], probes=["probe one", "probe two"],
                     bounded=False, remainder="finish the work")
         plan = _cuts_plan(cuts, "the goal")
-        assert plan[0] == "probe one"
-        assert plan[1] == "probe two"
+        assert plan[0].startswith("probe one")
+        assert plan[1].startswith("probe two")
         assert is_boundary_step(plan[2])
         assert "finish the work" in plan[2]
 
@@ -157,6 +162,52 @@ class TestCutsPlan:
         cuts = Cuts(probes=["probe"], remainder="")
         plan = _cuts_plan(cuts, "the original goal")
         assert "the original goal" in plan[-1]
+
+
+class TestCutsPlanReconTags:
+    """Probes are recon by construction — _cuts_plan tags them
+    deterministically (the cuts lane returns before the taught decompose,
+    so prompt-side emission never reaches it; 2026-08-01 smokes)."""
+
+    def test_probes_carry_recon_tag_with_remainder_voi(self):
+        cuts = Cuts(probes=["grep the readers", "read the store module"],
+                    remainder="pick the storage backend and implement it")
+        plan = _cuts_plan(cuts, "the goal")
+        for probe in plan[:-1]:
+            flavor, voi = step_flavor(probe)
+            assert flavor == "recon"
+            assert "pick the storage backend" in voi
+
+    def test_boundary_step_stays_commit_flavored(self):
+        cuts = Cuts(probes=["probe"], remainder="finish")
+        plan = _cuts_plan(cuts, "the goal")
+        assert is_boundary_step(plan[-1])
+        assert step_flavor(plan[-1])[0] == "commit"
+
+    def test_tagging_gated_by_tag_probes(self):
+        cuts = Cuts(probes=["probe one"], remainder="finish")
+        plan = _cuts_plan(cuts, "the goal", tag_probes=False)
+        assert plan[0] == "probe one"
+        assert step_flavor(plan[0])[0] == "commit"
+
+    def test_remainder_brackets_sanitized_in_voi(self):
+        # ']' inside the tag would terminate it early and leave garbage in
+        # the step text — _cuts_plan strips brackets from the VOI.
+        cuts = Cuts(probes=["probe"],
+                    remainder="handle [after:2] style tags in the [store]")
+        plan = _cuts_plan(cuts, "the goal")
+        flavor, voi = step_flavor(plan[0])
+        assert flavor == "recon"
+        assert "[" not in voi and "]" not in voi
+        assert "store" in voi
+        # Nothing dangles after the tag closes.
+        assert plan[0].rstrip().endswith("]")
+
+    def test_already_tagged_probe_not_double_tagged(self):
+        cuts = Cuts(probes=["probe [recon: decides X]"], remainder="finish")
+        plan = _cuts_plan(cuts, "the goal")
+        assert plan[0].count("[recon") == 1
+        assert step_flavor(plan[0]) == ("recon", "decides X")
 
 
 # ---------------------------------------------------------------------------
@@ -209,6 +260,27 @@ class TestDecomposeCutsFirst:
         adapter, calls = _adapter_returning("not json at all", '["step one"]')
         steps = decompose("check the config timeout value", adapter, max_steps=4)
         assert steps == ["step one"]
+
+    def test_cuts_probes_are_recon_flavored_live(self, monkeypatch):
+        """The live path: probes leave decompose already recon-tagged, with
+        the boundary plan as the named decision."""
+        _cuts_config(monkeypatch, enabled=True, recon=True)
+        adapter, calls = _adapter_returning(_CUTS_JSON)
+        steps = decompose("find non-ethanol gas near Manti", adapter, max_steps=8)
+        flavor, voi = step_flavor(steps[0])
+        assert flavor == "recon"
+        assert "verify ethanol-free availability" in voi
+        assert is_boundary_step(steps[-1])
+        assert step_flavor(steps[-1])[0] == "commit"
+
+    def test_recon_flavor_off_leaves_probes_untagged(self, monkeypatch):
+        """Emission killswitch covers the cuts lane too — OFF means the
+        probe text is exactly what draw_cuts returned."""
+        _cuts_config(monkeypatch, enabled=True, recon=False)
+        adapter, calls = _adapter_returning(_CUTS_JSON)
+        steps = decompose("find non-ethanol gas near Manti", adapter, max_steps=8)
+        assert steps[0] == "Search for Maverik station locations within 15 miles of Manti, Utah"
+        assert step_flavor(steps[0])[0] == "commit"
 
 
 # ---------------------------------------------------------------------------

@@ -125,3 +125,44 @@ mainline); strip_recon_tag deletion (already a named edge). The
 the durable carrier is the step TEXT; the dict stamp is in-process
 convenience. 6 new pins (22 total). Full record:
 docs/history/2026-08-01-recon-flavor-adversarial-review.md.
+
+## Cuts-lane emission fix (same day, Jeremy: "Let's fix the tags")
+
+Two live decompose smokes — one evaluate-shaped goal, one build-shaped,
+both phrased "find out X first, that decides Y" — produced ZERO recon
+tags. Both routed through the cuts-first lane, which short-circuits into
+`_cuts_plan` (string assembly of draw_cuts probes + boundary step) and
+returns before the taught decompose ever runs; RECON_FLAVOR_RULES only
+rides the normal extras and the staged lane. So with `planner.cuts_first`
+on, the probe phase — which IS the recon phase — could never be tagged;
+only post-boundary re-planning could. This was the named BACKLOG edge
+("Cuts-first probes untagged"); the smokes upgraded it from watch to fix.
+
+Fix is deterministic, not prompt work: `_cuts_plan` tags each probe
+`[recon: decides the boundary plan — <remainder>]` (probes are recon by
+construction; the VOI is the boundary plan they inform). Bracket
+characters are stripped from the VOI text (`]` would terminate the tag
+early at parse time) and it's capped at 140 chars; already-tagged probes
+are not double-tagged. Gated on the same `planner.recon_flavor` emission
+killswitch via a `tag_probes` kwarg — detection stays unconditional.
+
+Seams verified before shipping: boundary expansion embeds probe text
+verbatim in `- Probe:` evidence lines (tag rides along, harmless and
+informative) and nothing exact-matches probe text; parse_dependencies
+strips only [after:N]. One newly-reachable seam guarded: milestone
+expansion (loop_execute) decomposes the step's raw text into sub-steps,
+which would strand the tag and swap the map-edit contract for a
+commit-shaped sub-plan — recon steps are now exempt, same class as the
+`_shape_steps` skip.
+
+Tests: 7 new + 2 updated in test_cuts_planning (tag + VOI, boundary
+stays commit, killswitch off leaves probe text byte-identical, bracket
+sanitization, no double-tag, live-path decompose on/off) + 1 in
+test_agent_loop (milestone expansion skips recon — exactly one decompose
+call). Live smoke re-run: the same survey goal now emits
+`[recon: decides the boundary plan — ...]` on its probe.
+
+Still open from the smokes: the subprocess backend does not enforce
+`max_tokens` (cuts call requested 700, got 957/759 — warning fires,
+cap is advisory). Not this slice; noted for the caps-as-circuit-breakers
+posture.

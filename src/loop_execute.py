@@ -489,11 +489,17 @@ def _execute_main_loop(
         # Phase 58: Milestone-aware expansion — if pre-flight flagged this step as a
         # milestone candidate, pre-decompose it into sub-steps before executing.
         # Only at depth 0 to prevent recursive explosion. Skip if already expanded.
+        # Recon steps are exempt (same reason as the _shape_steps skip): they are
+        # single information-buying actions, and expansion rebuilds the text into
+        # sub-steps — stranding the [recon: ...] tag and swapping the map-edit
+        # contract for a commit-shaped sub-plan.
+        from planner import step_flavor as _lx_step_flavor
         _would_be_step_idx = step_idx + 1  # 1-based index this step will get
         if (_pf_review is not None
                 and continuation_depth == 0
                 and _would_be_step_idx in _pf_review.milestone_step_indices
-                and _would_be_step_idx not in _milestone_expanded):
+                and _would_be_step_idx not in _milestone_expanded
+                and _lx_step_flavor(step_text)[0] != "recon"):
             _milestone_expanded.add(_would_be_step_idx)
             try:
                 from planner import decompose as _ms_decompose

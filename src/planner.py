@@ -345,20 +345,40 @@ def draw_cuts(
     return cuts
 
 
-def _cuts_plan(cuts: Cuts, goal: str) -> List[str]:
+def _cuts_plan(cuts: Cuts, goal: str, *, tag_probes: bool = True) -> List[str]:
     """Build the probe-first plan from a Cuts result.
 
     Probes run as normal sequential steps; the boundary step is expanded at
     execution time with their findings in context (loop_execute.py). The
     remainder text keeps the original goal visible so expansion doesn't
     drift from the ask.
+
+    Probes are recon by construction — each exists to collapse an unknown
+    before the boundary plan is drawn — so they get the [recon: ...] tag
+    deterministically here, VOI = the boundary plan they inform. Prompt-side
+    teaching can't cover this lane: draw_cuts never sees RECON_FLAVOR_RULES,
+    and the cuts path returns before the taught decompose runs, so live
+    goals routed through cuts-first shipped textbook recon steps untagged
+    (2026-08-01 smokes). tag_probes rides the same `planner.recon_flavor`
+    emission killswitch as the teaching; detection stays unconditional.
     """
     remainder = cuts.remainder or f"complete the goal: {goal}"
+    probes = list(cuts.probes)
+    if tag_probes:
+        # Brackets inside the tag would terminate it early at parse time
+        # (_RECON_RE stops at the first ']') — keep the VOI text
+        # bracket-free and short.
+        _voi = re.sub(r"[\[\]]", "", remainder)[:140].strip()
+        probes = [
+            p if step_flavor(p)[0] == "recon"
+            else f"{p} [recon: decides the boundary plan — {_voi}]"
+            for p in probes
+        ]
     boundary = (
         f"Plan and complete the remaining bounded work using findings from "
         f"the prior steps: {remainder} {BOUNDARY_TAG}"
     )
-    return list(cuts.probes) + [boundary]
+    return probes + [boundary]
 
 
 # ---------------------------------------------------------------------------
@@ -951,7 +971,7 @@ def decompose(
                 except Exception:
                     pass
                 if cuts.probes:
-                    plan = _cuts_plan(cuts, goal)
+                    plan = _cuts_plan(cuts, goal, tag_probes=_recon_emission_on)
                     log.info("decompose cuts-first: %d probe(s) + boundary step", len(cuts.probes))
                     if verbose:
                         import sys

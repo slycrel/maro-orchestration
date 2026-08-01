@@ -2759,10 +2759,15 @@ deferred rather than silently dropped:
     tagged step in a fan-out lane gets the map-edit execution contract
     but no map-change verification. Upgrade rides whatever fixes
     parallel-lane verification generally, not a recon-specific patch.
-  - *Cuts-first probes untagged* — `_cuts_plan` probe steps are
-    recon-shaped but predate the tag; tagging them would give boundary
-    expansion honestly-verified probes (touches probe step text mid-run
-    — verify boundary-expansion carry first).
+  - ~~*Cuts-first probes untagged*~~ — CLOSED 2026-08-01: live smokes
+    showed the cuts lane intercepts exactly the survey-shaped goals and
+    shipped textbook recon probes untagged (the lane returns before the
+    taught decompose). Fixed deterministically in `_cuts_plan` (VOI =
+    the boundary plan), gated on the same `planner.recon_flavor`
+    emission killswitch; boundary-expansion carry verified (probe text
+    rides `- Probe:` evidence lines verbatim, nothing exact-matches);
+    milestone expansion exempts recon steps (text rebuilds strand the
+    tag — same class as the `_shape_steps` skip).
   - *`strip_recon_tag` has no runtime consumer* — ships as the parser's
     inverse (the [after:N] clean-display precedent); wire into display
     surfaces (viz step lists, thread-brain lines) or drop at next touch.

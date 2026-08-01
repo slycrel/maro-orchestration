@@ -2902,6 +2902,36 @@ def test_milestone_expansion_carries_step_ceiling(monkeypatch, tmp_path):
     assert "2-3 steps maximum" in kw["ancestry_context"]
 
 
+def test_milestone_expansion_skips_recon_steps(monkeypatch, tmp_path):
+    """A recon-flavored step is never milestone-expanded: expansion rebuilds
+    the text into sub-steps, stranding the [recon: ...] tag and swapping the
+    map-edit contract for a commit-shaped sub-plan (same exemption as
+    _shape_steps). Newly reachable live since cuts-first probes are tagged."""
+    _setup_workspace(monkeypatch, tmp_path)
+    from unittest.mock import MagicMock, patch
+
+    fake_pf = MagicMock()
+    fake_pf.milestone_step_indices = [1]
+    fake_pf.scope = "wide"
+    fake_pf.flags = []
+
+    _plan = ["survey the readers [recon: decides the boundary plan — pick a backend]",
+             "implement the change"]
+
+    with patch("pre_flight.review_plan", return_value=fake_pf):
+        with patch("planner.decompose", return_value=_plan) as mock_decompose:
+            run_agent_loop(
+                "do a complex analysis",
+                adapter=_DryRunAdapter(),
+                dry_run=False,
+                max_iterations=10,
+            )
+
+    # Exactly one decompose call — the initial plan. A second call would be
+    # the milestone sub-decompose of the flagged recon step.
+    assert mock_decompose.call_count == 1
+
+
 def test_milestone_step_expansion_only_at_depth_zero(monkeypatch, tmp_path):
     """Milestone expansion is skipped at continuation_depth > 0 to prevent recursion."""
     _setup_workspace(monkeypatch, tmp_path)
