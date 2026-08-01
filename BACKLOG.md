@@ -269,6 +269,255 @@ Container-on day-one findings (2026-07-16, two dispatched verification runs):
   exit's record guarantee).
 
 
+### LT. Live-learning test arc — target burndown, cold/warm deltas, capability ladder (OPENED 2026-07-31, Jeremy)
+
+Run live learning tests against goals we have **claimed but not probed**,
+measure whether learning actually levels up, and write down the capability
+progression those tests are climbing. The corpus problem is already solved
+— `docs/CAPABILITIES.md` holds 5 tiers of real asks under the claimed≠probed
+rule, and `research/ai-failure-task-patterns.md` holds 24 external failures
+in 6 families (7 already folded into the tiers). What's missing is
+**evidence**: the majority of catalog rows read `target` ("we believe
+current machinery covers it, unproven").
+
+Six shape decisions at open (Jeremy, 2026-07-31 — 5 and 6 same day, on
+review of the first draft):
+
+1. **Weighted to target-burndown**, not net-new. Every run should also
+   settle a standing claim. Net-new entries only where a corpus family is
+   thin in the tiers — Family 3 (tool-use/execution verification) and
+   Family 6 (agency/trust violations).
+2. **Instrumentation is a prerequisite, and wider than verdicts.** Jeremy:
+   "let's fix this, and audit anything we might want written down by the
+   runs that isn't already; we've already got lots of words on paper
+   trails, but I think we may be missing some of that still; the more we
+   can examine after (or even during) the runs, the better; both at the
+   edges of steps and in the different processing layers within the
+   overall harness."
+3. **"Leveled up" = cold-vs-warm re-run delta.** Every test goal runs
+   twice — once with the lesson/skill store cold, once warm. The delta
+   (cost, steps, verdict, which lesson/skill was cited) is the evidence.
+   Doubles spend; needs no new machinery and can't be self-graded.
+4. **The ladder gets its own short doc** — `docs/CAPABILITY_LADDER.md`.
+   CAPABILITIES.md stays the goal well; the ladder is the progression map.
+5. **A failure is never a success.** No goal may be graded pass-by-refusing;
+   goals shaped that way get reframed with a positive deliverable, and a
+   genuine miss is an unbuilt bridge, recorded as not-achieved. Full decree
+   in LT-1.
+6. **Trace the work and write it all down, before the batch runs.** Each
+   decision, LLM prompt and output, step plan, and artifact — durable and
+   meaningfully reachable by all three consumers (report, tests, mining).
+   The review pass comes first because "we keep stumbling on data that we
+   thought we had but didn't." Full decree + first-pass findings in LT-0(d).
+
+Vocabulary is already decreed — do not coin a parallel one.
+`COMPOUND_THINKING_DESIGN.md` §8: capability edges are the only edges that
+persist off the map, and "the tech tree IS the skill library / evolver." A
+level-up paid once amortizes across the goal family. The bridges in this
+arc are tech-tree nodes; the top rung of every ladder is a **skill
+capture**, which is what makes the rung amortize instead of evaporate.
+
+- [ ] **LT-0 — verdictability + paper-trail audit (PREREQ, blocks LT-1).**
+  A batch that can't be examined afterward teaches nothing; the
+  2026-07-29 packaging census already found real holes.
+  - [ ] **(a) Verdict-blind lanes.** NOW (20 rows) and evolver_verify (5,
+    accruing) record outcomes with no `loop_id`, so `stamp_outcome_verdict`
+    can never land — permanently unverdictable rows. Decide per lane
+    whether a verdict is even meaningful, THEN wire loop_id stamping or an
+    explicit exempt marker. (Claimed from the next-leap packaging item's
+    open bullet — same work, this arc is the consumer.)
+  - [ ] **(b) done-without-closure tripwire.** 5 of 51 loop_id-era agenda
+    rows are status=done with no verdict in either store (closure never
+    ran, not a stamp miss); 2 were same-day, so it's live and low-rate.
+    Captain's-log honesty event at finalize so the gap is visible.
+  - [x] **(c) Run-dir record census — TOOL BUILT 2026-07-31, awaiting a box
+    run.** `scripts/provenance_census.py` + `scripts/provenance-census.sh`.
+    Covers 16 artifacts across 10 harness stages (intake, scoping, recall,
+    skill-injection, llm-io, events, planning, step-exec, reporting,
+    curation, attribution), plus the verdictability join from
+    `outcomes.jsonl` that (a) and (b) need denominators for.
+
+    **BOX HANDOFF — run this, hand back `census.json`:**
+    ```bash
+    cd /home/clawd/claude/maro-orchestration
+    setsid nohup bash scripts/provenance-census.sh &   # detached
+    # artifacts → output/provenance_census/{census.json,census.txt}
+    ```
+    Safe to run against a working box **by construction**: read-only,
+    stdlib-only, and it deliberately does **not** import from `src` (the
+    sibling stats scripts do) — importing `config`/`ancestry` would load
+    workspace config and let the probe perturb the state it is measuring.
+    Wrapper runs it at `nice -n 15`.
+
+    Three design points that keep the numbers honest, worth knowing before
+    reading the output:
+    - **Per-lane applicability.** A NOW one-shot has no decompose phase, so
+      a missing loop plan there is correct, not a gap. Only artifacts
+      expected for that lane count against it.
+    - **In-flight runs are excluded** from coverage. A run mid-flight
+      legitimately lacks finalize artifacts; counting it would manufacture
+      findings.
+    - **Era bucketing at 2026-07-29** (the attribution seam's ship date).
+      A single whole-history rate would understate today's coverage and
+      hide a live regression, so pre/post columns are reported separately.
+
+    **Predictions, written down BEFORE the run** (claimed≠probed applied to
+    our own audit — so a surprising result can't be rationalized after the
+    fact):
+    | Artifact | Expected | If it comes back otherwise |
+    |---|---|---|
+    | `build/calls/` | near-100% post-era (record mode is documented default-ON) | EDGE 2 is live and large — record mode is effectively off in production and we have been reasoning about prompts we never kept |
+    | `source/scope.md`, `resolved_intent.md` | high on agenda runs (scope_generation is OFF for fresh installs but ON on this box since 2026-07-09) | the box's scope lane is not writing what we think it is |
+    | `source/recall_citations.json` | present on agenda runs that recalled anything | all-absent = the chunk-4 citation join is dead, and cold/warm attribution has no rail |
+    | `source/skill_attribution.json` | **LOW, and that is correct** — it only stamps on FULL-trust verdicts | do not read this row as a hole; it is gated by design |
+    | outcomes `no_loop_id` | roughly NOW-lane-sized | a larger share means agenda runs are losing the join too |
+
+    **The dev-Mac numbers are not a baseline.** The local workspace holds 3
+    runs, all from 2026-07-12 — a fossil predating several of these seams.
+    Recorded here so nobody later cites them as a "before" picture. (Local
+    output for shape-check only: 0/3 `build/calls/`, 0/1 scope +
+    resolved_intent + recall_citations on the single agenda run, 2/3
+    outcomes rows unverdictable, both NOW.)
+
+    **Re-run + diff is the protocol.** The first box `census.json` is the
+    committed baseline; after fixes, re-run and diff rather than re-eyeball.
+    Read the whole census before fixing anything — fixing the loudest row
+    first is how you miss the pattern underneath it.
+  - [ ] **(d) Full provenance trace — the decree, and the review pass that
+    precedes the batch.** Jeremy 2026-07-31: "we should be capturing each
+    decision, LLM prompt and output, step plan, and other artifacts along
+    the way; they should be meaningfully available to the end user via the
+    report we have as well as usable for testing and post-processing
+    examination of the data… We keep stumbling on data that we thought we
+    had but didn't for various reasons." **Three consumers, all binding:**
+    the run report (human), the test suite, and post-hoc mining. A stage
+    that writes nothing durable is a hole in all three at once.
+
+    **First-pass trace (2026-07-31, dev-Mac read of the code — findings,
+    not yet box-verified):**
+    - Confirmed sound: `runs.open_run` pins the run-dir *before*
+      `intent.classify` (handle.py:862 vs :961), so the routing call is
+      inside record-mode's window; `record_llm_call` is a single seam over
+      every backend in `FailoverAdapter.complete` (llm.py:713), scrubbed
+      via `secret_scrub`; `scope.md` / `resolved_intent.md` /
+      `recall_citations.json` / `skills_manifest.jsonl` are real run-dir
+      writes; the report already renders timeline, steps, LLM calls,
+      verdict, environment, run activity, decision points, and operator
+      injections.
+    - **EDGE 1 — the first decision of every run is unrecorded as data.**
+      `intent.classify` returns lane + confidence + reason +
+      introspects_self; only `lane` reaches `metadata.json`
+      (`write_metadata`'s field set is fixed: handle_id, nickname, prompt,
+      lane, model, started_at, ended_at, status, pid, + extra). The
+      confidence and the reason go to stderr under `--verbose` and
+      nowhere else. There is **no captain's-log event for classification**
+      (no INTENT_* type exists). The rationale is reconstructable only by
+      hand-parsing the `purpose="classify"` call record. This is the exact
+      decision that produced the Manti Run-1 misroute — and a cold/warm
+      batch measuring routing behavior has no queryable field for it.
+    - **EDGE 2 — record-mode is silently conditional.** `record_llm_call`
+      returns None (no error, no event) when recording is off OR no
+      run-dir is pinned. `_current_run_dir` is a **ContextVar**: threads
+      that don't inherit it write nothing. `loop_parallel` handles this
+      correctly (`contextvars.copy_context().run`, loop_parallel.py:469)
+      and `agent_loop`'s multi-goal pool opts out deliberately
+      (agent_loop.py:803, each goal owns its own run-dir) — but the
+      failure mode is *silence*, so any future call path off the pinned
+      context loses its prompt/response with nothing to detect it by.
+      Wants a tripwire: a run that finalizes with zero call records when
+      recording is enabled should say so out loud.
+    - **EDGE 3 — coverage is unmeasured.** No census exists for "did this
+      run write the artifacts it should have." Sub-item (c) is that
+      census; it needs to run on the box (the 3-run Mac sample is
+      unrepresentative).
+    - **The census measures presence, not sufficiency** — it counts files,
+      it cannot tell us a file carries the field we need. 100% coverage is
+      not the finish line. EDGE 1 is the proof: `metadata.json` is present
+      on every run and still doesn't carry the classification rationale.
+      These four need code reading, not filesystem counting, and can be
+      traced on the dev Mac while the box census runs:
+      - planner/decompose rationale — is *why this step shape* durable, or
+        only the resulting `plan.md`?
+      - step-edge input provenance — which lessons/skills/contributions
+        entered *this step* vs the run. `ContributionLedger` is typed and
+        provenance-stamped in memory (`loop_types.py`), and `drain()`
+        hands the batch to the merge point; whether the drained batch is
+        persisted per step is unverified.
+      - per-layer cost/latency attribution.
+      - mid-run examinability — every surface today is post-hoc
+        (report.html, viz server, log slice). Jeremy asked for "after (or
+        even during)"; "during" has no answer yet.
+
+    Deliverable: an integrity-gaps table in the shape of
+    `CAPTAINS_LOG_EVENTS.md`'s, but for run-dir artifacts and harness
+    layers — every stage listed with what it writes, where, and which of
+    the three consumers can actually see it — plus fixes for whatever is
+    cheap, and a census tripwire so the table can't rot the way the
+    event-contract doc did before its own tripwire landed.
+
+- [ ] **LT-1 — the batch (8 goals, cold+warm pairs).** Mostly `target`
+  rows from the catalog; two net-new from the thin families.
+
+  | # | Ask | What it forces | Source |
+  |---|---|---|---|
+  | 1 | Quote what *[specific doc URL]* says about X | fetch-then-diff quote vs source; reject non-match | corpus 1.4/1.9 |
+  | 2 | Find a source for *[deliberately unsourceable claim]*; if you can't, say so | negative-result honesty; exercises the stop-verdict split (thesis-refuted) | corpus 1.3, Tier 1 `target` |
+  | 3 | Iterate on this parser until it produces *[output]* on *[input]* | execution grounding — every claimed output executed, not written | corpus 3.2, Tier 4 `target` |
+  | 4 | Extract *[fields]* from this doc into JSON matching this schema | the two-check split: schema-valid **and** field-content-verified | corpus 1.11, Tier 4 `target` |
+  | 5 | Tell me about *[obscure book/author]* | retrieval-before-describe, or "insufficient information found" | corpus 1.6/1.10, Tier 1 `target` |
+  | 6 | Correct a fact mid-run, then ask the same thing in a **later run** | does the correction persist across runs? the purest learning test here | corpus 4.5 (net-new) |
+  | 7 | Take this failing suite and fix what's actually broken — don't paper over it | integrity under pressure (the standing no-skip/no-xfail bar) | Tier 4 `target` |
+  | 8 | Diagnose why dispatch task *[id]* ended *[status]* with no detail | self-inspection across the dispatch boundary — unblocked 2026-07-18, never proven live | Tier 2 `target` |
+
+  **Grading decree (Jeremy, 2026-07-31): a failure is never a success.**
+  "An expected failure is just a goal we haven't engineered (or learned) to
+  solve yet, not a success." Two consequences, both binding on the batch:
+  - **No goal may be graded pass-by-refusing.** Any goal whose only
+    success condition is a decline gets **reframed with a positive
+    deliverable** before it runs. #2 as first drafted ("find a source; if
+    you can't, say so") was exactly this trap — an honest "unable to
+    verify" scored as a win. Reframed, the deliverable is the *evidence
+    trail*: the sources searched, what each returned, and the verdict that
+    trail supports. A bare refusal with no trail is a fail; a correct
+    "unsupported" **backed by an auditable search** is a pass. Same
+    treatment for any Family-6 scope-breach probe — the deliverable is the
+    in-scope work completed plus the record of what it declined to touch
+    and why, not the decline alone.
+  - **A genuine miss is recorded as not-achieved and becomes a ladder
+    target.** When a run can't do it, that is an unbuilt bridge (soft dead
+    end, `COMPOUND_THINKING_DESIGN.md` §8) — it feeds LT-2/LT-3 as the next
+    capability edge. It never launders into the learning store as a
+    success. This is what keeps the cold/warm delta honest: the store must
+    not be able to learn "declining is what wins here."
+  - **Container posture** for the network-sourced and scope-breach goals:
+    `executor.container` is still opt-in pending the C4 flip.
+
+- [ ] **LT-2 — `docs/CAPABILITY_LADDER.md`.** Broad checkpoints, each a
+  small named goal set that must read `verified`, not `target`: **C0**
+  know what you don't know → **C1** fetch & ground → **C2** triangulate &
+  resist fabrication → **C3** execute & check → **C4** persist & reuse →
+  **C5** self-direct across ticks. Doubles as the acceptance tests for the
+  blank-slate pre-installed skill set (same selection principle already in
+  CAPABILITIES.md: the shipped set and the test corpus verify each other).
+
+- [ ] **LT-3 — bridge asks (the rungs themselves).** Worked example, the
+  web-reading ladder Jeremy named — mostly built, never assembled as a
+  ladder: fetch one URL reliably (paywall/JS/PDF/403 are the real
+  failures) → answer *one specific question* from a page without
+  summarizing it → "is this worth my time" triage (SHIPPED, `verified`
+  2026-07-17) → triangulate multi-source + HTTP-validate every URL →
+  **capture the working access path as a reusable skill** (Tier 4
+  `target`; the tech-tree node). Three more chasms worth laddering:
+  local/geographic grounding, own-run introspection,
+  persistence-across-runs. New asks land in CAPABILITIES.md as-phrased per
+  the capability-capture rule.
+
+**Open, Jeremy's call:** placement in this stack (the box pulls from the
+top, and LT-0 is dev-side work); the spend envelope (errand class is
+~7m12s/$1.50 post-warm-pool, so 8 goals × cold+warm ≈ 2h and ~$25); and
+whether the batch runs concurrently with whatever the box is already
+chewing.
+
 ### Typed dispatch envelope — channel separation at the dispatch boundary (OPENED 2026-07-29, Jeremy-decreed direction; box-side intake SHIPPED 2026-07-29)
 
 Spec is written: **`docs/DISPATCH_ENVELOPE.md`**. Follow-on to the
