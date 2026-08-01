@@ -434,19 +434,67 @@ capture**, which is what makes the rung amortize instead of evaporate.
       it cannot tell us a file carries the field we need. 100% coverage is
       not the finish line. EDGE 1 is the proof: `metadata.json` is present
       on every run and still doesn't carry the classification rationale.
-      These four need code reading, not filesystem counting, and can be
-      traced on the dev Mac while the box census runs:
-      - planner/decompose rationale — is *why this step shape* durable, or
-        only the resulting `plan.md`?
-      - step-edge input provenance — which lessons/skills/contributions
-        entered *this step* vs the run. `ContributionLedger` is typed and
-        provenance-stamped in memory (`loop_types.py`), and `drain()`
-        hands the batch to the merge point; whether the drained batch is
-        persisted per step is unverified.
-      - per-layer cost/latency attribution.
-      - mid-run examinability — every surface today is post-hoc
-        (report.html, viz server, log slice). Jeremy asked for "after (or
-        even during)"; "during" has no answer yet.
+    **Second-pass trace — the four the census can't answer (2026-07-31,
+    dev-Mac code read, done while the box census was queued):**
+
+    - [ ] **EDGE 4 — plan evolution is overwritten, not versioned.**
+      `loop_artifacts._write_plan_manifest` writes `loop-<id>-plan.md`
+      immediately after decompose and **overwrites it after every step**
+      (its own docstring: "Write (or overwrite)"). It carries the *what* —
+      steps, type tags, per-step status/elapsed/tokens/cost, an execution
+      log — and none of the *why*. `replan_count` is a bare integer: you
+      learn it replanned 3× and nothing about what changed or what
+      triggered it. On a replan the earlier plan is simply gone. For a
+      cold/warm pair where the warm run is expected to plan *differently*
+      (fewer, fatter steps is the stated errand-envelope lever), the
+      artifact that would show it is the one being overwritten.
+      Mitigation that already exists: the decompose calls ARE labeled
+      (`purpose="decompose-staged"` / `"decompose-compose"`, planner.py:927
+      and :990), so raw plan reasoning is recoverable from `build/calls` —
+      *if* record mode was on. `CUTS_DRAWN` separately carries
+      constraints/probes.
+    - [ ] **EDGE 5 — the step-edge context ledger is never persisted.**
+      `ContributionLedger` is typed and provenance-stamped in memory
+      (`ContextContribution(source, kind, text)`), and `drain()` at
+      loop_execute.py:698 is the single merge point. The drained batch's
+      only downstream use is **blocked-step re-arm** (loop_blocked.py:219,
+      :275, :348). Nothing writes it. So "which contributions did *this
+      step* actually see" survives only as `[source]`-prefixed text
+      embedded in the step prompt inside `build/calls` — unstructured, and
+      requires parsing the prompt to recover. That is precisely the field
+      a cold/warm delta needs: if a warm run improves because a `prereq`
+      or `reorientation` contribution fired that the cold run never got,
+      the mechanism is currently unqueryable. (Operator injections are the
+      exception — they ride `ctx.injections` → `LoopResult` → the report
+      and are durable.)
+    - [ ] **EDGE 6 — per-layer cost attribution breaks exactly at the work
+      layer.** `purpose=` on call records is the per-layer key, and
+      coverage is good overall: **73 of 82 real `adapter.complete()` call
+      sites are labeled** (86 raw regex hits minus 3 docstring examples and
+      the deliberate inner forward in `FailoverAdapter`, which pops
+      `purpose` at llm.py:646 by design). But **4 of the 9 unlabeled sites
+      are the agentic executor seams** — `step_exec.py:1202` (worker
+      executor step), `step_exec.py:1313` (its tool-search retry),
+      `workers.py:253` (worker-ticket executor), `team.py:215` (team worker)
+      — each marked `# agentic:` in-source as where the real work happens.
+      These are the biggest token consumers in any run. Net effect:
+      "what did the harness spend vs what did the work spend" is
+      answerable for the cheap orchestration layers and falls back to
+      `loop_report._sniff_call_head`'s prompt-opener heuristic for the
+      expensive one. The remaining 5 (factory_minimal:70, factory_thin:218,
+      harness_optimizer:419/575, hosted_free:374) are experiment/dev-tool
+      lanes — lower stakes. Fix is one kwarg per site.
+    - [ ] **EDGE 7 — the live report drops operator injections.** Good
+      news first: `plan.md` IS a genuine during-the-run surface (written
+      post-decompose, refreshed each step; its docstring calls it "the
+      primary debugging artifact for in-flight runs"), so "during" is not
+      unanswered — it was under-credited in the first pass. But of the four
+      `_write_run_report` call sites, only the three in `loop_finalize`
+      pass `injections=`; the mid-run writers (agent_loop.py:516 parallel
+      batch, loop_planning.py:288 post-plan, loop_post_step.py:254
+      per-step) omit it. An operator who injects a note and then opens the
+      live report to confirm it landed sees an empty panel until the run
+      finalizes. Fix is one argument at three call sites.
 
     Deliverable: an integrity-gaps table in the shape of
     `CAPTAINS_LOG_EVENTS.md`'s, but for run-dir artifacts and harness
