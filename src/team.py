@@ -221,6 +221,7 @@ def create_team_worker(
             tool_choice="required",
             max_tokens=2048,
             temperature=0.3,
+            purpose="team-worker",  # EDGE 6: agentic seam, was unlabeled in call records
         )
     except Exception as exc:
         # A token-runaway kill is a policy signal, not a worker-level failure:

@@ -292,6 +292,7 @@ def _preflight_checks(
                 planned_steps=manifest_steps,
                 start_ts=ctx.start_ts,
                 step_outcomes=[],
+                injections=list(ctx.injections),  # EDGE 7: live report showed none until finalize
             )
         except Exception as _rep_exc:
             log.warning("initial run report write failed: %s", _rep_exc)

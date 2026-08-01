@@ -1246,6 +1246,14 @@ def execute_step(
                 pass
         # The agentic worker executor step — the only lane the container wraps
         # (executor.container on/require). See container_exec.resolve_container_run.
+        # Per-layer cost attribution (BACKLOG LT-0 EDGE 6). This is the agentic
+        # executor seam — the biggest token consumer in a run. Unlabeled, its
+        # call records were indistinguishable from the cheap orchestration
+        # calls, so "what did the harness spend vs what did the WORK spend"
+        # fell back to loop_report's prompt-opener sniffer. NOTE: the
+        # tool-search retry below builds its own explicit kwargs and does NOT
+        # inherit these — it carries its own label.
+        _call_kwargs["purpose"] = "step-execute"
         _call_kwargs["executor"] = True
         if executor_session is not None:
             _call_kwargs["session_state"] = executor_session
@@ -1372,6 +1380,10 @@ def execute_step(
                         ],
                         tools=_expanded_tools,
                         tool_choice="required",
+                        # EDGE 6: distinct label from the first attempt — a
+                        # tool-search retry is its own cost event, and pooling
+                        # it with step-execute would hide retry spend.
+                        purpose="step-execute-retry",
                         max_tokens=4096,
                         temperature=0.3,
                         cwd=_call_kwargs.get("cwd"),

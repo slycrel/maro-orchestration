@@ -260,6 +260,7 @@ def _write_iteration_artifacts(
                 start_ts=start_ts,
                 step_outcomes=step_outcomes,
                 replan_count=replan_count,
+                injections=list(ctx.injections),  # EDGE 7: live report showed none until finalize
             )
             _write_runs_index()
         except Exception as _exc:

@@ -37,6 +37,9 @@ for a in "$@"; do
 done
 
 cd "$(git rev-parse --show-toplevel)"
+# Caller's repo root, resolved BEFORE the gate cds into its temp worktree.
+# The gate needs it to find a .venv interpreter (the worktree has none).
+REPO_DIR="$(pwd)"
 
 # Clean tree required only when landing HEAD — a named ref lands regardless of
 # unrelated worktree edits.
@@ -94,7 +97,23 @@ if ! $SKIP_CHECKS; then
         trap 'git worktree remove --force "$GATE_WT" >/dev/null 2>&1 || rm -rf "$GATE_WT"' EXIT
         git worktree add --detach -q "$GATE_WT" "$SHA"
         echo "pre-land gate: ${CHECKS[*]}"
-        if ! (cd "$GATE_WT" && python3 -m pytest -q "${CHECKS[@]}" >"$GATE_LOG" 2>&1); then
+        # Pick an interpreter that actually HAS pytest. On the box that's
+        # python3; on the dev Mac the homebrew python3 (3.14) ships without
+        # it and only the repo .venv has it, so a bare `python3 -m pytest`
+        # made the gate unrunnable there — and an unrunnable gate that
+        # refuses the land is indistinguishable from a real census failure.
+        # Resolve against the CALLER's repo (the temp worktree has no .venv).
+        GATE_PY="python3"
+        if [ -x "$REPO_DIR/.venv/bin/python" ] \
+           && "$REPO_DIR/.venv/bin/python" -c "import pytest" >/dev/null 2>&1; then
+            GATE_PY="$REPO_DIR/.venv/bin/python"
+        elif ! python3 -c "import pytest" >/dev/null 2>&1; then
+            echo "refuse: no interpreter with pytest for the pre-land gate" >&2
+            echo "       tried python3 and ${REPO_DIR}/.venv/bin/python." >&2
+            echo "       install pytest, or bypass with --skip-checks." >&2
+            exit 1
+        fi
+        if ! (cd "$GATE_WT" && PYTHONPATH=src "$GATE_PY" -m pytest -q "${CHECKS[@]}" >"$GATE_LOG" 2>&1); then
             tail -30 "$GATE_LOG" >&2
             echo "refuse: pre-land structural gate failed for ${SHA} (full log: ${GATE_LOG})" >&2
             echo "       fix the census failure, or bypass with --skip-checks (CI will still catch it)." >&2

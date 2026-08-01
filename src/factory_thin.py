@@ -228,6 +228,7 @@ def run_factory_thin(
                 tool_choice="required",
                 max_tokens=4096,
                 temperature=0.2,
+                purpose="factory-step",  # EDGE 6: agentic step lane, was unlabeled
             )
             total_tokens_in += resp.input_tokens
             total_tokens_out += resp.output_tokens

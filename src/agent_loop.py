@@ -523,6 +523,11 @@ def run_agent_loop(
                             status=_parallel_result.status,
                             elapsed_ms=_parallel_result.elapsed_ms,
                             replan_count=_replan_count,
+                            # EDGE 7: only loop_finalize passed this, so an
+                            # operator who injected a note and opened the LIVE
+                            # report to confirm it landed saw an empty panel
+                            # until the run finished.
+                            injections=list(ctx.injections),
                         )
                     _write_runs_index(force=True)
                 except Exception as _rep_exc:

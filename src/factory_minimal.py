@@ -74,6 +74,7 @@ def run_factory_minimal(
         ],
         max_tokens=8192,
         temperature=0.2,
+        purpose="factory-minimal",  # EDGE 6: keep the baseline lane attributable too
     )
 
     elapsed_ms = int((time.monotonic() - started_at) * 1000)

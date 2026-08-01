@@ -260,6 +260,7 @@ def dispatch_worker(
             max_tokens=4096,
             temperature=0.3,
             executor=True,  # worker ticket = agentic executor lane (container when on)
+            purpose="worker-ticket",  # EDGE 6: agentic seam, was unlabeled in call records
         )
     except Exception as exc:
         return WorkerResult(
