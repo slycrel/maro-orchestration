@@ -844,25 +844,32 @@ def recall(
             sources["lesson_ids_cited"] = lesson_ids_cited
         if rules_cited:
             sources["rules_cited"] = rules_cited
-        if lesson_ids_cited or rules_cited:
-            try:
-                import runs as _runs
-                _rd = _runs.current_run_dir()
-                if _rd is not None:
-                    _src = Path(_rd) / "source"
-                    _src.mkdir(parents=True, exist_ok=True)
-                    # Overwrite-per-recall is correct: a restarted run's
-                    # verdict should join against the citations of the recall
-                    # that actually fed it (the verdict stamp reads before
-                    # any later run's recall overwrites).
-                    (_src / "recall_citations.json").write_text(json.dumps({
-                        "rule_ids": rules_cited,
-                        "lesson_ids": lesson_ids_cited,
-                        "goal_preview": goal[:200],
-                        "project": project or "",
-                    }, indent=2))
-            except Exception as exc:
-                log.debug("recall: citation file write failed: %s", exc)
+        # Written on EVERY recall that has a run-dir, including when nothing
+        # was cited. The `if lesson_ids_cited or rules_cited` guard this
+        # replaces made absence ambiguous — "this run was injected with no
+        # lessons" and "the citation writer never ran" produced the identical
+        # empty state. That is fatal for the cold/warm attribution rail: the
+        # cold arm of a paired run cites nothing BY DESIGN, and that zero is
+        # the measurement, not a gap. Present-with-empty-lists now means
+        # "recall ran, cited nothing"; absent means recall never got here.
+        try:
+            import runs as _runs
+            _rd = _runs.current_run_dir()
+            if _rd is not None:
+                _src = Path(_rd) / "source"
+                _src.mkdir(parents=True, exist_ok=True)
+                # Overwrite-per-recall is correct: a restarted run's
+                # verdict should join against the citations of the recall
+                # that actually fed it (the verdict stamp reads before
+                # any later run's recall overwrites).
+                (_src / "recall_citations.json").write_text(json.dumps({
+                    "rule_ids": rules_cited,
+                    "lesson_ids": lesson_ids_cited,
+                    "goal_preview": goal[:200],
+                    "project": project or "",
+                }, indent=2))
+        except Exception as exc:
+            log.debug("recall: citation file write failed: %s", exc)
 
         # Camera frame (Chunk A): log the lesson-selection fork FORWARD —
         # the candidate sets the selector saw (raw scores + shares), what

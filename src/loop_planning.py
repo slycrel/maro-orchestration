@@ -480,25 +480,26 @@ def _build_loop_context(
         # Run-keyed record of what actually entered the prompt, post-routing.
         # Without this, A/B variant selection is invisible in the run record
         # and skill changes can't be attributed to outcome shifts.
-        if _matched_and_routed:
-            try:
-                from runs import append_skills_manifest as _append_skills_manifest
-                _append_skills_manifest(
-                    [
-                        {
-                            "id": getattr(s, "id", ""),
-                            "name": getattr(s, "name", ""),
-                            "content_hash": getattr(s, "content_hash", ""),
-                            "variant_of": getattr(s, "variant_of", None),
-                            "tier": getattr(s, "tier", None),
-                            "routing_key": _routing_key,
-                        }
-                        for s in _matched_and_routed
-                    ],
-                    stage="decompose",
-                )
-            except Exception:
-                pass
+        # Unconditional: an empty match set is recorded too, so a missing
+        # manifest means the recorder didn't run rather than "nothing matched".
+        try:
+            from runs import append_skills_manifest as _append_skills_manifest
+            _append_skills_manifest(
+                [
+                    {
+                        "id": getattr(s, "id", ""),
+                        "name": getattr(s, "name", ""),
+                        "content_hash": getattr(s, "content_hash", ""),
+                        "variant_of": getattr(s, "variant_of", None),
+                        "tier": getattr(s, "tier", None),
+                        "routing_key": _routing_key,
+                    }
+                    for s in _matched_and_routed
+                ],
+                stage="decompose",
+            )
+        except Exception:
+            pass
         if _matched_and_routed and verbose:
             print(
                 f"[maro] injecting {len(_matched_and_routed)} skill(s) into decompose",
@@ -516,23 +517,27 @@ def _build_loop_context(
         from skill_loader import skill_loader as _skill_loader
         _role = getattr(permission_context, "role", None) if permission_context else None
         _curated_block = _skill_loader.get_summaries_block(role=_role, goal=goal)
+        _curated_matches = []
         if _curated_block:
             curated_skills_context = _curated_block
             _curated_matches = _skill_loader.find_matching(goal, role=_role)
-            try:
-                from runs import append_skills_manifest as _append_skills_manifest
-                _append_skills_manifest(
-                    [
-                        {
-                            "name": getattr(s, "name", ""),
-                            "file_path": str(getattr(s, "file_path", "")),
-                        }
-                        for s in _curated_matches
-                    ],
-                    stage="curated_summaries",
-                )
-            except Exception:
-                pass
+        # Unconditional, same reason as the decompose site above: an empty
+        # curated match set is a recorded data point, not a silent absence.
+        try:
+            from runs import append_skills_manifest as _append_skills_manifest
+            _append_skills_manifest(
+                [
+                    {
+                        "name": getattr(s, "name", ""),
+                        "file_path": str(getattr(s, "file_path", "")),
+                    }
+                    for s in _curated_matches
+                ],
+                stage="curated_summaries",
+            )
+        except Exception:
+            pass
+        if _curated_block:
             if verbose:
                 print(
                     f"[maro] injecting {len(_curated_matches)} curated skill(s) into decompose",

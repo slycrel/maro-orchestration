@@ -27,6 +27,7 @@ successful census — the gaps are the deliverable, not an error.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -213,6 +214,16 @@ def inspect_run(run_dir: Path) -> Dict[str, Any]:
         # rather than pooling canaries with organic work.
         "measurement_class": meta.get("measurement_class") or "unknown",
         "dry_run": bool(meta.get("dry_run")),
+        # Corpus-shape fields. Not the prompt itself (census.json is already
+        # large, and prompts are user content) — just enough to tell a corpus
+        # of GOALS from a corpus of STEPS. The 2026-05 era opened a run-dir per
+        # step: 476 dirs, 120 distinct prompts, median length 61, one
+        # adversarial-verification step repeated 46 times. Pooled with real
+        # goals it silently became 65% of every all-history percentage.
+        "prompt_len": len(str(meta.get("prompt") or "")),
+        "prompt_fp": hashlib.sha1(
+            str(meta.get("prompt") or "").strip().lower().encode()
+        ).hexdigest()[:12],
     }
 
 
@@ -315,6 +326,29 @@ def monthly_coverage(runs: List[Dict[str, Any]]) -> Dict[str, Any]:
     # gap — the feature wasn't there. Reporting a "since first seen" rate is
     # what separates "never shipped / shipped late" from "shipped and dropping",
     # which is the exact distinction the first box run got wrong by pooling.
+    # Corpus composition per month — makes the denominator's CONTENTS visible,
+    # not just its size. A month of goals and a month of step-level pseudo-runs
+    # produce the same run count and completely different meaning.
+    out["composition"] = {}
+    for m in months:
+        rows = [r for r in settled if _month_of(r) == m]
+        fps = [r.get("prompt_fp", "") for r in rows]
+        lens = sorted(r.get("prompt_len", 0) for r in rows)
+        counts = Counter(fps)
+        top_n = counts.most_common(1)[0][1] if counts else 0
+        distinct = len(counts)
+        median = lens[len(lens) // 2] if lens else 0
+        out["composition"][m] = {
+            "runs": len(rows),
+            "distinct_prompts": distinct,
+            "median_prompt_len": median,
+            "max_repeat": top_n,
+            "distinct_ratio": round(distinct / len(rows), 2) if rows else None,
+            # Heuristic, deliberately conservative and advisory only: short,
+            # heavily-repeated prompts are step texts, not goals.
+            "step_shaped": bool(rows) and median < 100 and distinct < len(rows) / 2,
+        }
+
     out["since_first_seen"] = {}
     for spec in ARTIFACTS:
         key = spec["key"]
@@ -429,6 +463,35 @@ def render_text(report: Dict[str, Any]) -> str:
 
     mon = report.get("monthly") or {}
     months = mon.get("months") or []
+    comp = mon.get("composition") or {}
+    if comp:
+        add("-" * 74)
+        add("CORPUS COMPOSITION — what the denominator actually CONTAINS")
+        add("-" * 74)
+        add("A month of goals and a month of step-level pseudo-runs have the")
+        add("same run count and nothing else in common. STEP-SHAPED months are")
+        add("flagged: short, heavily-repeated prompts are step texts opened as")
+        add("their own run dirs, and pooling them dilutes every rate above.")
+        add("")
+        add(f"{'month':<10}{'runs':>7}{'distinct':>10}{'med len':>9}"
+            f"{'max rep':>9}  shape")
+        for m in months:
+            c = comp.get(m) or {}
+            shape = "STEP-SHAPED (exclude)" if c.get("step_shaped") else "goal-shaped"
+            add(f"{m:<10}{c.get('runs', 0):>7}{c.get('distinct_prompts', 0):>10}"
+                f"{c.get('median_prompt_len', 0):>9}{c.get('max_repeat', 0):>9}"
+                f"  {shape}")
+        flagged = [m for m in months if (comp.get(m) or {}).get("step_shaped")]
+        if flagged:
+            excl = sum((comp[m] or {}).get("runs", 0) for m in flagged)
+            tot = sum((comp[m] or {}).get("runs", 0) for m in months)
+            add("")
+            add(f"WARNING: {excl} of {tot} settled runs ({100*excl//max(1,tot)}%)"
+                f" sit in step-shaped month(s) {', '.join(flagged)}.")
+            add("Every all-history percentage above is computed over that pool.")
+            add("Read the per-month columns for those artifacts, not 'all' or")
+            add("even 'since' when first-seen predates the flagged month(s).")
+        add("")
     if months:
         add("-" * 74)
         add("PER-MONTH COVERAGE — the load-bearing view")

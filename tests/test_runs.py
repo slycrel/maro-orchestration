@@ -409,15 +409,37 @@ def test_skills_manifest_appends_per_stage(workspace):
         set_current_run_dir(None)
 
 
-def test_skills_manifest_noop_on_empty_or_no_run_dir(workspace):
+def test_skills_manifest_records_empty_match_set(workspace):
+    """DELIBERATE PIN INVERSION (2026-08-01, BACKLOG LT-0).
+
+    Was `test_skills_manifest_noop_on_empty_or_no_run_dir`, which pinned
+    "empty entries => write nothing". That made absence of the file ambiguous:
+    "no skills matched" and "the recorder never ran" produced the identical
+    empty state, which is fatal for the cold/warm attribution rail — a
+    cold-store run matches nothing BY DESIGN and that zero is the measurement.
+
+    New contract: no run-dir => None (nothing to write into); empty entries
+    WITH a run-dir => a record IS written, so present-and-empty means "ran,
+    matched nothing" and absent means "the recorder did not run".
+    """
     from runs import create_run_dir, set_current_run_dir, append_skills_manifest
     set_current_run_dir(None)
+    # Unchanged half of the contract: no run-dir, nowhere to write.
     assert append_skills_manifest([{"name": "x"}], stage="decompose") is None
+
     rd = create_run_dir("skmtest2", prompt="p")
     set_current_run_dir(rd)
     try:
-        assert append_skills_manifest([], stage="decompose") is None
-        assert not (rd / "source" / "skills_manifest.jsonl").exists()
+        out = append_skills_manifest([], stage="decompose")
+        assert out is not None
+        manifest = rd / "source" / "skills_manifest.jsonl"
+        assert manifest.exists()
+        rec = json.loads(manifest.read_text().strip())
+        assert rec["stage"] == "decompose"
+        assert rec["skills"] == []
+        # Consumers iterate `rec["skills"] or []`, so an empty record must be
+        # a no-op for them rather than a crash or a phantom attribution.
+        assert not [s for s in (rec.get("skills") or []) if s.get("id")]
     finally:
         set_current_run_dir(None)
 

@@ -1032,8 +1032,17 @@ def append_skills_manifest(entries: list, *, stage: str) -> Optional[Path]:
     """
     try:
         rd = current_run_dir()
-        if rd is None or not entries:
+        if rd is None:
             return None
+        # An EMPTY entries list is recorded, not skipped. Absence of this file
+        # used to mean two different things — "no skills matched" and "the
+        # recorder never ran" — which makes the file useless as an attribution
+        # rail: a cold-store run legitimately matches nothing, and that is a
+        # data point, not a gap. Present-and-empty now means "nothing was
+        # injected"; absent means the recorder genuinely did not run.
+        # (Both readers iterate `rec["skills"] or []`, so empty is a no-op for
+        # them — memory_ledger skips on empty skill_ids, loop_report renders
+        # no rows.)
         out = rd / "source" / "skills_manifest.jsonl"
         out.parent.mkdir(parents=True, exist_ok=True)
         record = {

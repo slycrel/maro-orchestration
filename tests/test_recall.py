@@ -599,14 +599,31 @@ class TestLoopSlice:
         ctx = [kw for et, kw in events if et == "RECALL_PERFORMED"][0]["context"]
         assert ctx["lesson_ids_cited"] == ["lid-fits"]
 
-    def test_no_citations_no_run_file(self, monkeypatch, tmp_path):
+    def test_no_citations_still_writes_empty_run_file(self, monkeypatch, tmp_path):
+        """DELIBERATE PIN INVERSION (2026-08-01, BACKLOG LT-0).
+
+        Was `test_no_citations_no_run_file`, pinning "nothing cited => no
+        file". The box census found recall_citations.json on 10% of July
+        agenda runs, and this guard was why: absence conflated "recall
+        injected no lessons" with "the citation writer never ran". The
+        cold arm of a cold/warm pair cites nothing by design — that zero is
+        the data point the whole protocol rests on, so it has to be written
+        down, not inferred from a missing file.
+        """
         _setup(monkeypatch, tmp_path)
         import runs as runs_module
         run_dir = tmp_path / "runs" / "r2"
         run_dir.mkdir(parents=True)
         monkeypatch.setattr(runs_module, "current_run_dir", lambda: run_dir)
         recall("any goal", slice="loop")
-        assert not (run_dir / "source" / "recall_citations.json").exists()
+        cite_file = run_dir / "source" / "recall_citations.json"
+        assert cite_file.exists(), "empty citations must still be recorded"
+        payload = json.loads(cite_file.read_text())
+        assert payload["lesson_ids"] == []
+        assert payload["rule_ids"] == []
+        # Goal context still lands, so an empty citation set is attributable
+        # to a specific ask rather than being an anonymous blank.
+        assert payload["goal_preview"] == "any goal"
 
     def test_citation_file_failure_never_takes_recall_down(
             self, monkeypatch, tmp_path):
