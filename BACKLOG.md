@@ -2237,6 +2237,45 @@ open — verification ≠ repair; each needs a wire-or-retire decision):**
   annotate. No successor-arc decree stands (verify-learn closed V1–V5) — this
   queues as a discrete item, not an arc reopen.
 
+  **Amended 2026-07-31** (Opus-5 blind contrast, every code claim verified vs
+  tree at badee73 — full record + accuracy scorecard:
+  `docs/history/2026-07-31-leact-opus-contrast.md`). Deltas folded in:
+  - **Blind-spot/tenure diagnosis**: the original entry's worry is false
+    positives surviving; the opposite failure is also live — true novel
+    positives dying. Tenure requires sessions_validated ≥ 3, incremented only
+    on similarity>0.8 restatement (knowledge_web.py:339/719), and a lesson
+    that fills a blind spot is by definition one the extractor won't
+    independently re-derive 3×. Δ-gating fixes both directions at once: it
+    flips selection pressure from "agrees with the corpus" to "changes
+    behavior". (Engages Jeremy's "maro is starting to think like me" concern
+    directly — the tenure rule actively selects for teacher-copying.)
+  - **Stratify rule-vs-reason before reading results**: lessons that ARE their
+    own action ("run tests before claiming done") have Δ≈0 definitionally
+    (LeAct §6 self-referential collapse). Unstratified aggregate Δ is
+    uninterpretable; discovering the corpus split is part of the experiment.
+  - **No-logprobs workaround**: LeAct App D.2.1 action-match reward over M
+    samples; the hosted-free rung makes M replays ~$0.
+  - **Follow-on steal (sequences after the gate)**: competence-redundancy
+    decay — retire a lesson when the model follows it unprompted (internalized,
+    Δ≈0 vs current competence), replacing calendar 0.85/day. Needs the same
+    replay harness.
+  - **Free diagnostic, runnable any time**: surprise-count — Jeremy reads the
+    long-tier corpus and counts entries that SURPRISE him (not wrong ones).
+    Zero = collapse empirically confirmed; nonzero = the seed set the gate is
+    evaluated against. Pair with the chunk-6 novelty-at-mint field.
+  - **Corrections (don't inherit Opus's errors)**: CANON_APPLY_THRESHOLD
+    surfaces candidates that never promote (battery V3 — no promote path);
+    extraction IS verdict-aware (extract_deferred_lessons, data-r2-01) — we're
+    at the outcome-filtered baseline the paper calls insufficient, not naive;
+    build/calls record-mode capture is dead on single-backend boxes, so replay
+    fixtures need another source; oracle anchoring exists but only negative
+    (chunk-4 contradiction path) or population-level (navigator A/B 58% vs
+    41%) — per-lesson positive Δ is the genuinely missing piece.
+  - **Revisit trigger**: don't build while the verdict denominator starves
+    (4 known-arrival verdict events as of 2026-07-31). Revisit when
+    `verdict_flow` shows real week-over-week verdict arrivals (Chunk B closed
+    the plumbing; flow measurable from 2026-07-31 forward).
+
 ### Standing test-goal menu (future ideas)
 
 - [ ] **Polymarket behavioral test** — "Analyze 400M+ Polymarket trades to find behavioral patterns among top wallets — what do winners do differently?" (from hrundel75 link)
