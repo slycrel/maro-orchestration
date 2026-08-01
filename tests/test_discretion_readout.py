@@ -179,6 +179,79 @@ class TestEffortSummary:
         assert s["total_cost_usd"] == 0.04
 
 
+def _loop_log(tmp_path, run, loop, started_at, steps):
+    """Write a runs/<run>/build/loop-<loop>-log.json with (text, status) rows."""
+    d = tmp_path / run / "build"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / f"loop-{loop}-log.json").write_text(json.dumps({
+        "loop_id": loop, "started_at": started_at,
+        "steps": [{"text": t, "status": s} for t, s in steps],
+    }), encoding="utf-8")
+
+
+class TestReconSummary:
+    def test_cohort_starts_at_first_tag_pooled_denominators_refused(self, tmp_path):
+        # The LT retraction lesson: runs that predate emission must not
+        # deflate the share — cohort is since-first-seen.
+        _loop_log(tmp_path, "r1", "aaa", "2026-07-10T00:00:00+00:00",
+                  [("old step one", "done"), ("old step two", "done")])
+        _loop_log(tmp_path, "r2", "bbb", "2026-08-01T12:00:00+00:00",
+                  [("survey readers [recon: decides the backend]", "done"),
+                   ("implement it", "done"),
+                   ("flaky probe [recon]", "blocked")])
+        s = dr.recon_summary(tmp_path)
+        assert s["sourced"] is True
+        assert s["first_seen"].startswith("2026-08-01")
+        assert s["pre_cohort_loops"] == 1
+        assert s["cohort_steps"] == 3          # r1's 2 steps excluded
+        assert s["recon_steps"] == 2
+        assert s["voi_missing"] == 1           # bare [recon]
+        assert s["by_flavor_status"]["recon"] == {"done": 1, "blocked": 1,
+                                                  "other": 0}
+        assert s["by_flavor_status"]["commit"]["done"] == 1
+
+    def test_empty_corpus_is_honest_not_silent(self, tmp_path):
+        _loop_log(tmp_path, "r1", "aaa", "2026-07-10T00:00:00+00:00",
+                  [("plain step", "done")])
+        s = dr.recon_summary(tmp_path)
+        assert s["first_seen"] is None
+        assert s["loops_scanned"] == 1
+        assert s["steps_scanned"] == 1
+
+    def test_unreadable_log_counted_not_silent(self, tmp_path):
+        d = tmp_path / "r1" / "build"
+        d.mkdir(parents=True)
+        (d / "loop-x-log.json").write_text("not json", encoding="utf-8")
+        s = dr.recon_summary(tmp_path)
+        assert s["files_failed"] == 1
+
+    def test_samples_strip_the_tag(self, tmp_path):
+        _loop_log(tmp_path, "r1", "aaa", "2026-08-01T00:00:00+00:00",
+                  [("grep the store [recon: decides the boundary plan]",
+                    "done")])
+        s = dr.recon_summary(tmp_path)
+        assert s["samples"] == [{"text": "grep the store",
+                                 "decides": "decides the boundary plan"}]
+
+    def test_report_renders_recon_section(self, tmp_path):
+        _loop_log(tmp_path, "r1", "aaa", "2026-08-01T00:00:00+00:00",
+                  [("probe [recon: decides X]", "done"), ("build", "done")])
+        payload = dr.build_payload(events=[], step_entries=[],
+                                   runs_root=tmp_path)
+        report = dr.build_report(payload)
+        assert "Recon steps (flavor corpus" in report
+        assert "recon: 1 (50%)" in report
+        assert "decides: decides X" in report
+
+    def test_log_dir_without_runs_root_leaves_recon_unsourced(self, tmp_path):
+        # Same mixed-corpus review pin as step-costs, crosswise: an
+        # alternate --log-dir must not silently pull the LIVE runs root.
+        (tmp_path / "captains_log.jsonl").write_text("", encoding="utf-8")
+        payload = dr.build_payload(base=tmp_path)
+        assert payload["recon"] == {"sourced": False}
+        assert "not sourced" in dr.build_report(payload)
+
+
 class TestReportAndLoader:
     def test_report_sections_and_honesty_block(self):
         events = [

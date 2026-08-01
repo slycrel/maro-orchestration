@@ -166,3 +166,23 @@ Still open from the smokes: the subprocess backend does not enforce
 `max_tokens` (cuts call requested 700, got 957/759 — warning fires,
 cap is advisory). Not this slice; noted for the caps-as-circuit-breakers
 posture.
+
+## Watch instrument (same day, third slice)
+
+With the corpus now emitting, "watch the corpus" needed an instrument or
+it was the V5 watch-with-no-readout gap again. `discretion_readout` gains
+a recon section: `recon_summary` reads `runs/*/build/loop-*-log.json`
+step rows (durable carrier = step text; flavor via `planner.step_flavor`,
+no side-channel) and reports recon share, VOI-missing rate, and the
+done/blocked split by flavor. Denominators are SINCE-FIRST-SEEN — the
+cohort starts at the first loop carrying a tag; pre-emission loops are
+counted and shown, never pooled (the LT-retraction denominator lesson,
+same day). Corpus-mixing rule extended crosswise: --log-dir without an
+explicit --runs-root leaves the recon section unsourced rather than
+silently pulling live run logs into an archive readout; hermetic callers
+(injected events) never touch the live corpus. Sample lines render via
+`strip_recon_tag` (its first runtime consumer — both remaining recon
+BACKLOG edges closed). Per-step VERIFY verdicts still aren't durably
+joined to step identity; step status is the proxy, named in "Not
+computable today". First live run: 510 loops / 3035 steps scanned, zero
+tags yet — honest, the emission fix landed this morning.

@@ -7,9 +7,10 @@ re-injected context — with dollars as one trailing column, per the
 budget-posture decree (EFFORT language, not dollars).
 
 Read-only: consumes captain's-log events (active + rotated archives, same
-glob as navigator_shadow._load_navigator_events) and memory/step-costs.jsonl.
-No LLM calls, no writes, no config flags — a CLI that spends nothing needs
-no killswitch. (CLI arguments like --json/--log-dir are surfaces, not
+glob as navigator_shadow._load_navigator_events), memory/step-costs.jsonl,
+and runs/*/build/loop-*-log.json (the recon flavor corpus — step text is
+the durable carrier). No LLM calls, no writes, no config flags — a CLI
+that spends nothing needs no killswitch. (CLI arguments like --json/--log-dir are surfaces, not
 config: nothing here changes runtime behavior.)
 
 Honesty rule: every metric the plan names that CANNOT be computed from
@@ -307,6 +308,93 @@ def duty_cycle_summary(events: List[Dict[str, Any]]) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Recon flavor corpus (chunk-9 #2 watch instrument)
+# ---------------------------------------------------------------------------
+
+def recon_summary(runs_root: Optional[Path] = None) -> Dict[str, Any]:
+    """Recon-vs-commit step tabulation over durable loop logs.
+
+    The durable carrier is the step TEXT (the tag is the schema): every
+    ``runs/*/build/loop-*-log.json`` step row yields its flavor via
+    ``planner.step_flavor`` with no side-channel. Denominators are
+    SINCE-FIRST-SEEN — the cohort starts at the first loop (by started_at)
+    containing a recon-tagged step — because pooling runs that predate tag
+    emission (shipped 2026-08-01) with runs that could carry tags is the
+    exact denominator defect the census retraction documented (2026-08-01).
+    Pre-cohort loops are counted and shown, never folded in. Step status
+    (done/blocked) is the available outcome proxy; per-step VERIFY verdicts
+    aren't durably joined to step identity (see "Not computable today").
+    """
+    from planner import step_flavor, strip_recon_tag
+    if runs_root is None:
+        from runs import runs_root as _live_runs_root
+        runs_root = _live_runs_root()
+    loops: List[Dict[str, Any]] = []
+    files_read = files_failed = 0
+    for p in sorted(Path(runs_root).glob("*/build/loop-*-log.json")):
+        try:
+            d = json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            files_failed += 1
+            continue
+        files_read += 1
+        rows = d.get("steps") or []
+        if not isinstance(rows, list):
+            continue
+        loops.append({
+            "started_at": str(d.get("started_at") or ""),
+            "rows": [(str(r.get("text") or ""), str(r.get("status") or ""))
+                     for r in rows if isinstance(r, dict)],
+        })
+    loops.sort(key=lambda l: l["started_at"])
+
+    def _has_recon(loop: Dict[str, Any]) -> bool:
+        return any(step_flavor(t)[0] == "recon" for t, _ in loop["rows"])
+
+    first_idx = next((i for i, l in enumerate(loops) if _has_recon(l)), None)
+    out: Dict[str, Any] = {
+        "sourced": True,
+        "files_read": files_read,
+        "files_failed": files_failed,
+        "loops_scanned": len(loops),
+        "steps_scanned": sum(len(l["rows"]) for l in loops),
+        "first_seen": None,
+    }
+    if first_idx is None:
+        return out
+    cohort = loops[first_idx:]
+    out["first_seen"] = cohort[0]["started_at"]
+    out["pre_cohort_loops"] = first_idx
+    by_flavor = {"recon": {"done": 0, "blocked": 0, "other": 0},
+                 "commit": {"done": 0, "blocked": 0, "other": 0}}
+    steps = recon_n = voi_missing = 0
+    samples: List[Dict[str, str]] = []
+    for l in cohort:
+        for text, status in l["rows"]:
+            steps += 1
+            flavor, voi = step_flavor(text)
+            bucket = status if status in ("done", "blocked") else "other"
+            by_flavor[flavor][bucket] += 1
+            if flavor == "recon":
+                recon_n += 1
+                if not voi:
+                    voi_missing += 1
+                if len(samples) < 3:
+                    samples.append({"text": strip_recon_tag(text)[:90],
+                                    "decides": voi[:60]})
+    out.update({
+        "cohort_loops": len(cohort),
+        "cohort_steps": steps,
+        "recon_steps": recon_n,
+        "recon_share": round(recon_n / steps, 3) if steps else None,
+        "voi_missing": voi_missing,
+        "by_flavor_status": by_flavor,
+        "samples": samples,
+    })
+    return out
+
+
+# ---------------------------------------------------------------------------
 # EFFORT summary (spend is one column, not the headline)
 # ---------------------------------------------------------------------------
 
@@ -372,6 +460,9 @@ def not_computable() -> List[str]:
         "novelty survival (do boosted lessons outlive decay): needs store "
         "age across decay cycles; revisit once the novelty field has "
         "accumulated history",
+        "recon verify-fail rate as VERIFY verdicts: per-step verification "
+        "results are not durably recorded with step identity — the recon "
+        "section reports step status (done/blocked) as the outcome proxy",
     ]
 
 
@@ -382,20 +473,34 @@ def not_computable() -> List[str]:
 def build_payload(events: Optional[List[Dict[str, Any]]] = None,
                   step_entries: Optional[List[dict]] = None,
                   base: Optional[Path] = None,
+                  runs_root: Optional[Path] = None,
                   input_coverage: Optional[Dict[str, int]] = None) -> Dict[str, Any]:
     """``base`` sources BOTH inputs (events glob and step-costs.jsonl) from
     one directory — an alternate --log-dir must never mix archive events
-    with live-workspace cost telemetry (review finding: mixed corpus)."""
+    with live-workspace cost telemetry (review finding: mixed corpus).
+    The recon corpus lives under the runs root, not the memory dir, so the
+    same rule applies crosswise: an alternate --log-dir without an explicit
+    --runs-root leaves the recon section unsourced rather than silently
+    mixing live run logs into an archive readout."""
     coverage: Dict[str, int] = dict(input_coverage or {})
+    live_mode = events is None and base is None
     if events is None:
         events = load_events(base, coverage=coverage)
     step_path = (base / "step-costs.jsonl") if base is not None else None
+    # Recon sources the LIVE runs root only in true live mode; injected
+    # events or an alternate --log-dir get it only via an explicit
+    # runs_root (hermetic callers must never touch the live corpus).
+    if runs_root is not None or live_mode:
+        recon = recon_summary(runs_root)
+    else:
+        recon = {"sourced": False}
     return {
         "metacognition": metacog_summary(events),
         "reinjection": reinjection_summary(events),
         "gate_families": gate_family_summary(events),
         "novelty": novelty_summary(events),
         "duty_cycle": duty_cycle_summary(events),
+        "recon": recon,
         "effort": effort_summary(step_entries, path=step_path),
         "input_coverage": coverage,
         "not_computable": not_computable(),
@@ -479,6 +584,37 @@ def build_report(payload: Optional[Dict[str, Any]] = None) -> str:
         lines.append(f"  {lane:18s} rows={s['rows']:4d} "
                      f"days_active={s['days_active']:3d}  {span}")
 
+    rc = p["recon"]
+    lines.append("")
+    lines.append("## Recon steps (flavor corpus — since first tag)")
+    if not rc.get("sourced"):
+        lines.append("not sourced: --log-dir given without --runs-root "
+                     "(refusing to mix live run logs into an archive readout)")
+    elif rc["first_seen"] is None:
+        lines.append(f"no recon-tagged step in any loop log yet "
+                     f"({rc['loops_scanned']} loop(s), "
+                     f"{rc['steps_scanned']} step(s) scanned; emission "
+                     f"shipped 2026-08-01 — corpus accrues from live runs)")
+    else:
+        share = (f"{rc['recon_share']:.0%}" if rc["recon_share"] is not None
+                 else "n/a")
+        lines.append(f"cohort: {rc['cohort_loops']} loop(s) since "
+                     f"{rc['first_seen'][:10]} "
+                     f"({rc['pre_cohort_loops']} pre-tag loop(s) excluded "
+                     f"from denominators)")
+        lines.append(f"steps: {rc['cohort_steps']}  recon: "
+                     f"{rc['recon_steps']} ({share})  "
+                     f"voi-missing: {rc['voi_missing']}")
+        bf = rc["by_flavor_status"]
+        lines.append(f"status: recon {_fmt_counts(bf['recon'])} | "
+                     f"commit {_fmt_counts(bf['commit'])}")
+        for s in rc["samples"]:
+            decides = f" — decides: {s['decides']}" if s["decides"] else ""
+            lines.append(f"  [recon] {s['text']}{decides}")
+        if rc.get("files_failed"):
+            lines.append(f"  ({rc['files_failed']} loop log(s) UNREADABLE — "
+                         "denominators are incomplete)")
+
     cov = p.get("input_coverage") or {}
     if cov:
         lines.append("")
@@ -504,11 +640,19 @@ def main(argv: Optional[List[str]] = None) -> int:
                         help="memory directory sourcing BOTH inputs — "
                              "captains_log*.jsonl and step-costs.jsonl "
                              "(default: the workspace memory dir)")
+    parser.add_argument("--runs-root", default=None,
+                        help="runs directory sourcing the recon flavor "
+                             "corpus (loop logs). Default: the live "
+                             "workspace runs root — unless --log-dir is "
+                             "given, in which case the recon section is "
+                             "unsourced without an explicit --runs-root "
+                             "(never mix corpora silently)")
     parser.add_argument("--json", action="store_true",
                         help="emit the raw payload as JSON")
     args = parser.parse_args(argv)
     base = Path(args.log_dir) if args.log_dir else None
-    payload = build_payload(base=base)
+    runs_root = Path(args.runs_root) if args.runs_root else None
+    payload = build_payload(base=base, runs_root=runs_root)
     if args.json:
         print(json.dumps(payload, indent=2))
     else:

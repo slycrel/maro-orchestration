@@ -2744,15 +2744,17 @@ deferred rather than silently dropped:
     claims name what settles them, but the verifier doesn't RUN probes;
     wiring claim_probe (chunk-5b read-only allowlist machinery) into
     recon verification is its own slice.
-  - *Recon-aware readout* — discretion_readout has no recon tabulation
-    yet (recon share, recon verify-fail rate vs commit, VOI-missing
-    rate). The durable carrier is the step TEXT — the tag is the schema,
-    so any corpus that keeps step text (manifests, checkpoints,
-    StepOutcome.text in loop artifacts) yields flavor via
-    `planner.step_flavor`; the executor-dict `flavor`/`recon_decision`
-    stamp is in-process convenience, not the durable record. A typed
-    StepOutcome field is deliberately NOT added (dual source of truth;
-    2026-08-01 adversarial review F2 rejected).
+  - ~~*Recon-aware readout*~~ — CLOSED 2026-08-01 (same day the cuts
+    fix made the corpus real): `discretion_readout.recon_summary` reads
+    `runs/*/build/loop-*-log.json` step rows (the durable carrier is the
+    step TEXT — the tag is the schema); reports recon share, VOI-missing
+    rate, and done/blocked split by flavor with SINCE-FIRST-SEEN
+    denominators (the LT retraction lesson — pre-emission loops are
+    counted, shown, never pooled in). Per-step VERIFY verdicts still
+    aren't durably joined to step identity — step status is the proxy,
+    named in "Not computable today". A typed StepOutcome field remains
+    deliberately NOT added (dual source of truth; 2026-08-01 adversarial
+    review F2 rejected).
   - *Parallel/fan-out lanes skip step verification entirely* —
     pre-existing lane property for ALL steps ("Ralph verify is not run
     in parallel mode — session-level state"), which recon inherits: a
@@ -2768,9 +2770,11 @@ deferred rather than silently dropped:
     rides `- Probe:` evidence lines verbatim, nothing exact-matches);
     milestone expansion exempts recon steps (text rebuilds strand the
     tag — same class as the `_shape_steps` skip).
-  - *`strip_recon_tag` has no runtime consumer* — ships as the parser's
-    inverse (the [after:N] clean-display precedent); wire into display
-    surfaces (viz step lists, thread-brain lines) or drop at next touch.
+  - ~~*`strip_recon_tag` has no runtime consumer*~~ — CLOSED 2026-08-01:
+    the recon readout's sample lines are the consumer (step text rendered
+    stripped, the decision as its own column). Viz step lists /
+    thread-brain lines remain tag-inclusive — fine, the tag is
+    informative there.
 - **Persona auto-selection misroute.** Run 3 routed to creative-director
   (conf 0.8) for a spec/pricing research task. Harmless here; worth a
   look if it recurs on research-shaped goals.
