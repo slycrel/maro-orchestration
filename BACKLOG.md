@@ -710,7 +710,7 @@ capture**, which is what makes the rung amortize instead of evaporate.
   | # | Ask | What it forces | Source |
   |---|---|---|---|
   | 1 | Quote what *[specific doc URL]* says about X | fetch-then-diff quote vs source; reject non-match | corpus 1.4/1.9 |
-  | 2 | ✅ **RUN 2026-08-01, cold arm PASSED** (`4bf7f761-merry-magpie`, chlorination claim, $24.88/42min, closure achieved=True @ 0.85) — the reframe held: honest "cannot determine" + 13-step auditable trail + the settling document named-but-unretrievable (Magie report). Catalog row promoted to `verified`. **Warm arm still owed** (re-run the same goal against the now-warm store — see the repeat-economics note below the table) | negative-result honesty; verdict-vs-trail split | corpus 1.3, Tier 1 → `verified` |
+  | 2 | ✅✅ **COLD+WARM PAIR COMPLETE 2026-08-01 — the arc's first full cold/warm measurement.** Cold `4bf7f761`: $24.88/7.68M-in/42min, "cannot determine" + 13-step trail, achieved=True @ 0.85. Warm `e2f4578b` (byte-identical prompt): **$17.39/5.42M-in/21.8min — −30% cost, −48% wall — landing dead-center in the pre-registered $15–20 artifact-reuse tier, exactly what UU-2 predicted** (no terrain lesson existed to reach $3–6). Mechanism, from camera frame + tool events + citations: (a) **lesson transfer DID happen** — 2 of the 3 cold-minted lessons were the top-2 recall candidates by score and were cited (initially misread as no-transfer: the tiered store re-IDs lessons vs the mint ledger — see UU-4); (b) **artifact reuse confirmed** — 35 tool-events touched prior artifacts, source_trail.md UPDATED in place, plan collapsed 7→3 planned steps; (c) **residual waste the terrain teaching would zero**: still probed the known-blocked archives 5× (vs dozens cold). And the warm deliverable is BETTER, not just cheaper: verdict upgraded to SPLIT (the claim bundles "first" + "illegally", resolved separately) on newly-fetched primary evidence — the actual 1898 BMJ Maidstone paper (PMC2434294) the cold run only name-dropped. Achieved=True @ 0.9. | cold/warm delta (decree #3), lesson transfer, artifact reuse | corpus 1.3, Tier 1 `verified`, pair measured |
   | 3 | Iterate on this parser until it produces *[output]* on *[input]* | execution grounding — every claimed output executed, not written | corpus 3.2, Tier 4 `target` |
   | 4 | Extract *[fields]* from this doc into JSON matching this schema | the two-check split: schema-valid **and** field-content-verified | corpus 1.11, Tier 4 `target` |
   | 5 | Tell me about *[obscure book/author]* | retrieval-before-describe, or "insufficient information found" | corpus 1.6/1.10, Tier 1 `target` |
@@ -824,6 +824,19 @@ capture**, which is what makes the rung amortize instead of evaporate.
     self), probe-verifiable terrain facts, cuts-time injection, existing
     store extended not replaced. Build waits on the doc's 4 provisional
     DECISIONs; chunk 1's acceptance test is a phrase-varied warm re-run.
+  - [ ] **(UU-4, from the warm-arm forensics) Lesson identity does not
+    survive the mint→store seam.** The 3 cold-minted lessons carry ledger
+    IDs (`lessons.jsonl`: 54d37f31/7de933d1/cd790134) but recall's tiered
+    store — and therefore `recall_citations.json` and the camera frame —
+    knows the SAME lessons (byte-identical text prefixes) under different
+    IDs (56a3f80e/2b0290ed/…). Cross-store provenance joins are
+    broken-by-design: "was the lesson minted by run A applied in run B?"
+    cannot be answered by ID join, only by text matching. This misled the
+    warm-arm analysis for a full round ("cold lessons never transferred" —
+    wrong). Fix direction: carry the mint-ledger id into the tiered store
+    row (or mint both from one id), so the citation rail joins end-to-end.
+    Cold/warm attribution at scale needs this — text-matching does not
+    survive paraphrase-on-reinforcement.
   - [ ] **(UU-3) This run planned WITHOUT any decompose-labeled call.**
     Zero decompose-candidate/compose purposes in the record — the 7-step
     plan was born from the `timeout-split` call (the killed step 1 got
