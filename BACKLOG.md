@@ -2258,7 +2258,10 @@ open — verification ≠ repair; each needs a wire-or-retire decision):**
   - **Follow-on steal (sequences after the gate)**: competence-redundancy
     decay — retire a lesson when the model follows it unprompted (internalized,
     Δ≈0 vs current competence), replacing calendar 0.85/day. Needs the same
-    replay harness.
+    replay harness. **Jeremy concurs 2026-07-31 (decree 55c877da)**: calendar
+    decay was "mostly placeholder"; and the tenure side — leverage successful
+    one-offs rather than requiring 3x independent re-derivation; repeat
+    patterns are better-than-luck signals to EXAMINE, not a tenure gate.
   - **Free diagnostic, runnable any time**: surprise-count — Jeremy reads the
     long-tier corpus and counts entries that SURPRISE him (not wrong ones).
     Zero = collapse empirically confirmed; nonzero = the seed set the gate is

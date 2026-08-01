@@ -5548,3 +5548,21 @@ pre-chunk NOW/evolver rows honestly unjudged going forward from here.
   posture); judge failures stamp now_self_verdict_error so a broken
   pipe never reads as unjudged-by-design. Record:
   docs/history/2026-07-31-chunkb-adversarial-review.md.
+
+- **2026-07-31** — Lesson-decay direction (Jeremy, decree-class, piped
+  55c877da): calendar decay (0.85/day) was "mostly placeholder" — decay
+  should re-anchor on competence-redundancy (Opus/LeAct steal #1, Jeremy
+  concurs). And the tenure side: successful one-offs should be leveraged,
+  not re-derived — "would be nice to leverage those better, rather than
+  re-inventing those wheels 3 times independently. Hard to replicate happy
+  accidents, but repeat patterns should be examined and recognized for
+  better-than-luck shapes that they likely are." Reading: independent
+  restatement is a better-than-luck SIGNAL to examine, not a tenure GATE;
+  one-off successes need a route to leverage that isn't 3x re-derivation.
+  Direction only — build stays gated on the verdict-flow revisit trigger
+  (BACKLOG LeAct entry, amended a1d4bb3). Surprise-read corpus snapshot
+  queued to the Reading tab
+  (docs/history/2026-07-31-lesson-corpus-surprise-read.md) — mechanical
+  pre-read finding: the ENTIRE long tier (4 rows) got tenure via the
+  recovery path re-minting identical template strings (sv 7-35 = machine
+  restatement), and all pre-chunk-6 rows carry novelty 0.00.

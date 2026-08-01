@@ -19,6 +19,7 @@ it; the queue's history is part of the decision record).
 
 | Added | Doc | Why / decision needed |
 |---|---|---|
+| 2026-07-31 | [Lesson-corpus surprise read](https://github.com/slycrel/maro-orchestration/blob/main/docs/history/2026-07-31-lesson-corpus-surprise-read.md) | LeAct surprise-count diagnostic: count entries that SURPRISE you (not wrong ones — instructions in the doc). Zero = mirroring collapse confirmed; nonzero = the seed set a Δ-gate gets evaluated against. React in a new session with entry numbers. |
 
 ## Done
 
