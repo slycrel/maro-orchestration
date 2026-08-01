@@ -555,6 +555,17 @@ its own slice, census first.
 The four stop verdicts (§3a) stand unchanged; paused is orthogonal and
 composes with all of them.
 
+**Slice 1 SHIPPED 2026-07-31** (typed pause reasons; `stop_verdicts.py`
+PAUSE_* vocabulary, `LoopContext.stamp_pause` rail mirroring `stamp_stop`,
+writer sites at the kill-switch/busy-refusal/clarification/stranded-sweep
+seams, run-card forwarding with a no-guessing fallback map — "interrupted"
+stays untyped rather than fabricating provenance). Named upgrade edges,
+tracked in BACKLOG: stamp sites for the reserved llm-unreachable /
+no-tokens / disk-full reasons; a live pause/resume lifecycle (today
+"paused" is observed provenance, not a commanded state); unification with
+the project-level sheriff `.maro-paused` marker (same word, different
+lifecycle); the untyped merge-failure/fence interrupt paths.
+
 **Build order resolved by delegation (Jeremy, 2026-07-31 — piped
 8c7f5068):** he declines to pick; the §12 proposed order stands (#4
 stop-verdict split → #2 recon flavor, exercised in `star` first), executed

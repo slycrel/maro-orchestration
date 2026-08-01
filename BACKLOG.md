@@ -2445,6 +2445,31 @@ deferred rather than silently dropped:
     and `is_learnable_outcome` fails closed on external-interrupt
     without a positive goal verdict. The row-write ordering itself is
     unchanged (load-bearing for lesson dedup).
+- **Paused-state upgrade edges (§13e slice 1 shipped 2026-07-31, decree
+  7afe8b3a).** Typed pause reasons landed (stop_verdicts.py PAUSE_*
+  vocabulary, stamp_pause rail, writer sites, run-card forwarding). The
+  honest-good-enough boundary, each edge independently upgradeable:
+  - *Reserved-reason stamp sites* — `llm-unreachable`, `no-tokens`,
+    `disk-full` exist in the vocabulary with NO writer yet. Natural seams:
+    the adapter failover ladder's terminal failure (llm-unreachable), the
+    budget breaker (no-tokens), an ENOSPC catch at artifact-write sites
+    (disk-full). Consumer-first is satisfied (run cards already forward);
+    each stamp is a small scoped add.
+  - *Live pause/resume lifecycle* — today "paused" is observed provenance
+    on runs that already stopped; there is no commanded `paused` status a
+    running loop enters and resumes from. If/when built, the resume seam
+    is `_find_resumable_runs` (stranded already resumes manually).
+  - *Sheriff naming collision* — project-level `.maro-paused` marker
+    (sheriff.py → orch_items status "paused") is the same word with a
+    different lifecycle (project intake gate vs run state). Unify the
+    vocabulary or rename one when the run-level state goes commanded.
+  - *Untyped interrupt edges* — loop_finalize merge-failure paths
+    (~:358-401) and the agent_loop fence path set external-interrupt
+    without a pause reason; type them if their frequency ever matters
+    (census: they're rare).
+  - *Residual raw-status reads* — strategy_evaluator/attribution are
+    interrupt-aware but still consume raw status on non-interrupt rows;
+    pause_family gives them a cleaner join when next touched.
 - **Persona auto-selection misroute.** Run 3 routed to creative-director
   (conf 0.8) for a spec/pricing research task. Harmless here; worth a
   look if it recurs on research-shaped goals.

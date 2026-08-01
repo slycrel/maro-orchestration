@@ -5586,4 +5586,13 @@ pre-chunk NOW/evolver rows honestly unjudged going forward from here.
   out to subagents (box OOM limits still respected). First fan-out same
   session: stop-seam refresh audit + fail-open census audit launched as
   background agents feeding slice 1. Coordination note: Jeremy has an M1
-  opus lane on a BACKLOG test item (auditing/bugfixes first).
+  opus lane on a BACKLOG test item (auditing/bugfixes first) — confirmed
+  2026-07-31 as the live-learning test arc (LT., landed 861ab28); its
+  provenance census ran on the box same day
+  (output/provenance_census/census.{json,txt}).
+- **2026-07-31** — §13e slice 1 SHIPPED: typed pause reasons
+  (stop_verdicts.py PAUSE_* vocabulary + stamp_pause rail + writer sites
+  + run-card forwarding; tests/test_pause_reasons.py). Upgrade edges
+  named in BACKLOG ("Paused-state upgrade edges"). Side-find pinned: the
+  reflect_and_record kwarg seam swallows TypeErrors via finalize's
+  catch-all — a signature drift there silently zeroes all learning data.
