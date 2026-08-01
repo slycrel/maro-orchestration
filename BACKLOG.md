@@ -672,7 +672,18 @@ capture**, which is what makes the rung amortize instead of evaporate.
   - **Container posture** for the network-sourced and scope-breach goals:
     `executor.container` is still opt-in pending the C4 flip.
 
-- [ ] **LT-2 — `docs/CAPABILITY_LADDER.md`.** Broad checkpoints, each a
+- [x] **LT-2 — `docs/CAPABILITY_LADDER.md` SHIPPED 2026-08-01.** C0–C5
+  checkpoints + four ladders (A web-reading, B here-and-now grounding, C
+  self-inspection, D remember-across-runs) with per-rung status, indexed in
+  `docs/INDEX.md`. Two findings worth carrying out of the writing: **(1) C4
+  (persist & reuse) is the first rung orchestration earns that a good
+  single-shot model plus tools cannot approximate** — everything below it is
+  table stakes, so C4 is both the prize and where our evidence is weakest.
+  **(2) Ladder D rung D1 (record what was injected) is not a capability any
+  user would ask for** — it exists solely to make D2/D3 measurable, which is
+  precisely why it was the thing quietly broken at 10% coverage. Original
+  spec follows.
+- [ ] ~~LT-2 — `docs/CAPABILITY_LADDER.md`.~~ Broad checkpoints, each a
   small named goal set that must read `verified`, not `target`: **C0**
   know what you don't know → **C1** fetch & ground → **C2** triangulate &
   resist fabrication → **C3** execute & check → **C4** persist & reuse →

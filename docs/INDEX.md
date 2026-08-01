@@ -37,6 +37,7 @@ BACKLOG, VISION, CLAUDE, README…) are living by definition and carry no frontm
 | What open threads exist, in what state? (premise-drift finds, ACTIVE/PARKED split, marker-convention rules) | `history/2026-07-28-thread-census.md` (star use #3; 56 threads / 7 states; 7 premise-drifts, 1 closed on the spot; 8 doc currency fixes; 10/10 sweep spot-checks held) |
 | What are we deliberately NOT building? | `ARCHITECTURE_NON_GOALS.md` |
 | What should Maro be able to do? (example goals, test corpus, pre-installed skill target) | `CAPABILITIES.md` (living catalog — add real asks as they happen) |
+| What do those goals add up to, and what's the next bridge? (C0–C5 checkpoints, per-chasm ladders, tech-tree nodes) | `CAPABILITY_LADDER.md` (progression map; CAPABILITIES.md stays the goal well) |
 | Two-box / Hermes dispatch, interactive goals, effort-based spend UX, mid-flight injection? | `SESSION_PROTOCOL_DESIGN.md` (dormant-design; the 2026-07-15 skeleton, iterate there) |
 | How do subsystems X work in detail? | `../skills/arch-*.md` (mandatory pre-reads per CLAUDE.md) |
 | Coding style / seam principles for this repo? | `CODING_NOTES.md`; project artifacts: `CONVENTIONS.md` |
