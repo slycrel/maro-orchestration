@@ -335,17 +335,61 @@ capture**, which is what makes the rung amortize instead of evaporate.
     re-run+diff protocol below): `output/provenance_census/census.{json,txt}`
     — 734 runs, commit 861ab28, generated 2026-08-01T05:22Z. Predictions
     scored against the pre-registered table:
-    - `build/calls/` **came back otherwise** — 50.0% post-era (12.6% all),
-      EDGE 2 live and large: **641 settled runs captured ZERO LLM calls.**
-      By the table's own wording: record mode is effectively off in
-      production and we have been reasoning about prompts we never kept.
+    - `build/calls/` **came back otherwise — and the "otherwise" reading
+      was WRONG, my instrument's fault (corrected 2026-08-01).** The
+      scored line said "record mode is effectively off in production."
+      It is not. The 12.6%-all-history / 50%-post-era pair pooled 619 runs
+      that PREDATE record mode (shipped 2026-06-26) with runs that could
+      have used it, and the post-era bucket was **n=8**. The monthly
+      series says: 2026-04 0%, 2026-05 0% (n=476), 2026-06 0% (n=141,
+      feature shipped on the 26th), **2026-07 80.7% (92/114)**. Record
+      mode works. The real, much narrower finding: **~19% of July runs
+      still capture zero calls** — the ContextVar/lane hole of EDGE 2, at
+      a fifth of runs rather than seven-eighths. Separately true and worth
+      recording: the **pre-2026-06-26 corpus (~619 runs) is permanently
+      blind on LLM I/O** — not a bug, the feature did not exist — so
+      retrospective prompt/response mining of that history is impossible.
+    - **The real alarm the pooled table buried: `recall_citations.json` at
+      10% of July agenda runs** (2.1% all-history). This is the artifact
+      naming *which lessons a run cited* — the exact rail a cold/warm
+      delta needs to attribute an improvement to a specific lesson. The
+      pre-registered reading said "all-absent = the citation join is dead
+      and cold/warm attribution has no rail"; 10% is not all-absent but is
+      close enough to no rail that LT-1 cannot measure what it exists to
+      measure until this is fixed. Its partner
+      `skills_manifest.jsonl` sits at 55% of July runs — no manifest, no
+      attribution, so the skill gets neither credit nor blame.
+      **These two, not record mode, are the batch blockers.**
     - outcomes `no_loop_id` **came back otherwise** — 96.3% (1397/1450),
       far beyond NOW-lane-sized; unverdictable by task_type is dominated
-      by `agenda` (1256). Agenda runs are losing the join too.
+      by `agenda` (1256). Agenda runs are losing the join too. **Caveat
+      pending re-run:** this number has the same pooling hazard as
+      `build/calls/` above and the first census could not rule it out —
+      `census_outcomes` had no date bucketing, so pre-loop_id-stamping
+      rows are pooled in. The tool now emits a per-month verdictability
+      table; **re-run before acting on 96.3%.** The finding is directionally
+      real either way (only 41 rows in all of history carry a verdict), but
+      the fix differs: a live join failure gets wired now, a historical
+      one only means the denominator has to be rebuilt going forward.
     - scope/resolved_intent 87.5% post-era, recall_citations 100% post-era,
       skill_attribution low-by-design — all roughly as predicted.
     - Environment.json/skills_manifest/checkpoint/run_card post-era at
       100% but tiny all-history denominators; per-stage table in census.txt.
+      July-only rates from the monthly series: environment 60%,
+      skills_manifest 55%, checkpoint 48%, run_card 93%, step-*.md 50%,
+      scope/resolved_intent 80%, plan.md 96%, report.html 90%,
+      captains_log_slice 92%. `skill_attribution.json` 29% stays
+      correct-by-design (FULL-trust verdicts only).
+    - [x] **Instrument fixed 2026-08-01 — the era split was the defect.**
+      A single late boundary (2026-07-29) left n=8 post and pooled
+      pre-feature history into the whole-history column, which is how a
+      working feature got scored as a production outage. The census now
+      emits a **per-month coverage series** (artifacts) and a **per-month
+      verdictability series** (outcomes), marks thin denominators (<20
+      runs) with `~`, and says in both the code comment and the rendered
+      header that the monthly view is load-bearing and the era columns must
+      not be read alone. **Re-run on the box** to get a corrected baseline;
+      diff against the committed one.
     `scripts/provenance_census.py` + `scripts/provenance-census.sh`.
     Covers 16 artifacts across 10 harness stages (intake, scoping, recall,
     skill-injection, llm-io, events, planning, step-exec, reporting,

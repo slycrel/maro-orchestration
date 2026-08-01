@@ -87,7 +87,20 @@ ARTIFACTS: Tuple[Dict[str, Any], ...] = (
 # shipped 2026-07-29. Runs older than that CANNOT have it, so a single
 # whole-history rate would understate today's coverage and hide a live
 # regression. Bucketing by era is what keeps the number honest.
+#
+# CAUTION, learned from the first box run (2026-08-01): a single boundary this
+# late leaves a tiny post bucket (n=8 of 734), and every "100% post-era" cell
+# then rests on a handful of runs. Worse, the whole-history column pools runs
+# that PREDATE a feature with runs that could have used it — which is how the
+# first run's `build/calls/` 12.6% got read as "record mode is off in
+# production" when the monthly series showed 81% for the only month in which
+# record mode existed. **The monthly series below is the load-bearing view;
+# the era columns are a coarse summary and must not be read alone.**
 ERA_BOUNDARY = "2026-07-29"
+
+# Below this many runs, a percentage is noise. Rendered cells carry a marker so
+# nobody quotes a 100% that is 3-of-3.
+THIN_DENOMINATOR = 20
 
 TERMINAL_STATUSES = {"done", "stuck", "error", "failed", "interrupted",
                      "complete", "completed", "partial"}
@@ -215,12 +228,24 @@ def census_outcomes(outcomes_path: Path) -> Dict[str, Any]:
     by_task_type_blind: Counter = Counter()
     examples_blind: List[str] = []
     examples_done_no_verdict: List[str] = []
+    # Same lesson as the artifact table: a whole-history unverdictable rate
+    # pools rows written before loop_id stamping existed with rows that could
+    # have carried it. Without this bucket the number reads as a live outage.
+    monthly: Dict[str, Dict[str, int]] = defaultdict(
+        lambda: {"total": 0, "no_loop_id": 0, "verdicted": 0})
 
     for row in _iter_jsonl(outcomes_path):
         total += 1
         loop_id = row.get("loop_id")
         has_verdict = row.get("goal_achieved") is not None
         status = (row.get("status") or "").strip().lower()
+
+        month = str(row.get("recorded_at") or "")[:7] or "unknown"
+        monthly[month]["total"] += 1
+        if not loop_id:
+            monthly[month]["no_loop_id"] += 1
+        if has_verdict:
+            monthly[month]["verdicted"] += 1
 
         if not loop_id:
             no_loop_id += 1
@@ -245,12 +270,47 @@ def census_outcomes(outcomes_path: Path) -> Dict[str, Any]:
         "blind_by_task_type": dict(by_task_type_blind.most_common(10)),
         "examples_unverdictable": examples_blind,
         "examples_done_no_verdict": examples_done_no_verdict,
+        "by_month": {m: dict(v) for m, v in sorted(monthly.items())},
     }
 
 
 # ---------------------------------------------------------------------------
 # Aggregation
 # ---------------------------------------------------------------------------
+
+def _month_of(row: Dict[str, Any]) -> str:
+    return str(row.get("started_at") or "")[:7] or "unknown"
+
+
+def monthly_coverage(runs: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Per-month presence rate per artifact — the view that keeps eras honest.
+
+    A whole-history rate pools runs from before a feature existed with runs
+    that could have used it, and reads as a live outage. The month a feature
+    ships is visible here as a step change; a real regression is visible as a
+    decline. The first box run needed exactly this to tell those apart.
+    """
+    settled = [r for r in runs if r["settled"]]
+    months = sorted({_month_of(r) for r in settled})
+    out: Dict[str, Any] = {"months": months, "runs_per_month": {}, "artifacts": {}}
+    for m in months:
+        out["runs_per_month"][m] = sum(1 for r in settled if _month_of(r) == m)
+    for spec in ARTIFACTS:
+        key = spec["key"]
+        cells: Dict[str, Any] = {}
+        for m in months:
+            rows = [r for r in settled
+                    if _month_of(r) == m and r["applicable"][key]]
+            if not rows:
+                cells[m] = None
+                continue
+            hits = sum(1 for r in rows if r["present"][key])
+            cells[m] = {"n": len(rows), "present": hits,
+                        "pct": round(100.0 * hits / len(rows), 1),
+                        "thin": len(rows) < THIN_DENOMINATOR}
+        out["artifacts"][key] = cells
+    return out
+
 
 def aggregate(runs: List[Dict[str, Any]]) -> Dict[str, Any]:
     settled = [r for r in runs if r["settled"]]
@@ -327,6 +387,44 @@ def render_text(report: Dict[str, Any]) -> str:
         add(f"{key:<34}{row['stage']:<16}"
             f"{str(row['present']) + '/' + str(row['applicable_runs']):>12}{pct:>7}{post:>10}")
     add("")
+
+    mon = report.get("monthly") or {}
+    months = mon.get("months") or []
+    if months:
+        add("-" * 74)
+        add("PER-MONTH COVERAGE — the load-bearing view")
+        add("-" * 74)
+        add("A whole-history rate pools runs from BEFORE a feature existed with")
+        add("runs that could have used it, and reads as a live outage. Read the")
+        add("month a feature ships as a step change; read a decline as a")
+        add("regression. '~' marks a cell with a thin denominator (<%d runs)."
+            % THIN_DENOMINATOR)
+        add("")
+        add(f"{'artifact':<34}" + "".join(f"{m:>10}" for m in months))
+        add(f"{'(runs settled)':<34}"
+            + "".join(f"{mon['runs_per_month'].get(m, 0):>10}" for m in months))
+        for key, cells in mon.get("artifacts", {}).items():
+            line = f"{key:<34}"
+            for m in months:
+                cell = cells.get(m)
+                if not cell:
+                    line += f"{'—':>10}"
+                else:
+                    mark = "~" if cell["thin"] else " "
+                    line += f"{mark + str(int(cell['pct'])) + '%':>10}"
+            add(line)
+        add("")
+
+    ocm = report["outcomes"].get("by_month") or {}
+    if ocm:
+        add("-" * 74)
+        add("PER-MONTH VERDICTABILITY (outcomes.jsonl)")
+        add("-" * 74)
+        add(f"{'month':<12}{'rows':>8}{'no loop_id':>13}{'blind %':>10}{'verdicted':>11}")
+        for m, v in ocm.items():
+            pct = 100.0 * v["no_loop_id"] / v["total"] if v["total"] else 0.0
+            add(f"{m:<12}{v['total']:>8}{v['no_loop_id']:>13}{pct:>9.1f}%{v['verdicted']:>11}")
+        add("")
 
     if agg["incomplete_stages"]:
         add("STAGES WITH INCOMPLETE PAPER TRAIL:")
@@ -421,6 +519,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         "window": args.since or "all history",
         "era_boundary": ERA_BOUNDARY,
         "runs": aggregate(inspected),
+        "monthly": monthly_coverage(inspected),
         "run_detail": inspected,
         "outcomes": census_outcomes(ws / "memory" / "outcomes.jsonl"),
     }
