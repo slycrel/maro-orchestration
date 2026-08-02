@@ -1134,6 +1134,71 @@ capture**, which is what makes the rung amortize instead of evaporate.
   achieved=False).** Argues for keeping deterministic guards advisory
   unless their matching is provably exact — worth a design pass.
 
+  **ROUND 4b RESULT — `91f72910-warm-glen`, 2026-08-02. The guard fix is
+  confirmed LIVE on the exact claim shape that broke it.**
+
+  | metric | predicted | actual | verdict |
+  |---|---|---|---|
+  | cost | $3.5–5.5 | **$2.65** | ❌ missed low |
+  | steps | 5–9 | **7** (17 min) | ✓ |
+  | avoidable retries | 0 | **0** (0 blocked hosts) | ✓ |
+  | no provenance demotion | — | **achieved=True, source=closure** | ✓ |
+
+  Byte-identical #5 prompt, same `tell-me-about-the-book` project, the six
+  real `OL*.json` still on disk — and the guard resolved the glob claim
+  correctly this time. **That was the re-run's primary purpose and it is
+  discharged.**
+
+  **The arc's second cold/warm pair: $7.83/13 steps → $2.65/7 steps
+  (−66% cost, −46% steps)** — far larger than the chlorination pair's
+  −14%. **Confound, stated:** the cold arm *wandered* (STEP_TOO_BROAD ×4)
+  and the warm arm didn't, so this delta conflates "warm" with "didn't
+  wander." Not separable at n=2. The plausible reading is that not
+  wandering IS partly a warm effect (artifacts + prior plan shape give the
+  run a track to follow), but that is a hypothesis, not a measurement.
+
+  **Warm ≠ lazy, again.** 38 tool events, 6 fresh fetches, a brand-new
+  32 KB report rather than a reuse of the cold arm's — and it improved on
+  the cold arm the same way the chlorination warm arm did. It **contested
+  its own best quote**: Gall's Law is split across two Wikipedia-cited
+  pages, the p.70 citation carries an `{{Incomplete reference}}`
+  maintenance flag, and the p.71 footnote's title/date pairing is "not
+  corroborated by any catalog record fetched in this project." Rated
+  weak/contested on attribution while still quoting it. That is the
+  per-aspect honesty the row was supposed to test.
+
+  **COST PREDICTIONS: 3 FOR 3, ALL MISSED LOW.** That is a pattern, not
+  noise, and the root cause is mine: I rebuilt the corrected band on #5's
+  $7.83 without noticing $7.83 was *itself* inflated by wandering. The
+  arc's seven runs span **$1.92–$7.83, mean $4.97**. Six remaining LT-1
+  arms ≈ **$30**, not $36–48, not $150–210. Third correction to this
+  number in one day, each one downward — the standing lesson is that I
+  keep anchoring on the most expensive specimen instead of the
+  distribution.
+
+  **Brittle checkers: instances 3 and 4, and now a sharper diagnosis.**
+  4b's two failures are *format-proxy* mismatches, verified by hand:
+  check 1 demanded ≥8 full URLs inside `systemantics_report.md`, which
+  carries **2** full URLs and **16 bracketed bare-domain refs**, having
+  delegated the full-URL list to `source-list.md` (**24 numbered entries,
+  17 URLs**); check 2 demanded a URL or OLID within 5 lines of the Gall
+  quote, which is followed by a bracketed bare-domain ref. Both measure
+  citation *style*, not citation *presence*.
+  **Running tally across 4a+4b: 4 failed checks, 4 check-design
+  artifacts, 0 real failures — closure judged past all four correctly.**
+  (Method note: I first drafted a POSIX bracket-expression bug as the
+  explanation for check 1, then couldn't reproduce it — the isolated test
+  returned 0 for the control too, meaning the test was unsound. Dropped
+  rather than published. The verified explanation above needed no regex
+  theory.)
+  **New watch-item that falls out of this: the closure CONFIDENCE score
+  is contaminated by check-design quality.** Both runs scored 3/5 checks
+  and confidence 0.72–0.78 while the deliverables were, on inspection,
+  strong. If bad checks routinely drag the number, then confidence is
+  partly measuring the checker's brittleness rather than the work — which
+  matters, because downstream consumers (promotion gates, lesson minting,
+  stop verdicts) read that number as a quality signal.
+
   **Repeat-run economics (the warm arm, mechanism written down before
   running it — 2026-08-01, Jeremy's question).** On the subprocess backend
   there is NO cross-run prompt cache — every `claude -p` call is a fresh
