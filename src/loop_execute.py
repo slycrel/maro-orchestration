@@ -957,6 +957,38 @@ def _execute_main_loop(
                 print(f"[maro] {stuck_reason}", file=sys.stderr, flush=True)
             break
 
+        # §13e decree (Jeremy 2026-08-02): environmental exhaustion is a
+        # PAUSE, distinct from the chosen budget ceiling above ("one is a
+        # pause (out of tokens/error, not budget); one is a conclusion that
+        # can be restarted"). Out-of-tokens / provider-down means the
+        # environment stopped the run — nothing about the goal concluded, so
+        # retrying the step or continuing to the next one would churn against
+        # the same dead backend. Stamp the typed pause and end "interrupted":
+        # closure skips interrupted runs, so the continuation lane's
+        # strict-affirmative resume test (pause_reason AND no verdict) routes
+        # the follow-up as a same-identity RESUME once the environment heals.
+        # Killswitch `pause.environmental` (docs/DEFAULTS.md) restores the
+        # old churn-to-stuck behavior.
+        _env_pause = ""
+        try:
+            from config import get as _cfg_get
+            if _cfg_get("pause.environmental", True):
+                from stop_verdicts import pause_reason_for_error_class
+                _env_pause = pause_reason_for_error_class(
+                    outcome.get("error_class") or "")
+        except Exception:
+            _env_pause = ""
+        if _env_pause:
+            loop_status = "interrupted"
+            stuck_reason = (outcome.get("stuck_reason")
+                            or f"environmental pause: {_env_pause}")
+            ctx.stamp_pause(_env_pause)
+            log.warning("environmental pause (%s): %s", _env_pause, stuck_reason)
+            if verbose:
+                print(f"[maro] paused ({_env_pause}): {stuck_reason}",
+                      file=sys.stderr, flush=True)
+            break
+
         step_status = outcome["status"]
         _raw_result = outcome.get("result", "")
         # Guard: LLM can return a JSON schema object instead of a string value for

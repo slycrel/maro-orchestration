@@ -100,6 +100,32 @@ PAUSE_ERR_LLM_UNREACHABLE = "llm-unreachable"    # vocabulary reserved; stamp si
 PAUSE_ERR_NO_TOKENS = "no-tokens"                # vocabulary reserved; stamp sites are an upgrade edge
 PAUSE_ERR_DISK_FULL = "disk-full"                # vocabulary reserved; stamp sites are an upgrade edge
 
+def pause_reason_for_error_class(error_class: str) -> str:
+    """Map a terminal step failure's llm_errors class to its typed pause.
+
+    §13e decree (Jeremy 2026-08-02): environmental exhaustion — out of
+    tokens, provider down — is a PAUSE ("one is a pause (out of
+    tokens/error, not budget)"); a chosen budget ceiling is a CONCLUSION
+    ("a conclusion that can be restarted by the user/orchestrator", the
+    out-of-budget STOP verdict). This helper is the pause half: it makes
+    the reserved NO_TOKENS/LLM_UNREACHABLE vocabulary real.
+
+    Returns "" for everything non-environmental: auth stays
+    terminal-surfaced (credentials need a human, and the reserved
+    vocabulary has no auth value — deliberate), budget_runaway stamps its
+    stop verdict at its own break site, and ordinary step failures ride
+    the blocked/recovery machinery unchanged.
+    """
+    return {
+        # credits/quota gone — "never retry"; tokens may return later
+        "billing_actionable": PAUSE_ERR_NO_TOKENS,
+        # rate/usage limit with a stated reset — tokens WILL return
+        "retry_at": PAUSE_ERR_NO_TOKENS,
+        # the failover chain exhausted every backend — LLM unreachable
+        "failover": PAUSE_ERR_LLM_UNREACHABLE,
+    }.get(error_class or "", "")
+
+
 PAUSE_REASONS_OPERATOR = frozenset((PAUSE_OP_MANUAL, PAUSE_OP_CLARIFICATION))
 PAUSE_REASONS_ERROR = frozenset((
     PAUSE_ERR_BUSY, PAUSE_ERR_WRITER_DIED, PAUSE_ERR_LLM_UNREACHABLE,

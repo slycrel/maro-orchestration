@@ -200,3 +200,56 @@ class TestSupersededRows:
                        task_type="agenda", handle_id="hdW")
         assert mark_outcomes_superseded("hdW") == 1
         assert mark_outcomes_superseded("hdW") == 0, "already-marked rows stay"
+
+
+class TestEnvironmentalPause:
+    """§13e decree (Jeremy 2026-08-02): out-of-tokens/provider-down is a
+    PAUSE; the chosen budget ceiling is a CONCLUSION. The mapping helper is
+    the tested seam; the break site consumes it."""
+
+    def test_mapping_covers_the_decree(self):
+        from stop_verdicts import (
+            pause_reason_for_error_class,
+            PAUSE_ERR_NO_TOKENS, PAUSE_ERR_LLM_UNREACHABLE,
+        )
+        assert pause_reason_for_error_class("billing_actionable") == PAUSE_ERR_NO_TOKENS
+        assert pause_reason_for_error_class("retry_at") == PAUSE_ERR_NO_TOKENS
+        assert pause_reason_for_error_class("failover") == PAUSE_ERR_LLM_UNREACHABLE
+
+    def test_non_environmental_classes_do_not_pause(self):
+        from stop_verdicts import pause_reason_for_error_class
+        # budget_runaway has its own STOP-verdict break; auth needs a human
+        # (deliberate vocabulary gap); ordinary failures ride blocked/recovery.
+        for cls in ("budget_runaway", "auth_actionable", "fatal",
+                    "token_runaway", "retry_backoff", "", None):
+            assert pause_reason_for_error_class(cls) == ""
+
+    def test_mapped_reasons_are_valid_vocabulary(self):
+        """The stamp site drops off-vocabulary reasons silently — every value
+        this helper emits must be in VALID_PAUSE_REASONS or the decree's
+        stamps evaporate."""
+        from stop_verdicts import (
+            pause_reason_for_error_class, VALID_PAUSE_REASONS)
+        for cls in ("billing_actionable", "retry_at", "failover"):
+            assert pause_reason_for_error_class(cls) in VALID_PAUSE_REASONS
+
+    def test_paused_env_run_is_resumable_by_the_lane(self, monkeypatch, tmp_path):
+        """End-to-end compose check: a run parked by the environmental pause
+        is exactly what the continuation lane's resume test accepts."""
+        _setup(monkeypatch, tmp_path)
+        import runs
+        from handle_queue import handle_task
+        from stop_verdicts import PAUSE_ERR_NO_TOKENS
+
+        rd = _mk_parent("parenthd05", pause_reason=PAUSE_ERR_NO_TOKENS,
+                        status="interrupted")
+        seen = {}
+
+        def _fake_loop(goal, **kwargs):
+            seen["pinned"] = runs.current_run_dir()
+            return _FakeLoopResult()
+
+        with patch("agent_loop.run_agent_loop", side_effect=_fake_loop):
+            handle_task(_task("parenthd05"), dry_run=True)
+        assert seen["pinned"] == rd, (
+            "no-tokens pause must resume as the same run identity")
