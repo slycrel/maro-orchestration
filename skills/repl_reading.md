@@ -19,6 +19,18 @@ ever reasons over small, relevant, verified slices.
 **The rule in one line: the document stays on disk; only slices you can
 justify enter your context.**
 
+**Measured correction (A/B run e0bbc289, 2026-08-02): on this executor,
+token cost scales with TOOL TURNS, not bytes read** — every tool
+round-trip re-sends the growing step conversation, so 94 tiny reads cost
+MORE than a few fat ones (tokens rose 24% while content-per-read fell).
+The protocol below is therefore stated in turns: **minimize round-trips
+first, bytes second.** One orientation command for the whole corpus, at
+most one locate + one read per file, and small files are read whole in a
+single command — running wc + grep + sed against a 25-line file is three
+turns where one `cat` was strictly cheaper. The slice discipline is for
+files where a whole read genuinely can't be justified (thousands of
+lines), and the honesty/verification discipline applies always.
+
 ## The protocol
 
 **0. Budget first.** Before reading anything, set your read budget for the
@@ -27,12 +39,15 @@ task: a total line/char ceiling you will not cross without narrowing
 synthesis may take more, but SAY so in your step result). If you notice
 you are about to exceed it, stop and narrow — do not push through.
 
-**1. Size-check before any read.** Never open a file blind:
+**1. ONE orientation pass for the whole corpus — not per file:**
 ```bash
-wc -lc path/file.md                  # lines + bytes
-ls -la dir/ | head -20               # corpus shape
+find dir/ -type f | xargs wc -l | sort -rn | head -30   # every file's size, one turn
 ```
-Under ~200 lines? Just read it — this protocol is for everything bigger.
+Files under ~300 lines: read them WHOLE, in one command — batch several
+small files into a single `cat small1.md small2.md small3.md` (with
+`==>` headers via `head -c0` trick or `tail -n +1 f1 f2`). The slice
+protocol below is ONLY for the files this listing shows are genuinely
+large.
 
 **2. Outline, don't read.** Get the document's skeleton and choose targets:
 ```bash
@@ -41,12 +56,13 @@ head -30 file.md; tail -20 file.md                      # frame: intro + conclus
 python3 -c "import json;d=json.load(open('f.json'));print(type(d),list(d)[:20] if isinstance(d,dict) else len(d))"  # JSON shape, not content
 ```
 
-**3. Locate, then read the located region — never the whole file.**
+**3. Locate, then read the located region — in as few turns as possible.**
 ```bash
-grep -n "the thing" file.md                             # find line numbers
-sed -n '120,160p' file.md                               # read THAT region ±context
-grep -n -A3 -B3 "term" file.md | head -40               # bounded context read
+grep -n -A5 -B2 "the thing" bigfile.md | head -60       # locate AND read, one turn
+sed -n '120,180p;300,340p' bigfile.md                   # multiple regions, one turn
 ```
+Combine locate+read into one command when you can; batch multiple regions
+into one sed. A separate turn per probe is the measured cost driver.
 Grep locates; it does not comprehend. After locating, READ the region —
 a hit's surrounding lines change its meaning (tables, negations,
 "however" one line up). And know grep's limit: paraphrase, tables, and

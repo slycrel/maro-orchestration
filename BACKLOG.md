@@ -2059,6 +2059,26 @@ and maintainable over time."** Step 1 is greenlit:
   corpus now also contains 3b's final_verdict.md (slightly richer than
   the 3b arm saw), so read the tokens_in delta as the primary signal,
   not the dollars alone.
+  **A/B RESULT (run `e0bbc289-sunny-pine`, 2026-08-02): $13.73 / 4.29M-in
+  / 18.7min vs baseline $11.25 / 3.45M / 16.7min — NEITHER predicted
+  tier, and the miss is the finding.** The protocol was followed
+  *beautifully*: 34 size-checks, 34 grep-locates, 26 slice-reads, only 2
+  whole-file cats, and the best honesty section any run has produced (an
+  explicit "Artifacts NOT read" list incl. "already confirmed
+  irrelevant; not re-read this pass"). Cost went UP anyway because **on
+  the subprocess executor, token cost scales with TOOL TURNS, not bytes
+  read** — each of ~94 round-trips re-sends the growing step
+  conversation, so many tiny reads cost more than a few fat ones;
+  several wc+grep+sed triples ran against 25-line files where one cat
+  was strictly cheaper. Closure 0.75 (vs 0.93), deliverable quality
+  high. **Skill revised same day to state the protocol in TURNS** (one
+  corpus-wide orientation command, whole-reads for small files batched
+  into single commands, locate+read combined, multi-region seds).
+  Second A/B with the turn-based protocol is the natural next probe —
+  prediction NOT yet registered; do that before dispatching. The
+  accuracy/honesty half of the RLM direction is confirmed worth keeping
+  regardless; the cost half INVERTS on a per-turn-resend transport, which
+  bounds where step-2 (recursive sub-calls) can pay on this backend.
   **Pause-stamp residual VERIFIED same day, result reframed:** the
   ceiling path doesn't stamp — and §13e's vocabulary has NO budget
   value by design ("out-of-budget" is a STOP verdict, not a pause). So
