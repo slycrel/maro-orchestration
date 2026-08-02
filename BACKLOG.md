@@ -745,12 +745,22 @@ capture**, which is what makes the rung amortize instead of evaporate.
     lever, now measured on a pure-local-corpus goal with no web at all.
     The $4–8 floor was wrong about the executor tax, not about the
     behavior.
-  - Honesty note: 3b's slug derived to the OLD project name (the goal
-    text names it early), so its artifacts were also in-slug. The tool
-    events show deliberate corpus reads per its own plan, so the
-    pointer-following conclusion stands, but a future 3b-style test
-    should phrase the goal so the slug differs and the pointer is the
-    ONLY bridge.
+  - Note on 3b's slug collision (CORRECTED 2026-08-02 after Jeremy pushed
+    back on the first version, which recommended forcing a distinct slug
+    "so the pointer is the only bridge"): **the collision is not a
+    confound — it is the continuity mechanism working as designed.** Goal
+    text referencing prior work routing to that work's project is what
+    slugs are for, and reads across projects are unrestricted anyway (the
+    fence is a WRITE fence), so a distinct-slug test would verify only
+    that the executor can read an explicit path — vacuous. What 3b proved
+    is the behavioral choice: corpus prioritized over re-research, zero
+    web fetches, planned around what the corpus could settle. **The real
+    untested rung is FUZZY reference resolution**: a user who says "you
+    researched water chlorination recently — using that work, answer X"
+    with no project name and no filenames. Discovery problem, not read
+    problem — sits between Ladder-D D1 and the exemplar-run "surfacing"
+    direction; 3b tested the rung above it (explicit pointer + named
+    files).
   - UU-1 stayed unexercised live (0 failed calls in either run — both
     fixes deployed, UU-4 confirmed live on 3a's mints, UU-1 remains
     test-verified only).
