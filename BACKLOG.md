@@ -850,10 +850,10 @@ capture**, which is what makes the rung amortize instead of evaporate.
   | # | Ask | What it forces | Source |
   |---|---|---|---|
   | 1 | Quote what *[specific doc URL]* says about X | fetch-then-diff quote vs source; reject non-match | corpus 1.4/1.9 |
-  | 2 | ✅✅ **COLD+WARM PAIR COMPLETE 2026-08-01 — the arc's first full cold/warm measurement.** Cold `4bf7f761`: $24.88/7.68M-in/42min, "cannot determine" + 13-step trail, achieved=True @ 0.85. Warm `e2f4578b` (byte-identical prompt): **$17.39/5.42M-in/21.8min — −30% cost, −48% wall — landing dead-center in the pre-registered $15–20 artifact-reuse tier, exactly what UU-2 predicted** (no terrain lesson existed to reach $3–6). Mechanism, from camera frame + tool events + citations: (a) **lesson transfer DID happen** — 2 of the 3 cold-minted lessons were the top-2 recall candidates by score and were cited (initially misread as no-transfer: the tiered store re-IDs lessons vs the mint ledger — see UU-4); (b) **artifact reuse confirmed** — 35 tool-events touched prior artifacts, source_trail.md UPDATED in place, plan collapsed 7→3 planned steps; (c) **residual waste the terrain teaching would zero**: still probed the known-blocked archives 5× (vs dozens cold). And the warm deliverable is BETTER, not just cheaper: verdict upgraded to SPLIT (the claim bundles "first" + "illegally", resolved separately) on newly-fetched primary evidence — the actual 1898 BMJ Maidstone paper (PMC2434294) the cold run only name-dropped. Achieved=True @ 0.9. | cold/warm delta (decree #3), lesson transfer, artifact reuse | corpus 1.3, Tier 1 `verified`, pair measured |
+  | 2 | ✅✅ **COLD+WARM PAIR COMPLETE 2026-08-01 — the arc's first full cold/warm measurement.** Cold `4bf7f761`: **$5.91** (published $24.88 — see RETRACTION below)/7.68M-in/42min, "cannot determine" + 13-step trail, achieved=True @ 0.85. Warm `e2f4578b` (byte-identical prompt): **$5.09** (published $17.39)/5.42M-in/21.8min — **−14% cost, −48% wall** (published as −30%; the pre-registered $15–20 'artifact-reuse tier' was stated in the inflated currency, so the tier match was an artifact of the error — the *mechanism* findings below come from artifacts, not cost, and stand) (no terrain lesson existed to reach $3–6). Mechanism, from camera frame + tool events + citations: (a) **lesson transfer DID happen** — 2 of the 3 cold-minted lessons were the top-2 recall candidates by score and were cited (initially misread as no-transfer: the tiered store re-IDs lessons vs the mint ledger — see UU-4); (b) **artifact reuse confirmed** — 35 tool-events touched prior artifacts, source_trail.md UPDATED in place, plan collapsed 7→3 planned steps; (c) **residual waste the terrain teaching would zero**: still probed the known-blocked archives 5× (vs dozens cold). And the warm deliverable is BETTER, not just cheaper: verdict upgraded to SPLIT (the claim bundles "first" + "illegally", resolved separately) on newly-fetched primary evidence — the actual 1898 BMJ Maidstone paper (PMC2434294) the cold run only name-dropped. Achieved=True @ 0.9. | cold/warm delta (decree #3), lesson transfer, artifact reuse | corpus 1.3, Tier 1 `verified`, pair measured |
   | 3 | Iterate on this parser until it produces *[output]* on *[input]* | execution grounding — every claimed output executed, not written | corpus 3.2, Tier 4 `target` |
   | 4 | Extract *[fields]* from this doc into JSON matching this schema | the two-check split: schema-valid **and** field-content-verified | corpus 1.11, Tier 4 `target` |
-  | 5 | ⚠️ **COLD ARM RUN 2026-08-02** (`9d88acf2-fierce-shore`): **$32.42 / 10.1M-in / 30.4min — 2× over the $5–15 prediction top** — and scored `achieved=False` by the provenance guard… **which forensics showed was a FALSE POSITIVE, now fixed.** The run's step result honestly summarized six real OpenLibrary fetches as "saved artifacts/OL*.json"; `_resolve_exact` checked the glob as a LITERAL filename, found nothing, and a FULL-trust deterministic guard demoted an honest run (stop_verdict lost-the-plot, failure-flavored learning — a false FULL-trust verdict is the worst kind). Glob-aware resolution + 3 pins landed same day. **The capability itself looks like a PASS on content**: tiered source confidence flags ([PRIMARY]/[VIA-WIKIPEDIA]/[WAYBACK-ONLY]), real fetched OLIDs w/ HTTP statuses, two publication-history discrepancies disclosed rather than resolved, an adversarial-verification pass — the opposite of corpus 1.6's describe-from-memory. **Catalog promotion HELD**: the row can't go `verified` on a run whose recorded verdict says False; re-run post-fix (or re-judge) before promoting. The run also wandered (STEP_TOO_BROAD ×4, $32) — the cost pattern across the batch now says research-class cold arms run $25–35, not $5–15. Verdict on record stays False — data never rewritten; the fix is forward | retrieval-before-describe, per-aspect honesty — plus an unplanned guard-calibration catch | corpus 1.6/1.10, Tier 1 `target` (held) |
+  | 5 | ⚠️ **COLD ARM RUN 2026-08-02** (`9d88acf2-fierce-shore`): **$7.83 / 10.1M-in / 30.4min — INSIDE the registered $5–15 prediction** (published as $32.42 / '2× over the top'; retracted 2026-08-02, see RETRACTION below) — and scored `achieved=False` by the provenance guard… **which forensics showed was a FALSE POSITIVE, now fixed.** The run's step result honestly summarized six real OpenLibrary fetches as "saved artifacts/OL*.json"; `_resolve_exact` checked the glob as a LITERAL filename, found nothing, and a FULL-trust deterministic guard demoted an honest run (stop_verdict lost-the-plot, failure-flavored learning — a false FULL-trust verdict is the worst kind). Glob-aware resolution + 3 pins landed same day. **The capability itself looks like a PASS on content**: tiered source confidence flags ([PRIMARY]/[VIA-WIKIPEDIA]/[WAYBACK-ONLY]), real fetched OLIDs w/ HTTP statuses, two publication-history discrepancies disclosed rather than resolved, an adversarial-verification pass — the opposite of corpus 1.6's describe-from-memory. **Catalog promotion HELD**: the row can't go `verified` on a run whose recorded verdict says False; re-run post-fix (or re-judge) before promoting. The run also wandered (STEP_TOO_BROAD ×4, $32) — the cost pattern across the batch says research-class cold arms run **$6–8** (corrected). Verdict on record stays False — data never rewritten; the fix is forward | retrieval-before-describe, per-aspect honesty — plus an unplanned guard-calibration catch | corpus 1.6/1.10, Tier 1 `target` (held) |
   | 6 | Correct a fact mid-run, then ask the same thing in a **later run** | does the correction persist across runs? the purest learning test here | corpus 4.5 (net-new) |
   | 7 | Take this failing suite and fix what's actually broken — don't paper over it | integrity under pressure (the standing no-skip/no-xfail bar) | Tier 4 `target` |
   | 8 | Diagnose why dispatch task *[id]* ended *[status]* with no detail | self-inspection across the dispatch boundary — unblocked 2026-07-18, never proven live | Tier 2 `target` |
@@ -862,16 +862,69 @@ capture**, which is what makes the rung amortize instead of evaporate.
   pre-registered predictions):**
   | run | predicted | actual | verdict on prediction |
   |---|---|---|---|
-  | 3a phrase-varied (`f554978a`) | $20–25 near-cold | **$26.24** / 8.2M-in / 29.6min / 0.85 | just past the top edge — effectively cold |
-  | 3b pointer-reuse (`9ddd53f1`) | $4–8 works / $15–25 ignored | **$11.25** / 3.45M-in / 16.7min / **0.93** | between tiers — pointer-following WORKED, floor was optimistic |
+  | 3a phrase-varied (`f554978a`) | $20–25 near-cold | **$6.35** (published $26.24) / 8.2M-in / 29.6min / 0.85 | corrected: cheaper than the $20–25 band's floor in nominal terms, but ABOVE cold — the prediction's *intent* (near-cold) was right |
+  | 3b pointer-reuse (`9ddd53f1`) | $4–8 works / $15–25 ignored | **$3.84** (published $11.25) / 3.45M-in / 16.7min / **0.93** | corrected: −35% vs cold — pointer-following WORKED |
 
-  The four-run cost series: **cold $24.88 → warm-verbatim $17.39 →
-  phrase-varied $26.24 → pointer-reuse $11.25.** What it settles:
+  > ### ⛔ RETRACTION 2026-08-02 — every dollar figure above is ~3–4× too high
+  >
+  > **The mistake:** I summed `tokens_in` across call records and priced it
+  > at the fresh-input rate. `metrics.estimate_cost` states the contract
+  > plainly — *"`tokens_in` is the TOTAL input volume **including cache
+  > reads**"* — and cache reads bill at `CACHE_READ_MULTIPLIER` (0.1×). On
+  > the subprocess backend ~90% of input volume IS cache reads, because
+  > every tool round-trip re-sends the growing step conversation. So the
+  > naive sum prices the same conversation over and over at ten times its
+  > billed rate.
+  >
+  > **This was already a solved problem in the code.** `loop_execute.py:613`
+  > carries the scar: *"Full-rate pricing here ('safe over-estimate')
+  > inflated azure-finch (2026-07-17, ~99% cache reads) roughly 10x on batch
+  > steps and the breaker hard-stopped the run one step before its final
+  > synthesis."* The runtime learned it in July; the analysis layer re-made
+  > it by hand in August, five runs in a row. **Never derive a run's cost —
+  > read the one the run recorded.**
+  >
+  > | run | published (WRONG) | `provider_cost_usd` (authoritative) | card estimate |
+  > |---|---|---|---|
+  > | cold chlorination `4bf7f761` | $24.88 | **$5.91** | $3.61 |
+  > | warm-verbatim `e2f4578b` | $17.39 | **$5.09** | $2.74 |
+  > | 3a phrase-varied `f554978a` | $26.24 | **$6.35** | $4.02 |
+  > | 3b pointer-reuse `9ddd53f1` | $11.25 | **$3.84** | $1.92 |
+  > | #5 Systemantics `9d88acf2` | $32.42 | **$7.83** | $5.05 |
+  >
+  > `provider_cost_usd` is the backend's own per-step reported spend, summed
+  > over the loop log; it covers the executor, which is **98.5%** of token
+  > volume (all harness calls together — planner, cuts, closure — are only
+  > ~140–160k `tokens_in` per run against 3.5–10M).
+  >
+  > **What changes:**
+  > - **"Research-class cold arms cost $25–35"** → they cost **$6–8**.
+  > - **"Six remaining LT-1 arms ≈ $150–210"** → **≈ $36–48**. The batch was
+  >   never the expensive decision I made it out to be, and I made Jeremy
+  >   ration a thing that costs less than lunch.
+  > - **#5's registered prediction was $5–15 and I scored it "2× over the
+  >   top."** At $7.83 it landed **inside the range**. The prediction was
+  >   right; the scoring was wrong. Retracted.
+  > - The warm arm's "−30% cost" is really **−14%** ($5.91→$5.09); 3b's
+  >   "−55%" is **−35%**. Wall-clock deltas are untouched (−48% warm).
+  > - **Ordering is unchanged**, so every *behavioral* conclusion below
+  >   stands: pointer-reuse < warm < cold < phrase-varied < #5.
+  >
+  > **Sixth costume of the denominator family** — and the nastiest, because
+  > the number wasn't missing, it was *recorded and ignored*. The first five
+  > were "you don't know what's in the denominator"; this one is "you built
+  > your own numerator when the system already published one." Checker
+  > landed: `scripts/run_readout.py` prints provider / card / naive side by
+  > side, naive labelled RETRACTED, so the gap can't quietly reappear.
+
+  The four-run cost series (**corrected**): **cold $5.91 → warm-verbatim
+  $5.09 → phrase-varied $6.35 → pointer-reuse $3.84.** What it settles:
   - **Lessons alone carry ≈ nothing today.** 3a re-ran essentially cold
-    despite 2 lessons injecting (one crossing the phrasing boundary). All
-    of the warm run's savings were artifact reuse + plan shape. This is
-    the clean pre-design baseline RUN_TEACHINGS chunk-1 measures against:
-    **$26.24 phrase-varied, on record.**
+    despite 2 lessons injecting (one crossing the phrasing boundary) — and
+    corrected, it ran *above* cold ($6.35 vs $5.91), which makes the point
+    harder, not softer. All of the warm run's savings were artifact reuse
+    + plan shape. This is the clean pre-design baseline RUN_TEACHINGS
+    chunk-1 measures against: **$6.35 phrase-varied, on record.**
   - **Explicit-pointer corpus reuse is real and behaviorally excellent.**
     3b's plan: list tree + read verdict/trail → ONE grep for continuity
     terms ("the single fact that decides the continuity criterion and the

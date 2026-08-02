@@ -1,0 +1,203 @@
+#!/usr/bin/env python3
+"""Post-hoc readout for a finished run: what it really cost, and what the
+terrain memory was worth.
+
+Exists because both numbers were got wrong by hand, twice each.
+
+**Cost.** Every figure in the LT arc's four-run cost series was ~3-4x too
+high (2026-08-02 retraction). The mistake: summing ``tokens_in`` across call
+records and pricing it at the fresh-input rate. ``metrics.estimate_cost``
+says plainly that ``tokens_in`` is the TOTAL input volume *including cache
+reads*, which bill at 0.1x — and on the subprocess backend ~90% of input
+volume is cache reads, because every tool round-trip re-sends the growing
+step conversation. The codebase had already learned this (loop_execute.py:
+"full-rate pricing ... inflated azure-finch roughly 10x on batch steps and
+the breaker hard-stopped the run one step before its final synthesis"); the
+analysis layer re-made it anyway. So: **never derive a run's cost. Read the
+one the run recorded.** This script prints all three columns side by side,
+naive included and labelled, so the gap stays visible instead of plausible.
+
+**Terrain.** ``avoidable_retries`` counts tool calls aimed at a host that
+was ALREADY recorded hard-blocked in an EARLIER step — precisely the waste
+RUN_TEACHINGS §5b closes, and the number that makes a terrain prediction
+falsifiable after the fact. It imports ``terrain`` rather than re-deriving
+the host/block rules: a checker that disagrees with the thing it checks is
+worse than no checker (the first hand-rolled version of this used a
+narrower host extractor and confidently reported 0 avoidable retries on a
+run that had 23).
+
+Usage:
+    python3 scripts/run_readout.py                       # all runs in the workspace
+    python3 scripts/run_readout.py 9d88acf2 4bf7f761     # by handle-id prefix
+    python3 scripts/run_readout.py --json
+    python3 scripts/run_readout.py --runs-dir DIR
+
+Exit status is 0 whenever the readout ran. Read-only: nothing here writes.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+
+try:
+    from terrain import TerrainMemory, scan_tool_events, _host_of
+except ImportError as exc:  # pragma: no cover - dev tool, src must be present
+    print(f"run_readout needs src/terrain.py on the path: {exc}", file=sys.stderr)
+    raise SystemExit(2)
+
+# Fresh-input rate used only to reproduce the WRONG number for contrast.
+# Deliberately a local constant: this is the mistake being displayed, not a
+# price the rest of the system should ever consult.
+_NAIVE_INPUT_PER_M = 3.0
+_NAIVE_OUTPUT_PER_M = 15.0
+
+
+def _load(path: Path) -> Any:
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return None
+
+
+def _default_runs_dir() -> Path:
+    ws = os.environ.get("MARO_WORKSPACE") or os.path.expanduser("~/.maro/workspace")
+    return Path(ws) / "runs"
+
+
+def read_run(run_dir: Path) -> Optional[Dict[str, Any]]:
+    """Everything this readout knows about one run. None if it isn't one."""
+    card = _load(run_dir / "run_card.json")
+    if not isinstance(card, dict):
+        return None
+
+    # --- cost -------------------------------------------------------------
+    # provider_cost_usd is the backend's own reported spend per step: the
+    # authoritative figure. card_cost is maro's cache-aware estimate (what
+    # the budget breaker actually reads). naive is the retracted method.
+    provider = 0.0
+    provider_seen = False
+    steps: List[Dict[str, Any]] = []
+    for log_path in sorted(run_dir.glob("build/loop-*-log.json")):
+        log = _load(log_path)
+        if isinstance(log, dict):
+            for step in log.get("steps") or []:
+                if isinstance(step, dict):
+                    steps.append(step)
+                    pc = step.get("provider_cost_usd")
+                    if isinstance(pc, (int, float)):
+                        provider += float(pc)
+                        provider_seen = True
+
+    tokens_in = tokens_out = 0
+    call_paths = sorted(run_dir.glob("build/calls/*.json"))
+    for call_path in call_paths:
+        call = _load(call_path)
+        if isinstance(call, dict):
+            tokens_in += int(call.get("tokens_in") or 0)
+            tokens_out += int(call.get("tokens_out") or 0)
+    naive = (tokens_in * _NAIVE_INPUT_PER_M / 1_000_000
+             + tokens_out * _NAIVE_OUTPUT_PER_M / 1_000_000)
+
+    # --- terrain ----------------------------------------------------------
+    memory = TerrainMemory()
+    avoidable: List[str] = []
+    step_no = 0
+    for call_path in call_paths:
+        call = _load(call_path)
+        events = (call or {}).get("tool_events") or []
+        if not events:
+            continue
+        step_no += 1
+        for event in events:
+            if not isinstance(event, dict):
+                continue
+            host = _host_of(str(event.get("input", "")))
+            fact = memory.facts.get(host) if host else None
+            if fact is not None and fact.first_step < step_no:
+                avoidable.append(f"s{step_no}:{host}")
+        scan_tool_events(events, step_no, memory)
+
+    return {
+        "handle_id": card.get("handle_id") or run_dir.name.split("-")[0],
+        "nickname": card.get("nickname") or "",
+        "steps": len(steps),
+        "tool_steps": step_no,
+        "tokens_in": tokens_in,
+        "tokens_out": tokens_out,
+        "provider_cost_usd": round(provider, 4) if provider_seen else None,
+        "card_cost_usd": card.get("total_cost_usd"),
+        "naive_cost_usd_RETRACTED": round(naive, 4),
+        "goal_achieved": card.get("goal_achieved"),
+        "blocked_hosts": {h: {"reason": f.reason, "hits": f.hits, "steps": f.steps}
+                          for h, f in memory.facts.items()},
+        "promotable_hosts": [f.host for f in memory.promotable()],
+        "avoidable_retries": len(avoidable),
+        "avoidable_detail": avoidable,
+    }
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    parser.add_argument("handles", nargs="*",
+                        help="handle-id prefixes; default = every run found")
+    parser.add_argument("--runs-dir", default=None)
+    parser.add_argument("--json", action="store_true")
+    args = parser.parse_args(argv)
+
+    runs_dir = Path(args.runs_dir) if args.runs_dir else _default_runs_dir()
+    if not runs_dir.is_dir():
+        print(f"no runs dir at {runs_dir}", file=sys.stderr)
+        return 1
+
+    rows = []
+    for run_dir in sorted(runs_dir.iterdir()):
+        if not run_dir.is_dir():
+            continue
+        if args.handles and not any(run_dir.name.startswith(h) for h in args.handles):
+            continue
+        row = read_run(run_dir)
+        if row:
+            rows.append(row)
+
+    if args.json:
+        print(json.dumps(rows, indent=2))
+        return 0
+
+    if not rows:
+        print("no runs matched")
+        return 0
+
+    print(f"{'run':<10} {'steps':>5} {'tok_in':>12} {'provider$':>10} "
+          f"{'card$':>8} {'naive$*':>8} {'blocked':>7} {'avoid':>6}")
+    for row in rows:
+        prov = row["provider_cost_usd"]
+        card = row["card_cost_usd"]
+        print(f"{row['handle_id']:<10} {row['steps']:>5} {row['tokens_in']:>12,} "
+              f"{(f'{prov:.2f}' if prov is not None else '-'):>10} "
+              f"{(f'{card:.2f}' if isinstance(card, (int, float)) else '-'):>8} "
+              f"{row['naive_cost_usd_RETRACTED']:>8.2f} "
+              f"{len(row['blocked_hosts']):>7} {row['avoidable_retries']:>6}")
+    print("\n* naive$ is the RETRACTED method (full-rate pricing of cached input) —")
+    print("  shown only so the ~3-4x gap stays visible. provider$ is the real spend.")
+    for row in rows:
+        if row["blocked_hosts"]:
+            detail = ", ".join(f"{h} ({v['reason']}, {v['hits']}x)"
+                               for h, v in row["blocked_hosts"].items())
+            print(f"\n{row['handle_id']} blocked: {detail}")
+            if row["avoidable_retries"]:
+                print(f"{row['handle_id']} avoidable retries "
+                      f"({row['avoidable_retries']}): {', '.join(row['avoidable_detail'][:12])}"
+                      + (" ..." if row["avoidable_retries"] > 12 else ""))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

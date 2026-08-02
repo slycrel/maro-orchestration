@@ -20,11 +20,22 @@ against code and the live run.
 
 ## 1. The specimen
 
-Run `4bf7f761-merry-magpie` (chlorination claim, 2026-08-01, $24.88): spent
-roughly **$15 of its $25 discovering, across ~6 steps and dozens of
-attempts, that HathiTrust, Google Books, and Archive.org are
-infrastructure-blocked from this box** — each block honestly documented
-with HTTP codes in `source_trail.md`.
+Run `4bf7f761-merry-magpie` (chlorination claim, 2026-08-01, **$5.91** —
+originally written here as $24.88; see the cost retraction in BACKLOG under
+LT-1) spent a large share of itself rediscovering that HathiTrust, Google
+Books, Archive.org and CourtListener are infrastructure-blocked from this
+box — each block honestly documented with HTTP codes in `source_trail.md`.
+
+**Measured, not estimated** (2026-08-02, `scripts/run_readout.py` replaying
+`src/terrain.py` over the run's real 11-step tool transcript): **7 hosts
+hard-blocked, and 23 tool calls aimed at a host already recorded blocked in
+an EARLIER step.** The first draft of this section said "~6 steps and dozens
+of attempts" from reading the trail; the countable number is 23 avoidable
+retries. Same replay across the arc: phrase-varied **24**, #5 Systemantics
+**1**, warm chlorination **0** — so terrain's value is large on
+archive-heavy research goals and near-zero on goals that find their sources
+first try. Any prediction about what §5b saves is falsifiable against that
+counter.
 
 The lesson funnel then minted 3 lessons. All three are task-strategy
 ("plans are step budgets, not fixed checklists"; "inconclusive verdicts are
