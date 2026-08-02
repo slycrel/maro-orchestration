@@ -45,6 +45,18 @@ _BLOCK_SIGNALS: tuple = (
     (re.compile(r"\b401\b|unauthorized", re.I), "401 unauthorized"),
     (re.compile(r"\b429\b|rate.?limit|too many requests", re.I), "429 rate-limited"),
     (re.compile(r"cloudflare|just a moment|attention required", re.I), "cloudflare challenge"),
+    # AWS WAF answers a bot challenge with HTTP *202* and an empty body — a
+    # 2xx, so nothing above sees it. Found live 2026-08-02: hup.harvard.edu
+    # returned `HTTP/2 202 / x-amzn-waf-action: challenge / content-length: 0`
+    # to every probe in run 5accd392, and terrain only caught the host at all
+    # because an unrelated path happened to 403. Anchored to the BLOCKING
+    # values on purpose: the header name alone also appears in
+    # `access-control-expose-headers: x-amzn-waf-action` on *successful*
+    # responses, and `x-amzn-waf-action: allow` is a pass — matching the bare
+    # name would mark every AWS-fronted host blocked. Bare `202` is never
+    # matched either; 202 Accepted is a legitimate success.
+    (re.compile(r"x-amzn-waf-action:\s*(?:challenge|captcha|block)", re.I),
+     "aws waf challenge"),
     (re.compile(r"\b451\b", re.I), "451 legally unavailable"),
     (re.compile(r"quota (?:exceeded|exhausted)|out of quota", re.I), "quota exhausted"),
     (re.compile(r"paywall|subscription required|log ?in to continue", re.I), "paywalled"),

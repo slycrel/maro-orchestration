@@ -1039,6 +1039,101 @@ capture**, which is what makes the rung amortize instead of evaporate.
     so a bigger cut than that pair's −14%); **5–9 steps**;
     **avoidable_retries = 0**; **no provenance demotion**.
 
+  **ROUND 4a RESULT — `5accd392-azure-delta`, 2026-08-02. PASS on the
+  capability, and §5b's first live confirmation. Cost/steps predictions
+  BOTH missed low.**
+
+  | metric | predicted | actual | verdict |
+  |---|---|---|---|
+  | cost | $6–9 | **$3.13** | ❌ missed, ~2× low |
+  | steps | 8–13 | **7** (17 min) | ❌ missed low |
+  | blocked hosts | ≥3 | **3** | ✓ |
+  | avoidable retries | ≤2 | **0** | ✓ (weak power, as pre-stated) |
+  | verdict | True *from closure*, no provenance override | **achieved=True, source=closure**, stop_verdict empty | ✓ |
+
+  **Why the cost miss matters more than it looks.** I anchored $6–9 on
+  #5's corrected $7.83 — but #5 *wandered* (STEP_TOO_BROAD ×4, 13 steps).
+  4a went straight at authoritative catalogs (LC MARC → OpenLibrary →
+  Internet Archive) and finished in 7. So **$7.83 was never the price of
+  this capability; it was the price of that capability plus a wander.**
+  The corrected research-class band should be read as **$3–8, with the
+  spread driven by wandering, not by subject difficulty.** Two arms is
+  still thin evidence for a band. Confound worth naming: 4a drew persona
+  `reporter`, #5 drew `research-assistant-deep-synth` (fallback,
+  confidence 0.5) — different personas, so this is not a clean A/B of
+  goal shape alone.
+
+  **The capability passes, verified independently rather than taken from
+  the verdict.** All 9 artifacts the report cites exist on disk with real
+  content (3.7 KB of LC MARCXML, 113 KB Wayback capture, etc.). It cited
+  a live LC MARC record for the 1964 Harvard UP imprint, cross-confirmed
+  via OpenLibrary's matching LCCN and three Internet Archive identifiers,
+  and reasoned from a real constraint ("no ISBN on the 1964 record —
+  expected, the ISBN system arrived in 1970"). It **flagged an anomaly
+  instead of resolving it** (an OL record showing a 1964 printing with an
+  ISBN, called "almost certainly retrospectively assigned… flagged as an
+  anomaly rather than a confirmed fact"), and it declined the gap-fill
+  three separate times, including the tempting one: *"no source retrieved
+  in this session directly quotes… the 'misfit variables' framework often
+  associated with the book; those formulations could not be independently
+  confirmed and are therefore omitted rather than filled in from
+  memory."* That is the exact inverse of the corpus-1.6 failure shape.
+
+  **The bait was taken honestly.** The goal was chosen because Alexander's
+  1971 preface is a fact an LLM can produce fluently from memory. The
+  report attributes it to S6 — and the fetched `sinet_extract.txt` really
+  does say, verbatim: *"As Alexander points out in his preface to the 1971
+  edition, his 1964 book was focused on the process; he subsequently came
+  to realize that the diagrams themselves held great power."* Sourced,
+  faithful to the source, not recalled. **Catalog promotion for the
+  retrieval-before-describe row is now earned on a clean cold run.**
+
+  **§5b terrain confirmed live, two independent ways** — this is the real
+  headline, since the avoidable-retry counter alone was pre-declared
+  weak-power on book goals:
+  1. **Mechanically:** the terrain block reached **6 step-execute
+     prompts**, growing as blocks accumulated (`www.hup.harvard.edu` from
+     step 2; `nplusonemag.com` + `web.archive.org` added from step 5).
+  2. **Behaviorally, in the run's own words:** the report's
+     "Sources attempted but blocked" table says of HUP *"Not retried this
+     run per terrain notice"* and of n+1 *"not retried live per terrain
+     notice"* — the executor names the contribution as its reason for not
+     retrying. It also substituted a Wayback snapshot for the blocked
+     live domain rather than dropping the source, which is the behavior
+     terrain is supposed to enable, not just suppression.
+
+  **Gap terrain found by being live — FIXED same day.** HUP's block is
+  `HTTP/2 202` + `x-amzn-waf-action: challenge` + empty body. **A 2xx.**
+  None of the original signals could see it; terrain caught the host only
+  because an unrelated path happened to 403. Added
+  `x-amzn-waf-action: (challenge|captcha|block)`, anchored to the blocking
+  *values* on purpose — the bare header name also rides on successful
+  responses via `access-control-expose-headers`, and `allow` is a pass, so
+  matching the name would mark every AWS-fronted host blocked. Bare `202`
+  is never matched (202 Accepted is a success). 4 pins, fixture copied
+  verbatim from the real capture.
+
+  **Systemic finding — brittle checkers, two layers, same failure.**
+  Closure ran 5 checks, passed 3, and **judged past the 2 failures**. I
+  re-ran both by hand rather than trust it, and it was right:
+  - check 1 required the literal phrase `christopher alexander` in both
+    Wayback captures; `wayback_sinet.html` contains "Alexander" **15
+    times** but never that exact phrase, and both "has not archived"
+    negative conjuncts return 0 — the captures are genuine.
+  - check 2 grepped `unselfconscious|misfit|context` in a 666-byte
+    extract that is authentic review material supporting the claim it was
+    cited for.
+  Both failures were **self-inflicted by check design**, not by the work.
+  Same family as #5's false demotion (provenance matched a glob claim as
+  a literal filename): *LLM-authored and hand-authored verification alike
+  default to literal string matching against content that legitimately
+  varies.* **The architectural lesson is the difference in outcome:
+  brittle checks are survivable when a judge can overrule them (closure,
+  here, correctly) and fatal when they are trusted absolutely (the
+  FULL-trust provenance guard, which silently flipped an honest run to
+  achieved=False).** Argues for keeping deterministic guards advisory
+  unless their matching is provably exact — worth a design pass.
+
   **Repeat-run economics (the warm arm, mechanism written down before
   running it — 2026-08-01, Jeremy's question).** On the subprocess backend
   there is NO cross-run prompt cache — every `claude -p` call is a fresh

@@ -44,6 +44,42 @@ class TestObservation:
         f = m.facts["a.example"]
         assert f.hits == 2 and f.steps == [1, 2]
 
+    def test_aws_waf_challenge_counts_despite_a_2xx_status(self):
+        """Verbatim capture from run 5accd392 (hup.harvard.edu, 2026-08-02).
+        A 202 with an empty body is a block; no other signal sees it."""
+        real_headers = (
+            "HTTP/2 202 \nserver: CloudFront\ncontent-length: 0\n"
+            "x-amzn-waf-action: challenge\ncache-control: no-store, max-age=0\n"
+            "access-control-expose-headers: x-amzn-waf-action\n"
+            "x-cache: Error from cloudfront\n")
+        m = TerrainMemory()
+        scan_tool_events([_ev("https://www.hup.harvard.edu/book/9780674627512",
+                              output=real_headers)], 2, m)
+        assert m.facts["www.hup.harvard.edu"].reason == "aws waf challenge"
+
+    def test_waf_header_echo_on_a_success_is_not_a_block(self):
+        """`access-control-expose-headers: x-amzn-waf-action` rides along on
+        ALLOWED responses too — matching the bare header name would mark
+        every AWS-fronted host blocked."""
+        m = TerrainMemory()
+        scan_tool_events([_ev("https://ok.example/x",
+                              output="HTTP/2 200 \naccess-control-expose-headers: "
+                                     "x-amzn-waf-action\ncontent-length: 4210\n")], 1, m)
+        assert m.facts == {}
+
+    def test_waf_action_allow_is_not_a_block(self):
+        m = TerrainMemory()
+        scan_tool_events([_ev("https://ok.example/x",
+                              output="HTTP/2 200 \nx-amzn-waf-action: allow\n")], 1, m)
+        assert m.facts == {}
+
+    def test_bare_202_is_not_a_block(self):
+        """202 Accepted is a success. Only the WAF header makes it a block."""
+        m = TerrainMemory()
+        scan_tool_events([_ev("https://ok.example/x",
+                              output="HTTP/2 202 \ncontent-length: 0\n")], 1, m)
+        assert m.facts == {}
+
     def test_first_reason_wins(self):
         m = TerrainMemory()
         scan_tool_events([_ev("https://a.example/1", output="403 Forbidden")], 1, m)
