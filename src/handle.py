@@ -2361,14 +2361,36 @@ def _handle_impl(
                         from runs import current_run_dir as _crd_prov
                         _rd_p = _crd_prov()
                         if _rd_p is not None:
+                            _prov_extra = {
+                                "goal_achieved": False,
+                                "goal_verdict_source": "provenance",
+                                "goal_verdict_summary":
+                                    f"claimed input/output(s) not found: {_prov_missing}",
+                            }
+                            # Closure disagreeing with the guard is recorded,
+                            # not silently discarded. Additive only — the
+                            # demotion still stands. Two false demotions on
+                            # 2026-08-02 (9d88acf2 @ 0.75, ea4ebe4a @ 0.92 with
+                            # 5/5 checks) were each found by hand days later;
+                            # both were paths the run DISCUSSED rather than
+                            # claimed. See provenance.contested_by_closure.
+                            try:
+                                from provenance import contested_by_closure
+                                _contested = contested_by_closure(
+                                    _closure, _prov_missing)
+                                if _contested:
+                                    _prov_extra.update(_contested)
+                                    log.warning(
+                                        "provenance demoted a run closure judged "
+                                        "COMPLETE @ %.2f — recorded as contested: %s",
+                                        _contested.get("closure_confidence", 0.0),
+                                        _prov_missing,
+                                    )
+                            except Exception:
+                                pass
                             _wm_prov(
                                 _rd_p, handle_id=handle_id, prompt=_raw_input,
-                                extra={
-                                    "goal_achieved": False,
-                                    "goal_verdict_source": "provenance",
-                                    "goal_verdict_summary":
-                                        f"claimed input/output(s) not found: {_prov_missing}",
-                                },
+                                extra=_prov_extra,
                             )
                             # Compiled-truth half (MILESTONES #3a): the
                             # provenance guard is deterministic — the most

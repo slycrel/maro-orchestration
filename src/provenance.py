@@ -25,7 +25,7 @@ import logging
 import re
 import time
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 log = logging.getLogger("maro.handle")
 
@@ -395,3 +395,51 @@ def _provenance_missing(goal: str, *, result_text: Optional[str] = None,
     except Exception as exc:
         log.debug("provenance check skipped: %s", exc)
     return list(dict.fromkeys(missing))  # dedup, preserve order
+
+
+def contested_by_closure(closure: Any, missing: List[str]) -> Dict[str, Any]:
+    """Metadata fields recording that closure DISAGREED with a provenance demotion.
+
+    Purely additive: this does not change who wins. The provenance guard still
+    demotes, because it exists to catch the false_pass a text-only verdict
+    can't see (shadow-eval n=42, 2026-06-24). What it changes is that the
+    disagreement stops being invisible.
+
+    Why (two live false demotions, both at high closure confidence):
+
+    * `9d88acf2` (2026-08-02) — an honest run summarized six real fetches as
+      "saved artifacts/OL*.json"; the guard checked the glob as a literal
+      filename. Closure had independently judged complete=True @ 0.75. The
+      demotion stood, and three lessons were minted on the false premise.
+    * `ea4ebe4a` (2026-08-02) — a forensic run whose whole deliverable was
+      explaining that `artifacts/comm-examples.md` had NEVER been written was
+      flagged for "claiming" that very file, plus `metadata.json/run_card.json`
+      (prose split on a slash). Closure: complete=True @ 0.92, **5/5 checks**.
+
+    The pattern is not that the filesystem check is unreliable — that part is
+    exact. It is that the guard conflates two very different confidences:
+    *"does this path exist?"* (deterministic) and *"did the run CLAIM to write
+    this path?"* (a regex over prose). It inherits FULL trust from the first
+    while every observed error comes from the second. Goals that legitimately
+    DISCUSS file paths — forensics, self-inspection, code review, anything
+    reporting on another run — are the standing false-positive population, and
+    no amount of matcher tuning removes that class.
+
+    So, per the recovery-over-correctness posture (Jeremy, 2026-08-02): a
+    verdict layer that admits no overrule must earn that standing. This is the
+    smallest honest step — record the conflict so a human or a later pass can
+    find it, instead of a silent flip that only surfaces when someone goes
+    digging weeks later.
+    """
+    fields: Dict[str, Any] = {}
+    if closure is None or not getattr(closure, "complete", False):
+        return fields
+    fields["goal_verdict_contested"] = True
+    fields["goal_verdict_contested_by"] = "closure"
+    fields["closure_complete"] = True
+    try:
+        fields["closure_confidence"] = float(getattr(closure, "confidence", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        fields["closure_confidence"] = 0.0
+    fields["provenance_missing_claims"] = list(missing or [])[:10]
+    return fields

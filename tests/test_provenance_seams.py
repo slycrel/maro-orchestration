@@ -175,3 +175,53 @@ def test_the_four_known_agentic_seams_are_labelled():
             f"{filename} lost its {label!r} purpose label — the agentic "
             "executor seam is unattributable again"
         )
+
+
+class TestContestedByClosure:
+    """The disagreement record (2026-08-02). Two live false demotions —
+    9d88acf2 (glob claim read as a literal filename, closure 0.75) and
+    ea4ebe4a (a forensic run flagged for "claiming" the very file it was
+    reporting had never been written, closure 0.92 on 5/5 checks) — were
+    each found by hand days later. The guard still wins; it just stops
+    winning invisibly."""
+
+    def _closure(self, complete=True, confidence=0.92):
+        return type("C", (), {"complete": complete, "confidence": confidence})()
+
+    def test_records_the_conflict_when_closure_says_complete(self):
+        from provenance import contested_by_closure
+        got = contested_by_closure(
+            self._closure(), ["artifacts/comm-examples.md (claimed written, not found)"])
+        assert got["goal_verdict_contested"] is True
+        assert got["goal_verdict_contested_by"] == "closure"
+        assert got["closure_confidence"] == 0.92
+        assert "comm-examples" in got["provenance_missing_claims"][0]
+
+    def test_silent_when_closure_agrees_the_run_failed(self):
+        """No conflict, no noise — the guard and closure concurring is the
+        normal case and must stay unannotated."""
+        from provenance import contested_by_closure
+        assert contested_by_closure(self._closure(complete=False), ["x"]) == {}
+
+    def test_silent_when_there_was_no_closure_verdict(self):
+        from provenance import contested_by_closure
+        assert contested_by_closure(None, ["x"]) == {}
+
+    def test_never_raises_on_a_malformed_confidence(self):
+        """Fails open: an annotation must never be able to break a run."""
+        from provenance import contested_by_closure
+        bad = type("C", (), {"complete": True, "confidence": "not-a-number"})()
+        assert contested_by_closure(bad, ["x"])["closure_confidence"] == 0.0
+
+    def test_missing_claims_are_capped(self):
+        from provenance import contested_by_closure
+        got = contested_by_closure(self._closure(), [f"f{i}.md" for i in range(50)])
+        assert len(got["provenance_missing_claims"]) == 10
+
+    def test_demotion_still_stands(self):
+        """Load-bearing: this is an annotation, not an override. The guard
+        exists to catch the false_pass a text-only verdict can't see."""
+        from provenance import contested_by_closure
+        got = contested_by_closure(self._closure(), ["x"])
+        assert "goal_achieved" not in got
+        assert "goal_verdict_source" not in got

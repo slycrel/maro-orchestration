@@ -1244,6 +1244,75 @@ capture**, which is what makes the rung amortize instead of evaporate.
   **5–9 steps**; **0 blocked hosts**; verdict genuinely uncertain — this
   capability has never been demonstrated live, and I put **PASS at ~50%,
   PARTIAL most likely.**
+
+  **ROUND 5 RESULT — `ea4ebe4a-spry-ash`. LT-1 #8 is a PASS on the
+  registered rubric. Row 8 proven live for the first time** — and the run
+  found the code-level root cause, which the rubric didn't ask for.
+
+  | metric | predicted | actual | verdict |
+  |---|---|---|---|
+  | cost | $2–4 | **$3.87** | ✓ **first cost hit** — anchoring on the distribution worked |
+  | steps | 5–9 | **9** | ✓ |
+  | blocked hosts | 0 | **0** | ✓ |
+  | rubric | PASS ~50%, PARTIAL likely | **PASS** | ✓ beat the odds I gave it |
+
+  All three registered PASS elements, plus more:
+  - Termination shape established *positively* — *"this is not a crash"*,
+    from clean `started_at`/`ended_at`, no truncated call, no partial JSON.
+  - The self-verdict catch, quoted verbatim from `call-00003.json`.
+  - **The propagation point, exactly:** *"a verdict WAS computed… but that
+    computed result never propagated into the fields a person would read
+    (`goal_verdict_summary`, `stop_verdict`)."*
+  - **Beyond rubric:** traced `handle.py:1129 → 1103-1106 → 514 →
+    1172-1186` in live source and found the NOW-lane persistence call
+    passes `extra` with **exactly two keys**, making it *"structurally
+    impossible"* for `goal_verdict_summary`/`stop_verdict`/`stop_evidence`
+    to be written. **I verified that citation by hand — it is correct.**
+  - **Pre-empted the registered FAIL mode in its opening paragraph:** *"No
+    claim below is inferred from the run's goal text."*
+  - **Named a missing record** instead of inferring around it (no git
+    history at that path, so "unchanged since this run" rests on the code
+    being live today, not on history).
+
+  **AND IT WAS FALSELY DEMOTED — second provenance false positive in two
+  days, this time over a closure verdict of complete=True @ 0.92 with 5/5
+  checks, the highest confidence in the arc.** Flagged:
+  `artifacts/comm-examples.md (claimed written, not found)` — **the very
+  file the run was diagnosing as never-written** — plus
+  `metadata.json/run_card.json`, prose split on a slash.
+
+  **Why matcher-tuning is the wrong response.** The guard conflates two
+  different confidences: *"does this path exist on disk?"* (deterministic,
+  exact) and *"did the run CLAIM to write this path?"* (a regex over
+  prose). It inherits FULL trust from the first while **every observed
+  error comes from the second.** Goals that legitimately DISCUSS paths —
+  forensics, self-inspection, code review, anything reporting on another
+  run — are a standing false-positive population no tuning removes. I
+  already fixed one matcher bug (the glob) that way; this is the class,
+  not the instance.
+
+  **SHIPPED, minimal and additive: `provenance.contested_by_closure`.**
+  When the guard demotes a run closure independently judged complete, the
+  metadata now carries `goal_verdict_contested`, `closure_confidence` and
+  the specific claims, plus a WARNING log. **The demotion still stands** —
+  the guard exists to catch the false_pass a text-only verdict can't see
+  (shadow-eval n=42) — so this changes nothing about who wins. It changes
+  the disagreement from invisible to findable; both of this week's false
+  demotions were found by hand, days late. 6 pins.
+
+  **Open, and Jeremy's call — the real design question.** Recording the
+  conflict is the smallest honest step, not the answer. The standing
+  decree says a verdict layer that admits no overrule must earn that
+  standing. Options: (a) leave it, now that conflicts are visible, and
+  sweep contested runs periodically; (b) **suppress failure-flavored
+  learning on contested verdicts** — where the measured harm actually
+  landed, since #5 minted three lessons on a false premise that had to be
+  contested by hand; (c) let high-confidence closure win outright, which
+  risks the false_pass the guard exists for. **(b) is my recommendation:
+  it targets the observed damage without touching the guard's safety
+  role.** Not doing it unilaterally — it changes the learning path.
+
+  **Repeat-run economics (the warm arm, mechanism written down before
   running it — 2026-08-01, Jeremy's question).** On the subprocess backend
   there is NO cross-run prompt cache — every `claude -p` call is a fresh
   process — so **zero savings come from token re-reads. Every dollar the
