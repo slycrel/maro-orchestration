@@ -17,6 +17,14 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable, ClassVar, Dict, List, Optional
 
+# terrain.py is stdlib-only and imports nothing from the loop — safe to
+# import at module load (this module's whole point is being import-safe).
+from terrain import TerrainMemory
+
+
+def _new_terrain() -> "TerrainMemory":
+    return TerrainMemory()
+
 log = logging.getLogger("maro.loop")
 
 _logging_configured = False
@@ -453,6 +461,12 @@ class LoopContext:
     # Hooks & interrupts — pending typed contributions for the next step's
     # prompt (§6 injection seam). Contributors append; the merge point drains.
     pending_context: ContributionLedger = field(default_factory=ContributionLedger)
+    # Run-scoped terrain memory (RUN_TEACHINGS §5b): hosts observed to HARD
+    # block this run, so step N+1 doesn't rediscover step N's 403. Populated
+    # deterministically from tool transcripts; rendered as one `terrain`
+    # contribution per step. Dies with the run — promotion to a durable
+    # terrain teaching reads this as its evidence source.
+    terrain: "TerrainMemory" = field(default_factory=lambda: _new_terrain())
     interrupts_applied: int = 0
     # Human-readable descriptions of interrupts applied at the most recent
     # boundary poll — consumed by the §6a injection-trigger director

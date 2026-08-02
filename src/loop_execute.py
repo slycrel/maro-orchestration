@@ -698,6 +698,20 @@ def _execute_main_loop(
                         "time", "context",
                         f"Previous step finished {_format_elapsed(_step_gap_s)} ago.",
                     )
+        # Terrain contribution (§5b): what this run already knows is blocked.
+        # Recomputed per step rather than appended once, because the set grows
+        # as steps discover more — and dropped first so a re-arm (blocked
+        # retry, compound split) can't replay a stale snapshot, exactly like
+        # the `time` contributor above. Empty render when nothing is known,
+        # preserving the ledger's byte-identity contract.
+        try:
+            _pending_context.drop_source("terrain")
+            _terrain_block = ctx.terrain.render()
+            if _terrain_block:
+                _pending_context.append("terrain", "context", _terrain_block)
+        except Exception as _tr_render_exc:
+            log.debug("terrain render skipped: %s", _tr_render_exc)
+
         # §6 merge point — the ONE consumption seam. Drain the pending
         # contributions exactly once and render them provenance-labeled.
         # Zero contributions ⇒ empty render ⇒ byte-identical prompts.
@@ -804,6 +818,24 @@ def _execute_main_loop(
         # Scavenging diagnostic (BACKLOG #1): flag out-of-fence file access from
         # the real tool transcript. Detection never changes step status; the
         # tier-a write fence below (config-gated) consumes the report's writes.
+        # Run-scoped terrain memory (RUN_TEACHINGS §5b): record hosts that
+        # HARD-blocked this step so later steps stop rediscovering them. The
+        # measured waste this closes: the cold chlorination run re-attempted
+        # the same blocked archives across ~6 steps (~$15 of a $25 run).
+        # Deterministic, observation-only, never touches step status.
+        try:
+            from config import get as _tr_cfg_get
+            if (bool(_tr_cfg_get("terrain.enabled", True))
+                    and outcome.get("tool_events")):
+                from terrain import scan_tool_events as _tr_scan
+                _tr_new = _tr_scan(outcome.get("tool_events"), step_idx,
+                                   ctx.terrain)
+                if _tr_new:
+                    log.info("terrain step=%d newly blocked: %s",
+                             step_idx, ", ".join(_tr_new))
+        except Exception as _tr_exc:
+            log.debug("terrain scan skipped: %s", _tr_exc)
+
         _sc_report = None
         try:
             from config import get as _sc_cfg_get

@@ -250,6 +250,7 @@ py-modules = [
     "task_store",
     "team",
     "telegram_listener",
+    "terrain",
     "thinkback",
     "thread_brain",
     "tool_cost_report",
