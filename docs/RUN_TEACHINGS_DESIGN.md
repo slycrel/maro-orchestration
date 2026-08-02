@@ -109,19 +109,32 @@ stamp). Different in two ways:
 ```
 
 `verify_probe` is the field that makes terrain teachings different in kind:
-**a terrain fact is cheaply re-checkable.** DECISION (provisional): probes
-are stored, never auto-executed at mint; they run at *injection* time under
-the existing read-only probe guard (claim_probe's mechanical gate) when the
-fact is older than its class's freshness window. Trust decays, data never
-does — a contradicted terrain fact flips to grey with the contradiction
-recorded, exactly like rules.
+**a terrain fact is cheaply re-checkable.** DECISION (provisional) — **HELD
+2026-08-02 pending record dig**: probes are stored, never auto-executed at
+mint; they run at *injection* time under the existing read-only probe guard
+(claim_probe's mechanical gate) when the fact is older than its class's
+freshness window. Trust decays, data never does — a contradicted terrain
+fact flips to grey with the contradiction recorded, exactly like rules.
+
+> **Jeremy 2026-08-02:** recalls the earlier probe discussions concluding
+> checks should be *planned as steps* ("we decided to not have the steps
+> test directly, that was a possible step itself based on research
+> findings"), tied to the bridge-building sub-goal arc; possible exception
+> where a hypothesis already has data behind it (proving existing data vs
+> gathering as the step work). Session-record dig in flight to recover the
+> original decision before ratifying. Note this section as written also
+> contradicts §4d ("never auto-executed at mint" vs the mint-time probe
+> shortcut) — the dig settles both.
 
 ### 4b. Storage — extend, don't build
 
-DECISION (provisional): teachings land in the **existing tiered lesson
-store** with two additive fields (`kind`, `scope`) and two new
-`lesson_type` values (`terrain`, `landmark_class`), rather than a new
-store. Reasons: the provisional lifecycle, contradiction adjudication,
+DECISION — **RATIFIED 2026-08-02** (Jeremy: "Yep, I like this… I think
+there will be multiple kinds of learning just like there are multiple
+kinds of steps, and the same mechanism should handle the lifecycle (and
+likely there will be nuance between the flavors)"): teachings land in the
+**existing tiered lesson store** with two additive fields (`kind`,
+`scope`) and two new `lesson_type` values (`terrain`, `landmark_class`),
+rather than a new store. Reasons: the provisional lifecycle, contradiction adjudication,
 reinforcement receipts, and decay machinery all already exist there, and
 the 2026-07-31 decay decree (competence-redundancy anchoring, "repeat
 patterns should be examined... better-than-luck shapes") applies to
@@ -149,11 +162,44 @@ are unreachable" had been on the table at `CUTS_DRAWN` time. DECISION
   (BACKLOG/reading queue candidates). A run shouldn't be reasoning about
   the harness's bugs mid-goal.
 
+### 4c, expanded — worked examples (added 2026-08-02; Jeremy asked for more context)
+
+The decision above compresses three separate calls. Concretely, on the
+chlorination specimen:
+
+1. **Terrain at cuts.** The cold run burned budget discovering
+   "HathiTrust full-text search is blocked from this host" at steps 3–5.
+   With that teaching on the table at `CUTS_DRAWN` time, the plan never
+   routes through the blocked archive — the cut is drawn around it, or a
+   route-around (mirror, cache) becomes a planned first-class step. The
+   alternative surface (inject at step-execution time) saves nothing: the
+   doomed steps are already in the plan by then.
+2. **Landmark-class at recall.** A landmark teaching is shaped "goals of
+   class X have hazard/shape Y" (e.g. purchase-ready research lives or
+   dies on per-field verification). It's only meaningful once the goal's
+   class is recognized, so it fires at recall when `intent.classify`
+   matches — injecting it everywhere would be noise for every other class.
+3. **Self-teachings out of runs.** "complete_step isn't wired, step
+   counts are unreliable" is true and useful — to the *dev loop*, not to a
+   run mid-goal. Injected into runs, it produces the M18/M19 flavor of
+   self-referential hedging inside deliverables. So self-kind routes to
+   BACKLOG/reading-queue candidates instead.
+
+The genuinely decidable parts for Jeremy: **(a)** does terrain belong at
+its own pre-planning surface (vs riding the normal recall slice with
+everything else)? **(b)** is routing self-teachings entirely OUT of runs
+right, or should a run at least see a caveat-grade "your step counter is
+broken"? (a) is what chunk 1's acceptance test measures; (b) is taste.
+
 ### 4d. Validation — the existing loop, plus the probe shortcut
 
 Teachings mint **provisional** (excluded from injection until confirmed,
 per the shipped provisional-lesson lifecycle) with one exception worth its
-own decision: DECISION (provisional) — a terrain teaching whose
+own decision: DECISION (provisional) — **HELD 2026-08-02, rides on §4a's
+record dig** (a mint-time probe execution is exactly what Jeremy recalls
+deciding against; his candidate exception — hypothesis already backed by
+data, proving rather than gathering — is close to what this shortcut
+describes, so the recovered record decides it) — a terrain teaching whose
 `verify_probe` passes at mint (one cheap read-only check confirming the
 claimed state) skips provisional and enters at confirmed-with-evidence,
 because unlike a strategy lesson its truth is checkable *now*. Everything

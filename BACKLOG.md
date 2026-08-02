@@ -23,6 +23,30 @@ full triage: 2026-07-04.
 
 Ordered open work that matters. Top of the list is next.
 
+### Green-lit 2026-08-02 (Jeremy, surprise-read follow-through) — two lesson-store chunks
+
+- [ ] **What-not-how mint-form pass.** Decree confirmed (GOAL_BRAIN
+  2026-08-02): lessons record the right *result* to ask for, not the
+  procedure — "how" is only appropriate when the goal itself requests
+  procedure. Sweep the mint sites (`extract_lessons`,
+  `extract_step_lessons`, `extract_deferred_lessons`, thinkback,
+  recovery-plan templates) so extraction prompts ask for the derived
+  observation, not an imperative playbook line. Acceptance: the chunk-1
+  negative examples (M9/M13-shaped inputs) re-mint as observations
+  ("this failure repeated across runs X,Y"; "2 trusted sources"), and no
+  mint site emits self-credit clauses without an evidence source (the
+  M14 defect). Runtime journal entry piped 2026-08-02.
+- [ ] **Retirement-by-contradiction for lessons.** Green-lit ("might be
+  time to level the decay up"). Rules already have the contested/
+  grey-flip flow (2026-06-11 decay-by-invalidation); lessons only ever
+  exit by decay/GC. Wire the lesson store to the same flow: operator or
+  run contradiction → contested status, excluded from injection,
+  contradiction recorded, data never deleted. Acceptance corpus: the six
+  operator-certified contradictions from surprise-read chunk 1 (L4, M6,
+  M8, M9, M13, M14 — M14 additionally documented self-exemplifying,
+  lesson_id 655ea616). Fold in the 2026-07-31 competence-redundancy
+  decay decree's direction where it overlaps.
+
 ### SP. Session-protocol arc — two-box Hermes dispatch, interactive goals, effort UX (OPENED 2026-07-15, Jeremy)
 
 The umbrella for the next big lane; full skeleton + stance decrees in

@@ -5848,3 +5848,36 @@ pre-chunk NOW/evolver rows honestly unjudged going forward from here.
   family; durable rule added: absence claims require the corpus vintage
   to cover the period where the thing would exist. Side-finding: the
   box's lf- knowledge import is 432 posts stale — resync+reimport filed.
+- **2026-08-02** — Run-teachings DECISIONs adjudicated (Jeremy, from the
+  reading queue). **§4b RATIFIED** — extend the tiered store, don't build
+  a new one — with a wider decree attached: *"there will be multiple
+  kinds of learning just like there are multiple kinds of steps, and the
+  same mechanism should handle the lifecycle (and likely there will be
+  nuance between the flavors)."* (Piped to runtime journal this session.)
+  **§4a + §4d HELD** — Jeremy recalls the earlier probe discussions
+  concluding checks are *planned as steps*, not machinery-executed
+  ("that was a possible step itself based on research findings"), tied to
+  the bridge-building sub-goal arc; candidate exception: hypothesis
+  already backed by data (proving vs gathering). He didn't author those
+  decisions — session-record dig dispatched to recover the original
+  before ratifying; §4d's mint-time probe shortcut rides on the same
+  answer (and as-written §4a/§4d contradict each other — flagged in the
+  doc). **§4c NEEDS CONTEXT** — worked-examples expansion added to the
+  design doc (§4c-expanded); two residual sub-calls queued for his read:
+  terrain at its own pre-planning surface?, self-teachings fully out of
+  runs or caveat-grade visible?
+- **2026-08-02** — **What-not-how mint rule CONFIRMED** (Jeremy, closing
+  the surprise-read altitude critique): lessons record the right *result*
+  to ask for, not the procedure — *"if we're asking for work, how is ok,
+  but usually we aren't — so asking for the right result is the more
+  important part."* He connects the prediction-contrast practice to the
+  same principle (registered result-predictions, not procedure specs).
+  Piped to runtime journal this session; mint-site implementation pass
+  queued in BACKLOG (acceptance: chunk-1 negative examples re-mint as
+  observations).
+- **2026-08-02** — **Retirement-by-contradiction GREEN-LIT** (Jeremy:
+  "might be time to level the decay up, I'm fine with improving this").
+  Wire the lesson store to the contested/grey-flip contradiction flow
+  rules already have; acceptance corpus = the six operator-certified
+  contradictions from surprise-read chunk 1 (L4, M6, M8, M9, M13, M14).
+  Queued in BACKLOG.
