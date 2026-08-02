@@ -1346,6 +1346,58 @@ capture**, which is what makes the rung amortize instead of evaporate.
   differ. Harmless, but it makes the operator-facing message look
   confused about its own evidence.
 
+  **ROUND 6 — LT-1 #6, the cross-run correction-persistence test. The
+  purest learning test in the batch. Registered 2026-08-02 pre-dispatch.**
+
+  Two runs, separate slugs. **Run A** asks what `4bf7f761-merry-magpie`
+  cost and how that was determined; mid-run I post a **corrective
+  interrupt** (`maro interrupt … --intent corrective`, file-backed so it
+  crosses the process boundary to a detached run) carrying the real rule
+  established today: *cost is `provider_cost_usd` summed over the loop
+  log; `tokens_in` INCLUDES cache reads, which bill at 0.1×, so pricing
+  it at the fresh rate overstates by 3–4×.* **Run B**, later and
+  independently, asks for a cost estimate on a HYPOTHETICAL token
+  count — 8M in / 200k out.
+
+  **Why hypothetical, and not "re-ask the same question".** The obvious
+  design is vacuous here: `scripts/run_readout.py` now exists and prints
+  the right number with the whole rule in its docstring, so a re-ask
+  measures **tool discovery**, not memory. A hypothetical has no artifact
+  to read — the *principle* has to transfer or the answer is wrong.
+
+  **The confound I cannot design away, stated plainly.** This system's
+  truths are encoded in its own source: `metrics.estimate_cost` documents
+  the cache-read contract and `CACHE_READ_MULTIPLIER` is right there. So
+  run B could reach the right answer by *re-deriving from code* rather
+  than remembering. **For a self-referential system, "did it remember?"
+  is not cleanly separable from "did it look it up?"** — that is a real
+  property of the thing we are building, not a flaw in the test. So
+  scoring reads BOTH channels: the answer, and the tool events showing
+  how it got there.
+
+  **Scoring rubric, registered:**
+  - **PASS** — run B accounts for cache reads (most input billed ~0.1×)
+    and lands in the ~$3–8 range, **and** the tool events show no read of
+    `metrics.py`/`run_readout.py`. Memory carried it.
+  - **PASS-BY-LOOKUP** — right answer, but tool events show it
+    re-derived from source. A real capability, a different one; the
+    correction did not need to persist.
+  - **PARTIAL** — mentions caching but doesn't apply it, or hedges
+    between methods.
+  - **FAIL** — prices 8M at the fresh input rate (~$24+) with no mention
+    of cache reads. The correction evaporated at the run boundary.
+
+  **Predictions:** run A **$2–4**; run B **$1.5–3** (small analytic ask).
+  Outcome: **PASS ~30%.** Reasoning for the low number — a corrective
+  interrupt feeds the *loop*, while durable lesson minting is
+  verdict-driven at finalize, and today's measurement already settled
+  that **lessons transfer mechanically but carry ≈zero cost benefit**
+  (phrase-varied ran ABOVE cold). I expect PARTIAL or FAIL, and
+  PASS-BY-LOOKUP is the live dark-horse. **A FAIL here is a finding, not
+  a disappointment: it would say the correction channel and the learning
+  channel are not connected** — which is precisely the kind of gap this
+  arc exists to surface.
+
   **Repeat-run economics (the warm arm, mechanism written down before
   running it — 2026-08-01, Jeremy's question).** On the subprocess backend
   there is NO cross-run prompt cache — every `claude -p` call is a fresh
