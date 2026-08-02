@@ -335,7 +335,11 @@ class TestEventTypes:
         # +2 (2026-07-29): SUBSYSTEM_SILENT / SUBSYSTEM_RECOVERED — system
         # self-health transition narration (monitoring decree): a declared
         # dynamic process stops observably executing / starts again.
-        assert len(EVENT_TYPES) == 75
+        # +2 (2026-08-02): LESSON_CONTESTED / LESSON_QUARANTINED —
+        # retirement-by-contradiction (lessons gain the contested/grey state
+        # standing rules got in June) and the tiered-store provenance
+        # (un)quarantine verb. Both emitted from knowledge_web.
+        assert len(EVENT_TYPES) == 77
 
     def test_previously_unregistered_events_in_set(self):
         from captains_log import EVOLVER_REVERTED, EVOLVER_VERIFY, PLAYBOOK_UPDATED
