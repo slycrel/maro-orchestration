@@ -47,7 +47,7 @@ from typing import Any, Dict, List, Optional
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 try:
-    from terrain import TerrainMemory, scan_tool_events, _host_of
+    from terrain import TerrainMemory, scan_tool_events, _host_of, _BLOCK_SIGNALS
 except ImportError as exc:  # pragma: no cover - dev tool, src must be present
     print(f"run_readout needs src/terrain.py on the path: {exc}", file=sys.stderr)
     raise SystemExit(2)
@@ -57,6 +57,54 @@ except ImportError as exc:  # pragma: no cover - dev tool, src must be present
 # price the rest of the system should ever consult.
 _NAIVE_INPUT_PER_M = 3.0
 _NAIVE_OUTPUT_PER_M = 15.0
+
+
+def classify_tool_events(events: Any) -> Dict[str, Any]:
+    """Coarse triage of one step's tool events, with an explicit residue.
+
+    The point is NOT to classify everything. It is to make the pile we
+    *couldn't* classify visible and countable, so an unknown failure mode
+    surfaces as a number on day one instead of being found by accident six
+    weeks later (see the AWS-WAF 202: a block that no signal recognized,
+    caught only because an unrelated path happened to 403).
+
+    Two things this deliberately does not do:
+
+    * **It does not use ``is_error`` as the failure denominator.** Measured
+      across the workspace 2026-08-02: of ~160 recognizable blocks, only 4
+      carried ``is_error``. `curl` exits 0 and prints the 403 body, so a
+      block is usually a *successful* tool call containing failure text. The
+      transport succeeds; the semantics fail.
+    * **It does not guess at "transient" or "got a payload".** A first draft
+      classified both, and both were visibly wrong on real data — the
+      transient regex matched the word "timeout" inside successful Overpass
+      JSON, and a <200-byte rule flagged "File created successfully" as
+      suspect. Anything not recognized with confidence goes to residue,
+      where a human can look at it. Coarse and honest beats fine and wrong.
+    """
+    out = {"total": 0, "blocked": 0, "tool_missing": 0,
+           "errors": 0, "residue": 0, "residue_samples": []}
+    if not events:
+        return out
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        out["total"] += 1
+        blob = f"{event.get('output', '')} {event.get('error', '')}"
+        if any(pattern.search(blob) for pattern, _ in _BLOCK_SIGNALS):
+            out["blocked"] += 1
+            continue
+        if "No such tool available" in blob or "Unknown skill:" in blob:
+            out["tool_missing"] += 1
+            continue
+        if not event.get("is_error"):
+            continue                      # not claiming this succeeded — just
+        out["errors"] += 1                # not claiming it failed either
+        out["residue"] += 1
+        if len(out["residue_samples"]) < 8:
+            out["residue_samples"].append(
+                f"[{event.get('name')}] {' '.join(blob.split())[:100]}")
+    return out
 
 
 def _load(path: Path) -> Any:
@@ -110,12 +158,20 @@ def read_run(run_dir: Path) -> Optional[Dict[str, Any]]:
     memory = TerrainMemory()
     avoidable: List[str] = []
     step_no = 0
+    triage = {"total": 0, "blocked": 0, "tool_missing": 0,
+              "errors": 0, "residue": 0, "residue_samples": []}
     for call_path in call_paths:
         call = _load(call_path)
         events = (call or {}).get("tool_events") or []
         if not events:
             continue
         step_no += 1
+        one = classify_tool_events(events)
+        for key in ("total", "blocked", "tool_missing", "errors", "residue"):
+            triage[key] += one[key]
+        for sample in one["residue_samples"]:
+            if len(triage["residue_samples"]) < 8:
+                triage["residue_samples"].append(sample)
         for event in events:
             if not isinstance(event, dict):
                 continue
@@ -141,6 +197,10 @@ def read_run(run_dir: Path) -> Optional[Dict[str, Any]]:
         "promotable_hosts": [f.host for f in memory.promotable()],
         "avoidable_retries": len(avoidable),
         "avoidable_detail": avoidable,
+        "tool_events": triage["total"],
+        "tool_missing": triage["tool_missing"],
+        "residue": triage["residue"],
+        "residue_samples": triage["residue_samples"],
     }
 
 
@@ -176,7 +236,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 0
 
     print(f"{'run':<10} {'steps':>5} {'tok_in':>12} {'provider$':>10} "
-          f"{'card$':>8} {'naive$*':>8} {'blocked':>7} {'avoid':>6}")
+          f"{'card$':>8} {'naive$*':>8} {'blocked':>7} {'avoid':>6} "
+          f"{'tools':>6} {'nosuch':>6} {'residue':>7}")
     for row in rows:
         prov = row["provider_cost_usd"]
         card = row["card_cost_usd"]
@@ -184,7 +245,8 @@ def main(argv: Optional[List[str]] = None) -> int:
               f"{(f'{prov:.2f}' if prov is not None else '-'):>10} "
               f"{(f'{card:.2f}' if isinstance(card, (int, float)) else '-'):>8} "
               f"{row['naive_cost_usd_RETRACTED']:>8.2f} "
-              f"{len(row['blocked_hosts']):>7} {row['avoidable_retries']:>6}")
+              f"{len(row['blocked_hosts']):>7} {row['avoidable_retries']:>6} "
+              f"{row['tool_events']:>6} {row['tool_missing']:>6} {row['residue']:>7}")
     print("\n* naive$ is the RETRACTED method (full-rate pricing of cached input) —")
     print("  shown only so the ~3-4x gap stays visible. provider$ is the real spend.")
     for row in rows:
@@ -196,6 +258,12 @@ def main(argv: Optional[List[str]] = None) -> int:
                 print(f"{row['handle_id']} avoidable retries "
                       f"({row['avoidable_retries']}): {', '.join(row['avoidable_detail'][:12])}"
                       + (" ..." if row["avoidable_retries"] > 12 else ""))
+    for row in rows:
+        if row["residue_samples"]:
+            print(f"\n{row['handle_id']} residue — errors we could not explain "
+                  f"({row['residue']}); this is the work-list, not noise:")
+            for sample in row["residue_samples"]:
+                print(f"    {sample}")
     return 0
 
 

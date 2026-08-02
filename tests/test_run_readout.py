@@ -112,6 +112,66 @@ class TestTerrain:
         assert run_readout.read_run(run)["promotable_hosts"] == ["a.example"]
 
 
+class TestTriage:
+    """The residue counter. Its job is to make the unclassified pile
+    countable, NOT to classify everything — so the pins are mostly about
+    what it refuses to claim."""
+
+    def test_blocks_are_counted_even_on_a_successful_call(self, tmp_path):
+        """Measured on real data: of ~160 recognizable blocks, 4 carried
+        is_error. curl exits 0 and prints the 403 body. If this regressed to
+        gating on is_error, block counting would silently drop ~97%."""
+        got = run_readout.classify_tool_events(
+            [{"name": "Bash", "input": {"command": "curl https://a.example"},
+              "output": "HTTP/1.1 403 Forbidden", "is_error": False}])
+        assert got["blocked"] == 1 and got["residue"] == 0
+
+    def test_tool_missing_is_its_own_class(self, tmp_path):
+        got = run_readout.classify_tool_events([
+            {"name": "fetch", "output": "<tool_use_error>Error: No such tool "
+                                        "available: fetch</tool_use_error>", "is_error": True},
+            {"name": "Skill", "output": "<tool_use_error>Unknown skill: "
+                                        "funnel_report</tool_use_error>", "is_error": True}])
+        assert got["tool_missing"] == 2 and got["residue"] == 0
+
+    def test_unexplained_error_lands_in_residue_with_a_sample(self, tmp_path):
+        got = run_readout.classify_tool_events(
+            [{"name": "Write", "output": "<tool_use_error>File has not been read "
+                                         "yet. Read it first.</tool_use_error>", "is_error": True}])
+        assert got["residue"] == 1
+        assert "[Write]" in got["residue_samples"][0]
+        assert "has not been read" in got["residue_samples"][0]
+
+    def test_unrecognized_success_is_not_claimed_either_way(self, tmp_path):
+        """A first draft guessed at 'got a payload' and 'transient' and was
+        wrong on real data both times — the transient regex matched the word
+        'timeout' inside successful JSON. Silence is the honest answer."""
+        got = run_readout.classify_tool_events(
+            [{"name": "Bash", "output": "http=200 {\"osm3s\": {\"timeout\": 180}}",
+              "is_error": False}])
+        assert got["total"] == 1
+        assert got["blocked"] == got["tool_missing"] == got["residue"] == 0
+
+    def test_residue_samples_are_capped(self, tmp_path):
+        got = run_readout.classify_tool_events(
+            [{"name": "Read", "output": f"EISDIR {i}", "is_error": True} for i in range(30)])
+        assert got["residue"] == 30 and len(got["residue_samples"]) == 8
+
+    def test_malformed_events_never_raise(self, tmp_path):
+        assert run_readout.classify_tool_events(None)["total"] == 0
+        assert run_readout.classify_tool_events([None, "junk", 7])["total"] == 0
+
+    def test_triage_totals_reach_the_row(self, tmp_path):
+        run = _make_run(tmp_path, calls=[
+            {"tool_events": [
+                {"name": "fetch", "output": "No such tool available: fetch", "is_error": True},
+                {"name": "Write", "output": "File has not been read yet", "is_error": True},
+                _fetch("https://a.example/1", "403 Forbidden")]}])
+        row = run_readout.read_run(run)
+        assert row["tool_events"] == 3
+        assert row["tool_missing"] == 1 and row["residue"] == 1
+
+
 class TestCLI:
     def test_handle_filter_and_json(self, tmp_path, capsys):
         _make_run(tmp_path, handle="aaaa1111")

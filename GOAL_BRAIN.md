@@ -5957,6 +5957,40 @@ pre-chunk NOW/evolver rows honestly unjudged going forward from here.
   premise injected into future runs is not. This is the first live use of
   the other session's contest verb, and the first case where the
   contamination came from a MACHINE error rather than a bad run.
+- **2026-08-02** — **Certainty vs probability, and recovery over
+  correctness** (Jeremy, decree-class; posture, not a mechanism). Prompted
+  by four brittle closure checks that all failed for check-design reasons:
+  **"let's try and be careful about absolute certainty vs probability
+  based thinking. We don't have to know for sure all the time (sometimes
+  you can't know, sometimes you make do with the information you have, and
+  sometimes 2 + 2 is provable and we can be certain)… at some point it
+  becomes more simple to accept the coarse grained truths and slide over
+  the details than it does to get mired in the details and churn on
+  figuring out why we're not quite right. Uh… good enough is good enough?
+  easier to do with data, much harder to do with decisions and that's
+  where it taints the downstream in various ways."** And the second half,
+  which is the actionable one: **"I think more often it's less about being
+  correct up front and more about how well you recover when you're wrong.
+  Both versions of incorrect can lead to a production outage and impact
+  recovery time; each has their pros and cons and each has efficiency and
+  waste in them; not right or wrong, just problem set trade-offs."**
+  **This replaces the framing I proposed the same day.** I had written
+  "keep deterministic guards advisory unless their matching is provably
+  exact" — a correctness frame, and probably unachievable. The two live
+  incidents say otherwise: the provenance guard and closure's checks were
+  *both* wrong, and only one caused damage. The guard was FULL-trust with
+  no downstream able to overrule it, so a brittle match silently flipped
+  an honest run to achieved=False. Closure was equally wrong four times
+  and recovered inside the same run, because a judge sat above the checks.
+  **The design rule is therefore about recovery paths proportional to
+  confidence, not about accuracy:** a verdict layer that admits no
+  overrule must earn that standing, and most should not have it. Applies
+  directly to the open watch-item that closure CONFIDENCE is contaminated
+  by check-design quality — the fix is not better checks, it is making the
+  score decomposable so "the work is weak" and "our checks are weak" route
+  to different recoveries. First application: `scripts/run_readout.py`'s
+  triage classifies only what it can classify with confidence and dumps
+  the rest into a visible, countable residue rather than guessing.
 - **2026-08-02** — **What-not-how mint-form pass SHIPPED** (the second
   green-lit chunk; decree entry above). Shared `_LESSON_FORM_RULES`
   composed into `_REFLECT_SYSTEM` and `_STEP_LESSON_SYSTEM` (deferred

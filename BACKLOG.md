@@ -2129,6 +2129,67 @@ is ON (since 2026-07-14) so the A/B is running; first live numbers
 anchoring risk once the comparison has real n; pre-optimizing the prompt
 before then is guessing.
 
+### Step prompts advertise tools the subprocess backend doesn't have — 245 wasted calls, 5.2% of all tool events (FOUND 2026-08-02)
+
+Found by the residue counter on its first pass, which is the point of
+building it.
+
+**Measured across the whole workspace:** 4,720 tool events, **245 "No such
+tool available" (5.2%), spread across 69 of 96 runs (72%)**. By name:
+`complete_step` 144, `fetch` 81, then `Bash`/`bash` 7 (a case mismatch),
+`register_tool` 4, `flag_stuck` 4, `create_team_worker` 3, `read`/`Read` 2.
+
+**Mechanism, verified on a real call record** (run `9d88acf2`,
+`backend=subprocess`, `purpose=step-execute`): the step prompt says *"Use
+inject_steps in your complete_step call to add 1-3 research/verification
+sub-steps"* and *"Call flag_stuck with reason NEED_INFO: [describe what's
+missing]"*. Those tools are real and registered (`tool_registry.py:342`) —
+for the API tool-calling path. The subprocess backend runs `claude -p`,
+which exposes Claude Code's own toolset, not maro's registry. So the model
+is instructed to use affordances that do not exist in its execution
+context, obeys, and gets an error. `step_exec.py` is already
+backend-aware in several places (the `("subprocess", "codex")` branches
+for ASYNC_ESCAPE, ENV_CLAIM, DELIVERABLE_PATH); **prompt assembly is
+not.**
+
+**Two costs, and the second is the one that matters:**
+1. **Waste.** 245 round-trips. Cost scales with tool TURNS on this backend
+   (the repl_reading finding), so these are not free.
+2. **A silently dead capability.** `inject_steps` (mid-step research
+   sub-steps) and `flag_stuck`/`NEED_INFO` (the escalation channel) are
+   *documented, coded, and unreachable on the default backend.*
+   `loop_blocked.py:927` routes `NEED_INFO:` into generated research
+   sub-steps — reached via `stuck_reason`, which the subprocess path never
+   sets, because a no-tool-call-with-content becomes `status="done"`
+   (`step_exec.py:1726`). The run survives by falling back to prose; it
+   just cannot escalate mid-step. **This is exactly the claimed≠probed
+   shape: the feature is built, tested, and never exercised where it
+   actually runs.**
+
+Not fixed — the fix is a real design call (make prompt assembly
+backend-aware; or register shims; or teach the subprocess path to parse
+`NEED_INFO:`/`flag_stuck` intent out of prose, which is the cheap one and
+would resurrect the escalation channel without touching the prompt).
+Logged with evidence first.
+
+**Sub-finding, separate class:** of the 400 `is_error` events workspace-
+wide, 239 are tool-missing and **157 are unexplained residue** —
+dominated not by network trouble but by tool-protocol mistakes:
+**65 × `Write` "File has not been read yet. Read it first"**, 11 × `Read`
+on a nonexistent path, 9 × `Read` on a directory (EISDIR), 5 × curl
+connect failures, **3 × `Read` "content exceeds maximum allowed size"**
+(the standing repl_reading motivation, now with a count), 2 × unknown
+skill. The Write-before-Read class alone is 65 avoidable turns and looks
+like a one-line prompt fix.
+
+**And the measurement lesson that fell out:** of ~160 recognizable blocks
+workspace-wide, **only 4 carried `is_error`**. `curl` exits 0 and prints
+the 403 body, so a block is normally a *successful* tool call containing
+failure text. Anything that treats `is_error` as the failure denominator
+undercounts blocks by ~97% — pinned in `tests/test_run_readout.py` so it
+can't regress. Same shape as the AWS-WAF 202: the transport succeeds and
+the semantics fail.
+
 ### Project slug is the first FIVE WORDS — generic openings silently merge unrelated goals (FOUND 2026-08-02, prospectively)
 
 `loop_artifacts._goal_to_slug` is `"-".join(words[:5])` after stripping
