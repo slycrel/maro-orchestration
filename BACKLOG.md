@@ -1398,6 +1398,46 @@ capture**, which is what makes the rung amortize instead of evaporate.
   channel are not connected** — which is precisely the kind of gap this
   arc exists to surface.
 
+  **ROUND 6 ATTEMPT 1 — INVALIDATED BEFORE SCORING. The system already
+  knew the thing I was 'correcting'.** Run A `fcc12c02-frosty-zephyr`
+  came back achieved=True @ 5/5 checks, having independently recomputed
+  `provider_cost_usd = $5.9103834` — matching by hand. The interrupt
+  worked mechanically (`applied=True`, carried into **12 of 22 calls**
+  from seq 6). But checking the calls BEFORE seq 6 killed the test:
+  **at seq 4 the run already reasoned about "cache-read billing at
+  ~0.1x", crediting "prior knowledge — cost_spike rules."**
+
+  So there was no error to correct, and run B succeeding would have
+  measured nothing. **Third costume of the vacuous-check trap in one
+  session** — after the fix-replay that read 0 chars, and the propagation
+  probe that couldn't reach the branch it claimed to test. The tell is
+  always the same: *the check could not have failed.*
+
+  **The inversion is the finding.** The cache-read rule was already
+  encoded in this system's rules while **I** priced five consecutive runs
+  wrong. The system knew; the analyst didn't. Any "does it remember?"
+  test has to first prove the thing is *absent* — exactly the denominator
+  discipline, pointed at knowledge instead of data.
+
+  **ROUND 6 ATTEMPT 2 — redesigned around a fact with NO lookup channel.**
+  Correction target is now an arbitrary operator CONVENTION, not a
+  derivable truth: *report a run's nickname alongside its handle id, and
+  end the report with a line reading `COST-METHOD: <method>`.* Absence
+  verified by grep across the whole workspace memory AND the repo — the
+  literal token `COST-METHOD` appears **nowhere**, so it cannot be
+  re-derived, looked up, or coincidentally produced. It can only arrive
+  by persistence.
+  **Yes, this is more artificial than a domain fact — deliberately.** The
+  confound registered before attempt 1 (this system's truths live in its
+  own source) turned out to be fatal rather than cosmetic, so the honest
+  move is to isolate persistence from lookup completely and say that the
+  price is ecological validity. "I told it a preference once; does it
+  remember next run?" is still a real user shape.
+  **Scoring:** PASS = run B emits `COST-METHOD:` unprompted. FAIL = it
+  doesn't. No lookup channel means no PASS-BY-LOOKUP outcome this time.
+  **Prediction unchanged at ~30%**, for the reason registered before:
+  interrupts feed the loop, durable minting is verdict-driven at finalize.
+
   **Repeat-run economics (the warm arm, mechanism written down before
   running it — 2026-08-01, Jeremy's question).** On the subprocess backend
   there is NO cross-run prompt cache — every `claude -p` call is a fresh
