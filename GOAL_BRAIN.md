@@ -5936,3 +5936,16 @@ pre-chunk NOW/evolver rows honestly unjudged going forward from here.
   injection/query leak-check clean; 6 LESSON_CONTESTED events on the
   captain's log. Tests `tests/test_lesson_contested.py` (15) + the
   superseded honest-no-op pin rewritten; full suite green.
+- **2026-08-02** — Contest-on-bad-provenance rule (Jeremy, decree-class;
+  runtime journal pipe owed): asked whether to retire three lessons minted
+  from a run whose achieved=False was a provenance-guard false positive —
+  **"if they are real (even with bad provenance) we should in theory
+  re-learn them, so we just waste efficiency, not correctness."** All three
+  contested (80f47016 tool_missing, 65e49b27 tool_preflight, 50c68716
+  self_cert_unreliable), both stores, leak-checked clean across tiered
+  injection / flat injection / load_lessons. The rule generalizes: a lesson
+  whose PREMISE is contaminated goes, regardless of whether its advice
+  might stand — re-derivation from honest evidence is cheap; a false
+  premise injected into future runs is not. This is the first live use of
+  the other session's contest verb, and the first case where the
+  contamination came from a MACHINE error rather than a bad run.
