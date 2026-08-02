@@ -718,9 +718,43 @@ capture**, which is what makes the rung amortize instead of evaporate.
   | 7 | Take this failing suite and fix what's actually broken — don't paper over it | integrity under pressure (the standing no-skip/no-xfail bar) | Tier 4 `target` |
   | 8 | Diagnose why dispatch task *[id]* ended *[status]* with no detail | self-inspection across the dispatch boundary — unblocked 2026-07-18, never proven live | Tier 2 `target` |
 
-  **Round-3 experiments (2026-08-01, Jeremy's variant folded in;
-  predictions registered BEFORE dispatch):**
-  - [ ] **(3a) Phrase-varied control** — same claim, different wording →
+  **ROUND-3 RESULTS (both runs complete 2026-08-02; scored against the
+  pre-registered predictions):**
+  | run | predicted | actual | verdict on prediction |
+  |---|---|---|---|
+  | 3a phrase-varied (`f554978a`) | $20–25 near-cold | **$26.24** / 8.2M-in / 29.6min / 0.85 | just past the top edge — effectively cold |
+  | 3b pointer-reuse (`9ddd53f1`) | $4–8 works / $15–25 ignored | **$11.25** / 3.45M-in / 16.7min / **0.93** | between tiers — pointer-following WORKED, floor was optimistic |
+
+  The four-run cost series: **cold $24.88 → warm-verbatim $17.39 →
+  phrase-varied $26.24 → pointer-reuse $11.25.** What it settles:
+  - **Lessons alone carry ≈ nothing today.** 3a re-ran essentially cold
+    despite 2 lessons injecting (one crossing the phrasing boundary). All
+    of the warm run's savings were artifact reuse + plan shape. This is
+    the clean pre-design baseline RUN_TEACHINGS chunk-1 measures against:
+    **$26.24 phrase-varied, on record.**
+  - **Explicit-pointer corpus reuse is real and behaviorally excellent.**
+    3b's plan: list tree + read verdict/trail → ONE grep for continuity
+    terms ("the single fact that decides the continuity criterion and the
+    only plausible trigger for a fresh fetch") → score and write. Zero
+    web fetches, 28 corpus touches, correct answer (Jersey City 1908 on
+    continuity; Maidstone 1897 was temporary typhoid-response dosing),
+    and it flagged Lincoln 1905 as an out-of-scope stronger claimant
+    unprompted. Highest closure confidence of the whole series (0.93).
+  - **Why 3b still cost $11 and not $5: the re-read churn again.** 3.45M
+    input tokens to read local files across 3 steps — the errand-envelope
+    lever, now measured on a pure-local-corpus goal with no web at all.
+    The $4–8 floor was wrong about the executor tax, not about the
+    behavior.
+  - Honesty note: 3b's slug derived to the OLD project name (the goal
+    text names it early), so its artifacts were also in-slug. The tool
+    events show deliberate corpus reads per its own plan, so the
+    pointer-following conclusion stands, but a future 3b-style test
+    should phrase the goal so the slug differs and the pointer is the
+    ONLY bridge.
+  - UU-1 stayed unexercised live (0 failed calls in either run — both
+    fixes deployed, UU-4 confirmed live on 3a's mints, UU-1 remains
+    test-verified only).
+  - [x] **(3a) Phrase-varied control** — same claim, different wording →
     different project slug → artifact cache defeated; measures lessons-only
     transfer on today's system, and is the control arm RUN_TEACHINGS
     chunk-1 needs. **Prediction: $20–25 (near-cold)** — the 3 strategy
@@ -728,7 +762,7 @@ capture**, which is what makes the rung amortize instead of evaporate.
     slug change. Materially under $20 = today's learning does more than
     credited and the design's projected delta shrinks (want to know before
     building).
-  - [ ] **(3b) Explicit-pointer corpus reuse (Jeremy's variant)** — hand
+  - [x] **(3b) Explicit-pointer corpus reuse (Jeremy's variant)** — hand
     the run the OLD project by name with a related-but-separate question
     over the same evidence (Maidstone 1897 vs Jersey City 1908: who has
     the stronger "first continuous municipal chlorination" claim).
