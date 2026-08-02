@@ -225,3 +225,39 @@ class TestContestedByClosure:
         got = contested_by_closure(self._closure(), ["x"])
         assert "goal_achieved" not in got
         assert "goal_verdict_source" not in got
+
+
+class TestNowVerdictRationale:
+    """ed7cf400 presented as 'incomplete, no explanation' for a month while
+    its judge's reasoning sat in build/calls/. Found by ea4ebe4a (LT-1 #8)."""
+
+    def _rationale(self):
+        import handle
+        return handle._now_verdict_rationale
+
+    def test_strips_a_fenced_json_verdict_and_keeps_the_reason(self):
+        raw = ('```json\n{"fulfilled": false}\n```\n\nThe response claims the '
+               'task is complete but provides no evidence:\n- No Write or Bash '
+               'tool calls showing the file was created')
+        got = self._rationale()(raw)
+        assert got.startswith("The response claims")
+        assert "No Write or Bash tool calls" in got
+        assert "fulfilled" not in got
+
+    def test_strips_a_bare_json_verdict(self):
+        got = self._rationale()('{"fulfilled": false} Nothing was written.')
+        assert got == "Nothing was written."
+
+    def test_verdict_with_no_prose_yields_empty_not_json(self):
+        """Better to record nothing than to record the boolean twice."""
+        assert self._rationale()('```json\n{"fulfilled": false}\n```') == ""
+
+    def test_plain_prose_survives_untouched(self):
+        assert self._rationale()("Just a reason.") == "Just a reason."
+
+    def test_output_is_bounded(self):
+        assert len(self._rationale()("x " * 5000)) <= 400
+
+    def test_empty_and_none_are_safe(self):
+        assert self._rationale()("") == ""
+        assert self._rationale()(None) == ""

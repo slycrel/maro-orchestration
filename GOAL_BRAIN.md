@@ -5991,6 +5991,21 @@ pre-chunk NOW/evolver rows honestly unjudged going forward from here.
   to different recoveries. First application: `scripts/run_readout.py`'s
   triage classifies only what it can classify with confidence and dumps
   the rest into a visible, countable residue rather than guessing.
+- **2026-08-02** — **Contested verdicts are ignored for learning, not
+  suppressed** (Jeremy, wording his own): asked whether to stop
+  failure-flavored learning on runs where the provenance guard and closure
+  disagree — **"b sounds good, though I might phrase it like 'we ignore
+  contested results for learning'… add them as anecdotes, but don't move
+  for or against the learning either way. Suppress sounds more like block
+  and ignore."** The distinction is load-bearing and matches the standing
+  decay-trust-never-data constraint: the outcome row is still written with
+  its full evidence; it simply doesn't get a vote. SHIPPED by routing
+  contested loops into the EXISTING unresolved-verdict-audit lane
+  (`skip_loop_ids`) rather than inventing a suppression path — that lane
+  already means "recorded, learning deferred." Motivating damage: #5's
+  false demotion minted three lessons on a fabricated premise that had to
+  be hand-contested. Companion half: `provenance.contested_by_closure`
+  records the disagreement in metadata so it is findable at all.
 - **2026-08-02** — **What-not-how mint-form pass SHIPPED** (the second
   green-lit chunk; decree entry above). Shared `_LESSON_FORM_RULES`
   composed into `_REFLECT_SYSTEM` and `_STEP_LESSON_SYSTEM` (deferred

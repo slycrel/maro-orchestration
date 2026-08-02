@@ -462,6 +462,32 @@ def _interactive_now_verdict_enabled() -> bool:
     return bool(val)
 
 
+def _now_verdict_rationale(raw: str, limit: int = 400) -> str:
+    """The judge's prose reason, minus the JSON verdict it leads with.
+
+    Found by run `ea4ebe4a` diagnosing `ed7cf400` (2026-08-02): the NOW judge
+    replies `{"fulfilled": false}` followed by a specific, genuinely useful
+    rationale — *"No Write or Bash tool calls showing the file was created…"* —
+    and only the boolean was ever read. The explanation existed in
+    `build/calls/` the whole time while the run presented as failed for no
+    stated reason. Keeping it is half the fix; the other half is that the
+    metadata writer has to accept the field at all.
+    """
+    text = (raw or "").strip()
+    if text.startswith("```"):                      # ```json { ... } ``` preamble
+        parts = text.split("```")
+        text = "".join(parts[2:]).strip() if len(parts) > 2 else ""
+    elif text.startswith("{"):                      # bare JSON, then prose
+        depth = 0
+        for i, ch in enumerate(text):
+            depth += (ch == "{") - (ch == "}")
+            if depth == 0:
+                text = text[i + 1:].strip()
+                break
+    text = " ".join(text.split())
+    return text[:limit]
+
+
 def _verify_now_outcome(
     message: str, outcome: Dict[str, Any], adapter,
     wall_start: Optional[float] = None,
@@ -487,6 +513,8 @@ def _verify_now_outcome(
         out["status"] = "incomplete"
         out["goal_achieved"] = False
         out["provenance_missing"] = _missing
+        out["goal_verdict_summary"] = (
+            f"claimed input/output(s) not found: {_missing}")
         log.info(
             "provenance: claimed input/output(s) not found %s — demoted to incomplete",
             _missing,
@@ -518,7 +546,9 @@ def _verify_now_outcome(
             out["goal_achieved"] = False
             out["tokens_in"] = outcome.get("tokens_in", 0) + getattr(resp, "input_tokens", 0)
             out["tokens_out"] = outcome.get("tokens_out", 0) + getattr(resp, "output_tokens", 0)
-            log.info("now-verify: response reports non-fulfillment — status demoted to incomplete")
+            out["goal_verdict_summary"] = _now_verdict_rationale(resp.content)
+            log.info("now-verify: response reports non-fulfillment — status demoted to incomplete (%s)",
+                     out["goal_verdict_summary"][:120] or "no rationale given")
             return out
         if verdict.get("fulfilled") is True:
             out = dict(outcome)
@@ -1175,16 +1205,26 @@ def _handle_impl(
                 from runs import current_run_dir as _crd_now
                 _rd_now = _crd_now()
                 if _rd_now is not None:
+                    _now_extra = {
+                        "goal_achieved": bool(outcome["goal_achieved"]),
+                        "goal_verdict_source": (
+                            "provenance" if outcome.get("provenance_missing")
+                            else ("now_self_verdict_free"
+                                  if outcome.get("now_verify_family") == "hosted_free"
+                                  else "now_self_verdict")),
+                    }
+                    # WHY the verdict landed, not just that it did. This dict
+                    # carried exactly two keys until 2026-08-02, which made it
+                    # structurally impossible for a NOW run to record a reason
+                    # — ed7cf400 presented as "incomplete, no explanation"
+                    # while its judge's rationale sat in build/calls/ the whole
+                    # time. Found by ea4ebe4a (LT-1 #8) reading live source.
+                    _now_summary = str(outcome.get("goal_verdict_summary") or "")
+                    if _now_summary:
+                        _now_extra["goal_verdict_summary"] = _now_summary
                     _wm_now(
                         _rd_now, handle_id=handle_id, prompt=_raw_input,
-                        extra={
-                            "goal_achieved": bool(outcome["goal_achieved"]),
-                            "goal_verdict_source": (
-                                "provenance" if outcome.get("provenance_missing")
-                                else ("now_self_verdict_free"
-                                      if outcome.get("now_verify_family") == "hosted_free"
-                                      else "now_self_verdict")),
-                        },
+                        extra=_now_extra,
                     )
             except Exception:
                 pass
@@ -2050,6 +2090,14 @@ def _handle_impl(
         _run_loop_ids = [loop_result.loop_id] if getattr(loop_result, "loop_id", "") else []
         _audit_warnings: List[str] = []
         _audit_failed_loop_ids: set[str] = set()
+        # Verdicts where the deterministic guard and closure DISAGREE. Jeremy,
+        # 2026-08-02: "we ignore contested results for learning… add them as
+        # anecdotes, but don't move for or against the learning either way."
+        # So these ride the existing unresolved-verdict-audit lane: the
+        # outcome row is written and keeps its evidence (decay trust, never
+        # data), lesson extraction just doesn't run off it. Nothing is
+        # blocked or deleted — the run simply doesn't get a vote.
+        _contested_verdict_loop_ids: set[str] = set()
 
         # Director restart: loop broke with restart status — re-run with restart context.
         # continuation_depth increment prevents infinite restart loops.
@@ -2380,6 +2428,8 @@ def _handle_impl(
                                     _closure, _prov_missing)
                                 if _contested:
                                     _prov_extra.update(_contested)
+                                    _contested_verdict_loop_ids.add(
+                                        getattr(loop_result, "loop_id", "") or "")
                                     log.warning(
                                         "provenance demoted a run closure judged "
                                         "COMPLETE @ %.2f — recorded as contested: %s",
@@ -2573,7 +2623,12 @@ def _handle_impl(
             _dl_result = loop_result
             _dl_project = project or getattr(loop_result, "project", "") or ""
             _dl_extra = [l for l in _run_loop_ids if l != _final_lid]
-            _dl_skip = list(_audit_failed_loop_ids)
+            _dl_skip = list(_audit_failed_loop_ids | _contested_verdict_loop_ids)
+            if _contested_verdict_loop_ids:
+                log.info(
+                    "learning: %d loop(s) held out as contested — recorded, "
+                    "but not voting for or against",
+                    len(_contested_verdict_loop_ids))
             _defer_learning_post_notify(
                 handle_id,
                 lambda: finalize_deferred_learning(
