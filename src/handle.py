@@ -402,7 +402,10 @@ def _run_now(
 
 _NOW_VERIFY_SYSTEM = (
     "You judge whether a response fulfilled a request. Reply with JSON only: "
-    '{"fulfilled": true} or {"fulfilled": false}. '
+    '{"fulfilled": true} or {"fulfilled": false, "why": "<one short sentence>"}. '
+    "On false, `why` must name the SPECIFIC missing thing (what was claimed "
+    "vs what is absent) — not a restatement of the verdict. It is the only "
+    "explanation a person will see for the run. Omit `why` when fulfilled. "
     "fulfilled=false when the response states the task could not be done, is "
     "incomplete or impossible, or only explains why it failed. "
     "fulfilled=false also when the response is a NON-ANSWER: it answers a "
@@ -534,7 +537,12 @@ def _verify_now_outcome(
                     f"Response:\n{str(outcome.get('result', ''))[:2000]}",
                 ),
             ],
-            max_tokens=64,
+            # 64 fit `{"fulfilled": false}` and nothing else, which is why
+            # the free judge could never give a reason (found live 2026-08-02,
+            # run 2113a608: the propagation fix landed inert because there was
+            # no rationale to propagate). A one-sentence `why` needs headroom;
+            # this is still far inside the sub-second interactive budget.
+            max_tokens=160,
             temperature=0.0,
             no_tools=True,
             purpose="now-verify",
@@ -546,7 +554,9 @@ def _verify_now_outcome(
             out["goal_achieved"] = False
             out["tokens_in"] = outcome.get("tokens_in", 0) + getattr(resp, "input_tokens", 0)
             out["tokens_out"] = outcome.get("tokens_out", 0) + getattr(resp, "output_tokens", 0)
-            out["goal_verdict_summary"] = _now_verdict_rationale(resp.content)
+            out["goal_verdict_summary"] = (
+                str(verdict.get("why") or "").strip()[:400]
+                or _now_verdict_rationale(resp.content))
             log.info("now-verify: response reports non-fulfillment — status demoted to incomplete (%s)",
                      out["goal_verdict_summary"][:120] or "no rationale given")
             return out

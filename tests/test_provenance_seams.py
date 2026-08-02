@@ -261,3 +261,32 @@ class TestNowVerdictRationale:
     def test_empty_and_none_are_safe(self):
         assert self._rationale()("") == ""
         assert self._rationale()(None) == ""
+
+
+class TestNowJudgeReason:
+    """Found live, not by pins (run 2113a608, 2026-08-02): the propagation
+    fix landed INERT on the hosted-free judge because that judge ran with
+    max_tokens=64 — room for `{"fulfilled": false}` and nothing else. There
+    was no rationale to propagate. The reason has to be ASKED for."""
+
+    def test_prompt_requests_a_reason_on_false_only(self):
+        import handle
+        sys_prompt = handle._NOW_VERIFY_SYSTEM
+        assert '"why"' in sys_prompt
+        assert "Omit `why` when fulfilled" in sys_prompt
+
+    def test_judge_has_room_to_answer(self):
+        """A cap that fits only the verdict silently forecloses the reason."""
+        import inspect
+        import handle
+        src = inspect.getsource(handle._verify_now_outcome)
+        assert "max_tokens=160" in src
+        assert "max_tokens=64" not in src
+
+    def test_structured_why_is_preferred_over_scraped_prose(self):
+        """Both are supported; the structured field wins when present."""
+        import inspect
+        import handle
+        src = inspect.getsource(handle._verify_now_outcome)
+        assert 'verdict.get("why")' in src
+        assert "_now_verdict_rationale(resp.content)" in src
