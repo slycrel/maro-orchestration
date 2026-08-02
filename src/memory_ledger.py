@@ -195,6 +195,13 @@ class Lesson:
     # kept on disk and visible in readouts. Absent key stays off the row
     # (_verdict_row), same discipline as the verdict fields.
     minted_from: str = ""
+    # Retirement-by-contradiction (2026-08-02): empty = full citizen;
+    # non-empty ({reason, source, contested_at}) = contested — excluded
+    # from injection (load_lessons default), kept on disk. Mirrors the
+    # tiered TieredLesson.contested field; UU-4 dual-written rows share a
+    # lesson_id, so knowledge_web.contest_lesson stamps both stores.
+    # Absent key stays off the row (_verdict_row discipline).
+    contested: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -464,6 +471,8 @@ def _verdict_row(obj: Any) -> Dict[str, Any]:
         row.pop("pause_reason")
     if "minted_from" in row and not row["minted_from"]:
         row.pop("minted_from")
+    if "contested" in row and not row["contested"]:
+        row.pop("contested")
     return row
 
 
@@ -1244,10 +1253,12 @@ def _store_lesson(
             minted_from = ""
     # Pass 1: fast exact-text dedup (no limit — prevents unbounded accumulation)
     # Pass 2: near-duplicate check within recent 100 lessons (word-overlap ≥ 0.8)
-    # include_quarantined — dedup must see quarantined rows or a re-minted
-    # prompt-derived lesson would append a fresh live duplicate.
+    # include_quarantined/contested — dedup must see excluded rows or a
+    # re-minted duplicate would append a fresh live copy, laundering the
+    # exclusion.
     existing = load_lessons(task_type=task_type, limit=500,
-                            include_quarantined=True)
+                            include_quarantined=True,
+                            include_contested=True)
     for ex in existing:
         if ex.lesson == lesson:
             if minted_from == "prompt":
@@ -1256,7 +1267,10 @@ def _store_lesson(
                 return ex
             # Exact match: reinforce without touching confidence (it's already there)
             ex.times_reinforced += 1
-            if ex.minted_from == "prompt" and minted_from == "outcome":
+            if (ex.minted_from == "prompt" and minted_from == "outcome"
+                    and not ex.contested):
+                # Contested rows never regain citizenship via a duplicate
+                # write (mirrors the tiered anti-laundering guard).
                 # Outcome-derived re-record clears quarantine — mirrors the
                 # tiered _reinforce_tiered_lesson citizenship rule. The
                 # incoming record must be affirmatively outcome-classified:
@@ -1276,8 +1290,10 @@ def _store_lesson(
                 return ex
             # Reinforce existing lesson and persist the update
             ex.times_reinforced += 1
-            ex.confidence = min(1.0, ex.confidence + 0.05)
-            if ex.minted_from == "prompt" and minted_from == "outcome":
+            if not ex.contested:  # contested rows: sighting counted, nothing else moves
+                ex.confidence = min(1.0, ex.confidence + 0.05)
+            if (ex.minted_from == "prompt" and minted_from == "outcome"
+                    and not ex.contested):
                 ex.minted_from = "outcome"  # same citizenship rule as above
                 log.info("quarantined flat lesson %s cleared by an "
                          "outcome-derived re-record", ex.lesson_id)
@@ -1370,6 +1386,51 @@ def set_flat_lesson_minted_from(lesson_id: str, minted_from: str,
     return True
 
 
+def contest_flat_lesson(lesson_id: str, stamp: Dict[str, Any]) -> bool:
+    """Stamp a flat-ledger lesson contested (retirement-by-contradiction).
+
+    Helper for knowledge_web.contest_lesson, which owns the LESSON_CONTESTED
+    event — this function only rewrites the row (UU-4 dual-written lessons
+    share a lesson_id across both stores, so one contest call flips both).
+    An already-contested row keeps its ORIGINAL stamp (first contradiction
+    wins the audit trail) and still counts as a hit.
+    Returns True if the lesson was found.
+    """
+    path = _lessons_path()
+    if not path.exists():
+        return False
+    hit = {"found": False}
+
+    def _stamp(old: str) -> str:
+        lines = []
+        for line in old.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            try:
+                row = json.loads(stripped)
+            except json.JSONDecodeError:
+                lines.append(line)
+                continue
+            if isinstance(row, dict) and row.get("lesson_id") == lesson_id:
+                hit["found"] = True
+                if not row.get("contested"):
+                    row["contested"] = stamp
+                lines.append(json.dumps(row))
+            else:
+                lines.append(line)
+        return "\n".join(lines) + ("\n" if lines else "")
+
+    from file_lock import locked_rmw
+    try:
+        locked_rmw(path, _stamp)
+    except OSError as exc:
+        log.warning("contest_flat_lesson: rewrite failed for %s: %s",
+                    lesson_id, exc)
+        return False
+    return hit["found"]
+
+
 def _rewrite_lessons_file(task_type: str, updated_lessons: List[Lesson]) -> None:
     """Rewrite the lessons file, replacing entries for the given task_type with updated versions.
 
@@ -1426,6 +1487,7 @@ def load_lessons(
     *,
     query: Optional[str] = None,
     include_quarantined: bool = False,
+    include_contested: bool = False,
 ) -> List[Lesson]:
     """Load relevant lessons from the lessons ledger.
 
@@ -1440,6 +1502,9 @@ def load_lessons(
             lessons stay out of every consumer that injects into prompts
             (recall top-up, bootstrap_context, inject_lessons_for_task).
             Readout/maintenance surfaces opt in.
+        include_contested: Default False — contested lessons
+            (retirement-by-contradiction) stay out of the same injection
+            consumers. Readout/maintenance/dedup surfaces opt in.
 
     Returns:
         List of Lesson objects.
@@ -1462,6 +1527,8 @@ def load_lessons(
                 if outcome_filter and l.outcome != outcome_filter:
                     continue
                 if not include_quarantined and l.minted_from == "prompt":
+                    continue
+                if not include_contested and l.contested:
                     continue
                 lessons.append(l)
             except Exception:

@@ -5916,3 +5916,23 @@ pre-chunk NOW/evolver rows honestly unjudged going forward from here.
   from Jeremy same message: M1 sessions are landing concurrent changes;
   "feel free to dig in where it makes sense" — green-lit BACKLOG chunks
   are the sanctioned lane.
+- **2026-08-02** — **Retirement-by-contradiction SHIPPED** (the green-lit
+  chunk, same day). `TieredLesson.contested` mirrors the standing-rule
+  grey flip: `contest_lesson()` stamps both stores (flat ledger included
+  — UU-4 shared ids; it feeds recall/bootstrap independently, so a
+  tiered-only flip would have leaked), excluded from every injection
+  surface, never promotes/confirms; adjudication's lesson-branch honest
+  no-op replaced with a real contest; operator verb `maro-memory
+  contest`. Two design points worth remembering: (1) dedup re-sightings
+  bump `times_reinforced` only — score and decay anchor FREEZE, so a
+  frequently re-derived contested MEDIUM row still retires on the decay
+  schedule, and the frozen sighting count is the evidence input for a
+  future lesson-refight slice (the V1 cut: contested is sticky, no
+  un-contest verb until that slice); (2) for decay-free LONG rows
+  contestation IS the retirement mechanism — there was previously none.
+  Acceptance corpus applied live: all six chunk-1 contradictions
+  contested with Jeremy's verbatim reads as reasons (L4=6287e494 long;
+  M6=9d6b63fe, M8=c304b9b2, M9=c85c9a09, M13=47e8f5e3, M14=655ea616);
+  injection/query leak-check clean; 6 LESSON_CONTESTED events on the
+  captain's log. Tests `tests/test_lesson_contested.py` (15) + the
+  superseded honest-no-op pin rewritten; full suite green.

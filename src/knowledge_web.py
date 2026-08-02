@@ -128,6 +128,16 @@ class TieredLesson:
     # from LONG promotion (same surfaces as provisional), visible in readouts,
     # cleared only by an outcome-derived confirming re-record.
     minted_from: str = ""
+    # Retirement-by-contradiction (2026-08-02): empty dict = full citizen;
+    # non-empty = contested ({reason, source, contested_at}) — the lesson was
+    # named by contradiction adjudication or operator judgment as plausibly
+    # wrong. Contested rows leave every injection surface (same set as
+    # provisional/quarantined) and never promote; reinforcement bumps score
+    # but is never confirming (sessions_validated frozen, flags never clear).
+    # This is the only retirement path for LONG rows, which don't decay.
+    # Sticky by design — no un-contest verb until a lesson-refight slice
+    # exists (mirrors refight_rule). Old rows deserialize to {}.
+    contested: Dict[str, Any] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -229,6 +239,13 @@ def _is_quarantined(tl: "TieredLesson") -> bool:
     and from promotion (lesson_provenance gate). Legacy ""/"outcome" rows
     are full citizens."""
     return tl.minted_from == "prompt"
+
+
+def _is_contested(tl: "TieredLesson") -> bool:
+    """Contested lessons (retirement-by-contradiction) leave every injection
+    surface and never promote or confirm. The dict carries the audit trail
+    (reason/source/contested_at); emptiness is the flag."""
+    return bool(tl.contested)
 
 
 def confidence_from_k_samples(k_samples: int) -> float:
@@ -461,6 +478,16 @@ def _reinforce_tiered_lesson(tl: TieredLesson, *, tier: str,
     sessions_validated while hidden, and its first confirmation would
     promote it to LONG immediately (adversarial review 2026-07-27).
     """
+    # Retirement-by-contradiction: a contested lesson may still be re-sighted
+    # (dedup re-records land here). The sighting is counted
+    # (times_reinforced — honest evidence for a future refight) but nothing
+    # else moves: no score bump, no decay re-anchor (or a frequently
+    # re-derived contested row would never decay out — retirement is the
+    # point), no confirmation (sessions_validated frozen, no flag clears —
+    # otherwise a contested lesson could launder itself back to citizenship
+    # through the same duplicate-write path that made it look validated).
+    contested_hit = _is_contested(tl)
+    confirming = confirming and not contested_hit
     if confirming and tl.provisional:
         tl.provisional = False
         log.info("provisional lesson %s confirmed by a learnable-context re-record",
@@ -478,14 +505,15 @@ def _reinforce_tiered_lesson(tl: TieredLesson, *, tier: str,
         tl.minted_from = "outcome"
         log.info("quarantined lesson %s cleared by an outcome-derived re-record",
                  tl.lesson_id)
-    tl.score = reinforce_score(tl.score)
+    if not contested_hit:
+        tl.score = reinforce_score(tl.score)
+        tl.last_reinforced = _current_date()
     if confirming:
         tl.sessions_validated += 1
         # F5: multi-session confidence promotion
         if tl.sessions_validated >= 3:
             tl.confidence = max(tl.confidence, _CONFIDENCE_MULTI_SESSION)
     tl.times_reinforced += 1
-    tl.last_reinforced = _current_date()
     # Replace the mutated lesson under the lock (raw stored scores for all
     # bystanders — a non-raw load would persist decay, compounding on each
     # write; an unlocked load would drop concurrent updates).
@@ -518,13 +546,19 @@ def _post_reinforce_hooks(tl: TieredLesson, *, tier: str) -> TieredLesson:
         if (tl.score >= PROMOTE_MIN_SCORE
                 and tl.sessions_validated >= PROMOTE_MIN_SESSIONS
                 and not tl.provisional
-                and not _is_quarantined(tl)):
+                and not _is_quarantined(tl)
+                and not _is_contested(tl)):
             try:
                 if promote_lesson(tl.lesson_id):
                     tl.tier = MemoryTier.LONG
             except Exception as exc:
                 log.warning("promotion-at-reinforcement failed for %s: %s", tl.lesson_id, exc)
     elif tier == MemoryTier.LONG:
+        # A contested LONG lesson must not keep feeding the hypothesis/
+        # standing-rule pipeline — that would accrete confirmations from a
+        # pattern currently under contradiction.
+        if _is_contested(tl):
+            return tl
         try:
             from knowledge_lens import observe_pattern
             observe_pattern(tl.lesson, tl.task_type or "", source_lesson_id=tl.lesson_id)
@@ -800,11 +834,12 @@ def search_graveyard(
         for tl in lessons:
             if tl.score >= max_score:
                 continue
-            # Provisional and quarantined lessons are excluded from every
-            # injection surface, and resurrection reinforces confirming=True
-            # — a topic match is not the learnable-context re-record that
-            # may clear either flag (adversarial review 2026-07-27).
-            if tl.provisional or _is_quarantined(tl):
+            # Provisional, quarantined, and contested lessons are excluded
+            # from every injection surface, and resurrection reinforces
+            # confirming=True — a topic match is not the learnable-context
+            # re-record that may clear any flag (adversarial review
+            # 2026-07-27).
+            if tl.provisional or _is_quarantined(tl) or _is_contested(tl):
                 continue
             text = tl.lesson.lower()
             match_ratio = sum(1 for kw in keywords if kw in text) / max(len(keywords), 1)
@@ -819,8 +854,8 @@ def search_graveyard(
     for tl in _load_archived_lessons():
         if tl.lesson_id in live_ids:
             continue
-        if tl.provisional or _is_quarantined(tl):  # same exclusion as the live scan above
-            continue
+        if tl.provisional or _is_quarantined(tl) or _is_contested(tl):
+            continue  # same exclusion as the live scan above
         text = tl.lesson.lower()
         match_ratio = sum(1 for kw in keywords if kw in text) / max(len(keywords), 1)
         if match_ratio > 0:
@@ -900,6 +935,94 @@ def set_lesson_minted_from(lesson_id: str, minted_from: str,
     return True
 
 
+def contest_lesson(lesson_id: str, reason: str, *, source: str,
+                   tier: Optional[str] = None) -> bool:
+    """Mark a stored lesson contested (retirement-by-contradiction,
+    2026-08-02). A contested lesson stays on disk and visible in readouts
+    but leaves every injection surface, never promotes, and never confirms
+    — for MEDIUM, decay then disposes of it; for decay-free LONG this is
+    the retirement mechanism itself.
+
+    Callers: contradiction adjudication (knowledge_lens) when a certified
+    failure names a cited lesson, and the operator verb
+    (`maro-memory contest`). Sticky by design — no un-contest path until a
+    lesson-refight slice exists. Re-sightings via dedup only bump
+    times_reinforced (evidence for that future refight); score and the
+    decay anchor freeze, so a contested MEDIUM row retires on the decay
+    schedule no matter how often it is re-derived.
+
+    Args:
+        lesson_id: id of the lesson to contest.
+        reason:    why — the contradiction evidence or operator judgment.
+        source:    who/what contested it, e.g.
+                   "contradiction_adjudication:<loop_id>" or "operator:<who>".
+        tier:      search only this tier; default searches MEDIUM then LONG.
+
+    Returns True if the lesson was found and stamped (idempotent: an
+    already-contested row keeps its ORIGINAL stamp — first contradiction
+    wins the audit trail — but still returns True).
+    """
+    stamp = {
+        "reason": reason[:400],
+        "source": source,
+        "contested_at": datetime.now(timezone.utc).isoformat(),
+    }
+    hit: Dict[str, Any] = {"tl": None, "already": False}
+
+    def _stamp(lessons: List[TieredLesson]) -> List[TieredLesson]:
+        for l in lessons:
+            if l.lesson_id == lesson_id:
+                if _is_contested(l):
+                    hit["already"] = True
+                else:
+                    l.contested = stamp
+                hit["tl"] = l
+        return lessons
+
+    found_tier = ""
+    for t in ([tier] if tier else [MemoryTier.MEDIUM, MemoryTier.LONG]):
+        _mutate_tiered_lessons(t, _stamp)
+        if hit["tl"] is not None:
+            found_tier = t
+            break
+
+    # UU-4 dual-written rows share a lesson_id across the tiered store and
+    # the flat ledger — stamp both so the lesson leaves EVERY injection
+    # surface (the flat ledger feeds recall top-up / bootstrap_context
+    # independently). Best-effort: a flat miss is normal for tiered-only
+    # rows and vice versa.
+    flat_hit = False
+    try:
+        from memory_ledger import contest_flat_lesson
+        flat_hit = contest_flat_lesson(lesson_id, stamp)
+    except Exception as exc:
+        log.warning("contest_lesson: flat-ledger stamp failed for %s: %s",
+                    lesson_id, exc)
+
+    if hit["tl"] is None and not flat_hit:
+        return False
+    if hit["already"]:
+        log.info("contest_lesson: %s already contested — original stamp kept",
+                 lesson_id)
+        return True
+    lesson_text = hit["tl"].lesson if hit["tl"] is not None else ""
+    try:
+        from captains_log import log_event, LESSON_CONTESTED
+        log_event(
+            event_type=LESSON_CONTESTED,
+            subject=lesson_id,
+            summary=(f"Lesson {lesson_id} contested ({source}): "
+                     f"{lesson_text[:100]}"),
+            context={"tier": found_tier, "flat": flat_hit,
+                     "reason": stamp["reason"], "source": source},
+        )
+    except Exception:
+        pass
+    log.info("contest_lesson: %s (tier=%s flat=%s) contested by %s — %s",
+             lesson_id, found_tier or "-", flat_hit, source, reason[:120])
+    return True
+
+
 def promote_lesson(lesson_id: str) -> bool:
     """Promote a medium-tier lesson to long-tier.
 
@@ -925,6 +1048,11 @@ def promote_lesson(lesson_id: str) -> bool:
         # Same boundary guard: a prompt-derived row reaching decay-free LONG
         # would make the contamination permanent.
         log.info("promote_lesson: %s is quarantined (prompt-derived) — not promoting", lesson_id)
+        return False
+    if _is_contested(target):
+        # Same boundary guard: a contested row reaching decay-free LONG
+        # would make a plausibly-wrong lesson permanent.
+        log.info("promote_lesson: %s is contested — not promoting", lesson_id)
         return False
     # ...but the record that moves tiers is the stored (raw) one — popped
     # from MEDIUM under the lock so concurrent updates aren't dropped.
@@ -991,10 +1119,11 @@ def run_decay_cycle(
         if (tl.score >= PROMOTE_MIN_SCORE
                 and tl.sessions_validated >= PROMOTE_MIN_SESSIONS
                 and not tl.provisional
-                and not _is_quarantined(tl)):
-            # not-provisional/not-quarantined mirrors _post_reinforce_hooks —
-            # the backstop must not promote what the reinforcement path
-            # refuses to.
+                and not _is_quarantined(tl)
+                and not _is_contested(tl)):
+            # not-provisional/quarantined/contested mirrors
+            # _post_reinforce_hooks — the backstop must not promote what
+            # the reinforcement path refuses to.
             promoted_ids.append(tl.lesson_id)
         elif tl.score < GC_THRESHOLD:
             gc_ids.append(tl.lesson_id)
@@ -1277,15 +1406,15 @@ def inject_tiered_lessons(
     # Load candidate lessons — fetch a wider pool when using TF-IDF ranking
     _pool_multiplier = 3 if goal else 1
 
-    # Provisional and quarantined (prompt-derived) lessons are excluded from
-    # every injection surface until a confirmed/outcome-derived re-record
-    # clears the flag (per-step learning 2026-07-27; provenance gate
-    # 2026-07-29). LONG can't hold either (promotion is guarded), but the
-    # filter is uniform so the invariant doesn't depend on it.
+    # Provisional, quarantined (prompt-derived), and contested lessons are
+    # excluded from every injection surface (per-step learning 2026-07-27;
+    # provenance gate 2026-07-29; retirement-by-contradiction 2026-08-02).
+    # LONG can't hold provisional/quarantined (promotion is guarded) but CAN
+    # hold contested — contestation is how decay-free LONG rows retire.
     long_candidates = [t for t in load_tiered_lessons(
         tier=MemoryTier.LONG, task_type=task_type, min_score=0.0,
         limit=max_long * _pool_multiplier,
-    ) if not (t.provisional or _is_quarantined(t))]
+    ) if not (t.provisional or _is_quarantined(t) or _is_contested(t))]
     if goal and len(long_candidates) > max_long:
         _ranker = _hybrid_rank if _USE_HYBRID else _tfidf_rank
         long_candidates = _ranker(goal, long_candidates, top_k=max_long)
@@ -1301,7 +1430,7 @@ def inject_tiered_lessons(
     medium_candidates = [t for t in load_tiered_lessons(
         tier=MemoryTier.MEDIUM, task_type=task_type, min_score=0.3,
         limit=max_medium * _pool_multiplier,
-    ) if not (t.provisional or _is_quarantined(t))]
+    ) if not (t.provisional or _is_quarantined(t) or _is_contested(t))]
     if goal and len(medium_candidates) > max_medium:
         _ranker = _hybrid_rank if _USE_HYBRID else _tfidf_rank
         medium_candidates = _ranker(goal, medium_candidates, top_k=max_medium)
@@ -1339,6 +1468,7 @@ def query_lessons_scored(
     min_score: float = 0.0,
     include_provisional: bool = False,
     include_quarantined: bool = False,
+    include_contested: bool = False,
 ) -> List[tuple]:
     """(lesson, score) variant of query_lessons — same pool, same ranking,
     same truncation; the ranker's internal score is surfaced instead of
@@ -1372,6 +1502,8 @@ def query_lessons_scored(
             pool = [t for t in pool if not t.provisional]
         if not include_quarantined:
             pool = [t for t in pool if not _is_quarantined(t)]
+        if not include_contested:
+            pool = [t for t in pool if not _is_contested(t)]
         candidates.extend(pool)
 
     if not candidates:
@@ -1391,6 +1523,7 @@ def query_lessons(
     min_score: float = 0.0,
     include_provisional: bool = False,
     include_quarantined: bool = False,
+    include_contested: bool = False,
 ) -> List[TieredLesson]:
     """Retrieve the top-N lessons most relevant to `query` via hybrid retrieval.
 
@@ -1411,6 +1544,9 @@ def query_lessons(
         include_quarantined: Default False — prompt-derived (quarantined)
                      lessons stay out of retrieval; readout surfaces that
                      want to SHOW quarantine contents opt in.
+        include_contested: Default False — contested lessons
+                     (retirement-by-contradiction) stay out of retrieval;
+                     readout/refight surfaces opt in.
 
     Returns:
         List of TieredLesson objects (most relevant first).
@@ -1420,6 +1556,7 @@ def query_lessons(
         tiers=tiers, min_score=min_score,
         include_provisional=include_provisional,
         include_quarantined=include_quarantined,
+        include_contested=include_contested,
     )]
 
 
@@ -1533,9 +1670,10 @@ def get_canon_candidates(
         lesson = lesson_map.get(lid)
         if not lesson:
             continue
-        if _is_quarantined(lesson):
-            # A quarantined row can accumulate stale canon hits from before
-            # its stamp — never recommend it for AGENTS.md identity.
+        if _is_quarantined(lesson) or _is_contested(lesson):
+            # A quarantined/contested row can accumulate stale canon hits
+            # from before its stamp — never recommend it for AGENTS.md
+            # identity.
             continue
         candidates.append({
             "lesson_id": lid,

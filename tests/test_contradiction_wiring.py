@@ -405,14 +405,18 @@ class TestAdjudicator:
             _FakeAdapter('{"contradicted": "no", "reasoning": "x"}'))
         assert counts2["examined"] == 1
 
-    def test_lesson_only_yes_records_honest_noop(self, monkeypatch, tmp_path):
-        """Review F5: a cited lesson that is not also a rule/hypothesis has
-        no contested tier — the yes records, but applied stays empty."""
+    def test_lesson_only_yes_contests_the_lesson(self, monkeypatch, tmp_path):
+        """Retirement-by-contradiction (2026-08-02) supersedes the review-F5
+        honest no-op this test used to pin: lessons now have a contested
+        state of their own, so a lesson-only yes lands (applied non-empty)
+        and the row leaves the injection surfaces."""
         _setup(monkeypatch, tmp_path)
-        from memory_ledger import _lessons_path
+        from memory_ledger import _lessons_path, load_lessons
         _lessons_path().parent.mkdir(parents=True, exist_ok=True)
         with open(_lessons_path(), "a") as f:
-            f.write(json.dumps({"lesson_id": "l-solo",
+            f.write(json.dumps({"lesson_id": "l-solo", "task_type": "general",
+                                "outcome": "done", "source_goal": "g",
+                                "confidence": 0.7,
                                 "lesson": "a lesson matching no rule"}) + "\n")
         _seed_candidate("lp-a9", lesson_ids=["l-solo"])
         counts = adjudicate_contradiction_candidates(_FakeAdapter(
@@ -421,7 +425,11 @@ class TestAdjudicator:
         assert counts["contradicted"] == 1
         ev = _events(CONTRADICTION_ADJUDICATED)[0]["context"]
         assert ev["contradicted_ids"] == ["l-solo"]
-        assert ev["applied"] == []
+        assert ev["applied"] == ["l-solo"]
+        assert load_lessons(task_type="general") == []
+        contested = load_lessons(task_type="general", include_contested=True)
+        assert contested[0].contested["source"] == (
+            "contradiction_adjudication:lp-a9")
 
     def test_refight_evidence_includes_adjudication_reasoning(
             self, monkeypatch, tmp_path):

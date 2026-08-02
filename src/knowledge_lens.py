@@ -1041,10 +1041,18 @@ Output ONLY valid JSON:
                     hit = contradict_pattern(rules_by_id[i].rule,
                                              rules_by_id[i].domain)
                 else:
-                    # Lessons have no contested tier of their own — the call
-                    # only lands if the text also lives as a rule/hypothesis.
-                    # The applied list keeps the no-op honest (review F5).
-                    hit = contradict_pattern(cited_lessons[i], "")
+                    # Retirement-by-contradiction (2026-08-02): contest the
+                    # lesson itself — it leaves every injection surface and
+                    # can never confirm/promote (was an honest no-op before
+                    # lessons had a contested state). The rule-layer echo
+                    # still runs so a pattern that ALSO lives as a
+                    # hypothesis/standing rule takes its contradiction there.
+                    from knowledge_web import contest_lesson
+                    lesson_hit = contest_lesson(
+                        i, reason=reasoning or "adjudicated contradiction",
+                        source=f"contradiction_adjudication:{loop_id}")
+                    rule_hit = contradict_pattern(cited_lessons[i], "")
+                    hit = lesson_hit or rule_hit
                 if hit:
                     applied.append(i)
         counts["contradicted" if verdict == "yes"

@@ -1222,6 +1222,16 @@ def _cmd_memory(args: argparse.Namespace) -> int:
         else:
             print(f"lesson_id={args.lesson_id} not eligible for promotion (score<{0.9} or sessions<3)")
             return 1
+    elif memory_cmd == "contest":
+        from memory import contest_lesson
+        ok = contest_lesson(args.lesson_id, args.reason,
+                            source=args.source,
+                            tier=getattr(args, "tier", None))
+        if ok:
+            print(f"Contested lesson_id={args.lesson_id} — out of every injection surface (sticky; no un-contest verb yet)")
+        else:
+            print(f"lesson_id={args.lesson_id} not found")
+            return 1
     elif memory_cmd == "list":
         tier = getattr(args, "tier", "medium")
         task_type = getattr(args, "task_type", None)
@@ -1233,10 +1243,12 @@ def _cmd_memory(args: argparse.Namespace) -> int:
             print(f"tier={tier} count={len(lessons)}")
             for l in lessons:
                 icon = "✓" if l.outcome == "done" else "✗"
-                # Quarantined rows stay visible in readouts by design —
-                # they are only excluded from injection surfaces.
+                # Quarantined/contested rows stay visible in readouts by
+                # design — they are only excluded from injection surfaces.
                 _q = " [QUARANTINED: prompt-derived]" if getattr(l, "minted_from", "") == "prompt" else ""
-                print(f"  [{l.lesson_id}] score={l.score:.2f} sessions={l.sessions_validated} {icon} [{l.task_type}] {l.lesson[:80]}{_q}")
+                _c = (f" [CONTESTED: {l.contested.get('source', '?')}]"
+                      if getattr(l, "contested", None) else "")
+                print(f"  [{l.lesson_id}] score={l.score:.2f} sessions={l.sessions_validated} {icon} [{l.task_type}] {l.lesson[:80]}{_q}{_c}")
     elif memory_cmd == "record":
         tier = getattr(args, "tier", "medium")
         task_type = getattr(args, "task_type", "general")
