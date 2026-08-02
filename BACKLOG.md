@@ -977,6 +977,46 @@ capture**, which is what makes the rung amortize instead of evaporate.
     which is itself the finding** (pointer-following failure, its own
     ladder rung). Run AFTER 3a so 3a's mints don't ride on 3b's slug.
 
+  **ROUND 4 — #5 post-fix, two arms. Predictions registered 2026-08-02
+  BEFORE dispatch.** Corrected economics make this cheap enough to stop
+  choosing: both arms together cost about what one arm was *thought* to
+  cost. They measure different things and the batch design wants both.
+
+  - **(4a) Second specimen, COLD** — same goal shape as #5, different
+    book: *Notes on the Synthesis of Form*, Christopher Alexander, 1964.
+    New slug ⇒ no artifact reuse ⇒ an honest capability verdict, which is
+    what the held Tier-1 catalog promotion actually needs (a warm arm's
+    verdict rides on the cold arm's cached artifacts and proves nothing
+    about retrieval-before-describe). Chosen for **high memory-prior plus
+    a publication-history detail memory usually mangles** — Alexander
+    added a 1971 preface repudiating the book's own method. That is the
+    corpus-1.6 trap baited: an LLM can produce a fluent description of
+    this book from memory, so a decorative source list is the failure
+    shape to watch for.
+    **Predictions:** cost **$6–9**; **8–13 steps**; **≥3 hard-blocked
+    hosts** recorded (worldcat / archive.org / googleapis / hathitrust
+    are all reliably blocked from this box per `run_readout`);
+    **avoidable_retries ≤ 2**; verdict **achieved=True from closure, with
+    no provenance override** — a second provenance demotion would be a
+    guard regression, not a run failure.
+    **Stated weakness of the terrain test:** book-shaped goals have a low
+    base rate for this waste (#5 cold scored 1 avoidable retry with no
+    terrain at all), so a low number here is *consistent with* §5b
+    working but is not strong evidence for it. The high-power terrain
+    probe is an archive-heavy claim-verification goal, where the
+    no-terrain base rate was 23–24. Say so rather than bank a weak win.
+  - **(4b) Verbatim re-run, WARM** — byte-identical #5 prompt, same
+    `tell-me-about-the-book` slug, run AFTER 4a so 4a's mints don't ride
+    on it. Buys two things a fresh specimen can't: the **second cold/warm
+    pair in the whole arc** (the warm-delta generalization currently rests
+    on one goal family), and a **live check of the provenance guard on the
+    exact claim shape that broke it** — `artifacts/OL*.json`, with the six
+    real OL JSONs still on disk.
+    **Predictions:** cost **$3.5–5.5** (−30% to −55% vs the corrected
+    $7.83 cold — richer artifacts on disk than the chlorination pair had,
+    so a bigger cut than that pair's −14%); **5–9 steps**;
+    **avoidable_retries = 0**; **no provenance demotion**.
+
   **Repeat-run economics (the warm arm, mechanism written down before
   running it — 2026-08-01, Jeremy's question).** On the subprocess backend
   there is NO cross-run prompt cache — every `claude -p` call is a fresh
