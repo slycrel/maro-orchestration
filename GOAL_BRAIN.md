@@ -5826,3 +5826,25 @@ pre-chunk NOW/evolver rows honestly unjudged going forward from here.
   reaches runtime. Raw-corpus reading judged too tedious as an
   instrument ("figure out a better way to get this information") —
   remainder re-issued as 8 family judgments + optional 5-row tail sample.
+- **2026-08-02** — Three decrees from the sidequest review (Jeremy; pipe
+  to runtime journal owed next box trip). **(1) Build-in-up-front
+  posture:** for capability classes we can see coming (first instance:
+  RLM-style REPL-reading of large documents), don't wait for maro to
+  discover them through friction — "let's build it into the system as a
+  direct capability up front; either as a skill… or whatever might be
+  lightweight and maintainable over time." repl_reading skill greenlit
+  (BACKLOG sidequest item; A/B against the registered $11.25/3.45M 3b
+  baseline). **(2) Continuation identity RATIFIED:** resume ≡
+  uninterrupted run (same id, same mechanisms, one outcome row);
+  new-attempt = own run + archaeology tie (parent id). Discriminator =
+  terminal-closure stamps; ambiguity fails toward restart. **(3)
+  Deletion safety:** UIs/tools deleting goals/runs must not silently
+  destroy data referenced by another run — resolved as
+  reverse-lookup-and-surface on the run-ref index (no copies, no
+  refcounts), per the retention decree. Context note recorded with the
+  sidequest: my "the RLM articles aren't in the link farm" was FALSE —
+  searched the box's 315-post snapshot frozen 2026-04-11; all six posts
+  postdate it (fresh clone: 747 posts). Fifth bite of the denominator
+  family; durable rule added: absence claims require the corpus vintage
+  to cover the period where the thing would exist. Side-finding: the
+  box's lf- knowledge import is 432 posts stale — resync+reimport filed.

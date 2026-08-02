@@ -597,6 +597,38 @@ capture**, which is what makes the rung amortize instead of evaporate.
       **artifact continuity** — resume writes into the same run dir,
       restart gets a fresh dir and reaches prior artifacts via the
       project dir, which persists across both.
+      **RATIFIED 2026-08-02 (Jeremy): "continuation-as-resume should
+      result in the same as an uninterrupted run… continuation-as-new-
+      attempt should result in the archaeology tie, but otherwise have
+      its own separate run with data."** Plus his rider: **deletion
+      safety** — any UI/tool that deletes goals/runs must copy or
+      reference-check so data referenced by another run isn't silently
+      destroyed. Design answer chosen for that rider (retention-decree-
+      shaped, no copies, no refcount machinery): parent links are IDs
+      not paths, and a restart reads prior artifacts via the project
+      dir, so deleting a parent run dir breaks provenance depth, not
+      function — therefore prune/delete tools do a **reverse lookup on
+      the run-ref index for children naming the target as
+      parent/resumed_from, and SURFACE the tie instead of silently
+      deleting** (refuse-or-warn; operator decides — same posture as
+      stale-clone surfacing). Copying was rejected (duplicates data,
+      violates single-source); refcounting rejected (the index already
+      gives cheap reverse lookup).
+      **Implementation decisions taken with the ratification (stated,
+      overridable):** (1) resume-≡-uninterrupted needs one explicit
+      mechanism — the interrupted segment's partial outcome row is
+      marked superseded by the resume's final row (verdict_flow counts
+      events; a resume must not read as two attempts); cost/tokens SUM
+      across segments, elapsed sums ACTIVE segments (a 3-day pause is
+      not 3 days of work). (2) **Restarts re-enter through handle(), not
+      direct-to-loop** — a retry after a judged failure must face the
+      recall guard (the ~25× repeat-burn protection) and fresh
+      scope/routing; resumes stay direct but re-pin the existing run dir
+      and append a loop row. (3) Terminal-closure stamps
+      (ended_at/goal_verdict_source/pause_reason) are the discriminator;
+      if a queued task is ambiguous (no stamps either way), fail toward
+      RESTART — a spurious new-id-with-parent is archaeology noise,
+      a spurious same-id resume corrupts a closed run's record.
     - **Verdictability resolved by the per-month table**: 2026-04 1272 rows
       100% blind / 0 verdicted, 2026-06 66 rows 100% blind, **2026-07 112
       rows 52.7% blind, 41 verdicted.** The 96.3% headline was 1272 April
@@ -1888,11 +1920,36 @@ refresh attempt — see BACKLOG_DONE for the reconciliation note).
 Jeremy's ask: articles on "repl-like reading of very large documents"
 claiming far better accuracy than standard LLM practice — "grep-guessing
 has limited utility, and the larger the dataset (and reading comprehension
-surface) the more likely it is to fail." The link-farm scan found only
-conceptual relatives (PageIndex hierarchical retrieval, marked
-`questionable`; the LangChain harness/context-rot piece); the work the
-description matches is **Recursive Language Models** (Zhang & Khattab,
-MIT, late 2025): the document NEVER enters the context window — it lives
+surface) the more likely it is to fail."
+
+**CORRECTION 2026-08-02 — the articles ARE in the link farm; my "not
+there" was the arc's denominator lesson in a fifth costume.** I searched
+the BOX's copy (315 posts, frozen 2026-04-11 — it's what
+import_link_farm.py points at); all six RLM posts date 2026-04-15
+onward. Searched a corpus that ended four days before the first post
+existed, reported absence. Jeremy re-checked with the fresh clone (747
+posts through 2026-07-31) and found six: Weitekamp "RLMs are the new
+reasoning models" (04-21, the survey — links alexzhang13/rlm, dspy.RLM,
+ax-llm/ax, rawwerks/rlm-cli); Trampoline-AI/predict-rlm (production
+implementation); **Sam Hogan "HALO: using RLMs to build self-improving
+agents" (05-15) — an RLM mining hundreds of thousands of execution
+traces for recurring harness failure modes, then auto-fixing the
+harness (AppWorld 73.7→89.5, SWE-Bench 65→74) — which is maro's
+evolver/introspect lane with an RLM reader, the most directly
+maro-shaped datapoint of the six**; local recursive LMs trained with RL
+(05-19); GEPA (05-02, same limitation via prompt optimization instead);
+Garry Tan "Resolvers" (04-15, tangential).
+- [ ] **Side-finding, actionable: the box's `lf-` knowledge nodes came
+  from the 315-post snapshot** — maro's knowledge layer is missing 432
+  posts incl. all RLM material. Sync the box's link-farm clone + re-run
+  the import (mind the standing lf- edge-contamination item first).
+- **Durable rule (add to the denominator family): before declaring a
+  thing absent from a corpus, verify the corpus's vintage covers the
+  period where it would exist.**
+
+The work itself — **Recursive Language Models** (Zhang, Kraska &
+Khattab per the survey's credits): the document NEVER enters the
+context window — it lives
 as a variable in a Python REPL, and the model peeks/slices/greps it
 programmatically and **recursively sub-calls itself (or a cheaper model)
 on located regions**, composing the answer. Claimed results: a small
@@ -1919,7 +1976,11 @@ mixed-positive.
    eating them — a bounded REPL-read is the natural implementation of
    its "read the evidence layer" input contract.
 
-**Build posture — discipline before machinery:**
+**Build posture — discipline before machinery. DECREED 2026-08-02
+(Jeremy): build it in up front as a direct capability — "rather than
+waiting for maro to discover this sort of thing… either as a skill
+(agree that's a great place to start) or whatever might be lightweight
+and maintainable over time."** Step 1 is greenlit:
 - [ ] **Step 1 (cheap, testable): `skills/repl_reading.md`** — a reading
   protocol skill: outline/TOC first; never cat whole files; targeted
   slices by offset; sub-verify every quote against its slice; explicit
