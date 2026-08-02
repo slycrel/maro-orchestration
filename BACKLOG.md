@@ -2013,7 +2013,28 @@ mixed-positive.
 waiting for maro to discover this sort of thing… either as a skill
 (agree that's a great place to start) or whatever might be lightweight
 and maintainable over time."** Step 1 is greenlit:
-- [ ] **Step 1 (cheap, testable): `skills/repl_reading.md`** — a reading
+- [x] **Step 1 BUILT 2026-08-02: `skills/repl_reading.md`** — protocol:
+  budget-first, size-check, outline-don't-read, locate-then-read-the-
+  region (with grep's comprehension limits stated), quote-verified-
+  against-slice with file:line provenance, map-reduce for genuinely
+  large surfaces, honesty stamps ("what I did NOT read"), and the five
+  observed anti-patterns. Parses in the loader; matches corpus-reading
+  goals for role=worker. **A/B prediction, registered before dispatch:
+  same corpus + related question, skill available → $3–6 if the
+  protocol bends the read curve; ~$11 (the 3b baseline) if it doesn't
+  inject or doesn't change behavior.** Confound noted honestly: the
+  corpus now also contains 3b's final_verdict.md (slightly richer than
+  the 3b arm saw), so read the tokens_in delta as the primary signal,
+  not the dollars alone.
+  **Pause-stamp residual VERIFIED same day, result reframed:** the
+  ceiling path doesn't stamp — and §13e's vocabulary has NO budget
+  value by design ("out-of-budget" is a STOP verdict, not a pause). So
+  budget-ceiling continuations are restarts under current decree; if
+  Jeremy wants multi-pass budget runs as same-identity resumes, that's
+  a §13e vocabulary decision (add e.g. "budget-ceiling" to
+  VALID_PAUSE_REASONS + stamp at the break site + skip closure-judging
+  the paused pass), not a missing one-liner. His call, filed.
+- ~~**Step 1 (cheap, testable): `skills/repl_reading.md`** — a reading~~
   protocol skill: outline/TOC first; never cat whole files; targeted
   slices by offset; sub-verify every quote against its slice; explicit
   budget per read. A/B it on a corpus goal we already have a baseline
