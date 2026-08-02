@@ -5810,3 +5810,19 @@ pre-chunk NOW/evolver rows honestly unjudged going forward from here.
   (imports.jsonl: no real pack import has ever run — no laundered rows
   exist anywhere). Record:
   docs/history/2026-08-01-pack-transport-adversarial-review.md.
+- **2026-08-01** — Lesson-corpus surprise read, chunk 1 (Jeremy; L1–L4 +
+  M1–M15; verbatim reads + tally:
+  `docs/history/2026-07-31-lesson-corpus-surprise-read.md`). Mirroring
+  collapse REFUTED (11/19 flagged), but the rubric needed a direction
+  split the binary missed: positive surprises **M4 + M12** seed the
+  Δ-gate; negative surprises **L4, M6, M8, M9, M13, M14** are
+  operator-certified contradiction/retirement candidates (first real test
+  corpus for retirement-by-contradiction — nothing has ever been retired
+  that way); **M7/M11** are system-gap flags routing to the existing
+  side-quest-identification and fetch-verb threads. Standing taste signal
+  (4 of 11 reads): lessons minted at the wrong altitude — *how* (named
+  procedure) where they should record *what* ("2 trusted sources");
+  candidate mint-time rule, awaiting Jeremy's confirmation before it
+  reaches runtime. Raw-corpus reading judged too tedious as an
+  instrument ("figure out a better way to get this information") —
+  remainder re-issued as 8 family judgments + optional 5-row tail sample.

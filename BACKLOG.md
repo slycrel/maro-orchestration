@@ -3074,6 +3074,19 @@ open — verification ≠ repair; each needs a wire-or-retire decision):**
     long-tier corpus and counts entries that SURPRISE him (not wrong ones).
     Zero = collapse empirically confirmed; nonzero = the seed set the gate is
     evaluated against. Pair with the chunk-6 novelty-at-mint field.
+    **Chunk-1 read landed 2026-08-01** (L1–L4 + M1–M15; full record + verbatim
+    reads in `docs/history/2026-07-31-lesson-corpus-surprise-read.md`):
+    mirroring collapse REFUTED (11/19 flagged) — but only M4 + M12 are
+    positive surprise (the Δ-gate seed set so far); six are
+    operator-certified contradictions (L4, M6, M8, M9, M13, M14 — the test
+    corpus a retirement-by-contradiction mechanism has been missing); two
+    route to existing threads (M7 → side-quest identification, M11 → fetch
+    verb). Recurring critique in 4 reads: lessons minted at the wrong
+    altitude — *how* (named procedure) where they should record *what*
+    ("2 trusted sources") — candidate mint-time rule, pending Jeremy.
+    Raw-corpus reading judged too tedious as an instrument; the remainder is
+    re-issued in the same doc as **8 family judgments + optional 5-row tail
+    sample** instead of 116 rows.
   - **Corrections (don't inherit Opus's errors)**: CANON_APPLY_THRESHOLD
     surfaces candidates that never promote (battery V3 — no promote path);
     extraction IS verdict-aware (extract_deferred_lessons, data-r2-01) — we're

@@ -455,3 +455,121 @@ plus anything you'd argue with is plenty.
 **M131** — score 0.60 · novelty 0.00 · validated 2x · applied 0x · 2026-07-16 · agenda
 > [verification-checklist] explicit-constraints: When a goal states precise, mechanically-checkable constraints (exact item count, format like 'one paragraph', negative constraints like 'do not modify files'), verify by enumerating each constraint and checking it directly against the final output/repo-diff, rather than generic re-review — this catches violations (wrong count, stray edits) that qualitative review misses.
 
+---
+
+# Jeremy's read — chunk 1: L1–L4 + M1–M15 (reacted 2026-08-01)
+
+His framing first: *"Feels a little like I'm giving my reaction as much as
+trying to find the surprises, hopefully it's helpful regardless"* — and the
+process *"was pretty tedious… We might have to figure out a better way to
+get this information."* (Answered below: the remainder is re-issued as
+family judgments, not 116 more rows.)
+
+Verbatim reads:
+
+| Entry | Read | Direction |
+|---|---|---|
+| L4 | "surprised in a discouraging way; tighter step count and smaller code surface isn't going to improve the plan, just add constraints to make it 'cheaper'" | negative |
+| M2 | "surprised at how prescriptive the methodology is" | ambivalent |
+| M4 | "surprised with the adversarial/skeptic style tone in a slightly positive way" | **positive** |
+| M6 | "surprised in a negative way; likely poe-prompted trickle down in this one (and for the record, consistently surprised that something that's 'easy' for end users are a consistent 'nope' from LLMs)" | negative |
+| M7 | "surprised this isn't a split planner answer, rather than 'do it differently in 1-shot'. Seems like a clear sidequest-as-deliverable, so probably means we need work on identifying those." | system-gap |
+| M8 | "surprised in a negative way; seems too narrow/brittle, will miss cases due to the prompting angle IMO" | negative |
+| M9 | "surprised in an odd way — prompting up front to not make the same mistake again; that should be derived evidence maybe not prompted initially? I'm not sure where the better line is there, probably makes sense with our particular implementation, but feels off" | negative |
+| M11 | "surprised we're not recommending a proper skill (or looking for one) here" | system-gap |
+| M12 | "surprisingly good advice" | **positive** |
+| M13 | "surprised; I'd say something like '2 trusted sources' rather than naming a specific failure path (seems to be describing how, not what)" | negative |
+| M14 | "surprised that another part of the system is named to allow laziness shaped as freedom" | negative |
+
+Unflagged (zero surprise): L1–L3, M1, M3, M5, M10, M15.
+
+## What the tally says
+
+11 of 19 entries flagged ⇒ **mirroring collapse is refuted** — the corpus
+is not a restatement of Jeremy's priors. But the original rubric's binary
+(zero/nonzero) missed that direction matters. The flags split three ways:
+
+1. **Δ-gate seed set (positive surprise, the rubric's intended sense):**
+   **M4, M12** — plus arguably M2 if prescriptive-but-sound counts. These
+   are the entries a Δ-gate experiment must protect.
+2. **Contradiction / retirement candidates (surprised-because-wrong):**
+   **L4, M6, M8, M9, M13, M14.** The corpus diverges from his priors
+   mostly by being wrong at the lesson-writing altitude, not by
+   out-thinking him. Directly relevant to the mechanical-count note above
+   that *nothing has ever been retired by contradiction* — this is an
+   operator-certified test corpus for a retirement mechanism, six entries
+   deep after one chunk.
+3. **System-gap flags (the lesson is a symptom; the cure is elsewhere):**
+   **M7** → side-quest-as-deliverable identification, already an open
+   design space (`INTENT_RESOLUTION_DESIGN.md`, BACKLOG "naming the
+   side-quests-before-decompose shape"). **M11** → the worker-reachable
+   fetch verb from the 2026-07-27 artifacts-over-streams decree
+   (GOAL_BRAIN). Both reads are fresh operator evidence those existing
+   cuts are the right ones.
+
+## Recurring altitude critique (4 of 11 reads)
+
+L4, M9, M13, M14 are versions of one complaint: **the lesson is minted at
+the wrong altitude — prescribing *how* (a named procedure, checkpoint,
+path) where it should record *what* (the derived observation).** M13 is
+the cleanest statement: "2 trusted sources," not
+spec-page-plus-retailer-page. Same shape as the provenance/positive-
+evidence line: lessons should be evidence the planner reasons from, not
+pre-baked instructions the next run obeys. Candidate mint-time rule,
+pending Jeremy's confirmation.
+
+---
+
+# Chunk 2, re-instrumented: 8 family judgments instead of 116 rows
+
+The chunk-1 tedium was mostly corpus redundancy — the store re-mints the
+same lesson once per run in a family (the tire runs and the blocked-X-link
+runs each minted 4–5 near-identical entries). All 21 unread rows with
+novelty > 0 cluster into 8 families. **Judge the family, not the members**;
+call out a member only if it deviates from your family verdict.
+
+**F1 — Output-budget scoping** (M16, M17 · kin of read M7/M10)
+> Big memos exceed one response's output budget: scope as separate
+> generation passes, spend depth on internal evidence over external
+> claims, resume from the cut point without restating.
+
+**F2 — Step-count ≠ goal-completion** (M18, M19 · tail kin M48/M64/M121)
+> Step counters are unreliable or broken; verify the deliverable directly
+> and tell the user which of the two (plan or tracker) broke.
+
+**F3 — Per-field deliverable contracts** (M20, M22, M27, M28 · kin of read M13)
+> "Purchase-ready" is judged per required field (model, load index,
+> price, URL), each independently confirmable — one verification step per
+> field, prior-failure reason becomes the acceptance criterion.
+
+**F4 — Mirror the sibling artifact** (M21, M24)
+> Series/house-style tasks: find the existing sibling artifact first and
+> mirror its structure line-by-line rather than designing from scratch.
+
+**F5 — Inherited-claim skepticism** (M25 · kin of read M4)
+> In diagnosis chains, prior reports' claims are hypotheses to re-verify,
+> not ground truth.
+
+**F6 — Blocked-source waivers** (M23, M26, M29, M30, M31 · kin of read M6/M11/M15)
+> The X/Twitter cluster: honor pre-authorization clauses ("source already
+> recovered, don't block on direct access"), isolate the fragile fetch as
+> an early step, and don't repeat social-thread benchmark claims
+> unverified.
+
+**F7 — Recovery template strings** (M32, M33, M34)
+> Machine-minted restatements — same species as the L1–L4 tenure holders.
+
+**F8 — Citation verification + evidence sweeps** (M118, M119 · kin of read M8)
+> Verify file:line claims against the actual tree; do one
+> sweep-and-persist evidence pass before analysis.
+
+**The tail (M35–M117, M120–M131 — 95 rows):** all pre-chunk-6, novelty
+0.00, generic verify-by-reading-back / minimal-planning /
+checkpoint-resume boilerplate the mechanical count already tags as prior
+restatement. Recommended protocol: **skip it**, or sample 5 rows blind to
+confirm the tail is restatement; a surprise in the sample reopens the
+tail, otherwise it's done.
+
+So the remaining read is: 8 family verdicts + (optionally) 5 sampled tail
+rows. Same reaction format as chunk 1.
+
