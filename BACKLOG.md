@@ -554,6 +554,25 @@ capture**, which is what makes the rung amortize instead of evaporate.
       explained by dying early — recording silently dropped. The census now
       computes this discriminator itself. NOW-lane drop rate (4/8) runs
       higher than agenda (17/105) but n is small.
+      **Residual root-cause identified 2026-08-02 (specimen dig, three of
+      the 22):** the drop is LANE-shaped. All examined zero-call runs came
+      through the queue/task lane (origin `job_id: task-…` or null);
+      every interactive `python3 -m handle` run in the LT series recorded
+      fully. And `handle_queue.py`'s continuation branch says why in its
+      own comment: it "deliberately bypasses handle()" and runs
+      `run_agent_loop` inside `with scoped_run_dir(None)` — clearing the
+      run-dir for drain-batch hygiene ("clear any stale run-dir left by
+      an earlier task in the same drain batch"), which as a side effect
+      makes **every continuation-lane run record zero LLM calls by
+      construction** (record_llm_call no-ops silently with no pinned
+      dir — the exact EDGE-2 silence). UU-1's fix doesn't reach this:
+      these calls SUCCEED, they just have nowhere to record. Fix
+      direction is a design call, not a one-liner: the continuation lane
+      should own (or re-pin) a run-dir rather than run dirless — that
+      touches loops-ledger/run-ref-index semantics of what a
+      continuation's run identity IS, so decide deliberately, don't
+      patch. Until then: queue-lane runs are known-blind on LLM I/O and
+      any census read should segment by lane.
     - **Verdictability resolved by the per-month table**: 2026-04 1272 rows
       100% blind / 0 verdicted, 2026-06 66 rows 100% blind, **2026-07 112
       rows 52.7% blind, 41 verdicted.** The 96.3% headline was 1272 April
