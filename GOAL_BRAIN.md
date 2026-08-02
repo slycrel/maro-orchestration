@@ -5898,6 +5898,21 @@ pre-chunk NOW/evolver rows honestly unjudged going forward from here.
   over the mint-time shortcut; §4a/§4d remain HELD awaiting Jeremy's
   call on that pair, with the §14 consistency requirement pinned (probe
   failure ⇒ grey + record only; recovery routing stays planner-owned).
-  "Bridge-building sub-goal arc" identified as the capability-acquisition
+  "Bridge-building sub-quest arc" identified as the capability-acquisition
   side-quest thread (Phase 27 → chasm/balloon → 07-27 "toolset to cross
   the chasm" ratification) — same exchange that produced §14.
+- **2026-08-02** — **§4a/§4d RATIFIED via probe-gated first injection**
+  (Jeremy, post-dig: "agree, let's do as you proposed, that seems to work
+  well there"). §4a as amended: probes never execute at mint; they run
+  under the read-only guard at injection time (staleness re-check for
+  confirmed facts, confirmation gate for provisional terrain). §4d
+  rewritten: the mint-time shortcut is out; a provisional terrain
+  teaching may be offered for injection iff its probe passes at that
+  moment — the pass IS the confirmation event; a failure flips to grey
+  with the record kept. §14 consistency requirement pinned throughout:
+  machinery never self-serves recovery — routing stays planner-owned.
+  All four run-teachings DECISIONs now adjudicated (4b/4a/4d ratified;
+  4c's two sub-calls still open on the reading queue). Standing context
+  from Jeremy same message: M1 sessions are landing concurrent changes;
+  "feel free to dig in where it makes sense" — green-lit BACKLOG chunks
+  are the sanctioned lane.

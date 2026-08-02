@@ -109,28 +109,27 @@ stamp). Different in two ways:
 ```
 
 `verify_probe` is the field that makes terrain teachings different in kind:
-**a terrain fact is cheaply re-checkable.** DECISION (provisional) — **HELD
-2026-08-02 pending record dig**: probes are stored, never auto-executed at
-mint; they run at *injection* time under the existing read-only probe guard
-(claim_probe's mechanical gate) when the fact is older than its class's
-freshness window. Trust decays, data never does — a contradicted terrain
-fact flips to grey with the contradiction recorded, exactly like rules.
+**a terrain fact is cheaply re-checkable.** DECISION — **RATIFIED
+2026-08-02 as amended** (Jeremy, post-dig: "agree, let's do as you
+proposed"): probes are stored, never executed at mint; they run under the
+existing read-only probe guard (claim_probe's mechanical gate) at
+*injection* time — both as the staleness re-check when a confirmed fact is
+older than its class's freshness window, and as the confirmation gate for
+provisional terrain (§4d). §14 consistency requirement, pinned: on probe
+FAILURE the machinery only flips the teaching to grey and records the
+contradiction — route-arounds, side-quests, and any bridge-building stay
+planner-owned moves. Trust decays, data never does.
 
-> **Jeremy 2026-08-02:** recalled the earlier probe discussions concluding
-> checks should be *planned as steps*, tied to the bridge-building
-> sub-goal arc, with a proving-vs-gathering exception. **Record dig
-> complete — his recollection verified exact** (2026-07-27 §14 diagnosis
-> ownership split, decision `7061e85e`; full forensics + verbatim quotes:
-> `docs/history/2026-08-02-probe-timing-record-dig.md`). Neither §4a nor
-> §4d ratifies any prior decision — both originate here, provisional.
-> The dig's adjudication material: injection-time re-probe fits the
-> claim_probe exception shape (proving an existing claim) with one §14
-> consistency requirement — on probe failure, machinery only greys and
-> records; recovery routing stays with the planner. And §4d exists to
-> break an unnamed deadlock (provisional teachings never inject + probes
-> only run at injection ⇒ terrain could never confirm); the dig doc offers
-> two resolutions and recommends **probe-gated first injection** over the
-> mint-time shortcut. Awaiting Jeremy's call on that pair.
+> **History:** Jeremy held this pair 2026-08-02 on a recollection that
+> checks were decided to be *planned as steps* (bridge-building arc,
+> proving-vs-gathering exception). The record dig verified his
+> recollection exact (2026-07-27 §14 diagnosis ownership split, decision
+> `7061e85e`; forensics:
+> `docs/history/2026-08-02-probe-timing-record-dig.md`), named the §4d
+> deadlock (provisional never injects + probes only at injection ⇒
+> terrain could never confirm), and recommended probe-gated first
+> injection. **Jeremy ratified the recommendation same day** — §4a as
+> amended above, §4d rewritten below.
 
 ### 4b. Storage — extend, don't build
 
@@ -200,16 +199,16 @@ broken"? (a) is what chunk 1's acceptance test measures; (b) is taste.
 ### 4d. Validation — the existing loop, plus the probe shortcut
 
 Teachings mint **provisional** (excluded from injection until confirmed,
-per the shipped provisional-lesson lifecycle) with one exception worth its
-own decision: DECISION (provisional) — **HELD 2026-08-02, rides on §4a's
-record dig** (a mint-time probe execution is exactly what Jeremy recalls
-deciding against; his candidate exception — hypothesis already backed by
-data, proving rather than gathering — is close to what this shortcut
-describes, so the recovered record decides it) — a terrain teaching whose
-`verify_probe` passes at mint (one cheap read-only check confirming the
-claimed state) skips provisional and enters at confirmed-with-evidence,
-because unlike a strategy lesson its truth is checkable *now*. Everything
-else rides the normal receipts: `times_applied` at injection,
+per the shipped provisional-lesson lifecycle) — no exceptions at mint.
+DECISION — **RATIFIED 2026-08-02 (probe-gated first injection**, replacing
+the drafted mint-time shortcut; Jeremy: "agree, let's do as you
+proposed"): a provisional terrain teaching MAY be offered for injection
+iff its `verify_probe` passes at that moment, under the read-only probe
+guard. **The pass is the confirmation event** — the teaching enters
+confirmed-with-evidence on first use, which is also the freshest possible
+moment to check it. A failed probe flips it to grey with the failure
+recorded (never silent, never a machinery-owned recovery — §14).
+Everything else rides the normal receipts: `times_applied` at injection,
 reinforcement on re-observation, contradiction flow on conflict.
 
 ## 5. Acceptance test — already scheduled
