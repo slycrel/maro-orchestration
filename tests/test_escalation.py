@@ -497,50 +497,58 @@ class TestHandleTask:
         assert isinstance(result, EscalationDecision)
 
     def test_continuation_routes_to_run_agent_loop(self, monkeypatch, tmp_path):
+        """DELIBERATE PIN INVERSION (2026-08-02, continuation-identity decree).
+
+        This test previously pinned the DIRLESS continuation lane
+        (scoped_run_dir(None) around run_agent_loop) — the exact EDGE-2
+        "continuation lane records nothing by construction" hole. Under the
+        new contract an unresolvable parent routes to RESTART through the
+        full handle() front door: clean goal extraction, seeded context on
+        operator_context (provenance-labeled), archaeology tie on origin,
+        and no run-dir leakage into the drain batch afterward.
+        (Resume-path pins live in tests/test_continuation_identity.py.)
+        """
         monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
         called = {}
 
-        class _FakeLoopResult:
-            status = "done"
+        import handle as handle_mod
 
-        def _fake_run_agent_loop(goal, **kw):
-            called["goal"] = goal
-            called["depth"] = kw.get("continuation_depth", -1)
-            called["ctx"] = kw.get("ancestry_context_extra", "")
+        def _fake_handle(message, **kw):
+            called["goal"] = message
+            called["ctx"] = kw.get("operator_context") or ""
             called["measurement_class"] = kw.get("measurement_class", "")
-            called["handle_id"] = kw.get("handle_id", "")
-            from runs import current_run_dir
-            called["active_run_dir"] = current_run_dir()
-            return _FakeLoopResult()
+            called["origin"] = kw.get("origin") or {}
+            called["force_lane"] = kw.get("force_lane", "")
+            return "restarted"
 
-        from runs import set_current_run_dir
+        from runs import set_current_run_dir, current_run_dir
         stale = tmp_path / "runs" / "stale-parent"
         stale.mkdir(parents=True)
         set_current_run_dir(stale)
-        with mock.patch("agent_loop.run_agent_loop", _fake_run_agent_loop):
-            task = {
-                "job_id": "cont-t-001",
-                "source": "loop_continuation",
-                "reason": "CONTINUATION of: review auth module\n\nPass 2.\n\nRemaining:\n- step 3",
-                "continuation_depth": 2,
-                "status": "claimed",
-                "origin": {
-                    "parent_handle_id": "parent-123",
-                    "measurement_class": "control",
-                },
-            }
-            handle_task(task, dry_run=True)
+        try:
+            with mock.patch.object(handle_mod, "handle", _fake_handle):
+                task = {
+                    "job_id": "cont-t-001",
+                    "source": "loop_continuation",
+                    "reason": "CONTINUATION of: review auth module\n\nPass 2.\n\nRemaining:\n- step 3",
+                    "continuation_depth": 2,
+                    "status": "claimed",
+                    "origin": {
+                        "parent_handle_id": "parent-123",
+                        "measurement_class": "control",
+                    },
+                }
+                result = handle_task(task, dry_run=True)
+        finally:
+            set_current_run_dir(None)
 
-        # Goal should be extracted cleanly — not the full blob
+        assert result == "restarted"
+        # Goal extracted cleanly — not the full blob
         assert called["goal"] == "review auth module"
-        assert called["depth"] == 2
+        assert called["force_lane"] == "agenda"
         assert called["measurement_class"] == "control"
-        assert called["handle_id"] == "parent-123"
-        assert called["active_run_dir"] is None
-        from runs import current_run_dir
-        assert current_run_dir() == stale  # caller context restored, not consumed
-        set_current_run_dir(None)
-        # Context block passed as ancestry_context_extra
+        assert called["origin"].get("parent_handle_id") == "parent-123"
+        # Context rides operator_context (provenance channel), not goal text
         assert "Remaining" in called["ctx"] or "Pass 2" in called["ctx"]
 
     def test_escalation_enqueue_failure_notifies_operator(self, monkeypatch, tmp_path):

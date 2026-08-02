@@ -629,6 +629,38 @@ capture**, which is what makes the rung amortize instead of evaporate.
       if a queued task is ambiguous (no stamps either way), fail toward
       RESTART — a spurious new-id-with-parent is archaeology noise,
       a spurious same-id resume corrupts a closed run's record.
+      **BUILT 2026-08-02** (Jeremy's clarifications folded in): the
+      `loop_continuation` branch now discriminates on strict-affirmative
+      resume (`pause_reason` set AND no `goal_verdict_source`; all else
+      restarts). RESUME re-pins the parent run dir (EDGE-2 closed for
+      this lane), appends the loop to the ledger, restamps
+      status/ended_at, indexes, and marks older same-handle outcome rows
+      `superseded_by` — **addendum, never overwrite, per Jeremy's
+      clarification** ("a supersede without an overwrite"): rows keep
+      every field, gain the marker
+      (`memory_ledger.mark_outcomes_superseded`, same locked pattern as
+      verdict stamping). RESTART goes through the full `handle()` front
+      door (Jeremy: "a retry is still a run with extra context and
+      data") — recall guard sees it, fresh scope, seeded context rides
+      `operator_context` so it renders provenance-labeled, archaeology
+      tie on origin; `force_lane="agenda"` keeps the
+      skip-reclassification optimization. 8 new pins
+      (tests/test_continuation_identity.py) + 1 deliberate inversion
+      (test_escalation's dirless-lane pin → restart-shape pin). Suite
+      7326 green.
+      **Jeremy's cycle caution (a restart could just replay a
+      hard-failure loop "with more pitfalls" — recursion injection,
+      killer step cycles):** partially covered NOW by routing restarts
+      through handle() — the recall repeat-guard (the ~25× repeat-burn
+      protection) sees every retry, and deep-recursion check-ins ride
+      origin depth. NOT yet covered: a hard depth cap on restart chains,
+      and the guard keys on goal similarity so a NARROWED restart
+      (revised goal) partially evades it. Left open deliberately —
+      revisit when a live chain demonstrates the gap.
+      **Residual (small):** budget-ceiling continuations only become
+      resumes once the budget break-site stamps `pause_reason` (§13e
+      vocabulary exists; verify the ceiling path stamps it — until then
+      those passes restart, which is safe but loses same-run identity).
     - **Verdictability resolved by the per-month table**: 2026-04 1272 rows
       100% blind / 0 verdicted, 2026-06 66 rows 100% blind, **2026-07 112
       rows 52.7% blind, 41 verdicted.** The 96.3% headline was 1272 April

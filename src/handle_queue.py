@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import logging
 
+from datetime import datetime, timezone
 from typing import List, Optional
 
 from ancestry import Origin
@@ -87,34 +88,122 @@ def handle_task(
         return _esc
 
     elif source == "loop_continuation":
-        # Continuations are already classified AGENDA — skip intent classification overhead.
-        # Extract the original goal cleanly; pass accomplished/remaining context as ancestry
-        # so the planner gets focused decomposition ("this is pass N, remaining work is X")
-        # rather than treating the full blob as a new goal to plan from scratch.
+        # Continuation identity (decree, Jeremy 2026-08-02 — BACKLOG LT arc):
+        # a queued continuation is one of two animals, discriminated by the
+        # parent run's stamps:
+        #   RESUME  — the parent paused/died mid-flight (affirmative
+        #             pause_reason, no closure verdict). Same run identity:
+        #             re-pin the parent's run dir, append a loop row, and the
+        #             final outcome supersedes the interrupted segments'
+        #             rows (addendum markers, never overwrites). The end
+        #             state reads the same as an uninterrupted run.
+        #   RESTART — the parent reached terminal closure (judged), or the
+        #             stamps are ambiguous/unresolvable. New run identity
+        #             through the full handle() front door: new run dir, the
+        #             recall guard sees the retry (the ~25× repeat-burn
+        #             protection), fresh scope, and the seeded context rides
+        #             operator_context so it renders as provenance-labeled
+        #             injected context, not as goal text. Ambiguity fails
+        #             toward RESTART: a spurious parent link is archaeology
+        #             noise; a spurious resume corrupts a closed run's record.
+        # Before this branch existed both shapes ran DIRLESS
+        # (scoped_run_dir(None)) — the EDGE-2 "continuation lane records
+        # nothing by construction" hole.
         log.info("handle_task routing continuation job_id=%s depth=%d", job_id, depth)
         _cont_goal, _cont_ctx = _handle_mod._parse_continuation_reason(reason)
-        from agent_loop import run_agent_loop
         if adapter is None and not dry_run:
             from llm import build_adapter, MODEL_CHEAP
             adapter = build_adapter(model=MODEL_CHEAP)
         _filtered_ctx = _handle_mod._context_firewall(_cont_ctx, depth=depth) if _cont_ctx else ""
         _origin = Origin(task.get("origin") or {})
-        # This lane deliberately bypasses handle(), so carry top-level cohort
-        # identity explicitly and clear any stale run-dir left by an earlier
-        # task in the same drain batch. A continuation with no terminal
-        # closure remains an organic *unjudged* row, never a guessed result.
-        from runs import scoped_run_dir
-        with scoped_run_dir(None):
-            return run_agent_loop(
-                _cont_goal,
-                adapter=adapter,
-                dry_run=dry_run,
-                verbose=verbose,
-                continuation_depth=depth,
-                ancestry_context_extra=_filtered_ctx,
-                measurement_class=str(_origin.get("measurement_class") or ""),
-                handle_id=str(_origin.get("parent_handle_id") or ""),
-            )
+        _parent_handle = str(_origin.get("parent_handle_id") or "")
+
+        _resume_rd = None
+        _parent_meta: dict = {}
+        if _parent_handle:
+            try:
+                from runs import resolve_run_dir as _resolve_rd
+                _rd = _resolve_rd(_parent_handle)
+                if _rd is not None:
+                    import json as _json
+                    _parent_meta = _json.loads(
+                        (_rd / "metadata.json").read_text(encoding="utf-8"))
+                    # Strict-affirmative resume test: a typed pause with no
+                    # closure verdict. Everything else — judged runs, stamp
+                    # ambiguity, unreadable metadata — restarts.
+                    if (_parent_meta.get("pause_reason")
+                            and not _parent_meta.get("goal_verdict_source")):
+                        _resume_rd = _rd
+            except Exception as _res_exc:
+                log.debug("continuation: parent resolve failed (%s) — restart", _res_exc)
+
+        if _resume_rd is not None:
+            # ---- RESUME: same identity, same mechanisms as a pause. ----
+            from agent_loop import run_agent_loop
+            from runs import set_current_run_dir
+            log.info("continuation RESUME of %s (pause_reason=%r)",
+                     _parent_handle, _parent_meta.get("pause_reason"))
+            set_current_run_dir(_resume_rd)
+            try:
+                _result = run_agent_loop(
+                    _cont_goal,
+                    adapter=adapter,
+                    dry_run=dry_run,
+                    verbose=verbose,
+                    continuation_depth=depth,
+                    ancestry_context_extra=_filtered_ctx,
+                    measurement_class=str(_origin.get("measurement_class") or ""),
+                    handle_id=_parent_handle,
+                )
+            finally:
+                # Drain-batch hygiene the old scoped_run_dir(None) provided:
+                # never leak this run dir into the next task in the batch.
+                set_current_run_dir(None)
+            # Post-loop identity bookkeeping, each best-effort:
+            try:
+                from runs import write_metadata, index_run_dir
+                _new_loop = str(getattr(_result, "loop_id", "") or "")
+                _extra = {}
+                if _new_loop:
+                    _lids = list(_parent_meta.get("loop_ids") or [])
+                    if _new_loop not in _lids:
+                        _lids.append(_new_loop)
+                    _extra["loop_ids"] = _lids
+                write_metadata(
+                    _resume_rd,
+                    handle_id=_parent_handle,
+                    prompt=str(_parent_meta.get("prompt") or _cont_goal),
+                    lane="agenda",
+                    status=str(getattr(_result, "status", "") or ""),
+                    ended_at=datetime.now(timezone.utc).isoformat(),
+                    extra=_extra or None,
+                )
+                index_run_dir(_resume_rd)
+            except Exception as _meta_exc:
+                log.debug("resume: metadata/index update failed: %s", _meta_exc)
+            try:
+                from memory_ledger import mark_outcomes_superseded
+                _n = mark_outcomes_superseded(_parent_handle)
+                if _n:
+                    log.info("resume: %d interrupted-segment row(s) superseded", _n)
+            except Exception as _sup_exc:
+                log.debug("resume: supersede marking failed: %s", _sup_exc)
+            return _result
+
+        # ---- RESTART: a retry is a run like any other (Jeremy: "a retry is
+        # still a run with extra context and data") — full front door.
+        log.info("continuation RESTART (parent=%s judged/ambiguous)",
+                 _parent_handle or "(none)")
+        return _handle_mod.handle(
+            _cont_goal,
+            adapter=adapter,
+            dry_run=dry_run,
+            verbose=verbose,
+            force_lane="agenda",  # continuations are known AGENDA — skip reclassification
+            operator_context=_filtered_ctx or None,
+            origin=_origin,
+            measurement_class=str(_origin.get("measurement_class") or "") or None,
+        )
 
     else:
         log.info("handle_task routing %s job_id=%s via handle()", source or "unknown", job_id)

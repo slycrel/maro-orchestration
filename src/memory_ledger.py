@@ -624,6 +624,72 @@ def _append_daily_log(outcome: Outcome):
             f.write(entry)
 
 
+def mark_outcomes_superseded(handle_id: str, *, max_attempts: int = 1) -> int:
+    """Resume-≡-uninterrupted (continuation decree, Jeremy 2026-08-02): after
+    a resumed run finalizes, the run identity has ONE authoritative outcome —
+    the newest row for this handle_id. Every older same-handle row gains a
+    ``superseded_by`` marker pointing at it.
+
+    Addendum, never overwrite (Jeremy's clarification): the old rows keep
+    every field they had — the marker is added so attempt-counting consumers
+    (verdict_flow, done-vs-achieved cohorts, the recall repeat-guard) can
+    exclude interrupted segments without the data being touched. Same locked
+    read + atomic publish pattern as stamp_outcome_verdict.
+
+    Returns the number of rows marked (0 = nothing to do or handle unseen).
+    """
+    if not handle_id:
+        return 0
+    path = _outcomes_path()
+    marked = {"n": 0}
+    from file_lock import atomic_write, locked_write
+
+    def _mark(old: str) -> str:
+        lines = old.splitlines()
+        rows = []
+        for i, line in enumerate(lines):
+            line_s = line.strip()
+            if not line_s:
+                continue
+            try:
+                row = json.loads(line_s)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(row, dict) and str(row.get("handle_id") or "") == handle_id:
+                rows.append((i, row))
+        if len(rows) < 2:
+            return old  # zero or one row — nothing is superseded
+        # Newest row (last appended) is the authority; it survives unmarked.
+        final_idx, final_row = rows[-1]
+        final_id = str(final_row.get("outcome_id") or "")
+        now = datetime.now(timezone.utc).isoformat()
+        for i, row in rows[:-1]:
+            if row.get("superseded_by"):
+                continue  # already marked by an earlier resume — leave it
+            row["superseded_by"] = final_id
+            row["superseded_at"] = now
+            lines[i] = json.dumps(row)
+            marked["n"] += 1
+        return "\n".join(lines) + ("\n" if lines else "")
+
+    for attempt in range(1, max(1, int(max_attempts)) + 1):
+        marked["n"] = 0
+        try:
+            with locked_write(path):
+                try:
+                    old = path.read_text(encoding="utf-8")
+                except FileNotFoundError:
+                    return 0
+                new = _mark(old)
+                if new != old:
+                    atomic_write(path, new)
+            return marked["n"]
+        except OSError:
+            if attempt >= max(1, int(max_attempts)):
+                return 0
+    return 0
+
+
 def stamp_outcome_verdict(
     loop_id: str,
     *,
