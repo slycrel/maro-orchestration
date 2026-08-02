@@ -268,6 +268,34 @@ def _resolve_exact(rel: str, bases: List[Path]) -> List[Path]:
     the first glob hit — run 75fe8b4e was falsely demoted to incomplete when
     its fresh output resolved to an older project's file of the same name.
     """
+    # Glob-aware (2026-08-02, run 9d88acf2 false demotion): a step result
+    # that honestly summarizes several writes as one pattern ("Saved
+    # artifacts/OL*.json" — six real files on disk) used to get its glob
+    # checked as a LITERAL filename, fail, and hand a FULL-trust
+    # deterministic not-achieved to an honest run. A claim containing glob
+    # metacharacters is satisfied by any matching file; freshness is still
+    # judged per hit by the caller.
+    if any(ch in rel for ch in "*?["):
+        ghits: List[Path] = []
+        for b in bases:
+            try:
+                ghits.extend(x for x in b.glob(rel) if x.exists())
+            except (OSError, ValueError):
+                pass
+        try:
+            from config import workspace_root
+            ws_projects = Path(workspace_root()) / "projects"
+            if ws_projects.is_dir():
+                for d in ws_projects.glob("*"):
+                    if d.is_dir():
+                        try:
+                            ghits.extend(x for x in d.glob(rel) if x.exists())
+                        except (OSError, ValueError):
+                            pass
+        except Exception:
+            pass
+        return ghits
+
     p = Path(rel)
     if p.is_absolute():
         return [p] if p.exists() else []

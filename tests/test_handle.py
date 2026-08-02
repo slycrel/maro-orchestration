@@ -5405,3 +5405,52 @@ class TestOperatorContextChannel:
         extra = loop_kwargs[0].get("ancestry_context_extra", "")
         assert "OPMARKER" in extra, (
             "operator context did not reach ancestry_context_extra")
+
+
+class TestGlobClaimProvenance:
+    """Pin for run 9d88acf2 (2026-08-02): a step result honestly summarized
+    six real writes as one pattern ('Saved artifacts/OL*.json') and the
+    literal existence check flagged the glob string as a missing file —
+    handing a FULL-trust deterministic not-achieved to an honest run.
+    Glob-bearing claims are satisfied by any matching (fresh) file."""
+
+    def _ws(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        proj = tmp_path / "projects" / "some-proj" / "artifacts"
+        proj.mkdir(parents=True)
+        return proj
+
+    def test_glob_claim_with_matching_files_is_not_flagged(self, monkeypatch, tmp_path):
+        import time
+        from provenance import _missing_or_stale_result_outputs
+        proj = self._ws(monkeypatch, tmp_path)
+        (proj / "OL111M.json").write_text("{}", encoding="utf-8")
+        (proj / "OL222M.json").write_text("{}", encoding="utf-8")
+        window = time.time() - 3600  # both files are fresh vs this window
+        flagged = _missing_or_stale_result_outputs(
+            "Fetched records and saved to artifacts/OL*.json for later steps.",
+            window)
+        assert not [f for f in flagged if "OL*" in f], flagged
+
+    def test_glob_claim_with_no_matches_is_still_flagged(self, monkeypatch, tmp_path):
+        import time
+        from provenance import _missing_or_stale_result_outputs
+        self._ws(monkeypatch, tmp_path)  # dir exists, no OL files
+        flagged = _missing_or_stale_result_outputs(
+            "Fetched records and saved to artifacts/OL*.json for later steps.",
+            time.time() - 3600)
+        assert any("OL*" in f and "not found" in f for f in flagged), (
+            "a glob claim with zero matches is still a fabricated claim")
+
+    def test_glob_claim_with_only_stale_matches_is_flagged(self, monkeypatch, tmp_path):
+        import os, time
+        from provenance import _missing_or_stale_result_outputs
+        proj = self._ws(monkeypatch, tmp_path)
+        stale = proj / "OL333M.json"
+        stale.write_text("{}", encoding="utf-8")
+        old = time.time() - 7200
+        os.utime(stale, (old, old))
+        flagged = _missing_or_stale_result_outputs(
+            "Saved to artifacts/OL*.json.",
+            time.time() - 60)  # window starts 1 min ago; file is 2h old
+        assert any("OL*" in f and "predates" in f for f in flagged)
