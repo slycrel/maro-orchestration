@@ -573,6 +573,30 @@ capture**, which is what makes the rung amortize instead of evaporate.
       continuation's run identity IS, so decide deliberately, don't
       patch. Until then: queue-lane runs are known-blind on LLM I/O and
       any census read should segment by lane.
+      **Jeremy's direction (2026-08-02, gut-check, mapped against the
+      machinery and it fits):** full restarted run → **new id + prior
+      run's id saved as parent** (pedigree link); interrupted-and-resumed
+      → **same id, treated as a pause, same mechanisms.** Mapping: the
+      parent link is exactly the existing ancestry pattern
+      (`Origin.parent_handle_id` / `resumed_from` — already durable index
+      keys); same-id resume is exactly the loops-ledger shape (one run
+      dir hosts several loops; resume appends a loop row) and rides the
+      just-shipped §13e pause machinery (typed pause_reason + real
+      resume contract; paused-is-a-state decree 7afe8b3a). **The one
+      base the gut-check didn't name, and the branch test the lane
+      needs: terminal closure.** A queued "continuation" is today either
+      shape: prior run reached terminal closure (judged) and this is a
+      fresh attempt continuing the mission → RESTART, new handle_id +
+      parent; prior run paused/died mid-flight (budget, kill, operator)
+      → RESUME, same handle_id, new loop row. Cleanly decidable from
+      what's already stamped (ended_at / goal_verdict_source /
+      pause_reason). Two semantic consequences to hold in the design:
+      **verdict counting** — restarts stay separate outcome rows (per-
+      attempt honesty, ancestry ties them), resumes must not double-
+      count (one row per run identity, per verdict_flow semantics); and
+      **artifact continuity** — resume writes into the same run dir,
+      restart gets a fresh dir and reaches prior artifacts via the
+      project dir, which persists across both.
     - **Verdictability resolved by the per-month table**: 2026-04 1272 rows
       100% blind / 0 verdicted, 2026-06 66 rows 100% blind, **2026-07 112
       rows 52.7% blind, 41 verdicted.** The 96.3% headline was 1272 April
@@ -1858,6 +1882,60 @@ refresh attempt — see BACKLOG_DONE for the reconciliation note).
   (incremental index, or rebuild only on viz/backfill).
 
 ---
+
+### REPL-reading for large documents/corpora (SIDEQUEST OPENED 2026-08-02, Jeremy)
+
+Jeremy's ask: articles on "repl-like reading of very large documents"
+claiming far better accuracy than standard LLM practice — "grep-guessing
+has limited utility, and the larger the dataset (and reading comprehension
+surface) the more likely it is to fail." The link-farm scan found only
+conceptual relatives (PageIndex hierarchical retrieval, marked
+`questionable`; the LangChain harness/context-rot piece); the work the
+description matches is **Recursive Language Models** (Zhang & Khattab,
+MIT, late 2025): the document NEVER enters the context window — it lives
+as a variable in a Python REPL, and the model peeks/slices/greps it
+programmatically and **recursively sub-calls itself (or a cheaper model)
+on located regions**, composing the answer. Claimed results: a small
+model in the harness beating its larger sibling by >100% on long-context
+benchmarks (OOLONG-family), 10M+ token corpora handled, sidesteps
+context rot. Caveats stated up front: author-run benchmarks; overhead
+can INVERT the win on small documents; community replication
+mixed-positive.
+
+**Why it fits us unusually well — three live specimens from this arc:**
+1. **The re-read churn** (top cost lever): workers LOAD artifacts into
+   context per step — 3.45M tokens to read local files in the $11.25
+   run, 1–2M-token step-execute calls throughout the series. RLM-style
+   discipline (artifacts stay on disk; bounded peeks + targeted slices)
+   is the concrete mechanism behind the #22 "fewer, fatter steps" lever.
+2. **3b's grep was located-comprehension, not guessing** — grep to find,
+   read the hit region — and it worked at this corpus size. Jeremy's
+   scaling worry is real though, and M14's fresh lesson says the same
+   ("grep catches absence, not scope over-reach"): paraphrase, tables,
+   and cross-references defeat keyword location. The RLM upgrade is
+   outline-first + recursive sub-reads of located regions +
+   quote-verification against the actual slice.
+3. **RUN_TEACHINGS extraction** must read big evidence trails without
+   eating them — a bounded REPL-read is the natural implementation of
+   its "read the evidence layer" input contract.
+
+**Build posture — discipline before machinery:**
+- [ ] **Step 1 (cheap, testable): `skills/repl_reading.md`** — a reading
+  protocol skill: outline/TOC first; never cat whole files; targeted
+  slices by offset; sub-verify every quote against its slice; explicit
+  budget per read. A/B it on a corpus goal we already have a baseline
+  for — the 3b shape at $11.25/3.45M-in is the registered control.
+  Success = the token curve bends materially on the same deliverable
+  quality.
+- [ ] **Step 2 (only if step 1 bends the curve): recursive sub-calls** —
+  the real RLM shape needs cheap in-step sub-queries (map-reduce over
+  located regions). Maro has recursion at goal scale (side-quests) but
+  not cheap in-step sub-calls; that's executor machinery and should wait
+  for the skill-level evidence.
+- Relation to existing items: this is the generalized form of the #22
+  errand-envelope lever and the designated reader for RUN_TEACHINGS
+  chunk-1's input stage; it is NOT a replacement for the cheaper
+  patch/diff-edit fix already noted there.
 
 ## Vision / Deferred
 
