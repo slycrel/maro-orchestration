@@ -5881,3 +5881,23 @@ pre-chunk NOW/evolver rows honestly unjudged going forward from here.
   rules already have; acceptance corpus = the six operator-certified
   contradictions from surprise-read chunk 1 (L4, M6, M8, M9, M13, M14).
   Queued in BACKLOG.
+- **2026-08-02** — Probe-timing record dig COMPLETE (follow-up to the
+  §4a/§4d hold; forensics:
+  `docs/history/2026-08-02-probe-timing-record-dig.md`, citations
+  re-verified against sources). Jeremy's recollection was exact: the
+  2026-07-27 §14 decision (`7061e85e`) put discriminating tests in the
+  PLAN (step diagnoses + recommends via `blocked_on`; planner routes),
+  with the substantiate-within-granted-scope carve-out as the
+  proving-vs-gathering exception; claim_probe's machinery execution is
+  confined to settling existing claims at the review layer; the
+  2026-08-01 recon slice explicitly cut probe-execution-at-verify. No
+  prior decision on teaching-probe timing exists — §4a/§4d originate
+  provisional with the UU-2 session. Dig also surfaced the unnamed §4d
+  deadlock (provisional never injects + probes only at injection ⇒
+  terrain never confirms) and recommends **probe-gated first injection**
+  over the mint-time shortcut; §4a/§4d remain HELD awaiting Jeremy's
+  call on that pair, with the §14 consistency requirement pinned (probe
+  failure ⇒ grey + record only; recovery routing stays planner-owned).
+  "Bridge-building sub-goal arc" identified as the capability-acquisition
+  side-quest thread (Phase 27 → chasm/balloon → 07-27 "toolset to cross
+  the chasm" ratification) — same exchange that produced §14.

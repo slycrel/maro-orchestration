@@ -116,15 +116,21 @@ mint; they run at *injection* time under the existing read-only probe guard
 freshness window. Trust decays, data never does — a contradicted terrain
 fact flips to grey with the contradiction recorded, exactly like rules.
 
-> **Jeremy 2026-08-02:** recalls the earlier probe discussions concluding
-> checks should be *planned as steps* ("we decided to not have the steps
-> test directly, that was a possible step itself based on research
-> findings"), tied to the bridge-building sub-goal arc; possible exception
-> where a hypothesis already has data behind it (proving existing data vs
-> gathering as the step work). Session-record dig in flight to recover the
-> original decision before ratifying. Note this section as written also
-> contradicts §4d ("never auto-executed at mint" vs the mint-time probe
-> shortcut) — the dig settles both.
+> **Jeremy 2026-08-02:** recalled the earlier probe discussions concluding
+> checks should be *planned as steps*, tied to the bridge-building
+> sub-goal arc, with a proving-vs-gathering exception. **Record dig
+> complete — his recollection verified exact** (2026-07-27 §14 diagnosis
+> ownership split, decision `7061e85e`; full forensics + verbatim quotes:
+> `docs/history/2026-08-02-probe-timing-record-dig.md`). Neither §4a nor
+> §4d ratifies any prior decision — both originate here, provisional.
+> The dig's adjudication material: injection-time re-probe fits the
+> claim_probe exception shape (proving an existing claim) with one §14
+> consistency requirement — on probe failure, machinery only greys and
+> records; recovery routing stays with the planner. And §4d exists to
+> break an unnamed deadlock (provisional teachings never inject + probes
+> only run at injection ⇒ terrain could never confirm); the dig doc offers
+> two resolutions and recommends **probe-gated first injection** over the
+> mint-time shortcut. Awaiting Jeremy's call on that pair.
 
 ### 4b. Storage — extend, don't build
 
