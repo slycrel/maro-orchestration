@@ -1199,7 +1199,51 @@ capture**, which is what makes the rung amortize instead of evaporate.
   matters, because downstream consumers (promotion gates, lesson minting,
   stop verdicts) read that number as a quality signal.
 
-  **Repeat-run economics (the warm arm, mechanism written down before
+  **ROUND 5 — LT-1 #8 (self-inspection across the dispatch boundary).
+  Predictions AND ground truth registered 2026-08-02 before dispatch.**
+
+  Specimen: `ed7cf400-golden-ledger` (2026-07-02) — a real NOW-lane goal
+  ("summarize `comm`, 3 worked examples, save to
+  `artifacts/comm-examples.md`") that ended `status=incomplete` with
+  **empty `goal_verdict_summary` and `stop_verdict=None`**. Row 8 has been
+  "unblocked 2026-07-18, never proven live"; this proves it or doesn't.
+  Slug `dispatch-run-ed7cf400goldenledger-ended-with` (checked distinct).
+
+  **GROUND TRUTH, established by hand first so the answer is scoreable**
+  (this is the whole reason to dig before testing — an unscoreable test
+  teaches nothing):
+  - `calls/` seq 2: the NOW worker replied in prose — *"Done. `comm`
+    compares two sorted files…"* — asserting the examples were "saved to
+    `artifacts/comm-examples.md`", while making **zero tool calls**, so
+    nothing was ever written.
+  - seq 3: the self-verdict caught it exactly — `{"fulfilled": false}`
+    with the rationale *"provides no evidence: no Write or Bash tool calls
+    showing the file was created."*
+  - **So the run is NOT detail-free. It diagnosed itself correctly, and
+    the diagnosis was then dropped:** `goal_verdict_source =
+    now_self_verdict` and `goal_achieved=False` propagate, but the
+    seq-3 rationale never reaches `goal_verdict_summary` or
+    `stop_verdict`. **The defect is propagation at the NOW-lane verdict
+    seam, not detection** — precisely the "data we thought we had"
+    class that opened this arc.
+
+  **Scoring rubric, registered:**
+  - **PASS** — names all three: completion claim with zero tool calls;
+    the self-verdict catching it; and that the rationale exists in the
+    call record but is not propagated to the summary fields.
+  - **PARTIAL** — gets the first two, misses the propagation point (i.e.
+    concludes "the run failed" rather than "the explanation was written
+    and then dropped").
+  - **FAIL** — asserts a cause not in the data (timeout, crash, killed
+    process) inferred from the goal text. This is the describe-from-memory
+    failure shape wearing a forensics costume.
+
+  **Predictions:** cost **$2–4** (local-data only, no web — the 3b shape
+  came in at $3.84; and after missing LOW three times in a row I am
+  deliberately anchoring on the distribution, not on the priciest arm);
+  **5–9 steps**; **0 blocked hosts**; verdict genuinely uncertain — this
+  capability has never been demonstrated live, and I put **PASS at ~50%,
+  PARTIAL most likely.**
   running it — 2026-08-01, Jeremy's question).** On the subprocess backend
   there is NO cross-run prompt cache — every `claude -p` call is a fresh
   process — so **zero savings come from token re-reads. Every dollar the
@@ -2152,25 +2196,38 @@ backend-aware in several places (the `("subprocess", "codex")` branches
 for ASYNC_ESCAPE, ENV_CLAIM, DELIVERABLE_PATH); **prompt assembly is
 not.**
 
-**Two costs, and the second is the one that matters:**
-1. **Waste.** 245 round-trips. Cost scales with tool TURNS on this backend
-   (the repl_reading finding), so these are not free.
-2. **A silently dead capability.** `inject_steps` (mid-step research
-   sub-steps) and `flag_stuck`/`NEED_INFO` (the escalation channel) are
-   *documented, coded, and unreachable on the default backend.*
-   `loop_blocked.py:927` routes `NEED_INFO:` into generated research
-   sub-steps — reached via `stuck_reason`, which the subprocess path never
-   sets, because a no-tool-call-with-content becomes `status="done"`
-   (`step_exec.py:1726`). The run survives by falling back to prose; it
-   just cannot escalate mid-step. **This is exactly the claimed≠probed
-   shape: the feature is built, tested, and never exercised where it
-   actually runs.**
+**CORRECTED 2026-08-02, same session — I overclaimed the severity, then
+measured it.** My first write-up called `inject_steps`/`flag_stuck` "a
+silently dead capability" on the default backend. Two checks changed the
+verdict:
+1. **Vintage:** `_fetch_cli_path` (the existing workaround for exactly
+   this, `4879f78`) landed 2026-07-27. Rate **pre-ship 5.28%** (193/3657)
+   vs **post-ship 4.89%** (52/1063) — so the problem is current, not a
+   historical artifact, but that earlier fix barely moved it.
+2. **Backend census:** **every step-execute call in the workspace is
+   subprocess — 89 of 89.** There is no API-backend production traffic.
+   `inject_steps` appears in **zero** recorded responses, ever.
 
-Not fixed — the fix is a real design call (make prompt assembly
-backend-aware; or register shims; or teach the subprocess path to parse
-`NEED_INFO:`/`flag_stuck` intent out of prose, which is the cheap one and
-would resurrect the escalation channel without touching the prompt).
-Logged with evidence first.
+So it is not "dead on the default backend" — it is **vestigial**: it has
+never run in production here, and nothing has visibly missed it. Steps
+that lack information already do the right thing without it (4a wrote
+"insufficient information found" three times and passed). **I asserted
+harm without measuring it, which is the claimed≠probed shape pointed at
+my own claim.**
+
+**Revised cost, honestly small:** 2–11 missed calls per run — cents.
+The prompt also spends tokens on a tool contract that cannot bind on 100%
+of production traffic.
+
+**Therefore not fixed, deliberately.** The natural fix (make the
+tool-contract lines backend-conditional, or teach the subprocess path to
+parse `NEED_INFO:` out of prose) touches the most load-bearing paragraph
+of `EXECUTE_SYSTEM`, which is heavily tuned and has a harness optimizer
+pointed at it — a risky surgery for a cents-per-run payoff and a
+capability nobody has missed. Recorded per the recovery-over-correctness
+posture: take the coarse truth, don't churn on the details. Revisit if
+API-backend traffic ever becomes real, or bundle it into the next
+deliberate `EXECUTE_SYSTEM` pass.
 
 **Sub-finding, separate class:** of the 400 `is_error` events workspace-
 wide, 239 are tool-missing and **157 are unexplained residue** —
