@@ -469,6 +469,27 @@ def _build_result_and_finalize(
     return result
 
 
+def _recovery_plan_lesson_text(failure_class: str, action: str) -> str:
+    """Observation-form mint text for an advisor-proposed recovery plan.
+
+    What-not-how (2026-08-02, surprise-read M9): the old form minted the
+    advisor's procedure bare — the row read as an instruction the next run
+    obeys. This form states what happened (the diagnosis) and marks the
+    plan as an unverified proposal, so the planner weighs it as evidence.
+    Deterministic per (failure_class, action) on purpose: recurring plans
+    still reinforce via near-duplicate dedup (M3, session 40).
+    """
+    return (f"[recovery-plan] {failure_class}: this failure class was "
+            f"diagnosed on a run; advisor-proposed recovery (unverified): "
+            f"{action}")
+
+
+def _auto_diagnosis_lesson_text(failure_class: str, recommendation: str) -> str:
+    """Observation-form mint text for a deterministic loop diagnosis."""
+    return (f"[auto-diagnosis] {failure_class}: diagnosed on a run; "
+            f"classifier recommendation (unverified): {recommendation}")
+
+
 def _finalize_loop(
     loop_id: str,
     goal: str,
@@ -549,12 +570,14 @@ def _finalize_loop(
                     try:
                         from memory import record_tiered_lesson as _record_lesson
                         _record_lesson(
-                            lesson_text=f"[recovery-plan] {_diag.failure_class}: {_recovery.action}",
+                            lesson_text=_recovery_plan_lesson_text(
+                                _diag.failure_class, _recovery.action),
                             task_type="agenda",
                             outcome=loop_status,
                             source_goal=goal[:120],
                             confidence=0.5,  # suggested, not yet verified by a completed run
                             lesson_type="recovery",
+                            evidence_sources=[f"loop:{loop_id}"] if loop_id else [],
                         )
                     except Exception as _rp_exc:
                         log.debug("recovery-plan lesson record failed: %s", _rp_exc)
@@ -563,9 +586,8 @@ def _finalize_loop(
         if _diag.failure_class != "healthy":
             try:
                 from memory import _store_lesson
-                _diag_lesson = (
-                    f"[auto-diagnosis] {_diag.failure_class}: {_diag.recommendation}"
-                )
+                _diag_lesson = _auto_diagnosis_lesson_text(
+                    _diag.failure_class, _diag.recommendation)
                 _store_lesson(
                     task_type="agenda",
                     outcome=_diag.failure_class,
@@ -603,6 +625,7 @@ def _finalize_loop(
                 source_goal=goal[:120],
                 confidence=0.7,  # verified — the run completed after the recovery
                 lesson_type="recovery",
+                evidence_sources=[f"loop:{loop_id}"] if loop_id else [],
             )
             log.info("recorded verified-recovery lesson (%d recovery steps)", recovery_steps)
         except Exception as _vr_exc:

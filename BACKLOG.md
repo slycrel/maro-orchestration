@@ -25,17 +25,30 @@ Ordered open work that matters. Top of the list is next.
 
 ### Green-lit 2026-08-02 (Jeremy, surprise-read follow-through) — two lesson-store chunks
 
-- [ ] **What-not-how mint-form pass.** Decree confirmed (GOAL_BRAIN
-  2026-08-02): lessons record the right *result* to ask for, not the
-  procedure — "how" is only appropriate when the goal itself requests
-  procedure. Sweep the mint sites (`extract_lessons`,
-  `extract_step_lessons`, `extract_deferred_lessons`, thinkback,
-  recovery-plan templates) so extraction prompts ask for the derived
-  observation, not an imperative playbook line. Acceptance: the chunk-1
-  negative examples (M9/M13-shaped inputs) re-mint as observations
-  ("this failure repeated across runs X,Y"; "2 trusted sources"), and no
-  mint site emits self-credit clauses without an evidence source (the
-  M14 defect). Runtime journal entry piped 2026-08-02.
+- [x] **What-not-how mint-form pass. SHIPPED 2026-08-02.** Shared
+  `_LESSON_FORM_RULES` block (observation-not-procedure, repeated-failure-
+  as-evidence, no self-credit without a named observation, procedure form
+  only when the goal asked for one) composed into `_REFLECT_SYSTEM` +
+  `_STEP_LESSON_SYSTEM` ("actionable" dropped from both;
+  `extract_deferred_lessons` rides `_REFLECT_SYSTEM`); thinkback got a
+  scoped clause — `key_lessons` mint as observations, step reviews /
+  retry_strategy stay prescriptive (the decree's "asking for work" case).
+  Deterministic templates reframed via `_recovery_plan_lesson_text` /
+  `_auto_diagnosis_lesson_text` (diagnosis stated as observation, action
+  marked "advisor-proposed (unverified)"; same-prefix so existing pins
+  hold, deterministic so dedup-reinforce still works). Structural M14 fix:
+  every reflect/deferred/finalize tiered mint now stamps
+  `evidence_sources=[loop:<id>]` (they all minted `[]` before — Phase 60's
+  citation penalty had nothing to reward), and dedup re-sightings merge
+  their evidence refs (cap 8, contested rows excluded) so a row
+  accumulates *where* it repeated, not just how often. Side-finds: seed
+  reader could serve a contested LONG lesson (L4) as the style example —
+  filtered. Live acceptance (real adapter): M13-shape minted the
+  disjoint-sources requirement as observation; M9-shape minted "blocker
+  in both this attempt and the prior dispatch; recurred despite retry";
+  M14-shape produced no self-credit clause. 15 pins in
+  `tests/test_mint_form.py`. Residual: LLM output can still carry a soft
+  "should" grounded in named evidence — acceptable form, not the defect.
 - [x] **Retirement-by-contradiction for lessons. SHIPPED 2026-08-02**
   (same session as the green-light). `TieredLesson.contested` +
   `contest_lesson()` mirror the standing-rule grey flip: out of every

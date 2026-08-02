@@ -77,6 +77,13 @@ _THINKBACK_SYSTEM = textwrap.dedent("""\
       "would_retry": <bool>,
       "retry_strategy": "<how to approach this goal differently next time — null if would_retry=false>"
     }
+
+    "key_lessons" are minted into persistent memory. Write each one as a
+    derived observation — what this run revealed — never an instruction for
+    next time, and never a general capability claim without the observed
+    instance that evidences it. Step reviews, counterfactuals, and
+    retry_strategy MAY be prescriptive: they are review output about this
+    run, not memory.
 """).strip()
 
 

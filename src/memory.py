@@ -192,10 +192,35 @@ def inject_lessons_for_task(task_type: str, goal: str, max_lessons: int = 3) -> 
 # Reflexion: post-run lesson extraction
 # ---------------------------------------------------------------------------
 
-_REFLECT_SYSTEM = textwrap.dedent("""\
+# What-not-how mint rule (Jeremy, 2026-08-02: "how is ok when asking for
+# work, but usually we aren't — asking for the right result is the more
+# important part"). Shared by every LLM mint-site prompt; the operator
+# surprise-read certified L4/M9/M13/M14 as the failure shapes this blocks.
+_LESSON_FORM_RULES = textwrap.dedent("""\
+    Lesson form — record WHAT was derived, not HOW to act on it:
+    - Mint the observation (the mismatch, the requirement, the observed
+      failure), never a prescribed procedure (a named checkpoint, tool path,
+      or step sequence). Future planners treat lessons as evidence to reason
+      from, not instructions to obey. Write "exact-pricing claims needed 2
+      trusted sources; a single category page was not enough" — not "budget
+      two lookups per item (spec page, then retailer page)".
+    - A repeated failure is itself the observation: state that it repeated
+      ("this same blocker sank the prior attempt too"), not a pre-baked
+      countermeasure for next time.
+    - Never credit a method or pass with a general capability ("this catches
+      X", "this prevents Y"). State only the instance actually observed in
+      this run. No self-credit clause without the observation that evidences
+      it.
+    - Procedure form is acceptable only when the goal itself asked for a
+      procedure (a runbook, script, or how-to) — there the procedure IS the
+      derived result.
+""").strip()
+
+
+_REFLECT_SYSTEM = (textwrap.dedent("""\
     You are a meta-learning agent. After each completed run, extract durable lessons.
     A lesson is a generalizable insight that would improve future similar runs.
-    Good lessons are: specific, actionable, and generalize beyond this one case.
+    Good lessons are: specific observations that generalize beyond this one case.
     Bad lessons are: too specific to this one task, or trivially obvious.
 
     Start from the expectation-mismatch question: what actually DIFFERED from
@@ -203,18 +228,18 @@ _REFLECT_SYSTEM = textwrap.dedent("""\
     unexpected shortcuts — carry the most durable lessons. When a mismatch
     exists, capture the mismatch itself (assumed X, found Y), not just the
     workaround. A run with no surprises usually has no lesson worth keeping.
-
+""").strip() + "\n\n" + _LESSON_FORM_RULES + "\n\n" + textwrap.dedent("""\
     Lesson types (pick the best fit for each lesson):
-    - "execution": how to carry out steps more effectively (tools, sequencing, parallelism)
-    - "planning": how to decompose or scope goals better
-    - "recovery": how to handle failure, retries, or stuck states
-    - "verification": how to validate output quality or catch errors early
-    - "cost": how to reduce token spend or latency without sacrificing quality
+    - "execution": carrying out steps (tools, sequencing, parallelism)
+    - "planning": decomposing or scoping goals
+    - "recovery": failure, retries, or stuck states
+    - "verification": output quality and catching errors early
+    - "cost": token spend or latency
 
     Respond with a JSON array of 1-3 lesson objects, each with "lesson" (string) and "type" (one of the above).
     Example: [{"lesson": "Research tasks produce better output when the goal includes success criteria", "type": "planning"},
               {"lesson": "Stuck detection triggers prematurely on research tasks that need multiple iterations", "type": "recovery"}]
-""").strip()
+""").strip())
 
 
 _LESSON_TYPES = frozenset({"execution", "planning", "recovery", "verification", "cost"})
@@ -225,12 +250,16 @@ def _seed_lesson_block(task_type: str) -> str:
     for the extractor prompt. Skips quarantined rows — a prompt-derived
     lesson used as the "high-quality example" would teach the extractor the
     exact style the provenance gate exists to catch (adversarial review
-    2026-07-29). Returns "" when no clean seed exists."""
+    2026-07-29). Skips contested rows for the same reason — an
+    operator-refuted lesson is the last thing to hold up as the style model
+    (L4 is contested LONG and would otherwise qualify here). Returns ""
+    when no clean seed exists."""
     try:
         seed_lessons = load_tiered_lessons(
             MemoryTier.LONG, task_type=task_type, min_score=0.7, limit=3)
         seed_lessons = [s for s in seed_lessons
-                        if getattr(s, "minted_from", "") != "prompt"]
+                        if getattr(s, "minted_from", "") != "prompt"
+                        and not getattr(s, "contested", None)]
         if not seed_lessons:
             return ""
         seed = seed_lessons[0]
@@ -401,7 +430,7 @@ def extract_lessons_via_llm(
 # Per-step learning (2026-07-27): provisional lessons from verified steps
 # ---------------------------------------------------------------------------
 
-_STEP_LESSON_SYSTEM = textwrap.dedent("""\
+_STEP_LESSON_SYSTEM = (textwrap.dedent("""\
     You are a meta-learning agent. A run's HIGH-LEVEL GOAL DID NOT land, but
     some of its steps individually PASSED verification. Extract durable method
     lessons scoped strictly to what those steps verifiably did.
@@ -415,18 +444,18 @@ _STEP_LESSON_SYSTEM = textwrap.dedent("""\
       "avoid Y") from this run. The run's failure is not evidence that any
       particular method is dead — a wrongly-recorded dead-end gets a working
       approach permanently avoided, which costs far more than a missed tip.
-    - Good lessons are specific, actionable, and generalize beyond this case.
-      A step with no surprise usually has no lesson worth keeping.
-
+    - Good lessons are specific observations that generalize beyond this
+      case. A step with no surprise usually has no lesson worth keeping.
+""").strip() + "\n\n" + _LESSON_FORM_RULES + "\n\n" + textwrap.dedent("""\
     Lesson types (pick the best fit for each lesson):
-    - "execution": how to carry out steps more effectively (tools, sequencing, parallelism)
-    - "planning": how to decompose or scope goals better
-    - "verification": how to validate output quality or catch errors early
-    - "cost": how to reduce token spend or latency without sacrificing quality
+    - "execution": carrying out steps (tools, sequencing, parallelism)
+    - "planning": decomposing or scoping goals
+    - "verification": output quality and catching errors early
+    - "cost": token spend or latency
 
     Respond with a JSON array of 0-3 lesson objects, each with "lesson"
     (string) and "type" (one of the above). An empty array is a valid answer.
-""").strip()
+""").strip())
 
 _STEP_LESSON_MAX_STEPS = 8  # prompt cap — verified steps beyond this are dropped (logged)
 
@@ -677,6 +706,10 @@ def reflect_and_record(
                     k_samples=1,  # single extraction → 0.5 confidence (F5)
                     lesson_type=lesson_type,
                     lesson_id=_shared_id,
+                    # M14 defect: reflect mints landed with evidence_sources=[]
+                    # even though the originating run was known — the Phase 60
+                    # citation penalty never had anything to reward.
+                    evidence_sources=[f"loop:{loop_id}"] if loop_id else [],
                 )
                 if getattr(recorded, "lesson_id", "") == "rejected":
                     tiered_failed += 1
@@ -873,6 +906,7 @@ def extract_deferred_lessons(
                     k_samples=1,
                     lesson_type=lesson_type,
                     lesson_id=_shared_id,
+                    evidence_sources=[f"loop:{loop_id}"] if loop_id else [],
                 )
                 if getattr(recorded, "lesson_id", "") == "rejected":
                     tiered_failed += 1

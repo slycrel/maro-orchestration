@@ -546,6 +546,12 @@ evidence line: lessons should be evidence the planner reasons from, not
 pre-baked instructions the next run obeys. Candidate mint-time rule,
 pending Jeremy's confirmation.
 
+*(Follow-up: confirmed 2026-08-02 and implemented the same day — shared
+`_LESSON_FORM_RULES` across all mint-site prompts, finalize templates
+reframed, evidence stamping + reinforce-merge added. Live acceptance
+re-minted all three certified shapes clean; see BACKLOG entry and
+`tests/test_mint_form.py`.)*
+
 ---
 
 # Chunk 2, re-instrumented: 8 family judgments instead of 116 rows

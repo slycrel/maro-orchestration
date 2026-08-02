@@ -5957,3 +5957,28 @@ pre-chunk NOW/evolver rows honestly unjudged going forward from here.
   premise injected into future runs is not. This is the first live use of
   the other session's contest verb, and the first case where the
   contamination came from a MACHINE error rather than a bad run.
+- **2026-08-02** — **What-not-how mint-form pass SHIPPED** (the second
+  green-lit chunk; decree entry above). Shared `_LESSON_FORM_RULES`
+  composed into `_REFLECT_SYSTEM` and `_STEP_LESSON_SYSTEM` (deferred
+  extraction rides the former); thinkback `key_lessons` scoped to
+  observation form while step reviews/retry_strategy stay prescriptive —
+  the decree's "asking for work" carve-out made explicit at the one site
+  that does both. Deterministic finalize templates reframed
+  (`_recovery_plan_lesson_text`/`_auto_diagnosis_lesson_text`: diagnosis
+  as observation, action marked advisor-proposed unverified; prefix and
+  determinism preserved so existing pins and dedup-reinforce hold).
+  Design points: (1) structural M14 fix — reflect/deferred/finalize
+  tiered mints stamp `evidence_sources=[loop:<id>]` (all minted `[]`
+  before; Phase 60's citation penalty finally has something to reward)
+  and reinforce merges incoming evidence refs capped at 8, giving rows a
+  "repeated across runs X, Y" record instead of a bare counter —
+  contested rows excluded (their frozen counter stays the refight-slice
+  input); (2) seed-reader side-find — `_seed_lesson_block` could serve
+  contested-LONG L4 as the style example, now filtered alongside
+  quarantined. Live acceptance on the real adapter: all three certified
+  shapes re-mint clean (M13 → disjoint-sources requirement as
+  observation; M9 → "blocker in both this attempt and the prior
+  dispatch; recurred despite retry"; M14 → no self-credit clause).
+  Honest residual: LLM output can still phrase a soft "should" when it
+  cites its evidencing cost in the same sentence — that is observation-
+  grounded advice, not the certified defect; not chased.

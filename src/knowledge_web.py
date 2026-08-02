@@ -364,7 +364,8 @@ def record_tiered_lesson(
                     return ex
                 return _reinforce_tiered_lesson(
                     ex, tier=MemoryTier.LONG, confirming=not provisional,
-                    incoming_minted_from=minted_from)
+                    incoming_minted_from=minted_from,
+                    incoming_evidence=evidence_sources)
             max_sim = max(max_sim, sim)
 
     # Scan-and-append is one critical section (review finding: the dedup
@@ -384,7 +385,8 @@ def record_tiered_lesson(
                     return ex
                 return _reinforce_tiered_lesson(
                     ex, tier=tier, confirming=not provisional,
-                    incoming_minted_from=minted_from)
+                    incoming_minted_from=minted_from,
+                    incoming_evidence=evidence_sources)
             max_sim = max(max_sim, sim)
 
         # Chunk 6: novelty term — a lesson unlike anything stored starts above
@@ -457,9 +459,13 @@ def _append_tiered_lesson(tl: TieredLesson, *, tier: str) -> None:
     locked_append(_tiered_lessons_path(tier), json.dumps(asdict(tl)))
 
 
+_REINFORCE_EVIDENCE_CAP = 8  # distinct evidence refs kept per row (first N sightings)
+
+
 def _reinforce_tiered_lesson(tl: TieredLesson, *, tier: str,
                              confirming: bool = True,
-                             incoming_minted_from: str = "") -> TieredLesson:
+                             incoming_minted_from: str = "",
+                             incoming_evidence: Optional[List[str]] = None) -> TieredLesson:
     """Reinforce an existing lesson: bump score and sessions_validated, rewrite file.
 
     ``tl.score`` is expected to be the *effective* (decay-derived) score —
@@ -508,6 +514,15 @@ def _reinforce_tiered_lesson(tl: TieredLesson, *, tier: str,
     if not contested_hit:
         tl.score = reinforce_score(tl.score)
         tl.last_reinforced = _current_date()
+        # What-not-how (2026-08-02): a re-derivation's originating run is the
+        # "repeated across runs X, Y" record — merge it (capped) so the row
+        # accumulates WHERE it was sighted, not just how often. Contested
+        # rows keep only the frozen counter (the refight-slice input).
+        for _src in (incoming_evidence or []):
+            if len(tl.evidence_sources) >= _REINFORCE_EVIDENCE_CAP:
+                break
+            if _src and _src not in tl.evidence_sources:
+                tl.evidence_sources.append(_src)
     if confirming:
         tl.sessions_validated += 1
         # F5: multi-session confidence promotion
