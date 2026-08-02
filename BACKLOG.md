@@ -1312,6 +1312,40 @@ capture**, which is what makes the rung amortize instead of evaporate.
   it targets the observed damage without touching the guard's safety
   role.** Not doing it unilaterally — it changes the learning path.
 
+  **NOW-lane verdict propagation — FIXED AND VERIFIED LIVE ON BOTH
+  BRANCHES, 2026-08-02.** The defect #8 found, closed end-to-end.
+  - `b70977aa-stout-crane` (provenance branch): `goal_verdict_summary` =
+    *"claimed input/output(s) not found: ['artifacts/comm-verify.md'…]"*.
+  - `c81e989b-nimble-forge` (judge branch): `goal_verdict_summary` =
+    *"It does not provide the exact location and street address of the
+    nearest 24-hour pharmacy."* — specific, names the missing thing.
+  Both fields were **structurally impossible to write** hours earlier.
+
+  **Two method lessons, both from live checks the pins could not give:**
+  1. **The first fix shipped INERT and every test passed.** Run
+     `2113a608` reproduced the failure with `goal_verdict_summary=None`
+     because the hosted-free judge ran at `max_tokens=64` — room for
+     `{"fulfilled": false}` and nothing else. The scraper correctly
+     returned empty, the writer correctly declined an empty field, every
+     layer was individually right, and the feature did nothing. The
+     defect lived in a token cap three layers from the code I changed.
+     Fix: **ask for the reason structurally** (`{"fulfilled": false,
+     "why": …}`, cap 64→160) instead of hoping for prose.
+  2. **My first two probes could not have tested what I claimed.** One
+     goal succeeded (nothing to propagate); the next named an output
+     path, so the provenance guard fired first and short-circuits the
+     judge by design. Only a goal that (a) fails AND (b) names no output
+     path can reach the judge branch. **A verification has to be able to
+     fail in the specific way you are claiming to have fixed** — the
+     near-miss version of the vacuous-verification trap from earlier in
+     this arc.
+
+  **Cosmetic residual (not fixed):** the provenance summary listed
+  `artifacts/comm-verify.md` twice — once bare, once "(claimed written,
+  not found)". `_provenance_missing` dedups on exact string and the two
+  differ. Harmless, but it makes the operator-facing message look
+  confused about its own evidence.
+
   **Repeat-run economics (the warm arm, mechanism written down before
   running it — 2026-08-01, Jeremy's question).** On the subprocess backend
   there is NO cross-run prompt cache — every `claude -p` call is a fresh
