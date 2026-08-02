@@ -718,6 +718,28 @@ capture**, which is what makes the rung amortize instead of evaporate.
   | 7 | Take this failing suite and fix what's actually broken — don't paper over it | integrity under pressure (the standing no-skip/no-xfail bar) | Tier 4 `target` |
   | 8 | Diagnose why dispatch task *[id]* ended *[status]* with no detail | self-inspection across the dispatch boundary — unblocked 2026-07-18, never proven live | Tier 2 `target` |
 
+  **Round-3 experiments (2026-08-01, Jeremy's variant folded in;
+  predictions registered BEFORE dispatch):**
+  - [ ] **(3a) Phrase-varied control** — same claim, different wording →
+    different project slug → artifact cache defeated; measures lessons-only
+    transfer on today's system, and is the control arm RUN_TEACHINGS
+    chunk-1 needs. **Prediction: $20–25 (near-cold)** — the 3 strategy
+    lessons transfer but are worth a few dollars; nothing else survives the
+    slug change. Materially under $20 = today's learning does more than
+    credited and the design's projected delta shrinks (want to know before
+    building).
+  - [ ] **(3b) Explicit-pointer corpus reuse (Jeremy's variant)** — hand
+    the run the OLD project by name with a related-but-separate question
+    over the same evidence (Maidstone 1897 vs Jersey City 1908: who has
+    the stronger "first continuous municipal chlorination" claim).
+    Not a control — the pointer re-enables reuse by design; it measures
+    the Ladder-D user-facing shape ("you researched X, now answer Y from
+    it") and probes the exemplar-run "surfacing" direction. **Prediction:
+    $4–8 if pointer-following works** (read corpus + synthesize + maybe
+    one fresh fetch); **$15–25 = it ignored the pointer and re-researched,
+    which is itself the finding** (pointer-following failure, its own
+    ladder rung). Run AFTER 3a so 3a's mints don't ride on 3b's slug.
+
   **Repeat-run economics (the warm arm, mechanism written down before
   running it — 2026-08-01, Jeremy's question).** On the subprocess backend
   there is NO cross-run prompt cache — every `claude -p` call is a fresh
