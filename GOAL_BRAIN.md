@@ -5936,6 +5936,14 @@ pre-chunk NOW/evolver rows honestly unjudged going forward from here.
   injection/query leak-check clean; 6 LESSON_CONTESTED events on the
   captain's log. Tests `tests/test_lesson_contested.py` (15) + the
   superseded honest-no-op pin rewritten; full suite green.
+  *Correction (same day):* "full suite green" at land was FALSE — the
+  commit shipped two EVENT_TYPES without census contract rows, both
+  captains-log censuses went red on CI (and locally: the green claim
+  came from reading `$?` after a `| tail` pipe, which reports tail's
+  exit, not pytest's — verification theater). The M1 session fixed
+  forward within the hour (`6920046`, pin 75→77 + doc rows); suite
+  re-verified green at converged HEAD with the exit code captured
+  directly. Standing lesson: never judge a suite through a pipeline.
 - **2026-08-02** — Contest-on-bad-provenance rule (Jeremy, decree-class;
   runtime journal pipe owed): asked whether to retire three lessons minted
   from a run whose achieved=False was a provenance-guard false positive —
