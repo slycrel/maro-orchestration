@@ -507,6 +507,34 @@ is not a restatement of Jeremy's priors. But the original rubric's binary
    (GOAL_BRAIN). Both reads are fresh operator evidence those existing
    cuts are the right ones.
 
+### M14 clarified (Jeremy follow-up, 2026-08-01)
+
+The unhelpful-and-potentially-incorrect part is the second sentence: *"This
+adversarial verification pass catches cases where a secondary summary …
+generalizes beyond what the primary source's actual experimental scope
+supports."* He's right, on two counts:
+
+1. **The mechanism can't deliver the claimed benefit.** Grep catches
+   *absence-class* errors — a cited stat or quote that literally isn't in
+   the source. Over-generalization is a *scope-semantics* error: the
+   summary reuses the source's own vocabulary while stretching its scope,
+   so grep finds the words and stamps a false pass. In exactly the
+   circumstance the sentence names, the "adversarial pass" label launders
+   a non-check into rigor — worse than claiming nothing.
+2. **The lesson is self-exemplifying.** Provenance check (lesson_id
+   `655ea616`, live store): minted 2026-07-31 from the LeAct X-post
+   evaluation run itself, `evidence_sources: []`, `sessions_validated: 0`,
+   confidence 0.5 — a secondary summary generalizing a capability claim
+   beyond what its own experimental scope (one run, no recorded catch)
+   supports. It commits the failure it warns about.
+
+The honest mint would have been: "grep the saved source to catch cited
+claims whose support text doesn't exist; scope over-reach requires reading
+the methods/limitations sections — grep will false-pass it." M14 stays in
+the contradiction set with the sharper charge: claimed benefit
+undeliverable by stated mechanism, and an unfalsifiable self-credit clause
+(no named falsifier, no evidence source).
+
 ## Recurring altitude critique (4 of 11 reads)
 
 L4, M9, M13, M14 are versions of one complaint: **the lesson is minted at
