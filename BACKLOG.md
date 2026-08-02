@@ -2059,6 +2059,46 @@ and maintainable over time."** Step 1 is greenlit:
   corpus now also contains 3b's final_verdict.md (slightly richer than
   the 3b arm saw), so read the tokens_in delta as the primary signal,
   not the dollars alone.
+  **RE-JUDGE OF #5 DONE 2026-08-02 (Jeremy: "good with re-judging the
+  existing artifacts"), and the false verdict had already cascaded.**
+  - **Closure had independently judged it `complete=True @ 0.75, 3/4
+    checks`** — on disk in the run's `closure_verdicts.jsonl` the whole
+    time. The provenance false positive overrode a genuine pass.
+  - **Fix verified against the REAL specimen, non-vacuously:** replaying
+    the fixed guard over the run's reconstructed 25,884-char step text
+    (asserted the glob claim is present, so the test can't pass by
+    reading nothing) → the `artifacts/OL*.json` flag is gone and no
+    other flag appears. First attempt at this check WAS vacuous (0 chars
+    — the loop log stores `result_length`, not text); caught and redone
+    from the step artifacts.
+  - **Verdict re-stamped** (`stamp_outcome_verdict`, re-stampable by
+    design): `goal_achieved=True`, source
+    `closure_reverdict_after_guard_fix`, conf 0.75. Original False and
+    its timestamp stay in the row's history — data not rewritten, the
+    correction is additive.
+  - [ ] **CASCADE, needs Jeremy's call — three lessons minted on a
+    fabricated premise.** The false demotion drove the diagnosis to
+    conclude `tool_missing`, and finalize minted 3 `achieved=False`
+    lessons (`80f47016` tool_missing, `65e49b27` tool_preflight,
+    `50c68716` self_cert_unreliable) whose stated rationale is that
+    fetch "wasn't available" and the output was "unverifiable" — **both
+    false; the run fetched six real OpenLibrary records with HTTP 200s.**
+    `50c68716` is the actively harmful one: it teaches distrust of an
+    adversarial-verification pass that was, in this run, correct.
+    **Not contested unilaterally**: the other session's V1 contest is
+    *sticky* (no un-contest verb until a refight slice exists), so
+    retiring three lessons on Jeremy's store is an irreversible call —
+    surfaced per the retention posture. Note `50c68716`'s advice is
+    arguably sound on its own merits even though its provenance is
+    contaminated; a re-mint from honest evidence would be the clean path.
+    Verb ready when he says go: `maro-memory contest <id> "<reason>"`.
+  - **Gotcha recorded (cost me a wrong-path write):** `OPENCLAW_WORKSPACE`
+    is a LEGACY pin — setting it forces `orch_root()/memory`
+    (`<ws>/prototypes/maro-orchestration/memory`), NOT the live ledger.
+    Ad-hoc scripts touching live memory must use **`MARO_WORKSPACE`** or
+    **`MARO_MEMORY_DIR`**. The stamp correctly returned `missing` instead
+    of creating a phantom ledger — the guard behaved.
+
   **A/B RESULT (run `e0bbc289-sunny-pine`, 2026-08-02): $13.73 / 4.29M-in
   / 18.7min vs baseline $11.25 / 3.45M / 16.7min — NEITHER predicted
   tier, and the miss is the finding.** The protocol was followed

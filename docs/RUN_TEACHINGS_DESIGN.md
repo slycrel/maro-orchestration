@@ -222,6 +222,55 @@ phrase-varied (to defeat artifact reuse) — the delta attributable to the
 terrain teaching alone should pull a fresh instance of the goal-class
 toward the $3–6 tier.** That is the whole design in one number.
 
+## 5b. Within-run terrain memory (Jeremy 2026-08-02 — "a goal short term memory issue")
+
+*"Should be a simple memory-related thing to remember that certain sites
+are blocked rather than churning on learning that over and over; seems
+like a goal short term memory issue would be a straightforward fix;
+potentially promotes like other learning, and maybe that's already
+there?"*
+
+**Answer: the parts exist, unconnected — and this is a SEPARATE, cheaper
+fix than §4, worth doing first.** The waste is not only cross-run
+(§1's $15 relearn); it is *within* a single run. The cold chlorination
+run re-attempted the same blocked archives across ~6 steps, and #5's
+run wandered `STEP_TOO_BROAD ×4` at $32 — each step rediscovering the
+same environmental facts because **nothing carries a fact from step N to
+step N+1 except the step's own prose result.**
+
+What already exists, and why none of it closes this:
+- `knowledge_web.short_set/short_get/short_all` — a genuine
+  session-scoped store, **but effectively dead code**: the only writer is
+  `persona.py` (persona_name/persona_goal). It is an in-process dict, so
+  it also would not survive the subprocess-worker boundary.
+- `ContributionLedger` (§6 injection seam) — the *right shape*, already
+  typed and provenance-stamped, drained per step. Current contributors:
+  `budget`, `reorientation`, `prereq`, `hook`, `escalate_reply`,
+  `blocked_retry`, `user_note`, `time`. **No terrain contributor.**
+- `SCAVENGE_DETECTED` / the fabrication guard already parse worker tool
+  transcripts for paths — so per-step observation machinery exists.
+
+**Proposed slice 0 (smaller than chunk 1, no LLM call, no new store):**
+a run-scoped terrain accumulator. When a step's tool transcript shows a
+host returning a hard block (403/429/Cloudflare/DNS-fail) or a tool
+reporting unavailable, record `{host, code, step}` on the LoopContext;
+render the accumulated set as ONE `terrain` contribution into each
+subsequent step's prompt ("Known blocked this run: hathitrust.org 403,
+books.google.com quota — do not retry; state the gap instead").
+Deterministic, cheap, and it rides the seam that already exists.
+
+**Then it promotes exactly as Jeremy guessed:** at finalize, a terrain
+fact observed ≥N times (or across ≥2 steps) is a candidate `terrain`
+teaching per §3/§4 — the run-scoped accumulator becomes the *evidence
+source* for the durable mint, which also gives §4a a deterministic
+input instead of asking an LLM to notice blocks in prose. Short-term
+memory feeds long-term memory; the two designs compose rather than
+compete.
+
+DECISION (provisional): slice 0 ships before chunk 1 — it is
+deterministic, testable without live runs, and independently valuable
+even if §4 never lands.
+
 ## 6. Build order (consumer-first, smallest real slice)
 
 1. **Chunk 1 — terrain only:** extraction pass (kind=terrain only) +
