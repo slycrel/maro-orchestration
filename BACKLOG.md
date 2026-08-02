@@ -1012,6 +1012,15 @@ capture**, which is what makes the rung amortize instead of evaporate.
     **avoidable_retries ≤ 2**; verdict **achieved=True from closure, with
     no provenance override** — a second provenance demotion would be a
     guard regression, not a run failure.
+    **Dispatched 2026-08-02** from a clean detached worktree at
+    `620d8ad` (`maro-wt-round4`) rather than the box checkout, which was
+    dirty with the other session's in-progress edits to `knowledge_web.py`
+    / `memory.py` / `loop_finalize.py` / `thinkback.py` — all in the
+    lesson-mint path a run executes at finalize. Goal text is #5's
+    instruction body verbatim with only the opening reworded, because the
+    project slug is the first five words and "Tell me about the book…"
+    would have merged this run into Systemantics' project (see the slug
+    hazard item below). Slug: `tell-me-about-notes-on`.
     **Stated weakness of the terrain test:** book-shaped goals have a low
     base rate for this waste (#5 cold scored 1 avoidable retry with no
     terrain at all), so a low number here is *consistent with* §5b
@@ -1959,6 +1968,56 @@ is ON (since 2026-07-14) so the A/B is running; first live numbers
 (49/120) — directional positive, small n. Re-evaluate the goal-preview
 anchoring risk once the comparison has real n; pre-optimizing the prompt
 before then is guessing.
+
+### Project slug is the first FIVE WORDS — generic openings silently merge unrelated goals (FOUND 2026-08-02, prospectively)
+
+`loop_artifacts._goal_to_slug` is `"-".join(words[:5])` after stripping
+non-alphanumerics. Nothing else disambiguates. So **two goals about
+completely different subjects share one project directory whenever their
+first five words match** — and the openings people actually use are
+exactly the generic ones: *"Tell me about the book…"*, *"Research the
+history of…"*, *"Fix the failing test in…"*, *"Write a summary of…"*.
+
+**Found while designing LT-1 round 4a**, not by a run failing: #5's slug
+is `tell-me-about-the-book`, so the planned second specimen (a different
+book, same goal shape) would have landed in Systemantics' project
+directory and read *Systemantics'* six fetched OpenLibrary records,
+`source-list.md`, and `adversarial-verification.md` as its own prior
+work. That is not a measurement confound, it is **wrong-source
+contamination**: the scavenge and provenance guards would happily resolve
+those files as legitimately present, because they are. Worked around for
+now by rewording only the opening (`tell-me-about-notes-on`).
+
+**Why this isn't the 3b collision.** 3b's slug collision was ruled a
+feature — goal text referencing prior work routing to that work's project
+is what slugs are *for*. The distinction is crisp and worth keeping:
+**collision on subject = continuity; collision on generic phrasing =
+bug.** Same mechanism, opposite verdicts, and only the goal's subject
+tells them apart.
+
+**Blast radius, measured 2026-08-02 — latent, not yet triggered.** Across
+the workspace, 29 projects have runs carrying `metadata.json`; 2 of those
+have more than one distinct goal, and both are same-subject families
+(the chlorination arc and an X-post arc) — i.e. continuity, working as
+designed. **Denominator caveat, stated because this arc keeps paying for
+omitting it:** 171 project directories exist but only 29 are reachable
+from run metadata, so this census covers projects with surviving run
+records, NOT all projects. It bounds the *known* damage at zero; it does
+not prove none happened before run metadata existed.
+
+**The fix has a natural home:** `NEXT.md` already records the originating
+goal as `Mission:`. Compare the incoming goal against it and disambiguate
+on mismatch. Options, cheapest first:
+1. Strip a leading imperative/stop phrase ("tell me about", "research",
+   "write a summary of") before taking five words — cheap, no state, but
+   the phrase list is a losing game.
+2. On slug hit, read the project's recorded Mission; if the subject
+   doesn't match, append a short disambiguator (`-2`, or a goal hash).
+   Correct by construction, needs a subject-match call.
+3. Score words by how distinguishing they are across existing slugs and
+   pick from the informative tail rather than the head.
+Not started — logging the hazard and the workaround first, since the
+guards that would normally catch a wrong file *can't* catch this one.
 
 ### 22. Capabilities catalog — open residuals (shipped trail archived)
 
