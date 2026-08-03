@@ -2708,10 +2708,18 @@ evolver/introspect lane with an RLM reader, the most directly
 maro-shaped datapoint of the six**; local recursive LMs trained with RL
 (05-19); GEPA (05-02, same limitation via prompt optimization instead);
 Garry Tan "Resolvers" (04-15, tangential).
-- [ ] **Side-finding, actionable: the box's `lf-` knowledge nodes came
-  from the 315-post snapshot** — maro's knowledge layer is missing 432
-  posts incl. all RLM material. Sync the box's link-farm clone + re-run
-  the import (mind the standing lf- edge-contamination item first).
+- [x] **Side-finding: lf- re-import DONE 2026-08-02.** The box's clone
+  was already synced through 2026-07-31 (747 posts); the stale thing was
+  the imported store, not the clone. Re-ran `import_link_farm.py`:
+  432 new nodes (315 existing deduped by URL-hash id, 0 orphaned),
+  nodes 696 → 1128; all six RLM posts present. **Edge-contamination
+  outcome, checked against the standing item first: 0 new edges** — the
+  topic-edge builder skips tags with >50 members and every non-generic
+  tag now exceeds that, so the 2124-edge lf-lf pile did not grow.
+  Honest caveat: the pre-existing TF-IDF injection exposure (lf- nodes
+  rankable into live goal context, see the knowledge-web read-side item)
+  now spans 1128-node corpus instead of 696 — the "should lf- inform
+  live execution at all" decision is still Jeremy's open call there.
 - **Durable rule (add to the denominator family): before declaring a
   thing absent from a corpus, verify the corpus's vintage covers the
   period where it would exist.**
