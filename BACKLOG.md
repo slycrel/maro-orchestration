@@ -2059,14 +2059,31 @@ capture**, which is what makes the rung amortize instead of evaporate.
   internals. Cheap fix: carry `provider_cost_usd`-to-date alongside the
   token count in the note.
 
-- [ ] **Closure judges a partial view of an artifact and can attribute
-  adjacent content to fields** (found 2026-08-02, `2738d9c0`). See ROUND 8
-  above. Two candidate cuts: put the raw artifact bytes in front of the
-  verdict call when it is small enough to fit, or make the verdict
-  distinguish "I read the file" from "I read a summary of the file" and
-  refuse a FULL-trust False on the latter. The second is the cheaper
-  honesty fix and matches §13e's fail-open posture — a judge without the
-  evidence should stamp unjudged, not False.
+- [x] ~~**Closure judges a partial view of an artifact and can attribute
+  adjacent content to fields**~~ — **FIXED 2026-08-03 (`f7b775c`).**
+  Diagnosis first, and it moved: the verdict prompt gets `Work done`
+  (the run's narration) plus `check_results` (probe stdout). In
+  `2738d9c0` the only probe was a structural validator printing
+  `SCHEMA OK`, so the field VALUES appeared nowhere in evidence and the
+  judge reasoned from the narration — which quoted the artifact's
+  optional `notes` array. It then stamped False at 0.80, over
+  `VERDICT_CONFIDENCE_FLOOR`, demoting a correct run at FULL trust.
+  Shipped both halves, each completing doctrine the module already had:
+  **prompt** — "you may only assert what a file CONTAINS when that
+  content is in front of you" (the converse of the existing
+  `target_file_content` is-ground-truth rule); **structural** — when
+  `complete=False` contradicts EVERY executed probe and no file content
+  is in evidence, cap confidence just below the floor. Nothing hidden:
+  complete/gaps/summary recorded verbatim and the summary states the cap.
+  What is denied is **standing** — it can no longer demote a run or teach
+  a failure. Applied to the LLM verdict only, before the deterministic
+  downgrades (modality/diagnosis-derived, which IS evidence). Verified
+  the restart path cannot engage on this shape (it requires a hard-failed
+  check), so the cap adds no cost. 9 pins, 3 red on revert.
+  **Chose the confidence cap over "put the artifact bytes in the prompt"
+  deliberately:** the cap is a statement about what a verdict may claim,
+  and holds for every deliverable shape; feeding bytes only fixes the
+  cases where we guessed the right file to feed.
 
 - [ ] **Executor image ships no pytest** (found 2026-08-02 via `d9607baa`).
   `maro-executor:2.1.210` has git/python3/curl by design — the Dockerfile
