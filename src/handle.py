@@ -421,6 +421,7 @@ _NOW_VERIFY_SYSTEM = (
 # Provenance guard (deterministic done != achieved check) — moved to provenance.py
 # ---------------------------------------------------------------------------
 from provenance import (
+    memory_claims_unverifiable,
     _clean_path_token,
     _claimed_output_paths,
     _claimed_output_bare,
@@ -439,7 +440,59 @@ from provenance import (
     _result_claimed_outputs,
     _missing_or_stale_result_outputs,
     _provenance_missing,
+    memory_provenance_unverified,
 )
+
+
+def _mark_memory_provenance(result_text: str) -> List[str]:
+    """Mark — never demote on — unbacked "persisted it to memory" claims.
+
+    The memory twin of the file guard above (see provenance.py's memory-claim
+    banner): a run that closes a step claiming it saved a rule/convention to
+    durable memory, with no matching row in any store, has fabricated the most
+    expensive kind of write there is — the bill lands on a FUTURE run that
+    silently never receives the knowledge. Advisory by decree (Jeremy,
+    2026-08-02): the finding rides in run metadata as evidence, the verdict is
+    untouched. Never raises.
+
+    Two categories, kept separate on purpose. `memory_provenance_unverified`
+    is checkable ("you claimed X; X is in no store"). `memory_claims_
+    unverifiable` is not ("you claimed nothing needed saving, and named no
+    subject") — that is the founding incident's exact wording, and merging it
+    into the first would launder an unverifiable claim into an accusation.
+    """
+    findings: List[str] = []
+    try:
+        findings = memory_provenance_unverified(result_text)
+    except Exception:
+        findings = []
+    if findings:
+        log.warning(
+            "memory provenance: claimed persisted to durable memory, no matching "
+            "row in any store — %s (advisory; verdict unchanged)", findings)
+        try:
+            from runs import stamp_run_metadata as _srm_mem
+            _srm_mem({"memory_provenance_unverified": findings})
+        except Exception:
+            pass
+    try:
+        _unverifiable = memory_claims_unverifiable(result_text)
+    except Exception:
+        _unverifiable = []
+    if _unverifiable:
+        # Not an accusation: the run may be right. Recorded so the shape stops
+        # being invisible — a step declaring memory complete, being wrong, and
+        # leaving no trace is how run 9c8d0a43 lost a convention silently.
+        log.info(
+            "memory provenance: %d unverifiable no-write-needed claim(s) "
+            "(advisory, not an accusation) — %s",
+            len(_unverifiable), _unverifiable)
+        try:
+            from runs import stamp_run_metadata as _srm_unv
+            _srm_unv({"memory_claims_unverifiable": _unverifiable})
+        except Exception:
+            pass
+    return findings
 
 
 # Hard wall-clock budget for the interactive NOW judge (review F1): the
@@ -501,6 +554,11 @@ def _verify_now_outcome(
     adapter=None runs the deterministic provenance guard ONLY (free, no
     latency class change) and skips the text judge — the interactive lane
     uses this when no hosted-free judge is available."""
+    # Memory-claim mark first — it is advisory, so it must be recorded even on
+    # the paths below that return early on a file-provenance failure.
+    _mem_unverified = _mark_memory_provenance(str(outcome.get("result", "")))
+    if _mem_unverified:
+        outcome = {**outcome, "memory_provenance_unverified": _mem_unverified}
     # Deterministic provenance guard, ahead of the text judge: if the goal named
     # an input that isn't on disk or an output that never landed, the goal is not
     # achieved regardless of how the response narrates it. Catches what the
@@ -2390,6 +2448,10 @@ def _handle_impl(
                     s.result for s in loop_result.steps
                     if s.status == "done" and s.result
                 )
+                # Advisory memory twin (agenda lane). Runs before the file
+                # guard's demotion branch so the mark lands either way — the
+                # two findings are independent evidence, not a ladder.
+                _mark_memory_provenance(_done_results)
                 _prov_missing = _provenance_missing(
                     _raw_input,
                     result_text=_done_results,
