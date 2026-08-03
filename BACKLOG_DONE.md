@@ -8,6 +8,54 @@ Last split: 2026-04-16 (session 34).
 
 ---
 
+## Green-lit 2026-08-02 (Jeremy, surprise-read follow-through) — two lesson-store chunks, both SHIPPED 2026-08-02
+
+Moved from BACKLOG 2026-08-02 (the move itself waited a day for the file
+to stop being another session's dirty copy).
+
+- [x] **What-not-how mint-form pass. SHIPPED 2026-08-02.** Shared
+  `_LESSON_FORM_RULES` block (observation-not-procedure, repeated-failure-
+  as-evidence, no self-credit without a named observation, procedure form
+  only when the goal asked for one) composed into `_REFLECT_SYSTEM` +
+  `_STEP_LESSON_SYSTEM` ("actionable" dropped from both;
+  `extract_deferred_lessons` rides `_REFLECT_SYSTEM`); thinkback got a
+  scoped clause — `key_lessons` mint as observations, step reviews /
+  retry_strategy stay prescriptive (the decree's "asking for work" case).
+  Deterministic templates reframed via `_recovery_plan_lesson_text` /
+  `_auto_diagnosis_lesson_text` (diagnosis stated as observation, action
+  marked "advisor-proposed (unverified)"; same-prefix so existing pins
+  hold, deterministic so dedup-reinforce still works). Structural M14 fix:
+  every reflect/deferred/finalize tiered mint now stamps
+  `evidence_sources=[loop:<id>]` (they all minted `[]` before — Phase 60's
+  citation penalty had nothing to reward), and dedup re-sightings merge
+  their evidence refs (cap 8, contested rows excluded) so a row
+  accumulates *where* it repeated, not just how often. Side-finds: seed
+  reader could serve a contested LONG lesson (L4) as the style example —
+  filtered. Live acceptance (real adapter): M13-shape minted the
+  disjoint-sources requirement as observation; M9-shape minted "blocker
+  in both this attempt and the prior dispatch; recurred despite retry";
+  M14-shape produced no self-credit clause. 15 pins in
+  `tests/test_mint_form.py`. Residual: LLM output can still carry a soft
+  "should" grounded in named evidence — acceptable form, not the defect.
+- [x] **Retirement-by-contradiction for lessons. SHIPPED 2026-08-02**
+  (same session as the green-light). `TieredLesson.contested` +
+  `contest_lesson()` mirror the standing-rule grey flip: out of every
+  injection surface (both stores — flat ledger included via UU-4 shared
+  ids), never promotes/confirms, dedup re-sightings count
+  `times_reinforced` only (score + decay anchor freeze so MEDIUM retires
+  on schedule; for decay-free LONG this IS retirement). Adjudication's
+  lesson-branch honest no-op replaced with a real contest; operator verb
+  `maro-memory contest`. Acceptance corpus applied to the live store:
+  all six contested with Jeremy's verbatim reads as reasons (L4=6287e494,
+  M6=9d6b63fe, M8=c304b9b2, M9=c85c9a09, M13=47e8f5e3, M14=655ea616);
+  injection/query leak-check clean. Tests
+  `tests/test_lesson_contested.py`; arch skill updated.
+  **Deliberate V1 cut:** no un-contest path — contested is sticky until
+  a lesson-refight slice exists (rules have `refight_rule`; a future
+  slice can use the frozen `times_reinforced` re-sighting count as its
+  evidence input). Competence-redundancy decay decree (2026-07-31)
+  overlap deferred with it.
+
 ## Data-driven cost thresholds — SHIPPED 2026-07-29 (decree-direct, no BACKLOG item)
 
 Jeremy (2026-07-29, after the escalate-death fix landed): raise the kill
@@ -312,7 +360,7 @@ the facades.
 3-reviewer (Skeptic/Architect/Minimalist) pass over `git diff b2dc34d..HEAD`
 (recursive-goal check-in, planning-depth shadow, `director_evaluate`
 skip/error split, R1 architectural cleanup already archived to
-BACKLOG_DONE). Full reports: `docs/history/2026-07-13-adversarial-review-batch1-{skeptic,architect,minimalist}.md`
+BACKLOG_DONE). Full reports: `docs/history/2026-07-13-adversarial-review-batch1-{skeptic,architect,minimalist}.md`.
 Five real bugs/gaps fixed live, with regression tests:
 
 - **`director_evaluate`'s masked-failure fix only covered one of two code
@@ -394,7 +442,7 @@ architectural cleanup, and R3's own fixes), per the closing instruction of
 this session's `/goal`: "run the adversarial-review against the entire
 changeset across all the chunks." Run via the actual `/adversarial-review`
 skill (Codex reviewers, cross-model, not internal subagents). Reports:
-`docs/history/2026-07-13-adversarial-review-final-{skeptic,architect,minimalist}.md`
+`docs/history/2026-07-13-adversarial-review-final-{skeptic,architect,minimalist}.md`.
 
 All three reviewers scoped their attention (per instruction) to what R3
 hadn't reviewed yet — R3's own fix commit (`f837c06`) and the
