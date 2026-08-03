@@ -799,22 +799,36 @@ capture**, which is what makes the rung amortize instead of evaporate.
     cheap, and a census tripwire so the table can't rot the way the
     event-contract doc did before its own tripwire landed.
 
-- [ ] **SPIN-OFF from the LT-0 verification run: stuck runs are not being
-  auto-recovered.** Found by the verification run's own deliverable
-  (`fd00c7be`, 2026-08-01) reading the live ledger, then corroborated by
-  the census: **last-30 rows = 21 done / 8 stuck / 1 restart**, and
-  whole-workspace = 168 stuck + 132 error + 57 stranded of 733 settled
-  (~43% done). The run's own words: *"the near-absence of `restart` (1/30)
-  alongside a substantial `stuck` count suggests stuck runs are largely
-  being left stuck rather than auto-recovered, which is worth checking
-  against whatever restart/recovery policy is supposed to be in place."*
-  Two readings and they need separating before anything is built: either
-  the restart predicate is too conservative and stuck runs that could
-  recover don't, or stuck is a correct terminal state here and the number
-  is just honest. Check the restart/auto-recovery policy against a sample
-  of the 8 stuck rows first — this is a diagnosis, not yet a defect.
-  (Filed here rather than as its own stack item because it came out of LT
-  work; promote it if the sample confirms a live gap.)
+- [x] **SPIN-OFF from the LT-0 verification run: stuck runs are not being
+  auto-recovered — DIAGNOSED 2026-08-02, no live gap; NOT promoted.**
+  The census read (last-30 = 21 done / 8 stuck / 1 restart; the run's
+  words: "stuck runs are largely being left stuck rather than
+  auto-recovered") had two candidate readings; the sample separated them
+  cleanly in favor of **"stuck is a correct terminal state here and the
+  number is just honest."** Joined the 7 recent agenda stuck rows to
+  their diagnoses + captain's-log events:
+  - 4 × `token_explosion`/`cost_spike` (1e976f5a, f2e2765e, 597558f4,
+    3289a1b6) and 1 × `adapter_timeout` (ba58f96c) — every one maps to
+    `auto_apply=False, risk=medium` in `introspect._RECOVERY_TABLE`, so
+    Phase-45 auto-recovery **correctly declined to fire**: blind re-runs
+    of a token explosion burn money without changing the read pattern
+    (the real fix lane is the retrieval-handle arc). All five got
+    quality-gate ESCALATE attention instead.
+  - 1 × navigator escalate-act honest stop (25f6d875, conf 0.92,
+    "heuristic recovery overridden") — **stuck by design**.
+  - 1 × budget-breaker death (3a4e2692) — its class fix already shipped
+    2026-07-29 (auto breaker + escalate-death delivery).
+  - The mechanism itself is alive: 12 AUTO_RECOVERY firings ever
+    (retry_churn 9, decomposition_too_broad 2, empty_model_output 1;
+    last 2026-07-03) — it fires when its low-risk classes appear; the
+    recent stuck population just isn't those classes.
+  - The 3 recent `evolver_verify` stuck rows carry no loop_id, so
+    per-loop diagnosis can't run on them — that's the standing
+    "NOW + evolver_verify lanes are verdict-blind" item's territory,
+    not a recovery-policy gap.
+  Residual watch, not a defect: if a future stuck sample shows
+  auto_apply=True classes going unrecovered, THAT would be the live gap
+  this item feared — re-open then.
 
 - [ ] **LT-1 — the batch (8 goals, cold+warm pairs).** Mostly `target`
   rows from the catalog; two net-new from the thin families.
