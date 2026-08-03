@@ -107,6 +107,15 @@ _CLOSURE_PLAN_SYSTEM = textwrap.dedent("""\
      "behavioral_probe_waived": "<reason — only when skipping a REQUIRED behavioral probe for a runtime-shaped deliverable; omit or empty string otherwise>"}
 """).strip()
 
+# Ungrounded-False cap (see the branch in verify_goal_completion). The floor
+# is memory_ledger.VERDICT_CONFIDENCE_FLOOR — the line above which a judged
+# verdict gates learning and demotes a run. Kept as a literal rather than an
+# import to avoid a cycle; the pin in tests/test_closure_ungrounded_false.py
+# fails if the two ever drift apart.
+_UNGROUNDED_FALSE_FLOOR = 0.7
+# Just below the floor: still recorded, still visible, but directional-only.
+_UNGROUNDED_FALSE_CONFIDENCE = 0.65
+
 _CLOSURE_VERDICT_SYSTEM = textwrap.dedent("""\
     You are the Director reviewing verification results after an agent loop completed.
 
@@ -120,6 +129,15 @@ _CLOSURE_VERDICT_SYSTEM = textwrap.dedent("""\
     completeness from the checks that did run. If the passing checks cover the
     goal's deliverables and no check failed, complete=true is the honest
     verdict even with an inconclusive probe in the mix.
+
+    You may only assert what a file CONTAINS when that content is in front of
+    you — in a check's stdout, or in "target_file_content". If no check
+    surfaced a deliverable's content, you do not know what it holds, and you
+    must not describe it. Say the verification did not cover it, and give a
+    confidence below 0.7. A verdict that contradicts every passing check while
+    resting only on the work summary's narration is how correct runs get
+    failed: the summary quotes and explains its own output, and those
+    quotations are not the file.
 
     Some failed checks carry "target_file_content" — the actual current content
     (bounded excerpt) of files the failed command referenced. That content is
@@ -982,6 +1000,47 @@ def verify_goal_completion(
                                 min_val=0.0, max_val=1.0)
         gaps = [safe_str(g) for g in safe_list(verdict_data.get("gaps")) if g]
         summary = safe_str(verdict_data.get("summary", ""))
+
+        # Ungrounded-False cap. A complete=False that contradicts EVERY
+        # executed probe, with no file content in front of the judge, has no
+        # evidence of failure behind it — only the work summary's narration.
+        # Run 2738d9c0 (2026-08-02) is the specimen: every check passed, the
+        # judge quoted the artifact's OPTIONAL `notes` array and attributed
+        # that prose to the scalar fields the notes merely mention, and
+        # stamped False at 0.80 — over VERDICT_CONFIDENCE_FLOOR, so it
+        # demoted a fully correct run AND counted at FULL trust in learning.
+        #
+        # This hides nothing: complete, gaps and summary are recorded as the
+        # judge wrote them. It denies the verdict the STANDING to demote a run
+        # or teach a failure, which is exactly what confidence < floor means
+        # (VERDICT_TRUST_DIRECTIONAL — "may flavor, never gate/count").
+        #
+        # It deliberately also covers the honest-looking case where the checks
+        # simply never covered a deliverable: "no probe looked" is insufficient
+        # coverage, not proof of failure. Evidence of failure is required for a
+        # confident False — the same principle as the module's existing
+        # "absence means not judged, not failed".
+        #
+        # Applied to the LLM's own verdict only, BEFORE the deterministic
+        # downgrade branches below: those derive from modality distribution and
+        # loop diagnosis, which IS evidence, and they keep their standing.
+        if (not complete and check_results
+                and all(r.get("passed") for r in check_results)
+                and not any(r.get("target_file_content") for r in check_results)
+                and confidence >= _UNGROUNDED_FALSE_FLOOR):
+            log.warning(
+                "closure: capping ungrounded complete=False confidence "
+                "%.2f -> %.2f — all %d checks passed and no file content was "
+                "in evidence, so the verdict rests on narration alone",
+                confidence, _UNGROUNDED_FALSE_CONFIDENCE, len(check_results),
+            )
+            confidence = _UNGROUNDED_FALSE_CONFIDENCE
+            summary = (
+                f"{summary} [verdict confidence capped: all "
+                f"{len(check_results)} checks passed and no file content was "
+                f"in evidence, so this not-achieved rests on the work "
+                f"summary's narration rather than on probe output]"
+            ).strip()
 
         # Build modality distribution now; we use it both for the behavioral-gap
         # downgrade below and for the CLOSURE_VERDICT event at the end.
