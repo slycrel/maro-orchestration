@@ -476,6 +476,24 @@ def test_write_reading_page_links_github(monkeypatch, tmp_path):
     assert 'href="index.html"' in content  # nav tab back to Runs
 
 
+def test_reading_page_links_the_queue_doc_itself(monkeypatch, tmp_path):
+    """The header links READING_QUEUE.md, not just the docs it points at.
+
+    Jeremy 2026-08-03: he reads this page on maro.feifdom.com and had no
+    way from there to the queue file — which is where the Done history
+    lives, and this page renders the Queue section only. An empty queue
+    must still carry the link, since "nothing to read" is exactly when
+    you want the history.
+    """
+    qdoc = tmp_path / "READING_QUEUE.md"
+    qdoc.write_text("## Queue\n\n| Added | Doc | Why |\n|---|---|---|\n")
+    monkeypatch.setattr(lr, "_READING_QUEUE_DOC", qdoc)
+    content = Path(lr.write_reading_page(tmp_path)).read_text()
+    assert ("https://github.com/slycrel/maro-orchestration/blob/main/"
+            "docs/READING_QUEUE.md") in content
+    assert "Queue is empty" in content  # the empty-state path still links it
+
+
 def test_reading_page_accepts_markdown_link_doc_cells(monkeypatch, tmp_path):
     """Concurrent sessions write the Doc cell both as a bare path and as a
     full markdown link (M1 lane, 2026-07-28) — both must render as a real

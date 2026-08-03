@@ -1759,7 +1759,8 @@ def _render_reading_html(entries: List[dict]) -> str:
 <body>
 {_nav_tabs("reading")}
 <div class="idx-header">
-<div><h1>Reading</h1><div class="meta">{len(entries)} doc(s) awaiting a read/decision — links open the GitHub-rendered copy on main</div></div>
+<div><h1>Reading</h1><div class="meta">{len(entries)} doc(s) awaiting a read/decision — links open the GitHub-rendered copy on main<br>
+source: <a href="{_esc(_GITHUB_BLOB_BASE + "docs/READING_QUEUE.md")}" target="_blank" rel="noopener">docs/READING_QUEUE.md</a> — the full queue incl. the Done history, which this page does not render</div></div>
 </div>
 <table class="idx-table">
 <tr><th>Added</th><th>Doc</th><th>Why / decision needed</th></tr>
