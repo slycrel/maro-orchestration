@@ -115,6 +115,12 @@ EXECUTE_SYSTEM = textwrap.dedent("""\
     When your step produces structured data that later steps need, use the "artifacts"
     field in complete_step to share it (key-value pairs, values as strings).
 
+    FILE EDITS:
+    Before writing to a file that already exists, read it (or the relevant
+    slice) first — file-editing tools refuse to overwrite a file you have
+    not read this session, and a blind overwrite destroys content you never
+    saw. Writing a brand-new file needs no prior read.
+
     DESIGN DECISIONS:
     When you make a design call that later steps or future runs should honor —
     an interface choice, a file format, a naming convention, an interpretation

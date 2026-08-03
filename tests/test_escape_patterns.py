@@ -376,6 +376,13 @@ class TestPromptContract:
         assert "SYNCHRONOUS EXECUTION" in EXECUTE_SYSTEM
         assert "background" in EXECUTE_SYSTEM
 
+    def test_execute_system_names_read_before_write_rule(self):
+        # 65 of the 157 unexplained is_error residue events workspace-wide
+        # were Write "File has not been read yet" turns on the subprocess
+        # backend (BACKLOG 2026-08-02 residue-counter finding).
+        assert "FILE EDITS" in EXECUTE_SYSTEM
+        assert "read" in EXECUTE_SYSTEM.split("FILE EDITS", 1)[1][:300].lower()
+
     def test_verify_prompts_name_promise_retry(self):
         from step_exec import _VERIFY_SYSTEM
         from verification_agent import _VERIFY_STEP_SYSTEM

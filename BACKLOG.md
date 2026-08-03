@@ -2493,7 +2493,12 @@ on a nonexistent path, 9 × `Read` on a directory (EISDIR), 5 × curl
 connect failures, **3 × `Read` "content exceeds maximum allowed size"**
 (the standing repl_reading motivation, now with a count), 2 × unknown
 skill. The Write-before-Read class alone is 65 avoidable turns and looks
-like a one-line prompt fix.
+like a one-line prompt fix. **FIXED 2026-08-02:** additive `FILE EDITS`
+section in `EXECUTE_SYSTEM` (read-before-overwrite, new files exempt) —
+deliberately NOT touching the tool-contract paragraph the entry above
+declines to operate on; pinned in
+`test_escape_patterns.py::TestPromptContract`. Residue counter will show
+whether the 65-turn class actually bends on future runs.
 
 **And the measurement lesson that fell out:** of ~160 recognizable blocks
 workspace-wide, **only 4 carried `is_error`**. `curl` exits 0 and prints
