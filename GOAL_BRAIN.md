@@ -5991,6 +5991,29 @@ pre-chunk NOW/evolver rows honestly unjudged going forward from here.
   to different recoveries. First application: `scripts/run_readout.py`'s
   triage classifies only what it can classify with confidence and dumps
   the rest into a visible, countable residue rather than guessing.
+- **2026-08-02** — **False premises: best-guess what was meant, don't
+  eliminate the bad question** (Jeremy; runtime journal `f7cb7c3a`):
+  **"People have false premises all the time (bad upfront prompt) and it
+  causes all sorts of problems. In that framing we don't want to eliminate
+  that possibility, but we do want to make our best guess on what the user
+  meant; that might mean an immediate ask for clarification or making some
+  assumptions… both the behavior and the general 'it's ok to ask a bad
+  question' type arc."** Plus the follow-through: *"If we can unlock better
+  behavior with prompting up front, and lean into the corrections in the
+  reporting angle… a direct answer, and a good educated guess for
+  additional downstream findings/data… getting more than what was asked
+  for 'free'."* SHIPPED into `EXECUTE_SYSTEM` (`f0c51d1`), not the intake
+  pass — the `clarity check` already runs and already carries an unused
+  `question` field, but it measures **clarity, not soundness** and passed
+  two clear-but-FALSE goals the same day. A false premise is also
+  *discoverable*, so by that check's own rules it must never become an ask.
+  Both additions cost nothing when idle: the premise rule emits only when a
+  premise is actually false; bonus findings are final-step-only, capped at
+  2, observed-not-speculated, and omittable. Precedent both directions the
+  same day — `ea4ebe4a` corrected my false premise from evidence and still
+  delivered; `fcc12c02` silently absorbed a redundant correction for a fact
+  it already held. The capability is present; what was missing is the
+  invitation and the timing.
 - **2026-08-02** — **Contested verdicts are ignored for learning, not
   suppressed** (Jeremy, wording his own): asked whether to stop
   failure-flavored learning on runs where the provenance guard and closure
