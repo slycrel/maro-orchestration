@@ -101,3 +101,103 @@ React with entry numbers (`P1–P24`). 24 entries, ~10 minutes.
 ### Signals
 
 **P24** — [Signal] Complete the AI-failure-task-patterns catalog v2, then analyze failure families to extract patterns that could inform Mode 1/2/3 taxonomy refinement and self-improving system robustness. *(from evolver:sig-94a153df)*
+
+---
+
+# Jeremy's reactions (2026-08-02, verbatim)
+
+> playbook surprise things:
+>
+> p2 - this is the same as a 200 char limit on output; we simply don't
+> know what a run might take, even if it's just a few words; inappropriate
+> IMO
+>
+> p3 - I'd rephrase this as "often" rather than "should" — again, judging
+> via guessing rather than allowing it to organically form; this is
+> advice/direction, not requirements right?
+>
+> p4 - agree, though I'd probably say it differently. Again, sounds like a
+> command instead of guidance, in the direction of guessing again.
+>
+> For all of these we get into prompt semantics... I think we want to say
+> "usually, do this" instead of "it has to look like this". Otherwise we
+> run the risk of an LLM doing what we ask, rather than what it might be
+> capable of.
+>
+> p6 - surprised; I'd consider build paths as sidequests that lead back to
+> either a chained sidequest series or a result that allows for a step to
+> be completed.
+>
+> p8 - slight surprise, paths are fragile, we should reference a maro
+> configuration instead of the path directly.
+>
+> p9 - surprised; seems to be working around systemic limitations (this
+> data should already be available to examine in step meta-data?)
+>
+> p10 - slight surprise... are we categorically denying multi-step
+> sidequests with this prompting (run a collection of steps and return the
+> results)?
+>
+> p11 - positive surprise, expect that those categories may change over
+> time, slight concern there
+>
+> p13 - "should" feels strong here, "could" might be better? Seems like
+> the wrong confidence going in blind to me.
+>
+> p14 - slight surprise. I might say a good skill or foundational data
+> would trump the verification as the highest leverage, though if this is
+> only quality scoped maybe that's true
+>
+> p16 - slight surprise; I agree generally, concerned that if we fast
+> track without a fast track out for problematic results, we might be in
+> for some pain later.
+>
+> p17 - yeah, this is cut off and needs completed, my gut says it's not
+> quite right, but fine on it's face
+>
+> p18 - seems like it doesn't belong here
+>
+> p19, p20, p23 - slight surprise, not sure that cost should win over
+> correctness; there will always be tension here, but we shouldn't only
+> consider cost. Probably downstream symptom of degradation work?
+>
+> p21, p22 - also cut off, definitely a half-formed thought, needs
+> corrected
+>
+> p24 - is this post-run work that happens? Seems fine, assuming that's
+> the context.
+
+Unflagged: P1, P5, P7, P12, P15.
+
+## Disposition (applied same day — live playbook + repo seed rewritten)
+
+The pre-rewrite live file had accreted PAST this snapshot: a 4th drift
+alarm (drift-a2af29bb), a 3rd calibration near-dup (calibration-781771a6,
+pass rate down to 0.33), and three more parked Signals — the frozen-alarm
+problem was still compounding while the read sat in the queue. Archived
+verbatim to `playbook_history/playbook-20260803T001831Z-operator-surprise-read-rewrite-2026-08-02.md`
+before the rewrite; untruncated originals for every clipped entry were
+recovered from `memory/suggestions.jsonl`.
+
+| Entry | Action |
+|---|---|
+| P2 | **Removed** (live + seed). Certified inappropriate — step-count caps guess what a run needs. |
+| P3, P4, P13, P14 | **Rephrased to usually-form** (live + seed), per the prompt-semantics decree. P14 carries the caveat "a good skill or foundational data can beat it". |
+| P6 | Rephrased to a prior ("~2x tokens is a fair prior, not a cap"). The build-paths-as-sidequests reframe is recorded here as design direction for the open side-quest thread (INTENT_RESOLUTION_DESIGN), not minted as playbook doctrine. |
+| P8 | Literal `/home/clawd/.maro/workspace/` replaced with `config.workspace_root()` reference. |
+| P9 | **Retired — the systemic answer is yes**: blocked steps now get deterministic diagnosis (`loop_blocked` failure classifier + recovery planner) and terrain memory records blocks across runs (§5b, live-confirmed 2026-08-02). The entry was a 07-10 workaround for machinery that has since shipped. Also truncated. |
+| P10 | **Replaced**: success-criteria guidance kept in usually-form; "Reject vague goals" dropped for clarification-first ("prefer a clarifying question or deriving criteria over rejecting"), matching the standing director-clarification decree. Answer to the question: nothing structural denies multi-step side-quests — the risk was exactly this injected prose biasing decompose, now removed. |
+| P11, P12 | Kept. P11's category-drift concern noted: the tier map cites the 2026-07-21 decree, so it has provenance to re-check against when tiers change. |
+| P16 | Kept + the fast-track-out added: "contest/retire is the exit when one turns out wrong" — the contest verb (rules grey-flip + lesson contest, both live) is that exit. |
+| P17 | **Completed** from the recovered original (8f7419c8-01) in guidance form. The "not quite right" gut: its enforcement half is now systemic (done≠successful split at closure); the upfront-criteria half is still useful at decompose time, which is what the completed entry keeps. |
+| P18 | **Removed** — July run-debugging TODO (two stuck haiku tasks) in permanent every-run context. |
+| P19, P20, P23 (+4th) | **All four drift alarms removed.** They are frozen-in-time cost observations phrased as quality verdicts ("may be degrading quality — consider rolling back") with no expiry — and yes, downstream of degradation work: emitted by the evolver drift checker, never retired. Cost-vs-correctness read distilled into one Cost entry ("cost signals are inputs to weigh, not verdicts"). Mechanism fix (alarms need an expiry/resolution path) → BACKLOG. |
+| P21, P22 (+3rd) | **Collapsed to one completed entry** carrying the full trend (0.50 → 0.43 → 0.33) from the recovered originals. The finding is real and worth keeping; three clipped near-dups were not. |
+| P24 (+3 more Signals) | **All four Signals retired from the playbook.** Answer to the question: no — these are NOT post-run work that happens. They're `sub_mission` suggestions parked "for human review" (`evolver.auto_enqueue_signals` defaults false) in permanent injection context, where nobody reviews them. sig-94a153df's ask (failure-pattern catalog) was completed separately; sig-9c78fc89's ask (`complete_step` audit) was done by the 2026-08-02 residue counter. The two never-reviewed remainder (sig-4b23f9d6 self-diagnosis audit, sig-1266881a fact-check-pipeline packaging) are preserved in the archive + `suggestions.jsonl`; a real review surface for held signals → BACKLOG. |
+
+**Root-cause fixes shipped with the rewrite:** the truncation was a bare
+`suggestion_text[:200]` slice at both evolver append sites — removed
+(`append_to_playbook`'s 500-char cap with an honest ellipsis is the only
+truncation now). The prompt-semantics decree is stamped into the playbook
+header and `_SEED_CONTENT` so future readers and fresh installs inherit
+the form.

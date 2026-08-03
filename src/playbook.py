@@ -61,6 +61,13 @@ def _playbook_path() -> Path:
 # Core operations
 # ---------------------------------------------------------------------------
 
+# Operator surprise read 2026-08-02 (P1–P24 reactions, recorded in
+# docs/history/2026-08-02-playbook-surprise-read.md): entries are priors
+# the run weighs, not requirements it obeys — "usually, do this", never
+# "it has to look like this" (otherwise the LLM does what we ask instead
+# of what it's capable of). The ≤15-words→1-4-steps cap was certified
+# inappropriate and removed outright ("we simply don't know what a run
+# might take, even if it's just a few words").
 _SEED_CONTENT = """\
 # Director's Playbook
 
@@ -68,32 +75,36 @@ Operational wisdom accumulated by the orchestration system. This document
 is maintained automatically (evolver, standing rules) and can be edited
 manually by the operator. It's injected into director and decompose context.
 
+Entry form (operator decree, 2026-08-02): guidance reads "usually, do
+this", not "it has to look like this" — entries are priors the run weighs,
+not requirements it obeys.
+
 ---
 
 ## Decomposition
 
 - Research goals benefit from a gather → synthesize → verify structure.
-- Narrow goals (≤15 words) should get 1-4 steps, not more.
-- Wide/deep goals should use staged-pass decomposition.
-- More atomic steps > fewer broad steps. One file or one command per step.
+- Wide/deep goals often work well with staged-pass decomposition.
+- Atomic steps usually beat broad ones — often one file or one command per step.
 
 ## Execution
 
 - If a step fails 3 times, the problem is usually the decomposition, not the execution.
-- Token budgets for build tasks should be ~2x research tasks.
+- Build tasks usually need more room than research tasks (~2x tokens is a fair prior, not a cap).
 - Always verify outputs before recording as done.
 
 ## Cost
 
 - Execution floor is MID (2026-07-21 unification); POWER at orchestrator/planner/reviewer decision points; CHEAP only for non-agentic calls (classify, triage, curation).
 - Enable extended thinking for decompose (high) and advisory calls (mid).
-- Narrow goals should skip multi-plan (saves 3 LLM calls).
+- Narrow goals can often skip multi-plan (saves 3 LLM calls).
+- Cost signals are inputs to weigh, not verdicts — when cost and correctness pull apart, correctness usually wins.
 
 ## Quality
 
-- The verification loop is the highest-leverage investment.
+- The verification loop is usually the highest-leverage quality investment — though a good skill or foundational data can beat it.
 - Inspector friction signals should be acted on, not just logged.
-- Standing rules are zero-cost — promote aggressively when validated.
+- Standing rules are zero-cost — promote when validated, and contest/retire is the exit when one turns out wrong.
 
 ---
 

@@ -2358,6 +2358,39 @@ as-we-go via the census-tested Remaining-pieces ledger
 direction. Census follow-ups all closed — nothing from the census
 awaits Jeremy anymore except the ACTIVE work itself.
 
+### Playbook needs exit paths — alarm expiry, signal review surface, suggestion mint-form (FOUND 2026-08-02, operator surprise read)
+
+The playbook surprise read (docs/history/2026-08-02-playbook-surprise-read.md)
+found that **nothing had ever exited** the playbook — and it's injected
+into every director/decompose call. Three mechanism gaps behind the mess
+the rewrite cleaned up by hand:
+
+1. **Drift/calibration alarms have no expiry or resolution path.** Four
+   frozen cost alarms from different eras all told every run to
+   "consider rolling back" changes that may long since have rolled back;
+   calibration warnings accreted as near-dups instead of updating in
+   place. An alarm needs a resolved/superseded verb — expiry on
+   re-baseline, or replacement when a newer reading of the same check
+   lands (the rewrite collapsed three calibration dups into one
+   trend-carrying entry by hand; the evolver should do that).
+2. **Held-for-review signals have no review surface.** With
+   `evolver.auto_enqueue_signals` false (default), sub_mission
+   suggestions park in the playbook "for human review" — permanent
+   injection context where nobody reviews them. Two never-reviewed
+   signals were retired in the rewrite (sig-4b23f9d6 self-diagnosis
+   audit, sig-1266881a fact-check-pipeline packaging — preserved in
+   `playbook_history/` + `suggestions.jsonl`). Held signals belong on a
+   review surface (READING_QUEUE row? operator status block?), not in
+   every-run context.
+3. **Upgrade edge: what-not-how form pass for evolver suggestion
+   prompts.** The suggestion generator still mints command-form
+   ("Reduce LLM confidence prompts…", "require all agenda goals…") —
+   the same defect the 2026-07-31 mint-form decree fixed for lessons.
+   Same fix shape: form rules in the suggestion prompt, so playbook
+   appends arrive as priors ("usually"), not requirements. Until then
+   the seed carries the decree note but evolver appends can regress the
+   form.
+
 ### R6-E. lesson_text embeds truncated goal previews (anchoring risk) — watch-item
 
 The one open residual of the R6 VERIFY_LEARN_ARC V4/R5 V4/V5 review

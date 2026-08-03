@@ -6031,3 +6031,34 @@ pre-chunk NOW/evolver rows honestly unjudged going forward from here.
   Honest residual: LLM output can still phrase a soft "should" when it
   cites its evidencing cost in the same sentence — that is observation-
   grounded advice, not the certified defect; not chased.
+- **2026-08-02** — **Guidance-form decree (Jeremy, decree-class, playbook
+  surprise read):** "I think we want to say 'usually, do this' instead of
+  'it has to look like this'. Otherwise we run the risk of an LLM doing
+  what we ask, rather than what it might be capable of." Injected
+  guidance (playbook, and by extension any every-run prose) is a **prior
+  the run weighs, not a requirement it obeys** — command-form guidance
+  caps capability at the guesser's imagination. Companion certified call:
+  step-count caps for narrow goals are "the same as a 200 char limit on
+  output; we simply don't know what a run might take" — inappropriate,
+  removed not rephrased. Applied same day across live playbook + repo
+  seed (see next entry). Sibling of the what-not-how mint decree
+  (2026-07-31): that one governs what MEMORY mints, this one governs how
+  INJECTED GUIDANCE speaks.
+- **2026-08-02** — **Playbook surprise read APPLIED** (second
+  self-maintained corpus operator-read; reactions + full disposition in
+  `docs/history/2026-08-02-playbook-surprise-read.md`). Rewrite of live
+  playbook + `_SEED_CONTENT` per certified reads: P2 step-cap removed;
+  P3/P4/P13/P14 → usually-form; P8 hardcoded path → `config.
+  workspace_root()`; P9 retired (blocked-step investigation is systemic
+  now — his "should already be in step meta-data?" hunch was right);
+  P10 "Reject vague goals" → clarification-first (his multi-step-
+  sidequest concern — nothing structural denied them, the injected prose
+  was the risk); P17/P21+P22 completed from recovered untruncated
+  originals; P18 July TODO + all 4 frozen drift alarms + all 4 parked
+  Signals removed (P24 answer: signals were NOT post-run work that
+  happens — `auto_enqueue_signals` defaults false and nobody reviews the
+  hold queue). Root cause of the truncations fixed: bare
+  `suggestion_text[:200]` at both evolver append sites removed;
+  `append_to_playbook`'s 500-char honest-ellipsis cap is the only clip.
+  Pre-rewrite state archived to `playbook_history/`. Mechanism gaps
+  (alarm expiry, signal review surface) → BACKLOG.

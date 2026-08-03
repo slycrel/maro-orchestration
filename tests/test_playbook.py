@@ -36,6 +36,19 @@ class TestPlaybookSeed:
         assert "Director's Playbook" in content
         assert "## Decomposition" in content
 
+    def test_seed_guidance_is_priors_not_requirements(self, tmp_path):
+        """Operator surprise-read pins (2026-08-02): the seed carries the
+        usually-form decree, and the certified-inappropriate step-count cap
+        ("1-4 steps" for narrow goals) and unconditional "promote
+        aggressively" stay out."""
+        seed_playbook()
+        content = (tmp_path / "playbook.md").read_text()
+        assert "usually, do" in content          # decree note in the header
+        assert "priors the run weighs" in content
+        assert "1-4 steps" not in content        # P2: removed, not rephrased
+        assert "promote aggressively" not in content  # P16: exit path instead
+        assert "contest/retire is the exit" in content
+
     def test_seed_is_idempotent(self, tmp_path):
         seed_playbook()
         path = tmp_path / "playbook.md"

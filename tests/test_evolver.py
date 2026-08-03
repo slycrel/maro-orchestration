@@ -1909,6 +1909,60 @@ class TestSubMissionAutoEnqueue:
         assert len(enqueued) == 0, "default should NOT auto-enqueue sub_missions"
 
 
+class TestPlaybookAppendUntruncated:
+    """Operator surprise-read pins (2026-08-02, P9/P10/P17): the evolver's
+    playbook appends carried a bare [:200] slice that clipped entries
+    mid-sentence into permanent every-run context. append_to_playbook's own
+    500-char cap (honest ellipsis) is the only truncation allowed."""
+
+    LONG = (
+        "Before execution, require agenda goals to include explicit success "
+        "criteria stated as observable conditions, and when a goal arrives "
+        "without them prefer asking a clarifying question or deriving the "
+        "criteria from context over rejecting the goal outright, because "
+        "exploratory and multi-step side-quest goals are legitimate work."
+    )  # ~330 chars — over the old 200-slice, under append's 500 cap
+
+    def _capture_appends(self, monkeypatch):
+        entries = []
+        import playbook as _pb
+        monkeypatch.setattr(
+            _pb, "append_to_playbook",
+            lambda text, section="", source="": entries.append(text),
+        )
+        return entries
+
+    def test_signal_lands_whole(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        import config as _cfg
+        monkeypatch.setattr(_cfg, "get", lambda k, d=None: False if k == "evolver.auto_enqueue_signals" else d)
+        entries = self._capture_appends(monkeypatch)
+
+        from evolver import _apply_suggestion_action
+        _apply_suggestion_action({
+            "suggestion_id": "sig-long01", "category": "sub_mission",
+            "target": "opportunity", "suggestion": self.LONG,
+            "confidence": 0.85, "applied": False,
+        })
+
+        assert entries and self.LONG in entries[0]
+
+    def test_applied_insight_lands_whole(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        entries = self._capture_appends(monkeypatch)
+
+        from evolver import _apply_suggestion_action
+        _apply_suggestion_action({
+            "suggestion_id": "obs-long01", "category": "observation",
+            "target": "all", "suggestion": self.LONG,
+            "confidence": 0.9, "applied": False,
+        })
+
+        assert entries and self.LONG in entries[0]
+
+
 # ---------------------------------------------------------------------------
 # scan_calibration_log
 # ---------------------------------------------------------------------------

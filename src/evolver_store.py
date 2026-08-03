@@ -420,8 +420,12 @@ def _apply_suggestion_action(d: dict) -> bool:
             else:
                 # Not auto-enqueuing — record to playbook so the human can review
                 from playbook import append_to_playbook
+                # No [:200] slice: it clipped entries mid-sentence into
+                # permanent every-run context (operator surprise read
+                # 2026-08-02, P9/P10/P17). append_to_playbook's 500-char
+                # cap with an honest ellipsis is the only truncation.
                 append_to_playbook(
-                    f"[Signal] {suggestion_text[:200]}",
+                    f"[Signal] {suggestion_text}",
                     section="Signals",
                     source=f"evolver:{suggestion_id}",
                 )
@@ -453,8 +457,9 @@ def _apply_suggestion_action(d: dict) -> bool:
                     "new_guardrail": "Quality",
                     "observation": "Learned",
                 }
+                # Same no-slice rule as the Signals path above.
                 append_to_playbook(
-                    suggestion_text[:200],
+                    suggestion_text,
                     section=_section_map.get(category, "Learned"),
                     source=f"evolver:{suggestion_id}",
                 )
