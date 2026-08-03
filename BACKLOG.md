@@ -4700,6 +4700,17 @@ deferred rather than silently dropped:
     inspector report aggregates still average the 0.7 unjudged display
     value alongside real LLM scores; split or annotate when the report
     is next touched.
+  - **A third gate joined the family after this census closed
+    (2026-08-03).** The node-promotion validator
+    (knowledge_web.py:1952/1956) shipped 2026-08-02 with battery V3
+    explicitly adopting *"the same degradation contract as skill
+    promotion"* — correct hygiene individually (`judged=False` stamped),
+    but it makes **three gates on the learning path that decline to
+    decide in the same direction**. The judged-denominator readout above
+    is now the load-bearing one of these edges, not a nice-to-have: all
+    three carry the `judged` bit and nothing counts how often promotion
+    credit accrues through an unjudged pass. Raised by the Opus-5
+    2026-08-03 contrast; full context in the LeAct item below.
 - **Recon-flavor upgrade edges (chunk-9 #2 runtime slice shipped
   2026-08-01, docs/history/2026-08-01-recon-flavor-runtime.md).** The
   `[recon: <decision>]` tag + map-edit execution contract + map-change
@@ -4899,13 +4910,148 @@ open — verification ≠ repair; each needs a wire-or-retire decision):**
     extraction IS verdict-aware (extract_deferred_lessons, data-r2-01) — we're
     at the outcome-filtered baseline the paper calls insufficient, not naive;
     build/calls record-mode capture is dead on single-backend boxes, so replay
-    fixtures need another source; oracle anchoring exists but only negative
+    fixtures need another source (**this correction is itself now STALE — see
+    the 2026-08-03 prerequisite census below; capture went live 2026-07-29**);
+    oracle anchoring exists but only negative
     (chunk-4 contradiction path) or population-level (navigator A/B 58% vs
     41%) — per-lesson positive Δ is the genuinely missing piece.
-  - **Revisit trigger**: don't build while the verdict denominator starves
+  - ~~**Revisit trigger**: don't build while the verdict denominator starves
     (4 known-arrival verdict events as of 2026-07-31). Revisit when
     `verdict_flow` shows real week-over-week verdict arrivals (Chunk B closed
-    the plumbing; flow measurable from 2026-07-31 forward).
+    the plumbing; flow measurable from 2026-07-31 forward).~~ — **TRIGGER
+    FIRED 2026-08-03**, see census below.
+
+  **Amended 2026-08-03 (Opus-5 second blind contrast, `opus-feedback.txt`
+  Aug-3 section — Jeremy re-ran the same reviewer against the tree after
+  ~214 commits / +9.1k lines in `src/`. Every code claim on both sides
+  re-verified against the tree at 25c286b before folding.)**
+
+  Its one-line summary is worth keeping verbatim: *"you closed the
+  upstream half of the LeAct gap and left the downstream half alone"* —
+  trusting the right state–action pairs (the oracle) is built; keeping
+  the right explanations (Δ) is not. It also names why that order was
+  correct rather than lucky: a Δ measured over a corpus polluted by runs
+  that fabricated their own memory writes would have returned noise we'd
+  have believed, and LT-1 #6 says that pollution was real and invisible.
+
+  - **REVISIT TRIGGER FIRED — the denominator no longer starves.**
+    Measured 2026-08-03 via `python3 src/verdict_flow.py` (run from
+    `src/`; the `__main__` path has a bare `from memory_ledger import`
+    that breaks `python3 -m src.verdict_flow` — small separate fix):
+    **67 judged rows** all-time (was 4 known-arrival at 2026-07-31),
+    with arrivals two weeks running — **W31: 18 verdict events, W32: 9**
+    (agenda 14/8, evolver_verify 1/1, now 3/0). Sources: closure 56,
+    provenance 6, deterministic_tests 2, now_self_verdict_free 2,
+    closure_reverdict 1. Stamped-later median record→verdict **1.4m**.
+    The stated condition for building was "real week-over-week verdict
+    arrivals"; that is now satisfied on the instrument we said would
+    decide it.
+  - **PREREQUISITE CENSUS — all four are in place; one was listed as
+    blocking and isn't.** The contrast named what a Δ gate needs; each
+    checked against the tree:
+    1. *Oracle on the learning path* — LIVE.
+       `provenance.memory_provenance_unverified()` (provenance.py:732)
+       + `memory_claims_unverifiable()` (:785) kept structurally
+       separate so an unverifiable claim can't launder into an
+       accusation; learning deferred behind `learning_allowed` at three
+       sites (handle.py:2596/2729/3058).
+    2. *Held-out set + pre-registered predictions* — LIVE. The LT-1
+       batch (CLOSED 2026-08-02, 8 arms, corpus/rubric/prediction
+       registered before dispatch, `#6 = FAIL as predicted`). The
+       contrast's read: this is the scaffolding a Δ gate needs and the
+       reason it wasn't runnable before — *you can't score marginal
+       contribution without a held-out set and a prediction registered
+       in advance.*
+    3. *Per-call replay corpus* — **LIVE, and this retires the
+       2026-07-31 correction above.** Record-mode capture stopped being
+       dark on single-backend boxes when `build_adapter(auto)` started
+       always wrapping in `FailoverAdapter` (SHIPPED 2026-07-29, wiring
+       row above). Verified 2026-08-03: **116 run dirs carry
+       `build/calls/`**, populated 20–45 calls each on recent runs, and
+       — the part that matters — *on the LT-1 arms themselves*
+       (`01e55212` 20, `2738d9c0` 45, `d9607baa` 30). Each record is
+       `{seq, backend, model, prompt, response, tool_events, tokens_in,
+       tokens_out, purpose, error, ts}` — replayable as-is. So the
+       fixture source and the pre-registered held-out set are **the same
+       runs**. Neither contrast noticed this; it is the single largest
+       reduction in remaining work.
+    4. *With/without harness* — LIVE, `src/lens_ablation.py`
+       (costume-arm vs evidence-arm), plus `src/compact_ab.py` already
+       doing action-match-style with/without for one skill.
+  - **NEW GAP the backlog never carried (both contrasts flagged it; it
+    never became a row).** The S2 seed-reader still prepends a
+    high-quality lesson as a **style exemplar**: memory.py:267 emits
+    *"High-quality lesson example (emulate this style and
+    specificity)"*. LeAct Fig 3b found the **no-verbatim stratum had
+    higher mean positive Δ** — style-copying the teacher produced worse
+    traces; their backward prompt deliberately gives only a redacted
+    qualitative summary of the expert policy to stop the generator
+    copying. Called *"the cheapest experiment on the list"* in both
+    reads. Note the seed-reader **has** been touched since (it now
+    excludes `minted_from == "prompt"` and contested seeds, chunk-1
+    surprise-read fallout) — so the code moved and the *style-emulation
+    instruction survived untested*, which is exactly how a caveat gets
+    lost. Minimum experiment: A/B the exemplar block against a redacted
+    qualitative variant ("lessons at this altitude record *what*, not
+    *how*") over minted-lesson quality; the harness in (4) already runs
+    this shape. **Do this before the Δ gate** — it's hours, not an arc,
+    and if style-copying is depressing mint quality then the Δ gate
+    would be measuring a corpus we already know is contaminated.
+  - **Fail-open now triples in the same direction** — cross-ref the
+    "Fail-open judge-error edges" item above, which tracks these
+    individually but not as a population. Three gates on the learning
+    path now decline to decide the same way: `skills.py` promote
+    validation, `artifact_check.py:391/482`, and — landed 2026-08-02
+    with battery V3, *after* the fail-open census — the node-promotion
+    gate (knowledge_web.py:1952/1956, explicitly adopting *"the same
+    degradation contract as skill promotion"*). Each is individually
+    defensible and all three stamp `judged=False`, which is the right
+    hygiene; the systemic point is that a run can now accrue promotion
+    credit through three unjudged passes and nothing counts how often
+    that happens. The `judged` bit exists at all three — a
+    judged-vs-unjudged denominator readout is the cheap next move, not
+    flipping any gate to fail-closed.
+  - **Edges the contrast missed — don't re-litigate these, they're
+    settled or already answered:**
+    - *The surprise-count diagnostic it proposed was already run, and
+      refuted its own hypothesis.* Chunk-1 read landed 2026-08-01
+      (`docs/history/2026-07-31-lesson-corpus-surprise-read.md`):
+      mirroring collapse **REFUTED** — 11/19 flagged, of which M4 + M12
+      are positive surprise (the Δ-gate seed set), six are
+      operator-certified contradictions, two route to existing threads.
+      Both surprise reads CLOSED 2026-08-02. The Aug-3 pass doesn't
+      mention it; "collapse confirmed" is not an open question.
+    - *Jeremy already decreed the tenure fix direction* (2026-07-31,
+      decree 55c877da): calendar decay was "mostly placeholder";
+      leverage successful **one-offs** rather than requiring 3×
+      independent re-derivation; repeat patterns are better-than-luck
+      signals to EXAMINE, not a tenure gate. The Aug-3 read re-states
+      the tenure critique as open. The *diagnosis* is closed; only the
+      *wire* is open.
+    - *Canon-lesson promotion still has no promote path* — and the
+      contrast praised its twin without noticing. `get_canon_candidates`
+      (knowledge_web.py:1663) surfaces on `CANON_APPLY_THRESHOLD = 10`
+      and **nothing promotes them**; the node-side twin
+      (`promote_knowledge_candidates`) shipped 2026-08-02 as battery V3
+      and drew the Aug-3 praise. Same defect shape, one lane over,
+      still open. Now newly reachable, too: the receipt write-back
+      thread (2026-07-29) made `times_applied` actually accrue on
+      lessons for the first time, so candidates will start arriving at
+      a threshold with no door behind it.
+  - **Net remaining work is one wire, not an arc.** Quoting the
+    contrast, which matches the census: *"What's still missing is a
+    single wire: a retention path to long-tier that runs on measured
+    effect instead of on being said three times."* Concretely — a
+    second, effect-based route to LONG that sits beside
+    `score >= PROMOTE_MIN_SCORE and sessions_validated >=
+    PROMOTE_MIN_SESSIONS` (knowledge_web.py:561, verified unchanged
+    2026-08-03), scoring action-match over M replays of a captured
+    LT-1 step with and without the candidate lesson injected. Sequence:
+    seed-reader A/B first (contamination check, cheap) → stratify
+    rule-vs-reason → Δ route to tenure → competence-redundancy decay.
+    **Still needs a Jeremy go** — this is a knowledge-layer arc opening
+    while SP and world-facts are in flight, and priority between them
+    is his call, not the readiness check's.
 
 ### Standing test-goal menu (future ideas)
 
