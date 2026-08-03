@@ -4803,6 +4803,29 @@ BACKLOG; era refs in `docs/KNOWLEDGE_JOURNEY.md` + era files):**
 **Battery side-finds V3/V4: both SHIPPED — moved to BACKLOG_DONE.md
 2026-08-02 (V3 promote path shipped that day; V4 shipped 2026-07-29).**
 
+- [ ] **V3's lesson-side twin is still a doorless threshold — and it just
+  started receiving traffic (surfaced 2026-08-03, LeAct contrast audit).**
+  V3 gave knowledge NODES an earned promote path
+  (`promote_knowledge_candidates`, knowledge_web.py). The **canon-LESSON**
+  path never got one: `get_canon_candidates` (knowledge_web.py:1663)
+  surfaces rows at `CANON_APPLY_THRESHOLD = 10` and **nothing promotes
+  them** — no `promote_canon_*` exists. Verified against the tree
+  2026-08-03; the only `CANON_APPLY_THRESHOLD` consumers are the surfacer
+  and a memory.py re-export. Two reasons this stops being cosmetic now:
+  (1) the receipt write-back thread (SHIPPED 2026-07-29) made
+  `times_applied` actually accrue on lessons for the first time — before
+  that every row sat at 0 and the threshold was unreachable, so the
+  missing door cost nothing; candidates will now genuinely arrive.
+  (2) The 2026-08-03 Opus contrast praised the node promote path without
+  noticing the lesson twin, which is how this stayed invisible through two
+  reviews. Decide door-or-no-door deliberately: either mirror V3's shape
+  (numeric gates + validation, same degradation contract) or retire the
+  surfacer so nothing implies a promotion that can't happen — the
+  consumer-first read is that a threshold with no door is worse than no
+  threshold. Related: the Δ-gate work below would give this path a
+  *better* gate than V3's if it lands first, so check sequencing before
+  building the mirror.
+
 **Era-file C-tier drops (grounding-checker review §C — out-of-arc,
 batched here so the drop is deliberate; full context in each era file's
 "lost good ideas" section):** Loop-Sheriff one-pager; degrade-don't-idle;
@@ -4935,9 +4958,7 @@ open — verification ≠ repair; each needs a wire-or-retire decision):**
   have believed, and LT-1 #6 says that pollution was real and invisible.
 
   - **REVISIT TRIGGER FIRED — the denominator no longer starves.**
-    Measured 2026-08-03 via `python3 src/verdict_flow.py` (run from
-    `src/`; the `__main__` path has a bare `from memory_ledger import`
-    that breaks `python3 -m src.verdict_flow` — small separate fix):
+    Measured 2026-08-03 via `PYTHONPATH=src python3 -m verdict_flow`:
     **67 judged rows** all-time (was 4 known-arrival at 2026-07-31),
     with arrivals two weeks running — **W31: 18 verdict events, W32: 9**
     (agenda 14/8, evolver_verify 1/1, now 3/0). Sources: closure 56,

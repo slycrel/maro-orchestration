@@ -235,11 +235,20 @@ Marked ✅ where the capability shipped, ⬜ where it is still a target.
 | Work claimed without evidence — the Mar 19→Apr 4 trust rupture ("I'd hate to set you up to lie to me") | Positive-evidence principle: claim probing, deterministic provenance, closure evidence attachment | ✅ live (claim_probe, closure verdicts) |
 | "Done" that was never used — dashboard "more of a prop in a play" (Mar 29) | done≠successful split; usage-verified delivery (run-visibility arc) | ✅ (verdict stamping; delivery-loop decree) |
 | Session loss wiped in-flight work + memory, four times in five days (Feb 5-9) | Durable run state + land-per-chunk discipline + memory ledger | ✅ |
+| **The backlog holds conditions nobody re-evaluates** (found 2026-08-03, twice in one audit). The LeAct item carried a falsifiable revisit trigger — *"revisit when `verdict_flow` shows real week-over-week arrivals"* — which had **fired days earlier** and nothing checked it. Same item listed *"replay fixtures need another source"* as blocking; that was made false on 2026-07-29 by a fix landed under a **different** backlog item (the record-mode wiring row), and nothing connected the two. Both were found only because Jeremy had an external reviewer re-read the repo. | **Standing-condition evaluation.** Two halves, both missing: (a) *revisit triggers* — when we defer work behind a named, measurable condition, something should evaluate it on a cadence rather than waiting for a human to wonder; the conditions are already written falsifiably, which is the hard part. (b) *cross-item blocker invalidation* — when item X ships, nothing asks which other items named it as a blocker. Cheapest honest v1 is a readout, not automation: list every open item carrying a stated condition + where that condition is measured, and print which ones are now satisfiable. | ⬜ |
 
 Why it's here: era 12 named this fold-in as one of its two loss
 candidates ("if a future reader finds these unshipped, this is the
 circling ledger's next row"). The ⬜ rows are capability targets in the
 catalog's sense — real asks, phrased from our own record.
+
+The 2026-08-03 row is the newest and generalizes the others: the
+failure is not that we lack the signal, it's that a **write-once
+condition never gets re-read**. The same shape recurs across the
+corpus — decrees captured but not surfaced, agendas persisted but not
+re-checked. Worth watching for a third instance before building
+anything (that's the tripwire discipline from the truncation decree,
+applied to itself).
 
 ---
 

@@ -15,6 +15,17 @@ verdict pipe moving this week".
 Read-only: consumes memory/outcomes.jsonl only. No LLM calls, no writes,
 no config flags — a CLI that spends nothing needs no killswitch.
 
+Usage (house convention — flat modules on PYTHONPATH, not a package):
+
+    PYTHONPATH=src python3 -m verdict_flow [--weeks N] [--ledger PATH]
+
+`python3 -m src.verdict_flow` does NOT work: main()'s private
+`from memory_ledger import _outcomes_path` resolves flat, and importing
+this as `src.verdict_flow` puts the repo root on sys.path instead of
+`src/`. That's the convention, not a defect — noted here because the
+failure surfaces at the bottom of main() as a bare ModuleNotFoundError
+after the module already imported cleanly, which reads like a bug.
+
 Honesty rules (same as discretion_readout): torn lines, unparsable
 timestamps, and dry-run exclusions are counted and printed, never
 silently dropped; delays that CANNOT be computed (historical closure
