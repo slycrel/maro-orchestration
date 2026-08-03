@@ -2177,6 +2177,52 @@ capture**, which is what makes the rung amortize instead of evaporate.
   gate's 600 dated to the gate's first commit, four months and one model
   tier ago.
 
+  ### What if we removed the limits entirely? (measured 2026-08-03, Jeremy asked)
+
+  1,760 step results across 268 runs. **Three different questions get
+  conflated under "truncation"; only one of them has a real answer of
+  "keep a bound".**
+
+  | | median | p99 | max |
+  |---|---|---|---|
+  | one step result | 1,168 ch (292 tok) | 4,671 (1,168) | **20,534 (5,134)** |
+  | one call payload, last 6 steps | 6,134 (1,534) | 20,400 (5,100) | 25,335 (6,334) |
+  | whole-run accumulation | 7,464 (1,866) | 28,547 (7,137) | 74,288 (18,572) |
+
+  - **Context windows are a non-issue.** The worst call payload ever
+    recorded is **3.2% of a 200k window**; the worst whole-run
+    accumulation is **9.3%**. Zero of 268 payloads would come close.
+  - **Cost is small.** Untruncated per-call payloads run ~1,534 tokens
+    median vs ~450 today — roughly **$0.005/call** at mid pricing, p99
+    ~$0.015.
+  - **The threat is already bounded upstream.** `step_exec` calls the
+    executor with **`max_tokens=4096`** (~16k chars), and the observed max
+    step result is 20,534 chars — consistent with that cap, imperfectly
+    enforced (`llm.py:722` warns when a backend ignores it). So the
+    downstream cuts are a *second, tighter, unmeasured* bound stacked on a
+    real one. That is the crux: they were protecting against a runaway the
+    executor already prevents.
+  - **The one place a bound genuinely earns its keep: ACCUMULATING
+    contexts** (`completed_context += …` per step in `factory_thin.py`,
+    `director.py`). Those are quadratic in step count — re-sent volume is
+    **7,457 tokens median but 65,890 at p99 and 313,271 at max**, on runs
+    up to 34 steps. Note the subprocess backend bills re-sent context as
+    **cache reads at 0.1×**, so the dollar impact is ~10× softer than the
+    token volume suggests — but the volume is real and this is where a cap
+    is doing work rather than cargo cult.
+  - **What I could NOT measure: whether more context makes the output
+    better.** Nothing in the run corpus isolates that, and the effect is
+    not monotonic in general. So "remove the bound" is defensible on cost,
+    window and upstream-safety grounds; the quality claim would need an
+    A/B, and I am not asserting it.
+
+  **Conclusion:** for single-value evidence cuts, the case for keeping
+  tight bounds is essentially empty — widen to a generous ceiling and mark
+  the remainder. For accumulating contexts, keep a bound but set it from
+  the distribution (a whole-run p99 of ~7k tokens says the cap belongs
+  near there, not at 200 chars/step). STORE cuts stay a genuine trade
+  because disk is forever.
+
 - [ ] **Do the evidence lenses want a wide-view seat?** (opened
   2026-08-03 alongside `065a010`.) `_lens_evidence_probe` documented
   itself as showing "the same summary the gate itself reviews"; that
