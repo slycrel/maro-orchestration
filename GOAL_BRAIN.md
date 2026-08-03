@@ -6241,3 +6241,39 @@ pre-chunk NOW/evolver rows honestly unjudged going forward from here.
   (`065a010`), closure work summary 300→4000 (`0f8409f`), NOW
   self-verdict marked, plus the two epistemic guards (`f7b775c`,
   `f4ef704`). Remaining worklist in BACKLOG "Arbitrary-truncation audit".
+
+- **2026-08-03** — **LeAct Δ-gate: the revisit trigger has FIRED**
+  (measurement, not decree — Jeremy's ask was "make sure our maro
+  backlog and work is on track" against a second Opus-5 blind contrast
+  of the repo, `~/claude/opus-feedback.txt` Aug-3 section). The
+  2026-07-31 entry above says *"build stays gated on the verdict-flow
+  revisit trigger"*; **that gate is now open and this supersedes it.**
+  `src/verdict_flow.py` reads **67 judged rows** (was 4 known-arrival at
+  2026-07-31) with arrivals two weeks running — W31 18, W32 9; sources
+  closure 56 / provenance 6 / deterministic_tests 2 / now_self_verdict 2.
+  Prerequisite census found **all four Δ-gate ingredients live**, one of
+  which the backlog still listed as blocking: record-mode capture went
+  live 2026-07-29 (`build_adapter(auto)` always wraps in
+  `FailoverAdapter`), so **116 run dirs carry replayable per-call records
+  — including the LT-1 arms themselves** (`01e55212` 20 calls,
+  `2738d9c0` 45, `d9607baa` 30). The pre-registered held-out set and the
+  replay-fixture source are the same runs; the "replay fixtures need
+  another source" correction is retired. Contrast's framing, kept: *the
+  upstream half of the LeAct gap is closed (oracle-anchored learning),
+  the downstream half (Δ) is not* — and that order was right, since Δ
+  measured over a corpus polluted by runs that fabricated their own
+  memory writes would have returned believable noise (LT-1 #6 says the
+  pollution was real and invisible). Remaining work is **one wire**: a
+  second, effect-based route to LONG beside `score >= 0.9 and
+  sessions_validated >= 3` (knowledge_web.py:561, verified unchanged).
+  **New row the backlog never carried across two contrasts:** the
+  seed-reader still says *"emulate this style and specificity"*
+  (memory.py:267) while LeAct Fig 3b found the no-verbatim stratum
+  scored higher — sequenced BEFORE the Δ gate, since style-copying would
+  contaminate the corpus Δ is measuring. Also newly noted: fail-open now
+  **triples in the same direction** on the learning path (skills,
+  artifact_check, and the 2026-08-02 node-promotion gate) — the cheap
+  move is the judged-vs-unjudged denominator readout, not flipping any
+  gate closed. Full amendment in BACKLOG LeAct entry (`015c4a3`).
+  **Open for Jeremy: priority against SP / world-facts, and a go on the
+  seed-reader A/B.**
