@@ -59,6 +59,60 @@ individual rules below exist to keep it honest.
 8. **Fix + record** — accepted findings fixed and landed; the review
    record (verdict, accepted/rejected, why) goes to `docs/history/`.
 
+## Reviewer roster — which model sits in which seat
+
+Cross-model (step 6) decides the *family*; this table decides the
+*tier*. They answer different questions and both apply: an
+adversarial-review reviewer must be on the opposite family (a
+same-model subagent is not a reviewer), and any same-family delegate —
+the read-only review agents, a fan-out verifier — still needs a tier
+chosen deliberately.
+
+The design rule (2026-07-27, work box): **model choice is a property of
+the role, not the moment.** Encoding `model:`/`effort:` in agent
+frontmatter decides the tier once, deliberately, instead of
+re-reasoning it under time pressure per invocation. `effort` is the
+second knob and often the better lever — raising effort on a cheaper
+model frequently beats jumping a tier.
+
+| Seat | Model | Effort | What it's for |
+|---|---|---|---|
+| `review-skeptic` | opus | xhigh | Correctness — what inputs break this |
+| `review-architect` | opus | xhigh | Structure — coupling, boundaries, what gets harder next |
+| `review-minimalist` | sonnet | high | Necessity — what can be deleted |
+| `build-verifier` | haiku | low | Builds/tests → pass/fail + failing lines only |
+| `deep-debugger` | fable | max | Root causes that survived the obvious |
+
+Tier fit, from the `claude-api` skill: fable (10/50 per 1M in→out) —
+hardest, longest-horizon only; opus (5/25) — review, verification,
+architecture; sonnet (3/15) — default workhorse; haiku (1/5) —
+mechanical fan-out.
+
+Three calls worth keeping when this gets copied:
+
+- **The three lenses replace a generic "code reviewer."** Distinct
+  parallel perspectives strictly dominate one general pass — same
+  reason step 6 scales 1→3 lenses by diff size.
+- **`review-minimalist` runs sonnet, not opus** — `/simplify` applies
+  cleanups, so this seat only has to *find* excess.
+- **`deep-debugger` is gated hard in its own description.** Fable is 2×
+  opus; reaching for it should feel expensive.
+
+Adjacent measured finding (`docs/history/2026-07-30-taste-lens-panel.md`,
+round 2): **frontier-at-xhigh lenses ship rejection conditions;
+mid-tier lenses mostly don't** — four arms, twenty lens outputs, two
+families, three capability tiers. Round 2 overturned a settled decision
+and produced the arc's first kill criteria; round 1 at mid-tier didn't.
+That's the argument for spending the expensive tier on *design* review
+specifically, not on review generally.
+
+Provenance and honest limits: the roster was built and is installed on
+Jeremy's **work box** (`~/.claude/agents/`, 2026-07-27 session record at
+`~/claude/2026-07-27-subagent-setup-handoff.md`); it is **not installed
+on the maro box** — here it's guidance, not configuration. The tiers are
+reasoned, not benchmarked; the panel finding above is the only measured
+tier-vs-review-depth evidence we have. *Tripwire:* prose-only.
+
 ## Standing invariants, each with its tripwire
 
 The house rule about house rules: a principle ships with the test that
@@ -123,6 +177,7 @@ NOT duplicate:
 | Session discipline, shared-tree git rules, landing policy | `CLAUDE.md` |
 | Config key census | `docs/DEFAULTS.md` |
 | Review mechanics | `.claude` adversarial-review skill; records in `docs/history/*-adversarial-review.md` |
+| Runtime (not dev) review seats | `src/quality_gate.py` evidence-path lenses; `docs/LENSES.md` proposed registry |
 | Subsystem intent vs implementation | `skills/arch-*.md` |
 
 ## Maintenance
