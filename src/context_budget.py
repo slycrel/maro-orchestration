@@ -1,0 +1,100 @@
+"""Bounded accumulating context for multi-step prompts.
+
+The `completed_context += <this step's result>` pattern is the one place
+in the truncation audit (BACKLOG "Arbitrary-truncation audit", 2026-08-03)
+where a bound genuinely earns its keep. Everywhere else the cuts guarded a
+runaway the executor's own `max_tokens=4096` already prevents; here the
+growth is real and **quadratic in step count**, because every step re-sends
+everything before it.
+
+Measured over 268 recorded runs (1,760 step results):
+
+    whole-run accumulation   median 7,464 ch   p90 16,292   p99 28,547   max 74,288
+    re-sent volume (quadratic) median 29,828   p99 263,560  max 1,253,083
+    one step result          median 1,168 ch   p99 4,671    max 20,534
+    longest run              34 steps
+
+The old call sites answered this with a per-entry cut and NO total bound —
+`factory_thin` at 200 chars/step, `director` at 2,000 — which is backwards
+on both axes: far too tight to be useful evidence, and unbounded in the
+dimension that actually grows. A next step planning against 200 characters
+of what just happened is the quiet-quality-loss failure mode.
+
+So: a generous per-entry cap, a real total budget, and **oldest-first
+eviction** — the immediately preceding step is what the next one builds on,
+so recency is what to protect. Eviction is announced in the rendered text
+rather than silent, the same contract the judge windows got: a model reading
+this must be able to tell a complete history from a trimmed one.
+
+Note the subprocess backend bills re-sent context as cache reads at 0.1x, so
+the dollar impact of the quadratic term is ~10x softer than the token volume
+suggests. The volume is still real, and the budget is set for volume.
+"""
+from __future__ import annotations
+
+from typing import List
+
+# ~99% of single step results fit (p99 is 4,671 chars); one pathological
+# step cannot eat the whole budget. Same ceiling the judge windows use.
+DEFAULT_ENTRY_CAP = 4000
+
+# ~6,000 tokens. Covers the median (7,464) and p90 (16,292) whole-run
+# accumulations intact and trims only the worst few percent. Chosen from the
+# distribution, not from taste — the point of the audit.
+DEFAULT_TOTAL_BUDGET = 24000
+
+
+class ContextBudget:
+    """Accumulate step results for a prompt, bounded and honest about it.
+
+    Entries are kept whole where possible. When the total exceeds budget the
+    OLDEST are dropped, and ``render()`` says how many went.
+    """
+
+    def __init__(self, *, total_budget: int = DEFAULT_TOTAL_BUDGET,
+                 entry_cap: int = DEFAULT_ENTRY_CAP,
+                 separator: str = "\n\n") -> None:
+        self.total_budget = int(total_budget)
+        self.entry_cap = int(entry_cap)
+        self.separator = separator
+        self._entries: List[str] = []
+
+    def add(self, entry: str) -> None:
+        """Append one entry, capping it (visibly) if it is oversized."""
+        entry = str(entry or "")
+        if not entry:
+            return
+        if len(entry) > self.entry_cap:
+            entry = (f"{entry[:self.entry_cap]}\n"
+                     f"… [entry truncated: first {self.entry_cap} of "
+                     f"{len(entry)} characters]")
+        self._entries.append(entry)
+
+    def render(self) -> str:
+        """The context block, oldest entries evicted to fit the budget."""
+        if not self._entries:
+            return ""
+        kept: List[str] = []
+        used = 0
+        # walk newest -> oldest so recency survives
+        for entry in reversed(self._entries):
+            cost = len(entry) + len(self.separator)
+            if kept and used + cost > self.total_budget:
+                break
+            kept.append(entry)
+            used += cost
+        kept.reverse()
+        dropped = len(self._entries) - len(kept)
+        body = self.separator.join(kept)
+        if dropped:
+            return (f"[{dropped} earlier entr"
+                    f"{'y' if dropped == 1 else 'ies'} elided to stay within "
+                    f"the context budget; the most recent {len(kept)} "
+                    f"follow]{self.separator}{body}")
+        return body
+
+    def __bool__(self) -> bool:
+        return bool(self._entries)
+
+    def __len__(self) -> int:
+        return len(self._entries)

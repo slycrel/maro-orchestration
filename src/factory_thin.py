@@ -204,7 +204,12 @@ def run_factory_thin(
     _tools = [LLMTool(name=t["name"], description=t["description"], parameters=t["parameters"])
               for t in EXECUTE_TOOLS_SHORT]
 
-    completed_context = ""
+    # Bounded accumulator, not a raw string: this grows quadratically as each
+    # step re-sends everything before it. Was 200 chars/step with no total
+    # bound — backwards on both axes (too tight to be evidence, unbounded
+    # where it actually grows). See context_budget for the measurement.
+    from context_budget import ContextBudget
+    completed_context = ContextBudget()
     if verify:
         from step_exec import verify_step as _verify_step
 
@@ -212,7 +217,8 @@ def run_factory_thin(
         _log(f"executing step {step.index}: {step.text[:50]!r}")
 
         for _attempt in range(max_retries if verify else 1):
-            context_block = f"\n\nCompleted so far:\n{completed_context}" if completed_context else ""
+            context_block = (f"\n\nCompleted so far:\n{completed_context.render()}"
+                             if completed_context else "")
             retry_hint = f"\n\nPrevious attempt was rejected by verifier — produce more specific, complete output." if _attempt > 0 else ""
             # agentic: thin-loop step execution — the model does the step's real work
             resp = adapter.complete(
@@ -263,7 +269,8 @@ def run_factory_thin(
             step.status = candidate_status
             step.result = candidate_result
             if candidate_status == "done":
-                completed_context += f"\nStep {step.index} ({step.text[:40]}): {step.result[:200]}"
+                completed_context.add(
+                    f"Step {step.index} ({step.text[:120]}): {step.result}")
                 _log(f"step {step.index} done tokens={step.tokens}")
             else:
                 _log(f"step {step.index} stuck: {step.result[:60]}")

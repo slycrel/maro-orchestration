@@ -415,7 +415,11 @@ def run_director(
     # Phase 2: Dispatch workers + review
     worker_results: List[WorkerResult] = []
     review_decisions: List[ReviewDecision] = []
-    completed_context = ""
+    # Bounded accumulator — worker results re-sent to every later worker grow
+    # quadratically in ticket count. Was 2,000 chars/worker with no total
+    # bound. See context_budget for the distribution this is set from.
+    from context_budget import ContextBudget
+    completed_context = ContextBudget()
 
     # Worker memory slice — DEFAULT ON since 2026-07-08 (§7 A/B verdict, Jeremy's
     # flip: 16 runs, every measure favored the slice or tied; record in
@@ -449,7 +453,7 @@ def run_director(
     for ticket in tickets:
         _log(f"dispatching worker={ticket.worker_type} task={ticket.task[:50]!r}")
 
-        context = completed_context.strip()
+        context = completed_context.render().strip()
         if ticket.context:
             context = ticket.context + ("\n" + context if context else "")
 
@@ -568,7 +572,8 @@ def run_director(
 
         worker_results.append(result)
         if result.status == "done" and result.result:
-            completed_context += f"\n\n[{ticket.worker_type}] {ticket.task}:\n{result.result[:2000]}"
+            completed_context.add(
+                f"[{ticket.worker_type}] {ticket.task}:\n{result.result}")
 
     # Phase 3: Compile final report
     _log("compiling final report...")

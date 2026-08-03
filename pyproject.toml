@@ -131,6 +131,7 @@ py-modules = [
     "config",
     "constraint",
     "container_exec",
+    "context_budget",
     "conversation",
     "convo_miner",
     "correspondence",
