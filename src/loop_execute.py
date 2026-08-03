@@ -302,6 +302,111 @@ def _execute_main_loop(
 
     # Phase F: Main execute loop
     _budget_bumped = False  # guard: mid-loop budget bump fires at most once
+
+    # Budget extension ladder (Jeremy 2026-08-02, decree): an out-of-budget
+    # breach with work remaining is a notification + a one-run's-worth
+    # extension the first two times in a run, and a pause-ask-user the third
+    # — never a kill. "I want it to work and be expensive rather than not
+    # work and be budget friendly." One shared counter across the token and
+    # cost breakers ("the third time in the same run"). An explicit 0 budget
+    # means "spend nothing" and never extends. Killswitch
+    # budget.extension_ladder (docs/DEFAULTS.md) restores the hard stops.
+    _budget_extensions = 0
+    _orig_token_budget = token_budget
+    _orig_cost_budget = cost_budget
+    try:
+        from config import get as _bl_cfg_get
+        _ladder_on = bool(_bl_cfg_get("budget.extension_ladder", True))
+    except Exception:
+        _ladder_on = True
+
+    def _ladder_decision(kind: str) -> str:
+        """'extend' | 'pause' | 'kill' for a budget breach of `kind`."""
+        if not _ladder_on:
+            return "kill"
+        _orig = _orig_token_budget if kind == "token" else _orig_cost_budget
+        if not _orig:
+            return "kill"   # explicit zero budget: spend nothing, no rungs
+        return "extend" if _budget_extensions < 2 else "pause"
+
+    def _ladder_extend(kind: str, breach_note: str) -> None:
+        """Grant one run's worth of extra budget and notify (never silent)."""
+        nonlocal _budget_extensions, token_budget, cost_budget
+        _budget_extensions += 1
+        if kind == "token":
+            token_budget = token_budget + _orig_token_budget
+            ctx.token_budget = token_budget
+            _new_desc = f"token_budget extended to {token_budget}"
+        else:
+            cost_budget = cost_budget + _orig_cost_budget
+            ctx.cost_budget = cost_budget
+            _new_desc = f"cost_budget extended to ${cost_budget:.2f}"
+            # Keep the runaway circuit proportional to the NEW ceiling —
+            # without this the meter keeps refusing adapter calls at
+            # multiplier x the ORIGINAL budget and the extension is dead
+            # on arrival mid-step.
+            try:
+                from config import get as _rm_get
+                _rm_mult = float(_rm_get("budget.runaway_multiplier", 1.5) or 0.0)
+                if _rm_mult > 0:
+                    from llm import raise_cost_meter_ceiling
+                    raise_cost_meter_ceiling(cost_budget * _rm_mult)
+            except Exception:
+                log.debug("runaway ceiling raise failed", exc_info=True)
+        log.warning("budget extension %d/2 (%s): %s; %s",
+                    _budget_extensions, kind, breach_note, _new_desc)
+        try:
+            from captains_log import log_event as _bx_log, BUDGET_EXTENDED
+            _bx_log(
+                BUDGET_EXTENDED,
+                subject=goal[:80],
+                summary=(f"extension {_budget_extensions}/2 after {kind} "
+                         f"budget breach — one run's worth added, run "
+                         f"continues (pause-ask-user on a third breach)"),
+                context={"kind": kind, "breach": breach_note,
+                         "extensions_used": _budget_extensions,
+                         "token_budget": token_budget,
+                         "cost_budget": cost_budget},
+                loop_id=getattr(ctx, "loop_id", "") or None,
+            )
+        except Exception:
+            log.debug("BUDGET_EXTENDED log write failed", exc_info=True)
+        # Effort language on the conversation channel — dollars stay internal
+        # (2026-07-15 spend-UX decree).
+        if getattr(ctx, "channel", None) is not None:
+            try:
+                if _budget_extensions == 1:
+                    _bx_text = ("This is taking more effort than these "
+                                "usually do — I've given it more room and "
+                                "I'm continuing.")
+                else:
+                    _bx_text = ("Still at it — this needed a second helping "
+                                "of effort. If it outgrows this one too, "
+                                "I'll pause and check in before going "
+                                "further.")
+                ctx.channel.emit("effort_note", text=_bx_text)
+            except Exception:
+                log.debug("extension effort_note emit failed", exc_info=True)
+
+    def _ladder_pause(breach_note: str) -> None:
+        """Third breach in the same run: pause and ask the user."""
+        from stop_verdicts import PAUSE_OP_BUDGET_DECISION
+        ctx.stamp_pause(PAUSE_OP_BUDGET_DECISION)
+        log.warning("budget pause-ask-user after %d extensions: %s",
+                    _budget_extensions, breach_note)
+        if getattr(ctx, "channel", None) is not None:
+            try:
+                ctx.channel.emit(
+                    "question",
+                    text=("This has taken far more effort than these "
+                          "usually do — I stretched the envelope twice "
+                          "already, so I'm pausing for your call: keep "
+                          "going as-is, trim the goal, or take the partial "
+                          "results so far."),
+                )
+            except Exception:
+                log.debug("budget pause emit failed", exc_info=True)
+
     while remaining_steps:
         if iteration >= max_iterations:
             loop_status = "stuck"
@@ -911,15 +1016,32 @@ def _execute_main_loop(
                 f"({total_tokens_in + total_tokens_out} total tokens after step {step_idx})"
             )
             if remaining_steps:
-                loop_status = "stuck"
-                stuck_reason = _budget_note
-                ctx.stamp_stop("out-of-budget", _budget_note)
+                _bl = _ladder_decision("token")
+                if _bl == "extend":
+                    _ladder_extend("token", _budget_note)
+                    # No break: the raised cap governs from the next check on.
+                elif _bl == "pause":
+                    loop_status = "interrupted"
+                    stuck_reason = (f"budget extension ladder exhausted "
+                                    f"(2 extensions granted): {_budget_note}")
+                    _ladder_pause(_budget_note)
+                    if verbose:
+                        print(f"[maro] paused (budget-decision): {_budget_note}",
+                              file=sys.stderr, flush=True)
+                    break
+                else:
+                    loop_status = "stuck"
+                    stuck_reason = _budget_note
+                    ctx.stamp_stop("out-of-budget", _budget_note)
+                    if verbose:
+                        print(f"[maro] {_budget_note}", file=sys.stderr, flush=True)
+                    break
             else:
                 log.warning("budget exceeded on final step (run kept done): %s",
                             _budget_note)
-            if verbose:
-                print(f"[maro] {_budget_note}", file=sys.stderr, flush=True)
-            break
+                if verbose:
+                    print(f"[maro] {_budget_note}", file=sys.stderr, flush=True)
+                break
 
         # Cost budget — early warn at the gate's warn line, hard stop at
         # budget + 20% slush. Truthiness (not `is not None`): 0 means
@@ -935,16 +1057,34 @@ def _execute_main_loop(
                 )
                 # Same finished-plan carve-out as the token breaker above.
                 if remaining_steps:
-                    loop_status = "stuck"
-                    stuck_reason = _budget_note
-                    ctx.stamp_stop("out-of-budget", _budget_note)
-                    log.warning("cost hard stop: %s", stuck_reason)
+                    _bl = _ladder_decision("cost")
+                    if _bl == "extend":
+                        _ladder_extend("cost", _budget_note)
+                        # No break: the raised cap governs from the next
+                        # check on (and the runaway meter was re-armed).
+                    elif _bl == "pause":
+                        loop_status = "interrupted"
+                        stuck_reason = (f"budget extension ladder exhausted "
+                                        f"(2 extensions granted): {_budget_note}")
+                        _ladder_pause(_budget_note)
+                        if verbose:
+                            print(f"[maro] paused (budget-decision): {_budget_note}",
+                                  file=sys.stderr, flush=True)
+                        break
+                    else:
+                        loop_status = "stuck"
+                        stuck_reason = _budget_note
+                        ctx.stamp_stop("out-of-budget", _budget_note)
+                        log.warning("cost hard stop: %s", stuck_reason)
+                        if verbose:
+                            print(f"[maro] {_budget_note}", file=sys.stderr, flush=True)
+                        break
                 else:
                     log.warning("cost budget exceeded on final step "
                                 "(run kept done): %s", _budget_note)
-                if verbose:
-                    print(f"[maro] {_budget_note}", file=sys.stderr, flush=True)
-                break
+                    if verbose:
+                        print(f"[maro] {_budget_note}", file=sys.stderr, flush=True)
+                    break
             else:
                 # Warn line: the gate's data-driven threshold when set (None
                 # means the gate never ran — fall back to the legacy 80%;

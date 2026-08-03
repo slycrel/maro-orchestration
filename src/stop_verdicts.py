@@ -93,6 +93,12 @@ PAUSED_STATUSES = INTERRUPT_STATUSES
 # Operator-class — a human is in the loop.
 PAUSE_OP_MANUAL = "manual-intervention"          # kill switch, operator stop directive
 PAUSE_OP_CLARIFICATION = "awaiting-clarification"
+# Budget extension ladder exhausted (Jeremy 2026-08-02): two one-run-budget
+# extensions were granted in this run and a third breach arrived — the run
+# pauses for the user's call (continue / trim scope / accept partial) instead
+# of concluding out-of-budget. Distinct from PAUSE_ERR_NO_TOKENS: the
+# environment can continue, the CHOSEN envelope was outgrown three times.
+PAUSE_OP_BUDGET_DECISION = "budget-decision"
 # Error-class — the substrate can't continue.
 PAUSE_ERR_BUSY = "box-busy"                      # run lease / admission contention
 PAUSE_ERR_WRITER_DIED = "writer-died"            # stranded sweep: crash/power loss, stamped post-hoc
@@ -126,7 +132,9 @@ def pause_reason_for_error_class(error_class: str) -> str:
     }.get(error_class or "", "")
 
 
-PAUSE_REASONS_OPERATOR = frozenset((PAUSE_OP_MANUAL, PAUSE_OP_CLARIFICATION))
+PAUSE_REASONS_OPERATOR = frozenset((
+    PAUSE_OP_MANUAL, PAUSE_OP_CLARIFICATION, PAUSE_OP_BUDGET_DECISION,
+))
 PAUSE_REASONS_ERROR = frozenset((
     PAUSE_ERR_BUSY, PAUSE_ERR_WRITER_DIED, PAUSE_ERR_LLM_UNREACHABLE,
     PAUSE_ERR_NO_TOKENS, PAUSE_ERR_DISK_FULL,

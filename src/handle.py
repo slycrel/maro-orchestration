@@ -2758,6 +2758,16 @@ def _handle_impl(
                     # restart re-run failed or depth exceeded — treat as stuck
                     _rst_reason = getattr(loop_result, "stuck_reason", None) or "restart limit reached"
                     channel.emit("stuck", text=f"Director restart loop exhausted: {_rst_reason}")
+                elif getattr(loop_result, "pause_reason", ""):
+                    # A typed pause is a wait, not a failure — don't let it
+                    # reach the user as an error line (delivery decree: plain
+                    # words where they asked, no terminal language). The break
+                    # site already said anything specific it had to say.
+                    channel.emit(
+                        "paused",
+                        text=(f"Paused ({loop_result.pause_reason}) — this can "
+                              f"pick up right where it left off."),
+                    )
                 elif loop_result.status not in ("done", "complete"):
                     channel.emit("error", text=f"Loop ended with status: {loop_result.status}")
                 channel.complete(_result_summary)

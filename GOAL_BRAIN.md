@@ -6158,3 +6158,24 @@ pre-chunk NOW/evolver rows honestly unjudged going forward from here.
   some more ideas from that in a few days, when that's a bit more
   fleshed out."** Revisit when he brings it (~few days from
   2026-08-02).
+- **2026-08-02** — **Budget extension ladder SHIPPED** (same-day
+  follow-through on the decree above). Between-step token and cost
+  breakers in `loop_execute` now walk the ladder when work remains: one
+  shared breach counter per run; breaches 1–2 add one run's worth (the
+  ORIGINAL cap) on top and continue with a `BUDGET_EXTENDED` log row
+  (dollars internal) + `effort_note` in effort language; breach 3 ends
+  the loop `interrupted` with the new operator-class pause
+  `budget-decision` (§13e vocabulary grew its budget value after all —
+  the A/B-day residual reversed by his own call), so the follow-up
+  rides the same-identity RESUME lane. Design points: cost extensions
+  lift the runaway-meter ceiling in place
+  (`llm.raise_cost_meter_ceiling`) or the meter would refuse calls at
+  1.5x the ORIGINAL budget and the extension would be dead on arrival;
+  explicit 0 budgets still mean "spend nothing" (never extended);
+  final-step carve-out, runaway circuit, daily gate, and the
+  max_iterations continuation lane all unchanged. Killswitch
+  `budget.extension_ladder` (DEFAULTS.md row) restores the hard stops
+  — the pre-existing hard-stop pin now runs under it. Bonus fix while
+  there: a paused run's channel line was the generic "error: Loop
+  ended with status: interrupted" — typed pauses now emit a "paused"
+  event in plain words (delivery decree). Full suite green (7501).

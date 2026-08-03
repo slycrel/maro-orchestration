@@ -185,6 +185,25 @@ def cost_meter_state() -> Optional[Dict[str, float]]:
     return {"spent_usd": state["spent_usd"], "ceiling_usd": state["ceiling_usd"]}
 
 
+def raise_cost_meter_ceiling(new_ceiling_usd: float) -> bool:
+    """Raise the armed runaway meter's ceiling in place.
+
+    Budget extension ladder (2026-08-02): when the between-step breaker
+    grants a one-run-budget extension, the runaway circuit must stay
+    proportional to the NEW ceiling — otherwise the meter keeps refusing
+    adapter calls at multiplier x the original budget and the extension is
+    dead on arrival mid-step. Never lowers the ceiling; returns False when
+    no meter is armed.
+    """
+    state = _RUN_COST_METER.get()
+    if state is None:
+        return False
+    with state["lock"]:
+        state["ceiling_usd"] = max(
+            float(state["ceiling_usd"]), float(new_ceiling_usd))
+    return True
+
+
 # ---------------------------------------------------------------------------
 # Model name constants (backend-independent)
 # ---------------------------------------------------------------------------

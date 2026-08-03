@@ -199,6 +199,13 @@ QUALITY_GATE_OVERRULED = "QUALITY_GATE_OVERRULED"  # gate ESCALATE vs judged clo
 # gap, it does not adjudicate it.
 DONE_WITHOUT_VERDICT = "DONE_WITHOUT_VERDICT"
 
+# Budget extension ladder rung granted (Jeremy 2026-08-02: out-of-budget is
+# a notification + one-run-budget extension the first two times in a run,
+# pause-ask-user the third). Emitted by the between-step breaker in
+# loop_execute at the moment the extension is granted — dollars live here
+# (internal unit); the conversation channel hears effort language only.
+BUDGET_EXTENDED = "BUDGET_EXTENDED"
+
 # Second-family gate check (swarm-review chunk 5a, stack-don't-substitute).
 # One per paid-gate PASS while hosted-free is available: a different model
 # family (Groq/Gemini) re-judges the SAME payload; the row records
@@ -306,7 +313,7 @@ EVENT_TYPES = {
     CLAIM_VERIFIER_OUTCOME, FABRICATION_DETECTED, SCAVENGE_DETECTED, FENCE_WRITE_BLOCKED,
     FENCE_EXTENDED,
     LOOP_CREATED, QUALITY_GATE_VERDICT, QUALITY_GATE_SECOND_FAMILY,
-    QUALITY_GATE_OVERRULED, DONE_WITHOUT_VERDICT,
+    QUALITY_GATE_OVERRULED, DONE_WITHOUT_VERDICT, BUDGET_EXTENDED,
     QUALITY_GATE_COUNCIL, QUALITY_GATE_CROSS_REF, STEP_TOO_BROAD,
     RECALL_PERFORMED, RECALL_GUARD_TRIPPED, NOW_ARTIFACT_RETRY,
     NAVIGATOR_DECIDED, NAVIGATOR_ACTED, NAVIGATOR_ADJUDICATED,
@@ -339,6 +346,9 @@ USER_SURFACED_EVENTS = frozenset({
     # honesty findings the operator should hear
     FABRICATION_DETECTED, SUBSYSTEM_SILENT, SUBSYSTEM_RECOVERED,
     DONE_WITHOUT_VERDICT,
+    # spend decisions the operator should hear (never silent shared-resource
+    # spend): a run was granted more budget than its configured envelope
+    BUDGET_EXTENDED,
 })
 
 

@@ -343,7 +343,11 @@ class TestEventTypes:
         # tripwire at close_run (LT-0 b): a done agenda run with no goal
         # verdict in metadata is logged at the moment the gap becomes
         # permanent (census 2026-07-29: 5/51 loop_id-era agenda rows).
-        assert len(EVENT_TYPES) == 78
+        # +1 (2026-08-02): BUDGET_EXTENDED — extension ladder rung granted
+        # (out-of-budget = notify + one-run-budget extension x2, pause-ask
+        # on the third breach; dollars in the log, effort language on the
+        # channel).
+        assert len(EVENT_TYPES) == 79
 
     def test_previously_unregistered_events_in_set(self):
         from captains_log import EVOLVER_REVERTED, EVOLVER_VERIFY, PLAYBOOK_UPDATED

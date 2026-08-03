@@ -55,8 +55,12 @@ def workspace(monkeypatch, tmp_path):
 
 class TestVocabulary:
     def test_two_families_disjoint_and_complete(self):
+        # + budget-decision (2026-08-02): extension ladder exhausted — two
+        # one-run-budget extensions granted, third breach waits on the user.
+        from stop_verdicts import PAUSE_OP_BUDGET_DECISION
         assert PAUSE_REASONS_OPERATOR == frozenset(
-            (PAUSE_OP_MANUAL, PAUSE_OP_CLARIFICATION))
+            (PAUSE_OP_MANUAL, PAUSE_OP_CLARIFICATION,
+             PAUSE_OP_BUDGET_DECISION))
         assert PAUSE_REASONS_ERROR == frozenset(
             (PAUSE_ERR_BUSY, PAUSE_ERR_WRITER_DIED, PAUSE_ERR_LLM_UNREACHABLE,
              PAUSE_ERR_NO_TOKENS, PAUSE_ERR_DISK_FULL))
@@ -82,7 +86,9 @@ class TestVocabulary:
         assert set(PAUSE_REASON_BY_STATUS.values()) <= VALID_PAUSE_REASONS
 
     def test_pause_family(self):
+        from stop_verdicts import PAUSE_OP_BUDGET_DECISION
         assert pause_family(PAUSE_OP_MANUAL) == "operator"
+        assert pause_family(PAUSE_OP_BUDGET_DECISION) == "operator"
         assert pause_family(PAUSE_ERR_DISK_FULL) == "error"
         assert pause_family("not-a-reason") == ""
         assert pause_family("") == ""

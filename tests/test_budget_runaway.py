@@ -105,6 +105,32 @@ class TestMeterLifecycle:
         adapter.complete(MSGS)  # must not raise, must not create a meter
         assert cost_meter_state() is None
 
+    def test_raise_ceiling_in_place(self):
+        # Budget extension ladder (2026-08-02): the between-step extension
+        # must lift the runaway ceiling too, or the meter keeps refusing at
+        # multiplier x the ORIGINAL budget mid-step.
+        from llm import raise_cost_meter_ceiling
+        disarm = arm_cost_meter(3.0)
+        try:
+            assert raise_cost_meter_ceiling(6.0) is True
+            assert cost_meter_state()["ceiling_usd"] == 6.0
+        finally:
+            disarm()
+
+    def test_raise_ceiling_never_lowers(self):
+        from llm import raise_cost_meter_ceiling
+        disarm = arm_cost_meter(3.0)
+        try:
+            assert raise_cost_meter_ceiling(1.0) is True
+            assert cost_meter_state()["ceiling_usd"] == 3.0
+        finally:
+            disarm()
+
+    def test_raise_ceiling_disarmed_is_noop(self):
+        from llm import raise_cost_meter_ceiling
+        assert raise_cost_meter_ceiling(6.0) is False
+        assert cost_meter_state() is None
+
 
 class TestCircuit:
     def test_refuses_next_call_after_ceiling_crossed(self):

@@ -3085,13 +3085,20 @@ and maintainable over time."** Step 1 is greenlit:
   regardless; the cost half INVERTS on a per-turn-resend transport, which
   bounds where step-2 (recursive sub-calls) can pay on this backend.
   **Pause-stamp residual VERIFIED same day, result reframed:** the
-  ceiling path doesn't stamp — and §13e's vocabulary has NO budget
+  ceiling path doesn't stamp — and §13e's vocabulary had NO budget
   value by design ("out-of-budget" is a STOP verdict, not a pause). So
   budget-ceiling continuations are restarts under current decree; if
   Jeremy wants multi-pass budget runs as same-identity resumes, that's
-  a §13e vocabulary decision (add e.g. "budget-ceiling" to
-  VALID_PAUSE_REASONS + stamp at the break site + skip closure-judging
-  the paused pass), not a missing one-liner. His call, filed.
+  a §13e vocabulary decision. **His call CAME same day (extension-ladder
+  decree, GOAL_BRAIN 2026-08-02): `budget-decision` is now an
+  operator-class pause reason** — stamped when a run breaches its
+  token/cost budget a third time after two one-run-budget extensions;
+  that pass ends `interrupted` (closure skips it) so the user's
+  follow-up rides the same-identity RESUME lane. The max_iterations
+  ceiling keeps its own continuation/escalation machinery (work already
+  continues there — its "no stamp" behavior stands, out-of-budget stop
+  verdict unchanged for that path and for `budget.extension_ladder:
+  false`).
 - ~~**Step 1 (cheap, testable): `skills/repl_reading.md`** — a reading~~
   protocol skill: outline/TOC first; never cat whole files; targeted
   slices by offset; sub-verify every quote against its slice; explicit

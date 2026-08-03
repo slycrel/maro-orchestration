@@ -1139,6 +1139,82 @@ def test_token_budget_none_is_ignored(monkeypatch, tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# Budget extension ladder (Jeremy 2026-08-02: notify + extend x2,
+# pause-ask-user on the third breach in the same run)
+# ---------------------------------------------------------------------------
+
+def _capture_log_events(monkeypatch):
+    import captains_log as _cl
+    events = []
+
+    def fake_log_event(event_type, *, subject, summary, context=None,
+                       loop_id=None, **kw):
+        events.append({"type": event_type, "summary": summary,
+                       "context": context or {}})
+    monkeypatch.setattr(_cl, "log_event", fake_log_event)
+    return events
+
+
+def test_token_budget_breach_extends_and_run_completes(monkeypatch, tmp_path):
+    """Breaches 1 and 2 add one run's worth each and the run finishes done."""
+    _setup_workspace(monkeypatch, tmp_path)
+    events = _capture_log_events(monkeypatch)
+    result = run_agent_loop(
+        "simple ladder test",
+        project="budget-ladder-extend",
+        dry_run=True,
+        token_budget=100,  # each dry-run step ~120 tokens: breach every check
+    )
+    assert result.status == "done"
+    assert result.stuck_reason is None or "token_budget" not in result.stuck_reason
+    extensions = [e for e in events if e["type"] == "BUDGET_EXTENDED"]
+    # 3 dry-run steps → 2 checks with work remaining → both rungs used
+    assert len(extensions) == 2
+    assert extensions[0]["context"]["extensions_used"] == 1
+    assert extensions[1]["context"]["extensions_used"] == 2
+
+
+def test_token_budget_third_breach_pauses_budget_decision(monkeypatch, tmp_path):
+    """The third breach in the same run pauses for the user instead of
+    concluding out-of-budget."""
+    _setup_workspace(monkeypatch, tmp_path)
+    import loop_planning as _lp
+    monkeypatch.setattr(_lp, "_decompose",
+                        lambda *a, **kw: ["a", "b", "c", "d", "e"])
+    result = run_agent_loop(
+        "ladder pause test",
+        project="budget-ladder-pause",
+        dry_run=True,
+        token_budget=1,  # nonzero: every post-step check breaches
+    )
+    from stop_verdicts import PAUSE_OP_BUDGET_DECISION
+    assert result.status == "interrupted"
+    assert result.pause_reason == PAUSE_OP_BUDGET_DECISION
+    assert "ladder exhausted" in (result.stuck_reason or "")
+
+
+def test_budget_ladder_killswitch_restores_hard_stop(monkeypatch, tmp_path):
+    """budget.extension_ladder: false brings back the out-of-budget stop."""
+    _setup_workspace(monkeypatch, tmp_path)
+    import config as _cfg
+    _orig_get = _cfg.get
+
+    def _gated_get(key, default=None):
+        if key == "budget.extension_ladder":
+            return False
+        return _orig_get(key, default)
+    monkeypatch.setattr(_cfg, "get", _gated_get)
+    result = run_agent_loop(
+        "ladder off test",
+        project="budget-ladder-off",
+        dry_run=True,
+        token_budget=100,
+    )
+    assert result.status == "stuck"
+    assert "token_budget" in (result.stuck_reason or "")
+
+
+# ---------------------------------------------------------------------------
 # Phase 35 P2: _generate_refinement_hint
 # ---------------------------------------------------------------------------
 
@@ -1924,8 +2000,21 @@ def test_generate_refinement_hint_uses_llm_response():
 
 @pytest.mark.slow
 def test_cost_budget_stops_loop(monkeypatch, tmp_path):
-    """Loop stops when estimated USD cost exceeds cost_budget + slush."""
+    """With the extension ladder off, cost breach stops the loop.
+
+    (Since the 2026-08-02 ladder decree, a breach with the ladder ON
+    extends instead — the hard stop is the budget.extension_ladder:
+    false contract, asserted here so enforcement itself stays proven.)
+    """
     _setup_workspace(monkeypatch, tmp_path)
+    import config as _cfg
+    _orig_get = _cfg.get
+
+    def _gated_get(key, default=None):
+        if key == "budget.extension_ladder":
+            return False
+        return _orig_get(key, default)
+    monkeypatch.setattr(_cfg, "get", _gated_get)
     from pre_flight import PlanReview
     from unittest.mock import patch as _patch
     _pf = PlanReview(scope="narrow", scope_note="test")
@@ -1941,6 +2030,30 @@ def test_cost_budget_stops_loop(monkeypatch, tmp_path):
     assert result.status in ("stuck", "budget_exceeded"), (
         f"Expected stuck/budget_exceeded but got {result.status!r} — budget enforcement may be broken"
     )
+
+
+@pytest.mark.slow
+def test_cost_budget_ladder_pauses_on_third_breach(monkeypatch, tmp_path):
+    """Cost-side ladder: two extensions then a budget-decision pause."""
+    _setup_workspace(monkeypatch, tmp_path)
+    import loop_planning as _lp
+    monkeypatch.setattr(_lp, "_decompose",
+                        lambda *a, **kw: ["a", "b", "c", "d", "e"])
+    from pre_flight import PlanReview
+    from unittest.mock import patch as _patch
+    _pf = PlanReview(scope="narrow", scope_note="test")
+    with _patch("pre_flight.review_plan", return_value=_pf):
+        result = run_agent_loop(
+            "expensive ladder task",
+            project="cost-ladder-pause",
+            adapter=_DryRunAdapter(),
+            dry_run=False,
+            cost_budget=0.0001,  # every post-step check breaches
+        )
+    from stop_verdicts import PAUSE_OP_BUDGET_DECISION
+    assert result.status == "interrupted"
+    assert result.pause_reason == PAUSE_OP_BUDGET_DECISION
+    assert "ladder exhausted" in (result.stuck_reason or "")
 
 
 @pytest.mark.slow
