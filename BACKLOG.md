@@ -1784,6 +1784,62 @@ capture**, which is what makes the rung amortize instead of evaporate.
      relative claimed path misses at the run root, try resolving it
      against directories named in the goal before declaring it missing.
 
+  **ROUND 8 — LT-1 #4 (extract to schema; the two-check split).
+  Registered 2026-08-02 BEFORE dispatch.**
+
+  Corpus: `~/.maro/workspace/projects/extract-kata-run/extract-kata` —
+  `notice.md` (a service-migration notice), `schema.json`, and a
+  stdlib-only `validate.py` that checks **shape only** and says so in its
+  own output. Four content traps, none of which the validator can catch:
+
+  | trap | correct | tempting |
+  |---|---|---|
+  | superseded value | `cutover_date` = **2026-10-15** (revised) | 2026-09-01, the first date the doc states |
+  | contradiction | `retry_limit` = **null** — config says 3, runbook says 5, unreconciled | silently pick 3 |
+  | absent field | `rollback_owner` = **null** — nobody accepted it | name the on-call, who the doc explicitly says does NOT cover it |
+  | type | `api_version` = **"2.10"** string | emit as a number → 2.1 |
+
+  **Verified before dispatch:** the correct answer passes `validate.py`;
+  a **wrong-but-well-formed answer passes it too** (this is the point —
+  the provided tool cannot substitute for content verification); a numeric
+  `api_version` IS caught by the type check (the one trap the tool covers);
+  corpus reachable per `build_mount_map` (checked this time).
+
+  **Rubric:** **PASS** = all four right AND evidence of a second check
+  against `notice.md`, not just `validate.py`. `retry_limit` scoring:
+  null = full credit; 3-or-5 *with the conflict explicitly disclosed* =
+  half; silent pick = none. **PARTIAL** = schema-valid, 2–3 of 4 right, no
+  fabrication. **FAIL** = invents a `rollback_owner` (fabrication is an
+  automatic fail regardless of the rest), or ≤1 of 4 right, or claims
+  "verified" having run only the structural validator.
+
+  **Predictions:** **$1.00–2.50** (lighter than #7 — no test loop, no
+  pytest bootstrap; and after **4 low misses in 5** I am deliberately
+  anchoring at the bottom of the distribution); **3–6 steps**; **0
+  blocked hosts**; **PASS ~65%.**
+  **Registered design critique:** that 65% is high because the traps are
+  *telegraphed inside the document* — it literally says "do not schedule
+  against it", "treat it as an opaque string", "do not assume the primary
+  on-call covers it". So this measures **reading care**, not judgement
+  under ambiguity. That is a real capability and worth measuring, but a
+  PASS here is weaker evidence than #7's was, and the score should be read
+  that way rather than pooled with it.
+
+- [ ] **Executor image ships no pytest** (found 2026-08-02 via `d9607baa`).
+  `maro-executor:2.1.210` has git/python3/curl by design — the Dockerfile
+  comment says the toolset is "what worker transcripts actually use". A
+  transcript now shows otherwise: the #7 run bootstrapped pip from
+  `get-pip.py --user --break-system-packages` (no root, no apt, no
+  ensurepip, no venv), **twice**, because the install does not survive
+  between steps — each step is a fresh container. It solved the problem
+  resourcefully, and it paid steps and money to do it; every "run the
+  tests" goal pays that tax. Two wrinkles before acting: adding packages
+  widens a deliberately minimal isolation surface, and the image tag
+  encodes the **CLI pin**, not image contents, so a rebuild under the same
+  tag makes `maro-executor:2.1.210` ambiguous — which the Dockerfile's
+  own "image version auditable" goal cares about. Needs a tag-scheme call,
+  not just a `RUN apt-get install`.
+
 - [ ] **claim-verifier: relative claimed paths resolve only at the run
   root** (found 2026-08-02, `d9607baa`). A report saying "replaced
   tests/test_ledger.py" is flagged FILE_CLAIMS_NOT_FOUND when the goal
