@@ -2151,9 +2151,15 @@ capture**, which is what makes the rung amortize instead of evaporate.
 
   **PROMPT worklist, ranked** — each needs the same treatment: measure the
   real distribution first, then widen or mark (or both):
-  - `factory_thin.py:266` — prior step results at **200 chars** into
-    `completed_context`. Tightest evidence window found; the next step
-    plans against a fifth of what happened.
+  - ~~`factory_thin.py:266` — prior step results at **200 chars**~~ and
+    ~~`director.py:571` — worker output at **2,000**~~ — **BOTH DONE
+    2026-08-03 (`25c286b`)**, the two accumulating sites. Replaced with
+    `context_budget.ContextBudget`: entry cap 4,000 (p99 step result is
+    4,671), total budget 24,000 ch / ~6,000 tok (covers median 7,464 and
+    p90 16,292 whole-run accumulations intact; bites the tail against a
+    74,288 max), oldest-first eviction, and the elision announced in the
+    rendered text. Both were backwards on both axes — too tight per entry
+    to be useful evidence, unbounded in the dimension that actually grows.
   - `step_exec.py:1597` — team-worker result at **600** into shared context.
   - `director.py:571` / `:775` — worker output at **2000** into the
     director's completed-context and review call.
