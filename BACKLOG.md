@@ -4944,10 +4944,14 @@ open — verification ≠ repair; each needs a wire-or-retire decision):**
     the plumbing; flow measurable from 2026-07-31 forward).~~ — **TRIGGER
     FIRED 2026-08-03**, see census below.
 
-  **Amended 2026-08-03 (Opus-5 second blind contrast, `opus-feedback.txt`
-  Aug-3 section — Jeremy re-ran the same reviewer against the tree after
-  ~214 commits / +9.1k lines in `src/`. Every code claim on both sides
-  re-verified against the tree at 25c286b before folding.)**
+  **Amended 2026-08-03 (Opus-5 second blind contrast — Jeremy re-ran the
+  same reviewer against the tree after ~214 commits / +9.1k lines in
+  `src/`. Every code claim on both sides re-verified against the tree at
+  25c286b before folding. Full record, accuracy scorecard (10/10
+  substantively correct this round), prerequisite census, and the source
+  text reproduced verbatim — the original lives only at machine-local
+  `~/claude/opus-feedback.txt` —
+  `docs/history/2026-08-03-leact-opus-contrast-round2.md`.)**
 
   Its one-line summary is worth keeping verbatim: *"you closed the
   upstream half of the LeAct gap and left the downstream half alone"* —
