@@ -5563,3 +5563,43 @@ class TestGlobClaimProvenance:
             "Saved to artifacts/OL*.json.",
             time.time() - 60)  # window starts 1 min ago; file is 2h old
         assert any("OL*" in f and "predates" in f for f in flagged)
+
+
+class TestNowVerifyPayloadTruncation:
+    """The last unmarked judge window (2026-08-03).
+
+    Three others were fixed the same day after the same failure repeated:
+    a judge shown `Response:` cannot tell a whole answer from its first
+    2000 chars, and reports what it cannot see as not delivered.
+    """
+
+    def test_short_payload_is_unmarked_and_complete(self):
+        from handle import _now_verify_payload
+        out = _now_verify_payload("what is 2+2", "4")
+        assert "TRUNCATED" not in out
+        assert "what is 2+2" in out and "4" in out
+
+    def test_long_response_is_marked_with_both_numbers(self):
+        from handle import _now_verify_payload, _NOW_VERIFY_CUT
+        body = "r" * (_NOW_VERIFY_CUT + 555)
+        out = _now_verify_payload("ask", body)
+        assert "TRUNCATED" in out
+        assert str(_NOW_VERIFY_CUT) in out
+        assert str(_NOW_VERIFY_CUT + 555) in out
+        assert "NOT shown to you" in out
+
+    def test_long_request_is_marked_independently(self):
+        from handle import _now_verify_payload, _NOW_VERIFY_CUT
+        out = _now_verify_payload("q" * (_NOW_VERIFY_CUT + 10), "short answer")
+        assert out.count("TRUNCATED") == 1        # request only
+        assert "short answer" in out
+
+    def test_tail_is_actually_withheld(self):
+        from handle import _now_verify_payload, _NOW_VERIFY_CUT
+        out = _now_verify_payload("ask", "A" * _NOW_VERIFY_CUT + "SECRET_TAIL")
+        assert "SECRET_TAIL" not in out
+
+    def test_empty_inputs_do_not_crash(self):
+        from handle import _now_verify_payload
+        out = _now_verify_payload("", "")
+        assert "Request" in out and "Response" in out

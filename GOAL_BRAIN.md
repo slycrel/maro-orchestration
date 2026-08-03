@@ -6220,3 +6220,24 @@ pre-chunk NOW/evolver rows honestly unjudged going forward from here.
   reference corpus, succeeds, the bridge mints a maro-authored
   candidate citing the lf- URL in sources, and THAT earns promotion by
   re-derivation.
+
+- **2026-08-03** — **Arbitrary truncation is a standing concern, not a
+  one-off bug** (Jeremy, decree-adjacent): *"this was one of the first
+  truncations early on and I've been uncomfortable making those trades
+  for 'keeping the context small' by cutting so much… there are still
+  way too many arbitrary truncations for my liking at this point."*
+  Context: he asked why the quality gate truncated evidence at all, after
+  I had fixed the *symptom* (a judge escalating on absence) while
+  defending the cut with an unmeasured claim that widening "costs tokens
+  and only moves the cliff". Measurement inverted it. **Standing
+  posture: a numeric cut on evidence is a decision that needs a
+  measurement, not a default** — pull the real distribution from
+  `runs/*/build/loop-*.json` (`result_length`), tabulate `cut → %
+  payloads intact / % text shown / median extra tokens`, and let the
+  answer fall out. Cuts that feed a JUDGE are the highest-harm class
+  (they fabricate verdicts); cuts that feed a PROMPT degrade quietly;
+  cuts that bound a STORE lose fidelity forever and are the only ones
+  with a genuine cost trade. Shipped under this: gate 600→4000
+  (`065a010`), closure work summary 300→4000 (`0f8409f`), NOW
+  self-verdict marked, plus the two epistemic guards (`f7b775c`,
+  `f4ef704`). Remaining worklist in BACKLOG "Arbitrary-truncation audit".

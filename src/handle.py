@@ -544,6 +544,35 @@ def _now_verdict_rationale(raw: str, limit: int = 400) -> str:
     return text[:limit]
 
 
+_NOW_VERIFY_CUT = 2000
+
+
+def _now_verify_payload(message: str, result: str,
+                        cut: int = _NOW_VERIFY_CUT) -> str:
+    """Request + response for the NOW self-verdict, truncation VISIBLE.
+
+    The last unmarked judge window in the codebase as of 2026-08-03. The
+    other three were fixed the same day after the same failure repeated:
+    a judge shown `Response:` cannot tell a whole answer from its first
+    2000 characters, and reports what it cannot see as not delivered
+    (quality gate `f4ef704`, closure work summary `0f8409f`).
+
+    Lower harm than those — NOW is the quick-answer lane and most replies
+    are far under the cut — so this marks rather than widens. If a NOW
+    reply ever routinely exceeds 2000 chars, that is a signal the lane is
+    being used for agenda work, and the marker will make it visible.
+    """
+    def _seg(label: str, text: str) -> str:
+        text = text or ""
+        if len(text) > cut:
+            return (f"{label} [TRUNCATED — first {cut} of {len(text)} "
+                    f"characters; the rest was NOT shown to you]:\n"
+                    f"{text[:cut]}")
+        return f"{label}:\n{text}"
+
+    return f"{_seg('Request', message)}\n\n{_seg('Response', result)}"
+
+
 def _verify_now_outcome(
     message: str, outcome: Dict[str, Any], adapter,
     wall_start: Optional[float] = None,
@@ -601,11 +630,8 @@ def _verify_now_outcome(
         resp = adapter.complete(
             [
                 LLMMessage("system", _NOW_VERIFY_SYSTEM),
-                LLMMessage(
-                    "user",
-                    f"Request:\n{message[:2000]}\n\n"
-                    f"Response:\n{str(outcome.get('result', ''))[:2000]}",
-                ),
+                LLMMessage("user", _now_verify_payload(
+                    message, str(outcome.get("result", "")))),
             ],
             # 64 fit `{"fulfilled": false}` and nothing else, which is why
             # the free judge could never give a reason (found live 2026-08-02,

@@ -2120,6 +2120,63 @@ capture**, which is what makes the rung amortize instead of evaporate.
   5%. **Lesson: a magic constant inherited from an earlier era deserves a
   measurement before a defence, and "it would cost more" is a claim.**
 
+- [ ] **Arbitrary-truncation audit** (opened 2026-08-03; **Jeremy:** *"this
+  was one of the first truncations early on and I've been uncomfortable
+  making those trades for 'keeping the context small' by cutting so much…
+  there are still way too many arbitrary truncations for my liking"*).
+
+  **Census: 958 numeric truncations across 115 modules in `src/`.** Most
+  are labels and log lines and are fine. The class that matters is a cut
+  applied to **evidence that then reaches an LLM** — 95 of those sit
+  inside LLM-calling functions. Ranked by consumer, because the consumer
+  decides the harm:
+
+  | consumer | harm | status |
+  |---|---|---|
+  | **JUDGE** — feeds a verdict | false verdicts; demotes runs, teaches failure | **all 4 addressed 2026-08-03** |
+  | **PROMPT** — feeds a model doing work | quiet quality loss, no error surface | worklist below |
+  | **STORE** — bounds what is persisted | permanent fidelity loss | worklist below |
+  | **DISPLAY** | cosmetic | ignore |
+
+  **Judge windows — done.** Gate review payload 600 → 4000 (`065a010`);
+  closure work summary 300 → 4000 and step text 120 → 300 (`0f8409f`);
+  closure `target_file_content` at 1200 — **already honest**, it appends
+  `"... (truncated)"`, left as-is; NOW self-verdict request/response at
+  2000 — marked, deliberately not widened (quick-answer lane, and a NOW
+  reply routinely over 2000 chars is itself a signal the lane is being
+  misused). The codebase already had the honest idiom in
+  `step_exec.verify_step` (*"Step result (first 1200 chars)"*) and
+  `sprint_contract.grade_contract` — the fix was making it universal, not
+  inventing it.
+
+  **PROMPT worklist, ranked** — each needs the same treatment: measure the
+  real distribution first, then widen or mark (or both):
+  - `factory_thin.py:266` — prior step results at **200 chars** into
+    `completed_context`. Tightest evidence window found; the next step
+    plans against a fifth of what happened.
+  - `step_exec.py:1597` — team-worker result at **600** into shared context.
+  - `director.py:571` / `:775` — worker output at **2000** into the
+    director's completed-context and review call.
+  - `memory.py:341` — result summary at **500** into lesson extraction.
+    Lessons are what the system keeps; extracting them from a fifth of the
+    evidence bounds how good the memory can ever be.
+  - `attribution.py:273`, `knowledge_bridge.py:139`, `evolver_scans.py:159`
+    — 500/500/200 into failure attribution and signal scanning.
+
+  **STORE worklist:** `memory_ledger.compress_old_outcomes` (120/600) and
+  the outcome-row `summary` at 500 in `handle.py` — these bound the record
+  *forever*, so they deserve a deliberate retention decision rather than a
+  default. Note the disk cost of raising them is real, unlike the token
+  cost of the judge windows, so this one genuinely is a trade.
+
+  **Method that worked, for whoever picks this up:** don't argue about the
+  number — pull the actual distribution out of `runs/*/build/loop-*.json`
+  (`result_length` is right there), tabulate `cut → % payloads intact / %
+  text shown / median extra tokens`, and the answer falls out. Every
+  constant fixed today was set in an earlier era and never revisited; the
+  gate's 600 dated to the gate's first commit, four months and one model
+  tier ago.
+
 - [ ] **Do the evidence lenses want a wide-view seat?** (opened
   2026-08-03 alongside `065a010`.) `_lens_evidence_probe` documented
   itself as showing "the same summary the gate itself reviews"; that
