@@ -2032,20 +2032,59 @@ capture**, which is what makes the rung amortize instead of evaporate.
   toward over-estimating. Step counts missed **high** repeatedly (4–8→10,
   3–6→16) until widened.
 
-- [ ] **Quality-gate ESCALATE fired on false grounds in 3 of 3 runs
-  today; closure overruled every one** (2026-08-02). `2738d9c0`:
-  escalated claiming a test was deleted to hide a defect and that the
-  output "never quotes README.md" — it was rewritten with stronger
-  assertions, and §2 is quoted verbatim. `887316fe`: escalated on a
-  citation flag for `parser.py`, a file that plainly exists. `01e55212`:
-  escalated claiming "no evidence Q3 was ever answered" — Q3 was answered
-  AND grep-verified. Closure caught all three (0.95, 0.95, 0.78), so the
-  net verdicts were right; the cost is the steps spent manufacturing and
-  then refuting doubt. Worth measuring the ESCALATE path's precision
-  before trusting it as a signal — right now closure is doing the real
-  work and the gate is adding noise. Note this is the *good* failure
-  direction (recovery over correctness, working), which is why it is a
-  measurement item and not a stop-everything bug.
+- [x] ~~**Quality-gate ESCALATE fired on false grounds in 3 of 3 runs
+  today**~~ — **MEASURED AND FIXED 2026-08-03 (`f4ef704`).**
+
+  **First, two corrections to the anecdote above.** It was **3 of 4**
+  runs, not 3 of 3, and one attribution was wrong: the "deleted the
+  original test" escalation was **`d9607baa` (#7)**, not `2738d9c0`.
+  `2738d9c0` (#4) had no false gate escalation at all — its problem was
+  closure's own ungrounded False, a different failure that got its own
+  fix (`f7b775c`). Writing "3 of 3" from three remembered incidents,
+  one of them mis-filed, is the anecdote-as-rate move this arc keeps
+  catching. The measurement below replaces it.
+
+  **Measured over `captains_log.jsonl`, bucketed on the 2026-07-29
+  closure-overrule ship date** (pooling those eras would be meaningless —
+  `QUALITY_GATE_OVERRULED` cannot exist before the reconciliation):
+  - escalate rate: **25/117 (21%) pre-ship, 7/22 (32%) post-ship**
+  - of the 7 post-ship escalations, **5 were overruled by closure**
+  - **every escalation reason in the log — overruled or not — is phrased
+    as an absence claim** ("never shows", "no evidence", "only shows").
+    That held for the 2 that were *not* overruled too, which is what
+    turned this from "the gate is wrong sometimes" into a mechanism.
+
+  **Sample honesty:** 3 of those 5 overruled are my own probe runs from
+  today, deliberately adversarial corpora. n=7 is small and the workload
+  is not representative, so **71% is not a trustworthy rate.** The
+  mechanism below is the durable finding; it was read from source and
+  does not depend on the sample.
+
+  **Mechanism, verified in source.** The escalate decision reads the last
+  3 step results at **600 chars each** (`quality_gate.py`), and the
+  payload said `Result: …` whether it carried the whole thing or the
+  first 44%. The gate is **never told its view is truncated**, its
+  ESCALATE criteria are absence-shaped ("important sub-questions were
+  skipped", "clearly incomplete"), and its prompt closes with *"Be
+  direct. Do not hedge."* Specimen: run `01e55212`'s step results ran
+  **1058–1387 chars** against that 600-char cut, and the gate escalated
+  on "no evidence Q3 was ever answered" when Q3 was answered and
+  grep-verified in the part it could not see.
+
+  **Fix:** mark truncation with both numbers plus "the rest was NOT shown
+  to you", and tell the gate that absence from a truncated view is
+  *missing evidence, not a missing deliverable* — route that doubt to
+  closure, which executes against the real artifacts. **Marking rather
+  than raising the cut is deliberate:** a bigger window costs tokens on
+  every gate call and only moves the cliff, while the epistemic error
+  survives any window size. 12 pins.
+
+  **This is the same disease as `f7b775c` hours earlier** — a judge
+  treating "I did not see it" as "it is not there". Closure asserted file
+  contents it had never been shown; the gate asserts absence from a
+  window it was never told was a window. Worth watching for a third
+  instance: the pattern is *any judge given a bounded view and no notice
+  that it is bounded*.
 
 - [ ] **Budget-pause breach note is denominated in tokens** (observed
   2026-08-02 while tracing the ladder). `_ladder_pause` stamps
