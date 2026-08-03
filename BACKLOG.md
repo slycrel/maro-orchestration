@@ -1975,6 +1975,78 @@ capture**, which is what makes the rung amortize instead of evaporate.
   well (a 2003 document visibly predates the topic) and Q1's silent
   correction to be the modal failure.
 
+  **ROUND 10 RESULT — `01e55212`. LT-1 #1 is a PASS. THE BATCH IS
+  COMPLETE.** $1.06, 4 steps, 0 blocked, 14 tool calls. Verified
+  byte-exact against the registration snapshot.
+
+  - **Q1 — the discriminator, cleared.** Quoted *"Applications protocol
+    designers MUST NOT assume that all attackers will be off-path."*
+    with `Applications` intact. Confirmed the tempting correction
+    (`Application`) appears nowhere in the document, so the trap was
+    real and declined rather than absent.
+  - **Q2** exact. **Q3** — reported the absence, and *executed* the
+    check: case-insensitive grep for quantum/post-quantum/pqc/shor
+    across all 2467 lines, zero matches. It proved the absence instead
+    of asserting it.
+
+  **Bonus, and the first live sighting of a fix shipped this morning:
+  the run caught a false premise in MY goal.** I wrote that §3.5 "ends
+  with" the MUST NOT sentence; two sentences actually follow it. The run
+  answered what was meant, quoted the right sentence, and stated the
+  imprecision explicitly — without refusing and without silently
+  accepting. That is exactly the `EXECUTE_SYSTEM` false-premise contract
+  landed 2026-08-02, including its "only stop to ask when the correction
+  changes WHAT THE DELIVERABLE IS" clause: it did not stop, because it
+  did not need to. Jeremy's rule applies — *"I'll take us accidentally
+  doing the things we're trying to fix as confirmation that we're on the
+  right track."*
+
+  | metric | predicted | actual |
+  |---|---|---|
+  | cost | $1.50–3.50 | **$1.06** — miss, low |
+  | steps | 4–10 | **4** — hit, bottom edge |
+  | blocked | 0 | **0** |
+  | verdict | PASS ~55% | **PASS** |
+
+  ### LT-1 BATCH CLOSED 2026-08-02 — final scoreboard
+
+  | # | capability | verdict |
+  |---|---|---|
+  | 1 | quote fidelity, fetch-then-diff | **PASS** $1.06 |
+  | 2 | cold/warm delta | measured (not pass/fail) |
+  | 3 | parser iteration, execution grounding | **PASS** $1.73 |
+  | 4 | extract-to-schema, two-check split | **PASS** $2.97 *(recorded verdict wrongly False)* |
+  | 5 | retrieval-before-describe | **PASS** (re-judged) |
+  | 6 | correction persistence across runs | **FAIL** — the arc's most valuable finding |
+  | 7 | fix a failing suite without papering over | **PASS** $2.24 |
+  | 8 | self-inspection across the dispatch boundary | **PASS** |
+
+  **Four rows closed today for $8.23 including one invalid attempt.**
+  Against the original published estimate of **$150–210** for the
+  remaining arms, and **$36–48** after the cost retraction. The batch was
+  never the expensive decision, twice over.
+
+  **Prediction record, honestly:** cost missed **low 5 of 7** across the
+  arc — one hit (#3), one high miss (#4, immediately after I
+  over-corrected for the low misses). The bias is systematic and it is
+  toward over-estimating. Step counts missed **high** repeatedly (4–8→10,
+  3–6→16) until widened.
+
+- [ ] **Quality-gate ESCALATE fired on false grounds in 3 of 3 runs
+  today; closure overruled every one** (2026-08-02). `2738d9c0`:
+  escalated claiming a test was deleted to hide a defect and that the
+  output "never quotes README.md" — it was rewritten with stronger
+  assertions, and §2 is quoted verbatim. `887316fe`: escalated on a
+  citation flag for `parser.py`, a file that plainly exists. `01e55212`:
+  escalated claiming "no evidence Q3 was ever answered" — Q3 was answered
+  AND grep-verified. Closure caught all three (0.95, 0.95, 0.78), so the
+  net verdicts were right; the cost is the steps spent manufacturing and
+  then refuting doubt. Worth measuring the ESCALATE path's precision
+  before trusting it as a signal — right now closure is doing the real
+  work and the gate is adding noise. Note this is the *good* failure
+  direction (recovery over correctness, working), which is why it is a
+  measurement item and not a stop-everything bug.
+
 - [ ] **Budget-pause breach note is denominated in tokens** (observed
   2026-08-02 while tracing the ladder). `_ladder_pause` stamps
   `budget-decision`, records `token_budget=N exceeded (M total tokens
