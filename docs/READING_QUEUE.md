@@ -19,12 +19,12 @@ it; the queue's history is part of the decision record).
 
 | Added | Doc | Why / decision needed |
 |---|---|---|
-| 2026-08-01 | [Run teachings design](https://github.com/slycrel/maro-orchestration/blob/main/docs/RUN_TEACHINGS_DESIGN.md) | **Updated 2026-08-02:** §4b, §4a, §4d all RATIFIED (§4a/§4d via probe-gated first injection, your post-dig call; [dig forensics](https://github.com/slycrel/maro-orchestration/blob/main/docs/history/2026-08-02-probe-timing-record-dig.md)). One remaining ask: **§4c-expanded** (worked examples) — two sub-calls: terrain at its own pre-planning surface?, self-teachings fully out of runs or caveat-grade visible? |
 
 ## Done
 
 | Added | Doc | Resolved |
 |---|---|---|
+| 2026-08-01 | [Run teachings design](https://github.com/slycrel/maro-orchestration/blob/main/docs/RUN_TEACHINGS_DESIGN.md) | 2026-08-02 — all sections now answered: §4b/§4a/§4d RATIFIED earlier same day (probe-gated first injection); §4c-expanded ANSWERED — terrain at its own surface, separate call to start (maybe parallel; pre/post-planner tension named in the doc), self-teachings caveat-grade injectable as single-win seed with NO solely time-based expiration. New ask folded in → BACKLOG: planner non-action world-fact types (anecdotal vs hypothesis). Decision block in §4c-expanded. |
 | 2026-08-02 | [Playbook surprise read](https://github.com/slycrel/maro-orchestration/blob/main/docs/history/2026-08-02-playbook-surprise-read.md) | 2026-08-02 — Jeremy reacted to all flagged entries same day; disposition applied in full (live playbook + repo seed rewritten). Guidance-form decree minted ("usually, do this" — priors not requirements); P2 step-cap removed; truncation root cause fixed (bare [:200] at evolver append sites); frozen alarms/signals retired with mechanism gaps → BACKLOG. Reactions + disposition table recorded in the doc. |
 | 2026-07-31 | [Lesson-corpus surprise read](https://github.com/slycrel/maro-orchestration/blob/main/docs/history/2026-07-31-lesson-corpus-surprise-read.md) | 2026-08-02 — Jeremy: remove from the list. Chunk 1's outputs both SHIPPED (retirement-by-contradiction + what-not-how mint-form pass); chunk 2's F1–F8 family verdicts waived — nothing blocks on them now that the tail families ride decay + the contest verb organically. The F1–F8 section stays in the doc if ever wanted. |
 | 2026-08-01 | [BACKLOG § Fail-open judge-error edges](https://github.com/slycrel/maro-orchestration/blob/main/BACKLOG.md) | 2026-08-01 — Jeremy: "let's fix the promote validation." Adapter wired same session; validation harness live for the first time, SKILL_PROMOTED events stamp `validation: passed/unjudged/skipped`. |

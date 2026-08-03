@@ -207,6 +207,24 @@ everything else)? **(b)** is routing self-teachings entirely OUT of runs
 right, or should a run at least see a caveat-grade "your step counter is
 broken"? (a) is what chunk 1's acceptance test measures; (b) is taste.
 
+DECIDED — **2026-08-02 (Jeremy, decree-class; GOAL_BRAIN entry same
+day).** **(a)** Terrain gets its own surface: "a separate call in
+addition to the existing planner (maybe parallel)… seems maybe cleaner
+to have them separate to start." His tension, named for whoever builds
+it: "the overall planner should be doing this already IMO, so this
+might be a pre or post step for the planner, depending on the
+approach." Separate-to-start keeps the seam visible; integration stays
+open as a later move. **(b)** Not fully out — caveat-grade
+self-teachings are OK: "injectable as a single win type seed for a
+learning", and this should factor with import/export of maro data in
+general, "as long as it has no solely time-based expiration… really we
+want learning to be data driven in all the shapes." (No time-only
+expiry is now a standing constraint on any teaching lifecycle.)
+Folded-in NEW ASK, BACKLOG'd for design: the planner needs
+**non-action item types** — two world-fact kinds, anecdotal/
+accidentally-found and hypothesis-type findings (pattern recognition /
+ideas). Plans are not only actions.
+
 ### 4d. Validation — the existing loop, plus the probe shortcut
 
 Teachings mint **provisional** (excluded from injection until confirmed,

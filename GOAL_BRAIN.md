@@ -6085,3 +6085,76 @@ pre-chunk NOW/evolver rows honestly unjudged going forward from here.
   `append_to_playbook`'s 500-char honest-ellipsis cap is the only clip.
   Pre-rewrite state archived to `playbook_history/`. Mechanism gaps
   (alarm expiry, signal review surface) → BACKLOG.
+- **2026-08-02** — **Decision-list batch: Jeremy answered 8 of 9 pending
+  asks in one message** (decree-class; individual entries follow). #4
+  (LT-1 batch) explicitly left to the M1 session ("let's leave this to
+  the other session"). His close: "that's not everything, but should
+  cover a lot of that" — thread-structure Proposal v2 reaction and §10
+  scoping discussion remain open. Addendum to the contest-on-bad-
+  provenance entry above — the go he gave this session carried the
+  rationale in his own words: **"contest loses us efficiency, but helps
+  stay correct… we might churn way worse with some bad assumptions
+  rather than contesting and re-learning."** (Contests were executed by
+  the M1 session 16:57; runtime journal pipe done this session — was
+  owed.) New idea seeded in the same breath, captured to BACKLOG:
+  **"we should have a way (eventually?) to figure out invalid
+  assumptions, more than just failures at a micro level… not sure what
+  that looks like yet."**
+- **2026-08-02** — **§4c-expanded ANSWERED (terrain + self-teachings),
+  plus a new planner ask** (Jeremy, decree-class): terrain planning gets
+  the same surface shape as the existing planner "just as a different
+  piece… seems maybe cleaner to have them separate to start" — a
+  separate call in addition to the planner (maybe parallel), with his
+  tension named for the record: **"the overall planner should be doing
+  this already IMO, so this might be a pre or post step for the planner,
+  depending on the approach."** Self-teachings: caveat-grade injection
+  OK — **"injectable as a single win type seed for a learning"**, should
+  factor well with import/export of maro data generally, **"as long as
+  it has no solely time-based expiration… really we want learning to be
+  data driven in all the shapes."** Folded-in NEW ASK: **"we need to add
+  non-action types to the planner. I think 2 types of world facts:
+  anecdotal/accidentally found and hypothesis type findings (pattern
+  recognition/ideas)."** He skim-reviewed the doc, open to more
+  discussion. READING_QUEUE row → Done; world-fact plan-item types →
+  BACKLOG (design needed before build).
+- **2026-08-02** — **Budget extension ladder decreed** (Jeremy,
+  decree-class; bandaid, his word): **"out of budget becomes a
+  notification the first time with a budget extension (just add a run's
+  worth of budget for the extension), and the same for the second
+  extension, with a pause-ask-user the third time in the same run. For
+  now we want to get this working, I do want to be budget optimized, but
+  I want it to work and be expensive rather than not work and be budget
+  friendly. So keep the budget hooks, but no big stoppage yet for
+  that."** Amends the 2026-07-29 caps=circuit-breakers decree at the
+  enforcement edge only: the breaker still fires and still records, but
+  firing now means notify + one-run-budget extension (twice) then
+  pause-ask-user — not kill. Spend-UX decree still governs the
+  notification's language (effort words on the conversation channel,
+  dollars in internals).
+- **2026-08-02** — **NODE_CANDIDATE promotion mirrors skills** (Jeremy,
+  decree-class): **"same as skills, promoted to maro-local usable, up to
+  the user to pick permanence. later we'll have to refine that UX
+  (smells like auto-mode settings for prompting), but I think we need
+  the user involved for permanent vs useful. And there might be another
+  layer/process in there… Down the road though. Open to discussion on
+  that if there might be a better answer now."** Shape decided, build
+  queued (BACKLOG item updated); the structural tripwire pin on
+  promotion symbols stands for whoever builds it.
+- **2026-08-02** — **Link-farm lf- nodes are a third-party data
+  resource, not maro knowledge** (Jeremy, decree-class): asked whether
+  the end user should understand/see that link-farm informs goal
+  research — **"no, that's a resource to use towards goals, not
+  something the end user should need to understand or be aware of;
+  treat like a 3rd party website for gathering data, because it is
+  (just happens to be me doing both, they're overlapping but not the
+  same)."** Disposition: lf- nodes stay OUT of live goal-context
+  knowledge injection — consultable as a research corpus, never
+  injected as learned knowledge. Resolves the TF-IDF injection-exposure
+  caveat on the 2026-08-02 re-import and sets the edge-contamination
+  item's fix direction (1).
+- **2026-08-02** — **House-style memory import (b) on HOLD** (Jeremy):
+  **"I have another arc I'm working on at work (a full panel review
+  skill that is codeLikeJeremy on steroids) and I think we can steal
+  some more ideas from that in a few days, when that's a bit more
+  fleshed out."** Revisit when he brings it (~few days from
+  2026-08-02).

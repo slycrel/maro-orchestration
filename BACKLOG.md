@@ -23,6 +23,24 @@ full triage: 2026-07-04.
 
 Ordered open work that matters. Top of the list is next.
 
+### Planner non-action item types — world facts (Jeremy ask, 2026-08-02; design before build)
+
+Decreed in the §4c decision batch: "we need to add non-action types to
+the planner. I think 2 types of world facts: anecdotal/accidentally
+found and hypothesis type findings (pattern recognition/ideas)." Plans
+today are action-only; a run that stumbles onto a fact ("archive X is
+blocked", "this dataset has a second sheet") or forms a hypothesis
+("these failures cluster by transport") has no plan-native place to put
+it — it leaks into prose or dies with the step. Design questions before
+code: where world-fact items live in the plan schema (peer of steps? a
+facts ledger the plan references?), how they flow into terrain/teaching
+mint (the RUN_TEACHINGS §4c terrain surface is the obvious consumer for
+the anecdotal kind; hypotheses look more like the hypotheses.jsonl
+lane), and how the planner is told it MAY emit them without being told
+it must (guidance-form decree applies). He's open to more discussion —
+"we can discuss more here if desired." Related: RUN_TEACHINGS_DESIGN
+§4c DECIDED block, GOAL_BRAIN 2026-08-02 entry.
+
 ### SP. Session-protocol arc — two-box Hermes dispatch, interactive goals, effort UX (OPENED 2026-07-15, Jeremy)
 
 The umbrella for the next big lane; full skeleton + stance decrees in
@@ -2497,6 +2515,11 @@ pointer.
   back, fresh agent + skill makes the change, score against his actual
   diff. Decree-with-tripwire applied to style; HOUSE_STYLE.md can be
   tested the same way (fixtures = real maro sessions).
+  **HOLD 2026-08-02 (Jeremy):** don't build the import yet — "I have
+  another arc I'm working on at work (a full panel review skill that is
+  codeLikeJeremy on steroids) and I think we can steal some more ideas
+  from that in a few days, when that's a bit more fleshed out."
+  Revisit when he brings the fleshed-out version (~2026-08-05+).
 
 ### Open-thread structure — beyond the backlog (DISCUSSION OPEN, updated 2026-07-28)
 
@@ -3019,22 +3042,21 @@ and maintainable over time."** Step 1 is greenlit:
     `closure_reverdict_after_guard_fix`, conf 0.75. Original False and
     its timestamp stay in the row's history — data not rewritten, the
     correction is additive.
-  - [ ] **CASCADE, needs Jeremy's call — three lessons minted on a
-    fabricated premise.** The false demotion drove the diagnosis to
+  - [x] **CASCADE RESOLVED 2026-08-02 — all three contested on Jeremy's
+    go.** Original finding: the false demotion drove the diagnosis to
     conclude `tool_missing`, and finalize minted 3 `achieved=False`
     lessons (`80f47016` tool_missing, `65e49b27` tool_preflight,
-    `50c68716` self_cert_unreliable) whose stated rationale is that
-    fetch "wasn't available" and the output was "unverifiable" — **both
-    false; the run fetched six real OpenLibrary records with HTTP 200s.**
-    `50c68716` is the actively harmful one: it teaches distrust of an
-    adversarial-verification pass that was, in this run, correct.
-    **Not contested unilaterally**: the other session's V1 contest is
-    *sticky* (no un-contest verb until a refight slice exists), so
-    retiring three lessons on Jeremy's store is an irreversible call —
-    surfaced per the retention posture. Note `50c68716`'s advice is
-    arguably sound on its own merits even though its provenance is
-    contaminated; a re-mint from honest evidence would be the clean path.
-    Verb ready when he says go: `maro-memory contest <id> "<reason>"`.
+    `50c68716` self_cert_unreliable) whose stated rationale — fetch
+    "wasn't available", output "unverifiable" — was false (the run
+    fetched six real OpenLibrary records with HTTP 200s). Jeremy's call,
+    given to both sessions: "contest loses us efficiency, but helps stay
+    correct… we might churn way worse with some bad assumptions rather
+    than contesting and re-learning." M1 session executed the contests
+    16:57 (both stores, leak-checked across tiered/flat injection +
+    load_lessons; GOAL_BRAIN contest-on-bad-provenance entry). No manual
+    re-mint of `50c68716`'s advice — contest-and-relearn is the decreed
+    path; if it's real it re-derives from honest evidence. Spawned idea
+    captured below: invalid-assumption detection above micro-failures.
   - **Gotcha recorded (cost me a wrong-path write):** `OPENCLAW_WORKSPACE`
     is a LEGACY pin — setting it forces `orch_root()/memory`
     (`<ws>/prototypes/maro-orchestration/memory`), NOT the live ledger.
@@ -3088,6 +3110,25 @@ and maintainable over time."** Step 1 is greenlit:
   patch/diff-edit fix already noted there.
 
 ## Vision / Deferred
+
+### Invalid-assumption detection above the micro level (Jeremy seed, 2026-08-02)
+
+Seeded while green-lighting the CASCADE contests: "that brings up a
+good point — we should have a way (eventually?) to figure out invalid
+assumptions, more than just failures at a micro level… not sure what
+that looks like yet though." Today's machinery catches bad premises
+only where they surface as individual failures (provenance guard,
+contradiction flow, contest verb, closure disagreement) — all
+micro-level, one artifact at a time. The gap: an assumption that
+quietly shapes many decisions (a lesson corpus, a config posture, a
+"we can't do X" belief) has no detector until something breaks loudly
+enough to audit. Possible shapes when this gets picked up: assumption
+provenance (what facts does this plan/lesson REST on — the
+evidence_sources stamp is a start), periodic re-probe of load-bearing
+beliefs (terrain verify_probe generalized), or contradiction sweeps
+across stores rather than within them. Not a build item yet — the
+phrasing is the value. Related: contest-on-bad-provenance decree,
+terrain teachings (cheap re-checkability), hypotheses lane.
 
 ### Verbal UX for orchestration (2026-07-28, Jeremy — revisit trigger named)
 
@@ -3375,10 +3416,13 @@ coordination brain is for. Still later; still direction, not design.
     of edges. Not investigated further; flagging so it isn't
     re-discovered as a surprise later.
 
-  **Fix direction, in order:** (1) decide whether `lf-` link-farm nodes
-  should ever inform live goal execution at all, or should be a
-  read-only reference corpus queried separately (a domain/tag exclusion
-  in `query_knowledge` is a 2-line fix once decided); (2) if adjacent-
+  **Fix direction, in order:** (1) **DECIDED 2026-08-02 (Jeremy,
+  decree-class): lf- nodes are a third-party data resource, not maro
+  knowledge** — "treat like a 3rd party website for gathering data,
+  because it is"; never injected into goal context as learned
+  knowledge, end user need not know the source exists. Exclusion
+  shipped same day (see knowledge_web lf- injection guard + tests);
+  the corpus stays queryable as a reference source. (2) if adjacent-
   knowledge retrieval over the *real* knowledge base is still wanted, build
   an actual edge-generation mechanism for it — since manual `[[wiki-link]]`
   authoring isn't a convention anyone follows, the realistic option is an
@@ -4293,7 +4337,7 @@ BACKLOG; era refs in `docs/KNOWLEDGE_JOURNEY.md` + era files):**
 **Battery side-finds V3/V4 (verified against the tree 2026-07-21;
 evidence in `docs/history/2026-07-21-phase05-battery.md`):**
 
-- [ ] **V3 — NODE_CANDIDATE promote path missing.** Bridged knowledge nodes are born `NODE_CANDIDATE` (conf 0.3) and nothing ever promotes them; live readers filter ACTIVE-only, so every live write is invisible to every live read. **Liveness pin SHIPPED 2026-07-29** (`test_knowledge_bridge.py::TestCandidateInvisibilityPin`): proves write→candidate→invisible end-to-end at the recall surface, plus a structural tripwire that fails when any node-promotion symbol appears — whoever builds promotion must revisit the pin. **Promotion criteria remain Jeremy's call** (what earns candidate→active: times_applied? validation events? hand adjudication?) — deliberately NOT built.
+- [ ] **V3 — NODE_CANDIDATE promote path missing.** Bridged knowledge nodes are born `NODE_CANDIDATE` (conf 0.3) and nothing ever promotes them; live readers filter ACTIVE-only, so every live write is invisible to every live read. **Liveness pin SHIPPED 2026-07-29** (`test_knowledge_bridge.py::TestCandidateInvisibilityPin`): proves write→candidate→invisible end-to-end at the recall surface, plus a structural tripwire that fails when any node-promotion symbol appears — whoever builds promotion must revisit the pin. **Promotion criteria DECIDED 2026-08-02 (Jeremy, decree-class): mirror skills** — "same as skills, promoted to maro-local usable, up to the user to pick permanence." Auto-promotion to usable on the same shape of signal skills use (validation/use); the user gates permanent-vs-useful ("I think we need the user involved for permanent vs useful"). UX refinement later — "smells like auto-mode settings for prompting"; possible extra layer/process down the road, open to discussion. Build now unblocked; revisit the tripwire pin when building.
 - [x] **V4 — knowledge.py canon-candidate dict-vs-attr + phantom `canonize` command.** SHIPPED 2026-07-29 (autonomous batch). Degradation verified worse than noted: `get_canon_candidates` returns dict rows, so `_stage3_data`'s attr access errored exactly and only when candidates existed (empty list → clean zeros; non-empty → `{"error": ...}`) — the report broke precisely when there was something to report. Fixed to dict access (rows arrive pre-sorted; redundant re-sort dropped) + non-empty pin test (old tests only exercised the empty path, and one asserted `or "error" in result`). Phantom `canonize` hint replaced with the honest human gate ("no auto-writer by design; promote by editing AGENTS.md by hand" — matches `get_canon_candidates`' never-auto-written docstring). Building a real `canonize` AGENTS.md-writer would be a design decision (entry format, placement) — deliberately not taken.
 
 **Era-file C-tier drops (grounding-checker review §C — out-of-arc,
