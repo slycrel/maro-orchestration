@@ -19,6 +19,7 @@ it; the queue's history is part of the decision record).
 
 | Added | Doc | Why / decision needed |
 |---|---|---|
+| 2026-08-03 | [World-fact plan items design](https://github.com/slycrel/maro-orchestration/blob/main/docs/WORLD_FACTS_DESIGN.md) | Design sketch for your §4c folded-in ask ("non-action types to the planner… anecdotal + hypothesis world facts"). Mostly wiring over shipped precedents (decisions directive, terrain ledger, V3 promotion, observe_pattern). 3 decisions in §7: hypothesis quarantine at injection, planner-emission ordering (slice 3 vs first), cap sizes. |
 
 ## Done
 

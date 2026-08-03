@@ -41,6 +41,15 @@ it must (guidance-form decree applies). He's open to more discussion —
 "we can discuss more here if desired." Related: RUN_TEACHINGS_DESIGN
 §4c DECIDED block, GOAL_BRAIN 2026-08-02 entry.
 
+**Design sketch WRITTEN 2026-08-03 → `docs/WORLD_FACTS_DESIGN.md`**
+(reading-queue row same day). Shape: completion-tool `world_facts`
+side-channel mirroring the decisions directive; run-scoped fact ledger
+generalizing terrain's seam (manifest-persisted so facts survive
+replan); landing split by kind at finalize (anecdotal → teaching/bridge
+mint riding V3 earned promotion; hypothesis → observe_pattern
+confirmation lane, quarantined from live injection until confirmed).
+Three decisions posed to Jeremy in §7. Build gated on his read.
+
 ### SP. Session-protocol arc — two-box Hermes dispatch, interactive goals, effort UX (OPENED 2026-07-15, Jeremy)
 
 The umbrella for the next big lane; full skeleton + stance decrees in
@@ -3722,6 +3731,16 @@ coordination brain is for. Still later; still direction, not design.
   design decision (what should the graph even encode) before it's an
   engineering task, not something to improvise past Jeremy's own stated
   uncertainty about doing it well.
+
+  **Placement wart accepted as-is (Jeremy 2026-08-03):** after the
+  disposition-hardening pass (both import lanes stamp lf-, bridge never
+  dedups against reference rows, promotion skips reference rows —
+  b8b9840), Jeremy: "it probably does need some cleanup later, but I'm
+  ok with it as-is for now." The eventual cleanup is a separate
+  reference store so third-party data stops living inside
+  knowledge_nodes.jsonl and the prefix carve-outs become unnecessary —
+  natural piece of the artifacts-over-streams arc, not urgent while the
+  carve-outs hold.
 
 ### Graph memory + recursive-orchestration scoped memory (2026-06-21, vision)
 
