@@ -1770,7 +1770,8 @@ source: <a href="{_esc(_GITHUB_BLOB_BASE + "docs/READING_QUEUE.md")}" target="_b
 """
 
 
-def write_reading_page(root: Optional[Path] = None) -> Optional[str]:
+def write_reading_page(root: Optional[Path] = None,
+                       queue_doc: Optional[Path] = None) -> Optional[str]:
     """Render docs/READING_QUEUE.md into `runs_root()/reading.html`. Never raises.
 
     The queue is repo-side truth, hand-edited and landed alongside the docs
@@ -1778,6 +1779,13 @@ def write_reading_page(root: Optional[Path] = None) -> Optional[str]:
     server without SSH. Links go to GitHub's rendered copy on main —
     nothing is self-hosted (Jeremy 2026-07-28: "better just as a link to
     the github-pushed artifact so we don't reinvent the wheel").
+
+    `queue_doc` overrides the source file. `scripts/land.sh` passes the
+    doc as it exists at the LANDED sha rather than in the caller's working
+    tree — landing a named ref, or landing from a worktree, means those
+    two can differ, and the page should show what main now says (Jeremy
+    2026-08-03: he expected this page to track commits, and it only ever
+    refreshed on run finalize).
     """
     try:
         if root is None:
@@ -1786,7 +1794,7 @@ def write_reading_page(root: Optional[Path] = None) -> Optional[str]:
         root = Path(root)
         root.mkdir(parents=True, exist_ok=True)
         try:
-            text = _READING_QUEUE_DOC.read_text(encoding="utf-8")
+            text = Path(queue_doc or _READING_QUEUE_DOC).read_text(encoding="utf-8")
         except OSError:
             text = ""
         out = root / "reading.html"

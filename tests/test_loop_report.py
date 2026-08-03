@@ -494,6 +494,28 @@ def test_reading_page_links_the_queue_doc_itself(monkeypatch, tmp_path):
     assert "Queue is empty" in content  # the empty-state path still links it
 
 
+def test_write_reading_page_queue_doc_override(monkeypatch, tmp_path):
+    """`queue_doc` wins over the repo copy — the seam land.sh renders through.
+
+    It passes the doc as it exists at the LANDED sha, which can differ from
+    the caller's working tree (named-ref land, or landing from a worktree).
+    """
+    repo_copy = tmp_path / "repo_READING_QUEUE.md"
+    repo_copy.write_text(
+        "## Queue\n\n| Added | Doc | Why |\n|---|---|---|\n"
+        "| 2026-01-01 | docs/stale.md | working-tree copy |\n"
+    )
+    monkeypatch.setattr(lr, "_READING_QUEUE_DOC", repo_copy)
+    landed = tmp_path / "landed.md"
+    landed.write_text(
+        "## Queue\n\n| Added | Doc | Why |\n|---|---|---|\n"
+        "| 2026-08-03 | docs/fresh.md | landed copy |\n"
+    )
+    content = Path(lr.write_reading_page(tmp_path, queue_doc=landed)).read_text()
+    assert "landed copy" in content
+    assert "working-tree copy" not in content
+
+
 def test_reading_page_accepts_markdown_link_doc_cells(monkeypatch, tmp_path):
     """Concurrent sessions write the Doc cell both as a bare path and as a
     full markdown link (M1 lane, 2026-07-28) — both must render as a real

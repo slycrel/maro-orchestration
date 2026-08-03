@@ -70,7 +70,8 @@ N="$(git rev-list --count "${MAIN}..${SHA}")"
 echo "landing ${N} commit(s) onto main:"
 git --no-pager log --oneline "${MAIN}..${SHA}"
 echo "files:"
-git diff --name-only "$MAIN" "$SHA" | sed 's/^/  /'
+LANDED_FILES="$(git diff --name-only "$MAIN" "$SHA")"
+sed 's/^/  /' <<<"$LANDED_FILES"
 
 if $DRY; then
     echo "(dry-run — nothing pushed)"
@@ -86,7 +87,7 @@ fi
 # --skip-checks is the emergency bypass.
 if ! $SKIP_CHECKS; then
     CHECKS=()
-    CHANGED="$(git diff --name-only "$MAIN" "$SHA")"
+    CHANGED="$LANDED_FILES"
     if grep -q '^docs/' <<<"$CHANGED"; then
         CHECKS+=(tests/test_docs_frontmatter.py)
     fi
@@ -127,6 +128,35 @@ fi
 # ff-only push to main over SSH. Never --force on main.
 git push origin "${SHA}:refs/heads/main"
 echo "landed: origin/main -> ${SHA}"
+
+# Post-land reading-page refresh (2026-08-03, Jeremy: he'd assumed the page
+# "got updated on commit", and found it three days stale because it only ever
+# rendered on run finalize — so a queue row landed in a quiet stretch stayed
+# invisible on the surface he actually reads). Fires ONLY when this land
+# touched the queue doc, renders from the LANDED blob (not the working tree,
+# which can differ when landing a named ref or landing from a worktree), and
+# never fails the land — the push already succeeded and a stale page is not
+# worth a nonzero exit.
+if grep -qx 'docs/READING_QUEUE\.md' <<<"$LANDED_FILES"; then
+    RQ_PY="python3"
+    if [ -x "$REPO_DIR/.venv/bin/python" ]; then
+        RQ_PY="$REPO_DIR/.venv/bin/python"
+    fi
+    RQ_TMP="$(mktemp /tmp/reading-queue.XXXXXX.md)"
+    if git show "${SHA}:docs/READING_QUEUE.md" >"$RQ_TMP" 2>/dev/null && \
+       OUT=$(cd "$REPO_DIR" && PYTHONPATH=src "$RQ_PY" -c '
+import sys
+from pathlib import Path
+import loop_report
+p = loop_report.write_reading_page(queue_doc=Path(sys.argv[1]))
+print(p or "")
+' "$RQ_TMP" 2>/dev/null) && [ -n "$OUT" ]; then
+        echo "reading page refreshed: ${OUT}"
+    else
+        echo "reading page refresh skipped (non-fatal)" >&2
+    fi
+    rm -f "$RQ_TMP"
+fi
 
 # Post-land CI watch (2026-08-01): detached watcher polls the Actions run
 # for this SHA and Telegram-pings ONLY on a red conclusion (green and
