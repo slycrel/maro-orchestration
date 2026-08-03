@@ -1347,6 +1347,54 @@ class TestQueryKnowledge:
     def test_empty_store(self, tmp_path):
         assert kw.query_knowledge("anything") == []
 
+    def test_link_farm_nodes_excluded_by_default(self, tmp_path):
+        # lf- nodes are a third-party reference corpus (decree 2026-08-02):
+        # even a perfectly-matching, high-confidence lf- node must not rank
+        # into a default query — that path feeds goal-context injection.
+        kw.append_knowledge_node(KnowledgeNode(
+            node_id="lf-abc1234567", node_type="insight",
+            title="Network retry failure",
+            description="network retry failure network retry failure",
+            confidence=0.9,
+        ))
+        kw.append_knowledge_node(KnowledgeNode(
+            node_id="real1", node_type="principle", title="Retry Patterns",
+            description="exponential backoff retry network failure recovery",
+            confidence=0.8,
+        ))
+        results = kw.query_knowledge("network retry failure")
+        assert [n.node_id for n in results] == ["real1"]
+
+    def test_link_farm_nodes_included_when_reference_opt_in(self, tmp_path):
+        kw.append_knowledge_node(KnowledgeNode(
+            node_id="lf-abc1234567", node_type="insight",
+            title="Network retry failure",
+            description="network retry failure recovery",
+            confidence=0.9,
+        ))
+        results = kw.query_knowledge(
+            "network retry failure", include_reference=True)
+        assert [n.node_id for n in results] == ["lf-abc1234567"]
+
+    def test_inject_knowledge_for_goal_never_carries_link_farm(self, tmp_path):
+        # The one live injection consumer (recall.py step 8) has no
+        # include_reference escape hatch — pin that the formatted block
+        # can't smuggle curated-tweet content into a run.
+        kw.append_knowledge_node(KnowledgeNode(
+            node_id="lf-def7654321", node_type="insight",
+            title="Curated tweet about databases",
+            description="database sharding database sharding database",
+            confidence=0.9,
+        ))
+        kw.append_knowledge_node(KnowledgeNode(
+            node_id="real2", node_type="principle", title="Database Sharding",
+            description="horizontal partitioning database performance scale",
+            confidence=0.8,
+        ))
+        block = kw.inject_knowledge_for_goal("database sharding performance")
+        assert "Curated tweet" not in block
+        assert "Database Sharding" in block
+
     def test_min_confidence_filter(self, tmp_path):
         kw.append_knowledge_node(KnowledgeNode(
             node_id="q3", node_type="insight", title="Low confidence",

@@ -1776,6 +1776,13 @@ NODE_SUPERSEDED = "superseded"
 NODE_DEPRECATED = "deprecated"
 NODE_CANDIDATE = "candidate"     # Not yet validated
 
+# Link-farm import prefix (scripts/import_link_farm.py stamps node_id as
+# "lf-" + sha256(url)[:10]). These nodes are a third-party reference corpus,
+# not maro-learned knowledge — Jeremy 2026-08-02: "treat like a 3rd party
+# website for gathering data." They must never rank into goal-context
+# injection; reference queries opt in via include_reference=True.
+LINK_FARM_PREFIX = "lf-"
+
 
 @dataclass
 class KnowledgeNode:
@@ -1957,12 +1964,20 @@ def query_knowledge(
     node_type: Optional[str] = None,
     max_results: int = 5,
     min_confidence: float = 0.0,
+    include_reference: bool = False,
 ) -> List[KnowledgeNode]:
     """Query knowledge nodes by goal relevance (TF-IDF ranked).
 
     Returns the most relevant active nodes for a given goal/query string.
+
+    Reference-corpus nodes (link-farm imports, ``lf-`` prefix) are excluded
+    unless ``include_reference=True``: they are third-party source material
+    for research, not learned knowledge, and must not reach goal-context
+    injection (decree 2026-08-02).
     """
     nodes = load_knowledge_nodes(domain=domain, node_type=node_type)
+    if not include_reference:
+        nodes = [n for n in nodes if not n.node_id.startswith(LINK_FARM_PREFIX)]
     if not nodes:
         return []
 
