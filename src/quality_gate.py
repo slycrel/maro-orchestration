@@ -121,7 +121,16 @@ def _lens_evidence_artifact(goal: str, done_steps: list) -> str:
 
 
 def _lens_evidence_probe(goal: str, done_steps: list) -> str:
-    """Probe-armed seat: same last-3 summary the gate itself reviews."""
+    """Probe-armed seat: the last-3 SHAPE the gate reviews, at 500 chars.
+
+    No longer byte-identical to the gate's own payload: the gate's cut went
+    600 -> 4000 on 2026-08-03 after measurement showed 600 hid 57% of the
+    evidence. This seat was left at 500 deliberately — these lenses are an
+    evidence-DIVERSITY panel, so making every seat see the same thing would
+    defeat them, and the recorded ablation baselines were taken at 500.
+    Whether the panel wants a wide-view seat is a separate call; filed
+    rather than changed under cover of a gate fix.
+    """
     steps = done_steps[-3:]
     lines = [
         f"Step {getattr(s, 'index', i + 1)}: {getattr(s, 'text', '?')[:80]}\n"
@@ -436,7 +445,33 @@ def run_llm_council(
     return CouncilVerdict(critiques=acting, weak_count=acting_weak,
                           escalate=escalate, source=acting_source)
 
-_REVIEW_STEP_CUT = 600
+# Per-step cut for the gate's review payload.
+#
+# Was 600 from the gate's original commit (3a0884f, 2026-03-31), when this
+# was a cheap-model reviewer and `default_model_tier` was `cheap`. Nothing
+# ever justified the number; it outlived its era by four months.
+#
+# Measured 2026-08-03 over 261 recorded loop payloads (the real last-3-step
+# distribution: median 3,323 chars, p90 5,659, max 23,398):
+#
+#     cut     payloads intact   text shown   median extra tokens
+#     600            15%            43%              -
+#     2500           88%            91%             422
+#     4000           95%            94%             422
+#     10000          99%            98%             422
+#
+# At 600 the gate judged **43% of the evidence** and 85% of payloads were
+# silently cut. The extra input for 4000 is ~422 tokens at the median —
+# **$0.0013 per call** at mid pricing — and the extra plateaus there because
+# the median payload already fits; only the tail grows, and the p99 payload
+# is still ~2,100 tokens. A false ESCALATE, by contrast, re-runs the entire
+# loop at the next model tier. Trading a tenth of a cent against that was
+# never a good trade.
+#
+# Kept bounded rather than removed: a pathological step that dumps megabytes
+# should not blow up the call. 4000 moves the truncation from 85% of
+# payloads to 5%, and those 5% are still marked honestly below.
+_REVIEW_STEP_CUT = 4000
 
 
 def render_step_for_review(step: Any, fallback_index: int,
@@ -458,10 +493,13 @@ def render_step_for_review(step: Any, fallback_index: int,
     gate escalated on "no evidence Q3 was ever answered" when Q3 was
     answered, grep-verified, in the part it could not see.
 
-    Marking is deliberately preferred over raising the cut: a bigger window
-    costs tokens on every gate call and only moves the cliff, while the
-    epistemic error — treating "not in my view" as "not done" — survives any
-    window size.
+    Marking and a wider window are both needed, and I initially shipped only
+    the marker on the reasoning that "a bigger window costs tokens and only
+    moves the cliff". That was asserted, not measured, and the measurement
+    (see `_REVIEW_STEP_CUT`) says it was wrong: the cost is ~$0.0013 a call
+    and the cliff moves from 85% of payloads to 5%. The marker still matters
+    for that 5% — the epistemic error survives any window size — but a window
+    that hid 57% of the evidence was the bigger problem.
     """
     text = str(getattr(step, "text", "?") or "?")[:80]
     result = str(getattr(step, "result", "") or "")

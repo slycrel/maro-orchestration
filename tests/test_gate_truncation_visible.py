@@ -22,14 +22,14 @@ def _step(result, index=3, text="write the report"):
 
 class TestTruncationIsMarked:
     def test_long_result_is_marked_with_both_numbers(self):
-        body = "x" * 1364
+        body = "x" * (_REVIEW_STEP_CUT + 764)
         out = render_step_for_review(_step(body), 1)
         assert "TRUNCATED" in out
         assert str(_REVIEW_STEP_CUT) in out      # how much you saw
-        assert "1364" in out                      # how much existed
+        assert str(_REVIEW_STEP_CUT + 764) in out  # how much existed
 
     def test_marked_result_says_the_rest_was_withheld(self):
-        out = render_step_for_review(_step("y" * 900), 1)
+        out = render_step_for_review(_step("y" * (_REVIEW_STEP_CUT + 300)), 1)
         assert "NOT shown to you" in out
 
     def test_only_the_cut_prefix_is_included(self):
@@ -59,6 +59,33 @@ class TestShortResultsUnchanged:
     def test_missing_attributes_fall_back(self):
         out = render_step_for_review(SimpleNamespace(), 4)
         assert "Step 4" in out
+
+
+class TestCutIsWideEnoughToBeUseful:
+    """The marker fixed the epistemics; the cut fixed the evidence.
+
+    Measured over 261 recorded loop payloads: median last-3-step payload is
+    3,323 chars, p90 5,659. At the original 600 only 15% of payloads
+    survived intact and the gate judged 43% of the text. The extra input at
+    4000 is ~422 tokens median -- about $0.0013 a call -- against a false
+    ESCALATE that re-runs the whole loop at the next model tier.
+    """
+
+    def test_cut_covers_the_median_observed_payload(self):
+        # median single-step result is ~1.1k chars (3,323 over ~3 steps);
+        # a cut below that means routinely judging half an answer
+        assert _REVIEW_STEP_CUT >= 2500
+
+    def test_cut_is_still_bounded(self):
+        """Not removed -- a pathological step dumping megabytes must not
+        blow up the gate call."""
+        assert _REVIEW_STEP_CUT <= 20000
+
+    def test_a_typical_step_result_now_survives_intact(self):
+        typical = "s" * 1400          # ~median single-step result
+        out = render_step_for_review(_step(typical), 1)
+        assert "TRUNCATED" not in out
+        assert typical in out
 
 
 class TestGatePromptContract:
