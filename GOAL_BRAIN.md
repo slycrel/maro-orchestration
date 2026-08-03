@@ -6198,3 +6198,25 @@ pre-chunk NOW/evolver rows honestly unjudged going forward from here.
   re-observed 2x promotes and surfaces through the live recall chain.
   Permanent-vs-useful user gate deliberately NOT built — that's the
   "auto-mode settings" UX layer Jeremy parked for down the road.
+- **2026-08-03** — **lf- disposition hardened** (out of Jeremy's
+  "shouldn't lf- promote like any other 3rd party data?" question —
+  answer: promotion is the trust verb for maro-DERIVED knowledge, and
+  genuine third-party data never promotes because it never enters the
+  store; lf- is the anomaly that got materialized INTO
+  knowledge_nodes.jsonl, and the prefix carve-outs make it behave like
+  the external website it is). Two holes found answering it, both
+  closed: (1) the second import lane (`knowledge import-links` CLI verb
+  → knowledge_web.import_link_farm) minted UNMARKED rows — dodging the
+  query exclusion and the promotion skip by construction; never used
+  against the live store (census: 747 lf-, 394 bridge candidates, 0
+  unmarked third-party rows), now stamps the lf- prefix and mints
+  ACTIVE like the script lane. (2) The bridge's dedup upsert matched
+  against lf- rows — a maro lesson title-colliding with a reference
+  row (Jaccard ≥ 0.7) would have reinforced the third-party row
+  instead of minting a first-party node, silently swallowing the
+  learning into a corpus that never injects and never promotes. The
+  bridge now skips reference rows when deduping. The lane by which lf-
+  data DOES earn trust is unchanged and correct: a run consults the
+  reference corpus, succeeds, the bridge mints a maro-authored
+  candidate citing the lf- URL in sources, and THAT earns promotion by
+  re-derivation.

@@ -105,7 +105,14 @@ Loop starting (recall.py loop slice)
 bridge-minted nodes (`knowledge_bridge.outcome_to_knowledge`,
 author="knowledge_bridge") are born `NODE_CANDIDATE` at confidence 0.3 —
 invisible to every live reader (ACTIVE-only loads; lf- reference-corpus
-nodes are excluded from queries regardless of status). Re-deriving the same
+nodes are excluded from queries regardless of status). Both link-farm
+import lanes (scripts/import_link_farm.py and the `knowledge
+import-links` CLI verb) stamp the lf- prefix and mint ACTIVE — reference
+data is consult-ready via `include_reference=True`, never
+trust-earning — and the bridge's dedup upsert skips lf- rows, so a maro
+lesson that title-collides with a reference row mints its own
+first-party node instead of being swallowed into the excluded corpus
+(both fixed 2026-08-03). Re-deriving the same
 generalization from a later run hits the bridge's dedup upsert (Jaccard ≥
 0.7 title match): confidence +0.05, times_applied +1 — on a candidate,
 times_applied counts exactly these independent re-observations (the

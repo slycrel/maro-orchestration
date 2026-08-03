@@ -1528,7 +1528,7 @@ def _make_post(url="https://x.com/user/1", summary="Test post", topics=None,
 
 class TestImportLinkFarm:
     def _all_nodes(self):
-        """Load nodes of any status (imported nodes are NODE_CANDIDATE)."""
+        """Load nodes of any status."""
         return kw.load_knowledge_nodes(status=None)
 
     def test_imports_enriched_posts(self, tmp_path):
@@ -1571,12 +1571,22 @@ class TestImportLinkFarm:
         assert nodes[0].node_type == "pattern"
         assert nodes[0].domain == "orchestration"
 
-    def test_node_starts_as_candidate(self, tmp_path):
+    def test_node_marked_reference_and_active(self, tmp_path):
+        # 2026-08-03: this lane used to mint UNMARKED candidates — dodging
+        # every lf- carve-out (query exclusion, promotion skip). Both import
+        # lanes now stamp the reference prefix, and reference rows are born
+        # ACTIVE (consult-ready via include_reference=True; the
+        # candidate→active trust ladder is for maro-learned knowledge only).
         posts = [_make_post(url="https://x.com/a/1")]
         kw.import_link_farm(posts)
         nodes = self._all_nodes()
-        assert nodes[0].status == kw.NODE_CANDIDATE
+        assert nodes[0].node_id.startswith(kw.LINK_FARM_PREFIX)
+        assert nodes[0].status == kw.NODE_ACTIVE
         assert nodes[0].confidence < 0.5  # external, unvalidated
+        # Reference disposition holds end to end: never in default queries,
+        # never eligible for promotion.
+        assert kw.query_knowledge("Summary A") == []
+        assert kw.promote_knowledge_candidates() == []
 
     def test_url_preserved_as_source(self, tmp_path):
         url = "https://x.com/user/999"

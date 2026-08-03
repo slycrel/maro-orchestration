@@ -127,6 +127,39 @@ class TestUpsertKnowledge:
         all_nodes = load_knowledge_nodes(status=None)  # type: ignore[arg-type]
         assert any(n.node_id == node.node_id for n in all_nodes)
 
+    def test_title_collision_with_reference_row_mints_own_node(self, tmp_workspace):
+        # 2026-08-03: a maro-derived lesson whose title Jaccard-matches an
+        # lf- reference row must NOT reinforce that row — reference rows are
+        # excluded from injection and promotion, so the learning would be
+        # swallowed invisibly. Maro's derivation gets a first-party node.
+        from knowledge_bridge import upsert_knowledge_from_candidate
+        from knowledge_web import (
+            KnowledgeNode, LINK_FARM_PREFIX, append_knowledge_node,
+            load_knowledge_nodes)
+
+        title = "Verify step independence before parallel execution"
+        ref = KnowledgeNode(
+            node_id=LINK_FARM_PREFIX + "cafe12345678",
+            node_type="principle", title=title,
+            description="Third-party X post saying the same thing.",
+        )
+        append_knowledge_node(ref)
+
+        node, is_new = upsert_knowledge_from_candidate(
+            title=title,  # identical → Jaccard 1.0, the worst case
+            description="Learned from run outcome.",
+            node_type="principle",
+            domain="orchestration",
+            sources=["outcome:test-1"],
+            existing_nodes=load_knowledge_nodes(status=None),  # type: ignore[arg-type]
+        )
+        assert is_new is True, "maro lesson was swallowed into the lf- reference row"
+        assert not node.node_id.startswith(LINK_FARM_PREFIX)
+        # The reference row is untouched.
+        ref_after = [n for n in load_knowledge_nodes(status=None)  # type: ignore[arg-type]
+                     if n.node_id == ref.node_id][0]
+        assert ref_after.times_applied == 0
+
     def test_updates_existing_similar_node(self, tmp_workspace):
         from knowledge_bridge import upsert_knowledge_from_candidate
         from knowledge_web import load_knowledge_nodes

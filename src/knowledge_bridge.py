@@ -204,6 +204,7 @@ def upsert_knowledge_from_candidate(
         KnowledgeEdge,
         append_knowledge_node,
         append_knowledge_edge,
+        LINK_FARM_PREFIX,
         NODE_CANDIDATE,
         NODE_TYPES,
     )
@@ -213,6 +214,16 @@ def upsert_knowledge_from_candidate(
     # Validate node_type
     if node_type not in NODE_TYPES:
         node_type = "insight"
+
+    # Never dedup against the lf- reference corpus: a maro-derived lesson
+    # that happens to title-collide with a third-party row would reinforce
+    # that row instead of minting a first-party node — and reference rows
+    # are excluded from injection and promotion, so the learning would be
+    # swallowed invisibly. Maro's own derivation always gets its own node.
+    existing_nodes = [
+        n for n in existing_nodes
+        if not str(n.node_id).startswith(LINK_FARM_PREFIX)
+    ]
 
     existing = _find_similar_node(title, existing_nodes)
 

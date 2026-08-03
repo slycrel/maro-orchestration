@@ -2386,8 +2386,12 @@ def import_link_farm(
             if extra and extra not in summary:
                 description = f"{summary}\n\n{extra}"
 
-        # Stable node_id from URL hash
-        node_id = hashlib.sha256(url.encode()).hexdigest()[:12]
+        # Stable node_id from URL hash, marked as reference corpus. The
+        # LINK_FARM_PREFIX is what enforces the third-party disposition
+        # (query exclusion, no promotion) — an unmarked import lane would
+        # dodge every carve-out (found 2026-08-03 answering Jeremy's
+        # "shouldn't lf- promote like any 3rd party data?" question).
+        node_id = LINK_FARM_PREFIX + hashlib.sha256(url.encode()).hexdigest()[:12]
 
         # Title: use subject if it's not the generic "Post by X on X" pattern,
         # otherwise fall back to summary first sentence
@@ -2408,7 +2412,13 @@ def import_link_farm(
             domain=domain,
             sources=[url],
             tags=topics,
-            status=NODE_CANDIDATE,  # imported nodes start as candidates — not yet validated
+            # ACTIVE like the scripts/import_link_farm.py lane: reference
+            # data is consult-ready on arrival (include_reference=True is
+            # how it's reached), not maro knowledge earning trust — the
+            # candidate→active ladder is the wrong verb for it, and a
+            # CANDIDATE reference row would be invisible even to reference
+            # queries (they load ACTIVE-only, then filter by prefix).
+            status=NODE_ACTIVE,
             confidence=0.4,         # external source, unverified
             author=post.get("handle", post.get("author", "link-farm")),
         )
