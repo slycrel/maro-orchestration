@@ -5,11 +5,17 @@ status: living
 # Reading Queue — docs awaiting Jeremy
 
 Rows here render to the **Reading** tab on the viz server
-(`https://maro.feifdom.com/reading.html`, regenerated whenever the runs
-index is). Each row links to the GitHub-rendered copy on `main` — nothing
-is self-hosted (Jeremy 2026-07-28: "better just as a link to the
-github-pushed artifact so we don't reinvent the wheel"). A row is only
-useful once its doc has landed — land first, then queue.
+(`https://maro.feifdom.com/reading.html`). Each row links to the
+GitHub-rendered copy on `main` — nothing is self-hosted (Jeremy
+2026-07-28: "better just as a link to the github-pushed artifact so we
+don't reinvent the wheel"). A row is only useful once its doc has landed
+— land first, then queue.
+
+**The page refreshes when this file lands** (`scripts/land.sh`, from the
+landed blob) and whenever the runs index is written. Before 2026-08-03 it
+was the second trigger only, so a row added in a quiet stretch could sit
+invisible for days — that's what Jeremy hit. The page renders the Queue
+section only; its header links back here for the Done history.
 
 Add a row when a landed doc needs Jeremy's eyes for a decision — not for
 every record. When it's read/decided, MOVE the row to Done (don't delete
