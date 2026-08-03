@@ -333,10 +333,15 @@ capture**, which is what makes the rung amortize instead of evaporate.
     96.3%-unverdictable headline was stock, not a live leak.
     **`python3 -m verdict_flow` is the authority on verdictability from
     here — not this census**, which now says so in its own output.
-  - [ ] **(b) done-without-closure tripwire.** 5 of 51 loop_id-era agenda
-    rows are status=done with no verdict in either store (closure never
-    ran, not a stamp miss); 2 were same-day, so it's live and low-rate.
-    Captain's-log honesty event at finalize so the gap is visible.
+  - [x] **(b) done-without-closure tripwire — SHIPPED 2026-08-02.** 5 of 51
+    loop_id-era agenda rows are status=done with no verdict in either store
+    (closure never ran, not a stamp miss); 2 were same-day, so it's live
+    and low-rate. Shipped: `DONE_WITHOUT_VERDICT` captain's-log event in
+    `runs.close_run` — fires when a done agenda run's metadata carries no
+    `goal_verdict_source` (NOW lane + dry runs exempt), emitted before the
+    log slice so it rides the run's own slice; user-surfaced (honesty
+    family). Marks the gap, doesn't adjudicate — audit-repair can still
+    stamp later. Tests in `test_runs.py`; docs/CAPTAINS_LOG_EVENTS.md row.
   - [x] **(c) Run-dir record census — TOOL BUILT 2026-07-31; BOX RUN DONE
     same day.** Baseline committed (deliberate gitignore exception, per the
     re-run+diff protocol below): `output/provenance_census/census.{json,txt}`
@@ -1913,14 +1918,9 @@ inspectable before any behavior changes.
   loop_id stamping or an explicit exempt marker — an honest
   denominator needs rows to be verdictable-or-exempt, not silently
   neither.
-- [ ] **"done" runs occasionally skip closure silently (census
-  2026-07-29)**: 5 of 51 loop_id-era agenda rows are status=done with
-  no verdict in EITHER store (outcomes row and run metadata both
-  unjudged — closure never ran, not a stamp miss); 2 are from
-  2026-07-29 morning, so it's live, low-rate. Candidate tripwire: at
-  run finalization, a done run with no goal_verdict_source gets a
-  captain's-log honesty event so the gap is visible instead of
-  accreting quietly.
+- [x] **"done" runs occasionally skip closure silently (census
+  2026-07-29)** — SHIPPED 2026-08-02 as LT-0 (b): `DONE_WITHOUT_VERDICT`
+  honesty event in `runs.close_run` (see the LT arc entry for detail).
 - [x] Durable dispatch→outcome join SHIPPED 2026-07-29:
   `record_persona_dispatch` stamps handle_id (handle.py passes the run's
   id), readout joins handle_id-first with goal-prefix fallback for

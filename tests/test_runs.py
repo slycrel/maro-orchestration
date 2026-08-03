@@ -601,6 +601,65 @@ def test_close_run_stamps_backend_error(workspace):
     assert meta["backend_error"]["user_action"] == "refresh your API key"
 
 
+def _read_log_events(log_path):
+    if not log_path.exists():
+        return []
+    return [json.loads(l) for l in log_path.read_text().splitlines() if l.strip()]
+
+
+def _close_with_log(workspace, tmp_path, monkeypatch, handle_id, *, lane,
+                    status, verdict_source=None, dry_run=None):
+    """open_run → optionally stamp a verdict → close_run, capturing the log."""
+    from runs import open_run, close_run, set_current_run_dir, stamp_run_metadata
+    log_path = tmp_path / "captains_log.jsonl"
+    import captains_log
+    monkeypatch.setattr(captains_log, "_log_path_override", log_path)
+    try:
+        open_run(handle_id, prompt="do it", lane=lane, dry_run=dry_run)
+        extra = {}
+        if verdict_source:
+            extra = {"goal_verdict_source": verdict_source, "goal_achieved": True}
+        if extra:
+            stamp_run_metadata(extra)
+    finally:
+        set_current_run_dir(None)
+    close_run(handle_id, status=status)
+    return [e for e in _read_log_events(log_path)
+            if e["event_type"] == "DONE_WITHOUT_VERDICT"]
+
+
+def test_close_run_done_without_verdict_logs_honesty_event(
+        workspace, tmp_path, monkeypatch):
+    events = _close_with_log(workspace, tmp_path, monkeypatch, "dwv1",
+                             lane="agenda", status="done")
+    assert len(events) == 1
+    assert events[0]["subject"] == "dwv1"
+    assert events[0]["context"]["handle_id"] == "dwv1"
+    # Honesty finding — user-surfaced lane.
+    assert events[0]["audience"] == "user"
+
+
+def test_close_run_verdicted_done_run_stays_silent(
+        workspace, tmp_path, monkeypatch):
+    events = _close_with_log(workspace, tmp_path, monkeypatch, "dwv2",
+                             lane="agenda", status="done",
+                             verdict_source="closure")
+    assert events == []
+
+
+def test_close_run_tripwire_skips_non_done_and_now_and_dry(
+        workspace, tmp_path, monkeypatch):
+    # stuck run: unverdicted is expected, not a closure gap
+    assert _close_with_log(workspace, tmp_path, monkeypatch, "dwv3",
+                           lane="agenda", status="stuck") == []
+    # NOW lane: outside the census scope (judged via the hosted-free family)
+    assert _close_with_log(workspace, tmp_path, monkeypatch, "dwv4",
+                           lane="now", status="done") == []
+    # dry runs are exempt
+    assert _close_with_log(workspace, tmp_path, monkeypatch, "dwv5",
+                           lane="agenda", status="done", dry_run=True) == []
+
+
 def test_resolve_run_dir_by_handle_and_loop_id(workspace):
     from runs import (open_run, run_dir, resolve_run_dir,
                       stamp_run_metadata, set_current_run_dir)

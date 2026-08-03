@@ -728,6 +728,32 @@ def close_run(
     classified BackendError-info object; only its actionable fields are
     persisted.
     """
+    # Done-without-closure tripwire (LT-0 b): a done agenda run whose
+    # metadata carries no goal verdict means closure never stamped one
+    # (5/51 loop_id-era agenda rows at the 2026-07-29 census, 2 same-day —
+    # live, low-rate). Make the gap visible at the moment it becomes
+    # permanent instead of letting unverdicted done rows accrete silently.
+    # Emitted BEFORE the log slice so the event rides the run's own slice.
+    if status == "done":
+        try:
+            meta = json.loads(
+                (run_dir(handle_id) / "metadata.json").read_text(encoding="utf-8"))
+            if (not meta.get("goal_verdict_source")
+                    and meta.get("lane") == "agenda"
+                    and not meta.get("dry_run")):
+                from captains_log import log_event, DONE_WITHOUT_VERDICT
+                log_event(
+                    DONE_WITHOUT_VERDICT,
+                    subject=handle_id,
+                    summary=("run finalized status=done with no goal verdict "
+                             "in run metadata — closure never stamped one"),
+                    context={"handle_id": handle_id,
+                             "lane": str(meta.get("lane", "")),
+                             "loop_id": str(meta.get("loop_id", ""))},
+                    loop_id=meta.get("loop_id") or None,
+                )
+        except Exception:
+            pass
     try:
         slice_log_for_run(handle_id)
     except Exception:

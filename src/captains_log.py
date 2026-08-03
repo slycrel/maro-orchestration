@@ -191,6 +191,13 @@ FENCE_EXTENDED = "FENCE_EXTENDED"  # per-run: fence widened to path(s) the goal 
 LOOP_CREATED = "LOOP_CREATED"  # every loop spawn — reason, parent_loop_id, slug, max_steps
 QUALITY_GATE_VERDICT = "QUALITY_GATE_VERDICT"  # PASS / ESCALATE — most important escalation signal
 QUALITY_GATE_OVERRULED = "QUALITY_GATE_OVERRULED"  # gate ESCALATE vs judged closure pass: the excerpt-fed gate does not overrule executed probes — dissent recorded, no re-run (2026-07-29)
+# Done-without-closure honesty tripwire (LT-0 b / census 2026-07-29: 5 of 51
+# loop_id-era agenda rows were status=done with no verdict in either store —
+# closure never ran, not a stamp miss). Emitted by runs.close_run at the
+# moment the gap becomes permanent; agenda lane only, dry runs exempt. A
+# later audit-repair stamp may still resolve the row — this event marks the
+# gap, it does not adjudicate it.
+DONE_WITHOUT_VERDICT = "DONE_WITHOUT_VERDICT"
 
 # Second-family gate check (swarm-review chunk 5a, stack-don't-substitute).
 # One per paid-gate PASS while hosted-free is available: a different model
@@ -299,7 +306,7 @@ EVENT_TYPES = {
     CLAIM_VERIFIER_OUTCOME, FABRICATION_DETECTED, SCAVENGE_DETECTED, FENCE_WRITE_BLOCKED,
     FENCE_EXTENDED,
     LOOP_CREATED, QUALITY_GATE_VERDICT, QUALITY_GATE_SECOND_FAMILY,
-    QUALITY_GATE_OVERRULED,
+    QUALITY_GATE_OVERRULED, DONE_WITHOUT_VERDICT,
     QUALITY_GATE_COUNCIL, QUALITY_GATE_CROSS_REF, STEP_TOO_BROAD,
     RECALL_PERFORMED, RECALL_GUARD_TRIPPED, NOW_ARTIFACT_RETRY,
     NAVIGATOR_DECIDED, NAVIGATOR_ACTED, NAVIGATOR_ADJUDICATED,
@@ -331,6 +338,7 @@ USER_SURFACED_EVENTS = frozenset({
     NAVIGATOR_ADJUDICATED,
     # honesty findings the operator should hear
     FABRICATION_DETECTED, SUBSYSTEM_SILENT, SUBSYSTEM_RECOVERED,
+    DONE_WITHOUT_VERDICT,
 })
 
 

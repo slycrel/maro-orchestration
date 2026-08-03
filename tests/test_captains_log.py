@@ -339,7 +339,11 @@ class TestEventTypes:
         # retirement-by-contradiction (lessons gain the contested/grey state
         # standing rules got in June) and the tiered-store provenance
         # (un)quarantine verb. Both emitted from knowledge_web.
-        assert len(EVENT_TYPES) == 77
+        # +1 (2026-08-02): DONE_WITHOUT_VERDICT — done-without-closure honesty
+        # tripwire at close_run (LT-0 b): a done agenda run with no goal
+        # verdict in metadata is logged at the moment the gap becomes
+        # permanent (census 2026-07-29: 5/51 loop_id-era agenda rows).
+        assert len(EVENT_TYPES) == 78
 
     def test_previously_unregistered_events_in_set(self):
         from captains_log import EVOLVER_REVERTED, EVOLVER_VERIFY, PLAYBOOK_UPDATED
