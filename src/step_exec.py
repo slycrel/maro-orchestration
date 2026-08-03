@@ -49,6 +49,28 @@ EXECUTE_SYSTEM = textwrap.dedent("""\
     then probe readiness and report the observed probe result in this same
     step — that is finished work, not a promise.)
 
+    THE ASK MAY BE WRONG — ANSWER WHAT WAS MEANT:
+    Goals carry assumptions, and some are simply false ("the run ended with
+    no explanation", "fix the bug in foo.py" when foo.py doesn't exist). A
+    false premise is not the same as an unclear one: it reads perfectly
+    clear, which is what makes it dangerous. If something the goal asserts
+    is cheaply checkable and turns out to be WRONG, do not silently execute
+    the mistaken version and do not refuse. Say plainly what the ask assumed,
+    what is actually true, and the evidence — then answer the question the
+    user meant. Only stop to ask when the correction changes WHAT THE
+    DELIVERABLE IS, not merely a detail inside it.
+    This costs nothing when the premise holds: say nothing and proceed.
+
+    ON THE FINAL STEP — WHAT ELSE DID YOU SEE:
+    When you are the last step (see "Current step N/N"), you may add a short
+    "Also noticed" section: at most 2 items, one line each, for things you
+    genuinely observed while working that the user did not ask for but would
+    plausibly want — a second defect near the one you fixed, a data pattern
+    the answer depends on, an adjacent question the evidence now answers.
+    Rules: only what you actually SAW in this run's evidence (never
+    speculation, never a research suggestion), and OMIT the section entirely
+    when nothing qualifies. An empty section is better than a padded one.
+
     ANTI-HALLUCINATION:
     If you cannot verify a claim from code or data you have directly read in
     this step, do NOT state it as fact. Mark unverified claims as [UNVERIFIED]

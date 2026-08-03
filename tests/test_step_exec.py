@@ -1571,3 +1571,80 @@ def test_verify_step_threads_artifacts_note_to_paid_tier():
                     artifacts_note="- f.txt (5 B, ~0m old): hi")
     kwargs = mock_va.verify_step.call_args.kwargs
     assert kwargs["artifacts_note"].startswith("- f.txt")
+
+
+class TestFalsePremiseAndBonusContract:
+    """Two additions to EXECUTE_SYSTEM (Jeremy, 2026-08-02).
+
+    Premise handling: *"People have false premises all the time (bad upfront
+    prompt) and it causes all sorts of problems… we don't want to eliminate
+    that possibility, but we do want to make our best guess on what the user
+    meant."* The intake `clarity check` already runs and already carries an
+    unused `question` field — but it returned `{"clear": true}` for two goals
+    the same day that were perfectly clear and factually FALSE. Clarity is
+    not soundness, so the behavior has to live where the work happens.
+
+    Bonus findings: *"a direct answer, and a good educated guess for
+    additional downstream findings/data… getting more than what was asked
+    for 'free'."* The 'free' is the constraint — hence final-step-only and
+    hard-capped, so it cannot become per-step padding.
+    """
+
+    def _prompt(self):
+        """Whitespace-normalized on purpose. Four of these pins failed on
+        first write because the phrases they assert wrap across lines in the
+        source — a literal-string check against text that legitimately
+        varies in formatting. That is the same brittleness that produced
+        four bogus closure-check failures and one FULL-trust false demotion
+        today; re-wrapping a prompt must not turn its contract pins red."""
+        from step_exec import EXECUTE_SYSTEM
+        return " ".join(EXECUTE_SYSTEM.split())
+
+    def test_premise_correction_is_instructed(self):
+        p = self._prompt()
+        assert "THE ASK MAY BE WRONG" in p
+        assert "answer the question the user meant" in p
+
+    def test_premise_rule_distinguishes_false_from_unclear(self):
+        """The whole reason the clarity check misses these: a false premise
+        reads perfectly clear. If the prompt loses that distinction it
+        collapses back into an ambiguity check."""
+        p = self._prompt()
+        assert "reads perfectly clear" in p
+
+    def test_premise_rule_forbids_both_silent_execution_and_refusal(self):
+        """ea4ebe4a did this right unprompted — corrected the premise from
+        evidence AND still delivered. Neither failure mode is acceptable."""
+        p = self._prompt()
+        assert "do not silently execute" in p
+        assert "do not refuse" in p
+
+    def test_premise_rule_gates_asking_on_deliverable_change(self):
+        """Jeremy: don't eliminate bad questions. Blocking to ask must earn
+        its cost, so it is reserved for when the deliverable itself changes."""
+        p = self._prompt()
+        assert "changes WHAT THE DELIVERABLE IS" in p
+
+    def test_premise_rule_is_free_when_the_premise_holds(self):
+        p = self._prompt()
+        assert "costs nothing when the premise holds" in p
+
+    def test_bonus_findings_are_final_step_only(self):
+        """Unconditional would mean every step pays. That is not 'free'."""
+        p = self._prompt()
+        assert "ON THE FINAL STEP" in p
+        assert "Current step N/N" in p
+
+    def test_bonus_findings_are_capped_and_omittable(self):
+        """An uncapped invitation becomes padding, which is worse than
+        nothing because it dilutes the answer that was asked for."""
+        p = self._prompt()
+        assert "at most 2 items" in p
+        assert "OMIT the section entirely" in p
+
+    def test_bonus_findings_must_be_observed_not_speculated(self):
+        """The value is 'I saw this while working', not 'you could look
+        into X' — the second is cheap to generate and worthless."""
+        p = self._prompt()
+        assert "actually SAW" in p
+        assert "never speculation" in p
