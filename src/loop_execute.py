@@ -52,6 +52,74 @@ log = logging.getLogger("maro.loop")
 # (memory.age_stamps) is configuration.
 _MATERIAL_STEP_GAP_SECONDS = 600
 
+# Never flagged: package/tooling files that legitimately appear in prose
+# without existing at any searched path.
+_CITATION_ALLOWLIST = frozenset(("__init__.py", "setup.py", "conftest.py"))
+
+
+def cited_py_not_found(step_result: str, project: str = "") -> set:
+    """Names of ``*.py`` files cited in a step result that exist nowhere we look.
+
+    Extracted from the loop 2026-08-02 so it has a seam and a test. The
+    search set is the maro repo (``src/``, ``tests/``), one level under
+    ``~/claude/``, **and the run's own project dir** — that last one was
+    missing, and its absence is the whole bug: the check silently assumed
+    every run works inside the maro checkout or a sibling repo. For the
+    normal containerized case, where a goal points at
+    ``~/.maro/workspace/projects/<slug>/``, every ``.py`` the run
+    legitimately touches got flagged as invented.
+
+    Measured across three probe runs on 2026-08-02: 6 false flags in
+    `2738d9c0`, 7 in `887316fe`. In the latter the bogus note seeded an
+    entire adversarial-review round that contested correct claims and
+    drove a quality-gate ESCALATE, which closure then had to overrule at
+    0.95 confidence. **A false "you made this up" is not cosmetic — it
+    manufactures doubt that propagates**, and it costs real steps to undo.
+
+    Returns an empty set when nothing is citable or everything resolves.
+    Fails open by construction: a directory that cannot be read simply
+    contributes no names, which can only *reduce* what is flagged.
+    """
+    import re as _verify_re
+
+    cited = set(_verify_re.findall(r'\b([a-z_]+\.py)\b', step_result or ""))
+    if not cited:
+        return set()
+
+    real: set = set()
+    for rel in ("src", "tests"):
+        d = Path(rel)
+        if d.is_dir():
+            real.update(f.name for f in d.glob("*.py"))
+
+    home_claude = Path.home() / "claude"
+    if home_claude.is_dir():
+        for sibling in home_claude.iterdir():
+            if sibling.is_dir() and not sibling.name.startswith("."):
+                for sub in ("src", "tests", ""):
+                    d = sibling / sub if sub else sibling
+                    if d.is_dir():
+                        real.update(f.name for f in d.glob("*.py"))
+
+    if project:
+        try:
+            from orch_items import project_dir
+            pdir = project_dir(project)
+            if pdir.is_dir():
+                for i, f in enumerate(pdir.rglob("*.py")):
+                    if i >= 500:  # bounded: never walk forever
+                        break
+                    real.add(f.name)
+        except Exception:
+            pass  # unresolvable project contributes nothing; never adds flags
+
+    # The original had a `len(missing) <= len(cited)` guard here. It is
+    # vacuous — `missing` is a subset of `cited` by construction, so it can
+    # never be larger — and dropping it is behaviour-preserving. Recorded
+    # rather than silently deleted: it is a guard that could not have fired,
+    # which is the same family as a check that could not have failed.
+    return cited - real - _CITATION_ALLOWLIST
+
 
 def _select_step_adapter(
     ctx: LoopContext,
@@ -1630,24 +1698,8 @@ def _execute_main_loop(
         # actually exist. Append a correction note if hallucinated files found.
         if step_status == "done" and step_result and ".py" in step_result:
             try:
-                import re as _verify_re
-                _cited_files = set(_verify_re.findall(r'\b([a-z_]+\.py)\b', step_result))
-                _src_files = set(f.name for f in Path("src").glob("*.py")) if Path("src").exists() else set()
-                _test_files = set(f.name for f in Path("tests").glob("*.py")) if Path("tests").exists() else set()
-                # Also scan sibling dirs in ~/claude/ (one level deep) to avoid false positives
-                # when the agent references files from an external repo under ~/claude/
-                _sibling_py: set = set()
-                _home_claude = Path.home() / "claude"
-                if _home_claude.exists():
-                    for _sibling in _home_claude.iterdir():
-                        if _sibling.is_dir() and not _sibling.name.startswith("."):
-                            for _sub in ("src", "tests", ""):
-                                _d = _sibling / _sub if _sub else _sibling
-                                if _d.is_dir():
-                                    _sibling_py.update(f.name for f in _d.glob("*.py"))
-                _all_real = _src_files | _test_files | _sibling_py
-                _hallucinated = _cited_files - _all_real - {"__init__.py", "setup.py", "conftest.py"}
-                if _hallucinated and len(_hallucinated) <= len(_cited_files):
+                _hallucinated = cited_py_not_found(step_result, project)
+                if _hallucinated:
                     _note = f"\n[VERIFICATION: {len(_hallucinated)} file(s) cited but not found: {', '.join(sorted(_hallucinated)[:5])}]"
                     step_result = step_result + _note
                     outcome["result"] = step_result
