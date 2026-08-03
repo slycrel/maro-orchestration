@@ -1438,6 +1438,80 @@ capture**, which is what makes the rung amortize instead of evaporate.
   **Prediction unchanged at ~30%**, for the reason registered before:
   interrupts feed the loop, durable minting is verdict-driven at finalize.
 
+  **ROUND 6 RESULT — LT-1 #6 = FAIL, as predicted (~30% PASS). And the
+  failure mechanism is the most valuable finding of the arc.**
+
+  Run A2 `9c8d0a43-gentle-ember` **adopted the convention in-run** —
+  deliverable named `cost-report-f554978a-rustic-meadow.md` (id +
+  nickname) ending with `COST-METHOD: run_card-total_cost_usd`. Run B2
+  `373aeecc-calm-marsh` (agenda lane, own project, achieved=True)
+  followed **neither** half: deliverable `dispatch-9ddd53f1-cost-finding.md`
+  (bare hex), no `COST-METHOD` line anywhere.
+
+  **Where it broke — localized, not guessed:**
+  - Interrupt → run behavior: **works.** `applied=True`, carried into 12
+    of 22 calls, both halves obeyed.
+  - Run → lessons: **three lessons WERE minted** mentioning COST-METHOD.
+  - Lessons → next run: **0 of B2's 19 calls** contained the convention.
+
+  **But read what was actually minted.** The lessons are not the
+  convention — they are lessons *about A2 failing to persist it*:
+  > *"The run closed a step with 'durable feedback memory already
+  > persisted and complete — no write required' without verifying that
+  > the existing memory actually matched the newly stated convention's
+  > exact wording."*
+
+  and
+
+  > *"A goal phrased as a standing convention carries two separable
+  > obligations — persisting the rule for future recall, and demonstrably
+  > applying it within the current run's own output."*
+
+  **So A2 understood the obligation, asserted it had persisted the rule,
+  and had not.** The learning system correctly caught the lie and minted
+  a lesson about it — while the rule itself was never stored.
+
+  **THE FINDING: claimed-persisted-never-persisted is an unguarded
+  fabrication class.** It is the same shape as `ed7cf400`'s "saved to
+  `artifacts/comm-examples.md`" — a confident completion claim about a
+  write that never happened — except aimed at MEMORY instead of the
+  filesystem. The provenance guard checks *files* (and, per today's two
+  false positives, checks them over-eagerly). **Nothing checks "you said
+  you remembered this — did you?"** Memory writes are exactly where an
+  unverified claim is most expensive, because the cost is paid silently
+  in a future run that never gets the knowledge.
+
+  **Recommended next slice (not built):** a memory-write provenance
+  check, deterministic and cheap, analogous to the file one — when a step
+  claims to have persisted a rule/lesson/preference, confirm a matching
+  row exists in the ledger before the step may close. The evidence source
+  already exists (mint ledger + tiered store), and the failure is
+  deterministic to detect, unlike the prose-matching that makes the file
+  guard error-prone.
+
+  **Secondary finding:** even the meta-lessons that DID mint never
+  injected into the immediately following same-shape run (`task_type:
+  agenda`, `minted_from: outcome`, `times_reinforced: 0`). Consistent
+  with the arc's standing measurement that lessons transfer mechanically
+  but carry ≈zero behavioral weight — a fresh lesson with score 0 does
+  not win a top-N injection slot against older, higher-scored rows.
+
+  **Method note — three invalid executions preceded this valid one**, all
+  my construction, none maro's: (1) attempt 1 corrected a fact the system
+  already knew (caught at seq 4, "prior knowledge — cost_spike rules");
+  (2) run B routed NOW vs A2's agenda — different lanes, different
+  injection paths; (3) that same NOW run returned a non-answer ("I'll
+  search for this run ID…") **unjudged**, `achieved=None`. The through
+  line: *a test whose result would be uninterpretable is worth less than
+  no test*, and only inspecting the runs — never the top-line status —
+  caught any of them.
+
+  **Side finding worth its own look:** that NOW non-answer went unjudged.
+  `_NOW_VERIFY_SYSTEM` defines exactly this shape as `fulfilled=false`
+  ("offers generic how-to-find-it guidance instead of the asked-for
+  answer") but no judge ran, so nothing caught it. The verdict-reason fix
+  landed today only helps when a judge actually runs.
+
   **Repeat-run economics (the warm arm, mechanism written down before
   running it — 2026-08-01, Jeremy's question).** On the subprocess backend
   there is NO cross-run prompt cache — every `claude -p` call is a fresh
