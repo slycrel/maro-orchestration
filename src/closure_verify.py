@@ -107,6 +107,56 @@ _CLOSURE_PLAN_SYSTEM = textwrap.dedent("""\
      "behavioral_probe_waived": "<reason — only when skipping a REQUIRED behavioral probe for a runtime-shaped deliverable; omit or empty string otherwise>"}
 """).strip()
 
+# Work-summary window. Was 300 chars/result, 120/step-text, last 6 steps.
+#
+# Measured 2026-08-03 over 268 recorded loop payloads (last-6-step totals:
+# median 6,134 chars, p90 11,319): at 300 the verdict saw **23% of the
+# evidence** and only **5% of payloads survived intact** — tighter than the
+# quality gate's 600 was, and this string feeds the plan AND verdict calls.
+#
+#     cut     payloads intact   text shown   median extra tokens
+#     300            5%             23%              -
+#     1500          38%             80%             956
+#     4000          93%             96%           1,099
+#
+# The extra plateaus near 1,100 tokens because the median payload fits well
+# before 4000; only the tail grows, and p99 stays ~3,700 tokens. That is
+# ~$0.003 a call at mid pricing, against a verdict that demotes runs and
+# teaches failure — and that is the layer which OVERRULES the quality gate,
+# so its errors are the last line rather than the first.
+#
+# Bounded, not removed: a pathological step dumping megabytes must not blow
+# up the call, and the remainder is marked honestly by the renderer below.
+_WORK_SUMMARY_RESULT_CUT = 4000
+# The step INSTRUCTION, not its output. 120 chars cut most instructions
+# mid-sentence, which is the one thing the judge needs to decide whether the
+# step did what it was asked.
+_WORK_SUMMARY_TEXT_CUT = 300
+_WORK_SUMMARY_STEPS = 6
+
+
+def render_step_for_closure(text: str, result: str, index: int) -> str:
+    """One step rendered for the closure work summary, truncation VISIBLE.
+
+    Same contract as quality_gate.render_step_for_review, and the same
+    reason: a judge told "Result: …" cannot tell a whole answer from its
+    first quarter, and will report what it cannot see as missing. Run
+    2738d9c0 is the specimen this family was found through.
+    """
+    text = str(text or "")
+    result = str(result or "")
+    head = text[:_WORK_SUMMARY_TEXT_CUT]
+    if len(text) > _WORK_SUMMARY_TEXT_CUT:
+        head += f"… [step text truncated at {_WORK_SUMMARY_TEXT_CUT}]"
+    if len(result) > _WORK_SUMMARY_RESULT_CUT:
+        return (f"Step {index}: {head}\n"
+                f"Result [TRUNCATED — showing the first "
+                f"{_WORK_SUMMARY_RESULT_CUT} of {len(result)} characters; "
+                f"the rest was NOT shown to you]: "
+                f"{result[:_WORK_SUMMARY_RESULT_CUT]}")
+    return f"Step {index}: {head}\nResult: {result}"
+
+
 # Ungrounded-False cap (see the branch in verify_goal_completion). The floor
 # is memory_ledger.VERDICT_CONFIDENCE_FLOOR — the line above which a judged
 # verdict gates learning and demotes a run. Kept as a literal rather than an
@@ -129,6 +179,11 @@ _CLOSURE_VERDICT_SYSTEM = textwrap.dedent("""\
     completeness from the checks that did run. If the passing checks cover the
     goal's deliverables and no check failed, complete=true is the honest
     verdict even with an inconclusive probe in the mix.
+
+    A step's Result may be marked TRUNCATED. When it is, you are reading the
+    beginning of that step's output and the rest was withheld from you. Do
+    not report as missing anything you simply cannot find in a truncated
+    Result — that is a fact about your window, not about the work.
 
     You may only assert what a file CONTAINS when that content is in front of
     you — in a check's stdout, or in "target_file_content". If no check
@@ -734,14 +789,17 @@ def verify_goal_completion(
     if dry_run or adapter is None:
         return _null
 
-    # Build a compact work summary from step results
+    # Build the work summary from step results. This string feeds BOTH the
+    # plan call and the verdict call — it IS the evidence the verdict
+    # reasons from whenever no probe surfaced the content directly.
     step_summary_parts = []
     for i, s in enumerate(steps or []):
         _res = getattr(s, "result", "") or ""
         _txt = getattr(s, "text", "") or getattr(s, "step_text", "") or ""
         if _res or _txt:
-            step_summary_parts.append(f"Step {i+1}: {(_txt or '')[:120]}\nResult: {(_res or '')[:300]}")
-    work_summary = "\n\n".join(step_summary_parts[-6:]) if step_summary_parts else "(no step detail available)"
+            step_summary_parts.append(render_step_for_closure(_txt, _res, i + 1))
+    work_summary = "\n\n".join(step_summary_parts[-_WORK_SUMMARY_STEPS:]) \
+        if step_summary_parts else "(no step detail available)"
 
     # Pull scope's failure modes into the plan-call context.
     # Closure verification is inversion against the same possibilities scope
