@@ -436,6 +436,45 @@ def run_llm_council(
     return CouncilVerdict(critiques=acting, weak_count=acting_weak,
                           escalate=escalate, source=acting_source)
 
+_REVIEW_STEP_CUT = 600
+
+
+def render_step_for_review(step: Any, fallback_index: int,
+                           cut: int = _REVIEW_STEP_CUT) -> str:
+    """One step rendered for the gate, with truncation made VISIBLE.
+
+    The gate reads the last three step results at ``cut`` chars each and was
+    never told so — the payload said "Result: …" whether it held the whole
+    thing or the first 44% of it. Its ESCALATE criteria are absence-shaped
+    ("important sub-questions were skipped", "clearly incomplete") and its
+    prompt says "Be direct. Do not hedge.", so it confidently reported
+    missing what was merely past the cut.
+
+    Measured 2026-08-03 over the captain's log: of 7 post-reconciliation
+    escalations, **5 were overruled by closure**, and every escalation
+    reason — overruled or not — is phrased as an absence claim ("never
+    shows", "no evidence", "only shows"). Verified specimen: run 01e55212's
+    step results ran 1058–1387 chars against this 600-char cut, and the
+    gate escalated on "no evidence Q3 was ever answered" when Q3 was
+    answered, grep-verified, in the part it could not see.
+
+    Marking is deliberately preferred over raising the cut: a bigger window
+    costs tokens on every gate call and only moves the cliff, while the
+    epistemic error — treating "not in my view" as "not done" — survives any
+    window size.
+    """
+    text = str(getattr(step, "text", "?") or "?")[:80]
+    result = str(getattr(step, "result", "") or "")
+    idx = getattr(step, "index", fallback_index)
+    if len(result) > cut:
+        shown = result[:cut]
+        return (f"Step {idx}: {text}\n"
+                f"Result [TRUNCATED — showing the first {cut} of "
+                f"{len(result)} characters; the rest was NOT shown to you]: "
+                f"{shown}")
+    return f"Step {idx}: {text}\nResult: {result}"
+
+
 _GATE_SYSTEM = textwrap.dedent("""\
     You are a quality reviewer. A research/analysis task just completed.
     Your job: decide if the output meets the bar for the stated goal.
@@ -458,6 +497,16 @@ _GATE_SYSTEM = textwrap.dedent("""\
       "reason": "one sentence — if ESCALATE, what specifically is missing or wrong",
       "confidence": 0.0–1.0
     }
+
+    A step's Result may be marked TRUNCATED. When it is, you are reading the
+    beginning of that step's output and the rest was withheld from you. You
+    MUST NOT escalate on something being absent from a truncated Result —
+    "no evidence X was answered", "only shows Y", "never states Z" are claims
+    about your window, not about the work. Escalate on what you can SEE being
+    wrong, shallow or off-goal. If the only thing that worries you is
+    something you cannot find, that is missing evidence, not a missing
+    deliverable: say PASS and let the closure checks, which execute against
+    the real artifacts, decide.
 
     Be direct. Do not hedge. If it's good enough, say PASS. Only escalate if
     the output would genuinely mislead or disappoint the user.
@@ -574,9 +623,7 @@ def run_quality_gate(
     # are most representative of final quality
     review_steps = done_steps[-3:]
     output_summary = "\n\n".join(
-        f"Step {getattr(s, 'index', i+1)}: {getattr(s, 'text', '?')[:80]}\n"
-        f"Result: {(getattr(s, 'result', '') or '')[:600]}"
-        for i, s in enumerate(review_steps)
+        render_step_for_review(s, i + 1) for i, s in enumerate(review_steps)
     )
 
     verdict = "PASS"
