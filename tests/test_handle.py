@@ -4274,6 +4274,115 @@ class TestOutputProvenanceGuard:
         assert _result_claimed_outputs("saved to /tmp/scratch/z.json") == []
 
 
+class TestNowLaneTypedStopVerdict:
+    """§13b typed verdicts on the NOW lane (2026-08-02).
+
+    The agenda provenance guard has stamped ``lost-the-plot`` since the
+    verdict shipped; the NOW guard fires on identical evidence and recorded
+    prose only. Same demotion, typed on one lane and untyped on the other —
+    a consistency hole, not a vocabulary gap: stop_verdicts.py's own
+    docstring already names the provenance guard as a lost-the-plot source.
+    """
+
+    def _no_judge(self):
+        """Adapter that fails the test if the judge is reached — the
+        provenance branch short-circuits before it."""
+        from unittest.mock import MagicMock
+        adapter = MagicMock()
+        adapter.complete.side_effect = AssertionError("judge must not be called")
+        return adapter
+
+    def test_now_provenance_demotion_stamps_lost_the_plot(self, tmp_path):
+        from handle import _verify_now_outcome
+        missing = tmp_path / "nope" / "missing.txt"
+        outcome = {"status": "done", "result": "All set — saved the report.",
+                   "tokens_in": 3, "tokens_out": 1}
+        out = _verify_now_outcome(
+            f"compute X and write the report to {missing}", outcome, self._no_judge())
+        assert out["stop_verdict"] == "lost-the-plot"
+        assert str(missing) in out["stop_evidence"]
+
+    def test_stamped_verdict_is_in_vocabulary(self, tmp_path):
+        """The value the guard writes must be one the ledger will accept —
+        stamp_outcome_stop_verdict and stamp_stop both reject off-vocabulary
+        strings, so a typo here would land a verdict nowhere."""
+        from handle import _verify_now_outcome
+        from stop_verdicts import VALID_STOP_VALUES, GOAL_VERDICTS
+        outcome = {"status": "done", "result": "saved it",
+                   "tokens_in": 3, "tokens_out": 1}
+        out = _verify_now_outcome(
+            f"write it to {tmp_path / 'gone' / 'x.txt'}", outcome, self._no_judge())
+        assert out["stop_verdict"] in VALID_STOP_VALUES
+        # and specifically a GOAL verdict: the guard observed the map
+        # (claimed territory that isn't there), it is not an event marker.
+        assert out["stop_verdict"] in GOAL_VERDICTS
+
+    def test_now_and_agenda_provenance_guards_agree(self):
+        """Parity read against live source: both provenance demotions must
+        name the same verdict. Divergence is what this whole fix was."""
+        from pathlib import Path
+        src = Path(__file__).resolve().parents[1] / "src" / "handle.py"
+        # Whitespace-normalized: a line-wrap change must not fail this pin.
+        # (Four prompt-contract pins broke exactly that way on 2026-08-02.)
+        text = " ".join(src.read_text(encoding="utf-8").split())
+        # the agenda twin stamps positionally; the NOW guard assigns a key
+        assert '_stamp_stop_on_demotion( loop_result, "lost-the-plot",' in text
+        assert 'out["stop_verdict"] = "lost-the-plot"' in text
+
+    def test_judge_demotion_does_not_stamp(self):
+        """Deliberate gap. A one-shot "I couldn't" is not an observation
+        about the map — the four verdicts are. It stays recorded as
+        goal_achieved=False plus prose, with no typed verdict invented for
+        it. If this ever starts failing, it is a decision, not a bug."""
+        from unittest.mock import MagicMock
+        from handle import _verify_now_outcome
+        adapter = MagicMock()
+        resp = MagicMock()
+        resp.content = '{"fulfilled": false, "why": "no access to that host"}'
+        resp.input_tokens = 1
+        resp.output_tokens = 1
+        adapter.complete.return_value = resp
+        outcome = {"status": "done", "result": "I could not reach the host.",
+                   "tokens_in": 3, "tokens_out": 1}
+        out = _verify_now_outcome("fetch the page", outcome, adapter)
+        assert out["goal_achieved"] is False          # still demoted
+        assert out["goal_verdict_summary"]            # still explained
+        assert not out.get("stop_verdict")            # but not typed
+
+    def test_clean_run_stamps_nothing(self):
+        from unittest.mock import MagicMock
+        from handle import _verify_now_outcome
+        adapter = MagicMock()
+        resp = MagicMock()
+        resp.content = '{"fulfilled": true}'
+        resp.input_tokens = 1
+        resp.output_tokens = 1
+        adapter.complete.return_value = resp
+        outcome = {"status": "done", "result": "the answer is 42",
+                   "tokens_in": 3, "tokens_out": 1}
+        out = _verify_now_outcome("what is the answer", outcome, adapter)
+        assert not out.get("stop_verdict")
+
+    def test_record_outcome_rejects_off_vocabulary_stop_verdict(self, tmp_path, monkeypatch):
+        """Ingress parity with pause_reason. The NOW lane now feeds this
+        argument straight from an outcome dict, so a bad value must die at
+        the door rather than live in the ledger while curation falls back."""
+        monkeypatch.setenv("MARO_MEMORY_DIR", str(tmp_path))
+        import memory_ledger
+        monkeypatch.setattr(memory_ledger, "_outcomes_path",
+                            lambda: tmp_path / "outcomes.jsonl")
+        rec = memory_ledger.record_outcome(
+            goal="g", status="incomplete", summary="s",
+            stop_verdict="not-a-real-verdict", stop_evidence="should go too")
+        assert rec.stop_verdict == ""
+        assert rec.stop_evidence == ""
+        ok = memory_ledger.record_outcome(
+            goal="g", status="incomplete", summary="s",
+            stop_verdict="lost-the-plot", stop_evidence="kept")
+        assert ok.stop_verdict == "lost-the-plot"
+        assert ok.stop_evidence == "kept"
+
+
 class TestEscalationLaneMetadata:
     def test_escalated_run_metadata_records_agenda(self, monkeypatch, tmp_path):
         """The now→agenda escalation must rewrite the lane written at classify time."""

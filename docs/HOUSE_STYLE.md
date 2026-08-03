@@ -34,7 +34,15 @@ individual rules below exist to keep it honest.
    cheap, test seams not internals, don't refactor mid-feature.
 3. **Verify** — the executed check named in step 1, plus
    `bash scripts/test-safe.sh` (judge by exit code). "Done" without an
-   executed check is a claim, not a fact.
+   executed check is a claim, not a fact. **Read the totals line too, not
+   just the exit code** — a green exit says nothing about how many tests
+   *ran*. On 2026-08-02 this box had been silently skipping ten router
+   tests for want of `scikit-learn` (declared in pyproject's `dev` extra,
+   never installed), and the runner couldn't have told you: its own `-q`
+   stacked with pyproject's into `-qq`, which suppresses the "N passed,
+   M skipped" line entirely. Both fixed; the habit is the durable part.
+   A skip count above zero is a finding, not a footnote — the one
+   legitimate standing skip is the Darwin ABI probe, inert on Linux.
 4. **Document** — currency rule: a doc your chunk proved stale gets
    fixed in the same commit. BACKLOG/MILESTONES updated so the next
    session knows what changed.

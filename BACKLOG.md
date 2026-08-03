@@ -3889,10 +3889,28 @@ deferred rather than silently dropped:
     separate status vocabularies with their own consumers
     (handle_queue.py drain, director review loop); unify or bridge
     when those consumers need typed endings.
-  - *NOW-lane lost-the-plot stamp* — `_verify_now_outcome` demotions
-    reach the right success_class via the choke-point rebucket
-    (incomplete + judged False); the metadata verdict stamp itself is
-    a 5-line add to `_run_now`'s metadata write when wanted.
+  - *NOW-lane lost-the-plot stamp* — **CLOSED 2026-08-02.** The
+    provenance branch of `_verify_now_outcome` now stamps
+    `lost-the-plot` + evidence, and `_run_now` forwards it to all three
+    homes the agenda rail uses (result dict → run metadata → outcome
+    row; `record_outcome` had accepted the kwargs since the verdict
+    shipped, the NOW call site just never passed them). The 2026-07-27
+    "5-line add" estimate held.
+    **Two things worth keeping from the fix.** (1) It was never a
+    vocabulary gap: `stop_verdicts.py`'s own docstring already names the
+    provenance guard as a lost-the-plot source, and the agenda twin has
+    stamped it all along — same evidence, typed on one lane and untyped
+    on the other. (2) The **judge** branch (`fulfilled: false`) is
+    deliberately left unstamped, with a pin saying so: a one-shot "I
+    couldn't" carries no observation about the map, and the four
+    verdicts are observations about the map. Inventing a fifth verdict
+    for it would dilute the taxonomy the way `external-interrupt` was
+    deliberately kept out of `GOAL_VERDICTS`.
+    Sibling hole closed in the same commit: `record_outcome` validated
+    `pause_reason` against its vocabulary but **not** `stop_verdict` —
+    the 2026-07-31 slice-1 review (#6, "stores disagreeing instead of
+    rejecting at ingress") fixed one field and not its twin. Reachable
+    the moment the NOW lane became a direct caller.
   - *Outcome-row ordering gap* — CLOSED by the adversarial-review round
     (2026-07-27, Skeptic finding 2): finalize now re-stamps the
     already-written row post-hoc when a merge-back block adds a verdict,

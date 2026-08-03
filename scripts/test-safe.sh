@@ -96,10 +96,20 @@ if [[ -n "$STALE" ]]; then
     echo "$STALE" | xargs kill -KILL 2>/dev/null || true
 fi
 
+# `-o addopts=""` on every REPORTING invocation below (not the --collect-only
+# ones, which want maximum quiet). pyproject sets addopts="-q"; this script
+# passes its own -q, and pytest reads that as -qq — which suppresses the final
+# "N passed, M skipped" line entirely. The suite ran fine and reported nothing
+# it could be judged by, which is the pipe-blindness this house has a rule
+# about. Found 2026-08-02 while checking a suite that had, in fact, been
+# skipping 10 router tests for want of scikit-learn.
+PYTEST_REPORT_OPTS=(-o 'addopts=')
+
 # If user specified a target, just run that directly — no chunking needed.
 if [[ -n "$TARGET" ]]; then
     echo "[test-safe] running: $TARGET (mode=$MODE_LABEL, $RESOURCE_LABEL)" >&2
-    exec "${RUN_PREFIX[@]}" "$PYTHON" -m pytest "$TARGET" -m "$PYTEST_MARK_EXPR" --tb=short -q -rs
+    exec "${RUN_PREFIX[@]}" "$PYTHON" -m pytest "${PYTEST_REPORT_OPTS[@]}" \
+        "$TARGET" -m "$PYTEST_MARK_EXPR" --tb=short -q -rs
 fi
 
 # Full suite, parallel lane. One pytest, `$JOBS` workers — no chunking, so we
@@ -111,7 +121,7 @@ fi
 # than up top so targeted runs don't pay for an import check they never use.
 if [[ "$JOBS" != "1" ]] && "$PYTHON" -c "import xdist" >/dev/null 2>&1; then
     echo "[test-safe] full suite, -n $JOBS (mode=$MODE_LABEL, $RESOURCE_LABEL)" >&2
-    exec "${RUN_PREFIX[@]}" "$PYTHON" -m pytest tests/ \
+    exec "${RUN_PREFIX[@]}" "$PYTHON" -m pytest "${PYTEST_REPORT_OPTS[@]}" tests/ \
         -m "$PYTEST_MARK_EXPR" -n "$JOBS" --tb=short -q -rs
 fi
 
@@ -139,7 +149,8 @@ fi
 TOTAL="$(wc -l < "$TMP_LIST" | tr -d '[:space:]')"
 if [[ "$TOTAL" -eq 0 ]]; then
     echo "[test-safe] no tests collected — falling back to full suite" >&2
-    exec "${RUN_PREFIX[@]}" "$PYTHON" -m pytest tests/ -m "$PYTEST_MARK_EXPR" --tb=short -q -rs
+    exec "${RUN_PREFIX[@]}" "$PYTHON" -m pytest "${PYTEST_REPORT_OPTS[@]}" \
+        tests/ -m "$PYTEST_MARK_EXPR" --tb=short -q -rs
 fi
 
 echo "[test-safe] $TOTAL items, chunks of $CHUNK_SIZE (mode=$MODE_LABEL, $RESOURCE_LABEL)" >&2
@@ -156,7 +167,8 @@ for chunk_file in "${TMP_LIST}".chunk-*; do
     while IFS= read -r item; do
         CHUNK_ARGS+=("$item")
     done < "$chunk_file"
-    if ! "${RUN_PREFIX[@]}" "$PYTHON" -m pytest -m "$PYTEST_MARK_EXPR" --tb=short -q -rs "${CHUNK_ARGS[@]}"; then
+    if ! "${RUN_PREFIX[@]}" "$PYTHON" -m pytest "${PYTEST_REPORT_OPTS[@]}" \
+            -m "$PYTEST_MARK_EXPR" --tb=short -q -rs "${CHUNK_ARGS[@]}"; then
         FAILED_CHUNKS+=("$CHUNK_NUM")
         echo "[test-safe] chunk $CHUNK_NUM had failures" >&2
     fi

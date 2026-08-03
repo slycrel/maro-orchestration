@@ -539,6 +539,18 @@ def record_outcome(
             log.debug("record_outcome: dropping off-vocabulary pause_reason %r",
                       pause_reason)
             pause_reason = ""
+    # Same rule for the sibling field. The 2026-07-31 review closed the hole
+    # on pause_reason only, so stop_verdict kept an ingress an off-vocabulary
+    # string could walk through — stamp_outcome_stop_verdict and
+    # LoopContext.stamp_stop both reject, this one didn't, and the NOW lane
+    # became a direct caller of it 2026-08-02.
+    if stop_verdict:
+        from stop_verdicts import VALID_STOP_VALUES
+        if stop_verdict not in VALID_STOP_VALUES:
+            log.debug("record_outcome: dropping off-vocabulary stop_verdict %r",
+                      stop_verdict)
+            stop_verdict = ""
+            stop_evidence = ""
     cost_usd = estimate_cost(tokens_in, tokens_out, model=model or None)
     outcome = Outcome(
         outcome_id=str(uuid.uuid4())[:8],

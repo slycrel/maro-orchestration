@@ -72,7 +72,7 @@ def test_test_safe_uses_nice_without_taskset(tmp_path):
     assert result.returncode == 0, result.stderr
     assert "taskset unavailable" in result.stderr
     assert result.command_log == (
-        f"nice:-n 15 {result.fake_python} -m pytest "
+        f"nice:-n 15 {result.fake_python} -m pytest -o addopts= "
         "tests/test_run_curation.py -m not slow or slow --tb=short -q -rs\n"
     )
 
@@ -83,7 +83,7 @@ def test_test_safe_adds_affinity_when_taskset_exists(tmp_path):
     assert result.returncode == 0, result.stderr
     assert "cores=0,1, nice=15" in result.stderr
     assert result.command_log == (
-        f"nice:-n 15 taskset -c 0,1 {result.fake_python} -m pytest "
+        f"nice:-n 15 taskset -c 0,1 {result.fake_python} -m pytest -o addopts= "
         "tests/test_run_curation.py -m not slow or slow --tb=short -q -rs\n"
     )
 
@@ -98,9 +98,25 @@ def test_test_safe_cli_resource_overrides_reach_command(tmp_path):
     assert result.returncode == 0, result.stderr
     assert "cores=2,3, nice=7" in result.stderr
     assert result.command_log == (
-        f"nice:-n 7 taskset -c 2,3 {result.fake_python} -m pytest "
+        f"nice:-n 7 taskset -c 2,3 {result.fake_python} -m pytest -o addopts= "
         "tests/test_run_curation.py -m not slow or slow --tb=short -q -rs\n"
     )
+
+
+def test_addopts_override_is_load_bearing():
+    """The four command pins above assert `-o addopts=` reaches pytest. That
+    override only matters because pyproject sets `addopts = "-q"`, which
+    stacks with the script's own `-q` into `-qq` — and `-qq` suppresses the
+    final "N passed, M skipped" line. A suite that reports nothing readable
+    is a suite you cannot judge; on 2026-08-02 exactly that hid ten skipped
+    router tests behind a green exit code. If pyproject ever stops setting
+    addopts, this pin fails and the override becomes deletable rather than
+    cargo cult.
+    """
+    from pathlib import Path
+    pyproject = Path(__file__).resolve().parents[1] / "pyproject.toml"
+    text = " ".join(pyproject.read_text(encoding="utf-8").split())
+    assert 'addopts = "-q"' in text
 
 
 def test_test_safe_fast_mode_reaches_pytest(tmp_path):
@@ -109,7 +125,7 @@ def test_test_safe_fast_mode_reaches_pytest(tmp_path):
     assert result.returncode == 0, result.stderr
     assert "mode=fast" in result.stderr
     assert result.command_log == (
-        f"nice:-n 15 {result.fake_python} -m pytest "
+        f"nice:-n 15 {result.fake_python} -m pytest -o addopts= "
         "tests/test_run_curation.py -m not slow --tb=short -q -rs\n"
     )
 

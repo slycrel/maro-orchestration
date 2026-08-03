@@ -576,6 +576,18 @@ def _verify_now_outcome(
         out["provenance_missing"] = _missing
         out["goal_verdict_summary"] = (
             f"claimed input/output(s) not found: {_missing}")
+        # Typed stop verdict, same as the agenda twin (handle ~2475). The
+        # §13b taxonomy names the provenance guard as a lost-the-plot source
+        # in stop_verdicts.py's own docstring, and the agenda guard has
+        # stamped it since the verdict shipped — the NOW guard fires on
+        # identical evidence and recorded prose only, so the same demotion
+        # was typed on one lane and untyped on the other (found 2026-08-02).
+        # Deliberately NOT extended to the judge branch below: a one-shot
+        # "I couldn't" carries no map observation, and the four verdicts are
+        # observations about the map.
+        out["stop_verdict"] = "lost-the-plot"
+        out["stop_evidence"] = (
+            f"provenance: claimed input/output(s) not found: {_missing}")[:500]
         log.info(
             "provenance: claimed input/output(s) not found %s — demoted to incomplete",
             _missing,
@@ -1290,6 +1302,15 @@ def _handle_impl(
                     _now_summary = str(outcome.get("goal_verdict_summary") or "")
                     if _now_summary:
                         _now_extra["goal_verdict_summary"] = _now_summary
+                    # Typed stop verdict rides the same write. classify_outcome
+                    # reads meta["stop_verdict"] straight onto the run card, so
+                    # this is the NOW lane's equivalent of the agenda rail's
+                    # stamp_run_metadata leg.
+                    _now_stop = str(outcome.get("stop_verdict") or "")
+                    if _now_stop:
+                        _now_extra["stop_verdict"] = _now_stop
+                        _now_extra["stop_evidence"] = str(
+                            outcome.get("stop_evidence") or "")[:500]
                     _wm_now(
                         _rd_now, handle_id=handle_id, prompt=_raw_input,
                         extra=_now_extra,
@@ -1336,6 +1357,12 @@ def _handle_impl(
                     ),
                     measurement_class=measurement_class,
                     handle_id=handle_id,
+                    # Third home for the typed verdict, matching the agenda
+                    # rail's three (result object / run metadata / outcome
+                    # row). record_outcome has accepted these since the
+                    # verdict shipped; the NOW call site never passed them.
+                    stop_verdict=str(outcome.get("stop_verdict") or ""),
+                    stop_evidence=str(outcome.get("stop_evidence") or "")[:500],
                 )
             except Exception:
                 pass  # outcome recording must never block the NOW response
