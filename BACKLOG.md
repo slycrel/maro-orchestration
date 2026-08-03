@@ -2095,6 +2095,45 @@ capture**, which is what makes the rung amortize instead of evaporate.
   instance: the pattern is *any judge given a bounded view and no notice
   that it is bounded*.
 
+  **FOLLOW-UP `065a010` — and the marker alone was the wrong fix.**
+  Jeremy asked why we truncate at all. I had written that widening "costs
+  tokens on every gate call and only moves the cliff" — **asserted, not
+  measured.** The 600 dates to the gate's ORIGINAL commit (`3a0884f`,
+  2026-03-31), when this was a cheap-model reviewer and
+  `default_model_tier` was `cheap`; nothing ever justified the number and
+  it outlived its era by four months. Measured over **261 recorded loop
+  payloads** (median last-3-step payload 3,323 chars, p90 5,659, max
+  23,398):
+
+  | cut | payloads intact | text shown | median extra tokens |
+  |---|---|---|---|
+  | 600 | **15%** | **43%** | — |
+  | 2500 | 88% | 91% | 422 |
+  | **4000** | **95%** | **94%** | **422** |
+  | 10000 | 99% | 98% | 422 |
+
+  The extra plateaus at 422 because the median payload already fits by
+  2500; only the tail grows, and p99 stays ~2,100 tokens. **$0.0013 a call
+  at mid pricing, against a false ESCALATE that re-runs the entire loop at
+  the next model tier.** Kept bounded rather than removed so a pathological
+  step cannot blow up the call; the marker still fires for the remaining
+  5%. **Lesson: a magic constant inherited from an earlier era deserves a
+  measurement before a defence, and "it would cost more" is a claim.**
+
+- [ ] **Do the evidence lenses want a wide-view seat?** (opened
+  2026-08-03 alongside `065a010`.) `_lens_evidence_probe` documented
+  itself as showing "the same summary the gate itself reviews"; that
+  stopped being true when the gate went 600 → 4000. Docstring corrected,
+  behaviour deliberately left at 500: the lenses are an evidence-DIVERSITY
+  panel and the recorded ablation baselines were taken at that width, so
+  changing an experimental arm under cover of a gate fix would corrupt the
+  comparison. The real question — whether the panel should include a seat
+  that sees the *whole* payload now that it is affordable — is a design
+  call with an ablation attached, not a constant to bump.
+  (`_lens_evidence_transcript` at 400×8 and `_lens_evidence_artifact` at
+  2400 are deliberate shapes; note the artifact seat already tells its
+  model "you see only this", which is the honest pattern the gate lacked.)
+
 - [ ] **Budget-pause breach note is denominated in tokens** (observed
   2026-08-02 while tracing the ladder). `_ladder_pause` stamps
   `budget-decision`, records `token_budget=N exceeded (M total tokens
