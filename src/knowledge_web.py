@@ -1885,6 +1885,199 @@ def _bump_node_times_applied(node_ids: List[str]) -> None:
         log.warning("knowledge_node: times_applied bump failed: %s", exc)
 
 
+# ---------------------------------------------------------------------------
+# Candidate → active promotion (V3, 2026-08-02)
+# ---------------------------------------------------------------------------
+# Jeremy decree 2026-08-02: "same as skills, promoted to maro-local usable,
+# up to the user to pick permanence." Mirrors skills.maybe_auto_promote_skills:
+# numeric use+score gates, optional LLM validation stamped
+# passed/unjudged/skipped, one captain's-log event per promotion. The
+# permanent-vs-useful user gate is a later UX layer, not this sweep.
+#
+# Signal semantics: a CANDIDATE's times_applied can only grow through
+# knowledge_bridge's dedup upsert (the injection-surface bump touches ACTIVE
+# nodes only), so on candidates it counts independent re-observations of the
+# same generalization from later runs — the analog of skill use_count.
+# confidence moves in step (+0.05 per re-observation from a 0.3 birth), so
+# together the gates read "re-derived at least twice since mint".
+
+NODE_PROMOTE_MIN_APPLICATIONS = 2   # re-observations before promotion considered
+NODE_PROMOTE_MIN_CONFIDENCE = 0.4   # 0.3 birth + 2 x 0.05 re-observation bumps
+
+# Two +0.05 float bumps land at 0.39999999999999997 — a bare >= 0.4 gate
+# would hold every legitimately re-observed-twice node forever.
+_CONFIDENCE_EPSILON = 1e-9
+
+_NODE_VALIDATION_SYSTEM = (
+    "You are a knowledge quality gate for an AI orchestration system. "
+    "Evaluate whether an auto-extracted knowledge node is ready to be "
+    "injected into future planning context. A valid node is: "
+    "(1) generalizable beyond one specific run; "
+    "(2) concrete enough to act on — not a truism or vague aspiration; "
+    "(3) plausibly correct as stated, with no unjustified absolutes. "
+    "Respond with JSON: {\"valid\": true|false, \"reason\": \"one sentence\"}"
+)
+
+
+def _validate_node_for_promotion(d: Dict[str, Any], adapter: Any) -> Dict[str, Any]:
+    """LLM quality gate for node promotion (skills.validate_skill_for_promotion mirror)."""
+    try:
+        from llm import LLMMessage
+        from llm_parse import extract_json, content_or_empty
+        node_text = (
+            f"Type: {d.get('node_type', '')}\n"
+            f"Title: {d.get('title', '')}\n"
+            f"Description: {(d.get('description') or '')[:800]}\n"
+            f"Re-observed {d.get('times_applied', 0)} time(s), "
+            f"confidence {float(d.get('confidence', 0) or 0):.2f}"
+        )
+        resp = adapter.complete(
+            [
+                LLMMessage("system", _NODE_VALIDATION_SYSTEM),
+                LLMMessage("user", f"Validate this knowledge node for promotion:\n\n{node_text}"),
+            ],
+            max_tokens=120,
+            temperature=0.1,
+            no_tools=True,
+            purpose="knowledge node promotion validation",
+        )
+        parsed = extract_json(content_or_empty(resp), dict, log_tag="knowledge_web.promote")
+        if isinstance(parsed, dict):
+            return {
+                "valid": bool(parsed.get("valid", False)),
+                "reason": str(parsed.get("reason", "")),
+                "judged": True,
+            }
+    except Exception as exc:
+        log.debug("node promotion validation failed (fail-open): %s", exc)
+    # Fail-open like skills: the numeric gates carried it here; a broken
+    # validator must not block the cycle. judged=False so the promotion
+    # event can say the pass was never a judgment.
+    return {"valid": True, "reason": "validation unavailable (fail-open)",
+            "judged": False}
+
+
+def promote_knowledge_candidates(*, adapter: Any = None, dry_run: bool = False,
+                                 limit: int = 10) -> List[str]:
+    """Promote earned NODE_CANDIDATE rows to NODE_ACTIVE.
+
+    Gates: times_applied >= NODE_PROMOTE_MIN_APPLICATIONS and confidence >=
+    NODE_PROMOTE_MIN_CONFIDENCE (epsilon-tolerant). lf- reference-corpus
+    nodes are never promoted — third-party data, not maro-learned knowledge.
+    With an adapter, each survivor passes the LLM gate (held at candidate on
+    an explicit "no"; fail-open "unjudged" on validator errors); without one,
+    validation is "skipped" and the numeric gates decide alone — the same
+    degradation contract as skill promotion.
+
+    dry_run returns the numeric-gate survivors without validating, writing,
+    or logging. Capped at `limit` promotions per sweep to bound validation
+    spend; the remainder waits for the next maintenance pass.
+
+    Returns the list of promoted node_ids.
+    """
+    p = _knowledge_nodes_path()
+    if not p.exists():
+        return []
+
+    eligible: List[Dict[str, Any]] = []
+    for line in p.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            d = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(d, dict) or d.get("status") != NODE_CANDIDATE:
+            continue
+        if str(d.get("node_id", "")).startswith(LINK_FARM_PREFIX):
+            continue
+        if int(d.get("times_applied", 0) or 0) < NODE_PROMOTE_MIN_APPLICATIONS:
+            continue
+        if float(d.get("confidence", 0) or 0) < (
+                NODE_PROMOTE_MIN_CONFIDENCE - _CONFIDENCE_EPSILON):
+            continue
+        eligible.append(d)
+
+    if len(eligible) > limit:
+        log.info("knowledge_node promotion: %d eligible, sweeping first %d",
+                 len(eligible), limit)
+        eligible = eligible[:limit]
+
+    if dry_run or not eligible:
+        return [d["node_id"] for d in eligible]
+
+    promoted: Dict[str, str] = {}  # node_id → validation stamp
+    for d in eligible:
+        validation = "skipped"  # no adapter → validation never ran
+        if adapter is not None:
+            result = _validate_node_for_promotion(d, adapter)
+            if not result["valid"]:
+                log.info("knowledge_node %s held at candidate: %s",
+                         d.get("node_id"), result["reason"])
+                continue
+            validation = "passed" if result.get("judged", True) else "unjudged"
+        promoted[d["node_id"]] = validation
+
+    if not promoted:
+        return []
+
+    # Flip survivors in one locked rewrite. Raw dicts so unknown keys survive
+    # (the dataclass filter is a READ convenience, never a write filter).
+    now = datetime.now(timezone.utc).isoformat()
+    flipped: List[Dict[str, Any]] = []
+    from file_lock import atomic_write, locked_write
+    with locked_write(p):
+        try:
+            lines = p.read_text(encoding="utf-8").splitlines()
+        except FileNotFoundError:
+            return []
+        out: List[str] = []
+        for line in lines:
+            stripped = line.strip()
+            if stripped:
+                try:
+                    d = json.loads(stripped)
+                    if (isinstance(d, dict) and d.get("node_id") in promoted
+                            and d.get("status") == NODE_CANDIDATE):
+                        d["status"] = NODE_ACTIVE
+                        d["validated_at"] = now
+                        line = json.dumps(d, sort_keys=True)
+                        flipped.append(d)
+                except json.JSONDecodeError:
+                    pass
+            out.append(line)
+        atomic_write(p, "\n".join(out) + ("\n" if out else ""))
+
+    for d in flipped:
+        node_id = d["node_id"]
+        log.info("knowledge_node promoted candidate -> active: %s %r",
+                 node_id, str(d.get("title", ""))[:60])
+        try:
+            from captains_log import log_event, KNOWLEDGE_NODE_PROMOTED
+            log_event(
+                event_type=KNOWLEDGE_NODE_PROMOTED,
+                subject=str(d.get("title", ""))[:120],
+                summary=(
+                    f"Promoted candidate -> active. Re-observed "
+                    f"{int(d.get('times_applied', 0) or 0)}x, confidence "
+                    f"{float(d.get('confidence', 0) or 0):.2f}."
+                ),
+                context={
+                    "node_id": node_id,
+                    "node_type": d.get("node_type", ""),
+                    "times_applied": int(d.get("times_applied", 0) or 0),
+                    "confidence": round(float(d.get("confidence", 0) or 0), 3),
+                    "validation": promoted[node_id],
+                },
+                related_ids=[f"knowledge:{node_id}"],
+            )
+        except Exception:
+            pass
+
+    return [d["node_id"] for d in flipped]
+
+
 def load_knowledge_nodes(
     *,
     node_type: Optional[str] = None,

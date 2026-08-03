@@ -35,7 +35,7 @@ Stage 5: Rule      → Hardcoded path (zero inference cost)
 | captains_log.jsonl | Event stream (11K+ entries) | Various — lifecycle events | captain's log read bridge |
 | task_ledger.jsonl | Per-step execution trace | record_step_trace() | evolver context |
 | verification_outcomes.jsonl | Claim verification history | record_verification() | calibration threshold |
-| knowledge_nodes.jsonl | Structured knowledge (K2) | import_link_farm, append_knowledge_node() | query_knowledge(), inject_knowledge_for_goal() |
+| knowledge_nodes.jsonl | Structured knowledge (K2) | import_link_farm, append_knowledge_node() (bridge mints CANDIDATE), promote_knowledge_candidates() (candidate → active flip) | query_knowledge(), inject_knowledge_for_goal() |
 | knowledge_edges.jsonl | Node relationships (K2) | import_link_farm, append_knowledge_edge() | load_knowledge_edges() |
 
 ## Write Flow (after each run)
@@ -100,6 +100,25 @@ Loop starting (recall.py loop slice)
 (`bootstrap_context()` — top outcomes + lessons — is CLI-only
 (`cli.py`), not part of loop start. Full store-by-store liveness map:
 `docs/history/2026-07-21-wiring-inventory.md`.)
+
+**Knowledge-node lifecycle (battery V3, promotion shipped 2026-08-02):**
+bridge-minted nodes (`knowledge_bridge.outcome_to_knowledge`,
+author="knowledge_bridge") are born `NODE_CANDIDATE` at confidence 0.3 —
+invisible to every live reader (ACTIVE-only loads; lf- reference-corpus
+nodes are excluded from queries regardless of status). Re-deriving the same
+generalization from a later run hits the bridge's dedup upsert (Jaccard ≥
+0.7 title match): confidence +0.05, times_applied +1 — on a candidate,
+times_applied counts exactly these independent re-observations (the
+injection-surface bump touches ACTIVE nodes only).
+`promote_knowledge_candidates()` (knowledge_web.py, riding
+`run_skill_maintenance` beside skill promotion — Jeremy decree "same as
+skills") flips earned candidates to ACTIVE: times_applied ≥ 2 AND
+confidence ≥ 0.4 (epsilon-tolerant — two float bumps land at 0.3999…),
+optional LLM gate stamped passed/unjudged/skipped (fail-open, the
+SKILL_PROMOTED contract), one `KNOWLEDGE_NODE_PROMOTED` event per flip,
+capped 10/sweep. The permanent-vs-useful user gate is a deferred UX layer,
+not this sweep. Pin: `test_knowledge_bridge.py::TestCandidateInvisibilityPin`
+(born invisible → earned promotion → surfaces in live recall).
 
 ## Tiered Memory Model
 

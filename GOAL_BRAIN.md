@@ -6179,3 +6179,22 @@ pre-chunk NOW/evolver rows honestly unjudged going forward from here.
   there: a paused run's channel line was the generic "error: Loop
   ended with status: interrupted" — typed pauses now emit a "paused"
   event in plain words (delivery decree). Full suite green (7501).
+- **2026-08-02** — **NODE_CANDIDATE → active promotion SHIPPED** (V3
+  battery find; same-day follow-through on the "same as skills" decree
+  above). `knowledge_web.promote_knowledge_candidates()` flips earned
+  candidates: times_applied ≥ 2 AND confidence ≥ 0.4 — on a candidate,
+  times_applied counts exactly the bridge's dedup-upsert re-observations
+  (the injection bump touches ACTIVE nodes only), so the gate reads
+  "independently re-derived at least twice since mint". Gate is
+  epsilon-tolerant (two +0.05 float bumps land at 0.3999…, a bare ≥ 0.4
+  would hold every legitimately earned node forever). Mirrors skill
+  promotion end to end: rides `run_skill_maintenance` with the same
+  adapter, optional LLM gate stamped passed/unjudged/skipped
+  (fail-open), `KNOWLEDGE_NODE_PROMOTED` captain's-log event
+  (user-surfaced, census 80), cap 10/sweep. lf- reference-corpus nodes
+  never promote (third-party data can't launder into maro-learned
+  knowledge). The `TestCandidateInvisibilityPin` tripwire was rewritten
+  to exercise earning: born invisible → fresh mint doesn't qualify →
+  re-observed 2x promotes and surfaces through the live recall chain.
+  Permanent-vs-useful user gate deliberately NOT built — that's the
+  "auto-mode settings" UX layer Jeremy parked for down the road.

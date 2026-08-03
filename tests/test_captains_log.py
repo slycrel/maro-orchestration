@@ -347,7 +347,10 @@ class TestEventTypes:
         # (out-of-budget = notify + one-run-budget extension x2, pause-ask
         # on the third breach; dollars in the log, effort language on the
         # channel).
-        assert len(EVENT_TYPES) == 79
+        # +1 (2026-08-02): KNOWLEDGE_NODE_PROMOTED — V3 candidate → active
+        # sweep (knowledge_web.promote_knowledge_candidates on the skill-
+        # maintenance cadence; "same as skills" decree).
+        assert len(EVENT_TYPES) == 80
 
     def test_previously_unregistered_events_in_set(self):
         from captains_log import EVOLVER_REVERTED, EVOLVER_VERIFY, PLAYBOOK_UPDATED

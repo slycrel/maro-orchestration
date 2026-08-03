@@ -1575,6 +1575,27 @@ class TestSkillValidationHarness:
         run_skill_maintenance(adapter=sentinel, dry_run=False)
         assert seen.get("adapter") is sentinel
 
+    def test_skill_maintenance_wires_node_promotion(self, monkeypatch, tmp_path):
+        # V3 (2026-08-02, "same as skills"): knowledge-node candidate → active
+        # promotion rides the same maintenance cadence, with the same adapter.
+        import knowledge_web as kw_module
+        from skill_lifecycle import run_skill_maintenance
+
+        seen = {}
+
+        def _capture(*, adapter=None, dry_run=False, **kw):
+            seen["adapter"] = adapter
+            seen["dry_run"] = dry_run
+            return ["node-x"]
+
+        monkeypatch.setattr(
+            kw_module, "promote_knowledge_candidates", _capture)
+        sentinel = object()
+        result = run_skill_maintenance(adapter=sentinel, dry_run=False)
+        assert seen.get("adapter") is sentinel
+        assert seen.get("dry_run") is False
+        assert result["nodes_promoted"] == ["node-x"]
+
     def test_promote_without_adapter_skips_validation(self, monkeypatch, tmp_path):
         from skills import maybe_auto_promote_skills
         from unittest.mock import patch

@@ -395,16 +395,20 @@ class TestReflectAndRecordK4Integration:
 
 
 class TestCandidateInvisibilityPin:
-    """Liveness pin for battery finding V3 (2026-07-21; re-verified in the
-    2026-07-29 wiring-claims docket): bridge-minted nodes are born
-    NODE_CANDIDATE and NO promote path exists anywhere in src/, so the live
-    recall chain (recall.py → inject_knowledge_for_goal → query_knowledge →
-    ACTIVE-only load) can never surface them. These tests state the gap as
-    fact — promotion criteria are Jeremy's call (BACKLOG). When a promote
-    path ships, the structural pin below fails on purpose: update it to
-    exercise promotion instead of absence."""
+    """Battery finding V3 (2026-07-21), updated 2026-08-02 when the promotion
+    path shipped (Jeremy decree: "same as skills, promoted to maro-local
+    usable" — knowledge_web.promote_knowledge_candidates). The invariants:
 
-    def test_bridge_written_nodes_invisible_to_live_recall_chain(self, tmp_workspace):
+    (a) bridge-minted nodes are BORN invisible — NODE_CANDIDATE, below the
+        promotion gates, filtered from the live recall chain (recall.py →
+        inject_knowledge_for_goal → query_knowledge → ACTIVE-only load);
+    (b) promotion is EARNED, never automatic — a fresh mint does not
+        qualify for the sweep;
+    (c) a candidate independently re-observed NODE_PROMOTE_MIN_APPLICATIONS
+        times (the bridge's dedup upsert) promotes, and the SAME recall
+        chain then surfaces it."""
+
+    def test_bridge_written_nodes_born_invisible(self, tmp_workspace):
         from knowledge_bridge import outcome_to_knowledge
         from knowledge_web import (
             NODE_CANDIDATE, inject_knowledge_for_goal, load_knowledge_nodes)
@@ -420,37 +424,61 @@ class TestCandidateInvisibilityPin:
 
         # (b) The default loader (status=ACTIVE) filters out every one.
         assert load_knowledge_nodes() == [], (
-            "a bridge-minted node reached the ACTIVE default read — either a "
-            "promote path shipped (update this pin) or candidate status broke")
+            "a fresh bridge-minted node reached the ACTIVE default read — "
+            "either something mints active or candidate status broke")
 
         # (c) End-to-end: the recall-surface injection sees nothing, even for
         # a goal that is a verbatim restatement of the recorded lesson.
         block = inject_knowledge_for_goal(
             "verify step independence before parallel execution")
         assert block == "", (
-            "recall injection surfaced a candidate node — invisibility "
-            "contract changed; re-adjudicate the V3 finding")
+            "recall injection surfaced an unearned candidate node — the "
+            "born-invisible contract broke; re-adjudicate the V3 finding")
 
-    def test_no_promote_path_exists(self):
-        # Structural half: nothing in the owning modules can move a node
-        # candidate → active today. This is the tripwire that forces whoever
-        # builds promotion to also revisit the invisibility pin above.
-        # Verbs "promote"/"activate" × nouns "node"/"candidate" (2026-07-29
-        # review find widened the net; "active" != "activate" so the existing
-        # ACTIVE-status readers don't false-positive).
-        import knowledge
-        import knowledge_bridge
-        import knowledge_web
+    def test_fresh_mint_does_not_qualify_for_promotion(self, tmp_workspace):
+        from knowledge_bridge import outcome_to_knowledge
+        from knowledge_web import (
+            load_knowledge_nodes, promote_knowledge_candidates)
 
-        verbs = ("promote", "activate")
-        nouns = ("node", "candidate")
-        for mod in (knowledge, knowledge_bridge, knowledge_web):
-            offenders = [
-                name for name in dir(mod)
-                if any(v in name.lower() for v in verbs)
-                and any(n in name.lower() for n in nouns)
-            ]
-            assert not offenders, (
-                f"{mod.__name__} grew a node-promotion symbol {offenders} — "
-                "wire it through the V3 pin (candidate invisibility) before "
-                "trusting bridged knowledge in recall")
+        assert outcome_to_knowledge(FakeOutcome(), adapter=None, dry_run=False) >= 1
+        assert promote_knowledge_candidates() == [], (
+            "a never-re-observed mint promoted — the earned-promotion gate "
+            "(times_applied/confidence) broke")
+        assert load_knowledge_nodes() == []
+
+    def test_earned_candidate_promotes_and_surfaces(self, tmp_workspace):
+        from knowledge_bridge import outcome_to_knowledge
+        from knowledge_web import (
+            NODE_ACTIVE,
+            NODE_PROMOTE_MIN_APPLICATIONS,
+            inject_knowledge_for_goal,
+            load_knowledge_nodes,
+            promote_knowledge_candidates,
+        )
+
+        # Mint, then re-observe through the REAL reinforcement path: later
+        # outcomes re-deriving the same lessons hit the bridge's dedup upsert
+        # (Jaccard title match → confidence +0.05, times_applied +1).
+        assert outcome_to_knowledge(FakeOutcome(), adapter=None, dry_run=False) >= 1
+        for i in range(NODE_PROMOTE_MIN_APPLICATIONS):
+            re_obs = FakeOutcome(outcome_id=f"test-outcome-reobs-{i}")
+            assert outcome_to_knowledge(re_obs, adapter=None, dry_run=False) == 0, (
+                "re-observation minted a NEW node instead of reinforcing — "
+                "dedup upsert broke, this test no longer exercises earning")
+
+        promoted = promote_knowledge_candidates()
+        assert promoted, "an earned candidate (re-observed 2x) did not promote"
+
+        # The promoted nodes are active and carry their earned signal.
+        active = load_knowledge_nodes()
+        assert {n.node_id for n in active} == set(promoted)
+        assert all(n.status == NODE_ACTIVE for n in active)
+        assert all(
+            n.times_applied >= NODE_PROMOTE_MIN_APPLICATIONS for n in active)
+
+        # End-to-end: the SAME recall chain that filtered the candidate now
+        # surfaces the promoted node.
+        block = inject_knowledge_for_goal(
+            "verify step independence before parallel execution")
+        assert "step independence" in block.lower(), (
+            "promoted node did not reach the live recall injection surface")

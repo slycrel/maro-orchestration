@@ -609,6 +609,20 @@ def run_skill_maintenance(
             if verbose:
                 print(f"[evolver] demotion failed: {e}", file=sys.stderr)
 
+    # V3 (2026-08-02, Jeremy: "same as skills"): knowledge-node candidate →
+    # active promotion rides the same maintenance cadence as skill promotion.
+    # The sweep handles dry_run itself (numeric-gate preview, no writes).
+    nodes_promoted: list = []
+    try:
+        from knowledge_web import promote_knowledge_candidates
+        nodes_promoted = promote_knowledge_candidates(
+            adapter=adapter, dry_run=dry_run)
+        if nodes_promoted and verbose:
+            print(f"[evolver] promoted knowledge nodes: {nodes_promoted}",
+                  file=sys.stderr)
+    except Exception as e:
+        log.debug("knowledge node promotion failed (non-fatal): %s", e)
+
     try:
         candidates = skills_needing_rewrite()
         rewrite_candidates = [s.id for s in candidates]
@@ -730,6 +744,7 @@ def run_skill_maintenance(
         "rewrite_candidates": rewrite_candidates,
         "rules_refought": refought,
         "contradictions_adjudicated": adjudicated,
+        "nodes_promoted": nodes_promoted,
     }
 
 

@@ -4451,11 +4451,8 @@ BACKLOG; era refs in `docs/KNOWLEDGE_JOURNEY.md` + era files):**
 - [ ] Promotion-side yield starvation (era 03)
 - [ ] Periodic hand-adjudicated burn-in ritual — impossible-control goals, verdicts vs artifacts on disk (era 08; the only method that caught verdict-layer bugs automated metrics blessed)
 
-**Battery side-finds V3/V4 (verified against the tree 2026-07-21;
-evidence in `docs/history/2026-07-21-phase05-battery.md`):**
-
-- [ ] **V3 — NODE_CANDIDATE promote path missing.** Bridged knowledge nodes are born `NODE_CANDIDATE` (conf 0.3) and nothing ever promotes them; live readers filter ACTIVE-only, so every live write is invisible to every live read. **Liveness pin SHIPPED 2026-07-29** (`test_knowledge_bridge.py::TestCandidateInvisibilityPin`): proves write→candidate→invisible end-to-end at the recall surface, plus a structural tripwire that fails when any node-promotion symbol appears — whoever builds promotion must revisit the pin. **Promotion criteria DECIDED 2026-08-02 (Jeremy, decree-class): mirror skills** — "same as skills, promoted to maro-local usable, up to the user to pick permanence." Auto-promotion to usable on the same shape of signal skills use (validation/use); the user gates permanent-vs-useful ("I think we need the user involved for permanent vs useful"). UX refinement later — "smells like auto-mode settings for prompting"; possible extra layer/process down the road, open to discussion. Build now unblocked; revisit the tripwire pin when building.
-- [x] **V4 — knowledge.py canon-candidate dict-vs-attr + phantom `canonize` command.** SHIPPED 2026-07-29 (autonomous batch). Degradation verified worse than noted: `get_canon_candidates` returns dict rows, so `_stage3_data`'s attr access errored exactly and only when candidates existed (empty list → clean zeros; non-empty → `{"error": ...}`) — the report broke precisely when there was something to report. Fixed to dict access (rows arrive pre-sorted; redundant re-sort dropped) + non-empty pin test (old tests only exercised the empty path, and one asserted `or "error" in result`). Phantom `canonize` hint replaced with the honest human gate ("no auto-writer by design; promote by editing AGENTS.md by hand" — matches `get_canon_candidates`' never-auto-written docstring). Building a real `canonize` AGENTS.md-writer would be a design decision (entry format, placement) — deliberately not taken.
+**Battery side-finds V3/V4: both SHIPPED — moved to BACKLOG_DONE.md
+2026-08-02 (V3 promote path shipped that day; V4 shipped 2026-07-29).**
 
 **Era-file C-tier drops (grounding-checker review §C — out-of-arc,
 batched here so the drop is deliberate; full context in each era file's
@@ -4558,7 +4555,9 @@ open — verification ≠ repair; each needs a wire-or-retire decision):**
     re-issued in the same doc as **8 family judgments + optional 5-row tail
     sample** instead of 116 rows.
   - **Corrections (don't inherit Opus's errors)**: CANON_APPLY_THRESHOLD
-    surfaces candidates that never promote (battery V3 — no promote path);
+    surfaces candidates that never promote (same shape battery V3 had for
+    knowledge nodes until its promote path shipped 2026-08-02 — canon-lesson
+    promotion still has none);
     extraction IS verdict-aware (extract_deferred_lessons, data-r2-01) — we're
     at the outcome-filtered baseline the paper calls insufficient, not naive;
     build/calls record-mode capture is dead on single-backend boxes, so replay

@@ -1689,3 +1689,158 @@ class TestLessonArchive:
             reason="decay_gc")
         hits = search_graveyard("zanzibar")
         assert len(hits) == 1
+
+
+# ---------------------------------------------------------------------------
+# promote_knowledge_candidates — V3 candidate → active sweep (2026-08-02)
+# ---------------------------------------------------------------------------
+
+def _mk_candidate(node_id="cand1", times_applied=2, confidence=0.4,
+                  status=kw.NODE_CANDIDATE, title="Verify inputs early",
+                  **extra):
+    node = KnowledgeNode(
+        node_id=node_id, node_type="principle", title=title,
+        description="Check preconditions before expensive work.",
+        status=status, confidence=confidence, times_applied=times_applied,
+        author="knowledge_bridge", **extra,
+    )
+    kw.append_knowledge_node(node)
+    return node
+
+
+class _StubResp:
+    def __init__(self, content):
+        self.content = content
+
+
+class _VerdictAdapter:
+    def __init__(self, valid=True, raise_exc=False):
+        self.valid = valid
+        self.raise_exc = raise_exc
+        self.calls = 0
+
+    def complete(self, messages, **kw_):
+        self.calls += 1
+        if self.raise_exc:
+            raise RuntimeError("validator down")
+        verdict = "true" if self.valid else "false"
+        return _StubResp('{"valid": %s, "reason": "judged"}' % verdict)
+
+
+@pytest.fixture()
+def _events(monkeypatch):
+    import captains_log
+    captured = []
+    monkeypatch.setattr(captains_log, "log_event",
+                        lambda **kw_: captured.append(kw_))
+    return captured
+
+
+class TestPromoteKnowledgeCandidates:
+    def test_earned_candidate_promotes_without_adapter(self, tmp_path, _events):
+        _mk_candidate()
+        assert kw.promote_knowledge_candidates() == ["cand1"]
+        active = kw.load_knowledge_nodes()
+        assert [n.node_id for n in active] == ["cand1"]
+        assert active[0].status == kw.NODE_ACTIVE
+        assert active[0].validated_at
+        # No adapter → the stamp says validation never ran.
+        assert _events[-1]["context"]["validation"] == "skipped"
+
+    def test_float_boundary_confidence_promotes(self, tmp_path, _events):
+        # The real reinforcement path lands at 0.3 + 0.05 + 0.05 =
+        # 0.39999999999999997 — the gate must be epsilon-tolerant.
+        _mk_candidate(confidence=0.3 + 0.05 + 0.05)
+        assert kw.promote_knowledge_candidates() == ["cand1"]
+
+    def test_below_use_gate_stays_candidate(self, tmp_path, _events):
+        _mk_candidate(times_applied=1)
+        assert kw.promote_knowledge_candidates() == []
+        assert kw.load_knowledge_nodes() == []
+        assert _events == []
+
+    def test_below_confidence_gate_stays_candidate(self, tmp_path, _events):
+        _mk_candidate(confidence=0.35)
+        assert kw.promote_knowledge_candidates() == []
+        assert kw.load_knowledge_nodes() == []
+
+    def test_lf_reference_nodes_never_promote(self, tmp_path, _events):
+        # Third-party reference corpus (Jeremy 2026-08-02: "treat like a 3rd
+        # party website") — never laundered into maro-learned knowledge, even
+        # with gate-clearing numbers.
+        _mk_candidate(node_id="lf-abc1234567", times_applied=9, confidence=0.9)
+        assert kw.promote_knowledge_candidates() == []
+        assert _events == []
+
+    def test_non_candidates_untouched(self, tmp_path, _events):
+        _mk_candidate(node_id="al1", status=kw.NODE_ACTIVE)
+        _mk_candidate(node_id="dep1", status=kw.NODE_DEPRECATED)
+        assert kw.promote_knowledge_candidates() == []
+        assert _events == []
+
+    def test_adapter_no_holds_at_candidate(self, tmp_path, _events):
+        _mk_candidate()
+        adapter = _VerdictAdapter(valid=False)
+        assert kw.promote_knowledge_candidates(adapter=adapter) == []
+        assert adapter.calls == 1
+        assert kw.load_knowledge_nodes() == []
+        assert _events == []
+
+    def test_adapter_yes_stamps_passed(self, tmp_path, _events):
+        _mk_candidate()
+        assert kw.promote_knowledge_candidates(
+            adapter=_VerdictAdapter(valid=True)) == ["cand1"]
+        assert _events[-1]["context"]["validation"] == "passed"
+
+    def test_adapter_error_fails_open_unjudged(self, tmp_path, _events):
+        # Same degradation contract as skill promotion: a broken validator
+        # must not block the cycle, but the event says the pass was never
+        # a judgment.
+        _mk_candidate()
+        assert kw.promote_knowledge_candidates(
+            adapter=_VerdictAdapter(raise_exc=True)) == ["cand1"]
+        assert _events[-1]["context"]["validation"] == "unjudged"
+
+    def test_dry_run_previews_without_writing(self, tmp_path, _events):
+        _mk_candidate()
+        # A raising adapter proves dry_run never validates (no spend).
+        result = kw.promote_knowledge_candidates(
+            adapter=_VerdictAdapter(raise_exc=True), dry_run=True)
+        assert result == ["cand1"]
+        assert kw.load_knowledge_nodes() == []  # still candidate on disk
+        assert _events == []
+
+    def test_limit_caps_sweep(self, tmp_path, _events):
+        for i in range(3):
+            _mk_candidate(node_id=f"c{i}", title=f"Distinct principle {i}")
+        promoted = kw.promote_knowledge_candidates(limit=2)
+        assert len(promoted) == 2
+        remaining = kw.load_knowledge_nodes(status=kw.NODE_CANDIDATE)
+        assert len(remaining) == 1  # waits for the next maintenance pass
+
+    def test_unknown_keys_survive_rewrite(self, tmp_path, _events):
+        # Raw-dict rewrite invariant: the dataclass filter is a READ
+        # convenience, never a write filter.
+        p = kw._knowledge_nodes_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        d = {"node_id": "cand9", "node_type": "principle",
+             "title": "Keep provenance", "description": "d",
+             "status": kw.NODE_CANDIDATE, "confidence": 0.4,
+             "times_applied": 2, "provenance": {"minted_from": "outcome"}}
+        with open(p, "a", encoding="utf-8") as f:
+            f.write(json.dumps(d) + "\n")
+        assert kw.promote_knowledge_candidates() == ["cand9"]
+        raw = json.loads(p.read_text(encoding="utf-8").strip())
+        assert raw["provenance"] == {"minted_from": "outcome"}
+        assert raw["status"] == kw.NODE_ACTIVE
+
+    def test_event_shape(self, tmp_path, _events):
+        _mk_candidate(times_applied=3, confidence=0.45)
+        kw.promote_knowledge_candidates()
+        ev = _events[-1]
+        assert ev["event_type"] == "KNOWLEDGE_NODE_PROMOTED"
+        assert ev["related_ids"] == ["knowledge:cand1"]
+        ctx = ev["context"]
+        assert ctx["node_id"] == "cand1"
+        assert ctx["times_applied"] == 3
+        assert ctx["confidence"] == pytest.approx(0.45)
