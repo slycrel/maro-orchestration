@@ -67,6 +67,112 @@ def test_goal_to_slug_max_words():
 
 
 # ---------------------------------------------------------------------------
+# resolve_project_slug — generic openings must not merge unrelated goals
+# ---------------------------------------------------------------------------
+
+SYSTEMANTICS = "tell me about the book Systemantics by John Gall"
+SYNTHESIS = "tell me about the book Notes on the Synthesis of Form"
+
+
+def _make_project(goal):
+    """Create the project a goal resolves to, the way a real run would."""
+    from loop_artifacts import resolve_project_slug
+    slug = resolve_project_slug(goal)
+    orch.ensure_project(slug, goal[:80])
+    return slug
+
+
+def test_resolve_slug_fresh_goal_is_the_bare_slug(monkeypatch, tmp_path):
+    _setup_workspace(monkeypatch, tmp_path)
+    from loop_artifacts import resolve_project_slug
+    assert resolve_project_slug(SYSTEMANTICS) == _goal_to_slug(SYSTEMANTICS)
+
+
+def test_resolve_slug_generic_opening_different_subject_disambiguates(monkeypatch, tmp_path):
+    """The found case: two books, one slug, wrong-source contamination."""
+    _setup_workspace(monkeypatch, tmp_path)
+    from loop_artifacts import resolve_project_slug
+    first = _make_project(SYSTEMANTICS)
+    second = resolve_project_slug(SYNTHESIS)
+    assert second != first
+    assert second == first + "-2"
+
+
+def test_resolve_slug_same_goal_returns_to_its_own_project(monkeypatch, tmp_path):
+    """Disambiguation is stable — a re-run lands back in -2, not -3."""
+    _setup_workspace(monkeypatch, tmp_path)
+    from loop_artifacts import resolve_project_slug
+    _make_project(SYSTEMANTICS)
+    second = _make_project(SYNTHESIS)
+    assert resolve_project_slug(SYNTHESIS) == second
+    assert resolve_project_slug(SYSTEMANTICS) == _goal_to_slug(SYSTEMANTICS)
+
+
+def test_resolve_slug_third_subject_gets_its_own(monkeypatch, tmp_path):
+    _setup_workspace(monkeypatch, tmp_path)
+    from loop_artifacts import resolve_project_slug
+    base = _make_project(SYSTEMANTICS)
+    _make_project(SYNTHESIS)
+    third = resolve_project_slug("tell me about the book Godel Escher Bach")
+    assert third == base + "-3"
+
+
+def test_resolve_slug_continuation_of_same_subject_reuses(monkeypatch, tmp_path):
+    """Generic opening, same subject → continuity, which is what slugs are for."""
+    _setup_workspace(monkeypatch, tmp_path)
+    from loop_artifacts import resolve_project_slug
+    first = _make_project(SYSTEMANTICS)
+    follow_up = "tell me about the book Systemantics chapter three in detail"
+    assert resolve_project_slug(follow_up) == first
+
+
+def test_resolve_slug_subject_bearing_slug_never_splits(monkeypatch, tmp_path):
+    """The 3b rule: collision on subject is the continuity mechanism working.
+
+    Two goals whose shared first five words carry the subject stay together
+    even when the rest of the text has nothing in common.
+    """
+    _setup_workspace(monkeypatch, tmp_path)
+    from loop_artifacts import resolve_project_slug
+    goal_a = "water chlorination history in municipal supplies"
+    goal_b = "water chlorination history in municipal Jersey City 1908 claims"
+    first = _make_project(goal_a)
+    assert _goal_to_slug(goal_b) == first  # same five opening words
+    assert resolve_project_slug(goal_b) == first
+
+
+def test_resolve_slug_unreadable_mission_reuses(monkeypatch, tmp_path):
+    """No recorded mission = no evidence of a different subject = today's behavior."""
+    _setup_workspace(monkeypatch, tmp_path)
+    from loop_artifacts import resolve_project_slug
+    slug = _goal_to_slug(SYSTEMANTICS)
+    orch.project_dir(slug).mkdir(parents=True, exist_ok=True)  # no NEXT.md
+    assert resolve_project_slug(SYNTHESIS) == slug
+
+
+def test_resolve_slug_disambiguation_cap_falls_back_to_hash(monkeypatch, tmp_path):
+    _setup_workspace(monkeypatch, tmp_path)
+    import loop_artifacts as la
+    base = _goal_to_slug(SYSTEMANTICS)
+    orch.ensure_project(base, SYSTEMANTICS)
+    for n in range(2, la._SLUG_DISAMBIGUATION_CAP + 1):
+        orch.ensure_project(f"{base}-{n}", f"tell me about the book Filler {n}")
+    out = la.resolve_project_slug(SYNTHESIS)
+    assert out.startswith(base + "-")
+    assert out != f"{base}-{la._SLUG_DISAMBIGUATION_CAP}"
+    assert la.resolve_project_slug(SYNTHESIS) == out  # deterministic
+
+
+def test_loop_run_lands_in_the_disambiguated_project(monkeypatch, tmp_path):
+    """End to end: the second book's run must not adopt the first's project."""
+    _setup_workspace(monkeypatch, tmp_path)
+    first = run_agent_loop(SYSTEMANTICS, dry_run=True)
+    second = run_agent_loop(SYNTHESIS, dry_run=True)
+    assert first.project != second.project
+    assert orch.project_dir(second.project).exists()
+
+
+# ---------------------------------------------------------------------------
 # _DryRunAdapter
 # ---------------------------------------------------------------------------
 

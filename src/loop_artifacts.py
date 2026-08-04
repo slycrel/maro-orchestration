@@ -246,3 +246,128 @@ def _goal_to_slug(goal: str) -> str:
     words = re.sub(r"[^a-z0-9 ]", "", goal.lower()).split()
     slug = "-".join(words[:5])
     return slug or "unnamed-goal"
+
+
+# Words that carry no subject: function words, the imperatives goals open
+# with, and the shape nouns that name the *kind* of thing rather than the
+# thing ("book", "article", "repo"). Used only as a GUARD — a word missing
+# from this set means resolve_project_slug degrades to today's behavior
+# (reuse the colliding project), never to a new hazard. That asymmetry is
+# why a phrase list is acceptable here and wasn't for building the slug.
+_GENERIC_WORDS = frozenset("""
+a an the this that these those it its my our your their his her
+and or but not for from with without into onto over under about above
+of on in to at by as is are was were be been being do does did done
+i me we us you they them he she who what which when where why how
+please can could should would may might will shall let lets need needs
+tell told say said give given show shown ask asked find found get got
+look looking see seen read reading write writing make making create
+creating build building fix fixing check checking research researching
+review reviewing analyze analyzing summarize summarizing explain
+explaining update updating add adding run running test testing use using
+help helping work working try trying take taking put putting
+new old more most some any all every each other another same
+summary report overview analysis notes note thing things stuff item items
+book books article articles paper papers file files code repo repos
+project projects doc docs document documents page pages site sites
+thread threads post posts video videos story stories task tasks
+""".split())
+
+# Longest disambiguator we'll try before falling back to a goal hash.
+_SLUG_DISAMBIGUATION_CAP = 20
+
+
+def _subject_words(text: str) -> set:
+    """Content words of a goal — the part that says what it is *about*.
+
+    Drops punctuation, generic words, and anything under 3 characters
+    (initials and digits carry no reliable subject signal).
+    """
+    import re
+    words = re.sub(r"[^a-z0-9 ]", " ", (text or "").lower()).split()
+    return {w for w in words if len(w) >= 3 and w not in _GENERIC_WORDS}
+
+
+def _slug_is_generic(slug: str) -> bool:
+    """True when a slug's words name no subject — "tell-me-about-the-book".
+
+    A slug carrying two or more subject words ("research-the-chlorination-of-
+    water") is specific enough that a collision means two goals about the
+    same thing, which is what slugs are for. One or zero means the slug is
+    pure phrasing and a collision proves nothing.
+    """
+    return len(_subject_words(slug.replace("-", " "))) <= 1
+
+
+def _recorded_mission(slug: str) -> str:
+    """The goal a project recorded when it was created, "" if unreadable."""
+    try:
+        o = _orch()
+        text = o.next_path(slug).read_text(encoding="utf-8")
+    except Exception:
+        return ""
+    # ensure_project writes "Mission:\n\n> <goal>\n"
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith(">"):
+            return line.lstrip("> ").strip()
+    return ""
+
+
+def _same_subject(goal: str, mission: str, slug: str) -> bool:
+    """Do two goals sharing a generic slug talk about the same thing?
+
+    Compares the *distinguishing tail* — subject words outside the slug the
+    two share by construction. One shared tail word is enough: the bug being
+    guarded against is two goals with nothing in common (Systemantics vs
+    Notes on the Synthesis of Form), and biasing toward "same" keeps every
+    real continuity family intact. Missing evidence (no mission recorded, no
+    tail on either side) reads as same — today's behavior.
+    """
+    if not mission:
+        return True
+    slug_words = set(slug.split("-"))
+    tail_a = _subject_words(goal) - slug_words
+    tail_b = _subject_words(mission) - slug_words
+    if not tail_a or not tail_b:
+        return True
+    return bool(tail_a & tail_b)
+
+
+def resolve_project_slug(goal: str) -> str:
+    """Project slug for a goal, disambiguated when a generic opening would
+    otherwise merge it into an unrelated project.
+
+    ``_goal_to_slug`` is the first five words and nothing else, so goals
+    that open the way people actually open them — "tell me about the
+    book…", "write a summary of…" — collide on phrasing alone and the
+    second goal inherits the first's artifacts as its own prior work. The
+    guards can't catch that: those files really are present.
+
+    Two conditions must both hold before this changes anything, so
+    subject-collisions (the continuity mechanism) are untouched:
+    the slug must carry no subject, AND the recorded mission of the
+    project it hit must share no subject word with the incoming goal.
+    Only then does the goal get its own ``-2``, ``-3``… directory —
+    re-entered on later runs, since the same mission check matches it.
+    """
+    base = _goal_to_slug(goal)
+    try:
+        o = _orch()
+        if not o.project_dir(base).exists():
+            return base
+        if not _slug_is_generic(base):
+            return base
+        if _same_subject(goal, _recorded_mission(base), base):
+            return base
+        for n in range(2, _SLUG_DISAMBIGUATION_CAP + 1):
+            cand = f"{base}-{n}"
+            if not o.project_dir(cand).exists():
+                return cand
+            if _same_subject(goal, _recorded_mission(cand), base):
+                return cand
+        # Cap reached: a hash still beats silently merging unrelated work.
+        import hashlib
+        return f"{base}-{hashlib.sha256(goal.encode('utf-8')).hexdigest()[:8]}"
+    except Exception:
+        return base

@@ -354,7 +354,8 @@ def run_mission(
     # Resolve project
     o = _orch()
     if not project:
-        project = _goal_to_slug(goal)
+        from loop_artifacts import resolve_project_slug
+        project = resolve_project_slug(goal)
     if not o.project_dir(project).exists():
         o.ensure_project(project, goal[:80])
         _log(f"created project={project}")

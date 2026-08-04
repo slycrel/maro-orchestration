@@ -659,7 +659,8 @@ def _cmd_run(args: argparse.Namespace) -> int:
     if getattr(args, "parent", None):
         from ancestry import create_child_ancestry, set_project_ancestry
         import orch as _o
-        _target_slug = args.project or _al._goal_to_slug(goal_str)
+        from loop_artifacts import resolve_project_slug as _resolve_slug
+        _target_slug = args.project or _resolve_slug(goal_str)
         _target_dir = _o.project_dir(_target_slug)
         if not _target_dir.exists():
             _o.ensure_project(_target_slug, goal_str[:80])

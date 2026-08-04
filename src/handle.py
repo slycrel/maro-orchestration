@@ -331,8 +331,8 @@ def _default_project_for(message: str) -> str:
     matched = _match_existing_project(message)
     if matched:
         return matched
-    from agent_loop import _goal_to_slug
-    return _goal_to_slug(message)
+    from loop_artifacts import resolve_project_slug
+    return resolve_project_slug(message)
 
 
 def _run_now(

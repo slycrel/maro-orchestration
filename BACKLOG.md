@@ -3247,8 +3247,55 @@ on mismatch. Options, cheapest first:
    Correct by construction, needs a subject-match call.
 3. Score words by how distinguishing they are across existing slugs and
    pick from the informative tail rather than the head.
-Not started — logging the hazard and the workaround first, since the
-guards that would normally catch a wrong file *can't* catch this one.
+
+**SHIPPED 2026-08-04 — option 2, deterministic subject match, no LLM
+call.** `loop_artifacts.resolve_project_slug(goal)` is now the single
+mint point (wired at `loop_init`, `handle._default_project_for`,
+`mission`, `cli run --parent`); `_goal_to_slug` stays the pure
+five-word function every existing lookup already depends on. **Two
+guards must BOTH fire before anything changes**, which is how the
+"collision on subject = continuity / collision on phrasing = bug"
+distinction got encoded rather than described:
+1. the base slug carries **≤1 subject word** (`_slug_is_generic` —
+   stopwords + goal-opening imperatives + shape nouns like "book",
+   "repo", "article"), AND
+2. the hit project's recorded Mission (`NEXT.md`, the `>` line) shares
+   **no** subject word with the incoming goal outside the slug the two
+   share by construction (`_same_subject`).
+Then the goal gets `-2`, `-3`… — re-entered on later runs, because the
+same mission check matches it. Cap 20, then a goal hash: a hash still
+beats silently merging unrelated work. Missing evidence (no mission, no
+distinguishing tail either side) reads as *same* — degrade to today's
+behavior, never to a new hazard. That asymmetry is why a stopword list
+is acceptable as a guard here and wasn't acceptable in option 1, where a
+missing phrase silently produces a bad slug.
+
+**Blast radius, measured before landing, not asserted:** 757 run-metadata
+records / 296 projects with runs / 22 projects holding more than one
+distinct goal → **0 would have been split.** All 22 have subject-bearing
+slugs, so guard 1 never fires on them; 37 of 180 project dirs have
+generic slugs and are the only place behavior can change at all. (This
+census reaches 296 projects vs the earlier entry's 29 because it falls
+back to slug-recompute when metadata carries no `project` — the
+denominator caveat above is what prompted widening it.)
+
+**Two pre-existing holes closed on the way, both required for the fix to
+be sound:** `loop_init` now stamps the resolved `project` into run
+metadata (only the handle lane did — a `maro run --project X` run left
+curation recomputing the slug from the prompt and missing), and the two
+`run_curation` sites that recomputed the slug directly
+(`spend_transparency` bundle, `_lite_candidate_files`) now go through
+`_project_dir_for`, which prefers metadata. Without those, a
+disambiguated run's artifacts would be looked for in the project it was
+disambiguated *away from*.
+
+**Named cut:** subject match is one shared word, so two different
+subjects sharing an incidental content word ("The Art of War" vs "The Art
+of Doing Science") still merge. Deliberate — biasing toward "same" is
+what keeps every real continuity family intact, and the failure it
+guards against (zero words in common) is the one that was found. 14 pins
+in `tests/test_agent_loop.py`, including the found case end-to-end and
+the 3b subject-collision case that must NOT split.
 
 ### 22. Capabilities catalog — open residuals (shipped trail archived)
 

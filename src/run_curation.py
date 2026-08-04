@@ -585,11 +585,9 @@ def spend_transparency(rd: Path, meta: dict, card: dict) -> None:
     bundle["truncated"] = len(files) > _CAP
     # Project artifacts live outside the run dir — same no-grep mandate.
     try:
-        from agent_loop import _goal_to_slug
-        import orch_items as o
-        _slug = _goal_to_slug(meta.get("prompt", "") or "")
-        pa = o.projects_root() / _slug / "artifacts"
-        if pa.is_dir():
+        _pd = _project_dir_for(meta)
+        pa = (_pd / "artifacts") if _pd else None
+        if pa is not None and pa.is_dir():
             pfiles = []
             for f in sorted(pa.rglob("*")):
                 if f.is_file():
@@ -652,12 +650,9 @@ def _lite_candidate_files(rd: Path, meta: dict) -> List[Path]:
     project artifacts dir (same join as spend_transparency)."""
     dirs = [rd / "artifact", rd / "build"]
     try:
-        from agent_loop import _goal_to_slug
-        import orch_items as o
-        _slug = _goal_to_slug(meta.get("prompt", "") or "")
-        pa = o.projects_root() / _slug / "artifacts"
-        if pa.is_dir():
-            dirs.append(pa)
+        _pd = _project_dir_for(meta)
+        if _pd is not None and (_pd / "artifacts").is_dir():
+            dirs.append(_pd / "artifacts")
     except Exception:
         pass
     out: List[Path] = []

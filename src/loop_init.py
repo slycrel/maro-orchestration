@@ -16,7 +16,7 @@ from typing import Optional
 
 from loop_types import _configure_logging, _orch, LoopResult, LoopStateMachine
 from stop_verdicts import PAUSE_ERR_BUSY, PAUSE_OP_MANUAL
-from loop_artifacts import _goal_to_slug
+from loop_artifacts import resolve_project_slug
 
 try:
     from tool_registry import PermissionContext as _PermissionContext, ROLE_WORKER as _ROLE_WORKER
@@ -368,12 +368,22 @@ def _initialize_loop(
         if verbose and not _proj_existed:
             print(f"[maro] created project={project}", file=sys.stderr, flush=True)
     else:
-        project = _goal_to_slug(goal)
+        project = resolve_project_slug(goal)
         _proj_existed = o.project_dir(project).exists()
         o.ensure_project(project, goal[:80])
         if verbose and not _proj_existed:
             print(f"[maro] created project={project}", file=sys.stderr, flush=True)
     ctx.project = project
+
+    # The resolved slug is the only thing that can find this run's artifacts
+    # later: curation recomputes it from the prompt when metadata is silent,
+    # which lands on the base slug and misses both an explicit --project and
+    # a disambiguated one. Stamp it so nothing has to guess.
+    try:
+        from runs import stamp_run_metadata
+        stamp_run_metadata({"project": ctx.project})
+    except Exception:
+        log.debug("project metadata stamp failed", exc_info=True)
 
     # Admission gate: atomically claim the per-project slot (flock, held for
     # the process's lifetime). Two runs on one project stomp each other's
