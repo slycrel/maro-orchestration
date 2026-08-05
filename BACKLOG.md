@@ -3093,6 +3093,39 @@ the rewrite cleaned up by hand:
    re-baseline, or replacement when a newer reading of the same check
    lands (the rewrite collapsed three calibration dups into one
    trend-carrying entry by hand; the evolver should do that).
+   **SHIPPED 2026-08-04.** The playbook could not tell a durable insight
+   from a live reading, so it kept both forever. An entry may now carry
+   an **alarm key** — the check it reports (`calibration:observation`,
+   `drift:avg_cost_usd`) plus the date of its last reading, written
+   inside the existing attribution so provenance parsing and injection
+   ranking are untouched: `*(from evolver:cal-b46 · alarm
+   calibration:observation @2026-08-04)*`. Two behaviors follow:
+   **re-reading replaces in place** (same key → swap the line, keeping
+   its position — an alarm that keeps firing shouldn't leapfrog the
+   playbook every cycle, and in-place is what the operator's hand-fix
+   did), and **silence expires it** (`expire_stale_alarms`, run from
+   `curate_playbook` before dedup and compression, default
+   `playbook.alarm_ttl_days: 14`). Silence has to be the signal: when a
+   condition clears the scanner just stops emitting, so there is no
+   "resolved" event to listen for. Archives before rewriting; unkeyed
+   entries are never expired.
+   Both alarm-minting scanners are keyed and reworded to observation form
+   — `scan_suggestion_outcomes` (was "Reduce LLM confidence prompts … or
+   tighten auto-apply threshold") and `scan_quality_drift` (was
+   "consider rolling back recent auto-applied suggestions", the exact
+   text the four frozen copies carried). **These are templates, not LLM
+   output — the guidance-form rules in the evolver prompt can't reach
+   them**, which is why the form pass had to come here separately.
+   **Why a mechanism and not another cleanup:** the live playbook had
+   grown two MORE calibration near-dups (b46f180f, bad8ca87) in the two
+   days after the 2026-08-02 hand-fix collapsed the first batch. Live
+   file migrated by hand once more (archived to `playbook_history/`
+   first): three legacy lines → two keyed alarms, one per category, with
+   the 0.50 → 0.43 → 0.33 → 0.27 trend preserved in the text. From here
+   the mechanism maintains them.
+   Residual, named: the `key` is set by the scanner that mints the
+   entry, so a future alarm-shaped writer that forgets it gets the old
+   accreting behavior. Pins in `tests/test_playbook.py::TestAlarms`.
 2. **Held-for-review signals have no review surface.** With
    `evolver.auto_enqueue_signals` false (default), sub_mission
    suggestions park in the playbook "for human review" — permanent

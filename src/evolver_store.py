@@ -90,6 +90,11 @@ class Suggestion:
     status: str = ""
     block_reason: str = ""
     dismissed_at: str = ""
+    # Set by scanners whose output is a READING of a live check rather than a
+    # durable insight ("calibration:observation", "drift:closure_rate"). The
+    # playbook entry it produces is an alarm: re-readings replace it, and it
+    # expires when the check stops firing. Empty = durable insight.
+    playbook_key: str = ""
     # new_guardrail only: the regex the guardrail actually matches step text
     # with. Separate from `suggestion` because the two are different things —
     # `suggestion` is prose for the playbook, this is a pattern for
@@ -118,6 +123,7 @@ class Suggestion:
             "status": self.status,
             "block_reason": self.block_reason,
             "dismissed_at": self.dismissed_at,
+            "playbook_key": self.playbook_key,
         }
 
     @classmethod
@@ -542,11 +548,15 @@ def _apply_suggestion_action(d: dict) -> bool:
                     "new_guardrail": "Quality",
                     "observation": "Learned",
                 }
-                # Same no-slice rule as the Signals path above.
+                # No [:200] slice: it clipped entries mid-sentence into
+                # permanent every-run context (operator surprise read
+                # 2026-08-02, P9/P10/P17). append_to_playbook's 500-char
+                # cap with an honest ellipsis is the only truncation.
                 append_to_playbook(
                     suggestion_text,
                     section=_section_map.get(category, "Learned"),
                     source=f"evolver:{suggestion_id}",
+                    key=str(d.get("playbook_key", "") or ""),
                 )
             except Exception:
                 pass

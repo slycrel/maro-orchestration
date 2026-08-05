@@ -42,7 +42,7 @@ from __future__ import annotations
 import logging
 import re
 import textwrap
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import List, Optional
 
@@ -180,6 +180,108 @@ def _entry_core(line: str) -> str:
     return core.lstrip("- ").strip().casefold()
 
 
+# ---------------------------------------------------------------------------
+# Alarms — entries that report a live reading, not a durable insight
+# ---------------------------------------------------------------------------
+#
+# The operator surprise read (2026-08-02) found four frozen cost alarms from
+# different eras all telling every run to "consider rolling back" changes that
+# may long since have rolled back, and calibration warnings accreting as
+# near-dups instead of updating in place. Nothing had ever exited the playbook
+# because nothing could: an insight is durable, but a reading is only true
+# while it keeps being taken, and the file had no way to tell them apart.
+#
+# An alarm carries its check's identity and the date it was last re-read.
+# Re-reading replaces it; not re-reading expires it. Two entries accreted in
+# the two days AFTER the hand-fix, which is what says this needed a mechanism
+# and not another cleanup.
+_ALARM_MARKER = "alarm"
+_ALARM_RE = re.compile(
+    r"·\s*" + _ALARM_MARKER + r"\s+(?P<key>[^\s)·]+)\s+@(?P<date>\d{4}-\d{2}-\d{2})"
+)
+_DEFAULT_ALARM_TTL_DAYS = 14
+
+
+def _today() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+
+def _stamp_updated(text: str) -> str:
+    """Refresh the document's Last-updated line, if it has one."""
+    if "*Last updated:" not in text:
+        return text
+    return re.sub(r"\*Last updated:.*\*", f"*Last updated: {_today()}*", text)
+
+
+def alarm_key(line: str) -> str:
+    """The check this line reports on, "" if it isn't an alarm."""
+    m = _ALARM_RE.search(line)
+    return m.group("key") if m else ""
+
+
+def _replace_alarm(text: str, key: str, new_line: str) -> tuple:
+    """Swap the existing entry for `key` in place. Returns (replaced?, text)."""
+    out = []
+    replaced = False
+    for line in text.split("\n"):
+        if not replaced and alarm_key(line) == key:
+            out.append(new_line)
+            replaced = True
+        else:
+            out.append(line)
+    return replaced, "\n".join(out)
+
+
+def _expire_text(text: str, max_age_days: int) -> tuple:
+    """(text without expired alarms, [(key, line), …]). Pure — no I/O."""
+    cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
+    kept, dropped = [], []
+    for line in text.split("\n"):
+        m = _ALARM_RE.search(line)
+        if m:
+            try:
+                stamped = datetime.strptime(m.group("date"), "%Y-%m-%d").replace(
+                    tzinfo=timezone.utc)
+            except ValueError:
+                stamped = None  # unreadable stamp → keep, don't guess
+            if stamped is not None and stamped < cutoff:
+                dropped.append((m.group("key"), line))
+                continue
+        kept.append(line)
+    return "\n".join(kept), dropped
+
+
+def expire_stale_alarms(max_age_days: int = _DEFAULT_ALARM_TTL_DAYS) -> int:
+    """Drop alarms whose check has stopped re-firing. Returns how many.
+
+    An alarm is only as true as its last reading. When the condition clears,
+    the scanner simply stops emitting it — there is no "resolved" event to
+    listen for — so silence has to be what retires it. Archives before
+    rewriting, like every other playbook mutation: the entry leaves the
+    injected context, not the record.
+    """
+    path = _playbook_path()
+    if not path.exists():
+        return 0
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return 0
+
+    updated, dropped = _expire_text(text, max_age_days)
+    if not dropped:
+        return 0
+    if archive_playbook(text, reason="alarm-expiry") is None:
+        return 0  # can't restore → don't rewrite (same rule as curation)
+
+    from file_lock import atomic_write
+    atomic_write(path, _stamp_updated(updated))
+    for key, line in dropped:
+        log.info("playbook: alarm %s expired (no reading in %dd): %s",
+                 key, max_age_days, line[:80])
+    return len(dropped)
+
+
 def parse_entries(text: str) -> List[dict]:
     """Parse playbook bullets into entries with section + provenance.
 
@@ -282,6 +384,7 @@ def append_to_playbook(
     *,
     section: str = "Learned",
     source: str = "",
+    key: str = "",
 ) -> None:
     """Append an operational insight to the playbook.
 
@@ -293,6 +396,12 @@ def append_to_playbook(
         entry: The insight text (one line, starts with "- ").
         section: Which section to append under (created if missing).
         source: Where this insight came from (e.g., "evolver:suggestion-id").
+        key: Marks this entry as a re-readable ALARM, identified by the check
+            it reports (e.g. "calibration:observation"). A later reading of
+            the same check replaces this entry in place instead of appending
+            beside it, and the entry expires if the check stops re-firing
+            (see `expire_stale_alarms`). Without a key an entry is a durable
+            insight: appended once, never auto-removed.
     """
     # Validate entry — reject empty or whitespace-only entries
     entry = (entry or "").strip()
@@ -315,8 +424,24 @@ def append_to_playbook(
         entry_line = entry if entry.startswith("- ") else f"- {entry}"
 
         # Add source attribution if provided
-        if source:
-            entry_line += f" *(from {source})*"
+        if source or key:
+            _bits = [f"from {source}"] if source else []
+            if key:
+                _bits.append(f"{_ALARM_MARKER} {key} @{_today()}")
+            entry_line += " *(" + " · ".join(_bits) + ")*"
+
+        if key:
+            # Same check, newer reading: replace in place. Keeping the original
+            # position is deliberate — an alarm that keeps re-firing shouldn't
+            # leapfrog the rest of the playbook every time it fires, and this is
+            # what the 2026-08-02 operator rewrite did by hand when it collapsed
+            # three calibration near-dups into one trend-carrying entry.
+            replaced, updated_text = _replace_alarm(text, key, entry_line)
+            if replaced:
+                from file_lock import atomic_write
+                atomic_write(path, _stamp_updated(updated_text))
+                log.info("playbook: alarm %s re-read: %s", key, entry_line[:80])
+                return
 
         # Dedup: skip if the core entry text already exists in the playbook
         _core = entry.lstrip("- ").strip()
@@ -356,15 +481,7 @@ def append_to_playbook(
             else:
                 updated = text.rstrip() + f"\n\n{section_header}\n\n{entry_line}\n"
 
-        # Update timestamp
-        now = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        if "*Last updated:" in updated:
-            import re
-            updated = re.sub(
-                r"\*Last updated:.*\*",
-                f"*Last updated: {now}*",
-                updated,
-            )
+        updated = _stamp_updated(updated)
 
         from file_lock import atomic_write
         atomic_write(path, updated)
@@ -524,7 +641,12 @@ def curate_playbook(*, force: bool = False, adapter=None) -> Optional[dict]:
         with locked_write(path):
             original = path.read_text(encoding="utf-8")
 
-        text, removed = _dedup_text(original)
+        # Alarms first: an expired reading shouldn't survive into the
+        # compression pass and get rephrased into something that reads durable.
+        text, _expired = _expire_text(
+            original, int(_cfg_get("playbook.alarm_ttl_days",
+                                   _DEFAULT_ALARM_TTL_DAYS)))
+        text, removed = _dedup_text(text)
         llm_compressed = False
 
         min_chars = int(_cfg_get("playbook.curation_min_chars", 4000))
@@ -578,6 +700,7 @@ def curate_playbook(*, force: bool = False, adapter=None) -> Optional[dict]:
 
         stats = {
             "removed_duplicates": removed,
+            "expired_alarms": [k for k, _ in _expired],
             "llm_compressed": llm_compressed,
             "archived": str(archived),
             "chars_before": len(original),

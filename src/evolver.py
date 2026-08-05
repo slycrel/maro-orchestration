@@ -367,6 +367,9 @@ def run_statistical_scans(
                     failure_pattern=f"quality_drift: {df.metric} delta={df.delta_pct:.1f}% consecutive={df.consecutive_drops}",
                     confidence=min(0.9, 0.6 + df.consecutive_drops * 0.1),
                     outcomes_analyzed=len(outcomes),
+                    # A drift reading, not a durable insight: one alarm per
+                    # metric, re-read in place, expires when the drift stops.
+                    playbook_key=f"drift:{df.metric}",
                 ))
             if verbose and drift_findings:
                 print(f"[evolver] drift_scan: {len(drift_findings)} quality drift finding(s)", file=sys.stderr)

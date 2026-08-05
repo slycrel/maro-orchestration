@@ -546,11 +546,15 @@ def scan_quality_drift(
                 baseline_value=baseline,
                 delta_pct=delta_pct,
                 consecutive_drops=consecutive,
+                # Observation form (2026-08-02 guidance decree): report the
+                # reading and what it's consistent with. The old text ended
+                # "consider rolling back recent auto-applied suggestions",
+                # which four frozen copies were still telling every run long
+                # after the changes in question may have been rolled back.
                 suggestion=(
                     f"{metric_key} has {direction} {delta_pct:.1f}% from baseline "
                     f"({current_val:.4f} vs {baseline:.4f}) for {consecutive} consecutive cycles. "
-                    f"Recent evolver changes may be degrading quality — consider rolling back "
-                    f"recent auto-applied suggestions."
+                    f"The window overlaps recent auto-applied evolver changes."
                 ),
             ))
 
@@ -731,16 +735,27 @@ def scan_suggestion_outcomes(
                     suggestion_id=f"calibration-{_uuid.uuid4().hex[:8]}",
                     category="observation",
                     target=cat,
+                    # Observation form, not command form: this is a reading,
+                    # and what to do about it is the reader's call (the
+                    # 2026-08-02 guidance decree — the old text ordered
+                    # "Reduce LLM confidence prompts … or tighten auto-apply
+                    # threshold", which is a template the LLM form rules can't
+                    # reach because no LLM writes it).
                     suggestion=(
-                        f"CONFIDENCE MISCALIBRATION in category '{cat}': "
-                        f"self-reported confidence {mean_conf:.2f} but empirical pass rate "
-                        f"{empirical_rate:.2f} ({data['passed']}/{total} verified). "
-                        f"Reduce LLM confidence prompts for this category or tighten "
-                        f"auto-apply threshold."
+                        f"Suggestions in category '{cat}' are running "
+                        f"overconfident: self-reported {mean_conf:.2f} against "
+                        f"an empirical pass rate of {empirical_rate:.2f} "
+                        f"({data['passed']}/{total} verified)."
                     ),
                     failure_pattern=f"overconfident:{cat}",
                     confidence=0.8,
                     outcomes_analyzed=total,
+                    # One alarm per category: a later scan re-reads it in
+                    # place, and it expires when the category stops being
+                    # overconfident. Three near-dups of this exact check were
+                    # live on 2026-08-04, two of them added AFTER the operator
+                    # collapsed the first batch by hand.
+                    playbook_key=f"calibration:{cat}",
                 ))
                 log.info(
                     "scan_suggestion_outcomes: %s overconfident — reported=%.2f empirical=%.2f (%d/%d)",

@@ -1972,7 +1972,7 @@ class TestSubMissionAutoEnqueue:
         playbook_entries = []
         import playbook as _pb
         monkeypatch.setattr(_pb, "append_to_playbook",
-                            lambda t, section="", source="": playbook_entries.append(t))
+                            lambda t, **kw: playbook_entries.append(t))
 
         d = self._make_sub_mission_dict(text)
         path.write_text(json.dumps(d) + "\n", encoding="utf-8")
@@ -2022,7 +2022,7 @@ class TestPlaybookAppendUntruncated:
         import playbook as _pb
         monkeypatch.setattr(
             _pb, "append_to_playbook",
-            lambda text, section="", source="": entries.append(text),
+            lambda text, section="", source="", key="": entries.append(text),
         )
         return entries
 
@@ -2838,7 +2838,10 @@ class TestScanSuggestionOutcomes:
         assert len(suggestions) == 1
         assert suggestions[0].category == "observation"
         assert "skill_mutation" in suggestions[0].suggestion
-        assert "CONFIDENCE MISCALIBRATION" in suggestions[0].suggestion
+        # Reworded 2026-08-04 to observation form (the guidance decree) and
+        # keyed as an alarm so re-scans update one entry instead of accreting.
+        assert "overconfident" in suggestions[0].suggestion
+        assert suggestions[0].playbook_key == "calibration:skill_mutation"
 
     def test_calibrated_category_no_suggestion(self, tmp_path):
         """Category with matching empirical and self-reported confidence → no suggestion."""
@@ -4065,3 +4068,43 @@ def test_status_survives_a_round_trip(tmp_path):
     assert back.status == "held_for_review"
     assert back.block_reason == "because"
     assert back.pattern == r"\bfoo\b"
+
+
+def test_calibration_finding_carries_an_alarm_key(tmp_path, monkeypatch):
+    """A miscalibration reading is an alarm, so re-scans update one entry."""
+    from evolver_scans import scan_suggestion_outcomes
+    path = tmp_path / "suggestion_outcomes.jsonl"
+    rows = []
+    for i in range(6):
+        rows.append(json.dumps({
+            "category": "observation", "confidence": 0.9,
+            "verified": i == 0,
+        }))
+    path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+
+    found = scan_suggestion_outcomes(outcomes_path=path)
+    assert len(found) == 1
+    assert found[0].playbook_key == "calibration:observation"
+    # Observation form, not a command: the reading, not the remedy.
+    assert "Reduce LLM confidence prompts" not in found[0].suggestion
+    assert "overconfident" in found[0].suggestion
+
+
+def test_applied_alarm_updates_one_playbook_entry(tmp_path, monkeypatch):
+    """Two scans of the same check leave one entry, not two."""
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    import playbook
+    playbook.seed_playbook()
+
+    for n, rate in ((1, "0.27"), (2, "0.31")):
+        _apply_suggestion_action({
+            "category": "observation", "target": "observation",
+            "suggestion": f"observation is overconfident: empirical {rate}.",
+            "suggestion_id": f"calibration-{n}", "confidence": 0.9,
+            "playbook_key": "calibration:observation",
+        })
+
+    text = playbook.load_playbook()
+    assert text.count("calibration:observation") == 1
+    assert "0.31" in text and "0.27" not in text

@@ -551,3 +551,108 @@ class TestNoInjectSections:
 
         assert playbook.inject_playbook(max_chars=800) == ""
         assert "keep me" in path.read_text()
+
+
+class TestAlarms:
+    """Entries that report a live check, not a durable insight.
+
+    The playbook had no way to tell the two apart, so four frozen cost
+    alarms from different eras all told every run to "consider rolling
+    back" — and calibration warnings accreted as near-dups. Two more
+    accreted in the two days AFTER the operator collapsed the first batch
+    by hand, which is what made this a mechanism gap and not a cleanup.
+    """
+
+    def _read(self, tmp_path):
+        return (tmp_path / "playbook.md").read_text()
+
+    def test_reading_the_same_check_replaces_in_place(self, tmp_path):
+        seed_playbook()
+        append_to_playbook("observation category is overconfident: 0.88 vs 0.27.",
+                           section="Learned", source="evolver:cal-1",
+                           key="calibration:observation")
+        append_to_playbook("observation category is overconfident: 0.85 vs 0.31.",
+                           section="Learned", source="evolver:cal-2",
+                           key="calibration:observation")
+        text = self._read(tmp_path)
+        assert text.count("calibration:observation") == 1
+        assert "0.31" in text and "0.27" not in text
+
+    def test_different_checks_coexist(self, tmp_path):
+        seed_playbook()
+        append_to_playbook("observation is overconfident.", section="Learned",
+                           source="evolver:c1", key="calibration:observation")
+        append_to_playbook("sub_mission is overconfident.", section="Learned",
+                           source="evolver:c2", key="calibration:sub_mission")
+        text = self._read(tmp_path)
+        assert "calibration:observation" in text
+        assert "calibration:sub_mission" in text
+
+    def test_unkeyed_entries_are_never_alarms(self, tmp_path):
+        seed_playbook()
+        append_to_playbook("Prefer artifact-diff evidence over narration.",
+                           section="Learned", source="evolver:x")
+        from playbook import alarm_key
+        line = [l for l in self._read(tmp_path).splitlines()
+                if "artifact-diff" in l][0]
+        assert alarm_key(line) == ""
+
+    def test_alarm_expires_when_the_check_stops_firing(self, tmp_path):
+        from playbook import expire_stale_alarms
+        (tmp_path / "playbook.md").write_text(
+            "# Director's Playbook\n\n"
+            "## Learned\n\n"
+            "- Durable insight worth keeping. *(from evolver:keep)*\n"
+            "- avg_cost_usd has risen 40%. *(from evolver:d1 · alarm drift:avg_cost_usd @2026-01-01)*\n",
+            encoding="utf-8",
+        )
+        assert expire_stale_alarms(max_age_days=14) == 1
+        text = self._read(tmp_path)
+        assert "Durable insight" in text
+        assert "avg_cost_usd" not in text
+
+    def test_fresh_alarm_survives_expiry(self, tmp_path):
+        from playbook import expire_stale_alarms, _today
+        (tmp_path / "playbook.md").write_text(
+            "# Director's Playbook\n\n## Learned\n\n"
+            f"- Reading. *(from evolver:d1 · alarm drift:x @{_today()})*\n",
+            encoding="utf-8",
+        )
+        assert expire_stale_alarms(max_age_days=14) == 0
+        assert "drift:x" in self._read(tmp_path)
+
+    def test_expiry_archives_before_rewriting(self, tmp_path):
+        from playbook import expire_stale_alarms
+        (tmp_path / "playbook.md").write_text(
+            "# Director's Playbook\n\n## Learned\n\n"
+            "- Old reading. *(from evolver:d1 · alarm drift:x @2026-01-01)*\n",
+            encoding="utf-8",
+        )
+        expire_stale_alarms(max_age_days=14)
+        archives = list((tmp_path / "playbook_history").glob("*"))
+        assert archives, "expiry must archive the prior version first"
+        assert "Old reading" in archives[0].read_text()
+
+    def test_alarm_line_still_parses_as_learned(self, tmp_path):
+        """The marker rides inside the attribution, so provenance detection
+        and injection ranking keep working."""
+        entries = parse_entries(
+            "## Learned\n"
+            "- A reading. *(from evolver:d1 · alarm drift:x @2026-08-04)*\n"
+        )
+        assert entries[0]["learned"] is True
+        assert "drift:x" in entries[0]["line"]
+
+    def test_curation_expires_alarms(self, tmp_path):
+        from playbook import curate_playbook
+        (tmp_path / "playbook.md").write_text(
+            "# Director's Playbook\n\n## Learned\n\n"
+            "- Keep me. *(from evolver:keep)*\n"
+            "- Stale reading. *(from evolver:d1 · alarm drift:x @2026-01-01)*\n",
+            encoding="utf-8",
+        )
+        stats = curate_playbook(force=True)
+        assert stats is not None
+        assert stats["expired_alarms"] == ["drift:x"]
+        assert "Stale reading" not in self._read(tmp_path)
+        assert "Keep me" in self._read(tmp_path)
