@@ -6324,3 +6324,26 @@ Both alarm-minting scanners are templates, not LLM output, so the form
 rules couldn't reach them — reworded here. **The falsifier for "mechanism,
 not cleanup": two more calibration near-dups had accreted in the two days
 after the operator collapsed the first batch by hand.**
+
+**Contest persistence (`5adefab`).** `_reinforce_tiered_lesson` wrote the
+caller's pre-lock copy of the row back wholesale — bystanders reloaded
+fresh inside the lock, the target row alone did not — so a contest landing
+mid-flight was reverted, and the contested check read that same stale copy
+and granted a confirmation. Repro'd: `contested: False | score 1.0 |
+sessions_validated 1`. Fixed by mutating inside the locked callback against
+the fresh row.
+
+Found while asking why `6287e494` — the **only** LONG contest ever
+attempted, Jeremy's L4 surprise read on the tighter-max_steps recovery
+lesson — showed `contested: {}`. The stale-write hazard is **not** proven
+to be the cause there (that row saw no post-contest reinforcement), and the
+disappearance stays recorded as unexplained rather than pinned on a
+convenient culprit. **His decision is now in effect**: contest re-applied
+to the live LONG store with his verbatim reason and original source stamp,
+store backed up first, verified off the injection surface. For three days
+the outcome he'd asked for had been silently reverted, with the lesson live
+in injection at score 1.0. LONG is decay-free, so contestation is its only
+retirement path — a lost LONG contest is permanent where a lost MEDIUM one
+just delays a row that was going to decay anyway. Watch-item: a second
+missing LONG contest is the trigger for a write-side read-back assertion,
+one instance isn't.
