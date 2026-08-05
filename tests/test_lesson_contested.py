@@ -304,3 +304,66 @@ class TestAdjudicationWiring:
             '{"contradicted": "no", "reasoning": "unrelated failure"}'))
         assert load_lessons(task_type="general")[0].lesson == "Innocent wisdom."
         assert _events(LESSON_CONTESTED) == []
+
+
+class TestConcurrentContest:
+    """A contest landing mid-flight must survive the re-sighting that follows.
+
+    `_reinforce_tiered_lesson` used to write the CALLER's pre-lock copy of
+    the row back wholesale — bystanders were reloaded fresh, the target row
+    was the one row that wasn't — so any change to that row in between was
+    reverted, and the contested check read the stale copy too. The result
+    was the exact laundering the contested path exists to prevent: a
+    confirmation credited to a contested lesson, and the contest itself
+    erased. Found while asking why the one LONG contest ever attempted
+    (6287e494, logged 2026-08-02) is not on disk. NOT proven to be what
+    erased that row — see BACKLOG.
+    """
+
+    def _contest_then_reinforce(self, lesson_id, tier=MemoryTier.MEDIUM):
+        from knowledge_web import _reinforce_tiered_lesson
+        snapshot = _raw(lesson_id, tier)          # the caller's copy, pre-contest
+        contest_lesson(lesson_id, "operator says no", source="operator:test",
+                       tier=tier)
+        _reinforce_tiered_lesson(snapshot, tier=tier)
+        return _raw(lesson_id, tier)
+
+    def test_contest_survives_a_stale_reinforcement(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        tl = record_tiered_lesson("Prefer two independent sources.", "research",
+                                  "done", source_goal="g")
+        row = self._contest_then_reinforce(tl.lesson_id)
+        assert _is_contested(row), "the contest was reverted by a stale write"
+
+    def test_stale_reinforcement_grants_no_confirmation(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        tl = record_tiered_lesson("Prefer two independent sources.", "research",
+                                  "done", source_goal="g")
+        _set(tl.lesson_id, MemoryTier.MEDIUM, sessions_validated=0,
+             times_reinforced=0)
+        row = self._contest_then_reinforce(tl.lesson_id)
+        assert row.sessions_validated == 0, "contested rows must never confirm"
+        assert row.times_reinforced == 1, "the sighting is still counted"
+
+    def test_long_tier_too(self, monkeypatch, tmp_path):
+        """LONG is decay-free, so contestation is its ONLY retirement path."""
+        _setup(monkeypatch, tmp_path)
+        tl = record_tiered_lesson("A permanent-looking claim.", "agenda",
+                                  "done", source_goal="g")
+        _set(tl.lesson_id, MemoryTier.MEDIUM, score=1.0, sessions_validated=3,
+             confidence=0.9)
+        assert promote_lesson(tl.lesson_id)
+        row = self._contest_then_reinforce(tl.lesson_id, MemoryTier.LONG)
+        assert _is_contested(row)
+
+    def test_a_concurrent_edit_to_another_field_is_not_reverted(self, monkeypatch,
+                                                                tmp_path):
+        """The general case — contest is just the one that bit us."""
+        from knowledge_web import _reinforce_tiered_lesson
+        _setup(monkeypatch, tmp_path)
+        tl = record_tiered_lesson("Prefer two independent sources.", "research",
+                                  "done", source_goal="g")
+        snapshot = _raw(tl.lesson_id)
+        _set(tl.lesson_id, MemoryTier.MEDIUM, times_applied=7)
+        _reinforce_tiered_lesson(snapshot, tier=MemoryTier.MEDIUM)
+        assert _raw(tl.lesson_id).times_applied == 7

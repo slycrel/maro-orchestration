@@ -484,58 +484,81 @@ def _reinforce_tiered_lesson(tl: TieredLesson, *, tier: str,
     sessions_validated while hidden, and its first confirmation would
     promote it to LONG immediately (adversarial review 2026-07-27).
     """
-    # Retirement-by-contradiction: a contested lesson may still be re-sighted
-    # (dedup re-records land here). The sighting is counted
-    # (times_reinforced — honest evidence for a future refight) but nothing
-    # else moves: no score bump, no decay re-anchor (or a frequently
-    # re-derived contested row would never decay out — retirement is the
-    # point), no confirmation (sessions_validated frozen, no flag clears —
-    # otherwise a contested lesson could launder itself back to citizenship
-    # through the same duplicate-write path that made it look validated).
-    contested_hit = _is_contested(tl)
-    confirming = confirming and not contested_hit
-    if confirming and tl.provisional:
-        tl.provisional = False
-        log.info("provisional lesson %s confirmed by a learnable-context re-record",
-                 tl.lesson_id)
-    if confirming and incoming_minted_from == "outcome" and tl.minted_from == "prompt":
-        # An outcome-derived confirming re-record means the same knowledge
-        # was independently derived from an actual outcome — it earns
-        # citizenship (mirrors the provisional promote-on-evidence clear).
-        # Prompt-derived re-records never reach here: record_tiered_lesson
-        # returns early on their dedup match. The incoming record must be
-        # affirmatively outcome-classified: an unclassified "" (gate off,
-        # or the applied-reinforcement path) must not clear quarantine —
-        # otherwise disabling the killswitch re-arms stamped rows via the
-        # next duplicate write (adversarial review 2026-07-29).
-        tl.minted_from = "outcome"
-        log.info("quarantined lesson %s cleared by an outcome-derived re-record",
-                 tl.lesson_id)
-    if not contested_hit:
-        tl.score = reinforce_score(tl.score)
-        tl.last_reinforced = _current_date()
-        # What-not-how (2026-08-02): a re-derivation's originating run is the
-        # "repeated across runs X, Y" record — merge it (capped) so the row
-        # accumulates WHERE it was sighted, not just how often. Contested
-        # rows keep only the frozen counter (the refight-slice input).
-        for _src in (incoming_evidence or []):
-            if len(tl.evidence_sources) >= _REINFORCE_EVIDENCE_CAP:
-                break
-            if _src and _src not in tl.evidence_sources:
-                tl.evidence_sources.append(_src)
-    if confirming:
-        tl.sessions_validated += 1
-        # F5: multi-session confidence promotion
-        if tl.sessions_validated >= 3:
-            tl.confidence = max(tl.confidence, _CONFIDENCE_MULTI_SESSION)
-    tl.times_reinforced += 1
-    # Replace the mutated lesson under the lock (raw stored scores for all
-    # bystanders — a non-raw load would persist decay, compounding on each
-    # write; an unlocked load would drop concurrent updates).
-    _mutate_tiered_lessons(
-        tier, lambda all_lessons: [tl if l.lesson_id == tl.lesson_id else l for l in all_lessons],
-    )
-    return _post_reinforce_hooks(tl, tier=tier)
+    # `tl` is the CALLER's copy, loaded before the lock (record_tiered_lesson's
+    # dedup scan hands it straight here). Everything below therefore runs
+    # against the row as it is on disk right now, re-read inside the lock —
+    # only the decay-derived score and the incoming evidence come from `tl`.
+    # Writing the caller's copy back wholesale reverted whatever had changed
+    # on that row in between, and read its own flags off the stale copy: a
+    # lesson contested mid-flight was both credited with a confirmation and
+    # silently un-contested (repro'd 2026-08-04). Bystanders were always
+    # reloaded fresh; the target row was the one row that wasn't.
+    effective_score = tl.score
+    lesson_id = tl.lesson_id
+    result: Dict[str, Any] = {"tl": None}
+
+    def _apply(all_lessons: List[TieredLesson]) -> List[TieredLesson]:
+        row = next((l for l in all_lessons if l.lesson_id == lesson_id), None)
+        if row is None:
+            # GC'd or promoted out between the caller's load and now. Same
+            # outcome as before: nothing to reinforce, nothing written back.
+            return all_lessons
+        # Retirement-by-contradiction: a contested lesson may still be
+        # re-sighted (dedup re-records land here). The sighting is counted
+        # (times_reinforced — honest evidence for a future refight) but
+        # nothing else moves: no score bump, no decay re-anchor (or a
+        # frequently re-derived contested row would never decay out —
+        # retirement is the point), no confirmation (sessions_validated
+        # frozen, no flag clears — otherwise a contested lesson could launder
+        # itself back to citizenship through the same duplicate-write path
+        # that made it look validated).
+        contested_hit = _is_contested(row)
+        confirms = confirming and not contested_hit
+        if confirms and row.provisional:
+            row.provisional = False
+            log.info("provisional lesson %s confirmed by a learnable-context re-record",
+                     row.lesson_id)
+        if confirms and incoming_minted_from == "outcome" and row.minted_from == "prompt":
+            # An outcome-derived confirming re-record means the same knowledge
+            # was independently derived from an actual outcome — it earns
+            # citizenship (mirrors the provisional promote-on-evidence clear).
+            # Prompt-derived re-records never reach here: record_tiered_lesson
+            # returns early on their dedup match. The incoming record must be
+            # affirmatively outcome-classified: an unclassified "" (gate off,
+            # or the applied-reinforcement path) must not clear quarantine —
+            # otherwise disabling the killswitch re-arms stamped rows via the
+            # next duplicate write (adversarial review 2026-07-29).
+            row.minted_from = "outcome"
+            log.info("quarantined lesson %s cleared by an outcome-derived re-record",
+                     row.lesson_id)
+        if not contested_hit:
+            # The caller's score is the effective (decay-derived) one;
+            # reinforcement re-anchors it. The stored score on the fresh row
+            # is pre-decay, so this figure has to come from `tl`.
+            row.score = reinforce_score(effective_score)
+            row.last_reinforced = _current_date()
+            # What-not-how (2026-08-02): a re-derivation's originating run is
+            # the "repeated across runs X, Y" record — merge it (capped) so
+            # the row accumulates WHERE it was sighted, not just how often.
+            # Contested rows keep only the frozen counter (the refight input).
+            for _src in (incoming_evidence or []):
+                if len(row.evidence_sources) >= _REINFORCE_EVIDENCE_CAP:
+                    break
+                if _src and _src not in row.evidence_sources:
+                    row.evidence_sources.append(_src)
+        if confirms:
+            row.sessions_validated += 1
+            # F5: multi-session confidence promotion
+            if row.sessions_validated >= 3:
+                row.confidence = max(row.confidence, _CONFIDENCE_MULTI_SESSION)
+        row.times_reinforced += 1
+        result["tl"] = row
+        return all_lessons
+
+    # Read-modify-write under the lock, raw + unlimited (a non-raw load would
+    # persist decay, compounding on each write).
+    _mutate_tiered_lessons(tier, _apply)
+    return _post_reinforce_hooks(result["tl"] or tl, tier=tier)
 
 
 def _post_reinforce_hooks(tl: TieredLesson, *, tier: str) -> TieredLesson:

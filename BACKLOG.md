@@ -3237,6 +3237,76 @@ worth copying: pin the seam, not one side of it.
 only HIGH blocks — so reviving the lane warns, never blocks, and the
 existing circuit breaker still applies.
 
+### A re-sighting could silently un-contest a lesson (FOUND + FIXED 2026-08-04)
+
+`_reinforce_tiered_lesson` wrote the **caller's** pre-lock copy of the row
+back wholesale:
+
+```python
+_mutate_tiered_lessons(
+    tier, lambda all: [tl if l.lesson_id == tl.lesson_id else l for l in all])
+```
+
+Every bystander row was reloaded fresh inside the lock; the target row was
+the one row that wasn't. So anything that changed on that row between the
+caller's unlocked load and this write was reverted — and worse, the
+contested check (`contested_hit = _is_contested(tl)`) read the same stale
+copy, so a contest landing mid-flight was not just erased but *credited*.
+Repro'd before the fix: `contest → reinforce` gives `contested on disk:
+False | score: 1.0 | sessions_validated: 1`. That is precisely the
+laundering the contested path exists to prevent, performed by the
+mechanism that claims in a comment to prevent it.
+
+**Fixed** by moving all mutation inside the `_mutate_tiered_lessons`
+callback, against the freshly-reloaded `row`; only `effective_score` and
+the incoming evidence come from the caller's copy. After: `contested
+survives: True | sessions_validated: 0 | times_reinforced: 1` — the
+sighting still counts (evidence for a future refight), the confirmation
+does not. Pins: `tests/test_lesson_contested.py::TestConcurrentContest`,
+four of them, all verified red on `HEAD` before landing. The fourth is the
+general case (an unrelated concurrent field edit survives), because
+contest is just the instance that bit us.
+
+**Not proven to be what erased 6287e494** — see below. Fixed on its own
+merits.
+
+### 6287e494: an operator contest that isn't on disk, unexplained
+
+The captain's log has 11 `LESSON_CONTESTED` events. Ten are `tier=medium`
+and all ten are contested on disk today. The eleventh — `6287e494`,
+`2026-08-02T07:26:31Z`, the **only** LONG contest ever attempted, Jeremy's
+L4 surprise read ("tighter step count and smaller code surface isn't going
+to improve the plan, just add constraints to make it 'cheaper'") — showed
+`contested: {}`.
+
+What was ruled out, not assumed:
+- `contest_lesson` works on a LONG-only lesson today, tested in isolation.
+- Its source at `06d145b` (the commit of that session) is byte-identical
+  to current, so this is not a since-fixed bug in the verb.
+- The stale-write hazard above is **not** a demonstrated cause here: that
+  row's `times_reinforced` is 7 and `last_reinforced` is 2026-06-12, so no
+  post-contest reinforcement ever ran on it.
+
+So the disappearance stands unexplained, and I'd rather leave it named
+than invent a story. It matters more for LONG than MEDIUM: LONG is
+decay-free, so contestation is its *only* retirement path — a lost LONG
+contest is permanent, while a lost MEDIUM one merely delays a row that was
+going to decay anyway. That asymmetry is why this is worth a
+watch-item rather than a shrug.
+
+**Jeremy's decision is now in effect.** Contest re-applied 2026-08-05
+with his verbatim reason and original source stamp (`operator:surprise-
+read-chunk-1(2026-08-01)`); LONG store backed up first
+(`lessons.jsonl.bak-2026-08-04-precontest`). Verified off the injection
+surface afterwards. Until then the lesson was live in injection at
+`score: 1.0` and was the top canon candidate at lowered thresholds — i.e.
+the surprise-read outcome he asked for had been quietly reverted for
+three days.
+
+**Watch:** if a second LONG contest goes missing, that's the signal to
+stop guessing and add a write-side read-back assertion to
+`contest_lesson`. One instance isn't enough to justify the machinery.
+
 ### R6-E. lesson_text embeds truncated goal previews (anchoring risk) — watch-item
 
 The one open residual of the R6 VERIFY_LEARN_ARC V4/R5 V4/V5 review
