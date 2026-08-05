@@ -2265,6 +2265,7 @@ def _handle_impl(
         # mirror this block's — don't let that coupling become a NameError.
         _closure = None
         _closure_decision = None
+        _closure_error = ""
         if (not dry_run
                 and loop_result.status in _closure_eligible_statuses
                 and _ran_any_step):
@@ -2290,9 +2291,17 @@ def _handle_impl(
                     project=project or getattr(loop_result, "project", "") or "",
                 )
                 _closure = _closure_decision.closure_verdict
-            except Exception:
+            except Exception as _closure_exc:
                 _closure_decision = None
                 _closure = None
+                # LT-4 R2w: this swallow used to be silent — "closure
+                # crashed" was indistinguishable from "closure not
+                # eligible", and a benchmark run recorded no verdict with
+                # nothing saying why.
+                _closure_error = f"{type(_closure_exc).__name__}: {_closure_exc}"
+                log.warning(
+                    "handle: closure evaluation raised — run records no "
+                    "verdict (source=closure_error): %s", _closure_error)
 
             try:
                 from config import get as _config_get
@@ -2730,6 +2739,24 @@ def _handle_impl(
                     _audit_warnings.append(_closure_audit.warning)
                     _audit_failed_loop_ids.add(
                         getattr(loop_result, "loop_id", "") or "")
+            elif _closure is None and _closure_error:
+                # Absence-means-not-judged holds (no goal_achieved key), but
+                # the source must say WHY there is no verdict — a crashed
+                # judge is a measurement gap, not an ineligible run.
+                try:
+                    from runs import write_metadata as _wm_cerr
+                    from runs import current_run_dir as _crd_cerr
+                    _rd_ce = _crd_cerr()
+                    if _rd_ce is not None:
+                        _wm_cerr(
+                            _rd_ce, handle_id=handle_id, prompt=_raw_input,
+                            extra={
+                                "goal_verdict_source": "closure_error",
+                                "goal_verdict_summary": _closure_error[:300],
+                            },
+                        )
+                except Exception:
+                    pass
 
         # data-r2-01: learning was deferred at loop finalize (defer_learning
         # above) — run it now that the closure/provenance verdict is stamped

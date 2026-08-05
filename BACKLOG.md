@@ -1060,9 +1060,14 @@ capture**, which is what makes the rung amortize instead of evaporate.
   10. **Malformed tool-fragment-into-bash** ×2 (`{tool::` R1w,
      `{tool:noop}` R2w) — harness-side parse leak, pattern not one-off.
 
-  **Follow-ups owed from LT-4** (each small, none started):
-  (a) skill dead-drop fix — standalone entry below; (b) closure-error
-  stamping (finding 8); (c) mint-time claim grounding for method/
+  **Follow-ups owed from LT-4** (each small):
+  (a) skill dead-drop fix — standalone entry below; (b) ~~closure-error
+  stamping (finding 8)~~ **SHIPPED same day** — `handle.py` now logs the
+  swallowed `evaluate_closure` exception and stamps
+  `goal_verdict_source="closure_error"` + error summary (goal_achieved
+  stays absent: not-judged convention preserved); pin
+  `test_handle.py::TestClosureErrorIsStamped`, verified red-then-green;
+  (c) mint-time claim grounding for method/
   provenance statements in artifacts — extend the claim_probe/
   review-grounding lane to artifact claims, targeting the
   claims-vs-events family (findings 1/6/7); (d) verdict-prior

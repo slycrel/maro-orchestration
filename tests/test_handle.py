@@ -5603,3 +5603,50 @@ class TestNowVerifyPayloadTruncation:
         from handle import _now_verify_payload
         out = _now_verify_payload("", "")
         assert "Request" in out and "Response" in out
+
+
+# ---------------------------------------------------------------------------
+# LT-4 R2w (2026-08-05): closure crashed -> run silently recorded no verdict
+# ---------------------------------------------------------------------------
+
+class TestClosureErrorIsStamped:
+    """A benchmark arm finished 7/7 done with NO verdict: evaluate_closure
+    raised, the bare except set _closure=None with no log line and no
+    stamp, and "closure crashed" became indistinguishable post-hoc from
+    "closure not eligible". The absence-means-not-judged convention must
+    survive (no goal_achieved key) — but the SOURCE has to say
+    closure_error so the missing verdict is attributable to the judge
+    failing, not to the run being unjudgeable."""
+
+    def test_closure_exception_stamps_closure_error_source(
+            self, monkeypatch, tmp_path):
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        _stub_build_adapter(monkeypatch)
+        from unittest.mock import patch, MagicMock
+        import runs as runs_mod
+        from agent_loop import LoopResult, StepOutcome
+
+        result = LoopResult(
+            loop_id="test-lr", project="test-proj", goal="build X",
+            status="done", stuck_reason=None,
+            steps=[StepOutcome(index=0, text="step", status="done",
+                               result="output", iteration=0)],
+        )
+        gate = MagicMock()
+        gate.escalate = False
+        gate.contested_claims = []
+
+        with patch("agent_loop.run_agent_loop", return_value=result), \
+             patch("intent.check_goal_clarity", return_value={"clear": True}), \
+             patch("director.evaluate_closure",
+                   side_effect=RuntimeError("probe exploded")), \
+             patch("quality_gate.run_quality_gate", return_value=gate):
+            hr = handle("build X", force_lane="agenda", dry_run=False)
+
+        import json as _json
+        meta = _json.loads(
+            (runs_mod.run_dir(hr.handle_id) / "metadata.json").read_text())
+        assert "goal_achieved" not in meta, (
+            "a crashed judge must not manufacture a verdict")
+        assert meta.get("goal_verdict_source") == "closure_error"
+        assert "probe exploded" in meta.get("goal_verdict_summary", "")
