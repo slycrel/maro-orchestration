@@ -1342,9 +1342,46 @@ def _gather_run_summaries() -> List[dict]:
         build_dir = d / "build"
         reports: List[str] = []
         totals = {"tokens_in": 0, "tokens_out": 0, "steps_done": 0, "steps_blocked": 0}
+        # A handle can contain an initial loop plus closure/recovery loops.
+        # Filesystem/lexical order made the index pick an arbitrary *older*
+        # report as the row destination (e.g. `0bf...` before the later
+        # `abe...` result).  The append-only loop ledger is the authoritative
+        # attempt order; use it to rank loop reports newest-first.  Unknown
+        # legacy report files remain visible after known ones.
+        loop_order = []
+        for entry in meta.get("loops") or []:
+            if isinstance(entry, dict) and entry.get("loop_id"):
+                loop_order.append(str(entry["loop_id"]))
+        if not loop_order and isinstance(meta.get("loop_ids"), list):
+            loop_order = [str(loop_id) for loop_id in meta["loop_ids"] if loop_id]
+        loop_rank = {loop_id: pos for pos, loop_id in enumerate(loop_order)}
+
+        def _report_sort_key(rel: str) -> Tuple[int, str]:
+            name = Path(rel).name
+            if name.startswith("loop-") and name.endswith("-report.html"):
+                loop_id = name[len("loop-"):-len("-report.html")]
+                # Negated position gives newest ledger entry first; unknown
+                # reports sort after all known attempts without hiding legacy data.
+                return (-loop_rank[loop_id], name) if loop_id in loop_rank else (1, name)
+            return (0, name)  # NOW has one canonical report per run.
+
+        result_relpath: Optional[str] = None
         if build_dir.is_dir():
-            reports = sorted(str(p.relative_to(d)) for p in build_dir.glob("loop-*-report.html"))
-            reports += sorted(str(p.relative_to(d)) for p in build_dir.glob("now-*-report.html"))
+            reports = [str(p.relative_to(d)) for p in build_dir.glob("loop-*-report.html")]
+            reports += [str(p.relative_to(d)) for p in build_dir.glob("now-*-report.html")]
+            reports.sort(key=_report_sort_key)
+            # When a final/recovery loop has a result but no regenerated HTML
+            # report, its result is the truthful default destination.  Never
+            # silently make an earlier-loop report look like the final answer.
+            result_path = card.get("result_path")
+            if result_path:
+                try:
+                    candidate = Path(result_path).resolve()
+                    result_relpath = str(candidate.relative_to(d.resolve()))
+                    if not candidate.is_file() or not result_relpath.startswith("build/"):
+                        result_relpath = None
+                except (OSError, ValueError):
+                    result_relpath = None
             for log_path in sorted(build_dir.glob("loop-*-log.json")):
                 try:
                     lj = json.loads(log_path.read_text(encoding="utf-8"))
@@ -1379,6 +1416,8 @@ def _gather_run_summaries() -> List[dict]:
             "cost_usd": card.get("total_cost_usd"),
             "totals": totals,
             "reports": reports,
+            "latest_loop_id": loop_order[-1] if loop_order else "",
+            "result_relpath": result_relpath,
         })
     summaries.sort(key=lambda s: s.get("started_at") or "", reverse=True)
     return summaries
@@ -1553,20 +1592,40 @@ def _render_index_html(summaries: List[dict]) -> str:
         t = s["totals"]
         tok_str = _fmt_tokens_split(t["tokens_in"], t["tokens_out"])
         primary_href = None
-        if s["reports"]:
-            links = []
-            for r in s["reports"]:
-                href = f'{s["dir_name"]}/{r}'
-                if primary_href is None:
-                    primary_href = href
-                stem = Path(r).stem.replace("-report", "")
-                # NOW reports embed the (long) handle_id; the row already
-                # names the run, so a lane label reads better than a UUID.
-                label = "now" if stem.startswith("now-") else stem.replace("loop-", "")
-                links.append(f'<a href="{_esc(href)}">{_esc(label)}</a>')
-            links_html = " ".join(links)
-        else:
-            links_html = '<span class="meta">no report</span>'
+        reports = s["reports"]
+        latest_loop_id = s.get("latest_loop_id") or ""
+        latest_report = f"build/loop-{latest_loop_id}-report.html" if latest_loop_id else ""
+        has_latest_report = bool(latest_report and latest_report in reports)
+        result_relpath = s.get("result_relpath")
+        # A clicked row must land on the current/final attempt, not the
+        # alphabetically-first historical report.  Prefer its HTML report;
+        # if that report was not rendered, send the operator to the curated
+        # final result and label any older-loop reports as such.
+        latest_href = f'{s["dir_name"]}/{latest_report}' if has_latest_report else ""
+        result_href = f'{s["dir_name"]}/{result_relpath}' if result_relpath else ""
+        if has_latest_report:
+            primary_href = latest_href
+        elif result_relpath:
+            primary_href = result_href
+        elif reports:
+            primary_href = f'{s["dir_name"]}/{reports[0]}'
+
+        links = []
+        if has_latest_report:
+            links.append(f'<a href="{_esc(latest_href)}">latest: {_esc(latest_loop_id)}</a>')
+        if result_relpath:
+            links.append(f'<a href="{_esc(result_href)}">result</a>')
+        for r in reports:
+            if r == latest_report:
+                continue
+            href = f'{s["dir_name"]}/{r}'
+            stem = Path(r).stem.replace("-report", "")
+            # NOW reports embed the (long) handle_id; the row already names
+            # the run, so a lane label reads better than a UUID.
+            label = "now" if stem.startswith("now-") else stem.replace("loop-", "")
+            prefix = "earlier: " if latest_loop_id else ""
+            links.append(f'<a href="{_esc(href)}">{_esc(prefix + label)}</a>')
+        links_html = " ".join(links) if links else '<span class="meta">no report</span>'
         row_attr = f' data-href="{_esc(primary_href)}"' if primary_href else ""
 
         eff_status = _effective_status(s)

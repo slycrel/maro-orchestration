@@ -418,6 +418,52 @@ def test_write_runs_index_lists_report_links(monkeypatch, tmp_path):
     assert "loop-idxloop-report.html" in content
 
 
+def test_runs_index_prefers_latest_loop_report_over_lexical_first(monkeypatch, tmp_path):
+    """A recovery/final loop must be the row destination even when its UUID
+    sorts after an older report.  The prior lexical glob order made the UI
+    report a correct goal but link it to stale step results."""
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+    import runs
+    rd = runs.create_run_dir("hnew", prompt="multi-loop goal", lane="agenda")
+    build = rd / "build"
+    (build / "loop-0bf231e3-report.html").write_text("older report")
+    (build / "loop-abe62826-report.html").write_text("latest report")
+    meta = json.loads((rd / "metadata.json").read_text())
+    meta["loops"] = [
+        {"loop_id": "0bf231e3", "created_at": "2026-08-05T17:47:00+00:00"},
+        {"loop_id": "abe62826", "created_at": "2026-08-05T18:10:00+00:00"},
+    ]
+    (rd / "metadata.json").write_text(json.dumps(meta))
+
+    content = Path(lr.write_runs_index(force=True)).read_text()
+    assert 'data-href="hnew-sleek-river/build/loop-abe62826-report.html"' in content
+    assert '>latest: abe62826</a>' in content
+    assert '>earlier: 0bf231e3</a>' in content
+
+
+def test_runs_index_defaults_to_final_result_when_latest_report_is_missing(monkeypatch, tmp_path):
+    """Do not route a finished handle to an older-loop report merely because
+    the final loop's report render is absent; its curated result is truthful."""
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+    import runs
+    rd = runs.create_run_dir("hres", prompt="recovery result", lane="agenda")
+    build = rd / "build"
+    (build / "loop-0bf231e3-report.html").write_text("older report")
+    result = build / "loop-abe62826-RESULT.md"
+    result.write_text("final result")
+    meta = json.loads((rd / "metadata.json").read_text())
+    meta["loops"] = [
+        {"loop_id": "0bf231e3"}, {"loop_id": "abe62826"},
+    ]
+    (rd / "metadata.json").write_text(json.dumps(meta))
+    (rd / "run_card.json").write_text(json.dumps({"result_path": str(result)}))
+
+    content = Path(lr.write_runs_index(force=True)).read_text()
+    assert 'data-href="hres-frosty-zephyr/build/loop-abe62826-RESULT.md"' in content
+    assert '>result</a>' in content
+    assert '>earlier: 0bf231e3</a>' in content
+
+
 def test_write_runs_index_debounces_without_force(monkeypatch, tmp_path):
     monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
     import runs
