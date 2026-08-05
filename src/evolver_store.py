@@ -77,6 +77,19 @@ class Suggestion:
     verified_at: str = ""
     verify_verdict: str = ""
     verify_extensions: int = 0
+    # Review lifecycle. apply_suggestion has written these into the JSON since
+    # the held_for_review gate landed, but they were absent from the dataclass,
+    # so from_dict dropped them and every reader that went through Suggestion
+    # (CLI --list included) was blind to whether a row was held, why, or
+    # whether a human had already dealt with it.
+    #   status       — "" (never gated) | "held_for_review" |
+    #                  "pending_human_review" | "action_failed" | "dismissed"
+    #   block_reason — what to do about it, in words, for the operator
+    #   dismissed_at — ISO stamp; the exit path. Dismissed rows leave the
+    #                  pending list and are never re-surfaced, but stay on disk.
+    status: str = ""
+    block_reason: str = ""
+    dismissed_at: str = ""
     # new_guardrail only: the regex the guardrail actually matches step text
     # with. Separate from `suggestion` because the two are different things —
     # `suggestion` is prose for the playbook, this is a pattern for
@@ -102,6 +115,9 @@ class Suggestion:
             "verify_verdict": self.verify_verdict,
             "verify_extensions": self.verify_extensions,
             "pattern": self.pattern,
+            "status": self.status,
+            "block_reason": self.block_reason,
+            "dismissed_at": self.dismissed_at,
         }
 
     @classmethod
@@ -262,10 +278,56 @@ def _save_suggestions(suggestions: List[Suggestion]) -> None:
 
 
 def list_pending_suggestions(limit: int = 20) -> List[Suggestion]:
-    """Return suggestions where applied=False, newest first."""
+    """Return suggestions awaiting a decision, newest first.
+
+    Dismissed rows are excluded — a review surface nobody can clear is the
+    thing that turned the playbook into permanent every-run context.
+    """
     all_suggestions = load_suggestions(limit=1000)
-    pending = [s for s in all_suggestions if not s.applied]
+    pending = [s for s in all_suggestions
+               if not s.applied and s.status != "dismissed"]
     return pending[:limit]
+
+
+def dismiss_suggestion(suggestion_id: str, reason: str = "") -> bool:
+    """Mark a suggestion reviewed-and-declined. The other exit from pending.
+
+    Nothing is deleted: the row keeps its text, its provenance, and now a
+    dismissal stamp. It simply stops being asked about.
+    """
+    p = _suggestions_path()
+    if not p.exists():
+        return False
+    found = False
+
+    def _merge(old: str) -> str:
+        nonlocal found
+        out = []
+        for line in old.splitlines():
+            s = line.strip()
+            if not s:
+                continue
+            try:
+                row = json.loads(s)
+            except Exception:
+                out.append(s)
+                continue
+            if row.get("suggestion_id") == suggestion_id and not row.get("applied"):
+                row["status"] = "dismissed"
+                row["dismissed_at"] = datetime.now(timezone.utc).isoformat()
+                if reason:
+                    row["block_reason"] = reason
+                found = True
+                out.append(json.dumps(row))
+            else:
+                out.append(s)
+        return "\n".join(out) + "\n" if out else ""
+
+    from file_lock import locked_rmw
+    locked_rmw(p, _merge)
+    if found:
+        log.info("dismiss_suggestion id=%s reason=%s", suggestion_id, reason or "-")
+    return found
 
 
 def suggestion_is_applied(suggestion_id: str) -> bool:
@@ -439,37 +501,23 @@ def _apply_suggestion_action(d: dict) -> bool:
                         f.write(json.dumps(entry) + "\n")
 
         elif category == "sub_mission":
-            # Enqueue the suggested goal for execution on the next heartbeat tick.
-            # Gated by evolver.auto_enqueue_signals (default False) — opt-in only.
-            # When off, the suggestion is logged to playbook for human review.
-            from config import get as _cfg_get
-            _auto_enqueue = _cfg_get("evolver.auto_enqueue_signals", False)
-            if _auto_enqueue:
-                from handle import enqueue_goal as _enqueue_goal
-                _job_id = _enqueue_goal(
-                    suggestion_text,
-                    reason=f"evolver signal ({target}): {suggestion_text[:80]}",
-                )
-                log.info(
-                    "evolver sub_mission enqueued job_id=%s confidence=%.2f",
-                    _job_id, confidence,
-                )
-            else:
-                # Not auto-enqueuing — record to playbook so the human can review
-                from playbook import append_to_playbook
-                # No [:200] slice: it clipped entries mid-sentence into
-                # permanent every-run context (operator surprise read
-                # 2026-08-02, P9/P10/P17). append_to_playbook's 500-char
-                # cap with an honest ellipsis is the only truncation.
-                append_to_playbook(
-                    f"[Signal] {suggestion_text}",
-                    section="Signals",
-                    source=f"evolver:{suggestion_id}",
-                )
-                log.info(
-                    "evolver sub_mission held for review (auto_enqueue_signals=false): %s",
-                    suggestion_text[:80],
-                )
+            # Enqueue the suggested goal for execution on the next heartbeat
+            # tick. The not-enqueuing case never reaches here — apply_suggestion
+            # holds it at the review gate, the same way it holds a guardrail.
+            # It used to be appended to the playbook "for human review", which
+            # put an unreviewed goal proposal into every director and decompose
+            # call at the TOP of the ranking (non-seed section = learned =
+            # outranks the curated seed), with no way out. Two lived there
+            # unreviewed until the 2026-08-02 rewrite pulled them by hand.
+            from handle import enqueue_goal as _enqueue_goal
+            _job_id = _enqueue_goal(
+                suggestion_text,
+                reason=f"evolver signal ({target}): {suggestion_text[:80]}",
+            )
+            log.info(
+                "evolver sub_mission enqueued job_id=%s confidence=%.2f",
+                _job_id, confidence,
+            )
 
         # observation: no action needed
 
@@ -650,6 +698,37 @@ def apply_suggestion(suggestion_id: str, manual: bool = False) -> bool:
                 log.info("evolver: auto-applied prompt_tweak: %s", d.get("suggestion", "")[:100])
             else:
                 d["status"] = "action_failed"
+        elif category == "sub_mission":
+            # A signal proposes autonomous WORK, so it holds by default — same
+            # gate shape as new_guardrail: a manual apply is the review, and
+            # evolver.auto_enqueue_signals opts a box into running them
+            # unattended. Held rows wait in `maro evolver --list` (where a
+            # human sees them once) instead of in every prompt (where nobody
+            # ever did).
+            _auto_enqueue = False
+            try:
+                from config import get as _cfg_get
+                _auto_enqueue = bool(_cfg_get("evolver.auto_enqueue_signals", False))
+            except Exception:
+                _auto_enqueue = False
+            if manual or _auto_enqueue:
+                d["applied"] = _apply_suggestion_action(d)
+                if d["applied"]:
+                    d.pop("status", None)
+                else:
+                    d["status"] = "action_failed"
+            else:
+                d["applied"] = False
+                d["status"] = "held_for_review"
+                d["block_reason"] = (
+                    "signal proposes a new autonomous goal: run it with "
+                    "`maro evolver --apply <id>`, or clear it with "
+                    "`maro evolver --dismiss <id>` (set config "
+                    "evolver.auto_enqueue_signals: true to run signals "
+                    "unattended)"
+                )
+                log.info("evolver: signal held for review: %s",
+                         d.get("suggestion", "")[:100])
         elif category == "cost_optimization":
             # No executor exists yet — surface for human review instead of
             # silently marking applied. Previously fell through to else and

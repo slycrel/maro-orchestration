@@ -1958,47 +1958,49 @@ class TestSubMissionAutoEnqueue:
         assert len(enqueued) == 1
         assert "arbitrage" in enqueued[0]
 
-    def test_hold_for_review_when_disabled(self, monkeypatch, tmp_path):
-        """When evolver.auto_enqueue_signals=False (default), sub_mission goes to playbook."""
+    def _hold_at_the_gate(self, monkeypatch, tmp_path, text):
+        """Drive the real seam: the hold decision moved up to apply_suggestion
+        (2026-08-04), so _apply_suggestion_action is now the enqueue itself."""
         monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
         monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        path = tmp_path / "suggestions.jsonl"
+        monkeypatch.setattr("evolver_store._suggestions_path", lambda: path)
 
         enqueued = []
         import handle as _handle
         monkeypatch.setattr(_handle, "enqueue_goal", lambda *a, **kw: enqueued.append(a) or "job-x")
+        playbook_entries = []
+        import playbook as _pb
+        monkeypatch.setattr(_pb, "append_to_playbook",
+                            lambda t, section="", source="": playbook_entries.append(t))
 
+        d = self._make_sub_mission_dict(text)
+        path.write_text(json.dumps(d) + "\n", encoding="utf-8")
+        from evolver import apply_suggestion as _apply
+        _apply(d["suggestion_id"])
+        row = json.loads(path.read_text().splitlines()[0])
+        return enqueued, playbook_entries, row
+
+    def test_hold_for_review_when_disabled(self, monkeypatch, tmp_path):
+        """auto_enqueue_signals=False holds the signal — and does NOT put it
+        in the playbook, where it would ride every prompt unreviewed."""
         import config as _cfg
         monkeypatch.setattr(_cfg, "get", lambda k, d=None: False if k == "evolver.auto_enqueue_signals" else d)
+        enqueued, playbook_entries, row = self._hold_at_the_gate(
+            monkeypatch, tmp_path, "Research crypto arbitrage patterns")
 
-        playbook_entries = []
-        try:
-            import playbook as _pb
-            monkeypatch.setattr(_pb, "append_to_playbook", lambda text, section="", source="": playbook_entries.append(text))
-        except ImportError:
-            pass
-
-        from evolver import _apply_suggestion_action
-        _apply_suggestion_action(self._make_sub_mission_dict("Research crypto arbitrage patterns"))
-
-        # Should NOT enqueue
         assert len(enqueued) == 0
-        # Should record to playbook (if playbook available)
-        if playbook_entries:
-            assert any("arbitrage" in e for e in playbook_entries)
+        assert playbook_entries == []
+        assert row["applied"] is False
+        assert row["status"] == "held_for_review"
 
     def test_default_is_hold_not_enqueue(self, monkeypatch, tmp_path):
         """Default config (no key set) does not auto-enqueue."""
-        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
-        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
-
-        enqueued = []
-        import handle as _handle
-        monkeypatch.setattr(_handle, "enqueue_goal", lambda *a, **kw: enqueued.append(a) or "job-x")
-
-        from evolver import _apply_suggestion_action
-        _apply_suggestion_action(self._make_sub_mission_dict("Analyze market gaps"))
+        enqueued, _, row = self._hold_at_the_gate(
+            monkeypatch, tmp_path, "Analyze market gaps")
 
         assert len(enqueued) == 0, "default should NOT auto-enqueue sub_missions"
+        assert row["status"] == "held_for_review"
 
 
 class TestPlaybookAppendUntruncated:
@@ -2024,21 +2026,10 @@ class TestPlaybookAppendUntruncated:
         )
         return entries
 
-    def test_signal_lands_whole(self, monkeypatch, tmp_path):
-        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
-        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
-        import config as _cfg
-        monkeypatch.setattr(_cfg, "get", lambda k, d=None: False if k == "evolver.auto_enqueue_signals" else d)
-        entries = self._capture_appends(monkeypatch)
-
-        from evolver import _apply_suggestion_action
-        _apply_suggestion_action({
-            "suggestion_id": "sig-long01", "category": "sub_mission",
-            "target": "opportunity", "suggestion": self.LONG,
-            "confidence": 0.85, "applied": False,
-        })
-
-        assert entries and self.LONG in entries[0]
+    # The signal half of this pin retired 2026-08-04: held signals no longer
+    # reach the playbook at all (they hold in `maro evolver --list`), so
+    # "lands whole" has nothing to land. The no-slice rule still governs the
+    # applied-insight append below, which is the remaining writer.
 
     def test_applied_insight_lands_whole(self, monkeypatch, tmp_path):
         monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
@@ -3980,3 +3971,97 @@ def test_prose_in_the_pattern_slot_is_not_loaded(tmp_path, monkeypatch):
     assert len(prose) > constraint._MAX_DYNAMIC_PATTERN_CHARS
     assert constraint._load_dynamic_constraints() == []
     assert dc.exists(), "read-time skip must not delete the row"
+
+
+# ---------------------------------------------------------------------------
+# Held signals: review surface, not every-run context
+# ---------------------------------------------------------------------------
+
+def _signal_row(sid="sig-t1"):
+    return Suggestion(
+        suggestion_id=sid, category="sub_mission", target="lead",
+        suggestion="Investigate the second data source found in run X",
+        failure_pattern="signal from: run X", confidence=0.9,
+        outcomes_analyzed=5,
+    )
+
+
+def test_held_signal_is_not_written_to_the_playbook(tmp_path, monkeypatch):
+    """The whole defect: an unreviewed goal proposal in every prompt."""
+    path = tmp_path / "suggestions.jsonl"
+    monkeypatch.setattr("evolver_store._suggestions_path", lambda: path)
+    appended = []
+    monkeypatch.setattr("playbook.append_to_playbook",
+                        lambda entry, **kw: appended.append(entry))
+    monkeypatch.setattr("config.get", lambda key, default=None: default)
+    with patch("evolver_store._suggestions_path", return_value=path):
+        _save_suggestions([_signal_row()])
+        assert apply_suggestion("sig-t1") is True
+        pending = list_pending_suggestions()
+
+    assert appended == []
+    assert [s.suggestion_id for s in pending] == ["sig-t1"]
+    held = pending[0]
+    assert held.status == "held_for_review"
+    assert "--dismiss" in held.block_reason
+
+
+def test_manual_apply_runs_a_held_signal(tmp_path, monkeypatch):
+    """Accept path: the human's apply IS the gate, same as a guardrail."""
+    path = tmp_path / "suggestions.jsonl"
+    monkeypatch.setattr("evolver_store._suggestions_path", lambda: path)
+    monkeypatch.setattr("config.get", lambda key, default=None: default)
+    enqueued = []
+    import handle
+    monkeypatch.setattr(handle, "enqueue_goal",
+                        lambda goal, reason="": enqueued.append(goal) or "job-1")
+
+    with patch("evolver_store._suggestions_path", return_value=path):
+        _save_suggestions([_signal_row("sig-t2")])
+        assert apply_suggestion("sig-t2", manual=True) is True
+        assert suggestion_is_applied("sig-t2") is True
+
+    assert len(enqueued) == 1
+
+
+def test_dismiss_clears_a_suggestion_without_deleting_it(tmp_path, monkeypatch):
+    """Dismiss path: leaves the pending list, stays on disk."""
+    path = tmp_path / "suggestions.jsonl"
+    monkeypatch.setattr("evolver_store._suggestions_path", lambda: path)
+    from evolver import dismiss_suggestion
+
+    with patch("evolver_store._suggestions_path", return_value=path):
+        _save_suggestions([_signal_row("sig-t3")])
+        assert dismiss_suggestion("sig-t3", reason="not worth running") is True
+        assert list_pending_suggestions() == []
+        rows = [json.loads(l) for l in path.read_text().splitlines() if l.strip()]
+
+    assert len(rows) == 1
+    assert rows[0]["status"] == "dismissed"
+    assert rows[0]["dismissed_at"]
+    assert rows[0]["suggestion"]  # text intact
+
+
+def test_dismiss_is_a_no_op_on_an_applied_suggestion(tmp_path, monkeypatch):
+    path = tmp_path / "suggestions.jsonl"
+    monkeypatch.setattr("evolver_store._suggestions_path", lambda: path)
+    from evolver import dismiss_suggestion
+    row = _signal_row("sig-t4")
+    row.applied = True
+
+    with patch("evolver_store._suggestions_path", return_value=path):
+        _save_suggestions([row])
+        assert dismiss_suggestion("sig-t4") is False
+
+
+def test_status_survives_a_round_trip(tmp_path):
+    """from_dict dropped status/block_reason, so --list was blind to holds."""
+    from evolver_store import Suggestion as S
+    row = S(suggestion_id="s", category="new_guardrail", target="all",
+            suggestion="x", failure_pattern="y", confidence=0.5,
+            outcomes_analyzed=1, status="held_for_review",
+            block_reason="because", pattern=r"\bfoo\b")
+    back = S.from_dict(json.loads(json.dumps(row.to_dict())))
+    assert back.status == "held_for_review"
+    assert back.block_reason == "because"
+    assert back.pattern == r"\bfoo\b"

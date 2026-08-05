@@ -52,6 +52,7 @@ from evolver_store import (
     load_suggestions, _save_suggestions, list_pending_suggestions,
     suggestion_is_applied,
     _apply_suggestion_action, apply_suggestion, revert_suggestion,
+    dismiss_suggestion,
     stamp_verification,
     _run_skill_test_gate, validate_skill_mutation, record_tiered_lesson, MemoryTier,
 )

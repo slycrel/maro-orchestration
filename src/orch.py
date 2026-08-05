@@ -267,6 +267,17 @@ def write_operator_status() -> dict:
     }
     payload["salvage"]["active_count"] = len(active_salvage_runs)
     payload["salvage"]["pending_count"] = _pending_salvage_count(active_salvage_runs)
+    # Suggestions waiting on a human. They used to wait in the playbook —
+    # i.e. in every prompt — because there was nowhere else to put them.
+    try:
+        from evolver_store import list_pending_suggestions as _pending_sugg
+        _held = _pending_sugg(limit=100)
+        payload["review"] = {
+            "pending_suggestions": len(_held),
+            "held_signals": sum(1 for s in _held if s.category == "sub_mission"),
+        }
+    except Exception:
+        payload["review"] = {"pending_suggestions": 0, "held_signals": 0}
     # atomic_write: the dashboard/TUI reads this live — a bare write_text
     # window shows it a torn JSON document.
     from file_lock import atomic_write

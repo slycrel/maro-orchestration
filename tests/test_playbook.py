@@ -515,3 +515,39 @@ class TestGuidanceForm:
         from evolver import _EVOLVER_SYSTEM
         assert "regular expression" in _EVOLVER_SYSTEM
         assert "new_guardrail only" in _EVOLVER_SYSTEM
+
+
+class TestNoInjectSections:
+    """Signals held "for human review" ranked ABOVE the curated seed."""
+
+    def test_signals_section_is_not_injected(self, tmp_path, monkeypatch):
+        import playbook
+        path = tmp_path / "playbook.md"
+        path.write_text(
+            "# Director's Playbook\n\n"
+            "## Execution\n\n"
+            "- Atomic steps usually beat broad ones.\n\n"
+            "## Signals\n\n"
+            "- [Signal] Investigate the second data source *(from evolver:sig-1)*\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(playbook, "_playbook_path", lambda: path)
+
+        block = playbook.inject_playbook(max_chars=800)
+        assert "Atomic steps" in block
+        assert "Signal" not in block
+        assert "## Signals" not in block
+
+    def test_signals_stay_in_the_file(self, tmp_path, monkeypatch):
+        import playbook
+        path = tmp_path / "playbook.md"
+        body = (
+            "# Director's Playbook\n\n"
+            "## Signals\n\n"
+            "- [Signal] keep me\n"
+        )
+        path.write_text(body, encoding="utf-8")
+        monkeypatch.setattr(playbook, "_playbook_path", lambda: path)
+
+        assert playbook.inject_playbook(max_chars=800) == ""
+        assert "keep me" in path.read_text()

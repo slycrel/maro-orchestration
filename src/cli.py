@@ -788,7 +788,18 @@ def _cmd_evolver(args: argparse.Namespace) -> int:
             else:
                 for s in pending:
                     print(f"  [{s.suggestion_id}] [{s.category}] {s.target}: {s.suggestion[:80]}")
+                    # Held rows say what they're waiting for. Without this the
+                    # review surface shows a proposal and no way to act on it.
+                    if s.block_reason:
+                        print(f"      held: {s.block_reason}")
         return 0
+
+    if getattr(args, "dismiss_id", None):
+        from evolver import dismiss_suggestion
+        if dismiss_suggestion(args.dismiss_id, reason="dismissed by operator"):
+            print(f"dismissed={args.dismiss_id}")
+            return 0
+        return fail("E_SUGGESTION_NOT_FOUND", args.dismiss_id)
 
     if getattr(args, "apply_id", None):
         ok = apply_suggestion(args.apply_id, manual=True)

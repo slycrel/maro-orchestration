@@ -68,6 +68,7 @@ def _make_suggestion(
     suggestion_text: str = "Improved skill description from evolver",
     suggestion_id: str = "sug-001",
     applied: bool = False,
+    pattern: str = "",
 ) -> Suggestion:
     return Suggestion(
         suggestion_id=suggestion_id,
@@ -78,6 +79,7 @@ def _make_suggestion(
         confidence=confidence,
         outcomes_analyzed=10,
         applied=applied,
+        pattern=pattern,
     )
 
 
@@ -361,9 +363,13 @@ def test_apply_guardrail_with_env_override(monkeypatch):
     sug = _make_suggestion(
         category="new_guardrail",
         target="all",
-        suggestion_text="Require confirmation for trades",
+        suggestion_text="Trades usually deserve an explicit confirmation step",
         suggestion_id="sug-guard-ok",
         confidence=0.9,
+        # The constraint row comes from `pattern` (a regex), not from the
+        # prose — writing the prose there produced guardrails that could
+        # never match (fixed 2026-08-04).
+        pattern=r"\b(place|execute)\s+trade\b",
     )
     _seed_suggestion(sug)
 
@@ -382,7 +388,7 @@ def test_apply_guardrail_with_env_override(monkeypatch):
     dc_path = memory_dir() / "dynamic-constraints.jsonl"
     assert dc_path.exists()
     entries = [json.loads(l) for l in dc_path.read_text().splitlines() if l.strip()]
-    assert any("Require confirmation" in e.get("pattern", "") for e in entries)
+    assert any(r"\b(place|execute)\s+trade\b" == e.get("pattern", "") for e in entries)
 
 
 # ---------------------------------------------------------------------------

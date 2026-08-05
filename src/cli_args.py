@@ -153,6 +153,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_evolver.add_argument("--list", action="store_true", dest="list_pending", help="List pending (unapplied) suggestions")
     p_evolver.add_argument("--apply", dest="apply_id", help="Mark a suggestion as applied by ID")
     p_evolver.add_argument("--revert", dest="revert_id", help="Revert a previously applied suggestion by ID")
+    p_evolver.add_argument("--dismiss", dest="dismiss_id", help="Clear a pending suggestion without applying it (reviewed and declined; the row is kept)")
     p_evolver.add_argument("--verbose", "-v", action="store_true", default=True)
     p_evolver.add_argument("--format", choices=["text", "json"], default="text")
 

@@ -3102,6 +3102,42 @@ the rewrite cleaned up by hand:
    `playbook_history/` + `suggestions.jsonl`). Held signals belong on a
    review surface (READING_QUEUE row? operator status block?), not in
    every-run context.
+   **SHIPPED 2026-08-04 — no new surface invented; the existing gate
+   already had the right shape.** `sub_mission` now holds in
+   `apply_suggestion` exactly like `new_guardrail` does: `applied=False`,
+   `status="held_for_review"`, a `block_reason` naming both exits. A
+   manual apply IS the review (`maro evolver --apply <id>` enqueues the
+   goal), and `evolver.auto_enqueue_signals` still opts a box into
+   running them unattended. `_apply_suggestion_action`'s sub_mission
+   branch is now enqueue-only — the playbook append is gone.
+   Three things had to come with it:
+   - **The exit that never existed:** `maro evolver --dismiss <id>` /
+     `dismiss_suggestion()`. Sets `status="dismissed"` + `dismissed_at`,
+     drops the row from `list_pending_suggestions`, **deletes nothing** —
+     the text and provenance stay on disk. Without this, "review surface"
+     just relocates the accumulation.
+   - **`status` / `block_reason` / `dismissed_at` on the `Suggestion`
+     dataclass.** `apply_suggestion` has written `status` into the JSON
+     since the held_for_review gate landed, but `from_dict` filters to
+     dataclass fields — so every reader that went through `Suggestion`
+     (`--list` included) was blind to whether a row was held or why. The
+     hold state existed and was unreadable. `--list` now prints the
+     `held:` reason under each row.
+   - **`playbook._NO_INJECT_SECTIONS = {"Signals"}`.** Non-seed section =
+     "learned" = ranked ABOVE the curated seed, so an unreviewed goal
+     proposal was the highest-priority injected guidance in every
+     director and decompose call. Excluded at injection, not deleted from
+     the file. (Live playbook has no Signals section — the 2026-08-02
+     rewrite already pulled them by hand; this is for installs that
+     still carry one, and for the next append that won't happen.)
+   Operator status gains `review.pending_suggestions` /
+   `review.held_signals` so the count is visible without running a verb.
+   **Two tests asserted the old behavior** and were rewritten to drive the
+   new seam (`TestSubMissionAutoEnqueue` now goes through
+   `apply_suggestion`); the `test_signal_lands_whole` half of the
+   no-truncation pin retired with a note — held signals no longer reach
+   the playbook, so there is nothing to land whole. The applied-insight
+   half still guards the remaining writer.
 3. **Upgrade edge: what-not-how form pass for evolver suggestion
    prompts.** The suggestion generator still mints command-form
    ("Reduce LLM confidence prompts…", "require all agenda goals…") —

@@ -165,6 +165,14 @@ _ATTRIB_RE = re.compile(r"\s*\*\(from [^)]*\)\*\s*$")
 # Sections shipped by _SEED_CONTENT; anything else is operator/system-grown.
 _SEED_SECTIONS = frozenset({"Decomposition", "Execution", "Cost", "Quality"})
 
+# Sections that stay in the file but never reach a prompt. "Signals" held
+# proposed autonomous goals "for human review" — as a non-seed section they
+# ranked as learned, so unreviewed proposals outranked the curated seed in
+# every director and decompose call. The evolver no longer writes them there
+# (they hold in `maro evolver --list` now); this keeps any that a live
+# playbook still carries out of the injected window without deleting them.
+_NO_INJECT_SECTIONS = frozenset({"Signals"})
+
 
 def _entry_core(line: str) -> str:
     """Dedup key: bullet text without dash prefix, attribution, or case."""
@@ -216,7 +224,8 @@ def inject_playbook(*, max_chars: int = 800) -> str:
     if not text:
         return ""
 
-    entries = parse_entries(text)
+    entries = [e for e in parse_entries(text)
+               if e["section"] not in _NO_INJECT_SECTIONS]
     if not entries:
         return ""
 
