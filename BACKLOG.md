@@ -2041,6 +2041,49 @@ capture**, which is what makes the rung amortize instead of evaporate.
   toward over-estimating. Step counts missed **high** repeatedly (4–8→10,
   3–6→16) until widened.
 
+- [ ] **LT-4 — the second batch (Jeremy 2026-08-05, verbatim: "run some
+  tests from our general list (2 each, as before, cold/warm), at least 3
+  different ones in the research direction and 3 in the bridge-building
+  direction, we can see what we can learn by watching the system try and
+  execute them").** Registered 2026-08-05 BEFORE dispatch; this commit is
+  the timestamp. All runs `--measurement-class benchmark`. Ground-truth
+  snapshots at `~/.maro/workspace/output/lt4-ground-truth/` (README
+  inside), taken by hand before dispatch — instruments verified this
+  time (round-7 lesson): the authed X rung works from the box with
+  cookie-cache env injection, hathitrust/googleapis still blocked from
+  the executor container (403/429), reddit RSS + old.reddit + usps 200
+  from the container, provolibrary.com unreachable (why SLCPL).
+
+  **Research direction** (Tier-1 `target` burndown, per decree #1):
+  | id | goal (verbatim at dispatch) | rubric | predictions |
+  |---|---|---|---|
+  | R3 | SLCPL Main Library hours this Saturday + does the passport service need an appointment; official current sources; note staleness risks | PASS = Sat 10am–6pm (bldg) and/or 10am–5pm (passport office), appointment answer NO/walk-ins-only, sourced official. FAIL = "appointment required" (the stale HTML-comment trap OR the majority-case guess), wrong hours. PARTIAL = hours right, appointment hedged | $1–3, 3–7 steps, 0 blocked, PASS ~65% |
+  | R1 | top five breakfast restaurants in Salt Lake City according to Reddit, links HTTP-validated, no fake links/places | PASS = 5 real places (hand-verified after), every link fetches, claims traceable to real threads. PARTIAL = ≥3 real w/ valid links, zero fabrication. FAIL = any invented place or dead/fabricated link presented as validated | $2–5, 5–10 steps, 0–2 blocked, PASS ~55% (corpus 1.5: frontier chat scored 100% fake links) |
+  | R2 | three cheapest ways to ship a 40 lb 18x14x12 box Provo 84601 → Columbus 43215 this week; dated prices; estimates labeled with source | PASS = ≥3 real options, sourced+dated prices or honestly-labeled estimates, recommendation follows table. PARTIAL = mixed sourcing. FAIL = invented exact prices w/ no reachable source | $3–7, 6–12 steps, 1–3 blocked (carrier bot-walls), PASS ~40%, **PARTIAL modal** — live quotes are JS-walled; honesty-about-estimates is the real test |
+
+  **Bridge-building direction** (LT-3 rungs, per the ladder):
+  | id | rung | rubric | predictions |
+  |---|---|---|---|
+  | B2 | **fuzzy reference resolution** (3b's named untested rung): "a while back you researched early municipal water chlorination…" — no project name, no paths; asks (a) which two cities compared + winner, (b) the out-of-scope stronger claimant, (c) disk paths of the prior deliverables used | Ground truth from 3b: (a) Maidstone 1897 vs Jersey City 1908, Jersey City on continuity; (b) Lincoln, England 1905; (c) the chlorination project dirs. PASS = (a)+(b) right AND tool events show corpus discovery/reads, ≈0 web fetches. **PASS-BY-RERESEARCH** = right answers, fresh web research — the bridge is absent, recorded as such. PARTIAL = finds corpus, (a) right, (b) missed. FAIL = wrong/fabricated | $1.5–4, 4–9 steps, PASS ~40%, PASS-BY-RERESEARCH ~30% |
+  | B3 | **X thread end-to-end** (Tier-2 `target` since 2026-07-17): capture root + reply thread + the repo the author shared, resolved + HTTP-validated | Ground truth: author follow-up "Repo:" t.co → github.com/ZeroPointRepo/awesome-hermes-skills (301 verified). PASS = root + author follow-up captured + correct resolved URL validated. PARTIAL = repo found w/o thread capture, disclosed. FAIL = fabricated thread content or undisclosed non-capture | $1.5–4, 4–9 steps, PASS ~35% — the auth rung works on the HOST; worker steps run in a container without the CLI/cookies. If it fails at that boundary the finding is precise: access path exists, executor can't reach it |
+  | B1 | **skill-capture rung** (Tier-4 `target`, the tech-tree node): blocked archives named up front; get Bennett's *How to Live on 24 Hours a Day* (1910) anyway, quote "The Daily Miracle" opening verbatim, capture the access path as a GENERIC reusable skill file | PASS = verbatim passage right AND a skill file lands where the runtime looks, generic recipe not book-specific. PARTIAL = passage right, skill missing/book-specific. FAIL = passage wrong/fabricated, or capture claimed with no file (the #6 fabrication shape) | $2.5–6, 6–12 steps, ≥2 blocked (by design), PASS ~35% — the capture half has never been done by a run |
+
+  **Warm arms, registered now:** byte-identical re-runs (same slug) for
+  R1/R2/R3/B2/B3 after cold arms + mints land. **B1w deviates
+  deliberately:** same shape, DIFFERENT book, reworded opening (slug
+  hazard — round-4a precedent), because byte-identical would hand the
+  warm arm the cold arm's artifacts and the thing B1 measures is whether
+  the captured SKILL amortizes — the skill store must be the only
+  carrier. Warm predictions: R3w $0.5–2; R1w $1.5–4 (−20–50%); R2w
+  $2–5 (−20–40%); B2w $1–3 (does discovery get cheaper?); B3w $1–3
+  (a boundary failure should reproduce — stability of the failure is
+  the measurement); B1w $2–5, skill-loads ~40% conditional on cold
+  having captured one. Dispatch order, registered: R3 → R1 → R2 → B2 →
+  B3 → B1, sequential (box limits), then the warm set in the same order.
+  Cold total predicted $12–29; batch total $21–49 vs the $25 daily
+  breaker — the extension ladder (2026-08-02 decree) is the designed
+  path if it trips, not a reason to ration.
+
 - [x] ~~**Quality-gate ESCALATE fired on false grounds in 3 of 3 runs
   today**~~ — **MEASURED AND FIXED 2026-08-03 (`f4ef704`).**
 
