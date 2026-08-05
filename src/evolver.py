@@ -85,6 +85,10 @@ from skill_lifecycle import (
 # LLM analysis
 # ---------------------------------------------------------------------------
 
+# Applied suggestions become playbook entries and tiered lessons — injected
+# guidance. The wording decree that governs them lives with its consumer.
+from playbook import GUIDANCE_FORM_RULES as _GUIDANCE_FORM_RULES
+
 _EVOLVER_SYSTEM = """\
 You are a meta-evolution agent. You analyze patterns across many completed and failed runs
 to identify systemic improvements.
@@ -105,6 +109,7 @@ Respond ONLY with a JSON object in this format:
       "suggestion": "specific improvement text",
       "failure_pattern": "what pattern motivated this",
       "confidence": 0.0-1.0,
+      "pattern": "new_guardrail only: a regular expression matching the step text to flag",
       "expected_signal": [
         {"metric": "failure_class_rate|stuck_rate|cost_per_run|<other observable>",
          "class": "the failure class this should reduce, if applicable",
@@ -117,6 +122,14 @@ Respond ONLY with a JSON object in this format:
 expected_signal declares which observable this specific change should move and
 which direction, so it can be checked later against what actually happened.
 Omit it (or leave the list empty) if you can't name a concrete observable.
+
+pattern applies to new_guardrail only, and it is matched as a regular expression
+against step text — so it must be a regex, not a sentence ("rm\\s+-rf", not
+"avoid destructive deletes"). Omit it when the guardrail can't be expressed that
+way; the suggestion still lands as guidance, and a guardrail with no matchable
+pattern is written nowhere rather than written as a rule that can never fire.
+
+""" + _GUIDANCE_FORM_RULES + """
 
 Be specific and actionable. Suggest at most 5 improvements total. If there are no clear patterns
 (e.g., too few outcomes), return {"failure_patterns": [], "suggestions": []}.
@@ -578,6 +591,7 @@ def run_evolver(
                 confidence=safe_float(raw.get("confidence"), default=0.5, min_val=0.0, max_val=1.0),
                 outcomes_analyzed=len(outcomes),
                 expected_signal=safe_list(raw.get("expected_signal", []), element_type=dict),
+                pattern=str(raw.get("pattern", "") or ""),
             ))
         except Exception:
             pass

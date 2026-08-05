@@ -5,6 +5,7 @@ import os
 import select
 import subprocess
 import sys
+import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -1500,13 +1501,19 @@ def test_apply_action_prompt_tweak_writes_lesson(tmp_path, monkeypatch):
 
 
 def test_apply_action_new_guardrail_writes_dynamic_constraint(tmp_path, monkeypatch):
-    """new_guardrail action appends to dynamic-constraints.jsonl."""
+    """new_guardrail appends to dynamic-constraints.jsonl — from `pattern`.
+
+    The pattern is matched as a regex by constraint.py, so it comes from its
+    own field. It used to be taken from `suggestion` (prose), which is why
+    the lane never fired.
+    """
     monkeypatch.setattr("evolver_store._dynamic_constraints_path", lambda: tmp_path / "dynamic-constraints.jsonl")
 
     _apply_suggestion_action({
         "category": "new_guardrail",
         "target": "all",
-        "suggestion": r"\bdrop\s+database\b",
+        "suggestion": "Destructive database steps usually deserve a check first",
+        "pattern": r"\bdrop\s+database\b",
         "suggestion_id": "test-01",
         "confidence": 0.9,
     })
@@ -1515,6 +1522,91 @@ def test_apply_action_new_guardrail_writes_dynamic_constraint(tmp_path, monkeypa
     entry = json.loads(content.strip())
     assert entry["pattern"] == r"\bdrop\s+database\b"
     assert "test-01" in entry["source"]
+
+
+def test_apply_action_new_guardrail_without_pattern_writes_nothing(tmp_path, monkeypatch):
+    """Prose with no pattern is guidance, not a constraint that can never fire."""
+    monkeypatch.setattr("evolver_store._dynamic_constraints_path", lambda: tmp_path / "dc.jsonl")
+
+    assert _apply_suggestion_action({
+        "category": "new_guardrail",
+        "target": "all",
+        "suggestion": "Builds usually go better when tests run first",
+        "suggestion_id": "test-01b",
+        "confidence": 0.9,
+    })
+    assert not (tmp_path / "dc.jsonl").exists()
+
+
+def test_apply_action_new_guardrail_rejects_uncompilable_pattern(tmp_path, monkeypatch):
+    monkeypatch.setattr("evolver_store._dynamic_constraints_path", lambda: tmp_path / "dc.jsonl")
+
+    assert _apply_suggestion_action({
+        "category": "new_guardrail",
+        "target": "all",
+        "suggestion": "guard the thing",
+        "pattern": "for agenda tasks with explicit 'goal' state (achieved/NOT-ac",
+        "suggestion_id": "test-01c",
+        "confidence": 0.9,
+    })
+    assert not (tmp_path / "dc.jsonl").exists()
+
+
+def test_written_guardrail_is_actually_loadable(tmp_path, monkeypatch):
+    """End to end: what the evolver writes, constraint.py must load.
+
+    The stamp was written ISO and compared to epoch seconds, so the TTL check
+    raised and the row was dropped whole — the lane read empty on live data
+    (1 row on disk, 0 loaded, probed 2026-08-04).
+    """
+    import constraint
+    dc = tmp_path / "dynamic-constraints.jsonl"
+    monkeypatch.setattr("evolver_store._dynamic_constraints_path", lambda: dc)
+    monkeypatch.setattr("orch_items.memory_dir", lambda: tmp_path)
+
+    _apply_suggestion_action({
+        "category": "new_guardrail",
+        "target": "all",
+        "suggestion": "prose for the playbook",
+        "pattern": r"\brm\s+-rf\b",
+        "suggestion_id": "test-01d",
+        "confidence": 0.9,
+    })
+
+    loaded = constraint._load_dynamic_constraints()
+    assert loaded, "evolver-written guardrail did not survive the loader"
+    name, patterns = loaded[0]
+    assert any(p[0] == r"\brm\s+-rf\b" for p in patterns)
+
+
+def test_legacy_iso_stamped_guardrail_still_loads(tmp_path, monkeypatch):
+    """Rows written before the fix carry an ISO stamp — read, not discarded."""
+    import constraint
+    from datetime import datetime, timezone
+    dc = tmp_path / "dynamic-constraints.jsonl"
+    dc.write_text(json.dumps({
+        "pattern": r"\bsudo\b",
+        "risk": "MEDIUM",
+        "detail": "legacy row",
+        "added_at": datetime.now(timezone.utc).isoformat(),
+    }) + "\n", encoding="utf-8")
+    monkeypatch.setattr("orch_items.memory_dir", lambda: tmp_path)
+
+    loaded = constraint._load_dynamic_constraints()
+    assert loaded and loaded[0][1][0][0] == r"\bsudo\b"
+
+
+def test_expired_guardrail_still_expires(tmp_path, monkeypatch):
+    import time as _time
+    import constraint
+    dc = tmp_path / "dynamic-constraints.jsonl"
+    old = _time.time() - (constraint._DYNAMIC_CONSTRAINT_TTL_DAYS + 5) * 86400
+    dc.write_text(json.dumps({
+        "pattern": r"\bsudo\b", "risk": "MEDIUM", "detail": "old", "added_at": old,
+    }) + "\n", encoding="utf-8")
+    monkeypatch.setattr("orch_items.memory_dir", lambda: tmp_path)
+
+    assert constraint._load_dynamic_constraints() == []
 
 
 def test_apply_action_skill_pattern_creates_skill(tmp_path, monkeypatch):
@@ -3865,3 +3957,26 @@ class TestVerifyClassSignal:
         _write_events([{"loop_id": "L2", "ts": "2026-05-01T09:00:00+00:00"}])
         dated = _load_dated_diagnoses()
         assert dated[0][0].isoformat() == "2026-05-01T13:00:00+00:00"
+
+
+def test_prose_in_the_pattern_slot_is_not_loaded(tmp_path, monkeypatch):
+    """The live legacy row: a whole sentence written where a regex belongs.
+
+    It compiles, so it loads — and can only match if a step repeats the
+    sentence verbatim. Skipped at read time; the row stays on disk.
+    """
+    import constraint
+    dc = tmp_path / "dynamic-constraints.jsonl"
+    prose = (
+        "For agenda tasks with explicit goal state, define acceptance criteria "
+        "upfront and validate against them before marking the task complete, and "
+        "if completion steps are done but the goal is not met, investigate the gap."
+    )
+    dc.write_text(json.dumps({
+        "pattern": prose, "risk": "MEDIUM", "detail": "legacy", "added_at": time.time(),
+    }) + "\n", encoding="utf-8")
+    monkeypatch.setattr("orch_items.memory_dir", lambda: tmp_path)
+
+    assert len(prose) > constraint._MAX_DYNAMIC_PATTERN_CHARS
+    assert constraint._load_dynamic_constraints() == []
+    assert dc.exists(), "read-time skip must not delete the row"

@@ -74,6 +74,9 @@ def _constraint_cfg_int(config_key: str, env_key: str, default: int) -> int:
 _DYNAMIC_BLOCK_CIRCUIT_BREAKER = _constraint_cfg_int("constraints.circuit_breaker", "MARO_DYNAMIC_CONSTRAINT_CIRCUIT_BREAKER", 5)
 _DYNAMIC_CIRCUIT_COOLDOWN_STEPS = _constraint_cfg_int("constraints.circuit_cooldown", "MARO_DYNAMIC_CIRCUIT_COOLDOWN", 50)
 _DYNAMIC_CONSTRAINT_TTL_DAYS = _constraint_cfg_int("constraints.ttl_days", "MARO_DYNAMIC_CONSTRAINT_TTL_DAYS", 30)
+# Above this, a "pattern" is a sentence someone wrote into the regex slot.
+# Generous for a real regex; nothing legitimate has come close.
+_MAX_DYNAMIC_PATTERN_CHARS = 120
 
 _dynamic_consecutive_blocks: int = 0   # steps blocked solely by dynamic constraints
 _dynamic_circuit_open_until: int = 0   # step counter; 0 = closed (normal)
@@ -311,6 +314,27 @@ def _check_patterns(
 CONSTRAINT_REGISTRY: List[Callable[[str, str], List[ConstraintFlag]]] = []
 
 
+def _as_epoch(value, default: float) -> float:
+    """Epoch seconds from either stamp form the writer has used.
+
+    Rows written before 2026-08-04 carry an ISO string here, which the TTL
+    comparison could only raise on — and the raise was caught one frame up,
+    so the row was dropped entirely and the whole dynamic-guardrail lane read
+    as empty. Both forms are accepted; anything unreadable reads as "now",
+    matching the pre-existing missing-field rule (no expiry rather than
+    silent deletion).
+    """
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str) and value:
+        try:
+            from datetime import datetime as _dt
+            return _dt.fromisoformat(value).timestamp()
+        except Exception:
+            return default
+    return default
+
+
 def _load_dynamic_constraints() -> List[tuple]:
     """Load evolver-generated constraint patterns from memory/dynamic-constraints.jsonl.
 
@@ -340,11 +364,18 @@ def _load_dynamic_constraints() -> List[tuple]:
                 pat = entry.get("pattern", "")
                 risk = entry.get("risk", "MEDIUM")
                 detail = entry.get("detail", f"dynamic guardrail: {pat[:60]}")
-                added_at = entry.get("added_at", now_ts)  # missing = current (no expiry)
+                added_at = _as_epoch(entry.get("added_at"), now_ts)  # unreadable = current
                 if added_at < ttl_cutoff:
                     log.debug("dynamic constraint %r expired (added_at=%s)", pat[:40], added_at)
                     continue
-                if pat:
+                if pat and len(pat) > _MAX_DYNAMIC_PATTERN_CHARS:
+                    # A sentence, not a pattern. Rows like this exist on disk
+                    # from before the writer separated prose from regex; as a
+                    # regex the whole sentence must appear verbatim in a step,
+                    # so it can only ever cost matching time. Skipped at read
+                    # time rather than deleted — the row is still its own record.
+                    log.debug("dynamic constraint is prose, not a pattern: %r", pat[:60])
+                elif pat:
                     try:
                         re.compile(pat, re.I)
                         patterns.append((pat, risk, detail))

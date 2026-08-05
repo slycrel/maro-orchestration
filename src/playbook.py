@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import logging
 import re
+import textwrap
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
@@ -68,6 +69,26 @@ def _playbook_path() -> Path:
 # of what it's capable of). The ≤15-words→1-4-steps cap was certified
 # inappropriate and removed outright ("we simply don't know what a run
 # might take, even if it's just a few words").
+
+# The same decree in prompt form, for the generators that MINT injected
+# guidance. The 2026-08-02 rewrite fixed the live playbook by hand; without
+# this the evolver's next append regresses it, which is the upgrade edge that
+# surprise read left open. Sibling of memory._LESSON_FORM_RULES: that one
+# governs what a lesson records, this one governs how guidance is worded.
+GUIDANCE_FORM_RULES = textwrap.dedent("""\
+    Guidance form — you are writing a prior the run weighs, not a rule it obeys.
+    This text is injected verbatim into every director and decompose call.
+    - Write "usually X", "X is often the cheaper first move", "X tends to
+      matter when Y" — never "always X", "you must X", "require X", "reject
+      any Y". A run that can see a better move must stay free to take it.
+    - Say what tends to be true, and when. Don't prescribe the shape of the
+      answer: "research goals benefit from gather → synthesize → verify",
+      not "decompose research goals into exactly three phases".
+    - No counts, caps, step budgets, or word limits as rules. We don't know
+      what a given run will take.
+    - Name the condition when the prior is narrow ("on goals with no named
+      source, usually …") so a run can tell whether it applies.
+""").strip()
 _SEED_CONTENT = """\
 # Director's Playbook
 

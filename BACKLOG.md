@@ -3110,6 +3110,63 @@ the rewrite cleaned up by hand:
    appends arrive as priors ("usually"), not requirements. Until then
    the seed carries the decree note but evolver appends can regress the
    form.
+   **SHIPPED 2026-08-04.** `playbook.GUIDANCE_FORM_RULES` — the decree in
+   prompt form, living with its consumer the way `_LESSON_FORM_RULES`
+   lives with the mint. Wired into `_EVOLVER_SYSTEM`, which is the mint
+   site for every applied suggestion: playbook entries AND (via
+   `prompt_tweak` → `record_tiered_lesson`) tiered lessons, so the
+   generator was bypassing the lesson form rules too. Named as forms to
+   avoid: "always", "you must", "require", "reject any", plus counts/caps
+   as rules — the P2 step-cap shape. Deliberately NOT applied to
+   `_SIGNAL_SYSTEM`: a sub_mission's `suggested_goal` is asking for work,
+   which is the what-not-how carve-out — a proposed goal should be
+   imperative. Its actual defect is where it's parked, which is gap 2.
+   Pins: `tests/test_playbook.py::TestGuidanceForm`.
+
+### The dynamic-guardrail lane never ran — prose as regex, ISO stamp vs epoch TTL (FOUND + FIXED 2026-08-04)
+
+Found while wiring the guidance-form rules above: `new_guardrail` is
+documented as "append pattern to memory/dynamic-constraints.jsonl →
+loaded by constraint.py at runtime", and **it has never loaded a single
+row.** Two independent defects, either one sufficient:
+
+1. **Stamp type.** `evolver_store` wrote `added_at` as an ISO string;
+   `constraint._load_dynamic_constraints` compares it to
+   `time.time() - ttl`. `str < float` raises, the raise is caught by the
+   per-row `except Exception: continue` one frame up, and the row is
+   discarded **whole** — not just its expiry. Probed live before fixing:
+   1 row on disk, `_load_dynamic_constraints()` → `[]`.
+2. **Prose in the regex slot.** The row's `pattern` was
+   `suggestion_text` — the LLM's prose. Matched as a regex, a 300-char
+   sentence can only fire if a step repeats it verbatim. So even with
+   defect 1 fixed the lane would still do nothing, which is why fixing
+   the stamp alone would have been the reckless half: it would have
+   activated a lane that writes sentences into a matcher.
+
+**Fixed together.** `Suggestion.pattern` is now its own field (additive,
+empty default); `_EVOLVER_SYSTEM` asks for a regex for `new_guardrail`
+only and says what it's matched against; no pattern or an uncompilable
+one → **no constraint row at all**, logged, with the prose still landing
+in the playbook as guidance. That's the honest split: guidance we can't
+match is guidance, not a rule that can never fire. The reader takes
+either stamp form (`_as_epoch`) so pre-fix rows are read rather than
+silently dropped, and skips any pattern over
+`_MAX_DYNAMIC_PATTERN_CHARS` (120) as prose — **at read time, never by
+deleting the row.** The one live row is prose, so live behavior is
+unchanged: `[]` before, `[]` after, for a stated reason instead of a
+swallowed TypeError.
+
+**The test asserted the defect.** `test_apply_action_new_guardrail_
+writes_dynamic_constraint` passed a regex-shaped string as `suggestion`
+and asserted it landed as `pattern` — green all along, because it
+encoded the writer's contract and nothing ever checked the reader could
+load what the writer wrote. The new pin does exactly that end-to-end
+(`test_written_guardrail_is_actually_loadable`), which is the shape
+worth copying: pin the seam, not one side of it.
+
+**Blast radius:** evolver guardrails are written `risk: MEDIUM`, and
+only HIGH blocks — so reviving the lane warns, never blocks, and the
+existing circuit breaker still applies.
 
 ### R6-E. lesson_text embeds truncated goal previews (anchoring risk) — watch-item
 

@@ -483,3 +483,35 @@ class TestWorkspaceSkillResolution:
         summaries = {s.name: s for s in loader.load_summaries()}
         assert "web_research" in summaries
         assert "EVOLVED" in summaries["web_research"].description
+
+
+class TestGuidanceForm:
+    """The 2026-08-02 decree: injected guidance is a prior, not a requirement.
+
+    The live playbook was fixed by hand; these pin the generator so the next
+    evolver append can't regress the form (the upgrade edge that surprise
+    read left open).
+    """
+
+    def test_seed_states_the_entry_form(self):
+        from playbook import _SEED_CONTENT
+        assert "usually" in _SEED_CONTENT.lower()
+        assert "not requirements it obeys" in _SEED_CONTENT
+
+    def test_evolver_prompt_carries_the_guidance_rules(self):
+        from evolver import _EVOLVER_SYSTEM
+        from playbook import GUIDANCE_FORM_RULES
+        assert GUIDANCE_FORM_RULES in _EVOLVER_SYSTEM
+
+    def test_guidance_rules_forbid_the_command_forms(self):
+        from playbook import GUIDANCE_FORM_RULES
+        body = " ".join(GUIDANCE_FORM_RULES.lower().split())
+        for banned in ("always", "you must", "require", "reject any"):
+            assert banned in body, f"{banned!r} should be named as a form to avoid"
+        assert "prior the run weighs" in body
+
+    def test_evolver_prompt_asks_for_a_regex_not_prose(self):
+        """new_guardrail's pattern is matched as a regex — the prompt must say so."""
+        from evolver import _EVOLVER_SYSTEM
+        assert "regular expression" in _EVOLVER_SYSTEM
+        assert "new_guardrail only" in _EVOLVER_SYSTEM

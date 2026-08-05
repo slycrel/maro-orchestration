@@ -15,7 +15,9 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import sys
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -75,6 +77,12 @@ class Suggestion:
     verified_at: str = ""
     verify_verdict: str = ""
     verify_extensions: int = 0
+    # new_guardrail only: the regex the guardrail actually matches step text
+    # with. Separate from `suggestion` because the two are different things —
+    # `suggestion` is prose for the playbook, this is a pattern for
+    # constraint.py. Writing prose into the pattern slot produced guardrails
+    # that could never fire (2026-08-04). Empty = no constraint row written.
+    pattern: str = ""
 
     def to_dict(self) -> dict:
         return {
@@ -93,6 +101,7 @@ class Suggestion:
             "verified_at": self.verified_at,
             "verify_verdict": self.verify_verdict,
             "verify_extensions": self.verify_extensions,
+            "pattern": self.pattern,
         }
 
     @classmethod
@@ -390,16 +399,44 @@ def _apply_suggestion_action(d: dict) -> bool:
                 raise RuntimeError("tiered lesson writer rejected the suggestion")
 
         elif category == "new_guardrail":
-            # Append to dynamic-constraints.jsonl — loaded by constraint.py at runtime
-            entry = {
-                "pattern": suggestion_text,
-                "risk": "MEDIUM",
-                "detail": f"evolver guardrail (id={suggestion_id}): {suggestion_text[:80]}",
-                "source": suggestion_id,
-                "added_at": datetime.now(timezone.utc).isoformat(),
-            }
-            with open(_dynamic_constraints_path(), "a", encoding="utf-8") as f:
-                f.write(json.dumps(entry) + "\n")
+            # Append to dynamic-constraints.jsonl — loaded by constraint.py at
+            # runtime, which matches `pattern` as a REGEX against step text.
+            # The suggestion prose used to be written into that slot, so every
+            # guardrail was either an unmatchable literal or a re.error the
+            # loader dropped (2026-08-04 probe: 1 live row, 0 loaded). No
+            # pattern now means no row — the prose still lands in the playbook
+            # below, which is the honest home for a guardrail we can't match.
+            _pattern = str(d.get("pattern", "") or "").strip()
+            if not _pattern:
+                log.info(
+                    "evolver new_guardrail %s has no matchable pattern — "
+                    "guidance only, no constraint row", suggestion_id,
+                )
+            else:
+                try:
+                    re.compile(_pattern, re.I)
+                except re.error as _pat_exc:
+                    log.warning(
+                        "evolver new_guardrail %s pattern is not a valid regex "
+                        "(%s) — guidance only, no constraint row",
+                        suggestion_id, _pat_exc,
+                    )
+                else:
+                    entry = {
+                        "pattern": _pattern,
+                        "risk": "MEDIUM",
+                        "detail": f"evolver guardrail (id={suggestion_id}): {suggestion_text[:80]}",
+                        "source": suggestion_id,
+                        # Epoch seconds: the TTL check in
+                        # constraint._load_dynamic_constraints compares against
+                        # time.time(). This was written as an ISO string, so the
+                        # comparison raised and the row was silently discarded —
+                        # the whole lane, not just its expiry.
+                        "added_at": time.time(),
+                        "added_at_iso": datetime.now(timezone.utc).isoformat(),
+                    }
+                    with open(_dynamic_constraints_path(), "a", encoding="utf-8") as f:
+                        f.write(json.dumps(entry) + "\n")
 
         elif category == "sub_mission":
             # Enqueue the suggested goal for execution on the next heartbeat tick.
