@@ -3270,6 +3270,66 @@ contest is just the instance that bit us.
 **Not proven to be what erased 6287e494** — see below. Fixed on its own
 merits.
 
+### Store round-trip probe — 18 stores, 0 undeclared drops (SHIPPED 2026-08-04)
+
+`scripts/store_roundtrip.py`. For each learning store: non-empty lines on
+disk, how many are even parseable JSON, and how many rows the real loader
+hands back. A gap the probe hasn't declared is a finding; so is a loader
+that raises.
+
+Built because the dynamic-guardrail bug was **not** a missing reader — it
+had a writer, a reader, and green tests on both sides, and had returned
+`[]` for the store's entire existence. Nothing we had could see that,
+because nothing ran one side through the other and counted.
+
+**Result, stated as found: 18 stores, 0 undeclared drops.** The two gaps
+are both declared and both correct (flat lessons −7 = the contested rows;
+dynamic constraints −1 = the one live prose pattern skipped at read time).
+So the guardrail bug was **isolated, not a family** — which is the useful
+thing to know and was not knowable by assertion.
+
+Two orphan checks fell out, both clean: `persona-outcomes.jsonl` and
+`sandbox-audit.jsonl` (383KB, 1080 rows, last written 2026-04-12) have no
+reference anywhere in `src/` — and both are already documented as
+deliberately retired writers with the data kept per the retention decree.
+The docs were right; now that's checked rather than believed.
+
+**Coverage is printed, not implied:** the probe table is hand-written, so
+the script also walks the workspace for every store it has no probe for
+and lists them (25 today). A hand-written list that hides its own gaps is
+the rot list item (a) warns about; one that prints them is a work-list.
+Pins: `tests/test_store_roundtrip.py` — the verdict logic (a declared drop
+must print its reason, or the exemption is unfalsifiable; `drops` excuses
+filtering, never an exception) and the coverage-gap reporting. The
+guardrail seam stays pinned at the seam in `test_evolver.py`, not
+restated here.
+
+**Natural next step, not taken unprompted:** this is a script someone has
+to remember to run. The self-health lane (`DECLARED_PROCESSES` probes) is
+the obvious host for it — a periodic round-trip check whose finding count
+lands in the captain's log. Left as a note because the health lane is v1
+and this is a null-result diagnostic today; wire it when a second store
+actually breaks, or when the health lane next gets a pass.
+
+### Write-before-Read prompt fix: not yet measurable (measured 2026-08-04)
+
+The `FILE EDITS` rule (`ed09b33`, landed 2026-08-03T01:02Z) was recorded
+with "residue counter will show whether the 65-turn class actually bends
+on future runs." Measured today. **It doesn't say yet, and the first
+denominator I reached for was the wrong one.**
+
+Post-fix corpus: 5 runs, 197 tool events, **0** `File has not been read
+yet`. Against the pre-fix rate per *tool event* (66/4724 = 1.40%) that's
+`P(0) = 0.06` — tempting. But the right denominator is write/edit calls,
+not all tool events, and the post-fix corpus contains **8** of them
+(pre: 434, rate 15.2%). `P(0 | n=8) = 0.30`. That is no evidence at all.
+
+**Verdict: no signal, need ~20 post-fix write/edit calls before the
+question is even askable** (at 15.2%, `0.848^20 ≈ 0.04`). Recorded so the
+next person doesn't read "0 occurrences" as "fixed". Unchanged and
+separate: `complete_step` tool-missing continues (16 in those 5 runs) —
+that's the entry above that declines the surgery on purpose.
+
 ### 6287e494: an operator contest that isn't on disk, unexplained
 
 The captain's log has 11 `LESSON_CONTESTED` events. Ten are `tier=medium`
@@ -4584,6 +4644,14 @@ wiring-inventory checks CANNOT ship the same way yet, per the checkpoint:
   paths declared through one helper/registry the census can walk
   (today they're ad-hoc `_x_path()` functions across modules — a census
   without the registry is a hand-maintained rot list).
+  **Spec correction 2026-08-04: existence isn't the check.** The
+  dynamic-guardrail store had a writer AND a reader AND passing tests on
+  both, and had never loaded a row in its life. An existence census calls
+  that healthy. The check that catches it is *counting* — rows on disk vs
+  rows the loader hands back. Shipped as a diagnostic ahead of the
+  registry: `scripts/store_roundtrip.py` (below). The registry still
+  belongs here; when it lands, it replaces that script's hand-written
+  probe table rather than adding a second thing to maintain.
 - [ ] **(c) Guards census** — every installed guard must be probed as
   *firing*, test_git_guard-style (installed/runtime state + a
   production-data-shape pin). Prerequisite: a guard manifest consumed
