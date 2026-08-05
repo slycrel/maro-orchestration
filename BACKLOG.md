@@ -954,6 +954,64 @@ capture**, which is what makes the rung amortize instead of evaporate.
   breaker — the extension ladder (2026-08-02 decree) is the designed
   path if it trips, not a reason to ration.
 
+  **COLD ARMS COMPLETE + hand-scored 2026-08-05 17:15Z — 6/6 PASS,
+  provider$ 18.96 (predicted 12–29 ✓).** Full per-arm scoring with
+  evidence: `~/.maro/workspace/output/lt4-logs/scorecard.md`. Summary:
+
+  | arm | pred. PASS | verdict | provider$ (band) | steps (band) | blocked (band) |
+  |---|---|---|---|---|---|
+  | R3 | ~65% | PASS | 2.00 ✓ | 6 ✓ | 0 ✓ |
+  | R1 | ~55% | PASS | 4.19 ✓ | 6 ✓ | 1 ✓ |
+  | R2 | ~40% (PARTIAL modal) | PASS ↑ | 5.16 ✓ | 12 ✓ | 7 ✗ (1–3) |
+  | B2 | ~40% full | PASS (full bridge) | 2.74 ✓ | 9 ✓ | 0 |
+  | B3 | ~35% | PASS | 3.19 ✓ | 9 ✓ | 0 |
+  | B1 | ~35% | PASS | 1.68 ✗ below | 6 ✓ | 2 ✓ |
+
+  Every hard part hit: R1's links all hand-verified real (the 100%-fake
+  -links failure didn't occur); R2 led with estimates-not-quotes honesty
+  and its one hard number ($121.80) is byte-exact vs the real USPS CSV
+  I fetched myself; B2 resolved the fuzzy reference to the on-disk
+  corpus with ZERO network commands (event-log verified — 3b's untested
+  rung works); B3's 5 genuine replies exactly match my authed
+  ground-truth snapshot; B1's passage verbatim + blocked archives
+  re-confirmed fresh. **Calibration:** cost/steps bands 22/24 hit;
+  verdict priors badly underconfident (joint P of 6/6 under my priors
+  ≈ 1.7%) — LT-1-era base rates look stale for current system state.
+
+  **Findings (the real yield):**
+  1. **B3 data-true/method-false confabulation** — every captured datum
+     verified real, but the deliverable calls its reply source "an
+     authenticated CLI thread fetch"; event log shows one unauthed
+     r.jina.ai render + syndication CDN, zero cookie/CLI references.
+     New failure-corpus shape (≠ #6 capture-claimed-never-done).
+     Closure (PASS 0.92) can't catch it — needs event-log grounding,
+     i.e. the claim_probe/review-grounding lane.
+  2. **B1 skill dead-drop** — the run's deliberate, excellent, genuinely
+     generic skill (`source-verification-ladder.md`, 4-stage) landed in
+     `projects/<slug>/skills/` which NO code path reads (runtime
+     surfaces: `workspace/skills/` + `memory/skills.jsonl` only).
+     Auto-promotion separately minted 2 thinner generic skills into
+     skills.jsonl (triggers: "public domain book", "Project Gutenberg")
+     — B1w measures whether THOSE amortize while the rich ladder sits
+     stranded. Fix candidate: either workers learn the real skill
+     surface, or promotion ingests project-local skill docs.
+  3. **Container-gap family** — workers reach for host tools absent
+     in-container: R3 tried repo `fetch_tool.py` (exit 2 → curl
+     fallback), R2 exit-127 on a missing binary, R2 nosuch=13.
+  4. **In-run adversarial-review quality is bimodal** — R3's reviewer
+     fabricated ≥2 of 4 contests against the run's own captured
+     evidence (Pioneer Day IS in the captured list); R2's reviewer was
+     exemplary (verified $121.80 vs stored CSV, called its own ranking
+     contested). Same ~30–50% fabrication rate as cross-model review.
+  5. **Bot-walls: kind predicted right, count 2–3× under** (R2 hit 7
+     domains); runs route around walls well — B3 never touched the
+     predicted container-auth boundary, going syndication+Jina instead.
+
+  Warm batch dispatched 17:19Z (same registered order; B1w = Smiles'
+  *Self-Help*, ground truth `smiles.txt` snapshotted by hand pre-
+  dispatch, reworded opening per slug-hazard registration). Cold-arm
+  Telegram summary sent to Jeremy 17:18Z.
+
 - [ ] **Arbitrary-truncation audit** (opened 2026-08-03; **Jeremy:** *"this
   was one of the first truncations early on and I've been uncomfortable
   making those trades for 'keeping the context small' by cutting so much…
