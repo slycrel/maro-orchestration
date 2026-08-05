@@ -1012,6 +1012,83 @@ capture**, which is what makes the rung amortize instead of evaporate.
   dispatch, reworded opening per slug-hazard registration). Cold-arm
   Telegram summary sent to Jeremy 17:18Z.
 
+  **WARM ARMS COMPLETE + hand-scored 2026-08-05 18:52Z — 6/6 PASS.
+  LT-4 batch DONE: 12/12 PASS, batch total provider$ 29.89 (predicted
+  21–49 ✓).** Full evidence per arm:
+  `~/.maro/workspace/output/lt4-logs/scorecard.md`.
+
+  | arm | verdict | provider$ (band) | Δ vs cold | steps | reuse behavior |
+  |---|---|---|---|---|---|
+  | R3w | PASS | 0.86 ✓ | −57% | 6→3 | verify-then-reuse + explicit drift re-fetch |
+  | R1w | PASS | 1.43 ~✓ (under band = cheap) | −66% | 6→5 | reuse research, re-validate all 5 links live |
+  | R2w | PASS | 2.48 ✓ | −52% | 12→7 | attack weakest claims; honest labels stand |
+  | B2w | PASS | 1.59 ✓ | −42% | 9→4 | straight to known corpus paths, md5 cross-check, still 0 net |
+  | B3w | PASS | 2.39 ✓ | −25% | 9→6 | reuse capture, re-validate URLs fresh |
+  | B1w | PASS | 2.18 ✓ | +30% (deviation arm: new book, deeper work) | 6→6 | cold-minted skills INJECTED (manifest-verified) |
+
+  **Headline: warm/cold on the 5 byte-identical arms = $8.75 vs $17.28
+  = −49%, all PASS, correct reuse shape in every arm.** Against LT-1's
+  "lessons alone carry ≈ nothing" baseline (warm cost MORE than cold,
+  $6.35 vs $5.91), this is night-and-day — and the carriers were
+  **artifacts + project continuity + (B1w) the skill store**, not
+  injected lessons. The artifacts-over-streams decree, confirmed
+  empirically. B1w specifics: the ~40%-conditional skill-load resolved
+  YES (2 of B1-cold's 3 auto-minted skills in `skills_manifest.jsonl`
+  at decompose), and the run out-did my ground truth — found the 1859
+  first edition on archive.org ("well-**worn**"), cross-checked the
+  1897 Gutenberg text ("well-**tried**"), and correctly identified the
+  one-word authorial revision; I re-fetched the 1859 scan and
+  confirmed it by hand.
+
+  **Warm-side findings (add to the cold five):**
+  6. **Confabulation is STICKY:** B3w re-verified URLs but republished
+     the cold arm's false "authenticated CLI fetch" note untouched —
+     reuse propagates false provenance; grounding must happen at mint.
+  7. **Claims-vs-events, 3rd instance:** B1w's "blocked sources
+     confirmed, ruled out this session" has zero matching events
+     (blocked=0, no probe command in any transcript) — inherited fact
+     dressed as fresh evidence. The family now: fake "authenticated"
+     (B3), phantom "confirmed this session" (B1w), while the DATA in
+     all cases is real.
+  8. **Silent closure-verdict loss:** R2w finished 7/7 done with NO
+     verdict (`goal_achieved None`) — `handle.py:2293-2295` swallows
+     `evaluate_closure` exceptions bare, no log line, so
+     raised-vs-None-verdict is indistinguishable post-hoc. Fix: log +
+     stamp `goal_verdict_source="closure_error"`.
+  9. **Skill dead-drop reproduced 2/2** — see the standalone entry
+     below; promoted out of this batch's findings to its own bug.
+  10. **Malformed tool-fragment-into-bash** ×2 (`{tool::` R1w,
+     `{tool:noop}` R2w) — harness-side parse leak, pattern not one-off.
+
+  **Follow-ups owed from LT-4** (each small, none started):
+  (a) skill dead-drop fix — standalone entry below; (b) closure-error
+  stamping (finding 8); (c) mint-time claim grounding for method/
+  provenance statements in artifacts — extend the claim_probe/
+  review-grounding lane to artifact claims, targeting the
+  claims-vs-events family (findings 1/6/7); (d) verdict-prior
+  recalibration for future batches — LT-1-era base rates are stale, 
+  12/12 PASS says re-anchor on LT-4; (e) container-image gap list
+  (fetch_tool.py, pdf binary, `nosuch` audit); (f) tool-fragment parse
+  leak (finding 10).
+
+- [ ] **Workers write skill files to a directory nothing reads
+  (`projects/<slug>/skills/`) — the self-improvement loop is severed at
+  the landing surface (found LT-4 2026-08-05, reproduced 2/2).** Both
+  B1 cold and B1w, told to "capture the access path as a reusable
+  skill file … future runs can load", wrote genuinely generic,
+  high-quality skill docs (`source-verification-ladder.md`,
+  `quote-verification-ladder.md`) into their project's `skills/`
+  subdir. Runtime skill surfaces are `workspace/skills/` (.md overlay)
+  and `memory/skills.jsonl` (injection store) ONLY — verified in src;
+  no code path scans project skills dirs. The auto-promotion pipeline
+  partially masks the gap (it minted 3 thin skills from B1 cold that
+  DID inject into B1w and amortized), but the worker-authored rich
+  versions are strictly better documents and are stranded. Fix
+  directions (pick one): teach workers the real surface (prompt/skill
+  the path), OR have promotion ingest project-local skill docs, OR
+  make `projects/*/skills/` a real overlay source. The two stranded
+  ladders are worth rescuing into the store when fixed.
+
 - [ ] **Arbitrary-truncation audit** (opened 2026-08-03; **Jeremy:** *"this
   was one of the first truncations early on and I've been uncomfortable
   making those trades for 'keeping the context small' by cutting so much…
