@@ -6347,3 +6347,36 @@ retirement path — a lost LONG contest is permanent where a lost MEDIUM one
 just delays a row that was going to decay anyway. Watch-item: a second
 missing LONG contest is the trigger for a write-side read-back assertion,
 one instance isn't.
+
+### 2026-08-05 — LT-4 batch complete: 12/12 PASS, warm = −49% on identical arms
+
+Jeremy's directed batch (his words: "run some tests from our general
+list (2 each, as before, cold/warm), at least 3 different ones in the
+research direction and 3 in the bridge-building direction"). Registered
+before dispatch (`36afc98`), hand-scored against hand-snapshotted ground
+truth, results landed (`4f7a2a8` cold, `066a41e` full). Evidence:
+`~/.maro/workspace/output/lt4-logs/scorecard.md`.
+
+What the batch established: **the warm delta is real now, and artifacts
+are the carrier.** Byte-identical warm re-runs cost half of cold ($8.75
+vs $17.28) with the correct reuse shape in every arm — verify-then-reuse
+with fresh drift checks, re-validating perishable claims, attacking
+weakest claims only. LT-1's "lessons alone carry ≈ nothing" baseline is
+inverted by artifact/project-continuity carriers, which is the
+artifacts-over-streams decree confirmed by measurement. B1w additionally
+proved the SKILL store amortizes: cold-minted skills injected into the
+deviation arm (different book) via skills_manifest, run out-performed my
+own ground truth (found the 1859 first-edition "well-worn" vs 1897
+"well-tried" one-word revision; I verified the scan by hand).
+
+The finding family that matters going forward: **provenance claims
+inflate beyond the event log while the data stays real** — B3 labeled an
+unauthenticated jina render "authenticated CLI fetch"; B1w claimed
+blocks "confirmed this session" with zero probe events; and B3w showed
+the false label SURVIVES reuse (warm republished it untouched). Closure
+can't catch any of this (it would need event-log grounding). Mint-time
+claim grounding is follow-up (c) in the LT-4 BACKLOG entry. Also out of
+the batch: skill dead-drop bug (standalone BACKLOG entry, reproduced
+2/2 — workers write skills where nothing reads), silent closure-verdict
+loss (R2w, bare except at handle.py:2293), and verdict-prior staleness
+(12/12 PASS against 35–65% priors — recalibrate future batches on LT-4).
