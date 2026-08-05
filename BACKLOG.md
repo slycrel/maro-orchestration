@@ -3078,7 +3078,7 @@ as-we-go via the census-tested Remaining-pieces ledger
 direction. Census follow-ups all closed — nothing from the census
 awaits Jeremy anymore except the ACTIVE work itself.
 
-### Playbook needs exit paths — alarm expiry, signal review surface, suggestion mint-form (FOUND 2026-08-02, operator surprise read)
+### Playbook needs exit paths — alarm expiry, signal review surface, suggestion mint-form (FOUND 2026-08-02, operator surprise read) — **ALL THREE SHIPPED 2026-08-04**
 
 The playbook surprise read (docs/history/2026-08-02-playbook-surprise-read.md)
 found that **nothing had ever exited** the playbook — and it's injected

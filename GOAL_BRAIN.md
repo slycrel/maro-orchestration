@@ -6277,3 +6277,50 @@ pre-chunk NOW/evolver rows honestly unjudged going forward from here.
   gate closed. Full amendment in BACKLOG LeAct entry (`015c4a3`).
   **Open for Jeremy: priority against SP / world-facts, and a go on the
   seed-reader A/B.**
+
+### 2026-08-04 — Three exit-path fixes: slug collisions, evolver write-side, playbook alarms
+Unblocked backlog work while the two LeAct decisions wait. Common shape:
+mechanisms that were documented as working and weren't, and context that
+could get in but never out.
+
+**Project slugs (`da82f1a`).** `_goal_to_slug` is the first five words, so
+"tell me about the book…" merged unrelated goals into one project and the
+second read the first's artifacts as its own prior work — invisible to the
+scavenge and provenance guards, because those files really are present.
+`resolve_project_slug` is the single mint point now; it changes nothing
+unless the slug carries no subject AND the hit project's recorded Mission
+shares no subject word with the incoming goal, which is the 3b
+"collision on subject = continuity" rule encoded rather than described.
+Measured before landing: 757 run records, 296 projects, 22 multi-goal
+projects, **0 would have split**. Two pre-existing holes closed with it
+(loop_init stamps the resolved project into run metadata; two
+`run_curation` recomputes now prefer it) — without those a disambiguated
+run's artifacts get looked for in the project it was disambiguated away
+from.
+
+**Evolver write-side (`043e4bb`).** `GUIDANCE_FORM_RULES` puts the
+2026-08-02 usually-form decree in the generator, not only in the seed the
+operator fixed by hand; it reaches tiered lessons too, since `prompt_tweak`
+mints one. And the dynamic-guardrail lane **had never loaded a row**:
+`added_at` was written ISO and compared to epoch seconds, so the TTL check
+raised and the per-row except dropped the entry whole; and `pattern` was
+the LLM's prose, which as a regex needs a step to repeat the sentence.
+Probed live: 1 row on disk, 0 loaded. Fixing only the stamp would have
+armed a lane that writes sentences into a matcher, so both went together.
+The existing test asserted the defect — it passed a regex as `suggestion`
+and checked it landed as `pattern`, green all along because nothing ever
+ran writer through reader.
+
+**Playbook exits (`69923d3`, `c1eb565`).** Held signals proposed autonomous
+work and were parked in the playbook "for human review" — a non-seed
+section, so they ranked as *learned* and outranked the curated seed in
+every director and decompose call, with no way out. They hold at the same
+gate guardrails use now (apply = accept, `--dismiss` = the exit that never
+existed), and `status`/`block_reason` joined the dataclass they had been
+written past since the gate landed, so `--list` can finally see that a row
+is held. Alarms got a key and a last-read date: same check re-read replaces
+in place, silence past `playbook.alarm_ttl_days` expires it at curation.
+Both alarm-minting scanners are templates, not LLM output, so the form
+rules couldn't reach them — reworded here. **The falsifier for "mechanism,
+not cleanup": two more calibration near-dups had accreted in the two days
+after the operator collapsed the first batch by hand.**
