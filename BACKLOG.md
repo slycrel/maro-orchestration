@@ -1091,8 +1091,18 @@ capture**, which is what makes the rung amortize instead of evaporate.
   versions are strictly better documents and are stranded. Fix
   directions (pick one): teach workers the real surface (prompt/skill
   the path), OR have promotion ingest project-local skill docs, OR
-  make `projects/*/skills/` a real overlay source. The two stranded
-  ladders are worth rescuing into the store when fixed.
+  make `projects/*/skills/` a real overlay source.
+  **Done 2026-08-05:** both stranded ladders hand-reviewed and rescued
+  into `~/.maro/workspace/skills/` (the overlay the runtime reads),
+  each with a provenance header naming this finding — reversible
+  curation, not a pipeline. **Decision owed (Jeremy): fix direction.**
+  My recommendation: **promotion-side ingest** (option 2) — at run end
+  the promotion pipeline already owns the skill store and its
+  guardrails (provisional tier, circuit breakers, dedup); scanning the
+  run's project `skills/` dir for worker-authored .md docs keeps one
+  vetted write-path, vs. option 1 (prompt-shaping, fragile) or option
+  3 (unvetted files leaking straight into the global overlay with no
+  tier/breaker protections).
 
 - [ ] **Arbitrary-truncation audit** (opened 2026-08-03; **Jeremy:** *"this
   was one of the first truncations early on and I've been uncomfortable
