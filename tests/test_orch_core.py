@@ -1095,6 +1095,31 @@ def test_ensure_project_is_idempotent(monkeypatch, tmp_path):
     assert "my item" in content
 
 
+def test_ensure_project_mints_no_risks_or_provenance_stubs(monkeypatch, tmp_path):
+    """RISKS.md/PROVENANCE.md are lazy-created on first append, never stubbed.
+
+    A "(fill in)" stub outlives any run with nothing to record, and curation
+    served one as a run deliverable (8b8671bd 2026-08-06).
+    """
+    monkeypatch.setenv("MARO_ORCH_ROOT", str(tmp_path))
+    orch.ensure_project("no-stubs", "test mission")
+    proj_dir = tmp_path / "projects" / "no-stubs"
+    assert (proj_dir / "NEXT.md").exists()
+    assert (proj_dir / "DECISIONS.md").exists()
+    assert not (proj_dir / "RISKS.md").exists()
+    assert not (proj_dir / "PROVENANCE.md").exists()
+
+    # First real write creates the file with its heading
+    orch.append_risk("no-stubs", ["something went sideways"])
+    risks = (proj_dir / "RISKS.md").read_text(encoding="utf-8")
+    assert risks.startswith("# RISKS")
+    assert "something went sideways" in risks
+    orch.append_provenance("no-stubs", ["run xyz artifact"])
+    prov = (proj_dir / "PROVENANCE.md").read_text(encoding="utf-8")
+    assert prov.startswith("# PROVENANCE")
+    assert "run xyz artifact" in prov
+
+
 def test_dir_exists_no_next_md_is_handled(monkeypatch, tmp_path):
     """Project dir exists but NEXT.md missing: append_next_items recovers gracefully."""
     monkeypatch.setenv("MARO_ORCH_ROOT", str(tmp_path))

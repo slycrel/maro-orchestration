@@ -2923,6 +2923,24 @@ and maintainable over time."** Step 1 is greenlit:
   chunk-1's input stage; it is NOT a replacement for the cheaper
   patch/diff-edit fix already noted there.
 
+### Loop lane has no risk-minting path (found via 8b8671bd stub, 2026-08-06)
+
+Jeremy spotted a served `RISKS.md` that was a 42-byte "(fill in)" stub
+(run 73426541 / 8b8671bd-warm-lichen). Shipped same day: `ensure_project`
+no longer mints RISKS/PROVENANCE stubs (lazy-create on first append was
+already the behavior of `append_section_lines`), and curation excludes
+`RISKS.md` from deliverables. The open design question underneath:
+`append_risk` fires only from the orch item lane on a *blocked* item
+(`orch.py:352`) — the agent loop writes DECISIONS at plan/post-step/
+finalize but has no path that mints run-discovered risks/unknowns into
+the project's RISKS.md, even though step results carry them (steps emit
+"UNKNOWNS RESOLVED" blocks; scope-parse failures land only in
+`build/scope-raw-FAILED.txt`). Should-we before how-would-we: decide
+whether open risks/unknowns from loop runs belong in project RISKS.md
+(would also feed the era-00 "RISKS.md as reviewer input" item above), or
+whether the closure/verdict layer is the canonical risk record and
+RISKS.md stays an orch-lane-only artifact.
+
 ## Vision / Deferred
 
 ### Invalid-assumption detection above the micro level (Jeremy seed, 2026-08-02)

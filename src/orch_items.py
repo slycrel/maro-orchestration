@@ -822,12 +822,13 @@ def ensure_project(slug: str, mission: str, priority: int = 0) -> Path:
                 "- [ ] Execute next leaf task\n"
             ),
         )
-    if not risks_path(slug).exists():
-        atomic_write(risks_path(slug), "# RISKS\n\n## Risks / Unknowns\n\n- (fill in)\n")
+    # RISKS.md / PROVENANCE.md are NOT pre-created: append_risk /
+    # append_provenance lazy-create them with their heading on first real
+    # write. A "(fill in)" stub minted here outlives any run that has
+    # nothing to record — and because it's file-modified-during-the-run,
+    # curation served the stub as a run deliverable (8b8671bd 2026-08-06).
     if not decisions_path(slug).exists():
         atomic_write(decisions_path(slug), "# DECISIONS\n\n")
         append_decision(slug, ["Project created.", f"Mission: {mission}"])
-    if not provenance_path(slug).exists():
-        atomic_write(provenance_path(slug), "# PROVENANCE\n\n- (links to key artifacts, datasets, runs)\n")
     atomic_write(priority_path(slug), f"{priority}\n")
     return pdir

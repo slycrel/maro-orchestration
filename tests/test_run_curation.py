@@ -1288,6 +1288,7 @@ def test_locate_deliverables_and_answer_excerpt(workspace):
     pdir = orch_items.projects_root() / "proj-x"
     pdir.mkdir(parents=True)
     (pdir / "NEXT.md").write_text("housekeeping — never a deliverable")
+    (pdir / "RISKS.md").write_text("# RISKS\n\n- housekeeping too (8b8671bd)")
     (pdir / "notes.json").write_text('{"scratch": 1}')
     (pdir / "FINAL_REPORT.md").write_text(
         "# Final Report\n\n1. Turn on cron\n2. Maker-checker delegation\n"
@@ -1298,6 +1299,7 @@ def test_locate_deliverables_and_answer_excerpt(workspace):
     names = [Path(d["path"]).name for d in card["deliverables"]]
     assert names[0] == "FINAL_REPORT.md"
     assert "NEXT.md" not in names
+    assert "RISKS.md" not in names
     # Top deliverable is copied into the run dir so the viz server (which
     # serves runs_root only) can serve it.
     assert (rd / "artifact" / "FINAL_REPORT.md").is_file()

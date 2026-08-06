@@ -322,7 +322,7 @@ def excerpt_result(rd: Path, meta: dict, card: dict) -> None:
 # --- deliverable location + answer synthesis (2026-07-17 delivery-loop arc) --
 
 _DELIVERABLE_EXCLUDE = {"DECISIONS.md", "NEXT.md", "PROVENANCE.md", "PRIORITY",
-                        "GOALS.md", "README.md", "step_data.json"}
+                        "RISKS.md", "GOALS.md", "README.md", "step_data.json"}
 _DELIVERABLE_NAME_HINTS = ("final_report", "report", "summary", "shortlist",
                            "findings", "answer", "recommendation", "response",
                            "verdict")
