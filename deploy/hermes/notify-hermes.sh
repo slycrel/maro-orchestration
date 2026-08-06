@@ -68,6 +68,28 @@ print(json.dumps(d, default=str))
 ' 2>/dev/null || true)"
 [ -n "$enriched" ] && payload="$enriched"
 
+# Served-artifact viewer URLs (delivery-loop decree: the user hears the
+# outcome where they asked, with a LINK to the real deliverable — not only
+# a relay's re-synthesis). card.served_artifacts is curation-ranked
+# "<run-dir>/artifact/<name>" relpaths; notify.viewer_url is the public
+# base (Caddy → viz server, which allows exactly these paths).
+enriched="$(printf '%s' "$payload" | python3 -c '
+import json, sys
+sys.path.insert(0, sys.argv[1] + "/src")
+d = json.load(sys.stdin)
+try:
+    from config import get as _get
+    base = str(_get("notify.viewer_url", "") or "").rstrip("/")
+except Exception:
+    base = ""
+rels = [r for r in d.get("served_artifacts") or [] if isinstance(r, str)]
+if base and rels:
+    d["served_artifact_urls"] = [
+        {"name": r.rsplit("/", 1)[-1], "url": f"{base}/{r}"} for r in rels]
+print(json.dumps(d, default=str))
+' "$REPO" 2>/dev/null || true)"
+[ -n "$enriched" ] && payload="$enriched"
+
 # Leg 1: ops-channel Telegram message.
 printf '%s' "$payload" | (cd "$REPO" && PYTHONPATH=src python3 -m notify_telegram)
 ok_telegram=$?

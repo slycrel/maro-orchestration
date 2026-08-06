@@ -1606,3 +1606,80 @@ class TestDeadDropIngest:
         meta = _json.loads((rd / "metadata.json").read_text())
 
         assert target in _lite_candidate_files(rd, meta)
+
+
+def test_primary_loop_deliverable_outranks_posthoc_audit_note(workspace):
+    """83a2c805: the audit loop's AUDIT_NOTE outranked steal_list.md on
+    recency and shipped as the answer. Files written after the first
+    non-initial loop started rank below primary-loop files — unless the
+    post-hoc file carries a deliverable name hint (a recovery loop that
+    genuinely finishes the work still wins with FINAL_*; calm-echo)."""
+    import os
+    import time
+
+    import orch_items
+
+    create_run_dir(
+        "h00ploop", prompt="steal what's useful", lane="agenda",
+        model="cheap",
+        extra_metadata={
+            "project": "proj-ploop", "goal_achieved": True,
+            "loops": [
+                {"loop_id": "aaa", "loop_reason": "initial",
+                 "created_at": "2026-08-05T17:48:00+00:00"},
+                {"loop_id": "bbb", "loop_reason": "closure_restart",
+                 "created_at": "2026-08-06T17:00:00+00:00"},
+            ],
+        },
+    )
+    pdir = orch_items.projects_root() / "proj-ploop"
+    pdir.mkdir(parents=True)
+    primary = pdir / "steal_list.md"
+    primary.write_text("# Steal list — the real deliverable\n")
+    audit = pdir / "AUDIT_NOTE.md"
+    audit.write_text("# Audit note from the recovery loop\n")
+    now = time.time()
+    os.utime(primary, (now + 1, now + 1))
+    # Audit note is NEWER and lands after the recovery loop's start.
+    from datetime import datetime
+    recovery = datetime.fromisoformat("2026-08-06T17:00:00+00:00").timestamp()
+    os.utime(audit, (recovery + 60, recovery + 60))
+    finalize_run("h00ploop", status="done")
+    card = curate_run("h00ploop")
+
+    names = [Path(d["path"]).name for d in card["deliverables"]]
+    assert names[0] == "steal_list.md"
+    assert card["deliverable_link_path"].endswith("/artifact/steal_list.md")
+
+
+def test_truncated_llm_answer_preserves_full_copy(workspace, monkeypatch):
+    """The 900-char card trim must not destroy the only copy of the LLM
+    synthesis (artifacts-over-streams): the full text lands in
+    <run>/artifact/ANSWER.md, which the viz allowlist already serves."""
+    import run_curation as rc
+
+    long_answer = "\n".join(f"- finding {i}: " + "x" * 40 for i in range(30))
+    monkeypatch.setattr(rc, "_llm_answer", lambda *a, **k: long_answer)
+    import config as _config
+    monkeypatch.setattr(_config, "get",
+                        lambda key, default=None: True
+                        if key == "curation.answer_synthesis"
+                        else default)
+
+    rd = create_run_dir(
+        "h00full", prompt="summarize the findings", lane="agenda",
+        model="cheap",
+        extra_metadata={"project": "proj-full", "goal_achieved": True},
+    )
+    import orch_items
+    pdir = orch_items.projects_root() / "proj-full"
+    pdir.mkdir(parents=True)
+    (pdir / "FINAL_REPORT.md").write_text("# Report\n\nThirty findings.\n")
+    finalize_run("h00full", status="done")
+    card = curate_run("h00full")
+
+    assert card["answer_source"] == "llm"
+    assert card["answer_truncated"] is True
+    assert len(card["answer_summary"]) <= 900
+    preserved = (rd / "artifact" / "ANSWER.md").read_text()
+    assert preserved == long_answer

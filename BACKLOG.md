@@ -1605,16 +1605,21 @@ first-wins on basename collision, `card.served_artifacts` in rank
 order) and the runs index links every `<run>/artifact/*` servable —
 the viz allowlist already permitted the path; nothing linked it.
 83a2c805 backfilled by hand (steal_list + evidence JSONs served,
-verified 200 via the live server). **Remaining, cheap, in order:**
-(a) event-payload rider — include public served-artifact URLs
-(`https://maro.feifdom.com/<run>/artifact/<name>`) in the completion
-event so the Poe message links the deliverable instead of relaying a
-lossy re-synthesis (delivery-loop decree: the user hears the outcome
-where they asked); (b) top-pick ranking — primary-loop deliverables
-should outrank post-hoc audit/recovery-loop notes; needs file→loop
-attribution (mtime vs loop windows is probably enough); (c)
-`answer_truncated: true` on 83a2c805 — check the storage cap isn't
-decapitating good summaries at the card layer.
+verified 200 via the live server). ~~Remaining, cheap, in order~~ **ALL THREE SHIPPED 2026-08-06:**
+(a) event-payload rider — notify-hermes.sh enriches the completion
+event with `served_artifact_urls` (card.served_artifacts ×
+notify.viewer_url) and the mini2 inbox prompt tells Hermes to link the
+deliverable (repo copy scp-installed to mini2:bin/maro-inbox.sh);
+(b) top-pick ranking — `_rank` gains a post_hoc term AFTER the
+name-hint term: files written after the first non-initial loop started
+lose to primary-loop files, hinted recovery deliverables still win
+(calm-echo stays fixed; named limitation: unhinted recovery
+deliverables lose to primary prose — acceptable until a specimen);
+(c) truncation-cap verdict — it's a flagged line-boundary trim, not
+decapitation, BUT the 900-char cap destroyed the only copy of the
+LLM synthesis: full text now lands in `<run>/artifact/ANSWER.md`
+(served + index-linked via straggler scan). Pins for (b) and (c) in
+test_run_curation.py.
 
 **2026-08-06 follow-through (Jeremy's nits on the run page):** artifacts
 now link IN-ROW at the step whose call record shows the Write/Edit

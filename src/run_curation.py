@@ -323,6 +323,15 @@ _DELIVERABLE_NAME_HINTS = ("final_report", "report", "summary", "shortlist",
 _SERVED_ARTIFACTS_CAP = 12
 
 
+def _parse_ts(iso: str) -> Optional[float]:
+    """ISO timestamp → epoch seconds (None on any parse failure)."""
+    try:
+        from datetime import datetime
+        return datetime.fromisoformat(iso).timestamp()
+    except Exception:
+        return None
+
+
 def _project_dir_for(meta: dict) -> Optional[Path]:
     """Resolve the project dir a run wrote into, '' project → None."""
     slug = str(meta.get("project") or "").strip()
@@ -386,6 +395,26 @@ def locate_deliverables(rd: Path, meta: dict, card: dict) -> None:
     if not candidates:
         return
 
+    # Post-hoc loop boundary: files written after the first non-initial
+    # loop started (closure_restart / audit / recovery) are that loop's
+    # meta-artifacts, not the goal's deliverable — 83a2c805 (2026-08-05):
+    # the audit loop's AUDIT_NOTE outranked steal_list.md on recency and
+    # shipped as the answer. Applied AFTER the name-hint term, so a
+    # recovery loop that genuinely finishes the work still wins with a
+    # FINAL_*-shaped name (the calm-echo inverse stays fixed). Named
+    # limitation: an unhinted recovery-produced deliverable loses to
+    # primary-loop prose — acceptable until a specimen says otherwise.
+    recovery_start = None
+    try:
+        for entry in meta.get("loops") or []:
+            if (isinstance(entry, dict)
+                    and str(entry.get("loop_reason") or "") not in ("", "initial")):
+                ts = _parse_ts(str(entry.get("created_at") or ""))
+                if ts is not None and (recovery_start is None or ts < recovery_start):
+                    recovery_start = ts
+    except Exception:
+        recovery_start = None
+
     def _rank(p: Path):
         name = p.name.lower()
         hinted = any(h in name for h in _DELIVERABLE_NAME_HINTS)
@@ -395,11 +424,12 @@ def locate_deliverables(rd: Path, meta: dict, card: dict) -> None:
             size, mtime = st.st_size, st.st_mtime
         except OSError:
             size, mtime = 0, 0.0
+        post_hoc = bool(recovery_start is not None and mtime >= recovery_start)
         # Recency before size: the run's final synthesis lands LAST, not
         # largest. calm-echo 2026-07-17: an early wrong draft (5.3KB,
         # minute 4) outranked the verified FINAL_RESPONSE.md (4.4KB,
         # minute 17) on size alone and shipped as the answer.
-        return (not hinted, not is_prose, -mtime, -size)
+        return (not hinted, not is_prose, post_hoc, -mtime, -size)
 
     candidates.sort(key=_rank)
     card["deliverables"] = [
@@ -564,6 +594,16 @@ def synthesize_answer(rd: Path, meta: dict, card: dict) -> None:
                 # broken — and FLAG it: a silently capped list reads as
                 # "that's everything" (live: 3 of 5 shortlist items shown,
                 # no hint the rest existed). Renderers surface the flag.
+                # The cap must not destroy the only copy (artifacts-over-
+                # streams): the full synthesis lands in <run>/artifact/
+                # ANSWER.md, which the viz server serves and the runs
+                # index links (straggler scan — no card key needed).
+                try:
+                    art = rd / "artifact"
+                    art.mkdir(parents=True, exist_ok=True)
+                    (art / "ANSWER.md").write_text(summary, encoding="utf-8")
+                except OSError:
+                    log.debug("full-answer preservation failed", exc_info=True)
                 summary = summary[:900].rsplit("\n", 1)[0].rstrip()
                 card["answer_truncated"] = True
             card["answer_summary"] = summary
