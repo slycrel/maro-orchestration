@@ -18,8 +18,32 @@ from typing import Any, Dict, List, Optional
 from loop_types import LoopContext, LoopResult, StepOutcome, _orch, _project_dir_root
 from loop_artifacts import _write_loop_log, _write_plan_manifest
 from loop_report import write_run_report as _write_run_report, write_runs_index as _write_runs_index
+from context_budget import ContextBudget, STORE_ENTRY_CAP, STORE_TOTAL_BUDGET
 
 log = logging.getLogger("maro.loop")
+
+
+def _step_evidence(step_outcomes, *, total_budget=None, entry_cap=None) -> str:
+    """What the steps actually produced, bounded and honest about the bound.
+
+    Feeds lesson extraction. Oldest-first eviction and the per-entry cap are
+    announced in the rendered text, so an extractor can tell a whole run from
+    a trimmed one instead of silently generalizing from a fragment.
+    """
+    kw = {}
+    if total_budget is not None:
+        kw["total_budget"] = total_budget
+    if entry_cap is not None:
+        kw["entry_cap"] = entry_cap
+    cb = ContextBudget(**kw)
+    for s in step_outcomes or []:
+        text = (getattr(s, "text", "") or "").strip()
+        result = (getattr(s, "result", "") or "").strip()
+        status = getattr(s, "status", "") or "?"
+        if not (text or result):
+            continue
+        cb.add(f"Step {getattr(s, 'index', '?')} [{status}] {text}\n{result}".strip())
+    return cb.render()
 
 def _auto_prune_days() -> float:
     """User-level retention knob (`artifacts.auto_prune_days`, default 0 =
@@ -635,14 +659,34 @@ def _finalize_loop(
     try:
         from memory import reflect_and_record, record_step_trace
         done_steps = [s for s in step_outcomes if s.status == "done"]
-        summary = (
-            f"Completed {len(done_steps)}/{len(step_outcomes)} steps. "
-            + (step_outcomes[-1].result[:80] if step_outcomes and loop_status == "done" else "")
+        # Lesson evidence (2026-08-06 truncation audit). This used to be a step
+        # count plus `step_outcomes[-1].result[:80]` — and that string is the
+        # ONLY evidence the lesson extractor ever sees, on both the finalize
+        # path and the post-verdict deferred path, because full step results
+        # are not persisted anywhere (runs/*/build/loop-*.json keeps
+        # `result_length`, not the text). Measured over 1,493 ledger rows:
+        # 90% matched that template, median length 70 chars, and 80 chars shows
+        # a median 7.1% of the last step's result — mid-word, and nothing at
+        # all from the other N-1 steps. Every lesson this system has learned
+        # from a completed run was extracted from that.
+        #
+        # Two consumers, two budgets, because they are priced differently:
+        #   evidence — prompt-only, free, wide (see context_budget defaults)
+        #   summary  — persisted + re-read forever, so STORE-grade
+        # The deferred extractor has only the row, so the stored one has to
+        # carry real evidence too; it is not merely a display string.
+        _head = f"Completed {len(done_steps)}/{len(step_outcomes)} steps."
+        summary = _head + " " + _step_evidence(
+            step_outcomes,
+            total_budget=STORE_TOTAL_BUDGET,
+            entry_cap=STORE_ENTRY_CAP,
         )
+        lesson_evidence = _head + "\n\n" + _step_evidence(step_outcomes)
         _outcome_rec = reflect_and_record(
             goal=goal,
             status=loop_status,
             result_summary=summary,
+            lesson_evidence=lesson_evidence,
             task_type="agenda",
             project=project,
             tokens_in=total_tokens_in,

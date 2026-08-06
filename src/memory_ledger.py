@@ -612,6 +612,18 @@ def record_outcome(
     return outcome
 
 
+_DAILY_LOG_SUMMARY_CUT = 400
+
+
+def _daily_log_summary(summary: str) -> str:
+    """One-glance version of a stored summary, honest when it trims."""
+    summary = str(summary or "").strip()
+    if len(summary) <= _DAILY_LOG_SUMMARY_CUT:
+        return summary
+    return (f"{summary[:_DAILY_LOG_SUMMARY_CUT]}… "
+            f"[{len(summary)} chars total; full text in outcomes.jsonl]")
+
+
 def _append_daily_log(outcome: Outcome):
     """Append a human-readable entry to today's daily log."""
     path = _daily_path()
@@ -629,7 +641,11 @@ def _append_daily_log(outcome: Outcome):
         f"\n## [{outcome.recorded_at[:10]}] {status_icon} {outcome.goal[:80]}\n"
         f"- **Status**: {status_str}\n"
         f"- **Type**: {outcome.task_type}\n"
-        f"- **Summary**: {outcome.summary}\n"
+        # DISPLAY, so it gets a display bound: since 2026-08-06 the stored
+        # summary carries real per-step evidence for the lesson extractor
+        # (loop_finalize._step_evidence), which is the right size for a prompt
+        # and the wrong size for a human skimming a day's runs.
+        f"- **Summary**: {_daily_log_summary(outcome.summary)}\n"
         f"- **Tokens**: {tokens} in {outcome.elapsed_ms}ms{cost_str}\n"
     )
     if outcome.lessons:

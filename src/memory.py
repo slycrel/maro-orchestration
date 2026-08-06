@@ -217,6 +217,13 @@ _LESSON_FORM_RULES = textwrap.dedent("""\
 """).strip()
 
 
+# Backstop on the evidence block handed to lesson extraction. Set ABOVE the
+# ContextBudget that builds the block (context_budget.DEFAULT_TOTAL_BUDGET =
+# 24,000) so the budget stays the thing that decides, and this only catches a
+# caller that passes something unbudgeted. It marks when it bites.
+_LESSON_EVIDENCE_CUT = 24000
+
+
 _REFLECT_SYSTEM = (textwrap.dedent("""\
     You are a meta-learning agent. After each completed run, extract durable lessons.
     A lesson is a generalizable insight that would improve future similar runs.
@@ -283,6 +290,7 @@ def extract_lessons_via_llm(
     return_typed: bool = False,
     goal_achieved: Optional[bool] = None,
     raise_on_failure: bool = False,
+    lesson_evidence: str = "",
 ) -> "List":
     """Use LLM to extract generalizable lessons from a completed run.
 
@@ -294,6 +302,12 @@ def extract_lessons_via_llm(
     Args:
         return_typed: If True, return List[Tuple[str, str]] (lesson_text, lesson_type).
                       If False (default), return List[str] for backward compat.
+        lesson_evidence: Wide per-step evidence, when the caller has the step
+                      outcomes in hand (loop_finalize does; the deferred path,
+                      which reads a stored row back, does not). Prompt-only and
+                      never persisted, so it is budgeted in tokens rather than
+                      disk — see loop_finalize._step_evidence. Falls back to
+                      result_summary when absent.
 
     Returns list of lesson strings (or typed tuples). Falls back to empty list on failure.
     """
@@ -334,11 +348,23 @@ def extract_lessons_via_llm(
         outcome_desc += " — but the goal was judged NOT achieved (treat this as a failure)"
     elif goal_achieved is True:
         outcome_desc += " — goal verified achieved"
+    # Evidence, widest available. This was `result_summary[:500]` — a cut that
+    # measured as pure decoration (0 of 1,493 stored summaries ever reached it,
+    # median length 70) because the real loss happened upstream, where the
+    # summary was built from one step's first 80 characters. Now that callers
+    # can pass a real evidence block, this backstop would start binding, so it
+    # is set above the ContextBudget that produces the block and it SAYS when
+    # it bites rather than trimming in silence.
+    _evidence = (lesson_evidence or result_summary or "").strip()
+    if len(_evidence) > _LESSON_EVIDENCE_CUT:
+        _evidence = (f"{_evidence[:_LESSON_EVIDENCE_CUT]}\n"
+                     f"… [evidence truncated: first {_LESSON_EVIDENCE_CUT} of "
+                     f"{len(_evidence)} characters]")
     user_msg = (
         f"Task type: {task_type}\n"
         f"Goal: {goal}\n"
         f"Outcome: {outcome_desc}\n"
-        f"Summary: {result_summary[:500]}\n\n"
+        f"What the run did:\n{_evidence}\n\n"
         "Extract 1-3 generalizable lessons as typed JSON objects."
     )
 
@@ -532,16 +558,22 @@ def extract_step_lessons(
                  "(plan order)", len(verified), _STEP_LESSON_MAX_STEPS)
         verified = verified[:_STEP_LESSON_MAX_STEPS]
 
-    step_lines = []
+    # The verified result IS the evidence for a method lesson, so it gets a
+    # budget rather than a fixed cut. The old `result[:300]` left 8.7% of step
+    # results intact (measured over 1,851 recorded steps: median 1,180 chars,
+    # p90 2,247); the step TEXT at 200 was already fine at 90.8% intact and
+    # stays where it is. Eviction and per-entry capping announce themselves.
+    from context_budget import ContextBudget
+    _budget = ContextBudget()
     for s in verified:
         text = (getattr(s, "text", "") or "")[:200]
-        result = (getattr(s, "result", "") or "")[:300]
-        step_lines.append(f"- step: {text}\n  verified result: {result}")
+        result = (getattr(s, "result", "") or "")
+        _budget.add(f"- step: {text}\n  verified result: {result}")
 
     user_msg = (
         f"Task type: {task_type}\n"
         f"High-level goal (NOT achieved): {goal[:300]}\n\n"
-        f"Individually-verified steps:\n" + "\n".join(step_lines) + "\n\n"
+        f"Individually-verified steps:\n" + _budget.render() + "\n\n"
         "Extract 0-3 step-scoped method lessons as typed JSON objects."
     )
 
@@ -629,6 +661,7 @@ def reflect_and_record(
     stop_verdict: str = "",
     stop_evidence: str = "",
     pause_reason: str = "",
+    lesson_evidence: str = "",
 ) -> Outcome:
     """Reflect on a completed run and record the outcome + lessons.
 
@@ -671,6 +704,7 @@ def reflect_and_record(
             goal=goal,
             status=status,
             result_summary=result_summary,
+            lesson_evidence=lesson_evidence,
             task_type=task_type,
             adapter=adapter,
             dry_run=dry_run,

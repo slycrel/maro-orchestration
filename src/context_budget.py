@@ -43,6 +43,33 @@ DEFAULT_ENTRY_CAP = 4000
 # distribution, not from taste — the point of the audit.
 DEFAULT_TOTAL_BUDGET = 24000
 
+# ---------------------------------------------------------------------------
+# STORE profile — for evidence that gets PERSISTED, not just prompted.
+#
+# The defaults above are priced in tokens, which are cheap and per-call. These
+# are priced in disk, which is forever and re-read on every load. The outcomes
+# ledger is the live case: `memory_ledger.load_outcomes` parses the WHOLE file
+# to return the last 20 rows, so every byte added to a row is paid again on
+# every read, for the life of the file.
+#
+# Breadth over depth, deliberately. The consumer is a later extractor asking
+# "what did this run DO" — knowing all six steps at 500 chars each beats
+# knowing two of them at 800. (Depth is already covered at finalize time,
+# where the wide prompt-grade view runs and its lessons land on the row; the
+# stored copy exists for the deferred post-verdict re-extraction, which has
+# nothing else to read.) So: a total that fits a median run WHOLE — 6 steps,
+# median step result 1,180 chars — and a per-entry cap that makes that fit.
+#
+# The trade, priced 2026-08-06 rather than guessed at: 1,493 rows / 868 KB
+# today (~580 B per row), full parse 12 ms. At ~3 KB per row the ledger goes
+# to ~4.3 MB and the parse to ~62 ms — and `load_outcomes` parses the WHOLE
+# file to return the last 20, so that cost is paid on every call. 50 ms
+# against a run that costs dollars and minutes is worth 17x the evidence.
+# What eventually pays it down is `compress_old_outcomes` (still on the STORE
+# worklist), not a tighter cut here.
+STORE_ENTRY_CAP = 500
+STORE_TOTAL_BUDGET = 4000
+
 
 class ContextBudget:
     """Accumulate step results for a prompt, bounded and honest about it.
