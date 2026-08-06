@@ -445,10 +445,12 @@ def _cmd_outcomes(args: argparse.Namespace) -> int:
             from dataclasses import asdict
             print(json.dumps([asdict(l) for l in lessons], indent=2))
         else:
+            from mint_grounding import grounding_summary
             for l in lessons:
                 _q = (" [QUARANTINED: prompt-derived]"
                       if getattr(l, "minted_from", "") == "prompt" else "")
-                print(f"[{l.task_type:8s}] conf={l.confidence:.1f} {l.lesson[:80]}{_q}")
+                _g = grounding_summary(getattr(l, "grounding", None))
+                print(f"[{l.task_type:8s}] conf={l.confidence:.1f} {l.lesson[:80]}{_q}{_g}")
         return 0
     return fail("E_INTERNAL", "unknown command")
 
@@ -1253,6 +1255,7 @@ def _cmd_memory(args: argparse.Namespace) -> int:
             print(json.dumps([dataclasses.asdict(l) for l in lessons], indent=2))
         else:
             print(f"tier={tier} count={len(lessons)}")
+            from mint_grounding import grounding_summary
             for l in lessons:
                 icon = "✓" if l.outcome == "done" else "✗"
                 # Quarantined/contested rows stay visible in readouts by
@@ -1260,7 +1263,8 @@ def _cmd_memory(args: argparse.Namespace) -> int:
                 _q = " [QUARANTINED: prompt-derived]" if getattr(l, "minted_from", "") == "prompt" else ""
                 _c = (f" [CONTESTED: {l.contested.get('source', '?')}]"
                       if getattr(l, "contested", None) else "")
-                print(f"  [{l.lesson_id}] score={l.score:.2f} sessions={l.sessions_validated} {icon} [{l.task_type}] {l.lesson[:80]}{_q}{_c}")
+                _g = grounding_summary(getattr(l, "grounding", None))
+                print(f"  [{l.lesson_id}] score={l.score:.2f} sessions={l.sessions_validated} {icon} [{l.task_type}] {l.lesson[:80]}{_q}{_c}{_g}")
     elif memory_cmd == "record":
         tier = getattr(args, "tier", "medium")
         task_type = getattr(args, "task_type", "general")

@@ -138,6 +138,13 @@ class TieredLesson:
     # Sticky by design — no un-contest verb until a lesson-refight slice
     # exists (mirrors refight_rule). Old rows deserialize to {}.
     contested: Dict[str, Any] = field(default_factory=dict)
+    # Mint-time grounding (2026-08-06, mint_grounding.py): receipt stamps
+    # joining this lesson's method claims against the minting run's tool
+    # events — [{claim, family, status: supported|unsupported|unprobed,
+    # receipts, note?}]. Annotation only, fail-open: consumers weigh it
+    # (injection marker, seed-reader skip); nothing here blocks a mint.
+    # Empty = no parseable claims OR minted before grounding existed.
+    grounding: List[Dict[str, Any]] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -277,6 +284,7 @@ def record_tiered_lesson(
     provisional: bool = False,
     minted_from: str = "",
     lesson_id: str = "",
+    grounding: Optional[List[Dict[str, Any]]] = None,
 ) -> TieredLesson:
     """Record a new lesson at the given tier.
 
@@ -305,6 +313,11 @@ def record_tiered_lesson(
         prompt-derived recording that dedup-matches an existing lesson is
         IGNORED (no reinforcement, no confirmation, no flag-clearing):
         instruction text must not move persistent state.
+    Mint-time grounding (2026-08-06): ``grounding`` carries the caller's
+        claim-receipt stamps (mint_grounding.ground_lessons_for_run).
+        Fresh mints only — the reinforce path returns the existing row
+        with its original stamps, whose receipts point at the run that
+        actually minted the text.
     """
     import uuid
 
@@ -431,6 +444,7 @@ def record_tiered_lesson(
             novelty=round(novelty, 4),
             provisional=provisional,
             minted_from=minted_from,
+            grounding=grounding or [],
         )
         _append_tiered_lesson(tl, tier=tier)
         if minted_from == "prompt":
@@ -1458,11 +1472,17 @@ def inject_tiered_lessons(
         long_candidates = _ranker(goal, long_candidates, top_k=max_long)
     long_lessons = long_candidates[:max_long]
 
+    # Mint-grounding display (design §3 slice 1): an unsupported method
+    # claim rides into the prompt WITH its warning — fail-open, the
+    # consumer weighs it.
+    from mint_grounding import grounding_marker
+
     if long_lessons:
         parts.append("### Long-Term Lessons (always apply)")
         for l in long_lessons:
             icon = "✓" if l.outcome == "done" else "✗"
-            parts.append(f"- {icon} {l.lesson}")
+            parts.append(f"- {icon} {l.lesson}"
+                         f"{grounding_marker(getattr(l, 'grounding', None))}")
             applied_ids.append((l.lesson_id, MemoryTier.LONG))
 
     medium_candidates = [t for t in load_tiered_lessons(
@@ -1478,7 +1498,9 @@ def inject_tiered_lessons(
         parts.append("### Medium-Term Lessons (apply if relevant)")
         for l in medium_lessons:
             icon = "✓" if l.outcome == "done" else "✗"
-            parts.append(f"- {icon} {l.lesson} [score={l.score:.2f}]")
+            parts.append(f"- {icon} {l.lesson}"
+                         f"{grounding_marker(getattr(l, 'grounding', None))}"
+                         f" [score={l.score:.2f}]")
             applied_ids.append((l.lesson_id, MemoryTier.MEDIUM))
 
     if include_short and _SHORT_TERM:

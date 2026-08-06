@@ -202,6 +202,11 @@ class Lesson:
     # lesson_id, so knowledge_web.contest_lesson stamps both stores.
     # Absent key stays off the row (_verdict_row discipline).
     contested: Dict[str, Any] = field(default_factory=dict)
+    # Mint-time grounding (2026-08-06, mint_grounding.py): claim-receipt
+    # stamps from the minting run's tool events, mirroring the tiered
+    # TieredLesson.grounding field (dual-written rows carry the same
+    # stamps). Absent key stays off the row (_verdict_row discipline).
+    grounding: List[Dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -473,6 +478,8 @@ def _verdict_row(obj: Any) -> Dict[str, Any]:
         row.pop("minted_from")
     if "contested" in row and not row["contested"]:
         row.pop("contested")
+    if "grounding" in row and not row["grounding"]:
+        row.pop("grounding")
     return row
 
 
@@ -485,6 +492,7 @@ def record_outcome(
     project: Optional[str] = None,
     lessons: Optional[List[str]] = None,
     lesson_ids: Optional[List[str]] = None,
+    lesson_groundings: Optional[List[List[Dict[str, Any]]]] = None,
     tokens_in: int = 0,
     tokens_out: int = 0,
     elapsed_ms: int = 0,
@@ -596,6 +604,11 @@ def record_outcome(
             _shared = ""
             if lesson_ids and _idx < len(lesson_ids):
                 _shared = str(lesson_ids[_idx] or "")
+            # Mint-grounding stamps ride parallel to lesson_ids (same
+            # index contract); absent/short list → unstamped, as before.
+            _ground = None
+            if lesson_groundings and _idx < len(lesson_groundings):
+                _ground = lesson_groundings[_idx]
             _store_lesson(
                 task_type=task_type,
                 outcome=status,
@@ -604,6 +617,7 @@ def record_outcome(
                 goal_achieved=goal_achieved,
                 goal_verdict_source=goal_verdict_source,
                 lesson_id=_shared,
+                grounding=_ground,
             )
 
     # Update MEMORY.md index
@@ -1248,6 +1262,7 @@ def _store_lesson(
     goal_verdict_source: str = "",
     minted_from: str = "",
     lesson_id: str = "",
+    grounding: Optional[List[Dict[str, Any]]] = None,
 ) -> Lesson:
     """Append a lesson to the lessons ledger, or reinforce existing near-duplicate.
 
@@ -1343,6 +1358,9 @@ def _store_lesson(
         goal_achieved=goal_achieved,
         goal_verdict_source=goal_verdict_source,
         minted_from=minted_from,
+        # Fresh mints only — the reinforce paths above return the existing
+        # row, whose stamps point at the run that actually minted it.
+        grounding=grounding or [],
     )
     if minted_from == "prompt":
         log.info("flat lesson %s quarantined at mint (prompt-derived): %s",

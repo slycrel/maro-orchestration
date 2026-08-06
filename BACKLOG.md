@@ -1088,9 +1088,15 @@ capture**, which is what makes the rung amortize instead of evaporate.
   stays absent: not-judged convention preserved); pin
   `test_handle.py::TestClosureErrorIsStamped`, verified red-then-green;
   (c) mint-time claim grounding for method/
-  provenance statements in artifacts — extend the claim_probe/
-  review-grounding lane to artifact claims, targeting the
-  claims-vs-events family (findings 1/6/7); (d) verdict-prior
+  provenance statements in artifacts — ~~extend the claim_probe/
+  review-grounding lane to artifact claims~~ **slice 1 SHIPPED
+  2026-08-06**: `src/mint_grounding.py` stamps lesson mints with
+  event-log receipts (supported/unsupported/unprobed) on both stores +
+  both extraction paths; injection surfaces mark unsupported claims,
+  seed-reader skips them (design + falsifiers:
+  `docs/MINT_GROUNDING_DESIGN.md`; slices 2 skill-mint / 3
+  republish-gate still open, gate = the only fail-closed point);
+  (d) verdict-prior
   recalibration for future batches — LT-1-era base rates are stale, 
   12/12 PASS says re-anchor on LT-4; (e) container-image gap list
   (fetch_tool.py, pdf binary, `nosuch` audit); (f) tool-fragment parse

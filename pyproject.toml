@@ -200,6 +200,7 @@ py-modules = [
     "memory_quality",
     "memory_sqlite",
     "metrics",
+    "mint_grounding",
     "mission",
     "navigator",
     "navigator_prompt",

@@ -64,10 +64,21 @@ events that already happened). Shared vocabulary, different verbs.
 
 ## 3. Slices
 
-1. **Lesson mint** — `extract_lessons_via_llm` output gets grounding
-   stamps before `reflect_and_record` persists (rides the existing
-   `lesson_provenance.minted_from` precedent). Seed-reader and
-   injection surfaces display receipts inline.
+1. **Lesson mint** — **SHIPPED 2026-08-06** (`src/mint_grounding.py`;
+   pins in `tests/test_mint_grounding.py`). Both extraction paths stamp
+   (finalize-time `reflect_and_record` AND the deferred lane organic
+   runs actually take); stamps ride both stores on the UU-4 shared-id
+   rows (`TieredLesson.grounding` + flat `Lesson.grounding`,
+   absent-key discipline). Consumers: both injection surfaces render a
+   marker for unsupported claims; the seed-reader skips
+   unsupported-claim rows as style exemplars (same skip family as
+   quarantined/contested). Live validation during the build: grounding
+   LT-5's own step-8 specimen text against c3c58c40's real event log
+   produced auth=unsupported + fetch=supported with the exact
+   syndication-CDN receipt (`call-00010#tool_events[8]`) hand-traced
+   during LT-5 — and the first lexicon draft marked auth supported off
+   `token=a` (a dummy public URL parameter), so credential markers now
+   require credential-shaped values; that false-support is pinned.
 2. **Skill mint** — skills-lite + provisional mints: method claims in
    the skill body vs the minting run's tool events. Stamp travels in
    frontmatter (`grounding:` block) + companion Skill record.

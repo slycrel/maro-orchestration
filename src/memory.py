@@ -174,6 +174,10 @@ def inject_lessons_for_task(task_type: str, goal: str, max_lessons: int = 3) -> 
     from age_stamp import age_stamps_enabled, age_suffix
     _stamp_ages = age_stamps_enabled()
 
+    # Mint-grounding display (MINT_GROUNDING_DESIGN §3 slice 1): an
+    # unsupported method claim rides into the prompt WITH its warning.
+    from mint_grounding import grounding_marker
+
     lines = ["## Lessons from Prior Runs (apply these)"]
     for l in lessons:
         # Verdict-preferred (SF-2): a lesson from a run judged goal-not-achieved
@@ -181,7 +185,8 @@ def inject_lessons_for_task(task_type: str, goal: str, max_lessons: int = 3) -> 
         icon = "✗" if getattr(l, "goal_achieved", None) is False else ("✓" if l.outcome == "done" else "✗")
         _suffix = (age_suffix(getattr(l, "recorded_at", "") or "")
                    if _stamp_ages else "")
-        lines.append(f"- {icon} {l.lesson}{_suffix}")
+        _gmark = grounding_marker(getattr(l, "grounding", None))
+        lines.append(f"- {icon} {l.lesson}{_gmark}{_suffix}")
     result = "\n".join(lines)
     if len(result) > _MAX_LESSON_INJECT_CHARS:
         result = result[:_MAX_LESSON_INJECT_CHARS].rsplit("\n", 1)[0]
@@ -259,14 +264,19 @@ def _seed_lesson_block(task_type: str) -> str:
     exact style the provenance gate exists to catch (adversarial review
     2026-07-29). Skips contested rows for the same reason — an
     operator-refuted lesson is the last thing to hold up as the style model
-    (L4 is contested LONG and would otherwise qualify here). Returns ""
-    when no clean seed exists."""
+    (L4 is contested LONG and would otherwise qualify here). Skips rows
+    with mint-grounding claims their own run's event log couldn't support —
+    a lesson carrying unsupported provenance must not be the style exemplar
+    (MINT_GROUNDING_DESIGN §3 slice 1). Returns "" when no clean seed
+    exists."""
     try:
+        from mint_grounding import has_unsupported
         seed_lessons = load_tiered_lessons(
             MemoryTier.LONG, task_type=task_type, min_score=0.7, limit=3)
         seed_lessons = [s for s in seed_lessons
                         if getattr(s, "minted_from", "") != "prompt"
-                        and not getattr(s, "contested", None)]
+                        and not getattr(s, "contested", None)
+                        and not has_unsupported(getattr(s, "grounding", None))]
         if not seed_lessons:
             return ""
         seed = seed_lessons[0]
@@ -726,9 +736,21 @@ def reflect_and_record(
     # 2026-08-01 warm-arm forensics a wrong conclusion). Fresh mints only:
     # a near-duplicate reinforce returns the existing row's id, which wins.
     lesson_shared_ids: List[str] = []
+    # Mint-time grounding (MINT_GROUNDING_DESIGN §3 slice 1): join each
+    # lesson's method claims against the minting run's tool events and
+    # stamp receipts on both store rows. Fail-open — any failure yields
+    # empty stamp lists and the mint proceeds exactly as before.
+    lesson_groundings: List[list] = []
+    if not dry_run and typed_lessons:
+        try:
+            from mint_grounding import ground_lessons_for_run
+            lesson_groundings = ground_lessons_for_run(
+                [t for t, _ in typed_lessons], loop_id or handle_id)
+        except Exception:
+            lesson_groundings = []
     if not dry_run and typed_lessons:
         import uuid as _uuid
-        for lesson_text, lesson_type in typed_lessons:
+        for _l_idx, (lesson_text, lesson_type) in enumerate(typed_lessons):
             _shared_id = str(_uuid.uuid4())[:8]
             try:
                 recorded = record_tiered_lesson(
@@ -744,6 +766,8 @@ def reflect_and_record(
                     # even though the originating run was known — the Phase 60
                     # citation penalty never had anything to reward.
                     evidence_sources=[f"loop:{loop_id}"] if loop_id else [],
+                    grounding=(lesson_groundings[_l_idx]
+                               if _l_idx < len(lesson_groundings) else None),
                 )
                 if getattr(recorded, "lesson_id", "") == "rejected":
                     tiered_failed += 1
@@ -764,6 +788,7 @@ def reflect_and_record(
         project=project,
         lessons=lessons,
         lesson_ids=lesson_shared_ids or None,
+        lesson_groundings=lesson_groundings or None,
         tokens_in=tokens_in,
         tokens_out=tokens_out,
         elapsed_ms=elapsed_ms,
@@ -926,9 +951,20 @@ def extract_deferred_lessons(
     # is the one the 2026-08-01 cold chlorination run actually took
     # (mode=deferred), where the id divergence was observed live.
     deferred_shared_ids: list = []
+    # Mint-time grounding — same join as the finalize-time path; this
+    # deferred lane is the one organic runs actually take (mode=deferred),
+    # so skipping it here would leave the production mints unstamped.
+    lesson_groundings: list = []
+    if not dry_run:
+        try:
+            from mint_grounding import ground_lessons_for_run
+            lesson_groundings = ground_lessons_for_run(
+                [t for t, _ in typed_lessons], loop_id)
+        except Exception:
+            lesson_groundings = []
     if not dry_run:
         import uuid as _uuid
-        for lesson_text, lesson_type in typed_lessons:
+        for _l_idx, (lesson_text, lesson_type) in enumerate(typed_lessons):
             _shared_id = str(_uuid.uuid4())[:8]
             try:
                 recorded = record_tiered_lesson(
@@ -941,6 +977,8 @@ def extract_deferred_lessons(
                     lesson_type=lesson_type,
                     lesson_id=_shared_id,
                     evidence_sources=[f"loop:{loop_id}"] if loop_id else [],
+                    grounding=(lesson_groundings[_l_idx]
+                               if _l_idx < len(lesson_groundings) else None),
                 )
                 if getattr(recorded, "lesson_id", "") == "rejected":
                     tiered_failed += 1
@@ -963,6 +1001,8 @@ def extract_deferred_lessons(
                 goal_achieved=outcome.goal_achieved,
                 goal_verdict_source=outcome.goal_verdict_source,
                 lesson_id=_shared,
+                grounding=(lesson_groundings[_idx]
+                           if _idx < len(lesson_groundings) else None),
             )
     _log_lesson_extraction(
         outcome_id=outcome.outcome_id,
