@@ -240,6 +240,13 @@ def classify_outcome(rd: Path, meta: dict, card: dict) -> None:
     card["status"] = status
     card["goal_achieved"] = achieved
     card["goal_verdict_summary"] = meta.get("goal_verdict_summary")
+    # The source says WHY goal_achieved is what it is — closure judged it,
+    # the judge crashed (closure_error), no step completed
+    # (closure_skipped_no_steps), the run errored... Dropping it rendered
+    # every no-verdict run as a bare "not verified" (adversarial review
+    # 2026-08-06 R2-7). Only-when-stamped, same as its siblings.
+    if meta.get("goal_verdict_source"):
+        card["goal_verdict_source"] = meta["goal_verdict_source"]
     # Only-when-stamped (matches the metadata write): absent = no downgrade.
     if meta.get("goal_verdict_downgrade_reason"):
         card["goal_verdict_downgrade_reason"] = meta["goal_verdict_downgrade_reason"]

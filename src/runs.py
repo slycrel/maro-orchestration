@@ -768,7 +768,15 @@ def close_run(
             if (not meta.get("goal_verdict_source")
                     and meta.get("lane") == "agenda"
                     and not meta.get("dry_run")):
-                _loop_id = str(meta.get("loop_id") or "")
+                # Modern runs carry plural loop_ids; the singular
+                # metadata.loop_id stopped being stamped (see the v1-index
+                # note above) — reading it alone made this ledger stamp
+                # dead code for every current agenda run (adversarial
+                # review 2026-08-06 R2-2). Old rows keep working via the
+                # singular fallback.
+                _loop_ids = [
+                    str(l) for l in (meta.get("loop_ids") or []) if l
+                ] or [s for s in (str(meta.get("loop_id") or ""),) if s]
                 from captains_log import log_event, DONE_WITHOUT_VERDICT
                 log_event(
                     DONE_WITHOUT_VERDICT,
@@ -779,14 +787,14 @@ def close_run(
                     context={"handle_id": handle_id,
                              "status": str(status),
                              "lane": str(meta.get("lane", "")),
-                             "loop_id": _loop_id},
-                    loop_id=_loop_id or None,
+                             "loop_id": (_loop_ids[0] if _loop_ids else "")},
+                    loop_id=(_loop_ids[0] if _loop_ids else None),
                 )
-                if _loop_id:
+                for _lid in _loop_ids:
                     try:
                         from memory_ledger import stamp_outcome_verdict
                         stamp_outcome_verdict(
-                            _loop_id,
+                            _lid,
                             goal_achieved=None,
                             goal_verdict_source=VERDICT_SOURCE_NEVER_STAMPED,
                         )

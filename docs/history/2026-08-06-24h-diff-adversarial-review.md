@@ -106,12 +106,16 @@ holes remain in exactly the denominator the change set out to close.
    runs.py:86–88) stopped being stamped; modern agenda runs carry only
    `loop_ids`. The `DONE_WITHOUT_VERDICT` tripwire still fires, but
    the `stamp_outcome_verdict` half is dead code for current runs.
-3. **[medium-high, CONFIRMED]** `interrupted` runs escape both markers:
-   `EXECUTION_FINISHED_STATUSES = ("done", "stuck")` and the
-   errored-run branch tests literal `status == "error"`, while backend
-   failures are deliberately converted to `interrupted` in
-   loop_execute. Such runs get neither `run_errored` nor
-   `closure_never_stamped`.
+3. **[medium-high, CONFIRMED → RETRACTED at fix time]** `interrupted`
+   runs escape both markers: `EXECUTION_FINISHED_STATUSES = ("done",
+   "stuck")` and the errored-run branch tests literal `status ==
+   "error"`. *Correction (2026-08-06 fix pass): this is the §13e paused
+   decree working as designed — a paused run "may or may not ever be
+   finished", so no verdict is owed yet, and it carries the typed
+   pause_reason layer (PAUSE_ERR_NO_TOKENS etc.) instead. The reviewer
+   scenario (billing failure → interrupted) lands in the pause-reason
+   vocabulary, not the verdict vocabulary. Pinned already by
+   test_paused_runs_are_not_owed_a_verdict_yet. No fix needed.*
 4. **[medium, PLAUSIBLE]** `closure_error` stamping covers only the
    first closure call — re-verification after closure restart and the
    quality-escalation path still swallow judge exceptions

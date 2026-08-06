@@ -128,6 +128,27 @@ class TestTheLedgerLearnsAboutIt:
         runs_mod.close_run("h6", status="done")
         assert _row(ledger, "L6").goal_verdict_source != VERDICT_SOURCE_NEVER_STAMPED
 
+    def test_modern_plural_loop_ids_rows_get_stamped(self, run_env):
+        """Adversarial-review pin R2-2 (2026-08-06): real agenda runs carry
+        only plural metadata.loop_ids — the singular loop_id stopped being
+        stamped, so a fallback reading it alone was dead code for every
+        current run (live specimen: 28a01ef7-gentle-crane, done/agenda, no
+        source, ledger never stamped). Every listed loop's row gets the
+        marker. Red on revert."""
+        tmp, runs_mod, ledger = run_env
+        d = runs_mod.run_dir("h8")
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "metadata.json").write_text(json.dumps({
+            "handle_id": "h8", "loop_ids": ["L8a", "L8b"],
+            "lane": "agenda", "status": "done",
+        }), encoding="utf-8")
+        for lid in ("L8a", "L8b"):
+            ledger.record_outcome(goal="g", status="done", summary="s",
+                                  task_type="agenda", loop_id=lid)
+        runs_mod.close_run("h8", status="done")
+        assert _row(ledger, "L8a").goal_verdict_source == VERDICT_SOURCE_NEVER_STAMPED
+        assert _row(ledger, "L8b").goal_verdict_source == VERDICT_SOURCE_NEVER_STAMPED
+
 
 class TestTheLogStillFires:
     def test_event_names_the_actual_status(self, run_env, monkeypatch):

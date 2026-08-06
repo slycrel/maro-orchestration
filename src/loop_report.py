@@ -994,6 +994,13 @@ def _render_verdict(report_dir: Path) -> str:
     badge = _render_status_badge(card.get("status") or "", card.get("success_class"))
     achieved = card.get("goal_achieved")
     achieved_str = "yes" if achieved is True else ("no" if achieved is False else "not verified")
+    # An unverified verdict says WHY when the card knows (R2-7): a crashed
+    # judge, zero completed steps, and an errored run are different facts —
+    # "not verified" alone rendered them identically.
+    if achieved is None:
+        _vsrc = str(card.get("goal_verdict_source") or "")
+        if _vsrc and _vsrc != "closure":
+            achieved_str = f"not verified ({_esc(_vsrc)})"
     cost = card.get("total_cost_usd")
     cost_str = f"${cost:.4f}" if isinstance(cost, (int, float)) else "-"
     verdict = (card.get("goal_verdict_summary") or "").strip()

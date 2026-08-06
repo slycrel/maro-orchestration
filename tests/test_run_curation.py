@@ -312,6 +312,22 @@ def test_classify_outcome_downgrade_reason_only_when_stamped(workspace):
     assert "goal_verdict_downgrade_reason" not in card2
 
 
+def test_classify_outcome_carries_verdict_source(workspace):
+    """Adversarial-review pin R2-7 (2026-08-06): the card dropped
+    goal_verdict_source, so every no-verdict run rendered as a bare "not
+    verified" — a crashed judge, zero completed steps, and an errored run
+    are different facts and the card must say which. Only-when-stamped."""
+    card = {}
+    classify_outcome(Path("/nonexistent"), {
+        "status": "stuck", "goal_verdict_source": "closure_skipped_no_steps",
+    }, card)
+    assert card["goal_verdict_source"] == "closure_skipped_no_steps"
+
+    card2 = {}
+    classify_outcome(Path("/nonexistent"), {"status": "done"}, card2)
+    assert "goal_verdict_source" not in card2
+
+
 def test_curate_run_downgraded_run_carries_reason_end_to_end(workspace):
     """Mutation survivor M9: classify_outcome's
     optional_provides=("goal_verdict_downgrade_reason",) declaration is

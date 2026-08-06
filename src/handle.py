@@ -2530,8 +2530,16 @@ def _handle_impl(
                                 _reverify_decision.stop_verdict,
                                 _reverify_decision.stop_evidence,
                             )
-                    except Exception:
+                    except Exception as _rv_exc:
                         _closure = None  # fail open: no re-verdict, no demotion
+                        # R2-4 (adversarial review 2026-08-06): a crashed
+                        # re-verification is the same measurement gap as a
+                        # crashed first closure — without this the run
+                        # finalizes closure_never_stamped (or keeps a
+                        # pre-restart verdict of superseded work) instead of
+                        # saying the judge died.
+                        _closure_error = (
+                            f"reverify {type(_rv_exc).__name__}: {_rv_exc}")
                 except Exception as _cr_exc:
                     log.warning("handle: closure restart re-run failed: %s", _cr_exc)
 
@@ -2791,6 +2799,26 @@ def _handle_impl(
                                 "goal_verdict_summary": _closure_error[:300],
                             },
                         )
+                except Exception:
+                    pass
+                # The ledger row needs the same why (adversarial review
+                # 2026-08-06 R2-1): metadata alone leaves the outcomes row
+                # source-less — and the presence of a metadata source
+                # suppresses close_run's never-stamped fallback, so without
+                # this stamp the crash case keeps the exact silent
+                # denominator hole this branch exists to close.
+                # goal_achieved=None: stamp_outcome_verdict leaves any
+                # provenance False untouched.
+                try:
+                    from audit_policy import persist_delivered_outcome_verdict
+                    persist_delivered_outcome_verdict(
+                        getattr(loop_result, "loop_id", "") or "",
+                        goal_achieved=None,
+                        goal_verdict_source="closure_error",
+                        goal_verdict_confidence=0.0,
+                        loop_ids=_run_loop_ids,
+                        channel=channel,
+                    )
                 except Exception:
                     pass
 
@@ -3163,6 +3191,41 @@ def _handle_impl(
                                     )
                             except Exception as _post_exc:
                                 log.debug("post-escalate closure failed: %s", _post_exc)
+                                # R2-4 (adversarial review 2026-08-06): the
+                                # shipped re-run must not inherit the parent's
+                                # verdict — that judged work we reverted. A
+                                # crashed post-escalate judge stamps
+                                # closure_error with replace-semantics
+                                # (goal_achieved=None removes the stale
+                                # boolean); the ledger row for the shipped
+                                # loop gets the same why.
+                                if _rerun_shipped:
+                                    _pe_err = (f"post-escalate "
+                                               f"{type(_post_exc).__name__}: "
+                                               f"{_post_exc}")
+                                    try:
+                                        from runs import stamp_run_verdict as _srv_err
+                                        _srv_err(
+                                            goal_achieved=None,
+                                            source="closure_error",
+                                            confidence=0.0,
+                                            summary=_pe_err,
+                                        )
+                                    except Exception:
+                                        pass
+                                    try:
+                                        from audit_policy import (
+                                            persist_delivered_outcome_verdict as _pdov_err)
+                                        _pdov_err(
+                                            getattr(loop_result, "loop_id", "") or "",
+                                            goal_achieved=None,
+                                            goal_verdict_source="closure_error",
+                                            goal_verdict_confidence=0.0,
+                                            loop_ids=_run_loop_ids,
+                                            channel=channel,
+                                        )
+                                    except Exception:
+                                        pass
                         # The copied loop contract intentionally keeps
                         # defer_learning=True. Complete that contract after
                         # the escalated verdict is available (or unjudged),

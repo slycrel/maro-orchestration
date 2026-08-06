@@ -5651,6 +5651,43 @@ class TestClosureErrorIsStamped:
         assert meta.get("goal_verdict_source") == "closure_error"
         assert "probe exploded" in meta.get("goal_verdict_summary", "")
 
+    def test_closure_exception_stamps_the_ledger_row_too(
+            self, monkeypatch, tmp_path):
+        """Adversarial-review pin R2-1 (2026-08-06): metadata alone left the
+        outcomes row source-less — and the metadata source's presence
+        suppresses close_run's never-stamped fallback, so the crash case
+        kept the exact silent denominator hole this branch closes."""
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        _stub_build_adapter(monkeypatch)
+        from unittest.mock import patch, MagicMock
+        import memory_ledger as ml
+        from agent_loop import LoopResult, StepOutcome
+
+        ml.record_outcome(goal="build X", status="done", summary="s",
+                          task_type="agenda", loop_id="cerr-lr")
+        result = LoopResult(
+            loop_id="cerr-lr", project="test-proj", goal="build X",
+            status="done", stuck_reason=None,
+            steps=[StepOutcome(index=0, text="step", status="done",
+                               result="output", iteration=0)],
+        )
+        gate = MagicMock()
+        gate.escalate = False
+        gate.contested_claims = []
+
+        with patch("agent_loop.run_agent_loop", return_value=result), \
+             patch("intent.check_goal_clarity", return_value={"clear": True}), \
+             patch("director.evaluate_closure",
+                   side_effect=RuntimeError("probe exploded")), \
+             patch("quality_gate.run_quality_gate", return_value=gate):
+            handle("build X", force_lane="agenda", dry_run=False)
+
+        row = ml.load_outcome_by_loop_id("cerr-lr")
+        assert row is not None
+        assert row.goal_verdict_source == "closure_error"
+        assert row.goal_achieved is None, (
+            "a crashed judge must not manufacture a verdict on the ledger")
+
 
 # ---------------------------------------------------------------------------
 # 2026-08-06: closure skipped for want of a completed step must SAY so
