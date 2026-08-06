@@ -546,15 +546,45 @@ def _main(argv: List[str]) -> int:
     ap.add_argument("--limit", type=int, default=5)
     ap.add_argument("--samples", type=int, default=3)
     ap.add_argument("--lesson-id", action="append", default=None)
+    ap.add_argument("--pace-s", type=float, default=6.5,
+                    help="min seconds between replays (free-tier RPM; "
+                         "the validation runs died unpaced)")
     args = ap.parse_args(argv)
 
+    import time as _time
+    import hosted_free as _hf
     from hosted_free import build_hosted_free_adapter
-    adapter = build_hosted_free_adapter()
-    if adapter is None:
+    # Batch-replay posture (validation run lessons, see the 2026-08-06
+    # history record): the per-process latency breaker is the wrong guard
+    # here, and bursts trip free-tier RPM/TPM — disable the cap, pace, and
+    # clear breaker state + retry once on a trip.
+    _hf.max_latency_ms = lambda: 0
+    inner = build_hosted_free_adapter()
+    if inner is None:
         print("hosted-free rung unavailable — not falling back to a paid "
               "tier; configure GROQ/GEMINI keys or pass an adapter in code")
         return 2
-    out = run_effect_route(adapter, promote=args.promote, limit=args.limit,
+
+    class _Paced:
+        def __init__(self):
+            self._last = 0.0
+
+        def complete(self, messages, **kw):
+            wait = self._last + args.pace_s - _time.time()
+            if wait > 0:
+                _time.sleep(wait)
+            call_kw = {**kw, "no_tools": True,
+                       "purpose": kw.get("purpose") or "delta replay"}
+            try:
+                return inner.complete(messages, **call_kw)
+            except Exception:
+                _time.sleep(65.0)
+                _hf.reset_cache()
+                return inner.complete(messages, **call_kw)
+            finally:
+                self._last = _time.time()
+
+    out = run_effect_route(_Paced(), promote=args.promote, limit=args.limit,
                            samples=args.samples, lesson_ids=args.lesson_id)
     print(json.dumps(out, indent=2))
     return 0

@@ -6542,3 +6542,17 @@ landed same session: `docs/DELTA_GATE_BUILD_BRIEF.md` (the one wire,
 scouted surfaces, sequencing instrument→stratify→wire→census, named
 falsifiers, slice-1 cuts) + MILESTONES queue head. World-facts §7 read
 stays queued ("homework").
+
+**Executed 2026-08-06/07 overnight (the sanctioned next-session build,
+run under the same night's "fix those, then the gate" grant): Δ-gate
+slice 1 SHIPPED.** Instrument standalone (4879ef2), pre-registered
+validation clean — 324 hosted-free replays, 0 errors: known-effective
+Δ=+0.59, known-inert Δ=−0.06, rule-stratum Δ=−0.15 (negative miss
+recorded as a finding: off-topic injection distracts decisions);
+separation criterion passes, so the effect route wired (cbee97a):
+`promote_lesson_by_effect` behind killswitch
+`knowledge.effect_promotion_enabled` (Δ≥0.30, ≥6 calls, jackknife<Δ,
+reason-stratum, tenure's boundary guards), CLI-driven measurement only.
+Record: `docs/history/2026-08-06-delta-gate-validation.md`. Jeremy's
+keep/adjust call rides the routes census (READING_QUEUE row
+2026-08-07).

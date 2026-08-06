@@ -800,20 +800,23 @@ Truth anchor: GOAL_BRAIN.md Threads. History: docs/history/ROADMAP_ARCHIVE.md.
 
 ## Active Queue
 
--7. **Δ-gate build (Jeremy, 2026-08-06: "prep the gate for the next
-   run, which will be after I clear the session") — the NEXT session's
-   directed work; supersedes the drift-review's "first thing" claim for
-   that one session.** Effect-based route to LONG beside the tenure
-   route. Everything is prepped: read `docs/DELTA_GATE_BUILD_BRIEF.md`
-   first — the one wire, scouted surfaces (promotion path
-   knowledge_web.py:72/598/1078; replay corpus = build/calls on the
-   LT-1 arms; harness pattern = seed-reader A/B), sequencing
-   (instrument standalone → stratify rule-vs-reason → wire behind
-   killswitch → routes census), named falsifiers, slice-1 cuts.
-   Preconditions all cleared 2026-08-06: corpus decontaminated (S2
-   exemplar removed on the A/B verdict), mint-grounding receipts live,
-   verdict denominator healthy (67 judged, two weeks of arrivals).
-   Decision 623eb056; GOAL_BRAIN 2026-08-06 records.
+-7. **Δ-gate build — SHIPPED 2026-08-06/07 overnight (slice 1
+   complete: instrument 4879ef2, validation + effect route cbee97a).**
+   Replay-Δ instrument built standalone, VALIDATED against
+   pre-registered predictions on the oracle corpus (known-effective
+   Δ=+0.59, known-inert Δ=−0.06, rule Δ=−0.15 — the rule specimen's
+   negative miss is a recorded finding: off-topic injection measurably
+   distracts decisions). Effect route to LONG wired behind the
+   validated instrument: `knowledge_web.promote_lesson_by_effect`
+   (killswitch + Δ≥0.30 + ≥6 calls + jackknife<Δ + reason-stratum +
+   tenure's boundary guards), `python3 -m delta_replay` census/promote
+   CLI (measurement = deliberate CLI spend, nothing ambient). Record:
+   `docs/history/2026-08-06-delta-gate-validation.md`; routes-census
+   readout for the keep/adjust call is Jeremy's next read. Remaining
+   from the brief's cuts (§5): evolver/thinkback trace scoring,
+   competence-redundancy decay, un-contest verb — all queue behind
+   reading the census. Original prep brief:
+   `docs/DELTA_GATE_BUILD_BRIEF.md`; decision 623eb056.
 
 -6. **Holistic drift review (Jeremy, 2026-07-17) — do this in a CLEAN
    session, first thing.** After the delivery-loop/two-tone arc: "Might be
