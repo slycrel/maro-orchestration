@@ -280,10 +280,14 @@ def test_config_paths_returns_dict():
 
 
 class TestWorkspacePinLayout:
-    """BACKLOG #-1 (2026-07-03): a pinned MARO_WORKSPACE means the workspace
-    IS that path — orch_items' memory/projects/output resolvers must agree
-    with config's (no prototype-layout split-brain). Legacy vars keep the
-    prototype layout."""
+    """BACKLOG #-1 (2026-07-03) + census item 5 (2026-08-06): a pinned
+    workspace var — ANY of MARO_WORKSPACE / OPENCLAW_WORKSPACE /
+    WORKSPACE_ROOT — means the workspace IS that path. orch_items'
+    memory/projects/output resolvers must agree with config's (no
+    prototype-layout split-brain, no shadow store under
+    <ws>/prototypes/maro-orchestration/). The only orch-layout data pin
+    left is MARO_ORCH_ROOT set alone (containers / build-loop repo-local
+    mode)."""
 
     def _clear_ws_vars(self, monkeypatch):
         for var in ("MARO_WORKSPACE", "OPENCLAW_WORKSPACE", "WORKSPACE_ROOT",
@@ -307,14 +311,58 @@ class TestWorkspacePinLayout:
         assert orch_items.projects_root() == config_mod.projects_dir()
         assert orch_items.output_root() == config_mod.output_dir()
 
-    def test_legacy_openclaw_pin_keeps_prototype_layout(self, monkeypatch, tmp_path):
+    def test_legacy_openclaw_pin_uses_workspace_layout(self, monkeypatch, tmp_path):
+        # Pre-2026-08-06 this pin routed data into
+        # tmp_path/prototypes/maro-orchestration/ — the shadow-store hijack.
         self._clear_ws_vars(monkeypatch)
         monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
         import orch_items
-        proto = tmp_path / "prototypes" / "maro-orchestration"
-        assert orch_items.memory_dir() == proto / "memory"
-        assert orch_items.projects_root() == proto / "projects"
-        assert orch_items.output_root() == proto / "output"
+        assert orch_items.memory_dir() == tmp_path / "memory"
+        assert orch_items.projects_root() == tmp_path / "projects"
+        assert orch_items.output_root() == tmp_path / "output"
+
+    def test_legacy_workspace_root_pin_uses_workspace_layout(self, monkeypatch, tmp_path):
+        self._clear_ws_vars(monkeypatch)
+        monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path))
+        import orch_items
+        assert orch_items.memory_dir() == tmp_path / "memory"
+        assert orch_items.projects_root() == tmp_path / "projects"
+        assert orch_items.output_root() == tmp_path / "output"
+
+    def test_legacy_pin_agrees_with_config(self, monkeypatch, tmp_path):
+        # The memory_dir docstring invariant, now enforced for legacy pins:
+        # must resolve to the SAME directory as config.memory_dir().
+        self._clear_ws_vars(monkeypatch)
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        import config as config_mod
+        import orch_items
+        assert orch_items.memory_dir() == config_mod.memory_dir()
+        assert orch_items.projects_root() == config_mod.projects_dir()
+        assert orch_items.output_root() == config_mod.output_dir()
+
+    def test_orch_root_only_pin_keeps_orch_layout(self, monkeypatch, tmp_path):
+        # MARO_ORCH_ROOT alone = explicit container/repo-local override:
+        # data deliberately rides the pinned orch root (build-loop.sh no-arg).
+        self._clear_ws_vars(monkeypatch)
+        monkeypatch.setenv("MARO_ORCH_ROOT", str(tmp_path))
+        import orch_items
+        assert orch_items.orch_root() == tmp_path
+        assert orch_items.memory_dir() == tmp_path / "memory"
+        assert orch_items.projects_root() == tmp_path / "projects"
+        assert orch_items.output_root() == tmp_path / "output"
+
+    def test_workspace_pin_wins_over_orch_root_pin_for_data(self, monkeypatch, tmp_path):
+        # Both set: code root follows MARO_ORCH_ROOT, data follows the workspace.
+        self._clear_ws_vars(monkeypatch)
+        ws = tmp_path / "ws"
+        code = tmp_path / "code"
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(ws))
+        monkeypatch.setenv("MARO_ORCH_ROOT", str(code))
+        import orch_items
+        assert orch_items.orch_root() == code
+        assert orch_items.memory_dir() == ws / "memory"
+        assert orch_items.projects_root() == ws / "projects"
+        assert orch_items.output_root() == ws / "output"
 
     def test_maro_workspace_wins_over_legacy_var(self, monkeypatch, tmp_path):
         self._clear_ws_vars(monkeypatch)

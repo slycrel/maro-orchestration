@@ -84,14 +84,18 @@ class ActionDecision:
 # ---------------------------------------------------------------------------
 
 def _config_path() -> Path:
-    """Return path to autonomy.json in memory/ directory."""
+    """Return path to autonomy.json in the canonical memory/ directory.
+
+    Routes through orch_items.memory_dir() like every other memory consumer
+    (until 2026-08-06 this joined orch_root()/memory directly, splitting
+    autonomy state from the rest of the learning data in production).
+    """
     try:
-        from orch import orch_root
-        base = orch_root()
+        from orch_items import memory_dir
+        mem = memory_dir()
     except Exception:
-        base = Path.cwd()
-    mem = base / "memory"
-    mem.mkdir(parents=True, exist_ok=True)
+        mem = Path.cwd() / "memory"
+        mem.mkdir(parents=True, exist_ok=True)
     return mem / "autonomy.json"
 
 

@@ -105,42 +105,27 @@ pass, not a quiet fix:
   the re-observation design. Options live at different layers: loosen
   match threshold, count semantic-neighbor hits, or judge candidates on
   age+content instead of re-observation.
-- [ ] **5. Shadow-workspace hijack: a stray
-  `~/.maro/workspace/prototypes/maro-orchestration/` husk silently
-  redirects memory_dir() whenever a legacy workspace var is pinned
-  (FOUND 2026-08-06, census follow-on).** `orch_items.orch_root()`
-  prefers the "traditional prototype path" whenever it merely EXISTS,
-  and `memory_dir()` routes through it whenever
-  OPENCLAW_WORKSPACE/WORKSPACE_ROOT is set — so pinning the var to the
-  REAL workspace (`OPENCLAW_WORKSPACE=~/.maro/workspace`, a
-  reasonable-looking thing) reads/writes an empty shadow store at
-  `.../prototypes/maro-orchestration/memory/` instead of
-  `~/.maro/workspace/memory/`. Not hypothetical: the husk's
-  `outcomes.jsonl.lock` is dated 2026-08-02 10:48 — something wrote
-  there four days ago; `scripts/build-loop.sh` exports exactly this var
-  when given a workspace arg. The husk (created 2026-04-11, migration
-  residue) also holds March-era poe-orchestration NOW artifacts —
-  retention decree applies, archive-move rather than delete. Real fix
-  is deliberate, not drive-by: memory_dir()'s own docstring declares
-  "must resolve to the SAME directory as config.memory_dir()" and the
-  legacy-pin branch violates that for any pin naming the canonical
-  workspace; but tests depend on the legacy-pin isolation shape
-  (OPENCLAW_WORKSPACE=tmp_path → tmp_path/prototypes/maro-orchestration/
-  memory), so the unification needs the arch-platform read and a test
-  sweep. **Husk archived 2026-08-06** (Jeremy's call) to
-  `~/.maro/workspace/archive/prototypes-husk-2026-08-06/` — 25 files
-  incl. the March poe-orchestration NOW artifacts, path preserved per
-  retention decree. Sharpened diagnosis from the verification probe:
-  with a legacy var pinned, memory_dir() routes to the prototypes path
-  UNCONDITIONALLY (orch_root falls through to "traditional regardless"
-  — husk existence is irrelevant, and memory_dir's mkdir recreates the
-  husk as a side effect; observed live). The archive move therefore
-  fixes only the unpinned case, where a pre-existing husk would win
-  orch_root()'s step-2 exists() check for its ~30 importing consumers
-  (persona, captains_log, checkpoint, build_loop_runner, …). The pinned
-  case remains code-only: any script pinning the legacy vars to the
-  real workspace still talks to a shadow store today — build-loop.sh
-  with a workspace arg is the known live instance.
+- [ ] **5b. orch_root() still anchors five runtime-data writers — repo
+  checkout collects state in production (FOUND 2026-08-06, resolution-
+  unification survey; follow-up to shipped item 5).** With the data
+  roots unified, `orch_root()` should be a pure code-root resolver
+  (workers/, repo personas/) — but five writers still anchor runtime
+  data on it, so in production (unpinned → orch_root = repo) they write
+  into the checkout: `hooks.py:281` (`.hooks/hooks.json` registry),
+  `persona.py:882` (`agents/manifest.*` generated capability manifest),
+  `director.py:884` (projectless run logs → `artifacts/director/`),
+  `checkpoint.py:55` (legacy checkpoint fallback — documented, has a
+  read-fallback contract already), plus `captains_log.py:1036` /
+  `convo_miner.py:233,390` which use orch_root as *git repo cwd* /
+  BACKLOG.md locator — correct only by coincidence when orch_root =
+  repo. Evidence: repo checkout holds gitignored `artifacts/`,
+  `checkpoints/` dirs with real run data. Fix shape: move the four data
+  writers to workspace-rooted helpers (each needs a read-fallback for
+  existing data — retention decree, no auto-delete), introduce an
+  explicit `repo_root()` for the git-cwd/BACKLOG consumers, then
+  orch_root's `_ws_pinned` test-isolation guard becomes droppable.
+  Sequencing note: this is what blocks dropping the prototype layout
+  from `orch_root()` entirely.
 - [ ] **4. Scan suggestions have no dedup-on-save — noise generator on
   frozen inputs.** `_save_suggestions` (evolver_store.py:278) never
   dedups, so every finalize re-derives and re-saves the same findings:

@@ -7,13 +7,6 @@ import subprocess
 from pathlib import Path
 
 
-def _mkproj(root: Path, slug: str, content: str, priority: int = 0) -> None:
-    project = root / "prototypes" / "maro-orchestration" / "projects" / slug
-    project.mkdir(parents=True, exist_ok=True)
-    (project / "NEXT.md").write_text(content, encoding="utf-8")
-    (project / "PRIORITY").write_text(f"{priority}\n", encoding="utf-8")
-
-
 def test_build_loop_shell_wrapper_runs_cli(tmp_path):
     repo_root = Path(__file__).resolve().parents[1]
     script = repo_root / "scripts" / "build-loop.sh"
@@ -106,7 +99,10 @@ def test_build_loop_shell_wrapper_accepts_trailing_workspace_dir(tmp_path):
 
     workspace_root = tmp_path / "workspace"
     workspace_root.mkdir(parents=True, exist_ok=True)
-    project = workspace_root / "prototypes" / "maro-orchestration" / "projects" / "workspace-local-check"
+    # Data (projects) lives directly under the pinned workspace since the
+    # 2026-08-06 resolution unification; only code assets (workers) still
+    # resolve through orch_root's prototype layout.
+    project = workspace_root / "projects" / "workspace-local-check"
     project.mkdir(parents=True, exist_ok=True)
     (project / "NEXT.md").write_text("- [ ] workspace local\n", encoding="utf-8")
     (project / "PRIORITY").write_text("99\n", encoding="utf-8")

@@ -20,7 +20,7 @@ if (( ${#args[@]} > 0 )); then
       unset 'args[$last_index]'
       args=("${args[@]}")
       if [[ -z "${MARO_WORKSPACE:-}" && -z "${OPENCLAW_WORKSPACE:-}" && -z "${WORKSPACE_ROOT:-}" && -z "${MARO_ORCH_ROOT:-}" ]]; then
-        export OPENCLAW_WORKSPACE="$resolved_workspace"
+        export MARO_WORKSPACE="$resolved_workspace"
       fi
     fi
   fi

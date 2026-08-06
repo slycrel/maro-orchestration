@@ -8,6 +8,51 @@ Last split: 2026-04-16 (session 34).
 
 ---
 
+## Shadow-workspace hijack / resolution unification — SHIPPED 2026-08-06 (census item 5)
+
+Found via the live-writer census follow-on (record:
+`docs/history/2026-08-06-live-writer-census.md`): pinning a legacy
+workspace var (`OPENCLAW_WORKSPACE`/`WORKSPACE_ROOT`) — even to the REAL
+workspace — routed `orch_items.memory_dir()`/`projects_root()`/
+`output_root()` into `<ws>/prototypes/maro-orchestration/`
+unconditionally, violating memory_dir's own docstring invariant ("must
+resolve to the SAME directory as config.memory_dir()"). Discovered when
+a dry-run probe pinned `OPENCLAW_WORKSPACE=~/.maro/workspace` and read
+an empty shadow skills store (0 rows vs 134 real). The husk's
+`outcomes.jsonl.lock` showed a live write 2026-08-02; `build-loop.sh`
+with a workspace arg was the known live pinner. `deploy/openclaw/
+maro-dispatch.sh` had already been defensively unsetting all five vars
+against exactly this bug.
+
+- [x] **Husk archived** (Jeremy's call) to
+  `~/.maro/workspace/archive/prototypes-husk-2026-08-06/` — 25 files
+  incl. March poe-orchestration NOW artifacts, retention decree
+  honored (e22db73).
+- [x] **Resolution unified**: `_legacy_ws_pinned()` →
+  `_orch_root_pinned()` — ANY workspace pin (canonical or legacy) now
+  means "the workspace IS x", matching `config.workspace_root()` which
+  always treated all three vars identically; the 2026-07-03 BACKLOG #-1
+  unification extended to the legacy vars. The one remaining
+  orch-layout data pin: `MARO_ORCH_ROOT` set alone (containers /
+  build-loop no-arg repo-local mode — deliberate). `orch_root()` itself
+  unchanged (code-root resolver; see follow-up 5b for making it pure).
+- [x] **autonomy.py rode along**: `_config_path()` joined
+  `orch_root()/memory` directly instead of `memory_dir()` — autonomy
+  state split from the learning data in production. Now routes through
+  `memory_dir()` (autonomy.json existed nowhere on disk, so the move
+  was free).
+- [x] **build-loop.sh** now exports `MARO_WORKSPACE` (says what it
+  means) for a workspace arg; smoke.sh's vestigial `OPENCLAW_WORKSPACE`
+  export dropped.
+- [x] **Contract tests rewritten**: `TestWorkspacePinLayout` legacy-pin
+  test flipped to workspace layout + four new pins (WORKSPACE_ROOT pin,
+  legacy-agrees-with-config, MARO_ORCH_ROOT-only keeps orch layout,
+  workspace-pin-wins-over-orch-root-pin for data). Test blast radius
+  was tiny: conftest's autouse `MARO_WORKSPACE=tmp_path` already
+  shadowed legacy setenvs everywhere except the dedicated contract test
+  (only `test_phase21.py` clears MARO_WORKSPACE, and only to test
+  `config.workspace_root()` itself — unaffected).
+
 ## Battery side-finds V3/V4 (2026-07-21 phase-05 battery) — both SHIPPED, moved from BACKLOG 2026-08-02
 
 Evidence in `docs/history/2026-07-21-phase05-battery.md`.

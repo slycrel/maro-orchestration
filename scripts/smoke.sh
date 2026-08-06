@@ -4,7 +4,6 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TMP="$(mktemp -d)"
 export MARO_WORKSPACE="$TMP"
-export OPENCLAW_WORKSPACE="$TMP"
 
 python3 "$ROOT_DIR/src/cli.py" init smoke "Smoke test mission" --priority 1
 python3 "$ROOT_DIR/src/cli.py" next --project smoke

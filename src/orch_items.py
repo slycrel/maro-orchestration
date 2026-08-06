@@ -177,24 +177,29 @@ def orch_root() -> Path:
     return traditional
 
 
-def _legacy_ws_pinned() -> bool:
-    """True when a LEGACY workspace pin selects the prototype (orch_root) layout.
+def _orch_root_pinned() -> bool:
+    """True when data roots should ride orch_root() instead of the workspace.
 
-    BACKLOG #-1 (fixed 2026-07-03): `MARO_WORKSPACE=x` — the canonical var —
-    means "the workspace IS x": memory/projects/output live directly under
-    it, exactly as config.workspace_root() resolves it. It therefore never
-    selects the prototype layout, and because config gives it top precedence,
-    it wins here too when set alongside a legacy var (before this fix, a
-    pinned env routed the memory tier into <ws>/prototypes/maro-orchestration/
-    while run dirs went to the config-resolved workspace — split-brain found
-    live 2026-07-02). Only the legacy vars (and the explicit container
-    override MARO_ORCH_ROOT) keep the historical prototype layout.
+    History: BACKLOG #-1 (2026-07-03) unified the canonical pin —
+    `MARO_WORKSPACE=x` means "the workspace IS x", all data roots resolve
+    through config. The legacy vars (OPENCLAW_WORKSPACE / WORKSPACE_ROOT)
+    kept the prototype layout, so pinning one — even to the real
+    workspace — silently routed memory/projects/output into
+    <ws>/prototypes/maro-orchestration/ (shadow-store hijack, 2026-08-06
+    census item 5). config.workspace_root() has always treated all three
+    vars identically, so since 2026-08-06 every workspace pin means "the
+    workspace IS x".
+
+    The one remaining orch-layout case: MARO_ORCH_ROOT set with NO
+    workspace var — an explicit container/CI override where data
+    deliberately rides next to the pinned orch root (build-loop.sh's
+    no-arg repo-local mode relies on this).
     """
-    if os.environ.get("MARO_WORKSPACE"):
+    if any(os.environ.get(v) for v in (
+        "MARO_WORKSPACE", "OPENCLAW_WORKSPACE", "WORKSPACE_ROOT",
+    )):
         return False
-    return any(os.environ.get(v) for v in (
-        "OPENCLAW_WORKSPACE", "WORKSPACE_ROOT", "MARO_ORCH_ROOT",
-    ))
+    return bool(os.environ.get("MARO_ORCH_ROOT"))
 
 
 def memory_dir() -> Path:
@@ -203,10 +208,11 @@ def memory_dir() -> Path:
     Resolution order:
       1. memory_dir_context() (explicit in-process storage context)
       2. $MARO_MEMORY_DIR     (process-level override — tests use this)
-      3. config.memory_dir() (aligns with captains_log.py — honors MARO_WORKSPACE,
-         defaults to ~/.maro/workspace/memory) — unless a LEGACY var is pinned
-      4. orch_root()/memory  (legacy pins: OPENCLAW_WORKSPACE/WORKSPACE_ROOT/
-         MARO_ORCH_ROOT — and fallback for containers/CI)
+      3. config.memory_dir() (honors any workspace pin — MARO_WORKSPACE/
+         OPENCLAW_WORKSPACE/WORKSPACE_ROOT — defaults to
+         ~/.maro/workspace/memory) — unless MARO_ORCH_ROOT is the only pin
+      4. orch_root()/memory  (MARO_ORCH_ROOT-only pin: containers/CI and
+         build-loop.sh's repo-local mode — and import-failure fallback)
       5. cwd/memory          (last resort)
 
     IMPORTANT: This must resolve to the SAME directory as config.memory_dir()
@@ -228,17 +234,17 @@ def memory_dir() -> Path:
         p.mkdir(parents=True, exist_ok=True)
         return p
 
-    # Align with config.py — the canonical workspace path. Honors a pinned
-    # MARO_WORKSPACE ($MARO_WORKSPACE/memory) and defaults to
-    # ~/.maro/workspace/memory, exactly like config.memory_dir().
-    if not _legacy_ws_pinned():
+    # Align with config.py — the canonical workspace path. Honors any
+    # workspace pin ($WS/memory) and defaults to ~/.maro/workspace/memory,
+    # exactly like config.memory_dir().
+    if not _orch_root_pinned():
         try:
             from config import memory_dir as _cfg_memory_dir
             return _cfg_memory_dir()
         except Exception:
             pass  # fall through to orch_root layout / cwd fallback
 
-    # Legacy workspace var is set (tests, CI) — use orch_root layout
+    # MARO_ORCH_ROOT is the only pin — data rides the orch root
     p = orch_root() / "memory"
     try:
         p.mkdir(parents=True, exist_ok=True)
@@ -269,11 +275,11 @@ def projects_root() -> Path:
     """Canonical projects directory — aligns with config.projects_dir().
 
     Resolution order:
-      1. config.projects_dir() unless a LEGACY workspace var is pinned
-         (honors MARO_WORKSPACE; defaults to ~/.maro/workspace/projects)
-      2. orch_root()/projects when a legacy workspace var IS set (tests, CI)
+      1. config.projects_dir() (honors any workspace pin; defaults to
+         ~/.maro/workspace/projects) unless MARO_ORCH_ROOT is the only pin
+      2. orch_root()/projects when MARO_ORCH_ROOT is the only pin
     """
-    if not _legacy_ws_pinned():
+    if not _orch_root_pinned():
         from config import projects_dir
         return projects_dir()
     p = orch_root() / "projects"
@@ -285,11 +291,11 @@ def output_root() -> Path:
     """Canonical output directory — aligns with config.output_dir().
 
     Resolution order:
-      1. config.output_dir() unless a LEGACY workspace var is pinned
-         (honors MARO_WORKSPACE; defaults to ~/.maro/workspace/output)
-      2. orch_root()/output when a legacy workspace var IS set (tests, CI)
+      1. config.output_dir() (honors any workspace pin; defaults to
+         ~/.maro/workspace/output) unless MARO_ORCH_ROOT is the only pin
+      2. orch_root()/output when MARO_ORCH_ROOT is the only pin
     """
-    if not _legacy_ws_pinned():
+    if not _orch_root_pinned():
         from config import output_dir
         return output_dir()
     p = orch_root() / "output"
