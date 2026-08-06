@@ -1852,10 +1852,24 @@ inspectable before any behavior changes.
     `goal_achieved=None`: absence with a reason is a fact, absence alone
     is a hole indistinguishable from "not judged yet".
 
-  Left open deliberately: `error`-status runs (backend death) still carry
-  no marker — blaming closure there points at the wrong layer, and it
-  wants its own reason code. And the tripwire has a named false positive
-  (closure also requires `_ran_any_step`; run metadata has no step count).
+  ~~Left open deliberately: `error`-status runs (backend death) still carry
+  no marker~~ — **CLOSED 2026-08-06 (`e9e6828`)** with its own reason code,
+  `VERDICT_SOURCE_RUN_ERRORED`, kept distinct from the tripwire's
+  `closure_never_stamped` on purpose: there closure owed a verdict and did
+  not deliver one (a closure bug worth hunting), here nothing was owed
+  because there was no finished work to judge. Collapsing them would send
+  someone chasing a closure bug that is really a backend outage. Run
+  metadata only — measured, `"error"` never appears as an outcome status at
+  all (the run dies before `reflect_and_record`), so a ledger stamp would
+  be dead code pretending to be a guard. Scope stated in the code as well
+  as here: 132 runs, **129 of them in 2026-05 and none since 2026-07-04**,
+  so this closes the gap for the next one rather than a live bleed.
+
+  Still open: the tripwire has a named false positive (closure also
+  requires `_ran_any_step`; run metadata has no step count, so a run that
+  completed zero steps trips it). Named in the code comment rather than
+  papered over — whoever next measures the denominator should expect a
+  small share of these and can separate them from the loop log.
 - [x] **"done" runs occasionally skip closure silently (census
   2026-07-29)** — SHIPPED 2026-08-02 as LT-0 (b): `DONE_WITHOUT_VERDICT`
   honesty event in `runs.close_run` (see the LT arc entry for detail).
