@@ -609,19 +609,25 @@ class TestMountViewNotice:
 
     def test_flagged_containerized_step_gets_partial_view_notice(self, tmp_path, monkeypatch):
         msg = self._run_step(tmp_path, monkeypatch, flagged=True, mode="on")
-        assert "PARTIAL VIEW" in msg
+        assert "VIEW CHECK" in msg
         assert "MARO_MOUNT_VIEW" in msg
         assert ".git" in msg
+        # The notice must be conditional on the in-container marker, never an
+        # unconditional "you are in a container" (adversarial review
+        # 2026-08-06 R3-6): mode "on" degrades to host when docker is down,
+        # and the prompt is built before the probe runs.
+        assert "If $MARO_MOUNT_VIEW is UNSET" in msg
+        assert "degraded to the host" in msg
 
     def test_unflagged_run_gets_no_notice(self, tmp_path, monkeypatch):
         msg = self._run_step(tmp_path, monkeypatch, flagged=False, mode="on")
-        assert "PARTIAL VIEW" not in msg
+        assert "VIEW CHECK" not in msg
 
     def test_containers_off_gets_no_notice(self, tmp_path, monkeypatch):
         # Host execution sees the real machine — a partial-view warning there
         # would be the inverse lie.
         msg = self._run_step(tmp_path, monkeypatch, flagged=True, mode="off")
-        assert "PARTIAL VIEW" not in msg
+        assert "VIEW CHECK" not in msg
 
 
 # ---------------------------------------------------------------------------

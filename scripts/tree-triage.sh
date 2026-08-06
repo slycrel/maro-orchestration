@@ -63,12 +63,37 @@ while IFS= read -r -d '' entry; do
     esac
 
     if [ ! -e "$path" ]; then
-        # Present in HEAD, absent from the tree. `git reset --mixed` onto a
-        # newer ref does exactly this to files the new commits ADDED: HEAD and
-        # index move, the working tree does not. Always stale.
-        printf '%s\0' "$path" >> "$STALE_LIST"
-        n_stale=$((n_stale + 1))
-        printf '%-46s %s\n' "$path" "STALE (missing from tree, present in HEAD)"
+        # Present in the index, absent from the tree. Two readers again
+        # (adversarial review 2026-08-06 R3-5): `git reset --mixed` onto a
+        # newer ref does exactly this to files the new commits ADDED — but
+        # another session's intentional `rm` looks identical, and restoring
+        # it violates the "real work untouched" contract. Discriminate
+        # symmetrically to the modify case: absence is STALE only when some
+        # recent ancestor also lacked the path (the tree can be an honest
+        # snapshot of that pre-add state). If every ancestor has it, no
+        # historical state explains the absence — that's a deletion in
+        # progress. And a staged change (X != space) can never be a reset
+        # artifact: reset --mixed leaves index == HEAD.
+        if [ "${xy:0:1}" != " " ]; then
+            n_real=$((n_real + 1))
+            printf '%-46s %s\n' "$path" "REAL uncommitted work (staged) — leave alone"
+            continue
+        fi
+        match=""
+        for c in $COMMITS; do
+            if ! git cat-file -e "$c:$path" 2>/dev/null; then
+                match="$c"
+                break
+            fi
+        done
+        if [ -n "$match" ]; then
+            printf '%s\0' "$path" >> "$STALE_LIST"
+            n_stale=$((n_stale + 1))
+            printf '%-46s %s\n' "$path" "STALE (absent here and in ancestor ${match:0:7})"
+        else
+            n_real=$((n_real + 1))
+            printf '%-46s %s\n' "$path" "REAL uncommitted work (deleted; every recent ancestor has it) — leave alone"
+        fi
         continue
     fi
 

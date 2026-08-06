@@ -42,6 +42,11 @@ class ClaimReport:
     verified: List[str]         # paths that exist on disk
     not_found: List[str]        # paths that don't exist (potential hallucination)
     unresolvable: List[str]     # paths we couldn't check (no root, ambiguous)
+    # Claims verified via the unique-suffix fallback rather than a direct
+    # hit: claim → the indexed relpath it matched. Kept visible so a
+    # suffix-verify never silently absorbs the hallucination signal
+    # (adversarial review 2026-08-06 R3-7).
+    suffix_matched: Dict[str, str] = field(default_factory=dict)
 
     @property
     def has_hallucinations(self) -> bool:
@@ -335,6 +340,7 @@ def verify_file_claims(
     verified = []
     not_found = []
     unresolvable = []
+    suffix_matched: Dict[str, str] = {}
     tree_index: Optional[Tuple[Set[str], Set[str]]] = None  # built lazily on first miss
 
     for claim in claims:
@@ -362,16 +368,30 @@ def verify_file_claims(
                     # only sees "pkg/tests/test_ledger.py". Match the WHOLE
                     # claimed path as a suffix of an indexed relative path —
                     # "wrong_dir/module.py" still cannot match "src/module.py".
+                    # The match must be UNIQUE (adversarial review 2026-08-06
+                    # R3-7): an unrelated same-suffix file elsewhere in the
+                    # tree (vendor/x/docs/report.md for a claimed
+                    # docs/report.md) must not quietly verify the claim.
+                    # One candidate is the goal-pointed-subdir signature and
+                    # verifies (recorded in suffix_matched); several is
+                    # genuinely ambiguous and lands in unresolvable — neither
+                    # verified nor a hallucination.
                     import os as _os
                     norm = _os.path.normpath(claim).replace(_os.sep, "/")
                     if not (norm.startswith("..") or norm.startswith("/")):
                         if tree_index is None:
                             tree_index = _tree_index(project_root)
                         suffix = "/" + norm
-                        found = any(
-                            rp == norm or rp.endswith(suffix)
-                            for rp in tree_index[1]
-                        )
+                        matches = [
+                            rp for rp in tree_index[1]
+                            if rp == norm or rp.endswith(suffix)
+                        ]
+                        if len(matches) > 1:
+                            unresolvable.append(claim)
+                            continue
+                        if len(matches) == 1:
+                            found = True
+                            suffix_matched[claim] = matches[0]
                 if found:
                     verified.append(claim)
                 else:
@@ -384,6 +404,7 @@ def verify_file_claims(
         verified=verified,
         not_found=not_found,
         unresolvable=unresolvable,
+        suffix_matched=suffix_matched,
     )
 
 

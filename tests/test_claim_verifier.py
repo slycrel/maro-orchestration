@@ -220,6 +220,47 @@ class TestVerifyFileClaims:
         )
         assert "src/app/main.py" in report.verified
 
+    def test_suffix_verify_records_the_match_target(self, tmp_path):
+        """A unique suffix match verifies — and says against WHAT, so the
+        fallback never silently absorbs the hallucination signal
+        (adversarial review 2026-08-06 R3-7)."""
+        pkg_tests = tmp_path / "pkg" / "tests"
+        pkg_tests.mkdir(parents=True)
+        (pkg_tests / "test_ledger.py").write_text("# tests")
+        report = verify_file_claims(
+            "Added tests/test_ledger.py.", project_root=tmp_path
+        )
+        assert report.suffix_matched["tests/test_ledger.py"] == \
+            "pkg/tests/test_ledger.py"
+
+    def test_direct_hit_is_not_a_suffix_match(self, tmp_path):
+        tests = tmp_path / "tests"
+        tests.mkdir()
+        (tests / "test_ledger.py").write_text("")
+        report = verify_file_claims(
+            "Added tests/test_ledger.py.", project_root=tmp_path
+        )
+        assert "tests/test_ledger.py" in report.verified
+        assert report.suffix_matched == {}
+
+    def test_ambiguous_suffix_match_is_unresolvable_not_verified(self, tmp_path):
+        """Two unrelated same-suffix files (pkg1 and pkg2 both carry
+        tests/test_ledger.py) cannot tell us WHICH one the worker meant —
+        the claim is ambiguous, neither verified nor a hallucination
+        (adversarial review 2026-08-06 R3-7: an unrelated same-suffix file
+        elsewhere in the tree must not quietly verify a claim)."""
+        for pkg in ("pkg1", "pkg2"):
+            d = tmp_path / pkg / "tests"
+            d.mkdir(parents=True)
+            (d / "test_ledger.py").write_text("")
+        report = verify_file_claims(
+            "Added tests/test_ledger.py.", project_root=tmp_path
+        )
+        assert "tests/test_ledger.py" in report.unresolvable
+        assert "tests/test_ledger.py" not in report.verified
+        assert "tests/test_ledger.py" not in report.not_found
+        assert not report.has_hallucinations
+
 
 # ---------------------------------------------------------------------------
 # annotate_result

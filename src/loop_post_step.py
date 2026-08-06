@@ -614,6 +614,9 @@ def _post_step_checks(
                                        if _has_halluc else "none"),
                             "file_not_found": list(_file_rep.not_found)[:20],
                             "file_verified_count": len(_file_rep.verified),
+                            "file_suffix_matched": dict(
+                                list(getattr(_file_rep, "suffix_matched",
+                                             {}).items())[:20]),
                             "symbol_not_found": list(_sym_rep.not_found)[:20],
                             "symbol_verified_count": len(_sym_rep.verified),
                         },

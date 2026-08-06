@@ -376,21 +376,36 @@ _RECON_STEP_EXTRA = textwrap.dedent("""\
 # introspection-shaped run executes in a container whose repo view is partial
 # (maro source + run records ro — no repo root, no .git), and nothing TOLD
 # the worker — so one run reported "the checkout was never git-initialized"
-# as a machine fact, false on host. Injected only when the run is flagged
-# introspective AND containers are on; MARO_MOUNT_VIEW in the container env
-# is the matching ground-truth marker (container_exec.introspection_provision).
+# as a machine fact, false on host. Injected when the run is flagged
+# introspective AND containers are on — but the containerize decision itself
+# (docker probe) happens later, inside the adapter, and mode "on" degrades to
+# host when the daemon is down. So the notice is CONDITIONAL on the
+# in-container ground-truth marker (MARO_MOUNT_VIEW, set only by
+# container_exec.introspection_provision): asserting "you are in a container"
+# unconditionally steered degraded-to-host workers away from evidence they
+# actually had (adversarial review 2026-08-06 R3-6) — .git, workspace
+# records — the mirror image of the records-blind failure this notice fixes.
 _INTROSPECTION_MOUNT_VIEW = textwrap.dedent("""\
 
-    PARTIAL VIEW — this step runs in a container that sees only a slice of
-    the machine: the maro source (read-only) and run records, NOT the repo
-    root, .git, or workspace memory/config. Consequences:
+    VIEW CHECK — this step is CONFIGURED to run in a container that sees
+    only a slice of the machine, but that can degrade to full host
+    execution when docker is down. Your environment is the ground truth:
+    check $MARO_MOUNT_VIEW before drawing machine-level conclusions.
+
+    If $MARO_MOUNT_VIEW is SET, you are in the container view — the maro
+    source (read-only) and run records, NOT the repo root, .git, or
+    workspace memory/config. Consequences:
       - Absence here is NOT absence on the host. Never report "X does not
         exist" / "the checkout is not a git repo" as a machine fact — say
         "not visible from this container view" instead.
       - Do not run git commands expecting a repository; there is none in
         this view.
-      - $MARO_MOUNT_VIEW in your environment describes this view; cite it
-        when a finding depends on what you could or could not see.
+      - Cite $MARO_MOUNT_VIEW when a finding depends on what you could or
+        could not see.
+
+    If $MARO_MOUNT_VIEW is UNSET, execution degraded to the host and none
+    of the partial-view caveats apply: what you observe (including .git
+    and the repo root) is real — use it.
 """).strip()
 
 
@@ -1194,10 +1209,12 @@ def execute_step(
         log.debug("step %d long_lived=True — injecting background-spawn enforcement", step_num)
 
     # Introspection-shaped run headed for the container lane: warn the worker
-    # its repo view is partial (see _INTROSPECTION_MOUNT_VIEW). Gated on the
-    # cheap checks only — the actual containerize decision (docker probe)
-    # happens inside the adapter; a docker-down degrade-to-host makes this
-    # notice harmlessly conservative, never the records-blind inverse.
+    # its repo view MAY be partial (see _INTROSPECTION_MOUNT_VIEW). Gated on
+    # the cheap checks only — the actual containerize decision (docker probe)
+    # happens inside the adapter — which is why the notice keys on the
+    # $MARO_MOUNT_VIEW env marker instead of asserting containerization: a
+    # docker-down degrade-to-host leaves the marker unset and the caveats
+    # self-cancel (R3-6), never the records-blind inverse.
     _mount_view_block = ""
     try:
         import container_exec as _ce_mv
