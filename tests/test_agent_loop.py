@@ -1320,6 +1320,30 @@ def test_budget_ladder_killswitch_restores_hard_stop(monkeypatch, tmp_path):
     assert "token_budget" in (result.stuck_reason or "")
 
 
+def test_token_budget_breach_note_carries_dollars(monkeypatch, tmp_path):
+    """The breach note explains itself in dollars, not just tokens — cache
+    reads bill at ~0.1x so the token count overstates real cost 3-4x, and
+    an unanswered pause has to be interpretable in the unit that matters."""
+    _setup_workspace(monkeypatch, tmp_path)
+    import config as _cfg
+    _orig_get = _cfg.get
+
+    def _gated_get(key, default=None):
+        if key == "budget.extension_ladder":
+            return False
+        return _orig_get(key, default)
+    monkeypatch.setattr(_cfg, "get", _gated_get)
+    result = run_agent_loop(
+        "budget note dollars test",
+        project="budget-note-dollars",
+        dry_run=True,
+        token_budget=100,
+    )
+    assert result.status == "stuck"
+    assert "est. spend" in (result.stuck_reason or "")
+    assert "$" in (result.stuck_reason or "")
+
+
 # ---------------------------------------------------------------------------
 # Phase 35 P2: _generate_refinement_hint
 # ---------------------------------------------------------------------------

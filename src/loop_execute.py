@@ -1079,9 +1079,13 @@ def _execute_main_loop(
         # run 692bd96f (2026-07-11) finished all steps + passed closure, then
         # the cost stop after the final step stamped it stuck/failed.
         if token_budget is not None and (total_tokens_in + total_tokens_out) >= token_budget:
+            # Dollars ride along: tokens are the misleading unit (cache reads
+            # bill at ~0.1x, so tokens_in overstates real cost 3-4x) — an
+            # unanswered pause must explain itself in the unit that matters.
             _budget_note = (
                 f"token_budget={token_budget} exceeded "
-                f"({total_tokens_in + total_tokens_out} total tokens after step {step_idx})"
+                f"({total_tokens_in + total_tokens_out} total tokens, "
+                f"~${total_cost_usd:.4f} est. spend after step {step_idx})"
             )
             if remaining_steps:
                 _bl = _ladder_decision("token")

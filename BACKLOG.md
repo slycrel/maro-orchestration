@@ -1360,17 +1360,19 @@ capture**, which is what makes the rung amortize instead of evaporate.
   2400 are deliberate shapes; note the artifact seat already tells its
   model "you see only this", which is the honest pattern the gate lacked.)
 
-- [ ] **Budget-pause breach note is denominated in tokens** (observed
-  2026-08-02 while tracing the ladder). `_ladder_pause` stamps
-  `budget-decision`, records `token_budget=N exceeded (M total tokens
-  after step K)`, and emits an operator question naming the three
-  resolutions — so Jeremy's "we need data capture at pause time so an
-  unanswered pause still explains itself" is substantially satisfied.
-  The wrinkle: the internal note is in **tokens**, and this arc spent
-  five runs proving tokens are the misleading unit (cache reads bill at
-  0.1×, so `tokens_in` is ~3–4× the real cost). Spend-UX says dollars in
-  internals. Cheap fix: carry `provider_cost_usd`-to-date alongside the
-  token count in the note.
+- [x] **Budget-pause breach note is denominated in tokens** (observed
+  2026-08-02 while tracing the ladder) — **FIXED 2026-08-06** (this
+  commit). `_ladder_pause` stamps `budget-decision`, records the breach
+  note, and emits an operator question naming the three resolutions —
+  so Jeremy's "we need data capture at pause time so an unanswered
+  pause still explains itself" was substantially satisfied. The
+  wrinkle: the internal note was in **tokens**, and this arc spent five
+  runs proving tokens are the misleading unit (cache reads bill at
+  0.1×, so `tokens_in` is ~3–4× the real cost). The token breach note
+  now carries the cache-aware `total_cost_usd` accumulator alongside
+  the token count (`…, ~$X.XXXX est. spend after step K`); the cost
+  breach note was already dollar-denominated. Pinned by
+  `test_token_budget_breach_note_carries_dollars`.
 
 - [x] ~~**Closure judges a partial view of an artifact and can attribute
   adjacent content to fields**~~ — **FIXED 2026-08-03 (`f7b775c`).**
