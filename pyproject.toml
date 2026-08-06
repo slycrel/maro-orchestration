@@ -137,6 +137,7 @@ py-modules = [
     "correspondence",
     "cross_ref",
     "decision_prior",
+    "delta_replay",
     "director",
     "discretion_readout",
     "dispatch_envelope",
