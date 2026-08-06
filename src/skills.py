@@ -618,6 +618,7 @@ def find_matching_skills(
     adapter=None,
     use_router: bool = True,
     project: str = "",
+    only_ids=None,
 ) -> List[Skill]:
     """Find skills whose trigger_patterns match the goal.
 
@@ -633,6 +634,12 @@ def find_matching_skills(
         project:    Project slug for isolation. When non-empty, only skills
                     with project=="" (global) or project==this value are
                     considered. Empty string disables filtering (legacy).
+        only_ids:   Restrict candidates to these skill ids (the run's
+                    injected manifest at attribution time). When given,
+                    A/B challengers in the set stay eligible — they were
+                    the routed arm. When None (candidate discovery),
+                    challengers are excluded: a challenger is reachable
+                    ONLY via its parent's routing.
 
     Returns:
         Top matching skills in score order (up to 3 via router, 2 via keywords).
@@ -653,6 +660,19 @@ def find_matching_skills(
     # Filter out skills with open circuit breaker — they've failed 3+ times
     # and shouldn't be injected until rewritten/recovered
     skills = [s for s in skills if getattr(s, "circuit_state", "closed") != "open"]
+
+    if only_ids is not None:
+        _only = {str(i) for i in only_ids}
+        skills = [s for s in skills if s.id in _only]
+    else:
+        # A/B challengers are not independent candidates (adversarial
+        # review 2026-08-06 R3-2): a challenger sharing its parent's
+        # triggers used to match alongside it, making the arms
+        # non-exclusive ([parent, challenger] — or the challenger twice)
+        # and crediting both on every outcome. A challenger enters a
+        # prompt ONLY when select_variant_for_task routes its parent to
+        # it.
+        skills = [s for s in skills if not getattr(s, "variant_of", None)]
     if not skills:
         return []
 
@@ -1133,12 +1153,18 @@ def attribute_failure_to_skills(
     step_text: str,
     failure_reason: str,
     goal: str = "",
+    only_ids=None,
 ) -> List[str]:
     """Find matching skills for a step that failed and record failure against them.
 
+    ``only_ids`` restricts attribution to the run's injected manifest
+    (R3-2) — None keeps the legacy full-pool match for callers with no
+    manifest.
+
     Returns list of skill_ids that were attributed.
     """
-    matched = find_matching_skills(step_text + " " + goal, use_router=False)
+    matched = find_matching_skills(step_text + " " + goal, use_router=False,
+                                   only_ids=only_ids)
     attributed = []
     for skill in matched:
         try:

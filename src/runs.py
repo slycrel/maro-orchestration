@@ -1180,6 +1180,39 @@ def append_skills_manifest(entries: list, *, stage: str) -> Optional[Path]:
         return None
 
 
+def read_injected_skill_ids(run_dir_path: Optional[Path] = None) -> Optional[set]:
+    """Deduped skill ids from the run's skills_manifest.jsonl.
+
+    Tri-state on purpose (R3-2 attribution rail): None when the manifest
+    is absent — the recorder never ran, so what was injected is unknown;
+    an empty set when present-and-empty — nothing was injected, and
+    crediting anything would be bystander attribution.
+    """
+    try:
+        rd = run_dir_path or current_run_dir()
+        if rd is None:
+            return None
+        manifest = Path(rd) / "source" / "skills_manifest.jsonl"
+        if not manifest.is_file():
+            return None
+        ids: set = set()
+        for line in manifest.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            for entry in rec.get("skills") or []:
+                sid = str(entry.get("id", "") or "")
+                if sid:
+                    ids.add(sid)
+        return ids
+    except Exception:
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Captain's log slicing — record offset at run-start, slice on finalize.
 # Same pattern scope_ab_runner.py uses externally; centralized here so

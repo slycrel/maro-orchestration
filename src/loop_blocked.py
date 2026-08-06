@@ -411,14 +411,27 @@ def _process_blocked_step(ctx: LoopContext, blk: BlockedStepContext) -> tuple:
         try:
             from skills import attribute_failure_to_skills, find_matching_skills, record_variant_outcome, record_skill_outcome
             from metrics import estimate_cost as _est_cost
-            attribute_failure_to_skills(step_text, _stuck_reason, goal=ctx.goal)
+            # Same injected-manifest restriction as the success path
+            # (loop_post_step, R3-2): failures must not be attributed to
+            # keyword bystanders either — that's how a never-injected
+            # skill's circuit breaker trips on someone else's step.
+            _fail_match_kwargs = {"use_router": False, "project": ctx.project}
+            try:
+                from runs import read_injected_skill_ids as _read_inj
+                _inj_ids = _read_inj()
+            except Exception:
+                _inj_ids = None
+            if _inj_ids is not None:
+                _fail_match_kwargs["only_ids"] = _inj_ids
+            attribute_failure_to_skills(step_text, _stuck_reason, goal=ctx.goal,
+                                        only_ids=_inj_ids)
             _fail_cost = _est_cost(
                 int(outcome.get("tokens_in", 0)),
                 int(outcome.get("tokens_out", 0)),
                 getattr(step_adapter, "model_key", None),
                 cache_read_tokens=int(outcome.get("cache_read_tokens", 0)),
             )
-            for _sk in find_matching_skills(step_text + " " + ctx.goal, use_router=False, project=ctx.project):
+            for _sk in find_matching_skills(step_text + " " + ctx.goal, **_fail_match_kwargs):
                 if getattr(_sk, "variant_of", None) is not None:
                     record_variant_outcome(_sk.id, success=False)
                 # Phase 59: record failure telemetry per skill

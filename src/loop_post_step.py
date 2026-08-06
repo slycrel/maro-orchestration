@@ -1013,7 +1013,23 @@ def _process_done_step(
             step_model,
             cache_read_tokens=int(outcome.get("cache_read_tokens", 0)),
         )
-        for _sk in find_matching_skills(step_text + " " + ctx.goal, use_router=False, project=ctx.project):
+        # Credit only skills that actually entered this run's prompts
+        # (adversarial review 2026-08-06 R3-2): the keyword re-match alone
+        # credited bystanders that were never injected, and — with arms
+        # now exclusive — would never credit the routed challenger. The
+        # manifest restricts the pool; keyword match against the step
+        # still decides which injected skill this step exercised. Manifest
+        # absent (recorder never ran: old runs, NOW lane) falls back to
+        # the legacy pool.
+        _match_kwargs = {"use_router": False, "project": ctx.project}
+        try:
+            from runs import read_injected_skill_ids as _read_inj
+            _inj_ids = _read_inj()
+        except Exception:
+            _inj_ids = None
+        if _inj_ids is not None:
+            _match_kwargs["only_ids"] = _inj_ids
+        for _sk in find_matching_skills(step_text + " " + ctx.goal, **_match_kwargs):
             update_skill_utility(_sk.id, success=True)
             if getattr(_sk, "variant_of", None) is not None:
                 record_variant_outcome(_sk.id, success=True)

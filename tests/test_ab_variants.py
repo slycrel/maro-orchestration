@@ -439,3 +439,57 @@ class TestRetirementArchive:
         prov = list((memory_dir() / "skill_provenance").glob("*.json"))
         assert any(json.loads(p.read_text(encoding="utf-8"))["decision"] == "retire"
                    for p in prov)
+
+
+# ---------------------------------------------------------------------------
+# Arm exclusivity (adversarial review 2026-08-06 R3-2)
+# ---------------------------------------------------------------------------
+
+class TestArmExclusivity:
+    """A challenger sharing its parent's triggers used to match alongside it
+    in find_matching_skills — [parent, challenger] (or the challenger twice
+    after per-row routing), with outcome credit landing on every keyword
+    match. The arms were never exclusive, so retire/promote decisions ran on
+    contaminated trials. A challenger must be reachable ONLY via its
+    parent's routing; attribution reaches it ONLY via the injected
+    manifest."""
+
+    def test_challenger_is_not_an_independent_candidate(self):
+        from skills import find_matching_skills
+        parent = _skill("p-excl", name="deploy helper")
+        parent.trigger_patterns = ["deploy the service"]
+        challenger = _skill("c-excl", name="deploy helper v2",
+                            variant_of="p-excl")
+        challenger.trigger_patterns = ["deploy the service"]
+        with mock.patch("skills.load_skills",
+                        return_value=[parent, challenger]):
+            matched = find_matching_skills("deploy the service now",
+                                           use_router=False)
+        assert [s.id for s in matched] == ["p-excl"]
+
+    def test_only_ids_keeps_the_routed_challenger_eligible(self):
+        """Attribution runs over the injected manifest: when routing put
+        the challenger in the prompt, only_ids must reach it."""
+        from skills import find_matching_skills
+        parent = _skill("p-excl2", name="deploy helper")
+        parent.trigger_patterns = ["deploy the service"]
+        challenger = _skill("c-excl2", name="deploy helper v2",
+                            variant_of="p-excl2")
+        challenger.trigger_patterns = ["deploy the service"]
+        with mock.patch("skills.load_skills",
+                        return_value=[parent, challenger]):
+            matched = find_matching_skills("deploy the service now",
+                                           use_router=False,
+                                           only_ids={"c-excl2"})
+        assert [s.id for s in matched] == ["c-excl2"]
+
+    def test_empty_manifest_credits_nothing(self):
+        """Present-and-empty manifest means nothing was injected — crediting
+        any keyword match would be bystander attribution."""
+        from skills import find_matching_skills
+        parent = _skill("p-excl3", name="deploy helper")
+        parent.trigger_patterns = ["deploy the service"]
+        with mock.patch("skills.load_skills", return_value=[parent]):
+            matched = find_matching_skills("deploy the service now",
+                                           use_router=False, only_ids=set())
+        assert matched == []
