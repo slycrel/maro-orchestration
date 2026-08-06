@@ -1761,15 +1761,39 @@ inspectable before any behavior changes.
   0.70 include bar — packaging on legacy counters would have shipped
   skills the run-verdict evidence doesn't support. Denominator grows
   organically now that the seam fires live (index v2 fix).
-- [ ] **NOW + evolver_verify lanes are verdict-blind (census
-  2026-07-29)**: both record outcomes without loop_id (NOW: 20 rows;
-  evolver_verify: 5, still accruing), so stamp_outcome_verdict can
-  never land on them — they are permanent "unverdicted" rows. Decide
-  per lane whether a verdict is even meaningful (NOW one-shots are
-  conversational; evolver_verify arguably self-verdicts), THEN wire
-  loop_id stamping or an explicit exempt marker — an honest
-  denominator needs rows to be verdictable-or-exempt, not silently
-  neither.
+- [x] **NOW + evolver_verify lanes are verdict-blind (census
+  2026-07-29)** — **CLOSED 2026-08-06 (`1031cf1`)**, mostly by work that
+  had already shipped. Re-censused against 1,493 rows before touching
+  anything, and both the item's headline and its proposed fix were stale:
+
+  - **Denominator artifact.** "12% of NOW rows judged" pools 20 pre-ship
+    rows with 4 post-ship ones. Chunk B shipped 2026-07-31; **every NOW
+    row before that date is unjudged and every one after is judged.**
+    Post-ship coverage across all lanes is 41/45 (91%) judged, 42/45
+    carrying a verdict source. Same trap as the LT-arc cost denominator —
+    *check the ship date before believing a rate.*
+  - **Wrong fix.** The item said "wire loop_id stamping". Both lanes stamp
+    their verdict **inline at record time**, so loop_id was never the
+    blocker — NOW via `_verify_now_outcome`, evolver_verify via
+    `goal_achieved=passed` + `goal_verdict_source="deterministic_tests"`
+    (the test suite IS the judge). Their rows still carry no loop_id and
+    are judged anyway.
+  - **The residual was in `agenda`** — the lane the census did not flag.
+    3 rows since the ship date, all with loop_id, all silently unjudged.
+    Two real bugs behind them, both fixed in `1031cf1`: the tripwire
+    watched `done` only (though `_closure_eligible_statuses` includes
+    `stuck`, `partial`, `restart` — so an unjudged stuck run is the same
+    gap, and the old pin asserting otherwise was wrong against the code),
+    and the honesty event went to the captain's log while the **outcomes
+    row stayed silent** — the ledger being the thing a denominator counts.
+    Rows now stamp `goal_verdict_source="closure_never_stamped"` with
+    `goal_achieved=None`: absence with a reason is a fact, absence alone
+    is a hole indistinguishable from "not judged yet".
+
+  Left open deliberately: `error`-status runs (backend death) still carry
+  no marker — blaming closure there points at the wrong layer, and it
+  wants its own reason code. And the tripwire has a named false positive
+  (closure also requires `_ran_any_step`; run metadata has no step count).
 - [x] **"done" runs occasionally skip closure silently (census
   2026-07-29)** — SHIPPED 2026-08-02 as LT-0 (b): `DONE_WITHOUT_VERDICT`
   honesty event in `runs.close_run` (see the LT arc entry for detail).
