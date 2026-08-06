@@ -90,11 +90,11 @@ pass, not a quiet fix:
   (conductor.py:70, heartbeat.py:779, quality_gate.py:682) always get
   empty. If inspector findings are wanted, give it a finalize-cadence
   lane like the evolver got (loop_finalize every-Nth-run); that's a
-  design decision, not a bug fix. Sub-find, fixable without a decision:
-  `_REPHRASING_MIN_COUNT` is double-dead by construction — no
-  comparison site anywhere AND `SIGNAL_REPEATED_REPHRASE` has zero
-  producers (declared/listed/described, never emitted). Implement the
-  detector or remove constant+signal.
+  design decision, not a bug fix. ~~Sub-find, fixable without a
+  decision: `_REPHRASING_MIN_COUNT` double-dead~~ **DONE 2026-08-06
+  same-day (74722ee)** — constant+signal removed with a
+  reintroduce-with-detector-or-not-at-all note at the declaration
+  site; only the decision-shaped inspector-lane question remains here.
 - [ ] **3. Node-promotion gate will ~never fire as built — threshold vs
   matching design.** `NODE_PROMOTE_MIN_APPLICATIONS=2` needs two dedup
   re-observations of the same candidate title at Jaccard-trigram ≥0.7
