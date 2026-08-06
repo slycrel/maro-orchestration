@@ -127,8 +127,20 @@ pass, not a quiet fix:
   workspace; but tests depend on the legacy-pin isolation shape
   (OPENCLAW_WORKSPACE=tmp_path → tmp_path/prototypes/maro-orchestration/
   memory), so the unification needs the arch-platform read and a test
-  sweep. Interim hazard note: any script/tool pinning the legacy vars
-  to the real workspace is silently talking to the shadow store today.
+  sweep. **Husk archived 2026-08-06** (Jeremy's call) to
+  `~/.maro/workspace/archive/prototypes-husk-2026-08-06/` — 25 files
+  incl. the March poe-orchestration NOW artifacts, path preserved per
+  retention decree. Sharpened diagnosis from the verification probe:
+  with a legacy var pinned, memory_dir() routes to the prototypes path
+  UNCONDITIONALLY (orch_root falls through to "traditional regardless"
+  — husk existence is irrelevant, and memory_dir's mkdir recreates the
+  husk as a side effect; observed live). The archive move therefore
+  fixes only the unpinned case, where a pre-existing husk would win
+  orch_root()'s step-2 exists() check for its ~30 importing consumers
+  (persona, captains_log, checkpoint, build_loop_runner, …). The pinned
+  case remains code-only: any script pinning the legacy vars to the
+  real workspace still talks to a shadow store today — build-loop.sh
+  with a workspace arg is the known live instance.
 - [ ] **4. Scan suggestions have no dedup-on-save — noise generator on
   frozen inputs.** `_save_suggestions` (evolver_store.py:278) never
   dedups, so every finalize re-derives and re-saves the same findings:
