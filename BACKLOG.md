@@ -1096,9 +1096,21 @@ capture**, which is what makes the rung amortize instead of evaporate.
   (fetch_tool.py, pdf binary, `nosuch` audit); (f) tool-fragment parse
   leak (finding 10).
 
-- [ ] **Workers write skill files to a directory nothing reads
-  (`projects/<slug>/skills/`) — the self-improvement loop is severed at
-  the landing surface (found LT-4 2026-08-05, reproduced 2/2).** Both
+- [x] **Workers write skill files to a directory nothing reads
+  (`projects/<slug>/skills/`) — SHIPPED 2026-08-06.** Jeremy decided
+  per recommendation ("I don't have a strong opinion... let's go with
+  your recommendation"): **promotion-side ingest.** One-dir fix:
+  `_lite_candidate_files` now scans `projects/<slug>/skills/` (listed
+  before the project artifacts dir so the scan cap can't starve it),
+  routing dead-drop skills through the ONE vetted skills-lite lane —
+  shape check, dangerous-pattern scan, injection guard, overlay copy +
+  provisional companion with validation stamping. Two pins
+  (`TestDeadDropIngest`): end-to-end promote + direct scanner
+  (red-verified — the end-to-end alone passed incidentally because the
+  2026-08-05 serve-all-artifacts change copies project .md files into
+  `rd/artifact/`, which the lite scan covers; that path depends on
+  deliverable-ranking luck under the 12-slot cap, so the scanner pin is
+  the load-bearing one). Original finding preserved below. — Both
   B1 cold and B1w, told to "capture the access path as a reusable
   skill file … future runs can load", wrote genuinely generic,
   high-quality skill docs (`source-verification-ladder.md`,
@@ -1115,8 +1127,8 @@ capture**, which is what makes the rung amortize instead of evaporate.
   **Done 2026-08-05:** both stranded ladders hand-reviewed and rescued
   into `~/.maro/workspace/skills/` (the overlay the runtime reads),
   each with a provenance header naming this finding — reversible
-  curation, not a pipeline. **Decision owed (Jeremy): fix direction.**
-  My recommendation: **promotion-side ingest** (option 2) — at run end
+  curation, not a pipeline. **Decision made 2026-08-06: promotion-side
+  ingest** (option 2, recommended and shipped above) — at run end
   the promotion pipeline already owns the skill store and its
   guardrails (provisional tier, circuit breakers, dedup); scanning the
   run's project `skills/` dir for worker-authored .md docs keeps one

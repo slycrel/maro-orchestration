@@ -1551,3 +1551,58 @@ def test_locate_deliverables_collision_first_wins(workspace):
     served = (rd / "artifact" / "notes.md").read_text()
     assert "ranked winner" in served
     assert [Path(rel).name for rel in card["served_artifacts"]] == ["notes.md"]
+
+
+class TestDeadDropIngest:
+    """Workers write self-authored skills to projects/<slug>/skills/ — a
+    dead drop nothing read (LT-4, reproduced 2/2; both stranded ladders
+    hand-rescued). Decision 2026-08-06 (Jeremy, per recommendation):
+    promotion-side ingest — that dir joins the skills-lite candidate scan
+    so dead-drop skills ride the ONE vetted lane (shape check, dangerous-
+    pattern scan, injection guard, overlay + provisional companion),
+    never a parallel promoter."""
+
+    def test_project_skills_dir_is_ingested(self, workspace):
+        import config
+        import orch_items
+
+        create_run_dir(
+            "h00dd001", prompt="research and mint a verification ladder",
+            lane="agenda", model="claude",
+            extra_metadata={"goal_achieved": True, "project": "proj-deaddrop",
+                            "loop_ids": ["loopDD01"]},
+        )
+        pdir = orch_items.projects_root() / "proj-deaddrop"
+        (pdir / "skills").mkdir(parents=True)
+        (pdir / "skills" / "ladder.md").write_text(TestSkillsLite.SKILL_MD)
+        finalize_run("h00dd001", status="done")
+
+        card = curate_run("h00dd001")
+        sl = card.get("skills_lite")
+        assert sl and [p["name"] for p in sl["promoted"]] == ["fetch_release_notes"]
+        assert (config.skills_dir() / "fetch_release_notes.md").is_file()
+        from skills import load_skills
+        comp = [s for s in load_skills() if s.name == "fetch_release_notes"]
+        assert comp and comp[0].tier == "provisional"
+
+    def test_scanner_reads_project_skills_dir_directly(self, workspace):
+        """The scan must include projects/<slug>/skills/ itself — not rely
+        on the file incidentally surviving locate_deliverables' 12-slot
+        ranking into rd/artifact/ (a busy run can push a skill file out of
+        the served set, re-opening the dead drop)."""
+        import orch_items
+        from run_curation import _lite_candidate_files
+
+        rd = create_run_dir(
+            "h00dd002", prompt="mint a ladder", lane="agenda", model="claude",
+            extra_metadata={"goal_achieved": True, "project": "proj-dd2"},
+        )
+        pdir = orch_items.projects_root() / "proj-dd2"
+        (pdir / "skills").mkdir(parents=True)
+        target = pdir / "skills" / "ladder.md"
+        target.write_text(TestSkillsLite.SKILL_MD)
+        finalize_run("h00dd002", status="done")
+        import json as _json
+        meta = _json.loads((rd / "metadata.json").read_text())
+
+        assert target in _lite_candidate_files(rd, meta)

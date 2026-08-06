@@ -2206,21 +2206,6 @@ Sample: the 2026-05-13..17 window of `~/.maro/workspace/runs/` (478 dirs total;
   Overnight guardrails held by Claude: no container flip (Jeremy's
   one-liner), no live-run spend batches — code work only.
 
-- **2026-08-06** — Executor image tag gets a contents revision:
-  `maro-executor:<cli-version>-r<IMAGE_REVISION>`. Jeremy: *"Off the cuff,
-  I'm in favor of adorning the version somehow, but more ignorant than I
-  should be on the repercussions. If we gain more than we lose with a bigger
-  refactor I'm ok with that, otherwise let's keep it simple."* Measured the
-  repercussions: the tag is derived in ONE place and nothing parses it back
-  into a version, so simple won — one constant, one f-string, one assertion,
-  two doc lines. The CLI pin answers "which claude", the revision answers
-  "which image"; a Dockerfile digest census fails if contents change without
-  a bump. Hand-bumped integer over a content digest deliberately: what is
-  being audited is a human decision to change the toolset, and a digest is
-  unreadable in `docker images`. Unblocked baking pytest into the image
-  (apt, not pip — pip would let any step install arbitrary PyPI packages at
-  run time).
-
 ## Threads (system-maintained — nothing leaves this list silently)
 
 Active:
@@ -6504,3 +6489,25 @@ ordering-dependent failures in test_verdict_learning; reloads removed
 (both modules read env at call time). Suite 7700 green. Remaining
 backlog items in this sweep's scope are all decision-gated (world-facts
 §7, LeAct A/B go, LT-4 direction, STORE retention, evidence-lens seat).
+
+### 2026-08-06 — Decisions: mint-grounding shape, skill dead-drop direction, seed-reader A/B go
+
+Three Jeremy calls in one message (~01:30 local):
+1. **Mint-time grounding = evidence annotation, not another judge.**
+   Quote: "Agree with your rationale; evidence will help with certainty,
+   we don't need a fresh set of eyes for this with another judge."
+   Scope ratified: start at the learning-store mints (lessons, skills,
+   teachings), annotate-with-receipts fail-open; fail-closed only where
+   reuse republishes (B3w propagation). Run-narrative grounding rides
+   the same probe later.
+2. **Skill dead-drop fix = promotion-side ingest** (my recommendation,
+   his "I don't have a strong opinion... let's go with your
+   recommendation"). Project-dir skill files enter the ONE vetted
+   write-path (provisional mint + validation harness + provenance
+   stamps), not a second parallel promoter.
+3. **Seed-reader style-exemplar A/B: GO, subagent-managed.** Quote:
+   "I'm ok starting a subagent to manage the A/B testing." memory.py:274
+   "emulate this style and specificity" vs LeAct Fig 3b's
+   diversity-preserving form; runs BEFORE the Δ gate per the queue row.
+   World-facts / LeAct docs remain queued ("still feels a bit like
+   homework, it will happen eventually").

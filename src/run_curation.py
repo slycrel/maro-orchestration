@@ -670,12 +670,21 @@ def _code_regions(text: str) -> str:
 
 def _lite_candidate_files(rd: Path, meta: dict) -> List[Path]:
     """Skill-shaped .md candidates: run-dir artifact/ + build/, plus the
-    project artifacts dir (same join as spend_transparency)."""
+    project skills/ + artifacts dirs (same join as spend_transparency).
+
+    projects/<slug>/skills/ is where workers drop self-authored skills —
+    a dead drop nothing read until 2026-08-06 (LT-4, reproduced 2/2;
+    decision: promotion-side ingest through THIS one vetted lane, no
+    parallel promoter). Listed before the project artifacts dir so the
+    scan cap can't starve the highest-precision source."""
     dirs = [rd / "artifact", rd / "build"]
     try:
         _pd = _project_dir_for(meta)
-        if _pd is not None and (_pd / "artifacts").is_dir():
-            dirs.append(_pd / "artifacts")
+        if _pd is not None:
+            if (_pd / "skills").is_dir():
+                dirs.append(_pd / "skills")
+            if (_pd / "artifacts").is_dir():
+                dirs.append(_pd / "artifacts")
     except Exception:
         pass
     out: List[Path] = []
