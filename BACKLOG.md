@@ -1104,6 +1104,46 @@ capture**, which is what makes the rung amortize instead of evaporate.
   3 (unvetted files leaking straight into the global overlay with no
   tier/breaker protections).
 
+- [ ] **Poe's X steal-list run (2026-08-05, handle `83a2c805`,
+  @rvaniaaaa's 8-agent skill-discovery pipeline) — the deliverable is
+  good; three captures out of it.** Run's own output:
+  `projects/users-ask-verbatimplease-run-this/steal_list.md` — 13
+  claims tagged vs maro code with 26 file refs, adversarially
+  re-verified w/ one self-correction. Verdict said not-achieved (0.82)
+  but that's static-probe bias (modality static:5 on a research-only
+  task) + closure check #4 breaking on the container mount view — the
+  content itself held up to my re-read.
+  1. **STEAL — scout wiring (its T1/T4/S1, post-correction):**
+     GitHub-wide search ALREADY EXISTS
+     (`channels.py:GitHubChannel.search_repositories` + fetch tool
+     modes `github_repos`/`github_code`) but a repo-wide grep found
+     ZERO autonomous callers in evolver/skills/heartbeat. The steal is
+     a loop, not a capability: scheduled/triggered scout that derives
+     queries from maro's own skill gaps → existing `repo_scan.py` →
+     `skills.py:extract_skills` (which the run confirmed is
+     input-shape-ready). Fits the standing research-steal-list arc;
+     honor the link-farm-first decree (2026-08-02) when sourcing.
+  2. **CONTESTED — its "highest-leverage" S9 (mandatory human merge
+     gate on skill promotion).** Pushback on record: a human gate on
+     EVERY promotion makes Jeremy the sequencing blocker (fanout
+     decree), LT-4 same day showed auto-promotion amortizing well, and
+     "ungated" overstates (provisional tier + circuit breakers +
+     validation harness since 2026-08-01 already gate). Better-fitting
+     variant if wanted: human gate at TIER GRADUATION
+     (provisional→trusted) only, or periodic playbook-style surprise
+     reads of the skill store. S8 (git-mediated store) is
+     infrastructure for S9 — only if the variant is chosen.
+  3. **SMALL FIX — introspection-mount blindness:** the container's
+     introspection view is `src/` + `runs/` ro (no repo root, no
+     `.git`), and nothing TELLS the worker its view is partial — so
+     the run stated "the checkout was never git-initialized" as a
+     machine fact (false on host) and closure check #4 died on bare
+     `git status` exit 1. Fix: an env marker + one worker-prompt line
+     ("your view of the repo is partial: src/ and runs/ only"), and
+     closure probes shouldn't assume git exists in-container. Same
+     claims-vs-events family as LT-4 findings 1/6/7 — surfaced
+     organically the same day.
+
 - [ ] **Arbitrary-truncation audit** (opened 2026-08-03; **Jeremy:** *"this
   was one of the first truncations early on and I've been uncomfortable
   making those trades for 'keeping the context small' by cutting so much…
