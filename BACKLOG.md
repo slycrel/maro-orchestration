@@ -1184,11 +1184,15 @@ capture**, which is what makes the rung amortize instead of evaporate.
     74,288 max), oldest-first eviction, and the elision announced in the
     rendered text. Both were backwards on both axes — too tight per entry
     to be useful evidence, unbounded in the dimension that actually grows.
-  - ~~`step_exec.py:1597` — team-worker result at **600** into shared
-    context~~ — **DONE 2026-08-06 (`54a4be7`)**, budgeted. The whole point
-    of `shared_ctx` is that the next worker reads it INSTEAD of redoing the
-    work; 600 left 24.7% of step results intact, so three times in four it
-    inherited a fragment.
+  - `step_exec.py:1597` — team-worker result at **600** into shared context.
+    **Half done 2026-08-06 (`54a4be7`)**: the *store* side is budgeted now,
+    but that alone is inert and I overclaimed it in the commit message. A
+    concurrent session found the stacked cut: `team.firewall_shared_ctx`
+    re-clips every entry to `max_chars_per_entry=200` before a worker ever
+    sees it (`team.py:110`, call site `:208`), so the worker received 200
+    chars whether the store held 600 or 4,000. **Widening one cut in a stack
+    changes nothing** — the binding one is the tightest, and it was two
+    frames downstream. Their tree raises both; not landed as of this note.
   - ~~`memory.py:341` — result summary at **500** into lesson extraction~~
     — **DONE 2026-08-06 (`54a4be7`)**, and the diagnosis in this line was
     wrong. See "the cut that was decoration" below.
@@ -1234,6 +1238,34 @@ capture**, which is what makes the rung amortize instead of evaporate.
   Before widening one, measure what actually arrives — the binding
   constraint may be somewhere else entirely, and a cut nothing reaches is
   not a bug, it is a distraction from the one that is.
+
+  **The same lesson, twice, from opposite directions** (both found
+  2026-08-06): `memory.py:341` was a cut nothing reached, so widening it
+  did nothing — the loss was *upstream*. `step_exec.py:1597` was a cut
+  everything reached, but widening it also did nothing — a tighter cut sat
+  *downstream* (`team.firewall_shared_ctx` at 200). **Follow the value end
+  to end before touching any single number.** Trace where the evidence is
+  born, every hop it takes, and where it is consumed; the tightest hop is
+  the only one that matters, and it is rarely the one you are looking at.
+
+  ### Concurrent-session note (2026-08-06)
+
+  Another session worked this same worklist simultaneously and reached the
+  same root cause independently (including that `extract_deferred_lessons`
+  reads `outcome.summary`, which is what forces evidence into the stored
+  row). Their approach: a `context_budget.clip(text, cap)` helper — cut and
+  say so — applied with fixed caps. Mine: `ContextBudget` with two priced
+  profiles and per-step breadth. **These are complementary, not rival**:
+  `clip()` is the better universal idiom for single-value sites, the budget
+  is for multi-entry ones. Their tree additionally covers `director.py:775`
+  / `_compile_report`, `team.py`, `attribution.py`, `knowledge_bridge.py`
+  and `evolver_scans.py` — the rest of the PROMPT worklist. As of this note
+  their work is uncommitted on the box and overlaps four files landed in
+  `54a4be7` (`context_budget`, `loop_finalize`, `memory`, `step_exec`), so
+  it needs a merge, not a re-do. On the overlap, `54a4be7` supersedes on
+  `loop_finalize`/`memory` (per-step breadth vs the last step only) and is
+  equivalent on `step_exec`; **their `clip()` and their `team.py` fix are
+  the parts to keep.**
 
   **STORE worklist:** `memory_ledger.compress_old_outcomes` (120/600) — now
   load-bearing rather than optional, since the outcome rows carry real
