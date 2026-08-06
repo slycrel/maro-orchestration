@@ -125,17 +125,17 @@ pass, not a quiet fix:
   `workers_root()`/repo personas are unresolvable (workspace-arg
   build-loop runs live with this today). Mostly mechanical churn, low
   production value until someone hits (3) for real.
-- [ ] **4. Scan suggestions have no dedup-on-save — noise generator on
-  frozen inputs.** `_save_suggestions` (evolver_store.py:278) never
-  dedups, so every finalize re-derives and re-saves the same findings:
-  81 `calibration-*` suggestions since 2026-07-20 from a stream whose
-  newest row is 2026-07-03 (tail rows are `esc-test-001` test rows in
-  the live store); cost-* 76, drift 28 same shape. Wants a
-  dedup-on-save or scan-freshness pass (skip a scan whose input hasn't
-  moved since its last suggestion), not a point fix per scan. Related
-  cleanup ride-alongs: purge the test rows from calibration.jsonl
-  (opt-in, data-retention decree applies) and the orphaned canon
-  high-hit stats note (census doc §6).
+- [x] ~~**4. Scan suggestions have no dedup-on-save — noise generator on
+  frozen inputs.**~~ **SHIPPED 2026-08-07** — content-key dedup in
+  `_save_suggestions` (category, target, suggestion text): identical
+  findings skip the append whether the prior row is pending, applied,
+  or dismissed (so re-derivation can't resurrect a reviewed row), and
+  a moved input changes the derived text so real updates still save.
+  Store-level, covers all three producers (evolver, harness_optimizer,
+  loop_finalize) without per-scan freshness logic. Ride-alongs NOT
+  done: calibration.jsonl test-row purge stays opt-in (data-retention
+  decree — Jeremy's call) and the orphaned canon high-hit stats note
+  (census doc §6) stands.
 
 ### SP. Session-protocol arc — two-box Hermes dispatch, interactive goals, effort UX (OPENED 2026-07-15, Jeremy)
 

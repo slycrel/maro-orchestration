@@ -145,6 +145,49 @@ def test_save_and_load_suggestions(tmp_path):
     assert loaded[0].category == "new_guardrail"
 
 
+def _sugg(sid, text, category="observation", target="all", **kw):
+    return Suggestion(suggestion_id=sid, category=category, target=target,
+                      suggestion=text, failure_pattern="fp", confidence=0.5,
+                      outcomes_analyzed=5, **kw)
+
+
+def test_save_dedups_identical_content_across_calls(tmp_path):
+    with patch("evolver_store._suggestions_path", return_value=tmp_path / "suggestions.jsonl"):
+        _save_suggestions([_sugg("calibration-aaa11111", "widen threshold to 0.4")])
+        # Re-derivation from an unmoved input mints a fresh uuid but the same text
+        _save_suggestions([_sugg("calibration-bbb22222", "widen threshold to 0.4")])
+        loaded = load_suggestions()
+    assert len(loaded) == 1
+    assert loaded[0].suggestion_id == "calibration-aaa11111"
+
+
+def test_save_dedups_within_one_batch(tmp_path):
+    with patch("evolver_store._suggestions_path", return_value=tmp_path / "suggestions.jsonl"):
+        _save_suggestions([_sugg("a", "same text"), _sugg("b", "same text")])
+        loaded = load_suggestions()
+    assert len(loaded) == 1
+
+
+def test_save_keeps_rows_that_differ_in_content(tmp_path):
+    with patch("evolver_store._suggestions_path", return_value=tmp_path / "suggestions.jsonl"):
+        _save_suggestions([_sugg("a", "widen threshold to 0.4")])
+        _save_suggestions([_sugg("b", "widen threshold to 0.5")])  # input moved
+        _save_suggestions([_sugg("c", "widen threshold to 0.4", target="build")])
+        loaded = load_suggestions()
+    assert len(loaded) == 3
+
+
+def test_save_dedup_does_not_resurrect_dismissed(tmp_path):
+    from evolver_store import dismiss_suggestion, list_pending_suggestions
+    with patch("evolver_store._suggestions_path", return_value=tmp_path / "suggestions.jsonl"):
+        _save_suggestions([_sugg("a", "flaky guardrail")])
+        assert dismiss_suggestion("a", reason="not actionable")
+        # Same finding re-derived next finalize: must not come back as pending
+        _save_suggestions([_sugg("b", "flaky guardrail")])
+        assert list_pending_suggestions() == []
+        assert len(load_suggestions()) == 1
+
+
 def test_load_suggestions_empty(tmp_path):
     with patch("evolver_store._suggestions_path", return_value=tmp_path / "nope.jsonl"):
         result = load_suggestions()

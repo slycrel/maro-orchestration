@@ -21,7 +21,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 log = logging.getLogger("maro.evolver")
 
@@ -275,11 +275,50 @@ def get_suggestion(suggestion_id: str) -> Optional[Suggestion]:
     return None
 
 
+def _content_key(d: Dict[str, Any]) -> tuple:
+    """Identity of a suggestion's finding, independent of its suggestion_id.
+
+    Scans re-derive from their inputs every finalize, and some (calibration)
+    mint a fresh uuid per derivation — so id equality can't detect "same
+    finding again". Content equality can: if the input stream moved, the
+    derived text moves with it (thresholds, counts) and the row saves.
+    """
+    return (
+        str(d.get("category", "")),
+        str(d.get("target", "")),
+        str(d.get("suggestion", "")).strip(),
+    )
+
+
 def _save_suggestions(suggestions: List[Suggestion]) -> None:
+    """Append rows, skipping any whose finding is already on disk.
+
+    Dismissed and applied rows count as "already have it" — re-deriving
+    identical content from an unmoved input must not resurrect a suggestion
+    someone already reviewed (2026-08-06 live-writer census item 4: 81
+    duplicate calibration-* rows from a stream frozen since 2026-07-03).
+    """
     p = _suggestions_path()
     p.parent.mkdir(parents=True, exist_ok=True)
+    seen: set = set()
+    if p.exists():
+        try:
+            for line in p.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    seen.add(_content_key(json.loads(line)))
+                except Exception:
+                    continue
+        except Exception:
+            pass
     from file_lock import locked_append
     for s in suggestions:
+        key = _content_key(s.to_dict())
+        if key in seen:
+            continue
+        seen.add(key)
         locked_append(p, json.dumps(s.to_dict()))
 
 
