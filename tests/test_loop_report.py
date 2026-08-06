@@ -514,6 +514,86 @@ def test_report_links_artifacts_to_writing_step_and_outcome(monkeypatch, tmp_pat
     assert 'href="../artifact/bash_made.csv"' in content
 
 
+def test_outcome_panel_encodes_names_marks_unservable_and_shows_omissions(
+        monkeypatch, tmp_path):
+    """Adversarial review 2026-08-06 R2-9/R2-10/R2-5: '#' in a filename
+    must be %-encoded in the href (else it becomes a fragment), extensions
+    the viz server won't serve render as plain names not dead links, and
+    the card's omission record surfaces as a count beside the list."""
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+    import runs
+    rd = runs.create_run_dir("henc", prompt="encode me", lane="agenda")
+    runs.set_current_run_dir(rd)
+    art = rd / "artifact"
+    art.mkdir(exist_ok=True)
+    (art / "notes #1.md").write_text("hash in name")
+    (art / "model.bin").write_text("not servable")
+    (rd / "run_card.json").write_text(json.dumps({
+        "status": "done", "goal_achieved": True,
+        "served_artifacts": [f"{rd.name}/artifact/notes #1.md",
+                             f"{rd.name}/artifact/model.bin"],
+        "served_artifacts_omitted": [
+            {"path": "/x/dup.md", "reason": "basename-collision"}],
+    }))
+    lr.write_run_report(
+        project="p", loop_id="encloop", goal="encode me",
+        planned_steps=["s"], start_ts="2026-08-05T00:00:00+00:00",
+        step_outcomes=[StepOutcome(index=1, text="s", status="done",
+                                   result="ok", iteration=1)],
+        status="done",
+    )
+    content = Path(rd / "build" / "loop-encloop-report.html").read_text()
+    assert 'href="../artifact/notes%20%231.md"' in content
+    assert 'href="../artifact/notes #1.md"' not in content
+    assert 'href="../artifact/model.bin"' not in content
+    assert "model.bin</span>" in content
+    assert "1 ranked deliverable(s) not served" in content
+
+
+def test_step_attribution_joins_by_source_path_when_card_records_it(
+        monkeypatch, tmp_path):
+    """Adversarial review 2026-08-06 R2-6: when the card knows which source
+    path each served name came from, a step that wrote a same-named file
+    somewhere ELSE must not claim the served artifact. Cards without the
+    capture keep the basename fallback."""
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+    import runs
+    rd = runs.create_run_dir("hsrc", prompt="attribute honestly", lane="agenda")
+    runs.set_current_run_dir(rd)
+    art = rd / "artifact"
+    art.mkdir(exist_ok=True)
+    (art / "summary.md").write_text("the served one")
+    (rd / "run_card.json").write_text(json.dumps({
+        "status": "done", "goal_achieved": True,
+        "served_artifacts": [f"{rd.name}/artifact/summary.md"],
+        "served_artifact_sources": {"summary.md": "/proj/final/summary.md"},
+    }))
+    calls = rd / "build" / "calls"
+    calls.mkdir(parents=True, exist_ok=True)
+    rec = calls / "call-00001.json"
+    rec.write_text(json.dumps({
+        "model": "claude-haiku-4-5-20251001", "backend": "subprocess",
+        "prompt": "p", "response": "", "tokens_in": 10, "tokens_out": 5,
+        "tool_events": [
+            {"name": "Write",
+             "input": {"file_path": "/proj/draft/summary.md"}},
+        ],
+    }))
+    lr.write_run_report(
+        project="p", loop_id="srcloop", goal="attribute honestly",
+        planned_steps=["s"], start_ts="2026-08-05T00:00:00+00:00",
+        step_outcomes=[StepOutcome(index=1, text="s", status="done",
+                                   result="ok", iteration=1,
+                                   call_record=str(rec))],
+        status="done",
+    )
+    content = Path(rd / "build" / "loop-srcloop-report.html").read_text()
+    # The draft-writing step claims nothing…
+    assert 'wrote: <a class="art-link"' not in content
+    # …but the served artifact stays visible on the Outcome panel.
+    assert 'href="../artifact/summary.md"' in content
+
+
 def test_runs_index_links_served_artifacts(monkeypatch, tmp_path):
     """Files curation copied into <run>/artifact/ get index links — the viz
     server already served that path but nothing linked it, so a run's real

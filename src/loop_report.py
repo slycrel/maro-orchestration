@@ -791,14 +791,31 @@ def _render_timeline(
 
 _WRITE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
 
+# Extensions the viz server's artifact route actually serves (its
+# allowlist); anything else renders as a name, not a dead link (R2-10).
+_SERVABLE_EXTS = frozenset((".md", ".txt", ".html", ".json", ".csv"))
 
-def _step_artifact_names(call_record: str, artifact_names: set) -> List[str]:
+
+def _art_quote(name: str) -> str:
+    """URL-encode an artifact filename for an href (R2-9): '#'/'?' in a
+    valid filename otherwise become fragment/query and break the link."""
+    from urllib.parse import quote
+    return quote(str(name))
+
+
+def _step_artifact_names(call_record: str, artifact_names: set,
+                         artifact_sources: Optional[dict] = None) -> List[str]:
     """Served artifacts this step's write-family tool events touched.
 
-    Ground truth is the call record's tool_events (Write/Edit file_path
-    basenames), matched against what curation copied into <run>/artifact/.
-    Bash-written files don't attribute — they still show on the Outcome
-    panel's artifact list, so nothing goes invisible."""
+    Ground truth is the call record's tool_events (Write/Edit file_path),
+    matched against what curation copied into <run>/artifact/. When the
+    card recorded which SOURCE path each served name came from
+    (served_artifact_sources), the join is by full path — a step that
+    wrote draft/summary.md must not claim the served final/summary.md
+    (adversarial review 2026-08-06 R2-6). Cards predating the capture
+    fall back to the basename join. Bash-written files don't attribute —
+    they still show on the Outcome panel's artifact list, so nothing
+    goes invisible."""
     try:
         data = json.loads(Path(call_record).read_text(encoding="utf-8"))
     except Exception:
@@ -811,9 +828,14 @@ def _step_artifact_names(call_record: str, artifact_names: set) -> List[str]:
         fp = inp.get("file_path") if isinstance(inp, dict) else None
         if not fp:
             continue
-        name = Path(str(fp)).name
-        if name in artifact_names and name not in hits:
-            hits.append(name)
+        fp_str = str(fp)
+        name = Path(fp_str).name
+        if name not in artifact_names or name in hits:
+            continue
+        src = (artifact_sources or {}).get(name)
+        if src and fp_str != src:
+            continue  # same basename, different file — not the served one
+        hits.append(name)
     return hits
 
 
@@ -831,6 +853,13 @@ def _render_step_table(
         if art_dir.is_dir():
             artifact_names = {p.name for p in art_dir.iterdir() if p.is_file()}
     except OSError:
+        pass
+    artifact_sources: dict = {}
+    try:
+        _card = json.loads(
+            (report_dir.parent / "run_card.json").read_text(encoding="utf-8"))
+        artifact_sources = _card.get("served_artifact_sources") or {}
+    except Exception:
         pass
     rows = []
     for pos, s in enumerate(step_outcomes, start=1):
@@ -863,10 +892,11 @@ def _render_step_table(
             if cm and cm["model"]:
                 model_html = f'<span title="{_esc(cm["backend"])}">{_esc(_short_model(cm["model"]))}</span>'
             if artifact_names:
-                arts = _step_artifact_names(abs_rec, artifact_names)
+                arts = _step_artifact_names(abs_rec, artifact_names,
+                                            artifact_sources)
                 if arts:
                     links = " ".join(
-                        f'<a class="art-link" href="../artifact/{_esc(n)}">{_esc(n)}</a>'
+                        f'<a class="art-link" href="../artifact/{_art_quote(n)}">{_esc(n)}</a>'
                         for n in arts)
                     arts_html = f'<div class="step-arts">&#8627; wrote: {links}</div>'
         else:
@@ -1033,10 +1063,22 @@ def _render_verdict(report_dir: Path) -> str:
         ordered = [n for n in ranked if n in present]
         ordered += [n for n in present if n not in ordered]
         links = " ".join(
-            f'<a class="art-link" href="../artifact/{_esc(n)}">{_esc(n)}</a>'
+            (f'<a class="art-link" href="../artifact/{_art_quote(n)}">{_esc(n)}</a>'
+             if Path(n).suffix.lower() in _SERVABLE_EXTS
+             else f'<span class="meta" title="on disk in the run dir; not '
+                  f'served by the viz server">{_esc(n)}</span>')
             for n in ordered)
         arts_html = (f'<div class="meta" style="margin-top:6px">'
                      f'<b>Artifacts:</b> {links}</div>')
+    # No silent caps (R2-5): the card records what curation's cap or
+    # basename-collision rule dropped — surface the count where the
+    # artifact list claims completeness.
+    _omitted = card.get("served_artifacts_omitted") or []
+    if _omitted:
+        arts_html += (
+            f'<div class="meta" style="margin-top:2px">'
+            f'&#9888; {len(_omitted)} ranked deliverable(s) not served '
+            f'(cap/collision) &mdash; paths in run_card.json</div>')
     return (
         '<h2>Outcome</h2><div class="panel">'
         f'<div class="meta"><b>Verdict:</b> {badge} &middot; <b>Goal achieved:</b> {_esc(achieved_str)} '
@@ -1295,10 +1337,14 @@ def _render_report_html(
         run_status = str(_run_meta.get("status") or "")
     except Exception:
         pass
-    # "done" only: a backfilled crash coerces the loop to "interrupted"
-    # while its never-finalized metadata still says running — that run is
-    # dead, not finalizing.
-    finalizing = status == "done" and run_status == "running"
+    # "done" only: a crashed loop is coerced to "interrupted", so it never
+    # reads as finalizing. Metadata status stays EMPTY until close_run
+    # finalizes (nothing ever writes "running" — the original
+    # `run_status == "running"` condition made this badge unreachable,
+    # adversarial review 2026-08-06 R2-8): loop done + metadata not yet
+    # finalized IS the finalizing window. A post-loop crash shows the
+    # badge until the stranded sweep stamps the run, then it clears.
+    finalizing = status == "done" and run_status in ("", "running")
     status_html = _esc(status)
     if finalizing:
         status_html += (

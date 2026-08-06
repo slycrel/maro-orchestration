@@ -1699,3 +1699,61 @@ def test_truncated_llm_answer_preserves_full_copy(workspace, monkeypatch):
     assert len(card["answer_summary"]) <= 900
     preserved = (rd / "artifact" / "ANSWER.md").read_text()
     assert preserved == long_answer
+
+
+def test_locate_deliverables_records_what_it_drops(workspace):
+    """Adversarial-review pin R2-5/R2-6 (2026-08-06): the serving cap and
+    first-wins collision rule stand, but what they drop is RECORDED
+    (served_artifacts_omitted) and each served name carries its source
+    path (served_artifact_sources) so step attribution can join by full
+    path instead of crediting every same-named writer."""
+    import os
+    import time
+
+    import orch_items
+
+    rd = create_run_dir(
+        "h000omit", prompt="summarize findings", lane="agenda",
+        model="cheap",
+        extra_metadata={"project": "proj-omit", "goal_achieved": True},
+    )
+    pdir = orch_items.projects_root() / "proj-omit"
+    (pdir / "drafts").mkdir(parents=True)
+    winner = pdir / "notes.md"
+    winner.write_text("# Final notes — the ranked winner\n")
+    loser = pdir / "drafts" / "notes.md"
+    loser.write_text("# Early draft — must not be served\n")
+    now = time.time()
+    os.utime(loser, (now + 1, now + 1))
+    os.utime(winner, (now + 601, now + 601))
+    finalize_run("h000omit", status="done")
+    card = curate_run("h000omit")
+
+    assert card["served_artifact_sources"]["notes.md"] == str(winner)
+    omitted = card["served_artifacts_omitted"]
+    assert [o["reason"] for o in omitted] == ["basename-collision"]
+    assert omitted[0]["path"] == str(loser)
+
+
+def test_locate_deliverables_over_cap_is_recorded(workspace):
+    """The 13th ranked deliverable is not served — and the card says so
+    instead of pretending completeness."""
+    import orch_items
+    from run_curation import _SERVED_ARTIFACTS_CAP
+
+    create_run_dir(
+        "h000cap", prompt="produce many reports", lane="agenda",
+        model="cheap",
+        extra_metadata={"project": "proj-cap", "goal_achieved": True},
+    )
+    pdir = orch_items.projects_root() / "proj-cap"
+    pdir.mkdir(parents=True)
+    for i in range(_SERVED_ARTIFACTS_CAP + 2):
+        (pdir / f"report_{i:02d}.md").write_text(f"# Report {i}\n\ncontent\n")
+    finalize_run("h000cap", status="done")
+    card = curate_run("h000cap")
+
+    assert len(card["served_artifacts"]) == _SERVED_ARTIFACTS_CAP
+    omitted = card["served_artifacts_omitted"]
+    assert len(omitted) == 2
+    assert all(o["reason"] == "over-cap" for o in omitted)

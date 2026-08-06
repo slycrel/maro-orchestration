@@ -448,12 +448,23 @@ def locate_deliverables(rd: Path, meta: dict, card: dict) -> None:
     # tree and had to be dug off the box. First-wins on basename collision
     # (subdirs can repeat a name) so the ranking's judgement sticks.
     served: List[str] = []
+    served_sources: Dict[str, str] = {}
+    omitted: List[Dict[str, str]] = []
     try:
         dest_dir = rd / "artifact"
         dest_dir.mkdir(parents=True, exist_ok=True)
         taken: set = set()
-        for p in candidates[:_SERVED_ARTIFACTS_CAP]:
+        for i, p in enumerate(candidates):
+            # No silent caps (adversarial review 2026-08-06 R2-5): the cap
+            # and first-wins collision rule both stand — but what they drop
+            # is recorded, so "all ranked deliverables" reads honestly as
+            # "all served, N omitted" instead of pretending completeness.
+            if i >= _SERVED_ARTIFACTS_CAP:
+                omitted.append({"path": str(p), "reason": "over-cap"})
+                continue
             if p.name in taken:
+                omitted.append({"path": str(p),
+                                "reason": "basename-collision"})
                 continue
             try:
                 shutil.copy2(p, dest_dir / p.name)
@@ -462,11 +473,20 @@ def locate_deliverables(rd: Path, meta: dict, card: dict) -> None:
                 continue
             taken.add(p.name)
             served.append(f"{rd.name}/artifact/{p.name}")
+            # Source path per served name: the attribution join key. A
+            # basename alone credits every same-named writer (R2-6).
+            served_sources[p.name] = str(p)
     except Exception:
         log.debug("artifact dir setup failed for %s", rd, exc_info=True)
     if served:
         card["deliverable_link_path"] = served[0]
         card["served_artifacts"] = served
+        card["served_artifact_sources"] = served_sources
+    if omitted:
+        card["served_artifacts_omitted"] = omitted
+        log.info("curation: %d ranked deliverable(s) not served (%s)",
+                 len(omitted),
+                 ", ".join(sorted({o["reason"] for o in omitted})))
 
 
 def _strip_result_preamble(text: str) -> str:
@@ -1318,7 +1338,8 @@ _CURATOR_SPECS: List[CuratorSpec] = [
                 provides=("success_class", "status", "goal_achieved",
                           "goal_verdict_summary", "audit_incomplete",
                           "audit_repair_required", "total_cost_usd"),
-                optional_provides=("goal_verdict_downgrade_reason",
+                optional_provides=("goal_verdict_source",
+                                   "goal_verdict_downgrade_reason",
                                    "goal_verdict_gaps",
                                    "clarification_question",
                                    "stop_verdict", "stop_evidence",
@@ -1328,7 +1349,9 @@ _CURATOR_SPECS: List[CuratorSpec] = [
                 optional_provides=("result_excerpt", "result_path")),
     CuratorSpec(locate_deliverables,
                 optional_provides=("deliverables", "deliverable_link_path",
-                                   "served_artifacts")),
+                                   "served_artifacts",
+                                   "served_artifact_sources",
+                                   "served_artifacts_omitted")),
     CuratorSpec(synthesize_answer,
                 optional_provides=("answer_summary", "answer_source",
                                    "answer_truncated"),
