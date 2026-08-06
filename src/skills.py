@@ -1229,36 +1229,62 @@ def maybe_auto_promote_skills(adapter: Any = None, max_repair_attempts: int = 3,
         max() so old stores with real counts keep working.
       - (if adapter) passes LLM validation gate or repairs within max_repair_attempts
 
-    At most `limit` skills promote per sweep (same cap shape as
-    knowledge-node promotion): the first sweep after the dead-gate fix
-    would otherwise push the whole 134-skill backlog through the LLM
-    validation harness in one maintenance pass.
+    At most `limit` CANDIDATES enter the validation harness per sweep
+    (same cap shape as knowledge-node promotion): the first sweep after
+    the dead-gate fix would otherwise push the whole 134-skill backlog
+    through the LLM validation harness in one maintenance pass. The cap
+    counts candidates, not successes — a pool of never-passing
+    provisionals must not turn the cap into unbounded validate+repair
+    spend every sweep.
+
+    Where SkillStats carries verdict-grounded evidence (injected_runs >
+    0), it can veto: the legacy counters credit keyword-matched
+    bystanders (~1.0 base rate, see skill_types.SkillStats), so a skill
+    whose actually-injected runs fail is held even if the inflated
+    counters look good.
 
     Returns list of promoted skill_ids.
     """
     skills = load_skills()
     promoted = []
-    changed = False
 
-    _stats_uses: Dict[str, int] = {}
+    _stats_by_id: Dict[str, Any] = {}
     try:
         for _st in get_all_skill_stats():
-            _stats_uses[_st.skill_id] = int(getattr(_st, "total_uses", 0) or 0)
+            _stats_by_id[_st.skill_id] = _st
     except Exception:
         pass
 
+    examined = 0
     for skill in skills:
-        if len(promoted) >= limit:
+        if examined >= limit:
             break
         if skill.tier != "provisional":
             continue
-        _uses = max(skill.use_count, _stats_uses.get(skill.id, 0))
+        _st = _stats_by_id.get(skill.id)
+        _uses = max(skill.use_count, int(getattr(_st, "total_uses", 0) or 0))
         if _uses < AUTO_PROMOTE_MIN_USES:
             continue
         if skill.utility_score < AUTO_PROMOTE_MIN_RATE:
             continue
+        _inj_runs = int(getattr(_st, "injected_runs", 0) or 0)
+        if (_inj_runs > 0
+                and float(getattr(_st, "injected_success_rate", 0.0) or 0.0)
+                < AUTO_PROMOTE_MIN_RATE):
+            logging.getLogger("maro.skills.promote").info(
+                "skill %s held: injected evidence (%d runs, rate %.2f) "
+                "contradicts legacy counters",
+                skill.id, _inj_runs,
+                float(getattr(_st, "injected_success_rate", 0.0) or 0.0))
+            continue
+        _evidence = "injected-confirmed" if _inj_runs > 0 else "legacy-only"
+        examined += 1
 
-        # Voyager/Agent0 steal: validation harness with repair loop
+        # Voyager/Agent0 steal: validation harness with repair loop.
+        # rewrite_skill (in_place default) persists repaired content to
+        # disk itself; this sweep only decides tier, applied on a fresh
+        # reload at the end so a repair is never clobbered by a stale
+        # in-memory row.
         _validation = "skipped"  # no adapter → validation never ran
         if adapter is not None:
             _logger = logging.getLogger("maro.skills.promote")
@@ -1272,12 +1298,6 @@ def maybe_auto_promote_skills(adapter: Any = None, max_repair_attempts: int = 3,
                     # fail-open default let it through (validation errored).
                     _validation = ("passed" if _result.get("judged", True)
                                    else "unjudged")
-                    if _attempt > 0:
-                        # Repair succeeded — update the skill in our list
-                        for i, s in enumerate(skills):
-                            if s.id == skill.id:
-                                skills[i] = _candidate
-                                break
                     break
                 # Try to repair via evolver.rewrite_skill
                 _logger.info(
@@ -1301,10 +1321,7 @@ def maybe_auto_promote_skills(adapter: Any = None, max_repair_attempts: int = 3,
                 )
                 continue  # don't promote
 
-        skill.tier = "established"
-        skill.content_hash = compute_skill_hash(skill)
         promoted.append(skill.id)
-        changed = True
         logging.getLogger("maro.skills").info("[skills] auto-promoted skill %s (%s)", skill.id, skill.name)
         try:
             from captains_log import log_event, SKILL_PROMOTED
@@ -1313,20 +1330,31 @@ def maybe_auto_promote_skills(adapter: Any = None, max_repair_attempts: int = 3,
                 subject=skill.name,
                 summary=f"Promoted provisional -> established. Utility: {skill.utility_score:.2f} over {_uses} uses.",
                 context={"skill_id": skill.id, "utility": round(skill.utility_score, 3), "use_count": _uses,
-                         "validation": _validation},
+                         "validation": _validation, "evidence": _evidence},
                 related_ids=[f"skill:{skill.id}"],
             )
         except Exception:
             pass
 
-    if changed:
-        _save_skills(skills)
+    if promoted:
+        # Tier changes land on a fresh reload: repairs above already
+        # saved the pool from their own load, so writing this sweep's
+        # pre-repair list back would revert them (and drop any
+        # concurrent mutation since our load). Reload, stamp tiers by
+        # id, save — the promoted object on disk is the repaired one.
+        _promoted_set = set(promoted)
+        fresh = load_skills()
+        for s in fresh:
+            if s.id in _promoted_set:
+                s.tier = "established"
+                s.content_hash = compute_skill_hash(s)
+        _save_skills(fresh)
         # Hermes steal: auto-export newly promoted skills as SKILL.md curated files
-        for skill in skills:
-            if skill.id in promoted:
+        for s in fresh:
+            if s.id in _promoted_set:
                 try:
                     from skill_loader import export_skill_as_markdown
-                    export_skill_as_markdown(skill)
+                    export_skill_as_markdown(s)
                 except Exception:
                     pass  # export is optional, never blocks promotion
 

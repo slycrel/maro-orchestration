@@ -1114,6 +1114,125 @@ def test_maybe_auto_promote_respects_limit(monkeypatch, tmp_path):
     assert sum(1 for t in tiers.values() if t == "established") == 2
 
 
+def test_maybe_auto_promote_repaired_skill_lands_established(monkeypatch, tmp_path):
+    """Adversarial-review pin R3-1 (2026-08-06): when validation fails once
+    and repair succeeds, the promotion used to be applied to a stale object
+    no longer in the list — SKILL_PROMOTED fired, the id was returned, and
+    the save persisted the repaired skill still-provisional. The on-disk row
+    must end up BOTH repaired and established. Red on revert."""
+    skill = _phase32_skill(tmp_path, tier="provisional",
+                           utility=AUTO_PROMOTE_MIN_RATE + 0.1,
+                           use_count=AUTO_PROMOTE_MIN_USES)
+    monkeypatch.setattr("skills._skills_path", lambda: tmp_path / "skills.jsonl")
+    monkeypatch.setattr("skills._skill_stats_path", lambda: tmp_path / "skill-stats.jsonl")
+    import skill_loader
+    monkeypatch.setattr(skill_loader, "export_skill_as_markdown", lambda s: None)
+
+    calls = {"n": 0}
+
+    def _validate(candidate, adapter):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return {"valid": False, "reason": "vague", "repair_hint": "", "judged": True}
+        return {"valid": True, "reason": "", "repair_hint": "", "judged": True}
+
+    def _fake_rewrite(candidate, adapter, **kwargs):
+        # Mimic rewrite_skill(in_place=True): fresh load, mutate, SAVE, return
+        # the fresh object — the sweep's in-memory list is now stale vs disk.
+        pool = load_skills()
+        target = next(s for s in pool if s.id == candidate.id)
+        target.description = "repaired description"
+        _save_skills(pool)
+        return target
+
+    monkeypatch.setattr("skills.validate_skill_for_promotion", _validate)
+    import evolver
+    monkeypatch.setattr(evolver, "rewrite_skill", _fake_rewrite)
+
+    promoted = maybe_auto_promote_skills(adapter=object())
+    assert skill.id in promoted
+    on_disk = next(s for s in load_skills() if s.id == skill.id)
+    assert on_disk.description == "repaired description"
+    assert on_disk.tier == "established"
+
+
+def test_maybe_auto_promote_limit_caps_llm_candidates(monkeypatch, tmp_path):
+    """Adversarial-review pin R3-3 (2026-08-06): `limit` must cap candidates
+    entering the LLM harness, not successful promotions — a pool of
+    never-passing provisionals used to get validated + repaired in full,
+    every sweep, with the cap never advancing. Red on revert."""
+    import json
+    rows = []
+    for i in range(4):
+        s = Skill(
+            id=f"cap{i}", name=f"Cap Skill {i}", description="d",
+            trigger_patterns=["t"], steps_template=["s"], source_loop_ids=[],
+            created_at="2026-08-06T00:00:00+00:00",
+            use_count=AUTO_PROMOTE_MIN_USES, success_rate=1.0,
+            tier="provisional", utility_score=1.0,
+        )
+        rows.append(json.dumps(_skill_to_dict(s)))
+    (tmp_path / "skills.jsonl").write_text("\n".join(rows) + "\n")
+    monkeypatch.setattr("skills._skills_path", lambda: tmp_path / "skills.jsonl")
+    monkeypatch.setattr("skills._skill_stats_path", lambda: tmp_path / "skill-stats.jsonl")
+
+    validated = {"n": 0}
+
+    def _always_invalid(candidate, adapter):
+        validated["n"] += 1
+        return {"valid": False, "reason": "no", "repair_hint": "", "judged": True}
+
+    monkeypatch.setattr("skills.validate_skill_for_promotion", _always_invalid)
+    import evolver
+    monkeypatch.setattr(evolver, "rewrite_skill", lambda c, a, **kw: None)
+
+    promoted = maybe_auto_promote_skills(adapter=object(), limit=2)
+    assert promoted == []
+    # 2 candidates x 1 validate each (rewrite returns None → stop): the other
+    # two eligible skills never reach the harness.
+    assert validated["n"] == 2
+
+
+def test_maybe_auto_promote_injected_evidence_vetoes(monkeypatch, tmp_path):
+    """Adversarial-review pin R3-4 (2026-08-06): SkillStats' legacy counters
+    credit keyword-matched bystanders (documented inflated in skill_types).
+    Where verdict-grounded evidence exists (injected_runs > 0), a failing
+    injected record must hold the skill even when legacy counters glow."""
+    import json
+    skill = _phase32_skill(tmp_path, tier="provisional",
+                           utility=1.0, use_count=AUTO_PROMOTE_MIN_USES)
+    monkeypatch.setattr("skills._skills_path", lambda: tmp_path / "skills.jsonl")
+    monkeypatch.setattr("skills._skill_stats_path", lambda: tmp_path / "skill-stats.jsonl")
+    (tmp_path / "skill-stats.jsonl").write_text(json.dumps({
+        "skill_id": skill.id, "skill_name": skill.name,
+        "total_uses": 20, "successes": 20, "failures": 0, "success_rate": 1.0,
+        "injected_runs": 3, "injected_successes": 0,
+        "injected_success_rate": 0.0,
+    }) + "\n")
+    promoted = maybe_auto_promote_skills()
+    assert promoted == []
+    assert load_skills()[0].tier == "provisional"
+
+
+def test_maybe_auto_promote_injected_evidence_confirms(monkeypatch, tmp_path):
+    """Companion to the veto pin: good injected evidence does not block."""
+    import json
+    skill = _phase32_skill(tmp_path, tier="provisional",
+                           utility=1.0, use_count=AUTO_PROMOTE_MIN_USES)
+    monkeypatch.setattr("skills._skills_path", lambda: tmp_path / "skills.jsonl")
+    monkeypatch.setattr("skills._skill_stats_path", lambda: tmp_path / "skill-stats.jsonl")
+    import skill_loader
+    monkeypatch.setattr(skill_loader, "export_skill_as_markdown", lambda s: None)
+    (tmp_path / "skill-stats.jsonl").write_text(json.dumps({
+        "skill_id": skill.id, "skill_name": skill.name,
+        "total_uses": 20, "successes": 20, "failures": 0, "success_rate": 1.0,
+        "injected_runs": 3, "injected_successes": 3,
+        "injected_success_rate": 1.0,
+    }) + "\n")
+    promoted = maybe_auto_promote_skills()
+    assert skill.id in promoted
+
+
 def test_maybe_demote_low_utility_established(monkeypatch, tmp_path):
     skill = _phase32_skill(tmp_path, tier="established",
                            utility=REWRITE_TRIGGER_RATE - 0.1,
