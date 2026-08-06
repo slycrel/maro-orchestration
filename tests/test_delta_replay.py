@@ -270,3 +270,107 @@ class TestScoreLesson:
         assert d["stratum"] == res.stratum
         assert d["calls"][0]["recorded_action"] == "extend"
         json.dumps(d)  # serializable as-is
+
+
+# ---------------------------------------------------------------------------
+# Effect promotion route (knowledge_web.promote_lesson_by_effect)
+# ---------------------------------------------------------------------------
+
+GOOD_EVIDENCE = {"delta": 0.59, "jackknife_spread": 0.09, "n_calls": 18,
+                 "stratum": "reason"}
+
+
+def _seed_medium_lesson(monkeypatch, tmp_path, **overrides):
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+    from memory import record_tiered_lesson
+    tl = record_tiered_lesson(
+        overrides.pop("lesson_text",
+                      "the deliverable path differed because the worker "
+                      "assumed artifacts/ existed"),
+        "agenda", "done", "goal", **overrides)
+    return tl
+
+
+class TestEffectPromotion:
+    def test_clears_bar_promotes_and_stamps_evidence(self, monkeypatch, tmp_path):
+        tl = _seed_medium_lesson(monkeypatch, tmp_path)
+        import knowledge_web as kw
+        assert kw.promote_lesson_by_effect(tl.lesson_id, GOOD_EVIDENCE) is True
+        longs = kw.load_tiered_lessons(tier=kw.MemoryTier.LONG, min_score=0.0)
+        row = next(l for l in longs if l.lesson_id == tl.lesson_id)
+        assert row.delta_evidence["route"] == "effect"
+        assert row.delta_evidence["delta"] == 0.59
+        # popped from MEDIUM, not duplicated
+        mediums = kw.load_tiered_lessons(tier=kw.MemoryTier.MEDIUM, min_score=0.0)
+        assert all(l.lesson_id != tl.lesson_id for l in mediums)
+
+    def test_tenure_not_required(self, monkeypatch, tmp_path):
+        tl = _seed_medium_lesson(monkeypatch, tmp_path)
+        import knowledge_web as kw
+        # Fresh row: sessions_validated=0, far below PROMOTE_MIN_SESSIONS —
+        # the whole point of the route (brief §1: tenure excludes
+        # blind-spot lessons).
+        assert tl.sessions_validated < kw.PROMOTE_MIN_SESSIONS
+        assert kw.promote_lesson_by_effect(tl.lesson_id, GOOD_EVIDENCE) is True
+
+    def test_below_delta_threshold_refused(self, monkeypatch, tmp_path):
+        tl = _seed_medium_lesson(monkeypatch, tmp_path)
+        import knowledge_web as kw
+        ev = dict(GOOD_EVIDENCE, delta=0.1)
+        assert kw.promote_lesson_by_effect(tl.lesson_id, ev) is False
+
+    def test_dominated_verdict_refused(self, monkeypatch, tmp_path):
+        # jackknife spread >= delta: one call owns the verdict
+        tl = _seed_medium_lesson(monkeypatch, tmp_path)
+        import knowledge_web as kw
+        ev = dict(GOOD_EVIDENCE, delta=0.4, jackknife_spread=0.5)
+        assert kw.promote_lesson_by_effect(tl.lesson_id, ev) is False
+
+    def test_rule_stratum_refused(self, monkeypatch, tmp_path):
+        # The validation's rule specimen measured NEGATIVE; a positive Δ on
+        # a rule lesson is noise by construction (LeAct §6).
+        tl = _seed_medium_lesson(monkeypatch, tmp_path)
+        import knowledge_web as kw
+        ev = dict(GOOD_EVIDENCE, stratum="rule")
+        assert kw.promote_lesson_by_effect(tl.lesson_id, ev) is False
+
+    def test_too_few_calls_refused(self, monkeypatch, tmp_path):
+        tl = _seed_medium_lesson(monkeypatch, tmp_path)
+        import knowledge_web as kw
+        ev = dict(GOOD_EVIDENCE, n_calls=3)
+        assert kw.promote_lesson_by_effect(tl.lesson_id, ev) is False
+
+    def test_killswitch_off_refuses(self, monkeypatch, tmp_path):
+        tl = _seed_medium_lesson(monkeypatch, tmp_path)
+        import knowledge_web as kw
+        monkeypatch.setattr(kw, "effect_promotion_enabled", lambda: False)
+        assert kw.promote_lesson_by_effect(tl.lesson_id, GOOD_EVIDENCE) is False
+
+    def test_provisional_row_never_reaches_long(self, monkeypatch, tmp_path):
+        tl = _seed_medium_lesson(monkeypatch, tmp_path, provisional=True)
+        import knowledge_web as kw
+        assert kw.promote_lesson_by_effect(tl.lesson_id, GOOD_EVIDENCE) is False
+
+
+class TestEffectRouteCensus:
+    def test_census_reports_both_routes_without_promoting(self, monkeypatch, tmp_path):
+        tl = _seed_medium_lesson(monkeypatch, tmp_path)
+        # oracle corpus: one judged-True run with one navigator call
+        import runs
+        rd = runs.create_run_dir("hcen", prompt="census", lane="agenda")
+        _write_call(rd / "build" / "calls", 1, "navigator decision",
+                    '{"move": "extend"}')
+        (rd / "run_card.json").write_text(json.dumps({"goal_achieved": True}))
+        from delta_replay import run_effect_route
+        adapter = ScriptedAdapter(tl.lesson)
+        out = run_effect_route(adapter, promote=False, samples=1)
+        assert out["n_oracle_calls"] == 1
+        row = next(r for r in out["census"] if r["lesson_id"] == tl.lesson_id)
+        assert row["delta"] == 1.0
+        assert row["tenure_eligible"] is False
+        assert row["promoted_by_effect"] is False
+        # census-only run must not move tiers
+        import knowledge_web as kw
+        longs = kw.load_tiered_lessons(tier=kw.MemoryTier.LONG, min_score=0.0)
+        assert all(l.lesson_id != tl.lesson_id for l in longs)

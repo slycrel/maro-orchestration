@@ -431,3 +431,135 @@ def score_lesson(
                               call.call_path, exc)
         result.calls.append(cd)
     return result
+
+
+# ---------------------------------------------------------------------------
+# Effect route orchestration (brief §3.3/§3.4) — CLI-driven, never ambient
+# ---------------------------------------------------------------------------
+
+def gather_oracle_decision_calls(runs_root: Optional[Path] = None) -> List[DecisionCall]:
+    """Every decision-bearing call across runs judged goal_achieved=True —
+    the corpus a lesson's Δ is measured over. run_card.json is the verdict
+    source (curation stamps it; absent/unjudged runs contribute nothing)."""
+    if runs_root is None:
+        try:
+            from config import workspace_root
+            runs_root = Path(workspace_root()) / "runs"
+        except Exception:
+            runs_root = Path.home() / ".maro" / "workspace" / "runs"
+    out: List[DecisionCall] = []
+    if not Path(runs_root).is_dir():
+        return out
+    for rd in sorted(Path(runs_root).iterdir()):
+        card_path = rd / "run_card.json"
+        if not card_path.exists():
+            continue
+        try:
+            card = json.loads(card_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if card.get("goal_achieved") is not True:
+            continue
+        out.extend(find_decision_calls(rd, goal_achieved=True))
+    return out
+
+
+def run_effect_route(
+    adapter: Any,
+    *,
+    promote: bool = False,
+    samples: int = 3,
+    limit: int = 5,
+    lesson_ids: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """Measure Δ for candidate MEDIUM lessons and (optionally) promote the
+    ones that clear the effect bar — the routes-census readout (brief §3.4)
+    is the return value either way: per candidate, Δ + both routes'
+    verdicts + overlap, so "what tenure alone would have missed" is
+    readable directly. promote=False is the census-only dry run.
+
+    Spend honesty: measurement is limit × 2 arms × samples × n_calls
+    replays on the caller's adapter — deliberate CLI-driven spend, which is
+    why nothing in the loop or maintenance cycles calls this.
+    """
+    from knowledge_web import (
+        MemoryTier, PROMOTE_MIN_SCORE, PROMOTE_MIN_SESSIONS,
+        _is_contested, _is_quarantined, load_tiered_lessons,
+        promote_lesson_by_effect,
+    )
+    calls = gather_oracle_decision_calls()
+    rows = [t for t in load_tiered_lessons(
+        tier=MemoryTier.MEDIUM, min_score=0.0, limit=None,
+    ) if not (t.provisional or _is_quarantined(t) or _is_contested(t))]
+    if lesson_ids:
+        wanted = set(lesson_ids)
+        rows = [t for t in rows if t.lesson_id in wanted]
+    else:
+        rows = [t for t in rows
+                if classify_stratum(t.lesson) == STRATUM_REASON]
+        rows.sort(key=lambda t: t.score, reverse=True)
+    dropped = max(0, len(rows) - limit)
+    rows = rows[:limit]
+
+    census: List[Dict[str, Any]] = []
+    for t in rows:
+        res = score_lesson(t.lesson, calls, adapter, samples=samples,
+                           max_calls=len(calls) or 1)
+        ev = res.as_dict()
+        ev.pop("calls", None)  # census row stays readable; raw detail is per-call
+        tenure_ok = (t.score >= PROMOTE_MIN_SCORE
+                     and t.sessions_validated >= PROMOTE_MIN_SESSIONS)
+        promoted = False
+        if promote:
+            promoted = promote_lesson_by_effect(t.lesson_id, ev)
+        census.append({
+            "lesson_id": t.lesson_id,
+            "lesson": t.lesson[:160],
+            "score": t.score,
+            "sessions_validated": t.sessions_validated,
+            **ev,
+            "tenure_eligible": tenure_ok,
+            "promoted_by_effect": promoted,
+        })
+    if dropped:
+        log.info("run_effect_route: measured top %d of %d candidates "
+                 "(%d not measured this pass)", len(rows),
+                 len(rows) + dropped, dropped)
+    return {
+        "n_oracle_calls": len(calls),
+        "samples": samples,
+        "promote": promote,
+        "candidates_not_measured": dropped,
+        "census": census,
+    }
+
+
+def _main(argv: List[str]) -> int:
+    """CLI: `python3 -m delta_replay [--promote] [--limit N] [--samples N]
+    [--lesson-id ID ...]` — census-only by default; --promote applies the
+    effect route to rows that clear the bar. Hosted-free rung only (the
+    ~$0 replay backend); refuses to run without it rather than silently
+    spending on a paid tier."""
+    import argparse
+    ap = argparse.ArgumentParser(prog="delta_replay")
+    ap.add_argument("--promote", action="store_true")
+    ap.add_argument("--limit", type=int, default=5)
+    ap.add_argument("--samples", type=int, default=3)
+    ap.add_argument("--lesson-id", action="append", default=None)
+    args = ap.parse_args(argv)
+
+    from hosted_free import build_hosted_free_adapter
+    adapter = build_hosted_free_adapter()
+    if adapter is None:
+        print("hosted-free rung unavailable — not falling back to a paid "
+              "tier; configure GROQ/GEMINI keys or pass an adapter in code")
+        return 2
+    out = run_effect_route(adapter, promote=args.promote, limit=args.limit,
+                           samples=args.samples, lesson_ids=args.lesson_id)
+    print(json.dumps(out, indent=2))
+    return 0
+
+
+if __name__ == "__main__":
+    import sys as _sys
+    raise SystemExit(_main(_sys.argv[1:]))

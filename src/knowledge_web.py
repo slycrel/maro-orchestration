@@ -138,6 +138,12 @@ class TieredLesson:
     # Sticky by design — no un-contest verb until a lesson-refight slice
     # exists (mirrors refight_rule). Old rows deserialize to {}.
     contested: Dict[str, Any] = field(default_factory=dict)
+    # Δ-gate (2026-08-06, delta_replay.py): replay-measured effect evidence
+    # when this lesson promoted by effect rather than tenure — {delta,
+    # jackknife_spread, n_calls, stratum, measured_at, route: "effect"}.
+    # Empty dict on tenure-promoted and unmeasured rows. Old rows
+    # deserialize to {}.
+    delta_evidence: Dict[str, Any] = field(default_factory=dict)
     # Mint-time grounding (2026-08-06, mint_grounding.py): receipt stamps
     # joining this lesson's method claims against the minting run's tool
     # events — [{claim, family, status: supported|unsupported|unprobed,
@@ -1129,6 +1135,113 @@ def promote_lesson(lesson_id: str) -> bool:
         from knowledge_lens import observe_pattern
         domain = getattr(target, "task_type", "") or ""
         observe_pattern(target.lesson, domain, source_lesson_id=target.lesson_id)
+    except Exception:
+        pass  # standing-rule pipeline must not block lesson promotion
+
+    return True
+
+
+# Δ-gate effect route (2026-08-06, DELTA_GATE_BUILD_BRIEF §3.3). Thresholds
+# validated on the LT-1 arms against pre-registered predictions before this
+# route existed: known-effective Δ=+0.59, known-inert Δ=−0.06, rule-stratum
+# Δ=−0.15 (record: docs/history/2026-08-06-delta-gate-validation.md). The
+# 0.30 default sits between the inert band and the validated effect.
+EFFECT_PROMOTE_MIN_DELTA = 0.30
+EFFECT_PROMOTE_MIN_CALLS = 6
+
+
+def effect_promotion_enabled() -> bool:
+    """Killswitch for the Δ-gate effect route (default ON — it only acts
+    when a replay measurement exists, and measurement is operator/CLI-
+    driven spend, not ambient). config: knowledge.effect_promotion_enabled."""
+    try:
+        from config import get as _cfg_get
+        return bool(_cfg_get("knowledge.effect_promotion_enabled", True))
+    except Exception:
+        return True
+
+
+def promote_lesson_by_effect(lesson_id: str, delta_evidence: Dict[str, Any]) -> bool:
+    """Effect-based route to LONG — tenure unmet is fine; measured Δ is the
+    eligibility (DELTA_GATE_BUILD_BRIEF §1: tenure selects for corpus
+    agreement, which excludes exactly the blind-spot lessons a Δ measure
+    values). The tenure route stays live beside this one.
+
+    `delta_evidence` comes from delta_replay.score_lesson's as_dict():
+    delta, jackknife_spread, n_calls, stratum at minimum. Eligibility:
+      - killswitch on (knowledge.effect_promotion_enabled)
+      - delta >= knowledge.effect_promotion_min_delta (default 0.30)
+      - n_calls >= knowledge.effect_promotion_min_calls (default 6)
+      - jackknife spread < delta (one call must not own the verdict)
+      - stratum == "reason" (rule lessons have Δ≈0 by construction —
+        LeAct §6 — and the validation's rule specimen measured NEGATIVE;
+        an accidental positive there would be noise)
+    plus the same boundary guards as tenure promotion (provisional /
+    quarantined / contested rows never reach decay-free LONG).
+    """
+    if not effect_promotion_enabled():
+        log.info("promote_lesson_by_effect: killswitch off — not promoting")
+        return False
+    try:
+        from config import get as _cfg_get
+        min_delta = float(_cfg_get("knowledge.effect_promotion_min_delta",
+                                   EFFECT_PROMOTE_MIN_DELTA))
+        min_calls = int(_cfg_get("knowledge.effect_promotion_min_calls",
+                                 EFFECT_PROMOTE_MIN_CALLS))
+    except Exception:
+        min_delta, min_calls = EFFECT_PROMOTE_MIN_DELTA, EFFECT_PROMOTE_MIN_CALLS
+
+    ev = dict(delta_evidence or {})
+    delta = ev.get("delta")
+    if not isinstance(delta, (int, float)) or delta < min_delta:
+        return False
+    if int(ev.get("n_calls") or 0) < min_calls:
+        return False
+    spread = ev.get("jackknife_spread")
+    if not isinstance(spread, (int, float)) or spread >= delta:
+        return False
+    if ev.get("stratum") != "reason":
+        return False
+
+    rows = load_tiered_lessons(tier=MemoryTier.MEDIUM, min_score=0.0, limit=None)
+    target = next((l for l in rows if l.lesson_id == lesson_id), None)
+    if not target:
+        return False
+    if target.provisional or _is_quarantined(target) or _is_contested(target):
+        log.info("promote_lesson_by_effect: %s is provisional/quarantined/"
+                 "contested — not promoting", lesson_id)
+        return False
+
+    popped: Dict[str, TieredLesson] = {}
+
+    def _pop(lessons: List[TieredLesson]) -> List[TieredLesson]:
+        t = next((l for l in lessons if l.lesson_id == lesson_id), None)
+        if t is None:
+            return lessons
+        popped["t"] = t
+        return [l for l in lessons if l.lesson_id != lesson_id]
+
+    _mutate_tiered_lessons(MemoryTier.MEDIUM, _pop)
+    target = popped.get("t")
+    if target is None:
+        return False
+    target.tier = MemoryTier.LONG
+    target.delta_evidence = {
+        "delta": float(delta),
+        "jackknife_spread": float(spread),
+        "n_calls": int(ev.get("n_calls") or 0),
+        "stratum": "reason",
+        "measured_at": ev.get("measured_at") or datetime.now(timezone.utc).isoformat(),
+        "route": "effect",
+    }
+    _append_tiered_lesson(target, tier=MemoryTier.LONG)
+    log.info("promote_lesson_by_effect: %s → LONG (Δ=%.3f over %d calls)",
+             lesson_id, float(delta), int(ev.get("n_calls") or 0))
+
+    try:
+        from knowledge_lens import observe_pattern
+        observe_pattern(target.lesson, getattr(target, "task_type", "") or "",
+                        source_lesson_id=target.lesson_id)
     except Exception:
         pass  # standing-rule pipeline must not block lesson promotion
 
