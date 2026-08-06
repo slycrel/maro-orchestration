@@ -6468,3 +6468,24 @@ positive-evidence principle binds skeptics too. Full scored record:
 shipped on Jeremy's nit: report pages now badge "loop done — run
 finalizing" while closure/curation/evolver still run (his "stuck?"
 read was the page conflating loop-terminal with run-terminal).
+
+### 2026-08-06 — Backlog cherry-pick sweep: three more no-decision items closed
+
+Continuing Jeremy's standing directive ("cherry pick from the backlog
+to close some things out"), three landed chunks: **65d05da** —
+claim-verifier resolves relative claimed paths in subdirectories (the
+bounded tree walk now indexes relpaths; whole-path suffix match, so
+"tests/test_ledger.py" verifies when the goal pointed into a subdir
+while wrong-dir claims still can't match; third-in-family false
+positive, first two cost verdicts). **e0cd654** — token-budget breach
+note now carries ~$ est. spend alongside the token count (tokens
+proved the misleading unit: cache reads bill ~0.1×). **a1add58** —
+mount-blindness fixed all three legs (MARO_MOUNT_VIEW env marker,
+PARTIAL VIEW step-prompt block for introspection-flagged container
+runs, closure "not a git repository" → inconclusive + plan-prompt
+rule). Side-find: the 08-06 test_unverdicted_is_marked fixture's
+importlib.reload split dataclass identity under xdist — 4
+ordering-dependent failures in test_verdict_learning; reloads removed
+(both modules read env at call time). Suite 7700 green. Remaining
+backlog items in this sweep's scope are all decision-gated (world-facts
+§7, LeAct A/B go, LT-4 direction, STORE retention, evidence-lens seat).
