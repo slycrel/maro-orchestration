@@ -1871,11 +1871,25 @@ inspectable before any behavior changes.
   as here: 132 runs, **129 of them in 2026-05 and none since 2026-07-04**,
   so this closes the gap for the next one rather than a live bleed.
 
-  Still open: the tripwire has a named false positive (closure also
-  requires `_ran_any_step`; run metadata has no step count, so a run that
-  completed zero steps trips it). Named in the code comment rather than
-  papered over — whoever next measures the denominator should expect a
-  small share of these and can separate them from the loop log.
+  ~~Still open: the tripwire has a named false positive~~ — **CLOSED
+  2026-08-06 (`e769dc4`)**, and my note calling it "a small share" was
+  wrong by an order of magnitude. Measured before building: **259 of the
+  345 unverdicted agenda runs on the box have zero completed steps — 75%
+  of the tripwire's firings were false positives**, which is the rate at
+  which a tripwire stops being read. Closed by naming the skip at the frame
+  that evaluates the condition (`handle.py`, which has `_ran_any_step` in a
+  local) rather than inferring it later from the loop log; the tripwire
+  itself needed no change, since it already skips anything carrying a
+  `goal_verdict_source`. Third member of the family, kept distinct because
+  they route to different places: `closure_never_stamped` (hunt a closure
+  bug), `run_errored` (backend death, nothing owed),
+  `closure_skipped_no_steps` (no work to judge).
+
+  **Method note worth keeping:** every one of the three residuals in this
+  item was mis-sized in the filing and re-sized by measurement — the NOW
+  rate was a ship-date artifact, the errored population was historically
+  dead, and this one was 15x larger than "small". Filing an estimate is
+  fine; acting on one without re-measuring is what keeps going wrong.
 - [x] **"done" runs occasionally skip closure silently (census
   2026-07-29)** — SHIPPED 2026-08-02 as LT-0 (b): `DONE_WITHOUT_VERDICT`
   honesty event in `runs.close_run` (see the LT arc entry for detail).
