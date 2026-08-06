@@ -89,6 +89,20 @@ INTERRUPT_STATUSES = frozenset(
 # same rows.
 PAUSED_STATUSES = INTERRUPT_STATUSES
 
+# Statuses meaning the run actually FINISHED EXECUTING and could therefore
+# have been judged — the population a missing closure verdict is a gap in.
+# Deliberately excludes PAUSED_STATUSES (the run is not over, so no verdict
+# is owed yet) and "error" (backend death; closure never got a chance, and
+# labelling that "closure never stamped" would blame the wrong layer — it
+# wants its own marker, not this one).
+EXECUTION_FINISHED_STATUSES = frozenset(("done", "stuck"))
+
+# Explicitly-unverdicted marker. Absence WITH a reason is a fact you can
+# count; absence alone is a hole that looks identical to "not judged yet".
+# Carries goal_achieved=None — we do not know, and claiming otherwise would
+# be the fabrication these guards exist to prevent.
+VERDICT_SOURCE_NEVER_STAMPED = "closure_never_stamped"
+
 # Typed pause reasons (§13e): WHY the run is paused, machine-readable.
 # Operator-class — a human is in the loop.
 PAUSE_OP_MANUAL = "manual-intervention"          # kill switch, operator stop directive

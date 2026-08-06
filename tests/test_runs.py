@@ -647,17 +647,38 @@ def test_close_run_verdicted_done_run_stays_silent(
     assert events == []
 
 
-def test_close_run_tripwire_skips_non_done_and_now_and_dry(
+def test_close_run_tripwire_covers_stuck_too(
         workspace, tmp_path, monkeypatch):
-    # stuck run: unverdicted is expected, not a closure gap
-    assert _close_with_log(workspace, tmp_path, monkeypatch, "dwv3",
-                           lane="agenda", status="stuck") == []
-    # NOW lane: outside the census scope (judged via the hosted-free family)
+    """A stuck run closure never judged is the same gap as a done one.
+
+    This pin used to assert the opposite -- "stuck run: unverdicted is
+    expected, not a closure gap" -- and that premise was wrong against the
+    code: `handle._closure_eligible_statuses` is ("done", "partial",
+    "stuck", "restart"), so closure is SUPPOSED to run on a stuck run.
+    "stuck" is a process status, not a verdict. Corrected 2026-08-06 after
+    the verdict-coverage census found exactly one such row (the ledger-kata
+    run, 2026-08-03) sitting silently unjudged.
+    """
+    events = _close_with_log(workspace, tmp_path, monkeypatch, "dwv3",
+                             lane="agenda", status="stuck")
+    assert len(events) == 1
+    # The summary must name the ACTUAL status -- it hardcoded "status=done".
+    assert "status=stuck" in events[0]["summary"]
+
+
+def test_close_run_tripwire_skips_now_and_dry(
+        workspace, tmp_path, monkeypatch):
+    # NOW lane: outside the census scope. It stamps its verdict inline at
+    # record time (chunk B, 2026-07-31), which is why loop_id was never
+    # NOW's blocker and why this post-hoc marker would be wrong for it.
     assert _close_with_log(workspace, tmp_path, monkeypatch, "dwv4",
                            lane="now", status="done") == []
     # dry runs are exempt
     assert _close_with_log(workspace, tmp_path, monkeypatch, "dwv5",
                            lane="agenda", status="done", dry_run=True) == []
+    # paused runs are not owed a verdict yet (§13e): the run is not over.
+    assert _close_with_log(workspace, tmp_path, monkeypatch, "dwv6",
+                           lane="agenda", status="interrupted") == []
 
 
 def test_resolve_run_dir_by_handle_and_loop_id(workspace):

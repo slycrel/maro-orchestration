@@ -728,30 +728,69 @@ def close_run(
     classified BackendError-info object; only its actionable fields are
     persisted.
     """
-    # Done-without-closure tripwire (LT-0 b): a done agenda run whose
-    # metadata carries no goal verdict means closure never stamped one
-    # (5/51 loop_id-era agenda rows at the 2026-07-29 census, 2 same-day —
-    # live, low-rate). Make the gap visible at the moment it becomes
-    # permanent instead of letting unverdicted done rows accrete silently.
+    # Finished-without-closure tripwire (LT-0 b): an agenda run whose metadata
+    # carries no goal verdict means closure never stamped one (5/51 loop_id-era
+    # agenda rows at the 2026-07-29 census, 2 same-day — live, low-rate). Make
+    # the gap visible at the moment it becomes permanent instead of letting
+    # unverdicted rows accrete silently.
     # Emitted BEFORE the log slice so the event rides the run's own slice.
-    if status == "done":
+    #
+    # Two corrections from the 2026-08-06 verdict-coverage census:
+    #
+    # 1. It watched `done` only, so a `stuck` run that closure never judged
+    #    was equally silent and equally invisible — 1 of the 3 residual rows.
+    #    An unjudged terminal run is the gap regardless of which terminal
+    #    status it wears; "stuck" is a process status, not a verdict.
+    # 2. The event landed in the captain's log while the OUTCOMES ROW — the
+    #    thing an honest denominator actually counts — still said nothing.
+    #    A log that knows and a ledger that doesn't is still a ledger you
+    #    cannot count. So stamp the row explicitly unverdicted: goal_achieved
+    #    stays None (we genuinely do not know, and None never erases an
+    #    existing provenance False) while the source records WHY it is absent.
+    #    That is the backlog's "verdictable-or-exempt, never silently
+    #    neither" — absence with a reason is a fact; absence alone is a hole.
+    #
+    # Known false positive, named rather than papered over: closure also
+    # requires `_ran_any_step` (handle.py), so a run that completed zero
+    # steps legitimately has no verdict and will still trip this. Run
+    # metadata carries no step count, so it cannot be told apart here.
+    # Whoever next measures the denominator should expect a small share of
+    # these and can separate them from the loop log's step records.
+    from stop_verdicts import (
+        EXECUTION_FINISHED_STATUSES,
+        VERDICT_SOURCE_NEVER_STAMPED,
+    )
+    if status in EXECUTION_FINISHED_STATUSES:
         try:
             meta = json.loads(
                 (run_dir(handle_id) / "metadata.json").read_text(encoding="utf-8"))
             if (not meta.get("goal_verdict_source")
                     and meta.get("lane") == "agenda"
                     and not meta.get("dry_run")):
+                _loop_id = str(meta.get("loop_id") or "")
                 from captains_log import log_event, DONE_WITHOUT_VERDICT
                 log_event(
                     DONE_WITHOUT_VERDICT,
                     subject=handle_id,
-                    summary=("run finalized status=done with no goal verdict "
-                             "in run metadata — closure never stamped one"),
+                    summary=(f"run finalized status={status} with no goal "
+                             "verdict in run metadata — closure never "
+                             "stamped one"),
                     context={"handle_id": handle_id,
+                             "status": str(status),
                              "lane": str(meta.get("lane", "")),
-                             "loop_id": str(meta.get("loop_id", ""))},
-                    loop_id=meta.get("loop_id") or None,
+                             "loop_id": _loop_id},
+                    loop_id=_loop_id or None,
                 )
+                if _loop_id:
+                    try:
+                        from memory_ledger import stamp_outcome_verdict
+                        stamp_outcome_verdict(
+                            _loop_id,
+                            goal_achieved=None,
+                            goal_verdict_source=VERDICT_SOURCE_NEVER_STAMPED,
+                        )
+                    except Exception:
+                        pass
         except Exception:
             pass
     try:
