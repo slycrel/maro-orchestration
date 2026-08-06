@@ -571,6 +571,60 @@ class TestDataPipelineEnforcementInExecuteStep:
 
 
 # ---------------------------------------------------------------------------
+# Mount-blindness notice (BACKLOG 2026-08-02, d9607baa's sibling find)
+# ---------------------------------------------------------------------------
+
+class TestMountViewNotice:
+    """An introspection-shaped run headed for the container lane must be TOLD
+    its repo view is partial — one run reported 'the checkout was never
+    git-initialized' as a machine fact (false on host) because nothing did."""
+
+    def _run_step(self, tmp_path, monkeypatch, *, flagged, mode):
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+        import container_exec as ce
+        monkeypatch.setattr(ce, "introspection_run", lambda: flagged)
+        monkeypatch.setattr(ce, "container_mode", lambda: mode)
+        monkeypatch.setattr(ce, "container_suppressed", lambda: False)
+
+        captured_msgs = []
+        adapter = MagicMock()
+        from llm import LLMResponse, ToolCall
+        adapter.complete.side_effect = lambda msgs, **kw: (
+            captured_msgs.append(msgs) or
+            LLMResponse("", [ToolCall("complete_step", {"result": "ok", "summary": "done"})],
+                        "tool_use", 10, 10)
+        )
+        from step_exec import execute_step, EXECUTE_TOOLS
+        execute_step(
+            goal="Diagnose why run X stalled",
+            step_text="Read the run records and summarize the stall",
+            step_num=1,
+            total_steps=1,
+            completed_context=[],
+            adapter=adapter,
+            tools=EXECUTE_TOOLS,
+        )
+        return captured_msgs[0][-1].content
+
+    def test_flagged_containerized_step_gets_partial_view_notice(self, tmp_path, monkeypatch):
+        msg = self._run_step(tmp_path, monkeypatch, flagged=True, mode="on")
+        assert "PARTIAL VIEW" in msg
+        assert "MARO_MOUNT_VIEW" in msg
+        assert ".git" in msg
+
+    def test_unflagged_run_gets_no_notice(self, tmp_path, monkeypatch):
+        msg = self._run_step(tmp_path, monkeypatch, flagged=False, mode="on")
+        assert "PARTIAL VIEW" not in msg
+
+    def test_containers_off_gets_no_notice(self, tmp_path, monkeypatch):
+        # Host execution sees the real machine — a partial-view warning there
+        # would be the inverse lie.
+        msg = self._run_step(tmp_path, monkeypatch, flagged=True, mode="off")
+        assert "PARTIAL VIEW" not in msg
+
+
+# ---------------------------------------------------------------------------
 # _classify_step
 # ---------------------------------------------------------------------------
 

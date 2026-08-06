@@ -372,6 +372,28 @@ _RECON_STEP_EXTRA = textwrap.dedent("""\
 """).strip()
 
 
+# Mount-blindness notice (BACKLOG 2026-08-02, d9607baa's sibling find): an
+# introspection-shaped run executes in a container whose repo view is partial
+# (maro source + run records ro — no repo root, no .git), and nothing TOLD
+# the worker — so one run reported "the checkout was never git-initialized"
+# as a machine fact, false on host. Injected only when the run is flagged
+# introspective AND containers are on; MARO_MOUNT_VIEW in the container env
+# is the matching ground-truth marker (container_exec.introspection_provision).
+_INTROSPECTION_MOUNT_VIEW = textwrap.dedent("""\
+
+    PARTIAL VIEW — this step runs in a container that sees only a slice of
+    the machine: the maro source (read-only) and run records, NOT the repo
+    root, .git, or workspace memory/config. Consequences:
+      - Absence here is NOT absence on the host. Never report "X does not
+        exist" / "the checkout is not a git repo" as a machine fact — say
+        "not visible from this container view" instead.
+      - Do not run git commands expecting a repository; there is none in
+        this view.
+      - $MARO_MOUNT_VIEW in your environment describes this view; cite it
+        when a finding depends on what you could or could not see.
+""").strip()
+
+
 # ---------------------------------------------------------------------------
 # Escape-pattern detectors (BACKLOG #23a / #23g)
 # ---------------------------------------------------------------------------
@@ -1171,6 +1193,22 @@ def execute_step(
         _long_lived_block = "\n\n" + _LONG_LIVED_PROCESS_EXTRA
         log.debug("step %d long_lived=True — injecting background-spawn enforcement", step_num)
 
+    # Introspection-shaped run headed for the container lane: warn the worker
+    # its repo view is partial (see _INTROSPECTION_MOUNT_VIEW). Gated on the
+    # cheap checks only — the actual containerize decision (docker probe)
+    # happens inside the adapter; a docker-down degrade-to-host makes this
+    # notice harmlessly conservative, never the records-blind inverse.
+    _mount_view_block = ""
+    try:
+        import container_exec as _ce_mv
+        if (_ce_mv.introspection_run()
+                and _ce_mv.container_mode() != "off"
+                and not _ce_mv.container_suppressed()):
+            _mount_view_block = "\n\n" + _INTROSPECTION_MOUNT_VIEW
+            log.debug("step %d introspection+container — injecting partial-view notice", step_num)
+    except Exception:
+        pass
+
     user_msg = (
         f"Overall goal: {goal}{ancestry_block}\n\n"
         f"Current step ({step_num}/{total_steps}) [{_step_type}]: {step_text}"
@@ -1182,6 +1220,7 @@ def execute_step(
         f"{_pipeline_block}"
         f"{_artifact_block}"
         f"{_long_lived_block}"
+        f"{_mount_view_block}"
         f"{_recon_block}\n\n"
         f"Complete this step now. Call complete_step when done or flag_stuck if blocked."
     )

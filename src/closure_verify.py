@@ -97,6 +97,9 @@ _CLOSURE_PLAN_SYSTEM = textwrap.dedent("""\
       endpoint status codes, websocket handshakes, process exit codes, or `grep -E`
       patterns that only encode the essential invariant).
     - Working directory provided — use relative paths from there.
+    - Do NOT assume the working directory is a git checkout: containerized
+      runs see a partial mount (no .git), so plan git-based probes only when
+      the work summary itself shows git commands succeeding.
     - If the goal produces no executable artifact (research, writing, analysis),
       return an empty list. If a failure mode cannot be mechanically probed in
       this environment (missing port, external service, credential needed), skip
@@ -546,6 +549,14 @@ def _check_outcome(*, exit_code: int, stderr: str = "") -> str:
     if "syntax error near unexpected token" in err or "syntax error: " in err:
         return "inconclusive"
     if "permission denied" in err or "operation not permitted" in err:
+        return "inconclusive"
+    # "not a git repository": the verifier's view lacks the host's .git —
+    # containerized introspection runs mount maro source + run records only
+    # (d9607baa: closure check #4 died on bare `git status` in-container).
+    # Same trade as permission-denied above: if the goal was literally "init
+    # a repo", the check goes inconclusive rather than fail — acceptable,
+    # since an environment-blind probe proves nothing either way.
+    if "not a git repository" in err:
         return "inconclusive"
     return "fail"
 

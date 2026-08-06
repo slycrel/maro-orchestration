@@ -48,28 +48,9 @@ log = logging.getLogger(__name__)
 # current published version with `npm view @anthropic-ai/claude-code version`.
 CLAUDE_CLI_VERSION = "2.1.210"
 
-# Image contents revision, independent of the CLI pin (Jeremy 2026-08-06:
-# "in favor of adorning the version somehow… otherwise let's keep it simple").
-#
-# The tag used to be `maro-executor:{CLAUDE_CLI_VERSION}` alone, which made it
-# a LIE about everything except the CLI: change the apt toolset, rebuild under
-# the same tag, and `maro-executor:2.1.210` now names two different images —
-# defeating the Dockerfile's own "image version auditable" goal (design §3).
-# The CLI pin answers "which claude"; this answers "which image". Bump it
-# whenever the Dockerfile's contents change without a CLI bump; it resets to
-# 1 when CLAUDE_CLI_VERSION moves, since that mints a fresh tag namespace.
-#
-# Deliberately a hand-bumped integer rather than a content digest: a digest is
-# self-maintaining but unreadable in `docker images` and in an operator's
-# muscle memory, and the thing being audited here is a human decision to
-# change the toolset. If drift between this and the Dockerfile ever bites in
-# practice, that is the moment to switch to a digest — not before.
-IMAGE_REVISION = 2
-
-# Default executor image tag. Encodes the CLI pin AND the contents revision
-# (design §3: "image version is auditable"). Override via
-# `executor.container_image`.
-DEFAULT_IMAGE = f"maro-executor:{CLAUDE_CLI_VERSION}-r{IMAGE_REVISION}"
+# Default executor image tag. Encodes the CLI pin (design §3: "image version
+# is auditable"). Override via `executor.container_image`.
+DEFAULT_IMAGE = f"maro-executor:{CLAUDE_CLI_VERSION}"
 
 # Dedicated auth volume (design §3 "Auth — the trap, named"): the container
 # never touches host ~/.claude — a named docker volume holds the container's
@@ -286,9 +267,7 @@ on the host under the write-fence exactly as before.
 
    Re-pin the CLI by editing CLAUDE_CLI_VERSION in src/container_exec.py
    (confirm the current version: npm view @anthropic-ai/claude-code version)
-   and rebuilding — the image tag tracks the pin. The `-r<N>` suffix is
-   IMAGE_REVISION, bumped when the image CONTENTS change without a CLI
-   bump, so a tag always names exactly one image.
+   and rebuilding — the image tag tracks the pin.
 
 2. Seed the dedicated auth volume with a one-time interactive login. This is
    a SECOND OAuth session on your account (same subscription/quota/ToS as the
@@ -416,8 +395,10 @@ def introspection_provision() -> Optional[dict]:
         `python3 -m <module>` works in-container for stdlib-only readers (the
         image ships python3); modules needing third-party deps fail loudly
         there, and the records mount above remains the actual guarantee.
-      - env markers so the worker knows what it has: MARO_INTROSPECTION=1 and
-        MARO_INTROSPECTION_RUNS=<records path> (identity-mapped host path).
+      - env markers so the worker knows what it has: MARO_INTROSPECTION=1,
+        MARO_INTROSPECTION_RUNS=<records path> (identity-mapped host path),
+        and MARO_MOUNT_VIEW describing the partial view (no repo root, no
+        .git) so the worker never reports its blinkered view as host fact.
 
     Fails CLOSED, all-or-nothing: no resolvable run-records dir → None, never
     a source-only mount with the introspection marker set — that would tell
@@ -441,7 +422,19 @@ def introspection_provision() -> Optional[dict]:
                 "run stays isolated", runs_dir)
             return None
         ro_mounts = [runs_real]
-        env = {"MARO_INTROSPECTION": "1", "MARO_INTROSPECTION_RUNS": runs_real}
+        env = {
+            "MARO_INTROSPECTION": "1",
+            "MARO_INTROSPECTION_RUNS": runs_real,
+            # Mount-blindness marker (BACKLOG 2026-08-02, run d9607baa's
+            # sibling find): nothing told the worker its view was partial, so
+            # it reported "the checkout was never git-initialized" as a
+            # machine fact — false on host. The prompt-side warning lives in
+            # step_exec; this is the in-container ground truth a probe can
+            # check.
+            "MARO_MOUNT_VIEW": (
+                "partial: maro source + run records only "
+                "(no repo root, no .git, no workspace memory/config)"),
+        }
         module_dir = os.path.dirname(os.path.realpath(__file__))
         if os.path.isdir(module_dir):
             ro_mounts.append(module_dir)

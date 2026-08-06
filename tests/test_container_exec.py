@@ -46,55 +46,9 @@ def _capturing_run(store, returncode=0, stdout="", stderr=""):
 # ---------------------------------------------------------------------------
 
 class TestConstants:
-    def test_default_image_encodes_cli_pin_and_contents_revision(self):
-        # The tag encodes the CLI pin so it's auditable (design §3), AND a
-        # contents revision — without it, changing the toolset and rebuilding
-        # makes one tag name two different images (Jeremy 2026-08-06).
-        assert ce.DEFAULT_IMAGE == (
-            f"maro-executor:{ce.CLAUDE_CLI_VERSION}-r{ce.IMAGE_REVISION}")
-
-    def test_image_revision_is_a_positive_int(self):
-        assert isinstance(ce.IMAGE_REVISION, int) and ce.IMAGE_REVISION >= 1
-
-    def test_dockerfile_changes_require_an_image_revision_bump(self):
-        """Census tripwire: the tag's honesty depends on a human bump.
-
-        The tag promises "this name is exactly one image". Nothing enforces
-        that promise at build time, so it is enforced here: edit the
-        Dockerfile without bumping IMAGE_REVISION (or bumping the CLI pin,
-        which mints a fresh tag namespace) and this fails with instructions.
-
-        Same shape as the pyproject py-modules census in test_packaging.py —
-        a constant that must track a file, checked by hashing the file.
-        """
-        import hashlib
-        from pathlib import Path
-
-        dockerfile = (Path(__file__).resolve().parent.parent
-                      / "deploy" / "docker" / "Dockerfile.executor")
-        assert dockerfile.exists(), dockerfile
-        digest = hashlib.sha256(dockerfile.read_bytes()).hexdigest()[:16]
-
-        # (CLAUDE_CLI_VERSION, IMAGE_REVISION) -> Dockerfile digest.
-        # Add a row when you bump; do not edit an existing row's digest.
-        KNOWN = {
-            ("2.1.210", 1): "fbcb4ad9b4ffb9aa",
-            ("2.1.210", 2): "1e0cf1a80909d799",   # + python3-pytest
-        }
-        key = (ce.CLAUDE_CLI_VERSION, ce.IMAGE_REVISION)
-        expected = KNOWN.get(key)
-        assert expected is not None, (
-            f"no recorded digest for {key}. If you changed the CLI pin or "
-            f"bumped IMAGE_REVISION, add ({key[0]!r}, {key[1]}): "
-            f"{digest!r} to KNOWN."
-        )
-        assert digest == expected, (
-            f"Dockerfile.executor changed ({digest} != {expected}) but the "
-            f"image tag did not: {ce.DEFAULT_IMAGE} would now name a second, "
-            f"different image. Bump IMAGE_REVISION in src/container_exec.py "
-            f"and add ({ce.CLAUDE_CLI_VERSION!r}, {ce.IMAGE_REVISION + 1}): "
-            f"{digest!r} to KNOWN."
-        )
+    def test_default_image_encodes_cli_pin(self):
+        # The tag encodes the CLI pin so it's auditable (design §3).
+        assert ce.DEFAULT_IMAGE == f"maro-executor:{ce.CLAUDE_CLI_VERSION}"
 
     def test_auth_mount_under_container_home(self):
         assert ce.AUTH_MOUNT == f"{ce.CONTAINER_HOME}/.claude"
@@ -967,6 +921,20 @@ class TestIntrospectionProvision:
         src_dir = os.path.dirname(os.path.realpath(ce.__file__))
         assert src_dir in out["ro_mounts"]
         assert out["env"]["PYTHONPATH"] == src_dir
+
+    def test_mount_view_marker_names_the_blind_spots(self, tmp_path, monkeypatch):
+        """Mount-blindness fix (d9607baa's sibling find): the env carries a
+        ground-truth description of the partial view so a worker never has
+        to report its blinkered view as host fact."""
+        import config as cfg
+        runs = tmp_path / "runs"; runs.mkdir()
+        monkeypatch.setattr(cfg, "workspace_root", lambda: tmp_path)
+        monkeypatch.setattr(ce, "get", lambda k, d=None: d)
+        ce.set_introspection_run(True)
+        out = ce.introspection_provision()
+        view = out["env"]["MARO_MOUNT_VIEW"]
+        assert view.startswith("partial:")
+        assert ".git" in view
 
     def test_workspace_root_itself_never_mounted(self, tmp_path, monkeypatch):
         # runs/ is a workspace DESCENDANT; the root (memory/, config, secrets)

@@ -3404,6 +3404,21 @@ class TestClosureFalseNegativeRegressions:
         assert _check_outcome(exit_code=1, stderr="cat: /var/log/x: Permission denied") == "inconclusive"
         assert _check_outcome(exit_code=1, stderr="Operation not permitted") == "inconclusive"
 
+    def test_not_a_git_repository_is_inconclusive(self):
+        """d9607baa: closure check #4 ran bare `git status` inside a
+        containerized introspection view (maro source + run records only,
+        no .git) and the exit was scored against the goal. The verifier's
+        view lacking the host's repo is missing data, not disproof."""
+        from closure_verify import _check_outcome
+        assert _check_outcome(
+            exit_code=128,
+            stderr="fatal: not a git repository (or any of the parent directories): .git",
+        ) == "inconclusive"
+        assert _check_outcome(
+            exit_code=1,
+            stderr="fatal: not a git repository",
+        ) == "inconclusive"
+
     def test_assertion_failure_stays_fail(self):
         """An AssertionError means the check RAN and the fact was false —
         that is legitimate disproof, not verifier breakage."""

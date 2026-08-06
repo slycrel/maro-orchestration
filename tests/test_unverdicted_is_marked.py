@@ -46,15 +46,13 @@ class TestTheStatusVocabulary:
 def run_env(tmp_path, monkeypatch):
     """A workspace with one agenda run dir and one outcomes row.
 
-    Deliberately NO importlib.reload: both modules resolve their paths per
-    call (`runs.runs_root`, `memory_ledger._memory_dir`), so the env var is
-    enough -- and reloading rebinds module-level DATACLASSES, so instances
-    made before the reload stop comparing equal to the reloaded class. That
-    contaminated four unrelated OutcomeVerdictStampResult equality tests in
-    whichever xdist worker happened to run this file first, and passed in
-    isolation. Same env var the house `workspace` fixture uses.
-    """
-    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+    No importlib.reload here: both runs and memory_ledger resolve the
+    workspace from env at CALL time, and reloading memory_ledger mints new
+    class objects — dataclass __eq__ then fails across the old/new split for
+    any already-imported module (test_verdict_learning's
+    OutcomeVerdictStampResult comparisons broke exactly this way under
+    xdist, 2026-08-06)."""
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
     import runs as _runs
     import memory_ledger as _ml
     return tmp_path, _runs, _ml
