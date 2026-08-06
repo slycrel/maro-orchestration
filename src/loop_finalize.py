@@ -23,6 +23,22 @@ from context_budget import ContextBudget, STORE_ENTRY_CAP, STORE_TOTAL_BUDGET
 log = logging.getLogger("maro.loop")
 
 
+def _grounding_for(lesson_text: str, loop_id: str):
+    """Mint-time grounding stamps for a single lesson (R1-3, 2026-08-06).
+
+    The recovery-lesson writers here have loop_id in hand — the same join
+    the reflect paths use. Fail-open by construction: any failure returns
+    [] and the absent-key discipline upstream keeps the row byte-identical.
+    """
+    if not loop_id:
+        return []
+    try:
+        from mint_grounding import ground_lessons_for_run
+        return ground_lessons_for_run([lesson_text], loop_id)[0]
+    except Exception:
+        return []
+
+
 def _step_evidence(step_outcomes, *, total_budget=None, entry_cap=None) -> str:
     """What the steps actually produced, bounded and honest about the bound.
 
@@ -593,15 +609,17 @@ def _finalize_loop(
                 if not dry_run:
                     try:
                         from memory import record_tiered_lesson as _record_lesson
+                        _rp_text = _recovery_plan_lesson_text(
+                            _diag.failure_class, _recovery.action)
                         _record_lesson(
-                            lesson_text=_recovery_plan_lesson_text(
-                                _diag.failure_class, _recovery.action),
+                            lesson_text=_rp_text,
                             task_type="agenda",
                             outcome=loop_status,
                             source_goal=goal[:120],
                             confidence=0.5,  # suggested, not yet verified by a completed run
                             lesson_type="recovery",
                             evidence_sources=[f"loop:{loop_id}"] if loop_id else [],
+                            grounding=_grounding_for(_rp_text, loop_id),
                         )
                     except Exception as _rp_exc:
                         log.debug("recovery-plan lesson record failed: %s", _rp_exc)
@@ -639,17 +657,19 @@ def _finalize_loop(
                 ("retry", "retry-with-hint"),
             )
             _kinds = sorted({k for e in failure_chain for m, k in _kind_markers if m in e})
+            _rv_text = (
+                f"[recovery-verified] {', '.join(_kinds) or 'recovery'} unblocked a run: "
+                f"{failure_chain[0][:100]}"
+            )
             _record_lesson(
-                lesson_text=(
-                    f"[recovery-verified] {', '.join(_kinds) or 'recovery'} unblocked a run: "
-                    f"{failure_chain[0][:100]}"
-                ),
+                lesson_text=_rv_text,
                 task_type="agenda",
                 outcome="done",
                 source_goal=goal[:120],
                 confidence=0.7,  # verified — the run completed after the recovery
                 lesson_type="recovery",
                 evidence_sources=[f"loop:{loop_id}"] if loop_id else [],
+                grounding=_grounding_for(_rv_text, loop_id),
             )
             log.info("recorded verified-recovery lesson (%d recovery steps)", recovery_steps)
         except Exception as _vr_exc:

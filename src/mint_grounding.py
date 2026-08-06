@@ -96,7 +96,12 @@ _AUTH_MARK = re.compile(
     r"|api[_-]?key['\"]?\s*[=:]\s*['\"]?[A-Za-z0-9_\-]{8,}"
     r"|token['\"]?\s*[=:]\s*['\"]?[A-Za-z0-9_\-]{8,}"
     r"|--user\b|-u\s+\S+:\S+|--cookie\b|-b\s+\S"
-    r"|\blogin\b|passw|credential", re.I)
+    # Assigned-value forms only (adversarial review 2026-08-06 R1-2): the
+    # bare words matched an anonymous `curl .../login` URL path — same
+    # false-support class as the pinned `token=a`. A password/credential
+    # FIELD carries a secret at any length; a URL containing "login" does
+    # not.
+    r"|passw\w*['\"]?\s*[=:]\s*\S|credentials?['\"]?\s*[=:]\s*\S", re.I)
 _TEST_CMD = re.compile(
     r"\bpytest\b|test[-_]safe|\bnpm test\b|\bgo test\b|\bunittest\b"
     r"|\bmake test\b", re.I)
@@ -161,6 +166,18 @@ def _tie_tokens(sentence: str) -> List[str]:
     toks = re.findall(r"[a-z0-9_.\-/]{4,}", sentence.lower())
     return [t for t in toks
             if t not in _STOPWORDS and t not in _VERB_TOKENS]
+
+
+# Identifier-shaped: hosts, paths, filenames, ids — the token shapes that
+# make a claim about a PARTICULAR thing rather than generic prose ("content",
+# "data"). These are what a false receipt would misattribute.
+_IDENTIFIER_SHAPED = re.compile(r"[./_\-\d]")
+
+
+def _specific_tokens(toks: List[str]) -> List[str]:
+    # Boundary punctuation is sentence syntax, not identifier shape —
+    # "fetch." must not read as specific while vendor.example does.
+    return [t for t in toks if _IDENTIFIER_SHAPED.search(t.strip("./_-"))]
 
 
 def collect_run_tool_events(run_dir) -> Optional[List[Dict[str, Any]]]:
@@ -246,18 +263,27 @@ def ground_text(text: str, events: List[Dict[str, Any]]) -> List[Dict[str, Any]]
                 "status": "supported",
                 "receipts": [e["ref"] for _, e in scored[:_MAX_RECEIPTS]],
             })
-        elif untied_status == "supported":
+        elif untied_status == "supported" and not _specific_tokens(toks):
+            # Family-level support only for GENERIC claims (adversarial
+            # review 2026-08-06 R1-1): "content was fetched" asserts
+            # nothing a family event can't cover. A claim that names an
+            # identifier-shaped specific (a host, a path, an id) which
+            # ties to NO candidate must not be stamped supported off an
+            # unrelated event — that attaches affirmatively wrong
+            # evidence, the exact false-support class this module
+            # refuses ("fetched from api-a" must not carry api-b's
+            # receipt).
             stamps.append({
                 "claim": c["claim"], "family": c["family"],
                 "status": "supported", "receipts": [cands[0]["ref"]],
-                "note": "family-level match; no keyword tie",
+                "note": "family-level match; claim names no specifics",
             })
         else:
             stamps.append({
                 "claim": c["claim"], "family": c["family"],
                 "status": "unprobed", "receipts": [],
-                "note": f"{len(cands)} probe-family events in the run; "
-                        f"none tie to this claim",
+                "note": f"{len(cands)} {c['family']}-family events in the "
+                        f"run; none tie to this claim's specifics",
             })
     return stamps
 

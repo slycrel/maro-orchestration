@@ -91,6 +91,47 @@ class TestGroundText:
         auth = [s for s in stamps if s["family"] == "auth"][0]
         assert auth["status"] == "unsupported"
 
+    def test_named_specific_does_not_ride_an_unrelated_receipt(self):
+        """Adversarial-review pin R1-1 (2026-08-06): 'fetched from api-a'
+        must not be stamped supported with api-b's receipt. A claim naming
+        an identifier-shaped specific that ties to NO candidate lands
+        unprobed — attaching an unrelated event as its receipt is the exact
+        false-support class this module refuses. Red on revert."""
+        events = [_ev(input_="curl -s https://api-b.example/other")]
+        stamps = ground_text(
+            "The report was fetched from api-a.example.", events)
+        fetch = [s for s in stamps if s["family"] == "fetch"][0]
+        assert fetch["status"] == "unprobed"
+        assert fetch["receipts"] == []
+
+    def test_generic_claim_keeps_family_level_support(self):
+        """The counterweight: a claim with no identifier-shaped specifics
+        ('content was fetched') asserts nothing a family event can't cover
+        — family-level support survives the R1-1 tightening."""
+        events = [_ev(input_="curl -s https://api-b.example/other")]
+        stamps = ground_text("Content was downloaded successfully.", events)
+        fetch = [s for s in stamps if s["family"] == "fetch"][0]
+        assert fetch["status"] == "supported"
+
+    def test_anonymous_login_url_is_not_credentials(self):
+        """Adversarial-review pin R1-2 (2026-08-06): bare login/passw/
+        credential words matched an anonymous `curl .../login` URL path —
+        same class as the pinned `token=a`. Only assigned-value forms
+        (password=..., credential=...) are credential material."""
+        events = [_ev(input_="curl -s https://public.example/login")]
+        stamps = ground_text(
+            "Data was fetched by an authenticated request.", events)
+        auth = [s for s in stamps if s["family"] == "auth"][0]
+        assert auth["status"] == "unsupported"
+
+    def test_assigned_password_field_still_counts_as_credentials(self):
+        events = [_ev(input_="curl -d 'user=x&password=hunter2' "
+                             "https://site.example/login")]
+        stamps = ground_text(
+            "Data was fetched by an authenticated request.", events)
+        auth = [s for s in stamps if s["family"] == "auth"][0]
+        assert auth["status"] == "supported"
+
     def test_real_bearer_header_supports_auth_claim(self):
         events = [_ev(input_="curl -H 'Authorization: Bearer abcd1234efgh' "
                              "https://api.example.com/v1/items")]

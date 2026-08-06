@@ -81,6 +81,15 @@ events that already happened). Shared vocabulary, different verbs.
    during LT-5 — and the first lexicon draft marked auth supported off
    `token=a` (a dummy public URL parameter), so credential markers now
    require credential-shaped values; that false-support is pinned.
+   Tightened same-day on the 24h-diff adversarial review (R1-1/R1-2):
+   family-level fallback support now applies only to claims naming no
+   identifier-shaped specifics — "fetched from api-a.example" lands
+   unprobed rather than riding api-b's receipt — and the bare
+   login/passw/credential auth markers (which matched an anonymous
+   `curl .../login` URL) were replaced with assigned-value forms. Both
+   pinned in tests/test_mint_grounding.py. Slice 1 sub-slice: the
+   loop_finalize recovery-lesson writers now stamp too (loop_id was
+   already in hand).
 2. **Skill mint** — skills-lite + provisional mints: method claims in
    the skill body vs the minting run's tool events. Stamp travels in
    frontmatter (`grounding:` block) + companion Skill record.
