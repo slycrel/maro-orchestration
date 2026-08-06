@@ -6531,3 +6531,14 @@ successor deliberately not adopted — untested; the harness at
 Pin: `test_mint_form.TestNoSeedExemplar`. This clears the Δ-gate's
 corpus-contamination precondition; the gate now waits only on Jeremy's
 priority call (vs SP / world-facts).
+
+### 2026-08-06 — Decision: Δ-gate priority CALLED; next session builds it
+
+On session wrap (~02:40 local), after the A/B readout: "The future is
+now" + **"Sure, prep the gate for the next run, which will be after I
+clear the session."** The owed priority call is made: **Δ-gate ahead of
+SP / world-facts**, and the next session's work is the build. Prep
+landed same session: `docs/DELTA_GATE_BUILD_BRIEF.md` (the one wire,
+scouted surfaces, sequencing instrument→stratify→wire→census, named
+falsifiers, slice-1 cuts) + MILESTONES queue head. World-facts §7 read
+stays queued ("homework").

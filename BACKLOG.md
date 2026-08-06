@@ -4420,8 +4420,11 @@ open — verification ≠ repair; each needs a wire-or-retire decision):**
     removal; a redacted-guidance successor was NOT tested and would
     need its own A/B — the harness reruns cheaply). Pin:
     `test_mint_form.TestNoSeedExemplar`. Δ-gate corpus-contamination
-    precondition cleared; the gate's one remaining input is Jeremy's
-    priority decision (vs SP / world-facts).
+    precondition cleared; ~~the gate's one remaining input is Jeremy's
+    priority decision~~ **priority CALLED 2026-08-06** ("prep the gate
+    for the next run") — build brief `docs/DELTA_GATE_BUILD_BRIEF.md`,
+    MILESTONES queue head, decision 623eb056. The next session builds
+    the wire.
   - **Fail-open now triples in the same direction** — cross-ref the
     "Fail-open judge-error edges" item above, which tracks these
     individually but not as a population. Three gates on the learning

@@ -800,6 +800,21 @@ Truth anchor: GOAL_BRAIN.md Threads. History: docs/history/ROADMAP_ARCHIVE.md.
 
 ## Active Queue
 
+-7. **Δ-gate build (Jeremy, 2026-08-06: "prep the gate for the next
+   run, which will be after I clear the session") — the NEXT session's
+   directed work; supersedes the drift-review's "first thing" claim for
+   that one session.** Effect-based route to LONG beside the tenure
+   route. Everything is prepped: read `docs/DELTA_GATE_BUILD_BRIEF.md`
+   first — the one wire, scouted surfaces (promotion path
+   knowledge_web.py:72/598/1078; replay corpus = build/calls on the
+   LT-1 arms; harness pattern = seed-reader A/B), sequencing
+   (instrument standalone → stratify rule-vs-reason → wire behind
+   killswitch → routes census), named falsifiers, slice-1 cuts.
+   Preconditions all cleared 2026-08-06: corpus decontaminated (S2
+   exemplar removed on the A/B verdict), mint-grounding receipts live,
+   verdict denominator healthy (67 judged, two weeks of arrivals).
+   Decision 623eb056; GOAL_BRAIN 2026-08-06 records.
+
 -6. **Holistic drift review (Jeremy, 2026-07-17) — do this in a CLEAN
    session, first thing.** After the delivery-loop/two-tone arc: "Might be
    time to do a wholistic review, and honestly see if we are on target, and
