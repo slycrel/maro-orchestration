@@ -1184,20 +1184,65 @@ capture**, which is what makes the rung amortize instead of evaporate.
     74,288 max), oldest-first eviction, and the elision announced in the
     rendered text. Both were backwards on both axes — too tight per entry
     to be useful evidence, unbounded in the dimension that actually grows.
-  - `step_exec.py:1597` — team-worker result at **600** into shared context.
-  - `director.py:571` / `:775` — worker output at **2000** into the
-    director's completed-context and review call.
-  - `memory.py:341` — result summary at **500** into lesson extraction.
-    Lessons are what the system keeps; extracting them from a fifth of the
-    evidence bounds how good the memory can ever be.
+  - ~~`step_exec.py:1597` — team-worker result at **600** into shared
+    context~~ — **DONE 2026-08-06 (`54a4be7`)**, budgeted. The whole point
+    of `shared_ctx` is that the next worker reads it INSTEAD of redoing the
+    work; 600 left 24.7% of step results intact, so three times in four it
+    inherited a fragment.
+  - ~~`memory.py:341` — result summary at **500** into lesson extraction~~
+    — **DONE 2026-08-06 (`54a4be7`)**, and the diagnosis in this line was
+    wrong. See "the cut that was decoration" below.
+  - `director.py:775` — worker output at **2000** into the review call
+    (`:571` was the accumulating site, done in `25c286b`).
   - `attribution.py:273`, `knowledge_bridge.py:139`, `evolver_scans.py:159`
     — 500/500/200 into failure attribution and signal scanning.
+  - `introspect.py:945` / `:1097` — the quality and adversarial lenses see
+    `p.text[:80]` and **no step results at all**, so the adversarial lens is
+    asked "what could go wrong that wasn't checked?" while holding only
+    truncated step *titles*. Lower priority than it looks: both are
+    `include_llm=True` CLI-only with a human reading the output, so no
+    automatic consumer acts on them. Folds into the open "do the evidence
+    lenses want a wide-view seat?" design question.
 
-  **STORE worklist:** `memory_ledger.compress_old_outcomes` (120/600) and
-  the outcome-row `summary` at 500 in `handle.py` — these bound the record
-  *forever*, so they deserve a deliberate retention decision rather than a
-  default. Note the disk cost of raising them is real, unlike the token
-  cost of the judge windows, so this one genuinely is a trade.
+  ### The cut that was decoration (2026-08-06, `54a4be7`)
+
+  Worth recording as a method lesson, because the worklist entry above was
+  confidently wrong. `memory.py:341`'s `result_summary[:500]` **had never
+  once bound**: 0 of 1,493 stored outcome rows reach 500 chars, median
+  length 70. Reading the cut told you nothing; reading the *distribution of
+  what flows through it* told you everything.
+
+  The real loss was one frame upstream, in `loop_finalize`:
+
+      summary = f"Completed {n}/{m} steps. " + step_outcomes[-1].result[:80]
+
+  That string is the **only** evidence the lesson extractor ever sees — on
+  the finalize path and on the post-verdict deferred path, because full
+  step results are persisted nowhere (`runs/*/build/loop-*.json` keeps
+  `result_length`, not the text). 90.1% of stored rows match that template.
+  80 chars shows a **median 7.1%** of the last step's result, mid-word,
+  with nothing at all from the other N-1 steps. Every lesson this system
+  has ever learned from a completed run was extracted from that.
+
+  Fixed as two consumers with two budgets, since they are priced
+  differently: `lesson_evidence` (prompt-only, free, wide — 72x the old
+  view) and `summary` (persisted and re-read forever, so STORE-grade:
+  breadth over depth at 500/entry and 4,000 total, which fits a median
+  6-step run whole — 33x the old view). New `context_budget` STORE profile.
+
+  **Generalizes:** a cut is only as interesting as the traffic through it.
+  Before widening one, measure what actually arrives — the binding
+  constraint may be somewhere else entirely, and a cut nothing reaches is
+  not a bug, it is a distraction from the one that is.
+
+  **STORE worklist:** `memory_ledger.compress_old_outcomes` (120/600) — now
+  load-bearing rather than optional, since the outcome rows carry real
+  evidence and `load_outcomes` parses the whole file to return the last 20
+  (priced 2026-08-06: 868 KB / 12 ms today → ~4.3 MB / ~62 ms at the new
+  profile; fine now, wants the compactor before it is 10x that). Also the
+  outcome-row `summary` at 500 in `handle.py` (NOW lane) — untouched, and
+  now the tighter of the two lanes. These bound the record *forever*, so
+  they deserve a deliberate retention decision rather than a default.
 
   **Method that worked, for whoever picks this up:** don't argue about the
   number — pull the actual distribution out of `runs/*/build/loop-*.json`
