@@ -275,10 +275,26 @@ class HookRegistry:
 # ---------------------------------------------------------------------------
 
 def _default_hooks_path() -> Optional[Path]:
-    """Return the default hooks.json path under the orch root."""
+    """Return the default hooks.json path — workspace-rooted since 2026-08-06.
+
+    Previously anchored on orch_root(), which in production resolved to the
+    repo checkout (census item 5b). A registry already living at the legacy
+    location keeps working: when the workspace copy doesn't exist but the
+    legacy one does, the legacy path is returned (reads AND writes stay
+    there — never moved automatically, retention decree).
+    """
     try:
-        import orch
-        return orch.orch_root() / ".hooks" / "hooks.json"
+        from config import workspace_root
+        p = workspace_root() / ".hooks" / "hooks.json"
+        if not p.exists():
+            try:
+                import orch
+                legacy = orch.orch_root() / ".hooks" / "hooks.json"
+                if legacy.exists():
+                    return legacy
+            except Exception:
+                pass
+        return p
     except Exception:
         return None
 

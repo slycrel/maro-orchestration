@@ -367,7 +367,6 @@ class TestWorkerSliceExperiment:
     def test_run_metadata_records_worker_slice(self, monkeypatch, tmp_path):
         """_write_director_log payload carries worker_slice + per-worker injection/token fields."""
         _setup(monkeypatch, tmp_path)
-        from orch_items import orch_root
 
         worker_results = [
             WorkerResult(
@@ -388,7 +387,8 @@ class TestWorkerSliceExperiment:
             worker_slice=True,
         )
         assert path_str is not None
-        full_path = Path(path_str) if Path(path_str).is_absolute() else orch_root() / path_str
+        from orch_items import resolve_artifact_path
+        full_path = resolve_artifact_path(path_str)
         payload = json.loads(full_path.read_text(encoding="utf-8"))
         assert payload["worker_slice"] is True
         wr = payload["worker_results"][0]
@@ -3784,3 +3784,25 @@ class TestClosureFalseNegativeRegressions:
                 )
         verdict_user_msg = captured[1][1].content
         assert "target_file_content" not in verdict_user_msg
+
+
+def test_projectless_director_log_is_output_rooted(monkeypatch, tmp_path):
+    """Projectless director run logs land under output_root()/artifacts/
+    director — not orch_root, which was the repo checkout in production
+    (census item 5b, 2026-08-06)."""
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+    path_str = _write_director_log(
+        project=None,
+        director_id="loc-pin-1",
+        directive="d",
+        spec="s",
+        tickets=[],
+        worker_results=[],
+        status="done",
+        elapsed_ms=1,
+    )
+    assert path_str is not None
+    expected = tmp_path / "output" / "artifacts" / "director" / "director-loc-pin-1-log.json"
+    assert expected.exists()
+    from orch_items import resolve_artifact_path
+    assert resolve_artifact_path(path_str) == expected

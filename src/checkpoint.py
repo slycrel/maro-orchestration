@@ -45,22 +45,51 @@ _CHECKPOINT_DIR_NAME = "checkpoints"
 
 
 def _checkpoint_dir() -> Path:
-    """Legacy checkpoint storage directory (pre-run-dir era).
+    """Non-run-dir checkpoint storage (write-fallback when no run is active).
 
-    Kept as the write-fallback when no run is active and as a read-fallback
-    for one release (checkpoints written before the 2026-07-09 move).
+    Workspace-rooted since 2026-08-06 (census item 5b): the old orch_root()
+    anchoring wrote checkpoints into whatever orch_root resolved to — the
+    repo checkout in production (52 stale files by 2026-07-09). Reads still
+    consult the old location via _old_checkpoint_dir().
     """
     try:
-        from orch_items import orch_root
-        d = orch_root() / _CHECKPOINT_DIR_NAME
+        from config import workspace_root
+        d = workspace_root() / _CHECKPOINT_DIR_NAME
     except Exception:
         d = Path(__file__).parent.parent / _CHECKPOINT_DIR_NAME
     d.mkdir(parents=True, exist_ok=True)
     return d
 
 
+def _old_checkpoint_dir() -> Optional[Path]:
+    """Pre-2026-08-06 location (orch_root()/checkpoints) — read-only fallback.
+
+    Never mkdir'd, never written: existing files stay where they are
+    (retention decree) and remain loadable/consumable.
+    """
+    try:
+        from orch_items import orch_root
+        d = orch_root() / _CHECKPOINT_DIR_NAME
+        return d if d.is_dir() else None
+    except Exception:
+        return None
+
+
 def _checkpoint_path(loop_id: str) -> Path:
     return _checkpoint_dir() / f"ckpt_{loop_id}.json"
+
+
+def _find_checkpoint_path(loop_id: str) -> Optional[Path]:
+    """Existing checkpoint file for loop_id: current dir first, then old."""
+    p = _checkpoint_path(loop_id)
+    if p.exists():
+        return p
+    old = _old_checkpoint_dir()
+    if old is not None:
+        op = old / f"ckpt_{loop_id}.json"
+        if op.exists():
+            return op
+    return None
 
 
 def _rundir_checkpoint_path() -> Optional[Path]:
@@ -345,8 +374,8 @@ def load_checkpoint(loop_id: str) -> Optional[Checkpoint]:
         if ckpt is not None:
             return ckpt
 
-    legacy = _checkpoint_path(loop_id)
-    if legacy.exists():
+    legacy = _find_checkpoint_path(loop_id)
+    if legacy is not None:
         ckpt = _load_from(legacy)
         if ckpt is not None:
             return ckpt
@@ -374,7 +403,7 @@ def mark_checkpoint_consumed(loop_id: str, *, resumed_to_loop_id: str) -> bool:
     keep resumable state, while a successful legacy resume cannot be invoked a
     second time to replay the same external effects.
     """
-    path = _checkpoint_path(loop_id)
+    path = _find_checkpoint_path(loop_id) or _checkpoint_path(loop_id)
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
         if str(data.get("loop_id") or "") != loop_id:
@@ -404,6 +433,9 @@ def delete_checkpoint(loop_id: str) -> None:
             if _load_from(rd_path, loop_id) is not None:
                 rd_path.unlink(missing_ok=True)
         _checkpoint_path(loop_id).unlink(missing_ok=True)
+        old = _old_checkpoint_dir()
+        if old is not None:
+            (old / f"ckpt_{loop_id}.json").unlink(missing_ok=True)
         log.debug("checkpoint deleted: %s", loop_id)
     except Exception:
         pass
@@ -417,6 +449,12 @@ def list_checkpoints() -> List[Checkpoint]:
             entries.append(p)
     except Exception:
         pass
+    old = _old_checkpoint_dir()
+    if old is not None:
+        try:
+            entries.extend(old.glob("ckpt_*.json"))
+        except Exception:
+            pass
     root = _runs_root()
     if root is not None and root.is_dir():
         try:

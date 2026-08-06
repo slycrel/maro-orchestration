@@ -869,7 +869,9 @@ def save_manifest(
     """Write the agent capability manifest to disk.
 
     Args:
-        output_path: Where to write. Defaults to agents/manifest.json in orch_root.
+        output_path: Where to write. Defaults to agents/manifest.json under
+                     output_root() (a generated artifact — regenerated on
+                     demand, so no legacy read-fallback needed).
         registry:    PersonaRegistry to source from.
         fmt:         "json" or "yaml" (yaml requires PyYAML).
 
@@ -878,8 +880,8 @@ def save_manifest(
     """
     if output_path is None:
         try:
-            import orch
-            output_path = orch.orch_root() / "agents" / f"manifest.{fmt}"
+            from orch_items import output_root
+            output_path = output_root() / "agents" / f"manifest.{fmt}"
         except Exception:
             output_path = Path(".") / f"manifest.{fmt}"
 

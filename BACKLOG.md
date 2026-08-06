@@ -105,27 +105,26 @@ pass, not a quiet fix:
   the re-observation design. Options live at different layers: loosen
   match threshold, count semantic-neighbor hits, or judge candidates on
   age+content instead of re-observation.
-- [ ] **5b. orch_root() still anchors five runtime-data writers — repo
-  checkout collects state in production (FOUND 2026-08-06, resolution-
-  unification survey; follow-up to shipped item 5).** With the data
-  roots unified, `orch_root()` should be a pure code-root resolver
-  (workers/, repo personas/) — but five writers still anchor runtime
-  data on it, so in production (unpinned → orch_root = repo) they write
-  into the checkout: `hooks.py:281` (`.hooks/hooks.json` registry),
-  `persona.py:882` (`agents/manifest.*` generated capability manifest),
-  `director.py:884` (projectless run logs → `artifacts/director/`),
-  `checkpoint.py:55` (legacy checkpoint fallback — documented, has a
-  read-fallback contract already), plus `captains_log.py:1036` /
-  `convo_miner.py:233,390` which use orch_root as *git repo cwd* /
-  BACKLOG.md locator — correct only by coincidence when orch_root =
-  repo. Evidence: repo checkout holds gitignored `artifacts/`,
-  `checkpoints/` dirs with real run data. Fix shape: move the four data
-  writers to workspace-rooted helpers (each needs a read-fallback for
-  existing data — retention decree, no auto-delete), introduce an
-  explicit `repo_root()` for the git-cwd/BACKLOG consumers, then
-  orch_root's `_ws_pinned` test-isolation guard becomes droppable.
-  Sequencing note: this is what blocks dropping the prototype layout
-  from `orch_root()` entirely.
+- [ ] **5b residual: drop orch_root()'s prototype layout — churny
+  test-sweep cleanup (deferred by Jeremy's call 2026-08-06; writers
+  migration SHIPPED same day, see BACKLOG_DONE).** The 5b writers
+  migration moved all runtime-data anchoring off `orch_root()`
+  (hooks/.hooks → workspace w/ legacy read-fallback, persona agents/
+  manifest → output_root, projectless director logs → output_root,
+  checkpoint fallback → workspace w/ read-fallback to old location,
+  git-cwd/BACKLOG consumers → new `repo_root()`). What remains before
+  `orch_root()` can become a pure code-root resolver (repo detection
+  always, no `<ws>/prototypes/maro-orchestration` shape): (1) the
+  `_ws_pinned` test-isolation guard in `orch_root()` — droppable only
+  after confirming no remaining orch_root consumer writes data under a
+  pin; (2) ~8 test files seed `workers/` at the proto path
+  (test_orch_core, test_cli, test_build_loop_script, …) and would need
+  re-seeding at the repo-detected root or a workers override; (3) the
+  latent sharp edge this would fix: under any workspace pin with no
+  proto dir, `orch_root()` points at a nonexistent path, so
+  `workers_root()`/repo personas are unresolvable (workspace-arg
+  build-loop runs live with this today). Mostly mechanical churn, low
+  production value until someone hits (3) for real.
 - [ ] **4. Scan suggestions have no dedup-on-save — noise generator on
   frozen inputs.** `_save_suggestions` (evolver_store.py:278) never
   dedups, so every finalize re-derives and re-saves the same findings:

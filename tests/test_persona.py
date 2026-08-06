@@ -768,3 +768,12 @@ class TestPersonaDispatchTracking:
             assert "fallback_count" in g
             assert "sample_goals" in g
             assert "suggested_slug" in g
+
+
+def test_save_manifest_default_is_output_rooted(monkeypatch, tmp_path):
+    """Default manifest location is output_root()/agents/ — a generated
+    artifact, not repo state (census item 5b, 2026-08-06)."""
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+    path = save_manifest(fmt="json")
+    assert path == tmp_path / "output" / "agents" / "manifest.json"
+    assert path.exists()

@@ -364,6 +364,17 @@ class TestWorkspacePinLayout:
         assert orch_items.projects_root() == ws / "projects"
         assert orch_items.output_root() == ws / "output"
 
+    def test_repo_root_is_the_checkout_regardless_of_pins(self, monkeypatch, tmp_path):
+        # repo_root() is for CODE concerns (git cwd, BACKLOG.md) — it must
+        # ignore every workspace/orch pin and name the source checkout.
+        self._clear_ws_vars(monkeypatch)
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        monkeypatch.setenv("MARO_ORCH_ROOT", str(tmp_path / "elsewhere"))
+        import orch_items
+        rr = orch_items.repo_root()
+        assert rr == Path(orch_items.__file__).resolve().parents[1]
+        assert (rr / "src" / "agent_loop.py").exists()
+
     def test_maro_workspace_wins_over_legacy_var(self, monkeypatch, tmp_path):
         self._clear_ws_vars(monkeypatch)
         maro_ws = tmp_path / "maro-ws"

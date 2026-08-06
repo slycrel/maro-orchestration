@@ -851,3 +851,24 @@ def test_mission_before_hooks_fire(monkeypatch, tmp_path):
     )
     # Should complete without crash
     assert result.status in ("done", "stuck")
+
+
+# ---------------------------------------------------------------------------
+# Default registry path — workspace-rooted (census item 5b, 2026-08-06)
+# ---------------------------------------------------------------------------
+
+def test_default_hooks_path_is_workspace_rooted(tmp_path, monkeypatch):
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+    from hooks import _default_hooks_path
+    assert _default_hooks_path() == tmp_path / ".hooks" / "hooks.json"
+
+
+def test_default_hooks_path_legacy_fallback(tmp_path, monkeypatch):
+    """A registry already at the legacy orch_root location keeps working
+    (reads AND writes stay there — never migrated automatically)."""
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+    legacy = orch.orch_root() / ".hooks" / "hooks.json"
+    legacy.parent.mkdir(parents=True, exist_ok=True)
+    legacy.write_text('{"hooks": []}', encoding="utf-8")
+    from hooks import _default_hooks_path
+    assert _default_hooks_path() == legacy

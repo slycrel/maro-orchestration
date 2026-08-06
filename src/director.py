@@ -877,11 +877,14 @@ def _write_director_log(
         try:
             import sys as _sys
             _sys.path.insert(0, str(Path(__file__).parent))
-            from orch import orch_root, projects_root
+            from orch import output_root, projects_root
             if project:
                 log_dir = projects_root() / project / "artifacts"
             else:
-                log_dir = orch_root() / "artifacts" / "director"
+                # Projectless run logs are output, not repo state (until
+                # 2026-08-06 these landed in orch_root — the repo checkout
+                # in production; old files left in place, write-only dir).
+                log_dir = output_root() / "artifacts" / "director"
         except Exception:
             base = Path.cwd()
             if project:

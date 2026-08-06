@@ -1029,11 +1029,13 @@ def correlate_with_git(
 
     import subprocess
 
-    # Find repo path
+    # Find repo path — the source checkout, not the runtime orch layout
+    # (orch_root() follows workspace pins and only coincides with the git
+    # repo when nothing is pinned).
     if repo_path is None:
         try:
-            from orch_items import orch_root
-            repo_path = str(orch_root())
+            from orch_items import repo_root
+            repo_path = str(repo_root())
         except Exception:
             repo_path = "."
 

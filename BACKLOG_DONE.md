@@ -8,6 +8,42 @@ Last split: 2026-04-16 (session 34).
 
 ---
 
+## 5b writers migration: runtime data off orch_root — SHIPPED 2026-08-06 (same session as item 5)
+
+Follow-on from the resolution unification: five consumers still anchored
+runtime data on `orch_root()`, so production (unpinned → orch_root =
+repo) wrote state into the checkout — the gitignored `artifacts/` and
+`checkpoints/` dirs full of real run data were the evidence. Jeremy
+green-lit the writers + `repo_root()` slice, deferring the churny
+orch_root guard-drop (residual stays in BACKLOG as 5b).
+
+- [x] **`repo_root()` introduced** (orch_items): the source checkout,
+  pin-independent — for CODE concerns. Moved onto it: captains_log git
+  cwd, convo_miner `scan_git_log` cwd + `scan_maro_memory` +
+  BACKLOG.md locator (all were orch_root — correct only by coincidence
+  when nothing was pinned). Pin: repo_root ignores every pin and must
+  contain src/agent_loop.py.
+- [x] **hooks registry** → `<ws>/.hooks/hooks.json`, legacy
+  read-fallback: an existing registry at `orch_root()/.hooks` keeps
+  being used in place (reads AND writes — never auto-migrated).
+  Nothing existed at either location on this box.
+- [x] **persona agents manifest** → `output_root()/agents/` (generated
+  artifact, only consumer is the CLI command that prints the path — no
+  fallback needed).
+- [x] **projectless director logs** → `output_root()/artifacts/director/`
+  (write-only; old repo files left in place). Existing metadata test
+  switched from orch_root-joining to `resolve_artifact_path()` — the
+  canonical display-form inverse.
+- [x] **non-run-dir checkpoints** → `<ws>/checkpoints/`; old
+  `orch_root()/checkpoints` stays readable, consumable
+  (replay-protection stamp works in place), listable, and
+  user-deletable via `_find_checkpoint_path`/`_old_checkpoint_dir` —
+  which is never mkdir'd (pinned by test: fallback resolution must not
+  recreate the old dir).
+- Pins in tests/test_checkpoint_paths.py (new), test_hooks.py,
+  test_persona.py, test_director.py, test_config.py
+  (TestWorkspacePinLayout::test_repo_root_is_the_checkout_regardless_of_pins).
+
 ## Shadow-workspace hijack / resolution unification — SHIPPED 2026-08-06 (census item 5)
 
 Found via the live-writer census follow-on (record:

@@ -177,6 +177,18 @@ def orch_root() -> Path:
     return traditional
 
 
+def repo_root() -> Path:
+    """Mainline repo root — the directory holding this source checkout.
+
+    Use for CODE/repo concerns: git cwd for `git log` scans, repo-tracked
+    files like BACKLOG.md. orch_root() is wrong for these by construction —
+    it resolves the runtime orch layout and follows workspace pins, so it
+    only coincides with the checkout when nothing is pinned (census item
+    5b, 2026-08-06: git-cwd consumers were correct by coincidence).
+    """
+    return Path(__file__).resolve().parents[1]
+
+
 def _orch_root_pinned() -> bool:
     """True when data roots should ride orch_root() instead of the workspace.
 

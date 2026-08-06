@@ -229,8 +229,8 @@ def scan_git_log(repo: Optional[Path] = None, max_commits: int = 500) -> List[Id
     """Scan git commit messages for embedded ideas/TODOs."""
     if repo is None:
         try:
-            from orch_items import orch_root
-            repo = orch_root()
+            from orch_items import repo_root
+            repo = repo_root()
         except Exception:
             repo = Path.cwd()
 
@@ -252,9 +252,12 @@ def scan_git_log(repo: Optional[Path] = None, max_commits: int = 500) -> List[Id
 def scan_maro_memory(workspace: Optional[Path] = None) -> List[Idea]:
     """Scan the orchestration repo's own BACKLOG/ROADMAP for open items."""
     if workspace is None:
-        # Use the repo root (parent of src/) — orch_root() points to runtime
-        # workspace, not the mainline repo.
-        workspace = Path(__file__).parent.parent
+        # The repo checkout, not the runtime workspace.
+        try:
+            from orch_items import repo_root
+            workspace = repo_root()
+        except Exception:
+            workspace = Path(__file__).parent.parent
 
     ideas: List[Idea] = []
     for fname in ("BACKLOG.md", "ROADMAP.md"):
@@ -386,8 +389,8 @@ def inject_into_backlog(
     """
     if backlog_path is None:
         try:
-            from orch_items import orch_root
-            backlog_path = orch_root() / "BACKLOG.md"
+            from orch_items import repo_root
+            backlog_path = repo_root() / "BACKLOG.md"
         except Exception:
             backlog_path = Path(__file__).parent.parent / "BACKLOG.md"
 
