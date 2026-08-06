@@ -6511,3 +6511,23 @@ Three Jeremy calls in one message (~01:30 local):
    diversity-preserving form; runs BEFORE the Δ gate per the queue row.
    World-facts / LeAct docs remain queued ("still feels a bit like
    homework, it will happen eventually").
+
+### 2026-08-06 — Seed-reader A/B ran; S2 exemplar removed on the verdict
+
+Same night (~02:15 local), subagent-managed per decision 3 above, 13
+runs × 2 arms, boundary-clean (no store writes, no repo edits by the
+harness). Verdict **inconclusive-leaning-supported**: no verbatim style
+cloning (zero seed-bigram overlap either arm — LeAct's strong claim not
+reproduced at this n), but the seeded arm minted the seed's lesson_type
+3.5× as often (6/25 vs 2/29 across 6 unrelated runs, Fisher p=0.125)
+and its lessons were ~60% more homogeneous cross-run (jackknife-stable)
+while every quality proxy stayed flat — the exemplar bought nothing
+measurable. The then-top seed was itself procedure-form, i.e. "emulate
+this style" pointed at a what-not-how violation. **Acted same session:
+S2 seed block removed from the extraction prompt** (tested arm WAS
+removal; good-system-citizen: remove, don't disable). Redacted-guidance
+successor deliberately not adopted — untested; the harness at
+`~/.maro/workspace/output/seed-reader-ab/` reruns cheaply if wanted.
+Pin: `test_mint_form.TestNoSeedExemplar`. This clears the Δ-gate's
+corpus-contamination precondition; the gate now waits only on Jeremy's
+priority call (vs SP / world-facts).

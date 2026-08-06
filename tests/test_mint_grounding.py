@@ -289,27 +289,9 @@ class TestMintIntegration:
         tiered_out = inject_tiered_lessons("general")
         assert "mint-grounding" in tiered_out
 
-    def test_seed_reader_skips_unsupported_grounded_row(self, monkeypatch,
-                                                        tmp_path):
-        # A lesson whose own run's event log couldn't support its method
-        # claim must not become the style exemplar the extractor emulates.
-        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
-        from knowledge_web import record_tiered_lesson, MemoryTier
-        record_tiered_lesson(
-            lesson_text="The blocks were confirmed via authenticated fetch.",
-            task_type="general", outcome="done", source_goal="g",
-            tier=MemoryTier.LONG,
-            grounding=[{"claim": "authenticated fetch", "family": "auth",
-                        "status": "unsupported", "receipts": []}])
-        from memory import _seed_lesson_block
-        assert _seed_lesson_block("general") == ""
-
-        record_tiered_lesson(
-            lesson_text="Single category pages priced items wrong; two "
-                        "trusted sources disagreed on 3 of 12 items.",
-            task_type="general", outcome="done", source_goal="g",
-            tier=MemoryTier.LONG)
-        assert "two" in _seed_lesson_block("general").lower()
+    # (A seed-reader skip test lived here for ~an hour; the S2 seed block
+    # itself was removed the same night on the A/B verdict, taking the
+    # surface with it — test_mint_form.TestNoSeedExemplar pins the removal.)
 
 
 def test_ground_lessons_for_run_fail_open_on_bad_ref(monkeypatch, tmp_path):

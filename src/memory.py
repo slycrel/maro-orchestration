@@ -257,36 +257,17 @@ _REFLECT_SYSTEM = (textwrap.dedent("""\
 _LESSON_TYPES = frozenset({"execution", "planning", "recovery", "verification", "cost"})
 
 
-def _seed_lesson_block(task_type: str) -> str:
-    """S2 seed-reader: render the top clean LONG lesson as a style example
-    for the extractor prompt. Skips quarantined rows — a prompt-derived
-    lesson used as the "high-quality example" would teach the extractor the
-    exact style the provenance gate exists to catch (adversarial review
-    2026-07-29). Skips contested rows for the same reason — an
-    operator-refuted lesson is the last thing to hold up as the style model
-    (L4 is contested LONG and would otherwise qualify here). Skips rows
-    with mint-grounding claims their own run's event log couldn't support —
-    a lesson carrying unsupported provenance must not be the style exemplar
-    (MINT_GROUNDING_DESIGN §3 slice 1). Returns "" when no clean seed
-    exists."""
-    try:
-        from mint_grounding import has_unsupported
-        seed_lessons = load_tiered_lessons(
-            MemoryTier.LONG, task_type=task_type, min_score=0.7, limit=3)
-        seed_lessons = [s for s in seed_lessons
-                        if getattr(s, "minted_from", "") != "prompt"
-                        and not getattr(s, "contested", None)
-                        and not has_unsupported(getattr(s, "grounding", None))]
-        if not seed_lessons:
-            return ""
-        seed = seed_lessons[0]
-        return (
-            f"\nHigh-quality lesson example (emulate this style and specificity):\n"
-            f'  {{"lesson": "{seed.lesson[:120]}", "type": "{seed.lesson_type or "execution"}"}}'
-            f"  [reinforced {seed.times_reinforced}x, applied {seed.times_applied}x, score={seed.score:.2f}]"
-        )
-    except Exception:
-        return ""
+# S2 seed-reader (NeMo steal) REMOVED 2026-08-06 after the sanctioned A/B
+# (13 runs × 2 arms, ~/.maro/workspace/output/seed-reader-ab/RESULTS.md):
+# showing the top LONG lesson as a verbatim "emulate this" exemplar bought
+# no measurable quality (what-not-how, length, count all flat-or-worse)
+# while tilting extraction toward the seed's lesson_type 3.5× across
+# unrelated runs and homogenizing lessons ~60% (jackknife-stable) — the
+# LeAct contamination mechanism, mild but real. The store's then-top seed
+# was itself procedure-form, so the exemplar was modeling the exact shape
+# the what-not-how mint rule forbids. Qualitative style guidance lives in
+# _REFLECT_SYSTEM + _LESSON_FORM_RULES; a redacted-guidance successor
+# would need its own A/B (the harness in that output dir reruns cheaply).
 
 
 def extract_lessons_via_llm(
@@ -306,7 +287,8 @@ def extract_lessons_via_llm(
 
     Phase 59 NeMo steals:
     - S1: Returns typed lessons (lesson_type per lesson) when return_typed=True.
-    - S2: Seed-reader bootstrapping — prepends top-1 long-tier lesson as style guide.
+    - S2: Seed-reader style exemplar — REMOVED 2026-08-06 (A/B: no quality
+      gain, type-anchoring + homogenization; see note above).
     - S3: ATIF feedback — passes times_reinforced + times_applied stats into prompt.
 
     Args:
@@ -330,9 +312,6 @@ def extract_lessons_via_llm(
 
     from llm import LLMMessage
 
-    # S2: Seed-reader bootstrapping — top clean long-tier lesson as style example
-    seed_block = _seed_lesson_block(task_type)
-
     # S3: ATIF feedback — pass reinforcement stats for this task_type
     atif_block = ""
     try:
@@ -348,7 +327,7 @@ def extract_lessons_via_llm(
     except Exception:
         pass
 
-    system_prompt = _REFLECT_SYSTEM + seed_block + atif_block
+    system_prompt = _REFLECT_SYSTEM + atif_block
 
     # Verdict-preferred framing (SF-2): tell the extractor when a completed
     # run was judged goal-not-achieved so lessons come out failure-flavored

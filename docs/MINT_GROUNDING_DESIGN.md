@@ -70,9 +70,11 @@ events that already happened). Shared vocabulary, different verbs.
    runs actually take); stamps ride both stores on the UU-4 shared-id
    rows (`TieredLesson.grounding` + flat `Lesson.grounding`,
    absent-key discipline). Consumers: both injection surfaces render a
-   marker for unsupported claims; the seed-reader skips
-   unsupported-claim rows as style exemplars (same skip family as
-   quarantined/contested). Live validation during the build: grounding
+   marker for unsupported claims, and CLI readouts show a
+   `[claims: N✓/N✗/N?]` census tag (the unprobed-rate falsifier's
+   measurement surface). A seed-reader skip shipped alongside but the
+   S2 seed block was removed the same night on the A/B verdict, taking
+   that consumer with it. Live validation during the build: grounding
    LT-5's own step-8 specimen text against c3c58c40's real event log
    produced auth=unsupported + fetch=supported with the exact
    syndication-CDN receipt (`call-00010#tool_events[8]`) hand-traced

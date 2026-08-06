@@ -26,7 +26,6 @@ from memory import (
     _LESSON_FORM_RULES,
     _REFLECT_SYSTEM,
     _STEP_LESSON_SYSTEM,
-    _seed_lesson_block,
     extract_deferred_lessons,
     reflect_and_record,
 )
@@ -206,19 +205,30 @@ class TestEvidenceStamping:
         assert after.evidence_sources == ["loop:lp-1"]  # nothing merged
 
 
-# ---------------------------------------------------------------------------
-# Seed-reader hygiene
-# ---------------------------------------------------------------------------
+# Seed-reader hygiene pins removed with the S2 seed block itself
+# (2026-08-06 A/B — see the note above extract_lessons_via_llm): no
+# exemplar, nothing to keep hygienic. The prompt must not name any stored
+# lesson as a style model at all now, pinned below.
 
-class TestSeedBlock:
-    def test_contested_long_lesson_never_seeds(self, monkeypatch, tmp_path):
+
+class TestNoSeedExemplar:
+    def test_extraction_prompt_carries_no_stored_lesson_exemplar(
+            self, monkeypatch, tmp_path):
         _setup(monkeypatch, tmp_path)
-        tl = record_tiered_lesson(
-            lesson_text="always add an early checkpoint that re-tests the requirement",
+        record_tiered_lesson(
+            lesson_text="UNIQUE-SEED-MARKER distill outputs before continuing",
             task_type="agenda", outcome="done", source_goal="g",
             tier=MemoryTier.LONG,
         )
-        assert _seed_lesson_block("agenda") != ""  # clean row seeds
-        assert contest_lesson(tl.lesson_id, "wrong altitude", source="test",
-                              tier=MemoryTier.LONG)
-        assert _seed_lesson_block("agenda") == ""  # contested row never does
+        captured = {}
+
+        class FakeAdapter:
+            def complete(self, messages, **kw):
+                captured["system"] = messages[0].content
+                return types.SimpleNamespace(content=json.dumps(["l"]))
+
+        from memory import extract_lessons_via_llm
+        extract_lessons_via_llm(
+            "goal", "done", "summary", "agenda", adapter=FakeAdapter())
+        assert "UNIQUE-SEED-MARKER" not in captured["system"]
+        assert "emulate this style" not in captured["system"]

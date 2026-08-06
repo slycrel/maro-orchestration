@@ -385,30 +385,10 @@ def test_tiered_full_goal_classification_stores_excerpt(monkeypatch, tmp_path):
     assert len(stored[0].source_goal) <= 120
 
 
-def test_seed_lesson_block_skips_quarantined(monkeypatch, tmp_path):
-    # The extractor's style-example seed must never showcase a quarantined
-    # lesson — that would teach the extractor the exact style the gate exists
-    # to catch.
-    _setup(monkeypatch, tmp_path)
-    from memory import _seed_lesson_block
-    from knowledge_web import set_lesson_minted_from
-    bad = record_tiered_lesson(
-        "QUARANTINED STYLE EXAMPLE lesson text.", "agenda", "done",
-        source_goal="g", tier=MemoryTier.LONG)
-    # Reinforce so the quarantined row outranks the clean one on score.
-    record_tiered_lesson(
-        "QUARANTINED STYLE EXAMPLE lesson text.", "agenda", "done",
-        source_goal="g", tier=MemoryTier.LONG)
-    assert set_lesson_minted_from(bad.lesson_id, "prompt",
-                                  tier=MemoryTier.LONG) is True
-    block = _seed_lesson_block("agenda")
-    assert "QUARANTINED STYLE EXAMPLE" not in block
-    clean = record_tiered_lesson(
-        "A clean outcome-derived example lesson.", "agenda", "done",
-        source_goal="g", tier=MemoryTier.LONG)
-    assert clean.lesson_id != bad.lesson_id
-    block = _seed_lesson_block("agenda")
-    assert "A clean outcome-derived example" in block
+# test_seed_lesson_block_skips_quarantined removed 2026-08-06 with the S2
+# seed block itself (A/B verdict — see memory.py note): no exemplar means
+# no quarantined-exemplar leak to guard. The no-exemplar-at-all pin lives
+# in test_mint_form.TestNoSeedExemplar.
 
 
 def test_canon_candidates_skip_quarantined(monkeypatch, tmp_path):

@@ -4345,9 +4345,26 @@ open — verification ≠ repair; each needs a wire-or-retire decision):**
     lost. Minimum experiment: A/B the exemplar block against a redacted
     qualitative variant ("lessons at this altitude record *what*, not
     *how*") over minted-lesson quality; the harness in (4) already runs
-    this shape. **Do this before the Δ gate** — it's hours, not an arc,
-    and if style-copying is depressing mint quality then the Δ gate
-    would be measuring a corpus we already know is contaminated.
+    this shape. ~~**Do this before the Δ gate**~~ — **RAN + ACTED
+    2026-08-06** (sanctioned subagent A/B, 13 runs × 2 arms, 28 cheap
+    calls; full writeup + repro:
+    `~/.maro/workspace/output/seed-reader-ab/RESULTS.md`). Verdict
+    inconclusive-leaning-supported: the STRONG claim (verbatim style
+    cloning) refuted at n=13 — zero bigram overlap with the seed — but
+    the contamination mechanism shows at the shape/label level: seeded
+    arm minted the seed's lesson_type 3.5× as often (6/25 vs 2/29,
+    across 6 unrelated runs incl. successful ones; Fisher p=0.125) and
+    its lessons were ~60% more similar to each other (cross-run difflib
+    0.107 vs 0.066, jackknife-stable), while quality proxies stayed
+    flat (removal cost nothing measurable). Bonus: the store's top seed
+    was itself procedure-form — "emulate this style" on a lesson
+    violating the 2026-08-02 what-not-how rule. **Action: S2 seed
+    exemplar REMOVED from the extraction prompt** (the tested arm was
+    removal; a redacted-guidance successor was NOT tested and would
+    need its own A/B — the harness reruns cheaply). Pin:
+    `test_mint_form.TestNoSeedExemplar`. Δ-gate corpus-contamination
+    precondition cleared; the gate's one remaining input is Jeremy's
+    priority decision (vs SP / world-facts).
   - **Fail-open now triples in the same direction** — cross-ref the
     "Fail-open judge-error edges" item above, which tracks these
     individually but not as a population. Three gates on the learning
