@@ -1295,6 +1295,13 @@ def _execute_main_loop(
         # code execution: catches a write-claim with no artifact (missing-artifact)
         # and a concrete-output claim against a provably-inert .py (inert-output).
         if _artifact_check_on and step_status == "done" and step_result:
+            # Denominator stamp (fail-open readout 2026-08-06): the judged bit
+            # used to live only in a log.info, making history unmeasurable.
+            # "unjudged" first so the except-pass below leaves the honest
+            # fail-open state; flipped to "judged" once a verdict lands.
+            # Steps this block never sees keep "" (exempt, not silently
+            # neither — same vocabulary as the outcomes-row tri-state).
+            outcome["artifact_check"] = "unjudged"
             try:
                 from artifact_check import check_fabrication as _ac_check
                 _ac_verdict = _ac_check(step_result, _proj_artifact_dir, _artifact_snapshot)
@@ -1309,7 +1316,9 @@ def _execute_main_loop(
                             _ac_verdict = _ec_verdict
                     except Exception:
                         pass
-                if not _ac_verdict.judged:
+                if _ac_verdict.judged:
+                    outcome["artifact_check"] = "judged"
+                else:
                     # Fail-open: the check errored; fabricated=False is a
                     # default, not a clean bill. Typed and visible (§13e:
                     # stamp judge-error-and-continue), never a block.
@@ -1421,6 +1430,7 @@ def _execute_main_loop(
                     executor_session_id=outcome.get("executor_session_id", ""),
                     executor_session_resumed=bool(
                         outcome.get("executor_session_resumed", False)),
+                    artifact_check=outcome.get("artifact_check", ""),
                 ))
 
             # Phase 64 Phase A: adaptive execution — director evaluates before stuck advisor
@@ -1672,6 +1682,7 @@ def _execute_main_loop(
                 cache_read_tokens=outcome.get("cache_read_tokens", 0),
                 elapsed_ms=step_elapsed,
                 call_record=outcome.get("call_record", ""),
+                artifact_check=outcome.get("artifact_check", ""),
             ))
             if item_index >= 0:
                 try:
@@ -1787,6 +1798,7 @@ def _execute_main_loop(
             executor_session_id=outcome.get("executor_session_id", ""),
             executor_session_resumed=bool(
                 outcome.get("executor_session_resumed", False)),
+            artifact_check=outcome.get("artifact_check", ""),
         ))
 
         # End-of-iteration artifacts: checkpoint, manifest, dead ends, march of nines

@@ -2475,6 +2475,95 @@ def test_run_agent_loop_allows_real_write(monkeypatch, tmp_path):
     assert not any("fabrication-guard" in (s.result or "") for s in result.steps)
 
 
+def test_artifact_check_denominator_persisted(monkeypatch, tmp_path):
+    """The judged bit reaches the step outcome AND the loop-log totals.
+
+    Fail-open readout 2026-08-06: the judged/unjudged state lived only in a
+    log.info, so the artifact_check denominator was retroactively
+    unmeasurable. Now it's a per-step tri-state ("judged"/"unjudged"/"" for
+    check-not-run) counted into the loop-log totals dict."""
+    monkeypatch.setenv("MARO_ORCH_ROOT", str(tmp_path))
+    import agent_loop as al
+    import loop_execute
+    monkeypatch.setattr(loop_execute, "_free_auto_ralph_enabled", lambda: False)
+
+    slug = al._goal_to_slug("denominator persistence goal")
+    proj_dir = tmp_path / "projects" / slug
+
+    class _RealAdapter:
+        model_key = "test"
+
+        def complete(self, messages, **kwargs):
+            from llm import LLMResponse, ToolCall
+            proj_dir.mkdir(parents=True, exist_ok=True)
+            (proj_dir / "out.py").write_text("print('x')\n")
+            return LLMResponse(
+                content="",
+                tool_calls=[ToolCall(name="complete_step", arguments={
+                    "result": "Wrote the output to out.py.",
+                    "summary": "wrote it",
+                })],
+                input_tokens=1, output_tokens=1,
+            )
+
+    result = al.run_agent_loop(
+        "denominator persistence goal",
+        adapter=_RealAdapter(),
+        preset_steps=["Write the output to out.py"],
+        max_steps=1,
+        max_iterations=3,
+    )
+    done = [s for s in result.steps if s.status == "done"]
+    assert done, f"expected a done step, got {[s.status for s in result.steps]}"
+    assert all(s.artifact_check == "judged" for s in done)
+
+    logs = list(tmp_path.rglob("loop-*-log.json"))
+    assert logs, "no loop log written"
+    payload = json.loads(logs[0].read_text(encoding="utf-8"))
+    assert payload["totals"]["artifact_checks_judged"] >= 1
+    assert payload["totals"]["artifact_checks_unjudged"] == 0
+    assert payload["steps"][0]["artifact_check"] == "judged"
+
+
+def test_artifact_check_error_stamps_unjudged(monkeypatch, tmp_path):
+    """A check that errors (fail-open) stamps "unjudged" — a default, not a
+    clean bill, and now countable instead of a lost log line."""
+    monkeypatch.setenv("MARO_ORCH_ROOT", str(tmp_path))
+    import agent_loop as al
+    import artifact_check
+    import loop_execute
+    monkeypatch.setattr(loop_execute, "_free_auto_ralph_enabled", lambda: False)
+    monkeypatch.setattr(
+        artifact_check, "check_fabrication",
+        lambda *a, **kw: artifact_check.ArtifactVerdict(
+            False, reason="check error (fail-open)", judged=False))
+
+    class _Adapter:
+        model_key = "test"
+
+        def complete(self, messages, **kwargs):
+            from llm import LLMResponse, ToolCall
+            return LLMResponse(
+                content="",
+                tool_calls=[ToolCall(name="complete_step", arguments={
+                    "result": "Summarized the findings.",
+                    "summary": "done",
+                })],
+                input_tokens=1, output_tokens=1,
+            )
+
+    result = al.run_agent_loop(
+        "unjudged stamp goal",
+        adapter=_Adapter(),
+        preset_steps=["Summarize the findings"],
+        max_steps=1,
+        max_iterations=3,
+    )
+    done = [s for s in result.steps if s.status == "done"]
+    assert done
+    assert all(s.artifact_check == "unjudged" for s in done)
+
+
 def test_run_agent_loop_blocks_inert_output_claim(monkeypatch, tmp_path):
     """A step that writes an inert .py but narrates concrete output is blocked.
 

@@ -3994,9 +3994,15 @@ deferred rather than silently dropped:
        The unjudged fail-open is a `log.info` (loop_execute ~1312);
        run records keep `result_length`, not text; no captain's-log
        event; journal retains nothing. Retroactively unmeasurable.
-       Cheap wire when wanted: count judged/unjudged per run into the
-       loop-log `totals` dict — no new event type, rides an existing
-       artifact.
+       ~~Cheap wire when wanted~~ — **WIRED 2026-08-06** (this
+       commit): per-step tri-state `artifact_check`
+       ("judged"/"unjudged"/"" = check not run) stamped in
+       loop_execute, carried on StepOutcome, persisted per step in
+       `loop-*-log.json` plus `totals.artifact_checks_judged` /
+       `artifact_checks_unjudged`. History before this commit stays
+       unmeasurable; the denominator accrues from here. Pins:
+       test_agent_loop `test_artifact_check_denominator_persisted` +
+       `test_artifact_check_error_stamps_unjudged`.
 - **Recon-flavor upgrade edges (chunk-9 #2 runtime slice shipped
   2026-08-01, docs/history/2026-08-01-recon-flavor-runtime.md).** The
   `[recon: <decision>]` tag + map-edit execution contract + map-change

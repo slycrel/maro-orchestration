@@ -118,6 +118,12 @@ class StepOutcome:
                                  # replans) into the wrong step's segment.
     executor_session_id: str = ""
     executor_session_resumed: bool = False
+    artifact_check: str = ""     # "judged" | "unjudged" | "" (check not run —
+                                 # gate off, step not done, or no result).
+                                 # Persisted so the fail-open denominator is
+                                 # measurable from run records (2026-08-06
+                                 # readout: the judged bit lived only in a
+                                 # log.info and history was unmeasurable).
 
 
 def step_from_decompose(
@@ -138,6 +144,7 @@ def step_from_decompose(
     executor_session_id: str = "",
     executor_session_resumed: bool = False,
     ended_ts: Optional[str] = None,
+    artifact_check: str = "",
 ) -> StepOutcome:
     """Factory for StepOutcome — centralises defaults so inline construction sites stay DRY.
 
@@ -171,6 +178,7 @@ def step_from_decompose(
         executor_session_id=executor_session_id,
         executor_session_resumed=executor_session_resumed,
         ended_ts=ended_ts if ended_ts is not None else datetime.now(timezone.utc).isoformat(),
+        artifact_check=artifact_check,
     )
 
 

@@ -215,6 +215,9 @@ def _write_loop_log(
                     # run-visibility report: when this step finished, for
                     # timeline positioning (loop_report.py)
                     "ended_ts": getattr(s, "ended_ts", ""),
+                    # fail-open denominator (2026-08-06 readout): "judged" |
+                    # "unjudged" | "" (check not run for this step)
+                    "artifact_check": getattr(s, "artifact_check", ""),
                 }
                 for s in steps
             ],
@@ -228,6 +231,14 @@ def _write_loop_log(
                 "executor_session_resumed_steps": sum(
                     1 for s in steps
                     if getattr(s, "executor_session_resumed", False)),
+                # judged + unjudged < len(steps) is normal: steps the check
+                # never sees (gate off, blocked, empty result) count neither.
+                "artifact_checks_judged": sum(
+                    1 for s in steps
+                    if getattr(s, "artifact_check", "") == "judged"),
+                "artifact_checks_unjudged": sum(
+                    1 for s in steps
+                    if getattr(s, "artifact_check", "") == "unjudged"),
             },
         }
         path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
