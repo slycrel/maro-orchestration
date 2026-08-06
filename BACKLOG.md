@@ -2966,6 +2966,25 @@ whether open risks/unknowns from loop runs belong in project RISKS.md
 whether the closure/verdict layer is the canonical risk record and
 RISKS.md stays an orch-lane-only artifact.
 
+Third specimen, same session (generalizes the item: **loop→project
+record mirroring is partial**): initial plan steps are mirrored into the
+project NEXT.md ledger (`loop_planning.py:99` `append_next_items`), but
+steps added mid-run never are — 8b8671bd's steps 3–7 (the ones that
+produced the deliverable) render as `ledger #-1` in the plan log and
+have no project-ledger entry; the plan header's "Progress: 7/3 done" is
+the same fact showing through. And the steal-list findings themselves
+only reached BACKLOG because Jeremy asked (captured 25a621e). Whatever
+the risk-minting decision is, it should probably answer for the family:
+which loop outputs (risks, mid-run steps, verified findings) are owed a
+durable project-record write, and which records are canonical elsewhere.
+
+One-specimen robustness note, same run: the scope pass failed to parse
+(`build/scope-raw-FAILED.txt`) because the scoper emitted preamble prose
+plus a `powershell`-labeled fence instead of bare output; run degraded
+gracefully but lost scope injection. If a second specimen appears, a
+strip-prose/fences pre-parse pass in `handle.py`'s scope path is the
+cheap fix.
+
 ## Vision / Deferred
 
 ### Invalid-assumption detection above the micro level (Jeremy seed, 2026-08-02)
