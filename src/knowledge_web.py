@@ -291,6 +291,7 @@ def record_tiered_lesson(
     minted_from: str = "",
     lesson_id: str = "",
     grounding: Optional[List[Dict[str, Any]]] = None,
+    source_evidence: str = "",
 ) -> TieredLesson:
     """Record a new lesson at the given tier.
 
@@ -355,7 +356,8 @@ def record_tiered_lesson(
             from lesson_provenance import (classify_lesson_provenance,
                                            provenance_gate_enabled)
             if provenance_gate_enabled():
-                minted_from = classify_lesson_provenance(lesson_text, source_goal)
+                minted_from = classify_lesson_provenance(
+                    lesson_text, source_goal, source_evidence)
         except Exception:
             minted_from = ""
 

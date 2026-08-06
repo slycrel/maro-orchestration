@@ -510,6 +510,7 @@ def record_outcome(
     stop_verdict: str = "",
     stop_evidence: str = "",
     pause_reason: str = "",
+    lesson_evidence: str = "",
 ) -> Outcome:
     """Record the outcome of a completed run.
 
@@ -618,6 +619,10 @@ def record_outcome(
                 goal_verdict_source=goal_verdict_source,
                 lesson_id=_shared,
                 grounding=_ground,
+                # R1-5: the extraction evidence rides to the provenance
+                # classifier — scaffolding can arrive via step output, not
+                # just the goal.
+                source_evidence=lesson_evidence,
             )
 
     # Update MEMORY.md index
@@ -1263,6 +1268,7 @@ def _store_lesson(
     minted_from: str = "",
     lesson_id: str = "",
     grounding: Optional[List[Dict[str, Any]]] = None,
+    source_evidence: str = "",
 ) -> Lesson:
     """Append a lesson to the lessons ledger, or reinforce existing near-duplicate.
 
@@ -1291,7 +1297,8 @@ def _store_lesson(
             from lesson_provenance import (classify_lesson_provenance,
                                            provenance_gate_enabled)
             if provenance_gate_enabled():
-                minted_from = classify_lesson_provenance(lesson, source_goal)
+                minted_from = classify_lesson_provenance(
+                    lesson, source_goal, source_evidence)
         except Exception:
             minted_from = ""
     # Pass 1: fast exact-text dedup (no limit — prevents unbounded accumulation)

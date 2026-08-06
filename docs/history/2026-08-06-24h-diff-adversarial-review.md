@@ -120,7 +120,11 @@ holes remain in exactly the denominator the change set out to close.
    first closure call — re-verification after closure restart and the
    quality-escalation path still swallow judge exceptions
    (`handle.py:2533`, `handle.py:3164`). Not hand-verified; check when
-   fixing (1).
+   fixing (1). *Verified 2026-08-07: both sites were covered in the
+   same fix pass (570a8f7 + kin) — the reverify catch stamps
+   `closure_error` into `_closure_error`, and the post-escalate catch
+   stamps run + ledger with replace-semantics when the re-run shipped.
+   Both carry R2-4 comments at the catch sites. Resolved.*
 5. **[medium, CONFIRMED]** Curation caps are silent: 3 deliverables on
    the card, 12 served (`_SERVED_ARTIFACTS_CAP`), first-wins on
    basename collision — all deliberate and commented, but nothing

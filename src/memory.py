@@ -559,10 +559,11 @@ def extract_step_lessons(
         result = (getattr(s, "result", "") or "")
         _budget.add(f"- step: {text}\n  verified result: {result}")
 
+    _step_evidence_block = _budget.render()
     user_msg = (
         f"Task type: {task_type}\n"
         f"High-level goal (NOT achieved): {goal[:300]}\n\n"
-        f"Individually-verified steps:\n" + _budget.render() + "\n\n"
+        f"Individually-verified steps:\n" + _step_evidence_block + "\n\n"
         "Extract 0-3 step-scoped method lessons as typed JSON objects."
     )
 
@@ -610,6 +611,9 @@ def extract_step_lessons(
                 lesson_type=lesson_type,
                 provisional=True,
                 evidence_sources=[f"loop:{loop_id}"] if loop_id else [],
+                # R1-5: step results are the extraction input — scaffolding
+                # planted there must reach the provenance classifier.
+                source_evidence=_step_evidence_block,
             )
             if getattr(tl, "lesson_id", "") != "rejected":
                 recorded += 1
@@ -747,6 +751,9 @@ def reflect_and_record(
                     evidence_sources=[f"loop:{loop_id}"] if loop_id else [],
                     grounding=(lesson_groundings[_l_idx]
                                if _l_idx < len(lesson_groundings) else None),
+                    # R1-5: same block extract_lessons_via_llm saw — the
+                    # classifier must see what the extractor generalized from.
+                    source_evidence=lesson_evidence or result_summary,
                 )
                 if getattr(recorded, "lesson_id", "") == "rejected":
                     tiered_failed += 1
@@ -785,6 +792,7 @@ def reflect_and_record(
         stop_verdict=stop_verdict,
         stop_evidence=stop_evidence,
         pause_reason=pause_reason,
+        lesson_evidence=lesson_evidence or result_summary,
     )
 
     _log_lesson_extraction(
@@ -958,6 +966,8 @@ def extract_deferred_lessons(
                     evidence_sources=[f"loop:{loop_id}"] if loop_id else [],
                     grounding=(lesson_groundings[_l_idx]
                                if _l_idx < len(lesson_groundings) else None),
+                    # R1-5: the stored summary is this path's extraction input.
+                    source_evidence=outcome.summary,
                 )
                 if getattr(recorded, "lesson_id", "") == "rejected":
                     tiered_failed += 1
@@ -982,6 +992,7 @@ def extract_deferred_lessons(
                 lesson_id=_shared,
                 grounding=(lesson_groundings[_idx]
                            if _idx < len(lesson_groundings) else None),
+                source_evidence=outcome.summary,
             )
     _log_lesson_extraction(
         outcome_id=outcome.outcome_id,

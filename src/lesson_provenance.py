@@ -80,21 +80,30 @@ def provenance_gate_enabled() -> bool:
         return True
 
 
-def classify_lesson_provenance(lesson_text: str, goal_text: str = "") -> str:
+def classify_lesson_provenance(
+    lesson_text: str, goal_text: str = "", evidence_text: str = ""
+) -> str:
     """Classify a minted lesson as outcome-derived or prompt-derived.
 
     Returns MINTED_FROM_PROMPT when the lesson generalizes instruction text
     (prompt-authority phrasing, obedience generalization, or an echo of
-    anti-escalation scaffolding that the source goal also carries);
-    MINTED_FROM_OUTCOME otherwise. ``goal_text`` is optional — the
-    scaffolding-echo signal needs it, the other two fire on the lesson text
-    alone. Deterministic, no I/O, never raises.
+    anti-escalation scaffolding that the source goal or step evidence also
+    carries); MINTED_FROM_OUTCOME otherwise. ``goal_text``/``evidence_text``
+    are optional — the scaffolding-echo signal needs a source text to match
+    against, the other two fire on the lesson text alone. The evidence leg
+    exists because the widened lesson-evidence window (loop_finalize) feeds
+    raw step output into extraction: an instruction-shaped payload planted
+    in a step result can be echoed into a lesson exactly like db37d525's
+    goal scaffolding was (R1-5, adversarial review 2026-08-06).
+    Deterministic, no I/O, never raises.
     """
     text = lesson_text or ""
     if _PROMPT_AUTHORITY_RE.search(text):
         return MINTED_FROM_PROMPT
     if _OBEDIENCE_RE.search(text):
         return MINTED_FROM_PROMPT
-    if goal_text and _SCAFFOLDING_RE.search(goal_text) and _SCAFFOLDING_RE.search(text):
-        return MINTED_FROM_PROMPT
+    if _SCAFFOLDING_RE.search(text):
+        for source in (goal_text, evidence_text):
+            if source and _SCAFFOLDING_RE.search(source):
+                return MINTED_FROM_PROMPT
     return MINTED_FROM_OUTCOME

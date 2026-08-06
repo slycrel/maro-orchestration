@@ -1172,7 +1172,17 @@ capture**, which is what makes the rung amortize instead of evaporate.
   both extraction paths; injection surfaces mark unsupported claims,
   seed-reader skips them (design + falsifiers:
   `docs/MINT_GROUNDING_DESIGN.md`; slices 2 skill-mint / 3
-  republish-gate still open, gate = the only fail-closed point);
+  republish-gate still open, gate = the only fail-closed point;
+  R1-3 from the 2026-08-06 24h-diff review: slice 1 covers the two
+  reflect paths only — step-lesson extraction `memory.py:601`,
+  `loop_finalize.py` recovery lessons, `prereq.py:185`, and
+  `evolver_store.py:458` still mint unstamped; the loop_finalize
+  recovery writers have `loop_id` in hand so those stamps are cheap,
+  fold into slice 2. R1-4 rider for the slice-2/3 design: the
+  knowledge layer launders groundings — `outcome_to_knowledge` /
+  `knowledge_bridge.py` carry only `outcome:<id>` and KnowledgeNode
+  has no grounding field, so an unsupported lesson can propagate into
+  decay-free knowledge with the stamp stripped);
   (d) verdict-prior
   recalibration for future batches — LT-1-era base rates are stale, 
   12/12 PASS says re-anchor on LT-4; (e) container-image gap list
