@@ -872,3 +872,15 @@ def test_default_hooks_path_legacy_fallback(tmp_path, monkeypatch):
     legacy.write_text('{"hooks": []}', encoding="utf-8")
     from hooks import _default_hooks_path
     assert _default_hooks_path() == legacy
+
+
+def test_default_hooks_path_orch_root_only_pin_stays_local(tmp_path, monkeypatch):
+    # 2026-08-06 adversarial-review fix: MARO_ORCH_ROOT-only (repo-local /
+    # container mode) must NOT resolve to the production workspace registry —
+    # loop_init loads AND EXECUTES whatever registry this path names.
+    for var in ("MARO_WORKSPACE", "OPENCLAW_WORKSPACE", "WORKSPACE_ROOT",
+                "MARO_MEMORY_DIR"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("MARO_ORCH_ROOT", str(tmp_path))
+    from hooks import _default_hooks_path
+    assert _default_hooks_path() == tmp_path / ".hooks" / "hooks.json"

@@ -47,32 +47,52 @@ _CHECKPOINT_DIR_NAME = "checkpoints"
 def _checkpoint_dir() -> Path:
     """Non-run-dir checkpoint storage (write-fallback when no run is active).
 
-    Workspace-rooted since 2026-08-06 (census item 5b): the old orch_root()
-    anchoring wrote checkpoints into whatever orch_root resolved to — the
-    repo checkout in production (52 stale files by 2026-07-09). Reads still
-    consult the old location via _old_checkpoint_dir().
+    Workspace-rooted since 2026-08-06 (census item 5b), honoring the
+    MARO_ORCH_ROOT-only pin like every other data root (orch_items.
+    data_root). The old orch_root() anchoring wrote checkpoints into
+    whatever orch_root resolved to — the repo checkout in production (52
+    stale files by 2026-07-09). Pre-move files stay readable via
+    _old_checkpoint_dirs().
     """
     try:
-        from config import workspace_root
-        d = workspace_root() / _CHECKPOINT_DIR_NAME
+        from orch_items import data_root
+        d = data_root() / _CHECKPOINT_DIR_NAME
     except Exception:
         d = Path(__file__).parent.parent / _CHECKPOINT_DIR_NAME
-    d.mkdir(parents=True, exist_ok=True)
+    try:
+        d.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass  # read-only fs: reads can still resolve; writes fail loudly later
     return d
 
 
-def _old_checkpoint_dir() -> Optional[Path]:
-    """Pre-2026-08-06 location (orch_root()/checkpoints) — read-only fallback.
+def _old_checkpoint_dirs() -> List[Path]:
+    """Pre-2026-08-06 location(s) — fallback for existing files, never created.
 
-    Never mkdir'd, never written: existing files stay where they are
-    (retention decree) and remain loadable/consumable.
+    Old data lives wherever orch_root() resolved when it was written — the
+    repo checkout for unpinned production (still found unpinned, since
+    orch_root() resolves there), the orch layout for legacy-pinned
+    deployments. Deliberately env-relative: a PINNED env does not see
+    files written unpinned — each workspace owns its data, and piercing
+    the pin would leak the real repo's checkpoints into every isolated
+    test env (2026-08-06 adversarial review, accepted residual). Files
+    found here are consumed/deleted in place (retention decree: never
+    migrated), but these dirs are never mkdir'd.
     """
     try:
         from orch_items import orch_root
-        d = orch_root() / _CHECKPOINT_DIR_NAME
-        return d if d.is_dir() else None
+        candidates = [orch_root() / _CHECKPOINT_DIR_NAME]
     except Exception:
-        return None
+        return []
+    try:
+        current = _checkpoint_dir()
+    except Exception:
+        current = None
+    out: List[Path] = []
+    for d in candidates:
+        if d != current and d not in out and d.is_dir():
+            out.append(d)
+    return out
 
 
 def _checkpoint_path(loop_id: str) -> Path:
@@ -84,8 +104,7 @@ def _find_checkpoint_path(loop_id: str) -> Optional[Path]:
     p = _checkpoint_path(loop_id)
     if p.exists():
         return p
-    old = _old_checkpoint_dir()
-    if old is not None:
+    for old in _old_checkpoint_dirs():
         op = old / f"ckpt_{loop_id}.json"
         if op.exists():
             return op
@@ -96,8 +115,8 @@ def _rundir_checkpoint_path() -> Optional[Path]:
     """Run-dir checkpoint location (`<run-dir>/build/checkpoint.json`).
 
     None when no run is active (tests, direct agent_loop invocations) —
-    callers fall back to the legacy directory. The run dir is the durable,
-    env-independent home: the legacy `orch_root()/checkpoints` resolved
+    callers fall back to `_checkpoint_dir()`. The run dir is the durable,
+    env-independent home: the pre-move `orch_root()/checkpoints` resolved
     differently per environment, which is how 52 stale checkpoints ended up
     in the repo and 0 in the live workspace.
     """
@@ -166,7 +185,7 @@ class Checkpoint:
     # Discarded whenever in_flight is present; adapter re-validates its config
     # signature (model/cwd/tools/permissions) before using the ID.
     executor_session: Optional[Dict[str, Any]] = None
-    # Successful legacy resume marks (rather than deletes) its source so the
+    # A successful resume marks (rather than deletes) its source so the
     # retained checkpoint remains inspectable but can never replay effects.
     consumed_at: str = ""
     resumed_to_loop_id: str = ""
@@ -280,7 +299,7 @@ def write_checkpoint(
 
     Lands in `<run-dir>/build/checkpoint.json` when a run is active (durable,
     linked to handle_id, survives crashes in the place the operator already
-    looks); falls back to the legacy checkpoints dir otherwise.
+    looks); falls back to the non-run-dir checkpoints dir otherwise.
 
     Args:
         loop_id: Unique ID for this loop run.
@@ -364,9 +383,10 @@ def _load_from(path: Path, loop_id: Optional[str] = None) -> Optional[Checkpoint
 def load_checkpoint(loop_id: str) -> Optional[Checkpoint]:
     """Load a checkpoint by loop_id. Returns None if not found or corrupt.
 
-    Search order: the active run dir (if any), then the legacy checkpoints
-    dir, then a newest-first scan of all run dirs (resume usually happens in
-    a fresh process where no run-dir contextvar is set).
+    Search order: the active run dir (if any), then the non-run-dir
+    checkpoint dir (current location first, then pre-move locations), then
+    a newest-first scan of all run dirs (resume usually happens in a fresh
+    process where no run-dir contextvar is set).
     """
     rd_path = _rundir_checkpoint_path()
     if rd_path is not None:
@@ -374,9 +394,9 @@ def load_checkpoint(loop_id: str) -> Optional[Checkpoint]:
         if ckpt is not None:
             return ckpt
 
-    legacy = _find_checkpoint_path(loop_id)
-    if legacy is not None:
-        ckpt = _load_from(legacy)
+    found = _find_checkpoint_path(loop_id)
+    if found is not None:
+        ckpt = _load_from(found)
         if ckpt is not None:
             return ckpt
 
@@ -400,8 +420,8 @@ def mark_checkpoint_consumed(loop_id: str, *, resumed_to_loop_id: str) -> bool:
     """Retain but irrevocably consume a successful resume source checkpoint.
 
     This is intentionally narrower than deletion: closure-demoted/stuck runs
-    keep resumable state, while a successful legacy resume cannot be invoked a
-    second time to replay the same external effects.
+    keep resumable state, while a successfully-resumed checkpoint cannot be
+    invoked a second time to replay the same external effects.
     """
     path = _find_checkpoint_path(loop_id) or _checkpoint_path(loop_id)
     try:
@@ -433,8 +453,7 @@ def delete_checkpoint(loop_id: str) -> None:
             if _load_from(rd_path, loop_id) is not None:
                 rd_path.unlink(missing_ok=True)
         _checkpoint_path(loop_id).unlink(missing_ok=True)
-        old = _old_checkpoint_dir()
-        if old is not None:
+        for old in _old_checkpoint_dirs():
             (old / f"ckpt_{loop_id}.json").unlink(missing_ok=True)
         log.debug("checkpoint deleted: %s", loop_id)
     except Exception:
@@ -442,15 +461,14 @@ def delete_checkpoint(loop_id: str) -> None:
 
 
 def list_checkpoints() -> List[Checkpoint]:
-    """List all saved checkpoints (legacy dir + run dirs), newest first."""
+    """List all saved checkpoints (checkpoint dirs + run dirs), newest first."""
     entries: List[tuple] = []
     try:
         for p in _checkpoint_dir().glob("ckpt_*.json"):
             entries.append(p)
     except Exception:
         pass
-    old = _old_checkpoint_dir()
-    if old is not None:
+    for old in _old_checkpoint_dirs():
         try:
             entries.extend(old.glob("ckpt_*.json"))
         except Exception:
@@ -462,10 +480,18 @@ def list_checkpoints() -> List[Checkpoint]:
         except Exception:
             pass
     ckpts = []
+    seen_ids: set = set()
     for p in sorted(entries, key=lambda x: x.stat().st_mtime, reverse=True):
         ckpt = _load_from(p)
-        if ckpt is not None:
-            ckpts.append(ckpt)
+        if ckpt is None:
+            continue
+        # A loop_id can exist at both the current and a pre-move location
+        # (e.g. an operator copied old files forward) — newest copy wins,
+        # matching _find_checkpoint_path's current-dir-first preference.
+        if ckpt.loop_id in seen_ids:
+            continue
+        seen_ids.add(ckpt.loop_id)
+        ckpts.append(ckpt)
     return ckpts
 
 

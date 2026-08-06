@@ -444,17 +444,19 @@ def check_system_health() -> SystemHealth:
     """
     checks: Dict[str, str] = {}
 
-    # Check 1: orch root accessible and writable
+    # Check 1: workspace accessible and writable — probe where runtime data
+    # actually lands (config.workspace_root()), not orch_root: post-5b the
+    # repo checkout being writable says nothing about the workspace.
     try:
-        from orch import orch_root
-        root = orch_root()
+        from config import workspace_root
+        root = workspace_root()
         if root.exists():
             test_path = root / ".sheriff-health-check"
             test_path.write_text("ok", encoding="utf-8")
             test_path.unlink()
             checks["workspace_writable"] = "ok"
         else:
-            checks["workspace_writable"] = "fail: orch_root does not exist"
+            checks["workspace_writable"] = "fail: workspace root does not exist"
     except Exception as exc:
         checks["workspace_writable"] = f"fail: {exc}"
 

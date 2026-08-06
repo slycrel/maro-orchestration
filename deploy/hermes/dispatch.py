@@ -37,9 +37,9 @@ SRC = REPO / "src"
 sys.path.insert(0, str(SRC))
 
 # Same workspace sanitization as deploy/openclaw/maro-dispatch.sh: any pinned
-# workspace var (even MARO_WORKSPACE) flips memory routing into legacy
-# prototype layouts; the clean no-env default is the only path to
-# ~/.maro/workspace (split-brain seen live 2026-07-02).
+# workspace var routes all data into THAT workspace (and MARO_ORCH_ROOT alone
+# routes it to the repo checkout); the clean no-env default is the only path
+# to ~/.maro/workspace (split-brain seen live 2026-07-02).
 for _var in ("MARO_WORKSPACE", "OPENCLAW_WORKSPACE", "WORKSPACE_ROOT",
              "MARO_ORCH_ROOT", "MARO_MEMORY_DIR"):
     os.environ.pop(_var, None)

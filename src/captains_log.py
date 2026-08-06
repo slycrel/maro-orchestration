@@ -1019,7 +1019,9 @@ def correlate_with_git(
     Args:
         entries: Log entries (from query_log or load_log).
         window_hours: Hours before/after event to search for commits.
-        repo_path: Path to git repo (default: auto-detect from orch_root).
+        repo_path: Path to git repo (default: repo_root(), the source
+            checkout; correlation is skipped when that isn't a git repo —
+            e.g. a pip install).
 
     Returns:
         Entries augmented with "nearby_commits" field.
@@ -1035,7 +1037,13 @@ def correlate_with_git(
     if repo_path is None:
         try:
             from orch_items import repo_root
-            repo_path = str(repo_root())
+            rr = repo_root()
+            # pip install: repo_root() is site-packages' parent, not a
+            # checkout — running git there would silently walk up to
+            # whatever repo CONTAINS the venv. Skip correlation instead.
+            if not (rr / ".git").exists():
+                return entries
+            repo_path = str(rr)
         except Exception:
             repo_path = "."
 

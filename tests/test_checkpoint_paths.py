@@ -68,3 +68,44 @@ def test_old_dir_never_created(tmp_path, monkeypatch):
     ckpt_module._checkpoint_dir()
     assert load_checkpoint("nope0000") is None
     assert not old_dir.exists()
+
+
+def _pin_orch_root_only(tmp_path, monkeypatch):
+    """MARO_ORCH_ROOT with no workspace var — repo-local/container mode."""
+    for var in ("MARO_WORKSPACE", "OPENCLAW_WORKSPACE", "WORKSPACE_ROOT",
+                "MARO_MEMORY_DIR"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("MARO_ORCH_ROOT", str(tmp_path))
+
+
+def test_orch_root_only_pin_keeps_checkpoints_local(tmp_path, monkeypatch):
+    # 2026-08-06 adversarial-review fix: MARO_ORCH_ROOT-only (build-loop.sh
+    # no-arg, containers) must NOT leak checkpoints into the production
+    # workspace — data rides the orch root.
+    _pin_orch_root_only(tmp_path, monkeypatch)
+    assert ckpt_module._checkpoint_dir() == tmp_path / "checkpoints"
+    # And the "old location" is the same dir here, so no fallback candidates.
+    assert ckpt_module._old_checkpoint_dirs() == []
+
+
+def test_list_checkpoints_dedups_by_loop_id(tmp_path, monkeypatch):
+    # Same loop_id present at both the current and the pre-move location
+    # (operator copied files forward) → one entry, newest copy wins.
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+    import os
+    import time
+
+    old_path = _write_old_location_checkpoint("dup00001")
+    new_dir = ckpt_module._checkpoint_dir()
+    c = Checkpoint(loop_id="dup00001", goal="new goal", project="proj",
+                   steps=["step 1"], completed=[])
+    new_path = new_dir / "ckpt_dup00001.json"
+    new_path.write_text(json.dumps(c.to_dict()), encoding="utf-8")
+    now = time.time()
+    os.utime(old_path, (now - 100, now - 100))
+    os.utime(new_path, (now, now))
+
+    ckpts = [c for c in ckpt_module.list_checkpoints()
+             if c.loop_id == "dup00001"]
+    assert len(ckpts) == 1
+    assert ckpts[0].goal == "new goal"

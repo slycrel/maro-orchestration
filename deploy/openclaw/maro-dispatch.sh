@@ -17,13 +17,12 @@ MARO_REPO="${MARO_REPO:-$HOME/claude/maro-orchestration}"
 # Workspace sanitization: a dispatch must land in Maro's canonical workspace
 # (~/.maro/workspace) no matter what environment the substrate runs us from.
 # OpenClaw pins OPENCLAW_WORKSPACE (and friends) for its subprocesses, which
-# Maro's legacy fallbacks honor — routing events, step-costs (the budget
-# ledger!), and lessons into ~/.openclaw/workspace/prototypes/* instead.
-# Seen live 2026-07-02: runs split-brained into the deprecated
-# poe-orchestration prototype dir. NOTE: any pinned workspace var (even
-# MARO_WORKSPACE) flips orch_items.memory_dir into the legacy
-# <ws>/prototypes/maro-orchestration layout — the clean no-env default is
-# the only path to ~/.maro/workspace/memory, so unset them all.
+# Maro honors — routing events, step-costs (the budget ledger!), and lessons
+# into the substrate's workspace instead. Seen live 2026-07-02 (then via the
+# old prototypes shadow layout; removed 2026-08-06, but a pin still means
+# "the workspace IS <ws>", which is the wrong workspace here). MARO_ORCH_ROOT
+# alone routes data to the repo checkout. Unset them all: the clean no-env
+# default is the only path to ~/.maro/workspace.
 unset MARO_WORKSPACE OPENCLAW_WORKSPACE WORKSPACE_ROOT MARO_ORCH_ROOT MARO_MEMORY_DIR
 
 drain="--drain"

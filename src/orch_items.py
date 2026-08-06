@@ -214,6 +214,24 @@ def _orch_root_pinned() -> bool:
     return bool(os.environ.get("MARO_ORCH_ROOT"))
 
 
+def data_root() -> Path:
+    """Anchor for workspace-level data that isn't memory/projects/output.
+
+    Same rule those three follow: config.workspace_root() for any workspace
+    pin (or the unpinned default), orch_root() when MARO_ORCH_ROOT is the
+    only pin (repo-local / container mode). Consumers: checkpoint.py
+    (non-run-dir checkpoints), hooks.py (registry). Added after the
+    2026-08-06 adversarial review — the first cut of the 5b migration
+    routed those two through config.workspace_root() directly, so
+    repo-local mode leaked its checkpoints and hook registry into the
+    production workspace.
+    """
+    if _orch_root_pinned():
+        return orch_root()
+    from config import workspace_root
+    return workspace_root()
+
+
 def memory_dir() -> Path:
     """Canonical memory directory — used by memory.py, observe.py, gc_memory.py, router.py.
 

@@ -221,17 +221,22 @@ piggybacks on a dispatch's token consent.
 
 ## Workspace sanitization (why the dispatch script unsets env vars)
 
-Maro honors legacy workspace env vars (`OPENCLAW_WORKSPACE`,
-`WORKSPACE_ROOT`, `MARO_ORCH_ROOT`, `MARO_MEMORY_DIR` — and any pinned
-workspace, including `MARO_WORKSPACE`, flips the memory tier into the legacy
-`<ws>/prototypes/maro-orchestration/` layout). A substrate that pins these
-for its own subprocesses (OpenClaw does) would silently split-brain Maro:
-run dirs in `~/.maro/workspace/runs/` but events, lessons, and the
-step-costs ledger **that the daily budget gate reads** in the substrate's
-prototype dirs. Seen live 2026-07-02. `maro-dispatch.sh` therefore unsets
+Maro honors workspace env vars (`MARO_WORKSPACE`, plus legacy
+`OPENCLAW_WORKSPACE`, `WORKSPACE_ROOT`, and the repo-local
+`MARO_ORCH_ROOT`, `MARO_MEMORY_DIR`). Since the 2026-08-06 resolution
+unification, any pinned workspace var routes ALL data (memory, projects,
+output, checkpoints, hooks) into that workspace's standard layout — the
+old `<ws>/prototypes/maro-orchestration/` shadow layout is gone. The
+remaining hazard is simpler but still real: a substrate that pins these
+for its own subprocesses (OpenClaw does) routes Maro's data into the
+*substrate's* workspace instead of the canonical `~/.maro/workspace` —
+events, lessons, and the step-costs ledger **that the daily budget gate
+reads** end up split-brained from the run dirs (pre-unification version
+seen live 2026-07-02). `MARO_ORCH_ROOT` alone routes data to the repo
+checkout (repo-local/container mode). `maro-dispatch.sh` therefore unsets
 all of them so every dispatch lands in the canonical `~/.maro/workspace`.
 If you write your own adapter, do the same — or export exactly one
-intentional workspace and know about the prototypes-layout quirk.
+intentional workspace.
 
 ---
 

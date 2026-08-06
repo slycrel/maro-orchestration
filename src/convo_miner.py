@@ -233,6 +233,10 @@ def scan_git_log(repo: Optional[Path] = None, max_commits: int = 500) -> List[Id
             repo = repo_root()
         except Exception:
             repo = Path.cwd()
+        # pip install: repo_root() is not a checkout — git would walk up
+        # to whatever repo contains the venv and mine a stranger's commits.
+        if not (repo / ".git").exists():
+            return []
 
     ideas: List[Idea] = []
     try:
@@ -393,6 +397,11 @@ def inject_into_backlog(
             backlog_path = repo_root() / "BACKLOG.md"
         except Exception:
             backlog_path = Path(__file__).parent.parent / "BACKLOG.md"
+        # Default target must already exist: inject appends to the dev
+        # backlog of a checkout — never conjure one (pip installs would
+        # otherwise get a BACKLOG.md inside the venv's lib tree).
+        if not backlog_path.exists():
+            return 0
 
     high = [i for i in ideas if i.confidence >= threshold]
     if not high:

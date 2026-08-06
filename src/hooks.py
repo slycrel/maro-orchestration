@@ -184,8 +184,10 @@ _BUILTIN_BY_ID: Dict[str, Hook] = {h.id: h for h in BUILTIN_HOOKS}
 class HookRegistry:
     """Stores and persists registered hooks.
 
-    Loads from `.hooks/hooks.json` inside the orch root (or `config_path`).
-    Creates an empty registry if the file is not found.
+    Loads from `.hooks/hooks.json` under the workspace data root — see
+    _default_hooks_path() for resolution and legacy fallback — or from an
+    explicit `config_path`. Creates an empty registry if the file is not
+    found.
     """
 
     def __init__(self, config_path: Optional[Path] = None):
@@ -277,23 +279,22 @@ class HookRegistry:
 def _default_hooks_path() -> Optional[Path]:
     """Return the default hooks.json path — workspace-rooted since 2026-08-06.
 
-    Previously anchored on orch_root(), which in production resolved to the
-    repo checkout (census item 5b). A registry already living at the legacy
-    location keeps working: when the workspace copy doesn't exist but the
-    legacy one does, the legacy path is returned (reads AND writes stay
-    there — never moved automatically, retention decree).
+    Resolves through orch_items.data_root(), which honors the
+    MARO_ORCH_ROOT-only repo-local pin like every other data root (a
+    repo-local build loop must not load — and execute — the production
+    registry; 2026-08-06 adversarial review). A registry already at the
+    legacy orch_root()/.hooks location keeps working: when the
+    current-path copy doesn't exist but the legacy one does, the legacy
+    path is returned — reads AND writes stay there (never migrated
+    automatically, retention decree).
     """
     try:
-        from config import workspace_root
-        p = workspace_root() / ".hooks" / "hooks.json"
+        from orch_items import data_root, orch_root
+        p = data_root() / ".hooks" / "hooks.json"
         if not p.exists():
-            try:
-                import orch
-                legacy = orch.orch_root() / ".hooks" / "hooks.json"
-                if legacy.exists():
-                    return legacy
-            except Exception:
-                pass
+            legacy = orch_root() / ".hooks" / "hooks.json"
+            if legacy.exists():
+                return legacy
         return p
     except Exception:
         return None

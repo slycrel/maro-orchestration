@@ -125,7 +125,7 @@ scripts/             smoke.sh, audit-phases.sh, enqueue.sh
 personas/            YAML persona specs
 docs/                Architecture, memory systems, self-reflection design
 lat.md/              Knowledge graph: 9 cross-linked concept nodes + index
-memory/              Repo-local: stale copies (tests write here via OPENCLAW_WORKSPACE). Real data is in ~/.maro/workspace/memory/
+memory/              Repo-local: stale pre-2026-08-06 copies (nothing writes here since resolution unification). Real data is in ~/.maro/workspace/memory/
 output/              Repo-local output (real output in ~/.maro/workspace/output/)
 research/            Research outputs: X link synthesis, Polymarket validation, Phase 41 design
 user/                Neutral operator-doc templates (GOALS, CONFIG, CONTEXT, SIGNALS, COMPLETION_STANDARD);

@@ -8,6 +8,62 @@ Last split: 2026-04-16 (session 34).
 
 ---
 
+## Adversarial review of items 5 + 5b — fixes SHIPPED 2026-08-06 (same session)
+
+Two parallel review agents over 83c208c + ed7cea3; every acted-on claim
+re-verified against code first (all key claims held this round). One
+real HIGH design flaw plus a cluster of hardening finds:
+
+- [x] **HIGH — repo-local mode leaked into the production workspace**:
+  ed7cea3 routed `checkpoint._checkpoint_dir` and
+  `hooks._default_hooks_path` through `config.workspace_root()`
+  unconditionally, ignoring the MARO_ORCH_ROOT-only pin (build-loop.sh
+  no-arg repo-local mode, containers). Worst case was hooks:
+  `loop_init` loads AND EXECUTES the registry every agent loop, so a
+  repo-local loop would have executed *production* hooks. Fix: new
+  `orch_items.data_root()` — orch_root() when MARO_ORCH_ROOT is the
+  only pin, else `config.workspace_root()`; checkpoint + hooks now
+  route through it. Pinned by tests (checkpoint dir + hooks path under
+  MARO_ORCH_ROOT-only).
+- [x] **sheriff probed the wrong root**: workspace_writable health probe
+  still checked orch_root(); now probes `config.workspace_root()` —
+  the tree the writers actually land in.
+- [x] **pip-install repo_root() hazard**: flat py-modules install makes
+  `repo_root()` = the venv lib dir; git subprocesses there walk UP to
+  whatever repo contains the venv, and convo_miner could inject into a
+  stranger's BACKLOG.md. Guards: `.git`-existence checks in
+  captains_log + convo_miner `scan_git_log`; `inject_into_backlog`
+  default path now requires an *existing* BACKLOG.md.
+- [x] **list_checkpoints dup gap**: same loop_id at current + pre-move
+  locations produced two entries; now deduped, newest-mtime wins
+  (matches `_find_checkpoint_path` preference). Pinned by test.
+- [x] **stale-doc sweep**: SUBSTRATE_INTEGRATION §workspace-sanitization
+  rewritten (the "any pin flips into the prototypes layout" claim was
+  backwards post-unification), maro-dispatch.sh + hermes dispatch.py
+  comments updated (the unset-all is still correct — a pin now means
+  "the workspace IS <ws>", which is the wrong workspace for a
+  dispatch), CLAUDE.md memory/ row, BACKEND_RESILIENCE_DESIGN
+  checkpoint-path gaps marked CLOSED, checkpoint.py "legacy" wording
+  disambiguated (pre-move dir vs non-run-dir).
+
+**Accepted residuals (deliberate, reviewed):**
+- Old-location fallbacks are env-relative (orch_root()-derived, never
+  repo_root()-pierced): a PINNED env does not see files written
+  unpinned. Each workspace owns its data; piercing the pin would leak
+  the real repo's 52 checkpoints into every isolated test env.
+- Orphaned shadow stores under `<ws>/prototypes/maro-orchestration/`
+  from the pre-unification era are not auto-migrated (retention
+  decree); on this box they held no live data.
+- `convo_miner.inject_into_backlog` still targets the real BACKLOG.md
+  by design — CLI-only surface, zero programmatic callers, and now
+  gated on the file already existing.
+- Refuted/downgraded: R1-F4 (inject under pins) — manual-command edge
+  only, no programmatic callers.
+
+**Known follow-on (not fixed here, noting for BACKLOG 5b residual when
+it unlocks):** `orch.py:413` validation-summary fallback writer still
+anchors on orch_root; fold into the deferred guard-drop cleanup.
+
 ## 5b writers migration: runtime data off orch_root — SHIPPED 2026-08-06 (same session as item 5)
 
 Follow-on from the resolution unification: five consumers still anchored
