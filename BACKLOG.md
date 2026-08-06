@@ -1184,22 +1184,28 @@ capture**, which is what makes the rung amortize instead of evaporate.
     74,288 max), oldest-first eviction, and the elision announced in the
     rendered text. Both were backwards on both axes — too tight per entry
     to be useful evidence, unbounded in the dimension that actually grows.
-  - `step_exec.py:1597` — team-worker result at **600** into shared context.
-    **Half done 2026-08-06 (`54a4be7`)**: the *store* side is budgeted now,
-    but that alone is inert and I overclaimed it in the commit message. A
-    concurrent session found the stacked cut: `team.firewall_shared_ctx`
-    re-clips every entry to `max_chars_per_entry=200` before a worker ever
-    sees it (`team.py:110`, call site `:208`), so the worker received 200
-    chars whether the store held 600 or 4,000. **Widening one cut in a stack
-    changes nothing** — the binding one is the tightest, and it was two
-    frames downstream. Their tree raises both; not landed as of this note.
+  - ~~`step_exec.py:1597` — team-worker result at **600** into shared
+    context~~ — **DONE across both sessions 2026-08-06**: store side
+    budgeted in `54a4be7`; the stacked downstream cut
+    (`team.firewall_shared_ctx` at `max_chars_per_entry=200` — the binding
+    one, two frames downstream) raised to 1,000 with an honest `clip()`
+    marker in this commit. Worker now actually receives what the store
+    holds (5 entries × 1,000 ≈ 1.3k tokens worst case).
   - ~~`memory.py:341` — result summary at **500** into lesson extraction~~
     — **DONE 2026-08-06 (`54a4be7`)**, and the diagnosis in this line was
     wrong. See "the cut that was decoration" below.
-  - `director.py:775` — worker output at **2000** into the review call
-    (`:571` was the accumulating site, done in `25c286b`).
-  - `attribution.py:273`, `knowledge_bridge.py:139`, `evolver_scans.py:159`
-    — 500/500/200 into failure attribution and signal scanning.
+  - ~~`director.py:775` — worker output at **2000** into the review call~~
+    — **DONE 2026-08-06**: accept/reject is a verdict, so judge-window
+    rules applied — `clip()` at 4,000 (p99 step result 4,671), marker on
+    the remainder. Same treatment for `_compile_report`'s per-worker 2,000.
+    (`:571` was the accumulating site, done in `25c286b`.)
+  - ~~`attribution.py:273`, `knowledge_bridge.py:139`,
+    `evolver_scans.py:159` — 500/500/200 into failure attribution and
+    signal scanning~~ — **DONE 2026-08-06**: goal 300→1,500 (goal p99 is
+    1,379 — the old cut bit the tail), stuck_reason/steps_summary/summary
+    500→2,000, attribution's per-step lines 60→160, evolver digest
+    80/200→300/500 (worst case 15 × ~800 ≈ 3k tokens). All honest via
+    `clip()`; pinned in `test_context_budget.py::TestPromptWorklistSitesUseClip`.
   - `introspect.py:945` / `:1097` — the quality and adversarial lenses see
     `p.text[:80]` and **no step results at all**, so the adversarial lens is
     asked "what could go wrong that wasn't checked?" while holding only
@@ -1266,6 +1272,16 @@ capture**, which is what makes the rung amortize instead of evaporate.
   `loop_finalize`/`memory` (per-step breadth vs the last step only) and is
   equivalent on `step_exec`; **their `clip()` and their `team.py` fix are
   the parts to keep.**
+
+  *Merge executed same day, by the other session (this commit):* dropped
+  my superseded edits to those four files and kept `54a4be7`'s versions
+  wholesale; re-added `clip()` into `context_budget` beside the STORE
+  profile; landed the remaining unique sites (`director` review+compile,
+  `team` firewall, `attribution`, `knowledge_bridge`, `evolver_scans`).
+  With that, **every row of the PROMPT worklist is closed** — what remains
+  of the audit is the `introspect.py` lens item folded into the
+  wide-view-seat design question, and the STORE worklist below (retention
+  decision, Jeremy's).
 
   **STORE worklist:** `memory_ledger.compress_old_outcomes` (120/600) — now
   load-bearing rather than optional, since the outcome rows carry real

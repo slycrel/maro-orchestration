@@ -48,6 +48,7 @@ log = logging.getLogger("maro.director")
 
 from workers import WorkerResult, dispatch_worker, infer_worker_type, WORKER_TYPES
 from llm_parse import extract_json, safe_float, safe_str, safe_list, content_or_empty
+from context_budget import clip as _clip
 from planner import _is_large_scope_review
 from config import get as config_get
 from captains_log import log_event
@@ -774,10 +775,13 @@ def _review_worker_output(
         return (ReviewDecision(accepted=True, reason="[dry-run] auto-accepted"), (0, 0))
 
     _r_result = result.result if isinstance(result.result, str) else json.dumps(result.result)
+    # Accept/reject is a verdict — judge-window rules apply (truncation
+    # audit): 4000 keeps ~99% of worker outputs whole, and clip() marks
+    # the remainder so the reviewer knows its view is partial.
     user_msg = (
         f"Directive: {directive}\n\n"
         f"Ticket ({ticket.worker_type}): {ticket.task}\n\n"
-        f"Worker output:\n{_r_result[:2000]}\n\n"
+        f"Worker output:\n{_clip(_r_result, 4000)}\n\n"
         f"Worker status: {result.status}"
         + (f"\nStuck reason: {result.stuck_reason}" if result.stuck_reason else "")
     )
@@ -827,7 +831,7 @@ def _compile_report(
     parts_text = ""
     for i, r in enumerate(worker_results, 1):
         _r_text = r.result if isinstance(r.result, str) else json.dumps(r.result)
-        parts_text += f"\n\n### Worker {i} ({r.worker_type})\nStatus: {r.status}\n{_r_text[:2000]}"
+        parts_text += f"\n\n### Worker {i} ({r.worker_type})\nStatus: {r.status}\n{_clip(_r_text, 4000)}"
 
     user_msg = (
         f"Directive: {directive}\n\n"

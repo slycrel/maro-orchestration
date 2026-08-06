@@ -22,6 +22,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
 from llm_parse import extract_json, safe_float, safe_str, safe_list, content_or_empty
+from context_budget import clip as _clip
 
 # Module-level imports for clean test patching
 try:
@@ -231,13 +232,13 @@ def _extract_steps_summary(outcome: dict) -> str:
             if isinstance(s, dict):
                 text = s.get("text", s.get("step", ""))
                 status = s.get("status", "")
-                parts.append(f"{i + 1}. [{status}] {str(text)[:60]}")
+                parts.append(f"{i + 1}. [{status}] {str(text)[:160]}")
             elif isinstance(s, str):
-                parts.append(f"{i + 1}. {s[:60]}")
+                parts.append(f"{i + 1}. {s[:160]}")
         return "\n".join(parts)
     # Fall back to summary/result_summary
     summary = outcome.get("summary") or outcome.get("result_summary") or ""
-    return summary[:300] if summary else "(no steps recorded)"
+    return _clip(summary, 1000) if summary else "(no steps recorded)"
 
 
 # ---------------------------------------------------------------------------
@@ -267,10 +268,13 @@ def attribute_failure(outcome: dict, adapter=None) -> Attribution:
     # Attempt LLM attribution
     if adapter is not None:
         try:
+            # Widened from 300/500/500 (truncation audit 2026-08-06): goal
+            # p99 is 1,379 chars, and attribution teaches — cutting the
+            # evidence it reasons from bounds what it can learn.
             prompt = _ATTRIBUTION_SYSTEM.format(
-                goal=goal[:300],
-                stuck_reason=stuck_reason[:500],
-                steps_summary=steps_summary[:500],
+                goal=_clip(goal, 1500),
+                stuck_reason=_clip(stuck_reason, 2000),
+                steps_summary=_clip(steps_summary, 2000),
             )
             if LLMMessage is not None:
                 resp = adapter.complete(

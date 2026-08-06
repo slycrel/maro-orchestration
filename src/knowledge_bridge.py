@@ -132,11 +132,15 @@ def _extract_llm(outcome, adapter) -> List[Tuple[str, str, str, str]]:
             else (" (goal verified achieved)" if achieved else " (goal judged NOT achieved — treat as a failure)")
         )
 
+        from context_budget import clip as _clip
+        # Widened from 300/500 (truncation audit 2026-08-06): goal p99 is
+        # 1,379 chars; this extraction mints knowledge candidates, so its
+        # evidence window bounds what the store can ever contain.
         prompt = _EXTRACT_PROMPT.format(
-            goal=goal[:300],
+            goal=_clip(goal, 1500),
             status=status_desc,
             task_type=task_type,
-            summary=summary[:500],
+            summary=_clip(summary, 2000),
             lessons_text=lessons_text,
         )
 

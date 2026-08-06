@@ -107,7 +107,7 @@ def firewall_shared_ctx(
     shared_ctx: Dict[str, Any],
     *,
     max_entries: int = 5,
-    max_chars_per_entry: int = 200,
+    max_chars_per_entry: int = 1000,
 ) -> Dict[str, str]:
     """Filter shared_ctx to the most task-relevant entries (subagent context firewall).
 
@@ -137,9 +137,11 @@ def firewall_shared_ctx(
     stop = {"the", "a", "an", "and", "or", "for", "to", "in", "of", "is", "it", "this", "that", "step"}
     task_words = _tok(task) - stop
 
+    from context_budget import clip as _clip
+
     scored: List[tuple] = []
     for k, v in shared_ctx.items():
-        v_str = str(v)[:max_chars_per_entry]
+        v_str = _clip(v, max_chars_per_entry)
         entry_words = _tok(k + " " + v_str)
         overlap = len(task_words & entry_words)
         scored.append((overlap, k, v_str))
@@ -204,8 +206,11 @@ def create_team_worker(
         tools = [LLMTool(**t) for t in _WORKER_TOOLS]
         _shared_block = ""
         if shared_ctx:
-            # Subagent context firewall: pass only task-relevant entries, not full history
-            _filtered_ctx = firewall_shared_ctx(task, shared_ctx, max_entries=5, max_chars_per_entry=200)
+            # Subagent context firewall: pass only task-relevant entries, not
+            # full history. 1000 chars/entry (was 200 — a silent cut stacked
+            # under step_exec's 600-char store cut left workers ~200 chars of
+            # "relevant context"; truncation audit 2026-08-06).
+            _filtered_ctx = firewall_shared_ctx(task, shared_ctx, max_entries=5, max_chars_per_entry=1000)
             _entries = [f"  [{k}]: {v}" for k, v in _filtered_ctx.items()]
             if _entries:
                 _shared_block = "\n\nRelevant context from prior steps:\n" + "\n".join(_entries)

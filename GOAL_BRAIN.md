@@ -6402,3 +6402,25 @@ the recovery loop's AUDIT_NOTE plus demoted-verdict framing. Follow-ups
 (artifact URLs in the completion event, primary-loop-first ranking,
 truncation-cap check) in BACKLOG § Typed dispatch envelope →
 return-path quality.
+
+### 2026-08-06 — PROMPT truncation worklist closed (two sessions, one merge)
+
+The remaining rows of the arbitrary-truncation audit's PROMPT worklist
+are done. Two sessions hit the list simultaneously and found the same
+method lesson from opposite ends: `54a4be7` (other session) proved
+`memory.py:341` was a cut nothing reached — the real loss was
+`loop_finalize`'s 80-char summary, the only evidence lesson extraction
+ever sees — while this session found `step_exec`'s 600-char hand-off was
+a cut everything reached but widening it alone was inert, because
+`team.firewall_shared_ctx` re-clipped to 200 two frames downstream.
+**Follow the value end to end; the tightest hop is the only one that
+matters.** Merge per the coordination note left in BACKLOG: `54a4be7`'s
+per-step-breadth versions kept on `loop_finalize`/`memory`/`step_exec`
++ STORE-profile `context_budget`; this session added the universal
+honest-cut idiom `context_budget.clip(text, cap)` and closed the rest —
+director review (verdict-feeding → judge-window 4,000) and compile,
+team firewall 200→1,000, attribution 300/500/500→1,500/2,000/2,000,
+knowledge_bridge 300/500→1,500/2,000, evolver digest 80/200→300/500.
+Still open from the audit: introspect lens widths (folded into the
+wide-view-seat design question) and the STORE retention decision
+(Jeremy's — now load-bearing, since outcome rows carry real evidence).

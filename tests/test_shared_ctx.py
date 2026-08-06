@@ -278,9 +278,21 @@ class TestFirewallSharedCtx:
 
     def test_values_capped_at_max_chars(self):
         from team import firewall_shared_ctx
-        ctx = {"key": "x" * 1000}
+        ctx = {"key": "x" * 2000}
         result = firewall_shared_ctx("task", ctx, max_chars_per_entry=100)
-        assert all(len(v) <= 100 for v in result.values())
+        # The cut is honest now (truncation audit): first 100 chars kept,
+        # marker announces the cut instead of hiding it.
+        for v in result.values():
+            assert v.startswith("x" * 100)
+            assert "truncated: first 100 of 2000" in v
+
+    def test_default_entry_cap_keeps_typical_step_results_whole(self):
+        # 200 chars/entry silently starved team workers of context; the
+        # audit widened the default to 1000 (median step result is 1,168).
+        from team import firewall_shared_ctx
+        ctx = {"key": "y" * 900}
+        result = firewall_shared_ctx("task", ctx)
+        assert result["key"] == "y" * 900
 
     def test_empty_ctx_returns_empty(self):
         from team import firewall_shared_ctx

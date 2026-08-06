@@ -71,6 +71,22 @@ STORE_ENTRY_CAP = 500
 STORE_TOTAL_BUDGET = 4000
 
 
+def clip(text, cap: int) -> str:
+    """Cut text at cap and say so — never silently.
+
+    The audit's universal idiom for SINGLE-VALUE evidence sites (the one
+    `step_exec.verify_step` already had): a model reading the prompt must
+    be able to tell complete evidence from trimmed evidence. Multi-entry
+    sites want ContextBudget instead; this is the scalar counterpart.
+    Returns the text unchanged when it fits.
+    """
+    text = str(text or "")
+    if len(text) <= cap:
+        return text
+    return (f"{text[:cap]} … [truncated: first {cap} of "
+            f"{len(text)} characters]")
+
+
 class ContextBudget:
     """Accumulate step results for a prompt, bounded and honest about it.
 

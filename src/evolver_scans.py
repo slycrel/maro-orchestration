@@ -154,9 +154,13 @@ def scan_outcomes_for_signals(
 
     # Build summary from done outcomes — goals + key findings
     lines = ["Recent completed outcomes and their key findings:"]
+    from context_budget import clip as _clip
+    # Widened from 80/200 (truncation audit 2026-08-06): goal p90 is 222
+    # chars and stored summaries run to 500; worst case is still only
+    # 15 x ~800 chars ≈ 3k tokens for the whole digest.
     for o in done_outcomes[:15]:
-        goal_text = getattr(o, "goal", "")[:80]
-        summary_text = getattr(o, "summary", "")[:200]
+        goal_text = _clip(getattr(o, "goal", ""), 300)
+        summary_text = _clip(getattr(o, "summary", ""), 500)
         if summary_text:
             lines.append(
                 f"  [{getattr(o, 'task_type', 'general')}] {goal_text}\n"

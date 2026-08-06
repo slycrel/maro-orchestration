@@ -125,3 +125,51 @@ class TestCallSitesUseIt:
         src = Path(importlib.import_module(module).__file__).read_text()
         assert "completed_context +=" not in src
         assert "ContextBudget()" in src
+
+
+class TestClip:
+    """clip() — the audit's universal honest-cut idiom."""
+
+    def test_short_text_unchanged(self):
+        from context_budget import clip
+        assert clip("hello", 100) == "hello"
+
+    def test_exact_cap_unchanged(self):
+        from context_budget import clip
+        assert clip("x" * 100, 100) == "x" * 100
+
+    def test_over_cap_marked_with_both_lengths(self):
+        from context_budget import clip
+        out = clip("y" * 250, 100)
+        assert out.startswith("y" * 100)
+        assert "truncated: first 100 of 250 characters" in out
+
+    def test_none_and_empty_safe(self):
+        from context_budget import clip
+        assert clip(None, 10) == ""
+        assert clip("", 10) == ""
+
+    def test_non_string_coerced(self):
+        from context_budget import clip
+        assert clip(12345, 100) == "12345"
+
+
+class TestPromptWorklistSitesUseClip:
+    """The 2026-08-06 PROMPT-worklist sites cut evidence honestly now.
+
+    Pins the *idiom* (clip import + no bare slice at the old width), not
+    line numbers.
+    """
+
+    @pytest.mark.parametrize("module,gone", [
+        ("director", "_r_result[:2000]"),
+        ("director", "_r_text[:2000]"),
+        ("attribution", "goal[:300]"),
+        ("knowledge_bridge", "summary[:500]"),
+        ("evolver_scans", '"goal", "")[:80]'),
+    ])
+    def test_old_bare_slice_gone(self, module, gone):
+        import importlib
+        from pathlib import Path
+        src = Path(importlib.import_module(module).__file__).read_text()
+        assert gone not in src, f"{module} still carries the silent cut {gone!r}"
