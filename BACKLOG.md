@@ -1413,13 +1413,22 @@ capture**, which is what makes the rung amortize instead of evaporate.
   own "image version auditable" goal cares about. Needs a tag-scheme call,
   not just a `RUN apt-get install`.
 
-- [ ] **claim-verifier: relative claimed paths resolve only at the run
-  root** (found 2026-08-02, `d9607baa`). A report saying "replaced
-  tests/test_ledger.py" is flagged FILE_CLAIMS_NOT_FOUND when the goal
-  pointed at a subdirectory. Advisory-only today, so it costs noise, not
-  verdicts — but it is the third false positive in this family and the
-  first two DID cost verdicts. Narrow widening, same shape as the glob
-  fix that landed for `9d88acf2`.
+- [x] **claim-verifier: relative claimed paths resolve only at the run
+  root** (found 2026-08-02, `d9607baa`) — **FIXED 2026-08-06** (this
+  commit). A report saying "replaced tests/test_ledger.py" was flagged
+  FILE_CLAIMS_NOT_FOUND when the goal pointed at a subdirectory.
+  Advisory-only, so it cost noise, not verdicts — but it was the third
+  false positive in this family and the first two DID cost verdicts.
+  Narrow widening, same shape as the glob fix that landed for
+  `9d88acf2`: the existing bounded walk (`_tree_index`, same skip-dirs +
+  2000-dir cap) now also indexes relative posix paths; a non-absolute
+  claim with a dir component that misses at the root verifies iff the
+  WHOLE claimed path matches an indexed relpath or its "/"-suffix.
+  "docs/module.py" still cannot match "src/module.py", ".."-escaping
+  claims never suffix-match, and a root dir named `src` cannot satisfy
+  "src/module.py" against its own top level. Pins in
+  tests/test_claim_verifier.py (subdirectory-resolved, wrong-dir,
+  parent-dir-name, deep-suffix).
 
 - [ ] **Evolver fabricates a stock mechanism for stuck-at-0-steps
   outcomes** (found 2026-08-02, `16d90814`). "Blocks indefinitely / no

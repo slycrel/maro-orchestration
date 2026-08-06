@@ -175,6 +175,51 @@ class TestVerifyFileClaims:
         report = verify_file_claims("See test_memory.py for coverage.", project_root=tmp_path)
         assert "test_memory.py" in report.verified
 
+    def test_relative_claim_resolves_in_subdirectory(self, tmp_path):
+        """A relative claim WITH a dir component verifies when the file lives
+        one level down — the goal pointed the worker into a subdirectory, so
+        'tests/test_ledger.py' is real even though project_root only sees
+        'pkg/tests/test_ledger.py'."""
+        pkg_tests = tmp_path / "pkg" / "tests"
+        pkg_tests.mkdir(parents=True)
+        (pkg_tests / "test_ledger.py").write_text("# tests")
+        report = verify_file_claims(
+            "Added tests/test_ledger.py with coverage.", project_root=tmp_path
+        )
+        assert "tests/test_ledger.py" in report.verified
+        assert "tests/test_ledger.py" not in report.not_found
+
+    def test_wrong_dir_claim_still_not_found(self, tmp_path):
+        """Suffix matching is on the WHOLE claimed path — 'docs/module.py'
+        must not match 'src/module.py'. (Prefix must be a known dir for the
+        extractor to keep the dir component at all.)"""
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "module.py").write_text("")
+        report = verify_file_claims("See docs/module.py.", project_root=tmp_path)
+        assert "docs/module.py" in report.not_found
+        assert "docs/module.py" not in report.verified
+
+    def test_parent_dir_name_cannot_satisfy_claim(self, tmp_path):
+        """'src/module.py' must not verify against root-level 'module.py'
+        just because the root directory itself is named 'src' — relative
+        paths are indexed from the root, whole-path matched."""
+        root = tmp_path / "src"
+        root.mkdir()
+        (root / "module.py").write_text("")
+        report = verify_file_claims("See src/module.py.", project_root=root)
+        assert "src/module.py" in report.not_found
+
+    def test_deep_relative_claim_matches_full_suffix(self, tmp_path):
+        """Multi-component relative claims match at any depth as a whole."""
+        deep = tmp_path / "work" / "repo" / "src" / "app"
+        deep.mkdir(parents=True)
+        (deep / "main.py").write_text("")
+        report = verify_file_claims(
+            "Entry point is src/app/main.py.", project_root=tmp_path
+        )
+        assert "src/app/main.py" in report.verified
+
 
 # ---------------------------------------------------------------------------
 # annotate_result

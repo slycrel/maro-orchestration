@@ -28,7 +28,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional, Set, Tuple
 
 
 # ---------------------------------------------------------------------------
@@ -233,25 +233,35 @@ _INDEX_SKIP_DIRS = frozenset({".git", "__pycache__", "node_modules", ".venv", ".
 _INDEX_MAX_DIRS = 2000
 
 
-def _basename_index(project_root: Path) -> Set[str]:
-    """One bounded walk of the project tree → set of file basenames.
+def _tree_index(project_root: Path) -> Tuple[Set[str], Set[str]]:
+    """One bounded walk of the project tree → (file basenames, relative paths).
 
-    Backs the bare-filename fallback in verify_file_claims: a claim like
-    "cart.py" is verified if any file of that name exists anywhere under the
-    project dir (workers legitimately save artifacts in subdirs like
-    output/repro/), without doing a fresh tree walk per claim.
+    Backs both fallbacks in verify_file_claims: a bare claim like "cart.py"
+    is verified if any file of that name exists anywhere under the project
+    dir (workers legitimately save artifacts in subdirs like output/repro/),
+    and a relative claim like "tests/test_ledger.py" is verified if that
+    whole relative path exists at any depth (the goal may have pointed the
+    worker into a subdirectory) — without a fresh tree walk per claim.
+    Relative paths are posix-style.
     """
     import os
     names: Set[str] = set()
+    relpaths: Set[str] = set()
     try:
         for i, (dirpath, dirnames, filenames) in enumerate(os.walk(project_root)):
             if i >= _INDEX_MAX_DIRS:
                 break
             dirnames[:] = [d for d in dirnames if d not in _INDEX_SKIP_DIRS]
             names.update(filenames)
+            try:
+                rel_dir = Path(dirpath).relative_to(project_root).as_posix()
+            except ValueError:
+                continue
+            prefix = "" if rel_dir == "." else rel_dir + "/"
+            relpaths.update(prefix + f for f in filenames)
     except OSError:
         pass
-    return names
+    return names, relpaths
 
 
 def _build_symbol_index(project_root: Path) -> Set[str]:
@@ -325,7 +335,7 @@ def verify_file_claims(
     verified = []
     not_found = []
     unresolvable = []
-    name_index: Optional[Set[str]] = None  # built lazily on first bare-name miss
+    tree_index: Optional[Tuple[Set[str], Set[str]]] = None  # built lazily on first miss
 
     for claim in claims:
         try:
@@ -333,17 +343,35 @@ def verify_file_claims(
             if candidate.exists():
                 verified.append(claim)
             else:
-                # Only try bare-filename fallback when the claim has no directory component —
-                # a claim like "wrong_dir/module.py" should NOT match "src/module.py".
-                # The fallback searches the whole project tree (bounded walk):
-                # workers cite bare names for artifacts they saved in subdirs
-                # (output/repro/cart.py), and "exists somewhere under the
-                # project" is the honest existence answer for a bare name.
                 found = False
-                if Path(claim).parent == Path("."):
-                    if name_index is None:
-                        name_index = _basename_index(project_root)
-                    found = Path(claim).name in name_index
+                claim_path = Path(claim)
+                if claim_path.parent == Path("."):
+                    # Bare-filename fallback: a claim like "cart.py" verifies if
+                    # any file of that name exists anywhere under the project
+                    # (bounded walk) — workers cite bare names for artifacts they
+                    # saved in subdirs (output/repro/cart.py), and "exists
+                    # somewhere under the project" is the honest existence
+                    # answer for a bare name.
+                    if tree_index is None:
+                        tree_index = _tree_index(project_root)
+                    found = claim_path.name in tree_index[0]
+                elif not claim_path.is_absolute():
+                    # Relative claim WITH a directory component: the goal may
+                    # have pointed the worker into a subdirectory, so
+                    # "tests/test_ledger.py" is real even though project_root
+                    # only sees "pkg/tests/test_ledger.py". Match the WHOLE
+                    # claimed path as a suffix of an indexed relative path —
+                    # "wrong_dir/module.py" still cannot match "src/module.py".
+                    import os as _os
+                    norm = _os.path.normpath(claim).replace(_os.sep, "/")
+                    if not (norm.startswith("..") or norm.startswith("/")):
+                        if tree_index is None:
+                            tree_index = _tree_index(project_root)
+                        suffix = "/" + norm
+                        found = any(
+                            rp == norm or rp.endswith(suffix)
+                            for rp in tree_index[1]
+                        )
                 if found:
                     verified.append(claim)
                 else:
