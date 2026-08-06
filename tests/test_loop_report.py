@@ -1533,3 +1533,43 @@ def test_index_html_status_dropdown_options_reflect_actual_runs(monkeypatch, tmp
     assert '<option value="failed">' in content
     # no bogus options for statuses that don't occur
     assert '<option value="partial">' not in content
+
+
+def test_report_flags_run_finalizing_when_loop_done_but_run_running(monkeypatch, tmp_path):
+    """Loop-terminal ≠ run-terminal: after the loop freezes its report at
+    "done", handle can spend ~10 min in closure/curation/evolver — the page
+    read as possibly-stuck (Jeremy 2026-08-06). While run metadata still
+    says running, the header badges the difference and keeps auto-refresh;
+    once the run is terminal the badge and refresh are gone."""
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+    import runs
+    rd = runs.create_run_dir("hfin", prompt="finalizing goal", lane="agenda")
+    runs.set_current_run_dir(rd)
+    runs.write_metadata(rd, handle_id="hfin", prompt="finalizing goal",
+                        status="running")
+
+    lr.write_run_report(
+        project="p", loop_id="finloop", goal="finalizing goal",
+        planned_steps=["only step"], start_ts="2026-08-06T00:00:00+00:00",
+        step_outcomes=[StepOutcome(index=1, text="only step", status="done",
+                                   result="ok", iteration=1)],
+        status="done",
+    )
+    content = (rd / "build" / "loop-finloop-report.html").read_text()
+    assert "run finalizing" in content
+    assert 'http-equiv="refresh"' in content
+
+    # After finalize the post-curation re-render drops both (renderer
+    # called directly — the frozen-report guard blocks a plain rewrite and
+    # the forced path needs a loop log this fixture doesn't have).
+    runs.finalize_run("hfin", status="done")
+    content = lr._render_report_html(
+        project="p", loop_id="finloop", goal="finalizing goal",
+        planned_steps=["only step"], start_ts="2026-08-06T00:00:00+00:00",
+        step_outcomes=[StepOutcome(index=1, text="only step", status="done",
+                                   result="ok", iteration=1)],
+        status="done", elapsed_ms=0, replan_count=0,
+        report_dir=rd / "build", index_link=None,
+    )
+    assert "run finalizing" not in content
+    assert 'http-equiv="refresh"' not in content

@@ -1275,10 +1275,35 @@ def _render_report_html(
     nav_html = ""
     if index_link:
         nav_html = f'<div class="footer-nav"><a href="{_esc(index_link)}">&larr; all runs</a></div>'
+    # Loop-terminal ≠ run-terminal: the loop finishes and freezes this page
+    # at "done" while handle keeps running closure/curation/learning — the
+    # evolver cadence can hold that open for ~10 min (Jeremy read "done" as
+    # possibly-stuck, 2026-08-06). When run-level metadata still says
+    # running, badge the difference and keep refreshing until the
+    # post-curation re-render lands with the final state.
+    run_status = ""
+    try:
+        _run_meta = json.loads(
+            (report_dir.parent / "metadata.json").read_text(encoding="utf-8"))
+        run_status = str(_run_meta.get("status") or "")
+    except Exception:
+        pass
+    # "done" only: a backfilled crash coerces the loop to "interrupted"
+    # while its never-finalized metadata still says running — that run is
+    # dead, not finalizing.
+    finalizing = status == "done" and run_status == "running"
+    status_html = _esc(status)
+    if finalizing:
+        status_html += (
+            ' <span class="badge badge-approx" title="All loop steps have finished;'
+            ' the run process is still doing closure, curation, and learning'
+            ' passes. This page refreshes until it lands.">'
+            'loop done &mdash; run finalizing</span>')
     # Cheap nicety for an in-flight run — reload picks up the next
-    # regeneration. Never emitted once frozen (status != "running"), so a
-    # finished report never re-fetches itself.
-    refresh_html = '<meta http-equiv="refresh" content="30">' if status == "running" else ""
+    # regeneration. Not emitted once the RUN is terminal, so a finished
+    # report never re-fetches itself.
+    refresh_html = ('<meta http-equiv="refresh" content="30">'
+                    if status == "running" or finalizing else "")
     goal_changed_html = (
         ' <b style="color:#c77d00;">(redirected mid-run &mdash; see Operator injections)</b>'
         if any(inj.get("goal_after") for inj in (injections or [])) else ""
@@ -1291,7 +1316,7 @@ def _render_report_html(
 <body>
 <h1>Run <code>{_esc(loop_id)}</code></h1>
 <div class="meta"><b>Project:</b> {_esc(project or "(none)")} &middot; <b>Goal:</b> {_esc_truncated(goal, 160)}{goal_changed_html}</div>
-<div class="meta"><b><span title="Process status only — steps finished/blocked, not whether the goal was verified achieved. See the cross-run index for that once curation runs.">Status:</span></b> {_esc(status)} &middot; <b>Progress:</b> {done}/{total_planned} done, {blocked} blocked{replan_html}</div>
+<div class="meta"><b><span title="Process status only — steps finished/blocked, not whether the goal was verified achieved. See the cross-run index for that once curation runs.">Status:</span></b> {status_html} &middot; <b>Progress:</b> {done}/{total_planned} done, {blocked} blocked{replan_html}</div>
 <div class="meta"><b>Started:</b> {_esc(_fmt_ts(start_ts))} &middot; <b>Elapsed:</b> {elapsed_ms}ms &middot; <b>Tokens:</b> {_fmt_tokens_split(total_tokens_in, total_tokens_out)} &middot; <b><span title="Estimated from this report's step token counts — may differ from the run's recorded actual spend shown in the cross-run index.">Cost (est.):</span></b> {cost_str}</div>
 
 {_render_verdict(report_dir)}

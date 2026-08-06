@@ -308,6 +308,26 @@ Container-on day-one findings (2026-07-16, two dispatched verification runs):
 
 ### LT. Live-learning test arc — target burndown, cold/warm deltas, capability ladder (OPENED 2026-07-31, Jeremy)
 
+**LT-5 (2026-08-06, Jeremy: "worth a re-run of this test directing
+sonnet as the min bar?"): sonnet-tier arm of the 83a2c805 steal
+analysis — verdict FLIPPED to achieved at LOWER provider cost** ($3.69
+vs $3.87; 8 steps vs 12 — the tier premium was repaid by not needing a
+recovery loop). Quality clearly up (grep-grounded adopt/adapt/reject
+mapping, dissent integrated). The claims-vs-events family recurred AT
+SONNET (fabricated "authenticated fetch" provenance, zero fetch events
+in the claiming step) → model-independent, strengthens follow-up (c)
+mint-time grounding. Mount-blindness recurred too but sonnet routed
+around the trap (raw.githubusercontent fetch instead of expecting a
+local checkout) — refined thesis: structure sets the traps, tier
+changes how often you fall in. NEW specimen: in-run reviewer DISMISSED
+a true discovery (the a0bae77 use_count fix, verified real) on a
+"hallucination signature" heuristic instead of probing — inverse of
+verify-before-fix; positive-evidence principle applies to skeptics
+too. Full record + pre-registered predictions:
+`~/.maro/workspace/output/steal-rerun-sonnet/predictions.md`. Opus
+advisor fired 8× (baseline 1×) — the escalation ladder engages more at
+higher base tier; worth a look when model-routing exploration resumes.
+
 Run live learning tests against goals we have **claimed but not probed**,
 measure whether learning actually levels up, and write down the capability
 progression those tests are climbing. The corpus problem is already solved

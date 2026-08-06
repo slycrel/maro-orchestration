@@ -6446,3 +6446,25 @@ denominator is retroactively unmeasurable; cheap wire named in BACKLOG
 (count judged/unjudged into loop-log totals). Watch: first maintenance
 sweeps will emit up to 10 SKILL_PROMOTED events each with
 validation stamps — the readout becomes readable then.
+
+### 2026-08-06 — LT-5 sonnet arm: verdict flips to achieved at LOWER cost than the haiku baseline
+
+Jeremy's directed re-run of the 83a2c805 steal analysis with sonnet as
+the min bar (byte-identical goal, fresh project, benchmark class):
+**done/success/achieved, provider $3.69 vs the haiku baseline's $3.87**
+— 8 steps vs 12, the tier premium repaid by not needing a recovery
+loop. Compound-thesis evidence cuts both ways honestly: quality and
+verdict improved with tier, AND the failure families recurred at
+sonnet (claims-vs-events provenance confabulation with zero backing
+events; container mount-blindness stated as machine fact) — they're
+model-independent, but a stronger model routed AROUND the mount trap
+rather than falling in. Refined claim, per the pre-registered
+prediction that took damage: structure sets the traps; tier changes
+how often you fall in. New specimen: the in-run adversarial reviewer
+dismissed a TRUE discovery (the same-day a0bae77 skills.py fix) on a
+"hallucination signature" heuristic without probing — the
+positive-evidence principle binds skeptics too. Full scored record:
+`~/.maro/workspace/output/steal-rerun-sonnet/predictions.md`. Also
+shipped on Jeremy's nit: report pages now badge "loop done — run
+finalizing" while closure/curation/evolver still run (his "stuck?"
+read was the page conflating loop-terminal with run-terminal).
