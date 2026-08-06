@@ -30,8 +30,9 @@ Run completes
 ## Per-Run Quality (zoom in)
 
 ### Inspector (inspector.py, ~2065 lines)
-Post-hoc analyzer of outcomes.jsonl. Detects 7 friction signals:
-- error_events, repeated_rephrasing, escalation_tone, platform_confusion, abandoned_tool_flow, backtracking, context_churn
+Post-hoc analyzer of outcomes.jsonl. Detects 6 friction signals:
+- error_events, escalation_tone, platform_confusion, abandoned_tool_flow, backtracking, context_churn
+- (a declared 7th, repeated_rephrasing, never had a mainline detector or threshold comparison — removed 2026-08-06 census)
 
 Configurable thresholds via config.yml. Produces InspectorReport with severity classification (low/medium/high).
 

@@ -10,9 +10,11 @@ It examines outcomes.jsonl after the fact and asks:
   - Are there repeating friction patterns?
   - What can the evolver do to improve quality?
 
-Seven friction signals based on Factory AI Signals research:
+Six friction signals based on Factory AI Signals research (a seventh,
+repeated_rephrasing, was declared here for months with no detector and no
+threshold comparison — removed 2026-08-06 census; reintroduce it WITH its
+detector or not at all):
   error_events          — LLM/API failures caused the session to get stuck
-  repeated_rephrasing   — same task attempted with slight variations without progress
   escalation_tone       — language in stuck reason indicates escalating severity
   platform_confusion    — agent confused about what platform/context it is operating in
   abandoned_tool_flow   — tool call chains were abandoned mid-way
@@ -65,7 +67,6 @@ except ImportError:  # pragma: no cover
 # ---------------------------------------------------------------------------
 
 SIGNAL_ERROR_EVENTS       = "error_events"
-SIGNAL_REPEATED_REPHRASE  = "repeated_rephrasing"
 SIGNAL_ESCALATION_TONE    = "escalation_tone"
 SIGNAL_PLATFORM_CONFUSION = "platform_confusion"
 SIGNAL_ABANDONED_TOOL_FLOW = "abandoned_tool_flow"
@@ -74,7 +75,6 @@ SIGNAL_CONTEXT_CHURN      = "context_churn"
 
 ALL_SIGNALS = [
     SIGNAL_ERROR_EVENTS,
-    SIGNAL_REPEATED_REPHRASE,
     SIGNAL_ESCALATION_TONE,
     SIGNAL_PLATFORM_CONFUSION,
     SIGNAL_ABANDONED_TOOL_FLOW,
@@ -147,7 +147,11 @@ _ESCALATION_MIN_HITS = _cfg_int("inspector.escalation_min_hits", "INSPECTOR_ESCA
 _CONTEXT_CHURN_TOKEN_THRESHOLD = _cfg_int("inspector.context_churn_tokens", "INSPECTOR_CONTEXT_CHURN_TOKENS", 10000)
 _ALIGNMENT_GOOD = _cfg_float("inspector.alignment_good", "INSPECTOR_ALIGNMENT_GOOD", 0.7)
 _ALIGNMENT_POOR = _cfg_float("inspector.alignment_poor", "INSPECTOR_ALIGNMENT_POOR", 0.4)
-_REPHRASING_MIN_COUNT = _cfg_int("inspector.rephrasing_min_count", "INSPECTOR_REPHRASING_MIN_COUNT", 2)
+# _REPHRASING_MIN_COUNT removed 2026-08-06 (live-writer census): it was
+# declared, config-plumbed, and echoed in inspector_thresholds() but never
+# compared against anywhere, and the repeated_rephrasing signal it was meant
+# to gate never had a detector in mainline. A threshold returns with its
+# comparison site or not at all.
 
 
 def inspector_thresholds() -> Dict[str, Any]:
@@ -158,7 +162,6 @@ def inspector_thresholds() -> Dict[str, Any]:
         "context_churn_token_threshold": _CONTEXT_CHURN_TOKEN_THRESHOLD,
         "alignment_good": _ALIGNMENT_GOOD,
         "alignment_poor": _ALIGNMENT_POOR,
-        "rephrasing_min_count": _REPHRASING_MIN_COUNT,
     }
 
 
@@ -189,7 +192,6 @@ _ESCALATION_INFORMATIVE_MIN_HITS = 2
 # Human-readable descriptions for each friction type (spec FRICTION_TYPES dict)
 FRICTION_TYPES: Dict[str, str] = {
     SIGNAL_ERROR_EVENTS:        "Tool failures, LLM errors, stuck loops",
-    SIGNAL_REPEATED_REPHRASE:   "Same goal decomposed 3+ times with little variation",
     SIGNAL_ESCALATION_TONE:     "Words like 'broken', 'failed', 'stuck' in decision logs",
     SIGNAL_PLATFORM_CONFUSION:  "Steps that ask about capabilities rather than execute",
     SIGNAL_ABANDONED_TOOL_FLOW: "Steps marked blocked without attempting alternatives",

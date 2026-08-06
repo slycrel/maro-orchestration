@@ -658,7 +658,10 @@ def test_inspector_thresholds_returns_defaults():
     assert t["context_churn_token_threshold"] == 10000
     assert t["alignment_good"] == 0.7
     assert t["alignment_poor"] == 0.4
-    assert t["rephrasing_min_count"] == 2
+    # rephrasing_min_count removed 2026-08-06 (census): threshold had no
+    # comparison site and its signal had no detector — it must not resurface
+    # in the echo without both.
+    assert "rephrasing_min_count" not in t
 
 
 def test_inspector_thresholds_env_override(monkeypatch):

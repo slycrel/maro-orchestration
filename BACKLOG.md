@@ -105,6 +105,30 @@ pass, not a quiet fix:
   the re-observation design. Options live at different layers: loosen
   match threshold, count semantic-neighbor hits, or judge candidates on
   age+content instead of re-observation.
+- [ ] **5. Shadow-workspace hijack: a stray
+  `~/.maro/workspace/prototypes/maro-orchestration/` husk silently
+  redirects memory_dir() whenever a legacy workspace var is pinned
+  (FOUND 2026-08-06, census follow-on).** `orch_items.orch_root()`
+  prefers the "traditional prototype path" whenever it merely EXISTS,
+  and `memory_dir()` routes through it whenever
+  OPENCLAW_WORKSPACE/WORKSPACE_ROOT is set — so pinning the var to the
+  REAL workspace (`OPENCLAW_WORKSPACE=~/.maro/workspace`, a
+  reasonable-looking thing) reads/writes an empty shadow store at
+  `.../prototypes/maro-orchestration/memory/` instead of
+  `~/.maro/workspace/memory/`. Not hypothetical: the husk's
+  `outcomes.jsonl.lock` is dated 2026-08-02 10:48 — something wrote
+  there four days ago; `scripts/build-loop.sh` exports exactly this var
+  when given a workspace arg. The husk (created 2026-04-11, migration
+  residue) also holds March-era poe-orchestration NOW artifacts —
+  retention decree applies, archive-move rather than delete. Real fix
+  is deliberate, not drive-by: memory_dir()'s own docstring declares
+  "must resolve to the SAME directory as config.memory_dir()" and the
+  legacy-pin branch violates that for any pin naming the canonical
+  workspace; but tests depend on the legacy-pin isolation shape
+  (OPENCLAW_WORKSPACE=tmp_path → tmp_path/prototypes/maro-orchestration/
+  memory), so the unification needs the arch-platform read and a test
+  sweep. Interim hazard note: any script/tool pinning the legacy vars
+  to the real workspace is silently talking to the shadow store today.
 - [ ] **4. Scan suggestions have no dedup-on-save — noise generator on
   frozen inputs.** `_save_suggestions` (evolver_store.py:278) never
   dedups, so every finalize re-derives and re-saves the same findings:
