@@ -1040,6 +1040,35 @@ def test_maybe_auto_promote_eligible(monkeypatch, tmp_path):
     assert updated[0].tier == "established"
 
 
+def test_maybe_auto_promote_tier_stamp_reloads_under_pool_lock(monkeypatch, tmp_path):
+    # R3-8 (adversarial review 2026-08-06): the tier-stamp rewrite is a
+    # reload → mutate → full-rewrite of the pool; without the lock spanning
+    # the reload, a mutation landing between reload and rewrite is dropped.
+    # Pin: the fresh reload runs while this thread holds the pool lock
+    # (locked_write is reentrant, so _save_skills' inner acquire is a no-op).
+    skill = _phase32_skill(tmp_path, tier="provisional",
+                           utility=AUTO_PROMOTE_MIN_RATE + 0.1,
+                           use_count=AUTO_PROMOTE_MIN_USES)
+    monkeypatch.setattr("skills._skills_path", lambda: tmp_path / "skills.jsonl")
+    import skills as skills_mod
+    from file_lock import _get_held
+    lock_key = str((tmp_path / "skills.jsonl.lock").resolve())
+    held_at_load = []
+    real_load = skills_mod.load_skills
+
+    def spy_load(*a, **k):
+        held_at_load.append(lock_key in _get_held())
+        return real_load(*a, **k)
+
+    monkeypatch.setattr(skills_mod, "load_skills", spy_load)
+    promoted = maybe_auto_promote_skills()
+    assert skill.id in promoted
+    # First load (candidate scan) runs unlocked; the fresh reload that the
+    # rewrite is based on must run under the lock.
+    assert held_at_load[0] is False
+    assert held_at_load[-1] is True
+
+
 def test_maybe_auto_promote_not_enough_uses(monkeypatch, tmp_path):
     skill = _phase32_skill(tmp_path, tier="provisional",
                            utility=0.9,

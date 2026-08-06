@@ -1368,13 +1368,20 @@ def maybe_auto_promote_skills(adapter: Any = None, max_repair_attempts: int = 3,
         # pre-repair list back would revert them (and drop any
         # concurrent mutation since our load). Reload, stamp tiers by
         # id, save — the promoted object on disk is the repaired one.
+        # The lock spans reload→save (R3-8, adversarial review
+        # 2026-08-06): _save_skills' own lock guards only the write, so
+        # a mutation landing inside the reload→rewrite window would be
+        # dropped by the full rewrite. locked_write is reentrant, so
+        # _save_skills' inner acquisition is a no-op here.
+        from file_lock import locked_write as _locked_write
         _promoted_set = set(promoted)
-        fresh = load_skills()
-        for s in fresh:
-            if s.id in _promoted_set:
-                s.tier = "established"
-                s.content_hash = compute_skill_hash(s)
-        _save_skills(fresh)
+        with _locked_write(_skills_path()):
+            fresh = load_skills()
+            for s in fresh:
+                if s.id in _promoted_set:
+                    s.tier = "established"
+                    s.content_hash = compute_skill_hash(s)
+            _save_skills(fresh)
         # Hermes steal: auto-export newly promoted skills as SKILL.md curated files
         for s in fresh:
             if s.id in _promoted_set:

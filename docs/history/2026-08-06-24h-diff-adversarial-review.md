@@ -208,6 +208,13 @@ structurally contaminated.
    → write-all transaction with the lock only on the final save;
    concurrent finalizes can drop intervening pool mutations.
    (Serialize-shared-state; concurrent sessions are the norm here.)
+   *Verified + fixed 2026-08-07: half-stale as claimed — the tier stamp
+   already reloaded fresh after validation, so the LLM window was
+   closed; but the reload→full-rewrite window itself was lock-free.
+   The pool lock now spans reload→save in `maybe_auto_promote_skills`
+   (locked_write is reentrant, so `_save_skills`' inner acquire
+   no-ops). Pinned by
+   test_maybe_auto_promote_tier_stamp_reloads_under_pool_lock.*
 
 ### Rejected / downgraded reviewer claims
 
