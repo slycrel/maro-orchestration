@@ -219,7 +219,10 @@ the `maro-claude-auth` volume. The token-spending halves (dogfood goals, the
 hostile-goal acceptance probe) stay **BLOCKED on that human step** and are
 marked as such below rather than skipped silently.
 
-**Environment**
+**Environment** (recorded as measured; tags below are the 2.1.207-era scheme —
+since 2026-08-06 the tag also carries a contents revision,
+`maro-executor:<cli>-r<n>`, so re-read the current tag from
+`maro-bootstrap container-setup` rather than from these lines)
 - Docker **28.2.2** reachable (`docker version` server = 28.2.2).
 - Executor image **built**: `maro-executor:2.1.207` (702 MB, `node:22-slim` base).
 - **CLI pin reconfirmed — NO drift.** `npm view @anthropic-ai/claude-code

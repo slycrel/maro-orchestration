@@ -44,13 +44,19 @@ class TestTheStatusVocabulary:
 
 @pytest.fixture
 def run_env(tmp_path, monkeypatch):
-    """A workspace with one agenda run dir and one outcomes row."""
-    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
-    import importlib
+    """A workspace with one agenda run dir and one outcomes row.
+
+    Deliberately NO importlib.reload: both modules resolve their paths per
+    call (`runs.runs_root`, `memory_ledger._memory_dir`), so the env var is
+    enough -- and reloading rebinds module-level DATACLASSES, so instances
+    made before the reload stop comparing equal to the reloaded class. That
+    contaminated four unrelated OutcomeVerdictStampResult equality tests in
+    whichever xdist worker happened to run this file first, and passed in
+    isolation. Same env var the house `workspace` fixture uses.
+    """
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
     import runs as _runs
     import memory_ledger as _ml
-    importlib.reload(_ml)
-    importlib.reload(_runs)
     return tmp_path, _runs, _ml
 
 
