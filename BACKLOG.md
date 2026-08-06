@@ -1434,6 +1434,38 @@ dir isn't mounted; if the container lane flips on for dispatched runs,
 attachments need a landing under the mounted cwd (or prompt inlining
 with a size cap). Evidence-gated on the C4-BOX flip, don't pre-build.
 
+**Return-path quality — artifact links in the event payload + top-pick
+ranking (OPENED 2026-08-05, from the 83a2c805 Poe steal run; Jeremy:
+"we should probably upgrade the run page so it dynamically surfaces
+the allowed artifacts… and also maybe consider a way to get a better
+summary")**. Diagnosis, all verified on the run: the return event
+already carries `answer_summary` + `deliverable_content`
+(mini2-maro-inbox.sh composes from them), and the card's LLM
+`answer_summary` was actually decent — the mush came from the PAYLOAD:
+(1) curation's top pick was the recovery loop's AUDIT_NOTE, not
+steal_list.md (recency rank — a post-hoc audit loop's file outranks
+the primary deliverable by construction), so Poe answered the ask from
+the wrong file; (2) `steal_list.md` was never copied into the served
+tree, so no link existed anywhere ("I can't actually see the
+steal_list.md without digging it up from the box"); (3) two step-N
+execution logs filled the other deliverable slots. **SHIPPED with this
+entry (run-page half, "functionally for now")**: `locate_deliverables`
+now serves ALL ranked candidates (cap 12, `step-` logs excluded,
+first-wins on basename collision, `card.served_artifacts` in rank
+order) and the runs index links every `<run>/artifact/*` servable —
+the viz allowlist already permitted the path; nothing linked it.
+83a2c805 backfilled by hand (steal_list + evidence JSONs served,
+verified 200 via the live server). **Remaining, cheap, in order:**
+(a) event-payload rider — include public served-artifact URLs
+(`https://maro.feifdom.com/<run>/artifact/<name>`) in the completion
+event so the Poe message links the deliverable instead of relaying a
+lossy re-synthesis (delivery-loop decree: the user hears the outcome
+where they asked); (b) top-pick ranking — primary-loop deliverables
+should outrank post-hoc audit/recovery-loop notes; needs file→loop
+attribution (mtime vs loop windows is probably enough); (c)
+`answer_truncated: true` on 83a2c805 — check the storage cap isn't
+decapitating good summaries at the card layer.
+
 ### NOW retry rung — failure-class-routed ladder: NOW → artifact retry / star → AGENDA (OPENED 2026-07-28, Jeremy)
 
 Jeremy's ask: a middle rung between a failed NOW one-shot and a full

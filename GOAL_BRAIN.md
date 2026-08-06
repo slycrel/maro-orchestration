@@ -6380,3 +6380,25 @@ the batch: skill dead-drop bug (standalone BACKLOG entry, reproduced
 2/2 — workers write skills where nothing reads), silent closure-verdict
 loss (R2w, bare except at handle.py:2293), and verdict-prior staleness
 (12/12 PASS against 35–65% priors — recalibrate future batches on LT-4).
+
+### 2026-08-05 — Run pages surface all allowed artifacts; briefs ride the payload, not a re-synthesis
+
+Jeremy (2026-08-05, on the 83a2c805 Poe steal run): *"we probably need
+a better way to give a brief of the outcome, in addition to all of the
+artifacts. I can't actually see the steal_list.md without digging it up
+from the box, we should probably upgrade the run page so it dynamically
+surfaces the allowed artifacts (functionally for now, and at some point
+a bit more UX love would go a ways…). And also maybe consider a way to
+get a better summary."*
+
+Run-page half SHIPPED same day: `locate_deliverables` serves every
+ranked candidate (cap 12, step-N logs excluded, `served_artifacts` on
+the card) and the runs index links each `<run>/artifact/*` servable —
+the viz allowlist already permitted the path; nothing had linked it.
+83a2c805 backfilled (steal_list.md clickable, verified 200). Summary
+half diagnosed, not built: the return event already carries a decent
+LLM `answer_summary`; the mush came from the payload's top pick being
+the recovery loop's AUDIT_NOTE plus demoted-verdict framing. Follow-ups
+(artifact URLs in the completion event, primary-loop-first ranking,
+truncation-cap check) in BACKLOG § Typed dispatch envelope →
+return-path quality.

@@ -319,6 +319,8 @@ _DELIVERABLE_EXCLUDE = {"DECISIONS.md", "NEXT.md", "PROVENANCE.md", "PRIORITY",
 _DELIVERABLE_NAME_HINTS = ("final_report", "report", "summary", "shortlist",
                            "findings", "answer", "recommendation", "response",
                            "verdict")
+# How many ranked deliverables get copied into <run>/artifact/ for serving.
+_SERVED_ARTIFACTS_CAP = 12
 
 
 def _project_dir_for(meta: dict) -> Optional[Path]:
@@ -368,6 +370,11 @@ def locate_deliverables(rd: Path, meta: dict, card: dict) -> None:
         if (not p.is_file() or name in _DELIVERABLE_EXCLUDE
                 or name.startswith(".") or name.endswith(".lock")):
             continue
+        # step-N-output.txt / step-N-transcript.json are execution logs the
+        # loop mirrors into the project dir, not deliverables (83a2c805:
+        # they filled 2 of the 3 deliverable slots).
+        if name.startswith("step-"):
+            continue
         if p.suffix.lower() not in (".md", ".txt", ".json", ".csv", ".html"):
             continue
         try:
@@ -398,15 +405,31 @@ def locate_deliverables(rd: Path, meta: dict, card: dict) -> None:
     card["deliverables"] = [
         {"path": str(p), "bytes": p.stat().st_size} for p in candidates[:3]
     ]
-    top = candidates[0]
+    # Copy ALL ranked candidates, not just the top pick: 83a2c805
+    # (2026-08-05) — the audit loop's AUDIT_NOTE outranked steal_list.md
+    # on recency, so the run's actual deliverable never reached the served
+    # tree and had to be dug off the box. First-wins on basename collision
+    # (subdirs can repeat a name) so the ranking's judgement sticks.
+    served: List[str] = []
     try:
         dest_dir = rd / "artifact"
         dest_dir.mkdir(parents=True, exist_ok=True)
-        dest = dest_dir / top.name
-        shutil.copy2(top, dest)
-        card["deliverable_link_path"] = f"{rd.name}/artifact/{top.name}"
+        taken: set = set()
+        for p in candidates[:_SERVED_ARTIFACTS_CAP]:
+            if p.name in taken:
+                continue
+            try:
+                shutil.copy2(p, dest_dir / p.name)
+            except Exception:
+                log.debug("deliverable copy failed for %s", p, exc_info=True)
+                continue
+            taken.add(p.name)
+            served.append(f"{rd.name}/artifact/{p.name}")
     except Exception:
-        log.debug("deliverable copy failed for %s", top, exc_info=True)
+        log.debug("artifact dir setup failed for %s", rd, exc_info=True)
+    if served:
+        card["deliverable_link_path"] = served[0]
+        card["served_artifacts"] = served
 
 
 def _strip_result_preamble(text: str) -> str:
@@ -1248,7 +1271,8 @@ _CURATOR_SPECS: List[CuratorSpec] = [
     CuratorSpec(excerpt_result,
                 optional_provides=("result_excerpt", "result_path")),
     CuratorSpec(locate_deliverables,
-                optional_provides=("deliverables", "deliverable_link_path")),
+                optional_provides=("deliverables", "deliverable_link_path",
+                                   "served_artifacts")),
     CuratorSpec(synthesize_answer,
                 optional_provides=("answer_summary", "answer_source",
                                    "answer_truncated"),

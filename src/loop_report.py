@@ -614,6 +614,7 @@ details.legend .meta { margin-top: 8px; line-height: 1.9; text-align: left; }
   padding: 4px 10px; font: inherit; font-size: 14px; cursor: pointer; }
 .idx-filters button:hover { color: var(--text); border-color: var(--blue); }
 .idx-table tr.idx-hidden { display: none; }
+.art-link { font-family: ui-monospace, monospace; font-size: 12px; opacity: 0.85; white-space: nowrap; }
 """
 
 _DETAIL_JS = """
@@ -1393,6 +1394,27 @@ def _gather_run_summaries() -> List[dict]:
                 totals["steps_done"] += t.get("steps_done", 0)
                 totals["steps_blocked"] += t.get("steps_blocked", 0)
 
+        # Servable deliverable copies: run_curation.locate_deliverables
+        # fills <run>/artifact/ and the viz server already allows
+        # <run>/artifact/*.{md,txt,html,json,csv} — but nothing linked
+        # them, so a run's real deliverable (83a2c805's steal_list.md)
+        # was unreachable without shelling into the box.  Curation-ranked
+        # order first (card.served_artifacts), stragglers name-sorted.
+        artifacts: List[str] = []
+        art_dir = d / "artifact"
+        if art_dir.is_dir():
+            try:
+                present = sorted(
+                    p.name for p in art_dir.iterdir()
+                    if p.is_file() and p.suffix.lower() in
+                    (".md", ".txt", ".html", ".json", ".csv"))
+            except OSError:
+                present = []
+            ranked = [Path(rel).name for rel in card.get("served_artifacts") or []
+                      if isinstance(rel, str)]
+            artifacts = [n for n in ranked if n in present]
+            artifacts += [n for n in present if n not in artifacts]
+
         started_at = meta.get("started_at", "") or ""
         ended_at = meta.get("ended_at")
         elapsed_str = "-"
@@ -1418,6 +1440,7 @@ def _gather_run_summaries() -> List[dict]:
             "reports": reports,
             "latest_loop_id": loop_order[-1] if loop_order else "",
             "result_relpath": result_relpath,
+            "artifacts": artifacts,
         })
     summaries.sort(key=lambda s: s.get("started_at") or "", reverse=True)
     return summaries
@@ -1625,6 +1648,12 @@ def _render_index_html(summaries: List[dict]) -> str:
             label = "now" if stem.startswith("now-") else stem.replace("loop-", "")
             prefix = "earlier: " if latest_loop_id else ""
             links.append(f'<a href="{_esc(href)}">{_esc(prefix + label)}</a>')
+        for name in s.get("artifacts") or []:
+            href = f'{s["dir_name"]}/artifact/{name}'
+            label = name if len(name) <= 30 else name[:27] + "…"
+            links.append(
+                f'<a class="art-link" href="{_esc(href)}" '
+                f'title="{_esc(name)}">{_esc(label)}</a>')
         links_html = " ".join(links) if links else '<span class="meta">no report</span>'
         row_attr = f' data-href="{_esc(primary_href)}"' if primary_href else ""
 
@@ -1689,7 +1718,7 @@ def _render_index_html(summaries: List[dict]) -> str:
 </div>
 {filters_html}
 <table class="idx-table">
-<tr><th>Started</th><th>Status</th><th>Goal</th><th title="{_esc(_LANE_HELP)}">Lane</th><th>Elapsed</th><th>Tokens</th><th>Cost</th><th>Report</th></tr>
+<tr><th>Started</th><th>Status</th><th>Goal</th><th title="{_esc(_LANE_HELP)}">Lane</th><th>Elapsed</th><th>Tokens</th><th>Cost</th><th>Report / artifacts</th></tr>
 {body_rows}
 </table>
 <script>{_INDEX_ROW_JS}{_INDEX_FILTER_JS}</script>

@@ -464,6 +464,34 @@ def test_runs_index_defaults_to_final_result_when_latest_report_is_missing(monke
     assert '>earlier: 0bf231e3</a>' in content
 
 
+def test_runs_index_links_served_artifacts(monkeypatch, tmp_path):
+    """Files curation copied into <run>/artifact/ get index links — the viz
+    server already served that path but nothing linked it, so a run's real
+    deliverable (83a2c805's steal_list.md) was unreachable from the UI.
+    Curation-ranked order first, stragglers after, non-servable skipped."""
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+    import runs
+    rd = runs.create_run_dir("hart", prompt="artifact-linked goal", lane="agenda")
+    art = rd / "artifact"
+    art.mkdir(exist_ok=True)
+    (art / "steal_list.md").write_text("the deliverable")
+    (art / "AUDIT_NOTE.md").write_text("the audit note")
+    (art / "extra.csv").write_text("a,b\n1,2\n")          # straggler: linked
+    (art / "helper.py").write_text("print('nope')")        # not servable
+    (rd / "run_card.json").write_text(json.dumps({
+        "served_artifacts": [f"{rd.name}/artifact/AUDIT_NOTE.md",
+                             f"{rd.name}/artifact/steal_list.md"],
+    }))
+
+    content = Path(lr.write_runs_index(force=True)).read_text()
+    assert f'href="{rd.name}/artifact/steal_list.md"' in content
+    assert f'href="{rd.name}/artifact/AUDIT_NOTE.md"' in content
+    assert f'href="{rd.name}/artifact/extra.csv"' in content
+    assert "helper.py" not in content
+    # Ranked order preserved: AUDIT_NOTE (curation's top pick) before the list.
+    assert content.index("AUDIT_NOTE.md") < content.index("steal_list.md")
+
+
 def test_write_runs_index_debounces_without_force(monkeypatch, tmp_path):
     monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
     import runs

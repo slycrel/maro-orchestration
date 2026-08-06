@@ -1479,3 +1479,75 @@ def test_locate_deliverables_recency_beats_size(workspace):
     names = [Path(d["path"]).name for d in card["deliverables"]]
     assert names[0] == "FINAL_RESPONSE.md"
     assert card["deliverable_link_path"].endswith("/artifact/FINAL_RESPONSE.md")
+
+
+def test_locate_deliverables_serves_all_candidates(workspace):
+    """Every ranked candidate is copied into <run>/artifact/, not just the
+    top pick (83a2c805 2026-08-05: the audit loop's AUDIT_NOTE outranked
+    steal_list.md on recency, so the run's actual deliverable never
+    reached the served tree).  step-N execution logs are excluded, and
+    the card records the served list in rank order."""
+    import os
+    import time
+
+    import orch_items
+
+    rd = create_run_dir(
+        "h000srvall", prompt="steal what's useful", lane="agenda",
+        model="cheap",
+        extra_metadata={"project": "proj-serveall", "goal_achieved": True},
+    )
+    pdir = orch_items.projects_root() / "proj-serveall"
+    pdir.mkdir(parents=True)
+    older = pdir / "steal_list.md"
+    older.write_text("# Steal list\n\n13 claims tagged.\n")
+    newer = pdir / "AUDIT_NOTE.md"
+    newer.write_text("# Audit note\n\nRecovery loop commentary.\n")
+    (pdir / "step-2-output.txt").write_text("execution log, not a deliverable")
+    now = time.time()
+    os.utime(older, (now + 1, now + 1))
+    os.utime(newer, (now + 601, now + 601))
+    finalize_run("h000srvall", status="done")
+    card = curate_run("h000srvall")
+
+    # Both real deliverables land in the served tree.
+    assert (rd / "artifact" / "AUDIT_NOTE.md").is_file()
+    assert (rd / "artifact" / "steal_list.md").is_file()
+    # Execution logs stay out of the deliverable list and the served tree.
+    names = [Path(d["path"]).name for d in card["deliverables"]]
+    assert "step-2-output.txt" not in names
+    assert not (rd / "artifact" / "step-2-output.txt").exists()
+    # Card records the served list in rank order; top pick keeps its slot.
+    served_names = [Path(rel).name for rel in card["served_artifacts"]]
+    assert served_names == ["AUDIT_NOTE.md", "steal_list.md"]
+    assert card["deliverable_link_path"] == card["served_artifacts"][0]
+
+
+def test_locate_deliverables_collision_first_wins(workspace):
+    """Two candidates sharing a basename (subdirs can repeat a name): the
+    higher-ranked copy is the one served — the loser must not overwrite it."""
+    import os
+    import time
+
+    import orch_items
+
+    rd = create_run_dir(
+        "h000colld", prompt="summarize findings", lane="agenda",
+        model="cheap",
+        extra_metadata={"project": "proj-collide", "goal_achieved": True},
+    )
+    pdir = orch_items.projects_root() / "proj-collide"
+    (pdir / "drafts").mkdir(parents=True)
+    winner = pdir / "notes.md"
+    winner.write_text("# Final notes — the ranked winner\n")
+    loser = pdir / "drafts" / "notes.md"
+    loser.write_text("# Early draft — must not be served\n")
+    now = time.time()
+    os.utime(loser, (now + 1, now + 1))
+    os.utime(winner, (now + 601, now + 601))
+    finalize_run("h000colld", status="done")
+    card = curate_run("h000colld")
+
+    served = (rd / "artifact" / "notes.md").read_text()
+    assert "ranked winner" in served
+    assert [Path(rel).name for rel in card["served_artifacts"]] == ["notes.md"]
