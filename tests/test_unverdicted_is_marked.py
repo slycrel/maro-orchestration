@@ -22,6 +22,7 @@ from stop_verdicts import (
     EXECUTION_FINISHED_STATUSES,
     PAUSED_STATUSES,
     VERDICT_SOURCE_NEVER_STAMPED,
+    VERDICT_SOURCE_NO_STEPS_COMPLETED,
     VERDICT_SOURCE_RUN_ERRORED,
 )
 
@@ -223,3 +224,54 @@ class TestErroredRunsSayWhy:
         _seed(tmp, runs_mod, ledger, handle_id="e7", loop_id="E7", status="error")
         runs_mod.close_run("e7", status="error")
         assert seen == []
+
+
+class TestNoStepsCompletedNamesItself:
+    """The tripwire's dominant false positive, closed at the source.
+
+    Closure requires `_ran_any_step` (handle.py). A run where no step
+    completed has nothing to judge, so no verdict is owed -- but run
+    metadata carries no step count, so `close_run` could not tell that
+    apart from "closure forgot". Measured 2026-08-06: 259 of the 345
+    unverdicted agenda runs on the box are this shape. 75% of the
+    tripwire's firings were false positives.
+
+    The fix is to name the skip where the condition is evaluated. No
+    change to the tripwire itself: it already skips anything carrying a
+    goal_verdict_source, so naming the skip IS the fix.
+    """
+
+    def test_it_is_a_distinct_reason_from_the_closure_gap(self):
+        """Collapsing these would put 259 legitimate skips into the bucket
+        people are supposed to investigate."""
+        assert VERDICT_SOURCE_NO_STEPS_COMPLETED != VERDICT_SOURCE_NEVER_STAMPED
+        assert VERDICT_SOURCE_NO_STEPS_COMPLETED != VERDICT_SOURCE_RUN_ERRORED
+
+    def test_a_marked_run_does_not_trip_the_tripwire(self, run_env, monkeypatch):
+        """The end-to-end property that matters: metadata carrying this
+        source means close_run stays silent and stamps nothing over it."""
+        tmp, runs_mod, ledger = run_env
+        seen = []
+        import captains_log
+        monkeypatch.setattr(captains_log, "log_event",
+                            lambda *a, **kw: seen.append(kw))
+        _seed(tmp, runs_mod, ledger, handle_id="n1", loop_id="N1",
+              status="stuck", verdict_source=VERDICT_SOURCE_NO_STEPS_COMPLETED)
+        runs_mod.close_run("n1", status="stuck")
+        assert seen == [], "no-steps run should not read as a closure gap"
+        meta = json.loads(
+            (runs_mod.run_dir("n1") / "metadata.json").read_text(encoding="utf-8"))
+        assert meta["goal_verdict_source"] == VERDICT_SOURCE_NO_STEPS_COMPLETED
+
+    def test_a_run_that_DID_complete_steps_still_trips_it(self, run_env, monkeypatch):
+        """The other half: silencing the false positives must not silence
+        the real gap the tripwire exists for."""
+        tmp, runs_mod, ledger = run_env
+        seen = []
+        import captains_log
+        monkeypatch.setattr(captains_log, "log_event",
+                            lambda *a, **kw: seen.append(kw))
+        _seed(tmp, runs_mod, ledger, handle_id="n2", loop_id="N2", status="stuck")
+        runs_mod.close_run("n2", status="stuck")
+        assert len(seen) == 1
+        assert _row(ledger, "N2").goal_verdict_source == VERDICT_SOURCE_NEVER_STAMPED

@@ -112,6 +112,14 @@ VERDICT_SOURCE_NEVER_STAMPED = "closure_never_stamped"
 # really a backend outage.
 VERDICT_SOURCE_RUN_ERRORED = "run_errored"
 
+# Closure declined to judge because NO step completed — there is no work to
+# judge, so no verdict is owed. Third member of the family, and the one that
+# turned out to dominate: measured 2026-08-06, 259 of the 345 unverdicted
+# agenda runs on the box (75%) are this shape, not a closure gap. Without it
+# the finished-without-closure tripwire is mostly false positives, which is
+# how a tripwire trains people to ignore it.
+VERDICT_SOURCE_NO_STEPS_COMPLETED = "closure_skipped_no_steps"
+
 # Typed pause reasons (§13e): WHY the run is paused, machine-readable.
 # Operator-class — a human is in the loop.
 PAUSE_OP_MANUAL = "manual-intervention"          # kill switch, operator stop directive

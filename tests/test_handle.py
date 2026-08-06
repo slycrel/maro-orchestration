@@ -5650,3 +5650,105 @@ class TestClosureErrorIsStamped:
             "a crashed judge must not manufacture a verdict")
         assert meta.get("goal_verdict_source") == "closure_error"
         assert "probe exploded" in meta.get("goal_verdict_summary", "")
+
+
+# ---------------------------------------------------------------------------
+# 2026-08-06: closure skipped for want of a completed step must SAY so
+# ---------------------------------------------------------------------------
+
+class TestNoStepsCompletedIsNamed:
+    """Closure requires `_ran_any_step`. A run where every step blocked has
+    nothing to judge, so no verdict is owed — but run metadata carries no
+    step count, so `runs.close_run`'s finished-without-closure tripwire read
+    it as "closure forgot to judge". Measured on the box 2026-08-06: 259 of
+    345 unverdicted agenda runs are this shape, so 75% of that tripwire's
+    firings were false positives — the rate at which a tripwire teaches
+    people to ignore it.
+
+    Named at the frame that evaluates the condition, rather than inferred
+    later from the loop log."""
+
+    def _run(self, monkeypatch, tmp_path, step_status):
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        _stub_build_adapter(monkeypatch)
+        from unittest.mock import patch, MagicMock
+        from agent_loop import LoopResult, StepOutcome
+
+        result = LoopResult(
+            loop_id="nosteps-lr", project="p", goal="do X",
+            status="stuck", stuck_reason="everything blocked",
+            steps=[StepOutcome(index=0, text="s", status=step_status,
+                               result="", iteration=0)],
+        )
+        gate = MagicMock()
+        gate.escalate = False
+        gate.contested_claims = []
+        with patch("agent_loop.run_agent_loop", return_value=result), \
+             patch("intent.check_goal_clarity", return_value={"clear": True}), \
+             patch("quality_gate.run_quality_gate", return_value=gate):
+            return handle("do X", force_lane="agenda", dry_run=False)
+
+    def test_all_blocked_run_names_the_skip(self, monkeypatch, tmp_path):
+        import json as _json
+        import runs as runs_mod
+        from stop_verdicts import VERDICT_SOURCE_NO_STEPS_COMPLETED
+        hr = self._run(monkeypatch, tmp_path, "blocked")
+        meta = _json.loads(
+            (runs_mod.run_dir(hr.handle_id) / "metadata.json").read_text())
+        assert meta.get("goal_verdict_source") == VERDICT_SOURCE_NO_STEPS_COMPLETED
+
+    def test_it_does_not_manufacture_a_verdict(self, monkeypatch, tmp_path):
+        import json as _json
+        import runs as runs_mod
+        hr = self._run(monkeypatch, tmp_path, "blocked")
+        meta = _json.loads(
+            (runs_mod.run_dir(hr.handle_id) / "metadata.json").read_text())
+        assert meta.get("goal_achieved") is None, (
+            "no work done is not a verdict about the goal")
+
+    def test_a_completed_step_leaves_the_marker_off(self, monkeypatch, tmp_path):
+        """The discriminator has to actually discriminate: one done step and
+        this run is closure's business again, not a named skip."""
+        import json as _json
+        import runs as runs_mod
+        from stop_verdicts import VERDICT_SOURCE_NO_STEPS_COMPLETED
+        hr = self._run(monkeypatch, tmp_path, "done")
+        meta = _json.loads(
+            (runs_mod.run_dir(hr.handle_id) / "metadata.json").read_text())
+        assert meta.get("goal_verdict_source") != VERDICT_SOURCE_NO_STEPS_COMPLETED
+
+    def test_the_ledger_row_is_marked_too(self, monkeypatch, tmp_path):
+        """Metadata alone is not enough: the denominator counts LEDGER rows.
+
+        In production the row already exists here — reflect_and_record runs
+        inside loop_finalize, before handle's closure gate — but this
+        harness mocks run_agent_loop away, so the row is seeded explicitly
+        rather than pretending the mock covers it.
+        """
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        _stub_build_adapter(monkeypatch)
+        from unittest.mock import patch, MagicMock
+        from agent_loop import LoopResult, StepOutcome
+        from stop_verdicts import VERDICT_SOURCE_NO_STEPS_COMPLETED
+        import memory_ledger as ml
+
+        ml.record_outcome(goal="do X", status="stuck", summary="s",
+                          task_type="agenda", loop_id="nosteps-lr")
+        result = LoopResult(
+            loop_id="nosteps-lr", project="p", goal="do X",
+            status="stuck", stuck_reason="everything blocked",
+            steps=[StepOutcome(index=0, text="s", status="blocked",
+                               result="", iteration=0)],
+        )
+        gate = MagicMock()
+        gate.escalate = False
+        gate.contested_claims = []
+        with patch("agent_loop.run_agent_loop", return_value=result), \
+             patch("intent.check_goal_clarity", return_value={"clear": True}), \
+             patch("quality_gate.run_quality_gate", return_value=gate):
+            handle("do X", force_lane="agenda", dry_run=False)
+
+        row = ml.load_outcome_by_loop_id("nosteps-lr")
+        assert row is not None
+        assert row.goal_verdict_source == VERDICT_SOURCE_NO_STEPS_COMPLETED
+        assert row.goal_achieved is None

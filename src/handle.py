@@ -2266,6 +2266,42 @@ def _handle_impl(
         _closure = None
         _closure_decision = None
         _closure_error = ""
+        # Say WHY closure is being skipped, at the only place that knows.
+        #
+        # The finished-without-closure tripwire (runs.close_run) sees run
+        # metadata, which carries no step count — so a run where no step
+        # completed looked exactly like a run closure forgot to judge.
+        # Measured 2026-08-06: 259 of the 345 unverdicted agenda runs on the
+        # box are that shape. **75% of the tripwire's firings were false
+        # positives**, which is how a tripwire teaches people to ignore it.
+        #
+        # Inferring it later from the loop log would work but is archaeology;
+        # this is the frame that evaluated the condition. And no change to
+        # the tripwire is needed — it already skips anything carrying a
+        # goal_verdict_source, so naming the skip IS the fix.
+        if (not dry_run
+                and loop_result.status in _closure_eligible_statuses
+                and not _ran_any_step):
+            try:
+                from stop_verdicts import VERDICT_SOURCE_NO_STEPS_COMPLETED
+                from runs import stamp_run_metadata as _srm_nosteps
+                _srm_nosteps(
+                    {"goal_verdict_source": VERDICT_SOURCE_NO_STEPS_COMPLETED})
+                _nosteps_loop = getattr(loop_result, "loop_id", "") or ""
+                if _nosteps_loop:
+                    # The ledger row exists for these runs (they DO reach
+                    # reflect_and_record), so the denominator needs the same
+                    # marker there. goal_achieved stays None: no work, no
+                    # verdict, and inventing one is the failure this family
+                    # of guards exists to prevent.
+                    from memory_ledger import stamp_outcome_verdict as _sov_nosteps
+                    _sov_nosteps(
+                        _nosteps_loop,
+                        goal_achieved=None,
+                        goal_verdict_source=VERDICT_SOURCE_NO_STEPS_COMPLETED,
+                    )
+            except Exception as _nosteps_exc:
+                log.debug("no-steps verdict marker failed: %s", _nosteps_exc)
         if (not dry_run
                 and loop_result.status in _closure_eligible_statuses
                 and _ran_any_step):
