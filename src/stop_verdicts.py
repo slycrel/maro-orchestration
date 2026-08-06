@@ -103,6 +103,15 @@ EXECUTION_FINISHED_STATUSES = frozenset(("done", "stuck"))
 # be the fabrication these guards exist to prevent.
 VERDICT_SOURCE_NEVER_STAMPED = "closure_never_stamped"
 
+# The run died before a verdict was possible — backend death, crash, no
+# LoopResult at all (handle.py falls back to status="error" when `result is
+# None`). Distinct from VERDICT_SOURCE_NEVER_STAMPED on purpose: there,
+# closure was owed a verdict and did not deliver one, which is a closure
+# bug; here nothing was owed, because there was no finished work to judge.
+# Collapsing the two would send someone hunting a closure bug that is
+# really a backend outage.
+VERDICT_SOURCE_RUN_ERRORED = "run_errored"
+
 # Typed pause reasons (§13e): WHY the run is paused, machine-readable.
 # Operator-class — a human is in the loop.
 PAUSE_OP_MANUAL = "manual-intervention"          # kill switch, operator stop directive

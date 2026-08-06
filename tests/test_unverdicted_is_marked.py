@@ -14,6 +14,7 @@ judged. Two real gaps survived, both here:
      nothing -- and the ledger is what a denominator counts.
 """
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -21,6 +22,7 @@ from stop_verdicts import (
     EXECUTION_FINISHED_STATUSES,
     PAUSED_STATUSES,
     VERDICT_SOURCE_NEVER_STAMPED,
+    VERDICT_SOURCE_RUN_ERRORED,
 )
 
 
@@ -141,3 +143,83 @@ class TestTheLogStillFires:
         assert seen, "no honesty event fired"
         summaries = [kw.get("summary", "") for _, kw in seen]
         assert any("status=stuck" in s for s in summaries), summaries
+
+
+class TestErroredRunsSayWhy:
+    """An errored run is unverdictable — and must say so, distinctly.
+
+    Left open deliberately when the finished-without-closure tripwire
+    shipped: blaming closure for a backend death points at the wrong layer.
+    Measured population: 132 runs, 129 in 2026-05, none since 2026-07-04 —
+    this closes the gap for the next one, not a live bleed.
+    """
+
+    def test_error_run_is_marked_unverdictable(self, run_env):
+        tmp, runs_mod, ledger = run_env
+        _seed(tmp, runs_mod, ledger, handle_id="e1", loop_id="E1", status="error")
+        runs_mod.close_run("e1", status="error")
+        meta = json.loads(
+            (runs_mod.run_dir("e1") / "metadata.json").read_text(encoding="utf-8"))
+        assert meta["goal_verdict_source"] == VERDICT_SOURCE_RUN_ERRORED
+
+    def test_error_is_not_blamed_on_closure(self, run_env):
+        """The whole point of a separate code: collapsing these two sends
+        someone hunting a closure bug that is really a backend outage."""
+        tmp, runs_mod, ledger = run_env
+        _seed(tmp, runs_mod, ledger, handle_id="e2", loop_id="E2", status="error")
+        runs_mod.close_run("e2", status="error")
+        meta = json.loads(
+            (runs_mod.run_dir("e2") / "metadata.json").read_text(encoding="utf-8"))
+        assert meta["goal_verdict_source"] != VERDICT_SOURCE_NEVER_STAMPED
+        assert VERDICT_SOURCE_RUN_ERRORED != VERDICT_SOURCE_NEVER_STAMPED
+
+    def test_error_does_not_invent_a_verdict(self, run_env):
+        tmp, runs_mod, ledger = run_env
+        _seed(tmp, runs_mod, ledger, handle_id="e3", loop_id="E3", status="error")
+        runs_mod.close_run("e3", status="error")
+        meta = json.loads(
+            (runs_mod.run_dir("e3") / "metadata.json").read_text(encoding="utf-8"))
+        assert meta.get("goal_achieved") is None
+
+    def test_an_existing_verdict_is_never_overwritten(self, run_env):
+        """A run that WAS judged and then errored on the way out keeps its
+        verdict — the marker fills absence, it does not erase evidence."""
+        tmp, runs_mod, ledger = run_env
+        _seed(tmp, runs_mod, ledger, handle_id="e4", loop_id="E4",
+              status="error", verdict_source="closure")
+        runs_mod.close_run("e4", status="error")
+        meta = json.loads(
+            (runs_mod.run_dir("e4") / "metadata.json").read_text(encoding="utf-8"))
+        assert meta["goal_verdict_source"] == "closure"
+
+    def test_dry_runs_are_exempt(self, run_env):
+        tmp, runs_mod, ledger = run_env
+        _seed(tmp, runs_mod, ledger, handle_id="e5", loop_id="E5",
+              status="error", dry_run=True)
+        runs_mod.close_run("e5", status="error")
+        meta = json.loads(
+            (runs_mod.run_dir("e5") / "metadata.json").read_text(encoding="utf-8"))
+        assert not meta.get("goal_verdict_source")
+
+    def test_backend_error_detail_survives_alongside_the_marker(self, run_env):
+        """The marker merges into `extra`; it must not clobber the actionable
+        backend_error payload that shares that dict."""
+        tmp, runs_mod, ledger = run_env
+        _seed(tmp, runs_mod, ledger, handle_id="e6", loop_id="E6", status="error")
+        be = SimpleNamespace(error_class="auth", backend="anthropic",
+                             user_action="re-auth")
+        runs_mod.close_run("e6", status="error", backend_error=be)
+        meta = json.loads(
+            (runs_mod.run_dir("e6") / "metadata.json").read_text(encoding="utf-8"))
+        assert meta["goal_verdict_source"] == VERDICT_SOURCE_RUN_ERRORED
+        assert meta["backend_error"]["error_class"] == "auth"
+
+    def test_errored_runs_do_not_trip_the_closure_tripwire(self, run_env, monkeypatch):
+        tmp, runs_mod, ledger = run_env
+        seen = []
+        import captains_log
+        monkeypatch.setattr(captains_log, "log_event",
+                            lambda *a, **kw: seen.append(kw))
+        _seed(tmp, runs_mod, ledger, handle_id="e7", loop_id="E7", status="error")
+        runs_mod.close_run("e7", status="error")
+        assert seen == []

@@ -759,6 +759,7 @@ def close_run(
     from stop_verdicts import (
         EXECUTION_FINISHED_STATUSES,
         VERDICT_SOURCE_NEVER_STAMPED,
+        VERDICT_SOURCE_RUN_ERRORED,
     )
     if status in EXECUTION_FINISHED_STATUSES:
         try:
@@ -811,6 +812,32 @@ def close_run(
             }}
         except Exception:
             extra = None
+
+    # An errored run is unverdictable, and should SAY so (2026-08-06, the
+    # residual left open when the finished-without-closure tripwire shipped).
+    # It gets its own source rather than VERDICT_SOURCE_NEVER_STAMPED: there,
+    # closure owed a verdict and did not deliver one — a closure bug worth
+    # hunting; here nothing was owed, because there was no finished work to
+    # judge. Same reasoning as the tripwire's, one layer over: absence with a
+    # reason is a fact, absence alone is a hole.
+    #
+    # Metadata only, deliberately — no ledger stamp. Measured over 1,493
+    # rows: "error" never appears as an outcome status at all, because the
+    # run dies before reflect_and_record, so there is no row to stamp and a
+    # stamp call here would be dead code pretending to be a guard.
+    #
+    # Historical note for whoever finds this: the population is 132 runs,
+    # 129 of them in 2026-05 and none since 2026-07-04. This closes the gap
+    # for the next one rather than a live bleed.
+    if status == "error":
+        try:
+            meta = json.loads(
+                (run_dir(handle_id) / "metadata.json").read_text(encoding="utf-8"))
+            if not meta.get("goal_verdict_source") and not meta.get("dry_run"):
+                extra = dict(extra or {})
+                extra["goal_verdict_source"] = VERDICT_SOURCE_RUN_ERRORED
+        except Exception:
+            pass
     try:
         finalize_run(handle_id, status=status, extra=extra)
     except Exception:
