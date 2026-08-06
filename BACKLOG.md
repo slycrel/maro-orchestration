@@ -60,6 +60,63 @@ mint riding V3 earned promotion; hypothesis → observe_pattern
 confirmation lane, quarantined from live injection until confirmed).
 Three decisions posed to Jeremy in §7. Build gated on his read.
 
+### Live-writer census findings — four decision-shaped items (OPENED 2026-08-06)
+
+The 2026-08-06 live-writer census (method: a gate is only as live as its
+input's writer; full LIVE/SUSPECT/DEAD record with evidence in
+`docs/history/2026-08-06-live-writer-census.md`) fixed the mechanical
+finds same-day (three more `use_count` corpses + the self-variant A/B
+bug, f71be8d). These four survivors each need a decision or a design
+pass, not a quiet fix:
+
+- [ ] **1. Phase-60 verification-calibration loop dead at both ends —
+  wire or remove.** `record_verification` (knowledge_lens.py:1281) has
+  zero src/ callers — its docstring claims "called by
+  inspector.check_alignment()", which doesn't exist;
+  `calibrated_alignment_threshold` (knowledge_lens.py:1400) also has
+  zero src/ callers; memory.py re-exports both.
+  verification_outcomes.jsonl: 58 rows frozen since 2026-04-12, tail
+  rows test-shaped. Same family as use_count/SKILL_REWRITE/promotion
+  (fourth dead lane). Natural wire point if kept: inspector's
+  `assess_goal_alignment`. If removed, drop the constants, both
+  functions, and the memory.py re-exports together.
+- [ ] **2. Inspector threshold cluster unreachable by decree — needs a
+  live lane or an explicit "stays manual" call.** `_BREACH_THRESHOLD`,
+  `_ESCALATION_MIN_HITS`, `_CONTEXT_CHURN_TOKEN_THRESHOLD` all have
+  live inputs, but `run_inspector`'s only production caller is the
+  heartbeat tick lane — no daemon running AND `heartbeat.autonomy:
+  false` (Jeremy 2026-07-12). Hard evidence: `inspection-log.jsonl` has
+  never existed in the live workspace, so the friction readers
+  (conductor.py:70, heartbeat.py:779, quality_gate.py:682) always get
+  empty. If inspector findings are wanted, give it a finalize-cadence
+  lane like the evolver got (loop_finalize every-Nth-run); that's a
+  design decision, not a bug fix. Sub-find, fixable without a decision:
+  `_REPHRASING_MIN_COUNT` is double-dead by construction — no
+  comparison site anywhere AND `SIGNAL_REPEATED_REPHRASE` has zero
+  producers (declared/listed/described, never emitted). Implement the
+  detector or remove constant+signal.
+- [ ] **3. Node-promotion gate will ~never fire as built — threshold vs
+  matching design.** `NODE_PROMOTE_MIN_APPLICATIONS=2` needs two dedup
+  re-observations of the same candidate title at Jaccard-trigram ≥0.7
+  (`_DEDUP_THRESHOLD`, knowledge_bridge.py:181). Observed rate: 1 bump
+  across 433 candidates in 8 weeks (432/433 flat at times_applied=0;
+  pool dates to 2026-06-11 — what shipped 2026-08-02 was the sweep, not
+  the pool). Plumbing verified live end-to-end; the starvation is in
+  the re-observation design. Options live at different layers: loosen
+  match threshold, count semantic-neighbor hits, or judge candidates on
+  age+content instead of re-observation.
+- [ ] **4. Scan suggestions have no dedup-on-save — noise generator on
+  frozen inputs.** `_save_suggestions` (evolver_store.py:278) never
+  dedups, so every finalize re-derives and re-saves the same findings:
+  81 `calibration-*` suggestions since 2026-07-20 from a stream whose
+  newest row is 2026-07-03 (tail rows are `esc-test-001` test rows in
+  the live store); cost-* 76, drift 28 same shape. Wants a
+  dedup-on-save or scan-freshness pass (skip a scan whose input hasn't
+  moved since its last suggestion), not a point fix per scan. Related
+  cleanup ride-alongs: purge the test rows from calibration.jsonl
+  (opt-in, data-retention decree applies) and the orphaned canon
+  high-hit stats note (census doc §6).
+
 ### SP. Session-protocol arc — two-box Hermes dispatch, interactive goals, effort UX (OPENED 2026-07-15, Jeremy)
 
 The umbrella for the next big lane; full skeleton + stance decrees in
