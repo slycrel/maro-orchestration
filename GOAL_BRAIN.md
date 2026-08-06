@@ -2206,6 +2206,21 @@ Sample: the 2026-05-13..17 window of `~/.maro/workspace/runs/` (478 dirs total;
   Overnight guardrails held by Claude: no container flip (Jeremy's
   one-liner), no live-run spend batches — code work only.
 
+- **2026-08-06** — Executor image tag gets a contents revision:
+  `maro-executor:<cli-version>-r<IMAGE_REVISION>`. Jeremy: *"Off the cuff,
+  I'm in favor of adorning the version somehow, but more ignorant than I
+  should be on the repercussions. If we gain more than we lose with a bigger
+  refactor I'm ok with that, otherwise let's keep it simple."* Measured the
+  repercussions: the tag is derived in ONE place and nothing parses it back
+  into a version, so simple won — one constant, one f-string, one assertion,
+  two doc lines. The CLI pin answers "which claude", the revision answers
+  "which image"; a Dockerfile digest census fails if contents change without
+  a bump. Hand-bumped integer over a content digest deliberately: what is
+  being audited is a human decision to change the toolset, and a digest is
+  unreadable in `docker images`. Unblocked baking pytest into the image
+  (apt, not pip — pip would let any step install arbitrary PyPI packages at
+  run time).
+
 ## Threads (system-maintained — nothing leaves this list silently)
 
 Active:
