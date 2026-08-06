@@ -1208,7 +1208,8 @@ def validate_skill_for_promotion(skill: "Skill", adapter: Any) -> Dict[str, Any]
             "repair_hint": "", "judged": False}
 
 
-def maybe_auto_promote_skills(adapter: Any = None, max_repair_attempts: int = 3) -> List[str]:
+def maybe_auto_promote_skills(adapter: Any = None, max_repair_attempts: int = 3,
+                              *, limit: int = 10) -> List[str]:
     """Promote provisional skills that meet quality threshold to established.
 
     If `adapter` is provided, applies a Voyager-style validation harness before
@@ -1219,8 +1220,19 @@ def maybe_auto_promote_skills(adapter: Any = None, max_repair_attempts: int = 3)
     Criteria for promotion:
       - tier == "provisional"
       - utility_score >= AUTO_PROMOTE_MIN_RATE (EMA-based, smoothed)
-      - use_count >= AUTO_PROMOTE_MIN_USES
+      - observed uses >= AUTO_PROMOTE_MIN_USES. Uses come from SkillStats
+        (`total_uses`), NOT Skill.use_count: that field's only writer was
+        removed 2026-07-29 as dead code, which left this gate reading a
+        permanently-zero counter — no skill promoted for 8 weeks while the
+        store grew to 376 provisionals, 134 of them use-eligible on real
+        stats (found 2026-08-06). Skill.use_count still participates as a
+        max() so old stores with real counts keep working.
       - (if adapter) passes LLM validation gate or repairs within max_repair_attempts
+
+    At most `limit` skills promote per sweep (same cap shape as
+    knowledge-node promotion): the first sweep after the dead-gate fix
+    would otherwise push the whole 134-skill backlog through the LLM
+    validation harness in one maintenance pass.
 
     Returns list of promoted skill_ids.
     """
@@ -1228,10 +1240,20 @@ def maybe_auto_promote_skills(adapter: Any = None, max_repair_attempts: int = 3)
     promoted = []
     changed = False
 
+    _stats_uses: Dict[str, int] = {}
+    try:
+        for _st in get_all_skill_stats():
+            _stats_uses[_st.skill_id] = int(getattr(_st, "total_uses", 0) or 0)
+    except Exception:
+        pass
+
     for skill in skills:
+        if len(promoted) >= limit:
+            break
         if skill.tier != "provisional":
             continue
-        if skill.use_count < AUTO_PROMOTE_MIN_USES:
+        _uses = max(skill.use_count, _stats_uses.get(skill.id, 0))
+        if _uses < AUTO_PROMOTE_MIN_USES:
             continue
         if skill.utility_score < AUTO_PROMOTE_MIN_RATE:
             continue
@@ -1289,8 +1311,8 @@ def maybe_auto_promote_skills(adapter: Any = None, max_repair_attempts: int = 3)
             log_event(
                 event_type=SKILL_PROMOTED,
                 subject=skill.name,
-                summary=f"Promoted provisional -> established. Utility: {skill.utility_score:.2f} over {skill.use_count} uses.",
-                context={"skill_id": skill.id, "utility": round(skill.utility_score, 3), "use_count": skill.use_count,
+                summary=f"Promoted provisional -> established. Utility: {skill.utility_score:.2f} over {_uses} uses.",
+                context={"skill_id": skill.id, "utility": round(skill.utility_score, 3), "use_count": _uses,
                          "validation": _validation},
                 related_ids=[f"skill:{skill.id}"],
             )

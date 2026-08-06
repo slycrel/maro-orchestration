@@ -3883,6 +3883,34 @@ deferred rather than silently dropped:
     three carry the `judged` bit and nothing counts how often promotion
     credit accrues through an unjudged pass. Raised by the Opus-5
     2026-08-03 contrast; full context in the LeAct item below.
+  - **Readout RUN 2026-08-06 — and the denominators told a different
+    story than the question assumed.** Per gate:
+    1. *Skill-promotion validation:* **zero SKILL_PROMOTED events since
+       2026-06-11** — the harness has never stamped a production
+       promotion, and not because validation fails. The use gate read
+       `Skill.use_count`, whose only writer was removed 2026-07-29 as
+       dead code ("sat at 0 for 312/314") — so the gate could never
+       pass. Store census: **376 provisional / 0 established**;
+       use_count 0 for 374/376; **134 skills eligible on the real
+       signal** (SkillStats `total_uses` ≥ 5 + utility ≥ 0.7; top:
+       783 uses at 98.2% success, held provisional forever). Same
+       family as the dynamic-guardrail lane that never loaded a row.
+       **FIXED same day:** gate reads `max(use_count,
+       stats.total_uses)`, capped 10 promotions/sweep (node-promotion
+       shape) so the backlog drains over ~14 maintenance sweeps
+       instead of one 134-skill validation burst. Dead-gate pin:
+       `test_skills.py::test_maybe_auto_promote_reads_stats_uses`.
+       Judged/unjudged stamps start accruing with the first real
+       promotions — check back after a few sweeps.
+    2. *Node promotion:* 0 events, legitimately — shipped 3 days ago
+       and no candidate has been independently re-observed 2× yet.
+    3. *artifact_check:* **the denominator is not recorded anywhere.**
+       The unjudged fail-open is a `log.info` (loop_execute ~1312);
+       run records keep `result_length`, not text; no captain's-log
+       event; journal retains nothing. Retroactively unmeasurable.
+       Cheap wire when wanted: count judged/unjudged per run into the
+       loop-log `totals` dict — no new event type, rides an existing
+       artifact.
 - **Recon-flavor upgrade edges (chunk-9 #2 runtime slice shipped
   2026-08-01, docs/history/2026-08-01-recon-flavor-runtime.md).** The
   `[recon: <decision>]` tag + map-edit execution contract + map-change

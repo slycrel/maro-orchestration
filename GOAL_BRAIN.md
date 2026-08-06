@@ -6424,3 +6424,25 @@ knowledge_bridge 300/500→1,500/2,000, evolver digest 80/200→300/500.
 Still open from the audit: introspect lens widths (folded into the
 wide-view-seat design question) and the STORE retention decision
 (Jeremy's — now load-bearing, since outcome rows carry real evidence).
+
+### 2026-08-06 — Skill promotion was structurally dead for 8 weeks; fixed, capped, and the fail-open readout ran
+
+The judged-vs-unjudged denominator readout (the LeAct amendment's named
+"cheap move") ran and found the question moot for the biggest gate:
+**zero SKILL_PROMOTED events since 2026-06-11.** The promotion gate read
+`Skill.use_count`, whose only writer was removed 2026-07-29 as dead code
+— a permanently-zero counter, so no skill could ever promote. The
+validation harness Jeremy ordered 2026-08-01 ("let's fix the promote
+validation") was wired onto a gate that could not fire. Store census:
+376 provisional / 0 established; 134 skills eligible on real usage
+(SkillStats: top skill 783 uses at 98.2% success, provisional forever).
+Fixed by gating on `max(use_count, SkillStats.total_uses)` with a
+10-promotions/sweep cap (the node-promotion shape) so the backlog
+drains over ~14 sweeps rather than one 134-skill LLM-validation burst.
+Same dead-lane family as the dynamic-guardrail lane and the skill
+dead-drop. Node-promotion gate: denominator legitimately empty (3 days
+old). artifact_check: the judged bit is never persisted — that
+denominator is retroactively unmeasurable; cheap wire named in BACKLOG
+(count judged/unjudged into loop-log totals). Watch: first maintenance
+sweeps will emit up to 10 SKILL_PROMOTED events each with
+validation stamps — the readout becomes readable then.

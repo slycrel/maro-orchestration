@@ -1058,6 +1058,62 @@ def test_maybe_auto_promote_low_utility(monkeypatch, tmp_path):
     assert promoted == []
 
 
+def test_maybe_auto_promote_reads_stats_uses(monkeypatch, tmp_path):
+    """THE dead-gate pin (2026-08-06): Skill.use_count's only writer was
+    removed 2026-07-29, so a gate reading it alone can never fire — the
+    store sat at 376 provisionals / 0 established for 8 weeks. Uses must
+    come from SkillStats.total_uses. Red on revert."""
+    import json
+    skill = _phase32_skill(tmp_path, tier="provisional",
+                           utility=AUTO_PROMOTE_MIN_RATE + 0.1,
+                           use_count=0)
+    monkeypatch.setattr("skills._skills_path", lambda: tmp_path / "skills.jsonl")
+    monkeypatch.setattr("skills._skill_stats_path", lambda: tmp_path / "skill-stats.jsonl")
+    (tmp_path / "skill-stats.jsonl").write_text(json.dumps({
+        "skill_id": skill.id, "skill_name": skill.name,
+        "total_uses": AUTO_PROMOTE_MIN_USES,
+        "successes": AUTO_PROMOTE_MIN_USES, "failures": 0,
+        "success_rate": 1.0,
+    }) + "\n")
+    promoted = maybe_auto_promote_skills()
+    assert skill.id in promoted
+
+
+def test_maybe_auto_promote_no_uses_anywhere_stays_provisional(monkeypatch, tmp_path):
+    skill = _phase32_skill(tmp_path, tier="provisional",
+                           utility=1.0, use_count=0)
+    monkeypatch.setattr("skills._skills_path", lambda: tmp_path / "skills.jsonl")
+    monkeypatch.setattr("skills._skill_stats_path", lambda: tmp_path / "skill-stats.jsonl")
+    promoted = maybe_auto_promote_skills()
+    assert promoted == []
+
+
+def test_maybe_auto_promote_respects_limit(monkeypatch, tmp_path):
+    """Cap per sweep (same shape as node promotion): the first sweep after
+    the dead-gate fix must not push the whole eligible backlog through the
+    LLM validation harness at once."""
+    import json
+    rows = []
+    for i in range(4):
+        s = Skill(
+            id=f"lim{i}", name=f"Limit Skill {i}", description="d",
+            trigger_patterns=["t"], steps_template=["s"], source_loop_ids=[],
+            created_at="2026-08-06T00:00:00+00:00",
+            use_count=AUTO_PROMOTE_MIN_USES, success_rate=1.0,
+            tier="provisional", utility_score=1.0,
+        )
+        rows.append(json.dumps(_skill_to_dict(s)))
+    (tmp_path / "skills.jsonl").write_text("\n".join(rows) + "\n")
+    monkeypatch.setattr("skills._skills_path", lambda: tmp_path / "skills.jsonl")
+    monkeypatch.setattr("skills._skill_stats_path", lambda: tmp_path / "skill-stats.jsonl")
+    import skill_loader
+    monkeypatch.setattr(skill_loader, "export_skill_as_markdown", lambda s: None)
+    promoted = maybe_auto_promote_skills(limit=2)
+    assert len(promoted) == 2
+    tiers = {s.id: s.tier for s in load_skills()}
+    assert sum(1 for t in tiers.values() if t == "established") == 2
+
+
 def test_maybe_demote_low_utility_established(monkeypatch, tmp_path):
     skill = _phase32_skill(tmp_path, tier="established",
                            utility=REWRITE_TRIGGER_RATE - 0.1,
