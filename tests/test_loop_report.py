@@ -464,6 +464,56 @@ def test_runs_index_defaults_to_final_result_when_latest_report_is_missing(monke
     assert '>earlier: 0bf231e3</a>' in content
 
 
+def test_report_links_artifacts_to_writing_step_and_outcome(monkeypatch, tmp_path):
+    """A step whose call record shows a Write/Edit of a served artifact gets
+    that artifact linked in its row (in context, not only the index's flat
+    list — Jeremy 2026-08-05), and the Outcome panel lists every served
+    artifact so Bash-written files no step claims stay reachable."""
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+    import runs
+    rd = runs.create_run_dir("hstep", prompt="steal what's useful", lane="agenda")
+    runs.set_current_run_dir(rd)
+    art = rd / "artifact"
+    art.mkdir(exist_ok=True)
+    (art / "steal_list.md").write_text("the deliverable")
+    (art / "bash_made.csv").write_text("a,b\n")  # no Write event anywhere
+    (rd / "run_card.json").write_text(json.dumps({
+        "status": "done", "goal_achieved": True,
+        "served_artifacts": [f"{rd.name}/artifact/steal_list.md"],
+    }))
+    calls = rd / "build" / "calls"
+    calls.mkdir(parents=True, exist_ok=True)
+    rec = calls / "call-00001.json"
+    rec.write_text(json.dumps({
+        "model": "claude-haiku-4-5-20251001", "backend": "subprocess",
+        "prompt": "p", "response": "", "tokens_in": 10, "tokens_out": 5,
+        "tool_events": [
+            {"name": "Read", "input": {"file_path": "/proj/notes.md"}},
+            {"name": "Write", "input": {"file_path": "/proj/steal_list.md"}},
+        ],
+    }))
+    outcomes = [
+        StepOutcome(index=1, text="tag the claims", status="done",
+                    result="ok", iteration=1, call_record=str(rec)),
+        StepOutcome(index=2, text="verify claims", status="done",
+                    result="ok", iteration=1),
+    ]
+    path = lr.write_run_report(
+        project="p", loop_id="artloop", goal="steal what's useful",
+        planned_steps=["tag the claims", "verify claims"],
+        start_ts="2026-08-05T00:00:00+00:00", step_outcomes=outcomes,
+        status="done",
+    )
+    content = Path(rd / "build" / "loop-artloop-report.html").read_text()
+    # The writing step links its artifact in-row…
+    assert 'wrote: <a class="art-link" href="../artifact/steal_list.md">' in content
+    # …the Read of notes.md does not attribute anything…
+    assert "notes.md" not in content
+    # …and the Outcome panel lists everything served, claimed or not.
+    assert content.count('href="../artifact/steal_list.md"') == 2
+    assert 'href="../artifact/bash_made.csv"' in content
+
+
 def test_runs_index_links_served_artifacts(monkeypatch, tmp_path):
     """Files curation copied into <run>/artifact/ get index links — the viz
     server already served that path but nothing linked it, so a run's real

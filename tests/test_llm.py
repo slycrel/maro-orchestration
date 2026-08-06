@@ -2542,3 +2542,61 @@ class TestCodexStreamEvents:
         assert resp.content == "via iterator"
         assert resp.input_tokens == 3
         assert resp.output_tokens == 2
+
+
+# ---------------------------------------------------------------------------
+# _main_model_from_usage — the model attributed to a subprocess call
+# ---------------------------------------------------------------------------
+
+class TestMainModelFromUsage:
+    """modelUsage lists every model the CLI touched, and its internal
+    auxiliary haiku can appear FIRST — keys()[0] recorded a `--model opus`
+    advisor call as haiku (83a2c805, 2026-08-05), reading as an all-haiku
+    run. The requested model must win over dict ordering."""
+
+    def test_aux_haiku_first_does_not_mask_requested_opus(self):
+        from llm import _main_model_from_usage
+        mu = {
+            "claude-haiku-4-5-20251001": {"outputTokens": 198, "costUSD": 0.03},
+            "claude-opus-5": {"outputTokens": 40, "costUSD": 0.21},
+        }
+        # The old expression — list(mu.keys())[0] — returns the aux haiku.
+        assert _main_model_from_usage(mu, "opus") == "claude-opus-5"
+
+    def test_single_entry_wins_regardless_of_request(self):
+        from llm import _main_model_from_usage
+        mu = {"claude-haiku-4-5-20251001": {"outputTokens": 50, "costUSD": 0.01}}
+        assert _main_model_from_usage(mu, "haiku") == "claude-haiku-4-5-20251001"
+
+    def test_no_match_falls_back_to_highest_cost(self):
+        from llm import _main_model_from_usage
+        # Requested model absent (e.g. CLI downgraded at a plan limit) —
+        # attribute honestly to whatever did the paid work.
+        mu = {
+            "claude-haiku-4-5-20251001": {"outputTokens": 900, "costUSD": 0.02},
+            "claude-sonnet-4-6": {"outputTokens": 300, "costUSD": 0.09},
+        }
+        assert _main_model_from_usage(mu, "opus") == "claude-sonnet-4-6"
+
+    def test_empty_usage_is_generic_claude(self):
+        from llm import _main_model_from_usage
+        assert _main_model_from_usage(None, "opus") == "claude"
+        assert _main_model_from_usage({}, "opus") == "claude"
+
+    def test_stream_events_attributes_power_call_to_opus(self):
+        """End-to-end through the subprocess adapter's parser: a power-tier
+        adapter's response.model must be the opus entry even when the aux
+        haiku lists first in modelUsage."""
+        a = ClaudeSubprocessAdapter(model="power")
+        result_event = {
+            "type": "result", "subtype": "success", "is_error": False,
+            "result": "advice text", "stop_reason": "end_turn",
+            "usage": {"input_tokens": 3196, "cache_read_input_tokens": 0,
+                      "output_tokens": 1061},
+            "modelUsage": {
+                "claude-haiku-4-5-20251001": {"outputTokens": 198, "costUSD": 0.03},
+                "claude-opus-5": {"outputTokens": 1061, "costUSD": 0.35},
+            },
+        }
+        events = list(a._stream_events(json.dumps(result_event), tools=None))
+        assert events[-1].response.model == "claude-opus-5"

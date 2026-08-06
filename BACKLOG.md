@@ -1466,6 +1466,22 @@ attribution (mtime vs loop windows is probably enough); (c)
 `answer_truncated: true` on 83a2c805 — check the storage cap isn't
 decapitating good summaries at the card layer.
 
+**2026-08-06 follow-through (Jeremy's nits on the run page):** artifacts
+now link IN-ROW at the step whose call record shows the Write/Edit
+(ground truth = tool_events; Bash-written files still reachable via a
+new Outcome-panel artifact list), and the detail panel renders JSON
+responses indented + tool events as per-event collapsibles instead of
+one stringify blob. Also killed a report-truth bug his "completely done
+by haiku?" question uncovered: the subprocess adapter attributed calls
+to `modelUsage.keys()[0]`, but the CLI lists its internal auxiliary
+haiku first — a `--model opus` advisor call recorded as haiku
+(`_main_model_from_usage` now matches the requested tier, falls back to
+highest-costUSD; pinned in TestMainModelFromUsage). So 37/38 of that
+run's calls were genuinely haiku (MODEL_DEFAULT=cheap, dispatch named
+no model, per-phase tier routing unbuilt; adaptive supervision is
+cheap-by-design) — but the strategic-advisor call requested opus and
+was mislabeled.
+
 ### NOW retry rung — failure-class-routed ladder: NOW → artifact retry / star → AGENDA (OPENED 2026-07-28, Jeremy)
 
 Jeremy's ask: a middle rung between a failed NOW one-shot and a full

@@ -615,20 +615,54 @@ details.legend .meta { margin-top: 8px; line-height: 1.9; text-align: left; }
 .idx-filters button:hover { color: var(--text); border-color: var(--blue); }
 .idx-table tr.idx-hidden { display: none; }
 .art-link { font-family: ui-monospace, monospace; font-size: 12px; opacity: 0.85; white-space: nowrap; }
+.step-arts { margin-top: 3px; font-size: 12px; color: var(--dim); }
+.tool-ev { border: 1px solid var(--border); border-radius: 3px; margin: 4px 0; padding: 2px 6px; }
+.tool-ev summary { cursor: pointer; }
+.link-sep { color: var(--dim); margin: 0 2px; }
 """
 
 _DETAIL_JS = """
 function escHtml(s){ const d=document.createElement('div'); d.innerText=s==null?'':String(s); return d.innerHTML; }
+function prettyMaybeJson(s){
+  // A JSON response rendered raw is one run-on line — indent it when it
+  // parses; leave prose untouched.
+  if (typeof s !== 'string') return JSON.stringify(s, null, 2);
+  var t = s.trim();
+  if (t.charAt(0) === '{' || t.charAt(0) === '[') {
+    try { return JSON.stringify(JSON.parse(t), null, 2); } catch(e) {}
+  }
+  return s;
+}
+function renderToolEvent(ev, i){
+  var name = (ev && ev.name) ? ev.name : '?';
+  var hint = '';
+  if (ev && ev.input && typeof ev.input === 'object') {
+    if (ev.input.file_path) hint = String(ev.input.file_path);
+    else if (ev.input.command) hint = String(ev.input.command).slice(0, 90);
+    else if (ev.input.url) hint = String(ev.input.url);
+    else if (ev.input.query) hint = String(ev.input.query).slice(0, 90);
+  }
+  var out = '<details class="tool-ev"><summary>' + (i+1) + '. <b>' + escHtml(name) + '</b>';
+  if (hint) out += ' <span class="meta">' + escHtml(hint) + '</span>';
+  if (ev && ev.is_error) out += ' <span class="detail-error">(error)</span>';
+  out += '</summary>';
+  out += '<h4>Input</h4><pre>' + escHtml(JSON.stringify(ev ? ev.input : null, null, 2)) + '</pre>';
+  if (ev && ev.output) out += '<h4>Output</h4><pre>' + escHtml(String(ev.output)) + '</pre>';
+  out += '</details>';
+  return out;
+}
 function renderCallRecord(data){
   var out = '';
   var meta = [];
+  if (data.purpose) meta.push(data.purpose);
   if (data.model) meta.push(data.model);
   if (data.backend) meta.push(data.backend);
   if (data.tokens_in || data.tokens_out) meta.push((data.tokens_in||0) + ' in / ' + (data.tokens_out||0) + ' out');
+  if (data.ts) meta.push(data.ts);
   if (meta.length) out += '<div class="meta">' + escHtml(meta.join(' · ')) + '</div>';
   out += '<h4>Prompt</h4><pre>' + escHtml(data.prompt || '') + '</pre>';
   if (data.response) {
-    out += '<h4>Response</h4><pre>' + escHtml(data.response) + '</pre>';
+    out += '<h4>Response</h4><pre>' + escHtml(prettyMaybeJson(data.response)) + '</pre>';
   } else if (data.tool_events && data.tool_events.length) {
     // Tool-call-driven steps legitimately record an empty response text —
     // the actual result travels in the tool events below. Say so instead
@@ -638,7 +672,12 @@ function renderCallRecord(data){
     out += '<h4>Response</h4><pre></pre>';
   }
   if (data.tool_events && data.tool_events.length) {
-    out += '<h4>Tool events (' + data.tool_events.length + ')</h4><pre>' + escHtml(JSON.stringify(data.tool_events, null, 2)) + '</pre>';
+    // One collapsible block per event (name + target at a glance) instead
+    // of a single JSON.stringify run-on blob.
+    out += '<h4>Tool events (' + data.tool_events.length + ')</h4>';
+    for (var i = 0; i < data.tool_events.length; i++) {
+      out += renderToolEvent(data.tool_events[i], i);
+    }
   }
   return out;
 }
@@ -750,11 +789,49 @@ def _render_timeline(
     return f'<div class="tl-wrap"><div class="tl-track">{"".join(chips)}</div></div>{approx_note}'
 
 
+_WRITE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
+
+
+def _step_artifact_names(call_record: str, artifact_names: set) -> List[str]:
+    """Served artifacts this step's write-family tool events touched.
+
+    Ground truth is the call record's tool_events (Write/Edit file_path
+    basenames), matched against what curation copied into <run>/artifact/.
+    Bash-written files don't attribute — they still show on the Outcome
+    panel's artifact list, so nothing goes invisible."""
+    try:
+        data = json.loads(Path(call_record).read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    hits: List[str] = []
+    for ev in data.get("tool_events") or []:
+        if not isinstance(ev, dict) or ev.get("name") not in _WRITE_TOOLS:
+            continue
+        inp = ev.get("input")
+        fp = inp.get("file_path") if isinstance(inp, dict) else None
+        if not fp:
+            continue
+        name = Path(str(fp)).name
+        if name in artifact_names and name not in hits:
+            hits.append(name)
+    return hits
+
+
 def _render_step_table(
     project: str,
     step_outcomes: List[StepOutcome],
     report_dir: Path,
 ) -> str:
+    # Artifacts the run serves (<run>/artifact/, filled by curation) — steps
+    # that wrote one get it linked in-row, in context (Jeremy 2026-08-05:
+    # the index's flat artifact list "sort of blurs together").
+    artifact_names: set = set()
+    try:
+        art_dir = report_dir.parent / "artifact"
+        if art_dir.is_dir():
+            artifact_names = {p.name for p in art_dir.iterdir() if p.is_file()}
+    except OSError:
+        pass
     rows = []
     for pos, s in enumerate(step_outcomes, start=1):
         status = s.status if s.status in _STATUS_CLASS else "blocked"
@@ -771,6 +848,7 @@ def _render_step_table(
         data_attr = ""
         detail_html = ""
         model_html = '<span class="meta">-</span>'
+        arts_html = ""
         if s.call_record:
             rec_path = Path(s.call_record)
             rel = _relpath(rec_path, report_dir) if rec_path.is_absolute() else s.call_record
@@ -780,9 +858,17 @@ def _render_step_table(
                 f'<a class="raw-link" href="{_esc(rel)}" target="_blank">raw &#8599;</a>'
                 f'<div class="detail-panel"></div>'
             )
-            cm = _call_meta(str(rec_path if rec_path.is_absolute() else report_dir / rec_path))
+            abs_rec = str(rec_path if rec_path.is_absolute() else report_dir / rec_path)
+            cm = _call_meta(abs_rec)
             if cm and cm["model"]:
                 model_html = f'<span title="{_esc(cm["backend"])}">{_esc(_short_model(cm["model"]))}</span>'
+            if artifact_names:
+                arts = _step_artifact_names(abs_rec, artifact_names)
+                if arts:
+                    links = " ".join(
+                        f'<a class="art-link" href="../artifact/{_esc(n)}">{_esc(n)}</a>'
+                        for n in arts)
+                    arts_html = f'<div class="step-arts">&#8627; wrote: {links}</div>'
         else:
             detail_html = '<span class="meta">no call record</span>'
 
@@ -790,7 +876,7 @@ def _render_step_table(
             f'<tr class="{_STATUS_CLASS.get(status, "")}"{data_attr}>'
             f'<td>{pos}</td>'
             f'<td>{icon}</td>'
-            f'<td class="step-text">{_esc_truncated(s.text, 200)}{tag_html}</td>'
+            f'<td class="step-text">{_esc_truncated(s.text, 200)}{tag_html}{arts_html}</td>'
             f'<td>{model_html}</td>'
             f'<td>{s.elapsed_ms}ms</td>'
             f'<td>{_fmt_tokens_total(s.tokens_in, s.tokens_out)}</td>'
@@ -924,11 +1010,31 @@ def _render_verdict(report_dir: Path) -> str:
     rp = card.get("result_path")
     if rp and Path(rp).exists():
         result_html = f' &middot; <a href="{_esc(_relpath(Path(rp), report_dir))}">result &#8599;</a>'
+    # Every served artifact, curation-ranked (card.served_artifacts) with
+    # stragglers appended — the run-level view; steps that wrote one also
+    # link it in-row.
+    arts_html = ""
+    try:
+        art_dir = report_dir.parent / "artifact"
+        present = sorted(p.name for p in art_dir.iterdir() if p.is_file()) \
+            if art_dir.is_dir() else []
+    except OSError:
+        present = []
+    if present:
+        ranked = [Path(rel).name for rel in card.get("served_artifacts") or []
+                  if isinstance(rel, str)]
+        ordered = [n for n in ranked if n in present]
+        ordered += [n for n in present if n not in ordered]
+        links = " ".join(
+            f'<a class="art-link" href="../artifact/{_esc(n)}">{_esc(n)}</a>'
+            for n in ordered)
+        arts_html = (f'<div class="meta" style="margin-top:6px">'
+                     f'<b>Artifacts:</b> {links}</div>')
     return (
         '<h2>Outcome</h2><div class="panel">'
         f'<div class="meta"><b>Verdict:</b> {badge} &middot; <b>Goal achieved:</b> {_esc(achieved_str)} '
         f'&middot; <b><span title="Recorded spend from run_card.json — the authoritative number, unlike the header\'s per-step estimate.">Cost (recorded):</span></b> {_esc(cost_str)}{result_html}</div>'
-        f'{downgrade_html}{verdict_html}</div>'
+        f'{downgrade_html}{verdict_html}{arts_html}</div>'
     )
 
 
@@ -1648,11 +1754,12 @@ def _render_index_html(summaries: List[dict]) -> str:
             label = "now" if stem.startswith("now-") else stem.replace("loop-", "")
             prefix = "earlier: " if latest_loop_id else ""
             links.append(f'<a href="{_esc(href)}">{_esc(prefix + label)}</a>')
-        for name in s.get("artifacts") or []:
+        for j, name in enumerate(s.get("artifacts") or []):
             href = f'{s["dir_name"]}/artifact/{name}'
             label = name if len(name) <= 30 else name[:27] + "…"
+            sep = '<span class="link-sep">&middot;</span> ' if (j == 0 and links) else ""
             links.append(
-                f'<a class="art-link" href="{_esc(href)}" '
+                f'{sep}<a class="art-link" href="{_esc(href)}" '
                 f'title="{_esc(name)}">{_esc(label)}</a>')
         links_html = " ".join(links) if links else '<span class="meta">no report</span>'
         row_attr = f' data-href="{_esc(primary_href)}"' if primary_href else ""

@@ -1841,6 +1841,32 @@ def _stringify_tool_result(content) -> str:
     return json.dumps(content)
 
 
+def _main_model_from_usage(model_usage: Optional[dict], requested: str) -> str:
+    """The model that did this call's WORK, from the CLI result's modelUsage.
+
+    modelUsage lists every model the CLI touched — including its internal
+    auxiliary haiku (titles/summaries), which can appear FIRST. Taking
+    keys()[0] recorded a `--model opus` advisor call as haiku (83a2c805,
+    2026-08-05 — Jeremy read the report as "completely done by haiku").
+    Prefer the key matching what we requested (aux models never match);
+    when nothing matches (or several do), the highest-costUSD entry is the
+    one that did the work.
+    """
+    mu = model_usage or {}
+    if not mu:
+        return "claude"
+    matches = [k for k in mu if requested and requested in k]
+    if len(matches) == 1:
+        return matches[0]
+    pool = matches or list(mu)
+
+    def _cost(k: str) -> float:
+        v = mu.get(k)
+        return safe_float(v.get("costUSD")) if isinstance(v, dict) else 0.0
+
+    return max(pool, key=_cost)
+
+
 def _parse_stream_json(text: str) -> dict:
     """Parse `claude -p --output-format stream-json` NDJSON output.
 
@@ -2496,10 +2522,8 @@ class ClaudeSubprocessAdapter(_JSONToolPromptMixin, LLMAdapter):
         if content:
             yield StreamEvent(kind="chunk", text=content)
 
-        model = (
-            list(data.get("modelUsage", {}).keys() or ["claude"])[0]
-            if data.get("modelUsage") else "claude"
-        )
+        model = _main_model_from_usage(
+            data.get("modelUsage"), resolve_model("subprocess", self.model_key))
         yield StreamEvent(kind="done", response=LLMResponse(
             content=content,
             tool_calls=tool_calls,
