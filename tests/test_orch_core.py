@@ -408,7 +408,33 @@ def test_session_execution_bridge_timeout_kills_lingering_child_processes(monkey
             "(artifact_dir / 'child.pid').write_text(str(child.pid), encoding='utf-8')\n"
             "signal.pause()\n"
             "PY",
-            timeout_seconds=0.1,
+            # Widened from 0.1 (2026-08-06). This budget has to cover this
+            # script's OWN setup — two interpreter startups, a Popen, a file
+            # write — because every assertion below needs child.pid to exist.
+            # At 0.1 the margin was thin: that work measures 28 ms unloaded
+            # and 49 ms under 10 CPU spinners, so 2-3.5x, which is not much
+            # for a timing-dependent test in a suite that runs under `-n`.
+            #
+            # Honesty about what this is: the suite failed here ONCE, with
+            # child.pid missing (FileNotFoundError). A too-tight budget is the
+            # best explanation, but I could NOT reproduce it — CPU load alone
+            # does not push setup past 100 ms, so the mechanism is plausible
+            # and unproven. This widens the margin ~20x against a cheap,
+            # low-risk change; it is not a demonstrated fix. If it recurs at
+            # 1.0s, the cause is elsewhere (fork/exec contention or tmpdir I/O
+            # under xdist are the next suspects) — do not just widen again.
+            #
+            # An absent child.pid must never be treated as a pass: it means
+            # the parent died before writing, which is EITHER "no child was
+            # spawned" (nothing leaked) OR "a child was spawned and we lost
+            # its pid" (exactly the leak this test exists to catch). Those are
+            # indistinguishable from here, so the answer is to not race.
+            #
+            # Costs ~0.9s: signal.pause() never returns, so the bridge always
+            # burns the full timeout. Deliberate spend against the shortened
+            # TERMINATE_GRACE_SECONDS above (5.0 -> 0.2, which saved ~4.8s) —
+            # an intermittent failure in a zero-skip suite costs more.
+            timeout_seconds=1.0,
         ),
     )
     elapsed = time.monotonic() - started
