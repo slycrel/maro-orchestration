@@ -275,6 +275,15 @@ detached HEAD):
    commits' blobs (`git rev-parse <commit>:<path>`): matches an
    ancestor → stale, safe to `git checkout -- <path>`; matches none →
    another session's real uncommitted work, leave it alone.
+   **Run `scripts/tree-triage.sh` instead of doing that by hand** (`--fix`
+   restores only the stale paths). A dirty path is a TWO-valued signal and
+   the failure mode is reading it as one-valued: 2026-08-06, a session saw
+   three files dirty, correctly concluded "someone is mid-chunk, stay
+   away" — and later committed them, reverting an executor tag scheme and
+   a pytest-in-image change that had already landed and been pushed. The
+   instinct was right; the premise was wrong, and nothing made the branch
+   point visible. A worktree does not cover this: it protects work you are
+   *writing*, not work you are *based on*.
 3. In the shared tree: stage explicit paths only (never `git add -A` /
    `git commit -a`), eyeball `git status` for strangers before every
    commit, and don't touch shared living docs (GOAL_BRAIN.md, BACKLOG.md,
