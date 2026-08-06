@@ -1347,10 +1347,19 @@ def maybe_demote_skills() -> List[str]:
     demoted = []
     changed = False
 
+    # Skill.use_count is legacy-frozen (writer removed 2026-07-29) — gate on
+    # the live SkillStats counters, same shape as maybe_auto_promote_skills.
+    _stats_uses: Dict[str, int] = {}
+    try:
+        for _st in get_all_skill_stats():
+            _stats_uses[_st.skill_id] = int(getattr(_st, "total_uses", 0) or 0)
+    except Exception:
+        pass
+
     for skill in skills:
         if skill.tier != "established":
             continue
-        if skill.use_count < REWRITE_MIN_USES:
+        if max(skill.use_count, _stats_uses.get(skill.id, 0)) < REWRITE_MIN_USES:
             continue
         # Demote only if circuit is open (sustained failures, not a blip)
         # OR utility is very low AND EMA has had enough data to stabilize
@@ -1413,16 +1422,23 @@ def skills_needing_rewrite() -> List[Skill]:
 
     Criteria (all must hold):
       - circuit_state == "open"
-      - use_count >= REWRITE_MIN_USES (enough data to trust the signal)
+      - uses >= REWRITE_MIN_USES (enough data to trust the signal; live
+        SkillStats.total_uses, max'd with the legacy-frozen Skill.use_count)
       - utility_score < REWRITE_TRIGGER_RATE (EMA confirms persistent underperformance)
         OR consecutive_failures >= CIRCUIT_OPEN_THRESHOLD (structural streak, EMA may lag)
     """
     skills = load_skills()
+    _stats_uses: Dict[str, int] = {}
+    try:
+        for _st in get_all_skill_stats():
+            _stats_uses[_st.skill_id] = int(getattr(_st, "total_uses", 0) or 0)
+    except Exception:
+        pass
     return [
         s for s in skills
         if (
             s.circuit_state == "open"
-            and s.use_count >= REWRITE_MIN_USES
+            and max(s.use_count, _stats_uses.get(s.id, 0)) >= REWRITE_MIN_USES
             and (
                 s.utility_score < REWRITE_TRIGGER_RATE
                 or s.consecutive_failures >= CIRCUIT_OPEN_THRESHOLD
@@ -1506,6 +1522,16 @@ def create_skill_variant(original: Skill, rewritten: Skill) -> Skill:
     Returns:
         The rewritten skill with variant_of set to original.id.
     """
+    if rewritten.id == original.id:
+        # A challenger must be a distinct row: marking a skill as its own
+        # variant makes the A/B armless, and retiring the "challenger"
+        # would archive-and-delete the parent itself. (This happened —
+        # rewrite_skill used to mutate in place and return the parent;
+        # every pre-2026-08-06 variant was self-referential.)
+        raise ValueError(
+            f"challenger id equals parent id ({original.id}); "
+            "pass a distinct rewritten skill (rewrite_skill in_place=False)"
+        )
     rewritten.variant_of = original.id
     rewritten.variant_wins = 0
     rewritten.variant_losses = 0
@@ -1595,6 +1621,30 @@ def retire_losing_variants(*, dry_run: bool = False, min_uses: int = MIN_VARIANT
     skills = load_skills()
     skill_by_id = {s.id: s for s in skills}
 
+    # Heal self-referential variants (pre-2026-08-06 mint bug: rewrite_skill
+    # mutated the parent in place, so create_skill_variant stamped every
+    # skill as its own challenger). A self-variant can never be A/B'd, and
+    # "retiring" one would archive-and-delete the parent itself — clear the
+    # corrupt marker instead of ever acting on it.
+    _healed = [s for s in skills if s.variant_of == s.id]
+    for s in _healed:
+        s.variant_of = None
+        logger.warning(
+            "skills.ab_variant: healed self-referential variant_of on %s (%s)",
+            s.id, s.name,
+        )
+    if _healed and not dry_run:
+        _save_skills(skills)
+
+    # Skill.use_count is legacy-frozen (writer removed 2026-07-29) — parent
+    # trial counts come from live SkillStats, max'd for old stores.
+    _stats_uses: Dict[str, int] = {}
+    try:
+        for _st in get_all_skill_stats():
+            _stats_uses[_st.skill_id] = int(getattr(_st, "total_uses", 0) or 0)
+    except Exception:
+        pass
+
     # Group challengers by parent
     parent_ids: set = {s.variant_of for s in skills if s.variant_of}
     promoted: List[str] = []
@@ -1611,7 +1661,7 @@ def retire_losing_variants(*, dry_run: bool = False, min_uses: int = MIN_VARIANT
         # Compute parent win-rate using utility_score as proxy (it's EMA of real outcomes)
         # We don't track parent variant_wins/losses separately — use utility_score
         parent_rate = parent.utility_score
-        parent_trials = parent.use_count
+        parent_trials = max(parent.use_count, _stats_uses.get(parent.id, 0))
 
         # Only act if challenger(s) have enough data
         for challenger in challengers:

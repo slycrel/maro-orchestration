@@ -74,7 +74,8 @@ def _top_peer_skills(failing_skill: "Skill", k: int = 2) -> List["Skill"]:
     return scored[:k]
 
 
-def rewrite_skill(skill: "Skill", adapter, *, verbose: bool = False) -> Optional["Skill"]:
+def rewrite_skill(skill: "Skill", adapter, *, verbose: bool = False,
+                  in_place: bool = True) -> Optional["Skill"]:
     """LLM-rewrite a skill whose circuit breaker is OPEN.
 
     Analyses the skill's failure_notes and current body, produces a revised
@@ -83,7 +84,14 @@ def rewrite_skill(skill: "Skill", adapter, *, verbose: bool = False) -> Optional
 
     Returns the updated Skill on success, None if rewrite fails or adapter unavailable.
 
-    The skill is saved to disk whether or not the caller uses the return value.
+    in_place=True (circuit lane): the skill row itself is rewritten and
+    saved to disk whether or not the caller uses the return value.
+
+    in_place=False (frontier A/B lane): the pool is NOT touched — returns a
+    NEW skill (fresh id) carrying the rewritten content, unsaved, for
+    create_skill_variant to stamp as a challenger. Before 2026-08-06 the
+    frontier lane used the in-place path, so every "challenger" was the
+    mutated parent marked as its own variant — the A/B never had two arms.
     """
     try:
         from skill_types import compute_skill_hash, skill_to_dict as _skill_to_dict
@@ -181,6 +189,31 @@ Rules:
     if not new_triggers:
         # Inherit existing triggers rather than discarding
         new_triggers = skill.trigger_patterns
+
+    if not in_place:
+        # Challenger mint: deep-copy via the dict roundtrip (list fields must
+        # not be shared with the parent), fresh id, rewritten content. No
+        # save here — the caller stamps variant_of and persists it. No
+        # SKILL_REWRITE event either — SKILL_VARIANT_CREATED covers the mint.
+        import uuid as _uuid
+        from skill_types import dict_to_skill as _dict_to_skill
+        challenger = _dict_to_skill(json.loads(json.dumps(_skill_to_dict(skill))))
+        challenger.id = str(_uuid.uuid4())[:8]
+        challenger.description = new_desc
+        challenger.steps_template = new_steps
+        challenger.trigger_patterns = new_triggers
+        challenger.consecutive_failures = 0
+        challenger.consecutive_successes = 0
+        challenger.circuit_state = "half_open"  # on probation — not trusted yet
+        challenger.failure_notes = list(skill.failure_notes[-2:])
+        challenger.variant_of = None
+        challenger.content_hash = compute_skill_hash(challenger)
+        if verbose:
+            print(
+                f"[evolver] minted challenger {challenger.id} for skill {skill.id} ({skill.name})",
+                file=sys.stderr,
+            )
+        return challenger
 
     # Apply rewrite — set to half_open (probationary) not closed
     failures_before = int(skill.consecutive_failures)  # snapshot: target may be this same object
@@ -666,7 +699,8 @@ def run_skill_maintenance(
                             continue
                     except Exception as _pe:
                         log.debug("strategy pre-score failed (non-fatal): %s", _pe)
-                    _updated = rewrite_skill(skill, adapter=adapter, verbose=verbose)
+                    _updated = rewrite_skill(skill, adapter=adapter, verbose=verbose,
+                                             in_place=False)
                     if _updated is not None:
                         # A/B variant: frontier rewrites become challengers, not replacements
                         try:

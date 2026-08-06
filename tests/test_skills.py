@@ -1134,6 +1134,26 @@ def test_maybe_demote_high_utility_not_demoted(monkeypatch, tmp_path):
     assert demoted == []
 
 
+def test_maybe_demote_reads_stats_uses(monkeypatch, tmp_path):
+    """Live-writer census pin (2026-08-06): the promote-side fix (a0bae77)
+    left this gate still reading the legacy-frozen Skill.use_count, so an
+    established skill with all its uses in live SkillStats could never
+    demote. Red on revert."""
+    import json
+    skill = _phase32_skill(tmp_path, tier="established",
+                           utility=REWRITE_TRIGGER_RATE - 0.1,
+                           use_count=0)
+    monkeypatch.setattr("skills._skills_path", lambda: tmp_path / "skills.jsonl")
+    monkeypatch.setattr("skills._skill_stats_path", lambda: tmp_path / "skill-stats.jsonl")
+    (tmp_path / "skill-stats.jsonl").write_text(json.dumps({
+        "skill_id": skill.id, "skill_name": skill.name,
+        "total_uses": REWRITE_MIN_USES, "successes": 0,
+        "failures": REWRITE_MIN_USES, "success_rate": 0.0,
+    }) + "\n")
+    demoted = maybe_demote_skills()
+    assert skill.id in demoted
+
+
 def test_skills_needing_rewrite(monkeypatch, tmp_path):
     """Only open-circuit skills with enough uses appear as rewrite candidates."""
     skill = _phase32_skill(tmp_path, utility=0.2, use_count=REWRITE_MIN_USES + 1,
@@ -1150,6 +1170,26 @@ def test_skills_needing_rewrite_not_enough_uses(monkeypatch, tmp_path):
     monkeypatch.setattr("skills._skills_path", lambda: tmp_path / "skills.jsonl")
     candidates = skills_needing_rewrite()
     assert candidates == []
+
+
+def test_skills_needing_rewrite_reads_stats_uses(monkeypatch, tmp_path):
+    """Live-writer census pin (2026-08-06), same corpse third site: a
+    circuit-open skill whose uses live only in SkillStats must still reach
+    the rewrite lane — Skill.use_count is legacy-frozen (writer removed
+    2026-07-29). Red on revert."""
+    import json
+    skill = _phase32_skill(tmp_path, utility=0.2, use_count=0,
+                           circuit_state="open",
+                           consecutive_failures=CIRCUIT_OPEN_THRESHOLD)
+    monkeypatch.setattr("skills._skills_path", lambda: tmp_path / "skills.jsonl")
+    monkeypatch.setattr("skills._skill_stats_path", lambda: tmp_path / "skill-stats.jsonl")
+    (tmp_path / "skill-stats.jsonl").write_text(json.dumps({
+        "skill_id": skill.id, "skill_name": skill.name,
+        "total_uses": REWRITE_MIN_USES, "successes": 0,
+        "failures": REWRITE_MIN_USES, "success_rate": 0.0,
+    }) + "\n")
+    candidates = skills_needing_rewrite()
+    assert any(s.id == skill.id for s in candidates)
 
 
 def test_skills_needing_rewrite_closed_circuit_not_eligible(monkeypatch, tmp_path):

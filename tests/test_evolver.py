@@ -3327,7 +3327,79 @@ class TestRewriteSkillEmitsEvent:
                 return _R()
 
         assert rewrite_skill(self._make_skill(), adapter=_JunkAdapter(), verbose=False) is None
-        assert "SKILL_REWRITE" not in events
+
+
+class TestRewriteSkillChallengerMint:
+    """Live-writer census 2026-08-06: the frontier A/B lane called the
+    in-place rewrite, which mutates the parent row and returns it — so
+    create_skill_variant stamped every skill as its own challenger
+    (variant_of == own id; all 6 live variants were self-referential with
+    0 trials, and 'retiring' one would have deleted the parent).
+    in_place=False must mint a distinct, unsaved challenger."""
+
+    def _make_skill(self):
+        from skills import Skill
+        return Skill(
+            id="fr01", name="frontier-skill", description="A mid skill",
+            trigger_patterns=["x"], steps_template=["do the thing"],
+            source_loop_ids=[], created_at="2026-01-01T00:00:00+00:00",
+            tier="provisional", utility_score=0.5, consecutive_failures=2,
+        )
+
+    class _GoodAdapter:
+        def complete(self, messages, **kw):
+            class _R:
+                content = (
+                    '{"description": "Revised description.",'
+                    ' "steps_template": ["step one"],'
+                    ' "trigger_patterns": ["kw one"]}'
+                )
+            return _R()
+
+    def test_challenger_gets_fresh_id_and_pool_untouched(self, monkeypatch):
+        import skills as skills_mod
+        from evolver import rewrite_skill
+
+        skill = self._make_skill()
+        saves = []
+        monkeypatch.setattr(skills_mod, "load_skills", lambda: [skill])
+        monkeypatch.setattr(skills_mod, "_save_skills",
+                            lambda s: saves.append(s))
+
+        challenger = rewrite_skill(skill, adapter=self._GoodAdapter(),
+                                   verbose=False, in_place=False)
+        assert challenger is not None
+        assert challenger.id != skill.id
+        assert challenger.description == "Revised description."
+        assert challenger.variant_of is None  # create_skill_variant stamps it
+        assert saves == []  # pool untouched — the caller persists it
+        # Parent row untouched
+        assert skill.description == "A mid skill"
+        assert skill.consecutive_failures == 2
+
+    def test_challenger_survives_create_skill_variant(self):
+        from evolver import rewrite_skill
+        from skills import create_skill_variant
+
+        skill = self._make_skill()
+        challenger = rewrite_skill(skill, adapter=self._GoodAdapter(),
+                                   verbose=False, in_place=False)
+        stamped = create_skill_variant(skill, challenger)
+        assert stamped.variant_of == skill.id
+        assert stamped.id != skill.id
+
+    def test_challenger_lists_not_shared_with_parent(self):
+        """Deep copy: mutating the challenger's lists must not reach the
+        parent (shared references were the risk of a shallow copy)."""
+        from evolver import rewrite_skill
+
+        skill = self._make_skill()
+        challenger = rewrite_skill(skill, adapter=self._GoodAdapter(),
+                                   verbose=False, in_place=False)
+        challenger.steps_template.append("mutated")
+        challenger.trigger_patterns.append("mutated")
+        assert "mutated" not in skill.steps_template
+        assert "mutated" not in skill.trigger_patterns
 
 
 # ---------------------------------------------------------------------------

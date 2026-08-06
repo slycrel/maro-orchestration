@@ -72,6 +72,20 @@ class TestCreateSkillVariant:
         create_skill_variant(parent, challenger)
         assert parent.variant_of is None  # parent unchanged
 
+    def test_rejects_self_variant(self):
+        """Census 2026-08-06: rewrite_skill used to mutate the parent row
+        in place and return it, so every 'challenger' was the parent marked
+        as its own variant (all 6 live variants were self-referential with
+        0 trials) — and retiring one would have deleted the parent. Same-id
+        stamping must fail loudly."""
+        s = _skill("same-id")
+        with pytest.raises(ValueError):
+            create_skill_variant(s, s)
+
+    def test_rejects_same_id_distinct_objects(self):
+        with pytest.raises(ValueError):
+            create_skill_variant(_skill("dup"), _skill("dup"))
+
 
 # ---------------------------------------------------------------------------
 # get_skill_variants
@@ -295,6 +309,46 @@ class TestRetireLosingVariants:
                 result = retire_losing_variants(min_uses=MIN_VARIANT_USES)
         # No promotions — parent doesn't exist
         assert result["promoted"] == []
+
+    def test_self_variant_healed_never_retired(self):
+        """Pre-fix corruption pin (census 2026-08-06): rows with
+        variant_of == their own id can never be A/B'd, and 'retiring' one
+        would archive-and-delete the parent itself. The sweep must clear
+        the marker and keep the skill."""
+        corrupt = _skill("selfy", variant_of="selfy",
+                         variant_wins=8, variant_losses=2)
+        with mock.patch("skills.load_skills", return_value=[corrupt]):
+            with mock.patch("skills._save_skills") as mock_save:
+                result = retire_losing_variants(min_uses=MIN_VARIANT_USES)
+        assert result == {"promoted": [], "retired": []}
+        assert corrupt.variant_of is None
+        mock_save.assert_called_once()
+        saved = mock_save.call_args[0][0]
+        assert any(s.id == "selfy" for s in saved)  # healed, never deleted
+
+    def test_self_variant_heal_respects_dry_run(self):
+        corrupt = _skill("selfy", variant_of="selfy",
+                         variant_wins=8, variant_losses=2)
+        with mock.patch("skills.load_skills", return_value=[corrupt]):
+            with mock.patch("skills._save_skills") as mock_save:
+                retire_losing_variants(dry_run=True, min_uses=MIN_VARIANT_USES)
+        mock_save.assert_not_called()
+
+    def test_parent_trials_come_from_live_stats(self):
+        """Census pin (2026-08-06): parent_trials read the legacy-frozen
+        Skill.use_count (writer removed 2026-07-29), so the parent leg of
+        the retirement gate could never fill for post-07 skills. Live
+        SkillStats.total_uses must satisfy it."""
+        parent = _skill("parent", utility_score=0.85, use_count=0)
+        challenger = _skill("c1", variant_of="parent",
+                            variant_wins=3, variant_losses=7)
+        stats = [SimpleNamespace(skill_id="parent",
+                                 total_uses=MIN_VARIANT_USES)]
+        with mock.patch("skills.load_skills", return_value=[parent, challenger]):
+            with mock.patch("skills.get_all_skill_stats", return_value=stats):
+                with mock.patch("skills._save_skills"):
+                    result = retire_losing_variants(min_uses=MIN_VARIANT_USES)
+        assert "c1" in result["retired"]
 
     def test_tie_goes_to_parent(self):
         """Equal win-rates: parent should not be replaced (challenger retired)."""
