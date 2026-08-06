@@ -79,3 +79,38 @@ jackknife < Δ, reason stratum only, same provisional/quarantined/contested
 boundary as tenure) + `python3 -m delta_replay` census/promote CLI.
 Measurement is deliberate CLI spend — nothing ambient replays. Registered
 in docs/DEFAULTS.md.
+
+## Routes census — first corpus measurement (2026-08-07)
+
+Ran on subprocess haiku (Jeremy cleared paid-cheap for the day; replay
+model now MATCHES the recorded model family, dropping the model-transfer
+limitation above). Top 3 MEDIUM lessons by score, 50 oracle decision
+calls each, samples=1, 300 replays, **zero errors, zero skipped**.
+Result: `~/.maro/workspace/output/delta-gate-v1/census.json`.
+
+| lesson | score (corpus rank) | stratum | Δ | jackknife |
+|---|---|---|---|---|
+| 3036c141 cross-referencing external claims | 1.27 (#1) | reason | **−0.10** | 0.022 |
+| 46613838 re-fetch fresh for adversarial verify | 1.25 (#2) | reason | **−0.08** | 0.022 |
+| f67f59ca reddit top-5 needs roundup threads | 1.08 (#3) | reason | **−0.10** | 0.022 |
+
+**Nothing promotes** (all Δ < 0.30 floor) — the gate held. The finding
+is the direction: the corpus's three HIGHEST-scored lessons all measure
+as mild decision-distractors, the same direction as the validation's
+rule specimen (−0.148), with spreads tight enough (0.022) that the sign
+is not noise. At samples=1 a Δ of −0.10 means 5 net decisions across 50
+flipped AWAY from the known-good action when the lesson was present.
+
+Reading: reinforcement scoring rewards narrative resonance (these are
+run-diary observations — well-written, true, and decision-irrelevant),
+while Δ measures decision utility. The two promotion routes now
+disagree in an informative way on the corpus's front-runners. None were
+tenure-eligible yet (sessions_validated=0 across the board), so tenure
+has promoted nothing wrongly — but score rank is tenure's precursor,
+and score rank is exactly what Δ contradicts here.
+
+Census caveats: 3 of 208 candidates measured (limit=3 driver;
+census.json records candidates_not_measured=205), samples=1 per arm so
+per-call scoring is 0/1, and all three lessons sit in a narrow score
+band. The keep/adjust call on the routes — and whether negative-Δ
+retirement (brief §5) graduates from cut to slice 2 — is Jeremy's read.

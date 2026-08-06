@@ -811,8 +811,11 @@ Truth anchor: GOAL_BRAIN.md Threads. History: docs/history/ROADMAP_ARCHIVE.md.
    (killswitch + Δ≥0.30 + ≥6 calls + jackknife<Δ + reason-stratum +
    tenure's boundary guards), `python3 -m delta_replay` census/promote
    CLI (measurement = deliberate CLI spend, nothing ambient). Record:
-   `docs/history/2026-08-06-delta-gate-validation.md`; routes-census
-   readout for the keep/adjust call is Jeremy's next read. Remaining
+   `docs/history/2026-08-06-delta-gate-validation.md`; routes census
+   RAN 2026-08-07 (subprocess haiku, 300 replays, 0 errors — top 3
+   corpus lessons by score all mildly NEGATIVE Δ, nothing promotes;
+   readout in the record doc) — the keep/adjust call on it is Jeremy's
+   next read. Remaining
    from the brief's cuts (§5): evolver/thinkback trace scoring,
    competence-redundancy decay, un-contest verb — all queue behind
    reading the census. Original prep brief:
