@@ -2923,6 +2923,31 @@ and maintainable over time."** Step 1 is greenlit:
   chunk-1's input stage; it is NOT a replacement for the cheaper
   patch/diff-edit fix already noted there.
 
+### DiffCodeGen steal-list — execution-based consensus over paid LLM judging (run 8b8671bd, 2026-08-06)
+
+Run 73426541 reviewed arXiv:2605.20473 (DiffCodeGen: generate diverse
+code candidates, execute against fuzzed inputs, cluster by behavior,
+take the medoid — no LLM judge) against Maro. Claims verified locally
+same day: the council and 3-candidate compose exist as described, and
+the mechanism gap (no fuzzing/behavioral-clustering/medoid anywhere)
+holds across all of src/, not just the run's 13-file sample. Full brief:
+`~/.maro/workspace/runs/8b8671bd-warm-lichen/artifact/steal-list-brief.md`
+(+ mechanism-benchmark-map.md alongside). Kept items:
+
+- [ ] **P0-1 (design default, zero build):** any future capability that
+  generates multiple code/patch candidates selects by deterministic
+  execution-based consensus, not a paid LLM judge (paper: +2.7–9.5pp
+  accuracy, ~5x time / ~25x token reduction vs LLM-judged baseline).
+  Attach this as the default design reference when such a ticket appears.
+- [ ] **P0-2 (near-term, gated on cost data):** audit `quality_gate.py`'s
+  3-seat council call-sites for sub-cases judging testable/executable
+  artifacts rather than prose; replace those with execution-based checks.
+  Pull actual council/compose call-volume + cost telemetry FIRST to size
+  ROI before committing build effort.
+- Dropped from the run's list as speculative beyond the paper's evidence:
+  plan-compose replacement (plans aren't executable; different signal
+  needed) and clustering prose verdicts (paper only benchmarks code).
+
 ### Loop lane has no risk-minting path (found via 8b8671bd stub, 2026-08-06)
 
 Jeremy spotted a served `RISKS.md` that was a 42-byte "(fill in)" stub
