@@ -31,8 +31,25 @@ ARG CLAUDE_CLI_VERSION=2.1.210
 
 # Toolset worker transcripts actually use: git (clone/commit), python3
 # (scripts), curl (fetches). coreutils ships in the debian base.
+#
+# python3-pytest added 2026-08-06 from transcript evidence, not guesswork.
+# Run d9607baa bootstrapped pip from get-pip.py (`--user
+# --break-system-packages`) and installed pytest FIFTEEN times — once per
+# step, because every step is a fresh container, so nothing installed at
+# runtime survives. Every one of those installs was bare `pytest`: no
+# plugins, no other package. Baking it removes a tax every "run the tests"
+# goal was paying in steps and dollars.
+#
+# apt, NOT pip, deliberately. The image is a minimal isolation surface by
+# design, and shipping pip would let any step install arbitrary packages
+# from PyPI at run time — a supply-chain surface far wider than the problem.
+# apt pins pytest to debian stable (7.2.1 on bookworm), which satisfies
+# every suite seen so far. A goal that genuinely needs a newer pytest or a
+# plugin can still bootstrap pip exactly as before; it just is not the
+# common case paying for the rare one.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends git python3 curl ca-certificates \
+    && apt-get install -y --no-install-recommends \
+        git python3 python3-pytest curl ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 # Bake the pinned CLI.

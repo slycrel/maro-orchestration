@@ -79,6 +79,7 @@ class TestConstants:
         # Add a row when you bump; do not edit an existing row's digest.
         KNOWN = {
             ("2.1.210", 1): "fbcb4ad9b4ffb9aa",
+            ("2.1.210", 2): "1e0cf1a80909d799",   # + python3-pytest
         }
         key = (ce.CLAUDE_CLI_VERSION, ce.IMAGE_REVISION)
         expected = KNOWN.get(key)

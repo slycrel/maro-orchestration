@@ -1400,20 +1400,28 @@ capture**, which is what makes the rung amortize instead of evaporate.
   and holds for every deliverable shape; feeding bytes only fixes the
   cases where we guessed the right file to feed.
 
-- [ ] **Executor image ships no pytest** (found 2026-08-02 via `d9607baa`).
-  `maro-executor:2.1.210` has git/python3/curl by design — the Dockerfile
-  comment says the toolset is "what worker transcripts actually use". A
-  transcript now shows otherwise: the #7 run bootstrapped pip from
-  `get-pip.py --user --break-system-packages` (no root, no apt, no
-  ensurepip, no venv), **twice**, because the install does not survive
-  between steps — each step is a fresh container. It solved the problem
-  resourcefully, and it paid steps and money to do it; every "run the
-  tests" goal pays that tax. Two wrinkles before acting: adding packages
-  widens a deliberately minimal isolation surface, and the image tag
-  encodes the **CLI pin**, not image contents, so a rebuild under the same
-  tag makes `maro-executor:2.1.210` ambiguous — which the Dockerfile's
-  own "image version auditable" goal cares about. Needs a tag-scheme call,
-  not just a `RUN apt-get install`.
+- [x] **Executor image ships no pytest** (found 2026-08-02 via `d9607baa`)
+  — **SHIPPED 2026-08-06 (`fd57a56` + this)**. Run `d9607baa` bootstrapped
+  pip from `get-pip.py --user --break-system-packages` and installed pytest
+  **fifteen times** — once per step, because every step is a fresh container
+  so nothing installed at run time survives. Grepping the transcript settled
+  the provisioning question without guesswork: **every one of those installs
+  was bare `pytest`** — no plugins, no other package.
+
+  Both filed wrinkles resolved rather than waved past:
+  - *Tag ambiguity* — fixed first, as its own change (`fd57a56`): the tag is
+    now `maro-executor:<cli>-r<IMAGE_REVISION>`, so changing image contents
+    can no longer make one tag name two images. A Dockerfile digest census
+    in `tests/test_container_exec.py` fails, with the exact line to add, if
+    contents change without a revision bump.
+  - *Isolation surface* — added via **apt, not pip**. Shipping pip would let
+    any step install arbitrary PyPI packages at run time, a supply-chain
+    surface far wider than the problem. apt pins pytest to debian stable
+    (7.2.1 on bookworm), which satisfies every suite seen so far; a goal
+    needing a newer pytest or a plugin can still bootstrap pip exactly as
+    before. Verified in-image: `/usr/bin/pytest` present, **pip still
+    absent**, and a two-test suite runs with the failing test failing (a
+    check that cannot fail proves nothing). Cost: 726 MB → 732 MB.
 
 - [x] **claim-verifier: relative claimed paths resolve only at the run
   root** (found 2026-08-02, `d9607baa`) — **FIXED 2026-08-06** (this

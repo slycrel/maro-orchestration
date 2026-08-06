@@ -64,7 +64,7 @@ CLAUDE_CLI_VERSION = "2.1.210"
 # muscle memory, and the thing being audited here is a human decision to
 # change the toolset. If drift between this and the Dockerfile ever bites in
 # practice, that is the moment to switch to a digest — not before.
-IMAGE_REVISION = 1
+IMAGE_REVISION = 2
 
 # Default executor image tag. Encodes the CLI pin AND the contents revision
 # (design §3: "image version is auditable"). Override via
