@@ -48,9 +48,28 @@ log = logging.getLogger(__name__)
 # current published version with `npm view @anthropic-ai/claude-code version`.
 CLAUDE_CLI_VERSION = "2.1.210"
 
-# Default executor image tag. Encodes the CLI pin (design §3: "image version
-# is auditable"). Override via `executor.container_image`.
-DEFAULT_IMAGE = f"maro-executor:{CLAUDE_CLI_VERSION}"
+# Image contents revision, independent of the CLI pin (Jeremy 2026-08-06:
+# "in favor of adorning the version somehow… otherwise let's keep it simple").
+#
+# The tag used to be `maro-executor:{CLAUDE_CLI_VERSION}` alone, which made it
+# a LIE about everything except the CLI: change the apt toolset, rebuild under
+# the same tag, and `maro-executor:2.1.210` now names two different images —
+# defeating the Dockerfile's own "image version auditable" goal (design §3).
+# The CLI pin answers "which claude"; this answers "which image". Bump it
+# whenever the Dockerfile's contents change without a CLI bump; it resets to
+# 1 when CLAUDE_CLI_VERSION moves, since that mints a fresh tag namespace.
+#
+# Deliberately a hand-bumped integer rather than a content digest: a digest is
+# self-maintaining but unreadable in `docker images` and in an operator's
+# muscle memory, and the thing being audited here is a human decision to
+# change the toolset. If drift between this and the Dockerfile ever bites in
+# practice, that is the moment to switch to a digest — not before.
+IMAGE_REVISION = 2
+
+# Default executor image tag. Encodes the CLI pin AND the contents revision
+# (design §3: "image version is auditable"). Override via
+# `executor.container_image`.
+DEFAULT_IMAGE = f"maro-executor:{CLAUDE_CLI_VERSION}-r{IMAGE_REVISION}"
 
 # Dedicated auth volume (design §3 "Auth — the trap, named"): the container
 # never touches host ~/.claude — a named docker volume holds the container's
@@ -267,7 +286,9 @@ on the host under the write-fence exactly as before.
 
    Re-pin the CLI by editing CLAUDE_CLI_VERSION in src/container_exec.py
    (confirm the current version: npm view @anthropic-ai/claude-code version)
-   and rebuilding — the image tag tracks the pin.
+   and rebuilding — the image tag tracks the pin. The `-r<N>` suffix is
+   IMAGE_REVISION, bumped when the image CONTENTS change without a CLI
+   bump, so a tag always names exactly one image.
 
 2. Seed the dedicated auth volume with a one-time interactive login. This is
    a SECOND OAuth session on your account (same subscription/quota/ToS as the
