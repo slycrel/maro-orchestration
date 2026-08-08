@@ -6597,3 +6597,12 @@ negatives is queued behind Jeremy's read (READING_QUEUE 2026-08-08 row),
 alongside the first live (4)-class question: the sweep's two positive
 method-shaped lessons (+0.200/+0.167, jackknife-dominant) sit UNDER the
 0.30 promote floor.
+
+**2026-08-08 later:** Jeremy: "go ahead and stamp now" — all three
+retested negatives stamped via demote_lesson_by_effect with the round-2
+evidence (injection surface verified clean of them). Promote-floor: he's
+on the fence ("might be too early yet"); a full-51-call retest of the
+two sweep positives (61e4cbd7 +0.200, 32a656a5 +0.167) is running as
+the winner's-curse check (top-2-of-9 selection inflates single
+measurements; same test-retest bar demotion cleared) — floor
+recommendation rides its result.

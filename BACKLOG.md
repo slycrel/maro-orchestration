@@ -33,6 +33,30 @@ full triage: 2026-07-04.
 
 Ordered open work that matters. Top of the list is next.
 
+### Warm claude-lane daemon — amortize claude -p bootstrap (Jeremy idea, 2026-08-08)
+
+His phrasing: "wonder if we could cheat by storing some meta-data and
+having a master subagent process fork over and over, driven by the
+on-disk meta-data, to get around the bootstrapping costs." Assessment
+(same session): the win is real but the mechanism isn't literal fork()
+— a Node process with a live event loop and open sockets doesn't fork
+safely, and the API is stateless so a forked child still re-sends its
+context. The two costs decompose: (1) **process bootstrap** ~2–3s per
+`claude -p` call (CLI boot, tool/MCP init) — killable with ONE warm
+daemon consuming job files from disk, which is exactly the Agent SDK's
+model (persistent process, many sessions), i.e. his on-disk-metadata
+driver with a long-lived worker instead of forks; at census scale (966
+replays) that's ~40–50 min of pure boot we paid in round 2. (2)
+**token re-send** — governed by server-side prompt caching keyed on
+prefix, so the lever is a byte-stable system-prompt prefix + calls
+batched inside the cache TTL, not process topology. Slice shape: a
+`claude_daemon.py` job-queue worker behind the subprocess adapter
+(adapter writes job file + waits on result file; daemon owns one warm
+CLI/SDK process), opt-in via config, benchmarked against bare `-p` on
+a 20-call batch before adoption. Related prior art: the slack-bridge
+`claude -p` no-cache finding ([[project_slack_bridge]] memory);
+subprocess-lane purpose= plumbing already centralizes the call site.
+
 ### Planner non-action item types — world facts (Jeremy ask, 2026-08-02; design before build)
 
 Decreed in the §4c decision batch: "we need to add non-action types to
