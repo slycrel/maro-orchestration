@@ -353,6 +353,134 @@ class TestEffectPromotion:
         assert kw.promote_lesson_by_effect(tl.lesson_id, GOOD_EVIDENCE) is False
 
 
+# ---------------------------------------------------------------------------
+# Effect demotion route (knowledge_web.demote_lesson_by_effect, 2026-08-08)
+# ---------------------------------------------------------------------------
+
+NEG_EVIDENCE = {"delta": -0.137, "jackknife_spread": 0.04, "n_calls": 51,
+                "stratum": "reason"}
+
+
+class TestEffectDemotion:
+    def test_clears_bar_stamps_and_stays_medium(self, monkeypatch, tmp_path):
+        tl = _seed_medium_lesson(monkeypatch, tmp_path)
+        import knowledge_web as kw
+        assert kw.demote_lesson_by_effect(tl.lesson_id, NEG_EVIDENCE) is True
+        mediums = kw.load_tiered_lessons(tier=kw.MemoryTier.MEDIUM, min_score=0.0)
+        row = next(l for l in mediums if l.lesson_id == tl.lesson_id)
+        # demotion is a stamp, not a tier move or deletion
+        assert row.delta_evidence["route"] == "effect-demote"
+        assert row.delta_evidence["delta"] == -0.137
+
+    def test_stamped_row_leaves_injection_surface(self, monkeypatch, tmp_path):
+        tl = _seed_medium_lesson(monkeypatch, tmp_path)
+        import knowledge_web as kw
+        # present before demotion — the exclusion assertion below isn't vacuous
+        assert tl.lesson in kw.inject_tiered_lessons("agenda")
+        assert kw.demote_lesson_by_effect(tl.lesson_id, NEG_EVIDENCE) is True
+        assert tl.lesson not in kw.inject_tiered_lessons("agenda")
+
+    def test_flat_query_surface_untouched(self, monkeypatch, tmp_path):
+        # Surface-scoping decree: decision-replay Δ demotes from decision
+        # injection only — query_lessons still serves the row.
+        tl = _seed_medium_lesson(monkeypatch, tmp_path)
+        import knowledge_web as kw
+        assert kw.demote_lesson_by_effect(tl.lesson_id, NEG_EVIDENCE) is True
+        hits = kw.query_lessons("deliverable path artifacts worker", n=5)
+        assert any(tl.lesson_id == h.lesson_id for h in hits)
+
+    def test_tenure_promotion_blocked(self, monkeypatch, tmp_path):
+        tl = _seed_medium_lesson(monkeypatch, tmp_path)
+        import knowledge_web as kw
+        assert kw.demote_lesson_by_effect(tl.lesson_id, NEG_EVIDENCE) is True
+
+        def _force_eligible(lessons):
+            for l in lessons:
+                if l.lesson_id == tl.lesson_id:
+                    l.score = 1.0
+                    l.sessions_validated = kw.PROMOTE_MIN_SESSIONS
+            return lessons
+
+        kw._mutate_tiered_lessons(kw.MemoryTier.MEDIUM, _force_eligible)
+        assert kw.promote_lesson(tl.lesson_id) is False
+        mediums = kw.load_tiered_lessons(tier=kw.MemoryTier.MEDIUM, min_score=0.0)
+        assert any(l.lesson_id == tl.lesson_id for l in mediums)
+
+    def test_new_positive_measurement_replaces_stamp(self, monkeypatch, tmp_path):
+        # Measurement replaces measurement: a later replay clearing the
+        # promote bar overwrites the demote stamp wholesale.
+        tl = _seed_medium_lesson(monkeypatch, tmp_path)
+        import knowledge_web as kw
+        assert kw.demote_lesson_by_effect(tl.lesson_id, NEG_EVIDENCE) is True
+        assert kw.promote_lesson_by_effect(tl.lesson_id, GOOD_EVIDENCE) is True
+        longs = kw.load_tiered_lessons(tier=kw.MemoryTier.LONG, min_score=0.0)
+        row = next(l for l in longs if l.lesson_id == tl.lesson_id)
+        assert row.delta_evidence["route"] == "effect"
+
+    def test_weak_negative_refused(self, monkeypatch, tmp_path):
+        tl = _seed_medium_lesson(monkeypatch, tmp_path)
+        import knowledge_web as kw
+        ev = dict(NEG_EVIDENCE, delta=-0.02, jackknife_spread=0.01)
+        assert kw.demote_lesson_by_effect(tl.lesson_id, ev) is False
+
+    def test_positive_delta_refused(self, monkeypatch, tmp_path):
+        tl = _seed_medium_lesson(monkeypatch, tmp_path)
+        import knowledge_web as kw
+        ev = dict(NEG_EVIDENCE, delta=0.2)
+        assert kw.demote_lesson_by_effect(tl.lesson_id, ev) is False
+
+    def test_dominated_verdict_refused(self, monkeypatch, tmp_path):
+        # jackknife spread >= |delta|: one call owns the verdict — this is
+        # exactly what stops the known-inert specimen (−0.06, spread 0.09)
+        tl = _seed_medium_lesson(monkeypatch, tmp_path)
+        import knowledge_web as kw
+        ev = dict(NEG_EVIDENCE, delta=-0.06, jackknife_spread=0.09)
+        assert kw.demote_lesson_by_effect(tl.lesson_id, ev) is False
+
+    def test_rule_stratum_refused(self, monkeypatch, tmp_path):
+        # Census round 2 measured the rule stratum MIXED (−0.067/+0.067) —
+        # rule-negative doesn't generalize; rules are already excluded from
+        # the effect surface by construction.
+        tl = _seed_medium_lesson(monkeypatch, tmp_path)
+        import knowledge_web as kw
+        ev = dict(NEG_EVIDENCE, stratum="rule")
+        assert kw.demote_lesson_by_effect(tl.lesson_id, ev) is False
+
+    def test_too_few_calls_refused(self, monkeypatch, tmp_path):
+        tl = _seed_medium_lesson(monkeypatch, tmp_path)
+        import knowledge_web as kw
+        ev = dict(NEG_EVIDENCE, n_calls=3)
+        assert kw.demote_lesson_by_effect(tl.lesson_id, ev) is False
+
+    def test_killswitch_off_refuses(self, monkeypatch, tmp_path):
+        tl = _seed_medium_lesson(monkeypatch, tmp_path)
+        import knowledge_web as kw
+        monkeypatch.setattr(kw, "effect_demotion_enabled", lambda: False)
+        assert kw.demote_lesson_by_effect(tl.lesson_id, NEG_EVIDENCE) is False
+
+    def test_census_demote_applies_stamp(self, monkeypatch, tmp_path):
+        tl = _seed_medium_lesson(monkeypatch, tmp_path)
+        # 6 oracle calls whose recorded action the adapter only produces
+        # WITHOUT the lesson → per-call Δ = −1.0, spread 0
+        import runs
+        rd = runs.create_run_dir("hdem", prompt="census", lane="agenda")
+        for i in range(1, 7):
+            _write_call(rd / "build" / "calls", i, "navigator decision",
+                        '{"move": "execute"}')
+        (rd / "run_card.json").write_text(json.dumps({"goal_achieved": True}))
+        from delta_replay import run_effect_route
+        adapter = ScriptedAdapter(tl.lesson)
+        out = run_effect_route(adapter, demote=True, samples=1)
+        row = next(r for r in out["census"] if r["lesson_id"] == tl.lesson_id)
+        assert row["delta"] == -1.0
+        assert row["demoted_by_effect"] is True
+        assert row["promoted_by_effect"] is False
+        import knowledge_web as kw
+        mediums = kw.load_tiered_lessons(tier=kw.MemoryTier.MEDIUM, min_score=0.0)
+        stamped = next(l for l in mediums if l.lesson_id == tl.lesson_id)
+        assert stamped.delta_evidence["route"] == "effect-demote"
+
+
 class TestEffectRouteCensus:
     def test_census_reports_both_routes_without_promoting(self, monkeypatch, tmp_path):
         tl = _seed_medium_lesson(monkeypatch, tmp_path)

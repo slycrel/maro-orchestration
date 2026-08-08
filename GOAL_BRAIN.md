@@ -6581,3 +6581,19 @@ adjustable when data leads — shades-of-grey expectation on record.
 Census round 2 launched same session (retest ×3 full-call + stratified
 ×9 + rule ×2, checkpointed, subprocess haiku,
 `~/.maro/workspace/output/delta-gate-v1/census_round2.json`).
+
+**Resolution (same day, 2026-08-08):** round 2 completed (3-way sharded,
+966 replays, 0 errors; merged result
+`~/.maro/workspace/output/delta-gate-v1/census_round2_merged.json`).
+Retest 3/3 same-sign (−0.137/−0.059/−0.078) — the agreeing-data
+condition MET → demotion built and landed per the conditional grant:
+`knowledge_web.demote_lesson_by_effect` + `--demote` census CLI,
+surface-scoped exactly per (2) (stamp = excluded from
+inject_tiered_lessons + tenure-to-LONG blocked; no score/ledger/query
+changes; a later qualifying positive measurement replaces the stamp;
+killswitch `knowledge.effect_demotion_enabled` in docs/DEFAULTS.md).
+Nothing stamped yet — running `--demote` on the three retested
+negatives is queued behind Jeremy's read (READING_QUEUE 2026-08-08 row),
+alongside the first live (4)-class question: the sweep's two positive
+method-shaped lessons (+0.200/+0.167, jackknife-dominant) sit UNDER the
+0.30 promote floor.

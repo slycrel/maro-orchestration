@@ -468,15 +468,18 @@ def run_effect_route(
     adapter: Any,
     *,
     promote: bool = False,
+    demote: bool = False,
     samples: int = 3,
     limit: int = 5,
     lesson_ids: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
-    """Measure Δ for candidate MEDIUM lessons and (optionally) promote the
-    ones that clear the effect bar — the routes-census readout (brief §3.4)
-    is the return value either way: per candidate, Δ + both routes'
+    """Measure Δ for candidate MEDIUM lessons and (optionally) act on the
+    ones that clear either effect bar — the routes-census readout (brief
+    §3.4) is the return value either way: per candidate, Δ + both routes'
     verdicts + overlap, so "what tenure alone would have missed" is
-    readable directly. promote=False is the census-only dry run.
+    readable directly. promote=False demote=False is the census-only dry
+    run; demote=True stamps measured-negative rows out of decision
+    injection (knowledge_web.demote_lesson_by_effect, 2026-08-08).
 
     Spend honesty: measurement is limit × 2 arms × samples × n_calls
     replays on the caller's adapter — deliberate CLI-driven spend, which is
@@ -485,7 +488,7 @@ def run_effect_route(
     from knowledge_web import (
         MemoryTier, PROMOTE_MIN_SCORE, PROMOTE_MIN_SESSIONS,
         _is_contested, _is_quarantined, load_tiered_lessons,
-        promote_lesson_by_effect,
+        demote_lesson_by_effect, promote_lesson_by_effect,
     )
     calls = gather_oracle_decision_calls()
     rows = [t for t in load_tiered_lessons(
@@ -512,6 +515,9 @@ def run_effect_route(
         promoted = False
         if promote:
             promoted = promote_lesson_by_effect(t.lesson_id, ev)
+        demoted = False
+        if demote and not promoted:
+            demoted = demote_lesson_by_effect(t.lesson_id, ev)
         census.append({
             "lesson_id": t.lesson_id,
             "lesson": t.lesson[:160],
@@ -520,6 +526,7 @@ def run_effect_route(
             **ev,
             "tenure_eligible": tenure_ok,
             "promoted_by_effect": promoted,
+            "demoted_by_effect": demoted,
         })
     if dropped:
         log.info("run_effect_route: measured top %d of %d candidates "
@@ -529,20 +536,23 @@ def run_effect_route(
         "n_oracle_calls": len(calls),
         "samples": samples,
         "promote": promote,
+        "demote": demote,
         "candidates_not_measured": dropped,
         "census": census,
     }
 
 
 def _main(argv: List[str]) -> int:
-    """CLI: `python3 -m delta_replay [--promote] [--limit N] [--samples N]
-    [--lesson-id ID ...]` — census-only by default; --promote applies the
-    effect route to rows that clear the bar. Hosted-free rung only (the
-    ~$0 replay backend); refuses to run without it rather than silently
-    spending on a paid tier."""
+    """CLI: `python3 -m delta_replay [--promote] [--demote] [--limit N]
+    [--samples N] [--lesson-id ID ...]` — census-only by default; --promote
+    applies the effect route to rows that clear the bar, --demote stamps
+    measured-negative rows out of decision injection. Hosted-free rung only
+    (the ~$0 replay backend); refuses to run without it rather than
+    silently spending on a paid tier."""
     import argparse
     ap = argparse.ArgumentParser(prog="delta_replay")
     ap.add_argument("--promote", action="store_true")
+    ap.add_argument("--demote", action="store_true")
     ap.add_argument("--limit", type=int, default=5)
     ap.add_argument("--samples", type=int, default=3)
     ap.add_argument("--lesson-id", action="append", default=None)
@@ -584,8 +594,9 @@ def _main(argv: List[str]) -> int:
             finally:
                 self._last = _time.time()
 
-    out = run_effect_route(_Paced(), promote=args.promote, limit=args.limit,
-                           samples=args.samples, lesson_ids=args.lesson_id)
+    out = run_effect_route(_Paced(), promote=args.promote, demote=args.demote,
+                           limit=args.limit, samples=args.samples,
+                           lesson_ids=args.lesson_id)
     print(json.dumps(out, indent=2))
     return 0
 

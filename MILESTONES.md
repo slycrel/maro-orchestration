@@ -816,13 +816,19 @@ Truth anchor: GOAL_BRAIN.md Threads. History: docs/history/ROADMAP_ARCHIVE.md.
    corpus lessons by score all mildly NEGATIVE Δ, nothing promotes;
    readout in the record doc) — keep/adjust CALLED 2026-08-08
    (GOAL_BRAIN decision + journal f7335288): gate stays; **negative-Δ
-   demotion conditionally approved** — build if census round 2 (launched
-   2026-08-08: retest ×3 + stratified ×9 + rule ×2 on cleared haiku
-   spend) confirms the negative signs are stable; Δ decreed
-   surface-scoped (decision-surface negative ≠ globally bad lesson).
-   Still-queued cuts from the brief's §5: evolver/thinkback trace
-   scoring, un-contest verb. Original prep brief:
-   `docs/DELTA_GATE_BUILD_BRIEF.md`; decision 623eb056.
+   demotion conditionally approved** — build if census round 2 confirms
+   the negative signs are stable; Δ decreed surface-scoped
+   (decision-surface negative ≠ globally bad lesson). **Round 2 RAN
+   2026-08-08 (3-way sharded haiku, 966 replays, 0 errors): retest 3/3
+   same-sign → condition MET → demotion SHIPPED same day**
+   (`demote_lesson_by_effect` + `--demote` CLI: stamp excludes from
+   decision injection + blocks tenure-to-LONG, surface-scoped per
+   decree; killswitch `knowledge.effect_demotion_enabled`). Sweep also
+   found the corpus's first POSITIVE Δs (+0.200/+0.167, method-shaped,
+   under the 0.30 floor) — promote-floor question queued to Jeremy
+   (READING_QUEUE row). Still-queued cuts from the brief's §5:
+   evolver/thinkback trace scoring, un-contest verb. Original prep
+   brief: `docs/DELTA_GATE_BUILD_BRIEF.md`; decision 623eb056.
 
 -6. **Holistic drift review (Jeremy, 2026-07-17) — do this in a CLEAN
    session, first thing.** After the delivery-loop/two-tone arc: "Might be

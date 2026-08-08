@@ -114,3 +114,59 @@ census.json records candidates_not_measured=205), samples=1 per arm so
 per-call scoring is 0/1, and all three lessons sit in a narrow score
 band. The keep/adjust call on the routes — and whether negative-Δ
 retirement (brief §5) graduates from cut to slice 2 — is Jeremy's read.
+
+## Routes census round 2 — retest + stratified sweep (2026-08-08)
+
+Jeremy's call on round 1 (GOAL_BRAIN Decisions 2026-08-08): negative Δ
+for demotion is the right direction, **build it if more testing gets us
+agreeing data**; haiku/sonnet-low replay spend cleared standing. Round 2
+ran the test: re-measure the three round-1 negatives on the FULL oracle
+set (51 calls, samples=3), plus a 9-lesson stratified sweep across the
+reason-stratum score range and 2 rule-stratum specimens (30 calls,
+samples=3 each). Sharded 3-way on subprocess haiku (~2h wall); 966
+replays, **zero errors**. Result:
+`~/.maro/workspace/output/delta-gate-v1/census_round2_merged.json`.
+
+**Retest — the agreeing-data condition, MET (3/3 same sign, stable):**
+
+| lesson | round 1 Δ | round 2 Δ | jackknife |
+|---|---|---|---|
+| 3036c141 cross-referencing external claims | −0.10 | **−0.137** | 0.024 |
+| 46613838 re-fetch fresh for adversarial verify | −0.08 | **−0.059** | 0.020 |
+| f67f59ca reddit top-5 needs roundup threads | −0.10 | **−0.078** | 0.024 |
+
+**Stratified sweep — Δ is non-monotonic in score:** ranks 2/27/50
+measured exactly 0.000 (inert); ranks 118–186 mildly negative
+(−0.03..−0.10); and two mid-ranking lessons measured the corpus's first
+POSITIVE Δs — rank 72 (61e4cbd7, "query library catalogs for
+bibliographic questions") **+0.200** jk 0.041 and rank 95 (32a656a5,
+"gather output schema and collision-check constraints before the main
+write step") **+0.167** jk 0.029. Both are method-shaped (procedural
+how-to), unlike the narrative top-scorers. Neither clears the 0.30
+promote floor — flagged to Jeremy as the first live adjustable-prior
+question (his round-1 words: "open to adjust some of our calculation
+variables when the data leads us there").
+
+**Rule stratum: MIXED** (e29b9ae6 −0.067, 6044bf32 +0.067) — the
+validation's rule-negative doesn't generalize to a stratum-wide claim.
+Rules stay excluded from the effect surface by construction (LeAct §6),
+not by measured sign.
+
+**Instrument honesty note:** 0/51 oracle decision prompts carry a
+"## Tiered Lessons" block in production — every measurement here is
+SYNTHETIC injection (the with-arm inserts the block in production
+format). Valid for gating what WOULD be injected, which is exactly what
+promotion/demotion control; it says nothing about lessons' effects on
+surfaces the instrument doesn't replay.
+
+**Acted on (same day):** `knowledge_web.demote_lesson_by_effect` +
+`--demote` on the census CLI — measured-negative MEDIUM lessons (Δ ≤
+−0.05, jackknife-dominant, ≥6 calls, reason stratum) get a
+`route="effect-demote"` stamp: excluded from `inject_tiered_lessons`,
+blocked from the tenure route to LONG. Surface-scoped per the decree —
+no score mutation, no deletion, flat ledger and `query_lessons`
+untouched ("other contexts might end up promoting on the same data").
+A later measurement clearing the promote bar replaces the stamp.
+Killswitch `knowledge.effect_demotion_enabled` (docs/DEFAULTS.md). The
+three retested negatives are eligible; stamping them is a one-line
+CLI run (`--demote --lesson-id ...`), left for after Jeremy's read.

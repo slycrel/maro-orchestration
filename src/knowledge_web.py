@@ -261,6 +261,20 @@ def _is_contested(tl: "TieredLesson") -> bool:
     return bool(tl.contested)
 
 
+def _is_delta_demoted(tl: "TieredLesson") -> bool:
+    """Measured-negative lessons (Δ-gate demotion route, 2026-08-08) leave
+    the tiered-lessons injection surface and never ride tenure to LONG.
+    Surface-scoped by decree: the flat ledger, query_lessons, and extraction
+    are untouched — a negative Δ on decision replays only demotes from
+    decision injection; other surfaces need their own reward design. Unlike
+    contest/quarantine, the stamp is a measurement: a later replay that
+    clears the promote bar replaces it (measurement replaces measurement)."""
+    try:
+        return (tl.delta_evidence or {}).get("route") == "effect-demote"
+    except Exception:
+        return False
+
+
 def confidence_from_k_samples(k_samples: int) -> float:
     """Map extraction method to standardized initial confidence (Feynman F5).
 
@@ -607,7 +621,8 @@ def _post_reinforce_hooks(tl: TieredLesson, *, tier: str) -> TieredLesson:
                 and tl.sessions_validated >= PROMOTE_MIN_SESSIONS
                 and not tl.provisional
                 and not _is_quarantined(tl)
-                and not _is_contested(tl)):
+                and not _is_contested(tl)
+                and not _is_delta_demoted(tl)):
             try:
                 if promote_lesson(tl.lesson_id):
                     tl.tier = MemoryTier.LONG
@@ -1114,6 +1129,14 @@ def promote_lesson(lesson_id: str) -> bool:
         # would make a plausibly-wrong lesson permanent.
         log.info("promote_lesson: %s is contested — not promoting", lesson_id)
         return False
+    if _is_delta_demoted(target):
+        # Same boundary guard: tenure must not launder a measured-negative
+        # lesson into decay-free LONG (LONG = always-injected — promotion
+        # would undo exactly what the demotion stamp excludes). The effect
+        # route can still promote it if a NEW measurement clears the bar.
+        log.info("promote_lesson: %s is Δ-demoted (measured negative) — "
+                 "not promoting", lesson_id)
+        return False
     # ...but the record that moves tiers is the stored (raw) one — popped
     # from MEDIUM under the lock so concurrent updates aren't dropped.
     popped: Dict[str, TieredLesson] = {}
@@ -1250,6 +1273,100 @@ def promote_lesson_by_effect(lesson_id: str, delta_evidence: Dict[str, Any]) -> 
     return True
 
 
+# Demotion mirror (2026-08-08, Jeremy's conditional grant met: census round-2
+# retest re-measured all three round-1 negatives with the same sign —
+# −0.137/−0.059/−0.078). Threshold sits at the edge of the inert band: the
+# round-1/round-2 negatives all cleared it, the known-inert specimen (−0.06
+# with jackknife 0.09) is jackknife-dominated and does not.
+EFFECT_DEMOTE_MAX_DELTA = -0.05
+
+
+def effect_demotion_enabled() -> bool:
+    """Killswitch for the Δ-gate demotion route (default ON — same ambient-
+    spend argument as promotion: it only acts on operator/CLI-driven
+    measurement). config: knowledge.effect_demotion_enabled."""
+    try:
+        from config import get as _cfg_get
+        return bool(_cfg_get("knowledge.effect_demotion_enabled", True))
+    except Exception:
+        return True
+
+
+def demote_lesson_by_effect(lesson_id: str, delta_evidence: Dict[str, Any]) -> bool:
+    """Effect-based demotion: stamp a measured-negative Δ on a MEDIUM lesson.
+
+    What the stamp does (see _is_delta_demoted): excludes the row from
+    inject_tiered_lessons and blocks the tenure route to LONG. What it does
+    NOT do — by the 2026-08-08 surface-scoping decree: no score mutation, no
+    deletion, no flat-ledger change, no exclusion from query_lessons or
+    extraction. Δ measured on decision replays licenses demotion from
+    decision injection only; "other contexts might end up promoting on the
+    same data" (Jeremy).
+
+    Eligibility mirrors promote_lesson_by_effect with the sign flipped:
+      - killswitch on (knowledge.effect_demotion_enabled)
+      - delta <= knowledge.effect_demotion_max_delta (default −0.05)
+      - n_calls >= knowledge.effect_promotion_min_calls (shared floor)
+      - jackknife spread < |delta| (one call must not own the verdict)
+      - stratum == "reason" (the rule stratum measured MIXED in census
+        round 2 — rule-negative does not generalize, and rules are already
+        excluded from the effect surface by construction)
+    No provisional/quarantined/contested guard: those rows are already off
+    every surface, and the stamp is a true measurement either way. The stamp
+    is not a verdict for all time — a later measurement that clears the
+    promote bar replaces it wholesale (promote_lesson_by_effect overwrites
+    delta_evidence with route="effect").
+    """
+    if not effect_demotion_enabled():
+        log.info("demote_lesson_by_effect: killswitch off — not demoting")
+        return False
+    try:
+        from config import get as _cfg_get
+        max_delta = float(_cfg_get("knowledge.effect_demotion_max_delta",
+                                   EFFECT_DEMOTE_MAX_DELTA))
+        min_calls = int(_cfg_get("knowledge.effect_promotion_min_calls",
+                                 EFFECT_PROMOTE_MIN_CALLS))
+    except Exception:
+        max_delta, min_calls = EFFECT_DEMOTE_MAX_DELTA, EFFECT_PROMOTE_MIN_CALLS
+
+    ev = dict(delta_evidence or {})
+    delta = ev.get("delta")
+    if not isinstance(delta, (int, float)) or delta > max_delta:
+        return False
+    if int(ev.get("n_calls") or 0) < min_calls:
+        return False
+    spread = ev.get("jackknife_spread")
+    if not isinstance(spread, (int, float)) or spread >= abs(delta):
+        return False
+    if ev.get("stratum") != "reason":
+        return False
+
+    stamped: Dict[str, TieredLesson] = {}
+
+    def _stamp(lessons: List[TieredLesson]) -> List[TieredLesson]:
+        t = next((l for l in lessons if l.lesson_id == lesson_id), None)
+        if t is None:
+            return lessons
+        t.delta_evidence = {
+            "delta": float(delta),
+            "jackknife_spread": float(spread),
+            "n_calls": int(ev.get("n_calls") or 0),
+            "stratum": "reason",
+            "measured_at": ev.get("measured_at") or datetime.now(timezone.utc).isoformat(),
+            "route": "effect-demote",
+        }
+        stamped["t"] = t
+        return lessons
+
+    _mutate_tiered_lessons(MemoryTier.MEDIUM, _stamp)
+    if "t" not in stamped:
+        return False
+    log.info("demote_lesson_by_effect: %s excluded from decision injection "
+             "(Δ=%.3f over %d calls)", lesson_id, float(delta),
+             int(ev.get("n_calls") or 0))
+    return True
+
+
 # ---------------------------------------------------------------------------
 # Decay cycle (run via maybe_consolidate() or `maro-memory decay`)
 # ---------------------------------------------------------------------------
@@ -1287,8 +1404,9 @@ def run_decay_cycle(
                 and tl.sessions_validated >= PROMOTE_MIN_SESSIONS
                 and not tl.provisional
                 and not _is_quarantined(tl)
-                and not _is_contested(tl)):
-            # not-provisional/quarantined/contested mirrors
+                and not _is_contested(tl)
+                and not _is_delta_demoted(tl)):
+            # not-provisional/quarantined/contested/Δ-demoted mirrors
             # _post_reinforce_hooks — the backstop must not promote what
             # the reinforcement path refuses to.
             promoted_ids.append(tl.lesson_id)
@@ -1600,10 +1718,14 @@ def inject_tiered_lessons(
                          f"{grounding_marker(getattr(l, 'grounding', None))}")
             applied_ids.append((l.lesson_id, MemoryTier.LONG))
 
+    # Δ-demoted rows leave THIS surface only (the measured one) — MEDIUM
+    # filter alone because demotion is MEDIUM-scoped in v1; a LONG row's
+    # delta_evidence can only carry route="effect".
     medium_candidates = [t for t in load_tiered_lessons(
         tier=MemoryTier.MEDIUM, task_type=task_type, min_score=0.3,
         limit=max_medium * _pool_multiplier,
-    ) if not (t.provisional or _is_quarantined(t) or _is_contested(t))]
+    ) if not (t.provisional or _is_quarantined(t) or _is_contested(t)
+              or _is_delta_demoted(t))]
     if goal and len(medium_candidates) > max_medium:
         _ranker = _hybrid_rank if _USE_HYBRID else _tfidf_rank
         medium_candidates = _ranker(goal, medium_candidates, top_k=max_medium)
