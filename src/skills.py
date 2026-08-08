@@ -89,6 +89,9 @@ _EXTRACT_SYSTEM = textwrap.dedent("""\
     - A description of what the skill does
     - 2-4 trigger patterns (phrases in goals/steps that suggest this skill applies)
     - A reusable step template (3-5 steps)
+    - A domain: one short lowercase phrase naming the subject area
+      (e.g. "web-research", "git", "data-analysis")
+    - 3-6 tags: lowercase discovery keywords a future goal might contain
     Respond ONLY with JSON, no prose, no markdown fences.
     JSON shape:
     {
@@ -97,7 +100,9 @@ _EXTRACT_SYSTEM = textwrap.dedent("""\
           "name": "short name",
           "description": "what it does",
           "trigger_patterns": ["pattern1", "pattern2"],
-          "steps_template": ["step1", "step2", "step3"]
+          "steps_template": ["step1", "step2", "step3"],
+          "domain": "subject-area",
+          "tags": ["keyword1", "keyword2", "keyword3"]
         }
       ]
     }
@@ -302,6 +307,9 @@ def extract_skills(outcomes: List[dict], adapter) -> List[Skill]:
                     steps_template=[str(s).strip() for s in rs.get("steps_template", []) if str(s).strip()],
                     source_loop_ids=source_ids,
                     created_at=now,
+                    origin="crystallized",
+                    domain=str(rs.get("domain", "")).strip().lower()[:40],
+                    tags=[str(t).strip().lower() for t in rs.get("tags", []) if str(t).strip()][:6],
                 )
                 if skill.name and skill.steps_template:
                     save_skill(skill)
@@ -381,9 +389,13 @@ def _tfidf_skill_rank(goal: str, skills: List[Skill], top_k: int = 3) -> List[Sk
     _best_isl, _best_sc = max(_island_scores.items(), key=lambda kv: kv[1])
     goal_island = _best_isl if _best_sc > 0 else ""
 
-    # Build skill documents: name + description + trigger_patterns
+    # Build skill documents: name + description + trigger_patterns + discovery
+    # metadata (tags/domain — the pedigree axis exists to be matched on)
     def skill_doc(s: Skill) -> str:
-        return " ".join([s.name, s.description] + list(s.trigger_patterns))
+        return " ".join(
+            [s.name, s.description, getattr(s, "domain", "")]
+            + list(s.trigger_patterns) + list(getattr(s, "tags", []))
+        )
 
     docs = [skill_doc(s) for s in skills]
     doc_tokens = [_skill_tokens(d) for d in docs]
@@ -451,7 +463,11 @@ def assign_island(skill: "Skill") -> str:
     Uses simple keyword scoring (no LLM, no deps). The island with the most
     matching keywords wins; ties go to the first matching island in the ordering.
     """
-    text = " ".join(skill.trigger_patterns + [skill.name, skill.description]).lower()
+    text = " ".join(
+        skill.trigger_patterns + [skill.name, skill.description,
+                                  getattr(skill, "domain", "")]
+        + list(getattr(skill, "tags", []))
+    ).lower()
     scores: dict[str, int] = {island: 0 for island in _ISLAND_KEYWORDS}
     for island, keywords in _ISLAND_KEYWORDS.items():
         for kw in keywords:
@@ -732,9 +748,14 @@ def find_matching_skills(
     goal_lower = goal.lower()
     kw_scored: List[tuple] = []
     for skill in skills:
+        # Tags count as trigger phrases here: substring-in-goal only (a tag
+        # is a short keyword — the reverse goal-in-tag test would be noise).
         score = sum(
             1 for pattern in skill.trigger_patterns
             if pattern.lower() in goal_lower or goal_lower in pattern.lower()
+        ) + sum(
+            1 for tag in getattr(skill, "tags", [])
+            if tag and tag.lower() in goal_lower
         )
         if score > 0:
             kw_scored.append((score, skill))

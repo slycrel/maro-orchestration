@@ -76,6 +76,8 @@ class _ExtractMockAdapter:
                     "description": "Gather and synthesize information from multiple sources",
                     "trigger_patterns": ["research", "analyze", "gather information"],
                     "steps_template": ["Define scope", "Gather sources", "Synthesize findings"],
+                    "domain": "web-research",
+                    "tags": ["Research", "sources", "synthesis"],
                 },
                 {
                     "name": "iterative build",
@@ -2443,3 +2445,75 @@ class TestCullArchive:
         prov = list((memory_dir() / "skill_provenance").glob("*.json"))
         assert any(json.loads(p.read_text(encoding="utf-8"))["decision"] == "retire"
                    for p in prov)
+
+
+# ---------------------------------------------------------------------------
+# Pedigree + discovery metadata (2026-08-08 BACKLOG item)
+# ---------------------------------------------------------------------------
+
+class TestSkillPedigree:
+    """origin/domain/tags: stamped at mint, round-trip, and consumed by matching."""
+
+    def test_round_trip_preserves_pedigree(self):
+        from skill_types import skill_to_dict, dict_to_skill
+        sk = _make_skill("pedigree probe")
+        sk.origin = "crystallized"
+        sk.domain = "web-research"
+        sk.tags = ["polymarket", "odds"]
+        back = dict_to_skill(skill_to_dict(sk))
+        assert back.origin == "crystallized"
+        assert back.domain == "web-research"
+        assert back.tags == ["polymarket", "odds"]
+
+    def test_legacy_row_defaults_to_unknown(self):
+        """Pre-stamp rows load with origin '' — unknown stays unknown."""
+        from skill_types import dict_to_skill
+        legacy = {"id": "old1", "name": "old", "description": "d"}
+        sk = dict_to_skill(legacy)
+        assert sk.origin == ""
+        assert sk.domain == ""
+        assert sk.tags == []
+
+    def test_legacy_imported_row_derives_imported_origin(self):
+        """An imported dict is certain evidence — blank origin derives 'imported'."""
+        from skill_types import dict_to_skill
+        legacy = {"id": "old2", "name": "old", "description": "d",
+                  "imported": {"pack": "p", "imported_from": "x"}}
+        assert dict_to_skill(legacy).origin == "imported"
+        # ...but an explicit origin is never overridden by derivation
+        explicit = dict(legacy, origin="crystallized")
+        assert dict_to_skill(explicit).origin == "crystallized"
+
+    def test_extract_skills_stamps_crystallized_with_discovery(self, monkeypatch, tmp_path):
+        _setup_workspace(monkeypatch, tmp_path)
+        outcomes = [
+            {"goal": "research polymarket strategies", "status": "done",
+             "task_type": "research", "summary": "found", "outcome_id": "oc1"},
+        ]
+        extracted = extract_skills(outcomes, _ExtractMockAdapter())
+        assert extracted
+        first = extracted[0]
+        assert first.origin == "crystallized"
+        assert first.domain == "web-research"
+        # tags normalized to lowercase at mint ("Research" in the mock payload)
+        assert first.tags == ["research", "sources", "synthesis"]
+
+    def test_keyword_matching_counts_tags(self, monkeypatch):
+        """A skill whose only hook is a tag still matches at the keyword tier."""
+        from skills import find_matching_skills
+        sk = _make_skill("tagged only", triggers=["completely unrelated phrase"])
+        sk.tags = ["polymarket"]
+        monkeypatch.setattr("skills.load_skills", lambda: [sk])
+        results = find_matching_skills(
+            "scan polymarket for mispriced odds", use_router=False)
+        assert [s.id for s in results] == [sk.id]
+        assert results[0].match_method == "keyword"
+
+    def test_tfidf_doc_includes_tags_and_domain(self):
+        from skills import _tfidf_skill_rank
+        tagged = _make_skill("alpha", triggers=["zz qq"])
+        tagged.tags = ["kubernetes", "deployment"]
+        tagged.domain = "devops"
+        plain = _make_skill("beta", triggers=["yy ww"])
+        ranked = _tfidf_skill_rank("kubernetes deployment rollout", [tagged, plain])
+        assert ranked and ranked[0].id == tagged.id

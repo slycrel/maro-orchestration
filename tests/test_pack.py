@@ -567,6 +567,24 @@ class TestImportPack:
         assert sk.imported["claimed_use_count"] == 50
         assert sk.imported["claimed_success_rate"] == 0.9
 
+    def test_skill_record_import_stamps_origin_and_carries_discovery(self, tmp_path, target_ws):
+        """Imports arrive origin='imported'; claimed origin + tags/domain travel."""
+        from skills import load_skills
+        src_ws = _make_workspace(tmp_path / "src")
+        _write_jsonl(src_ws / "memory" / "skills.jsonl",
+                     [{"id": "s2", "name": "digest", "description": "d",
+                       "trigger_patterns": [], "steps_template": [],
+                       "source_loop_ids": [], "created_at": "2020-01-01",
+                       "origin": "crystallized", "domain": "web-research",
+                       "tags": ["polymarket", "odds"]}])
+        pack_path = _export_and_seal(src_ws, tmp_path)
+        import_pack(pack_path, label="l", target=target_ws)
+        sk = load_skills()[0]
+        assert sk.origin == "imported"
+        assert sk.imported["original_origin"] == "crystallized"
+        assert sk.domain == "web-research"
+        assert sk.tags == ["polymarket", "odds"]
+
     def test_skill_md_quarantined_not_live(self, tmp_path, target_ws):
         src_ws = _make_workspace(tmp_path / "src")
         (src_ws / "skills" / "foo.md").write_text("---\nname: foo\n---\nbody", encoding="utf-8")

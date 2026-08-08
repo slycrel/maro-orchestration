@@ -1372,37 +1372,6 @@ capture**, which is what makes the rung amortize instead of evaporate.
   model is ever retrained into discriminating range, goal-insensitive
   injection goes live; worth a tripwire.
 
-- [ ] **Skill pedigree + discovery metadata** (opened 2026-08-08, **Jeremy:**
-  *"seems important in both a 'this pattern matches' sort of way as well as
-  domain-relevant sorts of ways… a little surprised we don't have some of
-  that metadata already; otherwise skills are difficult to discover"*).
-  Surfaced by the scout read: a world-sourced skill would have no honest
-  provenance home. **What EXISTS today** (`skill_types.py:20`): `source_loop_ids`
-  (which loops produced it), `created_at`, `content_hash` (poisoning defense),
-  `tier` provisional/established, `project` scoping, and `imported: dict` —
-  a real provenance stamp, but **only for pack-imported skills**
-  (PORTABLE_LEARNING_DESIGN §3; moves claimed stats to
-  `imported["claimed_use_count"]`). **What's missing, two axes:**
-  1. **Origin KIND.** Among natively-minted skills nothing distinguishes
-     crystallized-from-a-run (`extract_skills`) / synthesized-on-a-gap
-     (`synthesize_skill`) / human-authored-curated (`skill_loader` SKILL.md) /
-     graduated. `source_loop_ids` says *which* loop, never *what kind of
-     process*. Lessons already have exactly this — `minted_from` in
-     `lesson_provenance.py` (2026-07-29). Skills have no equivalent; latent
-     today only because every skill is born from a real run. **A scout would
-     be the first world-sourced writer and would drive straight through it —
-     so this is a PREREQUISITE for that item, not a follow-on.**
-  2. **Discovery axis.** There is no domain/tag/capability field at all.
-     Discovery rides `trigger_patterns` substring hits plus stemmed token
-     overlap (`find_matching_skills`, `skills.py:616`) and the curated
-     summaries block — which is why the fallback tier leans on incidental
-     token collisions. Two stores compound it: the `Skill` jsonl store and the
-     `skill_loader`/SKILL.md curated set carry different metadata.
-  Pairs naturally with the match-tier telemetry item above (both are "record
-  what we already know but throw away"). Should-we before how-would-we: decide
-  whether origin-kind is a stamp on `Skill` mirroring `minted_from`, or
-  whether `imported` generalizes into a single `provenance` dict.
-
 - [ ] **Arbitrary-truncation audit** (opened 2026-08-03; **Jeremy:** *"this
   was one of the first truncations early on and I've been uncomfortable
   making those trades for 'keeping the context small' by cutting so much…

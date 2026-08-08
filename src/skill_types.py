@@ -44,6 +44,14 @@ class Skill:
                                       # stamp for pack-imported skills; stats get moved to
                                       # imported["claimed_use_count"]/["claimed_success_rate"]
                                       # on import, local use_count/success_rate reset to 0/1.0.
+    # Pedigree + discovery metadata (2026-08-08 BACKLOG item; lessons'
+    # minted_from is the precedent — stamp at mint, legacy rows stay "").
+    origin: str = ""                 # "crystallized" (extracted from run outcomes) |
+                                     # "synthesized" (LLM-minted on a gap/suggestion) |
+                                     # "imported" (pack import) | "" (pre-stamp legacy)
+    domain: str = ""                 # coarse subject area, e.g. "web-research", "git"
+    tags: List[str] = field(default_factory=list)  # discovery keywords; fed into
+                                     # keyword/TF-IDF matching corpora
 
 
 @dataclass
@@ -194,6 +202,9 @@ def skill_to_dict(skill: Skill) -> dict:
         "variant_losses": skill.variant_losses,
         "project": skill.project,
         "imported": skill.imported,
+        "origin": skill.origin,
+        "domain": skill.domain,
+        "tags": skill.tags,
     }
 
 
@@ -222,6 +233,14 @@ def dict_to_skill(d: dict) -> Skill:
         variant_losses=int(d.get("variant_losses", 0)),
         project=d.get("project", ""),
         imported=d.get("imported", {}),
+        # Origin derivation-at-read: an imported dict is certain evidence of
+        # pack import, so blank-origin legacy rows with one get "imported"
+        # for free. Everything else stays "" — crystallized vs synthesized
+        # is not reliably derivable retroactively (both carry
+        # source_loop_ids), and guessing would violate positive-evidence.
+        origin=d.get("origin", "") or ("imported" if d.get("imported") else ""),
+        domain=d.get("domain", ""),
+        tags=[str(t) for t in d.get("tags", []) if str(t).strip()],
     )
 
 

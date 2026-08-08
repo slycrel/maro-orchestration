@@ -8,6 +8,49 @@ Last split: 2026-04-16 (session 34).
 
 ---
 
+## Skill pedigree + discovery metadata — SHIPPED 2026-08-08 (go-nuts stretch chunk 4)
+
+(opened 2026-08-08, **Jeremy:** *"seems important in both a 'this pattern
+matches' sort of way as well as domain-relevant sorts of ways… a little
+surprised we don't have some of that metadata already; otherwise skills are
+difficult to discover"*). Surfaced by the scout read: a world-sourced skill
+would have no honest provenance home. Pairs with match-tier telemetry
+(both "record what we already know but throw away").
+
+**Design call on the item's should-we** (origin stamp vs generalizing
+`imported` into a `provenance` dict): **stamp, mirroring lessons'
+`minted_from`**. `imported` is portable-learning's §3 contract (claimed-stat
+laundering defense rides on its exact shape) — generalizing it would churn
+pack import/export for zero new information. Three new `Skill` fields:
+
+- `origin`: `"crystallized"` (extract_skills + run_curation companion
+  mints) / `"synthesized"` (synthesize_skill + evolver skill_pattern
+  suggestions) / `"imported"` (pack import; claimed kind survives as
+  `imported["original_origin"]`, same pattern as `original_tier`) / `""`
+  legacy. Derivation-at-read in `dict_to_skill`: blank origin + imported
+  dict present → `"imported"` (certain evidence); crystallized-vs-synthesized
+  is NOT retro-derivable (both carry `source_loop_ids`) so legacy rows stay
+  `""` — positive-evidence, no guessing. "Graduated" kind turned out not to
+  exist: graduation.py mints no jsonl skills. The curated SKILL.md store is
+  separate and self-describing (frontmatter); untouched.
+- `domain` + `tags`: discovery axis, filled by the extraction/synthesis LLM
+  calls (JSON shapes extended — same call, no new spend; normalized
+  lowercase, capped 40 chars / 6 tags). **Live consumers in the same
+  change** (consumer-first): tags count as trigger phrases in keyword-tier
+  matching (substring-in-goal only — reverse test would be noise), tags +
+  domain join the TF-IDF document and `assign_island` text. A/B challenger
+  clones round-trip through `skill_to_dict`/`dict_to_skill` so variants
+  inherit pedigree free.
+
+Pack export copies `skills.jsonl` raw, so pedigree travels in packs with
+zero export changes. Tests: TestSkillPedigree (round-trip, legacy defaults,
+imported-derivation, mint stamps, keyword-tag match, tfidf doc), synthesis
+stamp assertions, pack import origin/discovery carry. No config keys.
+Backfill of the ~376 legacy rows deliberately NOT done (would be guessing);
+upgrade edge: a one-shot LLM backfill pass if discovery quality wants it.
+
+---
+
 ## Adversarial review of items 5 + 5b — fixes SHIPPED 2026-08-06 (same session)
 
 Two parallel review agents over 83c208c + ed7cea3; every acted-on claim

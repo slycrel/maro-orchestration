@@ -775,6 +775,10 @@ def _import_skill_records(content: str, *, pack_name: str, label: str, pack_tag:
             }
             if row.get("imported"):
                 imported["original_provenance"] = row["imported"]
+            if row.get("origin"):
+                # Local origin becomes "imported"; the claimed mint kind
+                # survives here, same pattern as original_tier.
+                imported["original_origin"] = row["origin"]
             sk = Skill(
                 id=new_id,
                 name=row.get("name", ""),
@@ -798,6 +802,9 @@ def _import_skill_records(content: str, *, pack_name: str, label: str, pack_tag:
                 island=row.get("island", ""),
                 project=row.get("project", ""),
                 imported=imported,
+                origin="imported",
+                domain=str(row.get("domain", ""))[:40],
+                tags=[str(t) for t in row.get("tags", []) if str(t).strip()][:6],
             )
             if compute_skill_hash(sk) in existing_hashes:
                 results.append({"id": original_id, "outcome": "skipped_identical"})

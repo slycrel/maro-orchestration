@@ -897,6 +897,9 @@ def promote_skills_lite(rd: Path, meta: dict, card: dict) -> None:
                 source_loop_ids=list(meta.get("loop_ids") or []),
                 created_at=datetime.now(timezone.utc).isoformat(),
                 tier="provisional",
+                origin="crystallized",
+                tags=[str(t).strip().lower() for t in (fm.get("tags") or [])
+                      if str(t).strip()][:6],
             ))
             write_skill_provenance(
                 name, "create",

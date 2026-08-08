@@ -1191,6 +1191,8 @@ class _SynthesisAdapter:
                 "search times out mid-query",
                 "all results are paywalled or unreadable",
             ],
+            "domain": "web-research",
+            "tags": ["search", "summarize", "news"],
         })
         return result
 
@@ -1210,6 +1212,10 @@ def test_synthesize_skill_returns_skill(tmp_path):
     assert "Search" in skill.steps_template[0]
     assert skill.circuit_state == "closed"
     assert skill.tier == "provisional"
+    # Pedigree stamp (2026-08-08): synthesis mints carry origin + discovery axis
+    assert skill.origin == "synthesized"
+    assert skill.domain == "web-research"
+    assert skill.tags == ["search", "summarize", "news"]
 
 
 def test_synthesize_skill_saves_when_not_dry_run(tmp_path):

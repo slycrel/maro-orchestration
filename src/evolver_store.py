@@ -487,6 +487,7 @@ def _apply_suggestion_action(d: dict) -> bool:
                     created_at=datetime.now(timezone.utc).isoformat(),
                     tier="provisional",
                     utility_score=confidence,
+                    origin="synthesized",
                 )
                 save_skill(new_skill)
 

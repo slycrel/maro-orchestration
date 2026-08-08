@@ -277,7 +277,9 @@ Output ONLY valid JSON with these keys:
   "trigger_patterns": ["<2-5 short keyword phrases that should trigger this skill>"],
   "steps_template": ["<step 1>", "<step 2>", "<step 3>"],
   "expected_outputs": ["<artifact or result 1>", "<artifact or result 2>"],
-  "edge_cases": ["<adversarial case 1>", "<adversarial case 2>", "<adversarial case 3>"]
+  "edge_cases": ["<adversarial case 1>", "<adversarial case 2>", "<adversarial case 3>"],
+  "domain": "<one short lowercase subject-area phrase, e.g. web-research, git>",
+  "tags": ["<3-6 lowercase discovery keywords a future goal might contain>"]
 }
 Rules:
 - 2-5 steps, each concrete and actionable
@@ -537,6 +539,9 @@ def synthesize_skill(
         tier="provisional",
         utility_score=1.0,
         circuit_state="closed",
+        origin="synthesized",
+        domain=str(parsed.get("domain", "")).strip().lower()[:40],
+        tags=[str(t).strip().lower() for t in parsed.get("tags", []) if str(t).strip()][:6],
     )
     new_skill.content_hash = compute_skill_hash(new_skill)
 
