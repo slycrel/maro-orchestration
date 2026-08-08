@@ -198,3 +198,39 @@ the same two-agreeing-measurements standard the three stamped negatives
 cleared, one full-set negative (disagreeing with a subset positive) is
 one measurement. A second full-set retest is running; agreement →
 stamp, disagreement → the volatility itself is the finding.
+
+## Positives retest 2 — disagreement; no stamps (2026-08-08)
+
+Second full-51-call retest (same frozen plan, same bare-subprocess
+substrate — wrapper pins the new session-fork lane OFF in-process so
+the instrument doesn't change under the measurement; 0 replay errors):
+
+| lesson | sweep (30) | full set #1 | full set #2 | verdict |
+|---|---|---|---|---|
+| 61e4cbd7 library-catalog method | +0.200 | −0.059 | **−0.020** jk 0.020 | not eligible — Δ above −0.05 floor, jackknife ≥ \|Δ\| |
+| 32a656a5 schema/collision pre-check | +0.167 | −0.137 | **+0.020** jk 0.020 | **SIGN FLIP between two full-set runs** |
+
+**No stamps.** Neither lesson meets the two-agreeing-full-set standard;
+per the pre-registered rule, the volatility is the finding:
+
+- **32a656a5 swung 0.157 between two identical-plan full-set runs**
+  (−0.137 → +0.020). Run-to-run variance on the SAME 51 calls can be
+  the size of a demote-worthy effect. Jackknife-within-one-run bounds
+  leave-one-out sensitivity, not run-to-run replay stochasticity —
+  it's a lower bound on the real uncertainty, not an estimate of it.
+- Both retest-2 deltas are exactly ±1/51 — single-call flips, the
+  instrument's resolution limit. These two lessons measure ≈ 0.
+- This retroactively **validates the two-measurement standard as
+  load-bearing, not ceremony**: a single full-set measurement can
+  produce a confident-looking −0.137 that a repeat run erases. The
+  three stamped negatives (−0.137/−0.059/−0.078) each cleared two
+  independent agreeing full-set measurements — exactly the protection
+  this pair failed.
+- Standing instrument rule, now with teeth at both layers: subset
+  measurements are triage only, AND one full-set measurement is a
+  candidate, not a verdict. Act on two agreeing full-set runs,
+  0 errors, jackknife-dominant.
+
+Disposition: 61e4cbd7 and 32a656a5 stay untouched (MEDIUM, no stamp,
+normal decay). Nothing further queued on the sweep positives; the
+promote-floor question is closed.
