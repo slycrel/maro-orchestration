@@ -755,7 +755,7 @@ def main(argv=None):
     parser.add_argument("--verbose", "-v", action="store_true", help="Print progress")
     parser.add_argument(
         "--backend", "-b",
-        choices=["auto", "anthropic", "openrouter", "openai", "subprocess", "codex"],
+        choices=["auto", "anthropic", "openrouter", "openai", "subprocess", "codex", "xai"],
         default=None,
         help="LLM backend (default: auto-detect; MARO_BACKEND env var also accepted)",
     )

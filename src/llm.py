@@ -246,6 +246,17 @@ _MODEL_MAP: Dict[str, Dict[str, str]] = {
         MODEL_MID:   "gpt-5.4",
         MODEL_POWER: "gpt-5.4",
     },
+    # Refreshed 2026-08-08 against the live /v1/models list on this box's key
+    # (same discipline as the openai map — marketing names lie, the endpoint
+    # doesn't). Priced via /v1/language-models the same day: 4.20-fast and
+    # 4.3 both $1.25/$2.50 per Mtok, 4.5 $2/$6. Non-reasoning cheap tier on
+    # purpose: the cheap-rung call classes (validation, classify) don't want
+    # reasoning latency.
+    "xai": {
+        MODEL_CHEAP: "grok-4.20-0309-non-reasoning",
+        MODEL_MID:   "grok-4.3",
+        MODEL_POWER: "grok-4.5",
+    },
 }
 
 
@@ -2981,6 +2992,25 @@ class OpenAIAdapter(OpenAICompatAdapter):
     _resolve_backend_key = "openai"
 
 
+class XAIAdapter(OpenAICompatAdapter):
+    """HTTP adapter for xAI's OpenAI-compatible endpoint (Grok models).
+
+    `XAI_API_KEY` (env or credentials .env, same discovery contract as the
+    other paid backends). Prepaid-credit account (Jeremy funded it
+    2026-08-08); full retry ladder like OpenAI/OpenRouter — this is a paid
+    rung, not a free-tier breaker lane. Deliberately NOT in
+    DEFAULT_BACKEND_ORDER: it joins the failover chain only when config
+    names it in `model.backend_order`, or via backend="xai" — a new paid
+    backend must be opted into, never silently picked up.
+    """
+
+    backend = "xai"
+    _resolve_backend_key = "xai"
+
+    def __init__(self, api_key: str, model: str = MODEL_CHEAP):
+        super().__init__(api_key, model, base_url="https://api.x.ai/v1")
+
+
 # ---------------------------------------------------------------------------
 # GroqAdapter / GeminiAdapter — hosted-free validation-ladder tier (BACKLOG #25)
 # ---------------------------------------------------------------------------
@@ -3094,7 +3124,7 @@ def _claude_bin_available() -> bool:
 # openrouter/openai last (billed routes).
 DEFAULT_BACKEND_ORDER = ["anthropic", "subprocess", "openrouter", "openai"]
 
-_KNOWN_BACKENDS = {"anthropic", "openrouter", "openai", "subprocess", "codex"}
+_KNOWN_BACKENDS = {"anthropic", "openrouter", "openai", "subprocess", "codex", "xai"}
 
 
 def _get_backend_order() -> List[str]:
@@ -3144,10 +3174,11 @@ def detect_backends() -> List[Tuple[str, bool, str]]:
     env = _load_env_file()
     out: List[Tuple[str, bool, str]] = []
     for name in _get_backend_order():
-        if name in ("anthropic", "openrouter", "openai"):
+        if name in ("anthropic", "openrouter", "openai", "xai"):
             env_var = {"anthropic": "ANTHROPIC_API_KEY",
                        "openrouter": "OPENROUTER_API_KEY",
-                       "openai": "OPENAI_API_KEY"}[name]
+                       "openai": "OPENAI_API_KEY",
+                       "xai": "XAI_API_KEY"}[name]
             usable = bool(_get_key(env_var, env))
             detail = f"{env_var} {'set' if usable else 'not set (env or credentials .env)'}"
         elif name == "subprocess":
@@ -3213,7 +3244,8 @@ def build_adapter(
     """Build an LLM adapter with auto-detection or explicit backend choice.
 
     Args:
-        backend: One of "auto", "subprocess", "anthropic", "openrouter", "openai".
+        backend: One of "auto", "subprocess", "anthropic", "openrouter",
+                 "openai", "xai", "codex".
                  "auto" tries each in priority order until one works.
         model:   MODEL_CHEAP | MODEL_MID | MODEL_POWER, or a raw model string.
         api_key: Explicit API key (overrides env detection).
@@ -3256,6 +3288,12 @@ def build_adapter(
         if not key:
             raise RuntimeError("No OPENAI_API_KEY found")
         return OpenAIAdapter(api_key=key, model=model)
+
+    if backend == "xai":
+        key = api_key or _get_key("XAI_API_KEY", env)
+        if not key:
+            raise RuntimeError("No XAI_API_KEY found")
+        return XAIAdapter(api_key=key, model=model)
 
     # Auto-detect
     assert backend == "auto", f"Unknown backend: {backend!r}"
@@ -3301,6 +3339,10 @@ def build_adapter(
             key = _get_key("OPENAI_API_KEY", env)
             if key:
                 available.append(OpenAIAdapter(api_key=key, model=model))
+        elif name == "xai":
+            key = _get_key("XAI_API_KEY", env)
+            if key:
+                available.append(XAIAdapter(api_key=key, model=model))
         elif name == "subprocess":
             if _claude_bin_available():
                 if model == MODEL_POWER and not _POWER_FALLBACK_WARNED:

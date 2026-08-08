@@ -115,7 +115,7 @@ def run_doctor() -> bool:
     _degraded: list[str] = []
     try:
         from llm import detect_backends as _detect_backends
-        _pkg_needs = {"anthropic": "anthropic", "openrouter": "requests", "openai": "requests"}
+        _pkg_needs = {"anthropic": "anthropic", "openrouter": "requests", "openai": "requests", "xai": "requests"}
         for _name, _avail, _ in _detect_backends():
             if not _avail:
                 continue

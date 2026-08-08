@@ -50,6 +50,13 @@ COST_BY_MODEL: Dict[str, Dict[str, float]] = {
     "cheap":                       {"input":  0.80, "output":  4.00},
     "mid":                         {"input":  3.00, "output": 15.00},
     "power":                       {"input": 15.00, "output": 75.00},
+    # xAI Grok (backend "xai") — priced from the live /v1/language-models
+    # endpoint 2026-08-08 (units there are USD per 10^10 tokens; ÷10⁴ = $/M)
+    "grok-4.20-0309-non-reasoning": {"input": 1.25, "output": 2.50},
+    "grok-4.20-0309-reasoning":     {"input": 1.25, "output": 2.50},
+    "grok-4.3":                     {"input": 1.25, "output": 2.50},
+    "grok-4.5":                     {"input": 2.00, "output": 6.00},
+    "grok-build-0.1":               {"input": 1.00, "output": 2.00},
 }
 
 # Default fallback — assumes mid-tier (Sonnet) when model is unknown

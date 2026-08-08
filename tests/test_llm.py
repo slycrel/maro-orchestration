@@ -1483,6 +1483,69 @@ def test_build_adapter_model_passed_through():
 
 
 # ---------------------------------------------------------------------------
+# XAIAdapter (backend "xai", wired 2026-08-08)
+# ---------------------------------------------------------------------------
+
+def test_xai_adapter_backend_and_base_url():
+    from llm import XAIAdapter
+    a = XAIAdapter(api_key="xai-test-key")
+    assert a.backend == "xai"
+    assert a._base_url == "https://api.x.ai/v1"
+
+
+def test_resolve_model_xai_tiers():
+    from llm import MODEL_CHEAP, MODEL_MID, MODEL_POWER, resolve_model
+    assert resolve_model("xai", MODEL_CHEAP) == "grok-4.20-0309-non-reasoning"
+    assert resolve_model("xai", MODEL_MID) == "grok-4.3"
+    assert resolve_model("xai", MODEL_POWER) == "grok-4.5"
+    # Raw model strings pass through untouched (model-churn contract).
+    assert resolve_model("xai", "grok-build-0.1") == "grok-build-0.1"
+
+
+def test_build_adapter_xai_explicit_no_key_raises(monkeypatch):
+    monkeypatch.delenv("XAI_API_KEY", raising=False)
+    monkeypatch.setattr("llm._load_env_file", lambda *a, **kw: {})
+    with pytest.raises(RuntimeError, match="XAI_API_KEY"):
+        build_adapter("xai")
+
+
+def test_build_adapter_xai_explicit(monkeypatch):
+    from llm import XAIAdapter
+    monkeypatch.setenv("XAI_API_KEY", "xai-test-key")
+    monkeypatch.setattr("llm._load_env_file", lambda *a, **kw: {})
+    a = build_adapter("xai")
+    assert isinstance(a, XAIAdapter)
+
+
+def test_xai_not_in_default_backend_order():
+    # A new paid backend must be opted into via config, never silently
+    # picked up by the failover chain.
+    from llm import DEFAULT_BACKEND_ORDER
+    assert "xai" not in DEFAULT_BACKEND_ORDER
+
+
+def test_build_adapter_auto_includes_xai_when_configured(monkeypatch):
+    from llm import FailoverAdapter, XAIAdapter
+    monkeypatch.setenv("XAI_API_KEY", "xai-test-key")
+    monkeypatch.setattr("llm._claude_bin_available", lambda: True)
+    monkeypatch.setattr("llm._load_env_file", lambda *a, **kw: {})
+    monkeypatch.setattr("llm._get_backend_order", lambda: ["xai", "subprocess"])
+    a = build_adapter("auto")
+    assert isinstance(a, FailoverAdapter)
+    assert isinstance(a._adapters[0], XAIAdapter)
+
+
+def test_detect_backends_reports_xai(monkeypatch):
+    from llm import detect_backends
+    monkeypatch.setenv("XAI_API_KEY", "xai-test-key")
+    monkeypatch.setattr("llm._load_env_file", lambda *a, **kw: {})
+    monkeypatch.setattr("llm._get_backend_order", lambda: ["xai"])
+    rows = {name: (usable, detail) for name, usable, detail in detect_backends()}
+    assert rows["xai"][0] is True
+    assert "XAI_API_KEY" in rows["xai"][1]
+
+
+# ---------------------------------------------------------------------------
 # LLMAdapter base class
 # ---------------------------------------------------------------------------
 
