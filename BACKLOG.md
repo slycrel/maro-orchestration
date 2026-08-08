@@ -1287,6 +1287,32 @@ capture**, which is what makes the rung amortize instead of evaporate.
      `skills.py:extract_skills` (which the run confirmed is
      input-shape-ready). Fits the standing research-steal-list arc;
      honor the link-farm-first decree (2026-08-02) when sourcing.
+     **AMENDED 2026-08-08 — design-input read done, three of those
+     claims do not survive verification:
+     `docs/history/2026-08-08-scout-wiring-design-input.md`.** (a) The
+     GitHub/zero-callers half is CONFIRMED, with the nuance that the
+     capability is already agent-reachable via `fetch_tool` — what's
+     missing is a trigger and a query, not reach. (b) `repo_scan.py` is
+     the WRONG component: it's a local tech-stack fingerprinter
+     (`scan_repo` → languages/frameworks/tags, sole caller
+     `loop_planning.py:591`), there is no fetch→disk bridge, and
+     bridging one reopens the C3 untrusted-git boundary. The near-miss
+     that probably caused the mis-file is `repo_scan.py:336`
+     `find_skills_for_stack` — which matches EXISTING skills to a
+     stack, the scout's inverse. (c) **"input-shape-ready" is wrong.**
+     `extract_skills(outcomes, adapter)` filters through
+     `is_learnable_outcome` (`skills.py:258`) and returns `[]` at
+     `skills.py:262` BEFORE any LLM call on non-outcome input; it
+     stamps `source_loop_ids`. Feeding it repo content means forging
+     outcome dicts — the exact fabricated-provenance shape
+     `lesson_provenance.py` exists to stop. (d) **The premise is
+     empirically empty:** across all 94 post-ship runs carrying a
+     skills manifest (2026-07-09 → 2026-08-08), ZERO recorded an empty
+     skill injection, so "derive queries from maro's own skill gaps"
+     has no corpus. Not a defect — the matcher is healthy (93% genuine
+     trigger matches; out-of-domain probes correctly match nothing) —
+     the signal is just the wrong SHAPE. Blocked on the match-tier
+     telemetry item below; re-scope after that lands.
   2. **CONTESTED — its "highest-leverage" S9 (mandatory human merge
      gate on skill promotion).** Pushback on record: a human gate on
      EVERY promotion makes Jeremy the sequencing blocker (fanout
@@ -1321,6 +1347,81 @@ capture**, which is what makes the rung amortize instead of evaporate.
      `test_verdict_learning` under xdist (4 ordering-dependent
      failures). Both modules read the workspace env at call time, so
      the reloads were pure downside; removed.
+
+- [ ] **Skill match-tier telemetry — the gap signal is the wrong shape, and
+  Phase-32 synthesis has been dormant since 2026-03-27** (opened 2026-08-08,
+  out of the scout-wiring design read —
+  `docs/history/2026-08-08-scout-wiring-design-input.md`). **Measured, box,
+  read-only:** across all 94 post-ship runs carrying a `skills_manifest.jsonl`
+  (2026-07-09 `f49f318` → 2026-08-08), **0 recorded an empty skill
+  injection**, split by stage so the two-injection-site conflation isn't
+  hiding it. So `had_no_matching_skill` (`loop_types.py:217` →
+  `loop_finalize.py:919`) effectively never fires, and the
+  `evolver.synthesize_skill` trigger it gates (Phase 32, `e315502`
+  **2026-03-27**) is de facto dead on a warm store. Also note the flag is
+  **not persisted** — 0 of 1,496 `outcomes.jsonl` rows and 0 of 773
+  `metadata.json` files carry it; it's an in-memory `LoopResult` field
+  consumed at finalize.
+  **This is not a matcher defect.** Replaying the 94 real prompts against
+  today's 376-skill store: **93% match on genuine trigger patterns**, 7% via
+  the `_tfidf_skill_rank` fallback, 0% nothing. Out-of-domain controls
+  (`"bake a sourdough loaf"`, `"translate this to Klingon"`) correctly return
+  **None**. The signal is simply binary — *"nothing matched at all"* — which
+  on a warm store is not a condition that occurs.
+  **The fix is telemetry, not a threshold:** `append_skills_manifest`
+  (`runs.py:1147`) entries already carry id/name/content_hash/variant_of/
+  tier/routing_key — add the **match tier** (`router`|`keyword`|
+  `tfidf_fallback`) and its score/overlap at the two `loop_planning.py`
+  injection sites. That turns a never-firing binary into a graded signal, and
+  yields: a real weak-match corpus (7% of runs, not 0%), a live Phase-32
+  trigger for the first time, and honest attribution — utility scores, A/B
+  `variant_wins` and `record_skill_outcome` currently credit a trigger match
+  and a weak fallback identically.
+  **Only then** the floor question: live fallbacks all won on 2–3 shared
+  tokens and read as genuinely related, while a 1-shared-token collision class
+  exists (`"deploy kubernetes to staging"` → `Staged Research Artifact
+  Pipeline`) but does **not** occur in the corpus. A ≥2-token floor would
+  preserve all 7 and kill the collision — but set it from the logged
+  distribution once telemetry exists, per the standing posture that a numeric
+  cut on evidence needs a measurement, not a default. **Don't ship the floor
+  first.** Blocks the scout-wiring re-scope above.
+  *Watch item, not live:* `router.route_skills` scores **skill text only**, so
+  its scores are a per-skill prior identical for every goal. Live-tested on
+  the box — all four probes returned `method='keyword'`, i.e. the
+  `DISCRIMINATION_EPSILON` (0.05) guard is correctly suppressing it. If the
+  model is ever retrained into discriminating range, goal-insensitive
+  injection goes live; worth a tripwire.
+
+- [ ] **Skill pedigree + discovery metadata** (opened 2026-08-08, **Jeremy:**
+  *"seems important in both a 'this pattern matches' sort of way as well as
+  domain-relevant sorts of ways… a little surprised we don't have some of
+  that metadata already; otherwise skills are difficult to discover"*).
+  Surfaced by the scout read: a world-sourced skill would have no honest
+  provenance home. **What EXISTS today** (`skill_types.py:20`): `source_loop_ids`
+  (which loops produced it), `created_at`, `content_hash` (poisoning defense),
+  `tier` provisional/established, `project` scoping, and `imported: dict` —
+  a real provenance stamp, but **only for pack-imported skills**
+  (PORTABLE_LEARNING_DESIGN §3; moves claimed stats to
+  `imported["claimed_use_count"]`). **What's missing, two axes:**
+  1. **Origin KIND.** Among natively-minted skills nothing distinguishes
+     crystallized-from-a-run (`extract_skills`) / synthesized-on-a-gap
+     (`synthesize_skill`) / human-authored-curated (`skill_loader` SKILL.md) /
+     graduated. `source_loop_ids` says *which* loop, never *what kind of
+     process*. Lessons already have exactly this — `minted_from` in
+     `lesson_provenance.py` (2026-07-29). Skills have no equivalent; latent
+     today only because every skill is born from a real run. **A scout would
+     be the first world-sourced writer and would drive straight through it —
+     so this is a PREREQUISITE for that item, not a follow-on.**
+  2. **Discovery axis.** There is no domain/tag/capability field at all.
+     Discovery rides `trigger_patterns` substring hits plus stemmed token
+     overlap (`find_matching_skills`, `skills.py:616`) and the curated
+     summaries block — which is why the fallback tier leans on incidental
+     token collisions. Two stores compound it: the `Skill` jsonl store and the
+     `skill_loader`/SKILL.md curated set carry different metadata.
+  Pairs naturally with the match-tier telemetry item above (both are "record
+  what we already know but throw away"). Should-we before how-would-we: decide
+  whether origin-kind is a stamp on `Skill` mirroring `minted_from`, or
+  whether `imported` generalizes into a single `provenance` dict.
 
 - [ ] **Arbitrary-truncation audit** (opened 2026-08-03; **Jeremy:** *"this
   was one of the first truncations early on and I've been uncomfortable
