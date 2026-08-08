@@ -60,6 +60,18 @@ mint riding V3 earned promotion; hypothesis → observe_pattern
 confirmation lane, quarantined from live injection until confirmed).
 Three decisions posed to Jeremy in §7. Build gated on his read.
 
+### Untracked test-artifact skills in repo skills/ (FOUND 2026-08-08)
+
+Seven untracked `.md` files sitting in the repo's `skills/` dir
+(`cli_list_test_skill`, `full_field_test`, `hash_storage_test`,
+`failure_tracker`, `iterative_build`, `polymarket_analyzer`,
+`research_tool`) — shapes look like test/run skill-export leakage into
+the repo instead of the workspace overlay, same isolation-leak class as
+the repo-local `memory/` writes (fixed 2026-08-06). Not deleted
+(data-retention decree — some might be real exports worth keeping);
+wants: identify the writer, point it at the workspace, then opt-in
+cleanup call on the seven files.
+
 ### Live-writer census findings — four decision-shaped items (OPENED 2026-08-06)
 
 The 2026-08-06 live-writer census (method: a gate is only as live as its
