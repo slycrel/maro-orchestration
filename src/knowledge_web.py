@@ -1139,11 +1139,23 @@ def promote_lesson(lesson_id: str) -> bool:
         return False
     # ...but the record that moves tiers is the stored (raw) one — popped
     # from MEDIUM under the lock so concurrent updates aren't dropped.
+    # The boundary guards are re-validated on the FRESH row inside the
+    # lock: the pre-checks above ran on an unlocked snapshot, and a stamp
+    # (quarantine/contest/Δ-demote) landing in that window would otherwise
+    # ride into decay-free LONG unfiltered (adversarial review 2026-08-08
+    # Part 1 finding 2 — same read-outside-the-lock class as the
+    # _reinforce_tiered_lesson fix of 2026-08-04, applied here as a class:
+    # all four guards, both promotion routes).
     popped: Dict[str, TieredLesson] = {}
 
     def _pop(lessons: List[TieredLesson]) -> List[TieredLesson]:
         t = next((l for l in lessons if l.lesson_id == lesson_id), None)
         if t is None:
+            return lessons
+        if (t.provisional or _is_quarantined(t) or _is_contested(t)
+                or _is_delta_demoted(t)):
+            log.info("promote_lesson: %s failed boundary guards under the "
+                     "lock — not promoting", lesson_id)
             return lessons
         popped["t"] = t
         return [l for l in lessons if l.lesson_id != lesson_id]
@@ -1236,12 +1248,30 @@ def promote_lesson_by_effect(lesson_id: str, delta_evidence: Dict[str, Any]) -> 
         log.info("promote_lesson_by_effect: %s is provisional/quarantined/"
                  "contested — not promoting", lesson_id)
         return False
+    if int(ev.get("replay_errors") or 0) != 0:
+        # Symmetric with the demote route: a failed sample scores as
+        # no-match, so errors manufacture Δ in whichever direction the
+        # outage lands. Errored measurements never act.
+        log.info("promote_lesson_by_effect: %s measurement carries %d replay "
+                 "errors — not promoting", lesson_id,
+                 int(ev.get("replay_errors") or 0))
+        return False
 
     popped: Dict[str, TieredLesson] = {}
 
     def _pop(lessons: List[TieredLesson]) -> List[TieredLesson]:
         t = next((l for l in lessons if l.lesson_id == lesson_id), None)
         if t is None:
+            return lessons
+        if t.provisional or _is_quarantined(t) or _is_contested(t):
+            # Re-validate on the fresh row under the lock — the pre-check
+            # above ran on an unlocked snapshot (review Part 1 finding 2;
+            # all guards get the class fix, both promotion routes).
+            # _is_delta_demoted is deliberately NOT in this route's in-lock
+            # set: a demote stamp is replaceable by exactly this call's
+            # fresh qualifying evidence (measurement replaces measurement).
+            log.info("promote_lesson_by_effect: %s failed boundary "
+                     "guards under the lock — not promoting", lesson_id)
             return lessons
         popped["t"] = t
         return [l for l in lessons if l.lesson_id != lesson_id]
@@ -1255,6 +1285,7 @@ def promote_lesson_by_effect(lesson_id: str, delta_evidence: Dict[str, Any]) -> 
         "delta": float(delta),
         "jackknife_spread": float(spread),
         "n_calls": int(ev.get("n_calls") or 0),
+        "replay_errors": int(ev.get("replay_errors") or 0),
         "stratum": "reason",
         "measured_at": ev.get("measured_at") or datetime.now(timezone.utc).isoformat(),
         "route": "effect",
@@ -1340,6 +1371,16 @@ def demote_lesson_by_effect(lesson_id: str, delta_evidence: Dict[str, Any]) -> b
         return False
     if ev.get("stratum") != "reason":
         return False
+    if int(ev.get("replay_errors") or 0) != 0:
+        # A failed with-arm sample scores as no-match, so an outage
+        # manufactures Δ=−1 with jackknife 0 — and the failure is BIASED
+        # toward the with-arm (longer prompt). Errored measurements never
+        # act (adversarial review 2026-08-08 Part 1 finding 3); re-run the
+        # measurement instead.
+        log.info("demote_lesson_by_effect: %s measurement carries %d replay "
+                 "errors — not demoting", lesson_id,
+                 int(ev.get("replay_errors") or 0))
+        return False
 
     stamped: Dict[str, TieredLesson] = {}
 
@@ -1351,6 +1392,9 @@ def demote_lesson_by_effect(lesson_id: str, delta_evidence: Dict[str, Any]) -> b
             "delta": float(delta),
             "jackknife_spread": float(spread),
             "n_calls": int(ev.get("n_calls") or 0),
+            # Persisted so the stamp stays auditable after the census row
+            # is gone (finding 3's second half): 0 by construction here.
+            "replay_errors": int(ev.get("replay_errors") or 0),
             "stratum": "reason",
             "measured_at": ev.get("measured_at") or datetime.now(timezone.utc).isoformat(),
             "route": "effect-demote",
@@ -1361,6 +1405,24 @@ def demote_lesson_by_effect(lesson_id: str, delta_evidence: Dict[str, Any]) -> b
     _mutate_tiered_lessons(MemoryTier.MEDIUM, _stamp)
     if "t" not in stamped:
         return False
+    try:
+        # Same operator-audit surface as quarantine/contest (finding 5):
+        # "what got demoted this month, and on what evidence" must be
+        # answerable from the captain's log, not a grep of the store.
+        from captains_log import log_event, LESSON_DELTA_DEMOTED
+        log_event(
+            event_type=LESSON_DELTA_DEMOTED,
+            subject=lesson_id,
+            summary=(f"Lesson {lesson_id} Δ-demoted (Δ={float(delta):.3f} "
+                     f"over {int(ev.get('n_calls') or 0)} calls): "
+                     f"{stamped['t'].lesson[:100]}"),
+            context={"delta": float(delta),
+                     "jackknife_spread": float(spread),
+                     "n_calls": int(ev.get("n_calls") or 0),
+                     "replay_errors": int(ev.get("replay_errors") or 0)},
+        )
+    except Exception:
+        pass
     log.info("demote_lesson_by_effect: %s excluded from decision injection "
              "(Δ=%.3f over %d calls)", lesson_id, float(delta),
              int(ev.get("n_calls") or 0))
@@ -1696,10 +1758,17 @@ def inject_tiered_lessons(
     # provenance gate 2026-07-29; retirement-by-contradiction 2026-08-02).
     # LONG can't hold provisional/quarantined (promotion is guarded) but CAN
     # hold contested — contestation is how decay-free LONG rows retire.
+    # Filter BEFORE the pool slice: load_tiered_lessons sorts by score and
+    # slices, so filtering after the limit makes every excluded row silently
+    # cost a slot instead of yielding it to the next healthy lesson
+    # (adversarial review 2026-08-08 Part 1 finding 1 — measured live: 3
+    # demote stamps cost 2 of 3 goalless MEDIUM slots). Excluded rows keep
+    # their rank by design (no score mutation), so the reorder is the fix.
     long_candidates = [t for t in load_tiered_lessons(
         tier=MemoryTier.LONG, task_type=task_type, min_score=0.0,
-        limit=max_long * _pool_multiplier,
-    ) if not (t.provisional or _is_quarantined(t) or _is_contested(t))]
+        limit=None,
+    ) if not (t.provisional or _is_quarantined(t) or _is_contested(t))
+    ][:max_long * _pool_multiplier]
     if goal and len(long_candidates) > max_long:
         _ranker = _hybrid_rank if _USE_HYBRID else _tfidf_rank
         long_candidates = _ranker(goal, long_candidates, top_k=max_long)
@@ -1718,14 +1787,16 @@ def inject_tiered_lessons(
                          f"{grounding_marker(getattr(l, 'grounding', None))}")
             applied_ids.append((l.lesson_id, MemoryTier.LONG))
 
-    # Δ-demoted rows leave THIS surface only (the measured one) — MEDIUM
-    # filter alone because demotion is MEDIUM-scoped in v1; a LONG row's
-    # delta_evidence can only carry route="effect".
+    # Δ-demoted rows leave THIS surface only (the measured one). Same
+    # filter-before-slice ordering as LONG above — demoted rows are
+    # top-ranked by construction (measured because high-scored, score
+    # untouched by decree), so filter-after-limit hits worst exactly here.
     medium_candidates = [t for t in load_tiered_lessons(
         tier=MemoryTier.MEDIUM, task_type=task_type, min_score=0.3,
-        limit=max_medium * _pool_multiplier,
+        limit=None,
     ) if not (t.provisional or _is_quarantined(t) or _is_contested(t)
-              or _is_delta_demoted(t))]
+              or _is_delta_demoted(t))
+    ][:max_medium * _pool_multiplier]
     if goal and len(medium_candidates) > max_medium:
         _ranker = _hybrid_rank if _USE_HYBRID else _tfidf_rank
         medium_candidates = _ranker(goal, medium_candidates, top_k=max_medium)

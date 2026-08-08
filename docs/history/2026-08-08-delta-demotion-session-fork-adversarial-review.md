@@ -487,3 +487,65 @@ and 2 of Part 1 were confirmed by executing the shipped code against the
 live workspace on the maro box; Part 2 findings 1 and 7 and both Part 2
 refutations were confirmed against
 `~/.maro/workspace/output/claude-fork-bench/`.*
+
+---
+
+## Fix pass (same day, verify-before-fix)
+
+Load-bearing claims spot-verified against source before acting (worker
+marker seam, pre-push gate, `atomic_write` existence, load-slice order,
+`_match_rate` None handling): all TRUE. Fixes landed same day:
+
+**Part 1 (demotion):**
+- F1 slot-eating — FIXED: both `inject_tiered_lessons` branches now
+  filter before the pool slice (excluded rows yield their slots). Pin:
+  `test_demoted_rows_do_not_eat_injection_slots` (4 rows, top-2 demoted,
+  healthy rows fill the block).
+- F2 TOCTOU — FIXED as a class: all boundary guards re-validated on the
+  fresh row inside the locked pop, in `promote_lesson` AND
+  `promote_lesson_by_effect` (the effect route deliberately omits the
+  demote flag from its in-lock set — its own fresh evidence is the
+  replacement). Pin: `test_promote_revalidates_guards_under_lock`
+  (stale-snapshot shape reproduced via a first-read-only stale loader).
+- F3 error-manufactured Δ — FIXED both routes: `replay_errors != 0`
+  refuses to act (demote AND promote), and the stamp persists
+  `replay_errors` for audit. The three live stamps were re-verified
+  against the recorded census rows (0 errors each) and re-stamped with
+  the audit field — no re-measurement needed; the record answers the
+  question the stamp couldn't.
+- F5 no audit row — FIXED: `LESSON_DELTA_DEMOTED` captain's-log event
+  (registry + contract doc + census tests updated); the re-stamps above
+  are its first three live rows.
+- F6 unreachable eligibility — FIXED: explicit `--lesson-id` naming now
+  measures any row (provisional/quarantined/contested excluded only from
+  the unnamed sweep); measurement is evidence-gathering, the act routes
+  keep their guards.
+- F4 + the findings-1/4 root cause (no-score-mutation ⇒ slot-pressure or
+  decay-erasure) — **DEFERRED TO JEREMY** per the lead judgment: the
+  surface-scoping decree is being used as an implementation constraint it
+  wasn't meant to be; that is a policy question, not a patch. F1's fix
+  removes the live bleeding; F4 (GC in ~9–10 days erases the stamp,
+  re-mint returns clean) remains open until the decree question is
+  answered.
+
+**Part 2 (fork lane):**
+- F1+F2+F3 — FIXED with one reshape, as the judgment prescribed: the
+  seed now rides `_run_subprocess_safe` with the CALLER'S exact flag set
+  (worker push-guard marker, runaway breakers, process-group kill,
+  identical tool contract → stable prefix). Seam pin:
+  `test_seed_inherits_callers_exact_flagset` asserts seed cmd ==
+  real cmd minus resume flags. Residual: seed usage is logged
+  (cost in the log line) but not yet in the metrics ledger.
+- F2 (retry storm) — FIXED: failed seeds negative-cached 15 min
+  (`_FORK_SEED_RETRY_S`).
+- F4 straggler deletion — FIXED: invalidation is owner-checked
+  (`stale_id` must match the stored master).
+- F5 stale masters — FIXED: 1h TTL (`_FORK_MASTER_TTL_S`); legacy
+  entries count as expired.
+- F7 non-atomic map — FIXED: `atomic_write` under `locked_write`.
+- F6/F8 + refuted-disk-growth doc drift — FIXED in the DEFAULTS row:
+  savings restated as fixed ~12k tokens/call, "stateless" scoped to
+  fork isolation, transcript accretion stated plainly.
+
+The default-ON flip (Jeremy's decree, journal 8aa8463b) lands WITH this
+fix pass — the review's flip-blocker (Part 2 F1) is closed by it.

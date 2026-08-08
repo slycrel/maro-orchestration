@@ -6606,3 +6606,23 @@ two sweep positives (61e4cbd7 +0.200, 32a656a5 +0.167) is running as
 the winner's-curse check (top-2-of-9 selection inflates single
 measurements; same test-retest bar demotion cleared) — floor
 recommendation rides its result.
+
+### 2026-08-08 — Decision: session-fork lane ON by default; promote floor HOLDS on retest evidence
+
+Jeremy on the fork lane (his words): "Let's turn that on by default, we
+can wait until after our test is done if it would negatively impact it";
+confirmed scope question ("Is this something maro in general is going to
+be upgraded by, or just our testing?") — answer on record: general, every
+stateless subprocess call. Flip landed after the in-flight Δ retest
+completed (mid-run flip would have changed the measurement substrate).
+Journal 8aa8463b. Also his framing of the day: "-p track" accepted for
+now, pure-API track deferred until economics change — consistent with
+the standing budget posture (don't re-pitch API keys).
+
+Promote-floor resolution (data, not decree): the two sweep positives
+FLIPPED SIGN on full-51-call retest (+0.200→−0.059, +0.167→−0.137) —
+winner's-curse selection artifact confirmed; **floor stays 0.30**; new
+instrument rule of thumb recorded in the validation doc: subset
+measurements triage, only full-oracle-set evidence acts. Second full-set
+retest of the two flipped lessons running (agreement → demote stamps
+under the same two-measurement standard).

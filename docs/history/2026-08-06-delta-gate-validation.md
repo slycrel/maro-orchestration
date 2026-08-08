@@ -170,3 +170,31 @@ A later measurement clearing the promote bar replaces the stamp.
 Killswitch `knowledge.effect_demotion_enabled` (docs/DEFAULTS.md). The
 three retested negatives are eligible; stamping them is a one-line
 CLI run (`--demote --lesson-id ...`), left for after Jeremy's read.
+
+## Positives retest — winner's curse confirmed, floor holds (2026-08-08)
+
+Jeremy was on the fence about lowering the 0.30 promote floor for the
+sweep's two positives. Before touching the prior, the obvious check: the
+two were the top-2 of a 9-lesson sweep measured once on a 30-call
+subset — the maximum of N noisy measurements is inflated by selection.
+Full-51-call retest (samples=1, bare subprocess haiku, 0 errors):
+
+| lesson | sweep (30 calls) | full set (51 calls) |
+|---|---|---|
+| 61e4cbd7 library-catalog method | +0.200 jk 0.041 | **−0.059** jk 0.021 |
+| 32a656a5 schema/collision pre-check | +0.167 jk 0.029 | **−0.137** jk 0.023 |
+
+Both FLIPPED SIGN. The 0.30 floor did exactly its job — neither was
+ever promotable, and the "first positive Δs" were subset-composition
+artifacts (the 21 calls outside the sweep subset measure both lessons
+strongly negative, so per-call heterogeneity across the oracle corpus
+is large; jackknife-within-one-run does not protect against choosing
+WHICH calls to run). **Floor stays at 0.30.** Instrument lesson worth
+keeping: subset measurements are for triage only; nothing acts (promote
+OR demote) except on full-oracle-set evidence.
+
+Both lessons now measure demote-eligible on the full set — but under
+the same two-agreeing-measurements standard the three stamped negatives
+cleared, one full-set negative (disagreeing with a subset positive) is
+one measurement. A second full-set retest is running; agreement →
+stamp, disagreement → the volatility itself is the finding.

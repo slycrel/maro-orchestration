@@ -491,15 +491,23 @@ def run_effect_route(
         demote_lesson_by_effect, promote_lesson_by_effect,
     )
     calls = gather_oracle_decision_calls()
-    rows = [t for t in load_tiered_lessons(
-        tier=MemoryTier.MEDIUM, min_score=0.0, limit=None,
-    ) if not (t.provisional or _is_quarantined(t) or _is_contested(t))]
+    rows = load_tiered_lessons(tier=MemoryTier.MEDIUM, min_score=0.0,
+                               limit=None)
     if lesson_ids:
+        # Explicit naming measures ANY row — including provisional/
+        # quarantined/contested ones, which are excluded only from the
+        # unnamed census sweep below. Measurement is evidence-gathering,
+        # not an act; the act routes keep their own guards. (Review Part 1
+        # finding 6: the old order filtered before selection, so the
+        # documented "stamp is a true measurement either way" eligibility
+        # was unreachable even by naming the lesson.)
         wanted = set(lesson_ids)
         rows = [t for t in rows if t.lesson_id in wanted]
     else:
         rows = [t for t in rows
-                if classify_stratum(t.lesson) == STRATUM_REASON]
+                if not (t.provisional or _is_quarantined(t)
+                        or _is_contested(t))
+                and classify_stratum(t.lesson) == STRATUM_REASON]
         rows.sort(key=lambda t: t.score, reverse=True)
     dropped = max(0, len(rows) - limit)
     rows = rows[:limit]

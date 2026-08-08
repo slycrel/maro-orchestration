@@ -225,6 +225,22 @@ def _block_subprocess_llm(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_session_fork(monkeypatch):
+    """subprocess.session_fork defaults ON (Jeremy decree 2026-08-08); in
+    tests the lane is forced OFF so no adapter test ever spawns a real
+    `claude -p` seed call (the seed path uses raw subprocess.run, which
+    _block_subprocess_llm does not intercept). TestSessionFork re-enables
+    it explicitly against a mocked subprocess.run."""
+    try:
+        import llm
+    except Exception:
+        yield
+        return
+    monkeypatch.setattr(llm, "_session_fork_enabled", lambda: False)
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _clear_current_run_dir():
     """Reset the runs.py current-run-dir global between tests.
 

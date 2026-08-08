@@ -825,8 +825,11 @@ Truth anchor: GOAL_BRAIN.md Threads. History: docs/history/ROADMAP_ARCHIVE.md.
    decision injection + blocks tenure-to-LONG, surface-scoped per
    decree; killswitch `knowledge.effect_demotion_enabled`). Sweep also
    found the corpus's first POSITIVE Δs (+0.200/+0.167, method-shaped,
-   under the 0.30 floor) — promote-floor question queued to Jeremy
-   (READING_QUEUE row). Still-queued cuts from the brief's §5:
+   under the 0.30 floor) — but both FLIPPED SIGN on full-set retest
+   same day (−0.059/−0.137): winner's-curse selection artifact, floor
+   HOLDS at 0.30; instrument rule recorded (subset measurements =
+   triage only, full-oracle-set evidence acts). Three stable negatives
+   STAMPED 2026-08-08 on Jeremy's go. Still-queued cuts from the brief's §5:
    evolver/thinkback trace scoring, un-contest verb. Original prep
    brief: `docs/DELTA_GATE_BUILD_BRIEF.md`; decision 623eb056.
 

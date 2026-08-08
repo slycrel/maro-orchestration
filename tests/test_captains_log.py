@@ -350,7 +350,11 @@ class TestEventTypes:
         # +1 (2026-08-02): KNOWLEDGE_NODE_PROMOTED — V3 candidate → active
         # sweep (knowledge_web.promote_knowledge_candidates on the skill-
         # maintenance cadence; "same as skills" decree).
-        assert len(EVENT_TYPES) == 80
+        # +1 (2026-08-08): LESSON_DELTA_DEMOTED — Δ-gate demotion stamp
+        # applied; sibling of LESSON_QUARANTINED/LESSON_CONTESTED (every
+        # exclusion mechanism leaves an operator audit row — adversarial
+        # review 2026-08-08 Part 1 finding 5).
+        assert len(EVENT_TYPES) == 81
 
     def test_previously_unregistered_events_in_set(self):
         from captains_log import EVOLVER_REVERTED, EVOLVER_VERIFY, PLAYBOOK_UPDATED

@@ -77,6 +77,10 @@ LESSON_QUARANTINED = "LESSON_QUARANTINED"  # provenance-gate stamp (prompt-deriv
 # lesson) or by operator judgment. Contested rows leave every injection
 # surface but stay on disk; the audit trail for lesson trust flips.
 LESSON_CONTESTED = "LESSON_CONTESTED"
+# Δ-gate demotion stamp applied (2026-08-08): measured-negative lesson
+# excluded from decision injection + tenure-to-LONG. Sibling of the two
+# above — every exclusion mechanism leaves an operator-readable audit row.
+LESSON_DELTA_DEMOTED = "LESSON_DELTA_DEMOTED"
 LESSON_EXTRACTION = "LESSON_EXTRACTION"  # per-outcome funnel intake state/counts
 LESSON_DECAYED = "LESSON_DECAYED"
 LESSON_RECOVERED = "LESSON_RECOVERED"  # reserved: Stage 2→3 lesson recovery, no emitter yet (BACKLOG #8)
@@ -302,6 +306,7 @@ EVENT_TYPES = {
     SKILL_CIRCUIT_OPEN, SKILL_CIRCUIT_HALF_OPEN, SKILL_CIRCUIT_CLOSED,
     SKILL_VARIANT_CREATED, AB_RETIRED, ISLAND_CULLED,
     LESSON_RECORDED, LESSON_REINFORCED, LESSON_QUARANTINED, LESSON_CONTESTED,
+    LESSON_DELTA_DEMOTED,
     LESSON_EXTRACTION, LESSON_DECAYED, LESSON_RECOVERED,
     MEMORY_CONSOLIDATED, WORKER_SLICE_INJECTED,
     HYPOTHESIS_CREATED, HYPOTHESIS_PROMOTED, HYPOTHESIS_CONTRADICTED,

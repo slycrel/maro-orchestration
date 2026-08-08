@@ -502,3 +502,151 @@ class TestEffectRouteCensus:
         import knowledge_web as kw
         longs = kw.load_tiered_lessons(tier=kw.MemoryTier.LONG, min_score=0.0)
         assert all(l.lesson_id != tl.lesson_id for l in longs)
+
+
+# ---------------------------------------------------------------------------
+# Adversarial-review hardening (2026-08-08): slot-eating, TOCTOU, replay
+# errors, audit event, named-lesson measurement
+# ---------------------------------------------------------------------------
+
+def _cl_events(tmp_path, event_type):
+    path = tmp_path / "memory" / "captains_log.jsonl"
+    if not path.exists():
+        return []
+    return [json.loads(line)
+            for line in path.read_text().splitlines()
+            if line.strip() and json.loads(line).get("event_type") == event_type]
+
+
+class TestReviewHardening:
+    def test_demoted_rows_do_not_eat_injection_slots(self, monkeypatch, tmp_path):
+        # Review Part 1 finding 1 (measured live): demoted rows keep their
+        # score rank, so a filter placed after the load limit spends the
+        # pool on rows it then drops. Healthy lessons must fill the slots.
+        import knowledge_web as kw
+        texts = [
+            "the run diverged because the dependency resolver preferred the "
+            "wrong registry mirror",
+            "the summary step failed because the artifact index was read "
+            "before the writer flushed",
+            "the fetch retried forever because the proxy stripped the "
+            "content-length header",
+            "the plan stalled because the validator held the workspace lock "
+            "across the whole batch",
+        ]
+        seeded = []
+        for text in texts:
+            seeded.append(_seed_medium_lesson(
+                monkeypatch, tmp_path, lesson_text=text))
+        top_two = [seeded[0].lesson_id, seeded[1].lesson_id]
+
+        def _rank(lessons):
+            order = {tl.lesson_id: n for n, tl in enumerate(seeded)}
+            for l in lessons:
+                if l.lesson_id in order:
+                    l.score = 2.0 - 0.1 * order[l.lesson_id]
+            return lessons
+
+        kw._mutate_tiered_lessons(kw.MemoryTier.MEDIUM, _rank)
+        for lid in top_two:
+            assert kw.demote_lesson_by_effect(lid, NEG_EVIDENCE) is True
+        block = kw.inject_tiered_lessons("agenda", track_applied=False)
+        assert seeded[2].lesson in block and seeded[3].lesson in block
+        assert seeded[0].lesson not in block and seeded[1].lesson not in block
+
+    def test_promote_revalidates_guards_under_lock(self, monkeypatch, tmp_path):
+        # Review Part 1 finding 2 (TOCTOU): promote_lesson pre-checks an
+        # unlocked snapshot. Simulate a demote stamp landing in the window
+        # by serving promote_lesson a stale (unstamped) snapshot while the
+        # on-disk row carries the stamp — the in-lock re-check must refuse.
+        import knowledge_web as kw
+        tl = _seed_medium_lesson(monkeypatch, tmp_path)
+
+        def _eligible(lessons):
+            for l in lessons:
+                if l.lesson_id == tl.lesson_id:
+                    l.score = 1.0
+                    l.sessions_validated = kw.PROMOTE_MIN_SESSIONS
+            return lessons
+
+        kw._mutate_tiered_lessons(kw.MemoryTier.MEDIUM, _eligible)
+        assert kw.demote_lesson_by_effect(tl.lesson_id, NEG_EVIDENCE) is True
+
+        real_load = kw.load_tiered_lessons
+        first = {"done": False}
+
+        def stale_first_read(*args, **kwargs):
+            # Only promote_lesson's PRE-CHECK read (the first) is stale —
+            # the locked read inside _mutate_tiered_lessons sees the disk
+            # truth, which is exactly the TOCTOU shape under test.
+            rows = real_load(*args, **kwargs)
+            if not first["done"]:
+                first["done"] = True
+                for r in rows:
+                    if r.lesson_id == tl.lesson_id:
+                        r.delta_evidence = {}  # the pre-stamp snapshot
+            return rows
+
+        monkeypatch.setattr(kw, "load_tiered_lessons", stale_first_read)
+        assert kw.promote_lesson(tl.lesson_id) is False
+        monkeypatch.setattr(kw, "load_tiered_lessons", real_load)
+        mediums = kw.load_tiered_lessons(tier=kw.MemoryTier.MEDIUM, min_score=0.0)
+        assert any(l.lesson_id == tl.lesson_id for l in mediums)
+        longs = kw.load_tiered_lessons(tier=kw.MemoryTier.LONG, min_score=0.0)
+        assert all(l.lesson_id != tl.lesson_id for l in longs)
+
+    def test_errored_measurement_never_demotes(self, monkeypatch, tmp_path):
+        # Review Part 1 finding 3: a with-arm outage manufactures delta=-1
+        # with jackknife 0. Errored measurements are evidence for a re-run,
+        # not an act.
+        import knowledge_web as kw
+        tl = _seed_medium_lesson(monkeypatch, tmp_path)
+        ev = dict(NEG_EVIDENCE, delta=-1.0, jackknife_spread=0.0,
+                  replay_errors=51)
+        assert kw.demote_lesson_by_effect(tl.lesson_id, ev) is False
+
+    def test_errored_measurement_never_promotes(self, monkeypatch, tmp_path):
+        import knowledge_web as kw
+        tl = _seed_medium_lesson(monkeypatch, tmp_path)
+        ev = dict(GOOD_EVIDENCE, replay_errors=3)
+        assert kw.promote_lesson_by_effect(tl.lesson_id, ev) is False
+
+    def test_stamp_persists_replay_errors_for_audit(self, monkeypatch, tmp_path):
+        import knowledge_web as kw
+        tl = _seed_medium_lesson(monkeypatch, tmp_path)
+        assert kw.demote_lesson_by_effect(
+            tl.lesson_id, dict(NEG_EVIDENCE, replay_errors=0)) is True
+        mediums = kw.load_tiered_lessons(tier=kw.MemoryTier.MEDIUM, min_score=0.0)
+        row = next(l for l in mediums if l.lesson_id == tl.lesson_id)
+        assert row.delta_evidence["replay_errors"] == 0
+
+    def test_demotion_emits_captains_log_event(self, monkeypatch, tmp_path):
+        # Review Part 1 finding 5: quarantine and contest both leave an
+        # operator-readable audit row; demotion must too.
+        import knowledge_web as kw
+        from captains_log import LESSON_DELTA_DEMOTED
+        tl = _seed_medium_lesson(monkeypatch, tmp_path)
+        assert kw.demote_lesson_by_effect(tl.lesson_id, NEG_EVIDENCE) is True
+        events = _cl_events(tmp_path, LESSON_DELTA_DEMOTED)
+        assert len(events) == 1
+        assert events[0]["subject"] == tl.lesson_id
+        assert events[0]["context"]["delta"] == NEG_EVIDENCE["delta"]
+        assert events[0]["context"]["replay_errors"] == 0
+
+    def test_named_lesson_ids_measure_excluded_rows(self, monkeypatch, tmp_path):
+        # Review Part 1 finding 6: measurement is evidence-gathering, not an
+        # act — naming a provisional row explicitly must measure it (the act
+        # routes keep their own guards).
+        tl = _seed_medium_lesson(monkeypatch, tmp_path, provisional=True)
+        import runs
+        rd = runs.create_run_dir("hnam", prompt="census", lane="agenda")
+        _write_call(rd / "build" / "calls", 1, "navigator decision",
+                    '{"move": "extend"}')
+        (rd / "run_card.json").write_text(json.dumps({"goal_achieved": True}))
+        from delta_replay import run_effect_route
+        adapter = ScriptedAdapter(tl.lesson)
+        out = run_effect_route(adapter, samples=1, lesson_ids=[tl.lesson_id])
+        row = next((r for r in out["census"] if r["lesson_id"] == tl.lesson_id),
+                   None)
+        assert row is not None
+        assert row["delta"] == 1.0

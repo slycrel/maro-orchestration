@@ -50,8 +50,10 @@ docs/DEFAULTS.md): ClaudeSubprocessAdapter seeds one master per
 (binary, model, no_tools, cwd), persists ids to
 `<workspace>/state/subprocess_fork_masters.json`, forks per stateless
 call; executor sessions + container calls stay bare; evicted masters
-fall back bare and re-seed. Live-smoked on the real CLI. **Residuals:**
-(1) flip ON in workspace config after burn-in — Jeremy's call; (2)
+fall back bare and re-seed. Live-smoked on the real CLI. **Default ON
+since same day** (Jeremy: "Let's turn that on by default"; flip landed
+after the in-flight Δ retest finished — journal 8aa8463b). **Residuals:**
+(1) ~~flip ON~~ DONE; (2)
 process-boot latency (~2–3s/call) remains — the warm-daemon/Agent-SDK
 variant (one long-lived worker consuming job files) is the upgrade
 edge if boot time ever matters at census scale (966 replays ≈ 40–50

@@ -2129,19 +2129,36 @@ _NO_TOOLS_OUTPUT_CEILING = 16000
 # (every fork gets a fresh session id, nothing is written back). Seeding
 # races between processes are harmless: last write wins, both masters stay
 # resumable. Any failure falls open to a bare call.
-_FORK_MASTERS_CACHE: Dict[str, str] = {}
+_FORK_MASTERS_CACHE: Dict[str, Tuple[str, float]] = {}  # key -> (session_id, seeded_at)
+_FORK_SEED_FAILED: Dict[str, float] = {}  # key -> time.time() of last failed seed
 _FORK_SEED_PROMPT = "Session seed. Reply with the single word OK."
 _FORK_SEED_TIMEOUT_S = 120
+# The master transcript freezes the CLI's context as of seed time —
+# CLAUDE.md included — so a master must expire or every stateless call
+# replays a stale copy with no error and no log line (adversarial review
+# 2026-08-08, Part 2 finding 5). One reseed/hour/shape costs ~$0.04.
+_FORK_MASTER_TTL_S = 3600
+# A persistently failing seed must not re-attempt on every stateless call
+# (same review, finding 2): negative-cache failures for this long.
+_FORK_SEED_RETRY_S = 900
+
+
+# Default ON (Jeremy, 2026-08-08: "Let's turn that on by default") — flipped
+# the same day it shipped, after the benchmark + live smoke and once the
+# in-flight Δ retest finished (a mid-run flip would have changed the
+# measurement substrate). Tests force the lane OFF via a conftest fixture so
+# no adapter test ever seeds a real master.
+_SESSION_FORK_DEFAULT = True
 
 
 def _session_fork_enabled() -> bool:
-    """config: subprocess.session_fork (default OFF — opt-in until the
-    lane has burn-in mileage; see docs/DEFAULTS.md)."""
+    """config: subprocess.session_fork (default ON; see docs/DEFAULTS.md).
+    Flip OFF in config to restore bare cold-start calls."""
     try:
         from config import get as _cfg_get
-        return bool(_cfg_get("subprocess.session_fork", False))
+        return bool(_cfg_get("subprocess.session_fork", _SESSION_FORK_DEFAULT))
     except Exception:
-        return False
+        return bool(_SESSION_FORK_DEFAULT)
 
 
 def _fork_masters_path() -> Path:
@@ -2158,7 +2175,7 @@ def _fork_master_key(claude_bin: str, model_str: str, no_tools: bool,
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
-def _load_fork_masters() -> Dict[str, str]:
+def _load_fork_masters() -> Dict[str, Any]:
     try:
         data = json.loads(_fork_masters_path().read_text())
         return data if isinstance(data, dict) else {}
@@ -2166,74 +2183,118 @@ def _load_fork_masters() -> Dict[str, str]:
         return {}
 
 
-def _store_fork_master(key: str, session_id: str) -> None:
+def _fork_entry_session_id(entry: Any, now: float) -> str:
+    """Session id from a map/cache entry IF it is within TTL. Legacy plain-
+    string entries (pre-TTL format) are treated as expired — one reseed
+    migrates them."""
+    if isinstance(entry, dict):
+        sid = str(entry.get("session_id") or "")
+        try:
+            seeded_at = float(entry.get("seeded_at") or 0)
+        except (TypeError, ValueError):
+            return ""
+        if sid and (now - seeded_at) < _FORK_MASTER_TTL_S:
+            return sid
+    return ""
+
+
+def _store_fork_master(key: str, session_id: str, seeded_at: float) -> None:
     try:
-        from file_lock import locked_write
+        from file_lock import atomic_write, locked_write
         path = _fork_masters_path()
         path.parent.mkdir(parents=True, exist_ok=True)
         with locked_write(path):
             masters = _load_fork_masters()
-            masters[key] = session_id
-            path.write_text(json.dumps(masters, indent=2))
+            masters[key] = {"session_id": session_id, "seeded_at": seeded_at}
+            # atomic under the lock — write_text truncates first, and a kill
+            # inside that window would orphan every other shape's master
+            # (adversarial review 2026-08-08, Part 2 finding 7).
+            atomic_write(path, json.dumps(masters, indent=2))
     except Exception as exc:
         log.debug("fork-master store failed (non-fatal): %s", exc)
 
 
 def _invalidate_fork_master(claude_bin: str, model_str: str, no_tools: bool,
-                            cwd: Optional[str]) -> None:
+                            cwd: Optional[str], stale_id: str) -> None:
+    """Drop the master for this shape ONLY if it is still `stale_id` — a
+    straggler holding an evicted master must not delete the healthy
+    replacement someone else already seeded under the same key (review
+    Part 2 finding 4)."""
     key = _fork_master_key(claude_bin, model_str, no_tools, cwd)
-    _FORK_MASTERS_CACHE.pop(key, None)
+    cached = _FORK_MASTERS_CACHE.get(key)
+    if cached and cached[0] == stale_id:
+        _FORK_MASTERS_CACHE.pop(key, None)
     try:
-        from file_lock import locked_write
+        from file_lock import atomic_write, locked_write
         path = _fork_masters_path()
         if not path.exists():
             return
         with locked_write(path):
             masters = _load_fork_masters()
-            if masters.pop(key, None) is not None:
-                path.write_text(json.dumps(masters, indent=2))
+            entry = masters.get(key)
+            entry_sid = (entry.get("session_id") if isinstance(entry, dict)
+                         else entry)
+            if entry_sid == stale_id:
+                masters.pop(key, None)
+                atomic_write(path, json.dumps(masters, indent=2))
     except Exception as exc:
         log.debug("fork-master invalidate failed (non-fatal): %s", exc)
 
 
 def _get_fork_master(claude_bin: str, model_str: str, no_tools: bool,
-                     cwd: Optional[str]) -> str:
+                     cwd: Optional[str], *, seed_cmd: List[str],
+                     env_extra: Optional[Dict[str, str]] = None) -> str:
     """Return a resumable master session id for this call shape, seeding
-    one if needed. Returns "" on any failure — the caller falls open to a
-    bare call, never errors."""
+    one if needed. Returns "" on failure — the caller falls open to a
+    bare call. Runaway-circuit exceptions propagate (a breaker must not
+    be swallowed by an optimization layer).
+
+    `seed_cmd` is the CALLER'S fully-built flag set (minus resume flags):
+    the seed must be byte-identical in tool contract to the forks that
+    will inherit its prefix (a differing tool block invalidates the whole
+    cached prefix — review Part 2 finding 3), and routing it through
+    `_run_subprocess_safe` gives it the same controls as every other
+    spawn: MARO_WORKER_RUN for the git push guard, process-group kill,
+    the runaway cost circuit and token brake (review findings 1–2 — the
+    seed was previously a raw subprocess.run with none of them).
+    Residual: seed usage is logged but not yet in the metrics ledger."""
+    import time as _time
     key = _fork_master_key(claude_bin, model_str, no_tools, cwd)
+    now = _time.time()
     cached = _FORK_MASTERS_CACHE.get(key)
-    if cached:
-        return cached
-    on_disk = _load_fork_masters().get(key)
+    if cached and (now - cached[1]) < _FORK_MASTER_TTL_S:
+        return cached[0]
+    on_disk = _fork_entry_session_id(_load_fork_masters().get(key), now)
     if on_disk:
-        _FORK_MASTERS_CACHE[key] = on_disk
+        _FORK_MASTERS_CACHE[key] = (on_disk, now)
         return on_disk
+    if (now - _FORK_SEED_FAILED.get(key, float("-inf"))) < _FORK_SEED_RETRY_S:
+        return ""
     try:
-        cmd = [claude_bin, "-p", "--output-format", "json",
-               "--dangerously-skip-permissions", "--strict-mcp-config"]
-        if no_tools:
-            cmd += ["--tools", ""]
-        if model_str in ("sonnet", "opus", "haiku") or model_str not in (
-                MODEL_CHEAP, MODEL_MID, MODEL_POWER, "cheap", "mid", "power"):
-            cmd += ["--model", model_str]
-        result = subprocess.run(
-            cmd, input=_FORK_SEED_PROMPT, capture_output=True, text=True,
-            timeout=_FORK_SEED_TIMEOUT_S, cwd=cwd or None)
-        if result.returncode != 0:
-            log.info("fork-master seed failed rc=%d — staying on bare calls",
-                     result.returncode)
+        result = _run_subprocess_safe(
+            list(seed_cmd), input=_FORK_SEED_PROMPT,
+            timeout=_FORK_SEED_TIMEOUT_S, cwd=cwd or None,
+            stream_probe=_build_stream_probes(model_str, agentic=not no_tools),
+            env_extra=env_extra)
+        payload = _parse_stream_json(result.stdout)["result"] or {}
+        session_id = str(payload.get("session_id") or "")
+        if result.returncode != 0 or not session_id:
+            _FORK_SEED_FAILED[key] = now
+            log.info("fork-master seed failed rc=%d — bare calls for %ds",
+                     result.returncode, _FORK_SEED_RETRY_S)
             return ""
-        session_id = str(json.loads(result.stdout).get("session_id") or "")
-        if not session_id:
-            return ""
-        _FORK_MASTERS_CACHE[key] = session_id
-        _store_fork_master(key, session_id)
-        log.info("fork-master seeded: %s (model=%s no_tools=%s)",
-                 session_id[:8], model_str, no_tools)
+        _FORK_MASTERS_CACHE[key] = (session_id, now)
+        _store_fork_master(key, session_id, now)
+        log.info("fork-master seeded: %s (model=%s no_tools=%s cost=$%.4f "
+                 "— logged here, not yet in metrics ledger)",
+                 session_id[:8], model_str, no_tools,
+                 float(payload.get("total_cost_usd") or 0.0))
         return session_id
-    except Exception as exc:
-        log.info("fork-master seed failed (%s) — staying on bare calls", exc)
+    except (subprocess.SubprocessError, OSError, ValueError, KeyError,
+            TypeError, AttributeError) as exc:
+        _FORK_SEED_FAILED[key] = now
+        log.info("fork-master seed failed (%s) — bare calls for %ds",
+                 exc, _FORK_SEED_RETRY_S)
         return ""
 
 
@@ -2414,11 +2475,16 @@ class ClaudeSubprocessAdapter(_JSONToolPromptMixin, LLMAdapter):
         # session must own its transcript end to end, and the fork's new
         # session id must never be mistaken for executor state). Container
         # calls stay bare: the container's claude has its own session store.
+        # The seed inherits THIS call's exact flag set (cmd before resume
+        # flags) and env, and runs through _run_subprocess_safe — same tool
+        # contract as the forks, same worker marker and breakers as every
+        # other spawn (adversarial review 2026-08-08 Part 2, findings 1–3).
         _fork_master_id = ""
         if (not _session_active and _container_name is None
                 and _session_fork_enabled()):
             _fork_master_id = _get_fork_master(
-                self.claude_bin, model_str, no_tools, _cwd)
+                self.claude_bin, model_str, no_tools, _cwd,
+                seed_cmd=list(cmd), env_extra=_env_extra)
             if _fork_master_id:
                 cmd += ["--resume", _fork_master_id, "--fork-session"]
 
@@ -2453,9 +2519,12 @@ class ClaudeSubprocessAdapter(_JSONToolPromptMixin, LLMAdapter):
                 _session_turns = 0
             else:
                 # Evicted/deleted master (e.g. a ~/.claude cleanup): drop
-                # the stale map entry; the next call re-seeds lazily.
+                # the stale map entry; the next call re-seeds lazily. Pass
+                # the id we actually failed on so a straggler can't delete
+                # a healthy replacement master.
                 _invalidate_fork_master(
-                    self.claude_bin, model_str, no_tools, _cwd)
+                    self.claude_bin, model_str, no_tools, _cwd,
+                    stale_id=_fork_master_id)
             fresh_cmd = list(cmd)
             resume_at = fresh_cmd.index("--resume")
             del fresh_cmd[resume_at:resume_at + 2]
