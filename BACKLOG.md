@@ -33,6 +33,36 @@ full triage: 2026-07-04.
 
 Ordered open work that matters. Top of the list is next.
 
+### Demote-stamp tombstones + strike-3 re-measure (DECIDED 2026-08-08, decision dcf8eab8) — build next
+
+Closes the adversarial review's finding 4 (a demoted lesson decays to
+GC in ~9–10 days and re-mints CLEAN — the paid-for two-run measurement
+erased). Jeremy's call is the **gentle variant**: "we should track
+demotions and when they come up again, don't immediately dismiss them,
+but let them gather more data until we know it's a pattern."
+
+- **Tombstone**: when a row carrying `delta_evidence route=effect-demote`
+  is GC'd, persist a compact tombstone (lesson text hash + the evidence
+  dict + demote history) that survives deletion. No score mutation, no
+  blocking — record only.
+- **Re-mint recognition**: mint-side dedup checks tombstones; a match
+  increments the tombstone's re-mint counter and stamps the new row
+  with a pointer (`delta_evidence.tombstone` or similar) — the row still
+  circulates normally (probation-with-circulation; 0/51 production
+  prompts carry lesson blocks today, so live harm ≈ 0).
+- **Strike 3**: third re-mint emits a captains-log event + queues the
+  lesson in a pending-remeasure list the census CLI picks up (NO
+  inline auto-spend from the mint path — no-silent-shared-resource-spend
+  feedback). The forced full-set re-measurement then sets the stamp
+  whichever way it lands (measurement replaces measurement).
+- Noted-not-built variants (Jeremy 2026-08-08): strict stamp-rides
+  ("more straightforward"), experimental both-ways-viewable path
+  ("risky, but potentially in a good way (probably just more volatile
+  though)... probably over-complicating it").
+- Pair with the samples=3 instrument upgrade if the noise-floor
+  calibration (running 2026-08-08) confirms temperature is the whole
+  volatility story.
+
 ### Session-fork lane for claude -p (Jeremy idea 2026-08-08) — **SHIPPED same day, opt-in; daemon variant = residual edge**
 
 His phrasing: "storing some meta-data and having a master subagent
@@ -109,7 +139,11 @@ bug, f71be8d). These four survivors each need a decision or a design
 pass, not a quiet fix:
 
 - [ ] **1. Phase-60 verification-calibration loop dead at both ends —
-  wire or remove.** `record_verification` (knowledge_lens.py:1281) has
+  ~~wire or remove~~ DECIDED 2026-08-08: REMOVE** (Jeremy: "makes me a
+  little sad, not sure why. Agree, we can resurrect if needed later" —
+  decision 1addc859). Drop the constants, both functions, and the
+  memory.py re-exports together; git remembers.
+  Original finding: `record_verification` (knowledge_lens.py:1281) has
   zero src/ callers — its docstring claims "called by
   inspector.check_alignment()", which doesn't exist;
   `calibrated_alignment_threshold` (knowledge_lens.py:1400) also has
@@ -127,9 +161,16 @@ pass, not a quiet fix:
   false` (Jeremy 2026-07-12). Hard evidence: `inspection-log.jsonl` has
   never existed in the live workspace, so the friction readers
   (conductor.py:70, heartbeat.py:779, quality_gate.py:682) always get
-  empty. If inspector findings are wanted, give it a finalize-cadence
+  empty. ~~If inspector findings are wanted, give it a finalize-cadence
   lane like the evolver got (loop_finalize every-Nth-run); that's a
-  design decision, not a bug fix. ~~Sub-find, fixable without a
+  design decision, not a bug fix.~~ **DECIDED 2026-08-08: build the
+  finalize-cadence lane** (decision 1addc859 — Jeremy's recalled
+  "hooked into the general lifecycle after each run" resolution was the
+  evolver's; the inspector never got it), **plus a periodic
+  larger-cleanup pass rider** ("kick off a parallel processing run
+  periodically alongside a general run for a larger cleanup") — the
+  deeper pass can ride the same cadence hook at a lower frequency, no
+  daemon. ~~Sub-find, fixable without a
   decision: `_REPHRASING_MIN_COUNT` double-dead~~ **DONE 2026-08-06
   same-day (74722ee)** — constant+signal removed with a
   reintroduce-with-detector-or-not-at-all note at the declaration
@@ -141,9 +182,11 @@ pass, not a quiet fix:
   across 433 candidates in 8 weeks (432/433 flat at times_applied=0;
   pool dates to 2026-06-11 — what shipped 2026-08-02 was the sweep, not
   the pool). Plumbing verified live end-to-end; the starvation is in
-  the re-observation design. Options live at different layers: loosen
+  the re-observation design. ~~Options live at different layers: loosen
   match threshold, count semantic-neighbor hits, or judge candidates on
-  age+content instead of re-observation.
+  age+content instead of re-observation.~~ **DECIDED 2026-08-08: judge
+  on age+content** (decision 1addc859, Jeremy ambivalent, went with
+  recommendation — the re-observation design is empirically refuted).
 - [ ] **5b residual: drop orch_root()'s prototype layout — churny
   test-sweep cleanup (deferred by Jeremy's call 2026-08-06; writers
   migration SHIPPED same day, see BACKLOG_DONE).** The 5b writers
@@ -1312,7 +1355,14 @@ capture**, which is what makes the rung amortize instead of evaporate.
      has no corpus. Not a defect — the matcher is healthy (93% genuine
      trigger matches; out-of-domain probes correctly match nothing) —
      the signal is just the wrong SHAPE. Blocked on the match-tier
-     telemetry item below; re-scope after that lands.
+     telemetry item below; re-scope after that lands. **DECIDED
+     2026-08-08 (decision 4d562766): scout output is READING MATERIAL
+     ONLY — never a skill-store write** ("gut says we still don't know
+     enough yet... re-open if we need to later"). Store-write legs are
+     void, the untrusted-git boundary stays closed, and the
+     Phase-32-ordering question is moot until re-opened; any re-scope
+     designs to a reading surface (captain's log / reading queue), not
+     the store.
   2. **CONTESTED — its "highest-leverage" S9 (mandatory human merge
      gate on skill promotion).** Pushback on record: a human gate on
      EVERY promotion makes Jeremy the sequencing blocker (fanout

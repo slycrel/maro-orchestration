@@ -6626,3 +6626,29 @@ instrument rule of thumb recorded in the validation doc: subset
 measurements triage, only full-oracle-set evidence acts. Second full-set
 retest of the two flipped lessons running (agreement → demote stamps
 under the same two-measurement standard).
+- **2026-08-08** — Reading-queue decision batch (Jeremy, all six open asks
+  cleared in one pass):
+  1. **Re-mint policy = the gentle variant**: tombstone survives GC and
+     tracks demotion history; a re-minted lesson circulates normally
+     while gathering data ("don't immediately dismiss... let them gather
+     more data until we know it's a pattern"); 3rd re-mint forces a
+     full-set re-measurement which sets the stamp whichever way it
+     lands. Noted future variants, not built: strict stamp-rides
+     ("more straightforward"), experimental both-ways-viewable path
+     ("probably over-complicating it").
+  2. **Scout output is reading material only — no store writes** ("okay
+     with this for now; gut says we still don't know enough yet...
+     re-open if we need to later"). Legs 3–4 of the steal item void;
+     untrusted-git boundary stays closed.
+  3. Live-writer survivors: **Phase-60 verification-calibration loop
+     REMOVED** (not disabled — off-switches-stay-off; "makes me a
+     little sad... agree, we can resurrect if needed"); **inspector gets
+     the evolver's run-finalize cadence lane** (Jeremy's recalled
+     resolution was the evolver's — inspector never got it) plus a
+     periodic larger-cleanup pass rider; **node promotion judged on
+     age+content** (re-observation design empirically starved: 1/433
+     in 8 weeks).
+  4. World-facts §7: **hypothesis quarantine at injection mirrors the
+     provenance pattern**; planner FACT: emission stays slice 3; cap
+     sizes are build-time tuning. Jeremy expects testing/review rounds
+     to surface the edges — open to discussion as they appear.
