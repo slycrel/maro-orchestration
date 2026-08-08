@@ -1319,8 +1319,17 @@ capture**, which is what makes the rung amortize instead of evaporate.
      failures). Both modules read the workspace env at call time, so
      the reloads were pure downside; removed.
 
-- [ ] **Skill match-tier telemetry — the gap signal is the wrong shape, and
-  Phase-32 synthesis has been dormant since 2026-03-27** (opened 2026-08-08,
+- [x] **Skill match-tier telemetry — SHIPPED 2026-08-08 same day** (go-nuts
+  stretch): `find_matching_skills` stamps `match_method`/`match_score` on
+  every winner (router probability / keyword overlap / TF-IDF cosine) and
+  fills a caller-supplied telemetry dict (method "none" on empty = the
+  graded gap signal); decompose manifest entries carry per-skill
+  tier+score (challengers inherit the matched parent's evidence) plus a
+  record-level `match` block {method, n_candidates, top_score}; curated
+  site stamped `curated_trigger` for parity. Floor question stays
+  DEFERRED to the logged distribution per the item's own posture; router
+  watch item stands. Original item (kept for the floor + watch context):
+  (opened 2026-08-08,
   out of the scout-wiring design read —
   `docs/history/2026-08-08-scout-wiring-design-input.md`). **Measured, box,
   read-only:** across all 94 post-ship runs carrying a `skills_manifest.jsonl`

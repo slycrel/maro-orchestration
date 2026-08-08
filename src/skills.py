@@ -418,7 +418,14 @@ def _tfidf_skill_rank(goal: str, skills: List[Skill], top_k: int = 3) -> List[Sk
                 sc = sc * (1.0 + _ISLAND_BOOST)
             scored.append((sc, skill))
     scored.sort(key=lambda x: x[0], reverse=True)
-    return [sk for _, sk in scored[:top_k]]
+    top = scored[:top_k]
+    for sc, sk in top:
+        # Match-tier telemetry (2026-08-08 scout-read item): the fallback
+        # tier stamps its cosine so attribution can tell a weak retrieval
+        # from a genuine trigger match.
+        sk.match_method = "tfidf_fallback"
+        sk.match_score = round(sc, 4)
+    return [sk for _, sk in top]
 
 
 # ---------------------------------------------------------------------------
@@ -619,8 +626,18 @@ def find_matching_skills(
     use_router: bool = True,
     project: str = "",
     only_ids=None,
+    telemetry: Optional[Dict[str, Any]] = None,
 ) -> List[Skill]:
     """Find skills whose trigger_patterns match the goal.
+
+    Match-tier telemetry (2026-08-08 scout-read item): every returned skill
+    carries `match_method` ("router" | "keyword" | "tfidf_fallback") and
+    `match_score` (router success probability / trigger-overlap count /
+    TF-IDF cosine) as dynamic attributes, and a caller-supplied `telemetry`
+    dict is filled with {method, n_candidates, top_score, scores} — method
+    is "none" when nothing matched, which turns the old binary gap signal
+    ("empty match set") into a graded one. Selection-time truth lands in
+    the run's skills manifest via the injection sites.
 
     Phase 17: when use_router=True (default) and a trained router is
     available, scores candidates by predicted success probability rather
@@ -644,8 +661,22 @@ def find_matching_skills(
     Returns:
         Top matching skills in score order (up to 3 via router, 2 via keywords).
     """
+    def _note(method: str, scored_pairs, n_candidates: int) -> None:
+        """Stamp match attrs on the winners and fill the telemetry dict."""
+        for sk, sc in scored_pairs:
+            sk.match_method = method
+            sk.match_score = round(float(sc), 4)
+        if telemetry is not None:
+            telemetry.update({
+                "method": method if scored_pairs else "none",
+                "n_candidates": n_candidates,
+                "top_score": round(float(scored_pairs[0][1]), 4) if scored_pairs else 0.0,
+                "scores": {sk.id: round(float(sc), 4) for sk, sc in scored_pairs},
+            })
+
     skills = load_skills()
     if not skills:
+        _note("none", [], 0)
         return []
 
     # Project isolation: keep global skills (project=="") and project-specific
@@ -674,6 +705,7 @@ def find_matching_skills(
         # it.
         skills = [s for s in skills if not getattr(s, "variant_of", None)]
     if not skills:
+        _note("none", [], 0)
         return []
 
     # Phase 17: router path — only use when a trained model is available
@@ -687,9 +719,12 @@ def find_matching_skills(
             # "no match → []" behavior is preserved.
             if route_results and any(r.method == "router" for r in route_results):
                 skill_by_id = {s.id: s for s in skills}
-                matched = [skill_by_id[r.skill_id] for r in route_results if r.skill_id in skill_by_id]
-                if matched:
-                    return matched
+                routed_pairs = [(skill_by_id[r.skill_id], r.score)
+                                for r in route_results
+                                if r.skill_id in skill_by_id]
+                if routed_pairs:
+                    _note("router", routed_pairs, len(skills))
+                    return [sk for sk, _ in routed_pairs]
         except Exception:
             pass  # fall through to keyword matching
 
@@ -706,11 +741,17 @@ def find_matching_skills(
 
     if kw_scored:
         kw_scored.sort(key=lambda x: x[0], reverse=True)
-        return [s for _, s in kw_scored[:3]]
+        top_kw = kw_scored[:3]
+        _note("keyword", [(s, sc) for sc, s in top_kw], len(skills))
+        return [s for _, s in top_kw]
 
     # TF-IDF fallback: relevance-ranked retrieval when no keyword match fires
     # (Phase 32 selective retrieval — prevents returning stale/irrelevant skills)
-    return _tfidf_skill_rank(goal, skills, top_k=2)
+    ranked = _tfidf_skill_rank(goal, skills, top_k=2)
+    # _tfidf_skill_rank stamped match_method/match_score already; reuse them.
+    _note("tfidf_fallback",
+          [(s, getattr(s, "match_score", 0.0)) for s in ranked], len(skills))
+    return ranked
 
 
 def format_skills_for_prompt(skills: List[Skill]) -> str:

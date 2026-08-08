@@ -217,6 +217,88 @@ def test_find_matching_skills_no_match(monkeypatch, tmp_path):
     assert matches2 == []
 
 
+def test_match_telemetry_keyword_tier(monkeypatch, tmp_path):
+    """Match-tier telemetry (2026-08-08): keyword winners carry method+score,
+    and the caller's telemetry dict is filled."""
+    _setup_workspace(monkeypatch, tmp_path)
+    skill = _make_skill("research tool", triggers=["polymarket", "research strategy"])
+    save_skill(skill)
+    telemetry = {}
+    matches = find_matching_skills("polymarket research", telemetry=telemetry)
+    assert matches and matches[0].match_method == "keyword"
+    assert matches[0].match_score >= 1
+    assert telemetry["method"] == "keyword"
+    assert telemetry["top_score"] >= 1
+    assert telemetry["n_candidates"] >= 1
+    assert matches[0].id in telemetry["scores"]
+
+
+def test_match_telemetry_none_on_empty_match(monkeypatch, tmp_path):
+    """The graded gap signal: no match fills method='none', not silence."""
+    _setup_workspace(monkeypatch, tmp_path)
+    skill = _make_skill("cooking skill", triggers=["bake cake", "mix ingredients"])
+    save_skill(skill)
+    telemetry = {}
+    matches = find_matching_skills("astrophysics telescope calibration zzzunique",
+                                   telemetry=telemetry)
+    assert matches == []
+    assert telemetry["method"] == "none"
+    assert telemetry["top_score"] == 0.0
+    assert telemetry["n_candidates"] >= 1
+
+
+def test_match_telemetry_none_on_empty_store(monkeypatch, tmp_path):
+    _setup_workspace(monkeypatch, tmp_path)
+    telemetry = {}
+    assert find_matching_skills("anything", telemetry=telemetry) == []
+    assert telemetry["method"] == "none"
+    assert telemetry["n_candidates"] == 0
+
+
+def test_match_telemetry_tfidf_tier(monkeypatch, tmp_path):
+    """No trigger overlap but real token overlap → tfidf_fallback with cosine."""
+    _setup_workspace(monkeypatch, tmp_path)
+    skill = _make_skill("web research helper", triggers=["zzznever matches"])
+    skill.description = "gather information from web sources and articles"
+    save_skill(skill)
+    telemetry = {}
+    matches = find_matching_skills(
+        "gather information from web sources", use_router=False,
+        telemetry=telemetry)
+    if matches:  # tokenizer-dependent; the contract under test is the stamp
+        assert matches[0].match_method == "tfidf_fallback"
+        assert 0 < matches[0].match_score <= 1.5
+        assert telemetry["method"] == "tfidf_fallback"
+    else:
+        assert telemetry["method"] == "none"
+
+
+def test_match_telemetry_optional_and_backward_compatible(monkeypatch, tmp_path):
+    """Callers that pass no telemetry dict are untouched."""
+    _setup_workspace(monkeypatch, tmp_path)
+    skill = _make_skill("research tool", triggers=["polymarket"])
+    save_skill(skill)
+    matches = find_matching_skills("polymarket research")
+    assert matches  # no TypeError, same behavior
+
+
+def test_manifest_meta_records_match_block(monkeypatch, tmp_path):
+    """append_skills_manifest(meta=...) lands a record-level match block."""
+    import json as _json
+    _setup_workspace(monkeypatch, tmp_path)
+    import runs
+    rd = tmp_path / "run-mt"
+    (rd / "source").mkdir(parents=True)
+    monkeypatch.setattr(runs, "current_run_dir", lambda: rd)
+    runs.append_skills_manifest(
+        [], stage="decompose",
+        meta={"method": "none", "n_candidates": 7, "top_score": 0.0})
+    rec = _json.loads((rd / "source" / "skills_manifest.jsonl").read_text())
+    assert rec["match"]["method"] == "none"
+    assert rec["match"]["n_candidates"] == 7
+    assert rec["skills"] == []
+
+
 def test_find_matching_skills_returns_top_3(monkeypatch, tmp_path):
     """Returns at most 3 matching skills (keyword cap)."""
     _setup_workspace(monkeypatch, tmp_path)

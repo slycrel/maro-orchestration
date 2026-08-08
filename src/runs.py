@@ -1143,7 +1143,8 @@ def write_environment_snapshot(run_dir_override: Optional[Path] = None) -> Optio
         return None
 
 
-def append_skills_manifest(entries: list, *, stage: str) -> Optional[Path]:
+def append_skills_manifest(entries: list, *, stage: str,
+                           meta: Optional[dict] = None) -> Optional[Path]:
     """Append one skill-injection event to `<run-dir>/source/skills_manifest.jsonl`.
 
     Called at each injection site with the skills that actually entered a
@@ -1173,6 +1174,12 @@ def append_skills_manifest(entries: list, *, stage: str) -> Optional[Path]:
             "stage": stage,
             "skills": entries,
         }
+        if meta:
+            # Match-tier telemetry (2026-08-08): record-level selection info
+            # ({method, n_candidates, top_score}) — present even when the
+            # skills list is empty, which is what turns the binary gap
+            # signal into a graded one.
+            record["match"] = meta
         from file_lock import locked_append
         locked_append(out, json.dumps(record, default=str))
         return out

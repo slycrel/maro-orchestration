@@ -471,7 +471,9 @@ def _build_loop_context(
     had_no_matching_skill = False
     try:
         from skills import find_matching_skills, format_skills_for_prompt, select_variant_for_task
-        _matching_skills = find_matching_skills(goal, project=project)
+        _match_telemetry: dict = {}
+        _matching_skills = find_matching_skills(goal, project=project,
+                                                telemetry=_match_telemetry)
         # A/B routing: for each matched skill, select parent or active challenger
         # using a hash of the goal as a stable routing key (loop_id not yet assigned)
         import hashlib as _hashlib
@@ -485,6 +487,13 @@ def _build_loop_context(
         # manifest means the recorder didn't run rather than "nothing matched".
         try:
             from runs import append_skills_manifest as _append_skills_manifest
+            # Per-skill match info lives on the MATCHED parent; a routed
+            # challenger inherits its parent's selection evidence.
+            _match_info = {
+                getattr(m, "id", ""): (getattr(m, "match_method", None),
+                                       getattr(m, "match_score", None))
+                for m in _matching_skills
+            }
             _append_skills_manifest(
                 [
                     {
@@ -494,10 +503,19 @@ def _build_loop_context(
                         "variant_of": getattr(s, "variant_of", None),
                         "tier": getattr(s, "tier", None),
                         "routing_key": _routing_key,
+                        "match_method": (_match_info.get(getattr(s, "id", ""))
+                                         or _match_info.get(getattr(s, "variant_of", "") or "")
+                                         or (None, None))[0],
+                        "match_score": (_match_info.get(getattr(s, "id", ""))
+                                        or _match_info.get(getattr(s, "variant_of", "") or "")
+                                        or (None, None))[1],
                     }
                     for s in _matched_and_routed
                 ],
                 stage="decompose",
+                meta={k: _match_telemetry.get(k)
+                      for k in ("method", "n_candidates", "top_score")}
+                if _match_telemetry else None,
             )
         except Exception:
             pass
@@ -531,10 +549,17 @@ def _build_loop_context(
                     {
                         "name": getattr(s, "name", ""),
                         "file_path": str(getattr(s, "file_path", "")),
+                        # Single-tier matcher (SkillSummary.matches_goal
+                        # trigger check) — stamped for parity with the
+                        # decompose site's graded tiers.
+                        "match_method": "curated_trigger",
                     }
                     for s in _curated_matches
                 ],
                 stage="curated_summaries",
+                meta={"method": ("curated_trigger" if _curated_matches
+                                 else "none"),
+                      "n_matches": len(_curated_matches)},
             )
         except Exception:
             pass
