@@ -445,6 +445,18 @@ def record_tiered_lesson(
         if _novelty_term_enabled():
             score = base + NOVELTY_BONUS * novelty
 
+        # Re-mint recognition (decision dcf8eab8): a fresh mint matching a
+        # Δ-demoted lineage in the archive gets a remint-watch stamp — it
+        # circulates normally (watch is not effect-demote) but carries the
+        # strike count; strike 3 queues a forced re-measurement. Rides the
+        # demotion killswitch: no demoted lineages exist without it.
+        remint_watch: Optional[Dict[str, Any]] = None
+        if tier == MemoryTier.MEDIUM and effect_demotion_enabled():
+            try:
+                remint_watch = _remint_watch_stamp(lesson_text, task_type)
+            except Exception:
+                remint_watch = None
+
         # UU-4: shared-id support for dual-writing callers — fresh mints only;
         # the near-duplicate reinforce path returns the existing row with its
         # original id (see memory_ledger._store_lesson for the same contract).
@@ -467,6 +479,7 @@ def record_tiered_lesson(
             provisional=provisional,
             minted_from=minted_from,
             grounding=grounding or [],
+            delta_evidence=remint_watch or {},
         )
         _append_tiered_lesson(tl, tier=tier)
         if minted_from == "prompt":
@@ -476,16 +489,39 @@ def record_tiered_lesson(
     # Captain's log
     try:
         from captains_log import log_event, LESSON_RECORDED
+        _rec_ctx = {"tier": tier, "task_type": task_type, "confidence": confidence,
+                    "lesson_type": lesson_type, "novelty": tl.novelty, "score": score,
+                    "minted_from": minted_from}
+        if remint_watch:
+            _rec_ctx["remint_strikes"] = remint_watch["strikes"]
         log_event(
             event_type=LESSON_RECORDED,
             subject=tl.lesson_id,
             summary=f"New {tier} lesson (confidence: {confidence:.2f}): {lesson_text[:100]}",
-            context={"tier": tier, "task_type": task_type, "confidence": confidence,
-                     "lesson_type": lesson_type, "novelty": tl.novelty, "score": score,
-                     "minted_from": minted_from},
+            context=_rec_ctx,
         )
     except Exception:
         pass
+
+    if remint_watch and remint_watch["strikes"] >= REMINT_PATTERN_STRIKES:
+        # Strike threshold: the pattern has earned a fresh full-set
+        # measurement. Queue-by-event only — the mint path must never spend
+        # (no-silent-shared-resource-spend); the census CLI's
+        # --remint-pending selector picks these rows up.
+        try:
+            from captains_log import log_event, LESSON_REMINT_PATTERN
+            log_event(
+                event_type=LESSON_REMINT_PATTERN,
+                subject=tl.lesson_id,
+                summary=(f"Lesson re-minted {remint_watch['strikes']}x after "
+                         f"Δ-demotion — re-measure queued: {lesson_text[:100]}"),
+                context={"strikes": remint_watch["strikes"],
+                         "prior_lesson_id": remint_watch["prior_lesson_id"],
+                         "prior_delta": remint_watch["prior_evidence"].get("delta"),
+                         "task_type": task_type},
+            )
+        except Exception:
+            pass
 
     return tl
 
@@ -801,6 +837,134 @@ def _load_archived_lessons(*, reasons: tuple = ("decay_gc",)) -> List[TieredLess
     except Exception:
         return []
     return list(by_id.values())
+
+
+REMINT_PATTERN_STRIKES = 3  # re-mints of a demoted lesson before forced re-measure
+
+
+def _remint_watch_stamp(lesson_text: str, task_type: str) -> Optional[Dict[str, Any]]:
+    """Archive-aware re-mint recognition (decision dcf8eab8, 2026-08-08).
+
+    A Δ-demoted lesson that decays to GC lives on in the archive with its
+    stamp — the archive IS the tombstone store (retention decree). When a
+    fresh mint matches that lineage (same task_type, same dedup similarity
+    bar as the live scan), return a "remint-watch" stamp for the new row:
+    the row circulates normally — watch is NOT effect-demote, so no
+    injection exclusion and no tenure block (Jeremy's gentle policy:
+    "don't immediately dismiss them... let them gather more data until we
+    know it's a pattern") — but the strike count rides along, and strike
+    REMINT_PATTERN_STRIKES queues a forced full-set re-measurement
+    (delta_replay --remint-pending). A "measured" record in the lineage
+    (resolve_remint_watch after a clean re-measurement) resets the count:
+    the pattern clock restarts from fresh evidence, not from history.
+    """
+    path = _lessons_archive_path()
+    if not path.exists():
+        return None
+    # Raw parse (not _load_archived_lessons): lineage counting needs
+    # archived_at ordering and the delta_evidence route per record, and the
+    # user_forget override semantics from the loader are reproduced here —
+    # a user-forgotten lesson never counts strikes.
+    by_id: Dict[str, Dict[str, Any]] = {}
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except Exception:
+                continue
+            lid = rec.get("lesson_id") or ""
+            if rec.get("archived_reason") != "decay_gc":
+                by_id.pop(lid, None)
+                continue
+            by_id[lid] = rec  # newest record per id wins (append order)
+    except Exception:
+        return None
+
+    lineage = [rec for rec in by_id.values()
+               if rec.get("task_type") == task_type
+               # Same 0.8 bar as the live dedup scans in
+               # record_tiered_lesson — "re-mint" must mean exactly what
+               # "duplicate" means, or the two surfaces drift.
+               and _text_similarity(rec.get("lesson") or "", lesson_text) > 0.8
+               and (rec.get("delta_evidence") or {}).get("route")
+               in ("effect-demote", "remint-watch", "measured")]
+    if not lineage:
+        return None
+    lineage.sort(key=lambda r: r.get("archived_at") or "")
+
+    root: Optional[Dict[str, Any]] = None
+    strikes = 0
+    for rec in lineage:
+        route = (rec.get("delta_evidence") or {}).get("route")
+        if route == "measured":
+            root, strikes = None, 0  # clean re-measurement resets the clock
+        elif route == "effect-demote":
+            root = rec
+            strikes += 1
+        elif route == "remint-watch" and root is not None:
+            strikes += 1
+    if root is None:
+        return None
+    return {
+        "route": "remint-watch",
+        "strikes": strikes,
+        "prior_lesson_id": root.get("lesson_id") or "",
+        "prior_evidence": dict(root.get("delta_evidence") or {}),
+        "stamped_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def resolve_remint_watch(lesson_id: str, delta_evidence: Dict[str, Any]) -> bool:
+    """Clear a remint-watch stamp after a clean re-measurement (route
+    "measured") — measurement replaces measurement, in both directions.
+
+    Called by delta_replay.run_effect_route when a watched row's forced
+    re-measurement comes back neither demote- nor promote-eligible (those
+    routes overwrite the stamp themselves). Guards: the measurement must be
+    error-free and carry at least the shared call floor — a partial or
+    errored run must not end a probation.
+    """
+    ev = dict(delta_evidence or {})
+    if int(ev.get("replay_errors") or 0) != 0:
+        return False
+    try:
+        from config import get as _cfg_get
+        min_calls = int(_cfg_get("knowledge.effect_promotion_min_calls",
+                                 EFFECT_PROMOTE_MIN_CALLS))
+    except Exception:
+        min_calls = EFFECT_PROMOTE_MIN_CALLS
+    if int(ev.get("n_calls") or 0) < min_calls:
+        return False
+
+    cleared: Dict[str, TieredLesson] = {}
+
+    def _clear(lessons: List[TieredLesson]) -> List[TieredLesson]:
+        t = next((l for l in lessons if l.lesson_id == lesson_id), None)
+        # In-lock revalidation: only a live watch row can be cleared.
+        if t is None or (t.delta_evidence or {}).get("route") != "remint-watch":
+            return lessons
+        t.delta_evidence = {
+            "route": "measured",
+            "delta": ev.get("delta"),
+            "jackknife_spread": ev.get("jackknife_spread"),
+            "n_calls": int(ev.get("n_calls") or 0),
+            "replay_errors": 0,
+            "stratum": ev.get("stratum") or "",
+            "measured_at": ev.get("measured_at") or datetime.now(timezone.utc).isoformat(),
+        }
+        cleared["t"] = t
+        return lessons
+
+    _mutate_tiered_lessons(MemoryTier.MEDIUM, _clear)
+    if "t" not in cleared:
+        return False
+    log.info("resolve_remint_watch: %s probation cleared by measurement "
+             "(Δ=%s over %s calls)", lesson_id, ev.get("delta"),
+             ev.get("n_calls"))
+    return True
 
 
 def resurrect_archived_lesson(lesson_id: str) -> Optional[TieredLesson]:

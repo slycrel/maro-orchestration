@@ -33,36 +33,6 @@ full triage: 2026-07-04.
 
 Ordered open work that matters. Top of the list is next.
 
-### Demote-stamp tombstones + strike-3 re-measure (DECIDED 2026-08-08, decision dcf8eab8) — build next
-
-Closes the adversarial review's finding 4 (a demoted lesson decays to
-GC in ~9–10 days and re-mints CLEAN — the paid-for two-run measurement
-erased). Jeremy's call is the **gentle variant**: "we should track
-demotions and when they come up again, don't immediately dismiss them,
-but let them gather more data until we know it's a pattern."
-
-- **Tombstone**: when a row carrying `delta_evidence route=effect-demote`
-  is GC'd, persist a compact tombstone (lesson text hash + the evidence
-  dict + demote history) that survives deletion. No score mutation, no
-  blocking — record only.
-- **Re-mint recognition**: mint-side dedup checks tombstones; a match
-  increments the tombstone's re-mint counter and stamps the new row
-  with a pointer (`delta_evidence.tombstone` or similar) — the row still
-  circulates normally (probation-with-circulation; 0/51 production
-  prompts carry lesson blocks today, so live harm ≈ 0).
-- **Strike 3**: third re-mint emits a captains-log event + queues the
-  lesson in a pending-remeasure list the census CLI picks up (NO
-  inline auto-spend from the mint path — no-silent-shared-resource-spend
-  feedback). The forced full-set re-measurement then sets the stamp
-  whichever way it lands (measurement replaces measurement).
-- Noted-not-built variants (Jeremy 2026-08-08): strict stamp-rides
-  ("more straightforward"), experimental both-ways-viewable path
-  ("risky, but potentially in a good way (probably just more volatile
-  though)... probably over-complicating it").
-- Pair with the samples=3 instrument upgrade if the noise-floor
-  calibration (running 2026-08-08) confirms temperature is the whole
-  volatility story.
-
 ### Session-fork lane for claude -p (Jeremy idea 2026-08-08) — **SHIPPED same day, opt-in; daemon variant = residual edge**
 
 His phrasing: "storing some meta-data and having a master subagent

@@ -6883,3 +6883,53 @@ Original finding text (from BACKLOG):
   (fourth dead lane). Natural wire point if kept: inspector's
   `assess_goal_alignment`. If removed, drop the constants, both
   functions, and the memory.py re-exports together.
+
+### Demote-stamp tombstones + strike-3 re-measure — SHIPPED 2026-08-08 (same day as decided)
+
+Decision dcf8eab8 (gentle variant), built same day. The build collapsed
+smaller than spec'd: **the archive IS the tombstone store** (GC
+archives full rows including `delta_evidence` — retention decree), so
+no new persistence layer. Shipped: `_remint_watch_stamp` lineage scan
+at mint time (same 0.8 dedup bar, task_type-scoped, honors user_forget
+override; a `route="measured"` record resets the strike clock);
+`route="remint-watch"` stamp on re-mints (circulates normally — not
+effect-demote, so no exclusion/tenure block); `LESSON_REMINT_PATTERN`
+event at strike 3 (queue-by-event, mint path never spends);
+`delta_replay --remint-pending` forced re-measure lane (demote/promote
+overwrite the stamp, a clean null clears probation via
+`resolve_remint_watch`, census-only mode stays a true dry run). Rides
+`knowledge.effect_demotion_enabled` — no new config key. 10 tests
+(TestRemintTombstones), event census 81→82.
+
+Original item (from BACKLOG):
+
+### Demote-stamp tombstones + strike-3 re-measure (DECIDED 2026-08-08, decision dcf8eab8) — build next
+
+Closes the adversarial review's finding 4 (a demoted lesson decays to
+GC in ~9–10 days and re-mints CLEAN — the paid-for two-run measurement
+erased). Jeremy's call is the **gentle variant**: "we should track
+demotions and when they come up again, don't immediately dismiss them,
+but let them gather more data until we know it's a pattern."
+
+- **Tombstone**: when a row carrying `delta_evidence route=effect-demote`
+  is GC'd, persist a compact tombstone (lesson text hash + the evidence
+  dict + demote history) that survives deletion. No score mutation, no
+  blocking — record only.
+- **Re-mint recognition**: mint-side dedup checks tombstones; a match
+  increments the tombstone's re-mint counter and stamps the new row
+  with a pointer (`delta_evidence.tombstone` or similar) — the row still
+  circulates normally (probation-with-circulation; 0/51 production
+  prompts carry lesson blocks today, so live harm ≈ 0).
+- **Strike 3**: third re-mint emits a captains-log event + queues the
+  lesson in a pending-remeasure list the census CLI picks up (NO
+  inline auto-spend from the mint path — no-silent-shared-resource-spend
+  feedback). The forced full-set re-measurement then sets the stamp
+  whichever way it lands (measurement replaces measurement).
+- Noted-not-built variants (Jeremy 2026-08-08): strict stamp-rides
+  ("more straightforward"), experimental both-ways-viewable path
+  ("risky, but potentially in a good way (probably just more volatile
+  though)... probably over-complicating it").
+- Pair with the samples=3 instrument upgrade if the noise-floor
+  calibration (running 2026-08-08) confirms temperature is the whole
+  volatility story.
+

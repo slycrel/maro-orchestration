@@ -650,3 +650,187 @@ class TestReviewHardening:
                    None)
         assert row is not None
         assert row["delta"] == 1.0
+
+# ---------------------------------------------------------------------------
+# Re-mint tombstones (2026-08-08, decision dcf8eab8): the archive is the
+# tombstone store — a fresh mint matching a GC'd Δ-demoted lineage gets a
+# remint-watch stamp (circulates normally), strike 3 queues re-measurement.
+# ---------------------------------------------------------------------------
+
+REMINT_TEXT = ("the verification step misread the ledger because the writer "
+               "flushed after the reader's snapshot")
+
+
+def _gc_lesson(kw, lesson_id):
+    """Force a live MEDIUM row through the real GC path (archive-then-drop)."""
+    def _sink(lessons):
+        for l in lessons:
+            if l.lesson_id == lesson_id:
+                l.score = 0.05
+                l.last_reinforced = "2020-01-01"
+        return lessons
+    kw._mutate_tiered_lessons(kw.MemoryTier.MEDIUM, _sink)
+    stats = kw.run_decay_cycle(kw.MemoryTier.MEDIUM)
+    assert stats["gc"] >= 1
+
+
+def _demote_and_gc(monkeypatch, tmp_path, **mint_kw):
+    """Mint → Δ-demote → GC. Returns (kw module, original lesson_id)."""
+    tl = _seed_medium_lesson(monkeypatch, tmp_path,
+                             lesson_text=mint_kw.pop("lesson_text", REMINT_TEXT),
+                             **mint_kw)
+    import knowledge_web as kw
+    assert kw.demote_lesson_by_effect(tl.lesson_id, NEG_EVIDENCE) is True
+    _gc_lesson(kw, tl.lesson_id)
+    return kw, tl.lesson_id
+
+
+class TestRemintTombstones:
+    def test_remint_of_demoted_lesson_gets_watch_stamp(self, monkeypatch, tmp_path):
+        kw, orig_id = _demote_and_gc(monkeypatch, tmp_path)
+        from memory import record_tiered_lesson
+        re1 = record_tiered_lesson(REMINT_TEXT, "agenda", "done", "goal")
+        assert re1.lesson_id != orig_id  # fresh row, not a resurrection
+        assert re1.delta_evidence["route"] == "remint-watch"
+        assert re1.delta_evidence["strikes"] == 1
+        assert re1.delta_evidence["prior_lesson_id"] == orig_id
+        assert re1.delta_evidence["prior_evidence"]["delta"] == -0.137
+        # Gentle policy: the watch stamp is NOT a demotion — the row
+        # circulates (no injection exclusion, no tenure block).
+        assert kw._is_delta_demoted(re1) is False
+
+    def test_watch_row_stays_on_injection_surface(self, monkeypatch, tmp_path):
+        kw, _ = _demote_and_gc(monkeypatch, tmp_path)
+        from memory import record_tiered_lesson
+        re1 = record_tiered_lesson(REMINT_TEXT, "agenda", "done", "goal")
+        block = kw.inject_tiered_lessons(task_type="agenda")
+        assert REMINT_TEXT[:40] in block
+
+    def test_remint_different_task_type_unstamped(self, monkeypatch, tmp_path):
+        _demote_and_gc(monkeypatch, tmp_path)
+        from memory import record_tiered_lesson
+        re1 = record_tiered_lesson(REMINT_TEXT, "research", "done", "goal")
+        assert (re1.delta_evidence or {}).get("route") != "remint-watch"
+
+    def test_remint_dissimilar_text_unstamped(self, monkeypatch, tmp_path):
+        _demote_and_gc(monkeypatch, tmp_path)
+        from memory import record_tiered_lesson
+        re1 = record_tiered_lesson(
+            "prefer the staging mirror when the registry rate-limits",
+            "agenda", "done", "goal")
+        assert (re1.delta_evidence or {}).get("route") != "remint-watch"
+
+    def test_remint_killswitch_off_unstamped(self, monkeypatch, tmp_path):
+        kw, _ = _demote_and_gc(monkeypatch, tmp_path)
+        monkeypatch.setattr(kw, "effect_demotion_enabled", lambda: False)
+        from memory import record_tiered_lesson
+        re1 = record_tiered_lesson(REMINT_TEXT, "agenda", "done", "goal")
+        assert (re1.delta_evidence or {}).get("route") != "remint-watch"
+
+    def test_strikes_accumulate_and_pattern_event_at_three(self, monkeypatch, tmp_path):
+        kw, _ = _demote_and_gc(monkeypatch, tmp_path)
+        from memory import record_tiered_lesson
+        from captains_log import LESSON_REMINT_PATTERN
+        for expected in (1, 2):
+            row = record_tiered_lesson(REMINT_TEXT, "agenda", "done", "goal")
+            assert row.delta_evidence["strikes"] == expected
+            assert _cl_events(tmp_path, LESSON_REMINT_PATTERN) == []
+            _gc_lesson(kw, row.lesson_id)
+        row = record_tiered_lesson(REMINT_TEXT, "agenda", "done", "goal")
+        assert row.delta_evidence["strikes"] == 3
+        events = _cl_events(tmp_path, LESSON_REMINT_PATTERN)
+        assert len(events) == 1
+        assert events[0]["subject"] == row.lesson_id
+        assert events[0]["context"]["strikes"] == 3
+
+    def test_resolve_clears_watch_and_resets_lineage(self, monkeypatch, tmp_path):
+        kw, _ = _demote_and_gc(monkeypatch, tmp_path)
+        from memory import record_tiered_lesson
+        re1 = record_tiered_lesson(REMINT_TEXT, "agenda", "done", "goal")
+        null_ev = {"delta": 0.01, "jackknife_spread": 0.02, "n_calls": 51,
+                   "stratum": "reason", "replay_errors": 0}
+        assert kw.resolve_remint_watch(re1.lesson_id, null_ev) is True
+        rows = kw.load_tiered_lessons(tier=kw.MemoryTier.MEDIUM, min_score=0.0)
+        row = next(l for l in rows if l.lesson_id == re1.lesson_id)
+        assert row.delta_evidence["route"] == "measured"
+        # The measured record resets the archive lineage: GC it, re-mint,
+        # and the pattern clock has restarted — no watch stamp without a
+        # fresh demotion.
+        _gc_lesson(kw, re1.lesson_id)
+        re2 = record_tiered_lesson(REMINT_TEXT, "agenda", "done", "goal")
+        assert (re2.delta_evidence or {}).get("route") != "remint-watch"
+
+    def test_resolve_refuses_errored_thin_or_nonwatch(self, monkeypatch, tmp_path):
+        kw, _ = _demote_and_gc(monkeypatch, tmp_path)
+        from memory import record_tiered_lesson
+        re1 = record_tiered_lesson(REMINT_TEXT, "agenda", "done", "goal")
+        base = {"delta": 0.01, "jackknife_spread": 0.02, "n_calls": 51,
+                "stratum": "reason", "replay_errors": 0}
+        assert kw.resolve_remint_watch(re1.lesson_id, dict(base, replay_errors=2)) is False
+        assert kw.resolve_remint_watch(re1.lesson_id, dict(base, n_calls=3)) is False
+        # A row that isn't under watch can't be "cleared"
+        other = record_tiered_lesson("the cache key omitted the model tier",
+                                     "agenda", "done", "goal")
+        assert kw.resolve_remint_watch(other.lesson_id, base) is False
+        # And the watch row itself is still watched (refusals mutated nothing)
+        rows = kw.load_tiered_lessons(tier=kw.MemoryTier.MEDIUM, min_score=0.0)
+        row = next(l for l in rows if l.lesson_id == re1.lesson_id)
+        assert row.delta_evidence["route"] == "remint-watch"
+
+    def test_run_effect_route_remint_pending_selects_and_clears(self, monkeypatch, tmp_path):
+        kw, _ = _demote_and_gc(monkeypatch, tmp_path)
+        from memory import record_tiered_lesson
+        re1 = record_tiered_lesson(REMINT_TEXT, "agenda", "done", "goal")
+
+        # Fast-forward to strike 3 without two more GC cycles: the selector
+        # reads the stamp, not the archive.
+        def _bump(lessons):
+            for l in lessons:
+                if l.lesson_id == re1.lesson_id:
+                    l.delta_evidence = dict(l.delta_evidence, strikes=3)
+            return lessons
+        kw._mutate_tiered_lessons(kw.MemoryTier.MEDIUM, _bump)
+
+        import runs
+        rd = runs.create_run_dir("hrem", prompt="census", lane="agenda")
+        for i in range(1, 7):  # >= shared min-calls floor (6)
+            _write_call(rd / "build" / "calls", i, "navigator decision",
+                        '{"move": "extend"}')
+        (rd / "run_card.json").write_text(json.dumps({"goal_achieved": True}))
+
+        class AlwaysExtend:
+            def complete(self, messages, **kw_):
+                return SimpleNamespace(content=json.dumps({"move": "extend"}))
+
+        from delta_replay import run_effect_route
+        out = run_effect_route(AlwaysExtend(), samples=1, remint_pending=True)
+        row = next((r for r in out["census"] if r["lesson_id"] == re1.lesson_id),
+                   None)
+        assert row is not None
+        assert row["delta"] == 0.0
+        assert row["remint_watch_cleared"] is True
+        rows = kw.load_tiered_lessons(tier=kw.MemoryTier.MEDIUM, min_score=0.0)
+        live = next(l for l in rows if l.lesson_id == re1.lesson_id)
+        assert live.delta_evidence["route"] == "measured"
+
+    def test_census_dry_run_never_clears_probation(self, monkeypatch, tmp_path):
+        kw, _ = _demote_and_gc(monkeypatch, tmp_path)
+        from memory import record_tiered_lesson
+        re1 = record_tiered_lesson(REMINT_TEXT, "agenda", "done", "goal")
+        import runs
+        rd = runs.create_run_dir("hdry", prompt="census", lane="agenda")
+        for i in range(1, 7):
+            _write_call(rd / "build" / "calls", i, "navigator decision",
+                        '{"move": "extend"}')
+        (rd / "run_card.json").write_text(json.dumps({"goal_achieved": True}))
+
+        class AlwaysExtend:
+            def complete(self, messages, **kw_):
+                return SimpleNamespace(content=json.dumps({"move": "extend"}))
+
+        from delta_replay import run_effect_route
+        run_effect_route(AlwaysExtend(), samples=1,
+                         lesson_ids=[re1.lesson_id])  # census-only naming
+        rows = kw.load_tiered_lessons(tier=kw.MemoryTier.MEDIUM, min_score=0.0)
+        live = next(l for l in rows if l.lesson_id == re1.lesson_id)
+        assert live.delta_evidence["route"] == "remint-watch"

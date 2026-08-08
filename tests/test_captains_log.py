@@ -354,7 +354,10 @@ class TestEventTypes:
         # applied; sibling of LESSON_QUARANTINED/LESSON_CONTESTED (every
         # exclusion mechanism leaves an operator audit row — adversarial
         # review 2026-08-08 Part 1 finding 5).
-        assert len(EVENT_TYPES) == 81
+        # +1 (2026-08-08): LESSON_REMINT_PATTERN — Δ-demoted lineage
+        # re-minted to the strike threshold; forced re-measure queued
+        # (tombstone build, decision dcf8eab8).
+        assert len(EVENT_TYPES) == 82
 
     def test_previously_unregistered_events_in_set(self):
         from captains_log import EVOLVER_REVERTED, EVOLVER_VERIFY, PLAYBOOK_UPDATED

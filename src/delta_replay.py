@@ -472,6 +472,7 @@ def run_effect_route(
     samples: int = 3,
     limit: int = 5,
     lesson_ids: Optional[List[str]] = None,
+    remint_pending: bool = False,
 ) -> Dict[str, Any]:
     """Measure Δ for candidate MEDIUM lessons and (optionally) act on the
     ones that clear either effect bar — the routes-census readout (brief
@@ -487,13 +488,23 @@ def run_effect_route(
     """
     from knowledge_web import (
         MemoryTier, PROMOTE_MIN_SCORE, PROMOTE_MIN_SESSIONS,
+        REMINT_PATTERN_STRIKES,
         _is_contested, _is_quarantined, load_tiered_lessons,
         demote_lesson_by_effect, promote_lesson_by_effect,
+        resolve_remint_watch,
     )
     calls = gather_oracle_decision_calls()
     rows = load_tiered_lessons(tier=MemoryTier.MEDIUM, min_score=0.0,
                                limit=None)
-    if lesson_ids:
+    if remint_pending:
+        # The strike-3 lane (decision dcf8eab8): watched re-mints whose
+        # pattern earned a forced re-measurement. Selection is derived from
+        # the stamps — there is no separate pending file to drift.
+        rows = [t for t in rows
+                if (t.delta_evidence or {}).get("route") == "remint-watch"
+                and int((t.delta_evidence or {}).get("strikes") or 0)
+                >= REMINT_PATTERN_STRIKES]
+    elif lesson_ids:
         # Explicit naming measures ANY row — including provisional/
         # quarantined/contested ones, which are excluded only from the
         # unnamed census sweep below. Measurement is evidence-gathering,
@@ -526,6 +537,16 @@ def run_effect_route(
         demoted = False
         if demote and not promoted:
             demoted = demote_lesson_by_effect(t.lesson_id, ev)
+        watch_cleared = False
+        if ((remint_pending or promote or demote)
+                and (t.delta_evidence or {}).get("route") == "remint-watch"
+                and not promoted and not demoted):
+            # Acting runs only — the census-only mode stays a true dry run.
+            # Measurement replaces measurement: a clean full-set result that
+            # cleared neither bar still ends the probation (route
+            # "measured", which also resets the archive lineage clock).
+            # resolve_remint_watch refuses errored or under-floor runs.
+            watch_cleared = resolve_remint_watch(t.lesson_id, ev)
         census.append({
             "lesson_id": t.lesson_id,
             "lesson": t.lesson[:160],
@@ -535,6 +556,7 @@ def run_effect_route(
             "tenure_eligible": tenure_ok,
             "promoted_by_effect": promoted,
             "demoted_by_effect": demoted,
+            "remint_watch_cleared": watch_cleared,
         })
     if dropped:
         log.info("run_effect_route: measured top %d of %d candidates "
@@ -564,6 +586,11 @@ def _main(argv: List[str]) -> int:
     ap.add_argument("--limit", type=int, default=5)
     ap.add_argument("--samples", type=int, default=3)
     ap.add_argument("--lesson-id", action="append", default=None)
+    ap.add_argument("--remint-pending", action="store_true",
+                    help="measure the strike-3 remint-watch rows (forced "
+                         "re-measure lane, decision dcf8eab8); combine with "
+                         "--demote/--promote to act, alone it still clears "
+                         "probation on a clean null result")
     ap.add_argument("--pace-s", type=float, default=6.5,
                     help="min seconds between replays (free-tier RPM; "
                          "the validation runs died unpaced)")
@@ -604,7 +631,8 @@ def _main(argv: List[str]) -> int:
 
     out = run_effect_route(_Paced(), promote=args.promote, demote=args.demote,
                            limit=args.limit, samples=args.samples,
-                           lesson_ids=args.lesson_id)
+                           lesson_ids=args.lesson_id,
+                           remint_pending=args.remint_pending)
     print(json.dumps(out, indent=2))
     return 0
 

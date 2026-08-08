@@ -829,9 +829,21 @@ Truth anchor: GOAL_BRAIN.md Threads. History: docs/history/ROADMAP_ARCHIVE.md.
    same day (−0.059/−0.137): winner's-curse selection artifact, floor
    HOLDS at 0.30; instrument rule recorded (subset measurements =
    triage only, full-oracle-set evidence acts). Three stable negatives
-   STAMPED 2026-08-08 on Jeremy's go. Still-queued cuts from the brief's §5:
-   evolver/thinkback trace scoring, un-contest verb. Original prep
-   brief: `docs/DELTA_GATE_BUILD_BRIEF.md`; decision 623eb056.
+   STAMPED 2026-08-08 on Jeremy's go. Retest 2 of the flipped pair:
+   DISAGREEMENT (32a656a5 swung −0.137→+0.020 between identical
+   full-set runs) → no stamps; noise-floor calibration same day
+   answered Jeremy's temperature question — volatility IS sampling
+   temperature (27.5% of arm-replays self-disagree on the oracle set,
+   σ≈0.060 at samples=1; 32a656a5's third measurement +0.007 ≈ zero).
+   Instrument rules final: samples=3 stamp-adjacent, subsets=triage,
+   two agreeing full-set 0-error runs to act. **Re-mint tombstones
+   SHIPPED 2026-08-08** (decision dcf8eab8, gentle variant): archive
+   IS the tombstone store; re-mints of demoted lineages carry a
+   remint-watch stamp and circulate; strike 3 → LESSON_REMINT_PATTERN
+   + `--remint-pending` forced re-measure lane. Still-queued cuts from
+   the brief's §5: evolver/thinkback trace scoring, un-contest verb.
+   Original prep brief: `docs/DELTA_GATE_BUILD_BRIEF.md`; decision
+   623eb056.
 
 -6. **Holistic drift review (Jeremy, 2026-07-17) — do this in a CLEAN
    session, first thing.** After the delivery-loop/two-tone arc: "Might be

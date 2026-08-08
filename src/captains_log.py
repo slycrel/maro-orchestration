@@ -81,6 +81,11 @@ LESSON_CONTESTED = "LESSON_CONTESTED"
 # excluded from decision injection + tenure-to-LONG. Sibling of the two
 # above — every exclusion mechanism leaves an operator-readable audit row.
 LESSON_DELTA_DEMOTED = "LESSON_DELTA_DEMOTED"
+# Re-mint strike threshold hit (2026-08-08, decision dcf8eab8): a Δ-demoted
+# lineage re-minted REMINT_PATTERN_STRIKES times — forced re-measurement
+# queued (picked up by delta_replay --remint-pending; the mint path never
+# spends).
+LESSON_REMINT_PATTERN = "LESSON_REMINT_PATTERN"
 LESSON_EXTRACTION = "LESSON_EXTRACTION"  # per-outcome funnel intake state/counts
 LESSON_DECAYED = "LESSON_DECAYED"
 LESSON_RECOVERED = "LESSON_RECOVERED"  # reserved: Stage 2→3 lesson recovery, no emitter yet (BACKLOG #8)
@@ -306,7 +311,7 @@ EVENT_TYPES = {
     SKILL_CIRCUIT_OPEN, SKILL_CIRCUIT_HALF_OPEN, SKILL_CIRCUIT_CLOSED,
     SKILL_VARIANT_CREATED, AB_RETIRED, ISLAND_CULLED,
     LESSON_RECORDED, LESSON_REINFORCED, LESSON_QUARANTINED, LESSON_CONTESTED,
-    LESSON_DELTA_DEMOTED,
+    LESSON_DELTA_DEMOTED, LESSON_REMINT_PATTERN,
     LESSON_EXTRACTION, LESSON_DECAYED, LESSON_RECOVERED,
     MEMORY_CONSOLIDATED, WORKER_SLICE_INJECTED,
     HYPOTHESIS_CREATED, HYPOTHESIS_PROMOTED, HYPOTHESIS_CONTRADICTED,
