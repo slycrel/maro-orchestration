@@ -108,28 +108,6 @@ finds same-day (three more `use_count` corpses + the self-variant A/B
 bug, f71be8d). These four survivors each need a decision or a design
 pass, not a quiet fix:
 
-- [ ] **2. Inspector threshold cluster unreachable by decree — needs a
-  live lane or an explicit "stays manual" call.** `_BREACH_THRESHOLD`,
-  `_ESCALATION_MIN_HITS`, `_CONTEXT_CHURN_TOKEN_THRESHOLD` all have
-  live inputs, but `run_inspector`'s only production caller is the
-  heartbeat tick lane — no daemon running AND `heartbeat.autonomy:
-  false` (Jeremy 2026-07-12). Hard evidence: `inspection-log.jsonl` has
-  never existed in the live workspace, so the friction readers
-  (conductor.py:70, heartbeat.py:779, quality_gate.py:682) always get
-  empty. ~~If inspector findings are wanted, give it a finalize-cadence
-  lane like the evolver got (loop_finalize every-Nth-run); that's a
-  design decision, not a bug fix.~~ **DECIDED 2026-08-08: build the
-  finalize-cadence lane** (decision 1addc859 — Jeremy's recalled
-  "hooked into the general lifecycle after each run" resolution was the
-  evolver's; the inspector never got it), **plus a periodic
-  larger-cleanup pass rider** ("kick off a parallel processing run
-  periodically alongside a general run for a larger cleanup") — the
-  deeper pass can ride the same cadence hook at a lower frequency, no
-  daemon. ~~Sub-find, fixable without a
-  decision: `_REPHRASING_MIN_COUNT` double-dead~~ **DONE 2026-08-06
-  same-day (74722ee)** — constant+signal removed with a
-  reintroduce-with-detector-or-not-at-all note at the declaration
-  site; only the decision-shaped inspector-lane question remains here.
 - [ ] **3. Node-promotion gate will ~never fire as built — threshold vs
   matching design.** `NODE_PROMOTE_MIN_APPLICATIONS=2` needs two dedup
   re-observations of the same candidate title at Jaccard-trigram ≥0.7

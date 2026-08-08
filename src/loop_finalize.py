@@ -853,6 +853,40 @@ def _finalize_loop(
         except Exception as _evo_exc:
             log.warning("run-cadence evolver cycle failed (non-fatal): %s", _evo_exc)
 
+    # Inspector on run-cadence (decision 1addc859, 2026-08-08): the evolver's
+    # lane, finally extended to the inspector — its threshold cluster
+    # (_BREACH_THRESHOLD etc.) had live inputs but no live caller since the
+    # heartbeat daemon stopped (live-writer census survivor 2), so
+    # inspection-log.jsonl never existed and the three friction readers
+    # (conductor, heartbeat summary, quality gate) always saw empty. Every
+    # `inspector.run_cadence`-th real run fires a standard pass; every
+    # `inspector.deep_every`-th firing widens to DEEP_PASS_LIMIT outcomes
+    # (the periodic larger-cleanup rider — same hook, no daemon). Default
+    # 0 = off (fresh installs unchanged; the run's adapter means LLM spend,
+    # so the flip is explicit config).
+    if not dry_run:
+        try:
+            from config import get as _cfg_get
+            from inspector import (DEEP_PASS_LIMIT, inspector_cadence_tick,
+                                   run_inspector)
+            _insp_cadence = int(_cfg_get("inspector.run_cadence", 0) or 0)
+            _deep_every = int(_cfg_get("inspector.deep_every", 5) or 0)
+            _mode = inspector_cadence_tick(_insp_cadence, _deep_every)
+            if _mode != "none":
+                _limit = DEEP_PASS_LIMIT if _mode == "deep" else 50
+                _insp_report = run_inspector(limit=_limit, adapter=adapter,
+                                             verbose=verbose)
+                log.info(
+                    "run-cadence inspector fired (%s pass, cadence=%d, "
+                    "limit=%d): %d outcome(s) inspected",
+                    _mode, _insp_cadence, _limit,
+                    getattr(_insp_report, "inspected_sessions", 0),
+                )
+        except ImportError:
+            pass
+        except Exception as _insp_exc:
+            log.warning("run-cadence inspector failed (non-fatal): %s", _insp_exc)
+
     # Loop-boundary Telegram ping — progress only, and only for a restart.
     # Completion is announced ONCE, at run level, by notify.emit(
     # "run_completed") → notify_telegram with the curated card (verdict,

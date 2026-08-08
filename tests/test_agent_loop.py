@@ -5940,3 +5940,108 @@ def test_run_agent_loop_default_leaves_flag_off(monkeypatch, tmp_path):
     ce.reset_container_caches()
     run_agent_loop("summarize the incident timeline", dry_run=True)
     assert ce.introspection_run() is False
+
+# ---------------------------------------------------------------------------
+# Inspector run-cadence lane (decision 1addc859, 2026-08-08) — the evolver's
+# finalize trigger extended to the inspector, + the periodic deep-pass rider
+# ---------------------------------------------------------------------------
+
+def _patch_inspector_cadence(monkeypatch, tmp_path, cadence_value, deep_every=5):
+    """Isolate counter file, set inspector.run_cadence, capture run_inspector calls."""
+    import inspector as inspector_mod
+    import config as config_mod
+
+    monkeypatch.setattr(
+        inspector_mod, "_cadence_path",
+        lambda: tmp_path / "inspector_cadence.json")
+    # Keep the evolver lane quiet in these tests
+    import evolver_store
+    monkeypatch.setattr(
+        evolver_store, "_cadence_path", lambda: tmp_path / "evolver_cadence.json")
+
+    orig_get = config_mod.get
+
+    def fake_get(key, default=None, *a, **kw):
+        if key == "inspector.run_cadence":
+            return cadence_value
+        if key == "inspector.deep_every":
+            return deep_every
+        if key == "evolver.run_cadence":
+            return 0
+        return orig_get(key, default, *a, **kw)
+
+    monkeypatch.setattr(config_mod, "get", fake_get)
+
+    calls = []
+
+    def fake_run_inspector(**kw):
+        calls.append(kw)
+        from inspector import InspectionReport
+        return InspectionReport(run_id="fake", inspected_sessions=0)
+
+    monkeypatch.setattr(inspector_mod, "run_inspector", fake_run_inspector)
+    return calls
+
+
+def test_inspector_cadence_off_by_default(monkeypatch, tmp_path):
+    """Fresh installs unchanged: inspector.run_cadence defaults to 0 → never fires."""
+    import inspector as inspector_mod
+    monkeypatch.setattr(
+        inspector_mod, "_cadence_path",
+        lambda: tmp_path / "inspector_cadence.json")
+    calls = []
+    monkeypatch.setattr(inspector_mod, "run_inspector",
+                        lambda **kw: calls.append(kw))
+    for _ in range(3):
+        _finalize_for_cadence(dry_run=False)
+    assert calls == []
+
+
+def test_inspector_cadence_fires_at_n_threads_adapter_and_resets(monkeypatch, tmp_path):
+    import json as _json
+
+    class _FakeAdapter:
+        model_key = "test"
+
+    adapter = _FakeAdapter()
+    calls = _patch_inspector_cadence(monkeypatch, tmp_path, 2)
+    _finalize_for_cadence(dry_run=False, adapter=adapter)
+    assert calls == []
+    _finalize_for_cadence(dry_run=False, adapter=adapter)
+    assert len(calls) == 1
+    assert calls[0].get("adapter") is adapter
+    assert calls[0].get("limit") == 50  # first firing is a normal pass
+    state = _json.loads((tmp_path / "inspector_cadence.json").read_text())
+    assert state["runs_since_inspect"] == 0
+    assert state["firings_since_deep"] == 1
+
+
+def test_inspector_deep_pass_every_nth_firing(monkeypatch, tmp_path):
+    from inspector import DEEP_PASS_LIMIT
+    calls = _patch_inspector_cadence(monkeypatch, tmp_path, 1, deep_every=3)
+    for _ in range(6):
+        _finalize_for_cadence(dry_run=False)
+    assert len(calls) == 6
+    limits = [c.get("limit") for c in calls]
+    # every 3rd firing widens to the deep limit; the counter then resets
+    assert limits == [50, 50, DEEP_PASS_LIMIT, 50, 50, DEEP_PASS_LIMIT]
+
+
+def test_inspector_cadence_dry_run_does_not_count_or_trigger(monkeypatch, tmp_path):
+    calls = _patch_inspector_cadence(monkeypatch, tmp_path, 1)
+    _finalize_for_cadence(dry_run=True)
+    _finalize_for_cadence(dry_run=True)
+    assert calls == []
+    assert not (tmp_path / "inspector_cadence.json").exists()
+
+
+def test_inspector_cadence_exception_is_nonfatal(monkeypatch, tmp_path):
+    import inspector as inspector_mod
+    _patch_inspector_cadence(monkeypatch, tmp_path, 1)
+
+    def boom(**kw):
+        raise RuntimeError("inspector exploded")
+
+    monkeypatch.setattr(inspector_mod, "run_inspector", boom)
+    # must not raise — failures are logged, never fatal to finalization
+    _finalize_for_cadence(dry_run=False)

@@ -6933,3 +6933,39 @@ but let them gather more data until we know it's a pattern."
   calibration (running 2026-08-08) confirms temperature is the whole
   volatility story.
 
+### Inspector run-cadence lane + deep-pass rider — SHIPPED 2026-08-08
+
+Live-writer census survivor 2, decided + built same day (decision
+1addc859). `inspector_cadence_tick` (locked RMW counter, mirrors
+evolver_store precedent) + finalize block in loop_finalize.py: every
+`inspector.run_cadence`-th real run fires run_inspector on the run's
+adapter; every `inspector.deep_every`-th firing widens 50→200 outcomes
+(Jeremy's periodic larger-cleanup rider — same hook, no daemon).
+First live writer of inspection-log.jsonl → conductor/heartbeat/quality-
+gate friction readers live for the first time. Default 0=off; this box
+flipped to 10 in workspace config. 5 tests.
+
+Original item:
+
+- [ ] **2. Inspector threshold cluster unreachable by decree — needs a
+  live lane or an explicit "stays manual" call.** `_BREACH_THRESHOLD`,
+  `_ESCALATION_MIN_HITS`, `_CONTEXT_CHURN_TOKEN_THRESHOLD` all have
+  live inputs, but `run_inspector`'s only production caller is the
+  heartbeat tick lane — no daemon running AND `heartbeat.autonomy:
+  false` (Jeremy 2026-07-12). Hard evidence: `inspection-log.jsonl` has
+  never existed in the live workspace, so the friction readers
+  (conductor.py:70, heartbeat.py:779, quality_gate.py:682) always get
+  empty. ~~If inspector findings are wanted, give it a finalize-cadence
+  lane like the evolver got (loop_finalize every-Nth-run); that's a
+  design decision, not a bug fix.~~ **DECIDED 2026-08-08: build the
+  finalize-cadence lane** (decision 1addc859 — Jeremy's recalled
+  "hooked into the general lifecycle after each run" resolution was the
+  evolver's; the inspector never got it), **plus a periodic
+  larger-cleanup pass rider** ("kick off a parallel processing run
+  periodically alongside a general run for a larger cleanup") — the
+  deeper pass can ride the same cadence hook at a lower frequency, no
+  daemon. ~~Sub-find, fixable without a
+  decision: `_REPHRASING_MIN_COUNT` double-dead~~ **DONE 2026-08-06
+  same-day (74722ee)** — constant+signal removed with a
+  reintroduce-with-detector-or-not-at-all note at the declaration
+  site; only the decision-shaped inspector-lane question remains here.

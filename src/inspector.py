@@ -346,6 +346,60 @@ def _inspection_log_path() -> Path:
     return memory_dir() / "inspection-log.jsonl"
 
 
+def _cadence_path() -> Path:
+    """Path to the run-cadence counter (inspector finalize-lane state)."""
+    from orch_items import memory_dir
+    return memory_dir() / "inspector_cadence.json"
+
+
+DEEP_PASS_LIMIT = 200  # outcomes inspected on the periodic deeper pass
+
+
+def inspector_cadence_tick(cadence: int, deep_every: int = 5) -> str:
+    """Count one run finalization toward the inspector run-cadence.
+
+    Returns "none" (no inspection this run), "normal" (cadence reached —
+    standard pass), or "deep" (every `deep_every`-th firing — the larger
+    cleanup pass, Jeremy 2026-08-08: "kick off a parallel processing run
+    periodically alongside a general run for a larger cleanup"; same hook,
+    lower frequency, bigger limit — still no daemon).
+
+    Mirrors evolver_store.evolver_cadence_tick (decision 1addc859: the
+    inspector gets what the evolver already has): single locked
+    read-modify-write so concurrent finalizations can't both trigger;
+    cadence <= 0 counts but never fires (fresh installs unchanged).
+    Callers must not count dry_run runs.
+    """
+    from file_lock import locked_rmw
+
+    mode = "none"
+
+    def _bump(old: str) -> str:
+        nonlocal mode
+        try:
+            state = json.loads(old)
+        except Exception:
+            state = {}
+        count = int(state.get("runs_since_inspect", 0) or 0) + 1
+        firings = int(state.get("firings_since_deep", 0) or 0)
+        if cadence > 0 and count >= cadence:
+            count = 0
+            firings += 1
+            if deep_every > 0 and firings >= deep_every:
+                mode = "deep"
+                firings = 0
+            else:
+                mode = "normal"
+        return json.dumps({
+            "runs_since_inspect": count,
+            "firings_since_deep": firings,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        })
+
+    locked_rmw(_cadence_path(), _bump)
+    return mode
+
+
 def _suggestions_path() -> Path:
     """Path to suggestions.jsonl — shared with evolver."""
     from orch_items import memory_dir
