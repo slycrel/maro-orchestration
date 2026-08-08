@@ -49,6 +49,26 @@ _EXT_RE = re.compile(r"\.[A-Za-z0-9]{1,6}$")
 _REMOTE_PREFIXES = ("http://", "https://", "ftp://", "s3://", "gs://", "git@", "ssh://")
 _TRANSIENT_SEGMENTS = ("/tmp/", "scratchpad", "/dev/", "/proc/", "/var/tmp/")
 
+# An unresolved template placeholder — "{project_dir}/artifacts/step-{N}-
+# transcript.json" (run de790c13, 2026-08-08). That is a filename *pattern*,
+# not a path: nothing is ever named "{N}", so the lookup CANNOT succeed and the
+# miss is guaranteed rather than evidential. Third costume of one bug, after
+# globs (9d88acf2, "artifacts/OL*.json") and prose slashes (4d20b559,
+# "range/index") — and the one the 2026-08-02 glob fix cannot reach, because
+# Path.glob does not expand braces. The exposed class is self-inspection runs:
+# quoting Maro's own path templates out of source is exactly their job, and
+# de790c13 was demoted for describing how step_exec names its transcripts.
+_TEMPLATE_MARKERS = re.compile(r"\{[^}]*\}|\$\{?\w+|<[^>]+>|%[sd]\b")
+
+# A bare token whose extension is a TLD is a hostname, not a local artifact —
+# run 0d50df61 flagged "api.anthropic.com" as a claimed-but-missing OUTPUT.
+# Bare names are already the lenient lane (location ambiguous); a hostname
+# there is never a file this run wrote. Kept deliberately tight: extensions
+# that double as real output suffixes (.sh, .app) are NOT listed.
+_HOSTNAME_TLDS = frozenset({
+    "com", "org", "net", "io", "ai", "dev", "co", "edu", "gov",
+})
+
 
 def _clean_path_token(tok: str) -> str:
     return tok.strip().strip("`'\"()").rstrip(".,;:")
@@ -78,13 +98,33 @@ def _path_shaped(tok: str) -> bool:
     return False
 
 
+def _unverifiable_pattern(tok: str) -> bool:
+    """True when a token cannot be checked against a filesystem BY CONSTRUCTION.
+
+    Two shapes, both observed demoting runs that had delivered: an unresolved
+    template placeholder (`{N}`, `$VAR`, `<name>`, `%s`) and a bare hostname
+    (`api.anthropic.com`). Neither can ever resolve, so a miss carries no
+    information about fabrication — it is guaranteed. Skipping them is the same
+    trade this module already makes for remote and transient paths: a false
+    demotion costs a delivered run its verdict, a missed fabrication costs one
+    advisory line."""
+    if _TEMPLATE_MARKERS.search(tok):
+        return True
+    if "/" not in tok:
+        base, _, ext = tok.lower().rpartition(".")
+        if base and ext in _HOSTNAME_TLDS:
+            return True
+    return False
+
+
 def _claimed_output_paths(goal: str) -> List[str]:
     """Dir-qualified output paths the goal asks to be written (user said *where*)."""
     out: List[str] = []
     for m in _OUTPUT_CLAIM_RE.finditer(goal or ""):
         tok = _clean_path_token(m.group("path"))
         if ("/" in tok and tok not in ("/", "./", "../")
-                and not tok.endswith("/") and _path_shaped(tok)):
+                and not tok.endswith("/") and _path_shaped(tok)
+                and not _unverifiable_pattern(tok)):
             out.append(tok)
     return out
 
@@ -94,7 +134,7 @@ def _claimed_output_bare(goal: str) -> List[str]:
     out: List[str] = []
     for m in _OUTPUT_CLAIM_RE.finditer(goal or ""):
         tok = _clean_path_token(m.group("path"))
-        if "/" not in tok and _EXT_RE.search(tok):
+        if "/" not in tok and _EXT_RE.search(tok) and not _unverifiable_pattern(tok):
             out.append(tok)
     return out
 
@@ -113,6 +153,8 @@ def _claimed_input_paths(goal: str) -> List[str]:
             continue                      # may be gone by verdict time
         if not _path_shaped(tok):
             continue                      # prose slash ("load range/index")
+        if _unverifiable_pattern(tok):
+            continue                      # template placeholder — cannot resolve
         out.append(tok)
     return out
 

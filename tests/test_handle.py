@@ -5565,6 +5565,91 @@ class TestGlobClaimProvenance:
         assert any("OL*" in f and "predates" in f for f in flagged)
 
 
+class TestTemplatePlaceholderProvenance:
+    """Pin for run de790c13 (2026-08-08) — third costume of the same bug the
+    glob pin above covers, and the one Path.glob cannot reach (it does not
+    expand braces).
+
+    A self-inspection run described how Maro's own step_exec names its
+    transcripts — "writes step-{N}-transcript.json and returns a handle" — as
+    PROSE ABOUT SOURCE CODE. The claim scraper read `{project_dir}/artifacts/
+    step-{N}-transcript.json` as an output the run claimed to have written,
+    found nothing named `{N}`, and handed a delivered 9-step run
+    goal_achieved=False + stop_verdict=lost-the-plot. All nine real
+    step-1..9-transcript.json files were on disk the whole time.
+
+    A token carrying an unresolved placeholder CANNOT resolve, so its miss is
+    guaranteed rather than evidential — the same reason remote and transient
+    paths are skipped. Self-inspection runs are the exposed class: quoting
+    Maro's own path templates is exactly their job.
+    """
+
+    def _ws(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        proj = tmp_path / "projects" / "some-proj" / "artifacts"
+        proj.mkdir(parents=True)
+        return proj
+
+    def test_brace_placeholder_claim_is_not_flagged(self, monkeypatch, tmp_path):
+        import time
+        from provenance import _missing_or_stale_result_outputs
+        self._ws(monkeypatch, tmp_path)
+        flagged = _missing_or_stale_result_outputs(
+            "step_exec writes to {project_dir}/artifacts/step-{N}-transcript.json "
+            "and returns a handle placed in outcome['artifacts'].",
+            time.time() - 3600)
+        assert not flagged, (
+            "an unresolved template placeholder is a pattern, not a claim: "
+            f"{flagged}")
+
+    def test_other_placeholder_dialects_are_not_flagged(self, monkeypatch, tmp_path):
+        import time
+        from provenance import _missing_or_stale_result_outputs
+        self._ws(monkeypatch, tmp_path)
+        for claim in (
+            "saved to $OUT_DIR/report.json",
+            "saved to ${BUILD}/out.txt",
+            "written to <run_dir>/summary.md",
+            "saved to artifacts/step-%d-out.json",
+        ):
+            flagged = _missing_or_stale_result_outputs(claim, time.time() - 3600)
+            assert not flagged, f"{claim!r} -> {flagged}"
+
+    def test_bare_hostname_is_not_flagged_as_a_file(self, monkeypatch, tmp_path):
+        # Run 0d50df61 (2026-07-17) recorded "api.anthropic.com (claimed
+        # written, not found)" — .com matched the extension regex, so a
+        # hostname entered the lenient bare-name lane as an artifact.
+        import time
+        from provenance import _missing_or_stale_result_outputs
+        self._ws(monkeypatch, tmp_path)
+        flagged = _missing_or_stale_result_outputs(
+            "Generated the completion by writing to api.anthropic.com.",
+            time.time() - 3600)
+        assert not flagged, flagged
+
+    def test_a_real_missing_path_is_still_flagged(self, monkeypatch, tmp_path):
+        # The guard must not become a blanket amnesty: a concrete claim with
+        # no placeholder and no file behind it is still a fabrication.
+        import time
+        from provenance import _missing_or_stale_result_outputs
+        self._ws(monkeypatch, tmp_path)
+        flagged = _missing_or_stale_result_outputs(
+            "Saved the summary to artifacts/never-written.md.",
+            time.time() - 3600)
+        assert any("never-written.md" in f and "not found" in f for f in flagged), (
+            f"a literal missing output must still be flagged: {flagged}")
+
+    def test_real_extensions_that_resemble_tlds_still_verify(self, monkeypatch, tmp_path):
+        # The TLD list is deliberately tight — .sh and .app are real output
+        # suffixes and must keep their verification.
+        import time
+        from provenance import _missing_or_stale_result_outputs
+        self._ws(monkeypatch, tmp_path)
+        flagged = _missing_or_stale_result_outputs(
+            "Saved the helper to deploy.sh.", time.time() - 3600)
+        assert any("deploy.sh" in f for f in flagged), flagged
+
+
 class TestNowVerifyPayloadTruncation:
     """The last unmarked judge window (2026-08-03).
 
