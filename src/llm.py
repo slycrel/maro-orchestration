@@ -2115,6 +2115,128 @@ class _JSONToolPromptMixin:
 _NO_TOOLS_OUTPUT_CEILING = 16000
 
 
+# ---------------------------------------------------------------------------
+# Fork-master lane (2026-08-08, Jeremy's session-fork idea). Measured on
+# this box (~/.maro/workspace/output/claude-fork-bench/): a bare `claude -p`
+# call re-creates ~12k cache tokens EVERY call — the CLI's per-invocation
+# context (CLAUDE.md etc.) is never a byte-stable prefix across processes,
+# so it never cache-hits (the old slack-bridge no-cache finding). Resuming
+# a seeded master with --fork-session replays the master transcript as a
+# stable prefix: cache_creation ~250 tokens, ~5x lower cost/quota burn,
+# ~34% lower API latency, even on unique prompts. Masters are keyed by
+# (binary, model, no_tools, cwd) and persisted to an on-disk map so short-
+# lived processes skip re-seeding; forks are stateless by construction
+# (every fork gets a fresh session id, nothing is written back). Seeding
+# races between processes are harmless: last write wins, both masters stay
+# resumable. Any failure falls open to a bare call.
+_FORK_MASTERS_CACHE: Dict[str, str] = {}
+_FORK_SEED_PROMPT = "Session seed. Reply with the single word OK."
+_FORK_SEED_TIMEOUT_S = 120
+
+
+def _session_fork_enabled() -> bool:
+    """config: subprocess.session_fork (default OFF — opt-in until the
+    lane has burn-in mileage; see docs/DEFAULTS.md)."""
+    try:
+        from config import get as _cfg_get
+        return bool(_cfg_get("subprocess.session_fork", False))
+    except Exception:
+        return False
+
+
+def _fork_masters_path() -> Path:
+    from config import workspace_root
+    return Path(workspace_root()) / "state" / "subprocess_fork_masters.json"
+
+
+def _fork_master_key(claude_bin: str, model_str: str, no_tools: bool,
+                     cwd: Optional[str]) -> str:
+    payload = json.dumps(
+        [claude_bin, model_str, bool(no_tools),
+         str(Path(cwd).resolve()) if cwd else ""],
+        separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+
+
+def _load_fork_masters() -> Dict[str, str]:
+    try:
+        data = json.loads(_fork_masters_path().read_text())
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _store_fork_master(key: str, session_id: str) -> None:
+    try:
+        from file_lock import locked_write
+        path = _fork_masters_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with locked_write(path):
+            masters = _load_fork_masters()
+            masters[key] = session_id
+            path.write_text(json.dumps(masters, indent=2))
+    except Exception as exc:
+        log.debug("fork-master store failed (non-fatal): %s", exc)
+
+
+def _invalidate_fork_master(claude_bin: str, model_str: str, no_tools: bool,
+                            cwd: Optional[str]) -> None:
+    key = _fork_master_key(claude_bin, model_str, no_tools, cwd)
+    _FORK_MASTERS_CACHE.pop(key, None)
+    try:
+        from file_lock import locked_write
+        path = _fork_masters_path()
+        if not path.exists():
+            return
+        with locked_write(path):
+            masters = _load_fork_masters()
+            if masters.pop(key, None) is not None:
+                path.write_text(json.dumps(masters, indent=2))
+    except Exception as exc:
+        log.debug("fork-master invalidate failed (non-fatal): %s", exc)
+
+
+def _get_fork_master(claude_bin: str, model_str: str, no_tools: bool,
+                     cwd: Optional[str]) -> str:
+    """Return a resumable master session id for this call shape, seeding
+    one if needed. Returns "" on any failure — the caller falls open to a
+    bare call, never errors."""
+    key = _fork_master_key(claude_bin, model_str, no_tools, cwd)
+    cached = _FORK_MASTERS_CACHE.get(key)
+    if cached:
+        return cached
+    on_disk = _load_fork_masters().get(key)
+    if on_disk:
+        _FORK_MASTERS_CACHE[key] = on_disk
+        return on_disk
+    try:
+        cmd = [claude_bin, "-p", "--output-format", "json",
+               "--dangerously-skip-permissions", "--strict-mcp-config"]
+        if no_tools:
+            cmd += ["--tools", ""]
+        if model_str in ("sonnet", "opus", "haiku") or model_str not in (
+                MODEL_CHEAP, MODEL_MID, MODEL_POWER, "cheap", "mid", "power"):
+            cmd += ["--model", model_str]
+        result = subprocess.run(
+            cmd, input=_FORK_SEED_PROMPT, capture_output=True, text=True,
+            timeout=_FORK_SEED_TIMEOUT_S, cwd=cwd or None)
+        if result.returncode != 0:
+            log.info("fork-master seed failed rc=%d — staying on bare calls",
+                     result.returncode)
+            return ""
+        session_id = str(json.loads(result.stdout).get("session_id") or "")
+        if not session_id:
+            return ""
+        _FORK_MASTERS_CACHE[key] = session_id
+        _store_fork_master(key, session_id)
+        log.info("fork-master seeded: %s (model=%s no_tools=%s)",
+                 session_id[:8], model_str, no_tools)
+        return session_id
+    except Exception as exc:
+        log.info("fork-master seed failed (%s) — staying on bare calls", exc)
+        return ""
+
+
 class ClaudeSubprocessAdapter(_JSONToolPromptMixin, LLMAdapter):
     """Adapter using `claude -p` subprocess. Works anywhere Claude Code is installed.
 
@@ -2287,6 +2409,19 @@ class ClaudeSubprocessAdapter(_JSONToolPromptMixin, LLMAdapter):
             # inject more than the cap per call. See _bash_output_cap_env.
             _env_extra = _bash_output_cap_env()
 
+        # Fork-master lane — sibling of the executor session above, for
+        # STATELESS calls only (gated on not _session_active: an executor
+        # session must own its transcript end to end, and the fork's new
+        # session id must never be mistaken for executor state). Container
+        # calls stay bare: the container's claude has its own session store.
+        _fork_master_id = ""
+        if (not _session_active and _container_name is None
+                and _session_fork_enabled()):
+            _fork_master_id = _get_fork_master(
+                self.claude_bin, model_str, no_tools, _cwd)
+            if _fork_master_id:
+                cmd += ["--resume", _fork_master_id, "--fork-session"]
+
         prompt = _delta_prompt if _resume_id else full_prompt
         if _resume_id:
             cmd += ["--resume", _resume_id]
@@ -2309,15 +2444,23 @@ class ClaudeSubprocessAdapter(_JSONToolPromptMixin, LLMAdapter):
         # prompt (live probe: rc=1, "No conversation found..."). Only that
         # explicit no-execution shape is safe to retry automatically; ambiguous
         # failures propagate so an externally-effectful step is never doubled.
-        if (_resume_id and result.returncode != 0
+        if ((_resume_id or _fork_master_id) and result.returncode != 0
                 and _extract_success_result(result.stdout) is None
                 and _is_plain_missing_session_error(result.stdout)):
-            _session_state.clear()
-            _session_state["signature"] = _session_signature
-            _session_turns = 0
+            if _resume_id:
+                _session_state.clear()
+                _session_state["signature"] = _session_signature
+                _session_turns = 0
+            else:
+                # Evicted/deleted master (e.g. a ~/.claude cleanup): drop
+                # the stale map entry; the next call re-seeds lazily.
+                _invalidate_fork_master(
+                    self.claude_bin, model_str, no_tools, _cwd)
             fresh_cmd = list(cmd)
             resume_at = fresh_cmd.index("--resume")
             del fresh_cmd[resume_at:resume_at + 2]
+            if "--fork-session" in fresh_cmd:
+                fresh_cmd.remove("--fork-session")
             prompt = full_prompt
             try:
                 result = _run_subprocess_safe(

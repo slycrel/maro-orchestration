@@ -2663,3 +2663,134 @@ class TestMainModelFromUsage:
         }
         events = list(a._stream_events(json.dumps(result_event), tools=None))
         assert events[-1].response.model == "claude-opus-5"
+
+
+# ---------------------------------------------------------------------------
+# Fork-master lane (subprocess.session_fork, 2026-08-08)
+# ---------------------------------------------------------------------------
+
+class TestSessionFork:
+    @pytest.fixture(autouse=True)
+    def _isolate(self, monkeypatch, tmp_path):
+        import llm
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        monkeypatch.setattr(llm, "_FORK_MASTERS_CACHE", {})
+        self.llm = llm
+        self.tmp_path = tmp_path
+
+    def _enable(self, monkeypatch):
+        monkeypatch.setattr(self.llm, "_session_fork_enabled", lambda: True)
+
+    def _seed_result(self, session_id="master-1234"):
+        m = MagicMock()
+        m.returncode = 0
+        m.stdout = json.dumps({"type": "result", "result": "OK",
+                               "session_id": session_id})
+        m.stderr = ""
+        return m
+
+    def _ok_result(self):
+        m = MagicMock()
+        m.returncode = 0
+        m.stdout = _make_subprocess_output("forked ok")
+        m.stderr = ""
+        return m
+
+    def test_fork_disabled_by_default(self):
+        a = ClaudeSubprocessAdapter()
+        with patch("llm._run_subprocess_safe", return_value=self._ok_result()) as run:
+            a.complete([LLMMessage("user", "x")])
+        assert "--fork-session" not in run.call_args.args[0]
+
+    def test_fork_seeds_master_attaches_and_caches(self, monkeypatch):
+        self._enable(monkeypatch)
+        a = ClaudeSubprocessAdapter()
+        with patch("llm.subprocess.run", return_value=self._seed_result()) as seed, \
+             patch("llm._run_subprocess_safe", return_value=self._ok_result()) as run:
+            a.complete([LLMMessage("user", "x")], no_tools=True)
+            a.complete([LLMMessage("user", "y")], no_tools=True)
+        assert seed.call_count == 1  # second call rides the cached master
+        seed_cmd = seed.call_args.args[0]
+        assert "--fork-session" not in seed_cmd  # the master itself is bare
+        cmd = run.call_args.args[0]
+        resume_at = cmd.index("--resume")
+        assert cmd[resume_at + 1] == "master-1234"
+        assert "--fork-session" in cmd
+        # persisted for other processes
+        masters = json.loads(
+            (self.tmp_path / "state" / "subprocess_fork_masters.json").read_text())
+        assert "master-1234" in masters.values()
+
+    def test_fork_master_reused_from_disk_without_reseed(self, monkeypatch):
+        self._enable(monkeypatch)
+        key = self.llm._fork_master_key(
+            ClaudeSubprocessAdapter().claude_bin,
+            resolve_model("subprocess", MODEL_CHEAP), True, None)
+        state = self.tmp_path / "state"
+        state.mkdir(parents=True)
+        (state / "subprocess_fork_masters.json").write_text(
+            json.dumps({key: "disk-master-9"}))
+        a = ClaudeSubprocessAdapter()
+        with patch("llm.subprocess.run") as seed, \
+             patch("llm._run_subprocess_safe", return_value=self._ok_result()) as run:
+            a.complete([LLMMessage("user", "x")], no_tools=True)
+        assert seed.call_count == 0
+        cmd = run.call_args.args[0]
+        assert cmd[cmd.index("--resume") + 1] == "disk-master-9"
+
+    def test_evicted_master_invalidates_and_falls_back_bare(self, monkeypatch):
+        self._enable(monkeypatch)
+        missing = MagicMock()
+        missing.returncode = 1
+        missing.stdout = "No conversation found with session ID: master-1234"
+        missing.stderr = ""
+        a = ClaudeSubprocessAdapter()
+        with patch("llm.subprocess.run", return_value=self._seed_result()), \
+             patch("llm._run_subprocess_safe",
+                   side_effect=[missing, self._ok_result()]) as run:
+            resp = a.complete([LLMMessage("user", "x")], no_tools=True)
+        assert resp.content == "forked ok"
+        retry_cmd = run.call_args_list[1].args[0]
+        assert "--resume" not in retry_cmd
+        assert "--fork-session" not in retry_cmd
+        masters = json.loads(
+            (self.tmp_path / "state" / "subprocess_fork_masters.json").read_text())
+        assert masters == {}  # stale entry dropped; next call re-seeds
+
+    def test_executor_session_lane_never_forks(self, monkeypatch):
+        self._enable(monkeypatch)
+        a = ClaudeSubprocessAdapter()
+        state = {}
+        with patch("llm.subprocess.run", return_value=self._seed_result()) as seed, \
+             patch("llm._run_subprocess_safe", return_value=self._ok_result()) as run:
+            a.complete([LLMMessage("user", "x")], executor=True,
+                       session_state=state, session_delta_prompt="delta")
+        assert seed.call_count == 0
+        assert "--fork-session" not in run.call_args.args[0]
+
+    def test_seed_failure_falls_open_to_bare_call(self, monkeypatch):
+        self._enable(monkeypatch)
+        bad_seed = MagicMock()
+        bad_seed.returncode = 1
+        bad_seed.stdout = ""
+        bad_seed.stderr = "boom"
+        a = ClaudeSubprocessAdapter()
+        with patch("llm.subprocess.run", return_value=bad_seed), \
+             patch("llm._run_subprocess_safe", return_value=self._ok_result()) as run:
+            resp = a.complete([LLMMessage("user", "x")], no_tools=True)
+        assert resp.content == "forked ok"
+        assert "--resume" not in run.call_args.args[0]
+
+    def test_no_tools_and_agentic_get_separate_masters(self, monkeypatch):
+        self._enable(monkeypatch)
+        seeds = [self._seed_result("master-utility"), self._seed_result("master-agentic")]
+        a = ClaudeSubprocessAdapter()
+        with patch("llm.subprocess.run", side_effect=seeds) as seed, \
+             patch("llm._run_subprocess_safe", return_value=self._ok_result()):
+            a.complete([LLMMessage("user", "x")], no_tools=True)
+            a.complete([LLMMessage("user", "y")])
+        assert seed.call_count == 2
+        seed_first = seeds and seed.call_args_list[0].args[0]
+        assert "--tools" in seed_first  # utility master seeded tool-less
+        assert "--tools" not in seed.call_args_list[1].args[0]

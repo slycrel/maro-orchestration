@@ -33,29 +33,30 @@ full triage: 2026-07-04.
 
 Ordered open work that matters. Top of the list is next.
 
-### Warm claude-lane daemon — amortize claude -p bootstrap (Jeremy idea, 2026-08-08)
+### Session-fork lane for claude -p (Jeremy idea 2026-08-08) — **SHIPPED same day, opt-in; daemon variant = residual edge**
 
-His phrasing: "wonder if we could cheat by storing some meta-data and
-having a master subagent process fork over and over, driven by the
-on-disk meta-data, to get around the bootstrapping costs." Assessment
-(same session): the win is real but the mechanism isn't literal fork()
-— a Node process with a live event loop and open sockets doesn't fork
-safely, and the API is stateless so a forked child still re-sends its
-context. The two costs decompose: (1) **process bootstrap** ~2–3s per
-`claude -p` call (CLI boot, tool/MCP init) — killable with ONE warm
-daemon consuming job files from disk, which is exactly the Agent SDK's
-model (persistent process, many sessions), i.e. his on-disk-metadata
-driver with a long-lived worker instead of forks; at census scale (966
-replays) that's ~40–50 min of pure boot we paid in round 2. (2)
-**token re-send** — governed by server-side prompt caching keyed on
-prefix, so the lever is a byte-stable system-prompt prefix + calls
-batched inside the cache TTL, not process topology. Slice shape: a
-`claude_daemon.py` job-queue worker behind the subprocess adapter
-(adapter writes job file + waits on result file; daemon owns one warm
-CLI/SDK process), opt-in via config, benchmarked against bare `-p` on
-a 20-call batch before adoption. Related prior art: the slack-bridge
-`claude -p` no-cache finding ([[project_slack_bridge]] memory);
-subprocess-lane purpose= plumbing already centralizes the call site.
+His phrasing: "storing some meta-data and having a master subagent
+process fork over and over, driven by the on-disk meta-data, to get
+around the bootstrapping costs" — clarified to mean **fork the
+session, not the process**, which the CLI already supports
+(`--resume MASTER --fork-session`). Benchmarked same day
+(`~/.maro/workspace/output/claude-fork-bench/`, n=6/arm, haiku): bare
+`-p` re-creates ~12k cache tokens EVERY call (per-invocation context
+is never a byte-stable prefix across processes — the slack-bridge
+no-cache finding, now with receipts) vs ~250 for forks; **~5× lower
+cost/quota burn, ~34% lower API latency**, wins even on unique
+prompts. SHIPPED as `subprocess.session_fork` (default OFF,
+docs/DEFAULTS.md): ClaudeSubprocessAdapter seeds one master per
+(binary, model, no_tools, cwd), persists ids to
+`<workspace>/state/subprocess_fork_masters.json`, forks per stateless
+call; executor sessions + container calls stay bare; evicted masters
+fall back bare and re-seed. Live-smoked on the real CLI. **Residuals:**
+(1) flip ON in workspace config after burn-in — Jeremy's call; (2)
+process-boot latency (~2–3s/call) remains — the warm-daemon/Agent-SDK
+variant (one long-lived worker consuming job files) is the upgrade
+edge if boot time ever matters at census scale (966 replays ≈ 40–50
+min of boot); (3) fork session files accrete under ~/.claude/projects
+— opt-in cleanup only, per data retention.
 
 ### Planner non-action item types — world facts (Jeremy ask, 2026-08-02; design before build)
 
