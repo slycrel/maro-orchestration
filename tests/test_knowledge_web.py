@@ -1828,6 +1828,66 @@ class TestPromoteKnowledgeCandidates:
         remaining = kw.load_knowledge_nodes(status=kw.NODE_CANDIDATE)
         assert len(remaining) == 1  # waits for the next maintenance pass
 
+    def test_aged_candidate_promotes_on_explicit_judgment(self, tmp_path, _events):
+        # Decision 1addc859: age is the eligibility, the judgment is the
+        # evidence — a 3-week-old never-re-observed candidate promotes on an
+        # explicit valid verdict.
+        _mk_candidate(times_applied=0, confidence=0.3,
+                      created_at="2020-01-01T00:00:00+00:00")
+        adapter = _VerdictAdapter(valid=True)
+        assert kw.promote_knowledge_candidates(adapter=adapter) == ["cand1"]
+        assert adapter.calls == 1
+        assert _events[-1]["context"]["promotion_path"] == "age"
+        assert _events[-1]["context"]["validation"] == "passed"
+
+    def test_aged_candidate_never_promotes_without_adapter(self, tmp_path, _events):
+        # No fail-open, no adapter-less path: time passing is absence of
+        # contradiction, not positive evidence.
+        _mk_candidate(times_applied=0, confidence=0.3,
+                      created_at="2020-01-01T00:00:00+00:00")
+        assert kw.promote_knowledge_candidates() == []
+        assert kw.load_knowledge_nodes() == []
+        assert _events == []
+
+    def test_aged_candidate_waits_when_validator_down(self, tmp_path, _events):
+        # Validator error → the re-observation path fails open, the age
+        # path just waits for a working judge.
+        _mk_candidate(times_applied=0, confidence=0.3,
+                      created_at="2020-01-01T00:00:00+00:00")
+        assert kw.promote_knowledge_candidates(
+            adapter=_VerdictAdapter(raise_exc=True)) == []
+        assert kw.load_knowledge_nodes() == []
+
+    def test_young_unobserved_candidate_stays(self, tmp_path, _events):
+        # Neither path: fresh (age ~0) and never re-observed.
+        _mk_candidate(times_applied=0, confidence=0.3)
+        assert kw.promote_knowledge_candidates(
+            adapter=_VerdictAdapter(valid=True)) == []
+
+    def test_reobservation_path_sorts_before_age_and_stamps_path(self, tmp_path, _events):
+        _mk_candidate(node_id="aged1", times_applied=0, confidence=0.3,
+                      title="Old but only aged",
+                      created_at="2020-01-01T00:00:00+00:00")
+        _mk_candidate(node_id="earned", times_applied=2, confidence=0.4,
+                      title="Actually re-observed twice")
+        promoted = kw.promote_knowledge_candidates(
+            adapter=_VerdictAdapter(valid=True), limit=1)
+        # limit=1 → the stronger-evidence path wins the slot
+        assert promoted == ["earned"]
+        assert _events[-1]["context"]["promotion_path"] == "reobservation"
+
+    def test_aged_lf_reference_nodes_still_never_promote(self, tmp_path, _events):
+        _mk_candidate(node_id="lf-abc1234567", times_applied=0, confidence=0.3,
+                      created_at="2020-01-01T00:00:00+00:00")
+        assert kw.promote_knowledge_candidates(
+            adapter=_VerdictAdapter(valid=True)) == []
+        assert _events == []
+
+    def test_unparseable_birthdate_never_age_qualifies(self, tmp_path, _events):
+        _mk_candidate(times_applied=0, confidence=0.3, created_at="not-a-date")
+        assert kw.promote_knowledge_candidates(
+            adapter=_VerdictAdapter(valid=True)) == []
+
     def test_unknown_keys_survive_rewrite(self, tmp_path, _events):
         # Raw-dict rewrite invariant: the dataclass filter is a READ
         # convenience, never a write filter.

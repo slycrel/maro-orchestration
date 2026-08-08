@@ -2421,6 +2421,18 @@ def _bump_node_times_applied(node_ids: List[str]) -> None:
 NODE_PROMOTE_MIN_APPLICATIONS = 2   # re-observations before promotion considered
 NODE_PROMOTE_MIN_CONFIDENCE = 0.4   # 0.3 birth + 2 x 0.05 re-observation bumps
 
+# Age+content path (decision 1addc859, 2026-08-08 — live-writer census
+# survivor 3): the re-observation design starved the gate (1 bump across 433
+# candidates in 8 weeks — near-verbatim re-derivation of the same
+# generalization almost never happens), so age is the eligibility and the
+# LLM content gate is the judgment. A candidate that has survived
+# NODE_PROMOTE_MIN_AGE_DAYS without being contradicted/superseded may
+# promote on an EXPLICIT judged-valid verdict — adapter required, no
+# fail-open (positive-evidence principle: time passing is absence of
+# contradiction, not evidence; only the judgment supplies that). The
+# re-observation path stays as an accelerator with its original contract.
+NODE_PROMOTE_MIN_AGE_DAYS = 14
+
 # Two +0.05 float bumps land at 0.39999999999999997 — a bare >= 0.4 gate
 # would hold every legitimately re-observed-twice node forever.
 _CONFIDENCE_EPSILON = 1e-9
@@ -2478,17 +2490,25 @@ def promote_knowledge_candidates(*, adapter: Any = None, dry_run: bool = False,
                                  limit: int = 10) -> List[str]:
     """Promote earned NODE_CANDIDATE rows to NODE_ACTIVE.
 
-    Gates: times_applied >= NODE_PROMOTE_MIN_APPLICATIONS and confidence >=
-    NODE_PROMOTE_MIN_CONFIDENCE (epsilon-tolerant). lf- reference-corpus
-    nodes are never promoted — third-party data, not maro-learned knowledge.
-    With an adapter, each survivor passes the LLM gate (held at candidate on
-    an explicit "no"; fail-open "unjudged" on validator errors); without one,
-    validation is "skipped" and the numeric gates decide alone — the same
-    degradation contract as skill promotion.
+    Two eligibility paths (decision 1addc859):
+    - **Re-observation** (legacy accelerator): times_applied >=
+      NODE_PROMOTE_MIN_APPLICATIONS and confidence >=
+      NODE_PROMOTE_MIN_CONFIDENCE (epsilon-tolerant). With an adapter the
+      LLM gate judges (held on explicit "no", fail-open "unjudged" on
+      validator errors); without one, validation is "skipped" and the
+      numeric gates decide alone — skill promotion's degradation contract.
+    - **Age+content**: created_at older than NODE_PROMOTE_MIN_AGE_DAYS.
+      Adapter REQUIRED and only an explicit judged-valid verdict promotes —
+      no fail-open, no adapter-less path (age is absence of contradiction,
+      not positive evidence; the judgment supplies that). Without an
+      adapter these candidates simply wait.
+    lf- reference-corpus nodes never promote on either path — third-party
+    data, not maro-learned knowledge.
 
-    dry_run returns the numeric-gate survivors without validating, writing,
-    or logging. Capped at `limit` promotions per sweep to bound validation
-    spend; the remainder waits for the next maintenance pass.
+    dry_run returns the eligibility survivors (both paths) without
+    validating, writing, or logging. Capped at `limit` promotions per sweep
+    to bound validation spend (re-observation candidates first, then oldest
+    age candidates); the remainder waits for the next maintenance pass.
 
     Returns the list of promoted node_ids.
     """
@@ -2496,7 +2516,16 @@ def promote_knowledge_candidates(*, adapter: Any = None, dry_run: bool = False,
     if not p.exists():
         return []
 
-    eligible: List[Dict[str, Any]] = []
+    def _age_days(d: Dict[str, Any]) -> float:
+        try:
+            born = datetime.fromisoformat(str(d.get("created_at", "")))
+            if born.tzinfo is None:
+                born = born.replace(tzinfo=timezone.utc)
+            return (datetime.now(timezone.utc) - born).total_seconds() / 86400.0
+        except Exception:
+            return 0.0  # unparseable birthdate never age-qualifies
+
+    eligible: List[Dict[str, Any]] = []  # d carries _promotion_path
     for line in p.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line:
@@ -2509,13 +2538,20 @@ def promote_knowledge_candidates(*, adapter: Any = None, dry_run: bool = False,
             continue
         if str(d.get("node_id", "")).startswith(LINK_FARM_PREFIX):
             continue
-        if int(d.get("times_applied", 0) or 0) < NODE_PROMOTE_MIN_APPLICATIONS:
-            continue
-        if float(d.get("confidence", 0) or 0) < (
-                NODE_PROMOTE_MIN_CONFIDENCE - _CONFIDENCE_EPSILON):
+        if (int(d.get("times_applied", 0) or 0) >= NODE_PROMOTE_MIN_APPLICATIONS
+                and float(d.get("confidence", 0) or 0) >= (
+                    NODE_PROMOTE_MIN_CONFIDENCE - _CONFIDENCE_EPSILON)):
+            d["_promotion_path"] = "reobservation"
+        elif _age_days(d) >= NODE_PROMOTE_MIN_AGE_DAYS:
+            d["_promotion_path"] = "age"
+        else:
             continue
         eligible.append(d)
 
+    # Re-observation survivors first (stronger evidence), then oldest-first
+    # so the age backlog drains chronologically.
+    eligible.sort(key=lambda d: (d["_promotion_path"] != "reobservation",
+                                 str(d.get("created_at", ""))))
     if len(eligible) > limit:
         log.info("knowledge_node promotion: %d eligible, sweeping first %d",
                  len(eligible), limit)
@@ -2525,16 +2561,29 @@ def promote_knowledge_candidates(*, adapter: Any = None, dry_run: bool = False,
         return [d["node_id"] for d in eligible]
 
     promoted: Dict[str, str] = {}  # node_id → validation stamp
+    paths: Dict[str, str] = {}     # node_id → promotion path
     for d in eligible:
-        validation = "skipped"  # no adapter → validation never ran
-        if adapter is not None:
+        path_kind = d.pop("_promotion_path")
+        if adapter is None:
+            if path_kind == "age":
+                continue  # age path never promotes unjudged
+            validation = "skipped"  # re-observation contract: gates decide
+        else:
             result = _validate_node_for_promotion(d, adapter)
             if not result["valid"]:
                 log.info("knowledge_node %s held at candidate: %s",
                          d.get("node_id"), result["reason"])
                 continue
-            validation = "passed" if result.get("judged", True) else "unjudged"
+            judged = result.get("judged", True)
+            if path_kind == "age" and not judged:
+                # Fail-open is the re-observation path's contract only —
+                # an age candidate with no working judge just waits.
+                log.info("knowledge_node %s (age path) held: validator "
+                         "unavailable, judgment required", d.get("node_id"))
+                continue
+            validation = "passed" if judged else "unjudged"
         promoted[d["node_id"]] = validation
+        paths[d["node_id"]] = path_kind
 
     if not promoted:
         return []
@@ -2576,9 +2625,10 @@ def promote_knowledge_candidates(*, adapter: Any = None, dry_run: bool = False,
                 event_type=KNOWLEDGE_NODE_PROMOTED,
                 subject=str(d.get("title", ""))[:120],
                 summary=(
-                    f"Promoted candidate -> active. Re-observed "
-                    f"{int(d.get('times_applied', 0) or 0)}x, confidence "
-                    f"{float(d.get('confidence', 0) or 0):.2f}."
+                    f"Promoted candidate -> active "
+                    f"({paths.get(node_id, 'reobservation')} path). "
+                    f"Re-observed {int(d.get('times_applied', 0) or 0)}x, "
+                    f"confidence {float(d.get('confidence', 0) or 0):.2f}."
                 ),
                 context={
                     "node_id": node_id,
@@ -2586,6 +2636,7 @@ def promote_knowledge_candidates(*, adapter: Any = None, dry_run: bool = False,
                     "times_applied": int(d.get("times_applied", 0) or 0),
                     "confidence": round(float(d.get("confidence", 0) or 0), 3),
                     "validation": promoted[node_id],
+                    "promotion_path": paths.get(node_id, "reobservation"),
                 },
                 related_ids=[f"knowledge:{node_id}"],
             )

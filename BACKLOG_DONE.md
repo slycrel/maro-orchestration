@@ -6969,3 +6969,34 @@ Original item:
   same-day (74722ee)** — constant+signal removed with a
   reintroduce-with-detector-or-not-at-all note at the declaration
   site; only the decision-shaped inspector-lane question remains here.
+
+### Node promotion reworked to age+content — SHIPPED 2026-08-08
+
+Live-writer census survivor 3, decided + built same day (decision
+1addc859, Jeremy ambivalent → recommendation). The re-observation design
+was empirically starved (1 bump / 433 candidates / 8 weeks). New second
+eligibility path in `promote_knowledge_candidates`: a candidate older
+than `NODE_PROMOTE_MIN_AGE_DAYS` (14) may promote on an EXPLICIT
+judged-valid LLM verdict — adapter required, no fail-open, no
+adapter-less promotion (positive-evidence principle: age is absence of
+contradiction, not evidence). Re-observation path unchanged as an
+accelerator with its original degradation contract; re-observation
+survivors take sweep slots first, then oldest age candidates
+(chronological backlog drain, ≤10/pass on the existing maintenance
+cadence). `KNOWLEDGE_NODE_PROMOTED` events now carry `promotion_path`.
+7 new tests; all 22 legacy promotion tests untouched and green.
+
+Original item:
+
+- [ ] **3. Node-promotion gate will ~never fire as built — threshold vs
+  matching design.** `NODE_PROMOTE_MIN_APPLICATIONS=2` needs two dedup
+  re-observations of the same candidate title at Jaccard-trigram ≥0.7
+  (`_DEDUP_THRESHOLD`, knowledge_bridge.py:181). Observed rate: 1 bump
+  across 433 candidates in 8 weeks (432/433 flat at times_applied=0;
+  pool dates to 2026-06-11 — what shipped 2026-08-02 was the sweep, not
+  the pool). Plumbing verified live end-to-end; the starvation is in
+  the re-observation design. ~~Options live at different layers: loosen
+  match threshold, count semantic-neighbor hits, or judge candidates on
+  age+content instead of re-observation.~~ **DECIDED 2026-08-08: judge
+  on age+content** (decision 1addc859, Jeremy ambivalent, went with
+  recommendation — the re-observation design is empirically refuted).

@@ -108,18 +108,6 @@ finds same-day (three more `use_count` corpses + the self-variant A/B
 bug, f71be8d). These four survivors each need a decision or a design
 pass, not a quiet fix:
 
-- [ ] **3. Node-promotion gate will ~never fire as built — threshold vs
-  matching design.** `NODE_PROMOTE_MIN_APPLICATIONS=2` needs two dedup
-  re-observations of the same candidate title at Jaccard-trigram ≥0.7
-  (`_DEDUP_THRESHOLD`, knowledge_bridge.py:181). Observed rate: 1 bump
-  across 433 candidates in 8 weeks (432/433 flat at times_applied=0;
-  pool dates to 2026-06-11 — what shipped 2026-08-02 was the sweep, not
-  the pool). Plumbing verified live end-to-end; the starvation is in
-  the re-observation design. ~~Options live at different layers: loosen
-  match threshold, count semantic-neighbor hits, or judge candidates on
-  age+content instead of re-observation.~~ **DECIDED 2026-08-08: judge
-  on age+content** (decision 1addc859, Jeremy ambivalent, went with
-  recommendation — the re-observation design is empirically refuted).
 - [ ] **5b residual: drop orch_root()'s prototype layout — churny
   test-sweep cleanup (deferred by Jeremy's call 2026-08-06; writers
   migration SHIPPED same day, see BACKLOG_DONE).** The 5b writers
