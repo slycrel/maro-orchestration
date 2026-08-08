@@ -1669,6 +1669,14 @@ capture**, which is what makes the rung amortize instead of evaporate.
   surgery. The cheap fix if it grows: make outcome analysis read
   `elapsed_ms` and `blocked_reason` before asserting a mechanism, and
   count occurrences by run identity rather than by attempt.
+  **RE-MEASURED 2026-08-08 — it did NOT grow; stays a watch item.**
+  `suggestions.jsonl` is now 547 rows (was 472) with **5 applied**, and
+  rows asserting the fabricated mechanism ("blocks indefinitely") are
+  **0** — the 2026-08-02 specimen is no longer in the live store. No
+  surgery warranted. Method note for whoever re-checks: a loose grep for
+  `stuck|0 steps` across the memory stores returns ~151 rows and is
+  almost entirely noise — match on the asserted mechanism text, not the
+  symptom word, or you will talk yourself into a fix that isn't needed.
 
 - [x] **LT-2 — `docs/CAPABILITY_LADDER.md` SHIPPED 2026-08-01.** C0–C5
   checkpoints + four ladders (A web-reading, B here-and-now grounding, C
@@ -1681,7 +1689,12 @@ capture**, which is what makes the rung amortize instead of evaporate.
   user would ask for** — it exists solely to make D2/D3 measurable, which is
   precisely why it was the thing quietly broken at 10% coverage. Original
   spec follows.
-- [ ] ~~LT-2 — `docs/CAPABILITY_LADDER.md`.~~ Broad checkpoints, each a
+- [x] ~~LT-2 — `docs/CAPABILITY_LADDER.md`.~~ **STALE DUPLICATE, closed
+  2026-08-08** — its own text was already struck through and the shipped
+  twin sits directly above (`LT-2 … SHIPPED 2026-08-01`, C0–C5 + four
+  ladders, indexed in `docs/INDEX.md`). The checkbox simply never got
+  flipped when the strikethrough went in. Original text kept below for
+  the record. Broad checkpoints, each a
   small named goal set that must read `verified`, not `target`: **C0**
   know what you don't know → **C1** fetch & ground → **C2** triangulate &
   resist fabrication → **C3** execute & check → **C4** persist & reuse →
@@ -1976,9 +1989,35 @@ inspectable before any behavior changes.
   consumers stay fed. Pinned: counter math, no-stats-from-utility,
   seam end-to-end (FULL/directional/unjudged/idempotent re-stamp/
   manifest dedup/no-manifest/no-run-dir), readout regime preference.
+- [ ] **`_OUTPUT_CLAIM_RE` misses the irregular past tense "wrote"**
+  (found 2026-08-08 while pinning the template-placeholder guard;
+  `provenance.py:37`). `writ\w*` covers write/writes/written/writing;
+  "wrote" is the one irregular form and is not matched, so "wrote the
+  summary to artifacts/x.md" is never verified while "written to" is.
+  **Deliberately NOT fixed, and this is the reasoning, not an oversight:**
+  widening a verdict layer's recall trades this module's *cheap* error
+  (missing a fabrication — one advisory line) for its *expensive* one (a
+  false demotion costs a delivered run its verdict), and there is zero
+  observed instance of a missed "wrote" fabrication. **Evidence gate:
+  widen only when a real fabrication is observed escaping through this
+  verb** — then add `wrote` and pin it. Threshold-provenance shape: marked
+  `reasoned`, with the measurement that would flip it named here.
+
 - [ ] **Migrate legacy-rate consumers onto injected counters**
-  (consumer-first, one at a time, each with its own liveness check):
-  every consumer below still reads the inflated legacy success_rate —
+  (consumer-first, one at a time, each with its own liveness check).
+  **DENOMINATOR IS NOW READY, measured 2026-08-08 (box):** 187 skill-stat
+  rows, **168 (90%) still carry legacy `success_rate >= 0.99`**, while 44
+  rows now have real evidence (159 verdicted injections total). The
+  inflation is ~30 points where both exist — e.g. `Headless Branch Setup`
+  and `Fixture-Based Behavior Verification` read legacy **1.00** against
+  injected **0.68**. Per this item's own rule ("a consumer migrates when
+  injected_runs gives it a real denominator"), consumers (a)/(c)/(d) are
+  unblocked; (b) stays blocked on goal-capture. Mirror `frontier_skills`
+  (`skills.py:1589`), which already guards on `injected_runs < min_uses`.
+  **Not taken 2026-08-08 by the M1 session purely to avoid a collision** —
+  the box was mid-flight on skill pedigree metadata in the same file. No
+  technical blocker; pick it up when `skills.py` is quiet.
+  Consumers, unchanged —
   (a) `get_skills_needing_escalation` + needs_escalation flag
   (skills.py — escalation threshold 0.4 is unreachable when the store
   is 99.4% positive, so redesign never triggers); (b) router
@@ -2248,10 +2287,44 @@ pointer.
   own module rather than inline in conftest specifically so it could be
   tested — the 2026-06-25 lesson that a guard nobody exercises (every git
   hook, dead for a month behind a stale `core.hooksPath`) is
-  indistinguishable from no guard. **Still open on this item:** the
+  indistinguishable from no guard. ~~**Still open on this item:** the
   fresh-workspace half (entry points against an empty `~/.maro/workspace`),
   the learning-gated exemption marker, and writing the invariant down in
-  HOUSE_STYLE.md — this tripwire covers the suite-hygiene half only.
+  HOUSE_STYLE.md — this tripwire covers the suite-hygiene half only.~~
+  **TWO OF THREE CLOSED 2026-08-08.** (1) The HOUSE_STYLE.md declaration
+  was already there (`docs/HOUSE_STYLE.md:122`) — that sub-point had gone
+  stale in this entry, not undone. (2) **Fresh-workspace half SHIPPED:**
+  `tests/test_fresh_workspace.py` — eleven read-only entry points
+  (`status`, `skill-stats`, `skills`, `memory`, `opstatus`, `metrics`,
+  `attribution`, `map`, `autonomy`, `inspector-status`, `mission-status`)
+  must exit 0 with no traceback against an empty workspace, AND against a
+  workspace path that does not exist at all (a distinct failure: a reader
+  can survive an empty dir and still die on `mkdir` under a missing
+  parent). It scrubs all three workspace env aliases before invoking,
+  since an ambient pin on a dev box is exactly how the original violation
+  hid for months, and asserts no write lands in the repo — attributing a
+  leak to ONE command at the moment it happens, where the session-level
+  checkout tripwire can only report an unattributable end-of-suite diff.
+  Measured, not assumed: all eleven already held, so this pins behaviour
+  rather than fixing a break. Commands argparse rejects before any store
+  read (`manifest`, `outcomes`) are deliberately excluded — asserting on
+  them would exercise argparse, not the invariant. **Still open: only the
+  learning-gated exemption marker** (functionality gated on prior learning
+  data must declare itself and degrade gracefully when the data is
+  absent).
+  **Side-finding while building the tripwire — `maro status` makes a live
+  LLM call.** Measured on an empty workspace: `status` **10.44s**, every
+  other read-only command **~0.07s** — it was 100% of the new file's cost.
+  Its output is generated prose ("Executive Summary" / "Recommendation")
+  and it reads the working tree's git diff. Two questions this raises,
+  neither answered here: (1) should a read-only `status` verb cost a paid
+  call and a network round-trip at all, or should the synthesis be opt-in
+  (cheap local summary by default, `--synthesize` to pay)? (2) it is a
+  **fresh-install first-run** command — what does it do on a box with no
+  backend configured? That is squarely this item's own invariant, and it
+  is untested precisely because putting it under test would spend money on
+  every suite run. Excluded from the tripwire for that reason, with the
+  reason written at the exclusion site.
   **Happy accident worth keeping** (Jeremy 2026-07-29: *"thankful for happy
   accidents"*): the M1 has **no maro config at all** — no `~/.maro/config.yml`
   and no workspace `config.yml` — so anything run here uses pure fresh-install

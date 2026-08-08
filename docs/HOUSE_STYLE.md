@@ -126,11 +126,16 @@ tripwired rules fire (decree-with-tripwire, DEV_PATTERNS).
   able to be verified on a clean clone of the maro repository."
   Violated silently for months (flat `src/` masked by `PYTHONPATH=src`,
   caught only by the 2026-07-09 docker clean-machine trial).
-  *Tripwire:* the clean-checkout tripwire
-  (`tests/_checkout_tripwire.py` + conftest session hooks) — first
-  shipped 2026-07-29. Still missing (BACKLOG): a fresh-workspace check
-  that entry points behave against an empty `~/.maro/workspace`, and an
-  explicit self-declared marker on learning-gated exemptions.
+  *Tripwires, both halves now armed:* the clean-checkout tripwire
+  (`tests/_checkout_tripwire.py` + conftest session hooks, 2026-07-29 —
+  the suite must not litter the working tree), and the fresh-workspace
+  tripwire (`tests/test_fresh_workspace.py`, 2026-08-08 — eleven
+  read-only entry points must answer against an empty
+  `~/.maro/workspace`, and against one whose directory does not exist
+  at all). The second scrubs all three workspace env aliases before
+  invoking, because an ambient pin on a developer box is precisely how
+  the original violation survived for months. Still missing (BACKLOG):
+  an explicit self-declared marker on learning-gated exemptions.
 - **Config honesty:** every documented config key has a live reader.
   *Tripwire:* `tests/test_defaults_doc.py` census over
   `docs/DEFAULTS.md` (AST-shape resolution, zero hand exemptions;
