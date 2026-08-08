@@ -395,43 +395,7 @@ class TestAdversarialSampleIntegration:
         assert calls == []
         assert result.findings == []
 
+# Phases 59-60 verifier-memory/calibration tests removed 2026-08-08 with the
+# cluster itself (Jeremy's remove call, decision 1addc859) -- see
+# knowledge_lens.py's removal note.
 
-# ---------------------------------------------------------------------------
-# 5. Calibration loop + inspector: end-to-end threshold wiring
-# ---------------------------------------------------------------------------
-
-class TestCalibrationInspectorWiring:
-    """calibrated_alignment_threshold() integration.
-
-    NOTE: check_alignment() (the Phase 12 spec-pipeline heuristic this class
-    originally tested against) was deleted 2026-07-02 as dead code — see
-    docs/REFACTOR_PLAN.md Tier 1. Remaining tests here cover the calibration
-    machinery itself, independent of that deleted consumer.
-    """
-
-    def test_calibration_threshold_base_with_no_history(self, monkeypatch, tmp_path):
-        """calibrated_alignment_threshold returns base 0.60 when no history exists."""
-        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
-        from memory import calibrated_alignment_threshold, _ALIGNMENT_THRESHOLD_BASE
-
-        threshold = calibrated_alignment_threshold("alignment")
-        assert threshold == _ALIGNMENT_THRESHOLD_BASE
-
-    def test_verification_outcome_persists_across_calls(self, monkeypatch, tmp_path):
-        """record_verification → load_verification_outcomes → verification_accuracy pipeline."""
-        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
-        from memory import (
-            record_verification, load_verification_outcomes, verification_accuracy,
-        )
-
-        for _ in range(3):
-            record_verification("alignment", "pass", "llm", 0.85)
-        record_verification("alignment", "fail", "llm", 0.4)
-
-        outcomes = load_verification_outcomes(claim_type="alignment")
-        assert len(outcomes) == 4
-
-        stats = verification_accuracy(claim_type="alignment")
-        assert stats["total"] == 4
-        assert abs(stats["pass_rate"] - 0.75) < 0.01
-        assert abs(stats["fail_rate"] - 0.25) < 0.01

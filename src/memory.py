@@ -88,17 +88,13 @@ from knowledge_web import (  # noqa: F401, E402
     _load_canon_stats, get_canon_candidates, memory_status,
 )
 from knowledge_lens import (  # noqa: F401, E402
-    StandingRule, Hypothesis, Decision, VerificationOutcome,
+    StandingRule, Hypothesis, Decision,
     RULE_PROMOTE_CONFIRMATIONS, DECISION_SEARCH_LIMIT,
-    _ALIGNMENT_THRESHOLD_BASE, _ALIGNMENT_THRESHOLD_MIN, _ALIGNMENT_THRESHOLD_MAX,
-    _CALIBRATION_MIN_SAMPLES,
-    _rules_path, _hypotheses_path, _decisions_path, _verification_outcomes_path,
+    _rules_path, _hypotheses_path, _decisions_path,
     load_standing_rules, load_hypotheses, _rewrite_rules, _rewrite_hypotheses,
     observe_pattern, contradict_pattern, check_contradiction, inject_standing_rules,
     standing_rules_with_ids, contested_rules, refight_rule,
     record_decision, search_decisions, inject_decisions,
-    record_verification, load_verification_outcomes,
-    verification_accuracy, calibrated_alignment_threshold,
 )
 
 # Hybrid retrieval (BM25 + RRF) — graceful fallback to TF-IDF if unavailable

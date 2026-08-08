@@ -34,7 +34,7 @@ Stage 5: Rule      → Hardcoded path (zero inference cost)
 | decisions.jsonl | ADR-style decision journal | step DECISION directive (step_exec/loop_post_step), scope proxy commitment (scope.py), `python3 -m knowledge_lens decision` (SF-13 decrees) — all via record_decision() | inject_decisions() (recall substrate #3) |
 | captains_log.jsonl | Event stream (11K+ entries) | Various — lifecycle events | captain's log read bridge |
 | task_ledger.jsonl | Per-step execution trace | record_step_trace() | evolver context |
-| verification_outcomes.jsonl | Claim verification history | record_verification() | calibration threshold |
+| verification_outcomes.jsonl | RETIRED 2026-08-08 — Phases 59-60 cluster removed (dead at both ends, decision 1addc859); file kept per data retention, frozen since 2026-04-12 | — | — |
 | knowledge_nodes.jsonl | Structured knowledge (K2) | import_link_farm, append_knowledge_node() (bridge mints CANDIDATE), promote_knowledge_candidates() (candidate → active flip) | query_knowledge(), inject_knowledge_for_goal() |
 | knowledge_edges.jsonl | Node relationships (K2) | import_link_farm, append_knowledge_edge() | load_knowledge_edges() |
 

@@ -138,21 +138,6 @@ finds same-day (three more `use_count` corpses + the self-variant A/B
 bug, f71be8d). These four survivors each need a decision or a design
 pass, not a quiet fix:
 
-- [ ] **1. Phase-60 verification-calibration loop dead at both ends —
-  ~~wire or remove~~ DECIDED 2026-08-08: REMOVE** (Jeremy: "makes me a
-  little sad, not sure why. Agree, we can resurrect if needed later" —
-  decision 1addc859). Drop the constants, both functions, and the
-  memory.py re-exports together; git remembers.
-  Original finding: `record_verification` (knowledge_lens.py:1281) has
-  zero src/ callers — its docstring claims "called by
-  inspector.check_alignment()", which doesn't exist;
-  `calibrated_alignment_threshold` (knowledge_lens.py:1400) also has
-  zero src/ callers; memory.py re-exports both.
-  verification_outcomes.jsonl: 58 rows frozen since 2026-04-12, tail
-  rows test-shaped. Same family as use_count/SKILL_REWRITE/promotion
-  (fourth dead lane). Natural wire point if kept: inspector's
-  `assess_goal_alignment`. If removed, drop the constants, both
-  functions, and the memory.py re-exports together.
 - [ ] **2. Inspector threshold cluster unreachable by decree — needs a
   live lane or an explicit "stays manual" call.** `_BREACH_THRESHOLD`,
   `_ESCALATION_MIN_HITS`, `_CONTEXT_CHURN_TOKEN_THRESHOLD` all have
