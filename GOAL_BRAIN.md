@@ -6556,3 +6556,28 @@ reason-stratum, tenure's boundary guards), CLI-driven measurement only.
 Record: `docs/history/2026-08-06-delta-gate-validation.md`. Jeremy's
 keep/adjust call rides the routes census (READING_QUEUE row
 2026-08-07).
+
+### 2026-08-08 — Decision: negative-Δ demotion direction SANCTIONED, gated on agreeing data
+
+Jeremy, after reading the validation record + census readout (his words):
+"it's reasonably clear that negative [Δ] should be used for
+demotion/decay... but I suspect it's also not that simple either;
+because other contexts might end up promoting on the same data";
+"I lean towards implementing this assuming more testing gets us agreeing
+data. I'm good with haiku or even sonnet-low spend for this testing";
+"I'm very happy the gate is working and want to see more data there as
+well"; "we may need to be open to adjust some of our calculation
+variables when the data leads us there."
+
+Operational meaning: (1) negative-Δ demotion/decay graduates from brief
+§5 cut to conditionally-approved — build IF census round 2 confirms the
+negative signs are stable; (2) Δ is decreed surface-scoped — a decision-
+surface negative demotes from decision injection, it does NOT condemn
+the lesson globally; other surfaces need their own reward design before
+they can promote on the same data; (3) haiku/sonnet-low replay spend is
+cleared for Δ testing (standing, not one-shot); (4) gate calculation
+variables (Δ floor 0.30, min calls 6, jackknife dominance) are priors,
+adjustable when data leads — shades-of-grey expectation on record.
+Census round 2 launched same session (retest ×3 full-call + stratified
+×9 + rule ×2, checkpointed, subprocess haiku,
+`~/.maro/workspace/output/delta-gate-v1/census_round2.json`).

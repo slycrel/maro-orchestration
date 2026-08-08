@@ -814,11 +814,14 @@ Truth anchor: GOAL_BRAIN.md Threads. History: docs/history/ROADMAP_ARCHIVE.md.
    `docs/history/2026-08-06-delta-gate-validation.md`; routes census
    RAN 2026-08-07 (subprocess haiku, 300 replays, 0 errors — top 3
    corpus lessons by score all mildly NEGATIVE Δ, nothing promotes;
-   readout in the record doc) — the keep/adjust call on it is Jeremy's
-   next read. Remaining
-   from the brief's cuts (§5): evolver/thinkback trace scoring,
-   competence-redundancy decay, un-contest verb — all queue behind
-   reading the census. Original prep brief:
+   readout in the record doc) — keep/adjust CALLED 2026-08-08
+   (GOAL_BRAIN decision + journal f7335288): gate stays; **negative-Δ
+   demotion conditionally approved** — build if census round 2 (launched
+   2026-08-08: retest ×3 + stratified ×9 + rule ×2 on cleared haiku
+   spend) confirms the negative signs are stable; Δ decreed
+   surface-scoped (decision-surface negative ≠ globally bad lesson).
+   Still-queued cuts from the brief's §5: evolver/thinkback trace
+   scoring, un-contest verb. Original prep brief:
    `docs/DELTA_GATE_BUILD_BRIEF.md`; decision 623eb056.
 
 -6. **Holistic drift review (Jeremy, 2026-07-17) — do this in a CLEAN
