@@ -234,3 +234,50 @@ per the pre-registered rule, the volatility is the finding:
 Disposition: 61e4cbd7 and 32a656a5 stay untouched (MEDIUM, no stamp,
 normal decay). Nothing further queued on the sweep positives; the
 promote-floor question is closed.
+
+## Noise-floor calibration — temperature is the story (2026-08-08)
+
+Jeremy's question: is the run-to-run volatility correlated with the
+model's sampling randomness (temperature — which `claude -p` exposes no
+flag for, so the instrument runs at the CLI's default), or something
+more? Measured directly: 32a656a5 replayed at samples=3 over the full
+51-call oracle set, per-call detail kept
+(`~/.maro/workspace/output/delta-gate-v1/noise_floor_calibration.json`,
+0 replay errors; substrate pinned to bare calls).
+
+**Answer: temperature, entirely — and the fixture had underestimated
+it 3×.**
+
+- **27.5% of arm-replays (28/102) disagree with themselves** across
+  their own 3 samples on the oracle set, vs 8.3% on the 18-call
+  validation fixture. The oracle corpus is much more
+  borderline-decision-heavy than the fixture; per-call flip mass (mean
+  minority fraction) is 0.101 vs the fixture's 0.028.
+- Implied run-to-run Δ noise at samples=1: **σ ≈ 0.060** (2σ ≈ 0.12).
+  The 0.157 retest-1→retest-2 swing that looked like a 4–5σ anomaly
+  under the fixture-based model is **2.6σ under the measured one** —
+  tail-ish, not mysterious. No second mechanism needed.
+- 32a656a5's third full-set measurement, at 3× the power:
+  **Δ = +0.007** — statistically zero. Series: −0.137 → +0.020 →
+  +0.007. Retest 1 was the outlier; the lesson does nothing. No-stamp
+  disposition confirmed.
+- The unstable calls concentrate on borderline continue/adjust/extend
+  decisions across both strata (adaptive supervision and navigator
+  decision) — the instrument's hard cases are the runtime's hard
+  cases, which is what you'd expect if temperature is the mechanism.
+
+**Instrument rules, final form:** `score_lesson`'s default is already
+samples=3 — the samples=1 runs were a shard-script spend optimization,
+and this calibration prices what that optimization traded away
+(σ 0.060 → ~0.035). (1) Stamp-adjacent measurements run samples=3.
+(2) Subset runs are triage only. (3) One full-set run is a candidate,
+not a verdict — act on two agreeing full-set, 0-error,
+jackknife-dominant measurements. The three stamped demotions each
+cleared that bar; nothing measured since has.
+
+Residual honesty: the three stamps' evidence predates this calibration
+and −0.059 (46613838) sits within 1σ of the measured noise floor —
+but it cleared two independent agreeing measurements (joint
+false-positive probability ~4% under a true-zero null), demotion is
+reversible by measurement, and the strike-3 re-measure lane (decision
+dcf8eab8) now gives every stamped lesson a data-driven road back.
