@@ -60,6 +60,48 @@ edge if boot time ever matters at census scale (966 replays ≈ 40–50
 min of boot); (3) fork session files accrete under ~/.claude/projects
 — opt-in cleanup only, per data retention.
 
+### Re-run identity — a re-dispatched goal should KNOW it's a re-run, with prior art, not rediscover (or misread) its own history (OPENED 2026-08-09, Jeremy)
+
+His phrasing, watching the 4th verbatim dispatch of the Model-or-Harness
+self-eval: *"a re-run should know it's a re-run, with prior art, instead
+of believing all the data is it's own directly."* The specimens, one per
+layer:
+- **Dispatch layer:** the 4th dispatch was PREVENTED — the navigator's
+  1200-char recall served it run 18773dfa's (then-false, since
+  restamped) "prior attempts failed by claiming completion" verdict with
+  no provenance framing, no marker that the record was contested, no
+  sight of the two successful attempts, and no signal that this was a
+  deliberate verbatim re-dispatch. It escalated at conf 0.95 on a
+  one-sided fragment it treated as its own knowledge. (Same disease
+  shape as the 2026-08-03 bounded-judge finds: a consumer given a
+  bounded, unattributed view treating it as the whole truth.)
+- **Run layer:** runs 2 and 3 only BENEFITED from prior art via
+  project-slug collision + forensics — run 3's first two steps were
+  archaeology ("ls -la to confirm whether FINAL_REPORT.md actually
+  exists (recall lists only FINAL_VERDICT.md)"), and its own minted
+  lesson was that recall served an incomplete fragment of the prior
+  deliverable set. Discovery worked but was paid in steps, every time,
+  and is luck-dependent.
+
+Fix shape: re-run identity is deterministically detectable at intake —
+`handle_inputs.jsonl` records every raw dispatch, so a normalized hash
+of `user_ask` at enqueue/handle time yields "N prior attempts, handles
+X/Y/Z" with zero LLM spend. Inject a compact **prior-attempts brief** as
+a typed, provenance-labeled channel (the dispatch-envelope pattern:
+history rides its own channel, never becomes the goal): per prior
+handle — date, verdict WITH STANDING (achieved / contested / operator-
+restamped), stop verdict if any, top deliverable paths in the shared
+project dir. Consumers: (a) the dispatch navigator — its prior for
+"verbatim re-dispatch, latest attempt succeeded" must differ from
+"fails repeatedly"; (b) the planner/scope — step 1 becomes "build on
+<prior deliverable>" instead of archaeology. Complete-by-construction
+(all attempts, not top-k recall snippets), which also fixes the
+navigator's one-sided sample. Dovetails with the contested-neutrality
+residual above (verdict standing unenforced in consumers) — the brief
+carries standing explicitly. Exact-hash first; fuzzy/paraphrase match
+is a later, separate decision (five-word-slug collision hazard is the
+cautionary sibling).
+
 ### MH. Model-or-Harness taxonomy — the ADOPT edges from maro's self-evaluation (OPENED 2026-08-09, from runs de790c13 + 6fa41f96)
 
 Two dispatched runs evaluated maro against arXiv:2607.28802 ("Model or
