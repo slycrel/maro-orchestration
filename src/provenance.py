@@ -34,15 +34,23 @@ from typing import Any, Dict, FrozenSet, Iterator, List, Optional, Tuple
 
 log = logging.getLogger("maro.handle")
 
+# The path token admits `)` ONLY inside a named-printf group (`%(step)d`).
+# Excluding `)` outright — prose parens must terminate a token — used to
+# truncate `artifacts/out-%(step)d.txt` to `artifacts/out-%(step`, which was
+# then collected as a LITERAL claim and falsely demoted whenever it survived
+# _path_shaped (absolute form always; relative form on any box whose bases
+# hold an `artifacts/` dir). Round-3 cross-review, 3/3 lenses: the "named
+# forms are uncollected, cheap" record was wrong on exactly that point.
+_PATH_TOKEN = r"(?:%\(\w+\)|[^\s`'\")])+"
 _OUTPUT_CLAIM_RE = re.compile(
     r"\b(?:sav\w*|writ\w*|creat\w*|output\w*|stor\w*|export\w*|generat\w*|dump\w*)\b"
-    r"[^.\n]*?\b(?:to|into|at|as)\s+[`'\"(]?(?P<path>[^\s`'\")]+)",
+    r"[^.\n]*?\b(?:to|into|at|as)\s+[`'\"(]?(?P<path>" + _PATH_TOKEN + r")",
     re.IGNORECASE,
 )
 _INPUT_CLAIM_RE = re.compile(
     r"\b(?:read|load|open|pars\w*|fetch|import|ingest)\w*\s+"
     r"(?:the\s+|a\s+|file\s+|from\s+|contents?\s+of\s+|in\s+)*"
-    r"[`'\"(]?(?P<path>[^\s`'\")]+)",
+    r"[`'\"(]?(?P<path>" + _PATH_TOKEN + r")",
     re.IGNORECASE,
 )
 _EXT_RE = re.compile(r"\.[A-Za-z0-9]{1,6}$")
@@ -93,6 +101,12 @@ _TEMPLATE_MARKERS = re.compile(
 # api.host.tld shape keeps single-label filenames verifiable and needs no
 # table to maintain.
 _HOSTNAME_RE = re.compile(r"^(?:[A-Za-z0-9-]+\.){2,}[A-Za-z]{2,}$")
+# The multi-label rule requires an ALPHA final label, so a dotted-quad IP
+# ("save the result to 192.168.1.1") fell through to the bare-file lane and
+# falsely demoted a delivered remote write (round-3 cross-review). An IP is
+# never plausibly a local artifact name; unlike two-label hostnames, it is
+# distinguishable at zero recall cost.
+_IPV4_RE = re.compile(r"^\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?$")
 
 _TEMPLATE_SENTINEL = "\x00"
 
@@ -147,7 +161,8 @@ def _unverifiable_pattern(tok: str) -> bool:
     # thing this regex replaced). Multi-label shape alone errs toward skipping
     # — a missed fabrication, the cheap error. `release.notes.md` staying
     # unverified is the accepted cost; see BACKLOG.
-    return bool(_HOSTNAME_RE.match(tok.split("/", 1)[0]))
+    first = tok.split("/", 1)[0]
+    return bool(_HOSTNAME_RE.match(first) or _IPV4_RE.match(first))
 
 
 def _normalize_template(tok: str) -> str:
@@ -439,6 +454,31 @@ def _resolve_exact(rel: str, bases: List[Path]) -> List[Path]:
     the first glob hit — run 75fe8b4e was falsely demoted to incomplete when
     its fresh output resolved to an older project's file of the same name.
     """
+    # LITERAL FIRST, same contract as _exists_at_exact. Round 3 gave the
+    # GOAL/INPUT lanes literal-first and left this resolver globbing on any
+    # "[" — so a real `artifacts/report[final].md` narrated in a RESULT was
+    # checked as a character class, matched nothing, and falsely demoted; a
+    # `~/…` claim likewise never expanded (round-3 cross-review — the "fourth
+    # lane split" the BACKLOG residual predicted).
+    lp = Path(rel).expanduser()
+    if lp.is_absolute():
+        if lp.is_file():
+            return [lp]
+    else:
+        lhits: List[Path] = [b / rel for b in bases if (b / rel).is_file()]
+        try:
+            from config import workspace_root
+            _ws_projects = Path(workspace_root()) / "projects"
+            if _ws_projects.is_dir():
+                lhits.extend(d / rel for d in _ws_projects.glob("*")
+                             if d.is_dir() and (d / rel).is_file())
+        except Exception:
+            pass
+        if lhits:
+            return lhits
+    if rel.startswith("~"):
+        rel = str(lp)
+
     # Template placeholders resolve as the patterns they stand for (run
     # de790c13, 2026-08-08) — "{project_dir}/artifacts/step-{N}-transcript.json"
     # becomes "artifacts/step-*-transcript.json" and is then satisfied by the

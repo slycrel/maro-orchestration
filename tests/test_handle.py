@@ -5651,18 +5651,63 @@ class TestTemplatePlaceholderProvenance:
             "saved to artifacts/out-%d.txt",
             "saved to artifacts/out-%02d.txt",
             "saved to artifacts/out-%1$s.txt",
+            "saved to artifacts/out-%(step)d.txt",
             "saved to ${BUILD}/artifacts/out-7.txt",
             "written to <run_dir>/artifacts/out-7.txt",
         ):
             flagged = _missing_or_stale_result_outputs(claim, time.time() - 3600)
             assert not flagged, f"{claim!r} -> {flagged}"
-        # NOT asserted: "%(step)d". _OUTPUT_CLAIM_RE's path token stops at ")",
-        # so a named-printf claim never becomes a claim at all — asserting it is
-        # "not flagged" passes whether or not the guard works, which is exactly
-        # the vacuous-check trap. Round-2 review caught the earlier version of
-        # this test doing precisely that. Named forms are therefore uncollected
-        # (a missed claim — this module's CHEAP error), not handled; the marker
-        # regex covers them for the day the collector widens.
+        # "%(step)d" is meaningful here since the collector widened (round-3
+        # cross-review): the path token used to stop at ")", so the claim was
+        # collected TRUNCATED (`artifacts/out-%(step`) and falsely demoted
+        # whenever the prefix survived _path_shaped — the "never becomes a
+        # claim, cheap" record was wrong. Now the full token is collected and
+        # the %(name)d marker resolves it as the glob it stands for.
+
+    def test_truncated_named_printf_is_never_a_claim(self, monkeypatch, tmp_path):
+        """The exact failure shape: an artifacts/ dir under a provenance base
+        made the truncated prefix path-shaped, so collection was environment-
+        dependent — red on this box, green in a clean worktree."""
+        from provenance import _claimed_output_paths
+        assert _claimed_output_paths(
+            "saved to artifacts/out-%(step)d.txt") == \
+            ["artifacts/out-%(step)d.txt"]
+        assert _claimed_output_paths(
+            "saved to /work/artifacts/%(step)d.json") == \
+            ["/work/artifacts/%(step)d.json"]
+
+    def test_result_lane_is_literal_first_too(self, monkeypatch, tmp_path):
+        """Round-3 cross-review: round 3 gave GOAL/INPUT literal-first and
+        left the RESULT resolver globbing on any "[" — a real
+        report[final].md was checked as a character class and falsely
+        demoted, and ~/ paths never expanded. One resolver, one behaviour,
+        this time actually in both lanes."""
+        import time
+        from provenance import _missing_or_stale_result_outputs, _resolve_exact
+        proj = self._ws(monkeypatch, tmp_path)
+        (proj / "report[final].md").write_text("x", encoding="utf-8")
+        flagged = _missing_or_stale_result_outputs(
+            "saved the summary to artifacts/report[final].md",
+            time.time() - 3600)
+        assert not flagged, flagged
+        # ~/ expands in the shared resolver (HOME is monkeypatched, so this
+        # touches nothing real; the claim itself must avoid /tmp — the
+        # transient filter would drop it before resolution)
+        monkeypatch.setenv("HOME", str(tmp_path))
+        (tmp_path / "out.md").write_text("y", encoding="utf-8")
+        hits = _resolve_exact("~/out.md", [])
+        assert hits and hits[0].name == "out.md"
+
+    def test_ip_destination_is_not_a_file(self, monkeypatch, tmp_path):
+        """`export the data to 192.168.1.1` is a remote write. The alpha-TLD
+        hostname rule let dotted-quad IPs fall through to the bare-file lane
+        and falsely demote a delivered remote run (round-3 cross-review)."""
+        from provenance import _result_claimed_outputs, _unverifiable_pattern
+        self._ws(monkeypatch, tmp_path)
+        assert _unverifiable_pattern("192.168.1.1")
+        assert _unverifiable_pattern("10.0.0.2:8080")
+        assert not _unverifiable_pattern("report.org")  # decided: still a file
+        assert _result_claimed_outputs("exported the data to 192.168.1.1") == []
 
     def test_multi_label_hostname_is_not_a_file(self, monkeypatch, tmp_path):
         # Run 0d50df61 recorded "api.anthropic.com (claimed written, not

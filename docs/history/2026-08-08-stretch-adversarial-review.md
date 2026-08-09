@@ -105,3 +105,46 @@ the truncated token only survives `_path_shaped` on hosts where an
 box's repo root, false in CI/worktrees). Red here, green in CI. Left
 for the M1 lane's round 3 rather than editing provenance.py under an
 active concurrent review.
+
+---
+
+# Round 3 — cross-lane sanity check (2026-08-09)
+
+Jeremy: *"we should probably run that once more as a sanity check,
+including the M1 changes, which I don't actually trust at this point."*
+Same three Codex lenses over the combined diff of BOTH lanes: the M1
+session's provenance arc (ee0b11b → ab1f4c5, its three self-run review
+rounds explicitly untrusted) and this lane's round-2 fix layer.
+Reviewers were authorized to attack DECIDED/BACKLOG'd calls if they
+could show the recorded reasoning wrong.
+
+## Verdict: CONTESTED → fixes applied same-session
+
+Independent pre-review: M1's two reverts verified complete (regexes
+restored with reasoning at the sites, `is_file()` kept, decided
+behavior re-pinned) — the backlogging itself was NOT cheating. The real
+lapse was landing 8e660ac with three broken tests behind a "full suite
+passed" claim (TMPDIR-dependent; fixed in 42850fe before this round).
+
+## Findings and outcomes
+
+| # | Finding (lens) | Verdict | Outcome |
+|---|---|---|---|
+| R3-1 | BACKLOG's "named-printf claims are never collected — cheap" is factually wrong: the token truncates at `)` and the PREFIX is collected, false-demoting whenever it survives `_path_shaped` (3/3 lenses, HIGH) | CONFIRMED (matches this lane's independent red-main diagnosis) | Collector widened: path token admits `%(name)` groups; full token resolves via the existing template marker; truncation pinned; BACKLOG item corrected |
+| R3-2 | RESULT lane never got literal-first or `~` expansion — round 3 fixed GOAL/INPUT only, so `report[final].md` globbed as a char class and falsely demoted (Architect+Minimalist, HIGH) | CONFIRMED (the "fourth lane split" M1's own BACKLOG predicted) | `_resolve_exact` does literal-first + expanduser before the glob branch, mirroring `_exists_at_exact`; both-lane pins |
+| R3-3 | `resolve_remint_watch` clears probation on measurements the routes would refuse: NaN delta, spread straddling a bar, non-reason stratum (Skeptic+Architect, HIGH/MED) | CONFIRMED (defect in this lane's round-2 fix — NaN passes isinstance and both band comparisons) | Same evidence bar as the routes: finite delta+spread, reason stratum, uncertainty band wholly inside the neutral interval |
+| R3-4 | Dotted-quad IPs fall through the alpha-TLD hostname rule into the bare-file lane and false-demote remote writes (Skeptic, HIGH as stated) | CONFIRMED for IPs; the `example.com` half is the DECIDED two-label trade (`report.org` stays verifiable) and reviewers showed no new cost | `_IPV4_RE` (with optional port) joins `_unverifiable_pattern`; hostname rule untouched |
+| R3-5 | GOAL lane still walks every workspace project per literal miss (Architect, MED) | REJECTED as action | Recorded design (all-candidates freshness contract); scale note only; typed-claim-boundary BACKLOG item is the structural answer |
+| R3-6 | `$100/…` leading-segment normalization can under-find in edge cases (Minimalist, MED) | REJECTED as action | Requires a literal `$100` directory in a claim; the reverted alternative false-demoted `$1` — recorded trade stands. RESULT lane's new literal-first incidentally covers the cited case |
+| R3-7 | BACKLOG stale: directory-satisfies-file clause survived the `is_file()` sweep (Architect+Minimalist, LOW) | CONFIRMED | Clause struck with pointer to 1371b44 and the pins |
+| R3-8 | Fresh-workspace console-script preference doesn't prove the installed `maro` imports this checkout; root-glob pin is timing-based (Minimalist, MED/LOW) | ACCEPTED as residual | Filed to the existing READ_ONLY_PROBES BACKLOG item — moot on boxes with nothing installed |
+
+## Lead judgment notes
+
+- R3-1 is the round's center of gravity: three independent lenses each
+  refuted a recorded cheap-cost classification by construction — exactly
+  the audit the distrust asked for. The other DECIDED calls survived the
+  same attack (reverts clean, reasoning sound).
+- Both lanes contributed a HIGH: M1's lane R3-1/R3-2, this lane R3-3.
+  Nobody's fix layer survives review untouched; that is the argument for
+  running rounds until findings go quiet, not against either lane.

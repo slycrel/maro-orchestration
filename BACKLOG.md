@@ -2007,20 +2007,33 @@ inspectable before any behavior changes.
      to letters-only was built and REVERTED: `$1` is a valid positional
      parameter, so an unexpanded `$1/report.json` gets looked up verbatim and
      false-demotes. Over-satisfying a literal `$100` is the cheap side.
-  3. Named-printf claims (`%(step)d`) never become claims at all — the path
-     token in `_OUTPUT_CLAIM_RE` stops at `)`. The marker regex covers the
-     form for the day the collector widens; today it is uncollected.
+  3. ~~Named-printf claims never become claims~~ **FIXED 2026-08-09 (round-3
+     cross-review, 3/3 lenses): the record was wrong — the token stopped at
+     `)` but the TRUNCATED prefix (`artifacts/out-%(step`) WAS collected and
+     falsely demoted whenever it survived `_path_shaped` (always for absolute
+     forms; environment-dependent for relative ones — the exact shape that
+     turned this test red on the runtime box and green in CI). Collector now
+     admits `%(name)` groups; the full token resolves via the existing
+     template marker.**
   4. `READ_ONLY_PROBES` in `tests/test_fresh_workspace.py` is hand-maintained,
      so a newly added store-reading subcommand gets no probe until someone
      remembers. Deriving it from CLI command metadata is the durable fix.
+     Round-3 cross-review added two adjacent test-honesty notes, both LOW:
+     the console-script preference doesn't verify the installed `maro`
+     actually imports THIS checkout (a stale global install would green-wash
+     every probe — moot on boxes with nothing installed), and the root-glob
+     refusal pin infers "didn't walk /" from a <5s wall clock rather than
+     stubbing the glob.
   **Round 3 (fresh codex, whole changeset) added two more, both LEFT OPEN
   because they widen acceptance rather than demote — the cheap side:**
   5. GOAL/INPUT existence is existential with no cardinality or freshness:
      `Create artifacts/part-{1..9}.json` is satisfied by ONE day-old
      `projects/unrelated-old-run/artifacts/part-1.json`, because
      `_resolve_exact` searches every project and the goal lane has no
-     freshness defence (RESULT does). A **directory** named `report-1.json`
-     satisfies it too.
+     freshness defence (RESULT does). ~~A directory named `report-1.json`
+     satisfies it too~~ (stale since 1371b44 — every resolver path now
+     tests `is_file()`, pinned; cardinality/freshness remains the open
+     residual).
   6. Cross-lane semantics are still shared by convention, not by type. Round 2
      unified dir-qualified claims and missed the bare lane; round 3 unified
      the bare lane. A fourth lane split is likelier than not.

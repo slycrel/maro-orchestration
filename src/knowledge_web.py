@@ -952,11 +952,27 @@ def resolve_remint_watch(lesson_id: str, delta_evidence: Dict[str, Any]) -> bool
     # is the bars'; route application is the flags' — clearing keys on
     # the bars alone.
     delta = ev.get("delta")
-    if not isinstance(delta, (int, float)):
+    if not (isinstance(delta, (int, float)) and math.isfinite(delta)):
         return False
     if delta <= demote_max or delta >= promote_min:
         log.info("resolve_remint_watch: %s Δ=%.3f is decisive, not neutral "
                  "— watch stays until a route acts on it", lesson_id, delta)
+        return False
+    # A measurement the effect routes would refuse as unreliable must not
+    # end a probation either (round-3 review: NaN, spread > band, or a
+    # non-reason stratum all cleared) — same evidence bar as the routes:
+    # finite spread, "reason" stratum, and the whole uncertainty band
+    # inside the neutral interval, not just the point estimate.
+    spread = ev.get("jackknife_spread")
+    if not (isinstance(spread, (int, float)) and math.isfinite(spread)
+            and spread >= 0):
+        return False
+    if ev.get("stratum") != "reason":
+        return False
+    if delta - spread <= demote_max or delta + spread >= promote_min:
+        log.info("resolve_remint_watch: %s Δ=%.3f ±%.3f straddles a decisive "
+                 "bar — not a settled neutral, watch stays",
+                 lesson_id, delta, spread)
         return False
 
     cleared: Dict[str, TieredLesson] = {}

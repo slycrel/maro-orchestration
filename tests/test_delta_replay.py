@@ -773,6 +773,17 @@ class TestRemintTombstones:
         assert kw.resolve_remint_watch(re1.lesson_id, dict(base, delta=-0.2)) is False
         assert kw.resolve_remint_watch(re1.lesson_id, dict(base, delta=0.5)) is False
         assert kw.resolve_remint_watch(re1.lesson_id, dict(base, delta=None)) is False
+        # A measurement the routes would refuse as unreliable must not end a
+        # probation either (round-3 review: NaN, spread straddling a bar, and
+        # a non-reason stratum all cleared the watch).
+        assert kw.resolve_remint_watch(
+            re1.lesson_id, dict(base, delta=float("nan"))) is False
+        assert kw.resolve_remint_watch(
+            re1.lesson_id, dict(base, jackknife_spread=1.0)) is False
+        assert kw.resolve_remint_watch(
+            re1.lesson_id, dict(base, jackknife_spread=None)) is False
+        assert kw.resolve_remint_watch(
+            re1.lesson_id, dict(base, stratum="rule")) is False
         # A row that isn't under watch can't be "cleared"
         other = record_tiered_lesson("the cache key omitted the model tier",
                                      "agenda", "done", "goal")
