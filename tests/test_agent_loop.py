@@ -6035,6 +6035,35 @@ def test_inspector_cadence_dry_run_does_not_count_or_trigger(monkeypatch, tmp_pa
     assert not (tmp_path / "inspector_cadence.json").exists()
 
 
+def test_inspector_cadence_disabled_creates_no_state(monkeypatch, tmp_path):
+    """2026-08-08 review: cadence 0 used to count anyway — the state file
+    appeared on fresh installs and a later enable fired immediately instead
+    of waiting N enabled runs. Disabled = no tick, no file."""
+    calls = _patch_inspector_cadence(monkeypatch, tmp_path, 0)
+    for _ in range(3):
+        _finalize_for_cadence(dry_run=False)
+    assert calls == []
+    assert not (tmp_path / "inspector_cadence.json").exists()
+
+
+def test_inspector_cadence_corrupt_counter_self_heals(monkeypatch, tmp_path):
+    """2026-08-08 review: type-corrupt counter fields used to raise on every
+    finalize, wedging the lane until manual repair."""
+    import json as _json
+    from inspector import inspector_cadence_tick
+    import inspector as inspector_mod
+    monkeypatch.setattr(
+        inspector_mod, "_cadence_path",
+        lambda: tmp_path / "inspector_cadence.json")
+    (tmp_path / "inspector_cadence.json").write_text(
+        '{"runs_since_inspect": "bad", "firings_since_deep": null}')
+    # Heals to a fresh count instead of raising; cadence 1 → fires now
+    assert inspector_cadence_tick(1, deep_every=5) == "normal"
+    state = _json.loads((tmp_path / "inspector_cadence.json").read_text())
+    assert state["runs_since_inspect"] == 0
+    assert state["firings_since_deep"] == 1
+
+
 def test_inspector_cadence_exception_is_nonfatal(monkeypatch, tmp_path):
     import inspector as inspector_mod
     _patch_inspector_cadence(monkeypatch, tmp_path, 1)

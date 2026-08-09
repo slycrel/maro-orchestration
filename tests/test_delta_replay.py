@@ -813,6 +813,84 @@ class TestRemintTombstones:
         live = next(l for l in rows if l.lesson_id == re1.lesson_id)
         assert live.delta_evidence["route"] == "measured"
 
+    def test_remint_pending_negative_delta_demotes_not_clears(self, monkeypatch, tmp_path):
+        """The strike-3 lane acts by definition (2026-08-08 review): a
+        decisively negative re-measurement must stamp effect-demote, not
+        quietly end the probation."""
+        kw, _ = _demote_and_gc(monkeypatch, tmp_path)
+        from memory import record_tiered_lesson
+        re1 = record_tiered_lesson(REMINT_TEXT, "agenda", "done", "goal")
+
+        def _bump(lessons):
+            for l in lessons:
+                if l.lesson_id == re1.lesson_id:
+                    l.delta_evidence = dict(l.delta_evidence, strikes=3)
+            return lessons
+        kw._mutate_tiered_lessons(kw.MemoryTier.MEDIUM, _bump)
+
+        import runs
+        rd = runs.create_run_dir("hneg", prompt="census", lane="agenda")
+        for i in range(1, 7):
+            _write_call(rd / "build" / "calls", i, "navigator decision",
+                        '{"move": "execute"}')
+        (rd / "run_card.json").write_text(json.dumps({"goal_achieved": True}))
+
+        from delta_replay import run_effect_route
+        # ScriptedAdapter answers "extend" WITH the lesson, "execute"
+        # without → with-arm always misses the execute oracle → Δ = −1.0.
+        out = run_effect_route(ScriptedAdapter(REMINT_TEXT), samples=1,
+                               remint_pending=True)
+        row = next(r for r in out["census"] if r["lesson_id"] == re1.lesson_id)
+        assert row["delta"] == -1.0
+        assert row["demoted_by_effect"] is True
+        assert row["remint_watch_cleared"] is False
+        rows = kw.load_tiered_lessons(tier=kw.MemoryTier.MEDIUM, min_score=0.0)
+        live = next(l for l in rows if l.lesson_id == re1.lesson_id)
+        assert live.delta_evidence["route"] == "effect-demote"
+
+    def test_remint_pending_reaches_long_tier_watch_row(self, monkeypatch, tmp_path):
+        """A watch row that tenure-promoted to LONG must stay selectable
+        and clearable (2026-08-08 review: MEDIUM-only scan stranded it)."""
+        kw, _ = _demote_and_gc(monkeypatch, tmp_path)
+        from memory import record_tiered_lesson
+        re1 = record_tiered_lesson(REMINT_TEXT, "agenda", "done", "goal")
+
+        moved = {}
+
+        def _pop(lessons):
+            for l in lessons:
+                if l.lesson_id == re1.lesson_id:
+                    l.delta_evidence = dict(l.delta_evidence, strikes=3)
+                    moved["row"] = l
+            return [l for l in lessons if l.lesson_id != re1.lesson_id]
+        kw._mutate_tiered_lessons(kw.MemoryTier.MEDIUM, _pop)
+        moved["row"].tier = kw.MemoryTier.LONG
+
+        def _push(lessons):
+            return lessons + [moved["row"]]
+        kw._mutate_tiered_lessons(kw.MemoryTier.LONG, _push)
+
+        import runs
+        rd = runs.create_run_dir("hlng", prompt="census", lane="agenda")
+        for i in range(1, 7):
+            _write_call(rd / "build" / "calls", i, "navigator decision",
+                        '{"move": "extend"}')
+        (rd / "run_card.json").write_text(json.dumps({"goal_achieved": True}))
+
+        class AlwaysExtend:
+            def complete(self, messages, **kw_):
+                return SimpleNamespace(content=json.dumps({"move": "extend"}))
+
+        from delta_replay import run_effect_route
+        out = run_effect_route(AlwaysExtend(), samples=1, remint_pending=True)
+        row = next((r for r in out["census"]
+                    if r["lesson_id"] == re1.lesson_id), None)
+        assert row is not None, "LONG-tier watch row must be selectable"
+        assert row["remint_watch_cleared"] is True
+        longs = kw.load_tiered_lessons(tier=kw.MemoryTier.LONG, min_score=0.0)
+        live = next(l for l in longs if l.lesson_id == re1.lesson_id)
+        assert live.delta_evidence["route"] == "measured"
+
     def test_census_dry_run_never_clears_probation(self, monkeypatch, tmp_path):
         kw, _ = _demote_and_gc(monkeypatch, tmp_path)
         from memory import record_tiered_lesson

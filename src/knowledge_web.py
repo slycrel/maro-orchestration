@@ -960,6 +960,11 @@ def resolve_remint_watch(lesson_id: str, delta_evidence: Dict[str, Any]) -> bool
 
     _mutate_tiered_lessons(MemoryTier.MEDIUM, _clear)
     if "t" not in cleared:
+        # A watch row can tenure-promote to LONG before its forced
+        # re-measurement runs (2026-08-08 review) — the probation must be
+        # clearable wherever the row now lives.
+        _mutate_tiered_lessons(MemoryTier.LONG, _clear)
+    if "t" not in cleared:
         return False
     log.info("resolve_remint_watch: %s probation cleared by measurement "
              "(Δ=%s over %s calls)", lesson_id, ev.get("delta"),
@@ -1568,6 +1573,12 @@ def demote_lesson_by_effect(lesson_id: str, delta_evidence: Dict[str, Any]) -> b
 
     _mutate_tiered_lessons(MemoryTier.MEDIUM, _stamp)
     if "t" not in stamped:
+        # Remint-watch rows can tenure-promote to LONG before the strike-3
+        # re-measurement runs (2026-08-08 review); a measured-negative Δ
+        # must stamp the row wherever it lives. The stamp's effect is
+        # tier-agnostic (injection exclusion reads the route, not the tier).
+        _mutate_tiered_lessons(MemoryTier.LONG, _stamp)
+    if "t" not in stamped:
         return False
     try:
         # Same operator-audit surface as quarantine/contest (finding 5):
@@ -1928,10 +1939,14 @@ def inject_tiered_lessons(
     # (adversarial review 2026-08-08 Part 1 finding 1 — measured live: 3
     # demote stamps cost 2 of 3 goalless MEDIUM slots). Excluded rows keep
     # their rank by design (no score mutation), so the reorder is the fix.
+    # _is_delta_demoted joined this filter 2026-08-08: demote stamps used
+    # to be MEDIUM-only by construction, but a remint-watch row that
+    # tenure-promoted to LONG can now carry one (strike-3 re-measure lane).
     long_candidates = [t for t in load_tiered_lessons(
         tier=MemoryTier.LONG, task_type=task_type, min_score=0.0,
         limit=None,
-    ) if not (t.provisional or _is_quarantined(t) or _is_contested(t))
+    ) if not (t.provisional or _is_quarantined(t) or _is_contested(t)
+              or _is_delta_demoted(t))
     ][:max_long * _pool_multiplier]
     if goal and len(long_candidates) > max_long:
         _ranker = _hybrid_rank if _USE_HYBRID else _tfidf_rank
@@ -2472,8 +2487,16 @@ def _validate_node_for_promotion(d: Dict[str, Any], adapter: Any) -> Dict[str, A
         )
         parsed = extract_json(content_or_empty(resp), dict, log_tag="knowledge_web.promote")
         if isinstance(parsed, dict):
+            # Strict verdict parse (2026-08-08 adversarial review): the LLM
+            # boundary returns untyped JSON, and bool("false") is True — a
+            # malformed negative would have promoted through the fail-closed
+            # age path. Only JSON true / the literal string "true" approve.
+            _raw_valid = parsed.get("valid", False)
+            _valid = _raw_valid is True or (
+                isinstance(_raw_valid, str)
+                and _raw_valid.strip().lower() == "true")
             return {
-                "valid": bool(parsed.get("valid", False)),
+                "valid": _valid,
                 "reason": str(parsed.get("reason", "")),
                 "judged": True,
             }
@@ -2538,6 +2561,16 @@ def promote_knowledge_candidates(*, adapter: Any = None, dry_run: bool = False,
             continue
         if str(d.get("node_id", "")).startswith(LINK_FARM_PREFIX):
             continue
+        # Terminal-rejection gate (2026-08-08 adversarial review): a
+        # judged-invalid candidate used to stay NODE_CANDIDATE and, sorting
+        # oldest-first, re-consume a slot of every future sweep — ten
+        # invalid old nodes would starve the whole backlog. A rejected node
+        # only re-enters when NEW evidence arrived (times_applied grew
+        # since rejection); age alone never re-knocks.
+        _rej_applied = d.get("promotion_rejected_applications")
+        if (_rej_applied is not None
+                and int(d.get("times_applied", 0) or 0) <= int(_rej_applied)):
+            continue
         if (int(d.get("times_applied", 0) or 0) >= NODE_PROMOTE_MIN_APPLICATIONS
                 and float(d.get("confidence", 0) or 0) >= (
                     NODE_PROMOTE_MIN_CONFIDENCE - _CONFIDENCE_EPSILON)):
@@ -2562,6 +2595,7 @@ def promote_knowledge_candidates(*, adapter: Any = None, dry_run: bool = False,
 
     promoted: Dict[str, str] = {}  # node_id → validation stamp
     paths: Dict[str, str] = {}     # node_id → promotion path
+    rejected: Dict[str, str] = {}  # node_id → judged-invalid reason
     for d in eligible:
         path_kind = d.pop("_promotion_path")
         if adapter is None:
@@ -2573,6 +2607,11 @@ def promote_knowledge_candidates(*, adapter: Any = None, dry_run: bool = False,
             if not result["valid"]:
                 log.info("knowledge_node %s held at candidate: %s",
                          d.get("node_id"), result["reason"])
+                if result.get("judged"):
+                    # Explicit "no" is terminal until new evidence: stamp it
+                    # so the sweep stops re-judging the same rejects
+                    # (head-of-line starvation, 2026-08-08 review).
+                    rejected[d["node_id"]] = str(result.get("reason", ""))[:200]
                 continue
             judged = result.get("judged", True)
             if path_kind == "age" and not judged:
@@ -2585,7 +2624,7 @@ def promote_knowledge_candidates(*, adapter: Any = None, dry_run: bool = False,
         promoted[d["node_id"]] = validation
         paths[d["node_id"]] = path_kind
 
-    if not promoted:
+    if not promoted and not rejected:
         return []
 
     # Flip survivors in one locked rewrite. Raw dicts so unknown keys survive
@@ -2610,6 +2649,15 @@ def promote_knowledge_candidates(*, adapter: Any = None, dry_run: bool = False,
                         d["validated_at"] = now
                         line = json.dumps(d, sort_keys=True)
                         flipped.append(d)
+                    elif (isinstance(d, dict) and d.get("node_id") in rejected
+                            and d.get("status") == NODE_CANDIDATE):
+                        # Rejection stamp: still a candidate, but the sweep
+                        # skips it until times_applied grows past this mark.
+                        d["promotion_rejected_at"] = now
+                        d["promotion_rejected_reason"] = rejected[d["node_id"]]
+                        d["promotion_rejected_applications"] = int(
+                            d.get("times_applied", 0) or 0)
+                        line = json.dumps(d, sort_keys=True)
                 except json.JSONDecodeError:
                     pass
             out.append(line)

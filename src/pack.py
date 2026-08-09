@@ -803,8 +803,15 @@ def _import_skill_records(content: str, *, pack_name: str, label: str, pack_tag:
                 project=row.get("project", ""),
                 imported=imported,
                 origin="imported",
-                domain=str(row.get("domain", ""))[:40],
-                tags=[str(t) for t in row.get("tags", []) if str(t).strip()][:6],
+                # Normalize at the boundary exactly like the mint sites do
+                # (2026-08-08 review): a foreign pack's `"tags": "Research"`
+                # would otherwise iterate into character tags and feed the
+                # matching corpora unlowered.
+                domain=str(row.get("domain", "")).strip().lower()[:40],
+                tags=[str(t).strip().lower()
+                      for t in (row.get("tags")
+                                if isinstance(row.get("tags"), list) else [])
+                      if str(t).strip()][:6],
             )
             if compute_skill_hash(sk) in existing_hashes:
                 results.append({"id": original_id, "outcome": "skipped_identical"})

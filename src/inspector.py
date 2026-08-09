@@ -366,9 +366,11 @@ def inspector_cadence_tick(cadence: int, deep_every: int = 5) -> str:
 
     Mirrors evolver_store.evolver_cadence_tick (decision 1addc859: the
     inspector gets what the evolver already has): single locked
-    read-modify-write so concurrent finalizations can't both trigger;
-    cadence <= 0 counts but never fires (fresh installs unchanged).
-    Callers must not count dry_run runs.
+    read-modify-write so concurrent finalizations can't both trigger.
+    Callers must short-circuit on cadence <= 0 (loop_finalize does) so a
+    disabled lane neither counts nor creates the state file, and must not
+    count dry_run runs. Corrupt counter fields self-heal to 0 rather than
+    wedging the lane (2026-08-08 review).
     """
     from file_lock import locked_rmw
 
@@ -378,10 +380,22 @@ def inspector_cadence_tick(cadence: int, deep_every: int = 5) -> str:
         nonlocal mode
         try:
             state = json.loads(old)
+            if not isinstance(state, dict):
+                state = {}
         except Exception:
             state = {}
-        count = int(state.get("runs_since_inspect", 0) or 0) + 1
-        firings = int(state.get("firings_since_deep", 0) or 0)
+        # Field-level guards (2026-08-08 review): a syntactically valid but
+        # type-corrupt counter ({"runs_since_inspect": "bad"}) used to raise
+        # here on EVERY finalize — cadence wedged until manual repair.
+        # Corrupt fields reset to 0; the lane self-heals.
+        try:
+            count = int(state.get("runs_since_inspect", 0) or 0) + 1
+        except (TypeError, ValueError):
+            count = 1
+        try:
+            firings = int(state.get("firings_since_deep", 0) or 0)
+        except (TypeError, ValueError):
+            firings = 0
         if cadence > 0 and count >= cadence:
             count = 0
             firings += 1

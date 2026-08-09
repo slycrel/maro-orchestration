@@ -143,21 +143,28 @@ class WorldFactLedger:
         raised — a corrupt checkpoint must not block a resume."""
         ledger = cls()
         for row in rows or []:
-            if not isinstance(row, dict):
+            # Per-row try: one corrupt row (e.g. a non-numeric first_step)
+            # must cost only itself, never the valid rows around it
+            # (2026-08-08 adversarial review — int() used to raise out of
+            # the whole restore).
+            try:
+                if not isinstance(row, dict):
+                    continue
+                kind = row.get("kind", "")
+                fact = str(row.get("fact", "")).strip()
+                if kind not in KINDS or not fact:
+                    continue
+                wf = WorldFact(
+                    kind=kind, fact=fact[:MAX_FACT_CHARS],
+                    evidence=str(row.get("evidence", "")).strip()[:MAX_EVIDENCE_CHARS],
+                    first_step=int(row.get("first_step", 0) or 0),
+                    hits=max(1, int(row.get("hits", 1) or 1)),
+                    steps=[int(s) for s in row.get("steps", [])
+                           if isinstance(s, (int, float))],
+                )
+                ledger.facts[cls._key(kind, wf.fact)] = wf
+            except Exception:
                 continue
-            kind = row.get("kind", "")
-            fact = str(row.get("fact", "")).strip()
-            if kind not in KINDS or not fact:
-                continue
-            wf = WorldFact(
-                kind=kind, fact=fact[:MAX_FACT_CHARS],
-                evidence=str(row.get("evidence", "")).strip()[:MAX_EVIDENCE_CHARS],
-                first_step=int(row.get("first_step", 0) or 0),
-                hits=max(1, int(row.get("hits", 1) or 1)),
-                steps=[int(s) for s in row.get("steps", [])
-                       if isinstance(s, (int, float))],
-            )
-            ledger.facts[cls._key(kind, wf.fact)] = wf
         return ledger
 
 
@@ -180,8 +187,22 @@ def clean_declared(raw: Any) -> List[Dict[str, str]]:
         kind = str(entry.get("kind", "")).strip().lower()
         fact = str(entry.get("fact", "")).strip()[:MAX_FACT_CHARS]
         evidence = str(entry.get("evidence", "")).strip()[:MAX_EVIDENCE_CHARS]
-        if kind in KINDS and fact:
-            cleaned.append({"kind": kind, "fact": fact, "evidence": evidence})
+        if kind not in KINDS or not fact:
+            continue
+        # Injection scan (2026-08-08 review): a declared fact re-enters
+        # later prompts verbatim under "treat as known" framing — stronger
+        # authority than step prose gets. The deterministic guard is cheap;
+        # a flagged declaration is dropped, not sanitized (same fail-closed
+        # posture as synthesize_skill). Guard unavailable → declaration
+        # dropped, never persisted unscanned.
+        try:
+            from injection_guard import scan_content
+            if not scan_content(f"{fact}\n{evidence}",
+                                source="world_facts").is_clean:
+                continue
+        except Exception:
+            continue
+        cleaned.append({"kind": kind, "fact": fact, "evidence": evidence})
     return cleaned
 
 

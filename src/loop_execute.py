@@ -891,8 +891,12 @@ def _execute_main_loop(
         # as terrain (the set grows; a re-arm must not replay a stale
         # snapshot). Hypothesis-kind facts never render (§7.1 quarantine).
         try:
+            from world_facts import world_facts_enabled as _wf_enabled
             _pending_context.drop_source("world_facts")
-            _wf_block = ctx.world_facts.render()
+            # The kill switch gates the render too (2026-08-08 review):
+            # capture-only gating would keep injecting facts restored from
+            # a checkpoint written while the flag was still on.
+            _wf_block = ctx.world_facts.render() if _wf_enabled() else ""
             if _wf_block:
                 _pending_context.append("world_facts", "context", _wf_block)
         except Exception as _wf_render_exc:

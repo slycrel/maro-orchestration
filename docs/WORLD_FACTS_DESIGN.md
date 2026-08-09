@@ -12,6 +12,11 @@ carry + resume restore, `world_facts.enabled` default ON). §7 decisions
 taken by Jeremy 2026-08-06: quarantine mirrors the provenance pattern;
 planner `FACT:` emission stays slice 3; cap sizes are build-time tuning.
 Slices 2 (finalize landing) and 3 (planner emission) remain open.
+Review hardening 2026-08-08: declarations pass the injection_guard scan
+(fail-closed), the kill switch gates render as well as capture, and
+checkpoint restore drops corrupt rows per-row. Named scope limit: the
+checkpoint carry is the sequential lane's — parallel fan-out/DAG paths
+have no checkpoint/resume machinery, so their facts die with the run.
 Origin: §4c decision batch, 2026-08-02. Related: RUN_TEACHINGS_DESIGN
 §4c/§5b (terrain), BACKLOG "Planner non-action item types".
 

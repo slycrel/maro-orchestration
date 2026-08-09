@@ -499,7 +499,13 @@ def run_effect_route(
     if remint_pending:
         # The strike-3 lane (decision dcf8eab8): watched re-mints whose
         # pattern earned a forced re-measurement. Selection is derived from
-        # the stamps — there is no separate pending file to drift.
+        # the stamps — there is no separate pending file to drift. A watch
+        # row can tenure-promote to LONG before the operator runs this
+        # (only effect-demote blocks tenure), so the selector covers both
+        # tiers — a MEDIUM-only scan would strand the queued event
+        # (2026-08-08 adversarial review).
+        rows = rows + load_tiered_lessons(tier=MemoryTier.LONG,
+                                          min_score=0.0, limit=None)
         rows = [t for t in rows
                 if (t.delta_evidence or {}).get("route") == "remint-watch"
                 and int((t.delta_evidence or {}).get("strikes") or 0)
@@ -531,11 +537,18 @@ def run_effect_route(
         ev.pop("calls", None)  # census row stays readable; raw detail is per-call
         tenure_ok = (t.score >= PROMOTE_MIN_SCORE
                      and t.sessions_validated >= PROMOTE_MIN_SESSIONS)
+        # The strike-3 lane acts by definition (decision dcf8eab8: the
+        # forced re-measurement "sets the stamp whichever way it lands") —
+        # without this, --remint-pending alone would measure a decisively
+        # negative Δ and still clear probation below (2026-08-08 review).
+        # Both routes carry their own Δ-bar guards, so applying them is
+        # only ever "stamp what the measurement supports".
+        _is_watch = (t.delta_evidence or {}).get("route") == "remint-watch"
         promoted = False
-        if promote:
+        if promote or (remint_pending and _is_watch):
             promoted = promote_lesson_by_effect(t.lesson_id, ev)
         demoted = False
-        if demote and not promoted:
+        if (demote or (remint_pending and _is_watch)) and not promoted:
             demoted = demote_lesson_by_effect(t.lesson_id, ev)
         watch_cleared = False
         if ((remint_pending or promote or demote)

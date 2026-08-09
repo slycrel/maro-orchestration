@@ -871,7 +871,12 @@ def _finalize_loop(
                                    run_inspector)
             _insp_cadence = int(_cfg_get("inspector.run_cadence", 0) or 0)
             _deep_every = int(_cfg_get("inspector.deep_every", 5) or 0)
-            _mode = inspector_cadence_tick(_insp_cadence, _deep_every)
+            # cadence <= 0 short-circuits BEFORE the tick (2026-08-08
+            # review): counting while disabled created the state file on
+            # fresh installs and made a later enable fire immediately
+            # instead of waiting N enabled runs.
+            _mode = (inspector_cadence_tick(_insp_cadence, _deep_every)
+                     if _insp_cadence > 0 else "none")
             if _mode != "none":
                 _limit = DEEP_PASS_LIMIT if _mode == "deep" else 50
                 _insp_report = run_inspector(limit=_limit, adapter=adapter,

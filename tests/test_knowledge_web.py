@@ -1858,6 +1858,45 @@ class TestPromoteKnowledgeCandidates:
             adapter=_VerdictAdapter(raise_exc=True)) == []
         assert kw.load_knowledge_nodes() == []
 
+    def test_string_false_verdict_never_promotes(self, tmp_path, _events):
+        # 2026-08-08 review: bool("false") is True — a malformed negative
+        # from the LLM boundary must not approve the fail-closed age path.
+        _mk_candidate(times_applied=0, confidence=0.3,
+                      created_at="2020-01-01T00:00:00+00:00")
+
+        class _StringFalseAdapter:
+            def complete(self, messages, **kw_):
+                return _StubResp('{"valid": "false", "reason": "nope"}')
+
+        assert kw.promote_knowledge_candidates(
+            adapter=_StringFalseAdapter()) == []
+        assert kw.load_knowledge_nodes() == []
+
+    def test_rejected_candidate_skipped_until_new_evidence(self, tmp_path, _events):
+        # 2026-08-08 review: judged-invalid candidates used to stay eligible
+        # and, oldest-first, re-consume a sweep slot forever (head-of-line
+        # starvation). Rejection is terminal until times_applied grows.
+        _mk_candidate(times_applied=2, confidence=0.4)
+        first = _VerdictAdapter(valid=False)
+        assert kw.promote_knowledge_candidates(adapter=first) == []
+        assert first.calls == 1
+        # Stamp persisted on the raw row
+        p = kw._knowledge_nodes_path()
+        raw = [json.loads(l) for l in p.read_text().splitlines() if l.strip()]
+        row = next(d for d in raw if d["node_id"] == "cand1")
+        assert row["promotion_rejected_applications"] == 2
+        assert row["promotion_rejected_reason"] == "judged"
+        # Second sweep: no re-judging, no spend
+        second = _VerdictAdapter(valid=True)
+        assert kw.promote_knowledge_candidates(adapter=second) == []
+        assert second.calls == 0
+        # New evidence (times_applied grew past the stamp) re-enters the pool
+        row["times_applied"] = 3
+        p.write_text("\n".join(json.dumps(d) for d in raw) + "\n")
+        third = _VerdictAdapter(valid=True)
+        assert kw.promote_knowledge_candidates(adapter=third) == ["cand1"]
+        assert third.calls == 1
+
     def test_young_unobserved_candidate_stays(self, tmp_path, _events):
         # Neither path: fresh (age ~0) and never re-observed.
         _mk_candidate(times_applied=0, confidence=0.3)

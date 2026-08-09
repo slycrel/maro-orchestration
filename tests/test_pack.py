@@ -585,6 +585,23 @@ class TestImportPack:
         assert sk.domain == "web-research"
         assert sk.tags == ["polymarket", "odds"]
 
+    def test_skill_record_import_normalizes_foreign_discovery_fields(self, tmp_path, target_ws):
+        """2026-08-08 review: a foreign pack's tags-as-string would iterate
+        into character tags; unnormalized values fed the matching corpora."""
+        from skills import load_skills
+        src_ws = _make_workspace(tmp_path / "src")
+        _write_jsonl(src_ws / "memory" / "skills.jsonl",
+                     [{"id": "s3", "name": "digest", "description": "d",
+                       "trigger_patterns": [], "steps_template": [],
+                       "source_loop_ids": [], "created_at": "2020-01-01",
+                       "domain": "  Web-Research ",
+                       "tags": "Research"}])
+        pack_path = _export_and_seal(src_ws, tmp_path)
+        import_pack(pack_path, label="l", target=target_ws)
+        sk = load_skills()[0]
+        assert sk.tags == []  # string is not a tag list — dropped, not exploded
+        assert sk.domain == "web-research"
+
     def test_skill_md_quarantined_not_live(self, tmp_path, target_ws):
         src_ws = _make_workspace(tmp_path / "src")
         (src_ws / "skills" / "foo.md").write_text("---\nname: foo\n---\nbody", encoding="utf-8")

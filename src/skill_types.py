@@ -240,7 +240,11 @@ def dict_to_skill(d: dict) -> Skill:
         # source_loop_ids), and guessing would violate positive-evidence.
         origin=d.get("origin", "") or ("imported" if d.get("imported") else ""),
         domain=d.get("domain", ""),
-        tags=[str(t) for t in d.get("tags", []) if str(t).strip()],
+        # tags must be a list — a string here would iterate into character
+        # tags (same guard as pack import, 2026-08-08 review).
+        tags=[str(t) for t in (d.get("tags")
+                               if isinstance(d.get("tags"), list) else [])
+              if str(t).strip()],
     )
 
 
