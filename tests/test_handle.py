@@ -5796,31 +5796,35 @@ class TestGoalLaneClaimResolution:
         proj = self._ws(monkeypatch, tmp_path)
         (proj / "report-1.json").mkdir()
         assert _provenance_missing("Save the output to artifacts/report-1.json")
+        # ...and via the BARE lane's nested-glob branches, which the first cut
+        # of this fix missed (they tested glob truthiness, not is_file).
+        (proj / "bare-report.json").mkdir()
+        assert _provenance_missing("Save the output as bare-report.json")
 
-    def test_multi_dot_filenames_are_not_read_as_hostnames(self, monkeypatch, tmp_path):
-        """`release.notes.md` and `archive.tar.gz` are files, not authorities.
+    def test_hostname_shape_errs_toward_skipping(self, monkeypatch, tmp_path):
+        """Multi-label shape alone decides, and that is the DELIBERATE choice.
 
-        Multi-label shape alone amnestied them; the last label decides.
+        Refining it with a file-extension allowlist was tried and reverted
+        2026-08-09: `.md`, `.sh`, `.rs`, `.py` and `.zip` are all real TLDs, so
+        the allowlist made `files.example.zip` a FALSE DEMOTION — this module's
+        expensive error — while still missing `styles.min.css`. Skipping
+        `release.notes.md` unverified is the accepted cheap cost.
         """
-        from provenance import _provenance_missing, _unverifiable_pattern
-        self._ws(monkeypatch, tmp_path)
-        for name in ("release.notes.md", "archive.tar.gz", "a.b.jsonl"):
-            assert not _unverifiable_pattern(name), name
-            assert _provenance_missing(f"Save the summary to {name}"), name
-        # a real multi-label host is still skipped
+        from provenance import _unverifiable_pattern
         assert _unverifiable_pattern("api.anthropic.com")
-        assert not _provenance_missing("Export the data to api.anthropic.com")
+        assert _unverifiable_pattern("files.example.zip")   # would false-demote
+        assert not _unverifiable_pattern("report.org")      # single label: a file
 
-    def test_a_literal_dollar_amount_is_not_a_variable(self, monkeypatch, tmp_path):
-        """`report-$100.txt` is a legal filename; `$VAR` starts with a letter.
+    def test_shell_variables_stay_templates(self, monkeypatch, tmp_path):
+        """`$1/report.json` is an unexpanded positional parameter.
 
-        The marker regex used `\\$\\w+`, so `$100` was retyped as a placeholder
-        and the claim could be satisfied by any `report-*.txt` sibling.
+        Narrowing `\\$\\w+` to letters-only (to keep a literal `report-$100.txt`
+        literal) was reverted: an unexpanded `$1` then gets looked up verbatim
+        and falsely demotes. Over-satisfying a literal `$100` is the cheap side.
         """
-        from provenance import _provenance_missing
-        proj = self._ws(monkeypatch, tmp_path)
-        (proj / "report-decoy.txt").write_text("x", encoding="utf-8")
-        assert _provenance_missing("Save the invoice to artifacts/report-$100.txt")
+        from provenance import _normalize_template
+        assert _normalize_template("$1/artifacts/report.json") == "artifacts/report.json"
+        assert _normalize_template("${RUN}/artifacts/report.json") == "artifacts/report.json"
 
     def test_bounded_absolute_template_still_resolves(self, monkeypatch, tmp_path):
         """The refusal above must not cost real absolute claims their check."""

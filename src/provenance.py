@@ -65,10 +65,15 @@ _TRANSIENT_SEGMENTS = ("/tmp/", "scratchpad", "/dev/", "/proc/", "/var/tmp/")
 # been checked as a literal and still falsely demoted.
 _TEMPLATE_MARKERS = re.compile(
     r"\{[^}/]*\}"                 # {N}, {project_dir}
-    r"|\$\{[A-Za-z_]\w*\}"        # ${VAR}
-    r"|\$[A-Za-z_]\w*"            # $VAR — must start with a letter/underscore,
-                                  # so a literal price like "report-$100.txt"
-                                  # is NOT retyped as a pattern (round-3 review)
+    r"|\$\{\w+\}"                 # ${VAR}, ${1}
+    r"|\$\w+"                     # $VAR and positional $1. Narrowing this to
+                                  # letters-only (to keep "report-$100.txt"
+                                  # literal) was reverted 2026-08-09: an
+                                  # unexpanded "$1/report.json" then gets looked
+                                  # up literally and FALSELY DEMOTES, trading
+                                  # this module's cheap error for its expensive
+                                  # one. A literal "$100" being globbed can only
+                                  # over-satisfy, which is the cheap side.
     r"|<[^>/]+>"                  # <run_dir>
     r"|%\(\w+\)[sd]"              # %(step)d
     r"|%\d+\$[sd]"                # %1$s
@@ -89,19 +94,6 @@ _TEMPLATE_MARKERS = re.compile(
 # table to maintain.
 _HOSTNAME_RE = re.compile(r"^(?:[A-Za-z0-9-]+\.){2,}[A-Za-z]{2,}$")
 
-# ...unless the last label is plainly a FILE extension. Multi-label shape alone
-# amnestied ordinary artifacts — `release.notes.md`, `archive.tar.gz` (round-3
-# review) — which is a missed fabrication rather than a false demotion, but a
-# free one to close. A real host does not end in `.md`.
-_FILE_EXTENSION_LABELS = frozenset({
-    "md", "txt", "json", "jsonl", "yml", "yaml", "csv", "tsv", "log", "xml",
-    "html", "htm", "toml", "ini", "cfg", "conf", "pdf", "png", "jpg", "jpeg",
-    "gif", "svg", "gz", "tar", "zip", "bz2", "xz", "py", "js", "ts", "sh",
-    "rb", "go", "rs", "java", "c", "h", "cpp", "sql", "db", "sqlite", "lock",
-})
-
-# Marks a spot _normalize_template substituted, so it can distinguish its own
-# wildcards from ones the claim already carried. NUL is not legal in a path.
 _TEMPLATE_SENTINEL = "\x00"
 
 
@@ -147,10 +139,15 @@ def _unverifiable_pattern(tok: str) -> bool:
     now RESOLVED as the patterns they are (see `_normalize_template`), which
     fixes the false demotion without buying off the true positive.
     """
-    first = tok.split("/", 1)[0]
-    if not _HOSTNAME_RE.match(first):
-        return False
-    return first.rsplit(".", 1)[-1].lower() not in _FILE_EXTENSION_LABELS
+    # Deliberately NOT refined with a file-extension allowlist. Tried that
+    # 2026-08-09 and a review probe killed it in one line: `.md`, `.sh`, `.rs`,
+    # `.py` and `.zip` are all REAL TLDs, so the allowlist turned
+    # `files.example.zip` into a false demotion (the EXPENSIVE error) while
+    # still missing `styles.min.css` (another hand-maintained table, the exact
+    # thing this regex replaced). Multi-label shape alone errs toward skipping
+    # — a missed fabrication, the cheap error. `release.notes.md` staying
+    # unverified is the accepted cost; see BACKLOG.
+    return bool(_HOSTNAME_RE.match(tok.split("/", 1)[0]))
 
 
 def _normalize_template(tok: str) -> str:
@@ -353,7 +350,12 @@ def _exists_bare_anywhere(name: str, bases: List[Path]) -> bool:
         try:
             if (d / name).is_file():
                 return True
-            if any(d.glob(f"*/{name}")) or any(d.glob(f"*/*/{name}")):
+            # is_file, not truthiness: a DIRECTORY named report.json would
+            # otherwise satisfy a claim to have written report.json. The
+            # direct-hit checks above were fixed for this; these nested glob
+            # branches were missed (review probe, 2026-08-09).
+            if (any(x.is_file() for x in d.glob(f"*/{name}"))
+                    or any(x.is_file() for x in d.glob(f"*/*/{name}"))):
                 return True
         except Exception:
             pass
@@ -549,8 +551,8 @@ def _resolve_bare(name: str, bases: List[Path]) -> List[Path]:
         try:
             if (d / name).is_file():
                 hits.append(d / name)
-            hits.extend(d.glob(f"*/{name}"))
-            hits.extend(d.glob(f"*/*/{name}"))
+            hits.extend(x for x in d.glob(f"*/{name}") if x.is_file())
+            hits.extend(x for x in d.glob(f"*/*/{name}") if x.is_file())
         except Exception:
             pass
     return hits
