@@ -240,17 +240,13 @@ def _exists_at_exact(rel: str, bases: List[Path]) -> bool:
     turned that inconsistency into a live regression on the INPUT lane, where
     `Read {project_dir}/artifacts/step-{N}.json` began flagging even with the
     concrete files on disk). One resolver, one behaviour.
+
+    The per-project fallback this used to carry is gone with the delegation,
+    not lost: `_resolve_exact` already walks `workspace/projects/<slug>/` in
+    both its glob and literal branches, so keeping a second copy here was dead
+    code the moment it started delegating.
     """
-    if _resolve_exact(rel, bases):
-        return True
-    try:
-        from config import workspace_root
-        ws_projects = Path(workspace_root()) / "projects"
-        if ws_projects.is_dir():
-            return any((d / rel).exists() for d in ws_projects.glob("*") if d.is_dir())
-    except Exception:
-        pass
-    return False
+    return bool(_resolve_exact(rel, bases))
 
 
 def _bare_search_dirs() -> List[Path]:
