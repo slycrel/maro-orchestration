@@ -135,6 +135,53 @@ prose-vs-JSON drift (three instances found) — trust the patched JSONs
 (`step-8` rulings + `step-4-reclassification.json`) only after checking
 their tallies against `FINAL_VERDICT.md`'s corrected banner.
 
+### Closure Signal-1 "not executed" downgrade — a false-demotion costume in the fd483efb fix's sibling lane (FOUND 2026-08-09, run 18773dfa)
+
+Specimen: `18773dfa-olive-wren`, the 3rd verbatim replay of the
+Model-or-Harness self-eval (see MH. entry above). The run did the right
+thing end to end: recognized FINAL_VERDICT.md (post step-9) as the
+authoritative deliverable, wrote `artifacts/discrepancy-crosscheck.md`
+(reconciling five tally sources — the only broken one is FINAL_REPORT.md's
+stale 6/21) + `artifacts/closure-note.md`, surfaced the one real residual
+(FINAL_REPORT.md:87-91's source-paper methodology critique — κ=0.76
+caveat, interaction-centric-vs-Maro-topology mismatch — never ported into
+FINAL_VERDICT.md), and HONORED the envelope's research-only constraint by
+recommending rather than performing the 3-bullet port. Closure judged
+"Goal achieved," 5/5 checks passed, 0 failed. Then the deterministic
+post-processor downgraded it: `closure_verify.py`'s **Signal 1**
+(`_RUNTIME_GAP_ADMISSION`, L1578, branch `(?:not|never|…)
+(?:…|executed|…)`) matched the summary's honest "not executed" — a phrase
+whose OBJECT was the optional recommended follow-up the constraint
+forbade — and stamped achieved=False, conf 0.78,
+`stop_verdict=lost-the-plot`.
+
+Three compounding problems: (1) **fix-every-lane, again** — the
+function's own docstring records this exact false-positive class
+(fd483efb, 2026-07-11: document-only goal, bare `\bprocess\b` hit
+downgraded a 5/5-checks 0.98 verdict) and the fix gated Signal 2 with
+deliverables-corroboration; Signal 1 kept the defect (no document-only
+carve-out at all). (2) **No contest lane** — provenance-vs-closure
+contests don't apply to a closure-internal downgrade, and the `f7b775c`
+evidence-of-failure floor doesn't reach this path (conf 0.78 > 0.7, and
+the downgrade is deterministic, not judge-asserted), so this false
+not-achieved STANDS in learning — unlike the contested cold-run demotion,
+which was held out. (3) The demotion punished exactly the honest-
+disclosure behavior we want runs to keep (cf. the LT-1 #7-attempt-1
+escalation specimen).
+
+Fix shape, in order of durability: (a) extend the document-only/
+static-modality guard to Signal 1 — when every deliverable is a document
+and all checks passed, a prose phrase-match is weak evidence (the
+docstring already argues this for Signal 2); (b) require the matched
+admission to BIND to a goal deliverable rather than any
+recommendation/optional item in the summary+gaps window (object check,
+not another regex literal — the provenance-costume lesson); (c) decide
+whether deterministic closure downgrades should get the same
+contest/holdout treatment provenance demotions got on 2026-08-02.
+Operator decision pending either way: re-stamp `18773dfa` (and
+`de790c13`, still False on the record from the brace-template costume) or
+leave both false verdicts standing.
+
 ### Run-card cost lane is a ~37%-low estimate; the budget auto-line inherits it (FOUND 2026-08-09)
 
 `run_card.total_cost_usd` = `metrics.spend_for_loops` (metrics.py:296) =
