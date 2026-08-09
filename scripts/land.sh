@@ -78,6 +78,27 @@ if $DRY; then
     exit 0
 fi
 
+# Red-main check (2026-08-09): a session landed six commits onto a red main
+# with no watcher running — nobody was pinged until an unrelated land
+# inherited the failure. If main's newest completed CI run is red, say so
+# LOUDLY before stacking more commits on it. Warn, don't refuse: the commit
+# being landed is often the fix itself. Needs a gh token; silent without one.
+if ! $SKIP_CHECKS && gh auth status >/dev/null 2>&1; then
+    RED_ROW="$(gh run list --repo slycrel/maro-orchestration --branch main \
+        --status completed --limit 1 --json conclusion,headSha,url \
+        --jq '.[0] | "\(.conclusion)|\(.headSha)|\(.url)"' 2>/dev/null || true)"
+    RED_CONCLUSION="${RED_ROW%%|*}"
+    case "$RED_CONCLUSION" in
+        success|skipped|cancelled|"") : ;;
+        *)
+            RED_REST="${RED_ROW#*|}"
+            echo "WARNING: newest completed CI run on main is ${RED_CONCLUSION} @ ${RED_REST%%|*}" >&2
+            echo "         ${RED_REST#*|}" >&2
+            echo "         landing anyway — if this land is not the fix, main stays red on you." >&2
+            ;;
+    esac
+fi
+
 # Pre-land structural gate (2026-08-01; Jeremy's CI-visibility ask after a
 # doc-only land shipped frontmatter-less history docs and CI went red for
 # an hour). Doc-only commits are exactly the ones that land without a

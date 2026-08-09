@@ -6661,3 +6661,21 @@ under the same two-measurement standard).
   carry (97bb780). Cross-model adversarial review of the six chunks ran
   same-day (verify-before-fix per standing rule). World-facts slices
   2–3 and the §5 cuts remain queued.
+- **2026-08-09** — Review-to-fixpoint arc CONVERGED at round 5 (Jeremy:
+  "in a perfect world we'd run it over and over until we only found
+  med/low findings"): findings per round 12 → 9 → 8 → 5 → 2 across the
+  stretch chunks, both fix layers, AND the untrusted-by-decree M1
+  provenance arc (cross-checked at Jeremy's ask — its backlogged
+  DECIDED calls survived attack except the named-printf "never
+  collected/cheap" classification, refuted 3/3 and fixed). Every
+  intermediate fix layer contributed its own HIGHs; convergence
+  arrived only when the layer got small enough to verify exhaustively
+  (record: docs/history/2026-08-08-stretch-adversarial-review.md).
+  Process holes found and fixed same-day: a session landed six commits
+  with no ci-watch spawned while CI was red (nobody pinged) →
+  land.sh now warns on a red main before pushing, and ci-watch follows
+  a cancelled (superseded) run to the newest main run's real verdict
+  with cross-watcher ping dedup. Structural direction reaffirmed by
+  seven lexical provenance patches in one weekend: the typed claim
+  boundary fed by tool-event evidence (BACKLOG) is the real fix —
+  scope before building.
