@@ -3402,7 +3402,26 @@ and maintainable over time."** Step 1 is greenlit:
   small-file reads; honesty section retained. **Falsifier on record:**
   if turns drop but tokens_in stays ≥ 4M, the turn-resend theory is
   wrong — conversation growth is driven by something other than tool
-  round-trips and the skill can't bend cost on this transport. The
+  round-trips and the skill can't bend cost on this transport.
+  **A/B-2 RESULT (run `4133114b-swift-falcon`, 2026-08-09, dispatched
+  ~2h after registration): ALL THREE AXES CONFIRMED, falsifier not
+  triggered.** 48 tool events (vs A/B-1's ~94 — halved), tokens_in
+  2.70M (vs 4.29M A/B-1 / 3.45M baseline), cost $1.49 on the
+  estimate lane the old figures used (vs $13.73 / $11.25) and $2.92
+  provider-truth (the new cost lane's first live full-run readout:
+  7/7 rows provider-priced, est/truth ratio 0.51 ≈ the 0.44 corpus
+  mean). Quality UP: closure 0.92 (vs 0.75 A/B-1), wall 20min (vs
+  48), protocol visibly followed — combined locate+read turns,
+  full-reads for small files, quote reconciliation by re-reading the
+  actual line (the step-6 "one long unwrapped line" catch), honesty
+  accounting 8-read/38-not-read. **Honest caveat: the question was
+  narrower than A/B-1's** (one named opinion + corroboration vs
+  corpus-wide role reconstruction), so part of the drop is
+  question-shape — but turn-count halving at higher closure is the
+  predicted mechanism behaving as theorized. Turn-based revision
+  KEEPS. Step-2 (recursive sub-calls) gate: evidence now favors "the
+  curve bends"; still wait for a same-shape replication before
+  building executor machinery. The
   accuracy/honesty half of the RLM direction is confirmed worth keeping
   regardless; the cost half INVERTS on a per-turn-resend transport, which
   bounds where step-2 (recursive sub-calls) can pay on this backend.

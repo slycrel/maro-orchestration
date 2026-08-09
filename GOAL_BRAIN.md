@@ -6857,3 +6857,15 @@ under the same two-measurement standard).
   mechanical, no new judgment). Corpus analysis can now count these by
   the taxonomy's own names. Pinned in test_contradiction_wiring +
   test_director.
+- **2026-08-09** — REPL-reading A/B-2 CONFIRMED the turn-based
+  protocol (run 4133114b-swift-falcon; prediction registered in
+  BACKLOG before dispatch, per the item's own rule). 48 tool events
+  vs A/B-1's ~94; tokens_in 2.70M vs 4.29M; estimate-lane $1.49 vs
+  $13.73; closure 0.92 vs 0.75; 20min vs 48. Falsifier (turns drop
+  but tokens ≥4M) not triggered — turn-resend is the cost mechanism
+  on this transport, as the 2026-08-02 revision theorized. Caveat on
+  record: narrower question than A/B-1, so magnitude is inflated;
+  mechanism direction is the finding. Side-validation: first live
+  full-run readout of the new cost truth lane — 7/7 step rows
+  provider-priced, est/truth 0.51 ≈ the 0.44 corpus mean. Step-2
+  recursive sub-calls stays gated on a same-shape replication.
