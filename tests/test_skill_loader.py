@@ -422,6 +422,20 @@ class TestExportSkillAsMarkdown:
         assert result is not None
         assert result.exists()
 
+    def test_default_target_is_workspace_overlay_not_repo(self, tmp_path,
+                                                          monkeypatch):
+        """2026-08-09 leak fix: this is a runtime self-writer — with no
+        explicit skills_dir it must land in the WORKSPACE overlay (which
+        respects tmp workspaces), never the repo's human-gated SKILLS_DIR.
+        22 untracked .md files accumulated in repo skills/ this way."""
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        import skill_loader as sl
+        skill = self._make_mock_skill(name="overlay_default_probe")
+        result = export_skill_as_markdown(skill)
+        assert result is not None
+        assert result == tmp_path / "skills" / "overlay_default_probe.md"
+        assert not (sl.SKILLS_DIR / "overlay_default_probe.md").exists()
+
     def test_filename_is_slug(self, tmp_path):
         skill = self._make_mock_skill(name="web research")
         result = export_skill_as_markdown(skill, skills_dir=tmp_path)

@@ -357,13 +357,26 @@ def export_skill_as_markdown(
 
     Args:
         skill:       Skill dataclass instance from skills.py.
-        skills_dir:  Target directory (default: SKILLS_DIR).
+        skills_dir:  Target directory (default: the WORKSPACE skills overlay).
         overwrite:   If False (default), skips if the file already exists.
 
     Returns:
         Path of the written file, or None if skipped/failed.
+
+    The default target is the workspace overlay, NOT the repo SKILLS_DIR
+    (2026-08-09 fix, BACKLOG "untracked test-artifact skills"): this is a
+    runtime self-writer — repo skills/ is the human-gated ship set, and
+    defaulting there meant every promotion (live runs AND unpatched test
+    promotions, which ignore tmp workspaces when the path is repo-absolute)
+    leaked untracked .md files into the checkout. The loader resolves
+    workspace → repo, so overlay exports are injected exactly the same.
+    Pass skills_dir explicitly for a deliberate repo/ship-set export.
     """
-    target_dir = skills_dir or SKILLS_DIR
+    if skills_dir is None:
+        from config import skills_dir as _ws_skills_dir
+        target_dir = _ws_skills_dir()
+    else:
+        target_dir = skills_dir
     slug = _slugify(getattr(skill, "name", "unnamed"))
     dest = target_dir / f"{slug}.md"
 

@@ -60,18 +60,6 @@ edge if boot time ever matters at census scale (966 replays ≈ 40–50
 min of boot); (3) fork session files accrete under ~/.claude/projects
 — opt-in cleanup only, per data retention.
 
-### Untracked test-artifact skills in repo skills/ (FOUND 2026-08-08)
-
-Seven untracked `.md` files sitting in the repo's `skills/` dir
-(`cli_list_test_skill`, `full_field_test`, `hash_storage_test`,
-`failure_tracker`, `iterative_build`, `polymarket_analyzer`,
-`research_tool`) — shapes look like test/run skill-export leakage into
-the repo instead of the workspace overlay, same isolation-leak class as
-the repo-local `memory/` writes (fixed 2026-08-06). Not deleted
-(data-retention decree — some might be real exports worth keeping);
-wants: identify the writer, point it at the workspace, then opt-in
-cleanup call on the seven files.
-
 ### MH. Model-or-Harness taxonomy — the ADOPT edges from maro's self-evaluation (OPENED 2026-08-09, from runs de790c13 + 6fa41f96)
 
 Two dispatched runs evaluated maro against arXiv:2607.28802 ("Model or

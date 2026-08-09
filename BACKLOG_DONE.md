@@ -8,6 +8,41 @@ Last split: 2026-04-16 (session 34).
 
 ---
 
+## Untracked test-artifact skills in repo skills/ — writer found + fixed, files relocated (FOUND 2026-08-08, SHIPPED 2026-08-09)
+
+Seven (grown to **22** by close — the writer was live) untracked `.md`
+files accumulating in the repo's `skills/` dir, same isolation-leak
+class as the repo-local `memory/` writes (fixed 2026-08-06).
+
+**Writer identified:** `skills.py` promotion sweep (provisional →
+established) auto-exports each promoted skill as a curated SKILL.md via
+`skill_loader.export_skill_as_markdown(s)` — and that function's
+default target was the repo-absolute `SKILLS_DIR`, not the workspace
+overlay. Two lanes leaked through it: live-run promotions, and
+unpatched test-suite promotions (a repo-absolute path ignores tmp
+workspaces entirely — fresh files appeared during suite runs the
+morning of close, which is how the count grew 7 → 22). The default
+also bypassed the "human review gates repo skills/ graduation"
+doctrine (run_curation.py's ship-set rule).
+
+**Fix:** default target is now `config.skills_dir()` (the workspace
+overlay, which respects `MARO_WORKSPACE`/`OPENCLAW_WORKSPACE`);
+explicit `skills_dir=` remains for deliberate ship-set exports. Pinned
+(`test_default_target_is_workspace_overlay_not_repo`). Loader
+resolution is workspace → repo, so overlay exports inject identically.
+
+**Files:** all 22 relocated (not deleted — data retention) from repo
+`skills/` to `~/.maro/workspace/skills/`, zero name collisions, repo
+tree clean. Same basenames at the new path if any ever needs to come
+back: analyzer, cli_list_test_skill, codebase_quality_audit,
+deduplication-first_issue_filing, failure_tracker, full_field_test,
+github_issue_sweep, hash_storage_test, increment_test,
+incremental_bug_fix_run, issue_filing_workflow, iterative_build,
+n1_query_fix, polymarket_analyzer, prioritized_github_issue_fix,
+pydantic_validation_schema_fix, quality_criteria_validate,
+repository_code_audit, repository_code_survey, research_tool,
+test-driven_bug_fix_cycle, test-driven_code_fix.
+
 ## Planner non-action item types — world facts — SHIPPED (slice 1 2026-08-08, slices 2+3 2026-08-09)
 
 (Jeremy ask, §4c decision batch 2026-08-02: *"we need to add non-action
