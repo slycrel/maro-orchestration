@@ -1,11 +1,17 @@
 ---
-status: dormant-design
+status: living
 ---
 
 # World-Fact Plan Items — Design Sketch
 
-Status: DESIGN — awaiting Jeremy's reaction (he asked for discussion:
-"we can discuss more here if desired"). No code yet by intent.
+Status: **slice 1 SHIPPED 2026-08-08** (capture + ledger + injection,
+anecdotal-only render; hypothesis kind accepted at capture and
+quarantined per §7.1 — `src/world_facts.py`, completion-tool
+`world_facts` channel in step_exec, `LoopContext.world_facts`, checkpoint
+carry + resume restore, `world_facts.enabled` default ON). §7 decisions
+taken by Jeremy 2026-08-06: quarantine mirrors the provenance pattern;
+planner `FACT:` emission stays slice 3; cap sizes are build-time tuning.
+Slices 2 (finalize landing) and 3 (planner emission) remain open.
 Origin: §4c decision batch, 2026-08-02. Related: RUN_TEACHINGS_DESIGN
 §4c/§5b (terrain), BACKLOG "Planner non-action item types".
 

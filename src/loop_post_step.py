@@ -231,6 +231,7 @@ def _write_iteration_artifacts(
         _write_ckpt(
             ctx.loop_id, ctx.goal, ctx.project or "", steps, step_outcomes,
             executor_session=executor_session,
+            world_facts=ctx.world_facts.to_list(),
         )
     except Exception as _exc:
         # Affects loop resumability — silent loss means a crashed loop can't restart.
@@ -760,6 +761,35 @@ def record_step_decisions(ctx, step_key: str, outcome: dict,
              step_key, len(_step_decisions))
 
 
+def record_step_world_facts(ctx, step_key: str, outcome: dict) -> None:
+    """Feed a step's validated world_facts declarations into the run ledger
+    (WORLD_FACTS_DESIGN slice 1). Entries were validated in step_exec;
+    observe() re-checks kind/emptiness so a hand-built outcome can't poison
+    the ledger. Shared by the sequential and parallel outcome walks, all
+    single-threaded post-join. Never raises."""
+    _declared = outcome.get("world_facts")
+    if not (_declared and isinstance(_declared, list)):
+        return
+    try:
+        _step_idx = int(step_key)
+    except (TypeError, ValueError):
+        _step_idx = 0
+    _new = 0
+    try:
+        for _wf in _declared:
+            if not isinstance(_wf, dict):
+                continue
+            if ctx.world_facts.observe(
+                    str(_wf.get("kind", "")), str(_wf.get("fact", "")),
+                    str(_wf.get("evidence", "")), _step_idx):
+                _new += 1
+        if _new:
+            log.info("step %s: %d new world fact(s) ledgered", step_key, _new)
+    except Exception as _wf_exc:
+        log.warning("step %s world-fact ledger write failed: %s",
+                    step_key, _wf_exc)
+
+
 def _artifacts_evidence_note(project: str, limit: int = 5) -> str:
     """Compact listing of the freshest project artifact files for the ralph
     verifier: name, size, age, head excerpt. Steps deliver content to
@@ -968,6 +998,7 @@ def _process_done_step(
     # DECISION directive (swarm-review chunk 3): executor design calls fan
     # out via record_step_decisions — shared with the parallel/DAG paths.
     record_step_decisions(ctx, str(step_idx), outcome, loop_shared_ctx)
+    record_step_world_facts(ctx, str(step_idx), outcome)
 
     # Mutable task graph: inject discovered steps
     _injected = outcome.get("inject_steps", [])

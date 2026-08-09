@@ -153,6 +153,18 @@ def _preflight_checks(
                         ended_ts="",
                     ))
                 steps = _remaining
+                # World-fact ledger carry (WORLD_FACTS_DESIGN slice 1): the
+                # resumed run must see the facts, not just the surviving
+                # steps. from_list drops malformed rows rather than raising.
+                _ckpt_wf = getattr(_ckpt, "world_facts", None)
+                if _ckpt_wf:
+                    try:
+                        from world_facts import WorldFactLedger as _WFL
+                        ctx.world_facts = _WFL.from_list(_ckpt_wf)
+                        log.info("checkpoint resume: restored %d world fact(s)",
+                                 len(ctx.world_facts.facts))
+                    except Exception as _wf_exc:
+                        log.warning("world-fact restore failed: %s", _wf_exc)
                 # In-flight FS-diff injection ((h) slice 3): if the prior
                 # process died mid-step, tell the re-executed step what the
                 # crashed attempt already touched so it completes idempotently

@@ -129,6 +129,16 @@ EXECUTE_SYSTEM = textwrap.dedent("""\
     recorded durably and carried uncompressed to every later step; routine
     actions and findings belong in "result", not here.
 
+    WORLD FACTS:
+    When you stumble onto a fact about the world that is NOT this step's
+    deliverable — a source is blocked, a dataset has an unexpected shape, a
+    tool behaves differently than documented — you MAY declare it in the
+    "world_facts" field of complete_step (kind "anecdotal" for things you
+    observed directly, "hypothesis" for patterns you suspect but have not
+    confirmed; max 3 per step). Anecdotal facts are carried to later steps
+    so the run stops re-deriving them. Usually, restating step results here
+    is wrong — those belong in "result".
+
     TOKEN EFFICIENCY:
     1. Extract 2-3 key facts from sources; never quote long passages verbatim.
     2. Output: bullet points or structured JSON. No preamble, no sign-offs.
@@ -623,6 +633,32 @@ EXECUTE_TOOLS = [
                         "one-sentence rationale. Maximum 2 per step. These are "
                         "recorded to the durable decision journal and carried "
                         "uncompressed to every later step."
+                    ),
+                },
+                "world_facts": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "kind": {
+                                "type": "string",
+                                "enum": ["anecdotal", "hypothesis"],
+                            },
+                            "fact": {"type": "string"},
+                            "evidence": {"type": "string"},
+                        },
+                        "required": ["kind", "fact"],
+                    },
+                    "description": (
+                        "Optional: facts about the world you discovered that are "
+                        "NOT this step's deliverable. kind 'anecdotal' = something "
+                        "you observed directly (a source is blocked, a dataset has "
+                        "a second sheet); kind 'hypothesis' = a pattern you suspect "
+                        "but have not confirmed. One sentence each, with brief "
+                        "evidence. Maximum 3 per step. Anecdotal facts are carried "
+                        "to later steps so they are not re-derived; hypotheses are "
+                        "recorded for confirmation. Step results and routine "
+                        "findings belong in 'result', not here."
                     ),
                 },
             },
@@ -1580,6 +1616,21 @@ def execute_step(
                     _outcome["decisions"] = _clean_decisions
                     log.info("step %d decisions: %d design decision(s) declared",
                              step_num, len(_clean_decisions))
+            # WORLD-FACT channel (WORLD_FACTS_DESIGN slice 1): non-action
+            # findings, validated here and ledgered by loop_post_step. Same
+            # cap discipline as decisions: malformed entries never consume
+            # the budget.
+            try:
+                from world_facts import clean_declared as _wf_clean, \
+                    world_facts_enabled as _wf_enabled
+                if _wf_enabled():
+                    _clean_wf = _wf_clean(tc.arguments.get("world_facts"))
+                    if _clean_wf:
+                        _outcome["world_facts"] = _clean_wf
+                        log.info("step %d world_facts: %d fact(s) declared",
+                                 step_num, len(_clean_wf))
+            except Exception as _wf_exc:
+                log.debug("world_facts validation skipped: %s", _wf_exc)
             # Escape-pattern demotions (BACKLOG #23a/#23g): a "done" whose
             # result is a promise of future background work, or an unprobed
             # environment-limitation claim on an agentic lane, is not done.

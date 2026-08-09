@@ -189,6 +189,9 @@ class Checkpoint:
     # retained checkpoint remains inspectable but can never replay effects.
     consumed_at: str = ""
     resumed_to_loop_id: str = ""
+    # Run-scoped world-fact ledger rows (WORLD_FACTS_DESIGN slice 1) — a
+    # resume must see the facts, not just the surviving steps.
+    world_facts: Optional[List[Dict[str, Any]]] = None
 
     def __post_init__(self):
         if not self.timestamp:
@@ -234,6 +237,8 @@ class Checkpoint:
         if self.consumed_at:
             d["consumed_at"] = self.consumed_at
             d["resumed_to_loop_id"] = self.resumed_to_loop_id
+        if self.world_facts:
+            d["world_facts"] = self.world_facts
         return d
 
     @classmethod
@@ -273,6 +278,7 @@ class Checkpoint:
             executor_session=executor_session,
             consumed_at=str(d.get("consumed_at") or ""),
             resumed_to_loop_id=str(d.get("resumed_to_loop_id") or ""),
+            world_facts=d.get("world_facts") or None,
         )
 
 
@@ -290,6 +296,7 @@ def write_checkpoint(
     *,
     in_flight_index: Optional[int] = None,
     executor_session: Optional[Dict[str, Any]] = None,
+    world_facts: Optional[List[Dict[str, Any]]] = None,
 ) -> None:
     """Write current loop progress to disk.
 
@@ -353,6 +360,7 @@ def write_checkpoint(
             # an in-flight checkpoint; readers then cannot accidentally use it.
             executor_session=(dict(executor_session or {}) or None)
             if in_flight is None else None,
+            world_facts=list(world_facts) if world_facts else None,
         )
         if rd_path is not None:
             rd_path.parent.mkdir(parents=True, exist_ok=True)
@@ -596,6 +604,7 @@ def branch_checkpoint(loop_id: str) -> Optional[str]:
         steps=list(ckpt.steps),
         completed=list(ckpt.completed),
         parent_loop_id=loop_id,
+        world_facts=list(ckpt.world_facts) if ckpt.world_facts else None,
     )
     path = _checkpoint_path(new_loop_id)
     path.write_text(json.dumps(branch.to_dict(), indent=2), encoding="utf-8")

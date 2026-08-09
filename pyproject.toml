@@ -267,6 +267,7 @@ py-modules = [
     "web_fetch",
     "workspace_import",
     "workers",
+    "world_facts",
     "worktree",
 ]
 

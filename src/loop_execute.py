@@ -284,6 +284,7 @@ def _execute_main_loop(
                 _rotation_ckpt(
                     ctx.loop_id, goal, ctx.project or "", steps, step_outcomes,
                     executor_session=_executor_session,
+                    world_facts=ctx.world_facts.to_list(),
                 )
             except Exception as _rotation_exc:
                 log.warning("executor session rotation checkpoint failed: %s",
@@ -885,6 +886,18 @@ def _execute_main_loop(
         except Exception as _tr_render_exc:
             log.debug("terrain render skipped: %s", _tr_render_exc)
 
+        # World-fact contribution (WORLD_FACTS_DESIGN slice 1): anecdotal
+        # facts the run has declared so far — same drop/re-render discipline
+        # as terrain (the set grows; a re-arm must not replay a stale
+        # snapshot). Hypothesis-kind facts never render (§7.1 quarantine).
+        try:
+            _pending_context.drop_source("world_facts")
+            _wf_block = ctx.world_facts.render()
+            if _wf_block:
+                _pending_context.append("world_facts", "context", _wf_block)
+        except Exception as _wf_render_exc:
+            log.debug("world_facts render skipped: %s", _wf_render_exc)
+
         # §6 merge point — the ONE consumption seam. Drain the pending
         # contributions exactly once and render them provenance-labeled.
         # Zero contributions ⇒ empty render ⇒ byte-identical prompts.
@@ -964,7 +977,8 @@ def _execute_main_loop(
             from checkpoint import write_checkpoint as _inflight_ckpt
             _inflight_ckpt(ctx.loop_id, ctx.goal, ctx.project or "",
                            steps, step_outcomes, in_flight_index=step_idx,
-                           executor_session=_executor_session)
+                           executor_session=_executor_session,
+                           world_facts=ctx.world_facts.to_list())
         except Exception as _if_exc:
             log.debug("in-flight checkpoint write failed (non-fatal): %s", _if_exc)
 

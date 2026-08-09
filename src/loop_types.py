@@ -20,10 +20,16 @@ from typing import Any, Callable, ClassVar, Dict, List, Optional
 # terrain.py is stdlib-only and imports nothing from the loop — safe to
 # import at module load (this module's whole point is being import-safe).
 from terrain import TerrainMemory
+# world_facts.py: same stdlib-only contract as terrain.py.
+from world_facts import WorldFactLedger
 
 
 def _new_terrain() -> "TerrainMemory":
     return TerrainMemory()
+
+
+def _new_world_facts() -> "WorldFactLedger":
+    return WorldFactLedger()
 
 log = logging.getLogger("maro.loop")
 
@@ -475,6 +481,14 @@ class LoopContext:
     # contribution per step. Dies with the run — promotion to a durable
     # terrain teaching reads this as its evidence source.
     terrain: "TerrainMemory" = field(default_factory=lambda: _new_terrain())
+    # Run-scoped world-fact ledger (WORLD_FACTS_DESIGN slice 1): non-action
+    # findings declared by the executor via the completion tool's
+    # `world_facts` channel. Anecdotal facts render as one `world_facts`
+    # contribution per step; hypothesis-kind facts are ledgered but
+    # quarantined from prompts (§7.1). Rides the run checkpoint so
+    # resume/replan sees the facts, not just the surviving steps.
+    world_facts: "WorldFactLedger" = field(
+        default_factory=lambda: _new_world_facts())
     interrupts_applied: int = 0
     # Human-readable descriptions of interrupts applied at the most recent
     # boundary poll — consumed by the §6a injection-trigger director
