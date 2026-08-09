@@ -341,6 +341,34 @@ class TestEffectPromotion:
         ev = dict(GOOD_EVIDENCE, n_calls=3)
         assert kw.promote_lesson_by_effect(tl.lesson_id, ev) is False
 
+    def test_non_finite_evidence_refused(self, monkeypatch, tmp_path):
+        # Round-4 review (3/3 lenses): NaN fails BOTH bar comparisons, so a
+        # malformed measurement sailed through `< min_delta` and
+        # `spread >= delta` and mutated a tier — and --remint-pending applies
+        # the routes BEFORE the hardened watch resolver, so the routes are
+        # the gate that matters.
+        tl = _seed_medium_lesson(monkeypatch, tmp_path)
+        import knowledge_web as kw
+        nan, inf = float("nan"), float("inf")
+        assert kw.promote_lesson_by_effect(
+            tl.lesson_id, dict(GOOD_EVIDENCE, delta=nan)) is False
+        assert kw.promote_lesson_by_effect(
+            tl.lesson_id, dict(GOOD_EVIDENCE, jackknife_spread=nan)) is False
+        assert kw.promote_lesson_by_effect(
+            tl.lesson_id, dict(GOOD_EVIDENCE, jackknife_spread=-1.0)) is False
+        assert kw.promote_lesson_by_effect(
+            tl.lesson_id, dict(GOOD_EVIDENCE, delta=inf)) is False
+        neg = {"delta": -1.0, "jackknife_spread": 0.0, "n_calls": 18,
+               "stratum": "reason"}
+        assert kw.demote_lesson_by_effect(
+            tl.lesson_id, dict(neg, delta=nan)) is False
+        assert kw.demote_lesson_by_effect(
+            tl.lesson_id, dict(neg, jackknife_spread=nan)) is False
+        assert kw.demote_lesson_by_effect(
+            tl.lesson_id, dict(neg, jackknife_spread=-1.0)) is False
+        # the well-formed originals still act
+        assert kw.demote_lesson_by_effect(tl.lesson_id, neg) is True
+
     def test_killswitch_off_refuses(self, monkeypatch, tmp_path):
         tl = _seed_medium_lesson(monkeypatch, tmp_path)
         import knowledge_web as kw

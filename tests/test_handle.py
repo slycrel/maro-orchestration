@@ -5668,13 +5668,53 @@ class TestTemplatePlaceholderProvenance:
         """The exact failure shape: an artifacts/ dir under a provenance base
         made the truncated prefix path-shaped, so collection was environment-
         dependent — red on this box, green in a clean worktree."""
-        from provenance import _claimed_output_paths
+        from provenance import _claimed_output_paths, _TEMPLATE_MARKERS
         assert _claimed_output_paths(
             "saved to artifacts/out-%(step)d.txt") == \
             ["artifacts/out-%(step)d.txt"]
         assert _claimed_output_paths(
             "saved to /work/artifacts/%(step)d.json") == \
             ["/work/artifacts/%(step)d.json"]
+        # Round 4: width/flag suffixes and non-\w mapping keys are valid
+        # Python named printf — both must collect whole AND read as templates
+        # (the \w-only first cut re-truncated `%(step-id)d` at the paren).
+        for claim in ("artifacts/out-%(step)03d.txt",
+                      "artifacts/out-%(step-id)d.json",
+                      "artifacts/out-%(step.id)-10s.json"):
+            assert _claimed_output_paths(f"saved to {claim}") == [claim]
+            assert _TEMPLATE_MARKERS.search(claim), claim
+
+    def test_stale_literal_template_name_does_not_shadow_fresh_hits(
+            self, monkeypatch, tmp_path):
+        """Round 4: literal-first used to EARLY-RETURN, so a stale file
+        literally named `out-%(step)d.txt` (a writer that failed to expand)
+        beat the fresh expanded outputs and flagged 'predates this run' —
+        regressing the run-75fe8b4e all-candidates freshness contract.
+        Literal hits now JOIN the pattern candidates."""
+        import os, time
+        from provenance import _missing_or_stale_result_outputs, _resolve_exact
+        proj = self._ws(monkeypatch, tmp_path)
+        stale = proj / "out-%(step)d.txt"
+        stale.write_text("stale", encoding="utf-8")
+        os.utime(stale, (time.time() - 9999, time.time() - 9999))
+        (proj / "out-7.txt").write_text("fresh", encoding="utf-8")
+        hits = _resolve_exact("artifacts/out-%(step)d.txt", [])
+        assert {h.name for h in hits} == {"out-%(step)d.txt", "out-7.txt"}
+        assert _missing_or_stale_result_outputs(
+            "saved to artifacts/out-%(step)d.txt", time.time() - 3600) == []
+
+    def test_unknown_home_user_does_not_abort_the_result_pass(
+            self, monkeypatch, tmp_path):
+        """Round 4: `~nosuchuser/…` made expanduser raise RuntimeError, which
+        aborted the whole result-lane scan — a real missing claim earlier in
+        the same result went unflagged."""
+        import time
+        from provenance import _missing_or_stale_result_outputs
+        self._ws(monkeypatch, tmp_path)
+        flagged = _missing_or_stale_result_outputs(
+            "saved the data to artifacts/really-missing.json and "
+            "stored a copy into ~nosuchuser-zz/x.json", time.time() - 3600)
+        assert any("really-missing.json" in f for f in flagged), flagged
 
     def test_result_lane_is_literal_first_too(self, monkeypatch, tmp_path):
         """Round-3 cross-review: round 3 gave GOAL/INPUT literal-first and
@@ -5707,6 +5747,10 @@ class TestTemplatePlaceholderProvenance:
         assert _unverifiable_pattern("192.168.1.1")
         assert _unverifiable_pattern("10.0.0.2:8080")
         assert not _unverifiable_pattern("report.org")  # decided: still a file
+        # Round 4: octet-validated — `999.999.999.999` is NOT an IP, so a
+        # file of that name stays verifiable rather than silently skipped.
+        assert not _unverifiable_pattern("999.999.999.999")
+        assert not _unverifiable_pattern("256.0.0.1")
         assert _result_claimed_outputs("exported the data to 192.168.1.1") == []
 
     def test_multi_label_hostname_is_not_a_file(self, monkeypatch, tmp_path):

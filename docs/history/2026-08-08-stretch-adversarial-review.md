@@ -148,3 +148,33 @@ passed" claim (TMPDIR-dependent; fixed in 42850fe before this round).
 - Both lanes contributed a HIGH: M1's lane R3-1/R3-2, this lane R3-3.
   Nobody's fix layer survives review untouched; that is the argument for
   running rounds until findings go quiet, not against either lane.
+
+---
+
+# Round 4 — convergence check (2026-08-09)
+
+Same three lenses over the cumulative diff with the round-3 fix layer
+last, explicitly invited to declare areas clean.
+
+## Verdict: CONTESTED — not yet converged
+
+Five findings, all in the round-3 fix layer, all verified real. The
+reviewers also returned substantive clean checks for the first time
+(no catastrophic backtracking in the widened token; transient-segment
+monkeypatches confirmed test-local; prose parens still terminate).
+
+| # | Finding (lens) | Outcome |
+|---|---|---|
+| R4-A | NaN bypasses the effect ROUTES (3/3, HIGH): --remint-pending applies promote/demote before the hardened watch resolver, and NaN fails both bar comparisons — a malformed measurement could mutate a tier | Finite-delta + finite-non-negative-spread guards in both routes; pinned promote and demote |
+| R4-B | Literal-first early return broke the all-candidates freshness contract (3/3, HIGH): a stale file literally named `out-%(step)d.txt` shadowed fresh expanded outputs → "predates this run" | Literal hits now JOIN pattern candidates (union, deduped); pinned |
+| R4-C | Named-printf coverage too narrow (2 lenses): `%(step)03d` collected but unrecognized → literal false-demote; `%(step-id)d` re-truncated at the paren | Token and marker regexes take any non-paren key + printf flag/width grammar; pinned |
+| R4-D | Unknown `~user` raised RuntimeError out of expanduser, aborting the whole result-lane scan — real missing claims in the same result went unflagged (Architect, HIGH) | Guarded expanduser, falls back to the raw token; pinned |
+| R4-E | `_IPV4_RE` matched any four dotted numbers — `999.999.999.999` skipped as an "IP" while the comment claimed zero recall cost (3/3, LOW/MED) | Octet range validation; pinned both directions |
+
+## Lead judgment notes
+
+- R4-A is the round's lesson: round 3 hardened the RESOLVER's evidence
+  bar while the ROUTES run first — a guard on the wrong side of the
+  ordering. The fix puts the bar where the mutation happens.
+- Findings per round: 12 → 9 → 8 → 5, HIGH-consensus narrowing to the
+  newest layer each time. Trending toward convergence, not there yet.

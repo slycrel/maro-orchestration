@@ -1435,12 +1435,19 @@ def promote_lesson_by_effect(lesson_id: str, delta_evidence: Dict[str, Any]) -> 
 
     ev = dict(delta_evidence or {})
     delta = ev.get("delta")
-    if not isinstance(delta, (int, float)) or delta < min_delta:
+    # Finite-only (round-4 review, 3/3 lenses): NaN fails BOTH bar
+    # comparisons, so a malformed measurement sailed through `< min_delta`
+    # and `spread >= delta` and mutated a tier — and --remint-pending
+    # applies this route before the hardened watch resolver ever runs, so
+    # the routes are the gate that matters.
+    if not (isinstance(delta, (int, float)) and math.isfinite(delta)) \
+            or delta < min_delta:
         return False
     if int(ev.get("n_calls") or 0) < min_calls:
         return False
     spread = ev.get("jackknife_spread")
-    if not isinstance(spread, (int, float)) or spread >= delta:
+    if not (isinstance(spread, (int, float)) and math.isfinite(spread)
+            and spread >= 0) or spread >= delta:
         return False
     if ev.get("stratum") != "reason":
         return False
@@ -1567,12 +1574,15 @@ def demote_lesson_by_effect(lesson_id: str, delta_evidence: Dict[str, Any]) -> b
 
     ev = dict(delta_evidence or {})
     delta = ev.get("delta")
-    if not isinstance(delta, (int, float)) or delta > max_delta:
+    # Finite-only — same round-4 guard as the promote route.
+    if not (isinstance(delta, (int, float)) and math.isfinite(delta)) \
+            or delta > max_delta:
         return False
     if int(ev.get("n_calls") or 0) < min_calls:
         return False
     spread = ev.get("jackknife_spread")
-    if not isinstance(spread, (int, float)) or spread >= abs(delta):
+    if not (isinstance(spread, (int, float)) and math.isfinite(spread)
+            and spread >= 0) or spread >= abs(delta):
         return False
     if ev.get("stratum") != "reason":
         return False

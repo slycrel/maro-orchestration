@@ -41,7 +41,10 @@ log = logging.getLogger("maro.handle")
 # _path_shaped (absolute form always; relative form on any box whose bases
 # hold an `artifacts/` dir). Round-3 cross-review, 3/3 lenses: the "named
 # forms are uncollected, cheap" record was wrong on exactly that point.
-_PATH_TOKEN = r"(?:%\(\w+\)|[^\s`'\")])+"
+# Key charset is any-non-paren, not \w: Python printf accepts %(step-id)d and
+# %(step.id)d, and a \w-only group re-truncates exactly the class round 3
+# meant to close (round-4 review).
+_PATH_TOKEN = r"(?:%\([^)\s]+\)|[^\s`'\")])+"
 _OUTPUT_CLAIM_RE = re.compile(
     r"\b(?:sav\w*|writ\w*|creat\w*|output\w*|stor\w*|export\w*|generat\w*|dump\w*)\b"
     r"[^.\n]*?\b(?:to|into|at|as)\s+[`'\"(]?(?P<path>" + _PATH_TOKEN + r")",
@@ -83,7 +86,7 @@ _TEMPLATE_MARKERS = re.compile(
                                   # one. A literal "$100" being globbed can only
                                   # over-satisfy, which is the cheap side.
     r"|<[^>/]+>"                  # <run_dir>
-    r"|%\(\w+\)[sd]"              # %(step)d
+    r"|%\([^)\s]+\)[-+ #0]*\d*(?:\.\d+)?[sd]"  # %(step)d, %(step)03d, %(step-id)s
     r"|%\d+\$[sd]"                # %1$s
     r"|%[-+ #0]*\d*(?:\.\d+)?[sd]"  # %s, %d, %02d, %-10s
 )
@@ -103,10 +106,13 @@ _TEMPLATE_MARKERS = re.compile(
 _HOSTNAME_RE = re.compile(r"^(?:[A-Za-z0-9-]+\.){2,}[A-Za-z]{2,}$")
 # The multi-label rule requires an ALPHA final label, so a dotted-quad IP
 # ("save the result to 192.168.1.1") fell through to the bare-file lane and
-# falsely demoted a delivered remote write (round-3 cross-review). An IP is
-# never plausibly a local artifact name; unlike two-label hostnames, it is
-# distinguishable at zero recall cost.
-_IPV4_RE = re.compile(r"^\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?$")
+# falsely demoted a delivered remote write (round-3 cross-review). Octets are
+# range-validated (round 4: `999.999.999.999` is not an IP and a file of that
+# name should stay verifiable); a valid dotted quad as a local artifact name
+# stays the accepted cheap cost, same shape as the hostname trade.
+_IPV4_OCTET = r"(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)"
+_IPV4_RE = re.compile(
+    r"^" + _IPV4_OCTET + r"(?:\." + _IPV4_OCTET + r"){3}(?::\d{1,5})?$")
 
 _TEMPLATE_SENTINEL = "\x00"
 
@@ -460,12 +466,24 @@ def _resolve_exact(rel: str, bases: List[Path]) -> List[Path]:
     # checked as a character class, matched nothing, and falsely demoted; a
     # `~/…` claim likewise never expanded (round-3 cross-review — the "fourth
     # lane split" the BACKLOG residual predicted).
-    lp = Path(rel).expanduser()
+    #
+    # Round 4: literal hits JOIN the pattern candidates instead of shadowing
+    # them. An early return on a literal hit broke the all-candidates
+    # freshness contract above — a stale file literally named
+    # `out-%(step)d.txt` (a writer that failed to expand) would win over the
+    # fresh expanded outputs and flag "predates this run". And expanduser is
+    # guarded: `~nosuchuser/…` raises RuntimeError, which used to abort the
+    # whole result-lane pass, discarding every other claim's finding.
+    try:
+        lp = Path(rel).expanduser()
+    except (RuntimeError, ValueError, KeyError):
+        lp = Path(rel)
+    lhits: List[Path] = []
     if lp.is_absolute():
         if lp.is_file():
-            return [lp]
+            lhits.append(lp)
     else:
-        lhits: List[Path] = [b / rel for b in bases if (b / rel).is_file()]
+        lhits = [b / rel for b in bases if (b / rel).is_file()]
         try:
             from config import workspace_root
             _ws_projects = Path(workspace_root()) / "projects"
@@ -474,10 +492,14 @@ def _resolve_exact(rel: str, bases: List[Path]) -> List[Path]:
                              if d.is_dir() and (d / rel).is_file())
         except Exception:
             pass
-        if lhits:
-            return lhits
+    if not (_TEMPLATE_MARKERS.search(rel) or any(ch in rel for ch in "*?[")):
+        return lhits            # plain claim — the literal hits are it
     if rel.startswith("~"):
         rel = str(lp)
+
+    def _merge(a: List[Path], b: List[Path]) -> List[Path]:
+        seen = {str(x) for x in a}
+        return a + [x for x in b if str(x) not in seen]
 
     # Template placeholders resolve as the patterns they stand for (run
     # de790c13, 2026-08-08) — "{project_dir}/artifacts/step-{N}-transcript.json"
@@ -520,7 +542,7 @@ def _resolve_exact(rel: str, bases: List[Path]) -> List[Path]:
             # An unverified claim is this module's CHEAP error; a minute-long
             # stall during finalization is not.
             if len(lead) <= 1:
-                return ghits
+                return _merge(lhits, ghits)
             anchor = Path(*lead)
             rest = _pat.parts[len(lead):]
             try:
@@ -532,7 +554,7 @@ def _resolve_exact(rel: str, bases: List[Path]) -> List[Path]:
                     ghits.append(anchor)
             except (OSError, ValueError, NotImplementedError, IndexError):
                 pass
-            return ghits
+            return _merge(lhits, ghits)
         for b in bases:
             try:
                 ghits.extend(x for x in b.glob(rel) if x.is_file())
@@ -550,11 +572,14 @@ def _resolve_exact(rel: str, bases: List[Path]) -> List[Path]:
                             pass
         except Exception:
             pass
-        return ghits
+        return _merge(lhits, ghits)
 
+    # Template normalization can land on a pattern-free path (a leading
+    # whole-segment placeholder just drops: `${BUILD}/artifacts/out-7.txt` →
+    # `artifacts/out-7.txt`) — look THAT literal up too.
     p = Path(rel)
     if p.is_absolute():
-        return [p] if p.is_file() else []
+        return _merge(lhits, [p] if p.is_file() else [])
     hits: List[Path] = []
     for b in bases:
         if (b / rel).is_file():
@@ -568,7 +593,7 @@ def _resolve_exact(rel: str, bases: List[Path]) -> List[Path]:
                     hits.append(d / rel)
     except Exception:
         pass
-    return hits
+    return _merge(lhits, hits)
 
 
 def _resolve_bare(name: str, bases: List[Path]) -> List[Path]:
