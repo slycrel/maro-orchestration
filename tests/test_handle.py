@@ -3970,7 +3970,13 @@ class TestOutputProvenanceGuard:
         assert _claimed_output_paths("read data/in.csv and summarize") == []  # input, not output
         assert _claimed_output_paths("create a function in src/foo.py") == []  # 'in', not a write target
 
-    def test_missing_dir_qualified_output_demotes(self, tmp_path):
+    def test_missing_dir_qualified_output_demotes(self, tmp_path, monkeypatch):
+        # pytest's tmp_path lives under /tmp, which the goal lane now skips
+        # as transient (8e660ac). The filter has its own pins; this one pins
+        # the DEMOTION machinery, so neutralize the segment list rather than
+        # depend on where TMPDIR happens to point.
+        import provenance
+        monkeypatch.setattr(provenance, "_TRANSIENT_SEGMENTS", ())
         from handle import _verify_now_outcome
         missing = tmp_path / "nope" / "missing.txt"   # absolute, does not exist
         outcome = {"status": "done", "result": "All set — saved the report.",
@@ -3982,7 +3988,12 @@ class TestOutputProvenanceGuard:
         assert str(missing) in out["provenance_missing"]
         adapter.complete.assert_not_called()   # deterministic short-circuit, no judge call
 
-    def test_existing_output_passes_to_judge(self, tmp_path):
+    def test_existing_output_passes_to_judge(self, tmp_path, monkeypatch):
+        # Same transient-segment neutralization as above — without it the
+        # claim is filtered and this pin passes vacuously (never resolves
+        # the file it created).
+        import provenance
+        monkeypatch.setattr(provenance, "_TRANSIENT_SEGMENTS", ())
         from handle import _verify_now_outcome
         landed = tmp_path / "out.txt"
         landed.write_text("done")
@@ -4000,7 +4011,12 @@ class TestOutputProvenanceGuard:
 
     def test_disabled_by_config_skips_guard(self, tmp_path, monkeypatch):
         import config
+        import provenance
         from handle import _verify_now_outcome
+        # Neutralize the transient filter so the config gate is what's tested
+        # — otherwise the claim never reaches the guard and this passes even
+        # with the gate broken.
+        monkeypatch.setattr(provenance, "_TRANSIENT_SEGMENTS", ())
         monkeypatch.setattr(config, "get", lambda key, default=None:
                             False if key == "validate.output_provenance" else default)
         missing = tmp_path / "gone" / "x.txt"
@@ -4292,7 +4308,9 @@ class TestNowLaneTypedStopVerdict:
         adapter.complete.side_effect = AssertionError("judge must not be called")
         return adapter
 
-    def test_now_provenance_demotion_stamps_lost_the_plot(self, tmp_path):
+    def test_now_provenance_demotion_stamps_lost_the_plot(self, tmp_path, monkeypatch):
+        import provenance
+        monkeypatch.setattr(provenance, "_TRANSIENT_SEGMENTS", ())
         from handle import _verify_now_outcome
         missing = tmp_path / "nope" / "missing.txt"
         outcome = {"status": "done", "result": "All set — saved the report.",
@@ -4302,12 +4320,14 @@ class TestNowLaneTypedStopVerdict:
         assert out["stop_verdict"] == "lost-the-plot"
         assert str(missing) in out["stop_evidence"]
 
-    def test_stamped_verdict_is_in_vocabulary(self, tmp_path):
+    def test_stamped_verdict_is_in_vocabulary(self, tmp_path, monkeypatch):
         """The value the guard writes must be one the ledger will accept —
         stamp_outcome_stop_verdict and stamp_stop both reject off-vocabulary
         strings, so a typo here would land a verdict nowhere."""
+        import provenance
         from handle import _verify_now_outcome
         from stop_verdicts import VALID_STOP_VALUES, GOAL_VERDICTS
+        monkeypatch.setattr(provenance, "_TRANSIENT_SEGMENTS", ())
         outcome = {"status": "done", "result": "saved it",
                    "tokens_in": 3, "tokens_out": 1}
         out = _verify_now_outcome(
