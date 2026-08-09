@@ -1039,6 +1039,12 @@ def _maybe_emit_contradiction_candidate(loop_id: str, row: dict) -> None:
                 "failure_summary": str(row.get("summary", "") or "")[:300],
                 "goal_preview": str(row.get("goal", "") or "")[:200],
                 "verdict_source": str(row.get("goal_verdict_source", "") or ""),
+                # MH taxonomy relabel (#7 Overgeneralization, 2026-08-09):
+                # this event IS maro's model—memory collision signal —
+                # crystallized knowledge injected, reality disagreed.
+                # Candidate-grade until the adjudicator rules.
+                "mh_edge": "model-memory",
+                "mh_class": "overgeneralization_candidate",
             },
             loop_id=loop_id,
             related_ids=[f"rule:{r}" for r in rule_ids],

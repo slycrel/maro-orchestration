@@ -6845,3 +6845,15 @@ under the same two-measurement standard).
   worker_results payload. The worker-slice A/B now records behavior
   alongside exposure. Judged only when injection happened; judge
   failure logs a warning and leaves the None sentinel.
+- **2026-08-09** — MH #7 + #9 relabels SHIPPED (the two cheap ADOPT
+  edges left after the model—tool build; MH entry now has #1/#4/#6/#8/
+  #13 remaining plus Rationale Erosion). #7 Overgeneralization
+  (model—memory): CONTRADICTION_CANDIDATE events carry
+  `mh_edge`/`mh_class` — the collision emitter IS that edge's signal,
+  candidate-grade until adjudicated. #9 Instruction-Following Failure
+  (owner—model): incomplete verdict + concrete failed checks stamps the
+  label on both the CLOSURE_VERDICT event and the persisted
+  closure_verdicts.jsonl row (absent when the shape doesn't hold —
+  mechanical, no new judgment). Corpus analysis can now count these by
+  the taxonomy's own names. Pinned in test_contradiction_wiring +
+  test_director.

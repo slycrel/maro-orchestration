@@ -1488,6 +1488,17 @@ def verify_goal_completion(
             complete, confidence, checks_passed, checks_run, len(gaps),
         )
 
+        # MH taxonomy relabel (#9 Instruction-Following Failure, owner—model
+        # edge, 2026-08-09): closure checks derive from the owner instruction,
+        # so an incomplete verdict with concrete failed checks is that edge's
+        # structured signal. Mechanical label over data already here — no new
+        # judgment; empty when the shape doesn't hold.
+        _mh_label = (
+            {"mh_edge": "owner-model",
+             "mh_class": "instruction_following_failure"}
+            if (not complete and verdict.failed_checks) else {}
+        )
+
         # Phase 65: emit CLOSURE_VERDICT to captain's log with per-check
         # modality distribution. Lets closure quality be measured instead of
         # guessed (floor: static vs runtime ratio across runs).
@@ -1528,6 +1539,7 @@ def verify_goal_completion(
                     ),
                     "commands": [r.get("command", "")[:200] for r in check_results],
                     "summary": summary[:400],
+                    **_mh_label,
                 },
                 loop_id=loop_id or None,
             )
@@ -1559,6 +1571,7 @@ def verify_goal_completion(
             "gaps": [str(g)[:300] for g in gaps],
             "summary": summary[:500],
             "failed_checks": list(verdict.failed_checks),
+            **_mh_label,
             "fingerprint": closure_fingerprint(verdict),
             "check_results": [
                 {

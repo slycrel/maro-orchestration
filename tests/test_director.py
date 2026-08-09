@@ -1318,6 +1318,10 @@ class TestVerifyGoalCompletion:
         assert row["loop_id"] == "loop9999"
         assert row["complete"] is False
         assert row["failed_checks"] == result.failed_checks
+        # MH taxonomy relabel (#9): incomplete + concrete failed checks =
+        # the owner—model instruction-following signal, named on the row.
+        assert row["mh_edge"] == "owner-model"
+        assert row["mh_class"] == "instruction_following_failure"
         assert row["fingerprint"] == closure_fingerprint(result) != ""
         outcomes = {r["command"]: r["outcome"] for r in row["check_results"]}
         assert outcomes == {"false": "fail", "true": "pass"}
@@ -1353,6 +1357,8 @@ class TestVerifyGoalCompletion:
         assert len(rows) == 1
         assert rows[0]["skipped"] == "no_checks_generated"
         assert rows[0]["loop_id"] == "loopskip"
+        # No failed checks → no MH instruction-following label.
+        assert "mh_class" not in rows[0]
 
     def test_persisted_row_scrubs_secrets_and_keeps_file_evidence(self, tmp_path):
         """Adversarial review 2026-07-29: (1) persisted rows must carry

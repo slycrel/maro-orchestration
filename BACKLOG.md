@@ -140,11 +140,18 @@ retracted by the step-9 adversarial pass — see below):
   raw; under-reporting to the parent plausible and undetected.
 - **#7 Overgeneralization (model—memory), INFERRED** — cheap relabel of
   `memory_ledger._maybe_emit_contradiction_candidate` (L983).
+  **BUILT 2026-08-09**: CONTRADICTION_CANDIDATE events now carry
+  `mh_edge: model-memory` / `mh_class: overgeneralization_candidate`
+  (candidate-grade until the adjudicator rules).
 - **#8 Missed Read (model—memory), INFERRED-cost** — `memory_quality.py`
   is a working offline hit@1/hit@5/MRR eval with ZERO call sites; adopt =
   wire it live. Batch-CLI→per-run cost was not scoped; "cheap" unverified.
 - **#9 Instruction-Following Failure (owner—model)** — relabel
-  `checks_run`/`failed_checks`, already structured.
+  `checks_run`/`failed_checks`, already structured. **BUILT
+  2026-08-09**: an incomplete verdict with concrete failed checks gets
+  `mh_edge: owner-model` / `mh_class: instruction_following_failure` on
+  both the CLOSURE_VERDICT event and the persisted
+  closure_verdicts.jsonl row; label absent when the shape doesn't hold.
 - **#10 Malformed Arguments / #11 Tool Hallucination / #12 Tool Recovery
   Failure (model—tool)** — three mechanical classifiers over
   `tool_transcript` (args+is_error split-out; called-name vs registry;
@@ -3384,8 +3391,18 @@ and maintainable over time."** Step 1 is greenlit:
   high. **Skill revised same day to state the protocol in TURNS** (one
   corpus-wide orientation command, whole-reads for small files batched
   into single commands, locate+read combined, multi-region seds).
-  Second A/B with the turn-based protocol is the natural next probe —
-  prediction NOT yet registered; do that before dispatching. The
+  Second A/B with the turn-based protocol is the natural next probe.
+  **A/B-2 PREDICTION REGISTERED 2026-08-09 (before dispatch):** same
+  corpus, fresh related question (Maidstone/BMJ side — the prior
+  verdict files cover it only at summary level, so the answer requires
+  the raw evidence). Predicted: tool turns **< 50** (vs A/B-1's ~94),
+  tokens_in **< 3.4M** (below the 3.45M baseline despite the corpus
+  having since grown), cost below the $11.25 baseline; protocol
+  adherence visible as combined locate+read turns and batched
+  small-file reads; honesty section retained. **Falsifier on record:**
+  if turns drop but tokens_in stays ≥ 4M, the turn-resend theory is
+  wrong — conversation growth is driven by something other than tool
+  round-trips and the skill can't bend cost on this transport. The
   accuracy/honesty half of the RLM direction is confirmed worth keeping
   regardless; the cost half INVERTS on a per-turn-resend transport, which
   bounds where step-2 (recursive sub-calls) can pay on this backend.

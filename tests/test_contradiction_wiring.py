@@ -97,6 +97,10 @@ class TestCandidateEmitter:
         assert ev["context"]["rule_ids"] == ["r-1"]
         assert ev["context"]["lesson_ids"] == ["l-9"]
         assert "rule:r-1" in ev.get("related_ids", [])
+        # MH taxonomy relabel (#7): the event carries its edge/class so
+        # corpus analysis can count by the taxonomy's names.
+        assert ev["context"]["mh_edge"] == "model-memory"
+        assert ev["context"]["mh_class"] == "overgeneralization_candidate"
 
     def test_directional_failure_never_emits(self, monkeypatch, tmp_path):
         """Era-10 law pin: verdicts are consumed only through verdict_trust.
