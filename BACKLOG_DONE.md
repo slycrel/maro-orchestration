@@ -8,6 +8,56 @@ Last split: 2026-04-16 (session 34).
 
 ---
 
+## Planner non-action item types — world facts — SHIPPED (slice 1 2026-08-08, slices 2+3 2026-08-09)
+
+(Jeremy ask, §4c decision batch 2026-08-02: *"we need to add non-action
+types to the planner. I think 2 types of world facts:
+anecdotal/accidentally found and hypothesis type findings (pattern
+recognition/ideas)."*) Plans were action-only; a run that stumbled onto
+a fact ("archive X is blocked") or formed a pattern hypothesis had no
+plan-native place to put it — it leaked into step prose or died with
+the step.
+
+Design sketch written 2026-08-03 (`docs/WORLD_FACTS_DESIGN.md`,
+reading-queue row same day); §7 decisions taken by Jeremy 2026-08-06
+(hypothesis quarantine mirrors the provenance pattern; planner FACT:
+emission last; cap sizes build-time tuning). Shipped in three slices
+exactly as ordered:
+
+1. **Capture + ledger + injection** (go-nuts stretch chunk 6, 97bb780):
+   completion-tool `world_facts` side-channel mirroring the decisions
+   directive, run-scoped ledger on LoopContext with checkpoint carry,
+   anecdotal-only render (§7.1 hypothesis quarantine), injection_guard
+   at every ingress (fail-closed), `world_facts.enabled` default ON.
+2. **Finalize landing** (2026-08-09): `land_facts` — anecdotal →
+   knowledge-bridge CANDIDATE nodes (V3 promotion = the
+   generalizability filter; the §4 teaching mint stays dormant, bridge
+   is the landing per the design's census); hypothesis →
+   `observe_pattern` with `world_fact:<loop_id>` provenance.
+   Verdict-independent; capped 5/3; idempotent per run dir
+   (`world_facts_landed` metadata stamp — a demoted-then-resumed run
+   must not self-confirm its own hypothesis to the standing-rule
+   threshold); one WORLD_FACTS_LANDED event. Watch item: the
+   promotion bar is the lane's RULE_PROMOTE_CONFIRMATIONS=2 — two
+   cross-run declarations of the same guess promote a rule; pinned,
+   contradiction-check + refight are the backstops.
+3. **Planner FACT: emission** (2026-08-09): `WORLD_FACT_RULES` taught
+   behind `planner.world_facts` (emission only; `parse_steps` plucks
+   FACT entries unconditionally — never steps, never counted against
+   max_steps). Seeded facts carry sticky `source="planner"` and are
+   REFUSED by land_facts: planner facts come from injected context, so
+   landing them back would launder stored knowledge into fresh
+   confidence (provenance-stamp lesson); a step restating a rendered
+   fact never upgrades provenance. Named residual: loop_execute
+   re-decompose lanes (boundary/milestone/replan) drop rather than
+   ledger FACT lines.
+
+Full state + falsifiers: `docs/WORLD_FACTS_DESIGN.md`. Defaults rows:
+`world_facts.enabled`, `planner.world_facts`. Tests:
+`tests/test_world_facts.py` (47 pins).
+
+---
+
 ## Skill pedigree + discovery metadata — SHIPPED 2026-08-08 (go-nuts stretch chunk 4)
 
 (opened 2026-08-08, **Jeremy:** *"seems important in both a 'this pattern

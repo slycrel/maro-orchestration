@@ -60,33 +60,6 @@ edge if boot time ever matters at census scale (966 replays ≈ 40–50
 min of boot); (3) fork session files accrete under ~/.claude/projects
 — opt-in cleanup only, per data retention.
 
-### Planner non-action item types — world facts (Jeremy ask, 2026-08-02; design before build)
-
-Decreed in the §4c decision batch: "we need to add non-action types to
-the planner. I think 2 types of world facts: anecdotal/accidentally
-found and hypothesis type findings (pattern recognition/ideas)." Plans
-today are action-only; a run that stumbles onto a fact ("archive X is
-blocked", "this dataset has a second sheet") or forms a hypothesis
-("these failures cluster by transport") has no plan-native place to put
-it — it leaks into prose or dies with the step. Design questions before
-code: where world-fact items live in the plan schema (peer of steps? a
-facts ledger the plan references?), how they flow into terrain/teaching
-mint (the RUN_TEACHINGS §4c terrain surface is the obvious consumer for
-the anecdotal kind; hypotheses look more like the hypotheses.jsonl
-lane), and how the planner is told it MAY emit them without being told
-it must (guidance-form decree applies). He's open to more discussion —
-"we can discuss more here if desired." Related: RUN_TEACHINGS_DESIGN
-§4c DECIDED block, GOAL_BRAIN 2026-08-02 entry.
-
-**Design sketch WRITTEN 2026-08-03 → `docs/WORLD_FACTS_DESIGN.md`**
-(reading-queue row same day). Shape: completion-tool `world_facts`
-side-channel mirroring the decisions directive; run-scoped fact ledger
-generalizing terrain's seam (manifest-persisted so facts survive
-replan); landing split by kind at finalize (anecdotal → teaching/bridge
-mint riding V3 earned promotion; hypothesis → observe_pattern
-confirmation lane, quarantined from live injection until confirmed).
-Three decisions posed to Jeremy in §7. Build gated on his read.
-
 ### Untracked test-artifact skills in repo skills/ (FOUND 2026-08-08)
 
 Seven untracked `.md` files sitting in the repo's `skills/` dir

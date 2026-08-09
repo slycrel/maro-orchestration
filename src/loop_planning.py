@@ -405,12 +405,21 @@ def _decompose_goal(
         _decompose_thinking = None
         if getattr(_decompose_adapter, "backend", "") == "anthropic":
             _decompose_thinking = THINKING_HIGH
+        _planner_facts: List[str] = []
         steps = _decompose(
             ctx.goal, _decompose_adapter, max_steps=max_steps, verbose=ctx.verbose,
             lessons_context=_lessons_context, ancestry_context=ctx.ancestry_context,
             skills_context=_skills_context, cost_context=_cost_context,
             thinking_budget=_decompose_thinking,
+            facts_out=_planner_facts,
         )
+        # World-facts slice 3: FACT: entries are observations, not steps —
+        # parse_steps plucked them; seed the run ledger so every step sees
+        # them rendered as already-known.
+        _seeded = seed_planner_facts(ctx, _planner_facts)
+        if _seeded and ctx.verbose:
+            print(f"[maro] planner declared {_seeded} world fact(s)",
+                  file=sys.stderr, flush=True)
     if ctx.verbose:
         print(f"[maro] plan ({len(steps)} steps) loop_id={ctx.loop_id}:", file=sys.stderr, flush=True)
         for _pi, _ps in enumerate(steps, 1):
@@ -791,11 +800,40 @@ def _shape_steps(steps: List[str], *, label: str = "") -> List[str]:
 
 def _decompose(goal, adapter, max_steps, verbose=False, lessons_context="",
                ancestry_context="", skills_context="", cost_context="",
-               thinking_budget=None):
+               thinking_budget=None, facts_out=None):
     """Delegate to planner.decompose(). See planner.py for full implementation."""
     from planner import maybe_add_verification_step
     steps = _decompose_impl(goal, adapter, max_steps, verbose=verbose,
                             lessons_context=lessons_context, ancestry_context=ancestry_context,
                             skills_context=skills_context, cost_context=cost_context,
-                            thinking_budget=thinking_budget)
+                            thinking_budget=thinking_budget, facts_out=facts_out)
     return maybe_add_verification_step(steps, goal, max_steps=max_steps)
+
+
+def seed_planner_facts(ctx, facts) -> int:
+    """World-facts slice 3: seed FACT: lines from decompose into the run
+    ledger as planner-sourced anecdotal facts.
+
+    Planner facts render into step prompts like any anecdotal fact, but
+    their provenance is sticky "planner" — they came from INJECTED context,
+    so land_facts() refuses to write them back to the stores (laundering
+    guard). step_idx 0 = declared before any step ran. Never raises.
+    """
+    seeded = 0
+    try:
+        from world_facts import KIND_ANECDOTAL, SOURCE_PLANNER, \
+            world_facts_enabled
+        if not facts or not world_facts_enabled():
+            return 0
+        for _fact in facts:
+            if ctx.world_facts.observe(
+                    KIND_ANECDOTAL, str(_fact),
+                    "planner-declared from injected context", 0,
+                    source=SOURCE_PLANNER):
+                seeded += 1
+        if seeded:
+            log.info("world_facts: planner declared %d fact(s) at decompose",
+                     seeded)
+    except Exception as _wf_exc:
+        log.debug("planner fact seeding failed (non-critical): %s", _wf_exc)
+    return seeded

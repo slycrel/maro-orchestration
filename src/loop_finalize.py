@@ -333,6 +333,23 @@ def _build_result_and_finalize(
     if ctx.verbose:
         print(f"[maro] {result.summary()}", file=sys.stderr, flush=True)
 
+    # World-facts slice 2: land the run's declared facts (anecdotal →
+    # candidate knowledge nodes, hypotheses → observe_pattern). Before
+    # _finalize_loop so the bridge's LLM extraction pass sees any node the
+    # facts minted and dedups against it instead of re-deriving a near-twin.
+    # Verdict-independent on purpose — a failed run's "archive X is blocked"
+    # is still a fact (land_facts docstring has the full call).
+    try:
+        from world_facts import land_facts
+        _wf_counts = land_facts(
+            ctx.world_facts, loop_id=ctx.loop_id,
+            project=ctx.project or "", dry_run=ctx.dry_run)
+        if _wf_counts["anecdotal"] or _wf_counts["hypotheses"]:
+            log.info("world_facts landed: %d anecdotal, %d hypothesis",
+                     _wf_counts["anecdotal"], _wf_counts["hypotheses"])
+    except Exception as _wf_exc:
+        log.debug("world-facts landing failed (non-critical): %s", _wf_exc)
+
     _finalize_loop(
         loop_id=ctx.loop_id,
         goal=ctx.goal,

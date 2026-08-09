@@ -222,6 +222,24 @@ RECON_FLAVOR_RULES = textwrap.dedent("""\
 """).strip()
 
 
+# World-fact emission (WORLD_FACTS_DESIGN slice 3). Guidance-form on
+# purpose — the planner MAY emit facts, it is never told it must. Gated by
+# `planner.world_facts` (emission only; parse-side detection is
+# unconditional).
+WORLD_FACT_RULES = textwrap.dedent("""\
+    WORLD FACTS — NON-ACTION ENTRIES:
+    If the context provided above already establishes a concrete fact about
+    the terrain this plan crosses (an endpoint known to be blocked, a
+    dataset's known shape, a tool known to be unavailable), you MAY record
+    it as its own array entry prefixed "FACT: ". Facts are observations,
+    not work: they are removed from the plan before execution and shown to
+    every step as already known, so steps don't re-derive them. Never
+    restate a step or its expected outcome as a fact, and never guess — a
+    fact you cannot point to in the provided context does not belong here.
+    Most plans need no FACT entries.
+""").strip()
+
+
 @dataclass
 class Cuts:
     """The narrowing pass drawn before decomposition.
@@ -700,14 +718,34 @@ def build_execution_levels(deps: dict) -> List[List[int]]:
 # JSON step parser
 # ---------------------------------------------------------------------------
 
-def parse_steps(content: str, max_steps: int) -> Optional[List[str]]:
-    """Extract a JSON step list from LLM response content."""
+# World-fact plan items (WORLD_FACTS_DESIGN slice 3): a "FACT: ..." array
+# entry is an observation, never a step. Detected unconditionally at parse
+# (chunk-6 precedent: kill emission, never measurement) so a FACT line can
+# never execute or count against max_steps regardless of any killswitch.
+_FACT_PREFIX_RE = re.compile(r"^FACT\s*:\s*", re.IGNORECASE)
+
+
+def parse_steps(content: str, max_steps: int,
+                facts_out: Optional[List[str]] = None) -> Optional[List[str]]:
+    """Extract a JSON step list from LLM response content.
+
+    FACT:-prefixed entries are plucked before the max_steps truncation —
+    into `facts_out` (exact-text deduped) when the caller collects them,
+    silently otherwise. Either way they are never steps.
+    """
     steps = extract_json(content, list, log_tag="planner.parse_steps")
     if steps and isinstance(steps, list) and all(isinstance(s, str) for s in steps):
         parsed: List[str] = []
         for raw in steps:
             step = raw.strip()
             if not step:
+                continue
+            _fact_m = _FACT_PREFIX_RE.match(step)
+            if _fact_m:
+                _fact_text = step[_fact_m.end():].strip()
+                if (_fact_text and facts_out is not None
+                        and _fact_text not in facts_out):
+                    facts_out.append(_fact_text)
                 continue
             # Drop malformed dependency-only placeholders like "[after:4]":
             # they become empty tasks downstream and can stall autonomous runs.
@@ -827,6 +865,7 @@ def decompose(
     cost_context: str = "",
     thinking_budget: Optional[int] = None,
     allow_cuts: bool = True,
+    facts_out: Optional[List[str]] = None,
 ) -> List[str]:
     """Decompose a goal into steps.
 
@@ -841,6 +880,10 @@ def decompose(
             `planner.cuts_first` config flag). Boundary expansion and milestone
             expansion pass False — a re-decompose inside the loop must not
             draw a second round of cuts.
+        facts_out: Collector for FACT: entries (world-facts slice 3). Every
+            parse lane plucks them unconditionally; callers who pass a list
+            get the deduped texts to seed the run ledger, callers who don't
+            simply lose them (they still never become steps).
     """
     from llm import LLMMessage
 
@@ -878,6 +921,21 @@ def decompose(
         pass
     if _recon_emission_on:
         extras.append(RECON_FLAVOR_RULES)
+
+    # World-fact emission (slice 3) — same killswitch discipline as recon:
+    # `planner.world_facts` gates the TEACHING only; parse_steps detection is
+    # unconditional. The world_facts.enabled master switch silences this
+    # surface too (a disabled ledger must not be fed from the planner side).
+    _fact_emission_on = False
+    try:
+        from config import get as _cfg_get_wf
+        from world_facts import world_facts_enabled as _wf_enabled
+        _fact_emission_on = (bool(_cfg_get_wf("planner.world_facts", True))
+                             and _wf_enabled())
+    except Exception:
+        pass
+    if _fact_emission_on:
+        extras.append(WORLD_FACT_RULES)
 
     # Auto-inject user context if available (capped at 500 chars per file
     # to avoid inflating decomposition token cost). Resolution: workspace
@@ -952,11 +1010,13 @@ def decompose(
         except Exception:
             _cuts_on = False
         if _cuts_on:
-            # RECON_FLAVOR_RULES is excluded: it teaches the decompose
-            # OUTPUT format, which is noise inside the cuts JSON prompt —
-            # _cuts_plan is the lane's single (deterministic) tag emitter.
+            # RECON_FLAVOR_RULES / WORLD_FACT_RULES are excluded: they teach
+            # the decompose OUTPUT format, which is noise inside the cuts
+            # JSON prompt — _cuts_plan is the lane's single (deterministic)
+            # tag emitter.
             cuts = draw_cuts(goal, adapter, context_extras="\n\n".join(
-                x for x in extras if x is not RECON_FLAVOR_RULES))
+                x for x in extras
+                if x is not RECON_FLAVOR_RULES and x is not WORLD_FACT_RULES))
             if cuts is not None and not cuts.is_empty():
                 try:
                     from captains_log import log_event, CUTS_DRAWN
@@ -1036,12 +1096,14 @@ def decompose(
                 _staged_system += "\n\n" + _STEP_CEILING_DIRECTIVE.format(n=_step_ceiling)
             if _recon_emission_on:
                 _staged_system += "\n\n" + RECON_FLAVOR_RULES
+            if _fact_emission_on:
+                _staged_system += "\n\n" + WORLD_FACT_RULES
             resp = adapter.complete(
                 [LLMMessage("system", _staged_system),
                  LLMMessage("user", f"Goal: {goal}\n\nDecompose into 3-5 staged passes.")],
                 **_staged_kwargs,
             )
-            staged = parse_steps(resp.content.strip(), max_steps)
+            staged = parse_steps(resp.content.strip(), max_steps, facts_out)
             if staged:
                 log.info("decompose staged-pass: %d passes for large-scope goal", len(staged))
                 if verbose:
@@ -1063,7 +1125,7 @@ def decompose(
                 no_tools=True,
                 purpose="decompose-narrow",
             )
-            simple_steps = parse_steps(resp.content.strip(), max_steps)
+            simple_steps = parse_steps(resp.content.strip(), max_steps, facts_out)
             if simple_steps:
                 log.info("decompose narrow: single-shot %d steps", len(simple_steps))
                 return _enforce_step_ceiling(simple_steps, _step_ceiling, goal, adapter,
@@ -1081,7 +1143,7 @@ def decompose(
                 no_tools=True,
                 purpose="decompose-candidate",
             )
-            parsed = parse_steps(resp.content.strip(), max_steps)
+            parsed = parse_steps(resp.content.strip(), max_steps, facts_out)
             if parsed:
                 candidates.append(parsed)
 
@@ -1121,7 +1183,7 @@ def decompose(
                 ],
                 **_compose_kwargs,
             )
-            composed = parse_steps(compose_resp.content.strip(), max_steps)
+            composed = parse_steps(compose_resp.content.strip(), max_steps, facts_out)
             if composed:
                 log.info("decompose multi-plan: %d candidates → %d composed steps",
                          len(candidates), len(composed))
@@ -1153,7 +1215,7 @@ def decompose(
             no_tools=True,
             purpose="decompose-single",
         )
-        parsed = parse_steps(resp.content.strip(), max_steps)
+        parsed = parse_steps(resp.content.strip(), max_steps, facts_out)
         if parsed:
             return _enforce_step_ceiling(parsed, _step_ceiling, goal, adapter,
                                          lane="single-plan")

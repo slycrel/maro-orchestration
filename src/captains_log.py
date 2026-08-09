@@ -97,6 +97,10 @@ HYPOTHESIS_PROMOTED = "HYPOTHESIS_PROMOTED"
 # skill-maintenance cadence; context.validation is passed/unjudged/skipped
 # (the SKILL_PROMOTED stamp contract).
 KNOWLEDGE_NODE_PROMOTED = "KNOWLEDGE_NODE_PROMOTED"
+# World-facts slice 2: one event per run whose declared facts reached durable
+# stores (anecdotal → candidate nodes, hypotheses → observe_pattern).
+# Emitted by world_facts.land_facts at loop finalize; context carries counts.
+WORLD_FACTS_LANDED = "WORLD_FACTS_LANDED"
 HYPOTHESIS_CONTRADICTED = "HYPOTHESIS_CONTRADICTED"
 STANDING_RULE_CONTRADICTED = "STANDING_RULE_CONTRADICTED"
 RULE_GRADUATED = "RULE_GRADUATED"

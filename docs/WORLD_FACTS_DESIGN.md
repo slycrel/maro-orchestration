@@ -4,21 +4,58 @@ status: living
 
 # World-Fact Plan Items — Design Sketch
 
-Status: **slice 1 SHIPPED 2026-08-08** (capture + ledger + injection,
-anecdotal-only render; hypothesis kind accepted at capture and
-quarantined per §7.1 — `src/world_facts.py`, completion-tool
+Status: **ALL THREE SLICES SHIPPED** — slice 1 2026-08-08 (capture +
+ledger + injection, anecdotal-only render; hypothesis kind accepted at
+capture and quarantined per §7.1 — `src/world_facts.py`, completion-tool
 `world_facts` channel in step_exec, `LoopContext.world_facts`, checkpoint
-carry + resume restore, `world_facts.enabled` default ON). §7 decisions
-taken by Jeremy 2026-08-06: quarantine mirrors the provenance pattern;
-planner `FACT:` emission stays slice 3; cap sizes are build-time tuning.
-Slices 2 (finalize landing) and 3 (planner emission) remain open.
+carry + resume restore, `world_facts.enabled` default ON); slices 2+3
+2026-08-09. §7 decisions taken by Jeremy 2026-08-06: quarantine mirrors
+the provenance pattern; planner `FACT:` emission stays slice 3; cap
+sizes are build-time tuning.
+
+**Slice 2 (finalize landing, 2026-08-09):** `world_facts.land_facts`,
+called from `_build_result_and_finalize` before `_finalize_loop` (so the
+bridge's own extraction pass dedups against fact-minted nodes).
+Anecdotal → `upsert_knowledge_from_candidate` CANDIDATE nodes (born
+invisible; the V3 promotion sweep IS the generalizability filter — the
+§4 teaching mint stays dormant-design, so the bridge is the landing per
+§2's census). Hypothesis → `observe_pattern` with
+`world_fact:<loop_id>` provenance. Verdict-independent by design (a
+failed run's "archive X is blocked" is still a fact). Caps 5/3 per run,
+strongest (hits) first. Idempotent per run dir via a
+`world_facts_landed` metadata stamp — a demoted-then-resumed run's
+restored ledger must not self-confirm its hypothesis to the
+standing-rule threshold. One `WORLD_FACTS_LANDED` captain's-log event.
+**Watch item:** the confirmation bar is the lane's existing
+RULE_PROMOTE_CONFIRMATIONS=2 — two runs declaring the same pattern
+guess promotes a StandingRule. Pinned deliberately
+(`test_cross_run_redeclaration_confirms_toward_rule`); the
+contradiction check at promotion + refight lane are the backstops. If
+live runs promote junk rules, raise the bar for world_fact-sourced
+hypotheses first.
+
+**Slice 3 (planner emission, 2026-08-09):** decompose (assembled prompt
++ staged lane) teaches `WORLD_FACT_RULES` behind `planner.world_facts`
+(emission only; `parse_steps` detection unconditional — FACT entries
+never execute, never count against max_steps). Facts seed the ledger as
+anecdotal with sticky `source="planner"`: they render as known but
+`land_facts` refuses them — planner facts come FROM injected context,
+and landing them back would launder stored knowledge into fresh
+confidence bumps; a step restating a rendered fact saw it as
+"treat as known" first, so provenance never upgrades. Named residual:
+the loop_execute re-decompose lanes (boundary/milestone/replan) don't
+collect facts_out — FACT lines there are plucked and dropped (safe,
+just unledgered).
+
 Review hardening 2026-08-08: declarations pass the injection_guard scan
-(fail-closed), the kill switch gates render as well as capture, and
-checkpoint restore drops corrupt rows per-row. Named scope limit: the
-checkpoint carry is the sequential lane's — parallel fan-out/DAG paths
-have no checkpoint/resume machinery, so their facts die with the run.
+(fail-closed), the kill switch gates render as well as capture (and now
+landing + planner teaching), and checkpoint restore drops corrupt rows
+per-row. Named scope limit: the checkpoint carry is the sequential
+lane's — parallel fan-out/DAG paths have no checkpoint/resume
+machinery, so their facts die with the run.
 Origin: §4c decision batch, 2026-08-02. Related: RUN_TEACHINGS_DESIGN
-§4c/§5b (terrain), BACKLOG "Planner non-action item types".
+§4c/§5b (terrain), docs/DEFAULTS.md rows `world_facts.enabled` +
+`planner.world_facts`.
 
 ## 1. The ask (verbatim)
 

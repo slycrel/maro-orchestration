@@ -3041,7 +3041,7 @@ def test_continuation_depth_in_ancestry_context(monkeypatch, tmp_path):
 
     def _fake_decompose(goal, adapter, max_steps, verbose=False, lessons_context="",
                         ancestry_context="", skills_context="", cost_context="",
-                        thinking_budget=None):
+                        thinking_budget=None, facts_out=None):
         captured_ancestry["ctx"] = ancestry_context
         return ["single step: do the work"]
 

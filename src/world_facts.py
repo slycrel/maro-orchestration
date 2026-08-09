@@ -47,6 +47,21 @@ MAX_FACTS_PER_STEP = 3
 MAX_RENDERED_FACTS = 10
 MAX_FACT_CHARS = 300
 MAX_EVIDENCE_CHARS = 300
+# Per-run landing caps (slice 2, §7.3 build-time tuning): strongest facts
+# land first; the remainder stays run-scoped (the kept checkpoint is the
+# audit copy — retention decree).
+MAX_LANDED_ANECDOTAL = 5
+MAX_LANDED_HYPOTHESES = 3
+
+
+# Fact provenance (slice 3). "step" = discovered by execution; "planner" =
+# declared at decompose from INJECTED context — i.e. derived from what the
+# stores already said. Provenance is sticky: a step restating a rendered
+# planner fact saw it as "treat as known" first, so the restatement is
+# laundering, not independent corroboration (the portable-learning
+# provenance-stamp lesson). land_facts() skips planner-sourced facts.
+SOURCE_STEP = "step"
+SOURCE_PLANNER = "planner"
 
 
 @dataclass
@@ -58,12 +73,13 @@ class WorldFact:
     first_step: int
     hits: int = 1
     steps: List[int] = field(default_factory=list)
+    source: str = SOURCE_STEP
 
     def to_dict(self) -> Dict[str, Any]:
         return {
             "kind": self.kind, "fact": self.fact, "evidence": self.evidence,
             "first_step": self.first_step, "hits": self.hits,
-            "steps": list(self.steps),
+            "steps": list(self.steps), "source": self.source,
         }
 
 
@@ -92,11 +108,12 @@ class WorldFactLedger:
         return f"{kind}:{' '.join(fact.lower().split())}"
 
     def observe(self, kind: str, fact: str, evidence: str,
-                step_idx: int) -> bool:
+                step_idx: int, *, source: str = SOURCE_STEP) -> bool:
         """Record one declared fact. Returns True if newly ledgered.
 
         First evidence wins, matching terrain's first-reason-wins: the
         original observation is the one later corroborations point back to.
+        Provenance is first-writer-wins and sticky (see SOURCE_* note).
         """
         fact = (fact or "").strip()
         if not fact or kind not in KINDS:
@@ -109,7 +126,9 @@ class WorldFactLedger:
             self.facts[key] = WorldFact(
                 kind=kind, fact=fact[:MAX_FACT_CHARS],
                 evidence=(evidence or "").strip()[:MAX_EVIDENCE_CHARS],
-                first_step=step_idx, steps=[step_idx])
+                first_step=step_idx, steps=[step_idx],
+                source=source if source in (SOURCE_STEP, SOURCE_PLANNER)
+                else SOURCE_STEP)
             return True
         existing.hits += 1
         if step_idx not in existing.steps:
@@ -175,6 +194,7 @@ class WorldFactLedger:
                 # scan (round-2 review).
                 if not _scan_clean(f"{fact}\n{evidence_raw}"):
                     continue
+                _src = row.get("source", SOURCE_STEP)
                 wf = WorldFact(
                     kind=kind, fact=fact[:MAX_FACT_CHARS],
                     evidence=evidence_raw[:MAX_EVIDENCE_CHARS],
@@ -182,11 +202,132 @@ class WorldFactLedger:
                     hits=max(1, int(row.get("hits", 1) or 1)),
                     steps=[int(s) for s in row.get("steps", [])
                            if isinstance(s, (int, float))],
+                    # Unknown provenance restores as "step" — pre-slice-3
+                    # checkpoints have no source key and all their facts
+                    # were step-declared.
+                    source=_src if _src in (SOURCE_STEP, SOURCE_PLANNER)
+                    else SOURCE_STEP,
                 )
                 ledger.facts[cls._key(kind, wf.fact)] = wf
             except Exception:
                 continue
         return ledger
+
+
+def land_facts(ledger: Optional["WorldFactLedger"], *, loop_id: str,
+               project: str = "", dry_run: bool = False) -> Dict[str, int]:
+    """Slice-2 landing: route the run's facts into durable stores at finalize.
+
+    Split by kind, no new lifecycle (WORLD_FACTS_DESIGN §3c):
+    - **anecdotal** → knowledge-web CANDIDATE nodes via the existing bridge
+      upsert. Born invisible; the V3 promotion sweep (re-observation, or
+      age+content with a judged-valid verdict) is the generalizability
+      filter — a run-specific fact that never re-observes stays candidate
+      and never reaches an injection surface.
+    - **hypothesis** → ``observe_pattern()``: minted as Hypothesis, earns
+      StandingRule status only through cross-run re-declaration, dies
+      quietly if never confirmed. Pattern-guesses get confirmation
+      machinery, not belief.
+
+    Landing is verdict-independent by design: "archive X is blocked" is
+    exactly the kind of fact a FAILED run discovers, so this runs at
+    finalize, not behind the deferred-learning verdict gate.
+
+    Idempotent per (run dir, loop_id): a run demoted done→incomplete and
+    resumed re-enters finalize with the same restored ledger — without the
+    metadata stamp its hypotheses would confirm THEMSELVES to the standing-
+    rule threshold (RULE_PROMOTE_CONFIRMATIONS=2). Known cost: facts
+    declared only in the resumed portion of such a run skip landing too.
+
+    Never raises; every store write is per-fact best-effort. Returns counts
+    for logging/tests.
+    """
+    counts = {"anecdotal": 0, "hypotheses": 0}
+    if ledger is None or not ledger.facts or dry_run:
+        return counts
+    if not world_facts_enabled():
+        # Kill switch gates landing like it gates capture and render
+        # (2026-08-08 review: the switch must silence every surface).
+        return counts
+
+    already_landed = False
+    try:
+        import json as _json
+        from runs import current_run_dir
+        _rd = current_run_dir()
+        if _rd is not None:
+            _meta = _json.loads(
+                (_rd / "metadata.json").read_text(encoding="utf-8"))
+            already_landed = _meta.get("world_facts_landed") == loop_id
+    except Exception:
+        pass  # unreadable metadata → land (fail-open; stamp below re-arms)
+    if already_landed:
+        return counts
+
+    def _strength(f: "WorldFact"):
+        # Re-observed-this-run first, then earliest-seen.
+        return (-f.hits, f.first_step)
+
+    def _landable(kind_rows: List["WorldFact"]) -> List["WorldFact"]:
+        # Planner-declared facts came FROM injected context — landing them
+        # would launder what the stores already say into fresh confidence
+        # bumps/confirmations (see SOURCE_* note). Execution-discovered only.
+        return [f for f in kind_rows if f.source != SOURCE_PLANNER]
+
+    sources = [f"loop:{loop_id}"] if loop_id else []
+
+    for f in sorted(_landable(ledger.anecdotal()),
+                    key=_strength)[:MAX_LANDED_ANECDOTAL]:
+        try:
+            from knowledge_bridge import upsert_knowledge_from_candidate
+            from knowledge_web import load_knowledge_nodes
+            desc = f.fact
+            if f.evidence:
+                desc += f" Evidence: {f.evidence}"
+            desc += (f" (declared during run {loop_id or '?'}, "
+                     f"step {f.first_step}, {f.hits}×)")
+            _node, _is_new = upsert_knowledge_from_candidate(
+                title=f.fact[:100],
+                description=desc,
+                node_type="insight",
+                domain=project or "orchestration",
+                sources=sources,
+                existing_nodes=load_knowledge_nodes(status=None),
+            )
+            counts["anecdotal"] += 1
+        except Exception:
+            continue
+
+    for f in sorted(_landable(ledger.hypotheses()),
+                    key=_strength)[:MAX_LANDED_HYPOTHESES]:
+        try:
+            from knowledge_lens import observe_pattern
+            observe_pattern(
+                f.fact, project or "",
+                source_lesson_id=f"world_fact:{loop_id}" if loop_id else "")
+            counts["hypotheses"] += 1
+        except Exception:
+            continue
+
+    try:
+        from runs import stamp_run_metadata
+        stamp_run_metadata({"world_facts_landed": loop_id})
+    except Exception:
+        pass
+    if counts["anecdotal"] or counts["hypotheses"]:
+        try:
+            from captains_log import log_event, WORLD_FACTS_LANDED
+            log_event(
+                event_type=WORLD_FACTS_LANDED,
+                subject=loop_id or "unknown-loop",
+                summary=(f"Landed {counts['anecdotal']} anecdotal fact(s) as "
+                         f"candidate nodes, {counts['hypotheses']} "
+                         f"hypothesis(es) into observe_pattern"),
+                context={"loop_id": loop_id, "project": project, **counts},
+            )
+        except Exception:
+            pass
+    return counts
 
 
 def clean_declared(raw: Any) -> List[Dict[str, str]]:

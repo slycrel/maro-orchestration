@@ -6679,3 +6679,21 @@ under the same two-measurement standard).
   seven lexical provenance patches in one weekend: the typed claim
   boundary fed by tool-event evidence (BACKLOG) is the real fix —
   scope before building.
+- **2026-08-09** — World-facts slices 2+3 SHIPPED (arc complete; slice 1
+  was stretch chunk 6). Slice 2: `land_facts` at finalize — anecdotal →
+  knowledge-bridge CANDIDATE nodes (V3 promotion = the generalizability
+  filter), hypothesis → `observe_pattern` with `world_fact:<loop_id>`
+  provenance; verdict-independent, capped 5/3, idempotent per run dir
+  (a demoted-then-resumed run must not self-confirm its own hypothesis
+  to the RULE_PROMOTE_CONFIRMATIONS=2 threshold). Watch item: that
+  2-confirmation bar now also gates raw pattern guesses — pinned;
+  raise it for world_fact-sourced hypotheses if live runs promote junk.
+  Slice 3: `FACT:` planner emission behind `planner.world_facts`
+  (teaching only; parse detection unconditional). Provenance call made
+  without a decree on point, flagged for Jeremy's read: planner-seeded
+  facts carry sticky `source="planner"` and NEVER land back into
+  stores — they derive from injected context, and landing them would
+  launder stored knowledge into fresh confidence bumps (extension of
+  the portable-learning provenance-stamp lesson; a step restating a
+  rendered fact doesn't upgrade it either). Design doc + DEFAULTS rows
+  updated; BACKLOG item moved to DONE; 47 pins.
