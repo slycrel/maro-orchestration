@@ -5768,6 +5768,24 @@ class TestGoalLaneClaimResolution:
         assert _resolve_exact("/**/report-*.json", _output_provenance_bases()) == []
         assert time.time() - started < 5.0, "root-anchored pattern was walked, not refused"
 
+    def test_remote_and_transient_goal_outputs_are_not_local_claims(self, monkeypatch, tmp_path):
+        """`Export the report to s3://acme/final.json` is not a missing file.
+
+        The GOAL lane was the only one without the remote/transient filters the
+        INPUT and RESULT lanes already had, so a run that wrote exactly where it
+        was asked was demoted for it.
+        """
+        from provenance import _provenance_missing
+        self._ws(monkeypatch, tmp_path)
+        for goal in (
+            "Export the report to s3://acme-bucket/reports/final.json",
+            "Save the summary to https://example.com/v1/report.json",
+            "Save the scratch copy to /tmp/run-9/report.json",
+        ):
+            assert not _provenance_missing(goal), goal
+        # and a genuinely local missing output is still caught
+        assert _provenance_missing("Save the summary to artifacts/nope.json")
+
     def test_bounded_absolute_template_still_resolves(self, monkeypatch, tmp_path):
         """The refusal above must not cost real absolute claims their check."""
         from provenance import _resolve_exact, _output_provenance_bases

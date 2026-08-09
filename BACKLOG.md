@@ -2008,12 +2008,26 @@ inspectable before any behavior changes.
   4. `READ_ONLY_PROBES` in `tests/test_fresh_workspace.py` is hand-maintained,
      so a newly added store-reading subcommand gets no probe until someone
      remembers. Deriving it from CLI command metadata is the durable fix.
-  **The pattern worth naming:** three separate fixes have now each added a
-  narrower lexical test (prose slash → glob → template → hostname). A fourth
-  costume is predictable. The structural answer is a typed claim boundary that
-  distinguishes *a path this run says it wrote* from *a string that happens to
-  look like one* at extraction time — probably by carrying tool-event evidence
-  rather than re-deriving intent from prose. Scope before building.
+  **Round 3 (fresh codex, whole changeset) added two more, both LEFT OPEN
+  because they widen acceptance rather than demote — the cheap side:**
+  5. GOAL/INPUT existence is existential with no cardinality or freshness:
+     `Create artifacts/part-{1..9}.json` is satisfied by ONE day-old
+     `projects/unrelated-old-run/artifacts/part-1.json`, because
+     `_resolve_exact` searches every project and the goal lane has no
+     freshness defence (RESULT does). A **directory** named `report-1.json`
+     satisfies it too.
+  6. Cross-lane semantics are still shared by convention, not by type. Round 2
+     unified dir-qualified claims and missed the bare lane; round 3 unified
+     the bare lane. A fourth lane split is likelier than not.
+  **The pattern worth naming, now with three rounds of evidence:** every fix
+  so far has added a narrower lexical test (prose slash → glob → template →
+  hostname → bracket-literal) and each landed against ONE lane while the
+  others silently kept the defect. The structural answer is a typed claim
+  boundary that distinguishes *a path this run says it wrote* from *a string
+  that happens to look like one*, decided once at extraction and carrying
+  lane-specific acceptance policy (freshness, cardinality) as data — probably
+  fed by tool-event evidence rather than re-derived from prose. Scope before
+  building; this is the third arc's worth of patches saying the same thing.
 
 - [ ] **`_OUTPUT_CLAIM_RE` misses the irregular past tense "wrote"**
   (found 2026-08-08 while pinning the template-placeholder guard;

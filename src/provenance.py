@@ -171,10 +171,24 @@ def _normalize_template(tok: str) -> str:
 
 
 def _claimed_output_paths(goal: str) -> List[str]:
-    """Dir-qualified output paths the goal asks to be written (user said *where*)."""
+    """Dir-qualified output paths the goal asks to be written (user said *where*).
+
+    Remote and transient destinations are skipped, matching the INPUT and
+    RESULT lanes. The GOAL lane was the only one without these filters
+    (round-3 review): `Export the report to s3://acme/reports/final.json` was
+    looked up as a LOCAL file, found missing, and deterministically demoted —
+    a delivered run failed for writing exactly where it was asked to. Same
+    reasoning the module already applies elsewhere: a destination we cannot
+    check locally is unverifiable, not absent.
+    """
     out: List[str] = []
     for m in _OUTPUT_CLAIM_RE.finditer(goal or ""):
         tok = _clean_path_token(m.group("path"))
+        low = tok.lower()
+        if low.startswith(_REMOTE_PREFIXES):
+            continue
+        if any(seg in low for seg in _TRANSIENT_SEGMENTS):
+            continue
         if ("/" in tok and tok not in ("/", "./", "../")
                 and not tok.endswith("/") and _path_shaped(tok)
                 and not _unverifiable_pattern(tok)):
