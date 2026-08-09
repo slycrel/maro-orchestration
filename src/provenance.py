@@ -65,8 +65,10 @@ _TRANSIENT_SEGMENTS = ("/tmp/", "scratchpad", "/dev/", "/proc/", "/var/tmp/")
 # been checked as a literal and still falsely demoted.
 _TEMPLATE_MARKERS = re.compile(
     r"\{[^}/]*\}"                 # {N}, {project_dir}
-    r"|\$\{\w+\}"                 # ${VAR}
-    r"|\$\w+"                     # $VAR
+    r"|\$\{[A-Za-z_]\w*\}"        # ${VAR}
+    r"|\$[A-Za-z_]\w*"            # $VAR — must start with a letter/underscore,
+                                  # so a literal price like "report-$100.txt"
+                                  # is NOT retyped as a pattern (round-3 review)
     r"|<[^>/]+>"                  # <run_dir>
     r"|%\(\w+\)[sd]"              # %(step)d
     r"|%\d+\$[sd]"                # %1$s
@@ -86,6 +88,17 @@ _TEMPLATE_MARKERS = re.compile(
 # api.host.tld shape keeps single-label filenames verifiable and needs no
 # table to maintain.
 _HOSTNAME_RE = re.compile(r"^(?:[A-Za-z0-9-]+\.){2,}[A-Za-z]{2,}$")
+
+# ...unless the last label is plainly a FILE extension. Multi-label shape alone
+# amnestied ordinary artifacts — `release.notes.md`, `archive.tar.gz` (round-3
+# review) — which is a missed fabrication rather than a false demotion, but a
+# free one to close. A real host does not end in `.md`.
+_FILE_EXTENSION_LABELS = frozenset({
+    "md", "txt", "json", "jsonl", "yml", "yaml", "csv", "tsv", "log", "xml",
+    "html", "htm", "toml", "ini", "cfg", "conf", "pdf", "png", "jpg", "jpeg",
+    "gif", "svg", "gz", "tar", "zip", "bz2", "xz", "py", "js", "ts", "sh",
+    "rb", "go", "rs", "java", "c", "h", "cpp", "sql", "db", "sqlite", "lock",
+})
 
 # Marks a spot _normalize_template substituted, so it can distinguish its own
 # wildcards from ones the claim already carried. NUL is not legal in a path.
@@ -134,7 +147,10 @@ def _unverifiable_pattern(tok: str) -> bool:
     now RESOLVED as the patterns they are (see `_normalize_template`), which
     fixes the false demotion without buying off the true positive.
     """
-    return bool(_HOSTNAME_RE.match(tok.split("/", 1)[0]))
+    first = tok.split("/", 1)[0]
+    if not _HOSTNAME_RE.match(first):
+        return False
+    return first.rsplit(".", 1)[-1].lower() not in _FILE_EXTENSION_LABELS
 
 
 def _normalize_template(tok: str) -> str:
@@ -283,16 +299,16 @@ def _exists_at_exact(rel: str, bases: List[Path]) -> bool:
     """
     p = Path(rel).expanduser()          # `~/` is admitted by _path_shaped
     if p.is_absolute():
-        if p.exists():
+        if p.is_file():
             return True
     else:
-        if any((b / rel).exists() for b in bases):
+        if any((b / rel).is_file() for b in bases):
             return True
         try:
             from config import workspace_root
             ws_projects = Path(workspace_root()) / "projects"
             if ws_projects.is_dir() and any(
-                (d / rel).exists() for d in ws_projects.glob("*") if d.is_dir()
+                (d / rel).is_file() for d in ws_projects.glob("*") if d.is_dir()
             ):
                 return True
         except Exception:
@@ -331,11 +347,11 @@ def _exists_bare_anywhere(name: str, bases: List[Path]) -> bool:
     was still demoted with a real `report-1.json` on disk, while the identical
     RESULT prose resolved. All three round-3 lenses reproduced it.
     """
-    if any((b / name).exists() for b in bases):
+    if any((b / name).is_file() for b in bases):
         return True
     for d in _bare_search_dirs():
         try:
-            if (d / name).exists():
+            if (d / name).is_file():
                 return True
             if any(d.glob(f"*/{name}")) or any(d.glob(f"*/*/{name}")):
                 return True
@@ -468,16 +484,16 @@ def _resolve_exact(rel: str, bases: List[Path]) -> List[Path]:
             try:
                 if rest and anchor.is_dir():
                     ghits.extend(
-                        x for x in anchor.glob(str(Path(*rest))) if x.exists()
+                        x for x in anchor.glob(str(Path(*rest))) if x.is_file()
                     )
-                elif not rest and anchor.exists():
+                elif not rest and anchor.is_file():
                     ghits.append(anchor)
             except (OSError, ValueError, NotImplementedError, IndexError):
                 pass
             return ghits
         for b in bases:
             try:
-                ghits.extend(x for x in b.glob(rel) if x.exists())
+                ghits.extend(x for x in b.glob(rel) if x.is_file())
             except (OSError, ValueError):
                 pass
         try:
@@ -487,7 +503,7 @@ def _resolve_exact(rel: str, bases: List[Path]) -> List[Path]:
                 for d in ws_projects.glob("*"):
                     if d.is_dir():
                         try:
-                            ghits.extend(x for x in d.glob(rel) if x.exists())
+                            ghits.extend(x for x in d.glob(rel) if x.is_file())
                         except (OSError, ValueError):
                             pass
         except Exception:
@@ -496,17 +512,17 @@ def _resolve_exact(rel: str, bases: List[Path]) -> List[Path]:
 
     p = Path(rel)
     if p.is_absolute():
-        return [p] if p.exists() else []
+        return [p] if p.is_file() else []
     hits: List[Path] = []
     for b in bases:
-        if (b / rel).exists():
+        if (b / rel).is_file():
             hits.append(b / rel)
     try:
         from config import workspace_root
         ws_projects = Path(workspace_root()) / "projects"
         if ws_projects.is_dir():
             for d in ws_projects.glob("*"):
-                if d.is_dir() and (d / rel).exists():
+                if d.is_dir() and (d / rel).is_file():
                     hits.append(d / rel)
     except Exception:
         pass
@@ -522,16 +538,16 @@ def _resolve_bare(name: str, bases: List[Path]) -> List[Path]:
         name = _normalize_template(name)
     hits: List[Path] = []
     for b in bases:
-        if (b / name).exists():
+        if (b / name).is_file():
             hits.append(b / name)
         if any(ch in name for ch in "*?["):
             try:
-                hits.extend(x for x in b.glob(name) if x.exists())
+                hits.extend(x for x in b.glob(name) if x.is_file())
             except (OSError, ValueError):
                 pass
     for d in _bare_search_dirs():
         try:
-            if (d / name).exists():
+            if (d / name).is_file():
                 hits.append(d / name)
             hits.extend(d.glob(f"*/{name}"))
             hits.extend(d.glob(f"*/*/{name}"))

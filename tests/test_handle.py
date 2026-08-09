@@ -5786,6 +5786,42 @@ class TestGoalLaneClaimResolution:
         # and a genuinely local missing output is still caught
         assert _provenance_missing("Save the summary to artifacts/nope.json")
 
+    def test_a_directory_does_not_satisfy_a_file_claim(self, monkeypatch, tmp_path):
+        """`mkdir report-1.json` must not count as having written it.
+
+        Every resolver tested `.exists()`, which a directory passes — so a run
+        could satisfy an output claim by creating a folder of that name.
+        """
+        from provenance import _provenance_missing
+        proj = self._ws(monkeypatch, tmp_path)
+        (proj / "report-1.json").mkdir()
+        assert _provenance_missing("Save the output to artifacts/report-1.json")
+
+    def test_multi_dot_filenames_are_not_read_as_hostnames(self, monkeypatch, tmp_path):
+        """`release.notes.md` and `archive.tar.gz` are files, not authorities.
+
+        Multi-label shape alone amnestied them; the last label decides.
+        """
+        from provenance import _provenance_missing, _unverifiable_pattern
+        self._ws(monkeypatch, tmp_path)
+        for name in ("release.notes.md", "archive.tar.gz", "a.b.jsonl"):
+            assert not _unverifiable_pattern(name), name
+            assert _provenance_missing(f"Save the summary to {name}"), name
+        # a real multi-label host is still skipped
+        assert _unverifiable_pattern("api.anthropic.com")
+        assert not _provenance_missing("Export the data to api.anthropic.com")
+
+    def test_a_literal_dollar_amount_is_not_a_variable(self, monkeypatch, tmp_path):
+        """`report-$100.txt` is a legal filename; `$VAR` starts with a letter.
+
+        The marker regex used `\\$\\w+`, so `$100` was retyped as a placeholder
+        and the claim could be satisfied by any `report-*.txt` sibling.
+        """
+        from provenance import _provenance_missing
+        proj = self._ws(monkeypatch, tmp_path)
+        (proj / "report-decoy.txt").write_text("x", encoding="utf-8")
+        assert _provenance_missing("Save the invoice to artifacts/report-$100.txt")
+
     def test_bounded_absolute_template_still_resolves(self, monkeypatch, tmp_path):
         """The refusal above must not cost real absolute claims their check."""
         from provenance import _resolve_exact, _output_provenance_bases
