@@ -5691,6 +5691,95 @@ class TestTemplatePlaceholderProvenance:
 
 
 
+class TestGoalLaneClaimResolution:
+    """Round-3 adversarial review: the GOAL and INPUT lanes were unpinned.
+
+    Rounds 1-2 only ever exercised RESULT claims, so every fix landed against
+    one lane and the reviewers reproduced the same defects in the others. These
+    pin the decisive lanes — the ones `handle.py` turns into
+    goal_achieved=False / stop_verdict=lost-the-plot.
+    """
+
+    def _ws(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        proj = tmp_path / "projects" / "p" / "artifacts"
+        (proj / "a" / "b").mkdir(parents=True)
+        return proj
+
+    def test_bare_goal_template_resolves(self, monkeypatch, tmp_path):
+        """`Save the output as report-{N}.json` with a real report-1.json.
+
+        The round-2 "one resolver" fix unified only dir-qualified claims; the
+        bare lane kept a literal-only path and still demoted honest runs.
+        """
+        from provenance import _provenance_missing
+        proj = self._ws(monkeypatch, tmp_path)
+        (proj / "report-1.json").write_text("{}", encoding="utf-8")
+        assert not _provenance_missing("Save the output as report-{N}.json")
+
+    def test_literal_bracket_path_is_not_read_as_a_glob(self, monkeypatch, tmp_path):
+        """`[` is legal in a filename. Round 2 delegated unconditionally to the
+        pattern resolver, which treats any `[` as glob syntax — so a real
+        artifacts/report[final].md was reported missing. Literal comes first."""
+        from provenance import _provenance_missing
+        proj = self._ws(monkeypatch, tmp_path)
+        (proj / "report[final].md").write_text("x", encoding="utf-8")
+        assert not _provenance_missing(
+            "Create the report at artifacts/report[final].md")
+
+    def test_caller_authored_globs_survive_normalization(self, monkeypatch, tmp_path):
+        """Normalization must not rewrite glob structure the claim already had.
+
+        `artifacts/**/deep-{a}{b}.json` used to collapse into `deep-**.json`
+        (Path.glob raises ValueError -> zero hits -> honest run demoted), and a
+        leading caller-written `*/` was deleted outright.
+        """
+        from provenance import _provenance_missing, _normalize_template
+        proj = self._ws(monkeypatch, tmp_path)
+        (proj / "a" / "b" / "deep-12.json").write_text("{}", encoding="utf-8")
+        assert not _provenance_missing("Save to artifacts/**/deep-{N}.json")
+        assert not _provenance_missing("Save to artifacts/**/deep-{a}{b}.json")
+        # a leading "*/" is the CALLER's, not a root placeholder
+        assert _normalize_template("*/artifacts/out-{N}.json") == "*/artifacts/out-*.json"
+        # a leading whole-segment placeholder IS a root anchor
+        assert _normalize_template("{project_dir}/artifacts/out-{N}.json") == "artifacts/out-*.json"
+
+    def test_home_anchored_paths_are_expanded(self, monkeypatch, tmp_path):
+        """`_path_shaped` admits `~/` as strong path evidence, so resolution
+        has to expand it — otherwise it looks for a literal `~` directory and
+        falsely demotes an ordinary anchored input."""
+        from provenance import _provenance_missing
+        self._ws(monkeypatch, tmp_path)
+        home = tmp_path / "home"
+        (home / "data").mkdir(parents=True)
+        (home / "data" / "input.csv").write_text("x", encoding="utf-8")
+        monkeypatch.setenv("HOME", str(home))
+        assert not _provenance_missing("Read ~/data/input.csv and summarize it")
+
+    def test_root_anchored_recursive_pattern_is_refused_not_walked(self, monkeypatch, tmp_path):
+        """A claim whose only wildcard-free prefix is `/` cannot bound its own
+        scan. Measured at 61.9s walking the real filesystem inside a
+        synchronous verdict path; refusing costs one unverified claim, which is
+        this module's cheap error."""
+        import time
+        from provenance import _resolve_exact, _output_provenance_bases
+        self._ws(monkeypatch, tmp_path)
+        started = time.time()
+        assert _resolve_exact("/**/report-*.json", _output_provenance_bases()) == []
+        assert time.time() - started < 5.0, "root-anchored pattern was walked, not refused"
+
+    def test_bounded_absolute_template_still_resolves(self, monkeypatch, tmp_path):
+        """The refusal above must not cost real absolute claims their check."""
+        from provenance import _resolve_exact, _output_provenance_bases
+        self._ws(monkeypatch, tmp_path)
+        target = tmp_path / "abs" / "sub"
+        target.mkdir(parents=True)
+        (target / "report-3.json").write_text("{}", encoding="utf-8")
+        hits = _resolve_exact(
+            f"{tmp_path}/abs/**/report-{{N}}.json", _output_provenance_bases())
+        assert len(hits) == 1, hits
+
+
 class TestNowVerifyPayloadTruncation:
     """The last unmarked judge window (2026-08-03).
 

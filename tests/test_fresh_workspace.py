@@ -68,12 +68,17 @@ _STORAGE_ENV_ALIASES = (
 # argv VECTORS, not bare command names. Bare `skills` only prints a usage hint —
 # it never opens a store, so pinning it would have been a check that could not
 # fail. Adversarial review caught that; `--list` and `--status` are the readers.
+#
+# `opstatus` was REMOVED from this list (round-3 review, 3/3): its handler calls
+# write_operator_status(), which creates output/operator-status.json and the
+# surrounding tree. A writer in a read-only matrix can MANUFACTURE the state
+# whose absence the probe is supposed to exercise, so it proved nothing here.
+# Initialization-on-first-use deserves its own test, asserting the writes.
 READ_ONLY_PROBES = [
     ("skill-stats", ["skill-stats"]),
     ("skills --list", ["skills", "--list"]),
     ("skills --status", ["skills", "--status"]),
     ("memory", ["memory"]),
-    ("opstatus", ["opstatus"]),
     ("metrics", ["metrics"]),
     ("attribution", ["attribution"]),
     ("map", ["map"]),

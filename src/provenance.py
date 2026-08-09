@@ -87,6 +87,10 @@ _TEMPLATE_MARKERS = re.compile(
 # table to maintain.
 _HOSTNAME_RE = re.compile(r"^(?:[A-Za-z0-9-]+\.){2,}[A-Za-z]{2,}$")
 
+# Marks a spot _normalize_template substituted, so it can distinguish its own
+# wildcards from ones the claim already carried. NUL is not legal in a path.
+_TEMPLATE_SENTINEL = "\x00"
+
 
 def _clean_path_token(tok: str) -> str:
     return tok.strip().strip("`'\"()").rstrip(".,;:")
@@ -145,18 +149,25 @@ def _normalize_template(tok: str) -> str:
     `$RUN_DIR/…`) is a root anchor, not a path component: every provenance base
     and every workspace project dir already *is* that root, so it is dropped
     rather than turned into a `*` that would push the match one level too deep.
+
+    Substitutions are tracked with a sentinel rather than written straight to
+    `*`, so this can tell ITS OWN stars from ones the claim already carried.
+    Round-2 used a whole-string `"**" not in tok` heuristic and round 3 showed
+    it fails both ways: `artifacts/**/r-{a}{b}.json` collapsed into the invalid
+    `r-**.json` (Path.glob raises ValueError -> zero hits -> honest run
+    demoted), and `*/artifacts/out-{N}.json` lost a leading `*` the CALLER
+    wrote. Only sentinel-derived stars are collapsed or dropped.
     """
-    globbed = _TEMPLATE_MARKERS.sub("*", tok)
-    # Collapse runs produced by ADJACENT markers ("{a}{b}" -> "**"), but never
-    # rewrite a recursive glob the claim already carried: "artifacts/**/step-{N}
-    # .json" must stay recursive or a real artifacts/a/b/step-1.json stops
-    # matching and an honest run is demoted (round-2 review).
-    if "**" not in tok:
-        globbed = re.sub(r"\*{2,}", "*", globbed)
-    parts = globbed.split("/")
-    while len(parts) > 1 and parts[0] == "*":
+    subbed = _TEMPLATE_MARKERS.sub(_TEMPLATE_SENTINEL, tok)
+    # Adjacent markers ("{a}{b}") are one wildcard, not two.
+    subbed = re.sub(f"{_TEMPLATE_SENTINEL}{{2,}}", _TEMPLATE_SENTINEL, subbed)
+    parts = subbed.split("/")
+    # A leading segment that is ENTIRELY placeholder ({project_dir}/, $RUN_DIR/)
+    # is a root anchor: every provenance base and project dir already is that
+    # root. A caller-authored "*/" segment is NOT one and must survive.
+    while len(parts) > 1 and parts[0] == _TEMPLATE_SENTINEL:
         parts.pop(0)
-    return "/".join(parts)
+    return "/".join(parts).replace(_TEMPLATE_SENTINEL, "*")
 
 
 def _claimed_output_paths(goal: str) -> List[str]:
@@ -245,8 +256,36 @@ def _exists_at_exact(rel: str, bases: List[Path]) -> bool:
     not lost: `_resolve_exact` already walks `workspace/projects/<slug>/` in
     both its glob and literal branches, so keeping a second copy here was dead
     code the moment it started delegating.
+
+    LITERAL FIRST, pattern only as a fallback. Round 2 delegated
+    unconditionally and round 3 showed that imports the RESULT lane's
+    semantics wholesale into lanes that cannot defend them: a real
+    `artifacts/report[final].md` was reported missing because `[` reads as
+    glob syntax, and GOAL/INPUT gained the exhaustive every-base-every-project
+    walk that RESULT only needs for freshness comparison. Trying the literal
+    path first keeps bracket filenames and `~/` working, keeps the common case
+    to a handful of stats, and reaches the pattern resolver only for claims
+    that actually carry template or glob syntax.
     """
-    return bool(_resolve_exact(rel, bases))
+    p = Path(rel).expanduser()          # `~/` is admitted by _path_shaped
+    if p.is_absolute():
+        if p.exists():
+            return True
+    else:
+        if any((b / rel).exists() for b in bases):
+            return True
+        try:
+            from config import workspace_root
+            ws_projects = Path(workspace_root()) / "projects"
+            if ws_projects.is_dir() and any(
+                (d / rel).exists() for d in ws_projects.glob("*") if d.is_dir()
+            ):
+                return True
+        except Exception:
+            pass
+    if _TEMPLATE_MARKERS.search(rel) or any(ch in rel for ch in "*?["):
+        return bool(_resolve_exact(rel, bases))
+    return False
 
 
 def _bare_search_dirs() -> List[Path]:
@@ -270,7 +309,14 @@ def _bare_search_dirs() -> List[Path]:
 
 def _exists_bare_anywhere(name: str, bases: List[Path]) -> bool:
     """True if a bare basename exists under any base (direct) or any landing
-    spot (one or two levels deep — where run/project/output files land)."""
+    spot (one or two levels deep — where run/project/output files land).
+
+    Literal first, then template — the BARE twin of `_exists_at_exact`. Round 2
+    unified only the dir-qualified lanes, so a bare goal claim
+    (`Save the output as report-{N}.json`) kept taking a literal-only path and
+    was still demoted with a real `report-1.json` on disk, while the identical
+    RESULT prose resolved. All three round-3 lenses reproduced it.
+    """
     if any((b / name).exists() for b in bases):
         return True
     for d in _bare_search_dirs():
@@ -281,6 +327,8 @@ def _exists_bare_anywhere(name: str, bases: List[Path]) -> bool:
                 return True
         except Exception:
             pass
+    if _TEMPLATE_MARKERS.search(name) or any(ch in name for ch in "*?["):
+        return bool(_resolve_bare(name, bases))
     return False
 
 
@@ -383,11 +431,33 @@ def _resolve_exact(rel: str, bases: List[Path]) -> List[Path]:
         # remainder instead.
         _pat = Path(rel)
         if _pat.is_absolute():
+            # Anchor at the longest wildcard-FREE leading run, not at "/".
+            # Round 2 globbed from the filesystem root, so claim prose
+            # containing "/**/report-{N}.json" would synchronously walk every
+            # accessible directory during verdict finalization (round-3 review,
+            # 3/3). If the fixed prefix is not a directory there is nothing to
+            # match anyway, so this costs no recall.
+            lead: List[str] = []
+            for part in _pat.parts:
+                if any(c in part for c in "*?["):
+                    break
+                lead.append(part)
+            # If the only wildcard-free prefix IS the filesystem root, there is
+            # nothing to bound the walk with — "/**/report-*.json" measured at
+            # 61.9s on this box, inside a synchronous verdict path. Refuse it.
+            # An unverified claim is this module's CHEAP error; a minute-long
+            # stall during finalization is not.
+            if len(lead) <= 1:
+                return ghits
+            anchor = Path(*lead)
+            rest = _pat.parts[len(lead):]
             try:
-                anchor = Path(_pat.anchor)
-                ghits.extend(
-                    x for x in anchor.glob(str(_pat.relative_to(anchor))) if x.exists()
-                )
+                if rest and anchor.is_dir():
+                    ghits.extend(
+                        x for x in anchor.glob(str(Path(*rest))) if x.exists()
+                    )
+                elif not rest and anchor.exists():
+                    ghits.append(anchor)
             except (OSError, ValueError, NotImplementedError, IndexError):
                 pass
             return ghits
