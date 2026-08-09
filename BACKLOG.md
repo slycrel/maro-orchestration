@@ -1996,12 +1996,17 @@ inspectable before any behavior changes.
   delivered run, which is why none were fixed under time pressure — but they
   are real and they share one cause: **the module decides "is this a local
   file?" from the shape of a string, with no boundary that actually knows.**
-  1. `_HOSTNAME_RE` requires multi-label host shape, so ordinary multi-dot
-     filenames — `release.notes.md`, `archive.tar.gz` — are read as network
-     authorities and skipped. Conversely two-label `example.com` is still
-     verified as a file.
-  2. `\$\w+` matches `$100`, so a literal `artifacts/literal-$100.txt` is
-     retyped as a glob and can be satisfied by an unrelated sibling.
+  1. ~~`_HOSTNAME_RE` multi-dot filenames read as hostnames~~ **DECIDED
+     2026-08-09, keeping it: accepted cheap cost.** Refining it with a
+     file-extension allowlist was built and REVERTED same day — `.md`, `.sh`,
+     `.rs`, `.py` and `.zip` are all real TLDs, so the allowlist turned
+     `files.example.zip` into a FALSE DEMOTION (expensive) while still missing
+     `styles.min.css`, and it reintroduced the hand-maintained table the regex
+     had just replaced. Reasoning now recorded at the site.
+  2. ~~`\$\w+` matches `$100`~~ **DECIDED 2026-08-09, keeping it.** Narrowing
+     to letters-only was built and REVERTED: `$1` is a valid positional
+     parameter, so an unexpanded `$1/report.json` gets looked up verbatim and
+     false-demotes. Over-satisfying a literal `$100` is the cheap side.
   3. Named-printf claims (`%(step)d`) never become claims at all — the path
      token in `_OUTPUT_CLAIM_RE` stops at `)`. The marker regex covers the
      form for the day the collector widens; today it is uncollected.
