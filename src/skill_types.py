@@ -208,6 +208,18 @@ def skill_to_dict(skill: Skill) -> dict:
     }
 
 
+def normalize_tags(raw: object, cap: Optional[int] = 6) -> List[str]:
+    """One normalizer for every tag boundary (2026-08-08 round-2 review:
+    per-site normalization missed the LLM mint sites, and a string value
+    iterates into character tags that then keyword-match everything).
+    List-only, lowercased, stripped, empties dropped, capped at mint
+    (cap=None for read paths — stored rows aren't re-truncated)."""
+    if not isinstance(raw, list):
+        return []
+    out = [str(t).strip().lower() for t in raw if str(t).strip()]
+    return out if cap is None else out[:cap]
+
+
 def dict_to_skill(d: dict) -> Skill:
     return Skill(
         id=d["id"],
@@ -240,11 +252,7 @@ def dict_to_skill(d: dict) -> Skill:
         # source_loop_ids), and guessing would violate positive-evidence.
         origin=d.get("origin", "") or ("imported" if d.get("imported") else ""),
         domain=d.get("domain", ""),
-        # tags must be a list — a string here would iterate into character
-        # tags (same guard as pack import, 2026-08-08 review).
-        tags=[str(t) for t in (d.get("tags")
-                               if isinstance(d.get("tags"), list) else [])
-              if str(t).strip()],
+        tags=normalize_tags(d.get("tags"), cap=None),
     )
 
 

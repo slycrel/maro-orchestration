@@ -414,7 +414,7 @@ def synthesize_skill(
     """
     log.info("synthesize_skill goal=%r source_loop=%s", goal[:60], source_loop_id)
     try:
-        from skill_types import Skill, compute_skill_hash
+        from skill_types import Skill, compute_skill_hash, normalize_tags
         from skills import save_skill, load_skills
         from llm import LLMMessage
     except ImportError:
@@ -541,7 +541,7 @@ def synthesize_skill(
         circuit_state="closed",
         origin="synthesized",
         domain=str(parsed.get("domain", "")).strip().lower()[:40],
-        tags=[str(t).strip().lower() for t in parsed.get("tags", []) if str(t).strip()][:6],
+        tags=normalize_tags(parsed.get("tags")),
     )
     new_skill.content_hash = compute_skill_hash(new_skill)
 

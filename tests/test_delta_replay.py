@@ -768,6 +768,11 @@ class TestRemintTombstones:
                 "stratum": "reason", "replay_errors": 0}
         assert kw.resolve_remint_watch(re1.lesson_id, dict(base, replay_errors=2)) is False
         assert kw.resolve_remint_watch(re1.lesson_id, dict(base, n_calls=3)) is False
+        # Decisive measurements are the routes' to act on — never a clear
+        # (round-2 review: a disabled route must not launder them).
+        assert kw.resolve_remint_watch(re1.lesson_id, dict(base, delta=-0.2)) is False
+        assert kw.resolve_remint_watch(re1.lesson_id, dict(base, delta=0.5)) is False
+        assert kw.resolve_remint_watch(re1.lesson_id, dict(base, delta=None)) is False
         # A row that isn't under watch can't be "cleared"
         other = record_tiered_lesson("the cache key omitted the model tier",
                                      "agenda", "done", "goal")
@@ -890,6 +895,43 @@ class TestRemintTombstones:
         longs = kw.load_tiered_lessons(tier=kw.MemoryTier.LONG, min_score=0.0)
         live = next(l for l in longs if l.lesson_id == re1.lesson_id)
         assert live.delta_evidence["route"] == "measured"
+
+    def test_remint_pending_disabled_route_never_launders_decisive_delta(self, monkeypatch, tmp_path):
+        """Round-2 review: with the demotion killswitch OFF, the demote
+        route returns False for CONFIG reasons — a decisively negative
+        re-measurement must leave the watch in place, not clear it to
+        route 'measured'."""
+        kw, _ = _demote_and_gc(monkeypatch, tmp_path)
+        from memory import record_tiered_lesson
+        re1 = record_tiered_lesson(REMINT_TEXT, "agenda", "done", "goal")
+
+        def _bump(lessons):
+            for l in lessons:
+                if l.lesson_id == re1.lesson_id:
+                    l.delta_evidence = dict(l.delta_evidence, strikes=3)
+            return lessons
+        kw._mutate_tiered_lessons(kw.MemoryTier.MEDIUM, _bump)
+
+        import runs
+        rd = runs.create_run_dir("hoff", prompt="census", lane="agenda")
+        for i in range(1, 7):
+            _write_call(rd / "build" / "calls", i, "navigator decision",
+                        '{"move": "execute"}')
+        (rd / "run_card.json").write_text(json.dumps({"goal_achieved": True}))
+
+        # Flip the killswitch off AFTER the watch stamp exists
+        monkeypatch.setattr(kw, "effect_demotion_enabled", lambda: False)
+
+        from delta_replay import run_effect_route
+        out = run_effect_route(ScriptedAdapter(REMINT_TEXT), samples=1,
+                               remint_pending=True)
+        row = next(r for r in out["census"] if r["lesson_id"] == re1.lesson_id)
+        assert row["delta"] == -1.0
+        assert row["demoted_by_effect"] is False  # killswitch held it
+        assert row["remint_watch_cleared"] is False  # decisive ≠ neutral
+        rows = kw.load_tiered_lessons(tier=kw.MemoryTier.MEDIUM, min_score=0.0)
+        live = next(l for l in rows if l.lesson_id == re1.lesson_id)
+        assert live.delta_evidence["route"] == "remint-watch"
 
     def test_census_dry_run_never_clears_probation(self, monkeypatch, tmp_path):
         kw, _ = _demote_and_gc(monkeypatch, tmp_path)

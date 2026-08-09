@@ -6064,6 +6064,24 @@ def test_inspector_cadence_corrupt_counter_self_heals(monkeypatch, tmp_path):
     assert state["firings_since_deep"] == 1
 
 
+def test_inspector_cadence_negative_counter_clamps(monkeypatch, tmp_path):
+    """Round-2 review: a negative runs_since_inspect (bad write, manual
+    edit) parsed fine and deferred inspection ~forever — int() is not the
+    only corruption. Negatives clamp to zero, so cadence 3 fires within 3."""
+    import json as _json
+    from inspector import inspector_cadence_tick
+    import inspector as inspector_mod
+    monkeypatch.setattr(
+        inspector_mod, "_cadence_path",
+        lambda: tmp_path / "inspector_cadence.json")
+    (tmp_path / "inspector_cadence.json").write_text(
+        '{"runs_since_inspect": -1000000, "firings_since_deep": -7}')
+    modes = [inspector_cadence_tick(3, deep_every=5) for _ in range(3)]
+    assert "normal" in modes
+    state = _json.loads((tmp_path / "inspector_cadence.json").read_text())
+    assert state["firings_since_deep"] >= 0
+
+
 def test_inspector_cadence_exception_is_nonfatal(monkeypatch, tmp_path):
     import inspector as inspector_mod
     _patch_inspector_cadence(monkeypatch, tmp_path, 1)

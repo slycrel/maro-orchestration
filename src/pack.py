@@ -746,7 +746,7 @@ def _import_skill_records(content: str, *, pack_name: str, label: str, pack_tag:
     """Skill records import with stats moved to imported.claimed_*; local
     counters start fresh (§3 arrival-trust table)."""
     from skills import load_skills, save_skill
-    from skill_types import Skill, compute_skill_hash
+    from skill_types import Skill, compute_skill_hash, normalize_tags
 
     existing = load_skills()
     existing_ids = {s.id for s in existing}
@@ -808,10 +808,7 @@ def _import_skill_records(content: str, *, pack_name: str, label: str, pack_tag:
                 # would otherwise iterate into character tags and feed the
                 # matching corpora unlowered.
                 domain=str(row.get("domain", "")).strip().lower()[:40],
-                tags=[str(t).strip().lower()
-                      for t in (row.get("tags")
-                                if isinstance(row.get("tags"), list) else [])
-                      if str(t).strip()][:6],
+                tags=normalize_tags(row.get("tags")),
             )
             if compute_skill_hash(sk) in existing_hashes:
                 results.append({"id": original_id, "outcome": "skipped_identical"})

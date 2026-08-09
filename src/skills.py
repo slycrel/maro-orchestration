@@ -36,7 +36,7 @@ from llm_parse import extract_json, content_or_empty
 from skill_types import (  # noqa: F401 — re-exported for backward compat
     Skill, SkillStats, SkillTestCase, SkillMutationResult,
     compute_skill_hash, verify_skill_hash,
-    skill_to_dict, dict_to_skill,
+    skill_to_dict, dict_to_skill, normalize_tags,
 )
 
 # Module-level imports for clean test patching
@@ -309,7 +309,7 @@ def extract_skills(outcomes: List[dict], adapter) -> List[Skill]:
                     created_at=now,
                     origin="crystallized",
                     domain=str(rs.get("domain", "")).strip().lower()[:40],
-                    tags=[str(t).strip().lower() for t in rs.get("tags", []) if str(t).strip()][:6],
+                    tags=normalize_tags(rs.get("tags")),
                 )
                 if skill.name and skill.steps_template:
                     save_skill(skill)
@@ -647,7 +647,10 @@ def find_matching_skills(
     """Find skills whose trigger_patterns match the goal.
 
     Match-tier telemetry (2026-08-08 scout-read item): every returned skill
-    carries `match_method` ("router" | "keyword" | "tfidf_fallback") and
+    carries `match_method` ("router" | "keyword" | "tfidf_fallback"; on the
+    router tier each skill keeps its own RouteResult.method, and the
+    record-level telemetry says "mixed" when a degraded batch mixes model
+    and per-skill-fallback results) and
     `match_score` (router success probability / trigger-overlap count /
     TF-IDF cosine) as dynamic attributes, and a caller-supplied `telemetry`
     dict is filled with {method, n_candidates, top_score, scores} — method
@@ -735,12 +738,24 @@ def find_matching_skills(
             # "no match → []" behavior is preserved.
             if route_results and any(r.method == "router" for r in route_results):
                 skill_by_id = {s.id: s for s in skills}
-                routed_pairs = [(skill_by_id[r.skill_id], r.score)
-                                for r in route_results
-                                if r.skill_id in skill_by_id]
-                if routed_pairs:
-                    _note("router", routed_pairs, len(skills))
-                    return [sk for sk, _ in routed_pairs]
+                routed = [(skill_by_id[r.skill_id], r.score, r.method)
+                          for r in route_results
+                          if r.skill_id in skill_by_id]
+                if routed:
+                    # Telemetry method is "router" only when every winner
+                    # actually came from the model — a mixed batch (one
+                    # candidate's inference failed → per-skill keyword
+                    # fallback) reports "mixed", and each skill keeps its
+                    # own RouteResult.method (round-2 review: stamping all
+                    # winners "router" recorded false provenance exactly in
+                    # the degraded cases).
+                    _pairs = [(sk, sc) for sk, sc, _ in routed]
+                    _methods = {m for _, _, m in routed}
+                    _note("router" if _methods == {"router"} else "mixed",
+                          _pairs, len(skills))
+                    for sk, _sc, m in routed:
+                        sk.match_method = m
+                    return [sk for sk, _, _ in routed]
         except Exception:
             pass  # fall through to keyword matching
 

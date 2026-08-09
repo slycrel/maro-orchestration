@@ -934,9 +934,29 @@ def resolve_remint_watch(lesson_id: str, delta_evidence: Dict[str, Any]) -> bool
         from config import get as _cfg_get
         min_calls = int(_cfg_get("knowledge.effect_promotion_min_calls",
                                  EFFECT_PROMOTE_MIN_CALLS))
+        promote_min = float(_cfg_get("knowledge.effect_promotion_min_delta",
+                                     EFFECT_PROMOTE_MIN_DELTA))
+        demote_max = float(_cfg_get("knowledge.effect_demotion_max_delta",
+                                    EFFECT_DEMOTE_MAX_DELTA))
     except Exception:
         min_calls = EFFECT_PROMOTE_MIN_CALLS
+        promote_min = EFFECT_PROMOTE_MIN_DELTA
+        demote_max = EFFECT_DEMOTE_MAX_DELTA
     if int(ev.get("n_calls") or 0) < min_calls:
+        return False
+    # Neutral-band check (2026-08-08 round-2 review): a probation may only
+    # end on a measurement that genuinely cleared neither bar. Without
+    # this, a route disabled by killswitch (or blocked by its own spread/
+    # stratum guards) returns False for CONFIG reasons and the decisive
+    # measurement was laundered into route "measured". Route eligibility
+    # is the bars'; route application is the flags' — clearing keys on
+    # the bars alone.
+    delta = ev.get("delta")
+    if not isinstance(delta, (int, float)):
+        return False
+    if delta <= demote_max or delta >= promote_min:
+        log.info("resolve_remint_watch: %s Δ=%.3f is decisive, not neutral "
+                 "— watch stays until a route acts on it", lesson_id, delta)
         return False
 
     cleared: Dict[str, TieredLesson] = {}
@@ -2490,16 +2510,26 @@ def _validate_node_for_promotion(d: Dict[str, Any], adapter: Any) -> Dict[str, A
             # Strict verdict parse (2026-08-08 adversarial review): the LLM
             # boundary returns untyped JSON, and bool("false") is True — a
             # malformed negative would have promoted through the fail-closed
-            # age path. Only JSON true / the literal string "true" approve.
-            _raw_valid = parsed.get("valid", False)
-            _valid = _raw_valid is True or (
-                isinstance(_raw_valid, str)
-                and _raw_valid.strip().lower() == "true")
-            return {
-                "valid": _valid,
-                "reason": str(parsed.get("reason", "")),
-                "judged": True,
-            }
+            # age path. Only a RECOGNIZED verdict counts as judged (round-2
+            # review): true/"true" approves, false/"false" rejects, and
+            # anything else ({"valid": null}, "maybe", a missing key) is a
+            # malformed reply, not a judgment — judged=False keeps it
+            # retryable instead of minting a terminal rejection stamp that
+            # an age-only candidate could never outgrow.
+            _raw_valid = parsed.get("valid")
+            _norm = (_raw_valid.strip().lower()
+                     if isinstance(_raw_valid, str) else _raw_valid)
+            if _raw_valid is True or _norm == "true":
+                return {"valid": True,
+                        "reason": str(parsed.get("reason", "")),
+                        "judged": True}
+            if _raw_valid is False or _norm == "false":
+                return {"valid": False,
+                        "reason": str(parsed.get("reason", "")),
+                        "judged": True}
+            return {"valid": False,
+                    "reason": f"unrecognized verdict: {_raw_valid!r}",
+                    "judged": False}
     except Exception as exc:
         log.debug("node promotion validation failed (fail-open): %s", exc)
     # Fail-open like skills: the numeric gates carried it here; a broken
@@ -2595,7 +2625,7 @@ def promote_knowledge_candidates(*, adapter: Any = None, dry_run: bool = False,
 
     promoted: Dict[str, str] = {}  # node_id → validation stamp
     paths: Dict[str, str] = {}     # node_id → promotion path
-    rejected: Dict[str, str] = {}  # node_id → judged-invalid reason
+    rejected: Dict[str, tuple] = {}  # node_id → (reason, snapshot times_applied)
     for d in eligible:
         path_kind = d.pop("_promotion_path")
         if adapter is None:
@@ -2610,8 +2640,14 @@ def promote_knowledge_candidates(*, adapter: Any = None, dry_run: bool = False,
                 if result.get("judged"):
                     # Explicit "no" is terminal until new evidence: stamp it
                     # so the sweep stops re-judging the same rejects
-                    # (head-of-line starvation, 2026-08-08 review).
-                    rejected[d["node_id"]] = str(result.get("reason", ""))[:200]
+                    # (head-of-line starvation, 2026-08-08 review). The
+                    # count stamped is the SNAPSHOT the judge actually saw —
+                    # an application arriving mid-judgment must still count
+                    # as new evidence (round-2 review).
+                    rejected[d["node_id"]] = (
+                        str(result.get("reason", ""))[:200],
+                        int(d.get("times_applied", 0) or 0),
+                    )
                 continue
             judged = result.get("judged", True)
             if path_kind == "age" and not judged:
@@ -2652,11 +2688,13 @@ def promote_knowledge_candidates(*, adapter: Any = None, dry_run: bool = False,
                     elif (isinstance(d, dict) and d.get("node_id") in rejected
                             and d.get("status") == NODE_CANDIDATE):
                         # Rejection stamp: still a candidate, but the sweep
-                        # skips it until times_applied grows past this mark.
+                        # skips it until times_applied grows past the count
+                        # the judge saw (snapshot, not current row — see the
+                        # collection site).
+                        _rej_reason, _rej_seen = rejected[d["node_id"]]
                         d["promotion_rejected_at"] = now
-                        d["promotion_rejected_reason"] = rejected[d["node_id"]]
-                        d["promotion_rejected_applications"] = int(
-                            d.get("times_applied", 0) or 0)
+                        d["promotion_rejected_reason"] = _rej_reason
+                        d["promotion_rejected_applications"] = _rej_seen
                         line = json.dumps(d, sort_keys=True)
                 except json.JSONDecodeError:
                     pass

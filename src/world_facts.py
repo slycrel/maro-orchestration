@@ -67,6 +67,19 @@ class WorldFact:
         }
 
 
+def _scan_clean(text: str) -> bool:
+    """Deterministic injection scan, fail-closed (guard unavailable → not
+    clean). Round-2 review: the scan must live at LEDGER INGRESS — the
+    completion tool is one producer, but a hand-built parallel outcome or a
+    corrupted checkpoint reaches observe()/from_list() without ever passing
+    clean_declared, and rendered facts carry "treat as known" authority."""
+    try:
+        from injection_guard import scan_content
+        return scan_content(text, source="world_facts").is_clean
+    except Exception:
+        return False
+
+
 @dataclass
 class WorldFactLedger:
     """Run-scoped accumulator. Lives on LoopContext; rides the checkpoint."""
@@ -87,6 +100,8 @@ class WorldFactLedger:
         """
         fact = (fact or "").strip()
         if not fact or kind not in KINDS:
+            return False
+        if not _scan_clean(f"{fact}\n{evidence or ''}"):
             return False
         key = self._key(kind, fact)
         existing = self.facts.get(key)
@@ -154,9 +169,15 @@ class WorldFactLedger:
                 fact = str(row.get("fact", "")).strip()
                 if kind not in KINDS or not fact:
                     continue
+                evidence_raw = str(row.get("evidence", "")).strip()
+                # Restore is an ingress too: a corrupted checkpoint must not
+                # smuggle an instruction-shaped fact past the declaration
+                # scan (round-2 review).
+                if not _scan_clean(f"{fact}\n{evidence_raw}"):
+                    continue
                 wf = WorldFact(
                     kind=kind, fact=fact[:MAX_FACT_CHARS],
-                    evidence=str(row.get("evidence", "")).strip()[:MAX_EVIDENCE_CHARS],
+                    evidence=evidence_raw[:MAX_EVIDENCE_CHARS],
                     first_step=int(row.get("first_step", 0) or 0),
                     hits=max(1, int(row.get("hits", 1) or 1)),
                     steps=[int(s) for s in row.get("steps", [])
@@ -191,16 +212,11 @@ def clean_declared(raw: Any) -> List[Dict[str, str]]:
             continue
         # Injection scan (2026-08-08 review): a declared fact re-enters
         # later prompts verbatim under "treat as known" framing — stronger
-        # authority than step prose gets. The deterministic guard is cheap;
-        # a flagged declaration is dropped, not sanitized (same fail-closed
-        # posture as synthesize_skill). Guard unavailable → declaration
-        # dropped, never persisted unscanned.
-        try:
-            from injection_guard import scan_content
-            if not scan_content(f"{fact}\n{evidence}",
-                                source="world_facts").is_clean:
-                continue
-        except Exception:
+        # authority than step prose gets. A flagged declaration is dropped,
+        # not sanitized (fail-closed, like synthesize_skill), and never
+        # consumes the cap. observe()/from_list() re-scan at ledger ingress
+        # for producers that bypass this site (round-2 review).
+        if not _scan_clean(f"{fact}\n{evidence}"):
             continue
         cleaned.append({"kind": kind, "fact": fact, "evidence": evidence})
     return cleaned

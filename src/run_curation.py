@@ -884,7 +884,7 @@ def promote_skills_lite(rd: Path, meta: dict, card: dict) -> None:
             import uuid as _uuid
             from datetime import datetime, timezone
             from skills import save_skill, write_skill_provenance
-            from skill_types import Skill
+            from skill_types import Skill, normalize_tags
             triggers = fm.get("triggers") or []
             if not isinstance(triggers, list):
                 triggers = [triggers]
@@ -898,8 +898,7 @@ def promote_skills_lite(rd: Path, meta: dict, card: dict) -> None:
                 created_at=datetime.now(timezone.utc).isoformat(),
                 tier="provisional",
                 origin="crystallized",
-                tags=[str(t).strip().lower() for t in (fm.get("tags") or [])
-                      if str(t).strip()][:6],
+                tags=normalize_tags(fm.get("tags")),
             ))
             write_skill_provenance(
                 name, "create",

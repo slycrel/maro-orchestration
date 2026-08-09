@@ -1897,6 +1897,62 @@ class TestPromoteKnowledgeCandidates:
         assert kw.promote_knowledge_candidates(adapter=third) == ["cand1"]
         assert third.calls == 1
 
+    def test_unrecognized_verdict_is_retryable_not_terminal(self, tmp_path, _events):
+        # Round-2 review: {"valid": "maybe"} used to become judged=True /
+        # valid=False — a terminal rejection stamp an age-only candidate
+        # could never outgrow. A parseable reply that dodges the question
+        # holds WITHOUT stamping; the next sweep re-judges.
+        _mk_candidate(times_applied=0, confidence=0.3,
+                      created_at="2020-01-01T00:00:00+00:00")
+
+        class _MaybeAdapter:
+            calls = 0
+
+            def complete(self, messages, **kw_):
+                _MaybeAdapter.calls += 1
+                return _StubResp('{"valid": "maybe", "reason": "shrug"}')
+
+        assert kw.promote_knowledge_candidates(adapter=_MaybeAdapter()) == []
+        p = kw._knowledge_nodes_path()
+        raw = [json.loads(l) for l in p.read_text().splitlines() if l.strip()]
+        row = next(d for d in raw if d["node_id"] == "cand1")
+        assert "promotion_rejected_at" not in row
+        # Retryable: a later sweep with a decisive judge still gets a shot.
+        adapter = _VerdictAdapter(valid=True)
+        assert kw.promote_knowledge_candidates(adapter=adapter) == ["cand1"]
+        assert adapter.calls == 1
+
+    def test_rejection_stamp_records_judged_snapshot_not_current(self, tmp_path, _events):
+        # Round-2 review: the stamp used to read times_applied fresh under
+        # the write lock — evidence arriving mid-judgment was silently
+        # counted as already-rejected. The stamp must carry the count the
+        # judge actually saw.
+        _mk_candidate(times_applied=2, confidence=0.4)
+        p = kw._knowledge_nodes_path()
+
+        class _BumpingAdapter:
+            calls = 0
+
+            def complete(self, messages, **kw_):
+                _BumpingAdapter.calls += 1
+                raw = [json.loads(l) for l in p.read_text().splitlines()
+                       if l.strip()]
+                for d in raw:
+                    if d["node_id"] == "cand1":
+                        d["times_applied"] = 5
+                p.write_text("\n".join(json.dumps(d) for d in raw) + "\n")
+                return _StubResp('{"valid": false, "reason": "judged"}')
+
+        assert kw.promote_knowledge_candidates(adapter=_BumpingAdapter()) == []
+        raw = [json.loads(l) for l in p.read_text().splitlines() if l.strip()]
+        row = next(d for d in raw if d["node_id"] == "cand1")
+        assert row["promotion_rejected_applications"] == 2  # the judged snapshot
+        assert row["times_applied"] == 5  # concurrent evidence survives
+        # 5 > 2 → the mid-judgment evidence earns a re-judge next sweep.
+        adapter = _VerdictAdapter(valid=True)
+        assert kw.promote_knowledge_candidates(adapter=adapter) == ["cand1"]
+        assert adapter.calls == 1
+
     def test_young_unobserved_candidate_stays(self, tmp_path, _events):
         # Neither path: fresh (age ~0) and never re-observed.
         _mk_candidate(times_applied=0, confidence=0.3)

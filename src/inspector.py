@@ -388,12 +388,15 @@ def inspector_cadence_tick(cadence: int, deep_every: int = 5) -> str:
         # type-corrupt counter ({"runs_since_inspect": "bad"}) used to raise
         # here on EVERY finalize — cadence wedged until manual repair.
         # Corrupt fields reset to 0; the lane self-heals.
+        # Clamped, not just parsed (round-2 review): a negative counter is
+        # as corrupt as a string one — runs_since_inspect=-10^6 would
+        # silently defer inspection for a million finalizations.
         try:
-            count = int(state.get("runs_since_inspect", 0) or 0) + 1
+            count = max(0, int(state.get("runs_since_inspect", 0) or 0)) + 1
         except (TypeError, ValueError):
             count = 1
         try:
-            firings = int(state.get("firings_since_deep", 0) or 0)
+            firings = max(0, int(state.get("firings_since_deep", 0) or 0))
         except (TypeError, ValueError):
             firings = 0
         if cadence > 0 and count >= cadence:

@@ -2517,3 +2517,72 @@ class TestSkillPedigree:
         plain = _make_skill("beta", triggers=["yy ww"])
         ranked = _tfidf_skill_rank("kubernetes deployment rollout", [tagged, plain])
         assert ranked and ranked[0].id == tagged.id
+
+    def test_normalize_tags_contract(self):
+        """Round-2 review: LLM mint sites iterated tags without a list
+        check — {"tags": "research"} became character tags that
+        keyword-match nearly any goal. One shared normalizer, all sites."""
+        from skill_types import normalize_tags
+        assert normalize_tags("research") == []
+        assert normalize_tags({"a": 1}) == []
+        assert normalize_tags(None) == []
+        assert normalize_tags([" Research ", "", 42, "ODDS"]) == \
+            ["research", "42", "odds"]
+        assert normalize_tags([f"t{i}" for i in range(9)]) == \
+            [f"t{i}" for i in range(6)]  # mint cap
+        assert len(normalize_tags([f"t{i}" for i in range(9)], cap=None)) == 9
+
+    def test_mint_site_survives_tags_as_string(self, monkeypatch, tmp_path):
+        _setup_workspace(monkeypatch, tmp_path)
+
+        class _StringTagsAdapter(_ExtractMockAdapter):
+            def complete(self, messages, **kwargs):
+                resp = super().complete(messages, **kwargs)
+                payload = json.loads(resp.content)
+                payload["skills"][0]["tags"] = "research"
+                return LLMResponse(content=json.dumps(payload),
+                                   stop_reason="end_turn",
+                                   input_tokens=1, output_tokens=1)
+
+        outcomes = [
+            {"goal": "research polymarket strategies", "status": "done",
+             "task_type": "research", "summary": "found", "outcome_id": "oc1"},
+        ]
+        extracted = extract_skills(outcomes, _StringTagsAdapter())
+        assert extracted and extracted[0].tags == []
+
+    def test_mixed_router_batch_keeps_per_skill_provenance(self, monkeypatch):
+        """Round-2 review: a degraded batch (one candidate's inference
+        failed → per-skill keyword fallback) used to stamp every winner
+        "router" — false provenance exactly where it matters. Telemetry
+        says "mixed"; each skill keeps its own RouteResult.method."""
+        from skills import find_matching_skills
+        from router import RouteResult
+        sk_a = _make_skill("routed one", triggers=["completely unrelated a"])
+        sk_b = _make_skill("fallback one", triggers=["completely unrelated b"])
+        monkeypatch.setattr("skills.load_skills", lambda: [sk_a, sk_b])
+        monkeypatch.setattr("router.route_skills", lambda goal, skills, top_k=3: [
+            RouteResult(sk_a.id, sk_a.name, 0.9, "router"),
+            RouteResult(sk_b.id, sk_b.name, 0.4, "keyword"),
+        ])
+        telemetry = {}
+        results = find_matching_skills("any goal at all", use_router=True,
+                                       telemetry=telemetry)
+        assert [s.id for s in results] == [sk_a.id, sk_b.id]
+        assert telemetry["method"] == "mixed"
+        assert results[0].match_method == "router"
+        assert results[1].match_method == "keyword"
+
+    def test_all_router_batch_still_reports_router(self, monkeypatch):
+        from skills import find_matching_skills
+        from router import RouteResult
+        sk_a = _make_skill("routed a", triggers=["completely unrelated a"])
+        monkeypatch.setattr("skills.load_skills", lambda: [sk_a])
+        monkeypatch.setattr("router.route_skills", lambda goal, skills, top_k=3: [
+            RouteResult(sk_a.id, sk_a.name, 0.9, "router"),
+        ])
+        telemetry = {}
+        results = find_matching_skills("any goal", use_router=True,
+                                       telemetry=telemetry)
+        assert telemetry["method"] == "router"
+        assert results[0].match_method == "router"
