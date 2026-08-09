@@ -6652,3 +6652,12 @@ under the same two-measurement standard).
      provenance pattern**; planner FACT: emission stays slice 3; cap
      sizes are build-time tuning. Jeremy expects testing/review rounds
      to surface the edges — open to discussion as they appear.
+- **2026-08-08** — Go-nuts stretch (Jeremy AFK, "I'm no longer a blocker")
+  executed the whole batch as landed chunks: re-mint tombstones
+  (26d3b58), inspector run-cadence + deep pass (aebf844, live at
+  run_cadence 10), node promotion age+content (42417df), match-tier
+  telemetry (a87348f), skill pedigree origin/domain/tags (bc613de),
+  world-facts slice 1 with §7.1 hypothesis quarantine + checkpoint
+  carry (97bb780). Cross-model adversarial review of the six chunks ran
+  same-day (verify-before-fix per standing rule). World-facts slices
+  2–3 and the §5 cuts remain queued.
