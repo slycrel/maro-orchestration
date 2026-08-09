@@ -6697,3 +6697,16 @@ under the same two-measurement standard).
   the portable-learning provenance-stamp lesson; a step restating a
   rendered fact doesn't upgrade it either). Design doc + DEFAULTS rows
   updated; BACKLOG item moved to DONE; 47 pins.
+- **2026-08-09** — World-facts s2+3 adversarial review (3 Codex lenses,
+  same session): 12 deduped findings, 7 CONFIRMED (58% — above the
+  30-50% band), fix layer landed same session. The round's keeper: the
+  idempotency stamp compared against loop_id, but loop_init mints a
+  fresh uuid on EVERY init including resume — the stamp never matched
+  on the exact demote→resume topology it was built for (my "landed and
+  verified" claim was a passing test over the wrong topology). Replaced
+  with per-fact landed-keys in run metadata. Also fixed: staged lane
+  taught to cite context it never receives (3/3 consensus → teaching
+  removed), punctuation-level provenance laundering (difflib twin
+  guard), same-step hits inflation, unknown-source coercion (landing
+  now allowlists). Record:
+  docs/history/2026-08-09-world-facts-s23-adversarial-review.md.

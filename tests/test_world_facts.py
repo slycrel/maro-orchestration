@@ -43,6 +43,18 @@ class TestLedger:
         # First evidence wins (terrain's first-reason-wins)
         assert f.evidence == ""
 
+    def test_same_step_repetition_does_not_inflate_hits(self):
+        """2026-08-09 review: hits ranks the landing sort — one step
+        repeating a claim three times in a payload must not outrank a
+        genuinely re-observed fact. Corroboration counts distinct steps."""
+        led = WorldFactLedger()
+        led.observe(KIND_ANECDOTAL, "weak claim", "", 2)
+        led.observe(KIND_ANECDOTAL, "weak claim", "", 2)
+        led.observe(KIND_ANECDOTAL, "weak claim", "", 2)
+        f = next(iter(led.facts.values()))
+        assert f.hits == 1
+        assert f.steps == [2]
+
     def test_same_text_different_kind_is_a_different_row(self):
         led = WorldFactLedger()
         led.observe(KIND_ANECDOTAL, "failures cluster by transport", "", 1)
@@ -347,24 +359,57 @@ class TestLanding:
         assert any(str(MAX_LANDED_ANECDOTAL + 2) in t for t in titles)
 
     def test_resumed_finalize_does_not_double_land(self, tmp_workspace):
-        """A run demoted done→incomplete re-enters finalize with the same
-        restored ledger — without the metadata stamp its own hypothesis
-        would self-confirm to the standing-rule threshold."""
+        """A run demoted done→incomplete resumes under a FRESH loop_id
+        (loop_init always mints one) with the same restored ledger — the
+        idempotency record must be keyed on the FACTS, not the loop id, or
+        the restored hypothesis self-confirms to the standing-rule
+        threshold (2026-08-09 adversarial review: the original loop-id
+        stamp guarded nothing real)."""
         import json
         from runs import scoped_run_dir
         rd = tmp_workspace / "runs" / "r1"
         rd.mkdir(parents=True)
         with scoped_run_dir(rd):
-            land_facts(self._ledger(), loop_id="samerun")
+            land_facts(self._ledger(), loop_id="attemptA")
             meta = json.loads((rd / "metadata.json").read_text(encoding="utf-8"))
-            assert meta["world_facts_landed"] == "samerun"
-            counts = land_facts(self._ledger(), loop_id="samerun")
+            assert len(meta["world_facts_landed_keys"]) == 2
+            # Resume topology: same restored ledger, NEW loop id.
+            counts = land_facts(self._ledger(), loop_id="attemptB")
         assert counts == {"anecdotal": 0, "hypotheses": 0}
         from knowledge_lens import load_hypotheses, load_standing_rules
         h = next(h for h in load_hypotheses(domain=None)
                  if "cluster by transport" in h.lesson)
         assert h.confirmations == 1
         assert load_standing_rules() == []
+
+    def test_facts_declared_after_resume_still_land(self, tmp_workspace):
+        """Per-key idempotency, not all-or-nothing: a fact discovered only
+        in the resumed portion of the run lands on the second finalize."""
+        from runs import scoped_run_dir
+        rd = tmp_workspace / "runs" / "r2"
+        rd.mkdir(parents=True)
+        led = self._ledger()
+        with scoped_run_dir(rd):
+            land_facts(led, loop_id="attemptA")
+            led.observe(KIND_ANECDOTAL, "the resumed step found a new thing",
+                        "", 7)
+            counts = land_facts(led, loop_id="attemptB")
+        assert counts == {"anecdotal": 1, "hypotheses": 0}
+        from knowledge_web import load_knowledge_nodes
+        titles = [n.title for n in load_knowledge_nodes(status=None)]
+        assert any("new thing" in t for t in titles)
+
+    def test_unknown_source_is_not_landable(self, tmp_workspace):
+        """Landing is an allowlist (source == step) — a future producer's
+        unrecognized source label must not be silently landable, and the
+        label round-trips checkpoints unchanged."""
+        led = WorldFactLedger()
+        led.observe(KIND_ANECDOTAL, "container-side finding", "", 1,
+                    source="container")
+        back = WorldFactLedger.from_list(led.to_list())
+        assert next(iter(back.facts.values())).source == "container"
+        counts = land_facts(back, loop_id="x")
+        assert counts == {"anecdotal": 0, "hypotheses": 0}
 
     def test_landing_never_raises_on_broken_stores(self, tmp_workspace, monkeypatch):
         def _boom(*a, **k):
@@ -436,13 +481,18 @@ class TestPlannerEmission:
         # Detection stays live with emission off.
         assert parse_steps('["FACT: x", "step"]', 5) == ["step"]
 
-    def test_staged_pass_lane_teaches_fact_rules(self, monkeypatch):
+    def test_staged_pass_lane_is_not_taught_fact_rules(self, monkeypatch):
+        """2026-08-09 adversarial review (3-lens consensus): the staged lane
+        replaces the assembled system prompt and never receives the
+        injected-context extras — teaching it to emit facts it 'can point
+        to in the provided context' invites model priors wearing grounding
+        claims. Detection still strips any FACT line it emits anyway."""
         import planner
         from planner import decompose, WORLD_FACT_RULES
         monkeypatch.setattr(planner, "estimate_goal_scope", lambda goal: "wide")
         adapter = _PlanCapturingAdapter()
         decompose("audit the whole codebase", adapter, max_steps=8)
-        assert any(WORLD_FACT_RULES in s for s in adapter.system_prompts)
+        assert not any(WORLD_FACT_RULES in s for s in adapter.system_prompts)
 
     def test_decompose_collects_facts_across_lanes(self, monkeypatch):
         import planner
@@ -490,6 +540,21 @@ class TestPlannerSeeding:
         f = next(iter(ctx.world_facts.facts.values()))
         assert f.source == SOURCE_PLANNER
         assert f.hits == 2
+
+    def test_surface_restatement_cannot_launder_planner_provenance(self):
+        """2026-08-09 review: exact-key stickiness let 'The API is
+        rate-limited.' re-declare the planner fact as a fresh LANDABLE
+        step row. Near-restatements merge into the planner row instead.
+        (True semantic paraphrases still slip this — named residual.)"""
+        from world_facts import SOURCE_PLANNER
+        from loop_planning import seed_planner_facts
+        ctx = self._ctx()
+        seed_planner_facts(ctx, ["the API is rate-limited"])
+        ctx.world_facts.observe(KIND_ANECDOTAL, "The API is rate-limited.",
+                                "restated with punctuation", 3)
+        assert len(ctx.world_facts.facts) == 1
+        f = next(iter(ctx.world_facts.facts.values()))
+        assert f.source == SOURCE_PLANNER
 
     def test_seeding_respects_master_switch(self, monkeypatch):
         import config

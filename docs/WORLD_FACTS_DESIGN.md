@@ -22,10 +22,15 @@ invisible; the V3 promotion sweep IS the generalizability filter — the
 §2's census). Hypothesis → `observe_pattern` with
 `world_fact:<loop_id>` provenance. Verdict-independent by design (a
 failed run's "archive X is blocked" is still a fact). Caps 5/3 per run,
-strongest (hits) first. Idempotent per run dir via a
-`world_facts_landed` metadata stamp — a demoted-then-resumed run's
-restored ledger must not self-confirm its hypothesis to the
-standing-rule threshold. One `WORLD_FACTS_LANDED` captain's-log event.
+strongest (distinct-step hits) first. Idempotent per run dir via a
+`world_facts_landed_keys` metadata list — keyed on the FACTS, not the
+loop id, because a demoted-then-resumed run re-enters finalize under a
+FRESH loop_id with the same restored ledger (the original loop-id stamp
+guarded nothing real — 2026-08-09 review); per-key recording also lets
+transiently-failed writes retry while landed hypotheses never
+self-confirm. Landing is an allowlist (`source == "step"`) — unknown
+future producer labels are preserved but not landable. One
+`WORLD_FACTS_LANDED` captain's-log event.
 **Watch item:** the confirmation bar is the lane's existing
 RULE_PROMOTE_CONFIRMATIONS=2 — two runs declaring the same pattern
 guess promotes a StandingRule. Pinned deliberately
@@ -34,18 +39,29 @@ contradiction check at promotion + refight lane are the backstops. If
 live runs promote junk rules, raise the bar for world_fact-sourced
 hypotheses first.
 
-**Slice 3 (planner emission, 2026-08-09):** decompose (assembled prompt
-+ staged lane) teaches `WORLD_FACT_RULES` behind `planner.world_facts`
-(emission only; `parse_steps` detection unconditional — FACT entries
-never execute, never count against max_steps). Facts seed the ledger as
-anecdotal with sticky `source="planner"`: they render as known but
-`land_facts` refuses them — planner facts come FROM injected context,
-and landing them back would launder stored knowledge into fresh
-confidence bumps; a step restating a rendered fact saw it as
-"treat as known" first, so provenance never upgrades. Named residual:
-the loop_execute re-decompose lanes (boundary/milestone/replan) don't
-collect facts_out — FACT lines there are plucked and dropped (safe,
-just unledgered).
+**Slice 3 (planner emission, 2026-08-09):** decompose teaches
+`WORLD_FACT_RULES` behind `planner.world_facts` in the assembled-prompt
+lanes only — the staged-pass lane is deliberately untaught (2026-08-09
+review, 3-lens consensus: it replaces the assembled prompt and never
+receives the injected-context extras, so a staged FACT could only be a
+model prior wearing a grounding claim; detection still strips any it
+emits). Emission-only gate; `parse_steps` detection unconditional —
+FACT entries never execute, never count against max_steps. Facts seed
+the ledger as anecdotal with sticky `source="planner"`: they render as
+known but `land_facts` refuses them — planner facts come FROM injected
+context, and landing them back would launder stored knowledge into
+fresh confidence bumps; a step restating a rendered fact saw it as
+"treat as known" first, so provenance never upgrades (a lexical
+near-restatement merges into the planner row via a difflib ≥0.85 guard;
+a true semantic paraphrase still slips it — named residual). Named
+residuals: loop_execute re-decompose lanes (boundary/milestone/replan)
+don't collect facts_out — FACT lines there are plucked and dropped
+(safe, just unledgered); multi-plan collects facts from ALL sampled
+candidates including rejected plans (DECIDED: facts claim grounding in
+the shared injected context, not in the winning plan — the injection
+scan and never-lands guard bound the damage); factory_thin's local
+parser doesn't strip FACT lines (DECIDED: adjudicated separate
+instrument, never taught the protocol).
 
 Review hardening 2026-08-08: declarations pass the injection_guard scan
 (fail-closed), the kill switch gates render as well as capture (and now

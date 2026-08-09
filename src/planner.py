@@ -1096,8 +1096,13 @@ def decompose(
                 _staged_system += "\n\n" + _STEP_CEILING_DIRECTIVE.format(n=_step_ceiling)
             if _recon_emission_on:
                 _staged_system += "\n\n" + RECON_FLAVOR_RULES
-            if _fact_emission_on:
-                _staged_system += "\n\n" + WORLD_FACT_RULES
+            # WORLD_FACT_RULES deliberately NOT taught here (2026-08-09
+            # adversarial review, 3-lens consensus): the staged lane
+            # replaces the assembled system prompt and never receives the
+            # injected-context extras, and the rules require a fact the
+            # planner "can point to in the provided context" — a staged
+            # FACT could only be a model prior wearing a grounding claim.
+            # parse-side detection below stays live regardless.
             resp = adapter.complete(
                 [LLMMessage("system", _staged_system),
                  LLMMessage("user", f"Goal: {goal}\n\nDecompose into 3-5 staged passes.")],

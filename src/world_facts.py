@@ -107,6 +107,24 @@ class WorldFactLedger:
         # later step bumps hits instead of duplicating a ledger row.
         return f"{kind}:{' '.join(fact.lower().split())}"
 
+    def _planner_twin(self, kind: str, fact_norm: str) -> Optional[WorldFact]:
+        """A planner-sourced same-kind row this text is a near-restatement of.
+
+        Laundering guard (2026-08-09 adversarial review): exact-key matching
+        let "Archive X is blocked." re-declare planner-seeded "archive x is
+        blocked" as a fresh, LANDABLE step fact — provenance stickiness has
+        to survive at least surface restatements. Lexical only; a true
+        semantic paraphrase still slips this (named residual).
+        """
+        import difflib
+        for f in self.facts.values():
+            if f.kind != kind or f.source != SOURCE_PLANNER:
+                continue
+            other = " ".join(f.fact.lower().split())
+            if difflib.SequenceMatcher(None, fact_norm, other).ratio() >= 0.85:
+                return f
+        return None
+
     def observe(self, kind: str, fact: str, evidence: str,
                 step_idx: int, *, source: str = SOURCE_STEP) -> bool:
         """Record one declared fact. Returns True if newly ledgered.
@@ -123,15 +141,23 @@ class WorldFactLedger:
         key = self._key(kind, fact)
         existing = self.facts.get(key)
         if existing is None:
+            existing = self._planner_twin(kind, " ".join(fact.lower().split()))
+        if existing is None:
             self.facts[key] = WorldFact(
                 kind=kind, fact=fact[:MAX_FACT_CHARS],
                 evidence=(evidence or "").strip()[:MAX_EVIDENCE_CHARS],
                 first_step=step_idx, steps=[step_idx],
-                source=source if source in (SOURCE_STEP, SOURCE_PLANNER)
-                else SOURCE_STEP)
+                # Unknown source strings are PRESERVED, not coerced to
+                # "step" (review: coercion made any future producer's facts
+                # silently landable — the landing side allowlists instead).
+                source=str(source) if source else SOURCE_STEP)
             return True
-        existing.hits += 1
+        # Corroboration counts distinct steps, not repeated declarations —
+        # one step restating a fact three times in a payload must not
+        # outrank a genuinely re-observed fact in the landing sort
+        # (2026-08-09 adversarial review).
         if step_idx not in existing.steps:
+            existing.hits += 1
             existing.steps.append(step_idx)
         return False
 
@@ -194,7 +220,6 @@ class WorldFactLedger:
                 # scan (round-2 review).
                 if not _scan_clean(f"{fact}\n{evidence_raw}"):
                     continue
-                _src = row.get("source", SOURCE_STEP)
                 wf = WorldFact(
                     kind=kind, fact=fact[:MAX_FACT_CHARS],
                     evidence=evidence_raw[:MAX_EVIDENCE_CHARS],
@@ -202,11 +227,11 @@ class WorldFactLedger:
                     hits=max(1, int(row.get("hits", 1) or 1)),
                     steps=[int(s) for s in row.get("steps", [])
                            if isinstance(s, (int, float))],
-                    # Unknown provenance restores as "step" — pre-slice-3
-                    # checkpoints have no source key and all their facts
-                    # were step-declared.
-                    source=_src if _src in (SOURCE_STEP, SOURCE_PLANNER)
-                    else SOURCE_STEP,
+                    # ABSENT provenance restores as "step" (pre-slice-3
+                    # checkpoints have no source key; all their facts were
+                    # step-declared). A PRESENT unknown string is kept as-is
+                    # — the landing allowlist decides what it may do.
+                    source=str(row.get("source") or SOURCE_STEP),
                 )
                 ledger.facts[cls._key(kind, wf.fact)] = wf
             except Exception:
@@ -233,11 +258,19 @@ def land_facts(ledger: Optional["WorldFactLedger"], *, loop_id: str,
     exactly the kind of fact a FAILED run discovers, so this runs at
     finalize, not behind the deferred-learning verdict gate.
 
-    Idempotent per (run dir, loop_id): a run demoted done→incomplete and
-    resumed re-enters finalize with the same restored ledger — without the
-    metadata stamp its hypotheses would confirm THEMSELVES to the standing-
-    rule threshold (RULE_PROMOTE_CONFIRMATIONS=2). Known cost: facts
-    declared only in the resumed portion of such a run skip landing too.
+    Idempotent per (run dir, fact key), loop-id-INDEPENDENT: a run demoted
+    done→incomplete resumes under a FRESH loop_id (loop_init always mints
+    one) with the same restored ledger — a loop-id-equality stamp guarded
+    nothing real (2026-08-09 adversarial review, 3-lens). The run dir's
+    metadata instead records the ledger KEYS that landed successfully;
+    already-landed keys are skipped, so a restored hypothesis cannot
+    confirm ITSELF to the standing-rule threshold
+    (RULE_PROMOTE_CONFIRMATIONS=2), while facts declared only in the
+    resumed portion still land. Per-key recording also means a fact whose
+    store write failed transiently retries on the next finalize instead of
+    being buried under an all-or-nothing stamp. Named residuals: a crash
+    between a store write and the key stamp can double-land that one fact;
+    topologies with no run dir land fail-open (they finalize once).
 
     Never raises; every store write is per-fact best-effort. Returns counts
     for logging/tests.
@@ -250,7 +283,7 @@ def land_facts(ledger: Optional["WorldFactLedger"], *, loop_id: str,
         # (2026-08-08 review: the switch must silence every surface).
         return counts
 
-    already_landed = False
+    landed_keys: set = set()
     try:
         import json as _json
         from runs import current_run_dir
@@ -258,23 +291,29 @@ def land_facts(ledger: Optional["WorldFactLedger"], *, loop_id: str,
         if _rd is not None:
             _meta = _json.loads(
                 (_rd / "metadata.json").read_text(encoding="utf-8"))
-            already_landed = _meta.get("world_facts_landed") == loop_id
+            _prior = _meta.get("world_facts_landed_keys")
+            if isinstance(_prior, list):
+                landed_keys = {str(k) for k in _prior}
     except Exception:
         pass  # unreadable metadata → land (fail-open; stamp below re-arms)
-    if already_landed:
-        return counts
 
     def _strength(f: "WorldFact"):
         # Re-observed-this-run first, then earliest-seen.
         return (-f.hits, f.first_step)
 
     def _landable(kind_rows: List["WorldFact"]) -> List["WorldFact"]:
-        # Planner-declared facts came FROM injected context — landing them
-        # would launder what the stores already say into fresh confidence
-        # bumps/confirmations (see SOURCE_* note). Execution-discovered only.
-        return [f for f in kind_rows if f.source != SOURCE_PLANNER]
+        # Allowlist, not denylist (review: a future producer's unknown
+        # source label must not be silently landable): only
+        # execution-discovered facts land. Planner-declared facts came FROM
+        # injected context — landing them would launder what the stores
+        # already say into fresh confidence bumps/confirmations (SOURCE_*
+        # note). Already-landed keys skip (idempotency, above).
+        return [f for f in kind_rows
+                if f.source == SOURCE_STEP
+                and WorldFactLedger._key(f.kind, f.fact) not in landed_keys]
 
     sources = [f"loop:{loop_id}"] if loop_id else []
+    newly_landed: List[str] = []
 
     for f in sorted(_landable(ledger.anecdotal()),
                     key=_strength)[:MAX_LANDED_ANECDOTAL]:
@@ -295,6 +334,7 @@ def land_facts(ledger: Optional["WorldFactLedger"], *, loop_id: str,
                 existing_nodes=load_knowledge_nodes(status=None),
             )
             counts["anecdotal"] += 1
+            newly_landed.append(WorldFactLedger._key(f.kind, f.fact))
         except Exception:
             continue
 
@@ -306,14 +346,17 @@ def land_facts(ledger: Optional["WorldFactLedger"], *, loop_id: str,
                 f.fact, project or "",
                 source_lesson_id=f"world_fact:{loop_id}" if loop_id else "")
             counts["hypotheses"] += 1
+            newly_landed.append(WorldFactLedger._key(f.kind, f.fact))
         except Exception:
             continue
 
-    try:
-        from runs import stamp_run_metadata
-        stamp_run_metadata({"world_facts_landed": loop_id})
-    except Exception:
-        pass
+    if newly_landed:
+        try:
+            from runs import stamp_run_metadata
+            stamp_run_metadata({"world_facts_landed_keys":
+                                sorted(landed_keys | set(newly_landed))})
+        except Exception:
+            pass
     if counts["anecdotal"] or counts["hypotheses"]:
         try:
             from captains_log import log_event, WORLD_FACTS_LANDED
