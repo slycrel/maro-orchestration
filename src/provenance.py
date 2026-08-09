@@ -58,16 +58,34 @@ _TRANSIENT_SEGMENTS = ("/tmp/", "scratchpad", "/dev/", "/proc/", "/var/tmp/")
 # Path.glob does not expand braces. The exposed class is self-inspection runs:
 # quoting Maro's own path templates out of source is exactly their job, and
 # de790c13 was demoted for describing how step_exec names its transcripts.
-_TEMPLATE_MARKERS = re.compile(r"\{[^}]*\}|\$\{?\w+|<[^>]+>|%[sd]\b")
+# Dialects seen in the wild plus the printf family: {N}, {project_dir},
+# ${VAR}, $VAR, <name>, %s/%d with flags/width (%02d), positional (%1$s) and
+# named (%(step)d) forms. Adversarial review 2026-08-08 caught the first cut
+# recognising only bare %s/%d — "step-%02d-transcript.json" would still have
+# been checked as a literal and still falsely demoted.
+_TEMPLATE_MARKERS = re.compile(
+    r"\{[^}/]*\}"                 # {N}, {project_dir}
+    r"|\$\{\w+\}"                 # ${VAR}
+    r"|\$\w+"                     # $VAR
+    r"|<[^>/]+>"                  # <run_dir>
+    r"|%\(\w+\)[sd]"              # %(step)d
+    r"|%\d+\$[sd]"                # %1$s
+    r"|%[-+ #0]*\d*(?:\.\d+)?[sd]"  # %s, %d, %02d, %-10s
+)
 
-# A bare token whose extension is a TLD is a hostname, not a local artifact —
-# run 0d50df61 flagged "api.anthropic.com" as a claimed-but-missing OUTPUT.
-# Bare names are already the lenient lane (location ambiguous); a hostname
-# there is never a file this run wrote. Kept deliberately tight: extensions
-# that double as real output suffixes (.sh, .app) are NOT listed.
-_HOSTNAME_TLDS = frozenset({
-    "com", "org", "net", "io", "ai", "dev", "co", "edu", "gov",
-})
+# A multi-label DNS name is not a local artifact — run 0d50df61 flagged
+# "api.anthropic.com" as a claimed-but-missing OUTPUT because ".com" matched
+# the extension regex. Matched against the token's FIRST segment so the
+# path-bearing form ("api.anthropic.com/v1/result.json") is caught too.
+#
+# Requires TWO OR MORE dot-separated labels before the TLD, deliberately: the
+# first cut used a hand-maintained TLD set, and adversarial review showed it
+# amnestied real files in both directions — "report.org" is an ordinary Org
+# document and "model.ai" a plausible artifact, while "api.vendor.cloud" was
+# still flagged because .cloud was missing from the table. Requiring
+# api.host.tld shape keeps single-label filenames verifiable and needs no
+# table to maintain.
+_HOSTNAME_RE = re.compile(r"^(?:[A-Za-z0-9-]+\.){2,}[A-Za-z]{2,}$")
 
 
 def _clean_path_token(tok: str) -> str:
@@ -99,22 +117,41 @@ def _path_shaped(tok: str) -> bool:
 
 
 def _unverifiable_pattern(tok: str) -> bool:
-    """True when a token cannot be checked against a filesystem BY CONSTRUCTION.
+    """True when a token names a NETWORK AUTHORITY rather than a local file.
 
-    Two shapes, both observed demoting runs that had delivered: an unresolved
-    template placeholder (`{N}`, `$VAR`, `<name>`, `%s`) and a bare hostname
-    (`api.anthropic.com`). Neither can ever resolve, so a miss carries no
-    information about fabrication — it is guaranteed. Skipping them is the same
-    trade this module already makes for remote and transient paths: a false
-    demotion costs a delivered run its verdict, a missed fabrication costs one
-    advisory line."""
-    if _TEMPLATE_MARKERS.search(tok):
-        return True
-    if "/" not in tok:
-        base, _, ext = tok.lower().rpartition(".")
-        if base and ext in _HOSTNAME_TLDS:
-            return True
-    return False
+    `api.anthropic.com` cannot be a file this run wrote, so its absence carries
+    no information about fabrication. Same trade the module already makes for
+    remote-prefixed and transient paths.
+
+    Template placeholders are deliberately NOT handled here. They used to be —
+    and adversarial review (2026-08-08) was right that skipping them was an
+    amnesty: `Saved artifacts/report-{N}.json` with zero files on disk is a
+    fabrication, and dropping the claim let it through silently. Templates are
+    now RESOLVED as the patterns they are (see `_normalize_template`), which
+    fixes the false demotion without buying off the true positive.
+    """
+    return bool(_HOSTNAME_RE.match(tok.split("/", 1)[0]))
+
+
+def _normalize_template(tok: str) -> str:
+    """Rewrite an unresolved template into the glob it stands for.
+
+    `{project_dir}/artifacts/step-{N}-transcript.json` becomes
+    `artifacts/step-*-transcript.json`, which the existing glob-aware
+    resolution already knows how to satisfy — the same machinery the 2026-08-02
+    glob fix added, reused rather than duplicated.
+
+    A leading placeholder that occupies a WHOLE segment (`{project_dir}/…`,
+    `$RUN_DIR/…`) is a root anchor, not a path component: every provenance base
+    and every workspace project dir already *is* that root, so it is dropped
+    rather than turned into a `*` that would push the match one level too deep.
+    """
+    globbed = _TEMPLATE_MARKERS.sub("*", tok)
+    globbed = re.sub(r"\*{2,}", "*", globbed)
+    parts = globbed.split("/")
+    while len(parts) > 1 and parts[0] == "*":
+        parts.pop(0)
+    return "/".join(parts)
 
 
 def _claimed_output_paths(goal: str) -> List[str]:
@@ -315,6 +352,14 @@ def _resolve_exact(rel: str, bases: List[Path]) -> List[Path]:
     the first glob hit — run 75fe8b4e was falsely demoted to incomplete when
     its fresh output resolved to an older project's file of the same name.
     """
+    # Template placeholders resolve as the patterns they stand for (run
+    # de790c13, 2026-08-08) — "{project_dir}/artifacts/step-{N}-transcript.json"
+    # becomes "artifacts/step-*-transcript.json" and is then satisfied by the
+    # nine real transcripts, while the same claim with nothing on disk still
+    # comes back empty and is still flagged.
+    if _TEMPLATE_MARKERS.search(rel):
+        rel = _normalize_template(rel)
+
     # Glob-aware (2026-08-02, run 9d88acf2 false demotion): a step result
     # that honestly summarizes several writes as one pattern ("Saved
     # artifacts/OL*.json" — six real files on disk) used to get its glob
@@ -364,10 +409,20 @@ def _resolve_exact(rel: str, bases: List[Path]) -> List[Path]:
 
 def _resolve_bare(name: str, bases: List[Path]) -> List[Path]:
     """ALL existing candidates for a bare output basename (see _resolve_exact)."""
+    # Same template-as-pattern rule as _resolve_exact — a bare
+    # "step-{N}-transcript.json" is satisfied by any real step-1..9 file, and
+    # by none when the claim was fabricated.
+    if _TEMPLATE_MARKERS.search(name):
+        name = _normalize_template(name)
     hits: List[Path] = []
     for b in bases:
         if (b / name).exists():
             hits.append(b / name)
+        if any(ch in name for ch in "*?["):
+            try:
+                hits.extend(x for x in b.glob(name) if x.exists())
+            except (OSError, ValueError):
+                pass
     for d in _bare_search_dirs():
         try:
             if (d / name).exists():

@@ -5566,22 +5566,24 @@ class TestGlobClaimProvenance:
 
 
 class TestTemplatePlaceholderProvenance:
-    """Pin for run de790c13 (2026-08-08) — third costume of the same bug the
-    glob pin above covers, and the one Path.glob cannot reach (it does not
-    expand braces).
+    """Pins for run de790c13 (2026-08-08) and the adversarial review that
+    followed it.
 
     A self-inspection run described how Maro's own step_exec names its
     transcripts — "writes step-{N}-transcript.json and returns a handle" — as
-    PROSE ABOUT SOURCE CODE. The claim scraper read `{project_dir}/artifacts/
-    step-{N}-transcript.json` as an output the run claimed to have written,
-    found nothing named `{N}`, and handed a delivered 9-step run
-    goal_achieved=False + stop_verdict=lost-the-plot. All nine real
+    PROSE ABOUT SOURCE CODE. The claim scraper read
+    `{project_dir}/artifacts/step-{N}-transcript.json` as an output the run
+    claimed to have written, found nothing named `{N}`, and handed a delivered
+    9-step run goal_achieved=False + stop_verdict=lost-the-plot. All nine real
     step-1..9-transcript.json files were on disk the whole time.
 
-    A token carrying an unresolved placeholder CANNOT resolve, so its miss is
-    guaranteed rather than evidential — the same reason remote and transient
-    paths are skipped. Self-inspection runs are the exposed class: quoting
-    Maro's own path templates is exactly their job.
+    The FIRST fix skipped placeholder-bearing claims outright. Adversarial
+    review (3 Codex lenses, unanimous high severity) was right that this bought
+    the false positive with a true negative: `Saved artifacts/report-{N}.json`
+    with NOTHING on disk is a fabrication, and skipping let it through. So a
+    template now RESOLVES as the pattern it stands for, reusing the glob
+    machinery the 2026-08-02 fix already added. Both halves are pinned below —
+    the honest claim passes, the fabricated one still fails.
     """
 
     def _ws(self, monkeypatch, tmp_path):
@@ -5590,64 +5592,97 @@ class TestTemplatePlaceholderProvenance:
         proj.mkdir(parents=True)
         return proj
 
-    def test_brace_placeholder_claim_is_not_flagged(self, monkeypatch, tmp_path):
+    def test_template_claim_with_real_files_is_not_flagged(self, monkeypatch, tmp_path):
+        """The de790c13 shape: nine real transcripts behind one pattern."""
         import time
         from provenance import _missing_or_stale_result_outputs
-        self._ws(monkeypatch, tmp_path)
+        proj = self._ws(monkeypatch, tmp_path)
+        for n in range(1, 10):
+            (proj / f"step-{n}-transcript.json").write_text("{}", encoding="utf-8")
         flagged = _missing_or_stale_result_outputs(
             "step_exec writes to {project_dir}/artifacts/step-{N}-transcript.json "
             "and returns a handle placed in outcome['artifacts'].",
             time.time() - 3600)
-        assert not flagged, (
-            "an unresolved template placeholder is a pattern, not a claim: "
-            f"{flagged}")
+        assert not flagged, flagged
 
-    def test_other_placeholder_dialects_are_not_flagged(self, monkeypatch, tmp_path):
+    def test_template_claim_with_no_files_is_STILL_flagged(self, monkeypatch, tmp_path):
+        """The amnesty the review caught. A pattern is a claim, not a pass."""
         import time
         from provenance import _missing_or_stale_result_outputs
-        self._ws(monkeypatch, tmp_path)
+        self._ws(monkeypatch, tmp_path)  # artifacts/ exists, no report files
+        flagged = _missing_or_stale_result_outputs(
+            "Saved the per-run summaries to artifacts/report-{N}.json.",
+            time.time() - 3600)
+        assert any("report-{N}.json" in f and "not found" in f for f in flagged), (
+            "a fabricated claim wearing a placeholder must still be caught; "
+            f"skipping it is an amnesty: {flagged}")
+
+    def test_other_placeholder_dialects_resolve_too(self, monkeypatch, tmp_path):
+        """printf width/positional/named forms are templates as much as {N}.
+
+        The first cut matched only bare %s/%d, so `step-%02d-transcript.json`
+        was still checked as a literal and would still have demoted a run.
+        """
+        import time
+        from provenance import _missing_or_stale_result_outputs
+        proj = self._ws(monkeypatch, tmp_path)
+        (proj / "out-7.txt").write_text("x", encoding="utf-8")
         for claim in (
-            "saved to $OUT_DIR/report.json",
-            "saved to ${BUILD}/out.txt",
-            "written to <run_dir>/summary.md",
-            "saved to artifacts/step-%d-out.json",
+            "saved to artifacts/out-%d.txt",
+            "saved to artifacts/out-%02d.txt",
+            "saved to artifacts/out-%1$s.txt",
+            "saved to artifacts/out-%(step)d.txt",
+            "saved to ${BUILD}/artifacts/out-7.txt",
+            "written to <run_dir>/artifacts/out-7.txt",
         ):
             flagged = _missing_or_stale_result_outputs(claim, time.time() - 3600)
             assert not flagged, f"{claim!r} -> {flagged}"
 
-    def test_bare_hostname_is_not_flagged_as_a_file(self, monkeypatch, tmp_path):
-        # Run 0d50df61 (2026-07-17) recorded "api.anthropic.com (claimed
-        # written, not found)" — .com matched the extension regex, so a
-        # hostname entered the lenient bare-name lane as an artifact.
+    def test_multi_label_hostname_is_not_a_file(self, monkeypatch, tmp_path):
+        # Run 0d50df61 recorded "api.anthropic.com (claimed written, not
+        # found)" — .com matched the extension regex, so a hostname entered
+        # the lenient bare-name lane as an artifact.
         import time
         from provenance import _missing_or_stale_result_outputs
         self._ws(monkeypatch, tmp_path)
-        flagged = _missing_or_stale_result_outputs(
+        for claim in (
             "Generated the completion by writing to api.anthropic.com.",
-            time.time() - 3600)
-        assert not flagged, flagged
+            "wrote results to api.anthropic.com/v1/result.json",
+        ):
+            flagged = _missing_or_stale_result_outputs(claim, time.time() - 3600)
+            assert not flagged, f"{claim!r} -> {flagged}"
+
+    def test_single_label_names_that_look_like_tlds_still_verify(self, monkeypatch, tmp_path):
+        """`report.org` is an Org document, not a domain.
+
+        The first cut exempted a hand-maintained TLD set, which amnestied real
+        artifacts. Requiring multi-label host shape keeps these verifiable.
+        """
+        import time
+        from provenance import _missing_or_stale_result_outputs
+        self._ws(monkeypatch, tmp_path)
+        for name in ("report.org", "model.ai", "notes.io"):
+            flagged = _missing_or_stale_result_outputs(
+                f"Saved the summary to {name}.", time.time() - 3600)
+            assert any(name in f for f in flagged), f"{name} -> {flagged}"
 
     def test_a_real_missing_path_is_still_flagged(self, monkeypatch, tmp_path):
-        # The guard must not become a blanket amnesty: a concrete claim with
-        # no placeholder and no file behind it is still a fabrication.
         import time
         from provenance import _missing_or_stale_result_outputs
         self._ws(monkeypatch, tmp_path)
         flagged = _missing_or_stale_result_outputs(
             "Saved the summary to artifacts/never-written.md.",
             time.time() - 3600)
-        assert any("never-written.md" in f and "not found" in f for f in flagged), (
-            f"a literal missing output must still be flagged: {flagged}")
+        assert any("never-written.md" in f and "not found" in f for f in flagged), flagged
 
     def test_real_extensions_that_resemble_tlds_still_verify(self, monkeypatch, tmp_path):
-        # The TLD list is deliberately tight — .sh and .app are real output
-        # suffixes and must keep their verification.
         import time
         from provenance import _missing_or_stale_result_outputs
         self._ws(monkeypatch, tmp_path)
         flagged = _missing_or_stale_result_outputs(
             "Saved the helper to deploy.sh.", time.time() - 3600)
         assert any("deploy.sh" in f for f in flagged), flagged
+
 
 
 class TestNowVerifyPayloadTruncation:

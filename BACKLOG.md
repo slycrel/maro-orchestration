@@ -2325,6 +2325,17 @@ pointer.
   is untested precisely because putting it under test would spend money on
   every suite run. Excluded from the tripwire for that reason, with the
   reason written at the exclusion site.
+  **Second side-finding (adversarial review, 2026-08-08): the RUNTIME BOX has
+  no installed entry points at all.** `~/claude/maro-orchestration/.venv/bin/maro`
+  does not exist and `maro` is not on PATH there — the Linux box runs from
+  source via `PYTHONPATH=src`. The M1 venv does have the console scripts. So
+  the machine that matters most is the one never exercising the packaged entry
+  points, which is precisely the configuration the 2026-07-09 docker trial
+  showed can be broken while every local invocation works. The fresh-workspace
+  tripwire therefore *prefers* the console script and falls back explicitly
+  (`HARNESS_USES_CONSOLE_SCRIPT`) rather than requiring it — requiring it would
+  red the suite on the box. Worth deciding: should the box be pip-installed
+  (`pip install -e .`) so it runs what ships?
   **Happy accident worth keeping** (Jeremy 2026-07-29: *"thankful for happy
   accidents"*): the M1 has **no maro config at all** — no `~/.maro/config.yml`
   and no workspace `config.yml` — so anything run here uses pure fresh-install
