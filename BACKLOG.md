@@ -72,6 +72,89 @@ the repo-local `memory/` writes (fixed 2026-08-06). Not deleted
 wants: identify the writer, point it at the workspace, then opt-in
 cleanup call on the seven files.
 
+### MH. Model-or-Harness taxonomy — the ADOPT edges from maro's self-evaluation (OPENED 2026-08-09, from runs de790c13 + 6fa41f96)
+
+Two dispatched runs evaluated maro against arXiv:2607.28802 ("Model or
+Harness?", Raj et al. — 41 failure modes localized to component-interaction
+edges with a fault side): cold `de790c13-eager-lichen` (2026-08-08, demoted
+by the since-fixed brace-template provenance costume, closure-contested)
+and its verbatim warm replay `6fa41f96-stout-quartz` (2026-08-09,
+achieved=True, closure 0.82), which audited and corrected the cold run's
+artifacts rather than redoing them. Deliverable: workspace
+`projects/httpsxcomxudong…evaluate/FINAL_VERDICT.md` + `artifacts/
+step-8-adopt-skip-rulings.json` + `step-9-adversarial-verification.json`.
+**Corrected tally: ALREADY_HAVE 7 / ADOPT 12 / SKIP 22.**
+
+The ADOPT edges, keeping FINAL_VERDICT.md's own numbering (#2 was
+retracted by the step-9 adversarial pass — see below):
+
+- **#1 Specification Gaming (model—grader), CRITICAL** — closure's checks
+  are command+exit_code pairs, structurally gameable; the verification
+  trust model has no defense against the failure mode aimed at it.
+  Highest leverage of the twelve.
+- **#3 Observation Failure (env—model), high** — `step_exec.py`
+  `_summarize_tool_events` truncates 2000 chars / 50 events silently
+  (same class as the arbitrary-truncation audit already on this backlog).
+- **#4 Instruction-Grader Mismatch (owner—model), med-high, INFERRED** —
+  closure checks derive from the owner instruction; drift = pass-but-wrong.
+- **#5 Tool Feedback Neglect (model—tool)** — `tool_transcript` already
+  logs `is_error`; cheapest build (classifier over existing data).
+- **#6 Communication Failure (subagent edge)** — subagent I/O captured
+  raw; under-reporting to the parent plausible and undetected.
+- **#7 Overgeneralization (model—memory), INFERRED** — cheap relabel of
+  `memory_ledger._maybe_emit_contradiction_candidate` (L983).
+- **#8 Missed Read (model—memory), INFERRED-cost** — `memory_quality.py`
+  is a working offline hit@1/hit@5/MRR eval with ZERO call sites; adopt =
+  wire it live. Batch-CLI→per-run cost was not scoped; "cheap" unverified.
+- **#9 Instruction-Following Failure (owner—model)** — relabel
+  `checks_run`/`failed_checks`, already structured.
+- **#10 Malformed Arguments / #11 Tool Hallucination / #12 Tool Recovery
+  Failure (model—tool)** — three mechanical classifiers over
+  `tool_transcript` (args+is_error split-out; called-name vs registry;
+  N-consecutive-failures joined with `stuck_loop`).
+- **#13 Delegation Failure (subagent edge), INFERRED** — extend
+  `attribution.failed_skill` toward scope/dependency mismatch vs
+  Task-call input; assumes Task-call input shape, not re-verified.
+
+Plus two SKIP rulings the verdict flags as genuine unresolved gaps, not
+dismissals: **Memory Following Failure** (`memory_slice_injected` is an
+A/B flag with zero consumers verifying behavior followed the injected
+content — the verdict's "single most actionable finding") and **Memory
+Rationale Erosion** (compress/dedup rewrite records, nothing checks
+rationale drift).
+
+Standing caveats to honor before building ANY of these: (a) every ruling
+is static-source-reading — "code path present," never "problem solved";
+(b) the list is 8 source-grounded + 4 inferred, and step 9 FALSIFIED one
+source-grounded claim (cold's ADOPT-critical #2, Indirect Prompt
+Injection — `security.py:scan_external_content` is already wired at
+`loop_execute.py:352`; reclassified ALREADY_HAVE-partial), so each edge
+deserves the same live-source re-verification #2 failed, not a free pass
+for citing a file name; (c) both runs' artifacts kept growing
+prose-vs-JSON drift (three instances found) — trust the patched JSONs
+(`step-8` rulings + `step-4-reclassification.json`) only after checking
+their tallies against `FINAL_VERDICT.md`'s corrected banner.
+
+### Run-card cost lane is a ~37%-low estimate; the budget auto-line inherits it (FOUND 2026-08-09)
+
+`run_card.total_cost_usd` = `metrics.spend_for_loops` (metrics.py:296) =
+sum of `step-costs.jsonl`, whose rows are `estimate_cost()` outputs
+(metrics.py:120): cache reads priced at 0.1× but **no cache-creation-write
+term** (billed 1.25×). The subprocess backend re-writes cache every step,
+so the card lane runs systematically low vs the backend-reported truth in
+the loop log: de790c13 card $3.42 vs provider $5.41 (−37%); 6fa41f96
+$3.00 vs $4.95 (−39%). `provider_cost_usd` (accumulated per-step,
+loop_execute.py:299) is the only truth lane. Knock-on: the budget
+auto-line (`max($2.50, p90)`) takes p90 of `total_cost_usd` across run
+cards (metrics.py:257) — the effective ceiling is ~35% tighter against
+real spend than the configured intent. Fix shape: plumb the
+backend-reported per-step cost into `record_step_cost` (signature is
+tokens-only today; the value already exists at the `loop_post_step.py`
+call site — the loop log's step rows carry it), or compute the card's
+cost from loop-log totals at curation time; then re-check what the budget
+line's p90 works out to on the truth lane before/after. Until fixed,
+readouts must not treat card and loop-log figures as interchangeable.
+
 ### Live-writer census findings — four decision-shaped items (OPENED 2026-08-06)
 
 The 2026-08-06 live-writer census (method: a gate is only as live as its
