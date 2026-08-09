@@ -969,13 +969,51 @@ class TestDetectBehavioralGap:
 
     def test_signal1_admission_ignores_deliverable_shape(self):
         # Self-contradiction in the verdict's own words is the strongest
-        # signal — document deliverables must NOT suppress it.
+        # signal — UNSHAPED document-looking deliverables must NOT suppress
+        # it (prose inference is too weak to override the admission; the
+        # narrower declared-shape stand-down is tested below, run 18773dfa).
         intent = self._intent(("notes/summary.md", "written summary"))
         reason = self._call(
             summary="Gap: runtime validation was not performed.",
             resolved_intent=intent,
         )
         assert reason
+
+    # -- Signal 1 declared-shape stand-down (run 18773dfa regression) ------
+
+    def test_signal1_all_declared_document_shapes_suppress_admission(self):
+        # Run 18773dfa (2026-08-09): research-only goal, all-document
+        # deliverables, summary honestly noted an OPTIONAL recommended
+        # follow-up "was never executed (correctly, per this run's
+        # research-only constraint)" — the bare phrase match demoted a
+        # 5/5-checks achieved verdict to lost-the-plot. When every
+        # deliverable EXPLICITLY declares document/data shape, static probes
+        # are the right modality and the admission can be about
+        # out-of-scope work.
+        intent = self._intent(
+            ("artifacts/discrepancy-crosscheck.md", "tally reconciliation",
+             "document"),
+            ("artifacts/closure-note.md", "closure decision note", "document"),
+        )
+        assert self._call(
+            summary="Achieved. The recommended port was not executed, "
+                    "correctly, per the research-only constraint.",
+            resolved_intent=intent,
+        ) == ""
+
+    def test_signal1_mixed_declared_shapes_keep_admission_armed(self):
+        # One runtime-shaped deliverable among documents → the admission may
+        # be about the goal's runtime half; the signal must still fire.
+        # (The no-intent lane is already covered by
+        # test_slycrel_go_exact_admission_flags — unchanged by this gate.)
+        intent = self._intent(
+            ("docs/runbook.md", "operations runbook", "document"),
+            ("cmd/server/main.go", "HTTP server binary", "runtime"),
+        )
+        assert self._call(
+            summary="runtime validation was not performed",
+            resolved_intent=intent,
+        )
 
     # -- declared Deliverable.shape (Part B, B1) takes precedence over the
     # keyword-regex inference above ---------------------------------------

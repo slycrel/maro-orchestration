@@ -135,7 +135,36 @@ prose-vs-JSON drift (three instances found) — trust the patched JSONs
 (`step-8` rulings + `step-4-reclassification.json`) only after checking
 their tallies against `FINAL_VERDICT.md`'s corrected banner.
 
-### Closure Signal-1 "not executed" downgrade — a false-demotion costume in the fd483efb fix's sibling lane (FOUND 2026-08-09, run 18773dfa)
+### Closure Signal-1 "not executed" downgrade — a false-demotion costume in the fd483efb fix's sibling lane (FOUND 2026-08-09, run 18773dfa; **fixes SHIPPED same day**, re-stamp decision open)
+
+**SHIPPED 2026-08-09 (same-day, Jeremy: "go ahead and fix that... sure
+seems like we need a verdict verification pass"):** (a) Signal 1 now
+stands down when every deliverable EXPLICITLY declares a document/data
+shape — deliberately narrower than fix-shape (a) below: the decided call
+in `test_signal1_admission_ignores_deliverable_shape` (unshaped
+document-looking deliverables must NOT suppress a self-contradiction
+admission) is honored, and the B1 declared-shape-is-authoritative
+doctrine carries the stand-down instead
+(`closure_verify._declared_all_document_deliverables`). (b) The systemic
+net is the new **verdict-audit pass** (`closure.verdict_audit`, default
+ON, DEFAULTS.md row): a negative verdict with zero cleanly-failed checks
+and ≥1 clean pass gets one second-opinion call holding the goal, the
+verdict's own reasoning, the check outcomes, and ground-truth excerpts of
+the files the checks referenced. Disagreement cancels a pending
+deterministic downgrade outright; a judge-asserted False gets ONE retry
+with the objection attached; a retry that maintains False stands, stamped
+`verdict_audit.disputed`, and handle.py routes the loop into the existing
+contested learning holdout — closure-internal negatives finally have a
+contest lane (fix-shape (c) below). Covers the no-ResolvedIntent lane the
+Signal-1 gate can't reach (both 18773dfa and its warm predecessor had
+`scope-raw-FAILED.txt`, so no deliverable shapes existed at closure
+time). Tests: `tests/test_closure_verdict_audit.py` + Signal-1 gate cases
+in `test_director.py`; full suite 8055 passed / 0 skipped.
+
+**Still open here: the operator re-stamp decision** — `18773dfa` and
+`de790c13` both carry false `goal_achieved=False` on the record.
+
+Original finding record:
 
 Specimen: `18773dfa-olive-wren`, the 3rd verbatim replay of the
 Model-or-Harness self-eval (see MH. entry above). The run did the right

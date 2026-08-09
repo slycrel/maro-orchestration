@@ -244,6 +244,15 @@ class ClosureVerdict:
     # so restart convergence can be judged structurally (§9.3): a restart
     # that fails identically made zero map edits.
     failed_checks: List[str] = field(default_factory=list)
+    # Verdict-audit trail (2026-08-09, runs 18773dfa/2738d9c0 class): the
+    # second-opinion pass over a negative verdict that lacked mechanical
+    # failure evidence — {ran, agrees, reason, confidence} plus one of
+    # overturned="downgrade-cancelled" / overturned="judge-retry" /
+    # disputed=True. Empty when the audit didn't run (killswitch, dry-run,
+    # a clean check failure backing the negative, or a positive verdict).
+    # disputed=True means the verdict stands but two judges disagree —
+    # handle.py routes those loops into the contested learning holdout.
+    verdict_audit: Dict[str, Any] = field(default_factory=dict)
 
 
 def _failed_check_signature(row: dict) -> str:
@@ -1041,16 +1050,19 @@ def verify_goal_completion(
 
         # Phase 3: director interprets results
         results_text = json.dumps(check_results, indent=2)
+        # Kept in a variable so the verdict-audit retry can re-ask the SAME
+        # question with the auditor's objection appended, not a paraphrase.
+        _verdict_user_content = (
+            f"Goal: {goal}\n\n"
+            f"{_interpretation_block}"
+            f"Work done:\n{work_summary}\n"
+            f"{_ledger_block}\n"
+            f"Verification results:\n{results_text}"
+        )
         verdict_resp = adapter.complete(
             [
                 LLMMessage("system", _CLOSURE_VERDICT_SYSTEM),
-                LLMMessage("user",
-                    f"Goal: {goal}\n\n"
-                    f"{_interpretation_block}"
-                    f"Work done:\n{work_summary}\n"
-                    f"{_ledger_block}\n"
-                    f"Verification results:\n{results_text}"
-                ),
+                LLMMessage("user", _verdict_user_content),
             ],
             max_tokens=256,
             temperature=0.1,
@@ -1143,6 +1155,102 @@ def verify_goal_completion(
             diagnosis=diagnosis,
             modality_dist=modality_dist,
         )
+
+        # Verdict audit (2026-08-09; specimens 18773dfa and 2738d9c0): before
+        # a negative verdict with NO mechanical failure evidence is allowed to
+        # stand, give one second-opinion call the artifact evidence and ask
+        # whether the evidence supports not-achieved. Fires only when at least
+        # one check cleanly passed (positive evidence exists that the negative
+        # contradicts) and none cleanly failed (a clean fail is real evidence
+        # and the negative may demote unaudited). Disagreement cancels a
+        # pending deterministic downgrade outright — the auditor holds
+        # strictly more evidence than the phrase-match that proposed the flip
+        # — while a judge-asserted False gets ONE retry with the objection
+        # attached; a retry that maintains False stands, stamped disputed so
+        # learning holds the outcome out (the contested-lane decree,
+        # 2026-08-02: anecdote, not a vote).
+        verdict_audit: Dict[str, Any] = {}
+        _pending_downgrades = [
+            r for r in (behavioral_gap_reason, diagnosis_gap_reason) if r
+        ]
+        _audit_fail_count = sum(
+            1 for r in check_results if r.get("outcome") == "fail")
+        _audit_pass_count = sum(1 for r in check_results if r.get("passed"))
+        if (
+            ((not complete) or _pending_downgrades)
+            and _audit_fail_count == 0
+            and _audit_pass_count > 0
+            and not dry_run
+            and _verdict_audit_enabled()
+        ):
+            verdict_audit = _audit_negative_verdict(
+                goal=goal,
+                adapter=adapter,
+                summary=summary,
+                gaps=gaps,
+                downgrade_reasons=_pending_downgrades,
+                check_results=check_results,
+                workspace_path=workspace_path,
+            )
+            if verdict_audit.get("agrees") is False:
+                if complete and _pending_downgrades:
+                    log.warning(
+                        "closure: verdict audit overturned pending "
+                        "deterministic downgrade(s) %s — %s",
+                        _pending_downgrades,
+                        verdict_audit.get("reason", ""),
+                    )
+                    verdict_audit["overturned"] = "downgrade-cancelled"
+                    verdict_audit["cancelled_reasons"] = [
+                        r[:200] for r in _pending_downgrades
+                    ]
+                    behavioral_gap_reason = ""
+                    diagnosis_gap_reason = ""
+                elif not complete:
+                    _retry_resp = adapter.complete(
+                        [
+                            LLMMessage("system", _CLOSURE_VERDICT_SYSTEM),
+                            LLMMessage("user",
+                                _verdict_user_content
+                                + "\n\nAn independent audit holding the "
+                                  "artifact files in evidence disagrees with "
+                                  "a not-achieved verdict here: "
+                                + verdict_audit.get("reason", "")
+                                + "\nRe-evaluate. A confident complete=false "
+                                  "requires evidence of failure — cite the "
+                                  "specific failing evidence if you maintain "
+                                  "it."),
+                        ],
+                        max_tokens=256,
+                        temperature=0.1,
+                        no_tools=True,
+                        purpose="closure verdict retry",
+                    )
+                    _retry_data = extract_json(
+                        content_or_empty(_retry_resp), dict,
+                        log_tag="director.closure_verdict_retry")
+                    if _retry_data and bool(_retry_data.get("complete", False)):
+                        log.warning(
+                            "closure: verdict audit retry overturned "
+                            "complete=False — %s",
+                            verdict_audit.get("reason", ""),
+                        )
+                        verdict_audit["overturned"] = "judge-retry"
+                        complete = True
+                        confidence = safe_float(
+                            _retry_data.get("confidence"), default=0.7,
+                            min_val=0.0, max_val=1.0)
+                        gaps = [safe_str(g) for g in
+                                safe_list(_retry_data.get("gaps")) if g]
+                        summary = safe_str(_retry_data.get("summary", ""))
+                    else:
+                        verdict_audit["disputed"] = True
+                        log.warning(
+                            "closure: verdict audit disagreed but the judge "
+                            "maintained complete=False on retry — verdict "
+                            "stands, stamped disputed for the learning "
+                            "holdout")
+
         if behavioral_gap_reason:
             log.warning(
                 "closure: downgrading complete=True -> False — behavioral gap: %s",
@@ -1301,6 +1409,7 @@ def verify_goal_completion(
                 for r in check_results
                 if r.get("outcome") == "fail" and r.get("command")
             ],
+            verdict_audit=verdict_audit,
         )
 
         # Emit needs_work if gaps found
@@ -1343,6 +1452,7 @@ def verify_goal_completion(
                     "behavioral_gap_downgrade": behavioral_gap_reason or "",
                     "diagnosis_failure_class": safe_str(getattr(diagnosis, "failure_class", "")),
                     "diagnosis_gap_downgrade": diagnosis_gap_reason or "",
+                    "verdict_audit": verdict_audit,
                     "next_ledger_divergence": _ledger_gap[:300],
                     # How many failed static checks carried ground-truth file
                     # excerpts into the verdict call (brittle-probe evidence,
@@ -1379,6 +1489,7 @@ def verify_goal_completion(
             "inconclusive_count": len(inconclusive_checks),
             "judged": judged,
             "downgrade_reason": downgrade_reason,
+            "verdict_audit": verdict_audit,
             "gaps": [str(g)[:300] for g in gaps],
             "summary": summary[:500],
             "failed_checks": list(verdict.failed_checks),
@@ -1635,6 +1746,18 @@ def _detect_behavioral_gap(
     every deliverable is a document (no server/endpoint/service shape), static
     probes ARE the right modality and the downgrade must not fire. With no
     deliverables to consult, the original conservative behavior stands.
+
+    Signal 1 gets a NARROWER gate (2026-08-09, run 18773dfa): it stands down
+    only when every deliverable EXPLICITLY declares a document/data shape
+    (B1) — for an all-declared-document goal, static probes are the right
+    modality and an admission phrase can be about out-of-scope work (18773dfa:
+    a research-only run's summary honestly noted an OPTIONAL recommended
+    follow-up was "not executed" and the bare phrase match demoted a
+    5/5-checks achieved verdict). Unshaped deliverables deliberately do NOT
+    suppress Signal 1 — prose inference is too weak to override the verdict's
+    own words (the decided call in
+    test_signal1_admission_ignores_deliverable_shape); the verdict-audit pass
+    is the net for that lane.
     """
     if not complete:
         return ""
@@ -1643,11 +1766,13 @@ def _detect_behavioral_gap(
     if has_behavioral:
         return ""
 
-    # Signal 1: self-contradiction in summary / gap text.
+    # Signal 1: self-contradiction in summary / gap text. Stands down only
+    # for all-DECLARED-document/data deliverables (see docstring; run
+    # 18773dfa) — unshaped deliverables keep the original behavior.
     combined_text = summary + "\n" + "\n".join(gaps)
-    if _RUNTIME_GAP_ADMISSION.search(combined_text):
-        m = _RUNTIME_GAP_ADMISSION.search(combined_text)
-        return f"LLM summary admits runtime was not exercised: {m.group(0)!r}"
+    _admission = _RUNTIME_GAP_ADMISSION.search(combined_text)
+    if _admission and not _declared_all_document_deliverables(resolved_intent):
+        return f"LLM summary admits runtime was not exercised: {_admission.group(0)!r}"
 
     # Signal 2: scope failure modes named runtime expectations.
     if scope is not None:
@@ -1699,6 +1824,31 @@ def _any_declared_runtime_deliverable(resolved_intent) -> bool:
     try:
         delivs = getattr(resolved_intent, "deliverables", None) or []
         return any(getattr(d, "shape", None) == "runtime" for d in delivs)
+    except Exception:
+        return False
+
+
+def _declared_all_document_deliverables(resolved_intent) -> bool:
+    """True when deliverables exist and EVERY one explicitly declares a
+    document/data shape (B1 declaration — authoritative when present).
+
+    Backs Signal 1's stand-down (run 18773dfa, 2026-08-09). Deliberately
+    stricter than `_deliverables_corroborate_runtime`: an unshaped
+    deliverable returns False even when its name/description read as a
+    document, because prose inference is too weak to override the verdict's
+    own admission words (the decided call recorded in
+    test_signal1_admission_ignores_deliverable_shape). None/empty → False
+    (conservative: the signal stays armed).
+    """
+    if resolved_intent is None:
+        return False
+    try:
+        delivs = getattr(resolved_intent, "deliverables", None) or []
+        if not delivs:
+            return False
+        return all(
+            getattr(d, "shape", None) in ("document", "data") for d in delivs
+        )
     except Exception:
         return False
 
@@ -1773,3 +1923,126 @@ def _detect_diagnosis_gap(
         f"loop diagnosis reported decomposition_too_broad{sev} "
         f"before closure, but no behavioral probe ran.{rec}"
     )
+
+
+# --- Verdict audit (2026-08-09) ---------------------------------------------
+#
+# Specimens: 18773dfa (Signal 1 demoted a research-only run for honestly
+# noting an OPTIONAL follow-up was "not executed") and the 2738d9c0 class
+# (judge-asserted False resting on narration alone — f7b775c caps its
+# standing but nothing could FIX the verdict). Both are one disease: a
+# negative verdict standing without mechanical failure evidence, produced
+# by a judge (or a regex) holding less evidence than the run left on disk.
+# The audit gives one second-opinion call the artifact evidence and asks the
+# only question that matters: does the evidence support not-achieved?
+
+_VERDICT_AUDIT_MAX_FILES = 6
+
+_VERDICT_AUDIT_SYSTEM = textwrap.dedent("""\
+    You audit NOT-ACHIEVED verdicts produced for autonomous runs. You get
+    the goal, the verdict's own reasoning, the mechanical check outcomes,
+    and ground-truth excerpts of artifact files those checks referenced.
+
+    Doctrine:
+    - A confident not-achieved requires EVIDENCE OF FAILURE: a check that
+      cleanly failed, or file content that contradicts the goal. "No probe
+      looked at X" is insufficient coverage, never proof of failure.
+    - Assert what a file contains only when its content is shown to you.
+    - Honoring an explicit constraint (e.g. research-only: recommend rather
+      than modify) is not failure, and prose noting that optional or
+      out-of-scope work was "not executed" is not an admission that the
+      goal work didn't happen.
+
+    Reply with JSON only:
+    {"agrees": true, "reason": "<one sentence>", "confidence": 0.0}
+    agrees=true means the not-achieved verdict is supported by the
+    evidence; agrees=false means the evidence contradicts it.
+""")
+
+
+def _verdict_audit_enabled() -> bool:
+    try:
+        from config import get
+        return bool(get("closure.verdict_audit", True))
+    except Exception:
+        return True
+
+
+def _audit_negative_verdict(
+    *,
+    goal: str,
+    adapter,
+    summary: str,
+    gaps: List[str],
+    downgrade_reasons: List[str],
+    check_results: List[dict],
+    workspace_path: str,
+) -> Dict[str, Any]:
+    """One second-opinion call, WITH artifact evidence, on a negative verdict.
+
+    Evidence is the ground-truth excerpts of files the closure plan's own
+    checks referenced — the same path-shaped-token extraction the
+    failed-check evidence lane uses, applied over ALL checks: a negative
+    verdict with zero failed checks attaches no evidence through the normal
+    lane, and that bounded view is exactly what is being audited.
+
+    Returns {} on any failure — the audit must never block closure.
+    """
+    try:
+        from llm import LLMMessage
+
+        checks_lines = [
+            f"- [{r.get('outcome', '?')}] {str(r.get('command', ''))[:200]}"
+            for r in check_results
+        ]
+        evidence: Dict[str, str] = {}
+        for r in check_results:
+            if len(evidence) >= _VERDICT_AUDIT_MAX_FILES:
+                break
+            for path, excerpt in _failed_check_file_evidence(
+                r.get("command", ""), workspace_path or None,
+                max_files=_VERDICT_AUDIT_MAX_FILES - len(evidence),
+            ).items():
+                evidence.setdefault(path, excerpt)
+        evidence_block = "\n".join(
+            f"--- {p} ---\n{x}" for p, x in evidence.items()
+        ) or "(no artifact files resolved from the check commands)"
+        reasons_block = (
+            "Deterministic downgrade reason(s): " + "; ".join(
+                r[:200] for r in downgrade_reasons)
+            if downgrade_reasons else
+            "Verdict source: the closure judge itself returned complete=False."
+        )
+
+        resp = adapter.complete(
+            [
+                LLMMessage("system", _VERDICT_AUDIT_SYSTEM),
+                LLMMessage("user",
+                    f"Goal: {goal}\n\n"
+                    f"Verdict under audit: NOT-ACHIEVED\n"
+                    f"{reasons_block}\n"
+                    f"Judge summary: {summary}\n"
+                    f"Judge gaps: {json.dumps([g[:300] for g in gaps])}\n\n"
+                    f"Mechanical checks ({len(check_results)}):\n"
+                    + "\n".join(checks_lines)
+                    + f"\n\nArtifact evidence:\n{evidence_block}"),
+            ],
+            max_tokens=256,
+            temperature=0.1,
+            no_tools=True,
+            purpose="closure verdict audit",
+        )
+        data = extract_json(content_or_empty(resp), dict,
+                            log_tag="closure.verdict_audit")
+        if not data or "agrees" not in data:
+            return {"ran": True, "parse_failed": True}
+        return {
+            "ran": True,
+            "agrees": bool(data.get("agrees")),
+            "reason": safe_str(data.get("reason", ""))[:300],
+            "confidence": safe_float(data.get("confidence"), default=0.5,
+                                     min_val=0.0, max_val=1.0),
+        }
+    except Exception as exc:
+        log.debug("verdict audit failed (non-blocking): %s", exc)
+        return {}

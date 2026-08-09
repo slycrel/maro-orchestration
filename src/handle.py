@@ -2839,6 +2839,21 @@ def _handle_impl(
             _dl_result = loop_result
             _dl_project = project or getattr(loop_result, "project", "") or ""
             _dl_extra = [l for l in _run_loop_ids if l != _final_lid]
+            # Verdict-audit dispute (2026-08-09): the closure verdict stood,
+            # but the evidence-holding auditor disagreed and a judge retry
+            # maintained it — two judges in disagreement is the same shape as
+            # provenance-vs-closure, so the loop joins the same contested
+            # holdout: recorded, but not voting for or against in learning.
+            try:
+                _va = getattr(_closure, "verdict_audit", {}) or {}
+                if _va.get("disputed") and _final_lid:
+                    _contested_verdict_loop_ids.add(_final_lid)
+                    log.info(
+                        "learning: closure verdict stands but the verdict "
+                        "audit disputed it — loop %s held out as contested",
+                        _final_lid)
+            except Exception:
+                pass
             _dl_skip = list(_audit_failed_loop_ids | _contested_verdict_loop_ids)
             if _contested_verdict_loop_ids:
                 log.info(
