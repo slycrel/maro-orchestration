@@ -590,11 +590,12 @@ def run_skill_maintenance(
       - After rewrite, skill is set to "half_open" (probationary)
       - CIRCUIT_HALFOPEN_RECOVERY (2) consecutive successes closes the breaker
 
-    Also re-fights contested standing rules (decay-by-invalidation v0) when
-    an adapter is available — same collision→repair shape, rule layer.
+    Also re-fights contested standing rules (decay-by-invalidation v0) and
+    contested lessons with post-contest re-sightings (§5 lesson refight,
+    2026-08-09) when an adapter is available — same collision→repair shape.
 
     Returns dict with keys: promoted, demoted, rewritten, rewrite_candidates,
-    rules_refought.
+    rules_refought, lessons_refought.
     """
     from skills import (
         maybe_auto_promote_skills,
@@ -776,12 +777,37 @@ def run_skill_maintenance(
     except Exception as _rf_e:
         log.debug("rule re-fight scan failed (non-fatal): %s", _rf_e)
 
+    # §5 lesson-refight (2026-08-09): the same collision→repair pattern for
+    # contested LESSONS. Evidence-gated — only rows re-sighted SINCE the
+    # contest are scanned (a contested MEDIUM row with no new evidence
+    # retires by decay for free; LONG stays retired-in-place), so this
+    # spends nothing until reality pushes back on a retirement. Same
+    # per-cycle cap as rules.
+    lessons_refought: list = []
+    try:
+        from knowledge_web import contested_lessons, refight_lesson
+        _cl = contested_lessons(new_evidence_only=True)
+        if _cl and verbose:
+            print(
+                f"[evolver] contested lessons with post-contest sightings "
+                f"(re-fight candidates): {[t.lesson_id for t in _cl[:3]]}",
+                file=sys.stderr,
+            )
+        if not dry_run and adapter is not None:
+            for _tl in _cl[:3]:  # max 3 re-fights per cycle
+                _laction = refight_lesson(_tl, adapter, verbose=verbose)
+                if _laction:
+                    lessons_refought.append(f"{_tl.lesson_id}:{_laction}")
+    except Exception as _lrf_e:
+        log.debug("lesson re-fight scan failed (non-fatal): %s", _lrf_e)
+
     return {
         "promoted": promoted,
         "demoted": demoted,
         "rewritten": rewritten,
         "rewrite_candidates": rewrite_candidates,
         "rules_refought": refought,
+        "lessons_refought": lessons_refought,
         "contradictions_adjudicated": adjudicated,
         "nodes_promoted": nodes_promoted,
     }

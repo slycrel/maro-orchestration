@@ -77,6 +77,13 @@ LESSON_QUARANTINED = "LESSON_QUARANTINED"  # provenance-gate stamp (prompt-deriv
 # lesson) or by operator judgment. Contested rows leave every injection
 # surface but stay on disk; the audit trail for lesson trust flips.
 LESSON_CONTESTED = "LESSON_CONTESTED"
+# §5 lesson-refight (2026-08-09): a contested lesson was re-derived against
+# its contradiction evidence (knowledge_web.refight_lesson — the lesson
+# mirror of RULE_REFOUGHT, run from the maintenance cadence when a contested
+# row accrues post-contest re-sightings, or via `maro-memory refight`).
+# Context carries action (keep|revise|retire), reasoning, old/new text, and
+# reinforced_since_contest — the audit trail for lesson-trust changes.
+LESSON_REFOUGHT = "LESSON_REFOUGHT"
 # Δ-gate demotion stamp applied (2026-08-08): measured-negative lesson
 # excluded from decision injection + tenure-to-LONG. Sibling of the two
 # above — every exclusion mechanism leaves an operator-readable audit row.

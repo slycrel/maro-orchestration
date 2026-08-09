@@ -1242,9 +1242,34 @@ def _cmd_memory(args: argparse.Namespace) -> int:
                             source=args.source,
                             tier=getattr(args, "tier", None))
         if ok:
-            print(f"Contested lesson_id={args.lesson_id} — out of every injection surface (sticky; no un-contest verb yet)")
+            print(f"Contested lesson_id={args.lesson_id} — out of every injection surface (clears only via `maro-memory refight` on a keep/revise verdict)")
         else:
             print(f"lesson_id={args.lesson_id} not found")
+            return 1
+    elif memory_cmd == "refight":
+        from knowledge_web import _is_contested, refight_lesson
+        tiers = ([getattr(args, "tier", None)] if getattr(args, "tier", None)
+                 else [MemoryTier.MEDIUM, MemoryTier.LONG])
+        target = None
+        for _t in tiers:
+            rows = load_tiered_lessons(tier=_t, min_score=0.0, limit=None, raw=True)
+            target = next((l for l in rows if l.lesson_id == args.lesson_id), None)
+            if target is not None:
+                target.tier = _t
+                break
+        if target is None:
+            print(f"lesson_id={args.lesson_id} not found in the tiered store "
+                  f"(flat-only contested rows aren't refightable — named v1 cut)")
+            return 1
+        if not _is_contested(target):
+            print(f"lesson_id={args.lesson_id} is not contested — nothing to re-fight")
+            return 1
+        from llm import build_adapter, MODEL_MID
+        action = refight_lesson(target, build_adapter(model=MODEL_MID), verbose=True)
+        if action:
+            print(f"Re-fought lesson_id={args.lesson_id} -> {action}")
+        else:
+            print(f"Re-fight unresolved for lesson_id={args.lesson_id} — stays contested (adapter unavailable or verdict unusable)")
             return 1
     elif memory_cmd == "list":
         tier = getattr(args, "tier", "medium")

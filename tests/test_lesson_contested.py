@@ -4,9 +4,10 @@ up"): lessons gain a contested state mirroring the standing-rule grey flip.
 Contested lessons leave every injection surface (inject_tiered_lessons,
 query_lessons, search_graveyard, flat-ledger load_lessons, canon candidates),
 never promote to LONG, and never confirm — re-sightings via dedup bump
-times_reinforced only (evidence for a future refight slice) while score and
-the decay anchor freeze, so MEDIUM rows retire on the decay schedule and
-contestation is the retirement mechanism for decay-free LONG rows.
+times_reinforced only (refight evidence, consumed by refight_lesson —
+tests/test_lesson_refight.py) while score and the decay anchor freeze, so
+MEDIUM rows retire on the decay schedule and contestation is the
+retirement mechanism for decay-free LONG rows.
 Acceptance corpus: the six chunk-1 surprise-read contradictions.
 """
 

@@ -6710,3 +6710,18 @@ under the same two-measurement standard).
   guard), same-step hits inflation, unknown-source coercion (landing
   now allowlists). Record:
   docs/history/2026-08-09-world-facts-s23-adversarial-review.md.
+- **2026-08-09** — Lesson refight SHIPPED (§5 cut A; the designed
+  consumer of the counter contest_lesson kept bumping "for a future
+  refight"). `knowledge_web.refight_lesson` mirrors `refight_rule`:
+  keep (contested cleared on BOTH stores, decay anchor restored) /
+  revise (corrected text re-enters provisional, zeroed counters; flat
+  row keeps the refuted original and stays contested) / retire
+  (archived `refight_retire`, excluded from graveyard resurrection —
+  the explicit disposal for decay-free LONG). Contest stamps now
+  snapshot `times_reinforced_at_contest` per store; the maintenance
+  scan (`run_skill_maintenance`, capped 3/cycle like rules) is
+  evidence-gated — only rows re-sighted SINCE the contest spend a
+  call, so quiet MEDIUM rows still decay out for free. Operator verb
+  `maro-memory refight` (legacy no-snapshot stamps reachable there;
+  flat-only contested rows named v1 cut). No new config key. 23 pins
+  (tests/test_lesson_refight.py); full suite green.

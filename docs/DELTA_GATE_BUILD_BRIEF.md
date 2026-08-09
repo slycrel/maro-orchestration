@@ -90,5 +90,9 @@ Lessons only — no evolver/thinkback trace scoring yet (the original
 LeAct item's wider target; it queues behind a working lesson gate).
 No competence-redundancy decay (follow-on steal, needs this same
 harness; Jeremy's 55c877da: calendar decay was "mostly placeholder").
-No un-contest/refight verb. Tenure route untouched. No retroactive
+~~No un-contest/refight verb~~ (BUILT 2026-08-09:
+`knowledge_web.refight_lesson` — keep/revise/retire LLM tri-state
+mirroring `refight_rule`, evidence-gated maintenance scan on
+post-contest re-sightings + `maro-memory refight` operator verb; see
+`tests/test_lesson_refight.py`). Tenure route untouched. No retroactive
 re-scoring of the existing LONG tier.

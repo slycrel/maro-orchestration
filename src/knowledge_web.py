@@ -135,8 +135,11 @@ class TieredLesson:
     # provisional/quarantined) and never promote; reinforcement bumps score
     # but is never confirming (sessions_validated frozen, flags never clear).
     # This is the only retirement path for LONG rows, which don't decay.
-    # Sticky by design — no un-contest verb until a lesson-refight slice
-    # exists (mirrors refight_rule). Old rows deserialize to {}.
+    # Sticky against duplicate writes — only refight_lesson (the §5 lesson
+    # mirror of refight_rule, 2026-08-09) can clear it, via an explicit
+    # keep/revise verdict against the contradiction evidence. The stamp also
+    # carries times_reinforced_at_contest so re-sightings since the contest
+    # are countable refight evidence. Old rows deserialize to {}.
     contested: Dict[str, Any] = field(default_factory=dict)
     # Δ-gate (2026-08-06, delta_replay.py): replay-measured effect evidence
     # when this lesson promoted by effect rather than tenure — {delta,
@@ -1225,11 +1228,12 @@ def contest_lesson(lesson_id: str, reason: str, *, source: str,
 
     Callers: contradiction adjudication (knowledge_lens) when a certified
     failure names a cited lesson, and the operator verb
-    (`maro-memory contest`). Sticky by design — no un-contest path until a
-    lesson-refight slice exists. Re-sightings via dedup only bump
-    times_reinforced (evidence for that future refight); score and the
-    decay anchor freeze, so a contested MEDIUM row retires on the decay
-    schedule no matter how often it is re-derived.
+    (`maro-memory contest`). Sticky against duplicate writes — only
+    refight_lesson clears it, on an explicit keep/revise verdict.
+    Re-sightings via dedup only bump times_reinforced (countable refight
+    evidence, vs the times_reinforced_at_contest snapshot in the stamp);
+    score and the decay anchor freeze, so a contested MEDIUM row retires on
+    the decay schedule no matter how often it is re-derived.
 
     Args:
         lesson_id: id of the lesson to contest.
@@ -1255,7 +1259,12 @@ def contest_lesson(lesson_id: str, reason: str, *, source: str,
                 if _is_contested(l):
                     hit["already"] = True
                 else:
-                    l.contested = stamp
+                    # Snapshot the sighting counter so refight can count
+                    # re-sightings SINCE the contest (per-store: the flat
+                    # ledger snapshots its own counter).
+                    l.contested = dict(
+                        stamp,
+                        times_reinforced_at_contest=l.times_reinforced)
                 hit["tl"] = l
         return lessons
 
@@ -1301,6 +1310,215 @@ def contest_lesson(lesson_id: str, reason: str, *, source: str,
     log.info("contest_lesson: %s (tier=%s flat=%s) contested by %s — %s",
              lesson_id, found_tier or "-", flat_hit, source, reason[:120])
     return True
+
+
+def _reinforced_since_contest(tl: TieredLesson) -> int:
+    """Re-sightings accrued after the contest stamp — the refight evidence
+    counter. Legacy stamps (pre-2026-08-09) lack the snapshot; count 0 for
+    them: with no baseline, raw times_reinforced would make every old
+    contested row look evidence-rich, and the operator verb covers them."""
+    snap = tl.contested.get("times_reinforced_at_contest")
+    if snap is None:
+        return 0
+    try:
+        return max(0, tl.times_reinforced - int(snap))
+    except (TypeError, ValueError):
+        return 0
+
+
+def contested_lessons(*, new_evidence_only: bool = False) -> List[TieredLesson]:
+    """Contested tiered lessons across MEDIUM + LONG (raw load — frozen
+    stored scores, no decay derivation), most re-sightings-since-contest
+    first: the row reality keeps re-deriving is the one whose retirement
+    most deserves a re-fight. With new_evidence_only=True, rows with zero
+    post-contest sightings are dropped — the maintenance-cadence filter, so
+    the scan only spends on rows the world has pushed back on (a contested
+    MEDIUM row with no new evidence retires by decay for free; a LONG one
+    stays retired-in-place)."""
+    rows: List[TieredLesson] = []
+    for tier in (MemoryTier.MEDIUM, MemoryTier.LONG):
+        for tl in load_tiered_lessons(tier=tier, min_score=0.0, limit=None,
+                                      raw=True):
+            if not _is_contested(tl):
+                continue
+            tl.tier = tier  # trust the store scanned, not the stored field
+            if new_evidence_only and _reinforced_since_contest(tl) < 1:
+                continue
+            rows.append(tl)
+    rows.sort(key=_reinforced_since_contest, reverse=True)
+    return rows
+
+
+def _lesson_contest_evidence(lesson_id: str, *, limit: int = 5) -> List[str]:
+    """Pull this lesson's contradiction evidence from the captain's log.
+    Mirrors knowledge_lens._rule_contradiction_evidence: the causal detail
+    (which run failed, how, why the judge attributed it) lives on the
+    CONTRADICTION_ADJUDICATED yes-events; LESSON_CONTESTED carries the
+    operator/adjudicator stamp summary."""
+    evidence: List[str] = []
+    try:
+        from captains_log import query_log
+        for e in query_log(lesson_id, event_type="CONTRADICTION_ADJUDICATED",
+                           limit=limit):
+            ctx = e.get("context") or {}
+            if str(ctx.get("verdict") or "") != "yes":
+                continue
+            if lesson_id not in (ctx.get("contradicted_ids") or []):
+                continue
+            evidence.append(
+                (f"run {ctx.get('loop_id', '?')} failed "
+                 f"({str(ctx.get('failure_summary') or 'no summary')[:120]}); "
+                 f"judge: {str(ctx.get('reasoning') or '')[:150]}")[:300])
+        for e in query_log(lesson_id, event_type="LESSON_CONTESTED",
+                           limit=limit):
+            evidence.append(str(e.get("summary") or "")[:200])
+    except Exception:
+        pass
+    return evidence[:limit * 2]
+
+
+def refight_lesson(tl: TieredLesson, adapter,
+                   *, verbose: bool = False) -> Optional[str]:
+    """Re-fight a contested lesson against its contradiction evidence — the
+    §5 lesson mirror of knowledge_lens.refight_rule (the designed consumer
+    of the frozen times_reinforced counter contest_lesson keeps bumping).
+
+    Verdicts: "keep" (the contradiction was noise — contested cleared on
+    BOTH stores, decay anchor restored to today), "revise" (corrected text
+    replaces the lesson, contested cleared but the row re-enters as
+    provisional with zeroed counters — must re-earn its record; the flat
+    row keeps the OLD text so it stays contested there), "retire"
+    (archived out of the live tier, reason="refight_retire", excluded from
+    graveyard resurrection like user_forget — the explicit disposal for
+    decay-free LONG rows; the flat row stays contested-in-place).
+
+    Returns the action taken, or None when the adapter is unavailable or
+    the output unusable — an unresolved collision stays contested rather
+    than being silently re-trusted. LLM call runs outside the store lock;
+    the verdict is applied under it against a fresh reload.
+    """
+    if adapter is None:
+        return None
+    if not _is_contested(tl):
+        return None
+
+    stamp = tl.contested
+    since = _reinforced_since_contest(tl)
+    evidence = _lesson_contest_evidence(tl.lesson_id)
+    evidence_text = "\n".join(f"- {e}" for e in evidence) or "(no event detail on record)"
+    prompt = f"""A stored lesson in an autonomous agent system was contested — a failed run was judged to have plausibly failed *because it applied* this lesson, or an operator flagged it as wrong — and must be re-derived.
+
+The lesson (injected into planning until contested):
+"{tl.lesson}"
+(task type: {tl.task_type or "general"}; tier: {tl.tier}; validated in {tl.sessions_validated} session(s); re-sighted {since}x SINCE being contested)
+
+Contested {stamp.get('contested_at', 'unknown')} by {stamp.get('source', 'unknown')}:
+{str(stamp.get('reason') or '(no reason recorded)')[:400]}
+
+Contradiction evidence (newest first):
+{evidence_text}
+
+Re-fight the battle that created this lesson. Decide:
+- "keep" — the lesson is still right; the contradiction was noise or misattribution.
+- "revise" — the lesson's core survives but needs correction; supply corrected lesson text.
+- "retire" — the lesson no longer holds; remove it from the live store.
+
+Output ONLY valid JSON:
+{{"action": "keep|revise|retire", "lesson": "<revised lesson text, only when action is revise>", "reasoning": "<one short paragraph>"}}"""
+
+    try:
+        from llm import LLMMessage
+        from llm_parse import extract_json, content_or_empty
+        resp = adapter.complete(
+            [LLMMessage("user", prompt)], max_tokens=400, temperature=0.2,
+            no_tools=True, purpose="lesson refight verdict",
+        )
+        parsed = extract_json(content_or_empty(resp), dict,
+                              log_tag="knowledge_web.refight_lesson")
+    except Exception as exc:
+        log.debug("refight_lesson: adapter failed for %s: %s",
+                  tl.lesson_id, exc)
+        return None
+    if not parsed:
+        return None
+
+    action = str(parsed.get("action") or "").strip().lower()
+    reasoning = str(parsed.get("reasoning") or "")[:400]
+    new_text = str(parsed.get("lesson") or "").strip()
+    if action not in ("keep", "revise", "retire"):
+        return None
+    if action == "revise" and not new_text:
+        return None
+
+    lesson_id = tl.lesson_id
+    applied = {"hit": False}
+
+    def _apply(lessons: List[TieredLesson]) -> List[TieredLesson]:
+        row = next((l for l in lessons if l.lesson_id == lesson_id), None)
+        if row is None or not _is_contested(row):
+            # GC'd, or a concurrent refight already resolved it — the
+            # verdict must not clobber that resolution.
+            return lessons
+        applied["hit"] = True
+        if action == "keep":
+            row.contested = {}
+            # The anchor froze at contest time; without re-anchoring, a
+            # restored MEDIUM row would instantly decay-GC on the time it
+            # spent contested (mirrors refight_rule's last_verified stamp).
+            row.last_reinforced = _current_date()
+        elif action == "revise":
+            row.lesson = new_text
+            row.contested = {}
+            row.provisional = True   # corrected text must re-earn its record
+            row.sessions_validated = 0
+            row.times_reinforced = 0
+            row.last_reinforced = _current_date()
+        else:  # retire → archive out of the live store, data preserved
+            _archive_lessons([row], reason="refight_retire")
+            return [l for l in lessons if l.lesson_id != lesson_id]
+        return lessons
+
+    _mutate_tiered_lessons(tl.tier, _apply)
+    if not applied["hit"]:
+        return None
+
+    if action == "keep":
+        # UU-4 dual-written rows: keep restores citizenship on EVERY surface
+        # the contest removed it from. revise/retire deliberately leave the
+        # flat row contested — its text is the refuted original.
+        try:
+            from memory_ledger import uncontest_flat_lesson
+            uncontest_flat_lesson(lesson_id)
+        except Exception as exc:
+            log.warning("refight_lesson: flat-ledger clear failed for %s: %s",
+                        lesson_id, exc)
+
+    log.info("lesson re-fought: %s -> %s", lesson_id, action)
+    if verbose:
+        import sys as _sys
+        print(f"[refight] lesson {lesson_id}: {action}",
+              file=_sys.stderr, flush=True)
+    try:
+        from captains_log import log_event, LESSON_REFOUGHT
+        log_event(
+            event_type=LESSON_REFOUGHT,
+            subject=lesson_id,
+            summary=(f"Re-fought (contested by {stamp.get('source', '?')}, "
+                     f"{since} re-sighting(s) since) -> {action}: "
+                     f"{tl.lesson[:80]}"),
+            context={
+                "action": action,
+                "reasoning": reasoning,
+                "tier": tl.tier,
+                "old_lesson": tl.lesson[:200],
+                "new_lesson": new_text[:200] if action == "revise" else "",
+                "contest_source": stamp.get("source", ""),
+                "reinforced_since_contest": since,
+            },
+        )
+    except Exception:
+        pass
+    return action
 
 
 def promote_lesson(lesson_id: str) -> bool:

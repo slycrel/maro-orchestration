@@ -1468,7 +1468,12 @@ def contest_flat_lesson(lesson_id: str, stamp: Dict[str, Any]) -> bool:
             if isinstance(row, dict) and row.get("lesson_id") == lesson_id:
                 hit["found"] = True
                 if not row.get("contested"):
-                    row["contested"] = stamp
+                    # Per-store sighting snapshot (refight evidence counter —
+                    # mirrors the tiered stamp).
+                    row["contested"] = dict(
+                        stamp,
+                        times_reinforced_at_contest=int(
+                            row.get("times_reinforced") or 0))
                 lines.append(json.dumps(row))
             else:
                 lines.append(line)
@@ -1479,6 +1484,47 @@ def contest_flat_lesson(lesson_id: str, stamp: Dict[str, Any]) -> bool:
         locked_rmw(path, _stamp)
     except OSError as exc:
         log.warning("contest_flat_lesson: rewrite failed for %s: %s",
+                    lesson_id, exc)
+        return False
+    return hit["found"]
+
+
+def uncontest_flat_lesson(lesson_id: str) -> bool:
+    """Clear a flat-ledger lesson's contested stamp — helper for
+    knowledge_web.refight_lesson on a "keep" verdict (the only path that
+    restores citizenship; revise/retire leave the flat row contested
+    because its text is the refuted original). Returns True if the lesson
+    was found (whether or not it was contested).
+    """
+    path = _lessons_path()
+    if not path.exists():
+        return False
+    hit = {"found": False}
+
+    def _clear(old: str) -> str:
+        lines = []
+        for line in old.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            try:
+                row = json.loads(stripped)
+            except json.JSONDecodeError:
+                lines.append(line)
+                continue
+            if isinstance(row, dict) and row.get("lesson_id") == lesson_id:
+                hit["found"] = True
+                row.pop("contested", None)
+                lines.append(json.dumps(row))
+            else:
+                lines.append(line)
+        return "\n".join(lines) + ("\n" if lines else "")
+
+    from file_lock import locked_rmw
+    try:
+        locked_rmw(path, _clear)
+    except OSError as exc:
+        log.warning("uncontest_flat_lesson: rewrite failed for %s: %s",
                     lesson_id, exc)
         return False
     return hit["found"]

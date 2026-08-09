@@ -403,6 +403,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_mem_contest.add_argument("reason", help="Why — the contradiction evidence or operator judgment")
     p_mem_contest.add_argument("--source", default="operator:cli", help="Who/what contested it (default operator:cli)")
     p_mem_contest.add_argument("--tier", choices=["medium", "long"], default=None, help="Search only this tier (default: medium then long)")
+
+    p_mem_refight = memory_sub.add_parser("refight", help="Re-fight a contested lesson against its contradiction evidence (LLM keep/revise/retire): keep restores citizenship on both stores, revise re-enters as provisional, retire archives it")
+    p_mem_refight.add_argument("lesson_id", help="Contested lesson ID to re-fight")
+    p_mem_refight.add_argument("--tier", choices=["medium", "long"], default=None, help="Search only this tier (default: medium then long)")
     p_mem_list = memory_sub.add_parser("list", help="List lessons in a tier")
     p_mem_list.add_argument("--tier", choices=["medium", "long"], default="medium")
     p_mem_list.add_argument("--task-type", default=None)
