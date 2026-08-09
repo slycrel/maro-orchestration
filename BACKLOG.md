@@ -129,6 +129,7 @@ retracted by the step-9 adversarial pass — see below):
   closure checks derive from the owner instruction; drift = pass-but-wrong.
 - **#5 Tool Feedback Neglect (model—tool)** — `tool_transcript` already
   logs `is_error`; cheapest build (classifier over existing data).
+  **BUILT 2026-08-09** (with #10/#11/#12 — see the classifier note below).
 - **#6 Communication Failure (subagent edge)** — subagent I/O captured
   raw; under-reporting to the parent plausible and undetected.
 - **#7 Overgeneralization (model—memory), INFERRED** — cheap relabel of
@@ -141,7 +142,24 @@ retracted by the step-9 adversarial pass — see below):
 - **#10 Malformed Arguments / #11 Tool Hallucination / #12 Tool Recovery
   Failure (model—tool)** — three mechanical classifiers over
   `tool_transcript` (args+is_error split-out; called-name vs registry;
-  N-consecutive-failures joined with `stuck_loop`).
+  N-consecutive-failures joined with `stuck_loop`). **BUILT 2026-08-09**,
+  together with #5: `introspect.classify_tool_pathologies` (pure, no
+  LLM), stamped at the SOURCE in step_exec (transcripts on disk are
+  keyed by step number only — later loops overwrite them, so
+  diagnose-time attribution can't be trusted), riding `step_done`
+  events into `diagnose_loop` as four new FAILURE_CLASSES with recovery
+  plans (none auto-apply). Live-source re-verified per caveat (a) and
+  corpus-smoked over all 610 persisted transcripts:
+  **tool_hallucination 178 (29%!)** — mostly inner sessions calling
+  lowercase `bash`/nonexistent names, detected by the
+  "No such tool available" signature and kin to the
+  advertised-but-absent-tools item below (which now has a per-run
+  detection lane instead of an offline census); tool_feedback_neglect
+  ≤93 (upper bound — offline smoke assumed done status);
+  tool_recovery_failure 7; tool_arg_malformed 0 (env-failure
+  signatures deliberately excluded per the LT-4 container audit).
+  Classes claim the diagnosis only when no structural class did;
+  evidence appends regardless.
 - **#13 Delegation Failure (subagent edge), INFERRED** — extend
   `attribution.failed_skill` toward scope/dependency mismatch vs
   Task-call input; assumes Task-call input shape, not re-verified.
@@ -282,26 +300,6 @@ contest/holdout treatment provenance demotions got on 2026-08-02.
 Operator decision pending either way: re-stamp `18773dfa` (and
 `de790c13`, still False on the record from the brace-template costume) or
 leave both false verdicts standing.
-
-### Run-card cost lane is a ~37%-low estimate; the budget auto-line inherits it (FOUND 2026-08-09)
-
-`run_card.total_cost_usd` = `metrics.spend_for_loops` (metrics.py:296) =
-sum of `step-costs.jsonl`, whose rows are `estimate_cost()` outputs
-(metrics.py:120): cache reads priced at 0.1× but **no cache-creation-write
-term** (billed 1.25×). The subprocess backend re-writes cache every step,
-so the card lane runs systematically low vs the backend-reported truth in
-the loop log: de790c13 card $3.42 vs provider $5.41 (−37%); 6fa41f96
-$3.00 vs $4.95 (−39%). `provider_cost_usd` (accumulated per-step,
-loop_execute.py:299) is the only truth lane. Knock-on: the budget
-auto-line (`max($2.50, p90)`) takes p90 of `total_cost_usd` across run
-cards (metrics.py:257) — the effective ceiling is ~35% tighter against
-real spend than the configured intent. Fix shape: plumb the
-backend-reported per-step cost into `record_step_cost` (signature is
-tokens-only today; the value already exists at the `loop_post_step.py`
-call site — the loop log's step rows carry it), or compute the card's
-cost from loop-log totals at curation time; then re-check what the budget
-line's p90 works out to on the truth lane before/after. Until fixed,
-readouts must not treat card and loop-log figures as interchangeable.
 
 ### Live-writer census findings — four decision-shaped items (OPENED 2026-08-06)
 
@@ -3026,6 +3024,13 @@ before then is guessing.
 Found by the residue counter on its first pass, which is the point of
 building it.
 
+**Live detection since 2026-08-09:** `introspect.classify_tool_pathologies`
+(MH taxonomy build) stamps `tool_hallucination` per step on the same
+"No such tool available" signature — per-run diagnosis lane instead of
+an offline census; 2026-08-09 corpus smoke put it at 178 of 610
+transcripts (29%). The fix itself (reconcile advertised vs offered)
+remains this item.
+
 **Measured across the whole workspace:** 4,720 tool events, **245 "No such
 tool available" (5.2%), spread across 69 of 96 runs (72%)**. By name:
 `complete_step` 144, `fetch` 81, then `Bash`/`bash` 7 (a case mismatch),
@@ -3453,7 +3458,13 @@ project NEXT.md ledger (`loop_planning.py:99` `append_next_items`), but
 steps added mid-run never are — 8b8671bd's steps 3–7 (the ones that
 produced the deliverable) render as `ledger #-1` in the plan log and
 have no project-ledger entry; the plan header's "Progress: 7/3 done" is
-the same fact showing through. And the steal-list findings themselves
+the same fact showing through. **Mirroring half FIXED 2026-08-09** (it
+extends the existing initial-plan/interrupt-path convention, no new
+decision): both inject paths (sequential `_process_done_step` +
+parallel batch) now `append_next_items` before splicing, degrading to
+the old `-1` sentinel on ledger failure; pinned
+(`test_injected_steps_mirrored_into_project_ledger`). The risk-minting
+should-we above remains the open decision. And the steal-list findings themselves
 only reached BACKLOG because Jeremy asked (captured 25a621e). Whatever
 the risk-minting decision is, it should probably answer for the family:
 which loop outputs (risks, mid-run steps, verified findings) are owed a

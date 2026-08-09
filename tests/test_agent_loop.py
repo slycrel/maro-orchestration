@@ -2129,6 +2129,45 @@ def test_generate_refinement_hint_uses_llm_response():
 # ---------------------------------------------------------------------------
 
 @pytest.mark.slow
+def test_cost_breaker_prefers_provider_reported_cost(monkeypatch, tmp_path):
+    """2026-08-09 truth-lane fix: when a step's response carries the
+    backend-reported cost_usd, the live budget accumulator must use it —
+    the token estimator has no cache-creation term and ran ~2x low, so an
+    estimate-only breaker judged real spend against half its value.
+    Tokens here are tiny (estimate ~$0.000x, far under budget); only the
+    provider figure can trip the breach."""
+    _setup_workspace(monkeypatch, tmp_path)
+    import config as _cfg
+    _orig_get = _cfg.get
+
+    def _gated_get(key, default=None):
+        if key == "budget.extension_ladder":
+            return False
+        return _orig_get(key, default)
+    monkeypatch.setattr(_cfg, "get", _gated_get)
+
+    class _ProviderCostAdapter(_DryRunAdapter):
+        def complete(self, messages, **kwargs):
+            resp = super().complete(messages, **kwargs)
+            resp.cost_usd = 0.30  # backend-reported truth per call
+            return resp
+
+    from pre_flight import PlanReview
+    from unittest.mock import patch as _patch
+    _pf = PlanReview(scope="narrow", scope_note="test")
+    with _patch("pre_flight.review_plan", return_value=_pf):
+        result = run_agent_loop(
+            "cheap-looking task",
+            project="cost-truth-test",
+            adapter=_ProviderCostAdapter(),
+            dry_run=False,
+            cost_budget=0.25,  # < one provider-priced step, >> the estimate
+        )
+    assert result.status in ("stuck", "budget_exceeded"), (
+        f"breaker ignored provider-reported cost (status={result.status!r})"
+    )
+
+
 def test_cost_budget_stops_loop(monkeypatch, tmp_path):
     """With the extension ladder off, cost breach stops the loop.
 
@@ -3128,6 +3167,58 @@ def test_inject_steps_inserted_into_plan(monkeypatch, tmp_path):
         f"Original step 2 missing from: {all_step_texts}"
     # 3 total steps: original step 1, injected step, original step 2
     assert len(all_step_texts) >= 3, f"Expected ≥3 steps, got: {all_step_texts}"
+
+
+def test_injected_steps_mirrored_into_project_ledger(monkeypatch, tmp_path):
+    """2026-08-09 fix (8b8671bd specimen): mid-run injected steps get a
+    project NEXT.md ledger entry like initial-plan and interrupt-added
+    steps — previously they rode ledger #-1 and the plan header's
+    progress count ran incoherent ('7/3 done')."""
+    import unittest.mock as mock
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+
+    from agent_loop import _DryRunAdapter
+    from llm import LLMResponse, ToolCall
+
+    step_count = [0]
+
+    class _InjectingAdapter(_DryRunAdapter):
+        def complete(self, messages, *, tools=None, tool_choice="auto", **kw):
+            n = step_count[0]
+            step_count[0] += 1
+            if tools and tool_choice == "required":
+                args = {"result": "done", "summary": "done"}
+                if n == 0:
+                    args["inject_steps"] = ["mirror-me: verify the ledger"]
+                return LLMResponse(
+                    content="",
+                    tool_calls=[ToolCall(name="complete_step", arguments=args)],
+                    stop_reason="tool_use",
+                    input_tokens=5, output_tokens=10,
+                )
+            return super().complete(messages, tools=tools,
+                                    tool_choice=tool_choice, **kw)
+
+    from pre_flight import PlanReview as _PlanReview
+    _pf = _PlanReview(scope="narrow", scope_note="test")
+    with mock.patch("loop_planning._decompose",
+                    return_value=["step 1: do first thing", "step 2: wrap"]), \
+         mock.patch("pre_flight.review_plan", return_value=_pf):
+        from agent_loop import run_agent_loop
+        result = run_agent_loop(
+            "test ledger mirror goal",
+            project="ledger-mirror-test",
+            adapter=_InjectingAdapter(),
+            max_iterations=10,
+        )
+
+    injected = [s for s in result.steps if "mirror-me" in s.text]
+    assert injected, f"injected step missing from {[s.text for s in result.steps]}"
+    assert injected[0].index >= 0, (
+        "injected step still carries the -1 ledger sentinel")
+    next_md = (tmp_path / "projects" / "ledger-mirror-test" / "NEXT.md")
+    assert next_md.exists()
+    assert "mirror-me" in next_md.read_text(encoding="utf-8")
 
 
 def test_inject_steps_capped_at_three(monkeypatch, tmp_path):

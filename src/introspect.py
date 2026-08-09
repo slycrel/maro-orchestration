@@ -43,6 +43,14 @@ FAILURE_CLASSES = {
     "cost_spike":                 "Single step or whole-loop cache-aware dollar cost exceeds threshold (real spend, not raw token volume)",
     "artifact_missing":           "Loop completed but no readable output in done steps",
     "integration_drift":          "ImportError or AttributeError caught in execution path",
+    # Model—tool edge classes (MH taxonomy adopt, 2026-08-09): mechanical
+    # classifiers over the inner agent's real tool transcript, stamped on the
+    # step outcome at execution time (step_exec) and carried on step_done
+    # events — diagnose_loop reads them with no extra I/O.
+    "tool_recovery_failure":      "Inner agent hit 3+ consecutive tool errors in one step without recovering",
+    "tool_feedback_neglect":      "Step reported done but its final tool call errored (result built past an unresolved failure)",
+    "tool_arg_malformed":         "Tool call errored with an argument-shape failure (usage/unknown-flag/TypeError signature)",
+    "tool_hallucination":         "Inner agent called a tool that doesn't exist ('No such tool available' error)",
     "healthy":                    "No pathology detected",
 }
 
@@ -80,6 +88,115 @@ _COST_SPIKE_FRACTION = 0.90   # step consumed 90%+ of total loop tokens
 _STEP_COST_WARN_USD = 0.50
 _LOOP_COST_WARN_USD = 2.00
 
+# tool_recovery_failure: this many consecutive errored tool calls without an
+# intervening success means the inner agent thrashed rather than recovered.
+_TOOL_ERROR_STREAK_LIMIT = 3
+
+# tool_arg_malformed: error-output substrings that indicate the CALL was
+# shaped wrong (vs the environment failing) — the model—tool edge, not
+# env—tool. Lowercased match. Deliberately excludes "command not found" /
+# "no such file" (environment gaps: see the LT-4 container audit, where
+# workers exit-127'd on binaries the image never had).
+_TOOL_ARG_ERROR_SIGNATURES = (
+    "usage:",
+    "unrecognized option",
+    "unknown option",
+    "unknown flag",
+    "invalid option",
+    "invalid argument",
+    "typeerror",
+    "unexpected keyword argument",
+    "missing required",
+    "required argument",
+    "invalid choice",
+)
+
+
+def classify_tool_pathologies(tool_events: List[dict],
+                              step_status: str = "done") -> List[dict]:
+    """Mechanical model—tool edge classifiers over one step's REAL tool
+    transcript (MH taxonomy adopt edges #5/#10/#12, 2026-08-09). Pure
+    heuristics, no LLM, no I/O — step_exec stamps the result on the step
+    outcome so it rides step_done events into diagnose_loop.
+
+    Returns a list of {"cls": <failure class>, "evidence": <str>} dicts,
+    empty when clean. Kept deliberately tight (strongest signals only):
+
+    - tool_recovery_failure: >= _TOOL_ERROR_STREAK_LIMIT consecutive
+      is_error events — thrash, not recovery.
+    - tool_feedback_neglect: the step reported done but its FINAL tool
+      call errored — whatever result it built rode past an unresolved
+      failure. (The looser "some tool never recovered" shape false-
+      positives on legitimate fallbacks — worker curls a mirror after
+      the primary 404s — so only the last-event form ships.)
+    - tool_arg_malformed: an errored call whose output matches an
+      argument-shape signature — the call itself was built wrong.
+    - tool_hallucination: a call answered with "No such tool available" —
+      the agent invented a tool name (found live in the 2026-08-09 corpus
+      smoke: an inner session calling lowercase "bash"; kin to the
+      BACKLOG advertised-but-absent-tools item, which this now detects
+      per-run instead of by offline census).
+    """
+    out: List[dict] = []
+    if not tool_events:
+        return out
+
+    _halluc = next((te for te in tool_events if te.get("is_error")
+                    and "no such tool available"
+                    in str(te.get("output", "")).lower()), None)
+    if _halluc is not None:
+        out.append({
+            "cls": "tool_hallucination",
+            "evidence": (f"call to {_halluc.get('name', '?')!r} answered "
+                         f"'No such tool available'"),
+        })
+
+    streak = 0
+    worst_streak = 0
+    streak_names: List[str] = []
+    worst_names: List[str] = []
+    for te in tool_events:
+        if te.get("is_error"):
+            streak += 1
+            streak_names.append(str(te.get("name", "?")))
+            if streak > worst_streak:
+                worst_streak = streak
+                worst_names = list(streak_names)
+        else:
+            streak = 0
+            streak_names = []
+    if worst_streak >= _TOOL_ERROR_STREAK_LIMIT:
+        out.append({
+            "cls": "tool_recovery_failure",
+            "evidence": (f"{worst_streak} consecutive tool errors "
+                         f"({', '.join(worst_names[:6])})"),
+        })
+
+    last = tool_events[-1]
+    if step_status == "done" and last.get("is_error"):
+        out.append({
+            "cls": "tool_feedback_neglect",
+            "evidence": (f"final tool call errored ({last.get('name', '?')}: "
+                         f"{str(last.get('output', ''))[:120]}) but step "
+                         f"reported done"),
+        })
+
+    for te in tool_events:
+        if not te.get("is_error"):
+            continue
+        out_text = str(te.get("output", "")).lower()
+        sig = next((s for s in _TOOL_ARG_ERROR_SIGNATURES if s in out_text),
+                   None)
+        if sig:
+            out.append({
+                "cls": "tool_arg_malformed",
+                "evidence": (f"{te.get('name', '?')} errored with "
+                             f"{sig!r} signature: "
+                             f"{str(te.get('output', ''))[:120]}"),
+            })
+            break  # one representative specimen is enough per step
+    return out
+
 
 # ---------------------------------------------------------------------------
 # Data model
@@ -97,6 +214,10 @@ class StepProfile:
     tokens_in: int = 0             # total input volume (incl. cache reads)
     tokens_out: int = 0
     model: str = ""                # model_key used, for accurate pricing
+    # Model—tool edge pathologies stamped at execution time (step_exec →
+    # step_done event): [{"cls": ..., "evidence": ...}]. Empty for clean
+    # steps and for events written before 2026-08-09.
+    tool_pathologies: List[dict] = field(default_factory=list)
 
     @property
     def fresh_tokens(self) -> int:
@@ -227,6 +348,7 @@ def _build_step_profiles(events: List[dict]) -> List[StepProfile]:
                 tokens_in=e.get("tokens_in", 0),
                 tokens_out=e.get("tokens_out", 0),
                 model=e.get("model", ""),
+                tool_pathologies=list(e.get("tool_pathologies") or []),
             ))
     return profiles
 
@@ -425,6 +547,30 @@ def diagnose_loop(loop_id: str, project: str = "",
         for k, v in churned.items():
             evidence.append(f"Step retried {v}x: {k}")
         recommendation = "Step is consistently failing — skip and note as partial, or decompose differently"
+
+    # Model—tool edge pathologies (MH taxonomy, 2026-08-09): stamped at
+    # execution time by step_exec, carried on step_done events. Weaker than
+    # the structural classes above, so they only claim the diagnosis when
+    # nothing else did — but their evidence is appended regardless, so a
+    # e.g. budget_exhaustion diagnosis still shows the tool thrash under it.
+    _tool_path_steps = [(p, tp) for p in profiles
+                        for tp in p.tool_pathologies]
+    if _tool_path_steps:
+        for p, tp in _tool_path_steps:
+            evidence.append(
+                f"Step {p.step_idx} {tp.get('cls', '?')}: "
+                f"{tp.get('evidence', '')}")
+        if failure_class == "healthy":
+            # Most causal/actionable first: hallucination (names the exact
+            # defect) > neglect (done built on an unresolved failure) >
+            # recovery failure (thrash) > malformed args.
+            _order = ("tool_hallucination", "tool_feedback_neglect",
+                      "tool_recovery_failure", "tool_arg_malformed")
+            _seen_cls = {tp.get("cls") for _, tp in _tool_path_steps}
+            failure_class = next((c for c in _order if c in _seen_cls),
+                                 "tool_arg_malformed")
+            severity = "warning"
+            recommendation = FAILURE_CLASSES.get(failure_class, "")
 
     # Build token/timing profiles for the response
     token_profile = [{"step": p.step_idx, "tokens": p.tokens, "status": p.status} for p in profiles]
@@ -1334,6 +1480,48 @@ _RECOVERY_TABLE: Dict[str, List[RecoveryPlan]] = {
             action="Skip the churning step and continue with remaining steps",
             auto_apply=True, risk="low",
             params={"action": "skip_and_continue"},
+        ),
+    ],
+    # Model—tool edge classes (MH taxonomy, 2026-08-09). None auto-apply:
+    # the pathology is evidence about HOW the step ran, not a mechanical
+    # state the loop can safely mutate — the leverage is verification
+    # pressure on the step's claimed result.
+    "tool_feedback_neglect": [
+        RecoveryPlan(
+            failure_class="tool_feedback_neglect",
+            action="Re-verify the step's claimed result against its artifacts — "
+                   "it was built past an unresolved tool failure",
+            auto_apply=False, risk="medium",
+            params={"action": "verify_step_result"},
+        ),
+    ],
+    "tool_recovery_failure": [
+        RecoveryPlan(
+            failure_class="tool_recovery_failure",
+            action="Inspect the step transcript for the repeated failure and "
+                   "address its cause (missing tool, wrong path, bad approach) "
+                   "before retrying similar steps",
+            auto_apply=False, risk="low",
+            params={"action": "inspect_transcript"},
+        ),
+    ],
+    "tool_arg_malformed": [
+        RecoveryPlan(
+            failure_class="tool_arg_malformed",
+            action="Check the tool's actual interface (signature/usage) before "
+                   "the next call — the call was shaped wrong, not the tool broken",
+            auto_apply=False, risk="low",
+            params={"action": "check_tool_interface"},
+        ),
+    ],
+    "tool_hallucination": [
+        RecoveryPlan(
+            failure_class="tool_hallucination",
+            action="Reconcile advertised tools with what the backend actually "
+                   "offers (see BACKLOG: step prompts advertising tools the "
+                   "subprocess backend doesn't have)",
+            auto_apply=False, risk="low",
+            params={"action": "reconcile_tool_registry"},
         ),
     ],
     "setup_failure": [

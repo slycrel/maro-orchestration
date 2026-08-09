@@ -333,6 +333,7 @@ def record_step_cost(
     elapsed_ms: int = 0,
     cache_read_tokens: int = 0,
     loop_id: str = "",
+    provider_cost_usd: float = 0.0,
 ) -> dict:
     """Record per-step token cost to memory/step-costs.jsonl.
 
@@ -344,11 +345,23 @@ def record_step_cost(
     persisted telemetry matches what the introspect alarms judge. Defaults to 0
     (legacy callers / no cache) → byte-identical to the old full-rate estimate.
 
+    ``provider_cost_usd`` is the backend-reported figure when the caller has
+    one (the step outcome's provider_cost_usd — subprocess backend reports
+    real billing incl. cache-CREATION writes at 1.25×, which the estimator
+    has no term for; cards ran ~37% low against it, 2026-08-09 finding).
+    When > 0 it becomes the row's ``cost_usd`` (``cost_source: "provider"``,
+    estimator kept alongside as ``estimated_cost_usd`` so drift stays
+    measurable); otherwise the estimate stands (``cost_source: "estimate"``).
+    Every ``cost_usd`` consumer — run-card spend_for_loops, the budget p90
+    auto-line, introspect alarms — inherits the truth lane through this.
+
     Returns the recorded entry dict (useful for testing).
     """
     step_type = classify_step_type(step_text)
-    cost_usd = estimate_cost(tokens_in, tokens_out, model=model or None,
-                             cache_read_tokens=cache_read_tokens)
+    est_usd = estimate_cost(tokens_in, tokens_out, model=model or None,
+                            cache_read_tokens=cache_read_tokens)
+    provider = max(0.0, float(provider_cost_usd or 0.0))
+    cost_usd = provider if provider > 0 else est_usd
     entry = {
         "id": str(uuid.uuid4())[:12],
         "recorded_at": datetime.now(timezone.utc).isoformat(),
@@ -359,6 +372,7 @@ def record_step_cost(
         "cache_read_tokens": cache_read_tokens,
         "total_tokens": tokens_in + tokens_out,
         "cost_usd": round(cost_usd, 8),
+        "cost_source": "provider" if provider > 0 else "estimate",
         "status": status,
         "goal_preview": goal[:80],
         "model": model,
@@ -367,6 +381,8 @@ def record_step_cost(
         # cost-per-goal and previews only join fuzzily (2026-07-02).
         "loop_id": loop_id,
     }
+    if provider > 0:
+        entry["estimated_cost_usd"] = round(est_usd, 8)
     try:
         path = _step_costs_path()
         path.parent.mkdir(parents=True, exist_ok=True)

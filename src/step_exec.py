@@ -1586,6 +1586,23 @@ def execute_step(
                 if _t_handle:
                     _outcome.setdefault("artifacts", {})["tool_transcript"] = _t_handle
                     log.info("step %d tool transcript: %s", step_num, _t_handle[:120])
+                # Model—tool edge classifiers (MH taxonomy, 2026-08-09):
+                # classified here at the source because transcripts on disk
+                # are keyed by step number only — a later loop of the same
+                # project overwrites them, so diagnose-time attribution
+                # can't be trusted. Done path only: a blocked step is
+                # already its own failure signal.
+                try:
+                    from introspect import classify_tool_pathologies
+                    _tp = classify_tool_pathologies(_tool_events,
+                                                    step_status="done")
+                    if _tp:
+                        _outcome["tool_pathologies"] = _tp
+                        log.info("step %d tool pathologies: %s", step_num,
+                                 ", ".join(p["cls"] for p in _tp))
+                except Exception as _tp_exc:
+                    log.debug("tool pathology classify failed (non-critical): %s",
+                              _tp_exc)
             # Mutable task graph: pick up any injected steps from the worker
             _raw_inject = tc.arguments.get("inject_steps") or []
             if isinstance(_raw_inject, list):

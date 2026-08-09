@@ -165,6 +165,7 @@ def _run_parallel_batch(
     _tokens_in_delta = 0
     _tokens_out_delta = 0
     _cache_read_delta = 0
+    _provider_cost_delta = 0.0
     _batch_injected: List[str] = []
     for _bi, (_batch_text, _batch_oc) in enumerate(zip(_batch_steps, _batch_outcomes)):
         step_idx += 1
@@ -173,6 +174,8 @@ def _run_parallel_batch(
         _tokens_in_delta += _batch_oc.get("tokens_in", 0)
         _tokens_out_delta += _batch_oc.get("tokens_out", 0)
         _cache_read_delta += _batch_oc.get("cache_read_tokens", 0)
+        _provider_cost_delta += float(
+            _batch_oc.get("provider_cost_usd", 0.0) or 0.0)
         # Ledger parity with the sequential path (loop_post_step): batch
         # steps used to skip record_step_cost entirely, so run_card cost
         # (spend_for_loops) silently excluded them — azure-finch 2026-07-17
@@ -189,6 +192,8 @@ def _run_parallel_batch(
                 elapsed_ms=_b_elapsed,
                 cache_read_tokens=_batch_oc.get("cache_read_tokens", 0),
                 loop_id=getattr(ctx, "loop_id", "") or "",
+                provider_cost_usd=float(
+                    _batch_oc.get("provider_cost_usd", 0.0) or 0.0),
             )
         except Exception as _cost_exc:
             log.debug("batch record_step_cost failed (non-critical): %s", _cost_exc)
@@ -247,8 +252,19 @@ def _run_parallel_batch(
     # Inject collected steps from batch
     if _batch_injected:
         _capped_inject = _shape_steps(_batch_injected[:6], label="parallel-inject")
+        # Ledger parity with the sequential inject path (2026-08-09):
+        # unmirrored injections render as `ledger #-1` and skew the plan
+        # header's progress count. Failure degrades to the -1 sentinel.
+        _inj_idxs = [-1] * len(_capped_inject)
+        if ctx.project:
+            try:
+                _inj_idxs = _orch().append_next_items(ctx.project,
+                                                      _capped_inject)
+            except Exception as _led_exc:
+                log.warning("parallel inject ledger mirror failed for %s: %s",
+                            ctx.project, _led_exc)
         remaining_steps[:0] = _capped_inject
-        remaining_indices[:0] = [-1] * len(_capped_inject)
+        remaining_indices[:0] = _inj_idxs
         log.info("parallel batch: injected %d step(s) from batch into plan",
                  len(_capped_inject))
         if ctx.verbose:
@@ -264,7 +280,8 @@ def _run_parallel_batch(
     except Exception as _exc:
         log.debug("parallel batch cost logging failed: %s", _exc)
 
-    return iteration, step_idx, _tokens_in_delta, _tokens_out_delta, _cache_read_delta
+    return (iteration, step_idx, _tokens_in_delta, _tokens_out_delta,
+            _cache_read_delta, _provider_cost_delta)
 
 
 def _run_parallel_path(

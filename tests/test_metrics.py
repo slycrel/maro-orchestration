@@ -571,6 +571,44 @@ def test_record_step_cost_cache_default_is_backward_compatible(monkeypatch, tmp_
     assert e["cost_usd"] == pytest.approx(estimate_cost(1000, 500, "mid"))
 
 
+def test_record_step_cost_provider_figure_wins(monkeypatch, tmp_path):
+    """2026-08-09 fix: cards ran ~37% low because the estimator has no
+    cache-CREATION term (billed 1.25x; the subprocess backend re-writes
+    cache every step). A backend-reported figure is the row's cost_usd —
+    the estimate stays alongside so drift is measurable."""
+    monkeypatch.setattr("metrics._step_costs_path", lambda: tmp_path / "step-costs.jsonl")
+    e = record_step_cost("build module", 100000, 1000, "done", model="power",
+                         cache_read_tokens=50000, provider_cost_usd=5.41)
+    assert e["cost_usd"] == pytest.approx(5.41)
+    assert e["cost_source"] == "provider"
+    assert e["estimated_cost_usd"] == pytest.approx(
+        estimate_cost(100000, 1000, "power", cache_read_tokens=50000))
+
+
+def test_record_step_cost_no_provider_figure_keeps_estimate(monkeypatch, tmp_path):
+    monkeypatch.setattr("metrics._step_costs_path", lambda: tmp_path / "step-costs.jsonl")
+    e = record_step_cost("research x", 1000, 500, "done", model="mid")
+    assert e["cost_source"] == "estimate"
+    assert e["cost_usd"] == pytest.approx(estimate_cost(1000, 500, "mid"))
+    assert "estimated_cost_usd" not in e
+    # A junk negative from a backend must not zero the row either.
+    neg = record_step_cost("research x", 1000, 500, "done", model="mid",
+                           provider_cost_usd=-1.0)
+    assert neg["cost_source"] == "estimate"
+    assert neg["cost_usd"] == pytest.approx(estimate_cost(1000, 500, "mid"))
+
+
+def test_spend_for_loops_prefers_provider_rows(monkeypatch, tmp_path):
+    """The run-card lane (spend_for_loops) inherits the truth figure."""
+    monkeypatch.setattr("metrics._step_costs_path", lambda: tmp_path / "step-costs.jsonl")
+    from metrics import spend_for_loops
+    record_step_cost("step one", 1000, 100, "done", loop_id="lp-truth",
+                     provider_cost_usd=2.0)
+    record_step_cost("step two", 1000, 100, "done", loop_id="lp-truth",
+                     provider_cost_usd=1.5)
+    assert spend_for_loops(["lp-truth"]) == pytest.approx(3.5)
+
+
 def test_record_step_cost_writes_file(monkeypatch, tmp_path):
     path = tmp_path / "step-costs.jsonl"
     monkeypatch.setattr("metrics._step_costs_path", lambda: path)

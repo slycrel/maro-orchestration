@@ -8,6 +8,41 @@ Last split: 2026-04-16 (session 34).
 
 ---
 
+## Run-card cost lane ~2×-low estimate — truth lane plumbed through (FOUND 2026-08-09, SHIPPED same day)
+
+`run_card.total_cost_usd` = `spend_for_loops` = sum of
+`step-costs.jsonl`, whose rows were `estimate_cost()` outputs: cache
+reads at 0.1× but **no cache-creation-write term** (billed 1.25×; the
+subprocess backend re-writes cache every step). Full-history measurement
+at close (43 successful runs with both figures): **mean card/truth
+ratio 0.44** — worse than the −37% the two spot runs suggested — card
+p90 **$2.36** vs truth p90 **$4.95**. Both the persisted lane AND the
+live breaker ran on the same low estimator, so the auto thresholds and
+the running total were consistently-low together (partially cancelling;
+readouts comparing card vs loop-log were the visible casualty).
+
+Fix (all lanes truth-preferring, estimate as fallback):
+
+- `record_step_cost` gained `provider_cost_usd`; when > 0 it becomes
+  the row's `cost_usd` (`cost_source: "provider"`, estimator kept as
+  `estimated_cost_usd` so drift stays measurable). All three loop call
+  sites (sequential post-step, blocked, parallel batch) pass the step
+  outcome's backend-reported figure.
+- The live budget accumulator (loop_execute sequential + batch paths)
+  prefers the same figure — a truth-priced threshold judged against an
+  estimate-priced running total would have made the breaker ~2× looser
+  in real terms. `_run_parallel_batch` returns a provider-cost delta.
+- Pinned: provider-wins + negative-junk fallback + spend_for_loops
+  inheritance (test_metrics), breaker-prefers-provider loop pin
+  (test_agent_loop).
+
+Transitional note: the auto lines re-anchor as truth-priced cards
+accrue (mtime-sorted newest 200). Until then p90 sits at the mixed-era
+$2.36 → warn (`max($2.50, p90)`) fires earlier against truth-priced
+runs — warn is notify-only, and the extension ladder means breaches
+extend rather than kill, so the skew is noise, not risk. Expected
+steady state on today's data: warn ≈ $4.95, breaker ≈ max($10, ~$19.8).
+
 ## Untracked test-artifact skills in repo skills/ — writer found + fixed, files relocated (FOUND 2026-08-08, SHIPPED 2026-08-09)
 
 Seven (grown to **22** by close — the writer was live) untracked `.md`

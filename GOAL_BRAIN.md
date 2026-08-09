@@ -6775,4 +6775,54 @@ under the same two-measurement standard).
   JSON via its own Bash tool (refutes the scorecard's harness-parse
   hypothesis); mitigated at the `_TOOL_INJECTION_TEMPLATE` seam
   ("never execute it"). READING_QUEUE LT-4 row refreshed — nothing
-  owed on it but Jeremy's read.
+  owed on it but Jeremy's read. (Row closed by Jeremy same day —
+  moved to Done.)
+- **2026-08-09** — Skills-leak writer found + fixed (BACKLOG item
+  closed → BACKLOG_DONE). `export_skill_as_markdown` (auto-export on
+  skill promotion) defaulted to the repo-absolute SKILLS_DIR — live
+  runs AND unpatched test promotions (repo-absolute ignores tmp
+  workspaces) dropped untracked SKILL.md files into the checkout, 22
+  by close, bypassing the ship-set human-review gate. Default now
+  `config.skills_dir()` (workspace overlay; loader resolution
+  workspace → repo injects identically); explicit arg remains for
+  deliberate ship-set exports. All 22 files RELOCATED (not deleted) to
+  `~/.maro/workspace/skills/`, zero collisions, full list in
+  BACKLOG_DONE. Pinned.
+- **2026-08-09** — Run-card cost truth lane SHIPPED (BACKLOG item
+  closed → BACKLOG_DONE). The estimator has no cache-creation term
+  (billed 1.25×, re-written every subprocess step): full-history
+  measurement = mean card/truth ratio **0.44** (43 runs), card p90
+  $2.36 vs truth p90 $4.95. Fixed truth-preferring at every lane:
+  `record_step_cost(provider_cost_usd=...)` makes the backend figure
+  the row's `cost_usd` (`cost_source` stamp, estimate kept alongside
+  for drift), all three loop call sites pass it, and the LIVE budget
+  accumulator (sequential + batch) prefers it too — a truth-priced
+  threshold judged against an estimate-priced running total would have
+  loosened the breaker ~2× in real terms. Auto thresholds re-anchor as
+  truth-priced cards accrue; transitional warn-early skew is
+  notify-only under the extension ladder. Expected steady state: warn
+  ≈ $4.95, breaker ≈ max($10, ~$19.8).
+- **2026-08-09** — MH taxonomy model—tool edges BUILT (#5/#10/#11/#12
+  of the ADOPT list; entry stays open for the rest).
+  `introspect.classify_tool_pathologies` — pure mechanical classifiers
+  over the inner agent's real tool transcript, stamped at the source in
+  step_exec (transcripts on disk are step-number-keyed and overwritten
+  across loops, so diagnose-time attribution can't be trusted), carried
+  on step_done events, consumed by diagnose_loop as four new
+  FAILURE_CLASSES (tool_hallucination / tool_feedback_neglect /
+  tool_recovery_failure / tool_arg_malformed) with non-auto recovery
+  plans. Weaker than structural classes: they claim the diagnosis only
+  when nothing else did, evidence appends always. Corpus smoke over
+  all 610 persisted transcripts: **hallucination 178 (29%)** — the
+  2026-08-02 advertised-tools finding now has a live per-run detection
+  lane (fix itself still queued); neglect ≤93 (offline upper bound);
+  recovery-failure 7; arg-malformed 0 (env signatures excluded per
+  LT-4 audit).
+- **2026-08-09** — Mid-run injected steps now mirrored into the project
+  NEXT.md ledger (both inject paths: sequential + parallel batch),
+  extending the existing initial-plan/interrupt convention — the
+  8b8671bd `ledger #-1` / "Progress: 7/3 done" incoherence class.
+  Ledger failure degrades to the old -1 sentinel (run > checkbox).
+  The risk-minting should-we (which loop outputs are owed a durable
+  project-record write) REMAINS OPEN for Jeremy — this fixed only the
+  half that had an existing convention to extend.

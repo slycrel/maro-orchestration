@@ -1147,3 +1147,121 @@ def test_find_relevant_failure_notes_no_project_arg_still_works(tmp_path, monkey
     notes = find_relevant_failure_notes("terminal websocket connection")
     assert notes
     assert "constraint_false_positive" in notes[0]
+
+# ---------------------------------------------------------------------------
+# Model—tool edge classifiers (MH taxonomy adopt, 2026-08-09)
+# ---------------------------------------------------------------------------
+
+def _te(name="Bash", is_error=False, output=""):
+    return {"name": name, "input": {}, "output": output,
+            "is_error": is_error, "id": "t1"}
+
+
+class TestClassifyToolPathologies:
+    def test_clean_transcript_is_empty(self):
+        from introspect import classify_tool_pathologies
+        assert classify_tool_pathologies([_te(), _te()], "done") == []
+        assert classify_tool_pathologies([], "done") == []
+
+    def test_recovery_failure_needs_consecutive_streak(self):
+        from introspect import classify_tool_pathologies
+        # 3 errors broken by a success — recovered, not thrash
+        evs = [_te(is_error=True), _te(is_error=True), _te(),
+               _te(is_error=True), _te()]
+        assert all(p["cls"] != "tool_recovery_failure"
+                   for p in classify_tool_pathologies(evs, "done"))
+        # 3 consecutive → flagged
+        evs = [_te(), _te(is_error=True), _te(is_error=True),
+               _te(is_error=True), _te()]
+        clses = [p["cls"] for p in classify_tool_pathologies(evs, "done")]
+        assert "tool_recovery_failure" in clses
+
+    def test_feedback_neglect_is_done_ending_on_error(self):
+        from introspect import classify_tool_pathologies
+        evs = [_te(), _te(name="Read", is_error=True, output="File does not exist")]
+        clses = [p["cls"] for p in classify_tool_pathologies(evs, "done")]
+        assert "tool_feedback_neglect" in clses
+        # blocked step ending on an error is NOT neglect — the failure was
+        # reported, not ridden past
+        assert all(p["cls"] != "tool_feedback_neglect"
+                   for p in classify_tool_pathologies(evs, "blocked"))
+        # done ending on a success is clean
+        evs2 = [_te(is_error=True), _te()]
+        assert all(p["cls"] != "tool_feedback_neglect"
+                   for p in classify_tool_pathologies(evs2, "done"))
+
+    def test_arg_malformed_matches_shape_signatures_only(self):
+        from introspect import classify_tool_pathologies
+        evs = [_te(is_error=True,
+                   output="error: unrecognized option '--frobnicate'"), _te()]
+        clses = [p["cls"] for p in classify_tool_pathologies(evs, "done")]
+        assert "tool_arg_malformed" in clses
+        # environment failures (missing binary/file) are the env—tool edge,
+        # deliberately excluded (LT-4 container audit)
+        evs = [_te(is_error=True, output="bash: pdftotext: command not found"),
+               _te()]
+        assert all(p["cls"] != "tool_arg_malformed"
+                   for p in classify_tool_pathologies(evs, "done"))
+
+    def test_one_malformed_specimen_per_step(self):
+        from introspect import classify_tool_pathologies
+        evs = [_te(is_error=True, output="usage: foo [-x]"),
+               _te(is_error=True, output="usage: bar [-y]"), _te()]
+        out = [p for p in classify_tool_pathologies(evs, "done")
+               if p["cls"] == "tool_arg_malformed"]
+        assert len(out) == 1
+
+
+class TestDiagnoseToolPathologies:
+    def test_pathology_claims_otherwise_healthy_loop(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("introspect._events_path",
+                            lambda: tmp_path / "memory" / "events.jsonl")
+        ev = _make_step_event("lpTP1", 1, "done")
+        ev["tool_pathologies"] = [
+            {"cls": "tool_feedback_neglect",
+             "evidence": "final tool call errored (Read: nope) but step reported done"}]
+        _write_events(tmp_path, [ev, _make_step_event("lpTP1", 2, "done"),
+                                 _make_loop_done("lpTP1")])
+        diag = diagnose_loop("lpTP1", emit_log_event=False)
+        assert diag.failure_class == "tool_feedback_neglect"
+        assert diag.severity == "warning"
+        assert any("tool_feedback_neglect" in e for e in diag.evidence)
+
+    def test_pathology_does_not_override_structural_class(self, tmp_path, monkeypatch):
+        """Structural classes stay primary; the tool evidence is appended."""
+        monkeypatch.setattr("introspect._events_path",
+                            lambda: tmp_path / "memory" / "events.jsonl")
+        first = _make_step_event("lpTP2", 1, "blocked", tokens_in=0,
+                                 tokens_out=0, elapsed_ms=200)
+        second = _make_step_event("lpTP2", 2, "done")
+        second["tool_pathologies"] = [
+            {"cls": "tool_arg_malformed", "evidence": "usage: x"}]
+        _write_events(tmp_path, [first, second,
+                                 _make_loop_done("lpTP2", "stuck")])
+        diag = diagnose_loop("lpTP2", emit_log_event=False)
+        assert diag.failure_class == "setup_failure"
+        assert any("tool_arg_malformed" in e for e in diag.evidence)
+
+    def test_severity_order_neglect_over_malformed(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("introspect._events_path",
+                            lambda: tmp_path / "memory" / "events.jsonl")
+        ev = _make_step_event("lpTP3", 1, "done")
+        ev["tool_pathologies"] = [
+            {"cls": "tool_arg_malformed", "evidence": "usage: x"},
+            {"cls": "tool_feedback_neglect", "evidence": "ended on error"}]
+        _write_events(tmp_path, [ev, _make_loop_done("lpTP3")])
+        diag = diagnose_loop("lpTP3", emit_log_event=False)
+        assert diag.failure_class == "tool_feedback_neglect"
+
+    def test_new_classes_are_in_taxonomy(self):
+        for c in ("tool_recovery_failure", "tool_feedback_neglect",
+                  "tool_arg_malformed"):
+            assert c in FAILURE_CLASSES
+
+    def test_hallucinated_tool_call_flagged(self):
+        from introspect import classify_tool_pathologies
+        evs = [_te(name="bash", is_error=True,
+                   output="<tool_use_error>Error: No such tool available: bash</tool_use_error>"),
+               _te()]
+        clses = [p["cls"] for p in classify_tool_pathologies(evs, "done")]
+        assert "tool_hallucination" in clses

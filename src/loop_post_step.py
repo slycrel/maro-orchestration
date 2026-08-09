@@ -534,6 +534,7 @@ def _post_step_checks(
             model=getattr(ctx.adapter, "model_key", "") or "",
             elapsed_ms=step_elapsed,
             detail=step_summary[:200] if step_summary else "",
+            tool_pathologies=outcome.get("tool_pathologies", []),
         )
     except Exception as _exc:
         log.debug("write_event(step_done/stuck) failed for step %d: %s", step_idx, _exc)
@@ -1006,8 +1007,22 @@ def _process_done_step(
         _raw_injected = [str(s).strip() for s in _injected if str(s).strip()][:3]
         _clean_injected = _shape_steps(_raw_injected, label="inject")
         if _clean_injected:
+            # Mirror into the project NEXT.md ledger like the initial plan
+            # (loop_planning) and interrupt-added steps already are —
+            # unmirrored injected steps rendered as `ledger #-1` and made
+            # the plan header count incoherent ("Progress: 7/3 done",
+            # 8b8671bd specimen, 2026-08-09 fix). Ledger failure degrades
+            # to the old -1 sentinel; the run matters more than the ledger.
+            _inj_idxs = [-1] * len(_clean_injected)
+            if ctx.project:
+                try:
+                    _inj_idxs = o.append_next_items(ctx.project,
+                                                    _clean_injected)
+                except Exception as _led_exc:
+                    log.warning("inject_steps ledger mirror failed for %s: %s",
+                                ctx.project, _led_exc)
             remaining_steps[:0] = _clean_injected
-            remaining_indices[:0] = [-1] * len(_clean_injected)
+            remaining_indices[:0] = _inj_idxs
             log.info("step %d injected %d step(s) into plan: %s",
                      step_idx, len(_clean_injected),
                      [s[:40] for s in _clean_injected])
@@ -1091,6 +1106,8 @@ def _process_done_step(
             elapsed_ms=step_elapsed,
             cache_read_tokens=outcome.get("cache_read_tokens", 0),
             loop_id=getattr(ctx, "loop_id", "") or "",
+            provider_cost_usd=float(
+                outcome.get("provider_cost_usd", 0.0) or 0.0),
         )
     except Exception as _cost_exc:
         log.debug("record_step_cost failed (non-critical): %s", _cost_exc)

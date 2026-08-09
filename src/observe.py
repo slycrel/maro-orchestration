@@ -507,6 +507,7 @@ def write_event(
     model: str = "",
     elapsed_ms: int = 0,
     detail: str = "",
+    tool_pathologies: Optional[List[dict]] = None,
 ) -> bool:
     """Append a structured event to memory/events.jsonl.
 
@@ -536,6 +537,15 @@ def write_event(
             "elapsed_ms": elapsed_ms,
             "detail": detail[:200],
         }
+        if tool_pathologies:
+            # Capped like every other field (PIPE_BUF atomicity): at most 3
+            # entries, evidence trimmed — the full text lives on the step
+            # outcome / transcript artifact.
+            entry["tool_pathologies"] = [
+                {"cls": str(p.get("cls", ""))[:40],
+                 "evidence": str(p.get("evidence", ""))[:160]}
+                for p in tool_pathologies[:3]
+            ]
         # Deliberately UNLOCKED: every field is length-capped so the line is
         # well under PIPE_BUF (single O_APPEND write, atomic on Linux), and
         # file_lock._report_timeout calls this — locking here would recurse

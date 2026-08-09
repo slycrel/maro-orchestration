@@ -767,7 +767,8 @@ def _execute_main_loop(
                     break
 
         if _parallel_peers:
-            iteration, step_idx, _tin, _tout, _tcache = _run_parallel_batch(
+            (iteration, step_idx, _tin, _tout, _tcache,
+             _batch_provider_cost) = _run_parallel_batch(
                 ctx, step_text, _parallel_peers,
                 step_outcomes=step_outcomes,
                 completed_context=completed_context,
@@ -784,20 +785,25 @@ def _execute_main_loop(
             total_tokens_in += _tin
             total_tokens_out += _tout
             total_cache_read += _tcache
-            # Keep total_cost_usd honest for the budget breaker — cache-aware,
-            # like the sequential path. Full-rate pricing here ("safe
+            # Keep total_cost_usd honest for the budget breaker — backend-
+            # reported cost when the batch has it (the estimator has no
+            # cache-CREATION term and ran cards ~2x low, 2026-08-09 finding),
+            # else the cache-aware estimate. Full-rate pricing here ("safe
             # over-estimate") inflated azure-finch (2026-07-17, ~99% cache
             # reads) roughly 10x on batch steps and the breaker hard-stopped
             # the run one step before its final synthesis: an over-estimate
             # that kills real work isn't the safe direction.
-            try:
-                from metrics import estimate_cost as _batch_est
-                total_cost_usd += _batch_est(
-                    _tin, _tout,
-                    model=getattr(ctx.adapter, "model_key", "") or None,
-                    cache_read_tokens=_tcache)
-            except ImportError:
-                pass
+            if _batch_provider_cost > 0:
+                total_cost_usd += _batch_provider_cost
+            else:
+                try:
+                    from metrics import estimate_cost as _batch_est
+                    total_cost_usd += _batch_est(
+                        _tin, _tout,
+                        model=getattr(ctx.adapter, "model_key", "") or None,
+                        cache_read_tokens=_tcache)
+                except ImportError:
+                    pass
             # A batch boundary counts as a step end for the time-gap
             # contributor — otherwise the next single step would report a
             # gap measured from before the batch ran.
@@ -1070,18 +1076,27 @@ def _execute_main_loop(
         total_tokens_in += outcome.get("tokens_in", 0)
         total_tokens_out += outcome.get("tokens_out", 0)
         total_cache_read += outcome.get("cache_read_tokens", 0)
-        # Per-step cost estimate (cache-aware: cache reads priced at ~0.1x)
+        # Per-step cost: the backend-reported figure when the step has one
+        # (subprocess backend reports real billing incl. cache-creation
+        # writes at 1.25x — the estimator has no term for those and ran
+        # cards ~2x low, 2026-08-09 finding), else the cache-aware estimate.
         _step_model = getattr(_step_adapter, "model_key", "")
+        _step_provider_cost = float(
+            outcome.get("provider_cost_usd", 0.0) or 0.0)
         try:
             from metrics import estimate_cost
-            _step_cost = estimate_cost(outcome.get("tokens_in", 0), outcome.get("tokens_out", 0), model=_step_model,
-                                       cache_read_tokens=outcome.get("cache_read_tokens", 0))
+            _step_cost = (_step_provider_cost if _step_provider_cost > 0
+                          else estimate_cost(
+                              outcome.get("tokens_in", 0),
+                              outcome.get("tokens_out", 0), model=_step_model,
+                              cache_read_tokens=outcome.get(
+                                  "cache_read_tokens", 0)))
             # Accumulate per step: repricing the running total at the latest step's
             # model swings the figure when steps switch cheap<->mid<->power.
             total_cost_usd += _step_cost
             _total_cost = total_cost_usd
         except ImportError:
-            _step_cost = 0.0
+            _step_cost = _step_provider_cost
             _total_cost = total_cost_usd
         log.info("step %d %s tokens_step=%d tokens_total=%d cost_step=$%.4f cost_total=$%.4f model=%s elapsed=%dms iter=%d/%d",
                  step_idx, outcome.get("status", "?"),

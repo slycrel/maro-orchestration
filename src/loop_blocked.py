@@ -456,6 +456,8 @@ def _process_blocked_step(ctx: LoopContext, blk: BlockedStepContext) -> tuple:
             elapsed_ms=step_elapsed,
             cache_read_tokens=outcome.get("cache_read_tokens", 0),
             loop_id=getattr(ctx, "loop_id", "") or "",
+            provider_cost_usd=float(
+                outcome.get("provider_cost_usd", 0.0) or 0.0),
         )
     except Exception as _exc:
         log.debug("metrics.record_step_cost failed for stuck step %d: %s", step_idx, _exc)
