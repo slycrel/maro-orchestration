@@ -161,6 +161,48 @@ Signal-1 gate can't reach (both 18773dfa and its warm predecessor had
 time). Tests: `tests/test_closure_verdict_audit.py` + Signal-1 gate cases
 in `test_director.py`; full suite 8055 passed / 0 skipped.
 
+**Adversarial review round (2026-08-09, Codex ×3 lenses): REJECT on the
+first cut — 5 consensus ship-blockers, all fixed same-day before the box
+opted in.** The review earned its cost a 5th time in this module: (1) a
+retry adapter crash escaped to the function-wide handler and returned the
+null "verification did not run" verdict, ERASING the real negative and
+its checks → retry is now locally error-bounded, original verdict
+preserved, `retry_failed` stamped; (2) a retry flipping to achieved
+bypassed every deterministic downgrade detector (they ran while
+complete=False and stood down) → retry verdicts now re-run through both
+detectors (`retry_redowngraded`); (3) cancel authority covered Signals
+2/3 + diagnosis, whose structured runtime evidence the auditor's own
+"absence isn't failure" doctrine is blind to → cancel scoped to Signal 1
+only (keyed structurally via `_detect_behavioral_gap_ex`'s signal id, not
+a reason-string literal), others record `disputed`; (4) truthiness
+coercion at the LLM boundary (`"agrees": 0`, `"complete": "false"`) →
+exact JSON booleans required, plus a 0.6 confidence floor for the
+disagreement to act; (5) worker-authored artifact excerpts reached the
+auditor un-scanned → workspace containment + injection_guard scan
+(fail-closed withhold) + explicit untrusted-data fencing. Also flipped
+the config default OFF per the fresh-installs-conservative convention
+(this box opts in via workspace config).
+
+**Residuals filed from the review (real, pre-existing or shared):**
+- `_failed_check_file_evidence`'s original failed-check lane accepts
+  absolute/`../` paths despite its cwd-containment docstring — same leak
+  shape the audit lane now guards; fixing it changes long-shipped verdict
+  evidence behavior (self-inspection checks legitimately reference maro
+  source), so it needs its own decision, not a rider.
+- Contested/disputed neutrality is not honored by downstream consumers:
+  `strategy_evaluator` fitness scores any raw `goal_achieved=False` as
+  full failure and `recall`'s repeat-pressure counts it as a failed
+  attempt — this hole is SHARED with the 2026-08-02 provenance contested
+  lane (metadata `goal_verdict_contested` is stamped but nothing reads
+  it in learning-adjacent consumers). Wants a typed contested state in
+  the outcome model, enforced in one shared policy.
+- A deterministic downgrade on an all-passed check set can never engage
+  `closure_restart` (restart requires a non-pass, audit-eligibility
+  requires zero fails) — the module's "over-eager demotion costs one
+  bounded restart" safety argument does not hold for exactly the shape
+  the audit targets. Pre-existing; decide whether an audit-agreed
+  downgrade should be restart-worthy.
+
 **Still open here: the operator re-stamp decision** — `18773dfa` and
 `de790c13` both carry false `goal_achieved=False` on the record.
 

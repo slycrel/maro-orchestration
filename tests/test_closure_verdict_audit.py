@@ -57,8 +57,9 @@ RETRY_TRUE = {"complete": True, "confidence": 0.85, "gaps": [],
               "summary": "Goal achieved; the audit objection holds."}
 
 
-def _run(monkeypatch, tmp_path, adapter, *, all_pass=True):
-    def fake_run(cmd, **kwargs):
+def _run(monkeypatch, tmp_path, adapter, *, all_pass=True, audit_on=True,
+         **kwargs):
+    def fake_run(cmd, **kw):
         proc = MagicMock()
         proc.returncode = 0 if all_pass else 1
         proc.stdout = "ok\n"
@@ -66,11 +67,16 @@ def _run(monkeypatch, tmp_path, adapter, *, all_pass=True):
         return proc
 
     monkeypatch.setattr("subprocess.run", fake_run)
+    # Config default is OFF (fresh-installs-conservative); the box opts in
+    # via workspace config, tests opt in here.
+    monkeypatch.setattr(closure_verify, "_verdict_audit_enabled",
+                        lambda: audit_on)
     return closure_verify.verify_goal_completion(
         goal="evaluate the taxonomy against maro and write the crosscheck",
         steps=[{"result": "wrote artifacts/crosscheck.md and closure-note.md"}],
         adapter=adapter,
         workspace_path=str(tmp_path),
+        **kwargs,
     )
 
 
@@ -124,10 +130,8 @@ class TestJudgeRetry:
 
 class TestAuditDoesNotRun:
     def test_killswitch_off_skips_audit(self, monkeypatch, tmp_path):
-        monkeypatch.setattr(closure_verify, "_verdict_audit_enabled",
-                            lambda: False)
         adapter = _adapter(PLAN, ACHIEVED)
-        v = _run(monkeypatch, tmp_path, adapter)
+        v = _run(monkeypatch, tmp_path, adapter, audit_on=False)
         assert v.complete is False          # Signal 1 downgrade stands
         assert v.verdict_audit == {}
         assert adapter.complete.call_count == 2   # plan + verdict only
@@ -185,3 +189,137 @@ class TestAuditEvidence:
         assert retry_msg.startswith(verdict_msg)
         assert "independent audit" in retry_msg
         assert AUDIT_DISAGREES["reason"] in retry_msg
+
+
+class TestReviewRegressions:
+    """Regression tests for the 2026-08-09 adversarial review findings."""
+
+    def test_retry_crash_preserves_original_verdict(
+            self, monkeypatch, tmp_path):
+        """Review HIGH (unanimous): a retry adapter failure used to escape to
+        the function-wide handler and return the null 'verification did not
+        run' verdict — erasing the real negative and its checks."""
+        adapter = MagicMock()
+        adapter.complete.side_effect = [
+            _resp(PLAN), _resp(JUDGE_FALSE), _resp(AUDIT_DISAGREES),
+            RuntimeError("backend down")]
+        v = _run(monkeypatch, tmp_path, adapter)
+        assert v.complete is False
+        assert v.checks_run == 1            # the real verdict survived
+        assert v.judged is True
+        assert "backend down" in v.verdict_audit["retry_failed"]
+        assert v.verdict_audit["disputed"] is True
+
+    def test_retry_string_false_is_not_a_flip(self, monkeypatch, tmp_path):
+        """Review HIGH: `"complete": "false"` is truthy — only an exact JSON
+        boolean true may overturn."""
+        stringy = {"complete": "false", "confidence": 0.0,
+                   "gaps": [], "summary": "nope"}
+        v = _run(monkeypatch, tmp_path,
+                 _adapter(PLAN, JUDGE_FALSE, AUDIT_DISAGREES, stringy))
+        assert v.complete is False
+        assert v.verdict_audit["disputed"] is True
+        assert "overturned" not in v.verdict_audit
+
+    def test_nonbool_agrees_is_inert(self, monkeypatch, tmp_path):
+        """Review HIGH: `"agrees": 0` coerced to disagreement via bool()."""
+        adapter = _adapter(
+            PLAN, ACHIEVED,
+            {"agrees": 0, "reason": "typed wrong", "confidence": 0.9})
+        v = _run(monkeypatch, tmp_path, adapter)
+        assert v.complete is False          # downgrade stands
+        assert v.verdict_audit.get("parse_failed") is True
+        assert adapter.complete.call_count == 3   # no retry either
+
+    def test_low_confidence_disagreement_is_inert(
+            self, monkeypatch, tmp_path):
+        """Review: an auditor announcing near-zero confidence in its own
+        disagreement must not overturn anything."""
+        timid = {"agrees": False, "reason": "not sure", "confidence": 0.2}
+        v = _run(monkeypatch, tmp_path, _adapter(PLAN, ACHIEVED, timid))
+        assert v.complete is False          # downgrade stands
+        assert "overturned" not in v.verdict_audit
+
+    def test_signal3_downgrade_is_never_cancelled(self, monkeypatch, tmp_path):
+        """Review HIGH (unanimous): for a declared runtime deliverable with
+        no behavioral probe, the missing probe IS the finding — the auditor's
+        'nothing failed' doctrine is its blind spot, not a rebuttal."""
+        from scope import Deliverable, ResolvedIntent
+        ri = ResolvedIntent()
+        ri.deliverables = [Deliverable(
+            name="cmd/server/main.go", description="HTTP server binary",
+            shape="runtime")]
+        clean = {"complete": True, "confidence": 0.9, "gaps": [],
+                 "summary": "Achieved. Binary present."}
+        v = _run(monkeypatch, tmp_path,
+                 _adapter(PLAN, clean, AUDIT_DISAGREES),
+                 resolved_intent=ri)
+        assert v.complete is False          # Signal 3 downgrade stands
+        assert "runtime" in v.downgrade_reason
+        assert v.verdict_audit["disputed"] is True
+        assert "overturned" not in v.verdict_audit
+
+    def test_retry_flip_goes_through_deterministic_guards(
+            self, monkeypatch, tmp_path):
+        """Review HIGH (unanimous): a retry that flips to achieved while
+        ADMITTING runtime wasn't exercised must be re-downgraded — the
+        detectors originally ran while complete=False and stood down."""
+        confessing_retry = {
+            "complete": True, "confidence": 0.9, "gaps": [],
+            "summary": ("Goal achieved structurally, though runtime "
+                        "validation was not performed.")}
+        v = _run(monkeypatch, tmp_path,
+                 _adapter(PLAN, JUDGE_FALSE, AUDIT_DISAGREES,
+                          confessing_retry))
+        assert v.complete is False
+        assert v.verdict_audit["overturned"] == "judge-retry"
+        assert v.verdict_audit["retry_redowngraded"] is True
+        assert "not exercised" in v.downgrade_reason
+
+    def test_evidence_outside_workspace_is_not_quoted(
+            self, monkeypatch, tmp_path):
+        """Review MEDIUM: the audit lane quotes workspace files only."""
+        outside = tmp_path / "secret.txt"
+        outside.write_text("s3cret-t0ken")
+        ws = tmp_path / "ws"
+        (ws / "artifacts").mkdir(parents=True)
+        (ws / "artifacts" / "crosscheck.md").write_text("tally ok")
+        plan = {"checks": [
+            {"description": "leak", "command": f"cat {outside}"},
+            {"description": "real", "command": "cat artifacts/crosscheck.md"},
+        ]}
+        def fake_run(cmd, **kw):
+            proc = MagicMock()
+            proc.returncode = 0
+            proc.stdout = "ok\n"
+            proc.stderr = ""
+            return proc
+        monkeypatch.setattr("subprocess.run", fake_run)
+        monkeypatch.setattr(closure_verify, "_verdict_audit_enabled",
+                            lambda: True)
+        adapter = _adapter(plan, ACHIEVED, AUDIT_DISAGREES)
+        closure_verify.verify_goal_completion(
+            goal="write the crosscheck",
+            steps=[{"result": "wrote artifacts/crosscheck.md"}],
+            adapter=adapter,
+            workspace_path=str(ws),
+        )
+        audit_msg = adapter.complete.call_args_list[2].args[0][1].content
+        assert "s3cret-t0ken" not in audit_msg
+        assert "tally ok" in audit_msg
+
+    def test_flagged_excerpt_is_withheld(self, monkeypatch, tmp_path):
+        """Review HIGH: worker-authored artifact text is scanned before it
+        reaches the auditor; a flagged excerpt is visibly withheld."""
+        (tmp_path / "artifacts").mkdir()
+        (tmp_path / "artifacts" / "crosscheck.md").write_text("tally ok")
+        _finding = MagicMock()
+        _finding.findings = ["instruction-to-judge pattern"]
+        import injection_guard
+        monkeypatch.setattr(injection_guard, "scan_content",
+                            lambda text: _finding)
+        adapter = _adapter(PLAN, ACHIEVED, AUDIT_DISAGREES)
+        _run(monkeypatch, tmp_path, adapter)
+        audit_msg = adapter.complete.call_args_list[2].args[0][1].content
+        assert "tally ok" not in audit_msg
+        assert "withheld" in audit_msg

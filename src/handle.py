@@ -2783,6 +2783,30 @@ def _handle_impl(
                     _audit_warnings.append(_closure_audit.warning)
                     _audit_failed_loop_ids.add(
                         getattr(loop_result, "loop_id", "") or "")
+                # Durable disputed marker (adversarial review 2026-08-09:
+                # an in-memory skip set is routing state, not a verdict
+                # state). Field-name parity with the provenance contested
+                # lane so every surface that already renders contested
+                # picks this up. Consumer-side neutrality (strategy
+                # fitness, repeat-pressure) is a shared residual with that
+                # lane — BACKLOG.
+                try:
+                    if (getattr(_closure, "verdict_audit", {}) or {}).get(
+                            "disputed"):
+                        from runs import write_metadata as _wm_vad
+                        from runs import current_run_dir as _crd_vad
+                        _rd_vad = _crd_vad()
+                        if _rd_vad is not None:
+                            _wm_vad(
+                                _rd_vad, handle_id=handle_id,
+                                prompt=_raw_input,
+                                extra={
+                                    "goal_verdict_contested": True,
+                                    "goal_verdict_contested_by":
+                                        "verdict_audit",
+                                })
+                except Exception:
+                    pass
             elif _closure is None and _closure_error:
                 # Absence-means-not-judged holds (no goal_achieved key), but
                 # the source must say WHY there is no verdict — a crashed
@@ -3257,6 +3281,20 @@ def _handle_impl(
                                 )
                                 _dl_post_adapter = _escalated_adapter
                                 _dl_post_project = _escalated_project
+                                # Disputed-audit holdout, escalation lane
+                                # (adversarial review 2026-08-09: the
+                                # normal-path skip set never reaches this
+                                # callback).
+                                _dl_post_skip = None
+                                try:
+                                    if (getattr(_post_closure,
+                                                "verdict_audit", {}) or {}
+                                            ).get("disputed"):
+                                        _dl_post_skip = [
+                                            getattr(_dl_post_result,
+                                                    "loop_id", "") or ""]
+                                except Exception:
+                                    _dl_post_skip = None
                                 _defer_learning_post_notify(
                                     handle_id,
                                     lambda: _fdl_post(
@@ -3265,6 +3303,7 @@ def _handle_impl(
                                         project=_dl_post_project,
                                         dry_run=False,
                                         verbose=verbose,
+                                        skip_loop_ids=_dl_post_skip,
                                     ))
                             except Exception as _post_dl_exc:
                                 log.warning(
