@@ -81,6 +81,7 @@ from knowledge_web import (  # noqa: F401, E402
     load_tiered_lessons, _rewrite_tiered_lessons,
     reinforce_lesson, search_graveyard, forget_lesson, promote_lesson,
     contest_lesson, contested_lessons, refight_lesson,
+    confirm_lesson_by_delta,
     resurrect_archived_lesson, _load_archived_lessons, _lessons_archive_path,
     run_decay_cycle, maybe_consolidate, consolidation_due,
     inject_tiered_lessons, query_lessons,

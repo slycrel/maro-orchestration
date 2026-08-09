@@ -473,6 +473,7 @@ def run_effect_route(
     limit: int = 5,
     lesson_ids: Optional[List[str]] = None,
     remint_pending: bool = False,
+    origin: str = "",
 ) -> Dict[str, Any]:
     """Measure Δ for candidate MEDIUM lessons and (optionally) act on the
     ones that clear either effect bar — the routes-census readout (brief
@@ -482,6 +483,12 @@ def run_effect_route(
     run; demote=True stamps measured-negative rows out of decision
     injection (knowledge_web.demote_lesson_by_effect, 2026-08-08).
 
+    §5 cut B (2026-08-09): `origin` selects rows by producer stamp
+    (minted_by — "thinkback"/"evolver" trace mints), provisional included;
+    on acting runs a provisional row that clears the promote bars gets
+    confirm_lesson_by_delta (flag cleared, stays MEDIUM) instead of
+    promotion — the trace-acceptance filter's verdict gating tiering.
+
     Spend honesty: measurement is limit × 2 arms × samples × n_calls
     replays on the caller's adapter — deliberate CLI-driven spend, which is
     why nothing in the loop or maintenance cycles calls this.
@@ -490,8 +497,8 @@ def run_effect_route(
         MemoryTier, PROMOTE_MIN_SCORE, PROMOTE_MIN_SESSIONS,
         REMINT_PATTERN_STRIKES,
         _is_contested, _is_quarantined, load_tiered_lessons,
-        demote_lesson_by_effect, promote_lesson_by_effect,
-        resolve_remint_watch,
+        confirm_lesson_by_delta, demote_lesson_by_effect,
+        promote_lesson_by_effect, resolve_remint_watch,
     )
     calls = gather_oracle_decision_calls()
     rows = load_tiered_lessons(tier=MemoryTier.MEDIUM, min_score=0.0,
@@ -520,6 +527,17 @@ def run_effect_route(
         # was unreachable even by naming the lesson.)
         wanted = set(lesson_ids)
         rows = [t for t in rows if t.lesson_id in wanted]
+    elif origin:
+        # §5 cut B: class selection by producer stamp — the lane that makes
+        # thinkback/evolver trace mints measurable without naming ids.
+        # Same posture as explicit naming: provisional rows ARE the point
+        # (thinkback mints enter provisional; a positive Δ is their
+        # retention path via confirm_lesson_by_delta), so no citizenship
+        # filter here — but no stratum filter either, and the act routes
+        # keep their own stratum/eligibility guards.
+        rows = [t for t in rows
+                if getattr(t, "minted_by", "") == origin]
+        rows.sort(key=lambda t: t.score, reverse=True)
     else:
         rows = [t for t in rows
                 if not (t.provisional or _is_quarantined(t)
@@ -545,15 +563,24 @@ def run_effect_route(
         # only ever "stamp what the measurement supports".
         _is_watch = (t.delta_evidence or {}).get("route") == "remint-watch"
         promoted = False
+        confirmed = False
         if promote or (remint_pending and _is_watch):
-            promoted = promote_lesson_by_effect(t.lesson_id, ev)
+            if t.provisional:
+                # §5 cut B: a provisional row can't reach LONG (boundary
+                # guard), but a qualifying positive Δ clears its flag —
+                # the retention path for trace-minted lessons. Same bars
+                # as promotion; the row stays MEDIUM.
+                confirmed = confirm_lesson_by_delta(t.lesson_id, ev)
+            else:
+                promoted = promote_lesson_by_effect(t.lesson_id, ev)
         demoted = False
-        if (demote or (remint_pending and _is_watch)) and not promoted:
+        if (demote or (remint_pending and _is_watch)) and not promoted \
+                and not confirmed:
             demoted = demote_lesson_by_effect(t.lesson_id, ev)
         watch_cleared = False
         if ((remint_pending or promote or demote)
                 and (t.delta_evidence or {}).get("route") == "remint-watch"
-                and not promoted and not demoted):
+                and not promoted and not confirmed and not demoted):
             # Acting runs only — the census-only mode stays a true dry run.
             # Measurement replaces measurement: a clean full-set result that
             # cleared neither bar still ends the probation (route
@@ -565,9 +592,12 @@ def run_effect_route(
             "lesson": t.lesson[:160],
             "score": t.score,
             "sessions_validated": t.sessions_validated,
+            "minted_by": getattr(t, "minted_by", ""),
+            "provisional": bool(t.provisional),
             **ev,
             "tenure_eligible": tenure_ok,
             "promoted_by_effect": promoted,
+            "confirmed_by_effect": confirmed,
             "demoted_by_effect": demoted,
             "remint_watch_cleared": watch_cleared,
         })
@@ -599,6 +629,11 @@ def _main(argv: List[str]) -> int:
     ap.add_argument("--limit", type=int, default=5)
     ap.add_argument("--samples", type=int, default=3)
     ap.add_argument("--lesson-id", action="append", default=None)
+    ap.add_argument("--origin", default="",
+                    help="measure rows by producer stamp (minted_by), e.g. "
+                         "'thinkback' or 'evolver' — includes provisional "
+                         "rows (with --promote, a qualifying positive Δ "
+                         "clears their flag instead of promoting)")
     ap.add_argument("--remint-pending", action="store_true",
                     help="measure the strike-3 remint-watch rows (forced "
                          "re-measure lane, decision dcf8eab8); combine with "
@@ -645,7 +680,8 @@ def _main(argv: List[str]) -> int:
     out = run_effect_route(_Paced(), promote=args.promote, demote=args.demote,
                            limit=args.limit, samples=args.samples,
                            lesson_ids=args.lesson_id,
-                           remint_pending=args.remint_pending)
+                           remint_pending=args.remint_pending,
+                           origin=args.origin)
     print(json.dumps(out, indent=2))
     return 0
 

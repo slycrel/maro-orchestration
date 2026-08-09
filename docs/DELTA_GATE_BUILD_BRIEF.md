@@ -86,8 +86,17 @@ routes, it does not replace one.
 
 ## 5. Cuts (slice 1)
 
-Lessons only — no evolver/thinkback trace scoring yet (the original
-LeAct item's wider target; it queues behind a working lesson gate).
+~~Lessons only — no evolver/thinkback trace scoring yet~~ (BUILT
+2026-08-09, §5 cut B: thinkback mints enter tiered-PROVISIONAL with
+`minted_by="thinkback"` — no more ungated flat-citizen narrations —
+and evolver prompt_tweak mints stamp `minted_by="evolver"` (not
+provisional; that category has its own EVOLVER_VERDICT lifecycle);
+`delta_replay --origin <producer>` measures trace mints as a class,
+and on acting runs a provisional row clearing the promote bars gets
+`confirm_lesson_by_delta` — flag cleared, stays MEDIUM — the
+acceptance filter's verdict gating tiering per the LeAct item's
+consumer-first rule. Spend posture unchanged: measurement stays
+CLI-only. See `tests/test_trace_scoring.py`.)
 No competence-redundancy decay (follow-on steal, needs this same
 harness; Jeremy's 55c877da: calendar decay was "mostly placeholder").
 ~~No un-contest/refight verb~~ (BUILT 2026-08-09:

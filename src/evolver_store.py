@@ -502,6 +502,12 @@ def _apply_suggestion_action(d: dict) -> bool:
                 source_goal=f"evolver-{suggestion_id}",
                 tier=MemoryTier.MEDIUM,
                 confidence=confidence,
+                # §5 cut B: producer stamp — makes evolver traces
+                # Δ-measurable as a class (delta_replay --origin evolver).
+                # NOT provisional: evolver suggestions have their own
+                # behavioral verify lifecycle (EVOLVER_VERDICT), and this
+                # category exists to be injected.
+                minted_by="evolver",
             )
             if getattr(recorded_lesson, "lesson_id", "") == "rejected":
                 raise RuntimeError("tiered lesson writer rejected the suggestion")

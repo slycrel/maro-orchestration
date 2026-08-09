@@ -128,6 +128,13 @@ class TieredLesson:
     # from LONG promotion (same surfaces as provisional), visible in readouts,
     # cleared only by an outcome-derived confirming re-record.
     minted_from: str = ""
+    # §5 cut B (2026-08-09): producer stamp for LLM-narrated mints — "" for
+    # the ordinary extraction funnel, "thinkback" / "evolver" for reasoning
+    # traces those instruments mint. Sibling of minted_from (which classifies
+    # WHERE the text derives from; this names WHAT minted it) and of the
+    # skill-pedigree `origin` stamp. Selector for delta_replay --origin, so
+    # trace mints are Δ-measurable as a class. Old rows deserialize to "".
+    minted_by: str = ""
     # Retirement-by-contradiction (2026-08-02): empty dict = full citizen;
     # non-empty = contested ({reason, source, contested_at}) — the lesson was
     # named by contradiction adjudication or operator judgment as plausibly
@@ -306,6 +313,7 @@ def record_tiered_lesson(
     lesson_type: str = "",
     provisional: bool = False,
     minted_from: str = "",
+    minted_by: str = "",
     lesson_id: str = "",
     grounding: Optional[List[Dict[str, Any]]] = None,
     source_evidence: str = "",
@@ -481,6 +489,7 @@ def record_tiered_lesson(
             novelty=round(novelty, 4),
             provisional=provisional,
             minted_from=minted_from,
+            minted_by=minted_by,
             grounding=grounding or [],
             delta_evidence=remint_watch or {},
         )
@@ -1731,6 +1740,98 @@ def promote_lesson_by_effect(lesson_id: str, delta_evidence: Dict[str, Any]) -> 
     except Exception:
         pass  # standing-rule pipeline must not block lesson promotion
 
+    return True
+
+
+def confirm_lesson_by_delta(lesson_id: str, delta_evidence: Dict[str, Any]) -> bool:
+    """Δ-as-confirmation (§5 cut B): a measured positive Δ clears a
+    provisional MEDIUM row's flag — the retention path for trace-minted
+    lessons (thinkback mints enter provisional, so without this the only
+    exit is an independent confirmed-context re-record that a blind-spot
+    trace by definition may never get; the LeAct filter's verdict must
+    gate tiering, not just annotate).
+
+    Same eligibility bars and killswitch as promote_lesson_by_effect
+    (knowledge.effect_promotion_enabled + min_delta/min_calls, finite-only,
+    spread < delta, stratum == "reason", zero replay errors) — clearing
+    provisional is a smaller act than promotion to LONG, so it must not be
+    reachable on weaker evidence. The row stays MEDIUM: it becomes
+    injectable and can then earn LONG through either route. Quarantined and
+    contested rows are refused — those flags have their own designed exits
+    (outcome-derived re-record; refight_lesson). Stamps delta_evidence
+    route="effect-confirm" (measurement replaces measurement) and
+    re-anchors the decay clock.
+    """
+    if not effect_promotion_enabled():
+        log.info("confirm_lesson_by_delta: killswitch off — not confirming")
+        return False
+    try:
+        from config import get as _cfg_get
+        min_delta = float(_cfg_get("knowledge.effect_promotion_min_delta",
+                                   EFFECT_PROMOTE_MIN_DELTA))
+        min_calls = int(_cfg_get("knowledge.effect_promotion_min_calls",
+                                 EFFECT_PROMOTE_MIN_CALLS))
+    except Exception:
+        min_delta, min_calls = EFFECT_PROMOTE_MIN_DELTA, EFFECT_PROMOTE_MIN_CALLS
+
+    ev = dict(delta_evidence or {})
+    delta = ev.get("delta")
+    if not (isinstance(delta, (int, float)) and math.isfinite(delta)) \
+            or delta < min_delta:
+        return False
+    if int(ev.get("n_calls") or 0) < min_calls:
+        return False
+    spread = ev.get("jackknife_spread")
+    if not (isinstance(spread, (int, float)) and math.isfinite(spread)
+            and spread >= 0) or spread >= delta:
+        return False
+    if ev.get("stratum") != "reason":
+        return False
+    if int(ev.get("replay_errors") or 0) != 0:
+        return False
+
+    hit: Dict[str, Any] = {"tl": None}
+
+    def _confirm(lessons: List[TieredLesson]) -> List[TieredLesson]:
+        row = next((l for l in lessons if l.lesson_id == lesson_id), None)
+        if row is None:
+            return lessons
+        # Guards on the fresh in-lock row (same discipline as the promote
+        # route's re-validate).
+        if not row.provisional or _is_quarantined(row) or _is_contested(row):
+            return lessons
+        row.provisional = False
+        row.last_reinforced = _current_date()
+        row.delta_evidence = {
+            "delta": float(delta),
+            "jackknife_spread": float(spread),
+            "n_calls": int(ev.get("n_calls") or 0),
+            "replay_errors": 0,
+            "stratum": "reason",
+            "measured_at": (ev.get("measured_at")
+                            or datetime.now(timezone.utc).isoformat()),
+            "route": "effect-confirm",
+        }
+        hit["tl"] = row
+        return lessons
+
+    _mutate_tiered_lessons(MemoryTier.MEDIUM, _confirm)
+    if hit["tl"] is None:
+        return False
+    log.info("confirm_lesson_by_delta: %s provisional cleared (Δ=%.3f over "
+             "%d calls)", lesson_id, float(delta), int(ev.get("n_calls") or 0))
+    try:
+        from captains_log import log_event, LESSON_DELTA_CONFIRMED
+        log_event(
+            event_type=LESSON_DELTA_CONFIRMED,
+            subject=lesson_id,
+            summary=(f"Provisional lesson {lesson_id} confirmed by measured "
+                     f"Δ={float(delta):.3f}: {hit['tl'].lesson[:100]}"),
+            context={"delta": float(delta), "n_calls": int(ev.get("n_calls") or 0),
+                     "minted_by": hit["tl"].minted_by},
+        )
+    except Exception:
+        pass
     return True
 
 

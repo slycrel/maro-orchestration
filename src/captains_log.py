@@ -88,6 +88,11 @@ LESSON_REFOUGHT = "LESSON_REFOUGHT"
 # excluded from decision injection + tenure-to-LONG. Sibling of the two
 # above — every exclusion mechanism leaves an operator-readable audit row.
 LESSON_DELTA_DEMOTED = "LESSON_DELTA_DEMOTED"
+# Δ-as-confirmation (§5 cut B, 2026-08-09): a provisional row's flag cleared
+# by a measured positive Δ (knowledge_web.confirm_lesson_by_delta — the
+# retention path for trace-minted provisional lessons). Same eligibility
+# bars as effect promotion; the row stays MEDIUM.
+LESSON_DELTA_CONFIRMED = "LESSON_DELTA_CONFIRMED"
 # Re-mint strike threshold hit (2026-08-08, decision dcf8eab8): a Δ-demoted
 # lineage re-minted REMINT_PATTERN_STRIKES times — forced re-measurement
 # queued (picked up by delta_replay --remint-pending; the mint path never

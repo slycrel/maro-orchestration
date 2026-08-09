@@ -6725,3 +6725,22 @@ under the same two-measurement standard).
   `maro-memory refight` (legacy no-snapshot stamps reachable there;
   flat-only contested rows named v1 cut). No new config key. 23 pins
   (tests/test_lesson_refight.py); full suite green.
+- **2026-08-09** — Trace scoring SHIPPED (§5 cut B; the LeAct
+  acceptance-filter item's structural half). Thinkback mints no longer
+  ship as ungated flat-ledger citizens — they enter the TIERED store
+  provisional (out of every injection surface) with
+  `minted_by="thinkback"`, run_id on evidence_sources instead of a
+  text prefix; citizenship comes from a confirmed-context re-record or
+  a measured positive Δ via new `confirm_lesson_by_delta` (same bars +
+  killswitch as effect promotion; row stays MEDIUM, route
+  "effect-confirm", LESSON_DELTA_CONFIRMED event). Evolver
+  prompt_tweak mints stamp `minted_by="evolver"` but stay full
+  citizens — that category has its own EVOLVER_VERDICT behavioral
+  lifecycle and exists to be injected (deliberately not double-gated).
+  `delta_replay --origin <producer>` measures trace mints as a class;
+  acting runs route provisional rows to confirm instead of promote.
+  Spend posture unchanged — measurement is CLI-only, nothing ambient.
+  No new config key (rides effect_promotion_enabled). LeAct BACKLOG
+  item marked shipped-structural; measurement campaign +
+  competence-redundancy decay stay queued. 16 pins
+  (tests/test_trace_scoring.py).

@@ -451,13 +451,24 @@ def run_thinkback_from_outcome(
 
 
 def _save_thinkback_lessons(goal: str, lessons: List[str], run_id: str) -> None:
-    """Record thinkback-derived lessons via the shared lesson store.
+    """Record thinkback-derived lessons — tiered + PROVISIONAL (§5 cut B).
 
-    Goes through memory._store_lesson so thinkback lessons get the same
-    prompt-injection guard and exact/near-duplicate reinforce logic as every
-    other lesson write path, instead of hand-appending raw JSONL.
+    A thinkback lesson is a single-run LLM narration with no quantitative
+    filter, which is exactly the LeAct acceptance-gate target: a
+    plausible-but-wrong narrative must not ship like a validated one.
+    Minting is therefore outcome-gated at the tier layer: rows enter the
+    MEDIUM store provisional (excluded from every injection surface) with
+    minted_by="thinkback", and earn citizenship through a confirmed-context
+    re-record OR a measured positive Δ (delta_replay --origin thinkback +
+    confirm_lesson_by_delta); decay disposes of the unconfirmed rest in
+    about a week. Pre-2026-08-09 this wrote the FLAT ledger as a full
+    citizen (`[thinkback:<run_id>]` text prefix) — that shipped narrations
+    straight into recall top-up ungated; the run_id now rides
+    evidence_sources instead, keeping the lesson text clean for replay.
+    record_tiered_lesson still applies the same injection guard and
+    dedup/reinforce logic as every other mint path.
     """
-    from memory import _store_lesson
+    from knowledge_web import MemoryTier, record_tiered_lesson
 
     task_type = "general"  # thinkback lessons are cross-cutting
 
@@ -465,12 +476,16 @@ def _save_thinkback_lessons(goal: str, lessons: List[str], run_id: str) -> None:
         if not lesson_text.strip():
             continue
         try:
-            _store_lesson(
-                task_type=task_type,
-                outcome="done",
-                lesson=f"[thinkback:{run_id}] {lesson_text}",
+            record_tiered_lesson(
+                lesson_text,
+                task_type,
+                "done",
                 source_goal=goal,
+                tier=MemoryTier.MEDIUM,
                 confidence=0.65,
+                provisional=True,
+                minted_by="thinkback",
+                evidence_sources=[f"thinkback:{run_id}"],
             )
         except Exception as exc:
             log.warning("thinkback: could not save lesson: %s", exc)

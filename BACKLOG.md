@@ -4679,7 +4679,18 @@ open — verification ≠ repair; each needs a wire-or-retire decision):**
 
 ### LeAct acceptance filter for minted reasoning traces (2026-07-31, from dispatched run 4125f34e-azure-haven)
 
-- [ ] Steal from LeAct (arXiv 2607.21856), surfaced by the Hermes minimal-prompt
+- [x] **SHIPPED 2026-08-09 (§5 cut B — structural half)**: thinkback
+  mints now enter the tiered store PROVISIONAL (excluded from every
+  injection surface; citizenship only via confirmed-context re-record or
+  measured positive Δ through `confirm_lesson_by_delta`) with
+  `minted_by="thinkback"`; evolver prompt_tweak mints stamp
+  `minted_by="evolver"` (not provisional — own EVOLVER_VERDICT
+  lifecycle); `delta_replay --origin` measures trace mints as a class.
+  The filter's verdict gates tiering, as required below. What remains
+  operator-driven by design: actually RUNNING the measurement campaign
+  on live trace mints (CLI spend posture), and the follow-on
+  competence-redundancy-decay steal stays queued. Original item:
+  Steal from LeAct (arXiv 2607.21856), surfaced by the Hermes minimal-prompt
   research run: keep a sampled reasoning trace only if it **measurably raises
   the probability of reproducing a known-correct action** — an outcome-gated
   acceptance filter on explanations, not just on changes. Mapped onto us:
