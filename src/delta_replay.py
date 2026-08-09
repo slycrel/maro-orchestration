@@ -570,7 +570,11 @@ def run_effect_route(
                 # guard), but a qualifying positive Δ clears its flag —
                 # the retention path for trace-minted lessons. Same bars
                 # as promotion; the row stays MEDIUM.
-                confirmed = confirm_lesson_by_delta(t.lesson_id, ev)
+                # expected_lesson binds the confirmation to the text the Δ
+                # was measured against — a concurrent refight-revise must
+                # not inherit it (2026-08-09 review).
+                confirmed = confirm_lesson_by_delta(
+                    t.lesson_id, ev, expected_lesson=t.lesson)
             else:
                 promoted = promote_lesson_by_effect(t.lesson_id, ev)
         demoted = False

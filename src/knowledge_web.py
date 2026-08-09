@@ -25,7 +25,7 @@ import math
 import re
 import logging
 from collections import Counter
-from dataclasses import asdict, dataclass, field, fields
+from dataclasses import asdict, dataclass, field, fields, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -1335,6 +1335,25 @@ def _reinforced_since_contest(tl: TieredLesson) -> int:
         return 0
 
 
+def _refight_evidence_pending(tl: TieredLesson) -> bool:
+    """Does this contested row have re-sightings its refights haven't
+    consumed? An unusable verdict stamps refight_attempted_at with the
+    sighting count it judged — without that, a row whose refight keeps
+    returning garbage stays eligible forever and maintenance (which runs
+    on EVERY loop finalize) re-spends three LLM calls per completed run
+    on the same rows (2026-08-09 review, architect+minimalist consensus:
+    "cap 3/cycle limits burst size, not total spend")."""
+    if _reinforced_since_contest(tl) < 1:
+        return False
+    attempted = tl.contested.get("refight_attempted_at")
+    if attempted is None:
+        return True
+    try:
+        return tl.times_reinforced > int(attempted)
+    except (TypeError, ValueError):
+        return True
+
+
 def contested_lessons(*, new_evidence_only: bool = False) -> List[TieredLesson]:
     """Contested tiered lessons across MEDIUM + LONG (raw load — frozen
     stored scores, no decay derivation), most re-sightings-since-contest
@@ -1351,7 +1370,7 @@ def contested_lessons(*, new_evidence_only: bool = False) -> List[TieredLesson]:
             if not _is_contested(tl):
                 continue
             tl.tier = tier  # trust the store scanned, not the stored field
-            if new_evidence_only and _reinforced_since_contest(tl) < 1:
+            if new_evidence_only and not _refight_evidence_pending(tl):
                 continue
             rows.append(tl)
     rows.sort(key=_reinforced_since_contest, reverse=True)
@@ -1435,6 +1454,31 @@ Re-fight the battle that created this lesson. Decide:
 Output ONLY valid JSON:
 {{"action": "keep|revise|retire", "lesson": "<revised lesson text, only when action is revise>", "reasoning": "<one short paragraph>"}}"""
 
+    lesson_id = tl.lesson_id
+
+    def _same_contest(row: TieredLesson) -> bool:
+        # Bind the verdict to the contest it judged (2026-08-09 review,
+        # 3/3 consensus): a newer contest with fresh evidence must not be
+        # resolved by a verdict rendered against the old stamp.
+        return (row.contested.get("contested_at") == stamp.get("contested_at")
+                and row.contested.get("source") == stamp.get("source"))
+
+    def _consume_evidence() -> None:
+        # An LLM call happened but produced no usable verdict — record which
+        # sighting level it judged, so the maintenance scan (which runs on
+        # every loop finalize) doesn't re-spend on the same evidence forever.
+        # The operator verb bypasses this via contested_lessons()'s default.
+        def _stamp_attempt(lessons: List[TieredLesson]) -> List[TieredLesson]:
+            row = next((l for l in lessons if l.lesson_id == lesson_id), None)
+            if row is not None and _is_contested(row) and _same_contest(row):
+                row.contested = dict(row.contested,
+                                     refight_attempted_at=row.times_reinforced)
+            return lessons
+        try:
+            _mutate_tiered_lessons(tl.tier, _stamp_attempt)
+        except Exception:
+            pass
+
     try:
         from llm import LLMMessage
         from llm_parse import extract_json, content_or_empty
@@ -1447,26 +1491,43 @@ Output ONLY valid JSON:
     except Exception as exc:
         log.debug("refight_lesson: adapter failed for %s: %s",
                   tl.lesson_id, exc)
+        _consume_evidence()
         return None
     if not parsed:
+        _consume_evidence()
         return None
 
     action = str(parsed.get("action") or "").strip().lower()
     reasoning = str(parsed.get("reasoning") or "")[:400]
     new_text = str(parsed.get("lesson") or "").strip()
     if action not in ("keep", "revise", "retire"):
+        _consume_evidence()
         return None
-    if action == "revise" and not new_text:
-        return None
+    if action == "revise":
+        if not new_text:
+            _consume_evidence()
+            return None
+        # The refight prompt carries contest reasons + captain's-log failure
+        # summaries — external content. Revised text must pass the same
+        # injection chokepoint every other lesson write does (2026-08-09
+        # review): a hostile "correction" is an unusable verdict, not a mint.
+        try:
+            from memory_ledger import _lesson_looks_adversarial
+            if _lesson_looks_adversarial(new_text):
+                log.warning("refight_lesson: revised text for %s rejected "
+                            "(adversarial pattern)", lesson_id)
+                _consume_evidence()
+                return None
+        except ImportError:
+            pass
 
-    lesson_id = tl.lesson_id
     applied = {"hit": False}
 
     def _apply(lessons: List[TieredLesson]) -> List[TieredLesson]:
         row = next((l for l in lessons if l.lesson_id == lesson_id), None)
-        if row is None or not _is_contested(row):
-            # GC'd, or a concurrent refight already resolved it — the
-            # verdict must not clobber that resolution.
+        if row is None or not _is_contested(row) or not _same_contest(row):
+            # GC'd, resolved by a concurrent refight, or re-contested with
+            # fresh evidence — this verdict must not clobber that state.
             return lessons
         applied["hit"] = True
         if action == "keep":
@@ -1476,6 +1537,10 @@ Output ONLY valid JSON:
             # spent contested (mirrors refight_rule's last_verified stamp).
             row.last_reinforced = _current_date()
         elif action == "revise":
+            # Data retention: the refuted original is archived before the
+            # overwrite — for a tiered-only row this copy is the ONLY full
+            # text that survives the revision (2026-08-09 review, 3/3).
+            _archive_lessons([replace(row)], reason="refight_revise")
             row.lesson = new_text
             row.contested = {}
             row.provisional = True   # corrected text must re-earn its record
@@ -1491,16 +1556,26 @@ Output ONLY valid JSON:
     if not applied["hit"]:
         return None
 
+    flat_cleared = None
     if action == "keep":
         # UU-4 dual-written rows: keep restores citizenship on EVERY surface
         # the contest removed it from. revise/retire deliberately leave the
-        # flat row contested — its text is the refuted original.
+        # flat row contested — its text is the refuted original. The clear is
+        # stamp-bound (a NEWER flat contest survives) and its outcome is
+        # recorded: a flat row left contested after a reported keep needs a
+        # repair signal, not silence (2026-08-09 review).
         try:
             from memory_ledger import uncontest_flat_lesson
-            uncontest_flat_lesson(lesson_id)
+            flat_cleared = uncontest_flat_lesson(lesson_id,
+                                                 expected_stamp=stamp)
         except Exception as exc:
+            flat_cleared = False
             log.warning("refight_lesson: flat-ledger clear failed for %s: %s",
                         lesson_id, exc)
+        if flat_cleared is False:
+            log.warning("refight_lesson: keep on %s did NOT clear a flat "
+                        "row (absent, newer contest, or write failure) — "
+                        "flat surfaces may still exclude it", lesson_id)
 
     log.info("lesson re-fought: %s -> %s", lesson_id, action)
     if verbose:
@@ -1523,6 +1598,9 @@ Output ONLY valid JSON:
                 "new_lesson": new_text[:200] if action == "revise" else "",
                 "contest_source": stamp.get("source", ""),
                 "reinforced_since_contest": since,
+                # None = not a keep (no flat clear attempted); False = keep
+                # reported but the flat row stayed contested — repair signal.
+                "flat_cleared": flat_cleared,
             },
         )
     except Exception:
@@ -1622,10 +1700,15 @@ EFFECT_PROMOTE_MIN_CALLS = 6
 def effect_promotion_enabled() -> bool:
     """Killswitch for the Δ-gate effect route (default ON — it only acts
     when a replay measurement exists, and measurement is operator/CLI-
-    driven spend, not ambient). config: knowledge.effect_promotion_enabled."""
+    driven spend, not ambient). config: knowledge.effect_promotion_enabled.
+    String-normalized like _novelty_term_enabled: a quoted "false" in YAML
+    is a truthy string and would leave the killswitch unkillable."""
     try:
         from config import get as _cfg_get
-        return bool(_cfg_get("knowledge.effect_promotion_enabled", True))
+        val = _cfg_get("knowledge.effect_promotion_enabled", True)
+        if isinstance(val, str):
+            return val.strip().lower() not in ("false", "0", "no", "off")
+        return bool(val)
     except Exception:
         return True
 
@@ -1743,7 +1826,8 @@ def promote_lesson_by_effect(lesson_id: str, delta_evidence: Dict[str, Any]) -> 
     return True
 
 
-def confirm_lesson_by_delta(lesson_id: str, delta_evidence: Dict[str, Any]) -> bool:
+def confirm_lesson_by_delta(lesson_id: str, delta_evidence: Dict[str, Any],
+                            expected_lesson: str = "") -> bool:
     """Δ-as-confirmation (§5 cut B): a measured positive Δ clears a
     provisional MEDIUM row's flag — the retention path for trace-minted
     lessons (thinkback mints enter provisional, so without this the only
@@ -1761,6 +1845,12 @@ def confirm_lesson_by_delta(lesson_id: str, delta_evidence: Dict[str, Any]) -> b
     (outcome-derived re-record; refight_lesson). Stamps delta_evidence
     route="effect-confirm" (measurement replaces measurement) and
     re-anchors the decay clock.
+
+    expected_lesson, when non-empty, is compared against the fresh in-lock
+    row's text: a Δ was measured against a specific wording, and a
+    concurrent refight-revise (which zeroes counters and re-enters
+    provisional with NEW text) must not inherit that confirmation
+    (2026-08-09 review). Empty = no text binding (legacy callers).
     """
     if not effect_promotion_enabled():
         log.info("confirm_lesson_by_delta: killswitch off — not confirming")
@@ -1799,6 +1889,8 @@ def confirm_lesson_by_delta(lesson_id: str, delta_evidence: Dict[str, Any]) -> b
         # Guards on the fresh in-lock row (same discipline as the promote
         # route's re-validate).
         if not row.provisional or _is_quarantined(row) or _is_contested(row):
+            return lessons
+        if expected_lesson and row.lesson != expected_lesson:
             return lessons
         row.provisional = False
         row.last_reinforced = _current_date()
@@ -1846,10 +1938,14 @@ EFFECT_DEMOTE_MAX_DELTA = -0.05
 def effect_demotion_enabled() -> bool:
     """Killswitch for the Δ-gate demotion route (default ON — same ambient-
     spend argument as promotion: it only acts on operator/CLI-driven
-    measurement). config: knowledge.effect_demotion_enabled."""
+    measurement). config: knowledge.effect_demotion_enabled.
+    String-normalized like _novelty_term_enabled (quoted "false" is truthy)."""
     try:
         from config import get as _cfg_get
-        return bool(_cfg_get("knowledge.effect_demotion_enabled", True))
+        val = _cfg_get("knowledge.effect_demotion_enabled", True)
+        if isinstance(val, str):
+            return val.strip().lower() not in ("false", "0", "no", "off")
+        return bool(val)
     except Exception:
         return True
 

@@ -1290,7 +1290,18 @@ capture**, which is what makes the rung amortize instead of evaporate.
   9. **Skill dead-drop reproduced 2/2** — see the standalone entry
      below; promoted out of this batch's findings to its own bug.
   10. **Malformed tool-fragment-into-bash** ×2 (`{tool::` R1w,
-     `{tool:noop}` R2w) — harness-side parse leak, pattern not one-off.
+     `{tool:noop}` R2w) — ~~harness-side parse leak~~ **RE-DIAGNOSED +
+     MITIGATED 2026-08-09**: transcript evidence (R1w call-00015, R2w
+     call-00012) shows the INNER containerized claude session executing
+     maro's subprocess tool-protocol JSON via its own Bash tool
+     (`{"tool": "complete_step"}` / `{"tool":"noop"}` as shell
+     commands) — maro's parser never leaked anything; the worker
+     conflated "reply with this JSON" with "run this". Fix at the only
+     seam we control: `_TOOL_INJECTION_TEMPLATE` now states the JSON is
+     the final TEXT reply, never to be executed via any of the
+     worker's own tools. Watch: if the shape recurs in future batches,
+     the next rung is detection (the `bash: {tool:` 127 signature in
+     tool output) feeding the failure corpus.
 
   **Follow-ups owed from LT-4** (each small):
   (a) skill dead-drop fix — standalone entry below; (b) ~~closure-error
@@ -1318,11 +1329,46 @@ capture**, which is what makes the rung amortize instead of evaporate.
   `knowledge_bridge.py` carry only `outcome:<id>` and KnowledgeNode
   has no grounding field, so an unsupported lesson can propagate into
   decay-free knowledge with the stamp stripped);
-  (d) verdict-prior
-  recalibration for future batches — LT-1-era base rates are stale, 
-  12/12 PASS says re-anchor on LT-4; (e) container-image gap list
-  (fetch_tool.py, pdf binary, `nosuch` audit); (f) tool-fragment parse
-  leak (finding 10).
+  (d) ~~verdict-prior
+  recalibration for future batches~~ **DONE 2026-08-09** — re-anchored
+  base rates in the "Prediction anchors for the next batch" block at
+  the end of this entry; future batch registrations start from those,
+  not LT-1's; (e) ~~container-image gap list~~ **AUDIT DONE
+  2026-08-09** (transcript-verified across all 13 LT-4 run dirs):
+  the image (Dockerfile.executor rev 2: git, python3, python3-pytest,
+  curl, ca-certificates) lacks (1) any fetch tool — the step prompt's
+  `__FETCH_CLI__` seam resolves on the HOST, `maro-fetch` isn't on
+  PATH there, so the prompt bakes the host-absolute
+  `python3 …/src/fetch_tool.py` which the container can't see (R3×3 +
+  R2 probes, "per system instructions"; workers then curled anyway
+  DESPITE the prompt's "missing fetcher is reportable, don't fall
+  back" line — and passed); (2) `file` (R2 call-00007 exit-127 while
+  type-checking the fetched USPS PDF) and no pdftotext/poppler; (3)
+  `nosuch=13` audit resolved: the count is dominated by the worker's
+  own unsaved-tmp-file reads (ugrep on a 000-response page) + the
+  fetch_tool probes — no additional image gaps behind it. Fix
+  directions when the C4 lane warrants a rebuild (IMAGE_REVISION
+  bump): bake `maro-fetch` (or mount `src/fetch_tool.py` read-only)
+  + apt `file poppler-utils`; container-aware `__FETCH_CLI__`
+  substitution is the no-rebuild alternative. Evidence-gated —
+  don't rebuild until a batch actually loses a verdict to these
+  (LT-4 lost none); (f) ~~tool-fragment parse
+  leak (finding 10)~~ **RE-DIAGNOSED + MITIGATED 2026-08-09** — see
+  finding 10 above (inner-session self-execution of the tool-protocol
+  JSON, not a harness parse leak; `_TOOL_INJECTION_TEMPLATE` now
+  forbids executing the reply).
+
+  **Prediction anchors for the next batch (follow-up d, 2026-08-09):**
+  LT-1-era priors underpredicted LT-4 badly (joint P of the observed
+  12/12 ≈ 1.7% × warm ≈ similar — systematically stale). Re-anchor:
+  research-direction Tier-1 goals ~85–90% PASS cold (was 40–65%);
+  bridge rungs with a shipped carrier (artifacts/corpus/skill store)
+  ~75–85% cold (was 35–40%); warm byte-identical arms: PASS ≈ cold,
+  cost −40% to −65% (LT-4 measured −49% mean); cost/steps bands were
+  well-calibrated (22/24) — keep the method, widen blocked-count bands
+  ×2–3 (R2 hit 7 vs 1–3 predicted). Failure risk has MOVED: predict
+  claims-vs-events confabulation (findings 1/6/7 family) as the modal
+  non-PASS shape, not wrong-answer.
 
 - [x] **Workers write skill files to a directory nothing reads
   (`projects/<slug>/skills/`) — SHIPPED 2026-08-06.** Jeremy decided

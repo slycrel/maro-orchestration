@@ -25,6 +25,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from knowledge_web import (
     MemoryTier,
+    _mutate_tiered_lessons,
     confirm_lesson_by_delta,
     contest_lesson,
     inject_tiered_lessons,
@@ -318,3 +319,57 @@ class TestOriginRoute:
         with path.open("a") as f:
             f.write(json.dumps(row) + "\n")
         assert _raw("legacy1").minted_by == ""
+
+# ---------------------------------------------------------------------------
+# 2026-08-09 adversarial-review fix layer
+# ---------------------------------------------------------------------------
+
+class TestConfirmTextBinding:
+    def test_confirmation_bound_to_measured_text(self, monkeypatch, tmp_path):
+        """F8: the Δ was measured against a specific wording — a concurrent
+        refight-revise (new text, re-entered provisional) must not inherit
+        the confirmation."""
+        _setup(monkeypatch, tmp_path)
+        tl = _seed_provisional()
+        measured_text = tl.lesson
+        def _revise(lessons):
+            for l in lessons:
+                if l.lesson_id == tl.lesson_id:
+                    l.lesson = "Concurrently revised wording."
+            return lessons
+        _mutate_tiered_lessons(MemoryTier.MEDIUM, _revise)
+        assert confirm_lesson_by_delta(
+            tl.lesson_id, GOOD_EVIDENCE,
+            expected_lesson=measured_text) is False
+        assert _raw(tl.lesson_id).provisional is True
+
+    def test_matching_text_confirms(self, monkeypatch, tmp_path):
+        _setup(monkeypatch, tmp_path)
+        tl = _seed_provisional()
+        assert confirm_lesson_by_delta(
+            tl.lesson_id, GOOD_EVIDENCE, expected_lesson=tl.lesson) is True
+        assert _raw(tl.lesson_id).provisional is False
+
+
+class TestKillswitchNormalization:
+    def test_quoted_false_kills_both_effect_switches(self, monkeypatch, tmp_path):
+        """F6: config.get returns raw YAML nodes — a quoted "false" is a
+        truthy string; normalize like _novelty_term_enabled (chunk-5a F1
+        rule) or the killswitch can't kill."""
+        _setup(monkeypatch, tmp_path)
+        import config as config_mod
+        from knowledge_web import (effect_demotion_enabled,
+                                   effect_promotion_enabled)
+        real_get = config_mod.get
+
+        def fake_get(key, default=None):
+            if key in ("knowledge.effect_promotion_enabled",
+                       "knowledge.effect_demotion_enabled"):
+                return "false"
+            return real_get(key, default)
+
+        monkeypatch.setattr(config_mod, "get", fake_get)
+        assert effect_promotion_enabled() is False
+        assert effect_demotion_enabled() is False
+        tl = _seed_provisional()
+        assert confirm_lesson_by_delta(tl.lesson_id, GOOD_EVIDENCE) is False

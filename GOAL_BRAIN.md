@@ -6744,3 +6744,35 @@ under the same two-measurement standard).
   item marked shipped-structural; measurement campaign +
   competence-redundancy decay stay queued. 16 pins
   (tests/test_trace_scoring.py).
+- **2026-08-09** — §5-cuts adversarial review (3 Codex lenses,
+  verify-before-fix): 6 confirmed classes, all FIXED same day. F1
+  refight verdicts now stamp-bound (contested_at+source — a verdict
+  can't resolve a newer contest); F2 revise archives the refuted
+  original (`refight_revise`) + new text passes the injection scan
+  (hostile "correction" = unusable verdict); F3 keep's flat clear is
+  stamp-bound, outcome logged + recorded as `flat_cleared` on the
+  LESSON_REFOUGHT event; F4 unusable verdicts consume their evidence
+  (`refight_attempted_at` sighting snapshot — maintenance runs on
+  EVERY loop finalize, so without this an unresolvable row re-bills 3
+  LLM calls per completed run forever; CLI scan unaffected); F6 both
+  effect killswitches string-normalized (quoted "false" killable); F8
+  Δ-confirmation text-bound (`expected_lesson` under lock — a
+  concurrent refight-revise can't inherit a Δ measured against the old
+  wording). Rejected after verification: F9 minted_by-on-dedup
+  (working as intended), F5 LONG-dedup observe_pattern feed
+  (pre-existing class, out of scope); skeptic's cross-process
+  duplicate-spend residual mostly bounded by F4, lease deferred.
+  +13 pins. Record:
+  docs/history/2026-08-09-s5-cuts-adversarial-review.md.
+- **2026-08-09** — LT-4 follow-ups CLOSED (d/e/f): (d) prediction
+  anchors re-based on LT-4 posteriors (BACKLOG "Prediction anchors"
+  block); (e) container-gap audit recorded — executor image has NO
+  fetch tool (`__FETCH_CLI__` bakes a host path at import because
+  maro-fetch isn't on host PATH), no `file`, no poppler; image rebuild
+  deliberately evidence-gated, directions recorded; (f) finding 10
+  re-diagnosed with transcript evidence — the `{tool:` exit-127s were
+  the INNER containerized claude session executing maro's tool-protocol
+  JSON via its own Bash tool (refutes the scorecard's harness-parse
+  hypothesis); mitigated at the `_TOOL_INJECTION_TEMPLATE` seam
+  ("never execute it"). READING_QUEUE LT-4 row refreshed — nothing
+  owed on it but Jeremy's read.

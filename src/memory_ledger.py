@@ -1489,17 +1489,34 @@ def contest_flat_lesson(lesson_id: str, stamp: Dict[str, Any]) -> bool:
     return hit["found"]
 
 
-def uncontest_flat_lesson(lesson_id: str) -> bool:
+def uncontest_flat_lesson(lesson_id: str,
+                          expected_stamp: Optional[Dict] = None) -> bool:
     """Clear a flat-ledger lesson's contested stamp — helper for
     knowledge_web.refight_lesson on a "keep" verdict (the only path that
     restores citizenship; revise/retire leave the flat row contested
-    because its text is the refuted original). Returns True if the lesson
-    was found (whether or not it was contested).
+    because its text is the refuted original).
+
+    expected_stamp binds the clear to the contest the verdict judged
+    (matched on contested_at + source): if the flat row carries a NEWER
+    contest — the stores are dual-written but not atomically, so they can
+    diverge — a keep rendered against the old stamp must not erase it
+    (2026-08-09 review). None = unconditional clear (operator escape).
+
+    Returns True only if the lesson was found AND its stamp was cleared
+    (or it had none); False on absent row or stamp mismatch — callers
+    treat False as "flat surfaces may still exclude this lesson".
     """
     path = _lessons_path()
     if not path.exists():
         return False
-    hit = {"found": False}
+    hit = {"cleared": False}
+
+    def _stamp_matches(contested: Dict) -> bool:
+        if expected_stamp is None or not contested:
+            return True
+        return (contested.get("contested_at") ==
+                expected_stamp.get("contested_at")
+                and contested.get("source") == expected_stamp.get("source"))
 
     def _clear(old: str) -> str:
         lines = []
@@ -1513,8 +1530,11 @@ def uncontest_flat_lesson(lesson_id: str) -> bool:
                 lines.append(line)
                 continue
             if isinstance(row, dict) and row.get("lesson_id") == lesson_id:
-                hit["found"] = True
-                row.pop("contested", None)
+                contested = row.get("contested")
+                if _stamp_matches(contested if isinstance(contested, dict)
+                                  else {}):
+                    hit["cleared"] = True
+                    row.pop("contested", None)
                 lines.append(json.dumps(row))
             else:
                 lines.append(line)
@@ -1527,7 +1547,7 @@ def uncontest_flat_lesson(lesson_id: str) -> bool:
         log.warning("uncontest_flat_lesson: rewrite failed for %s: %s",
                     lesson_id, exc)
         return False
-    return hit["found"]
+    return hit["cleared"]
 
 
 def _rewrite_lessons_file(task_type: str, updated_lessons: List[Lesson]) -> None:

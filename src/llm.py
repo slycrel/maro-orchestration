@@ -889,6 +889,11 @@ _CLAUDE_BIN = _find_claude_bin()
 # When tools are requested, embed them in the prompt as JSON instructions.
 # The subprocess adapter simulates native tool calls by asking the model
 # to respond with a JSON object containing "tool" and its arguments.
+# The "text, not a command" line is load-bearing (LT-4 finding 10,
+# re-diagnosed 2026-08-09): inside a containerized claude session the
+# worker sometimes routed this JSON through its OWN Bash tool
+# (`{"tool": "complete_step"}` as a shell command → exit 127) — the
+# instruction has to name the failure, not just the format.
 _TOOL_INJECTION_TEMPLATE = textwrap.dedent("""\
 
 --- AVAILABLE TOOLS ---
@@ -896,6 +901,9 @@ You MUST respond by calling exactly one of these tools. Reply ONLY with a JSON
 object (no prose, no markdown fence) in this exact format:
 
 {{"tool": "<tool_name>", <arguments as top-level keys>}}
+
+The JSON object is your final TEXT reply. Never execute it — do not pass it
+to a shell, a Bash tool, or any other tool of your own; just output it.
 
 Tools:
 {tool_list}
