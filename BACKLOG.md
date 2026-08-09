@@ -1989,6 +1989,32 @@ inspectable before any behavior changes.
   consumers stay fed. Pinned: counter math, no-stats-from-utility,
   seam end-to-end (FULL/directional/unjudged/idempotent re-stamp/
   manifest dedup/no-manifest/no-run-dir), readout regime preference.
+- [ ] **Claim-token classification is still lexical — four known holes, all
+  on the CHEAP side of the trade** (from two rounds of adversarial review,
+  2026-08-08; `ee0b11b` → `64eac95` → `d302437`). Every one lets a claim go
+  UNVERIFIED (a missed fabrication, one advisory line) rather than demoting a
+  delivered run, which is why none were fixed under time pressure — but they
+  are real and they share one cause: **the module decides "is this a local
+  file?" from the shape of a string, with no boundary that actually knows.**
+  1. `_HOSTNAME_RE` requires multi-label host shape, so ordinary multi-dot
+     filenames — `release.notes.md`, `archive.tar.gz` — are read as network
+     authorities and skipped. Conversely two-label `example.com` is still
+     verified as a file.
+  2. `\$\w+` matches `$100`, so a literal `artifacts/literal-$100.txt` is
+     retyped as a glob and can be satisfied by an unrelated sibling.
+  3. Named-printf claims (`%(step)d`) never become claims at all — the path
+     token in `_OUTPUT_CLAIM_RE` stops at `)`. The marker regex covers the
+     form for the day the collector widens; today it is uncollected.
+  4. `READ_ONLY_PROBES` in `tests/test_fresh_workspace.py` is hand-maintained,
+     so a newly added store-reading subcommand gets no probe until someone
+     remembers. Deriving it from CLI command metadata is the durable fix.
+  **The pattern worth naming:** three separate fixes have now each added a
+  narrower lexical test (prose slash → glob → template → hostname). A fourth
+  costume is predictable. The structural answer is a typed claim boundary that
+  distinguishes *a path this run says it wrote* from *a string that happens to
+  look like one* at extraction time — probably by carrying tool-event evidence
+  rather than re-deriving intent from prose. Scope before building.
+
 - [ ] **`_OUTPUT_CLAIM_RE` misses the irregular past tense "wrote"**
   (found 2026-08-08 while pinning the template-placeholder guard;
   `provenance.py:37`). `writ\w*` covers write/writes/written/writing;
