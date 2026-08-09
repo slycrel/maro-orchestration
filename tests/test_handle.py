@@ -5680,7 +5680,9 @@ class TestTemplatePlaceholderProvenance:
         # (the \w-only first cut re-truncated `%(step-id)d` at the paren).
         for claim in ("artifacts/out-%(step)03d.txt",
                       "artifacts/out-%(step-id)d.json",
-                      "artifacts/out-%(step.id)-10s.json"):
+                      "artifacts/out-%(step.id)-10s.json",
+                      "artifacts/out-%(step).2f.txt",   # round 5: full
+                      "artifacts/out-%(step)x.json"):   # conversion set
             assert _claimed_output_paths(f"saved to {claim}") == [claim]
             assert _TEMPLATE_MARKERS.search(claim), claim
 

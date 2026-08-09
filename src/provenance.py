@@ -86,7 +86,10 @@ _TEMPLATE_MARKERS = re.compile(
                                   # one. A literal "$100" being globbed can only
                                   # over-satisfy, which is the cheap side.
     r"|<[^>/]+>"                  # <run_dir>
-    r"|%\([^)\s]+\)[-+ #0]*\d*(?:\.\d+)?[sd]"  # %(step)d, %(step)03d, %(step-id)s
+    # Named form takes the FULL conversion set — %(step).2f and %(step)x are
+    # valid Python (round 5). The plain form below stays [sd] on purpose:
+    # "%x"-style false hits in prose are likelier than named-group ones.
+    r"|%\([^)\s]+\)[-+ #0]*\d*(?:\.\d+)?[diouxXeEfFgGcrsa]"
     r"|%\d+\$[sd]"                # %1$s
     r"|%[-+ #0]*\d*(?:\.\d+)?[sd]"  # %s, %d, %02d, %-10s
 )

@@ -178,3 +178,31 @@ monkeypatches confirmed test-local; prose parens still terminate).
   ordering. The fix puts the bar where the mutation happens.
 - Findings per round: 12 → 9 → 8 → 5, HIGH-consensus narrowing to the
   newest layer each time. Trending toward convergence, not there yet.
+
+---
+
+# Round 5 — CONVERGED (2026-08-09)
+
+Attack surface: the round-4 fix layer alone (6cbc7a2), reviewers told
+a clean verdict is first-class output.
+
+## Verdict: PASS (converged)
+
+Architect and Minimalist: clean on all five areas, explicitly — merge
+dedup can't split freshness, raw-literal + normalized-pattern union
+correct at every exit, `report(final).md` never reads as a template,
+route guards compatible with the sole caller's numeric evidence.
+Skeptic: one MEDIUM, one LOW.
+
+| # | Finding | Outcome |
+|---|---|---|
+| R5-1 | Named-printf conversions beyond `[sd]` (`%(step).2f`, `%(step)x`) collected but unrecognized → literal false-demote (Skeptic, MED) | FIXED same-session: named form takes the full Python conversion set; plain form stays `[sd]` deliberately (prose false-hit risk); pinned |
+| R5-2 | `:65536`–`:99999` accepted as ports; a colon-named fabricated output could evade verification (Skeptic, LOW) | ACCEPTED as cheap cost — missed-fabrication side, contrived shape |
+
+## Arc summary
+
+Findings per round: 12 → 9 → 8 → 5 → 2 (one fixable), with round 5
+delivering the first explicit clean verdicts. The fixpoint practice
+held to its historical shape: convergence to lows by round 4-5, every
+intermediate fix layer contributing its own HIGHs until the layer got
+small enough to verify exhaustively.
