@@ -29,6 +29,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 from dataclasses import replace
 from pathlib import Path
 from typing import List, Optional, Tuple
@@ -352,6 +353,56 @@ def stamp_items_with_age(items: List[MemoryItem]) -> Tuple[List[MemoryItem], boo
         else:
             stamped.append(item)
     return (stamped, True) if stamped_any else (items, False)
+
+
+_ECHO_MIN_TERM_LEN = 5
+_ECHO_MIN_HITS = 2
+_ECHO_STOPWORDS = frozenset({
+    # frequent lesson boilerplate — matching these proves nothing
+    "before", "after", "should", "always", "never", "when", "instead",
+    "prefer", "avoid", "check", "verify", "ensure", "using", "with",
+    "without", "because", "lesson", "learned", "failed", "failure",
+    "success", "successful", "worked", "working", "error", "errors",
+    "file", "files", "step", "steps", "task", "tasks", "goal", "run",
+    "runs", "output", "result", "results", "project", "which", "there",
+    "their", "these", "those", "first", "second", "rather", "about",
+})
+
+
+def slice_echo(items: List[MemoryItem], result_text: str) -> Optional[bool]:
+    """Did the worker's result show lexical contact with any injected
+    memory item? (MH taxonomy "Memory Following Failure" gap, 2026-08-09:
+    memory_slice_injected said only that injection HAPPENED — nothing ever
+    checked the behavior side, so the A/B compared injected vs not without
+    knowing whether injected content was even touched.)
+
+    Mechanical lower-bound signal, deliberately named "echo" not
+    "followed": a worker can follow advice without quoting it (False here
+    is weak evidence), but distinctive terms from an injected lesson
+    appearing in the result is real contact (True is meaningful). An item
+    echoes when >= _ECHO_MIN_HITS of its distinctive terms (len >=
+    _ECHO_MIN_TERM_LEN, stopwords out) appear in the result; items with
+    fewer distinctive terms than the hit bar require all of them.
+
+    Returns None when there is nothing to judge (no items, or empty
+    result text) — consumers must keep None distinct from False.
+    """
+    if not items or not (result_text or "").strip():
+        return None
+    text = result_text.lower()
+    for item in items:
+        terms = {
+            w for w in re.findall(r"[a-z0-9_\-./]{%d,}" % _ECHO_MIN_TERM_LEN,
+                                  (item.content or "").lower())
+            if w not in _ECHO_STOPWORDS
+        }
+        if not terms:
+            continue
+        need = min(_ECHO_MIN_HITS, len(terms))
+        hits = sum(1 for t in terms if t in text)
+        if hits >= need:
+            return True
+    return False
 
 
 def format_worker_memory_block(

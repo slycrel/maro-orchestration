@@ -125,6 +125,12 @@ retracted by the step-9 adversarial pass — see below):
 - **#3 Observation Failure (env—model), high** — `step_exec.py`
   `_summarize_tool_events` truncates 2000 chars / 50 events silently
   (same class as the arbitrary-truncation audit already on this backlog).
+  **BUILT 2026-08-09**: cut outputs now carry
+  `…[output truncated: +N chars in the full transcript artifact]` +
+  `output_truncated: True`, and event lists cut at 50 append a
+  `[transcript truncated]` sentinel naming shown-of-total — caps bound
+  the view, the transcript artifact stays the full copy
+  (artifacts-over-streams). Pins in test_step_exec.py.
 - **#4 Instruction-Grader Mismatch (owner—model), med-high, INFERRED** —
   closure checks derive from the owner instruction; drift = pass-but-wrong.
 - **#5 Tool Feedback Neglect (model—tool)** — `tool_transcript` already
@@ -167,9 +173,15 @@ retracted by the step-9 adversarial pass — see below):
 Plus two SKIP rulings the verdict flags as genuine unresolved gaps, not
 dismissals: **Memory Following Failure** (`memory_slice_injected` is an
 A/B flag with zero consumers verifying behavior followed the injected
-content — the verdict's "single most actionable finding") and **Memory
-Rationale Erosion** (compress/dedup rewrite records, nothing checks
-rationale drift).
+content — the verdict's "single most actionable finding"; **ADDRESSED
+2026-08-09**: `memory_bridge.slice_echo` — mechanical lexical-contact
+lower bound, deliberately named "echo" not "followed" (True = real
+contact, False = weak evidence, None = nothing to judge) — wired at
+both director dispatch sites onto `WorkerResult.memory_slice_echoed`
+and into the director-log worker_results payload, so the A/B now has a
+behavior column, not just an exposure column) and **Memory Rationale
+Erosion** (compress/dedup rewrite records, nothing checks rationale
+drift — still open).
 
 Standing caveats to honor before building ANY of these: (a) every ruling
 is static-source-reading — "code path present," never "problem solved";

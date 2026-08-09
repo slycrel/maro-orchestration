@@ -432,7 +432,7 @@ def run_director(
     parent_goal_brain = ""
     if worker_slice_enabled:
         try:
-            from memory_bridge import ingest_lessons_to_store, recall_for_worker, format_worker_memory_block, stamp_items_with_age
+            from memory_bridge import ingest_lessons_to_store, recall_for_worker, format_worker_memory_block, stamp_items_with_age, slice_echo
             from memory_sqlite import SqliteMemoryStore
             from memory_bridge import _memory_store_path
 
@@ -503,6 +503,11 @@ def run_director(
             verbose=verbose,
         )
         result.memory_slice_injected = worker_slice_injected
+        if worker_slice_injected:
+            try:
+                result.memory_slice_echoed = slice_echo(items, result.result)
+            except Exception as exc:
+                log.warning("director: slice_echo failed for ticket %s: %s", ticket.ticket_id, exc)
         total_tokens_in += result.tokens_in
         total_tokens_out += result.tokens_out
 
@@ -550,6 +555,11 @@ def run_director(
                     verbose=verbose,
                 )
                 result.memory_slice_injected = worker_slice_injected
+                if worker_slice_injected:
+                    try:
+                        result.memory_slice_echoed = slice_echo(items, result.result)
+                    except Exception as exc:
+                        log.warning("director: slice_echo failed for revision of ticket %s: %s", ticket.ticket_id, exc)
                 total_tokens_in += result.tokens_in
                 total_tokens_out += result.tokens_out
                 review, rev_tokens = _review_worker_output(
@@ -912,6 +922,7 @@ def _write_director_log(
                     "status": r.status,
                     "result_length": len(r.result),
                     "memory_slice_injected": r.memory_slice_injected,
+                    "memory_slice_echoed": r.memory_slice_echoed,
                     "tokens_in": r.tokens_in,
                     "tokens_out": r.tokens_out,
                 }

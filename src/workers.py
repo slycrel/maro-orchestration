@@ -50,6 +50,10 @@ class WorkerResult:
     tokens_in: int = 0
     tokens_out: int = 0
     memory_slice_injected: bool = False  # A/B experiment: was memory slice injected?
+    # Behavior side of the A/B (2026-08-09): did the result show lexical
+    # contact with the injected items? None = not judged (no injection or
+    # nothing to compare); see memory_bridge.slice_echo for semantics.
+    memory_slice_echoed: Optional[bool] = None
 
 
 # ---------------------------------------------------------------------------

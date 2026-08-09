@@ -6826,3 +6826,22 @@ under the same two-measurement standard).
   The risk-minting should-we (which loop outputs are owed a durable
   project-record write) REMAINS OPEN for Jeremy — this fixed only the
   half that had an existing convention to extend.
+- **2026-08-09** — MH #3 truncation visibility SHIPPED (Observation
+  Failure, env—model). `_summarize_tool_events` cuts are now marked:
+  clipped outputs carry `…[output truncated: +N chars in the full
+  transcript artifact]` + `output_truncated: True`; event lists cut at
+  50 append a `[transcript truncated]` sentinel naming shown-of-total.
+  Caps still bound the view (PIPE_BUF et al.), the transcript artifact
+  remains the full copy — artifacts-over-streams; verifiers can now
+  tell "ended" from "cut". Pinned in test_step_exec.py.
+- **2026-08-09** — Memory Following gap ADDRESSED (the MH verdict's
+  "single most actionable finding"): `memory_bridge.slice_echo` — a
+  mechanical lexical-contact lower bound over injected items vs the
+  worker's result, named "echo" not "followed" on purpose (True = real
+  contact; False = weak evidence, workers can follow without quoting;
+  None = nothing to judge, kept distinct from False). Wired at both
+  director dispatch sites (initial + revision) onto
+  `WorkerResult.memory_slice_echoed` and into the director-log
+  worker_results payload. The worker-slice A/B now records behavior
+  alongside exposure. Judged only when injection happened; judge
+  failure logs a warning and leaves the None sentinel.

@@ -304,6 +304,14 @@ class TestWorkerSliceExperiment:
 
         assert result.worker_slice is True
         assert any(r.memory_slice_injected for r in result.worker_results)
+        # Behavior side (slice_echo): injected workers get a judged echo bool,
+        # never left at the None sentinel. The dry-run result text repeats the
+        # ticket's distinctive terms ("widget", "recall", "gadget"), so the
+        # judged value here is True.
+        assert all(
+            r.memory_slice_echoed is True
+            for r in result.worker_results if r.memory_slice_injected
+        )
         # A/B observability: a WORKER_SLICE_INJECTED captains_log event was recorded.
         assert any(e[0] == "WORKER_SLICE_INJECTED" for e in events)
         assert "Prior lessons from memory:" in captured["context"]
@@ -372,6 +380,11 @@ class TestWorkerSliceExperiment:
             WorkerResult(
                 worker_type="general", ticket="t1", status="done", result="ok",
                 tokens_in=12, tokens_out=34, memory_slice_injected=True,
+                memory_slice_echoed=True,
+            ),
+            WorkerResult(
+                worker_type="general", ticket="t2", status="done", result="ok",
+                tokens_in=1, tokens_out=2,
             ),
         ]
         tickets = [Ticket(ticket_id="t1", worker_type="general", task="do the thing")]
@@ -393,8 +406,13 @@ class TestWorkerSliceExperiment:
         assert payload["worker_slice"] is True
         wr = payload["worker_results"][0]
         assert wr["memory_slice_injected"] is True
+        assert wr["memory_slice_echoed"] is True
         assert wr["tokens_in"] == 12
         assert wr["tokens_out"] == 34
+        # Non-injected worker keeps the not-judged sentinel (JSON null), not False.
+        wr2 = payload["worker_results"][1]
+        assert wr2["memory_slice_injected"] is False
+        assert wr2["memory_slice_echoed"] is None
 
 
 # ---------------------------------------------------------------------------

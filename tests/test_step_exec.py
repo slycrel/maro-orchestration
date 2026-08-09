@@ -1092,13 +1092,38 @@ class TestToolTranscriptCapture:
 
         return _Cap()
 
-    def test_summarize_truncates_output(self):
+    def test_summarize_truncates_output_with_visible_marker(self):
+        """MH #3 (2026-08-09): truncation is marked, never silent — a
+        verifier must be able to tell 'output ended' from 'output cut'."""
         from step_exec import _summarize_tool_events, _TRANSCRIPT_OUTPUT_CAP
         big = [{"name": "Bash", "input": {"command": "x"}, "output": "y" * 9999, "is_error": False}]
         out = _summarize_tool_events(big)
         assert len(out) == 1
         assert out[0]["name"] == "Bash"
-        assert len(out[0]["output"]) == _TRANSCRIPT_OUTPUT_CAP
+        assert out[0]["output"].startswith("y" * _TRANSCRIPT_OUTPUT_CAP)
+        assert "[output truncated: +7999 chars" in out[0]["output"]
+        assert out[0]["output_truncated"] is True
+
+    def test_summarize_untruncated_output_has_no_marker(self):
+        from step_exec import _summarize_tool_events
+        out = _summarize_tool_events(
+            [{"name": "Bash", "input": {}, "output": "short", "is_error": False}])
+        assert out[0]["output"] == "short"
+        assert "output_truncated" not in out[0]
+
+    def test_summarize_event_tail_gets_sentinel(self):
+        from step_exec import _summarize_tool_events, _MAX_TRANSCRIPT_EVENTS
+        evs = [{"name": f"Bash", "input": {}, "output": "ok", "is_error": False}
+               for _ in range(_MAX_TRANSCRIPT_EVENTS + 20)]
+        out = _summarize_tool_events(evs)
+        assert len(out) == _MAX_TRANSCRIPT_EVENTS + 1
+        sentinel = out[-1]
+        assert sentinel["name"] == "[transcript truncated]"
+        assert f"showing {_MAX_TRANSCRIPT_EVENTS} of {len(evs)}" in sentinel["output"]
+        # exactly-at-cap stays sentinel-free
+        out2 = _summarize_tool_events(evs[:_MAX_TRANSCRIPT_EVENTS])
+        assert len(out2) == _MAX_TRANSCRIPT_EVENTS
+        assert all(e["name"] != "[transcript truncated]" for e in out2)
 
     def test_persist_returns_none_when_empty(self):
         from step_exec import _persist_tool_transcript

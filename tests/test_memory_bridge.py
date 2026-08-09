@@ -16,6 +16,7 @@ from memory_bridge import (
     _lesson_to_memory_item,
     _get_ingest_offset,
     _save_ingest_offset,
+    slice_echo,
 )
 from memory_sqlite import SqliteMemoryStore
 from memory_port import MemoryItem
@@ -516,3 +517,66 @@ def test_invalidate_lesson_mirror(tmp_memory_dir, sample_lessons):
     assert not any(it.content == content for it in items)
     # Second call: already invalid — reports False, converges.
     assert invalidate_lesson_mirror(lid, content, store=store) is False
+
+
+# ---------------------------------------------------------------------------
+# slice_echo — behavior side of the worker-slice A/B (MH "Memory Following
+# Failure" gap, 2026-08-09). None ≠ False is a contract: None = nothing to
+# judge, False = judged and no lexical contact found.
+# ---------------------------------------------------------------------------
+
+def _echo_item(content: str) -> MemoryItem:
+    return MemoryItem(kind="lesson", content=content, meta={})
+
+
+def test_slice_echo_true_on_distinctive_term_contact():
+    items = [_echo_item("Throttle the polymarket resolver via exponential backoff")]
+    result = "I applied exponential backoff to the polymarket resolver and it held."
+    assert slice_echo(items, result) is True
+
+
+def test_slice_echo_false_when_no_contact():
+    items = [_echo_item("Throttle the polymarket resolver via exponential backoff")]
+    result = "Wrote the CSV export and validated headers against the schema."
+    assert slice_echo(items, result) is False
+
+
+def test_slice_echo_none_on_no_items():
+    assert slice_echo([], "plenty of result text here") is None
+
+
+def test_slice_echo_none_on_empty_result_text():
+    items = [_echo_item("Throttle the polymarket resolver")]
+    assert slice_echo(items, "") is None
+    assert slice_echo(items, "   \n  ") is None
+
+
+def test_slice_echo_stopword_only_item_is_skipped():
+    # Every term is boilerplate (stopwords) or too short — the item carries
+    # no distinctive terms, so it can never claim an echo.
+    items = [_echo_item("always verify before check after should never")]
+    result = "always verify before check after should never"
+    assert slice_echo(items, result) is False
+
+
+def test_slice_echo_single_term_item_needs_only_that_term():
+    # An item with fewer distinctive terms than the hit bar requires all of
+    # them (need = min(_ECHO_MIN_HITS, len(terms))).
+    items = [_echo_item("always check kubernetes before this")]
+    assert slice_echo(items, "the kubernetes rollout completed") is True
+    assert slice_echo(items, "the docker rollout completed") is False
+
+
+def test_slice_echo_one_hit_below_bar_is_false():
+    # Item has 3 distinctive terms; only one appears — below _ECHO_MIN_HITS.
+    items = [_echo_item("polymarket resolver throttling")]
+    assert slice_echo(items, "the resolver finished") is False
+
+
+def test_slice_echo_any_item_echoing_wins():
+    items = [
+        _echo_item("polymarket resolver throttling"),
+        _echo_item("stagger telegram notifications batching"),
+    ]
+    result = "Batching the telegram notifications reduced noise."
+    assert slice_echo(items, result) is True

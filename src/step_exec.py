@@ -972,14 +972,40 @@ _TRANSCRIPT_OUTPUT_CAP = 2000
 def _summarize_tool_events(tool_events: List[dict]) -> List[dict]:
     """Compact a raw tool_events list for the outcome dict: truncate each
     output, keep name/input/is_error. Bounds step-trace bloat while keeping
-    enough for verification (claims like '142 passed' appear early in output)."""
+    enough for verification (claims like '142 passed' appear early in output).
+
+    Truncation is MARKED, never silent (MH taxonomy #3 Observation Failure,
+    2026-08-09): a verifier reading this view must be able to tell "output
+    ended" from "output cut" — a claim probe that only sees the first 2000
+    chars of a 60k-char test run shouldn't treat absence as evidence. Cut
+    outputs get a visible text marker + `output_truncated: True`; a dropped
+    event tail gets a self-describing sentinel entry (name-filtering
+    consumers skip it; prompt-rendered views show it). The FULL transcript
+    is persisted separately by _persist_tool_transcript — the cap bounds
+    the view, not the only copy (artifacts-over-streams)."""
     compact = []
-    for te in (tool_events or [])[:_MAX_TRANSCRIPT_EVENTS]:
-        compact.append({
+    src = tool_events or []
+    for te in src[:_MAX_TRANSCRIPT_EVENTS]:
+        out_full = str(te.get("output", ""))
+        entry = {
             "name": te.get("name", ""),
             "input": te.get("input"),
-            "output": str(te.get("output", ""))[:_TRANSCRIPT_OUTPUT_CAP],
+            "output": out_full[:_TRANSCRIPT_OUTPUT_CAP],
             "is_error": bool(te.get("is_error", False)),
+        }
+        if len(out_full) > _TRANSCRIPT_OUTPUT_CAP:
+            entry["output"] += (f"\n…[output truncated: +{len(out_full) - _TRANSCRIPT_OUTPUT_CAP}"
+                                f" chars in the full transcript artifact]")
+            entry["output_truncated"] = True
+        compact.append(entry)
+    if len(src) > _MAX_TRANSCRIPT_EVENTS:
+        compact.append({
+            "name": "[transcript truncated]",
+            "input": None,
+            "output": (f"showing {_MAX_TRANSCRIPT_EVENTS} of {len(src)} tool "
+                       f"events — full transcript in the step's "
+                       f"transcript artifact"),
+            "is_error": False,
         })
     return compact
 
