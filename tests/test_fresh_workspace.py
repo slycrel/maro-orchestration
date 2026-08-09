@@ -48,14 +48,22 @@ CLI = REPO_ROOT / "src" / "cli.py"
 CONSOLE_SCRIPT = Path(sys.executable).parent / "maro"
 HARNESS_USES_CONSOLE_SCRIPT = CONSOLE_SCRIPT.is_file() and os.access(CONSOLE_SCRIPT, os.X_OK)
 
-# Every alias that can redirect storage away from the pinned workspace. Scrubbed
-# before each probe: an ambient override on a developer box pointing at populated
-# memory would let a probe read real stores and mask the missing-store failure
-# under test — which is how the original violation survived for months.
+# Aliases that redirect RUNTIME-DATA storage away from the pinned workspace.
+# Scrubbed before each probe: an ambient override on a developer box pointing at
+# populated memory would let a probe read real stores and mask the missing-store
+# failure under test — which is how the original violation survived for months.
 _STORAGE_ENV_ALIASES = (
     "MARO_WORKSPACE", "OPENCLAW_WORKSPACE", "WORKSPACE_ROOT",
-    "MARO_MEMORY_DIR", "MARO_ORCH_ROOT", "MARO_USER_DIR", "MARO_ENV_FILE",
+    "MARO_MEMORY_DIR", "MARO_ORCH_ROOT",
 )
+
+# NOT scrubbed, deliberately — `MARO_USER_DIR`, `MARO_ENV_FILE` and the
+# credential-path vars are conftest's SAFETY isolation (tests/conftest.py:166:
+# "the box's real ~/.maro/config.yml must never feed a test"). An earlier cut of
+# this file scrubbed them alongside the storage aliases, which handed each
+# subprocess the developer's real user config and legacy credential fallbacks —
+# round-2 adversarial review caught it. They are inherited, and `MARO_USER_DIR`
+# is pinned below when absent so the isolation holds outside pytest too.
 
 # argv VECTORS, not bare command names. Bare `skills` only prints a usage hint —
 # it never opens a store, so pinning it would have been a check that could not
@@ -88,6 +96,9 @@ def _run(argv: list[str], workspace: Path) -> subprocess.CompletedProcess:
     for var in _STORAGE_ENV_ALIASES:
         env.pop(var, None)
     env["MARO_WORKSPACE"] = str(workspace)
+    # Keep conftest's user-config isolation; supply it if we're running outside
+    # that fixture so a probe can never fall back to the real ~/.maro.
+    env.setdefault("MARO_USER_DIR", str(workspace.parent / "maro-user-isolated"))
     if HARNESS_USES_CONSOLE_SCRIPT:
         cmd = [str(CONSOLE_SCRIPT), *argv]
     else:

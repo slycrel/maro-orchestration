@@ -5631,12 +5631,18 @@ class TestTemplatePlaceholderProvenance:
             "saved to artifacts/out-%d.txt",
             "saved to artifacts/out-%02d.txt",
             "saved to artifacts/out-%1$s.txt",
-            "saved to artifacts/out-%(step)d.txt",
             "saved to ${BUILD}/artifacts/out-7.txt",
             "written to <run_dir>/artifacts/out-7.txt",
         ):
             flagged = _missing_or_stale_result_outputs(claim, time.time() - 3600)
             assert not flagged, f"{claim!r} -> {flagged}"
+        # NOT asserted: "%(step)d". _OUTPUT_CLAIM_RE's path token stops at ")",
+        # so a named-printf claim never becomes a claim at all — asserting it is
+        # "not flagged" passes whether or not the guard works, which is exactly
+        # the vacuous-check trap. Round-2 review caught the earlier version of
+        # this test doing precisely that. Named forms are therefore uncollected
+        # (a missed claim — this module's CHEAP error), not handled; the marker
+        # regex covers them for the day the collector widens.
 
     def test_multi_label_hostname_is_not_a_file(self, monkeypatch, tmp_path):
         # Run 0d50df61 recorded "api.anthropic.com (claimed written, not

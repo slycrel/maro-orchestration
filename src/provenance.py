@@ -147,7 +147,12 @@ def _normalize_template(tok: str) -> str:
     rather than turned into a `*` that would push the match one level too deep.
     """
     globbed = _TEMPLATE_MARKERS.sub("*", tok)
-    globbed = re.sub(r"\*{2,}", "*", globbed)
+    # Collapse runs produced by ADJACENT markers ("{a}{b}" -> "**"), but never
+    # rewrite a recursive glob the claim already carried: "artifacts/**/step-{N}
+    # .json" must stay recursive or a real artifacts/a/b/step-1.json stops
+    # matching and an honest run is demoted (round-2 review).
+    if "**" not in tok:
+        globbed = re.sub(r"\*{2,}", "*", globbed)
     parts = globbed.split("/")
     while len(parts) > 1 and parts[0] == "*":
         parts.pop(0)
@@ -191,7 +196,7 @@ def _claimed_input_paths(goal: str) -> List[str]:
         if not _path_shaped(tok):
             continue                      # prose slash ("load range/index")
         if _unverifiable_pattern(tok):
-            continue                      # template placeholder — cannot resolve
+            continue                      # network authority, not a local file
         out.append(tok)
     return out
 
@@ -225,12 +230,18 @@ def _output_provenance_bases() -> List[Path]:
 
 
 def _exists_at_exact(rel: str, bases: List[Path]) -> bool:
-    """True if a (possibly relative) path resolves to an existing file. For
-    relative paths, also checks one level under workspace/projects/<slug>/."""
-    p = Path(rel)
-    if p.is_absolute():
-        return p.exists()
-    if any((b / rel).exists() for b in bases):
+    """True if a (possibly relative) path resolves to an existing file.
+
+    Delegates to `_resolve_exact` so the GOAL lane and the RESULT lane answer
+    the same question the same way. They used to diverge: only RESULT claims
+    got glob/template resolution, so `Save outputs to artifacts/OL*.json` in a
+    GOAL was reported missing while the identical RESULT claim passed
+    (adversarial review 2026-08-08, round 2 — and removing the template skip
+    turned that inconsistency into a live regression on the INPUT lane, where
+    `Read {project_dir}/artifacts/step-{N}.json` began flagging even with the
+    concrete files on disk). One resolver, one behaviour.
+    """
+    if _resolve_exact(rel, bases):
         return True
     try:
         from config import workspace_root
@@ -369,6 +380,21 @@ def _resolve_exact(rel: str, bases: List[Path]) -> List[Path]:
     # judged per hit by the caller.
     if any(ch in rel for ch in "*?["):
         ghits: List[Path] = []
+        # An ABSOLUTE pattern cannot be handed to Path.glob() — it raises
+        # NotImplementedError, which the narrow catches below miss and the
+        # caller's blanket handler then swallows, aborting the check for every
+        # REMAINING claim too (round-2 review). Anchor it and glob the relative
+        # remainder instead.
+        _pat = Path(rel)
+        if _pat.is_absolute():
+            try:
+                anchor = Path(_pat.anchor)
+                ghits.extend(
+                    x for x in anchor.glob(str(_pat.relative_to(anchor))) if x.exists()
+                )
+            except (OSError, ValueError, NotImplementedError, IndexError):
+                pass
+            return ghits
         for b in bases:
             try:
                 ghits.extend(x for x in b.glob(rel) if x.exists())
