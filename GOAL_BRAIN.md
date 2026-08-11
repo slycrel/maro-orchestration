@@ -6969,3 +6969,10 @@ under the same two-measurement standard).
   behavioral probe ran / downgrade pending (negative lane owns it) /
   dry run. Prevention (harness execution receipts as check inputs)
   stays open on the MH entry. Pinned: TestPassAudit, 7 tests.
+- **2026-08-10** — REPL A/B-3 CONFIRMED (run `29c8bced-gilded-forge`):
+  corpus-wide same-shape replication, all three pre-registered axes hit
+  (52 calls ≤60, tokens_in 2.72M ≤3.2M, closure 0.9 ≥0.75; A/B-1
+  baseline 94 / 4.29M / 0.75), falsifier not triggered, narrowness
+  caveat retired. Turn-based REPL protocol replicates at full breadth.
+  **Step-2 recursive sub-calls gate: OPEN** (build when queue allows;
+  cost-half caveat re per-turn-resend transports still stands).

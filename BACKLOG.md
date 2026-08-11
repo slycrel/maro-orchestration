@@ -3532,7 +3532,18 @@ and maintainable over time."** Step 1 is greenlit:
   **≤ 3.2M**, closure **≥ 0.75** at comparable deliverable quality.
   **Falsifier:** turns/tokens back near A/B-1 levels on the wide shape
   = A/B-2's win was question-narrowness, not the turn-based protocol,
-  and the step-2 gate stays closed. The
+  and the step-2 gate stays closed.
+  **A/B-3 RESULT (run `29c8bced-gilded-forge`, 2026-08-10): ALL THREE
+  AXES CONFIRMED on the wide shape, falsifier not triggered.** 52 LLM
+  calls (≤60 predicted; A/B-1 was 94), tokens_in 2.72M (≤3.2M
+  predicted; A/B-1 4.29M), closure confidence 0.9 (≥0.75 predicted),
+  goal achieved, provider cost $3.76, 8/8 steps done 0 blocked. The
+  narrowness caveat is dead: same corpus-wide breadth as A/B-1 at
+  ~55% of the calls and ~63% of the tokens with higher closure.
+  Turn-based protocol replicates. **Step-2 (recursive sub-calls) gate
+  is now OPEN** — same-shape replication demanded by A/B-2's caveat is
+  delivered; executor machinery for recursive sub-calls is buildable
+  when queue priority allows. The
   accuracy/honesty half of the RLM direction is confirmed worth keeping
   regardless; the cost half INVERTS on a per-turn-resend transport, which
   bounds where step-2 (recursive sub-calls) can pay on this backend.
