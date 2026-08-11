@@ -7063,3 +7063,15 @@ under the same two-measurement standard).
   the consented ladder config). Container-image residual filed on
   C4-BOX (neither maro-fetch nor maro-read baked; pre-existing for
   fetch). Suite 8208, exit 0.
+- **2026-08-11** — maro-read review round 2 (Skeptic-only): 6 findings,
+  5 confirmed + fixed (budget exact to the char incl. headers/joins —
+  reviewer had repro'd 24,044/24,000; truncation cuts back to the last
+  complete line so labels stay grep-verifiable; emission-based coverage
+  TRIMS instead of skipping — my round-1 fix would have swallowed a
+  match touching a truncated head, caught by its own pin in-flight;
+  byte-based 4MB scan cap; scanner failure fails CLOSED and withholds).
+  Rejected: check-then-open symlink TOCTOU (inside the stated
+  accident-guard-not-containment posture; noted in the module).
+  FIXPOINT DECLARED — round 2 was refinements-of-refinements, no new
+  arcs. Suite 8213, exit 0. maro-read arc complete pending live-run
+  evidence (next corpus dispatch vs A/B-3's 52-call/2.72M baseline).

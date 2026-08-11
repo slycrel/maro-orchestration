@@ -236,7 +236,71 @@ def test_total_budget_is_hard(monkeypatch, tmp_path):
     (messages, kw), = ad.calls
     user = messages[1].content
     slices_part = user.split("FILE SLICES (UNTRUSTED DATA):\n", 1)[1]
-    assert len(slices_part) <= read_query.TOTAL_CHAR_BUDGET + 400  # headers margin
+    # EXACT invariant (round-2 fix): every emitted char is charged —
+    # headers, labels, join newlines. The join between per-file slices is
+    # the only char not owned by a file's own budget: one per boundary.
+    assert len(slices_part) <= read_query.TOTAL_CHAR_BUDGET + len(files)
+
+
+def test_per_file_budget_exact(tmp_path):
+    f = tmp_path / "trades.jsonl"
+    f.write_text("\n".join('{"n": %d, "filler": "%s"}' % (i, "x" * 60)
+                           for i in range(2000)), encoding="utf-8")
+    text, receipt = read_query._slice_file(f, ["nomatch"], 24_000)
+    assert len(text) <= 24_000  # no 24,044s (round-2 reviewer repro)
+
+
+def test_truncated_head_does_not_mask_early_matches(tmp_path):
+    """Round-2 pin: coverage reflects EMISSION — a head cut at line 1 by
+    the sub-budget must not mark lines 2-40 covered and skip a match
+    sitting there."""
+    f = tmp_path / "minified.json"
+    f.write_text("x" * 100_000 + "\n"
+                 + "the ZENITH marker on line two\n"
+                 + "\n".join(f"line {i}" for i in range(300)),
+                 encoding="utf-8")
+    text, receipt = read_query._slice_file(f, ["zenith"], 24_000)
+    assert "ZENITH marker" in text
+
+
+def test_truncation_at_newline_boundary_labels_exact_lines(tmp_path):
+    f = tmp_path / "b.md"
+    f.write_text("\n".join(f"filler {i}" for i in range(5000)), encoding="utf-8")
+    text, receipt = read_query._slice_file(f, [], 2_000)
+    import re as _re
+    for m in _re.finditer(r"--- \w+.* \(lines (\d+)-(\d+)", text):
+        a, b = int(m.group(1)), int(m.group(2))
+        block = text[m.end():].split("--- ", 1)[0]
+        # The last numbered line in the block must match the label.
+        nums = _re.findall(r"^(\d+)\t", block, _re.M)
+        if nums:
+            assert int(nums[-1]) == b
+
+
+def test_scan_failure_withholds(monkeypatch, tmp_path):
+    """Round-2 pin: a broken injection scanner fails CLOSED — the
+    unscanned answer is exactly the payload withholding exists to stop."""
+    ad = _FakeAdapter()
+    _enable(monkeypatch, ad)
+    f = tmp_path / "a.md"
+    f.write_text("data", encoding="utf-8")
+    import injection_guard
+    def _boom(content, source=""):
+        raise RuntimeError("guard exploded")
+    monkeypatch.setattr(injection_guard, "scan_content", _boom)
+    out = read_query.read_query("q?", [str(f)])
+    assert "WITHHELD" in out and "scan could not run" in out
+    assert "ANSWER: yes" not in out
+
+
+def test_scan_cap_is_bytes_not_chars(monkeypatch, tmp_path):
+    """Round-2 pin: multibyte content must not blow past the byte cap or
+    trigger a false partial-scan claim."""
+    monkeypatch.setattr(read_query, "LOCAL_SCAN_CAP", 10_000)
+    f = tmp_path / "utf8.md"
+    f.write_text("é" * 4_000, encoding="utf-8")  # 8,000 bytes, 4,000 chars
+    text, receipt = read_query._slice_file(f, [], 20_000)
+    assert "scanned only" not in receipt  # under the byte cap → full scan
 
 
 def test_giant_first_line_cannot_starve_match_regions(monkeypatch, tmp_path):
