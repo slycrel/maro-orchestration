@@ -2176,6 +2176,13 @@ either copy — build_mount_map hard-excludes the workspace and the run
 dir isn't mounted; if the container lane flips on for dispatched runs,
 attachments need a landing under the mounted cwd (or prompt inlining
 with a size cap). Evidence-gated on the C4-BOX flip, don't pre-build.
+Second residual on the same flip (adversarial review 2026-08-11): the
+executor image bakes neither `maro-fetch` nor `maro-read`, but
+EXECUTE_SYSTEM advertises both via host-path substitution — inside a
+container those commands don't resolve and the worker falls back to
+direct reads/curls, the exact costs the verbs exist to avoid. Bake the
+package (and hosted-free env plumbing for maro-read, or advertise
+conditionally) before any `executor.container` flip.
 
 **Return-path quality — artifact links in the event payload + top-pick
 ranking (OPENED 2026-08-05, from the 83a2c805 Poe steal run; Jeremy:

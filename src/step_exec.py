@@ -157,9 +157,13 @@ EXECUTE_SYSTEM = textwrap.dedent("""\
         __READ_CLI__ "one focused question" file1 [file2 ...]
     A cheap out-of-band model reads bounded slices and returns only the
     answer + a receipt naming what it did and didn't read; the file's bytes
-    never enter your context. If it reports itself disabled/unavailable,
-    read directly per your reading protocol instead. Small files: just read
-    them — the sub-query is for files where a whole read is unjustifiable.
+    never enter your context. Two obligations when you use it: (1) verify
+    any quote you re-use — the receipt gives file:line, check it with
+    grep -Fn before your result claims it; (2) carry the receipt's
+    omissions into your own honesty stamp (what was NOT read stays not
+    read). If it reports itself disabled/unavailable, read directly per
+    your reading protocol instead. Small files: just read them — the
+    sub-query is for files where a whole read is unjustifiable.
 """).strip()
 
 

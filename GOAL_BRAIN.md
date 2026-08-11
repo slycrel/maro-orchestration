@@ -7048,3 +7048,18 @@ under the same two-measurement standard).
   via EXECUTE_SYSTEM __READ_CLI__ + repl_reading §5b. Live-smoked
   ($0, sub-second, correct file:line evidence). Next evidence: a real
   corpus dispatch measured against A/B-3's 52-call/2.72M baseline.
+- **2026-08-11** — maro-read review round (3 Codex lenses, all 10 deduped
+  findings verified real — 0% hallucination this round) + fixes landed:
+  injection-flagged answers now WITHHELD not labeled; every emitted char
+  counts against the slice budget + local answer truncation (hard bounds
+  actually hard); killswitch string-normalized (bool("false") class);
+  head sub-budget enforced as char cap in _take; receipts built from
+  actual takes; 4MB local scan cap (bounded egress ≠ bounded execution);
+  sensitive-path refusal (.ssh/.aws/secrets/.env/keys, symlink-resolved
+  — accident guard, not containment); whole files line-numbered for real
+  citation provenance; verify-quote + carry-receipt obligations moved
+  into EXECUTE_SYSTEM (skill bodies don't reach executors — skill_loader
+  known gap); "$0" claim rephrased honestly (no NEW spend paths; rides
+  the consented ladder config). Container-image residual filed on
+  C4-BOX (neither maro-fetch nor maro-read baked; pre-existing for
+  fetch). Suite 8208, exit 0.
