@@ -52,6 +52,7 @@ maro-run = "agent_loop:main"
 maro-handle = "handle:main"
 maro-enqueue = "handle:enqueue_main"
 maro-fetch = "fetch_tool:main"
+maro-read = "read_query:main"
 maro-memory = "cli:_memory_main"
 maro-persona = "cli:_persona_main"
 maro-skills = "cli:_skills_main"
@@ -226,6 +227,7 @@ py-modules = [
     "process_identity",
     "provenance",
     "quality_gate",
+    "read_query",
     "recall",
     "repo_scan",
     "rerun_identity",

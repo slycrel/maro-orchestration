@@ -3599,11 +3599,25 @@ and maintainable over time."** Step 1 is greenlit:
   for — the 3b shape at $11.25/3.45M-in is the registered control.
   Success = the token curve bends materially on the same deliverable
   quality.
-- [ ] **Step 2 (only if step 1 bends the curve): recursive sub-calls** —
-  the real RLM shape needs cheap in-step sub-queries (map-reduce over
-  located regions). Maro has recursion at goal scale (side-quests) but
-  not cheap in-step sub-calls; that's executor machinery and should wait
-  for the skill-level evidence.
+- [x] **Step 2: recursive sub-calls — v1 SHIPPED 2026-08-11** (gate
+  opened by A/B-3's same-shape replication). Shape: NOT an executor-seam
+  tool — on the subprocess transport the inner session has shell, so the
+  verb is a CLI it shells out to: `maro-read "question" files...`
+  (src/read_query.py, console script + __READ_CLI__ advertisement in
+  EXECUTE_SYSTEM mirroring maro-fetch, repl_reading §5b teaches it).
+  A hosted-free model (validation ladder) reads bounded slices
+  out-of-band and returns only answer + honesty receipt — file bytes
+  never enter the step conversation, one bash turn replaces
+  outline+N-read turns. Gates: `validate.hosted_free.enabled` egress
+  consent (a key is authentication, not consent) + provider keys;
+  `executor.read_query` killswitch (DEFAULTS row); NO paid fallback —
+  never spends money. Bounded: ≤8 files/~48KB slices/≤700-tok answer,
+  no-tools single-shot (can't recurse deeper). Live-smoked on
+  DEFAULTS.md (2 locator fixes from smoke: selectivity-ordered regions,
+  head sub-budget) + a run's closure_verdicts.jsonl — sub-second, $0,
+  correct with file:line receipts. OPEN evidence question: does a real
+  corpus run USE it and does the curve bend further? Judge on next
+  corpus-shaped dispatch (compare vs A/B-3's 52 calls / 2.72M).
 - Relation to existing items: this is the generalized form of the #22
   errand-envelope lever and the designated reader for RUN_TEACHINGS
   chunk-1's input stage; it is NOT a replacement for the cheaper

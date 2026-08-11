@@ -150,6 +150,16 @@ EXECUTE_SYSTEM = textwrap.dedent("""\
     1. Write a filter script: fetch → filter to ≤20 items → save to {project_dir}/step_data.json
     2. Read the filtered file and summarize in ≤200 words.
     Call complete_step with that summary, not raw data.
+
+    LARGE LOCAL FILES:
+    For a question answerable from local files too large to justify reading
+    (ledgers, transcripts, long reports), prefer one sub-query over N reads:
+        __READ_CLI__ "one focused question" file1 [file2 ...]
+    A cheap out-of-band model reads bounded slices and returns only the
+    answer + a receipt naming what it did and didn't read; the file's bytes
+    never enter your context. If it reports itself disabled/unavailable,
+    read directly per your reading protocol instead. Small files: just read
+    them — the sub-query is for files where a whole read is unjustifiable.
 """).strip()
 
 
@@ -183,7 +193,28 @@ def _fetch_cli_path() -> str:
     return "python3 -m fetch_tool"
 
 
+def _read_cli_path() -> str:
+    """Absolute path to the maro-read sub-query CLI — same resolution
+    contract as _fetch_cli_path above (console script if installed, else
+    the repo file, else the module form)."""
+    try:
+        import shutil
+        if shutil.which("maro-read"):
+            return "maro-read"
+    except Exception:
+        pass
+    try:
+        from pathlib import Path as _Path
+        p = _Path(__file__).resolve().parent / "read_query.py"
+        if p.is_file():
+            return f"python3 {p}"
+    except Exception:
+        pass
+    return "python3 -m read_query"
+
+
 EXECUTE_SYSTEM = EXECUTE_SYSTEM.replace("__FETCH_CLI__", _fetch_cli_path())
+EXECUTE_SYSTEM = EXECUTE_SYSTEM.replace("__READ_CLI__", _read_cli_path())
 
 # ---------------------------------------------------------------------------
 # Data pipeline enforcement helpers

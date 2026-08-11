@@ -85,6 +85,22 @@ process per-file/per-section with steps 2–4, writing one bounded summary
 per unit to a scratch file, then answer from the summaries. Never
 concatenate the corpus into one read.
 
+**5b. Sub-query instead of reading, when available.** Your system prompt
+names a sub-query command under LARGE LOCAL FILES (`maro-read`, or a
+`python3 .../read_query.py` path). Prefer it for any file too large to
+justify a whole read: it has a cheap out-of-band model read bounded
+slices and returns ONLY the answer — the file's bytes never enter your
+context, and one command replaces an outline turn plus several read
+turns:
+```bash
+maro-read "what does the ledger conclude about X, with evidence?" big1.jsonl big2.md
+```
+One focused question per call, up to 8 files. The answer carries a
+receipt naming what was and wasn't read — carry that receipt's honesty
+into your own step result, and verify any quote you re-use (step 4)
+against the named file:line before claiming it. If the command reports
+itself disabled or unavailable, fall back to steps 2–4 unchanged.
+
 **6. Honesty stamps.** Your step result states: files touched, lines
 actually read (approximate), and what you did NOT read. "Answered from
 sections 2 and 5; did not read appendices" is a good sentence. A result

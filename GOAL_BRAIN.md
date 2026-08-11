@@ -7039,3 +7039,12 @@ under the same two-measurement standard).
   recognized runner segments (a generic `python3 smoke.py --dry-run`
   executes and stays process; `grep -q pytest tox.ini` stays static —
   hint-before-runner precedence kept). FIXPOINT DECLARED after round 3.
+- **2026-08-11** — REPL step-2 v1 SHIPPED (`maro-read` sub-query verb):
+  the recursive-sub-calls gate A/B-3 opened, built as a CLI the inner
+  session shells out to (not an executor-seam tool — per-turn-resend is
+  the cost driver, so the win is bytes-out-of-conversation). Hosted-free
+  ladder only, egress-consent-gated, no paid path, bounded by
+  construction, injection-scanned answers, honesty receipts. Advertised
+  via EXECUTE_SYSTEM __READ_CLI__ + repl_reading §5b. Live-smoked
+  ($0, sub-second, correct file:line evidence). Next evidence: a real
+  corpus dispatch measured against A/B-3's 52-call/2.72M baseline.
