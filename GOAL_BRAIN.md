@@ -6906,3 +6906,19 @@ under the same two-measurement standard).
   exact match only; newest-12 metadata resolution; recall guard
   untouched (typed-contested-state residual is the shared fix). 28
   pins; full suite 8130 passed / 0 skipped.
+- **2026-08-10** — Jeremy decision batch (blockers cleared in one pass):
+  (1) **Δ-gate GC re-mint = archive-aware re-stamp** — re-mint dedup
+  consults archive tombstones and re-applies demotion stamps to the
+  fresh row; no score mutation. (2) **Operator re-stamp of
+  18773dfa/de790c13 = flip to True, "but be honest about it and note
+  they were failures at run time somewhere"** — the concurrent session
+  had already executed the flip with originals under `*_superseded`
+  keys; the standing half is now `stamp_outcome_verdict`'s
+  `verdict_history` — ANY future re-stamp of a judged row preserves
+  the superseded verdict on the row itself (pinned). (3) **Risk
+  minting: loop-discovered risks/unknowns DO belong in project
+  RISKS.md** (append_risk from finalize; feeds "RISKS.md as reviewer
+  input"). (4) Overnight queue: re-run identity (shipped by the
+  concurrent session while the question was being asked), MH #1
+  spec-gaming, REPL A/B-3 replication; dispatched-run burn NOT
+  selected.

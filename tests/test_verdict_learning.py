@@ -171,6 +171,44 @@ def test_annotate_stamps_newest_matching_row(monkeypatch, tmp_path):
     assert "goal_achieved" not in rows[0]
 
 
+def test_restamp_preserves_superseded_verdict_on_row(monkeypatch, tmp_path):
+    """Re-stamp honesty (Jeremy decree 2026-08-10): flipping a judged
+    verdict must keep the superseded one visible on the row itself —
+    "note they were failures at run time somewhere"."""
+    _setup(monkeypatch, tmp_path)
+    record_outcome("goal", "done", "s", loop_id="lp-flip")
+    stamp_outcome_verdict(
+        "lp-flip", goal_achieved=False, goal_verdict_source="closure",
+        goal_verdict_confidence=0.9,
+    )
+    stamp_outcome_verdict(
+        "lp-flip", goal_achieved=True,
+        goal_verdict_source="operator_reverdict",
+        goal_verdict_confidence=0.75,
+    )
+    row = _raw_rows()[-1]
+    assert row["goal_achieved"] is True
+    assert row["goal_verdict_source"] == "operator_reverdict"
+    (hist,) = row["verdict_history"]
+    assert hist["goal_achieved"] is False
+    assert hist["goal_verdict_source"] == "closure"
+    assert hist["goal_verdict_confidence"] == pytest.approx(0.9)
+    assert hist["superseded_by"] == "operator_reverdict"
+    assert hist["superseded_at"]
+
+
+def test_first_stamp_writes_no_verdict_history(monkeypatch, tmp_path):
+    """The first verdict landing on an unjudged row is not a correction —
+    no history entry."""
+    _setup(monkeypatch, tmp_path)
+    record_outcome("goal", "done", "s", loop_id="lp-first")
+    stamp_outcome_verdict(
+        "lp-first", goal_achieved=True, goal_verdict_source="closure",
+    )
+    row = _raw_rows()[-1]
+    assert "verdict_history" not in row
+
+
 def test_annotate_unverifiable_leaves_goal_achieved_absent(monkeypatch, tmp_path):
     _setup(monkeypatch, tmp_path)
     record_outcome("goal", "done", "s", loop_id="lp-3")

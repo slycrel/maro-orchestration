@@ -798,6 +798,22 @@ def stamp_outcome_verdict(
             if target_idx is None:
                 return old
             row = json.loads(lines[target_idx])
+            # Re-stamp honesty (Jeremy decree 2026-08-10: corrections may
+            # flip a verdict "but be honest about it and note they were
+            # failures at run time"): overwriting an existing judged
+            # verdict preserves the superseded one on the row itself, not
+            # just in event history. Only fires on a real re-stamp of a
+            # judged row — the first verdict landing on an unjudged row
+            # writes no history.
+            if goal_achieved is not None and row.get("goal_achieved") is not None:
+                row.setdefault("verdict_history", []).append({
+                    "goal_achieved": row.get("goal_achieved"),
+                    "goal_verdict_source": row.get("goal_verdict_source", ""),
+                    "goal_verdict_at": row.get("goal_verdict_at", ""),
+                    "goal_verdict_confidence": row.get("goal_verdict_confidence"),
+                    "superseded_at": datetime.now(timezone.utc).isoformat(),
+                    "superseded_by": goal_verdict_source,
+                })
             if goal_achieved is not None:
                 row["goal_achieved"] = bool(goal_achieved)
             row["goal_verdict_source"] = goal_verdict_source
