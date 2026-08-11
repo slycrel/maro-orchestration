@@ -801,11 +801,17 @@ class TestProbeModalityClassifier:
         assert _classify_probe_modality("cargo test") == "process"
         assert _classify_probe_modality("cd /repo && go test ./...") == "process"
 
-    def test_static_hints_still_outrank_test_runners(self):
-        # Precedence pin: collect-only and -run stay static by design.
+    def test_non_executing_runner_flags_stay_static(self):
+        """Round-2 pin (2026-08-10): flag-aware, not runner-name-only.
+        Collect/list/no-run forms don't execute anything; `go test -run`
+        DOES execute the matched tests (round 1 wrongly pinned it static)."""
         from director import _classify_probe_modality
         assert _classify_probe_modality("pytest --collect-only") == "static"
-        assert _classify_probe_modality("go test -run TestFoo ./pkg") == "static"
+        assert _classify_probe_modality("cargo test --no-run") == "static"
+        assert _classify_probe_modality("npm test -- --listTests") == "static"
+        assert _classify_probe_modality("go test -run TestFoo ./pkg") == "process"
+        assert _classify_probe_modality("pnpm run test") == "process"
+        assert _classify_probe_modality("yarn run test") == "process"
 
     # -- per-segment classification (Jeremy's call 2026-07-16; corpus
     # measurement in BACKLOG_DONE: 11 probes shift, all static→process,

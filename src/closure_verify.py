@@ -1690,12 +1690,21 @@ _MODALITY_PATTERNS = (
     # pass-audit fire its "nothing executed" refutation on genuinely-executed
     # passes (adversarial review 2026-08-10). Static hints still win first
     # (`pytest --collect-only`, `go test -run` stay static by precedence).
-    ("process", re.compile(r"\b(pytest|go test|cargo test|npm (run )?test|pnpm test|yarn test|make test|tox)\b", re.I)),
+    ("process", re.compile(r"\b(pytest|go test|cargo test|(npm|pnpm|yarn) (run )?test|make test|tox)\b", re.I)),
 )
 
 _STATIC_HINTS = re.compile(
-    r"\b(grep|rg|test -[efdrs]|cat|head|tail|wc -[lc]|ls |find |jq |go build|go vet|go test -run|tsc --noEmit|ruff|flake8|mypy|pytest --collect-only)\b",
+    r"\b(grep|rg|test -[efdrs]|cat|head|tail|wc -[lc]|ls |find |jq |go build|go vet|tsc --noEmit|ruff|flake8|mypy)\b",
     re.I,
+)
+# Runner flags that mean "don't actually execute" — compile/collect/list
+# only. Checked with the static hints so `cargo test --no-run` or
+# `npm test -- --listTests` doesn't count as behavioral evidence (round-2
+# review 2026-08-10; `go test -run` moved OUT of the static hints the same
+# round — it executes the matched tests, and calling it static routed
+# genuinely-tested passes into the all-static pass audit).
+_STATIC_FLAG_HINTS = re.compile(
+    r"--(no-run|collect-only|list-?tests?|dry-run)\b", re.I,
 )
 
 
@@ -1776,7 +1785,7 @@ def _classify_probe_segment(seg: str) -> str:
     # Before checking "process", defer to explicit static hints. A command
     # like `go build ./cmd/slycrel-server` otherwise matches "process" via
     # `./cmd/...` even though the actual verb is a compile-only check.
-    if _STATIC_HINTS.search(seg):
+    if _STATIC_HINTS.search(seg) or _STATIC_FLAG_HINTS.search(seg):
         return "static"
     # Process = runs a built binary / script that likely exercises the
     # artifact without network I/O.

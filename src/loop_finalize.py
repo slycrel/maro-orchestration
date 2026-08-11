@@ -1032,7 +1032,10 @@ def _mint_run_risks_to_project(project: str, loop_id: str) -> int:
                     verdict_row = row  # last matching row wins (restarts append)
         if verdict_row and not verdict_row.get("skipped"):
             for gap in (verdict_row.get("gaps") or [])[:3]:
-                gap = str(gap).strip()
+                # One physical line per gap — LLM-derived gap text can carry
+                # embedded newlines, which would break the markdown bullet
+                # and make the <=3 cap a lie (round-2 review 2026-08-10).
+                gap = " ".join(str(gap).split())
                 if gap:
                     lines.append(
                         f"Open gap from run {loop_id} (closure): {gap[:200]}")
@@ -1052,7 +1055,10 @@ def _mint_run_risks_to_project(project: str, loop_id: str) -> int:
         # adversarial review 2026-08-10).
         if rp.exists() and loop_id in rp.read_text(encoding="utf-8"):
             return 0
-        append_risk(project, lines, dedupe_token=loop_id)
+        # A race-losing finalizer's in-lock dedupe is a no-op — report it
+        # as 0 minted, not len(lines) (round-2 review 2026-08-10).
+        if not append_risk(project, lines, dedupe_token=loop_id):
+            return 0
         return len(lines)
     except Exception as exc:
         log.warning("risk mint failed for loop %s: %s", loop_id, exc)

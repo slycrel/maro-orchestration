@@ -40,6 +40,7 @@ import json
 import logging
 import re
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
@@ -349,6 +350,13 @@ class LessonDelta:
         return {
             "lesson_text": self.lesson_text,
             "stratum": self.stratum,
+            # Measurement identity (round-2 review 2026-08-10): the demote
+            # stamp's agreements-increment distinguishes measurements by
+            # measured_at, so the producer must own the timestamp — without
+            # it, replaying one measurement dict compares None against the
+            # stamp-site-generated time and inflates the count. Stamped at
+            # dict-build time: the census builds one dict per measurement.
+            "measured_at": datetime.now(timezone.utc).isoformat(),
             "n_calls": self.n_calls,
             "delta": self.delta,
             "jackknife_spread": self.jackknife(),

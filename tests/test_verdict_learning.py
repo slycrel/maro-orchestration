@@ -841,11 +841,29 @@ def test_risk_mint_dedupe_is_atomic_under_the_lock(monkeypatch, tmp_path):
     _setup(monkeypatch, tmp_path)
     from orch_items import ensure_project, append_risk, risks_path
     ensure_project("proj-r7", "mission")
-    append_risk("proj-r7", ["risk from lp-r7"], dedupe_token="lp-r7")
-    append_risk("proj-r7", ["risk from lp-r7 duplicate"], dedupe_token="lp-r7")
+    assert append_risk("proj-r7", ["risk from lp-r7"],
+                       dedupe_token="lp-r7") is True
+    # Round-2 pin: the race loser reports the no-op honestly.
+    assert append_risk("proj-r7", ["risk from lp-r7 duplicate"],
+                       dedupe_token="lp-r7") is False
     text = risks_path("proj-r7").read_text(encoding="utf-8")
     assert text.count("lp-r7") == 1
     assert "duplicate" not in text
+
+
+def test_risk_mint_flattens_multiline_gaps(monkeypatch, tmp_path):
+    """Round-2 pin (2026-08-10): an LLM gap with embedded newlines must
+    render as one bullet, not break the markdown or the <=3 cap."""
+    _setup(monkeypatch, tmp_path)
+    import loop_finalize
+    from orch_items import ensure_project, risks_path
+    ensure_project("proj-r8", "mission")
+    _seed_run_dir(monkeypatch, tmp_path, "lp-r8",
+                  gaps=["missing A\nmissing B\nmissing C"])
+    n = loop_finalize._mint_run_risks_to_project("proj-r8", "lp-r8")
+    assert n == 1
+    text = risks_path("proj-r8").read_text(encoding="utf-8")
+    assert "missing A missing B missing C" in text
 
 
 def test_risk_mint_is_idempotent_per_loop(monkeypatch, tmp_path):

@@ -7015,3 +7015,17 @@ under the same two-measurement standard).
   an existing pin: a function-local `log_event` import shadowed the
   module-level name and unbound the WORKER_SLICE_INJECTED emission —
   constant-only import is the fix shape.
+- **2026-08-11** — Review round 2 (Codex Skeptic+Architect on the round-1
+  fixes) found real regressions in my own fixes, all corrected:
+  measurement identity now producer-owned (as_dict stamps measured_at —
+  identity-less replays could inflate agreements); the idempotent
+  re-stamp path PRESERVES the prior agreements count (was resetting a
+  strong 2 to 1); `go test -run` reclassified process (it executes —
+  round 1 pinned the wrong behavior); non-executing runner flags
+  (--no-run/--collect-only/--list-tests/--dry-run) stay static via
+  flag-aware hints; pnpm/yarn `run test` variants covered; multiline
+  LLM gaps flatten to one bullet; race-losing risk mints report 0.
+  Rejected as residual: substring dedupe key (benign compound),
+  fail-open crystallization on unreadable ledger (deliberate posture).
+  Fixpoint reached — round 2's findings were narrowing (refinements of
+  round-1 fixes, no new arcs). Suite 8185/0 skips-on-linux, exit 0.

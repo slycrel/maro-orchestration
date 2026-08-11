@@ -1109,6 +1109,37 @@ class TestStrongEvidenceReapply:
         assert kw.demote_lesson_by_effect(tl.lesson_id, ev) is True
         assert self._agreements(kw, tl.lesson_id) == 1
 
+    def test_same_measurement_restamp_preserves_strong_count(
+            self, monkeypatch, tmp_path):
+        """Round-2 pin (2026-08-10): the idempotent path must KEEP the
+        prior count, not reset it to 1 — a replayed second measurement
+        was destroying already-strong evidence."""
+        tl = _seed_medium_lesson(monkeypatch, tmp_path)
+        import knowledge_web as kw
+        first = {**NEG_EVIDENCE, "measured_at": "2026-08-10T01:00:00+00:00"}
+        second = {**NEG_EVIDENCE, "measured_at": "2026-08-10T02:00:00+00:00"}
+        assert kw.demote_lesson_by_effect(tl.lesson_id, first) is True
+        assert kw.demote_lesson_by_effect(tl.lesson_id, second) is True
+        assert kw.demote_lesson_by_effect(tl.lesson_id, second) is True
+        assert self._agreements(kw, tl.lesson_id) == 2
+
+    def test_identity_less_measurement_never_increments(
+            self, monkeypatch, tmp_path):
+        # A legacy ev without measured_at has no identity — it can seed
+        # a count of 1 but never adds agreeing runs.
+        tl = _seed_medium_lesson(monkeypatch, tmp_path)
+        import knowledge_web as kw
+        assert kw.demote_lesson_by_effect(tl.lesson_id, dict(NEG_EVIDENCE)) is True
+        assert kw.demote_lesson_by_effect(tl.lesson_id, dict(NEG_EVIDENCE)) is True
+        assert self._agreements(kw, tl.lesson_id) == 1
+
+    def test_production_measurement_dict_carries_identity(self):
+        # as_dict() must own measured_at (round 2): without it the stamp
+        # site can't tell measurements apart.
+        from delta_replay import LessonDelta
+        ev = LessonDelta(lesson_text="x", stratum="reason").as_dict()
+        assert ev.get("measured_at")
+
     def test_two_agreeing_runs_reach_reapply_threshold(
             self, monkeypatch, tmp_path):
         """The decree's standard end-to-end without manual backfill: two

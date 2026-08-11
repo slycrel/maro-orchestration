@@ -2068,15 +2068,24 @@ def demote_lesson_by_effect(lesson_id: str, delta_evidence: Dict[str, Any]) -> b
         # caller-supplied-only field left every production stamp at 0 and
         # the reapply branch dormant). Each DISTINCT qualifying full-set
         # measurement that lands on an already-demoted row counts as one
-        # more agreeing run; same measured_at re-stamps don't inflate.
+        # more agreeing run. The producer owns measurement identity
+        # (as_dict stamps measured_at at build time — round 2): a re-stamp
+        # of the SAME measurement neither inflates nor resets the prior
+        # count (round-2 finding: `agreements = 1` on the idempotent path
+        # destroyed an already-strong 2).
         prior = dict(t.delta_evidence or {})
         agreements = int(ev.get("agreements") or 0)
         if not agreements:
-            agreements = 1
-            if (prior.get("route") == "effect-demote"
-                    and prior.get("measured_at")
+            prior_ag = (int(prior.get("agreements") or 0)
+                        if prior.get("route") == "effect-demote" else 0)
+            if (prior_ag and prior.get("measured_at")
+                    and ev.get("measured_at")
                     and prior.get("measured_at") != ev.get("measured_at")):
-                agreements = int(prior.get("agreements") or 1) + 1
+                agreements = prior_ag + 1
+            else:
+                # Same measurement, or one without its own identity: keep
+                # the prior count — never inflate, never reset.
+                agreements = max(prior_ag, 1)
         t.delta_evidence = {
             "delta": float(delta),
             "jackknife_spread": float(spread),
