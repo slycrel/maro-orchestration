@@ -357,7 +357,10 @@ class TestEventTypes:
         # +1 (2026-08-08): LESSON_REMINT_PATTERN — Δ-demoted lineage
         # re-minted to the strike threshold; forced re-measure queued
         # (tombstone build, decision dcf8eab8).
-        assert len(EVENT_TYPES) == 82
+        # +1 (2026-08-10): WORKER_REPORT_OMISSION — MH #6 subagent-edge
+        # candidate: a DONE worker's output made no lexical contact with
+        # the compiled report (director._report_echo).
+        assert len(EVENT_TYPES) == 83
 
     def test_previously_unregistered_events_in_set(self):
         from captains_log import EVOLVER_REVERTED, EVOLVER_VERIFY, PLAYBOOK_UPDATED

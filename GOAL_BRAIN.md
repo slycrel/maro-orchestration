@@ -6995,3 +6995,23 @@ under the same two-measurement standard).
   re-run-identity findings (already fixed by the concurrent session's
   own review round, 48c025e — reviewers saw the pre-fix diff).
   Verify-before-fix held: 5/12 deduped findings confirmed.
+- **2026-08-11** — MH #6 Communication Failure BUILT (subagent edge,
+  detection-only; MH entry now has #4/#8/#13 + Rationale Erosion +
+  the #1 prevention half remaining). Live-source verification narrowed
+  the build: the compile window's cut was already marked
+  (context_budget.clip) — the gap was that nothing checked whether
+  worker content SURVIVED into the compiled report.
+  `director._report_echo` (shares memory_bridge.distinctive_terms;
+  asymmetry inverted vs slice_echo: False = dropped worker, the
+  meaningful pole) → `WorkerResult.report_echoed`, stamped in the LLM
+  compile path only (verbatim-concatenation paths stay None — a check
+  that could not fail proves nothing), director-log field, and
+  `WORKER_REPORT_OMISSION` candidate event for DONE workers at False
+  (advisory, never control flow). Measured corpus context: 30 legacy
+  director logs / 49 worker rows, median result 5,278 chars, 59%
+  exceed the 4000-char compile window — the compiler selects from a
+  clipped majority when the lane runs; lane is low-traffic
+  (skip_if_simple), signal is forward-only. 11 pins. Gotcha caught by
+  an existing pin: a function-local `log_event` import shadowed the
+  module-level name and unbound the WORKER_SLICE_INJECTED emission —
+  constant-only import is the fix shape.

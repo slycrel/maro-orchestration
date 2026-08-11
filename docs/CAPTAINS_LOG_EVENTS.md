@@ -211,6 +211,7 @@ Written by `captains_log.log_event(...)`. Every entry has the four required fiel
 | `RECALL_GUARD_TRIPPED` | handle.py:2298 | goal_preview, job_id | The dispatch guard refused to re-run a goal whose recent attempts all failed (the ~25× repeat-burn protection). |
 | `NOW_ARTIFACT_RETRY` | handle.py (NOW lane, post-verdict) | goal_preview, recovered, provenance_missing (when the demotion was provenance-driven) | A self-verdict NOW failure got one artifact-seeded retry (ask + failed answer + demotion reason) before any agenda escalation. `recovered` says whether the retry's own verdict judged it fulfilled. Shallow failures only — complex directives skip the rung. Gated by `now_lane.artifact_retry` (default OFF). |
 | `WORKER_SLICE_INJECTED` | director.py:483 | ticket_id, worker_type, items_count, thread_scope, goal_brain_included, memory_block_len, age_stamped (only when stamped) | The director injected a recalled memory slice into a worker ticket (A/B observability for the worker recall slice). |
+| `WORKER_REPORT_OMISSION` | director.py (run_director, post-compile) | director_id, worker_type, result_length, mh_edge, mh_class | MH #6 subagent-edge candidate: a DONE worker's output made no lexical contact with the compiled report (`_report_echo` False) — content dropped on the way to the parent. Candidate-grade evidence for corpus counting, never a verdict input. |
 
 ### Navigator (goal-brain)
 

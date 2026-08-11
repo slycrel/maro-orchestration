@@ -369,6 +369,18 @@ _ECHO_STOPWORDS = frozenset({
 })
 
 
+def distinctive_terms(text: str) -> set:
+    """Distinctive lexical terms of a text: len >= _ECHO_MIN_TERM_LEN,
+    boilerplate stopwords out. The shared vocabulary for every echo-shaped
+    contact check (slice_echo here; director._report_echo on the subagent
+    edge) — one extraction rule, so the checks can't drift apart."""
+    return {
+        w for w in re.findall(r"[a-z0-9_\-./]{%d,}" % _ECHO_MIN_TERM_LEN,
+                              (text or "").lower())
+        if w not in _ECHO_STOPWORDS
+    }
+
+
 def slice_echo(items: List[MemoryItem], result_text: str) -> Optional[bool]:
     """Did the worker's result show lexical contact with any injected
     memory item? (MH taxonomy "Memory Following Failure" gap, 2026-08-09:
@@ -391,11 +403,7 @@ def slice_echo(items: List[MemoryItem], result_text: str) -> Optional[bool]:
         return None
     text = result_text.lower()
     for item in items:
-        terms = {
-            w for w in re.findall(r"[a-z0-9_\-./]{%d,}" % _ECHO_MIN_TERM_LEN,
-                                  (item.content or "").lower())
-            if w not in _ECHO_STOPWORDS
-        }
+        terms = distinctive_terms(item.content or "")
         if not terms:
             continue
         need = min(_ECHO_MIN_HITS, len(terms))

@@ -225,6 +225,35 @@ retracted by the step-9 adversarial pass — see below):
   **BUILT 2026-08-09** (with #10/#11/#12 — see the classifier note below).
 - **#6 Communication Failure (subagent edge)** — subagent I/O captured
   raw; under-reporting to the parent plausible and undetected.
+  **BUILT 2026-08-11** (detection-only, the #5/#10–12 pattern).
+  Live-source re-verification first (caveat (a), and it narrowed the
+  build): the compile window's 4000-char cut is already MARKED
+  (`context_budget.clip`, truncation-audit idiom), so visibility was
+  covered — the gap was purely that nothing checked whether worker
+  content SURVIVED into the compiled report. `director._report_echo`:
+  mechanical contact floor sharing `memory_bridge.distinctive_terms`
+  (one extraction rule, no drift), asymmetry INVERTED vs slice_echo and
+  documented as such — compilers paraphrase, so True is weak coverage
+  evidence, but False (fewer than 3 distinctive terms from the whole
+  worker output in the report) is a DROPPED worker. Stamped on
+  `WorkerResult.report_echoed` in the LLM compile path only (dry-run and
+  exception fallback concatenate verbatim — a check that could not fail
+  proves nothing → None), persisted per-worker in the director log, and
+  a DONE worker with False emits `WORKER_REPORT_OMISSION`
+  (mh_edge subagent / mh_class communication_failure_candidate —
+  candidate-grade, advisory, never control flow; blocked workers
+  excluded, their absence is already visible via status). Corpus
+  context, measured on box: 30 legacy director logs / 49 worker rows,
+  median result 5,278 chars, **59% exceed the 4000-char compile
+  window** — when this lane runs, the compiler is selecting from a
+  clipped majority, which is exactly where drops happen. Honest bound:
+  old logs store result_length only, so no retro detection; the lane is
+  low-traffic (director mostly bypassed via skip_if_simple), so the
+  signal accrues only when multi-worker runs happen. 11 pins
+  (tests/test_report_echo.py); local-import shadowing gotcha caught by
+  the existing WORKER_SLICE_INJECTED pin (a function-local `log_event`
+  import would have unbound the module-level name for the whole
+  function).
 - **#7 Overgeneralization (model—memory), INFERRED** — cheap relabel of
   `memory_ledger._maybe_emit_contradiction_candidate` (L983).
   **BUILT 2026-08-09**: CONTRADICTION_CANDIDATE events now carry

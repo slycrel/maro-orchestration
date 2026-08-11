@@ -54,6 +54,14 @@ class WorkerResult:
     # contact with the injected items? None = not judged (no injection or
     # nothing to compare); see memory_bridge.slice_echo for semantics.
     memory_slice_echoed: Optional[bool] = None
+    # MH #6 Communication Failure (subagent edge, 2026-08-10): did the
+    # compiled report make lexical contact with this worker's output?
+    # INVERSE asymmetry vs memory_slice_echoed — compilers paraphrase, so
+    # True is weak evidence of coverage, but False means the worker's
+    # content was DROPPED. None = not judged (dry-run/fallback report is a
+    # verbatim concatenation, or too little to judge); see
+    # director._report_echo.
+    report_echoed: Optional[bool] = None
 
 
 # ---------------------------------------------------------------------------

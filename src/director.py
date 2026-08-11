@@ -592,6 +592,37 @@ def run_director(
     total_tokens_in += compile_tokens[0]
     total_tokens_out += compile_tokens[1]
 
+    # MH #6 Communication Failure (subagent edge): a DONE worker whose
+    # content made no lexical contact with the compiled report was dropped
+    # on the way to the parent — candidate-grade evidence (the #7
+    # contradiction-candidate convention), advisory only, never control
+    # flow. Blocked workers are excluded: their absence from the report is
+    # visible through status already.
+    for _r in worker_results:
+        if _r.status == "done" and _r.report_echoed is False:
+            try:
+                # Constant-only import: a local `log_event` import here
+                # would shadow the module-level name across this whole
+                # function scope and unbind the WORKER_SLICE_INJECTED
+                # emission above.
+                from captains_log import WORKER_REPORT_OMISSION
+                log_event(
+                    WORKER_REPORT_OMISSION,
+                    subject="director_compile",
+                    summary=(f"{_r.worker_type} worker output "
+                             f"({len(_r.result)} chars) shows no lexical "
+                             f"contact with the compiled report"),
+                    context={
+                        "director_id": director_id,
+                        "worker_type": _r.worker_type,
+                        "result_length": len(_r.result),
+                        "mh_edge": "subagent",
+                        "mh_class": "communication_failure_candidate",
+                    },
+                )
+            except Exception:
+                pass
+
     # Determine overall status
     all_done = all(r.status == "done" for r in worker_results)
     status = "done" if all_done else "stuck"
@@ -824,6 +855,42 @@ def _review_worker_output(
     return (ReviewDecision(accepted=False, reason="review parse failed, rejecting for safety"), (0, 0))
 
 
+# Report-echo bar (MH #6 Communication Failure, subagent edge,
+# 2026-08-10): a worker result with at least this many distinctive terms
+# is judgeable; contact requires min(_REPORT_ECHO_HITS, len(terms)) of
+# them in the compiled report. The bar is deliberately LOW — with it this
+# low, False means fewer than 3 distinctive terms from the worker's whole
+# output survived, which is a dropped worker, not a paraphrase.
+_REPORT_ECHO_MIN_TERMS = 5
+_REPORT_ECHO_HITS = 3
+
+
+def _report_echo(result_text: str, report_text: str) -> Optional[bool]:
+    """Did the compiled report make lexical contact with this worker's
+    output? Mechanical lower bound on the subagent edge — the mirror of
+    memory_bridge.slice_echo, with the asymmetry INVERTED: compilers
+    paraphrase, so True is weak evidence of coverage, but False (near-zero
+    distinctive-term survival) is strong evidence the worker's content was
+    dropped on the way to the parent. None = nothing to judge (short or
+    empty result, empty report) — consumers must keep None distinct from
+    False."""
+    if not (result_text or "").strip() or not (report_text or "").strip():
+        return None
+    from memory_bridge import distinctive_terms
+    terms = distinctive_terms(result_text)
+    if len(terms) < _REPORT_ECHO_MIN_TERMS:
+        return None
+    text = report_text.lower()
+    need = min(_REPORT_ECHO_HITS, len(terms))
+    hits = 0
+    for t in terms:
+        if t in text:
+            hits += 1
+            if hits >= need:
+                return True
+    return False
+
+
 def _compile_report(
     directive: str,
     spec: str,
@@ -831,7 +898,13 @@ def _compile_report(
     adapter,
     dry_run: bool,
 ) -> Tuple[str, Tuple[int, int]]:
-    """Compile worker outputs into a final polished report."""
+    """Compile worker outputs into a final polished report.
+
+    Side effect (MH #6): on the LLM compile path only, stamps
+    ``report_echoed`` on every worker result against the produced report.
+    The dry-run and exception-fallback paths concatenate outputs verbatim —
+    an echo check there could not fail, so it proves nothing and the
+    stamp stays None."""
     from llm import LLMMessage
 
     if dry_run or adapter is None:
@@ -861,7 +934,14 @@ def _compile_report(
             no_tools=True,
             purpose="report compile",
         )
-        return (resp.content.strip(), (resp.input_tokens, resp.output_tokens))
+        report = resp.content.strip()
+        for r in worker_results:
+            try:
+                _r_text = r.result if isinstance(r.result, str) else json.dumps(r.result)
+                r.report_echoed = _report_echo(_r_text, report)
+            except Exception:
+                r.report_echoed = None
+        return (report, (resp.input_tokens, resp.output_tokens))
     except Exception as exc:
         # Fallback: concatenate worker outputs
         parts = [f"**{r.worker_type.title()} ({r.status})**\n{r.result}" for r in worker_results]
@@ -923,6 +1003,9 @@ def _write_director_log(
                     "result_length": len(r.result),
                     "memory_slice_injected": r.memory_slice_injected,
                     "memory_slice_echoed": r.memory_slice_echoed,
+                    # MH #6: did this worker's content reach the compiled
+                    # report? False = dropped (see _report_echo).
+                    "report_echoed": r.report_echoed,
                     "tokens_in": r.tokens_in,
                     "tokens_out": r.tokens_out,
                 }

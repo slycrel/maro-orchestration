@@ -188,6 +188,14 @@ MEMORY_CONSOLIDATED = "MEMORY_CONSOLIDATED"
 # a worker's context. Used for measuring retrieval quality and token delta.
 WORKER_SLICE_INJECTED = "WORKER_SLICE_INJECTED"
 
+# MH #6 Communication Failure candidate (subagent edge, 2026-08-10): a DONE
+# worker's output made no lexical contact with the director's compiled
+# report — content dropped on the way to the parent. Candidate-grade (the
+# CONTRADICTION_CANDIDATE convention): evidence for corpus counting, never
+# a verdict input. Context: director_id, worker_type, result_length,
+# mh_edge, mh_class.
+WORKER_REPORT_OMISSION = "WORKER_REPORT_OMISSION"
+
 # Decisions
 DECISION_RECORDED = "DECISION_RECORDED"
 METACOGNITIVE_DECISION = "METACOGNITIVE_DECISION"  # mid-loop re-decompose/retry decisions
@@ -329,7 +337,7 @@ EVENT_TYPES = {
     LESSON_RECORDED, LESSON_REINFORCED, LESSON_QUARANTINED, LESSON_CONTESTED,
     LESSON_DELTA_DEMOTED, LESSON_REMINT_PATTERN,
     LESSON_EXTRACTION, LESSON_DECAYED, LESSON_RECOVERED,
-    MEMORY_CONSOLIDATED, WORKER_SLICE_INJECTED,
+    MEMORY_CONSOLIDATED, WORKER_SLICE_INJECTED, WORKER_REPORT_OMISSION,
     HYPOTHESIS_CREATED, HYPOTHESIS_PROMOTED, HYPOTHESIS_CONTRADICTED,
     KNOWLEDGE_NODE_PROMOTED,
     STANDING_RULE_CONTRADICTED, RULE_GRADUATED, RULE_DEMOTED, CANON_CANDIDATE,
