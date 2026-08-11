@@ -323,3 +323,92 @@ class TestReviewRegressions:
         audit_msg = adapter.complete.call_args_list[2].args[0][1].content
         assert "tally ok" not in audit_msg
         assert "withheld" in audit_msg
+
+
+# ---------------------------------------------------------------------------
+# Pass-side audit (MH #1 Specification Gaming v1, 2026-08-10): all-static
+# ACHIEVED verdicts get one adversarial refutation call. Detection degrades
+# trust (confidence cap below the 0.7 learning floor); it never flips the
+# verdict.
+# ---------------------------------------------------------------------------
+
+# Clean achieved payload: no admission phrases ("not executed" in ACHIEVED
+# triggers the Signal-1 behavioral-gap downgrade, which routes through the
+# NEGATIVE audit lane — not the shape under test here).
+PASS_ACHIEVED = {"complete": True, "confidence": 0.9, "gaps": [],
+                 "summary": ("Achieved. The crosscheck document exists and "
+                             "covers the taxonomy comparison.")}
+
+PASS_AUDIT_REFUTES = {"agrees": False,
+                      "reason": "the artifact asserts success but demonstrates nothing",
+                      "confidence": 0.9}
+PASS_AUDIT_AGREES = {"agrees": True,
+                     "reason": "excerpts substantively satisfy the goal",
+                     "confidence": 0.85}
+
+
+def _run_pass(monkeypatch, tmp_path, adapter, *, pass_audit_on=True, **kwargs):
+    monkeypatch.setattr(closure_verify, "_pass_audit_enabled",
+                        lambda: pass_audit_on)
+    # Negative-audit lane off so payload order stays deterministic.
+    return _run(monkeypatch, tmp_path, adapter, audit_on=False, **kwargs)
+
+
+class TestPassAudit:
+    def test_refuted_all_static_pass_caps_confidence_not_verdict(
+            self, monkeypatch, tmp_path):
+        adapter = _adapter(PLAN, PASS_ACHIEVED, PASS_AUDIT_REFUTES)
+        v = _run_pass(monkeypatch, tmp_path, adapter)
+        assert v.complete is True  # never flips
+        assert v.confidence == pytest.approx(0.6)  # below the 0.7 floor
+        assert v.verdict_audit["pass_audit"] is True
+        assert v.verdict_audit["refuted"] is True
+        assert v.verdict_audit["mh_edge"] == "model-grader"
+        assert v.verdict_audit["mh_class"] == "specification_gaming_candidate"
+        assert "Pass-audit refutation" in v.summary
+
+    def test_agreeing_audit_leaves_verdict_untouched(self, monkeypatch, tmp_path):
+        adapter = _adapter(PLAN, PASS_ACHIEVED, PASS_AUDIT_AGREES)
+        v = _run_pass(monkeypatch, tmp_path, adapter)
+        assert v.complete is True
+        assert v.confidence == pytest.approx(0.9)
+        assert v.verdict_audit["pass_audit"] is True
+        assert "refuted" not in v.verdict_audit
+
+    def test_killswitch_off_no_audit_call(self, monkeypatch, tmp_path):
+        adapter = _adapter(PLAN, PASS_ACHIEVED)
+        v = _run_pass(monkeypatch, tmp_path, adapter, pass_audit_on=False)
+        assert adapter.complete.call_count == 2
+        assert v.verdict_audit == {}
+
+    def test_low_confidence_refutation_does_not_act(self, monkeypatch, tmp_path):
+        adapter = _adapter(PLAN, PASS_ACHIEVED,
+                           {**PASS_AUDIT_REFUTES, "confidence": 0.4})
+        v = _run_pass(monkeypatch, tmp_path, adapter)
+        assert v.confidence == pytest.approx(0.9)
+        assert v.verdict_audit.get("refuted") is None
+        # The audit record still persists for analysis.
+        assert v.verdict_audit["pass_audit"] is True
+
+    def test_behavioral_check_present_skips_pass_audit(self, monkeypatch, tmp_path):
+        plan = {"checks": [
+            {"description": "runs", "command": "python3 thing.py && grep ok out.txt"},
+        ]}
+        adapter = _adapter(plan, PASS_ACHIEVED)
+        v = _run_pass(monkeypatch, tmp_path, adapter)
+        assert adapter.complete.call_count == 2  # no third (audit) call
+        assert v.verdict_audit == {}
+
+    def test_negative_verdict_never_pass_audited(self, monkeypatch, tmp_path):
+        adapter = _adapter(PLAN, JUDGE_FALSE)
+        v = _run_pass(monkeypatch, tmp_path, adapter)
+        assert adapter.complete.call_count == 2
+        assert v.verdict_audit.get("pass_audit") is None
+
+    def test_non_bool_agrees_is_non_actionable(self, monkeypatch, tmp_path):
+        adapter = _adapter(PLAN, PASS_ACHIEVED,
+                           {"agrees": "false", "reason": "x", "confidence": 0.9})
+        v = _run_pass(monkeypatch, tmp_path, adapter)
+        assert v.confidence == pytest.approx(0.9)
+        assert v.verdict_audit.get("refuted") is None
+        assert v.verdict_audit.get("parse_failed") is True

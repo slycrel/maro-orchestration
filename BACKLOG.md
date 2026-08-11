@@ -152,7 +152,18 @@ retracted by the step-9 adversarial pass — see below):
 - **#1 Specification Gaming (model—grader), CRITICAL** — closure's checks
   are command+exit_code pairs, structurally gameable; the verification
   trust model has no defense against the failure mode aimed at it.
-  Highest leverage of the twelve.
+  Highest leverage of the twelve. **v1 BUILT 2026-08-10** (detection +
+  trust-degradation, deliberately NOT prevention): the gameable class
+  is an achieved verdict resting entirely on static checks —
+  `closure.pass_audit` (OFF fresh installs, ON this box) gives those
+  one adversarial refutation call on the shared audit evidence lane;
+  a typed refutation caps confidence below the 0.7 learning floor and
+  stamps `mh_class: specification_gaming_candidate` — never flips the
+  verdict (no new false-demotion lane). **Still open on this edge:**
+  prevention — harness-side execution receipts (tool transcripts,
+  event-log timestamps the executor can't forge post-hoc) as closure
+  check inputs, the structural answer the mint-grounding arc already
+  proved out for lessons.
 - **#3 Observation Failure (env—model), high** — `step_exec.py`
   `_summarize_tool_events` truncates 2000 chars / 50 events silently
   (same class as the arbitrary-truncation audit already on this backlog).

@@ -6938,3 +6938,21 @@ under the same two-measurement standard).
   46613838) backfilled with agreements=2 + provenance note, so their
   ~08-17 GC re-mint will re-apply instead of erasing. Pinned
   (TestStrongEvidenceReapply, 5 tests).
+- **2026-08-10** — MH #1 Specification Gaming v1 SHIPPED (model—grader,
+  the taxonomy's highest-leverage edge; detection not prevention, said
+  plainly). Gameable class = achieved verdict resting entirely on
+  static/preflight checks. New `closure.pass_audit` (OFF fresh
+  installs, ON this box): one adversarial refutation call per
+  all-static positive — shared evidence lane with the negative audit
+  (`_audit_artifact_evidence` extracted so the containment + injection
+  guards can't fork), refutation requires positive evidence the pass
+  is hollow (coverage gaps alone don't refute), typed-boolean +
+  conf ≥ 0.6 gate mirrored from the negative lane. Refuted → confidence
+  capped 0.6 (below VERDICT_CONFIDENCE_FLOOR 0.7 — learning stops
+  full-trusting the achievement), summary annotated,
+  `verdict_audit.pass_audit` stamped with mh_class
+  specification_gaming_candidate. Never flips the verdict — a one-call
+  True→False authority would be a fresh false-demotion lane. Skips:
+  behavioral probe ran / downgrade pending (negative lane owns it) /
+  dry run. Prevention (harness execution receipts as check inputs)
+  stays open on the MH entry. Pinned: TestPassAudit, 7 tests.
