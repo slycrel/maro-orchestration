@@ -7029,3 +7029,13 @@ under the same two-measurement standard).
   fail-open crystallization on unreadable ledger (deliberate posture).
   Fixpoint reached — round 2's findings were narrowing (refinements of
   round-1 fixes, no new arcs). Suite 8185/0 skips-on-linux, exit 0.
+- **2026-08-11** — Review round 3 (single Skeptic on the round-2 diff):
+  3 mediums, no highs — trend converged (2 highs → refinements →
+  refinements-of-refinements). All three fixed: measurement identity
+  moved onto the LessonDelta OBJECT (as_dict() was minting a fresh
+  timestamp per serialization — double-serialize = fake second
+  agreement, now pinned identical); runner short-spellings covered
+  (`pytest --co`, `go test -list`); non-exec flag hints SCOPED to
+  recognized runner segments (a generic `python3 smoke.py --dry-run`
+  executes and stays process; `grep -q pytest tox.ini` stays static —
+  hint-before-runner precedence kept). FIXPOINT DECLARED after round 3.

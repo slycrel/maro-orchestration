@@ -813,6 +813,18 @@ class TestProbeModalityClassifier:
         assert _classify_probe_modality("pnpm run test") == "process"
         assert _classify_probe_modality("yarn run test") == "process"
 
+    def test_runner_flags_short_spellings_and_scoping(self):
+        """Round-3 pins (2026-08-11): short spellings count (`pytest --co`,
+        `go test -list`), but the flags are RUNNER semantics — a generic
+        program with --dry-run still executes, and grep-for-a-runner-name
+        is still static."""
+        from director import _classify_probe_modality
+        assert _classify_probe_modality("pytest --co tests/") == "static"
+        assert _classify_probe_modality("go test -list . ./pkg") == "static"
+        assert _classify_probe_modality("python3 smoke.py --dry-run") == "process"
+        assert _classify_probe_modality("node validate.js --list-tests") == "process"
+        assert _classify_probe_modality("grep -q pytest tox.ini") == "static"
+
     # -- per-segment classification (Jeremy's call 2026-07-16; corpus
     # measurement in BACKLOG_DONE: 11 probes shift, all static→process,
     # exactly one historical verdict flips — d2f4e2f4's false downgrade) --

@@ -1686,26 +1686,32 @@ _MODALITY_PATTERNS = (
     # go wildcard `./...` (as in `go build ./...`) which is a package pattern,
     # not a binary invocation.
     ("process", re.compile(r"(^|[\s;&|])\./[A-Za-z0-9_-][A-Za-z0-9_./-]*|(^|[\s;&|])(go run|node |python[0-9.]* |timeout [0-9]+\s+\S+\s*&)", re.I)),
-    # Test runners execute the artifact — classifying them "static" made the
-    # pass-audit fire its "nothing executed" refutation on genuinely-executed
-    # passes (adversarial review 2026-08-10). Static hints still win first
-    # (`pytest --collect-only`, `go test -run` stay static by precedence).
-    ("process", re.compile(r"\b(pytest|go test|cargo test|(npm|pnpm|yarn) (run )?test|make test|tox)\b", re.I)),
+)
+
+# Test runners execute the artifact — classifying them "static" made the
+# pass-audit fire its "nothing executed" refutation on genuinely-executed
+# passes (adversarial review 2026-08-10). Non-executing invocation forms
+# (collect/list/no-run/dry-run, incl. short spellings) classify static —
+# but ONLY for recognized runners: the flags are runner semantics, and a
+# generic `python3 smoke.py --dry-run` still executes the program
+# (round-3 review 2026-08-11).
+_TEST_RUNNER = re.compile(
+    r"\b(pytest|go test|cargo test|(npm|pnpm|yarn) (run )?test|make test|tox)\b",
+    re.I,
+)
+_NON_EXEC_RUNNER_FLAGS = re.compile(
+    r"(^|\s)--?(no-run|collect-only|co|list-?tests?|dry-run|list)\b", re.I,
 )
 
 _STATIC_HINTS = re.compile(
     r"\b(grep|rg|test -[efdrs]|cat|head|tail|wc -[lc]|ls |find |jq |go build|go vet|tsc --noEmit|ruff|flake8|mypy)\b",
     re.I,
 )
-# Runner flags that mean "don't actually execute" — compile/collect/list
-# only. Checked with the static hints so `cargo test --no-run` or
-# `npm test -- --listTests` doesn't count as behavioral evidence (round-2
-# review 2026-08-10; `go test -run` moved OUT of the static hints the same
-# round — it executes the matched tests, and calling it static routed
-# genuinely-tested passes into the all-static pass audit).
-_STATIC_FLAG_HINTS = re.compile(
-    r"--(no-run|collect-only|list-?tests?|dry-run)\b", re.I,
-)
+# (`go test -run` moved OUT of the static hints in the round-2 review
+# 2026-08-10 — it executes the matched tests, and calling it static routed
+# genuinely-tested passes into the all-static pass audit. Non-executing
+# runner FORMS are handled by _NON_EXEC_RUNNER_FLAGS below, scoped to
+# recognized runners only.)
 
 
 def _split_probe_segments(cmd: str) -> List[str]:
@@ -1784,9 +1790,17 @@ def _classify_probe_segment(seg: str) -> str:
             return label
     # Before checking "process", defer to explicit static hints. A command
     # like `go build ./cmd/slycrel-server` otherwise matches "process" via
-    # `./cmd/...` even though the actual verb is a compile-only check.
-    if _STATIC_HINTS.search(seg) or _STATIC_FLAG_HINTS.search(seg):
+    # `./cmd/...` even though the actual verb is a compile-only check —
+    # and `grep -q pytest tox.ini` must not read as a test-runner
+    # invocation (hint-before-runner precedence, kept from the original
+    # classifier design).
+    if _STATIC_HINTS.search(seg):
         return "static"
+    # Recognized test runners: executing forms are process, non-executing
+    # forms (collect/list/no-run/dry-run) are static. Scoped so the flags
+    # apply only where they're actually runner semantics.
+    if _TEST_RUNNER.search(seg):
+        return "static" if _NON_EXEC_RUNNER_FLAGS.search(seg) else "process"
     # Process = runs a built binary / script that likely exercises the
     # artifact without network I/O.
     for label, pat in _MODALITY_PATTERNS[3:]:

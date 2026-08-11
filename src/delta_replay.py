@@ -322,6 +322,11 @@ class LessonDelta:
     calls: List[CallDelta] = field(default_factory=list)
     skipped_no_oracle: int = 0
     replay_errors: int = 0
+    # Measurement identity, owned by the measurement OBJECT (round-3
+    # review 2026-08-11: generating it in as_dict() meant serializing one
+    # result twice minted two "independent" measurements).
+    measured_at: str = field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
     @property
     def n_calls(self) -> int:
@@ -354,9 +359,8 @@ class LessonDelta:
             # stamp's agreements-increment distinguishes measurements by
             # measured_at, so the producer must own the timestamp — without
             # it, replaying one measurement dict compares None against the
-            # stamp-site-generated time and inflates the count. Stamped at
-            # dict-build time: the census builds one dict per measurement.
-            "measured_at": datetime.now(timezone.utc).isoformat(),
+            # stamp-site-generated time and inflates the count.
+            "measured_at": self.measured_at,
             "n_calls": self.n_calls,
             "delta": self.delta,
             "jackknife_spread": self.jackknife(),

@@ -1135,10 +1135,15 @@ class TestStrongEvidenceReapply:
 
     def test_production_measurement_dict_carries_identity(self):
         # as_dict() must own measured_at (round 2): without it the stamp
-        # site can't tell measurements apart.
+        # site can't tell measurements apart. Round-3 refinement: identity
+        # lives on the measurement OBJECT — serializing one result twice
+        # must yield the SAME identity, or a retry mints two "independent"
+        # measurements.
         from delta_replay import LessonDelta
-        ev = LessonDelta(lesson_text="x", stratum="reason").as_dict()
-        assert ev.get("measured_at")
+        res = LessonDelta(lesson_text="x", stratum="reason")
+        ev1, ev2 = res.as_dict(), res.as_dict()
+        assert ev1.get("measured_at")
+        assert ev1["measured_at"] == ev2["measured_at"]
 
     def test_two_agreeing_runs_reach_reapply_threshold(
             self, monkeypatch, tmp_path):
