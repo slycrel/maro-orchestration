@@ -6888,3 +6888,21 @@ under the same two-measurement standard).
   entry (e7fbd33). Note: navigator acting LIVE at dispatch is new
   behavior this week (run 1's escalate was shadow-only) — check it
   when a dispatch mysteriously doesn't run.
+- **2026-08-10** — Re-run identity v1 SHIPPED (BACKLOG top item, Jeremy
+  2026-08-09: "a re-run should know it's a re-run, with prior art").
+  `src/rerun_identity.py`: normalized exact-text match over the intake
+  record (`handle_inputs.jsonl`) yields the COMPLETE prior-attempts
+  list — zero LLM spend, complete-by-construction (the fix for the
+  navigator's one-sided top-k sample) — each verdict read WITH STANDING
+  from run metadata (operator_restamp → "do not read as failure";
+  contested → "anecdote, not ground truth"). Injected at both consumer
+  seams: dispatch navigator (NavigatorInput.prior_attempts_block, with
+  a "when recall disagrees, THIS wins" precedence note;
+  origin["rerun"] stamp for analysis) and the AGENDA run context
+  beside dispatch recall (build on deliverables instead of
+  archaeology; top project-dir deliverables listed). Killswitch
+  `rerun.brief` default ON (deterministic/read-only — the
+  recall.dispatch_inject convention, not the LLM-spend one). Cuts:
+  exact match only; newest-12 metadata resolution; recall guard
+  untouched (typed-contested-state residual is the shared fix). 28
+  pins; full suite 8130 passed / 0 skipped.

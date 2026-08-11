@@ -215,6 +215,16 @@ def render_input(nav_input: NavigatorInput) -> str:
     parts.append("## What the system already knows (recall)\n"
                  + (rb if rb else "(nothing relevant on record)"))
 
+    # Dispatch-only, rendered only when history exists (like the projects
+    # menu below). Deliberately placed AFTER recall: this is the complete,
+    # standing-carrying record, and when the two disagree about prior
+    # attempts, this section wins — recall is a top-k sample.
+    pb = nav_input.prior_attempts_block.strip()
+    if pb:
+        parts.append(
+            "## Prior attempts at this exact goal (complete deterministic "
+            "record — when recall above disagrees, THIS wins)\n" + pb)
+
     if nav_input.recent_projects:
         lines = []
         for p in nav_input.recent_projects:

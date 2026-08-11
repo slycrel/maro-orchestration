@@ -228,6 +228,7 @@ py-modules = [
     "quality_gate",
     "recall",
     "repo_scan",
+    "rerun_identity",
     "router",
     "rules",
     "run_curation",

@@ -60,7 +60,31 @@ edge if boot time ever matters at census scale (966 replays ≈ 40–50
 min of boot); (3) fork session files accrete under ~/.claude/projects
 — opt-in cleanup only, per data retention.
 
-### Re-run identity — a re-dispatched goal should KNOW it's a re-run, with prior art, not rediscover (or misread) its own history (OPENED 2026-08-09, Jeremy)
+### Re-run identity — a re-dispatched goal should KNOW it's a re-run, with prior art, not rediscover (or misread) its own history (OPENED 2026-08-09, Jeremy; **v1 SHIPPED 2026-08-10**)
+
+**v1 SHIPPED 2026-08-10** (`src/rerun_identity.py`, killswitch
+`rerun.brief` default ON — deterministic, read-only, zero LLM spend;
+DEFAULTS.md row): normalized exact-text match over
+`memory/handle_inputs.jsonl` → complete prior-attempts list, each verdict
+read WITH STANDING from run metadata (`operator_restamp` renders as "do
+not read it as failure", contested as "anecdote, not ground truth") →
+provenance-labeled brief injected at both consumer seams: (a) the
+dispatch navigator (`NavigatorInput.prior_attempts_block`, rendered with
+an explicit "when recall disagrees, THIS wins" precedence note; threaded
+handle_queue → shadow_dispatch_live; `origin["rerun"]`
+{count, prior_handles} stamps run metadata for analysis), and (b) the
+AGENDA run context (handle() `_extra_ctx_parts` beside dispatch recall —
+the brief's guidance says build on deliverables, verify before
+overwriting; a top-deliverables listing from the shared project dir rides
+along). 28 pins (tests/test_rerun_identity.py). **Named v1 cuts:** exact
+normalized match only (a prefix-bearing variant won't match its bare
+sibling); newest 12 matches get metadata resolution, older rows counted
+not inspected; dry-run previews dropped as non-attempts; the
+deterministic recall guard deliberately untouched (its contested-
+neutrality hole is the shared typed-contested-state residual above);
+fuzzy/paraphrase matching stays a separate later decision.
+
+Original entry:
 
 His phrasing, watching the 4th verbatim dispatch of the Model-or-Harness
 self-eval: *"a re-run should know it's a re-run, with prior art, instead

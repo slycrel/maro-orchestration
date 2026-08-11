@@ -1977,6 +1977,24 @@ def _handle_impl(
             except Exception as _recall_exc:
                 log.debug("handle: dispatch recall skipped: %s", _recall_exc)
 
+        # Re-run identity (BACKLOG 2026-08-09, Jeremy: "a re-run should know
+        # it's a re-run, with prior art"): deterministic prior-attempts brief
+        # from the intake record — complete-by-construction, each verdict
+        # carrying its standing — so a re-dispatched goal builds on prior
+        # deliverables instead of doing project archaeology, and never reads
+        # a contested or re-stamped record as its own failure. Zero LLM
+        # spend; the recall block above stays the fuzzy/semantic complement.
+        # Matched on _raw_input (pre-prefix-strip) — the same field the
+        # intake record stores. exclude_handle_id: this handle's own row was
+        # already written above.
+        try:
+            from rerun_identity import brief_for_goal as _rerun_brief
+            _rerun_block = _rerun_brief(_raw_input, exclude_handle_id=handle_id)
+            if _rerun_block:
+                _extra_ctx_parts.append(_rerun_block)
+        except Exception as _rerun_exc:
+            log.debug("handle: rerun brief skipped: %s", _rerun_exc)
+
         # Phase 65 minimum viable experiment: scope generation via inversion.
         # Gated by `scope_generation` config flag (default off). `scope_ab_skip`
         # is the paired A/B flag — when true, we'd-have-generated is recorded

@@ -243,6 +243,30 @@ def handle_task(
         # burns nothing, so there is no waste to guard against).
         _nav_project = ""
         if not dry_run:
+            # Re-run identity (BACKLOG 2026-08-09, Jeremy: "a re-run should
+            # know it's a re-run, with prior art"): the complete
+            # prior-attempts record for this exact goal text, standing
+            # included, handed to the navigator below. Fixes the 6b14e413
+            # Act-1 escalation, where top-k recall served a since-restamped
+            # false verdict unattributed and the navigator read it as its
+            # own knowledge. The origin stamp makes the detection visible
+            # in run metadata for analysis.
+            _rerun_block = ""
+            try:
+                from rerun_identity import (
+                    brief_enabled as _rr_on, prior_attempts as _rr_attempts,
+                    render_brief as _rr_render)
+                if _rr_on():
+                    _rr_list = _rr_attempts(reason)
+                    _rerun_block = _rr_render(_rr_list)
+                    if _rr_list:
+                        _origin["rerun"] = {
+                            "count": len(_rr_list),
+                            "prior_handles": [
+                                a.handle_id for a in _rr_list[:8]],
+                        }
+            except Exception as _rerun_exc:
+                log.debug("handle_task rerun brief skipped: %s", _rerun_exc)
             try:
                 from config import get as _cfg_get
                 _guard_on = bool(_cfg_get("recall.dispatch_guard", True))
@@ -281,6 +305,7 @@ def handle_task(
                     recall_result=_rr,
                     pipeline_move="guard_refused" if _guard_tripped else "execute",
                     extra={"job_id": job_id, "source": source or "task_store"},
+                    prior_attempts_block=_rerun_block,
                 )
             except Exception as _shadow_exc:
                 log.debug("handle_task navigator shadow skipped: %s", _shadow_exc)

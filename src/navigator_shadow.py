@@ -334,6 +334,7 @@ def shadow_dispatch_live(
     extra: Optional[Dict[str, Any]] = None,
     tiers: Optional[List[str]] = None,
     adapter_factory=None,
+    prior_attempts_block: str = "",
 ) -> Optional[Any]:
     """Live shadow at the autonomous dispatch boundary: decide-only.
 
@@ -413,6 +414,7 @@ def shadow_dispatch_live(
             goal_brain=goal_brain,
             budget={"note": "live dispatch shadow; loop budget not yet allocated"},
             recent_projects=_recent_projects_menu(),
+            prior_attempts_block=prior_attempts_block,
         )
         pipeline_actual = {
             "point": "dispatch",

@@ -107,6 +107,13 @@ class NavigatorInput:
     # of minting a fresh slug (1bfd0894: "finish and correct" started over
     # in an empty project while the brief lived in the previous one).
     recent_projects: List[Dict[str, str]] = field(default_factory=list)
+    # Re-run identity (dispatch only): rerun_identity.render_brief output —
+    # the COMPLETE prior-attempts record for this exact goal text, each
+    # verdict carrying its standing (closure / operator_restamp /
+    # contested). Fixes the one-sided-sample failure where top-k recall
+    # served a since-restamped verdict as plain failure (6b14e413 Act 1:
+    # escalate at 0.95 quoting the poisoned record).
+    prior_attempts_block: str = ""
 
     def digest(self) -> Dict[str, Any]:
         """Compact snapshot for the NAVIGATOR_DECIDED tuple. Full state lives
@@ -118,6 +125,7 @@ class NavigatorInput:
             "has_last_work": self.last_work is not None,
             "last_work_status": self.last_work.status if self.last_work else "",
             "recall_chars": len(self.recall_block),
+            "prior_attempts_chars": len(self.prior_attempts_block),
             "goal_brain_chars": len(self.goal_brain),
             "budget": dict(self.budget),
         }
