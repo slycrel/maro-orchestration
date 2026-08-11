@@ -2063,6 +2063,20 @@ def demote_lesson_by_effect(lesson_id: str, delta_evidence: Dict[str, Any]) -> b
         t = next((l for l in lessons if l.lesson_id == lesson_id), None)
         if t is None:
             return lessons
+        # Agreements self-populate (adversarial review 2026-08-10: the
+        # census caller's as_dict() carries no "agreements", so a
+        # caller-supplied-only field left every production stamp at 0 and
+        # the reapply branch dormant). Each DISTINCT qualifying full-set
+        # measurement that lands on an already-demoted row counts as one
+        # more agreeing run; same measured_at re-stamps don't inflate.
+        prior = dict(t.delta_evidence or {})
+        agreements = int(ev.get("agreements") or 0)
+        if not agreements:
+            agreements = 1
+            if (prior.get("route") == "effect-demote"
+                    and prior.get("measured_at")
+                    and prior.get("measured_at") != ev.get("measured_at")):
+                agreements = int(prior.get("agreements") or 1) + 1
         t.delta_evidence = {
             "delta": float(delta),
             "jackknife_spread": float(spread),
@@ -2076,9 +2090,8 @@ def demote_lesson_by_effect(lesson_id: str, delta_evidence: Dict[str, Any]) -> b
             # Agreeing independent full-set runs behind this demotion
             # (2026-08-10): >= REAPPLY_MIN_AGREEMENTS makes the stamp
             # strong enough to re-apply on a post-GC re-mint instead of
-            # the gentle watch. Caller-supplied — the route itself judges
-            # one measurement.
-            "agreements": int(ev.get("agreements") or 0),
+            # the gentle watch.
+            "agreements": agreements,
         }
         stamped["t"] = t
         return lessons

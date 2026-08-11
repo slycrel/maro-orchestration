@@ -1686,6 +1686,11 @@ _MODALITY_PATTERNS = (
     # go wildcard `./...` (as in `go build ./...`) which is a package pattern,
     # not a binary invocation.
     ("process", re.compile(r"(^|[\s;&|])\./[A-Za-z0-9_-][A-Za-z0-9_./-]*|(^|[\s;&|])(go run|node |python[0-9.]* |timeout [0-9]+\s+\S+\s*&)", re.I)),
+    # Test runners execute the artifact — classifying them "static" made the
+    # pass-audit fire its "nothing executed" refutation on genuinely-executed
+    # passes (adversarial review 2026-08-10). Static hints still win first
+    # (`pytest --collect-only`, `go test -run` stay static by precedence).
+    ("process", re.compile(r"\b(pytest|go test|cargo test|npm (run )?test|pnpm test|yarn test|make test|tox)\b", re.I)),
 )
 
 _STATIC_HINTS = re.compile(

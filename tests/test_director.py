@@ -787,6 +787,26 @@ class TestProbeModalityClassifier:
         from director import _classify_probe_modality
         assert _classify_probe_modality("") == "static"
 
+    def test_test_runners_are_process(self):
+        """Adversarial review 2026-08-10: `pytest`/`npm test` matched neither
+        a process pattern nor a static hint and fell through to "static" —
+        which made the MH #1 pass-audit fire its "nothing executed"
+        refutation on runs whose test suite executed the deliverable."""
+        from director import _classify_probe_modality
+        assert _classify_probe_modality("pytest tests/ -q") == "process"
+        assert _classify_probe_modality("python3 -m pytest tests/") == "process"
+        assert _classify_probe_modality("npm test") == "process"
+        assert _classify_probe_modality("npm run test -- --ci") == "process"
+        assert _classify_probe_modality("make test") == "process"
+        assert _classify_probe_modality("cargo test") == "process"
+        assert _classify_probe_modality("cd /repo && go test ./...") == "process"
+
+    def test_static_hints_still_outrank_test_runners(self):
+        # Precedence pin: collect-only and -run stay static by design.
+        from director import _classify_probe_modality
+        assert _classify_probe_modality("pytest --collect-only") == "static"
+        assert _classify_probe_modality("go test -run TestFoo ./pkg") == "static"
+
     # -- per-segment classification (Jeremy's call 2026-07-16; corpus
     # measurement in BACKLOG_DONE: 11 probes shift, all static→process,
     # exactly one historical verdict flips — d2f4e2f4's false downgrade) --

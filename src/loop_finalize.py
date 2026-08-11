@@ -1040,12 +1040,19 @@ def _mint_run_risks_to_project(project: str, loop_id: str) -> int:
             lines.append(
                 f"Run {loop_id} executed without scope injection "
                 "(scope parse failed; raw output in build/scope-raw-FAILED.txt)")
+        # <=3 TOTAL per run (gaps + sentinel combined) — noise cap; when
+        # both would overflow it, keep the leading gaps + the sentinel.
+        if len(lines) > 3:
+            lines = lines[:2] + [lines[-1]]
         if not lines:
             return 0
         rp = risks_path(project)
+        # Cheap pre-check saves the lock in the common already-minted case;
+        # the authoritative check is the in-lock dedupe_token (TOCTOU fix,
+        # adversarial review 2026-08-10).
         if rp.exists() and loop_id in rp.read_text(encoding="utf-8"):
             return 0
-        append_risk(project, lines)
+        append_risk(project, lines, dedupe_token=loop_id)
         return len(lines)
     except Exception as exc:
         log.warning("risk mint failed for loop %s: %s", loop_id, exc)
@@ -1139,11 +1146,25 @@ def finalize_deferred_learning(
     if dry_run or getattr(loop_result, "status", "") != "done" or not step_outcomes:
         return
     try:
-        from memory_ledger import load_outcome_by_loop_id
+        from memory_ledger import (load_outcome_by_loop_id, verdict_trust,
+                                   VERDICT_TRUST_FULL)
         _row = load_outcome_by_loop_id(loop_id)
         if _row is not None and _row.goal_achieved is False:
             log.info("deferred skill crystallization skipped — loop %s judged not-achieved (%s)",
                      loop_id, _row.goal_verdict_source)
+            return
+        # Judged-True but not fully trusted (confidence below the floor —
+        # e.g. a pass-audit refutation capped it — or an excluded source):
+        # crystallizing "the strongest examples" from a verdict learning
+        # does not full-trust would launder the doubt away (adversarial
+        # review 2026-08-10: the MH #1 cap must reach this gate, not just
+        # the verdict_trust consumers). Unjudged rows keep pre-fix
+        # behavior — absence means "not judged", and done is enough.
+        if (_row is not None and _row.goal_achieved is True
+                and verdict_trust(_row) != VERDICT_TRUST_FULL):
+            log.info("deferred skill crystallization skipped — loop %s judged "
+                     "achieved but verdict trust is %s (source %s)",
+                     loop_id, verdict_trust(_row), _row.goal_verdict_source)
             return
     except Exception:
         pass  # fail open to pre-fix behavior: done is enough when unreadable

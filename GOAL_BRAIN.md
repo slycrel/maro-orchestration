@@ -6976,3 +6976,22 @@ under the same two-measurement standard).
   caveat retired. Turn-based REPL protocol replicates at full breadth.
   **Step-2 recursive sub-calls gate: OPEN** (build when queue allows;
   cost-half caveat re per-turn-resend transports still stands).
+- **2026-08-10** — Overnight-batch adversarial review (Codex 3-lens,
+  scope 1bc4529..b4f52cc) COMPLETE, verdict CONTESTED → all confirmed
+  findings fixed same night. Confirmed + fixed: (1) delta-gate
+  `agreements` was caller-supplied-only and no production caller
+  supplies it — stamps now self-populate (distinct qualifying
+  measurements increment; same measured_at doesn't inflate; two
+  agreeing runs reach the reapply threshold end-to-end, pinned);
+  (2) MH #1 confidence cap never reached skill crystallization —
+  loop_finalize now skips crystallizing judged-True rows whose
+  verdict_trust != FULL (unjudged keeps pre-fix behavior); (3) modality
+  classifier called `pytest`/`npm test`/`make test` static, so the
+  pass-audit would fire "nothing executed" on genuinely-executed
+  passes — test runners now classify process (collect-only/-run stay
+  static by precedence); (4) risk-mint idempotency was check-then-append
+  TOCTOU — dedupe_token check now runs inside the file lock;
+  (5) 3 gaps + sentinel = 4 lines — capped at 3 total. Rejected: all 7
+  re-run-identity findings (already fixed by the concurrent session's
+  own review round, 48c025e — reviewers saw the pre-fix diff).
+  Verify-before-fix held: 5/12 deduped findings confirmed.

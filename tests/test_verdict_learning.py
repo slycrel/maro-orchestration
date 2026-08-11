@@ -666,6 +666,30 @@ def test_finalize_deferred_learning_crystallizes_on_true_or_unjudged(monkeypatch
     assert len(calls) == 2
 
 
+def test_finalize_deferred_learning_skips_skills_on_directional_true(monkeypatch, tmp_path):
+    """MH #1 reach (adversarial review 2026-08-10): a pass-audit-capped
+    verdict (True at conf 0.6, below VERDICT_CONFIDENCE_FLOOR) is
+    directional trust — it must not crystallize "strongest example" skills.
+    An explicit high-confidence True still does."""
+    _setup(monkeypatch, tmp_path)
+    import loop_finalize
+    calls = []
+    monkeypatch.setattr(loop_finalize, "_crystallize_and_synthesize",
+                        lambda **kw: calls.append(kw))
+    record_outcome("the goal", "done", "s", loop_id="lp-d9")
+    stamp_outcome_verdict("lp-d9", goal_achieved=True,
+                          goal_verdict_source="closure",
+                          goal_verdict_confidence=0.6)
+    loop_finalize.finalize_deferred_learning(_loop_result("lp-d9"))
+    assert calls == []
+    record_outcome("the goal", "done", "s", loop_id="lp-d10")
+    stamp_outcome_verdict("lp-d10", goal_achieved=True,
+                          goal_verdict_source="closure",
+                          goal_verdict_confidence=0.9)
+    loop_finalize.finalize_deferred_learning(_loop_result("lp-d10"))
+    assert len(calls) == 1
+
+
 def test_finalize_deferred_learning_extracts_for_extra_loop_ids(monkeypatch, tmp_path):
     _setup(monkeypatch, tmp_path)
     import loop_finalize
@@ -790,6 +814,38 @@ def test_risk_mint_writes_gaps_and_scope_failure(monkeypatch, tmp_path):
     assert "Open gap from run lp-r1 (closure): missing citations" in text
     assert "no honesty section" in text
     assert "without scope injection" in text
+
+
+def test_risk_mint_caps_total_at_three(monkeypatch, tmp_path):
+    """Adversarial review 2026-08-10: three gaps + the scope sentinel made
+    four lines. <=3 TOTAL; the sentinel outranks the trailing gap."""
+    _setup(monkeypatch, tmp_path)
+    import loop_finalize
+    from orch_items import ensure_project, risks_path
+    ensure_project("proj-r6", "mission")
+    _seed_run_dir(monkeypatch, tmp_path, "lp-r6",
+                  gaps=["gap one", "gap two", "gap three"],
+                  scope_failed=True)
+    n = loop_finalize._mint_run_risks_to_project("proj-r6", "lp-r6")
+    assert n == 3
+    text = risks_path("proj-r6").read_text(encoding="utf-8")
+    assert "gap one" in text and "gap two" in text
+    assert "gap three" not in text
+    assert "without scope injection" in text
+
+
+def test_risk_mint_dedupe_is_atomic_under_the_lock(monkeypatch, tmp_path):
+    """TOCTOU pin (adversarial review 2026-08-10): even when the caller-side
+    pre-check races (both callers observe absence), the in-lock dedupe_token
+    check makes the second append a no-op."""
+    _setup(monkeypatch, tmp_path)
+    from orch_items import ensure_project, append_risk, risks_path
+    ensure_project("proj-r7", "mission")
+    append_risk("proj-r7", ["risk from lp-r7"], dedupe_token="lp-r7")
+    append_risk("proj-r7", ["risk from lp-r7 duplicate"], dedupe_token="lp-r7")
+    text = risks_path("proj-r7").read_text(encoding="utf-8")
+    assert text.count("lp-r7") == 1
+    assert "duplicate" not in text
 
 
 def test_risk_mint_is_idempotent_per_loop(monkeypatch, tmp_path):

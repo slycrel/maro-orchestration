@@ -779,13 +779,21 @@ def list_blocked_projects() -> List[ProjectStatus]:
     return sorted(out, key=lambda s: (s.priority, s.blocked, s.slug), reverse=True)
 
 
-def append_section_lines(path: Path, heading: str, lines: Iterable[str]) -> None:
+def append_section_lines(path: Path, heading: str, lines: Iterable[str],
+                         dedupe_token: str = "") -> None:
     # Multi-line block append > PIPE_BUF can interleave with concurrent
     # loops on the same project — hold the file lock for seed + append.
+    # dedupe_token: when set, the presence-check happens INSIDE the lock so
+    # check-then-append is one transaction (adversarial review 2026-08-10:
+    # a caller-side pre-check alone is a TOCTOU — two finalizers can both
+    # observe absence, then serialize only their appends).
     from file_lock import locked_write
     stamp = now_utc_iso()
     payload = ["", f"## {stamp}", *[f"- {ln}" for ln in lines]]
     with locked_write(path):
+        if (dedupe_token and path.exists()
+                and dedupe_token in path.read_text(encoding="utf-8")):
+            return
         path.parent.mkdir(parents=True, exist_ok=True)
         if not path.exists():
             path.write_text(heading + "\n\n", encoding="utf-8")
@@ -797,8 +805,10 @@ def append_decision(slug: str, lines: Iterable[str]) -> None:
     append_section_lines(decisions_path(slug), "# DECISIONS", lines)
 
 
-def append_risk(slug: str, lines: Iterable[str]) -> None:
-    append_section_lines(risks_path(slug), "# RISKS", lines)
+def append_risk(slug: str, lines: Iterable[str],
+                dedupe_token: str = "") -> None:
+    append_section_lines(risks_path(slug), "# RISKS", lines,
+                         dedupe_token=dedupe_token)
 
 
 def append_provenance(slug: str, lines: Iterable[str]) -> None:

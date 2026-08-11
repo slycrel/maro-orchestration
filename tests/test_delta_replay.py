@@ -1077,3 +1077,52 @@ class TestStrongEvidenceReapply:
                  and int((t.delta_evidence or {}).get("strikes") or 0)
                  >= kw.REMINT_PATTERN_STRIKES]
         assert watch == []
+
+    def _agreements(self, kw, lesson_id):
+        row = next(l for l in kw.load_tiered_lessons(
+            tier=kw.MemoryTier.MEDIUM, min_score=0.0)
+            if l.lesson_id == lesson_id)
+        return row.delta_evidence["agreements"]
+
+    def test_agreements_self_populate_across_distinct_measurements(
+            self, monkeypatch, tmp_path):
+        """Adversarial review 2026-08-10: the census caller's as_dict()
+        carries no "agreements", so a caller-supplied-only field left every
+        production stamp at 0 and the reapply branch dormant. Each distinct
+        qualifying measurement on an already-demoted row now counts as one
+        more agreeing run."""
+        tl = _seed_medium_lesson(monkeypatch, tmp_path)
+        import knowledge_web as kw
+        first = {**NEG_EVIDENCE, "measured_at": "2026-08-10T01:00:00+00:00"}
+        assert kw.demote_lesson_by_effect(tl.lesson_id, first) is True
+        assert self._agreements(kw, tl.lesson_id) == 1
+        second = {**NEG_EVIDENCE, "measured_at": "2026-08-10T02:00:00+00:00"}
+        assert kw.demote_lesson_by_effect(tl.lesson_id, second) is True
+        assert self._agreements(kw, tl.lesson_id) == 2
+
+    def test_same_measurement_restamp_does_not_inflate(
+            self, monkeypatch, tmp_path):
+        tl = _seed_medium_lesson(monkeypatch, tmp_path)
+        import knowledge_web as kw
+        ev = {**NEG_EVIDENCE, "measured_at": "2026-08-10T01:00:00+00:00"}
+        assert kw.demote_lesson_by_effect(tl.lesson_id, ev) is True
+        assert kw.demote_lesson_by_effect(tl.lesson_id, ev) is True
+        assert self._agreements(kw, tl.lesson_id) == 1
+
+    def test_two_agreeing_runs_reach_reapply_threshold(
+            self, monkeypatch, tmp_path):
+        """The decree's standard end-to-end without manual backfill: two
+        agreeing full-set demotions -> agreements 2 -> GC -> re-mint
+        re-applies the demotion instead of the gentle watch."""
+        tl = _seed_medium_lesson(monkeypatch, tmp_path,
+                                 lesson_text=REMINT_TEXT)
+        import knowledge_web as kw
+        for hour in ("01", "02"):
+            ev = {**NEG_EVIDENCE,
+                  "measured_at": f"2026-08-10T{hour}:00:00+00:00"}
+            assert kw.demote_lesson_by_effect(tl.lesson_id, ev) is True
+        _gc_lesson(kw, tl.lesson_id)
+        from memory import record_tiered_lesson
+        re1 = record_tiered_lesson(REMINT_TEXT, "agenda", "done", "goal")
+        assert re1.delta_evidence["route"] == "effect-demote"
+        assert re1.delta_evidence.get("reapplied_from_archive") is True
