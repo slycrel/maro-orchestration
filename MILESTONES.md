@@ -2,7 +2,18 @@
 
 What to do next, in what order. Updated each session. Deferred ideas live in BACKLOG.md; completed phase history in docs/history/ROADMAP_ARCHIVE.md (ROADMAP.md is a stub). This file is the executable queue.
 
-Last updated: 2026-08-01 — **chunk-9 #2 recon flavor graduated to the
+Last updated: 2026-08-11 — **checkpoint pointer, not a work record: since
+2026-08-01 the executable queue has lived in BACKLOG.md's "Actionable
+Stack" (top of list = next) with per-ship records in GOAL_BRAIN.md's
+dated log.** The LT live-learning arc, the verdict-integrity arc
+(Signal-1 fix, verdict audit, operator re-stamp, re-run identity), the
+MH taxonomy burndown (#1/#3/#5–7/#9–12 built; #4/#8/#13 + Rationale
+Erosion + #1-prevention open), and the REPL A/B series (step-2 gate OPEN
+as of A/B-3) are all tracked there. This file resumes when a
+milestone-shaped multi-chunk build (e.g. REPL step-2 executor machinery)
+starts.
+
+Previous checkpoint: 2026-08-01 — **chunk-9 #2 recon flavor graduated to the
 runtime** (continuing Jeremy's delegated build order 8c7f5068 — star half
 shipped 2026-07-27, this is the src/ graduation "exercised in star first"
 was building toward). Flavor rides the step string as inline

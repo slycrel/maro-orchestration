@@ -393,7 +393,8 @@ to `goal_achieved=True` / `goal_verdict_source=operator_restamp` (loops
 `stop_verdict_superseded`), across outcomes.jsonl (via
 `memory_ledger.stamp_outcome_verdict` + locked rewrite), metadata.json,
 and run_card.json; originals preserved under `*_superseded` keys; script
-kept at `/tmp/operator-restamp.py` on the box. Trigger: the 4th verbatim
+kept at `~/.maro/workspace/output/operator-restamp-2026-08-09.py` on the
+box (copied out of volatile /tmp 2026-08-11). Trigger: the 4th verbatim
 dispatch (run `6b14e413-cobalt-orchard`) was PREVENTED by the navigator
 conf-quoting the poisoned record — the false verdict's first live
 downstream victim (specimen recorded in the re-run identity entry

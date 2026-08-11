@@ -28,6 +28,12 @@ Goal arrives (Telegram / Slack / CLI / Python API / Dashboard)
       → _is_complex_directive() may escalate NOW→AGENDA; URLs are replaced
         with an opaque token first so link dots don't read as sentences
     → AGENDA lane:
+      → Re-run identity (rerun_identity.py, 2026-08-10): deterministic
+        exact-match over memory/handle_inputs.jsonl → prior-attempts brief
+        with verdict STANDING (operator_restamp/contested can't read as
+        plain failure); injected into run context beside dispatch recall,
+        and into the dispatch navigator's input on the autonomous queue
+        path (handle_queue). Killswitch rerun.brief, default ON.
       → Clarity check (ambiguous? ask user first, unless yolo mode)
       → BLE rewrite (strip imperative steps → outcome-focused goal)
       → Completion standard injected (user/COMPLETION_STANDARD.md)
@@ -135,6 +141,14 @@ Plans work, delegates to specialized workers, reviews output. Three-phase:
 
 **In practice:** Mostly bypassed via `skip_if_simple=True`. Director overhead (3+ LLM calls) only justified for complex multi-worker tasks.
 
+**Subagent-edge instrumentation (MH taxonomy, 2026-08-09/11):** worker
+dispatch stamps `memory_slice_echoed` (did the worker's result touch the
+injected memory slice — memory_bridge.slice_echo) and the compile step
+stamps `report_echoed` (did the worker's content survive into the
+compiled report — director._report_echo; False = dropped worker, emits
+WORKER_REPORT_OMISSION candidate event). Both advisory, never control
+flow; per-worker values persist in the director log.
+
 ## Workers (workers.py)
 
 Specialized executors with constrained tool access:
@@ -175,6 +189,7 @@ identity for the job, not just routing to shipped ones — remains the Phase 62
 | File | Lines | Role |
 |------|-------|------|
 | src/handle.py | ~2526 | Unified entry point, prefix registry, lane dispatch |
+| src/rerun_identity.py | ~300 | Deterministic prior-attempts brief at intake (re-run identity) |
 | src/intent.py | ~320 | NOW/AGENDA classification |
 | src/director.py | ~2150 | Plan-delegate-review hierarchy + adaptive supervision |
 | src/workers.py | ~390 | Specialized executors |
