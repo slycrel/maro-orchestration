@@ -3466,7 +3466,17 @@ and maintainable over time."** Step 1 is greenlit:
   predicted mechanism behaving as theorized. Turn-based revision
   KEEPS. Step-2 (recursive sub-calls) gate: evidence now favors "the
   curve bends"; still wait for a same-shape replication before
-  building executor machinery. The
+  building executor machinery.
+  **A/B-3 PREDICTION REGISTERED 2026-08-10 (before dispatch; the
+  same-shape replication the step-2 gate demands):** corpus-WIDE
+  question this time — full litigation reconstruction across all three
+  opinions + secondary sources, matching A/B-1's breadth so the
+  narrowness caveat can't explain the result. Predicted vs A/B-1's
+  94 turns / 4.29M tokens_in / closure 0.75: turns **≤ 60**, tokens_in
+  **≤ 3.2M**, closure **≥ 0.75** at comparable deliverable quality.
+  **Falsifier:** turns/tokens back near A/B-1 levels on the wide shape
+  = A/B-2's win was question-narrowness, not the turn-based protocol,
+  and the step-2 gate stays closed. The
   accuracy/honesty half of the RLM direction is confirmed worth keeping
   regardless; the cost half INVERTS on a per-turn-resend transport, which
   bounds where step-2 (recursive sub-calls) can pay on this backend.
