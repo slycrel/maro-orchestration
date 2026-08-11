@@ -3636,6 +3636,28 @@ and maintainable over time."** Step 1 is greenlit:
   teaching before re-testing the verb; (b) invocations but calls/tokens
   ~= A/B-3 -> the verb doesn't bend the curve on this shape; record
   honestly, step-2 stays shipped as a capability, not a cost win.
+  **A/B-4 JUDGED 2026-08-11 (run 2a3bb789-lucid-forge): PREDICTION
+  FAILED on all four axes.** 59 calls (vs <=45; A/B-3 = 52), tokens_in
+  5.32M (vs <=2.2M; A/B-3 = 2.72M), goal_verdict_confidence 0.6
+  (vs >=0.75; below the 0.7 trust floor -> DIRECTIONAL), and **zero
+  maro-read invocations** — the EXECUTE_SYSTEM advertisement rode every
+  executor payload (confirmed in call JSONs) but no worker invoked the
+  verb; the 225KB 1908-opinion fulltext (the exact target shape) was
+  read via Read tool + grep instead. **Falsifier (a) fires:** the
+  advertisement alone is insufficient teaching — and per the verified
+  skill_loader gap, EXECUTE_SYSTEM is the ONLY teaching surface workers
+  see (repl_reading §5b never reaches them). Teaching fix owed before
+  any re-test. Honest confounds, cutting BOTH ways: (1) the token blowup
+  is dominated by step 8 (adversarial citation re-verification, 3.17M
+  tokens_in alone — 60% of run); steps 1–7 totaled ~2.15M, under the
+  2.2M line, so the plan SHAPE (a heavier 8-step plan than A/B-3 drew)
+  is a major confound in the cost axes; (2) but zero invocations is
+  clean and unconfounded — the verb cannot bend any curve if it is
+  never called. Run quality itself was good: verbatim-accurate quotes,
+  its own step-8 audit caught + fixed 10 drifted citations,
+  goal_achieved=true — the 0.6 confidence is the judge's, not a broken
+  deliverable. Step-2 stands as shipped capability; cost-win claim
+  remains UNPROVEN.
 - Relation to existing items: this is the generalized form of the #22
   errand-envelope lever and the designated reader for RUN_TEACHINGS
   chunk-1's input stage; it is NOT a replacement for the cheaper

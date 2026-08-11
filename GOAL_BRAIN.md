@@ -7075,3 +7075,17 @@ under the same two-measurement standard).
   FIXPOINT DECLARED — round 2 was refinements-of-refinements, no new
   arcs. Suite 8213, exit 0. maro-read arc complete pending live-run
   evidence (next corpus dispatch vs A/B-3's 52-call/2.72M baseline).
+- **2026-08-11** — A/B-4 judged (run 2a3bb789-lucid-forge, pre-registered
+  prediction b446340): **FAILED all four axes** — 59 calls (≤45
+  predicted), 5.32M tokens_in (≤2.2M), verdict confidence 0.6 (≥0.75),
+  and ZERO maro-read invocations despite the advertisement riding every
+  executor payload; the 225KB opinion fulltext was read via Read+grep.
+  Falsifier (a) fires: advertisement-only teaching is insufficient, and
+  EXECUTE_SYSTEM is the only surface workers see (skill_loader gap).
+  Confound recorded: step-8 citation re-verification alone burned 3.17M
+  (steps 1–7 ≈ 2.15M, under the line) — plan shape dominates the cost
+  axes; zero-invocations is the clean unconfounded result. Step-2 stays
+  shipped as capability; cost-win claim UNPROVEN. Next: strengthen the
+  teaching (explicit size trigger in EXECUTE_SYSTEM), re-test on a
+  future corpus dispatch — not another same-corpus run today (axis
+  exhaustion + spend judgment left for Jeremy).
