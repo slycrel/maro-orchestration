@@ -988,6 +988,70 @@ def _crystallize_and_synthesize(
             log.warning("skill synthesis failed — loop %s: %s", loop_id, _synth_exc)
 
 
+def _mint_run_risks_to_project(project: str, loop_id: str) -> int:
+    """Jeremy's 2026-08-10 risk-minting ruling: run-discovered open
+    risks/unknowns belong in the project's RISKS.md record (feeds the
+    "RISKS.md as reviewer input" direction). Mechanical v1, no LLM —
+    two sources:
+
+    - the run's persisted closure-verdict gaps (build/closure_verdicts
+      .jsonl, last row for this loop): closure already named what's
+      missing, capped at 3;
+    - the scope-parse failure sentinel (build/scope-raw-FAILED.txt):
+      the run executed without scope injection.
+
+    Idempotent per loop — skips when RISKS.md already names this
+    loop_id. Returns lines minted. Never raises: risk minting is
+    observability-grade and must not perturb result delivery.
+    """
+    if not project or not loop_id:
+        return 0
+    try:
+        from pathlib import Path as _Path
+        from config import get as _config_get
+        if not _config_get("project.risk_mint", True):
+            return 0
+        import runs as _runs
+        from orch_items import append_risk, risks_path
+        rd = _runs.resolve_run_dir(loop_id)
+        if rd is None:
+            return 0
+        rd = _Path(rd)
+        lines: List[str] = []
+        verdict_row = None
+        vpath = rd / "build" / "closure_verdicts.jsonl"
+        if vpath.exists():
+            for raw in vpath.read_text(encoding="utf-8").splitlines():
+                if not raw.strip():
+                    continue
+                try:
+                    row = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(row, dict) and row.get("loop_id") == loop_id:
+                    verdict_row = row  # last matching row wins (restarts append)
+        if verdict_row and not verdict_row.get("skipped"):
+            for gap in (verdict_row.get("gaps") or [])[:3]:
+                gap = str(gap).strip()
+                if gap:
+                    lines.append(
+                        f"Open gap from run {loop_id} (closure): {gap[:200]}")
+        if (rd / "build" / "scope-raw-FAILED.txt").exists():
+            lines.append(
+                f"Run {loop_id} executed without scope injection "
+                "(scope parse failed; raw output in build/scope-raw-FAILED.txt)")
+        if not lines:
+            return 0
+        rp = risks_path(project)
+        if rp.exists() and loop_id in rp.read_text(encoding="utf-8"):
+            return 0
+        append_risk(project, lines)
+        return len(lines)
+    except Exception as exc:
+        log.warning("risk mint failed for loop %s: %s", loop_id, exc)
+        return 0
+
+
 def finalize_deferred_learning(
     loop_result,
     *,
@@ -1043,6 +1107,8 @@ def finalize_deferred_learning(
 
     if loop_id in _skip:
         return
+    _mint_run_risks_to_project(
+        project or getattr(loop_result, "project", "") or "", loop_id)
     step_outcomes = getattr(loop_result, "steps", None) or []
     # Per-step learning (2026-07-27): closure judged, and the row failed the
     # learnability gate (judged-False verdict) — the run-level lessons came

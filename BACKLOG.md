@@ -3553,7 +3553,14 @@ the project's RISKS.md, even though step results carry them (steps emit
 whether open risks/unknowns from loop runs belong in project RISKS.md
 (would also feed the era-00 "RISKS.md as reviewer input" item above), or
 whether the closure/verdict layer is the canonical risk record and
-RISKS.md stays an orch-lane-only artifact.
+RISKS.md stays an orch-lane-only artifact. **DECIDED + BUILT 2026-08-10
+(Jeremy: mint to RISKS.md):** `loop_finalize._mint_run_risks_to_project`
+— post-closure, mints the verdict's gaps (≤3) + scope-parse-failure
+sentinel via `append_risk`; idempotent per loop, audit-held loops never
+mint, `project.risk_mint` killswitch (DEFAULTS.md row). Family answer
+now consistent: mid-run steps → NEXT.md ledger (2026-08-09), risks/
+unknowns → RISKS.md (this), verified findings → closure/verdict layer
+stays canonical.
 
 Third specimen, same session (generalizes the item: **loop→project
 record mirroring is partial**): initial plan steps are mirrored into the

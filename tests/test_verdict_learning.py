@@ -752,3 +752,117 @@ def test_finalize_deferred_learning_quarantines_only_named_loop(monkeypatch, tmp
     assert "failed" in rows["lp-safe"]["lessons"][0]
     assert rows["lp-held"]["lesson_extraction_status"] == "deferred"
     assert rows["lp-held"]["lessons"] == []
+
+
+# ---------------------------------------------------------------------------
+# Risk minting (Jeremy ruling 2026-08-10): loop-discovered risks/unknowns
+# belong in the project RISKS.md record.
+# ---------------------------------------------------------------------------
+
+def _seed_run_dir(monkeypatch, tmp_path, loop_id, *, gaps=None, skipped="",
+                  scope_failed=False):
+    import runs as runs_module
+    rd = tmp_path / "runs" / f"run-{loop_id}"
+    (rd / "build").mkdir(parents=True, exist_ok=True)
+    if gaps is not None or skipped:
+        row = {"loop_id": loop_id, "gaps": gaps or []}
+        if skipped:
+            row["skipped"] = skipped
+        (rd / "build" / "closure_verdicts.jsonl").write_text(
+            json.dumps(row) + "\n", encoding="utf-8")
+    if scope_failed:
+        (rd / "build" / "scope-raw-FAILED.txt").write_text("raw", encoding="utf-8")
+    monkeypatch.setattr(runs_module, "resolve_run_dir", lambda ref: rd)
+    return rd
+
+
+def test_risk_mint_writes_gaps_and_scope_failure(monkeypatch, tmp_path):
+    _setup(monkeypatch, tmp_path)
+    import loop_finalize
+    from orch_items import ensure_project, risks_path
+    ensure_project("proj-r1", "mission")
+    _seed_run_dir(monkeypatch, tmp_path, "lp-r1",
+                  gaps=["missing citations", "no honesty section"],
+                  scope_failed=True)
+    n = loop_finalize._mint_run_risks_to_project("proj-r1", "lp-r1")
+    assert n == 3
+    text = risks_path("proj-r1").read_text(encoding="utf-8")
+    assert "Open gap from run lp-r1 (closure): missing citations" in text
+    assert "no honesty section" in text
+    assert "without scope injection" in text
+
+
+def test_risk_mint_is_idempotent_per_loop(monkeypatch, tmp_path):
+    _setup(monkeypatch, tmp_path)
+    import loop_finalize
+    from orch_items import ensure_project, risks_path
+    ensure_project("proj-r2", "mission")
+    _seed_run_dir(monkeypatch, tmp_path, "lp-r2", gaps=["gap one"])
+    assert loop_finalize._mint_run_risks_to_project("proj-r2", "lp-r2") == 1
+    assert loop_finalize._mint_run_risks_to_project("proj-r2", "lp-r2") == 0
+    assert risks_path("proj-r2").read_text(encoding="utf-8").count("gap one") == 1
+
+
+def test_risk_mint_ignores_skipped_verdict_rows(monkeypatch, tmp_path):
+    _setup(monkeypatch, tmp_path)
+    import loop_finalize
+    from orch_items import ensure_project, risks_path
+    ensure_project("proj-r3", "mission")
+    _seed_run_dir(monkeypatch, tmp_path, "lp-r3",
+                  gaps=["phantom"], skipped="no_checks_generated")
+    assert loop_finalize._mint_run_risks_to_project("proj-r3", "lp-r3") == 0
+    assert not risks_path("proj-r3").exists()
+
+
+def test_risk_mint_killswitch_off(monkeypatch, tmp_path):
+    _setup(monkeypatch, tmp_path)
+    import loop_finalize
+    import config as _cfg
+    from orch_items import ensure_project, risks_path
+    ensure_project("proj-r4", "mission")
+    _seed_run_dir(monkeypatch, tmp_path, "lp-r4", gaps=["gap"])
+    _orig = _cfg.get
+    monkeypatch.setattr(
+        _cfg, "get",
+        lambda key, default=None: False if key == "project.risk_mint"
+        else _orig(key, default))
+    assert loop_finalize._mint_run_risks_to_project("proj-r4", "lp-r4") == 0
+    assert not risks_path("proj-r4").exists()
+
+
+def test_risk_mint_no_run_dir_degrades(monkeypatch, tmp_path):
+    _setup(monkeypatch, tmp_path)
+    import loop_finalize
+    import runs as runs_module
+    monkeypatch.setattr(runs_module, "resolve_run_dir", lambda ref: None)
+    assert loop_finalize._mint_run_risks_to_project("proj-r5", "lp-r5") == 0
+
+
+def test_finalize_deferred_learning_mints_risks(monkeypatch, tmp_path):
+    _setup(monkeypatch, tmp_path)
+    import loop_finalize
+    monkeypatch.setattr(loop_finalize, "_crystallize_and_synthesize",
+                        lambda **kw: None)
+    minted = []
+    monkeypatch.setattr(loop_finalize, "_mint_run_risks_to_project",
+                        lambda project, loop_id: minted.append((project, loop_id)))
+    record_outcome("the goal", "done", "s", loop_id="lp-r6")
+    stamp_outcome_verdict("lp-r6", goal_achieved=True, goal_verdict_source="closure")
+    loop_finalize.finalize_deferred_learning(_loop_result("lp-r6"), dry_run=True)
+    assert minted == [("p", "lp-r6")]
+
+
+def test_finalize_deferred_learning_skips_risk_mint_for_audited_loop(monkeypatch, tmp_path):
+    """A loop held back by an unresolved verdict audit must not mint risks
+    from its disputed verdict."""
+    _setup(monkeypatch, tmp_path)
+    import loop_finalize
+    monkeypatch.setattr(loop_finalize, "_crystallize_and_synthesize",
+                        lambda **kw: None)
+    minted = []
+    monkeypatch.setattr(loop_finalize, "_mint_run_risks_to_project",
+                        lambda project, loop_id: minted.append(loop_id))
+    record_outcome("the goal", "done", "s", loop_id="lp-r7")
+    loop_finalize.finalize_deferred_learning(
+        _loop_result("lp-r7"), dry_run=True, skip_loop_ids=["lp-r7"])
+    assert minted == []
