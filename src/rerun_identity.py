@@ -174,9 +174,14 @@ def _standing_line(att: PriorAttempt, meta: dict) -> str:
                    else ")"))
     base = "ACHIEVED" if att.achieved else "NOT ACHIEVED"
     if att.verdict_source == "operator_restamp":
+        # The re-stamp is the operator's final word — it supersedes any
+        # earlier automated contest, so rendering both would re-dispute a
+        # settled record (live-smoke find, de790c13).
         base += (" — operator re-stamp: the original automated verdict was "
                  "wrong and is superseded; do not read it as failure")
-    elif att.verdict_source:
+        return base + (f"; stop_verdict: {att.stop_verdict}"
+                       if att.stop_verdict else "")
+    if att.verdict_source:
         conf = meta.get("goal_verdict_confidence")
         base += (f" (source: {att.verdict_source}"
                  + (f", conf {conf}" if isinstance(conf, (int, float)) else "")
@@ -200,16 +205,23 @@ def _deliverables(project: str) -> List[str]:
         pdir = root / project
         if not pdir.is_dir() or not pdir.resolve().is_relative_to(root.resolve()):
             return []
-        cands = []
-        for f in pdir.iterdir():
-            if f.is_file() and not f.name.startswith("."):
-                cands.append((f.stat().st_mtime, f.name))
+        # Root files (FINAL_VERDICT.md, ledgers) outrank artifacts/ — the
+        # constantly-touched artifacts would otherwise crowd out the actual
+        # deliverable by mtime (live-smoke find: FINAL_VERDICT.md missed the
+        # cap while two .lock files made it).
+        def _files(d, prefix=""):
+            out = []
+            for f in d.iterdir():
+                if (f.is_file() and not f.name.startswith(".")
+                        and not f.name.endswith(".lock")):
+                    out.append((f.stat().st_mtime, prefix + f.name))
+            out.sort(reverse=True)
+            return out
+
+        cands = _files(pdir)
         art = pdir / "artifacts"
         if art.is_dir():
-            for f in art.iterdir():
-                if f.is_file() and not f.name.startswith("."):
-                    cands.append((f.stat().st_mtime, f"artifacts/{f.name}"))
-        cands.sort(reverse=True)
+            cands.extend(_files(art, prefix="artifacts/"))
         return [name for _, name in cands[:_MAX_DELIVERABLES]]
     except Exception:
         return []

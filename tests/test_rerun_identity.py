@@ -137,6 +137,16 @@ class TestStanding:
         assert "operator re-stamp" in att.standing
         assert "do not read it as failure" in att.standing
 
+    def test_restamp_supersedes_stale_contest_flag(self):
+        # de790c13 live-smoke find: a re-stamped record still carrying the
+        # pre-restamp contested flag must NOT render as disputed — the
+        # operator's word is final.
+        att = self._one(goal_achieved=True,
+                        goal_verdict_source="operator_restamp",
+                        goal_verdict_contested={"by": "closure"})
+        assert "operator re-stamp" in att.standing
+        assert "CONTESTED" not in att.standing
+
     def test_contested_is_labeled_anecdote(self):
         att = self._one(goal_achieved=False, goal_verdict_source="closure",
                         goal_verdict_contested={"by": "verdict_audit"})
@@ -191,6 +201,27 @@ class TestRenderBrief:
         assert "some-proj" in brief
         assert "FINAL_VERDICT.md" in brief
         assert "artifacts/rulings.json" in brief
+
+    def test_deliverables_skip_locks_and_rank_root_over_artifacts(self, tmp_path):
+        import os
+        import time
+        from orch_items import projects_root
+        proj = projects_root() / "busy-proj"
+        (proj / "artifacts").mkdir(parents=True)
+        now = time.time()
+        # Root deliverable is OLDER than every artifact — must still lead.
+        (proj / "FINAL_VERDICT.md").write_text("v", encoding="utf-8")
+        os.utime(proj / "FINAL_VERDICT.md", (now - 500, now - 500))
+        (proj / "NEXT.md.lock").write_text("", encoding="utf-8")
+        for i in range(6):
+            p = proj / "artifacts" / f"step-{i}.json"
+            p.write_text("{}", encoding="utf-8")
+            os.utime(p, (now - i, now - i))
+        atts = [PriorAttempt(handle_id="aaaa1111", ts="t", standing="x",
+                             project="busy-proj")]
+        brief = render_brief(atts)
+        assert "FINAL_VERDICT.md" in brief
+        assert ".lock" not in brief
 
     def test_traversal_shaped_project_lists_nothing(self):
         atts = [PriorAttempt(handle_id="aaaa1111", ts="t", standing="x",
