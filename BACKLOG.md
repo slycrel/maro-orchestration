@@ -3623,8 +3623,19 @@ and maintainable over time."** Step 1 is greenlit:
   DEFAULTS.md (2 locator fixes from smoke: selectivity-ordered regions,
   head sub-budget) + a run's closure_verdicts.jsonl — sub-second, $0,
   correct with file:line receipts. OPEN evidence question: does a real
-  corpus run USE it and does the curve bend further? Judge on next
-  corpus-shaped dispatch (compare vs A/B-3's 52 calls / 2.72M).
+  corpus run USE it and does the curve bend further?
+  **A/B-4 PREDICTION REGISTERED 2026-08-11 (before dispatch):** same
+  corpus + breadth as A/B-3, DIFFERENT question axis (evidence-building
+  story, not litigation history — an identical question would trigger
+  the new re-run brief and point the run at A/B-3's finished answer,
+  contaminating the measurement). With maro-read advertised: LLM calls
+  **<= 45** (vs 52), tokens_in **<= 2.2M** (vs 2.72M), closure
+  **>= 0.75**, AND >=1 maro-read invocation visible in the step
+  transcripts. **Falsifiers:** (a) zero invocations -> the
+  EXECUTE_SYSTEM advertisement is insufficient teaching, fix the
+  teaching before re-testing the verb; (b) invocations but calls/tokens
+  ~= A/B-3 -> the verb doesn't bend the curve on this shape; record
+  honestly, step-2 stays shipped as a capability, not a cost win.
 - Relation to existing items: this is the generalized form of the #22
   errand-envelope lever and the designated reader for RUN_TEACHINGS
   chunk-1's input stage; it is NOT a replacement for the cheaper
