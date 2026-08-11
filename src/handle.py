@@ -1006,20 +1006,26 @@ def _handle_impl(
         print(f"[maro:{handle_id}] handle: {message!r}", file=sys.stderr, flush=True)
 
     # Persist raw input before any prefix stripping — visibility hole fix.
-    # Writes to memory/handle_inputs.jsonl so every goal + its prefixes are recoverable.
+    # Writes to memory/handle_inputs.jsonl so every goal + its prefixes are
+    # recoverable. Locked append since 2026-08-10: rerun_identity reads this
+    # as a correctness source, and bare concurrent appends can interleave
+    # (file_lock module doc). dry_run is stamped so the re-run detector can
+    # drop previews without paying a metadata read.
     _raw_input = message
     try:
         from orch_items import memory_dir as _mem_dir
-        _inputs_path = _mem_dir() / "handle_inputs.jsonl"
-        with _inputs_path.open("a", encoding="utf-8") as _fh:
-            _input_rec = {
-                "handle_id": handle_id,
-                "raw_input": _raw_input,
-                "ts": datetime.now(timezone.utc).isoformat(),
-            }
-            if origin:
-                _input_rec["origin"] = origin
-            _fh.write(json.dumps(_input_rec) + "\n")
+        from file_lock import locked_append as _locked_append
+        _input_rec = {
+            "handle_id": handle_id,
+            "raw_input": _raw_input,
+            "ts": datetime.now(timezone.utc).isoformat(),
+        }
+        if dry_run:
+            _input_rec["dry_run"] = True
+        if origin:
+            _input_rec["origin"] = origin
+        _locked_append(_mem_dir() / "handle_inputs.jsonl",
+                       json.dumps(_input_rec))
     except Exception:
         pass  # never block on logging
 

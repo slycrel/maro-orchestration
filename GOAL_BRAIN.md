@@ -6904,8 +6904,21 @@ under the same two-measurement standard).
   `rerun.brief` default ON (deterministic/read-only — the
   recall.dispatch_inject convention, not the LLM-spend one). Cuts:
   exact match only; newest-12 metadata resolution; recall guard
-  untouched (typed-contested-state residual is the shared fix). 28
-  pins; full suite 8130 passed / 0 skipped.
+  untouched (typed-contested-state residual is the shared fix).
+  **Codex 3-lens adversarial review same day: REJECT-as-reviewed →
+  remediated same session** (filename-injection forgery of brief
+  structure with working repro → boundary rejection + untrusted
+  labeling; "COMPLETE" header could hide a restamped success behind the
+  5-shown cap — the exact misread the module prevents → all inspected
+  attempts render, claim names its own bound; timestamp ordering +
+  locked intake append + intake dry_run stamp; dry-runs no longer
+  consume the resolution budget; non-dict rows degrade per-row instead
+  of emptying all history; restamp wording direction-aware; exact-
+  history projects bindable past the recent-5 menu; origin["rerun"] in
+  the Origin TypedDict; prefilter deleted). Residuals filed in the
+  BACKLOG entry: specialty-mode context bypass (pre-existing, 3-lens
+  consensus), CLI-lane intake rows, snapshot/index perf posture. 40
+  pins; full suite 8142 passed / 0 skipped.
 - **2026-08-10** — Jeremy decision batch (blockers cleared in one pass):
   (1) **Δ-gate GC re-mint = archive-aware re-stamp** — re-mint dedup
   consults archive tombstones and re-applies demotion stamps to the

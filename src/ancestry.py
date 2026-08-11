@@ -101,6 +101,11 @@ class Origin(TypedDict, total=False):
     # Transport snapshot only. NavigatorDecision remains the authoritative
     # domain type; this field deliberately does not redeclare that contract.
     dispatch_navigator: Dict[str, Any]
+    # Re-run identity stamp (2026-08-10): {"count": int, "prior_handles":
+    # [str, ...] capped at 8}. Written at the autonomous dispatch path when
+    # rerun_identity finds prior attempts; analysis-facing, never a
+    # control-flow input.
+    rerun: Dict[str, Any]
 
 
 # ---------------------------------------------------------------------------

@@ -252,6 +252,7 @@ def handle_task(
             # own knowledge. The origin stamp makes the detection visible
             # in run metadata for analysis.
             _rerun_block = ""
+            _rerun_projects = []
             try:
                 from rerun_identity import (
                     brief_enabled as _rr_on, prior_attempts as _rr_attempts,
@@ -265,6 +266,8 @@ def handle_task(
                             "prior_handles": [
                                 a.handle_id for a in _rr_list[:8]],
                         }
+                        _rerun_projects = [
+                            a.project for a in _rr_list if a.project]
             except Exception as _rerun_exc:
                 log.debug("handle_task rerun brief skipped: %s", _rerun_exc)
             try:
@@ -382,15 +385,24 @@ def handle_task(
                             and ".." not in _cand:
                         from navigator_shadow import _recent_projects_menu
                         from orch_items import projects_root as _proots
-                        # The pick must name a menu entry — the menu is the
-                        # offer, not a hint about the namespace. Recomputing
-                        # it here can race a just-deleted project; rejection
-                        # then equals pre-menu behavior (fresh slug), which
-                        # is the safe side. resolve() containment guards the
-                        # symlink case is_dir() alone would follow.
+                        # The pick must name an offered entry — the menu is
+                        # the offer, not a hint about the namespace. Since
+                        # 2026-08-10 the prior-attempts brief is a second
+                        # offer surface: an exact-history project outside
+                        # the recent-5 menu is bindable too (adversarial
+                        # review: the brief told the navigator to reuse a
+                        # project the binder then rejected). Recomputing
+                        # the menu here can race a just-deleted project;
+                        # rejection then equals pre-menu behavior (fresh
+                        # slug), which is the safe side. resolve()
+                        # containment guards the symlink case is_dir()
+                        # alone would follow.
                         _root = _proots()
                         _target = _root / _cand
-                        if (_cand in {m.get("name") for m in _recent_projects_menu()}
+                        _offered = ({m.get("name")
+                                     for m in _recent_projects_menu()}
+                                    | set(_rerun_projects))
+                        if (_cand in _offered
                                 and _target.is_dir()
                                 and _target.resolve().is_relative_to(_root.resolve())):
                             _nav_project = _cand

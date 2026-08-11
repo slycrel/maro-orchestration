@@ -222,8 +222,12 @@ def render_input(nav_input: NavigatorInput) -> str:
     pb = nav_input.prior_attempts_block.strip()
     if pb:
         parts.append(
-            "## Prior attempts at this exact goal (complete deterministic "
-            "record — when recall above disagrees, THIS wins)\n" + pb)
+            "## Prior attempts at this exact goal (deterministic "
+            "dispatch record — where recall above disagrees about these "
+            "attempts' outcomes, this record wins)\n" + pb
+            + "\n\nA project named in this section may be bound via "
+              "\"project\" in your payload even if it is not in the "
+              "recent-projects menu below.")
 
     if nav_input.recent_projects:
         lines = []

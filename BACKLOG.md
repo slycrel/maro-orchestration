@@ -84,6 +84,51 @@ deterministic recall guard deliberately untouched (its contested-
 neutrality hole is the shared typed-contested-state residual above);
 fuzzy/paraphrase matching stays a separate later decision.
 
+**Adversarial review round (2026-08-10, Codex ×3 lenses):
+REJECT-as-reviewed → remediated same session** (7th time this arc's
+reviews have earned their cost; both injection findings came with
+working repros). Fixed: (1) worker-controlled FILENAMES with embedded
+newlines forged brief structure inside the navigator's
+highest-precedence section → control-char/length rejection at the
+boundary, quoted rendering, explicit untrusted-data label; (2) the
+"COMPLETE" header vs 5-shown cap could hide a restamped success behind
+five failures — the exact misread the module exists to prevent → every
+inspected attempt renders, only the uninspected tail collapses, and the
+claim names its own bound (handle-dispatch record; CLI-lane runs
+absent); (3) physical file order treated as chronology (workspace
+import appends history) → stable sort on row timestamps; intake write
+upgraded to `file_lock.locked_append` + `dry_run` stamped at write;
+(4) dry-run previews consumed the 12-slot resolution budget → budget
+counts real attempts (ceiling 36 reads); (5) non-dict JSON rows /
+metadata arrays escaped the per-line guard and silently emptied ALL
+history → isinstance guards, per-row degradation; (6) restamp direction
+was assumed positive — an operator correcting success→False got
+achieved-shaped language → direction-aware wording; (7) unjudged rows
+now keep verdict source/contest/stop provenance; (8) the brief could
+name a project the recent-5 menu binder would then REJECT → exact-
+history projects are a second offer surface (binder union +
+navigator-prompt affordance note); (9) `origin["rerun"]` declared in
+the Origin TypedDict; (10) prefilter deleted (speculative, had an
+escape-encoding edge); guidance paragraph tightened;
+`recall.dispatch_inject`'s "amnesiac" DEFAULTS row corrected (two
+history lanes now); handle_task integration test added. 40 pins total;
+suite 8142/0 skipped. **Residuals filed (decision-shaped, not riders):**
+- Specialty AGENDA modes (`direct:`, `mode:thin`, `pipeline:`,
+  `team:`) return before the ENTIRE `_extra_ctx_parts` assembly —
+  recall, completion standard, persona, scope AND this brief (3-lens
+  consensus). Pre-existing architecture, not a regression; the durable
+  fix is centralizing AGENDA context assembly before mode dispatch,
+  which changes what those modes see and needs its own chunk.
+- CLI-lane runs (`maro run` / `maro resume`) never write intake rows,
+  so the brief can't see them (it now says so honestly). Durable fix:
+  one attempt-start recording owner used by every execution entry
+  point.
+- Perf posture: ~100ms per scan at 57k rows, twice per autonomous
+  dispatch (navigator + run seams computed independently; views can
+  also skew across the gap). Acceptable today; if the ledger keeps
+  growing, the fix is one immutable snapshot per dispatch + a derived
+  rebuildable exact-key index, not two lifetime scans.
+
 Original entry:
 
 His phrasing, watching the 4th verbatim dispatch of the Model-or-Harness
