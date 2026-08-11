@@ -87,8 +87,9 @@ concatenate the corpus into one read.
 
 **5b. Sub-query instead of reading, when available.** Your system prompt
 names a sub-query command under LARGE LOCAL FILES (`maro-read`, or a
-`python3 .../read_query.py` path). Prefer it for any file too large to
-justify a whole read: it has a cheap out-of-band model read bounded
+`python3 .../read_query.py` path). Decision rule: a file over ~50KB you
+need answers from (not to edit) goes through the sub-query, not into
+your context: it has a cheap out-of-band model read bounded
 slices and returns ONLY the answer — the file's bytes never enter your
 context, and one command replaces an outline turn plus several read
 turns:

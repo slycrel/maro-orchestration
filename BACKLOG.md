@@ -3657,7 +3657,18 @@ and maintainable over time."** Step 1 is greenlit:
   its own step-8 audit caught + fixed 10 drifted citations,
   goal_achieved=true — the 0.6 confidence is the judge's, not a broken
   deliverable. Step-2 stands as shipped capability; cost-win claim
-  remains UNPROVEN.
+  remains UNPROVEN. **Teaching fix shipped same day:** EXECUTE_SYSTEM
+  block rewritten from preference ("prefer one sub-query") to a
+  decision rule (check size first; >~50KB + need-answers-not-editing ->
+  sub-query, do NOT read into context) and now states the economics
+  (per-turn re-send makes a 200KB read cost ~50k tokens EVERY remaining
+  turn); repl_reading §5b aligned + workspace copy synced. RE-TEST on
+  the next naturally corpus-shaped dispatch — not another same-corpus
+  run (question-axis exhaustion; third run would hit the re-run
+  identity brief or contrive an axis). Prediction for that re-test:
+  >=1 invocation on any file >50KB, or falsifier (a) fires AGAIN and
+  the next lever is planner-level (plan steps naming the verb), not
+  more prompt wording.
 - Relation to existing items: this is the generalized form of the #22
   errand-envelope lever and the designated reader for RUN_TEACHINGS
   chunk-1's input stage; it is NOT a replacement for the cheaper

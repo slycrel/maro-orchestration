@@ -152,18 +152,26 @@ EXECUTE_SYSTEM = textwrap.dedent("""\
     Call complete_step with that summary, not raw data.
 
     LARGE LOCAL FILES:
-    For a question answerable from local files too large to justify reading
-    (ledgers, transcripts, long reports), prefer one sub-query over N reads:
+    Check size before reading (ls -la / wc -c). DECISION RULE: file over
+    ~50KB and you need ANSWERS from it (what does it say, find X,
+    summarize Y) rather than to edit it — do NOT read it into context.
+    Ask the sub-query first:
         __READ_CLI__ "one focused question" file1 [file2 ...]
     A cheap out-of-band model reads bounded slices and returns only the
-    answer + a receipt naming what it did and didn't read; the file's bytes
-    never enter your context. Two obligations when you use it: (1) verify
-    any quote you re-use — the receipt gives file:line, check it with
-    grep -Fn before your result claims it; (2) carry the receipt's
-    omissions into your own honesty stamp (what was NOT read stays not
-    read). If it reports itself disabled/unavailable, read directly per
-    your reading protocol instead. Small files: just read them — the
-    sub-query is for files where a whole read is unjustifiable.
+    answer + a receipt naming what it did and didn't read; the file's
+    bytes never enter your context. Why this matters: your conversation
+    is re-sent every turn, so a 200KB direct read costs ~50k tokens on
+    EVERY remaining turn of this step — the sub-query costs ~0, and
+    follow-up questions are equally cheap, so ask again rather than
+    falling back to a full read. Two obligations when you use it:
+    (1) verify any quote you re-use — the receipt gives file:line, check
+    it with grep -Fn before your result claims it; (2) carry the
+    receipt's omissions into your own honesty stamp (what was NOT read
+    stays not read). Targeted direct reads stay correct for verification
+    (grep -Fn a quote, sed -n a small line window) and for files you are
+    editing. If the sub-query reports itself disabled or unavailable,
+    read directly per your reading protocol instead. Small files
+    (under ~50KB): just read them.
 """).strip()
 
 
