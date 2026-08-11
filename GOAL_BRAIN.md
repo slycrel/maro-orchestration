@@ -6922,3 +6922,19 @@ under the same two-measurement standard).
   concurrent session while the question was being asked), MH #1
   spec-gaming, REPL A/B-3 replication; dispatched-run burn NOT
   selected.
+- **2026-08-10** — Δ-gate stamp-erasure reconciliation SHIPPED (Jeremy's
+  two rulings merged: today's "archive-aware re-stamp" + the
+  2026-08-08 gentle variant dcf8eab8, scoped by evidence class per his
+  same-day tiebreak "strong evidence re-applies"). A re-mint matching a
+  demoted lineage whose root demotion carries `agreements >= 2`
+  (agreeing full-set 0-error runs — the arc's own standard) is born
+  demoted: route effect-demote re-applied from the archive with full
+  prior evidence + reapplied_from_archive provenance, LESSON_DELTA_
+  DEMOTED audit event, no strike-3 re-measure event (row isn't
+  circulating; named/census replay clears it — measurement replaces
+  measurement). Weaker lineages keep the gentle watch+strikes path
+  unchanged. demote_lesson_by_effect now persists caller-supplied
+  `agreements`; the 3 live stamped negatives (f67f59ca/3036c141/
+  46613838) backfilled with agreements=2 + provenance note, so their
+  ~08-17 GC re-mint will re-apply instead of erasing. Pinned
+  (TestStrongEvidenceReapply, 5 tests).

@@ -505,7 +505,9 @@ def record_tiered_lesson(
                     "lesson_type": lesson_type, "novelty": tl.novelty, "score": score,
                     "minted_from": minted_from}
         if remint_watch:
-            _rec_ctx["remint_strikes"] = remint_watch["strikes"]
+            _rec_ctx["remint_strikes"] = remint_watch.get("strikes", 0)
+            if remint_watch.get("reapplied_from_archive"):
+                _rec_ctx["demotion_reapplied"] = True
         log_event(
             event_type=LESSON_RECORDED,
             subject=tl.lesson_id,
@@ -515,7 +517,30 @@ def record_tiered_lesson(
     except Exception:
         pass
 
-    if remint_watch and remint_watch["strikes"] >= REMINT_PATTERN_STRIKES:
+    if remint_watch and remint_watch.get("reapplied_from_archive"):
+        # Same operator-audit surface as a live demotion: "what got demoted
+        # this month" must include archive re-applications. No strike-3
+        # re-measure event for these — the row isn't circulating, so the
+        # --remint-pending selector correctly ignores it; a named/census
+        # replay clears it like any other stamp.
+        try:
+            from captains_log import log_event, LESSON_DELTA_DEMOTED
+            log_event(
+                event_type=LESSON_DELTA_DEMOTED,
+                subject=tl.lesson_id,
+                summary=(f"Lesson re-minted after Δ-demotion with "
+                         f"{int(remint_watch.get('agreements') or 0)} agreeing "
+                         f"full-set runs behind it — demotion re-applied at "
+                         f"mint: {lesson_text[:100]}"),
+                context={"delta": remint_watch.get("delta"),
+                         "n_calls": remint_watch.get("n_calls"),
+                         "agreements": remint_watch.get("agreements"),
+                         "prior_lesson_id": remint_watch.get("prior_lesson_id"),
+                         "reapplied_from_archive": True},
+            )
+        except Exception:
+            pass
+    elif remint_watch and remint_watch.get("strikes", 0) >= REMINT_PATTERN_STRIKES:
         # Strike threshold: the pattern has earned a fresh full-set
         # measurement. Queue-by-event only — the mint path must never spend
         # (no-silent-shared-resource-spend); the census CLI's
@@ -852,6 +877,7 @@ def _load_archived_lessons(*, reasons: tuple = ("decay_gc",)) -> List[TieredLess
 
 
 REMINT_PATTERN_STRIKES = 3  # re-mints of a demoted lesson before forced re-measure
+REAPPLY_MIN_AGREEMENTS = 2  # agreeing full-set runs behind a demotion → re-apply on re-mint
 
 
 def _remint_watch_stamp(lesson_text: str, task_type: str) -> Optional[Dict[str, Any]]:
@@ -920,6 +946,25 @@ def _remint_watch_stamp(lesson_text: str, task_type: str) -> Optional[Dict[str, 
             strikes += 1
     if root is None:
         return None
+    # Strong-evidence branch (Jeremy 2026-08-10, reconciling the gentle
+    # variant with the archive-aware re-stamp ruling): a lineage whose root
+    # demotion was confirmed by >= REAPPLY_MIN_AGREEMENTS agreeing full-set
+    # runs re-applies the demotion on re-mint — evidence that strong does
+    # not need re-gathering. Weaker lineages keep the gentle watch+strikes
+    # path below. "Measurement replaces measurement" still holds: a future
+    # named/census replay can clear the re-applied stamp like any other.
+    prior_ev = dict(root.get("delta_evidence") or {})
+    if int(prior_ev.get("agreements") or 0) >= REAPPLY_MIN_AGREEMENTS:
+        return {
+            **{k: prior_ev[k] for k in
+               ("delta", "jackknife_spread", "n_calls", "replay_errors",
+                "stratum", "measured_at", "agreements") if k in prior_ev},
+            "route": "effect-demote",
+            "strikes": strikes,
+            "prior_lesson_id": root.get("lesson_id") or "",
+            "reapplied_from_archive": True,
+            "reapplied_at": datetime.now(timezone.utc).isoformat(),
+        }
     return {
         "route": "remint-watch",
         "strikes": strikes,
@@ -2028,6 +2073,12 @@ def demote_lesson_by_effect(lesson_id: str, delta_evidence: Dict[str, Any]) -> b
             "stratum": "reason",
             "measured_at": ev.get("measured_at") or datetime.now(timezone.utc).isoformat(),
             "route": "effect-demote",
+            # Agreeing independent full-set runs behind this demotion
+            # (2026-08-10): >= REAPPLY_MIN_AGREEMENTS makes the stamp
+            # strong enough to re-apply on a post-GC re-mint instead of
+            # the gentle watch. Caller-supplied — the route itself judges
+            # one measurement.
+            "agreements": int(ev.get("agreements") or 0),
         }
         stamped["t"] = t
         return lessons

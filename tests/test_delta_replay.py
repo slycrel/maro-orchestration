@@ -993,3 +993,87 @@ class TestRemintTombstones:
         rows = kw.load_tiered_lessons(tier=kw.MemoryTier.MEDIUM, min_score=0.0)
         live = next(l for l in rows if l.lesson_id == re1.lesson_id)
         assert live.delta_evidence["route"] == "remint-watch"
+
+
+STRONG_NEG_EVIDENCE = {**NEG_EVIDENCE, "agreements": 2}
+
+
+class TestStrongEvidenceReapply:
+    """Jeremy 2026-08-10 reconciliation: a lineage whose root demotion was
+    confirmed by >= 2 agreeing full-set runs re-applies the demotion on
+    re-mint; weaker lineages keep the gentle watch (dcf8eab8)."""
+
+    def _demote_strong_and_gc(self, monkeypatch, tmp_path):
+        tl = _seed_medium_lesson(monkeypatch, tmp_path,
+                                 lesson_text=REMINT_TEXT)
+        import knowledge_web as kw
+        assert kw.demote_lesson_by_effect(tl.lesson_id, STRONG_NEG_EVIDENCE) is True
+        _gc_lesson(kw, tl.lesson_id)
+        return kw, tl.lesson_id
+
+    def test_demote_stamp_persists_agreements(self, monkeypatch, tmp_path):
+        tl = _seed_medium_lesson(monkeypatch, tmp_path)
+        import knowledge_web as kw
+        assert kw.demote_lesson_by_effect(tl.lesson_id, STRONG_NEG_EVIDENCE) is True
+        row = next(l for l in kw.load_tiered_lessons(
+            tier=kw.MemoryTier.MEDIUM, min_score=0.0)
+            if l.lesson_id == tl.lesson_id)
+        assert row.delta_evidence["agreements"] == 2
+
+    def test_strong_lineage_reapplies_demotion_on_remint(self, monkeypatch, tmp_path):
+        kw, orig_id = self._demote_strong_and_gc(monkeypatch, tmp_path)
+        from memory import record_tiered_lesson
+        re1 = record_tiered_lesson(REMINT_TEXT, "agenda", "done", "goal")
+        assert re1.lesson_id != orig_id
+        ev = re1.delta_evidence
+        assert ev["route"] == "effect-demote"
+        assert ev["reapplied_from_archive"] is True
+        assert ev["prior_lesson_id"] == orig_id
+        assert ev["agreements"] == 2
+        assert ev["delta"] == STRONG_NEG_EVIDENCE["delta"]
+        # Born demoted: excluded from injection, unlike the gentle watch.
+        assert kw._is_delta_demoted(re1) is True
+        block = kw.inject_tiered_lessons(task_type="agenda")
+        assert REMINT_TEXT[:40] not in (block or "")
+
+    def test_weak_lineage_keeps_gentle_watch(self, monkeypatch, tmp_path):
+        # Single-run demotion (no agreements field / 0): the 2026-08-08
+        # gentle variant is untouched.
+        kw, orig_id = _demote_and_gc(monkeypatch, tmp_path)
+        from memory import record_tiered_lesson
+        re1 = record_tiered_lesson(REMINT_TEXT, "agenda", "done", "goal")
+        assert re1.delta_evidence["route"] == "remint-watch"
+        assert kw._is_delta_demoted(re1) is False
+
+    def test_reapply_emits_demotion_audit_event_not_strike_event(
+            self, monkeypatch, tmp_path):
+        kw, _ = self._demote_strong_and_gc(monkeypatch, tmp_path)
+        import captains_log as cl
+        events = []
+        orig = cl.log_event
+
+        def _spy(event_type, *a, **kw_):
+            events.append(event_type)
+            return orig(event_type, *a, **kw_)
+
+        monkeypatch.setattr(cl, "log_event", _spy)
+        from memory import record_tiered_lesson
+        record_tiered_lesson(REMINT_TEXT, "agenda", "done", "goal")
+        assert cl.LESSON_DELTA_DEMOTED in events
+        assert cl.LESSON_REMINT_PATTERN not in events
+
+    def test_reapplied_row_not_selected_by_remint_pending(
+            self, monkeypatch, tmp_path):
+        # The strike-3 selector targets circulating watch rows; a re-applied
+        # row is already excluded and clears via named/census replay instead.
+        kw, _ = self._demote_strong_and_gc(monkeypatch, tmp_path)
+        from memory import record_tiered_lesson
+        re1 = record_tiered_lesson(REMINT_TEXT, "agenda", "done", "goal")
+        assert re1.delta_evidence["route"] == "effect-demote"
+        rows = kw.load_tiered_lessons(tier=kw.MemoryTier.MEDIUM, min_score=0.0,
+                                      limit=None)
+        watch = [t for t in rows
+                 if (t.delta_evidence or {}).get("route") == "remint-watch"
+                 and int((t.delta_evidence or {}).get("strikes") or 0)
+                 >= kw.REMINT_PATTERN_STRIKES]
+        assert watch == []
