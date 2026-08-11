@@ -6869,3 +6869,22 @@ under the same two-measurement standard).
   full-run readout of the new cost truth lane — 7/7 step rows
   provider-priced, est/truth 0.51 ≈ the 0.44 corpus mean. Step-2
   recursive sub-calls stays gated on a same-shape replication.
+- **2026-08-09** — Operator re-stamp EXECUTED + 4th verbatim dispatch
+  (run `6b14e413-cobalt-orchard`), recorded 2026-08-10 after on-box
+  verification. Act 1: the dispatch was PREVENTED — the navigator's
+  recall served run 3's then-false verdict unattributed ("prior
+  attempts failed by claiming completion") and escalated at conf 0.95;
+  the false not-achieved's first live downstream victim, and the
+  trigger for executing the pending re-stamp. Both false records
+  corrected to achieved=True / source=operator_restamp (loops
+  `eff982cc`/18773dfa, `da047274`/de790c13; `lost-the-plot` cleared,
+  originals under `*_superseded` keys) across outcomes.jsonl,
+  metadata.json, run_card.json. Act 2: re-dispatch ran CLEAN —
+  achieved=True via closure (0.75), no downgrade, no contest,
+  verdict_audit trail `{}` (correctly idle), $2.82; named all three
+  prior loops by id in one inventory step. Four-run verdict series:
+  false-demoted / clean / false-demoted / clean+guarded; $5.41 →
+  $4.95 → $2.23 → $2.82. Specimens feed the re-run-identity BACKLOG
+  entry (e7fbd33). Note: navigator acting LIVE at dispatch is new
+  behavior this week (run 1's escalate was shadow-only) — check it
+  when a dispatch mysteriously doesn't run.

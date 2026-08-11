@@ -102,6 +102,13 @@ carries standing explicitly. Exact-hash first; fuzzy/paraphrase match
 is a later, separate decision (five-word-slug collision hazard is the
 cautionary sibling).
 
+Supporting datapoint (2026-08-09, run 4 `6b14e413-cobalt-orchard` after
+the operator re-stamp): with clean records, the re-dispatch converged on
+"no rewrite needed" in ONE inventory step and named all three prior
+loops by id — clean records make the archaeology cheap, but it was still
+archaeology (steps spent rediscovering provenance the intake layer
+already knows). The brief would hand that over for free.
+
 ### MH. Model-or-Harness taxonomy — the ADOPT edges from maro's self-evaluation (OPENED 2026-08-09, from runs de790c13 + 6fa41f96)
 
 Two dispatched runs evaluated maro against arXiv:2607.28802 ("Model or
@@ -202,7 +209,7 @@ prose-vs-JSON drift (three instances found) — trust the patched JSONs
 (`step-8` rulings + `step-4-reclassification.json`) only after checking
 their tallies against `FINAL_VERDICT.md`'s corrected banner.
 
-### Closure Signal-1 "not executed" downgrade — a false-demotion costume in the fd483efb fix's sibling lane (FOUND 2026-08-09, run 18773dfa; **fixes SHIPPED same day**, re-stamp decision open)
+### Closure Signal-1 "not executed" downgrade — a false-demotion costume in the fd483efb fix's sibling lane (FOUND 2026-08-09, run 18773dfa; **fixes SHIPPED same day; re-stamp EXECUTED same day**)
 
 **SHIPPED 2026-08-09 (same-day, Jeremy: "go ahead and fix that... sure
 seems like we need a verdict verification pass"):** (a) Signal 1 now
@@ -270,8 +277,22 @@ the config default OFF per the fresh-installs-conservative convention
   the audit targets. Pre-existing; decide whether an audit-agreed
   downgrade should be restart-worthy.
 
-**Still open here: the operator re-stamp decision** — `18773dfa` and
-`de790c13` both carry false `goal_achieved=False` on the record.
+**Re-stamp EXECUTED 2026-08-09T12:06Z** — both false records corrected
+to `goal_achieved=True` / `goal_verdict_source=operator_restamp` (loops
+`eff982cc` for 18773dfa, conf 0.78; `da047274` for de790c13, conf 0.85;
+`stop_verdict=lost-the-plot` cleared, original kept under
+`stop_verdict_superseded`), across outcomes.jsonl (via
+`memory_ledger.stamp_outcome_verdict` + locked rewrite), metadata.json,
+and run_card.json; originals preserved under `*_superseded` keys; script
+kept at `/tmp/operator-restamp.py` on the box. Trigger: the 4th verbatim
+dispatch (run `6b14e413-cobalt-orchard`) was PREVENTED by the navigator
+conf-quoting the poisoned record — the false verdict's first live
+downstream victim (specimen recorded in the re-run identity entry
+above). Post-re-stamp, the re-dispatch ran clean: achieved=True via
+closure (0.75), no downgrade, no contest, `verdict_audit` trail `{}`
+(correctly idle — nothing negative to audit), $2.82. Four-run verdict
+series: false-demoted / clean / false-demoted / clean+guarded. Verified
+on-box 2026-08-10 (outcomes.jsonl rows + run-4 metadata).
 
 Original finding record:
 
