@@ -1,4 +1,5 @@
 ---
+status: record
 name: star
 description: ALPHA star-pattern mini-orchestrator — a master loop that owns taste (choose the next task) and judgement (validate the answer) and delegates everything else, 0..n dynamically chosen steps, no pre-planned pathway. Dev-side gut check for maro's orchestration patterns; also the modern melt-test of the 2026-03-31 factory branch.
 ---
