@@ -514,6 +514,57 @@ def test_report_links_artifacts_to_writing_step_and_outcome(monkeypatch, tmp_pat
     assert 'href="../artifact/bash_made.csv"' in content
 
 
+def test_step_table_flags_overcap_steps_scoped_to_loop(monkeypatch, tmp_path):
+    """A STEP_TOO_BROAD firing badges its step in the report (matched by the
+    elapsed/tokens pair when the ledger index is -1), and another loop's
+    firing in the same slice must not bleed in — its (5s, 20tok) pair would
+    otherwise match step 2 exactly."""
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+    import runs
+    rd = runs.create_run_dir("hcap", prompt="cap me", lane="agenda")
+    runs.set_current_run_dir(rd)
+    (rd / "build").mkdir(exist_ok=True)
+    (rd / "build" / "captains_log_slice.jsonl").write_text(
+        json.dumps({"event_type": "STEP_TOO_BROAD", "loop_id": "caploop",
+                    "context": {"step_index": -1, "elapsed_s": 190,
+                                "tokens": 1201651, "cap_elapsed_s": 120,
+                                "cap_tokens": 200000}}) + "\n"
+        + json.dumps({"event_type": "STEP_TOO_BROAD", "loop_id": "otherloop",
+                      "context": {"step_index": 1, "elapsed_s": 5,
+                                  "tokens": 20, "cap_elapsed_s": 120,
+                                  "cap_tokens": 200000}}) + "\n",
+        encoding="utf-8")
+    outcomes = [
+        StepOutcome(index=-1, text="adversarial verification", status="done",
+                    result="ok", iteration=1, elapsed_ms=190305,
+                    tokens_in=1185726, tokens_out=15925),
+        StepOutcome(index=2, text="small step", status="done", result="ok",
+                    iteration=2, elapsed_ms=5000, tokens_in=10,
+                    tokens_out=10),
+    ]
+    lr.write_run_report(
+        project="p", loop_id="caploop", goal="cap me",
+        planned_steps=["a", "b"], start_ts="2026-08-11T00:00:00+00:00",
+        step_outcomes=outcomes, status="done",
+    )
+    content = Path(rd / "build" / "loop-caploop-report.html").read_text()
+    assert content.count("over-cap") == 1
+    assert "vs caps &le;120s" in content
+
+
+def test_index_marks_runs_with_step_flags(monkeypatch, tmp_path):
+    monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+    import runs
+    rd = runs.create_run_dir("hflag", prompt="flagged run", lane="agenda")
+    (rd / "run_card.json").write_text(json.dumps({
+        "status": "done", "goal_achieved": True,
+        "step_flags": {"too_broad": [{"step_index": 13, "elapsed_s": 190,
+                                      "tokens": 1201651}]}}))
+    out = lr.write_runs_index(force=True)
+    content = Path(out).read_text()
+    assert "breached the per-step watchdog caps" in content
+
+
 def test_outcome_panel_encodes_names_marks_unservable_and_shows_omissions(
         monkeypatch, tmp_path):
     """Adversarial review 2026-08-06 R2-9/R2-10/R2-5: '#' in a filename

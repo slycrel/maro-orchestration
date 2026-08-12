@@ -56,20 +56,32 @@ the end user wait for closure while all that runs." Data from run
 `2a3b1f85-sunny-wren` (clean agenda research run, same day): final step
 ended 23:35:56, closure verdict 23:43:28, claim probes 23:44:25, run
 done 23:44:30 — **the user-facing answer waited 8m34s after the work was
-finished, ~40% of a 22-minute run's wall clock**, on closure + quality
-gate + curation + the learning/maintenance tail (11 skill-promotion
-validations, 10 knowledge-node promotion validations, 7 skill rewrites,
-lesson/knowledge extraction — ~30 LLM calls). Shape: deliver
-RESULT.md/answer at final-step compile; closure verdict arrives as a
-follow-up stamp on the same record (verdict_history already supports
-supersede); learning/maintenance runs detached. Watch-fors: the answer
-synthesis (`curation.synthesize_answer`) currently rides the tail —
-either move it ahead or deliver the raw result first; the dispatch
-reply lane must be able to send "result now, verdict pending"; and the
-**tail's ~30 calls are invisible in `total_cost_usd` today** — the
-b05af61 cost-truth lane sums loop-step provider costs only, so the card
-under-reports true run cost by the whole maintenance tail (fold into
-the async chunk or fix separately).
+finished, ~40% of a 22-minute run's wall clock**. Slice timestamps
+decompose it: **~6min (70%) is evolver/maintenance running INLINE
+BEFORE closure** (5 skill-promotion validations 23:36:31-23:40:06,
+skill rewrite, 3 knowledge-node promotions, A/B challenger — ~28 Sonnet
+calls), then ~1min closure, ~1min gate incl. the adversarial claim
+pass. Lesson extraction is ALREADY correctly deferred post-notify (the
+2026-07-17 answer-first work, `_defer_learning_post_notify` /
+`_drain_deferred_learning` in handle.py) — the maintenance phase just
+never joined it. **Two-phase shape, cheap win first:** (1) route the
+maintenance/evolver phase through the EXISTING defer hook (or
+heartbeat) — no new mechanism, no verdict semantics change, recovers
+~70% of the tail; (2) the real design chunk: notify/reply at
+final-step compile with "verdict pending", closure verdict arrives as
+a follow-up stamp (verdict_history already supports supersede), sweep
+for crash-orphaned unstamped runs via the repair-audits contract.
+Watch-fors: the answer synthesis (`curation.synthesize_answer`)
+currently rides the tail — move ahead or deliver raw result first;
+consumers of goal_achieved at notify time must tolerate pending (they
+already tolerate unjudged); concurrency is NOT new — concurrent runs
+already run these tails against the shared stores under existing locks
+(memory ledger, knowledge tiers, index.html.lock), deferral only moves
+WHEN the same process does the work; heartbeat-routing WOULD need
+single-flight dedup. And the **tail's ~30 calls are invisible in
+`total_cost_usd` today** — the b05af61 cost-truth lane sums loop-step
+provider costs only, so the card under-reports true run cost by the
+whole maintenance tail (fold into the async chunk or fix separately).
 
 ### Session-fork lane for claude -p (Jeremy idea 2026-08-08) — **SHIPPED same day, opt-in; daemon variant = residual edge**
 
@@ -3925,6 +3937,23 @@ strip-prose/fences pre-parse pass in `handle.py`'s scope path is the
 cheap fix.
 
 ## Vision / Deferred
+
+### Codex (and maybe Grok) as primary executor — gated revisit of the stay-first-party call (Jeremy, 2026-08-11)
+
+His phrasing: "at some point we should be testing codex as primary, and
+maybe grok too... but let's get more consistently good results before we
+do that." This REVISITS BACKLOG_DONE item 24's model-route decision
+(2026-07-11/12, resolved stay-first-party for the orchestrator + workers)
+— that resolution stands for now; this entry is the named future
+exception, explicitly gated on "consistently good results" first, so the
+A/B has a stable baseline to compare against. Prior art when picked up:
+item 24's analysis, the `("subprocess", "codex")` backend branches
+already in the codebase (codex is exercised today as the adversarial
+reviewer, so the adapter path is warm), and the xAI Grok adapter
+(`backend 'xai'`, ee6de2c) with Jeremy's console.x.ai credits. Shape
+when live: run a small goal battery (LT-style pre-registered rubrics)
+with executor swapped per-arm, verdict layer held constant — measure
+achieved-rate, verdict cleanliness, and provider cost, not vibes.
 
 ### Invalid-assumption detection above the micro level (Jeremy seed, 2026-08-02)
 

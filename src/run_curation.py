@@ -1714,6 +1714,59 @@ def refresh_run_card_classification(
     return refreshed["card"]
 
 
+def refresh_step_flags(handle_id: Optional[str] = None) -> int:
+    """Backfill `step_flags` onto existing run cards (watchdog visibility).
+
+    Cards curated before 4d790ff never got the `surface_step_flags` lift, so
+    their watchdog firings live only in the log slice. Runs ONLY that pure
+    curator per run and merges the result under the card lock — trust-bearing
+    maintenance never re-runs. Idempotent; returns the number of cards that
+    actually changed. `handle_id` is a prefix filter; None = every run.
+    """
+    from file_lock import locked_rmw
+    root = _runs_root()
+    if not root.is_dir():
+        return 0
+    updated = 0
+    for d in sorted(root.iterdir()):
+        if not d.is_dir():
+            continue
+        if handle_id and not d.name.startswith(handle_id):
+            continue
+        card_path = d / "run_card.json"
+        if not card_path.is_file():
+            continue
+        probe: dict = {}
+        try:
+            surface_step_flags(d, {}, probe)
+        except Exception:
+            continue
+        if not probe:
+            continue
+        changed = {"v": False}
+
+        def _merge(old: str, _flags=probe["step_flags"], _changed=changed) -> str:
+            try:
+                card = json.loads(old)
+            except (ValueError, TypeError):
+                card = {}
+            if not isinstance(card, dict):
+                card = {}
+            if card.get("step_flags") == _flags:
+                return old
+            card["step_flags"] = _flags
+            _changed["v"] = True
+            return json.dumps(card, indent=2)
+
+        try:
+            locked_rmw(card_path, _merge)
+        except Exception:
+            continue
+        if changed["v"]:
+            updated += 1
+    return updated
+
+
 # --- user-facing surface (visible + prunable) ------------------------------
 
 def list_runs(limit: int = 50) -> List[dict]:
@@ -1876,6 +1929,11 @@ def main(argv=None):
     pr = sub.add_parser("result"); pr.add_argument("handle_id")
     pc = sub.add_parser("curate"); pc.add_argument("handle_id")
     pp = sub.add_parser("prune"); pp.add_argument("handle_id"); pp.add_argument("--yes", action="store_true")
+    pf = sub.add_parser(
+        "refresh-step-flags",
+        help="backfill step_flags (watchdog firings) onto existing run cards",
+    )
+    pf.add_argument("handle_id", nargs="?", default=None)
     pa = sub.add_parser(
         "repair-audits",
         help="retry quarantined verdict audits and their deferred learning",
@@ -1922,6 +1980,8 @@ def main(argv=None):
             print("refusing to prune without --yes")
             return 1
         print("pruned" if prune_run(args.handle_id) else "not found")
+    elif args.cmd == "refresh-step-flags":
+        print(f"updated {refresh_step_flags(args.handle_id)} card(s)")
     elif args.cmd == "repair-audits":
         from audit_repair import reconcile_pending_audits
 

@@ -270,6 +270,30 @@ def test_step_flags_absent_when_nothing_fired(workspace):
     assert "step_flags" not in card
 
 
+def test_refresh_step_flags_backfills_legacy_cards(workspace):
+    # A card curated before the slice carried watchdog events (the pre-4d790ff
+    # corpus): the backfill must lift the flags without replaying maintenance,
+    # and a second pass must be a no-op.
+    from run_curation import refresh_step_flags
+    rd = _finish("h0000f15", "g", "done", achieved=True)
+    curate_run("h0000f15")  # card exists, slice not yet written → no flags
+    slice_path = rd / "build" / "captains_log_slice.jsonl"
+    slice_path.parent.mkdir(parents=True, exist_ok=True)
+    slice_path.write_text(
+        json.dumps({"event_type": "STEP_TOO_BROAD",
+                    "context": {"step_index": 5, "elapsed_s": 130,
+                                "tokens": 250000, "cap_elapsed_s": 120,
+                                "cap_tokens": 200000}}) + "\n",
+        encoding="utf-8",
+    )
+    assert refresh_step_flags("h0000f15") == 1
+    card = json.loads((rd / "run_card.json").read_text())
+    assert card["step_flags"]["too_broad"][0]["step_index"] == 5
+    # maintenance state survives untouched
+    assert "_maintenance" in card
+    assert refresh_step_flags("h0000f15") == 0  # idempotent
+
+
 def test_empty_run_not_mineable(workspace):
     _finish("h0000008", "g", "done", achieved=True)
     card = curate_run("h0000008")

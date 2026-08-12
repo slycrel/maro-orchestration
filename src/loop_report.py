@@ -539,6 +539,7 @@ h2 { font-size: 15px; color: var(--dim); text-transform: uppercase; letter-spaci
      margin: 20px 0 8px; border-bottom: 1px solid var(--border); padding-bottom: 4px; }
 a { color: var(--blue); }
 .meta { color: var(--dim); font-size: 15px; margin-bottom: 2px; }
+.overcap { color: var(--yellow); font-size: 12px; white-space: nowrap; cursor: help; }
 .meta b { color: var(--text); }
 .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 12px; margin-bottom: 12px; }
 .badge { display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 13px; margin-left: 4px; }
@@ -839,10 +840,64 @@ def _step_artifact_names(call_record: str, artifact_names: set,
     return hits
 
 
+def _too_broad_events(report_dir: Path, loop_id: str = "") -> List[dict]:
+    """STEP_TOO_BROAD watchdog firings from the run's log slice, optionally
+    scoped to one loop. Advisory display only — the same events the curation
+    pass lifts onto the card as `step_flags.too_broad` (run 2a3b1f85: a
+    6x-cap firing was log-only and nothing surfaced it)."""
+    out: List[dict] = []
+    slice_path = report_dir / "captains_log_slice.jsonl"
+    try:
+        if not slice_path.is_file():
+            return out
+        lines = slice_path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return out
+    for line in lines:
+        try:
+            row = json.loads(line)
+        except (ValueError, TypeError):
+            continue
+        if not isinstance(row, dict) or row.get("event_type") != "STEP_TOO_BROAD":
+            continue
+        if loop_id and row.get("loop_id") and row.get("loop_id") != loop_id:
+            continue
+        ctx = row.get("context")
+        if isinstance(ctx, dict):
+            out.append(ctx)
+    return out
+
+
+def _step_overcap_badge(s: StepOutcome, too_broad: List[dict]) -> str:
+    """Badge html for a step the watchdog flagged, '' otherwise.
+
+    Events carry the ledger index, which is -1 for injected/expanded steps —
+    fall back to matching the (elapsed, tokens) pair the emitter computed
+    from this same StepOutcome."""
+    for ev in too_broad:
+        ev_idx = ev.get("step_index")
+        idx_match = (ev_idx is not None and ev_idx != -1
+                     and ev_idx == getattr(s, "index", None))
+        pair_match = (
+            ev.get("elapsed_s") == (getattr(s, "elapsed_ms", 0) or 0) // 1000
+            and ev.get("tokens") == (getattr(s, "tokens_in", 0) or 0)
+            + (getattr(s, "tokens_out", 0) or 0)
+        )
+        if idx_match or pair_match:
+            return (
+                f' <span class="overcap" title="Watchdog: step ran '
+                f'{ev.get("elapsed_s")}s / {(ev.get("tokens") or 0) // 1000}K '
+                f'tokens vs caps &le;{ev.get("cap_elapsed_s")}s / '
+                f'&le;{(ev.get("cap_tokens") or 0) // 1000}K — likely '
+                f'decomposed too broadly">&#9888; over-cap</span>')
+    return ""
+
+
 def _render_step_table(
     project: str,
     step_outcomes: List[StepOutcome],
     report_dir: Path,
+    loop_id: str = "",
 ) -> str:
     # Artifacts the run serves (<run>/artifact/, filled by curation) — steps
     # that wrote one get it linked in-row, in context (Jeremy 2026-08-05:
@@ -861,10 +916,12 @@ def _render_step_table(
         artifact_sources = _card.get("served_artifact_sources") or {}
     except Exception:
         pass
+    too_broad = _too_broad_events(report_dir, loop_id)
     rows = []
     for pos, s in enumerate(step_outcomes, start=1):
         status = s.status if s.status in _STATUS_CLASS else "blocked"
         icon = _STATUS_ICON.get(status, "?")
+        overcap_html = _step_overcap_badge(s, too_broad)
         try:
             from metrics import estimate_cost as _est
             cost = _est(s.tokens_in, s.tokens_out, cache_read_tokens=getattr(s, "cache_read_tokens", 0))
@@ -906,7 +963,7 @@ def _render_step_table(
             f'<tr class="{_STATUS_CLASS.get(status, "")}"{data_attr}>'
             f'<td>{pos}</td>'
             f'<td>{icon}</td>'
-            f'<td class="step-text">{_esc_truncated(s.text, 200)}{tag_html}{arts_html}</td>'
+            f'<td class="step-text">{_esc_truncated(s.text, 200)}{tag_html}{overcap_html}{arts_html}</td>'
             f'<td>{model_html}</td>'
             f'<td>{s.elapsed_ms}ms</td>'
             f'<td>{_fmt_tokens_total(s.tokens_in, s.tokens_out)}</td>'
@@ -1378,7 +1435,7 @@ def _render_report_html(
 <div class="panel">{_render_timeline(planned_steps, step_outcomes, windows, approx, marker_slots, status)}</div>
 
 <h2>Steps</h2>
-<div class="panel">{_render_step_table(project, step_outcomes, report_dir)}</div>
+<div class="panel">{_render_step_table(project, step_outcomes, report_dir, loop_id)}</div>
 
 {_render_llm_calls(report_dir, step_outcomes)}
 {_render_decision_points(attributed_markers)}
@@ -1625,6 +1682,8 @@ def _gather_run_summaries() -> List[dict]:
             "latest_loop_id": loop_order[-1] if loop_order else "",
             "result_relpath": result_relpath,
             "artifacts": artifacts,
+            "step_flags_n": len((card.get("step_flags") or {}).get("too_broad")
+                                or []),
         })
     summaries.sort(key=lambda s: s.get("started_at") or "", reverse=True)
     return summaries
@@ -1854,10 +1913,15 @@ def _render_index_html(summaries: List[dict]) -> str:
             f' data-lane="{_esc(lane_val)}"'
             f' data-date="{_esc((s.get("started_at") or "")[:10])}"'
         )
+        flags_n = s.get("step_flags_n") or 0
+        flag_html = (
+            f' <span class="overcap" title="{flags_n} step(s) breached the '
+            f'per-step watchdog caps (time+tokens) — open the report for '
+            f'details">&#9888;</span>' if flags_n else "")
         rows.append(
             f'<tr{row_attr}{filter_attrs}>'
             f'<td class="meta">{_esc(_fmt_ts(s["started_at"]))}</td>'
-            f'<td>{_render_status_badge(s["status"], s.get("success_class"))}</td>'
+            f'<td>{_render_status_badge(s["status"], s.get("success_class"))}{flag_html}</td>'
             f'<td class="goal-cell">{_esc_truncated(s["goal"], 220)}</td>'
             f'<td class="meta">{_esc(s.get("lane") or "-")}</td>'
             f'<td>{_esc(s["elapsed_str"])}</td>'
