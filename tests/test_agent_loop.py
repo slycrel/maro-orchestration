@@ -1998,6 +1998,93 @@ def test_finalize_loop_skips_reflexion_in_dry_run(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# Maintenance tail deferral (async-tail decree, 2026-08-11): on the closure
+# lane the maintenance phase registers post-notify instead of running inline
+# before closure — it was ~70% of the user-perceived post-work wait.
+# ---------------------------------------------------------------------------
+
+def _finalize_kwargs(**overrides):
+    kw = dict(
+        loop_id="mt-loop",
+        goal="goal",
+        project="proj",
+        loop_status="done",
+        step_outcomes=[],
+        adapter=None,
+        dry_run=False,
+        verbose=False,
+        total_tokens_in=0,
+        total_tokens_out=0,
+        elapsed_ms=0,
+        had_no_matching_skill=False,
+    )
+    kw.update(overrides)
+    return kw
+
+
+def _stub_maintenance(monkeypatch):
+    import loop_finalize
+    import memory
+    monkeypatch.setattr(memory, "reflect_and_record", lambda *a, **kw: None)
+    ran = []
+    monkeypatch.setattr(loop_finalize, "run_post_run_maintenance",
+                        lambda **kw: ran.append(kw))
+    return ran
+
+
+def test_finalize_defers_maintenance_on_closure_lane(monkeypatch):
+    """defer_learning=True + handle_id → maintenance registers post-notify,
+    nothing runs inline; the drain runs it with the loop's adapter."""
+    import handle as handle_mod
+    ran = _stub_maintenance(monkeypatch)
+
+    class _FakeAdapter:
+        model_key = "test"
+
+    _adapter = _FakeAdapter()
+    _finalize_loop(**_finalize_kwargs(
+        adapter=_adapter, defer_learning=True, handle_id="mt-hid"))
+    assert ran == []
+    assert "mt-hid" in handle_mod._POST_NOTIFY_MAINTENANCE
+    assert handle_mod._drain_deferred_maintenance("mt-hid") == 1
+    assert len(ran) == 1
+    assert ran[0]["adapter"] is _adapter
+
+
+def test_finalize_runs_maintenance_inline_without_closure_lane(monkeypatch):
+    """defer_learning=False (no post-notify contract) → inline, unchanged."""
+    import handle as handle_mod
+    ran = _stub_maintenance(monkeypatch)
+    _finalize_loop(**_finalize_kwargs(handle_id="mt-hid-inline"))
+    assert len(ran) == 1
+    assert "mt-hid-inline" not in handle_mod._POST_NOTIFY_MAINTENANCE
+
+
+def test_finalize_dry_run_neither_runs_nor_registers_maintenance(monkeypatch):
+    import handle as handle_mod
+    ran = _stub_maintenance(monkeypatch)
+    _finalize_loop(**_finalize_kwargs(
+        dry_run=True, defer_learning=True, handle_id="mt-hid-dry"))
+    assert ran == []
+    assert "mt-hid-dry" not in handle_mod._POST_NOTIFY_MAINTENANCE
+
+
+def test_finalize_maintenance_defer_failure_falls_back_inline(monkeypatch):
+    """Registration failing must not drop maintenance — it runs inline."""
+    import handle as handle_mod
+    ran = _stub_maintenance(monkeypatch)
+
+    def _boom(handle_id, fn):
+        raise RuntimeError("registry unavailable")
+
+    monkeypatch.setattr(handle_mod, "_defer_maintenance_post_notify", _boom)
+    _finalize_loop(**_finalize_kwargs(
+        defer_learning=True, handle_id="mt-hid-boom"))
+    assert len(ran) == 1
+    assert "mt-hid-boom" not in handle_mod._POST_NOTIFY_MAINTENANCE
+
+
+# ---------------------------------------------------------------------------
 # _finalize_loop — recovery lessons (session 40 M3)
 # ---------------------------------------------------------------------------
 

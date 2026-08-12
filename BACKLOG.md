@@ -81,7 +81,44 @@ crash duplicates are reconcilable by the dedup sweep; disappearance is
 not), or a recoverable move marker/WAL. Sized as its own chunk: both
 promotion routes + the crash-window reconciliation story + pins.
 
-### Async the post-run tail — return the result, don't make the user wait for closure + learning (Jeremy, 2026-08-11)
+### Async the post-run tail — return the result, don't make the user wait for closure + learning (Jeremy, 2026-08-11; **PHASE 1 SHIPPED 2026-08-12**)
+
+**PHASE 1 SHIPPED 2026-08-12** — the maintenance/evolver phase (the ~70%
+slice) no longer runs inline before closure. `_finalize_loop`'s five
+maintenance blocks (skill maintenance, health probes, statistical scans,
+run-cadence evolver, run-cadence inspector) extracted to
+`loop_finalize.run_post_run_maintenance()`; on the closure lane
+(defer_learning=True + handle_id) it registers into
+`handle._POST_NOTIFY_MAINTENANCE` — a twin of the answer-first learning
+registry, drained by handle()'s finalize AFTER the run_completed notify
+and after the learning drain (promotions see this run's crystallization
+one cycle earlier; nothing here feeds the run card, so no refresh).
+No-closure callers (defer_learning=False, e.g. direct loop runs) and
+registration failures fall back inline — maintenance moves in time,
+never silently drops. Deliberately NOT drained at the quality-gate
+early-drain site: the escalated retry needs the failed loop's LESSONS,
+not its promotions, and putting the multi-minute tail ahead of the retry
+is exactly the wait the decree removes (the retry now sees
+pre-maintenance skill state — threshold-based, one-cycle lag, benign).
+Crash before the drain loses at most one cadence cycle; every sub-system
+is threshold/cadence-based and re-fires on the next run's tail, and
+heartbeat still runs skill maintenance on its own tick. Pins:
+tests/test_agent_loop.py (defer/inline/dry-run/registration-failure
+fallback), tests/test_handle.py `TestAsyncMaintenanceTail` (registry
+drain semantics, notify→learning→maintenance ordering through handle(),
+early-drain leaves maintenance registered). Suite 8266/0 skipped.
+
+**REMAINING — phase 2 + cost visibility (open):** (2) the real design
+chunk: notify/reply at final-step compile with "verdict pending",
+closure verdict arrives as a follow-up stamp (verdict_history already
+supports supersede), sweep for crash-orphaned unstamped runs via the
+repair-audits contract — the answer-synthesis and
+goal_achieved-at-notify watch-fors below belong to this phase. And the
+tail's ~30 calls are STILL invisible in `total_cost_usd` (unchanged by
+phase 1 — the calls just run later); fold into phase 2 or fix
+separately.
+
+Original entry:
 
 His phrasing: "at some point we should async the 'cleanup and therefore'
 part of the job at the end and return the run's result; no need to make

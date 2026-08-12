@@ -203,6 +203,36 @@ def _drain_deferred_learning(handle_id: str) -> int:
     return len(fns)
 
 
+# Maintenance twin of _POST_NOTIFY_LEARNING (async-tail decree, 2026-08-11):
+# loop_finalize registers the run's maintenance tail here (skill promotion/
+# demotion/rewrite, health probes, statistical scans, run-cadence evolver +
+# inspector — ~28 LLM calls, ~6min of 2a3b1f85-sunny-wren's 8m34s post-work
+# tail) instead of running it inline before closure. Drained ONLY by
+# handle()'s finalize, after run_completed and after the learning drain —
+# never by the quality-gate early drain: the escalated retry needs the
+# lessons of the loop it is retrying, not its promotions, and putting the
+# multi-minute tail ahead of the retry is exactly the wait this removes.
+_POST_NOTIFY_MAINTENANCE: dict = {}
+
+
+def _defer_maintenance_post_notify(handle_id: str, fn) -> None:
+    _POST_NOTIFY_MAINTENANCE.setdefault(handle_id, []).append(fn)
+
+
+def _drain_deferred_maintenance(handle_id: str) -> int:
+    """Run + clear any registered deferred maintenance for handle_id.
+
+    Returns the number of callables run. Never raises."""
+    fns = _POST_NOTIFY_MAINTENANCE.pop(handle_id, [])
+    for fn in fns:
+        try:
+            fn()
+        except Exception as exc:
+            log.warning("deferred maintenance failed for handle %s: %s",
+                        handle_id, exc)
+    return len(fns)
+
+
 def _is_complex_directive(message: str) -> bool:
     """Heuristic: does a NOW-classified message actually require Director-level planning?
 
@@ -921,6 +951,11 @@ def handle(
                         write_reports_for_run_dir(_run_dir_refresh(_hid))
                     except Exception:
                         pass
+                # Maintenance tail drains after learning (async-tail decree):
+                # promotions read the freshest skill/lesson stats — this run's
+                # crystallization is now one cycle earlier in their view — and
+                # nothing here feeds the run card, so no refresh follows.
+                _drain_deferred_maintenance(_hid)
         except Exception:
             pass  # finalize must never affect the request outcome
         if not dry_run:

@@ -5483,6 +5483,76 @@ class TestAnswerFirstDeferredLearning:
         assert _drain_deferred_learning("t-hid") == 0
 
 
+class TestAsyncMaintenanceTail:
+    """Maintenance twin of the answer-first lane (async-tail decree,
+    2026-08-11): the maintenance phase (skill promotion/rewrite, probes,
+    scans, cadence evolver/inspector) was ~6min of 2a3b1f85-sunny-wren's
+    8m34s post-work tail, inline BEFORE closure. It now rides its own
+    post-notify registry, drained by handle()'s finalize after the
+    learning drain — and never by the quality-gate early drain."""
+
+    def test_maintenance_registry_drain_runs_clears_and_swallows(self):
+        from handle import (_POST_NOTIFY_MAINTENANCE,
+                            _defer_maintenance_post_notify,
+                            _drain_deferred_maintenance)
+        ran = []
+        _defer_maintenance_post_notify("m-hid", lambda: ran.append(1))
+
+        def _boom():
+            ran.append(2)
+            raise RuntimeError("swallowed")
+
+        _defer_maintenance_post_notify("m-hid", _boom)
+        assert _drain_deferred_maintenance("m-hid") == 2
+        assert ran == [1, 2]
+        assert "m-hid" not in _POST_NOTIFY_MAINTENANCE
+        assert _drain_deferred_maintenance("m-hid") == 0
+
+    def test_maintenance_drains_after_notify_and_after_learning(
+            self, monkeypatch, tmp_path):
+        """handle()'s finalize order: run_completed notify → learning
+        drain → maintenance drain. The user hears the outcome before any
+        bookkeeping runs."""
+        _setup(monkeypatch, tmp_path)
+        calls = []
+        import handle as handle_mod
+        import notify
+        monkeypatch.setattr(notify, "emit",
+                            lambda event, *a, **kw: calls.append(event))
+        _real_learning_drain = handle_mod._drain_deferred_learning
+        monkeypatch.setattr(
+            handle_mod, "_drain_deferred_learning",
+            lambda hid: (calls.append("learning-drain"),
+                         _real_learning_drain(hid))[1])
+        monkeypatch.setattr(
+            handle_mod, "_drain_deferred_maintenance",
+            lambda hid: (calls.append("maintenance-drain"), 0)[1])
+        result = handle("research winning polymarket strategies",
+                        dry_run=True)
+        assert result.lane == "agenda"
+        assert "run_completed" in calls
+        assert "maintenance-drain" in calls
+        assert (calls.index("run_completed")
+                < calls.index("maintenance-drain"))
+        assert (calls.index("learning-drain")
+                < calls.index("maintenance-drain"))
+
+    def test_quality_gate_early_drain_leaves_maintenance_registered(self):
+        """The escalation path drains learning early (its retry recalls
+        lessons); maintenance must stay put until the final notify."""
+        from handle import (_POST_NOTIFY_MAINTENANCE,
+                            _defer_learning_post_notify,
+                            _defer_maintenance_post_notify,
+                            _drain_deferred_learning,
+                            _drain_deferred_maintenance)
+        _defer_learning_post_notify("g-hid", lambda: None)
+        _defer_maintenance_post_notify("g-hid", lambda: None)
+        # what the quality-gate escalation site calls:
+        _drain_deferred_learning("g-hid")
+        assert "g-hid" in _POST_NOTIFY_MAINTENANCE
+        assert _drain_deferred_maintenance("g-hid") == 1
+
+
 class TestOperatorContextChannel:
     """Dispatch-envelope operator channel (docs/DISPATCH_ENVELOPE.md):
     operator framing reaches the loop as ancestry context while the goal

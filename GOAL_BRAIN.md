@@ -7292,3 +7292,17 @@ under the same two-measurement standard).
   teach-as-decision-rule, evidence-modality refutation at judge,
   toolset-stamped reopen conditions. Anti-prompt-soup rule held:
   contract changes + pointers only, war stories stayed in history docs.
+
+- **2026-08-12** — Async-tail phase 1 SHIPPED (the 2026-08-11 decree's
+  cheap win): the maintenance phase (skill promotion/rewrite, health
+  probes, statistical scans, run-cadence evolver + inspector — the
+  ~70% slice of 2a3b1f85's 8m34s post-work tail) no longer runs inline
+  before closure. Extracted to `loop_finalize.run_post_run_maintenance`;
+  the closure lane registers it into `handle._POST_NOTIFY_MAINTENANCE`
+  (twin of the 2026-07-17 answer-first learning lane), drained by
+  handle()'s finalize after run_completed + the learning drain. Inline
+  fallback when there's no post-notify contract or registration fails —
+  moved in time, never dropped. The quality-gate early drain deliberately
+  does NOT drain it (the retry needs lessons, not promotions). Remaining:
+  phase 2 (verdict-pending reply at final-step compile) + the tail's ~30
+  calls still invisible in `total_cost_usd`. Suite 8266/0 skipped.

@@ -804,110 +804,33 @@ def _finalize_loop(
             had_no_matching_skill=had_no_matching_skill,
         )
 
-    # Phase 32: auto-promote skills that meet threshold (don't wait for evolver heartbeat)
+    # Maintenance tail (async-tail decree, 2026-08-11): skill maintenance,
+    # health probes, statistical scans, and the run-cadence evolver +
+    # inspector used to run inline HERE — before closure, the gate, and the
+    # user-facing notify (~6min of the 8m34s post-work answer delay measured
+    # on 2a3b1f85-sunny-wren, ~70% of the tail). On the closure lane
+    # (defer_learning=True) the caller promises a post-notify drain, so the
+    # whole phase registers there instead — same contract deferred learning
+    # rides. No-closure callers (defer_learning=False) keep it inline, and a
+    # registration failure falls back inline: maintenance may move in time,
+    # never silently drop.
     if not dry_run:
-        try:
-            from evolver import run_skill_maintenance
-            # adapter threaded through (arch-04 fix, 2026-07-09): without it the
-            # refight_rule half of decay-by-invalidation was structurally
-            # unreachable — this is the only live caller path.
-            run_skill_maintenance(adapter=adapter)
-        except ImportError:
-            pass
-        except Exception as _maint_exc:
-            log.debug("skill maintenance failed (non-critical): %s", _maint_exc)
-
-        # Liveness probes (2026-07-29): same no-cron cadence decision as
-        # skill maintenance — health rides goal-run closure. Report-only;
-        # internally shielded, but belt-and-suspenders here too.
-        try:
-            from system_health import run_health_probes
-            run_health_probes()
-        except Exception as _health_exc:
-            log.debug("health probes failed (non-critical): %s", _health_exc)
-
-    # BACKLOG #13 (2026-07-03): evolver's 5 statistical scanners, per-run
-    # instead of per-heartbeat-tick — "app, not OS": no daemon, no LLM calls
-    # (safe at this cadence), observational only (never auto-applies). Gives
-    # scan_suggestion_outcomes()/scan_evolver_impact() real data to work with,
-    # which they've never had (see BACKLOG.md #13).
-    if not dry_run:
-        try:
-            from evolver import run_statistical_scans
-            from evolver_store import _save_suggestions
-            _stat_suggestions = run_statistical_scans(verbose=verbose)
-            if _stat_suggestions:
-                _save_suggestions(_stat_suggestions)
-                log.info("post-run statistical scan: %d suggestion(s) saved", len(_stat_suggestions))
-        except ImportError:
-            pass
-        except Exception as _scan_exc:
-            log.debug("post-run statistical scan failed (non-critical): %s", _scan_exc)
-
-    # Evolver meta-cycle on run-cadence (2026-07-09 supervision decision):
-    # every N-th real run finalization triggers run_evolver() — the meta-cycle
-    # rides run completions instead of a timer ("app, not systemic": no
-    # daemon, no self-rearming loop; no runs → no evolver, which is also the
-    # correct no-op). `evolver.run_cadence` default 0 = off (fresh installs
-    # unchanged); dry_run runs neither count nor trigger. Never fatal to
-    # finalization.
-    if not dry_run:
-        try:
-            from config import get as _cfg_get
-            from evolver_store import evolver_cadence_tick
-            _cadence = int(_cfg_get("evolver.run_cadence", 0) or 0)
-            if evolver_cadence_tick(_cadence):
-                from evolver import run_evolver
-                _evo_report = run_evolver(adapter=adapter, verbose=verbose)
-                log.info(
-                    "run-cadence evolver cycle fired (cadence=%d): reviewed=%d suggestions=%d",
-                    _cadence,
-                    getattr(_evo_report, "outcomes_reviewed", 0),
-                    len(getattr(_evo_report, "suggestions", []) or []),
-                )
-        except ImportError:
-            pass
-        except Exception as _evo_exc:
-            log.warning("run-cadence evolver cycle failed (non-fatal): %s", _evo_exc)
-
-    # Inspector on run-cadence (decision 1addc859, 2026-08-08): the evolver's
-    # lane, finally extended to the inspector — its threshold cluster
-    # (_BREACH_THRESHOLD etc.) had live inputs but no live caller since the
-    # heartbeat daemon stopped (live-writer census survivor 2), so
-    # inspection-log.jsonl never existed and the three friction readers
-    # (conductor, heartbeat summary, quality gate) always saw empty. Every
-    # `inspector.run_cadence`-th real run fires a standard pass; every
-    # `inspector.deep_every`-th firing widens to DEEP_PASS_LIMIT outcomes
-    # (the periodic larger-cleanup rider — same hook, no daemon). Default
-    # 0 = off (fresh installs unchanged; the run's adapter means LLM spend,
-    # so the flip is explicit config).
-    if not dry_run:
-        try:
-            from config import get as _cfg_get
-            from inspector import (DEEP_PASS_LIMIT, inspector_cadence_tick,
-                                   run_inspector)
-            _insp_cadence = int(_cfg_get("inspector.run_cadence", 0) or 0)
-            _deep_every = int(_cfg_get("inspector.deep_every", 5) or 0)
-            # cadence <= 0 short-circuits BEFORE the tick (2026-08-08
-            # review): counting while disabled created the state file on
-            # fresh installs and made a later enable fire immediately
-            # instead of waiting N enabled runs.
-            _mode = (inspector_cadence_tick(_insp_cadence, _deep_every)
-                     if _insp_cadence > 0 else "none")
-            if _mode != "none":
-                _limit = DEEP_PASS_LIMIT if _mode == "deep" else 50
-                _insp_report = run_inspector(limit=_limit, adapter=adapter,
-                                             verbose=verbose)
-                log.info(
-                    "run-cadence inspector fired (%s pass, cadence=%d, "
-                    "limit=%d): %d outcome(s) inspected",
-                    _mode, _insp_cadence, _limit,
-                    getattr(_insp_report, "inspected_sessions", 0),
-                )
-        except ImportError:
-            pass
-        except Exception as _insp_exc:
-            log.warning("run-cadence inspector failed (non-fatal): %s", _insp_exc)
+        _maint_deferred = False
+        if defer_learning and handle_id:
+            try:
+                from handle import _defer_maintenance_post_notify
+                _maint_adapter = adapter
+                _maint_verbose = verbose
+                _defer_maintenance_post_notify(
+                    handle_id,
+                    lambda: run_post_run_maintenance(
+                        adapter=_maint_adapter, verbose=_maint_verbose))
+                _maint_deferred = True
+            except Exception as _defer_exc:
+                log.debug("maintenance defer failed — running inline: %s",
+                          _defer_exc)
+        if not _maint_deferred:
+            run_post_run_maintenance(adapter=adapter, verbose=verbose)
 
     # Loop-boundary Telegram ping — progress only, and only for a restart.
     # Completion is announced ONCE, at run level, by notify.emit(
@@ -926,6 +849,121 @@ def _finalize_loop(
             )
         except Exception as _tg_exc:
             log.debug("loop-boundary Telegram ping failed (non-critical): %s", _tg_exc)
+
+
+def run_post_run_maintenance(*, adapter=None, verbose: bool = False) -> None:
+    """The run's maintenance tail, extracted from _finalize_loop
+    (async-tail decree, 2026-08-11) so the closure lane can defer it past
+    the run_completed notify — the user hears the outcome first, then the
+    same process does the same work (deferral moves WHEN, not what).
+
+    Never raises; every sub-block swallows its own failures, same as when
+    it lived inline. Callers gate dry_run — nothing here should run for a
+    dry run. A crash before a deferred drain loses at most one cycle:
+    every sub-system here is threshold/cadence-based and re-fires on the
+    next run's tail (heartbeat also runs skill maintenance on its own
+    tick), so a lost cycle self-heals.
+    """
+    # Phase 32: auto-promote skills that meet threshold (don't wait for evolver heartbeat)
+    try:
+        from evolver import run_skill_maintenance
+        # adapter threaded through (arch-04 fix, 2026-07-09): without it the
+        # refight_rule half of decay-by-invalidation was structurally
+        # unreachable — this is the only live caller path.
+        run_skill_maintenance(adapter=adapter)
+    except ImportError:
+        pass
+    except Exception as _maint_exc:
+        log.debug("skill maintenance failed (non-critical): %s", _maint_exc)
+
+    # Liveness probes (2026-07-29): same no-cron cadence decision as
+    # skill maintenance — health rides goal-run closure. Report-only;
+    # internally shielded, but belt-and-suspenders here too.
+    try:
+        from system_health import run_health_probes
+        run_health_probes()
+    except Exception as _health_exc:
+        log.debug("health probes failed (non-critical): %s", _health_exc)
+
+    # BACKLOG #13 (2026-07-03): evolver's 5 statistical scanners, per-run
+    # instead of per-heartbeat-tick — "app, not OS": no daemon, no LLM calls
+    # (safe at this cadence), observational only (never auto-applies). Gives
+    # scan_suggestion_outcomes()/scan_evolver_impact() real data to work with,
+    # which they've never had (see BACKLOG.md #13).
+    try:
+        from evolver import run_statistical_scans
+        from evolver_store import _save_suggestions
+        _stat_suggestions = run_statistical_scans(verbose=verbose)
+        if _stat_suggestions:
+            _save_suggestions(_stat_suggestions)
+            log.info("post-run statistical scan: %d suggestion(s) saved", len(_stat_suggestions))
+    except ImportError:
+        pass
+    except Exception as _scan_exc:
+        log.debug("post-run statistical scan failed (non-critical): %s", _scan_exc)
+
+    # Evolver meta-cycle on run-cadence (2026-07-09 supervision decision):
+    # every N-th real run finalization triggers run_evolver() — the meta-cycle
+    # rides run completions instead of a timer ("app, not systemic": no
+    # daemon, no self-rearming loop; no runs → no evolver, which is also the
+    # correct no-op). `evolver.run_cadence` default 0 = off (fresh installs
+    # unchanged); dry_run runs neither count nor trigger. Never fatal to
+    # finalization.
+    try:
+        from config import get as _cfg_get
+        from evolver_store import evolver_cadence_tick
+        _cadence = int(_cfg_get("evolver.run_cadence", 0) or 0)
+        if evolver_cadence_tick(_cadence):
+            from evolver import run_evolver
+            _evo_report = run_evolver(adapter=adapter, verbose=verbose)
+            log.info(
+                "run-cadence evolver cycle fired (cadence=%d): reviewed=%d suggestions=%d",
+                _cadence,
+                getattr(_evo_report, "outcomes_reviewed", 0),
+                len(getattr(_evo_report, "suggestions", []) or []),
+            )
+    except ImportError:
+        pass
+    except Exception as _evo_exc:
+        log.warning("run-cadence evolver cycle failed (non-fatal): %s", _evo_exc)
+
+    # Inspector on run-cadence (decision 1addc859, 2026-08-08): the evolver's
+    # lane, finally extended to the inspector — its threshold cluster
+    # (_BREACH_THRESHOLD etc.) had live inputs but no live caller since the
+    # heartbeat daemon stopped (live-writer census survivor 2), so
+    # inspection-log.jsonl never existed and the three friction readers
+    # (conductor, heartbeat summary, quality gate) always saw empty. Every
+    # `inspector.run_cadence`-th real run fires a standard pass; every
+    # `inspector.deep_every`-th firing widens to DEEP_PASS_LIMIT outcomes
+    # (the periodic larger-cleanup rider — same hook, no daemon). Default
+    # 0 = off (fresh installs unchanged; the run's adapter means LLM spend,
+    # so the flip is explicit config).
+    try:
+        from config import get as _cfg_get
+        from inspector import (DEEP_PASS_LIMIT, inspector_cadence_tick,
+                               run_inspector)
+        _insp_cadence = int(_cfg_get("inspector.run_cadence", 0) or 0)
+        _deep_every = int(_cfg_get("inspector.deep_every", 5) or 0)
+        # cadence <= 0 short-circuits BEFORE the tick (2026-08-08
+        # review): counting while disabled created the state file on
+        # fresh installs and made a later enable fire immediately
+        # instead of waiting N enabled runs.
+        _mode = (inspector_cadence_tick(_insp_cadence, _deep_every)
+                 if _insp_cadence > 0 else "none")
+        if _mode != "none":
+            _limit = DEEP_PASS_LIMIT if _mode == "deep" else 50
+            _insp_report = run_inspector(limit=_limit, adapter=adapter,
+                                         verbose=verbose)
+            log.info(
+                "run-cadence inspector fired (%s pass, cadence=%d, "
+                "limit=%d): %d outcome(s) inspected",
+                _mode, _insp_cadence, _limit,
+                getattr(_insp_report, "inspected_sessions", 0),
+            )
+    except ImportError:
+        pass
+    except Exception as _insp_exc:
+        log.warning("run-cadence inspector failed (non-fatal): %s", _insp_exc)
 
 
 def _crystallize_and_synthesize(
