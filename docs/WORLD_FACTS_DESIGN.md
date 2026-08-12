@@ -13,6 +13,19 @@ carry + resume restore, `world_facts.enabled` default ON); slices 2+3
 the provenance pattern; planner `FACT:` emission stays slice 3; cap
 sizes are build-time tuning.
 
+**§7 re-called by Jeremy 2026-08-11 (arc-closing pass, all three):**
+(1) §7.1 AMENDED — unproven facts stay out of durable stores ("an
+unproven fact is essentially just an assumption") but MAY be prompted
+into steps "as long as they're honest about what they are and aren't":
+hypotheses now render in a separately-labeled "Unconfirmed guesses"
+section (capped `MAX_RENDERED_HYPOTHESES=3`, never mixed with the facts
+list, render text forbids restating a guess as fact). (2) §7.2
+re-confirmed — emission as slice 3 (last) "is fine". (3) §7.3 CALLED —
+"more shallow (2-3 per run) for the moment": landing caps cut 5/3 →
+**3 anecdotal + 2 hypotheses per run**; he framed this as part of a
+bigger optimization/tuning question ("how long should we work and what
+does that look like") deferred to the §10 taste-calibration discussion.
+
 **Slice 2 (finalize landing, 2026-08-09):** `world_facts.land_facts`,
 called from `_build_result_and_finalize` before `_finalize_loop` (so the
 bridge's own extraction pass dedups against fact-minted nodes).
@@ -21,8 +34,9 @@ invisible; the V3 promotion sweep IS the generalizability filter — the
 §4 teaching mint stays dormant-design, so the bridge is the landing per
 §2's census). Hypothesis → `observe_pattern` with
 `world_fact:<loop_id>` provenance. Verdict-independent by design (a
-failed run's "archive X is blocked" is still a fact). Caps 5/3 per run,
-strongest (distinct-step hits) first. Idempotent per run dir via a
+failed run's "archive X is blocked" is still a fact). Caps 3/2 per run
+(5/3 until Jeremy's 2026-08-11 shallow call), strongest (distinct-step
+hits) first. Idempotent per run dir via a
 `world_facts_landed_keys` metadata list — keyed on the FACTS, not the
 loop id, because a demoted-then-resumed run re-enters finalize under a
 FRESH loop_id with the same restored ledger (the original loop-id stamp

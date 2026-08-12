@@ -45,13 +45,16 @@ MAX_FACTS_PER_STEP = 3
 # Cap the rendered block: facts are a hint, not a wall of text (§4
 # injection-regression falsifier watches this).
 MAX_RENDERED_FACTS = 10
+# Guesses render behind a smaller cap than facts — they're the risky half
+# of the block (§7.1 as amended 2026-08-11).
+MAX_RENDERED_HYPOTHESES = 3
 MAX_FACT_CHARS = 300
 MAX_EVIDENCE_CHARS = 300
-# Per-run landing caps (slice 2, §7.3 build-time tuning): strongest facts
-# land first; the remainder stays run-scoped (the kept checkpoint is the
-# audit copy — retention decree).
-MAX_LANDED_ANECDOTAL = 5
-MAX_LANDED_HYPOTHESES = 3
+# Per-run landing caps (§7.3, Jeremy 2026-08-11: "more shallow (2-3 per
+# run) for the moment"): strongest facts land first; the remainder stays
+# run-scoped (the kept checkpoint is the audit copy — retention decree).
+MAX_LANDED_ANECDOTAL = 3
+MAX_LANDED_HYPOTHESES = 2
 
 
 # Fact provenance (slice 3). "step" = discovered by execution; "planner" =
@@ -169,27 +172,49 @@ class WorldFactLedger:
         return [f for f in self.facts.values() if f.kind == KIND_HYPOTHESIS]
 
     def render(self) -> str:
-        """Advisory known-this-run block — ANECDOTAL ONLY (§7.1 quarantine).
+        """Advisory known-this-run block.
+
+        Anecdotal facts render as established; hypothesis facts render in a
+        separately-labeled guesses section (§7.1 as amended by Jeremy
+        2026-08-11: prompting them in is fine "as long as they're honest
+        about what they are and aren't" — the label IS the honesty, and the
+        two sections must never mix).
 
         Empty render is load-bearing: zero contributions must leave prompts
         byte-identical.
         """
+        lines: List[str] = []
         rows = sorted(self.anecdotal(), key=lambda f: (-f.hits, f.fact))
-        if not rows:
-            return ""
-        lines = [
-            "Facts already established THIS RUN — treat as known; do not "
-            "re-derive them:"
-        ]
-        for f in rows[:MAX_RENDERED_FACTS]:
-            line = f"  - {f.fact}"
-            if f.evidence:
-                line += f" (evidence: {f.evidence})"
-            if f.hits > 1:
-                line += f" [{f.hits}× since step {f.first_step}]"
-            lines.append(line)
-        if len(rows) > MAX_RENDERED_FACTS:
-            lines.append(f"  …and {len(rows) - MAX_RENDERED_FACTS} more.")
+        if rows:
+            lines.append(
+                "Facts already established THIS RUN — treat as known; do "
+                "not re-derive them:"
+            )
+            for f in rows[:MAX_RENDERED_FACTS]:
+                line = f"  - {f.fact}"
+                if f.evidence:
+                    line += f" (evidence: {f.evidence})"
+                if f.hits > 1:
+                    line += f" [{f.hits}× since step {f.first_step}]"
+                lines.append(line)
+            if len(rows) > MAX_RENDERED_FACTS:
+                lines.append(f"  …and {len(rows) - MAX_RENDERED_FACTS} more.")
+        guesses = sorted(self.hypotheses(), key=lambda f: (-f.hits, f.fact))
+        if guesses:
+            lines.append(
+                "Unconfirmed guesses declared THIS RUN — assumptions, NOT "
+                "established facts; verify before relying on one and never "
+                "restate one as fact:"
+            )
+            for f in guesses[:MAX_RENDERED_HYPOTHESES]:
+                line = f"  - {f.fact}"
+                if f.evidence:
+                    line += f" (basis: {f.evidence})"
+                lines.append(line)
+            if len(guesses) > MAX_RENDERED_HYPOTHESES:
+                lines.append(
+                    f"  …and {len(guesses) - MAX_RENDERED_HYPOTHESES} more."
+                )
         return "\n".join(lines)
 
     # -- checkpoint carry -------------------------------------------------

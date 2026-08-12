@@ -17,8 +17,8 @@ import pytest  # noqa: E402
 from world_facts import (  # noqa: E402
     WorldFactLedger, clean_declared, land_facts,
     KIND_ANECDOTAL, KIND_HYPOTHESIS,
-    MAX_FACTS_PER_STEP, MAX_RENDERED_FACTS, MAX_FACT_CHARS,
-    MAX_LANDED_ANECDOTAL,
+    MAX_FACTS_PER_STEP, MAX_RENDERED_FACTS, MAX_RENDERED_HYPOTHESES,
+    MAX_FACT_CHARS, MAX_LANDED_ANECDOTAL,
 )
 
 
@@ -68,23 +68,36 @@ class TestLedger:
         assert led.facts == {}
 
 
-class TestQuarantine:
-    """§7.1 (decided 2026-08-06): hypotheses are ledgered, never rendered."""
+class TestHonestGuessLabeling:
+    """§7.1 as amended (Jeremy 2026-08-11): hypotheses may render, but only
+    behind the guesses label — "honest about what they are and aren't"."""
 
-    def test_render_is_anecdotal_only(self):
+    def test_hypotheses_render_after_the_guess_label_never_as_facts(self):
         led = WorldFactLedger()
         led.observe(KIND_ANECDOTAL, "source A is paywalled", "hit paywall", 1)
         led.observe(KIND_HYPOTHESIS, "all gov sites will block us", "hunch", 1)
         block = led.render()
-        assert "source A is paywalled" in block
-        assert "all gov sites" not in block
+        label = "Unconfirmed guesses declared THIS RUN"
+        assert label in block
+        assert block.index("source A is paywalled") < block.index(label)
+        assert block.index(label) < block.index("all gov sites will block us")
 
-    def test_hypotheses_only_renders_empty(self):
-        """Empty render is load-bearing — zero contributions must leave
-        prompts byte-identical."""
+    def test_hypotheses_only_renders_labeled_guess_block_only(self):
         led = WorldFactLedger()
-        led.observe(KIND_HYPOTHESIS, "pattern guess", "", 1)
-        assert led.render() == ""
+        led.observe(KIND_HYPOTHESIS, "pattern guess", "a hunch", 1)
+        block = led.render()
+        assert "Unconfirmed guesses declared THIS RUN" in block
+        assert "pattern guess" in block
+        assert "(basis: a hunch)" in block
+        assert "Facts already established" not in block
+
+    def test_guess_render_is_capped_tighter_than_facts(self):
+        led = WorldFactLedger()
+        for i in range(MAX_RENDERED_HYPOTHESES + 4):
+            led.observe(KIND_HYPOTHESIS, f"guess number {i}", "", 1)
+        block = led.render()
+        assert "…and 4 more." in block
+        assert MAX_RENDERED_HYPOTHESES < MAX_RENDERED_FACTS
 
     def test_hypotheses_accessor_is_the_slice2_seam(self):
         led = WorldFactLedger()

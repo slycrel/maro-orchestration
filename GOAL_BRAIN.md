@@ -7141,3 +7141,15 @@ under the same two-measurement standard).
   reach reinforce (provenance gate). Playbook curation already archives
   full prior versions; outcome compression's post-summary removal is
   by-design and named, not silently exempted. 5 pins; suite 8224/0.
+- **2026-08-11** — World-facts §7 re-called by Jeremy (evening, arc
+  CLOSED): (1) §7.1 amended — "an unproven fact is essentially just an
+  assumption"; keep them out of durable stores, but prompting them in is
+  fine "as long as they're honest about what they are and aren't" →
+  hypotheses now render as a labeled "Unconfirmed guesses" block
+  (cap 3, never mixed with facts, never restated as fact); (2) emission
+  as slice 3 re-confirmed; (3) landing caps decreed shallow "2-3 per
+  run for the moment" → MAX_LANDED_ANECDOTAL 5→3, MAX_LANDED_HYPOTHESES
+  3→2 — explicitly framed as an instance of the bigger "how long should
+  we work" optimization question, folded into the §10 taste-calibration
+  discussion, which he queued next ("finish that arc and then jump into
+  the 10 discussion").
