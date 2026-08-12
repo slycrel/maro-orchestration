@@ -1695,6 +1695,84 @@ Output ONLY valid JSON:
     return action
 
 
+def _move_medium_to_long(lesson_id: str, *, in_lock_guards,
+                         mutate=None) -> Optional[TieredLesson]:
+    """Crash-safe MEDIUM→LONG move — LONG is written FIRST.
+
+    The old order (pop from MEDIUM, then append to LONG) silently and
+    permanently lost the lesson — variants and all — when the LONG append
+    failed between the two (adversarial review 2026-08-11, reproduced;
+    the auto-reinforcement caller swallows the exception, so nothing even
+    logged loudly). Duplicates are reconcilable; disappearance is not
+    (retention decree), so the destination is written first:
+
+      1. MEDIUM lock: find the fresh row, run ``in_lock_guards`` on it
+         (the 2026-08-08 unlocked-snapshot fix, unchanged), stage a COPY.
+         The row is NOT removed here.
+      2. LONG lock: append the copy IF ABSENT — idempotent, which closes
+         both the concurrent-double-promotion race the old pop-atomicity
+         used to close, and retry-after-crash.
+      3. MEDIUM lock: remove the row — unless a boundary stamp landed in
+         the 1→3 window, in which case the move ABORTS: the stamped
+         MEDIUM row is the truth and the LONG copy from step 2 is rolled
+         back (a contested/quarantined row must never stand in decay-free
+         LONG).
+
+    A crash between 2 and 3 leaves the row in BOTH tiers; run_decay_cycle
+    reconciles (the MEDIUM copy of a LONG id is an interrupted-move
+    leftover and is dropped). Updates landing on the MEDIUM row inside
+    the 1→3 window are lost with the removal — same class as the old
+    post-pop window, ±1 reinforcement at stake vs the permanent loss this
+    ordering fixes. No tier lock is ever held while taking the other.
+
+    Returns the moved row, or None (not found / guards failed / aborted).
+    """
+    staged: Dict[str, Any] = {}
+
+    def _stage(lessons: List[TieredLesson]) -> List[TieredLesson]:
+        t = next((l for l in lessons if l.lesson_id == lesson_id), None)
+        if t is not None and in_lock_guards(t):
+            staged["t"] = replace(t)
+        return lessons
+
+    _mutate_tiered_lessons(MemoryTier.MEDIUM, _stage)
+    target = staged.get("t")
+    if target is None:
+        return None
+    target.tier = MemoryTier.LONG
+    if mutate is not None:
+        mutate(target)
+
+    def _append_if_absent(lessons: List[TieredLesson]) -> List[TieredLesson]:
+        if any(l.lesson_id == lesson_id for l in lessons):
+            return lessons
+        return lessons + [target]
+
+    _mutate_tiered_lessons(MemoryTier.LONG, _append_if_absent)
+
+    outcome: Dict[str, bool] = {}
+
+    def _remove(lessons: List[TieredLesson]) -> List[TieredLesson]:
+        t = next((l for l in lessons if l.lesson_id == lesson_id), None)
+        if t is None:
+            return lessons  # concurrently moved/GC'd — LONG copy stands
+        if not in_lock_guards(t):
+            outcome["aborted"] = True
+            return lessons
+        return [l for l in lessons if l.lesson_id != lesson_id]
+
+    _mutate_tiered_lessons(MemoryTier.MEDIUM, _remove)
+    if outcome.get("aborted"):
+        def _rollback(lessons: List[TieredLesson]) -> List[TieredLesson]:
+            return [l for l in lessons if l.lesson_id != lesson_id]
+
+        _mutate_tiered_lessons(MemoryTier.LONG, _rollback)
+        log.info("promotion of %s aborted: boundary stamp landed mid-move "
+                 "— MEDIUM row kept, LONG copy rolled back", lesson_id)
+        return None
+    return target
+
+
 def promote_lesson(lesson_id: str) -> bool:
     """Promote a medium-tier lesson to long-tier.
 
@@ -1734,35 +1812,25 @@ def promote_lesson(lesson_id: str) -> bool:
         log.info("promote_lesson: %s is Δ-demoted (measured negative) — "
                  "not promoting", lesson_id)
         return False
-    # ...but the record that moves tiers is the stored (raw) one — popped
-    # from MEDIUM under the lock so concurrent updates aren't dropped.
-    # The boundary guards are re-validated on the FRESH row inside the
-    # lock: the pre-checks above ran on an unlocked snapshot, and a stamp
-    # (quarantine/contest/Δ-demote) landing in that window would otherwise
-    # ride into decay-free LONG unfiltered (adversarial review 2026-08-08
-    # Part 1 finding 2 — same read-outside-the-lock class as the
-    # _reinforce_tiered_lesson fix of 2026-08-04, applied here as a class:
-    # all four guards, both promotion routes).
-    popped: Dict[str, TieredLesson] = {}
-
-    def _pop(lessons: List[TieredLesson]) -> List[TieredLesson]:
-        t = next((l for l in lessons if l.lesson_id == lesson_id), None)
-        if t is None:
-            return lessons
-        if (t.provisional or _is_quarantined(t) or _is_contested(t)
-                or _is_delta_demoted(t)):
+    # ...but the record that moves tiers is the stored (raw) one, and the
+    # move is destination-first (_move_medium_to_long — LONG written
+    # before MEDIUM removal, so a failure between the two duplicates
+    # instead of destroys). The boundary guards are re-validated on the
+    # FRESH row inside the lock at BOTH ends of the move: the pre-checks
+    # above ran on an unlocked snapshot, and a stamp (quarantine/contest/
+    # Δ-demote) landing mid-move aborts it (adversarial reviews 2026-08-08
+    # Part 1 finding 2 and 2026-08-11 promotion-atomicity).
+    def _guards(t: TieredLesson) -> bool:
+        ok = not (t.provisional or _is_quarantined(t) or _is_contested(t)
+                  or _is_delta_demoted(t))
+        if not ok:
             log.info("promote_lesson: %s failed boundary guards under the "
                      "lock — not promoting", lesson_id)
-            return lessons
-        popped["t"] = t
-        return [l for l in lessons if l.lesson_id != lesson_id]
+        return ok
 
-    _mutate_tiered_lessons(MemoryTier.MEDIUM, _pop)
-    target = popped.get("t")
+    target = _move_medium_to_long(lesson_id, in_lock_guards=_guards)
     if target is None:
         return False
-    target.tier = MemoryTier.LONG
-    _append_tiered_lesson(target, tier=MemoryTier.LONG)
 
     # Feed into standing-rule pipeline: observe the pattern for hypothesis tracking
     try:
@@ -1866,40 +1934,37 @@ def promote_lesson_by_effect(lesson_id: str, delta_evidence: Dict[str, Any]) -> 
                  int(ev.get("replay_errors") or 0))
         return False
 
-    popped: Dict[str, TieredLesson] = {}
-
-    def _pop(lessons: List[TieredLesson]) -> List[TieredLesson]:
-        t = next((l for l in lessons if l.lesson_id == lesson_id), None)
-        if t is None:
-            return lessons
-        if t.provisional or _is_quarantined(t) or _is_contested(t):
-            # Re-validate on the fresh row under the lock — the pre-check
-            # above ran on an unlocked snapshot (review Part 1 finding 2;
-            # all guards get the class fix, both promotion routes).
-            # _is_delta_demoted is deliberately NOT in this route's in-lock
-            # set: a demote stamp is replaceable by exactly this call's
-            # fresh qualifying evidence (measurement replaces measurement).
+    def _guards(t: TieredLesson) -> bool:
+        # Re-validate on the fresh row under the lock — the pre-check
+        # above ran on an unlocked snapshot (review Part 1 finding 2;
+        # all guards get the class fix, both promotion routes).
+        # _is_delta_demoted is deliberately NOT in this route's in-lock
+        # set: a demote stamp is replaceable by exactly this call's
+        # fresh qualifying evidence (measurement replaces measurement).
+        ok = not (t.provisional or _is_quarantined(t) or _is_contested(t))
+        if not ok:
             log.info("promote_lesson_by_effect: %s failed boundary "
                      "guards under the lock — not promoting", lesson_id)
-            return lessons
-        popped["t"] = t
-        return [l for l in lessons if l.lesson_id != lesson_id]
+        return ok
 
-    _mutate_tiered_lessons(MemoryTier.MEDIUM, _pop)
-    target = popped.get("t")
+    def _stamp_evidence(t: TieredLesson) -> None:
+        t.delta_evidence = {
+            "delta": float(delta),
+            "jackknife_spread": float(spread),
+            "n_calls": int(ev.get("n_calls") or 0),
+            "replay_errors": int(ev.get("replay_errors") or 0),
+            "stratum": "reason",
+            "measured_at": ev.get("measured_at") or datetime.now(timezone.utc).isoformat(),
+            "route": "effect",
+        }
+
+    # Destination-first move (_move_medium_to_long): LONG written before
+    # MEDIUM removal — a failure between the two duplicates instead of
+    # destroys (adversarial review 2026-08-11 promotion-atomicity).
+    target = _move_medium_to_long(lesson_id, in_lock_guards=_guards,
+                                  mutate=_stamp_evidence)
     if target is None:
         return False
-    target.tier = MemoryTier.LONG
-    target.delta_evidence = {
-        "delta": float(delta),
-        "jackknife_spread": float(spread),
-        "n_calls": int(ev.get("n_calls") or 0),
-        "replay_errors": int(ev.get("replay_errors") or 0),
-        "stratum": "reason",
-        "measured_at": ev.get("measured_at") or datetime.now(timezone.utc).isoformat(),
-        "route": "effect",
-    }
-    _append_tiered_lesson(target, tier=MemoryTier.LONG)
     log.info("promote_lesson_by_effect: %s → LONG (Δ=%.3f over %d calls)",
              lesson_id, float(delta), int(ev.get("n_calls") or 0))
 
@@ -2204,7 +2269,49 @@ def run_decay_cycle(
     Returns a dict with counts: decayed, promoted, gc'd.
     """
     if tier != MemoryTier.MEDIUM:
-        return {"decayed": 0, "promoted": 0, "gc": 0}
+        return {"decayed": 0, "promoted": 0, "gc": 0, "reconciled": 0}
+
+    # Interrupted-move reconciliation (2026-08-11, promotion-atomicity fix):
+    # a MEDIUM row whose lesson_id already lives in LONG is the leftover of
+    # a crash between the destination-first promotion's LONG append and its
+    # MEDIUM removal. The LONG copy is authoritative (it was the move's
+    # destination); the MEDIUM copy is dropped here, before this cycle's
+    # promote/GC judgments see it. The LONG membership read happens INSIDE
+    # the MEDIUM lock: the mover's remove/abort step is serialized against
+    # this closure, so an id seen in LONG here means the move either
+    # completed or will conclude with LONG standing. (Residual window,
+    # named: an abort flagged just before this cycle whose LONG rollback
+    # lands between our read and the drop — microseconds, requires a
+    # mid-move contest stamp AND a concurrent decay cycle; reduces to the
+    # pre-fix loss mode, never a new one. A real WAL is the stronger fix.)
+    reconciled = 0
+    try:
+        if dry_run:
+            _long_ids = {l.lesson_id for l in load_tiered_lessons(
+                tier=MemoryTier.LONG, min_score=0.0, limit=None, raw=True)}
+            _med = load_tiered_lessons(tier=tier, min_score=0.0, limit=None,
+                                       raw=True)
+            reconciled = sum(1 for l in _med if l.lesson_id in _long_ids)
+        else:
+            _recon: Dict[str, int] = {"n": 0}
+
+            def _drop_leftovers(lessons: List[TieredLesson]) -> List[TieredLesson]:
+                long_ids = {l.lesson_id for l in load_tiered_lessons(
+                    tier=MemoryTier.LONG, min_score=0.0, limit=None, raw=True)}
+                if not long_ids:
+                    return lessons
+                kept = [l for l in lessons if l.lesson_id not in long_ids]
+                _recon["n"] = len(lessons) - len(kept)
+                return kept if _recon["n"] else lessons
+
+            _mutate_tiered_lessons(tier, _drop_leftovers)
+            reconciled = _recon["n"]
+        if reconciled:
+            log.info("run_decay_cycle: %s %d interrupted-move leftover(s) "
+                     "in MEDIUM (id already in LONG)",
+                     "found" if dry_run else "dropped", reconciled)
+    except Exception as exc:
+        log.warning("run_decay_cycle: reconciliation skipped: %s", exc)
 
     effective = load_tiered_lessons(tier=tier, min_score=0.0, limit=None)
 
@@ -2267,7 +2374,8 @@ def run_decay_cycle(
 
             _mutate_tiered_lessons(tier, _archive_and_drop)
 
-    return {"decayed": decayed, "promoted": len(promoted_ids), "gc": len(gc_ids)}
+    return {"decayed": decayed, "promoted": len(promoted_ids),
+            "gc": len(gc_ids), "reconciled": reconciled}
 
 
 # ---------------------------------------------------------------------------

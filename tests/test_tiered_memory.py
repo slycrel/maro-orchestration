@@ -402,6 +402,104 @@ def test_promote_lesson_success(monkeypatch, tmp_path):
     assert any(l.lesson_id == tl.lesson_id for l in long_lessons)
 
 
+def test_promotion_long_append_failure_keeps_medium_row(monkeypatch, tmp_path):
+    """Promotion atomicity (adversarial review 2026-08-11, HIGH): the old
+    remove-then-append order silently and permanently lost the lesson when
+    the LONG write failed. Destination-first: a LONG failure must leave
+    the MEDIUM row untouched."""
+    _setup(monkeypatch, tmp_path)
+    import knowledge_web as kw
+    tl = _make_eligible_lesson(tmp_path)
+    real_mutate = kw._mutate_tiered_lessons
+
+    def _long_write_fails(tier, mutate):
+        if tier == MemoryTier.LONG:
+            raise OSError("disk full")
+        return real_mutate(tier, mutate)
+
+    monkeypatch.setattr(kw, "_mutate_tiered_lessons", _long_write_fails)
+    import pytest as _pytest
+    with _pytest.raises(OSError):
+        promote_lesson(tl.lesson_id)
+    monkeypatch.setattr(kw, "_mutate_tiered_lessons", real_mutate)
+    medium = load_tiered_lessons(tier=MemoryTier.MEDIUM)
+    assert any(l.lesson_id == tl.lesson_id for l in medium), \
+        "LONG write failure must not lose the MEDIUM row"
+    long_lessons = load_tiered_lessons(tier=MemoryTier.LONG)
+    assert not any(l.lesson_id == tl.lesson_id for l in long_lessons)
+
+
+def test_promotion_is_idempotent_after_crash_window(monkeypatch, tmp_path):
+    """A retry after a crash between LONG append and MEDIUM removal must
+    not duplicate the LONG row (append-if-absent) and must complete the
+    interrupted move."""
+    _setup(monkeypatch, tmp_path)
+    import json
+    from dataclasses import asdict, replace
+    import knowledge_web as kw
+    tl = _make_eligible_lesson(tmp_path)
+    # Manufacture the crash-window state: copy already in LONG, row still
+    # in MEDIUM.
+    long_copy = replace(tl)
+    long_copy.tier = MemoryTier.LONG
+    kw._append_tiered_lesson(long_copy, tier=MemoryTier.LONG)
+
+    ok = promote_lesson(tl.lesson_id)
+    assert ok is True
+    long_rows = [l for l in load_tiered_lessons(tier=MemoryTier.LONG, raw=True)
+                 if l.lesson_id == tl.lesson_id]
+    assert len(long_rows) == 1, "append-if-absent must not duplicate"
+    medium = load_tiered_lessons(tier=MemoryTier.MEDIUM)
+    assert not any(l.lesson_id == tl.lesson_id for l in medium)
+
+
+def test_move_aborts_and_rolls_back_when_stamp_lands_mid_move(monkeypatch, tmp_path):
+    """A boundary stamp landing between stage and removal aborts the move:
+    the stamped MEDIUM row is the truth; the LONG copy is rolled back."""
+    _setup(monkeypatch, tmp_path)
+    import knowledge_web as kw
+    tl = _make_eligible_lesson(tmp_path)
+    calls = {"n": 0}
+
+    def _guards_flip(t):
+        calls["n"] += 1
+        return calls["n"] == 1  # pass at stage, fail at remove
+
+    moved = kw._move_medium_to_long(tl.lesson_id, in_lock_guards=_guards_flip)
+    assert moved is None
+    medium = load_tiered_lessons(tier=MemoryTier.MEDIUM)
+    assert any(l.lesson_id == tl.lesson_id for l in medium)
+    long_lessons = load_tiered_lessons(tier=MemoryTier.LONG, raw=True)
+    assert not any(l.lesson_id == tl.lesson_id for l in long_lessons), \
+        "aborted move must roll the LONG copy back"
+
+
+def test_decay_cycle_reconciles_interrupted_move(monkeypatch, tmp_path):
+    """A MEDIUM row whose id already lives in LONG is an interrupted-move
+    leftover — the decay cycle drops it (LONG is authoritative); dry_run
+    counts without acting."""
+    _setup(monkeypatch, tmp_path)
+    from dataclasses import replace
+    import knowledge_web as kw
+    tl = record_tiered_lesson("a lesson caught mid move", "general", "done", "g1")
+    long_copy = replace(tl)
+    long_copy.tier = MemoryTier.LONG
+    kw._append_tiered_lesson(long_copy, tier=MemoryTier.LONG)
+
+    stats = kw.run_decay_cycle(tier=MemoryTier.MEDIUM, dry_run=True)
+    assert stats["reconciled"] == 1
+    assert any(l.lesson_id == tl.lesson_id
+               for l in load_tiered_lessons(tier=MemoryTier.MEDIUM))
+
+    stats = kw.run_decay_cycle(tier=MemoryTier.MEDIUM)
+    assert stats["reconciled"] == 1
+    medium = load_tiered_lessons(tier=MemoryTier.MEDIUM)
+    assert not any(l.lesson_id == tl.lesson_id for l in medium)
+    long_rows = [l for l in load_tiered_lessons(tier=MemoryTier.LONG, raw=True)
+                 if l.lesson_id == tl.lesson_id]
+    assert len(long_rows) == 1
+
+
 def test_promote_lesson_ineligible_score(monkeypatch, tmp_path):
     _setup(monkeypatch, tmp_path)
     tl = record_tiered_lesson("low score lesson", "general", "done", "g1")

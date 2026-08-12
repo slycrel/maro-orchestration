@@ -44,7 +44,29 @@ full triage: 2026-07-04.
 
 Ordered open work that matters. Top of the list is next.
 
-### MEDIUM→LONG promotion can lose a lesson outright on destination-write failure (FOUND 2026-08-11, adversarial review of the rationale-erosion chunk — pre-existing, HIGH)
+### MEDIUM→LONG promotion can lose a lesson outright on destination-write failure (FOUND 2026-08-11, adversarial review of the rationale-erosion chunk — pre-existing, HIGH; **FIXED same day, Jeremy: "let's fix that now"**)
+
+**FIXED 2026-08-11** (`knowledge_web._move_medium_to_long`, both routes):
+the move is now destination-first — stage under the MEDIUM lock (in-lock
+boundary guards unchanged, both ends of the move), append-IF-ABSENT under
+the LONG lock (idempotent: closes the concurrent-double-promotion race
+the old pop-atomicity closed, and makes retry-after-crash safe), then
+remove under the MEDIUM lock with a guard re-check — a boundary stamp
+landing mid-move ABORTS the promotion and rolls the LONG copy back (a
+contested row must never stand in decay-free LONG). A crash between the
+two locks leaves the row in BOTH tiers; `run_decay_cycle` reconciles
+(the MEDIUM copy of a LONG id is an interrupted-move leftover, dropped —
+LONG-membership read INSIDE the MEDIUM lock, serialized against the
+mover). Named residual window: an abort's LONG rollback interleaving a
+concurrent decay cycle's read — microseconds, needs a mid-move contest
+stamp AND a cycle at that instant, and it reduces to the PRE-fix loss
+mode, never a new one; a real WAL is the stronger fix if it ever fires.
+Also honest: MEDIUM-row updates landing inside the stage→remove window
+are lost with the removal (±1 reinforcement — same class as the old
+post-pop window). 4 pins (test_tiered_memory.py) + 3 shape pins updated
+(`reconciled` in cycle stats).
+
+Original finding:
 
 Both promotion routes remove the row from MEDIUM under that tier's lock,
 then append it to LONG as a separate operation

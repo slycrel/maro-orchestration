@@ -7231,3 +7231,12 @@ under the same two-measurement standard).
   yet." Meta-edge he named: LLMs (and he) reaching for exact
   correctness where probabilistic direction is the tool — "sometimes
   it's both."
+- **2026-08-11** — Promotion perma-loss FIXED same evening (Jeremy:
+  "pretty bad — let's fix that now"). `_move_medium_to_long`, both
+  routes: destination-first (LONG append-if-absent before MEDIUM
+  removal), in-lock guards at both ends with mid-move-stamp ABORT +
+  LONG rollback, crash-window duplicates reconciled by run_decay_cycle
+  (in-lock LONG-membership read). Residual window named honestly
+  (abort-rollback × concurrent cycle — microseconds, reduces to the
+  pre-fix mode; WAL is the stronger fix). 4 new pins + 3 shape pins;
+  suite 8254/0 skipped.

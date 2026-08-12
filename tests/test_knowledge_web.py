@@ -867,7 +867,7 @@ class TestRunDecayCycle:
 
     def test_decay_cycle_empty_tier(self, tmp_path):
         result = run_decay_cycle(tier=MemoryTier.MEDIUM)
-        assert result == {"decayed": 0, "promoted": 0, "gc": 0}
+        assert result == {"decayed": 0, "promoted": 0, "gc": 0, "reconciled": 0}
 
     def test_decay_cycle_long_tier_is_noop(self, tmp_path):
         """Long tier doesn't decay by design — cycle on it is a no-op."""
@@ -876,7 +876,7 @@ class TestRunDecayCycle:
             lesson_id="lt1", score=0.95, last_reinforced=old_date, tier=MemoryTier.LONG,
         ), tier=MemoryTier.LONG)
         result = run_decay_cycle(tier=MemoryTier.LONG)
-        assert result == {"decayed": 0, "promoted": 0, "gc": 0}
+        assert result == {"decayed": 0, "promoted": 0, "gc": 0, "reconciled": 0}
         long_ = load_tiered_lessons(tier=MemoryTier.LONG, min_score=0.0)
         assert long_[0].score == pytest.approx(0.95)
 
@@ -999,7 +999,7 @@ class TestConsolidation:
             lesson_id="c1", score=0.8, last_reinforced=old_date,
         ))
         result = kw.maybe_consolidate()
-        assert set(result["medium"]) == {"decayed", "promoted", "gc"}
+        assert set(result["medium"]) == {"decayed", "promoted", "gc", "reconciled"}
         marker = json.loads(kw._consolidation_marker_path().read_text(encoding="utf-8"))
         assert "ts" in marker and "medium" in marker
 
