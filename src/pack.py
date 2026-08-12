@@ -653,6 +653,29 @@ def _import_variants(raw: Any) -> List[str]:
     return out
 
 
+def _union_variants_into_local(lesson_text: str, variants: List[str]) -> None:
+    """Union imported variants into the local tiered row whose canonical
+    text is byte-identical, under the store lock. Best-effort: a miss
+    (row moved/GC'd between the caller's check and here) is a no-op."""
+    try:
+        from knowledge_web import MemoryTier, _mutate_tiered_lessons
+        from memory_ledger import _absorb_variant
+
+        def _apply(lessons):
+            row = next((l for l in lessons if l.lesson == lesson_text), None)
+            if row is not None:
+                for v in variants:
+                    _absorb_variant(row.merged_variants, v, row.lesson)
+            return lessons
+
+        for tier in (MemoryTier.MEDIUM, MemoryTier.LONG):
+            _mutate_tiered_lessons(tier, _apply)
+    except Exception as exc:
+        import logging
+        logging.getLogger("maro.pack").debug(
+            "pack import: variant union skipped: %s", exc)
+
+
 def _import_lessons(content: str, *, pack_name: str, label: str, pack_tag: str,
                      now: str, dry_run: bool) -> List[Dict[str, Any]]:
     """Lessons enter MEDIUM tier regardless of origin tier, score capped at 0.5
@@ -689,7 +712,17 @@ def _import_lessons(content: str, *, pack_name: str, label: str, pack_tag: str,
                 results.append({"lesson_id": original_id, "outcome": "already_imported"})
                 continue
             if lesson_text and lesson_text in existing_texts:
-                results.append({"lesson_id": original_id, "outcome": "skipped_identical"})
+                # Identity collision skips the ROW, not its rationale
+                # (fixpoint review 2026-08-11: the early skip silently lost
+                # a foreign operative variant, making transport
+                # order-dependent). Incoming variants union into the local
+                # twin — data crosses, trust does not.
+                _in_vars = _import_variants(row.get("merged_variants"))
+                if _in_vars and not dry_run:
+                    _union_variants_into_local(lesson_text, _in_vars)
+                results.append({"lesson_id": original_id,
+                                "outcome": "skipped_identical",
+                                "variants_merged": len(_in_vars)})
                 continue
             original_score = float(row.get("score", 1.0))
             imported = {
@@ -760,6 +793,10 @@ def _import_lessons(content: str, *, pack_name: str, label: str, pack_tag: str,
             if not dry_run:
                 _append_tiered_lesson(tl, tier=MemoryTier.MEDIUM)
             existing_ids.add(new_id)
+            # Duplicate rows INSIDE one artifact must not both import —
+            # the identity snapshot was taken once, before any appends
+            # (fixpoint review 2026-08-11).
+            existing_texts.add(lesson_text)
             outcome = ("imported_medium_quarantined" if minted_from == "prompt"
                        else "imported_medium")
             results.append({"lesson_id": original_id, "new_id": new_id, "outcome": outcome})

@@ -1496,6 +1496,80 @@ class TestDeduplicateLessons:
         assert len(kept) == 1
         assert kept[0]["merged_variants"] == [near]
 
+    def test_sweep_is_task_type_scoped(self, monkeypatch, tmp_path):
+        """Fixpoint review round 2: the live lanes' contract is 'identical
+        text under a different task type is a separate lesson' — the sweep
+        merging globally deleted rows the live lanes deliberately keep."""
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        import json
+        lessons_path = self._lessons_path(tmp_path)
+        text = "identical text kept per task type by contract"
+        self._write_lessons(lessons_path, [
+            self._make_lesson(text, task_type="research", lesson_id="L001"),
+            self._make_lesson(text, task_type="build", lesson_id="L002"),
+        ])
+        from memory_ledger import deduplicate_lessons
+        stats = deduplicate_lessons()
+        assert stats["after"] == 2
+        assert stats["removed_exact"] == 0
+
+    def test_sweep_merges_absorbed_reinforcement_history(self, monkeypatch, tmp_path):
+        """Fixpoint review round 2: times_reinforced is refight evidence —
+        collapsing an absorbed row's 7 sightings to +1 destroyed it."""
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        import json
+        lessons_path = self._lessons_path(tmp_path)
+        survivor = self._make_lesson("Always test edge cases.", lesson_id="L001")
+        survivor["times_reinforced"] = 4
+        absorbed = self._make_lesson("Always test edge cases.", lesson_id="L002")
+        absorbed["times_reinforced"] = 7
+        self._write_lessons(lessons_path, [survivor, absorbed])
+        from memory_ledger import deduplicate_lessons
+        deduplicate_lessons()
+        kept = [json.loads(l) for l in lessons_path.read_text().splitlines() if l.strip()]
+        assert kept[0]["times_reinforced"] == 4 + 1 + 7
+
+    def test_oversize_exact_rerecord_is_not_a_variant(self, monkeypatch, tmp_path):
+        """Fixpoint review round 2: identity is judged BEFORE clipping — a
+        >500-char canonical's exact re-record must not store its own
+        clipped twin as a variant, and a stored clipped variant must not
+        re-clip into a fresh twin."""
+        from memory_ledger import (_MERGED_VARIANTS_CAP, _VARIANT_MAX_CHARS,
+                                   _absorb_variant, _clip)
+        canonical = "boundary validation lesson " * 40  # ~1080 chars
+        variants = []
+        _absorb_variant(variants, canonical, canonical)
+        assert variants == []  # exact re-record, no bogus variant
+        near = canonical + "extra operative clause"
+        _absorb_variant(variants, near, canonical)
+        assert len(variants) == 1 and "truncated" in variants[0]
+        stored = variants[0]
+        _absorb_variant(variants, stored, canonical)  # re-process stored clip
+        assert variants == [stored]  # idempotent — no re-clipped twin
+
+    def test_live_flat_reinforce_mutates_fresh_row(self, monkeypatch, tmp_path):
+        """Fixpoint review round 2 (HIGH): the reinforce paths mutated a
+        stale pre-lock copy — a counter bump landing between load and
+        rewrite was silently reverted. The mutation now applies to the row
+        as it is on disk."""
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        import json
+        from memory_ledger import _lessons_path, _store_lesson
+        base = "always validate user inputs at the system boundary before processing any data"
+        first = _store_lesson("build", "done", base, "goal-1", minted_from="outcome")
+        # Simulate a concurrent writer bumping the row on disk AFTER the
+        # next caller's (stale) load would have happened: bump directly.
+        rows = [json.loads(l) for l in
+                _lessons_path().read_text().splitlines() if l.strip()]
+        rows[0]["times_reinforced"] = 5
+        _lessons_path().write_text(
+            "\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
+        _store_lesson("build", "done", base, "goal-2", minted_from="outcome")
+        rows = [json.loads(l) for l in
+                _lessons_path().read_text().splitlines() if l.strip()]
+        assert rows[0]["times_reinforced"] == 6, \
+            "reinforce must build on the on-disk row, not a stale copy"
+
     def test_exact_dups_leave_no_variant_and_key_stays_absent(self, monkeypatch, tmp_path):
         """Identical text loses nothing — no variant recorded, and an empty
         merged_variants never lands on the row (_verdict_row discipline)."""

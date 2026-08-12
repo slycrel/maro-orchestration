@@ -490,10 +490,42 @@ classifier reads worker-authored reasons only; (8) the "prompt text
 cannot land here" comment overclaimed → bounded honestly (gate-off
 exposes canonical text identically; variants never MORE exposed than
 the store). **Residuals filed:** MEDIUM→LONG promotion atomicity (new
-top-of-stack entry — pre-existing HIGH); reinforce-race
+top-of-stack entry — pre-existing HIGH; FIXED same evening); reinforce-race
 counters/provisional-clear on refight-revised rows (pre-existing,
 needs a fingerprint-revalidation design); per-variant provenance if
 pack quarantine ever needs to filter variants.
+
+**Fixpoint round (2026-08-11 evening, Jeremy's ask: review work+fixes
+as one whole; Codex 2-lens over 579cc6d..8b5bf05): REJECT again — the
+round found what per-delta review couldn't, all fixed same session.**
+(1) HIGH, pre-existing made worse: the flat reinforce paths mutated a
+PRE-LOCK stale copy and the per-id wholesale rewrite made concurrent
+reinforcements last-writer-wins (variants AND counters silently
+vanished; the tiered lane fixed this identical class 2026-08-04) →
+`_reinforce_flat_row`: single-row locked RMW, mutation applies to the
+on-disk row, unparseable lines preserved verbatim. (2) HIGH,
+pre-existing: the SWEEP merged across task types against the live
+lanes' documented contract ("identical text under a different task
+type is a separate lesson") — deleting rows the live lanes keep,
+breaking UU-4 same-id joins → sweep is task_type-scoped now, and the
+survivor absorbs the dropped row's reinforcement HISTORY (+1+absorbed,
+not +1 — that counter is refight evidence). (3) clip-before-equality
+broke identity: a >500-char canonical's exact re-record stored its own
+clipped twin as a variant, and stored clips re-clipped into fresh
+twins (marker not idempotent) → identity judged before clipping,
+marker-carrying texts never re-clip, canonical stripped for compare.
+(4) the round-1 similarity recheck was NOT identity ("always
+validate…"→"never validate…" scores 0.88) → variant attach now binds
+to the EXACT matched canonical text (byte-equal), not a similarity
+floor. (5) pack import's skipped_identical early-exit lost foreign
+variants (transport order-dependent) → collision unions variants into
+the local twin (data crosses, trust does not); intra-artifact
+duplicates closed (identity snapshot updated after append). Rejected
+with rationale: typed blocked-origin shape (the "" default not
+classifying externally-built results is the conservative design for a
+candidate lane). Residual added: import-side near-dup canonical
+reconciliation policy (foreign near-dups still append a second row —
+trust-aware near-merge is its own design). Suite 8259/0 skipped.
 
 Standing caveats to honor before building ANY of these: (a) every ruling
 is static-source-reading — "code path present," never "problem solved";

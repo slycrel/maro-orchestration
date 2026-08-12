@@ -1290,6 +1290,52 @@ def _lesson_looks_adversarial(text: str) -> bool:
     return any(p in lower for p in _INJECTION_PATTERNS)
 
 
+def _reinforce_flat_row(lesson_id: str, apply) -> Optional[Lesson]:
+    """Locked read-modify-write of ONE flat-ledger row.
+
+    ``apply(row)`` mutates the row AS IT IS ON DISK inside the lock —
+    never a pre-lock copy (fixpoint review 2026-08-11: stale-copy
+    mutation + per-id wholesale rewrite made concurrent reinforcements
+    last-writer-wins; variants and counters silently vanished — the
+    tiered lane fixed this same class 2026-08-04). Unparseable lines are
+    preserved verbatim, never dropped by the rewrite. Returns the fresh
+    mutated row, or None when the id vanished (concurrent dedup/GC).
+    """
+    from file_lock import locked_rmw
+    out: Dict[str, Lesson] = {}
+
+    def _rmw(old: str) -> str:
+        entries: List[Any] = []  # Lesson | raw str (preserved verbatim)
+        target: Optional[Lesson] = None
+        for line in old.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            try:
+                row = _lesson_from_row(json.loads(stripped))
+            except Exception:
+                entries.append(stripped)
+                continue
+            if row.lesson_id == lesson_id and target is None:
+                target = row
+            entries.append(row)
+        if target is None:
+            return old
+        apply(target)
+        out["row"] = target
+        return "\n".join(
+            e if isinstance(e, str) else json.dumps(_verdict_row(e))
+            for e in entries) + "\n"
+
+    try:
+        locked_rmw(_lessons_path(), _rmw)
+    except Exception as exc:
+        log.warning("_reinforce_flat_row: rewrite failed for %s: %s",
+                    lesson_id, exc)
+        return None
+    return out.get("row")
+
+
 def _store_lesson(
     task_type: str,
     outcome: str,
@@ -1339,54 +1385,66 @@ def _store_lesson(
     # include_quarantined/contested — dedup must see excluded rows or a
     # re-minted duplicate would append a fresh live copy, laundering the
     # exclusion.
+    # The MATCH may run on this unlocked snapshot (flat canonical text is
+    # never revised in place, so a matched text stays valid), but the
+    # MUTATION runs against the row as it is on disk under the lock
+    # (_reinforce_flat_row) — mutating the stale copy and rewriting it
+    # wholesale made concurrent absorptions last-writer-wins: variants and
+    # counters silently vanished (fixpoint review 2026-08-11; the tiered
+    # lane fixed this same disease 2026-08-04).
     existing = load_lessons(task_type=task_type, limit=500,
                             include_quarantined=True,
                             include_contested=True)
+
+    def _citizenship(row: Lesson) -> None:
+        if (row.minted_from == "prompt" and minted_from == "outcome"
+                and not row.contested):
+            # Contested rows never regain citizenship via a duplicate
+            # write (mirrors the tiered anti-laundering guard).
+            # Outcome-derived re-record clears quarantine — mirrors the
+            # tiered _reinforce_tiered_lesson citizenship rule. The
+            # incoming record must be affirmatively outcome-classified:
+            # an unclassified "" (gate off) must not clear, or disabling
+            # the killswitch re-arms stamped rows via the next duplicate
+            # write (adversarial review 2026-07-29).
+            row.minted_from = "outcome"
+            log.info("quarantined flat lesson %s cleared by an "
+                     "outcome-derived re-record", row.lesson_id)
+
     for ex in existing:
         if ex.lesson == lesson:
             if minted_from == "prompt":
                 log.info("prompt-derived flat re-record of %s ignored "
                          "(provenance gate)", ex.lesson_id)
                 return ex
-            # Exact match: reinforce without touching confidence (it's already there)
-            ex.times_reinforced += 1
-            if (ex.minted_from == "prompt" and minted_from == "outcome"
-                    and not ex.contested):
-                # Contested rows never regain citizenship via a duplicate
-                # write (mirrors the tiered anti-laundering guard).
-                # Outcome-derived re-record clears quarantine — mirrors the
-                # tiered _reinforce_tiered_lesson citizenship rule. The
-                # incoming record must be affirmatively outcome-classified:
-                # an unclassified "" (gate off) must not clear, or disabling
-                # the killswitch re-arms stamped rows via the next duplicate
-                # write (adversarial review 2026-07-29).
-                ex.minted_from = "outcome"
-                log.info("quarantined flat lesson %s cleared by an "
-                         "outcome-derived re-record", ex.lesson_id)
-            _rewrite_lessons_file(task_type, existing)
-            return ex
+
+            def _apply_exact(row: Lesson) -> None:
+                # Exact match: reinforce without touching confidence
+                # (it's already there)
+                row.times_reinforced += 1
+                _citizenship(row)
+
+            return _reinforce_flat_row(ex.lesson_id, _apply_exact) or ex
     for ex in existing[:100]:
         if _text_similarity(ex.lesson, lesson) > 0.8:
             if minted_from == "prompt":
                 log.info("prompt-derived flat re-record of %s ignored "
                          "(provenance gate)", ex.lesson_id)
                 return ex
-            # Reinforce existing lesson and persist the update
-            ex.times_reinforced += 1
-            # Rationale erosion (adversarial review 2026-08-11: this flat
-            # live lane was the third merge path still discarding text —
-            # and the UU-4 dual-write's flat half, so tiered/flat rows with
-            # the same lesson_id silently diverged).
-            _absorb_variant(ex.merged_variants, lesson, ex.lesson)
-            if not ex.contested:  # contested rows: sighting counted, nothing else moves
-                ex.confidence = min(1.0, ex.confidence + 0.05)
-            if (ex.minted_from == "prompt" and minted_from == "outcome"
-                    and not ex.contested):
-                ex.minted_from = "outcome"  # same citizenship rule as above
-                log.info("quarantined flat lesson %s cleared by an "
-                         "outcome-derived re-record", ex.lesson_id)
-            _rewrite_lessons_file(task_type, existing)
-            return ex
+
+            def _apply_near(row: Lesson) -> None:
+                row.times_reinforced += 1
+                # Rationale erosion (adversarial review 2026-08-11: this
+                # flat live lane was the third merge path still discarding
+                # text — and the UU-4 dual-write's flat half, so
+                # tiered/flat rows with the same lesson_id silently
+                # diverged).
+                _absorb_variant(row.merged_variants, lesson, row.lesson)
+                if not row.contested:  # contested: sighting counted, nothing else moves
+                    row.confidence = min(1.0, row.confidence + 0.05)
+                _citizenship(row)
+
+            return _reinforce_flat_row(ex.lesson_id, _apply_near) or ex
 
     # UU-4 (BACKLOG LT arc): a caller that dual-writes the same lesson to
     # this ledger AND the tiered store may supply one shared id, so the two
@@ -1765,6 +1823,9 @@ _MERGED_VARIANTS_CAP = 5
 _VARIANT_MAX_CHARS = 500
 
 
+_CLIP_MARKER_RE = re.compile(r" … \[truncated: first \d+ of \d+ characters\]$")
+
+
 def _absorb_variant(variants: List[str], text: str, canonical: str) -> None:
     """Preserve an absorbed near-dup text on a survivor row, bounded.
 
@@ -1773,12 +1834,25 @@ def _absorb_variant(variants: List[str], text: str, canonical: str) -> None:
     separately had already diverged by the first review). Mutates
     ``variants`` in place; skips empties, the canonical text itself,
     already-present texts, and everything past _MERGED_VARIANTS_CAP.
+
+    Identity is judged BEFORE clipping (fixpoint review, round 2: clipping
+    first made a >500-char canonical's exact re-record look like a new
+    variant, and re-processing a stored clipped variant re-clipped it into
+    a fresh textual twin — the clip marker is not idempotent). A text that
+    already carries the clip marker is stored as-is, never re-clipped.
     """
     if len(variants) >= _MERGED_VARIANTS_CAP:
         return
-    text = _clip((text or "").strip(), _VARIANT_MAX_CHARS)
+    text = (text or "").strip()
+    canonical = (canonical or "").strip()
     if not text or text == canonical or text in variants:
         return
+    if not _CLIP_MARKER_RE.search(text):
+        text = _clip(text, _VARIANT_MAX_CHARS)
+        # Re-check identity in clipped form: the clipped twin of the
+        # canonical or of an existing variant is still a twin.
+        if text == canonical or text in variants:
+            return
     variants.append(text)
 
 
@@ -1814,11 +1888,22 @@ def deduplicate_lessons(*, dry_run: bool = False) -> dict:
         stats["before"] = len(all_lessons)
         kept: List[Lesson] = []
 
+        # Both matches are task_type-scoped (fixpoint review, round 2): the
+        # live lanes' documented contract is "identical text under a
+        # different task type is a separate lesson", and the sweep merging
+        # globally deleted rows the live lanes deliberately keep — breaking
+        # UU-4 same-id joins and emptying task-scoped retrieval. The
+        # survivor also absorbs the dropped row's reinforcement HISTORY,
+        # not just +1: that counter is refight evidence, and collapsing 7
+        # sightings to 1 destroyed it (same review).
         for l in all_lessons:
             # Exact match check
-            exact_match = next((k for k in kept if k.lesson == l.lesson), None)
+            exact_match = next(
+                (k for k in kept
+                 if k.lesson == l.lesson and k.task_type == l.task_type),
+                None)
             if exact_match is not None:
-                exact_match.times_reinforced += 1
+                exact_match.times_reinforced += 1 + l.times_reinforced
                 # The dropped row may itself carry absorbed variants —
                 # union them or they vanish with the row (adversarial
                 # review 2026-08-11: the merge was not closed under its
@@ -1831,11 +1916,13 @@ def deduplicate_lessons(*, dry_run: bool = False) -> dict:
 
             # Near-duplicate check
             near_match = next(
-                (k for k in kept if _text_similarity(k.lesson, l.lesson) > 0.8),
+                (k for k in kept
+                 if k.task_type == l.task_type
+                 and _text_similarity(k.lesson, l.lesson) > 0.8),
                 None,
             )
             if near_match is not None:
-                near_match.times_reinforced += 1
+                near_match.times_reinforced += 1 + l.times_reinforced
                 near_match.confidence = min(1.0, near_match.confidence + 0.05)
                 # Rationale erosion fix (MH, 2026-08-11): the dropped text
                 # can differ in exactly the operative clause — keep it AND

@@ -7240,3 +7240,18 @@ under the same two-measurement standard).
   (abort-rollback × concurrent cycle — microseconds, reduces to the
   pre-fix mode; WAL is the stronger fix). 4 new pins + 3 shape pins;
   suite 8254/0 skipped.
+- **2026-08-11** — Fixpoint review round (Jeremy: "worth another
+  adversarial-review across the entire changeset?") — yes, it was:
+  REJECT again, all fixed same session (9th earning round). The two
+  HIGHs were PRE-EXISTING structure the variant work surfaced: flat
+  reinforce mutated pre-lock stale copies (last-writer-wins — the
+  identical class the tiered lane fixed 2026-08-04) → single-row
+  locked RMW; and the dedup SWEEP merged across task types against the
+  live lanes' documented contract, deleting rows and breaking UU-4
+  joins → task-scoped + reinforcement-history-preserving. Plus:
+  identity-before-clip (idempotent marker), byte-exact version binding
+  for variant attach (similarity ≠ identity: "always…"→"never…" scores
+  0.88), pack collision unions variants instead of dropping them.
+  Rejected: typed blocked-origin (conservative "" default is the
+  design). New residual: import-side near-dup reconciliation policy.
+  Suite 8259/0 skipped.

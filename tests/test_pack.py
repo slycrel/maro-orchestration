@@ -923,6 +923,33 @@ class TestProvenanceTransport:
         assert "truncated" in tl.merged_variants[0]  # marked clip
         assert all(isinstance(v, str) for v in tl.merged_variants)
 
+    def test_identical_canonical_collision_unions_variants(self, tmp_path, target_ws):
+        """Fixpoint review round 2: the skipped_identical early-exit lost
+        foreign variants — the collision skips the ROW, not its rationale."""
+        from knowledge_web import (MemoryTier, load_tiered_lessons,
+                                   record_tiered_lesson)
+        canonical = "the shared canonical lesson text"
+        src_ws = _make_workspace(tmp_path / "src")
+        pack_path = _export_and_seal(src_ws, tmp_path)
+        _add_artifact(pack_path, cls="lessons", relpath="memory/long/lessons.jsonl",
+                      content=json.dumps({
+                          "lesson_id": "f1", "lesson": canonical,
+                          "task_type": "ops", "outcome": "success",
+                          "source_goal": "g", "confidence": 0.9, "tier": "long",
+                          "score": 1.0, "last_reinforced": "2020-01-01",
+                          "merged_variants": ["a foreign operative variant"],
+                      }) + "\n")
+        # Local twin exists BEFORE import → row skips, variants must not.
+        record_tiered_lesson(canonical, "ops", "done", "local-goal")
+        result = import_pack(pack_path, label="l", target=target_ws)
+        row = [r for r in result["lessons_imported"] if r["lesson_id"] == "f1"][0]
+        assert row["outcome"] == "skipped_identical"
+        assert row["variants_merged"] == 1
+        local = [l for l in load_tiered_lessons(tier=MemoryTier.MEDIUM,
+                                                limit=None, raw=True)
+                 if l.lesson == canonical][0]
+        assert "a foreign operative variant" in local.merged_variants
+
     def test_import_classifies_unstamped_prompt_shaped_lesson(self, tmp_path, target_ws):
         from knowledge_web import load_tiered_lessons, MemoryTier
         src_ws = _make_workspace(tmp_path / "src")
