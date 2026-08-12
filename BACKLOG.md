@@ -262,6 +262,31 @@ retracted by the step-9 adversarial pass — see below):
 - **#8 Missed Read (model—memory), INFERRED-cost** — `memory_quality.py`
   is a working offline hit@1/hit@5/MRR eval with ZERO call sites; adopt =
   wire it live. Batch-CLI→per-run cost was not scoped; "cheap" unverified.
+  **COST SCOPED 2026-08-11 (measured live, full box corpus) — and the
+  measurement surfaced the real finding.** Cost answer: one full-corpus
+  eval = 1,957 items / 2,011 queries, **zero LLM tokens** (paraphrase
+  queries are pre-generated and cached; self/probe queries are pure
+  extraction), ~50s wall dominated by the jsonl lane (23.7ms/query;
+  sqlite-fts5 is 1.2ms) — so "cheap" is TRUE for periodic wiring and
+  false for per-run (a minute per run for a slowly-moving corpus metric
+  is waste). Wiring shape when built: heartbeat/GC-cadence trend row
+  (weekly-ish), report already lands in `output/memory_quality/`.
+  **The finding: semantic retrieval is near-dead on both adapters.**
+  The module's own fair lane (LLM-paraphrase queries, checker verified:
+  expected-item scoring by content sha1, spot-checked queries are
+  meaning-preserving rewords) scores **hit@1 2.0% / hit@5 8.2% (jsonl)
+  and 6.1% / 14.3% (sqlite-fts5)** vs the lexically-biased self lane's
+  46%/80% (jsonl) and 80%/89% (sqlite). n=49 (cache vintage 2026-07-08;
+  binomial 95% upper bound on 2.0% is still only ~11%) — a run asking
+  memory for something in words other than the stored ones essentially
+  never gets it. This QUANTIFIES the Missed Read edge and is direct
+  input to the memory-as-module bake-off priority (MILESTONES arc -1,
+  memory_port): the incumbent adapters lose on exactly the semantic
+  axis a 3rd-party store would bring. Regenerating/extending the
+  paraphrase cache to the current corpus (cheap-tier calls,
+  `scripts/gen_paraphrase_queries.py`) is part of any wiring build.
+  READING_QUEUE row added — wire-at-cadence vs bake-off-priority is
+  Jeremy's call.
 - **#9 Instruction-Following Failure (owner—model)** — relabel
   `checks_run`/`failed_checks`, already structured. **BUILT
   2026-08-09**: an incomplete verdict with concrete failed checks gets

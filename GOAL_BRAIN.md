@@ -7101,3 +7101,17 @@ under the same two-measurement standard).
   candidate loop: blocked + provision-shaped → director-log
   `delegation_gap` + WORKER_DELEGATION_GAP candidate event. Advisory,
   forward-only, low-traffic lane. Suite 8191/0 skipped.
+- **2026-08-11** — MH #8 cost SCOPED (measured, not asserted) and the
+  measurement carried the real finding. Full-corpus memory_quality eval
+  on box: 1,957 items / 2,011 queries, ZERO LLM tokens, ~50s wall
+  (jsonl lane 23.7ms/query; sqlite-fts5 1.2ms) — "cheap" TRUE for
+  heartbeat/GC-cadence wiring, false for per-run. Finding: **the fair
+  (paraphrase) lane scores hit@1 2.0%/6.1% (jsonl/sqlite) vs the
+  lexical self lane's 46%/80%** — semantic retrieval is near-dead on
+  both adapters; a run asking memory in its own words essentially
+  never gets the stored item (checker verified before publishing:
+  sha1-matched expected-item scoring; paraphrases spot-checked as
+  meaning-preserving; n=49, binomial upper bound ~11% — direction
+  unambiguous). Quantifies the Missed Read edge; direct input to the
+  memory-as-module bake-off priority (arc -1). READING_QUEUE row
+  added: wire-at-cadence and/or bump bake-off is Jeremy's call.
