@@ -7198,6 +7198,26 @@ under the same two-measurement standard).
   lane verified live (card == provider sum to the digit), pass-audit
   ran correctly on a positive verdict, four-layer verdict stack
   agreed unassisted — second consecutive clean-verdict run.
+
+- **2026-08-11** — Step-flag visibility follow-on (392095a, Jeremy:
+  "worth a pass to generate that metadata, along with upgrading the
+  report to show it"): over-cap badges in the per-run report step
+  table + cross-run index, `refresh-step-flags` backfill CLI.
+  **Backfill run on the box: 61 runs / 140 firings were invisible;
+  median firing is 829K tokens vs the 200K cap (p90 1.7M, max 3.9M)
+  — the cap is blown through 4x at median, not grazed, so either the
+  cap is miscalibrated or too-broad decomposition is common and the
+  signal (which only feeds the NEXT loop's decompose) isn't
+  correcting it. Data now on cards for the tuning call.** Also filed:
+  **codex-as-primary (maybe grok) A/B is a named, GATED future
+  revisit of item 24's stay-first-party decision** (Vision/Deferred)
+  — Jeremy: "let's get more consistently good results before we do
+  that"; baseline first, then executor-swap battery with the verdict
+  layer held constant. Async-tail entry sharpened with slice
+  timestamps: 70% of the 8m34s tail is evolver/maintenance running
+  inline BEFORE closure; lesson extraction already defers post-notify
+  (2026-07-17 answer-first hook) — phase 1 is routing maintenance
+  through that same hook, phase 2 is verdict-pending reply semantics.
 - **2026-08-11** — §10/§14 work-depth pass (evening, recorded §14h):
   earned-depth direction AGREED-held-loosely ("tend to agree and I go
   back and forth… genuinely heavy sub-goals sometimes, but they likely
