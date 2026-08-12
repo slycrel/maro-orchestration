@@ -7172,3 +7172,29 @@ under the same two-measurement standard).
   remove-then-append and silently loses the row (variants and all) on
   destination-write failure — filed at the top of the Actionable
   Stack, retention-decree violation, own chunk.**
+
+- **2026-08-11** — Run-2a3b1f85 testing exam (dev-Mac session, Jeremy
+  live). Claim-probe layer caught dismissing numeric disputes on
+  probes that could not have failed (field-exists grep vs a 270k-star
+  contestation; right outcome by luck, both claims verified true
+  against live GitHub) — **fixed: `insufficient` probe status** (exit-0
+  probe that neither cites a claim number nor compares a value leaves
+  the verdict standing; clause now demands value-testing probes for
+  numeric contestations, `probe_stats` reports the lane separately).
+  STEP_TOO_BROAD surfaced to run cards (`step_flags.too_broad`,
+  curation lift + run_readout line) — **Jeremy: watchdog firings
+  should be visible/tunable, not log-only.** Two Jeremy directions
+  filed: **(1)** truncation posture reaffirmed and sharpened — *"I'm
+  ready to be wordy and data driven, I don't love the character/token
+  limits we've created for ourselves"* — four STORE-lane mid-word cuts
+  from the exam added to the arbitrary-truncation audit
+  (goal_verdict_summary:300, closure/audit reason:300,
+  decision_prior lessons:200/tried:400, navigator reasoning:300);
+  **(2)** *"async the 'cleanup and therefore' part … return the run's
+  result; no need to make the end user wait for closure"* — filed in
+  Actionable Stack with the measured 8m34s post-work tail (~40% of
+  wall) and the tail's ~30 LLM calls being invisible in
+  `total_cost_usd`. Also confirmed from the exam: b05af61 cost-truth
+  lane verified live (card == provider sum to the digit), pass-audit
+  ran correctly on a positive verdict, four-layer verdict stack
+  agreed unassisted — second consecutive clean-verdict run.

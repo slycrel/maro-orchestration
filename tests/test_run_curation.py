@@ -242,6 +242,34 @@ def test_inventory_flags_scripts(workspace):
     assert card["mineable"] is True
 
 
+def test_step_flags_surfaced_from_slice(workspace):
+    # STEP_TOO_BROAD lived only in the per-run log slice and nothing consumed
+    # it (run 2a3b1f85: 6x the token cap, invisible to cross-run tooling).
+    rd = _finish("h0000f13", "g", "done", achieved=True)
+    slice_path = rd / "build" / "captains_log_slice.jsonl"
+    slice_path.parent.mkdir(parents=True, exist_ok=True)
+    slice_path.write_text(
+        json.dumps({"event_type": "STEP_TOO_BROAD",
+                    "context": {"step_index": 13, "elapsed_s": 190,
+                                "tokens": 1201651, "cap_elapsed_s": 120,
+                                "cap_tokens": 200000}}) + "\n"
+        + json.dumps({"event_type": "SCAVENGE_DETECTED",
+                      "context": {"step_index": 2}}) + "\n"
+        + "not json\n",
+        encoding="utf-8",
+    )
+    card = curate_run("h0000f13")
+    assert card["step_flags"] == {"too_broad": [
+        {"step_index": 13, "elapsed_s": 190, "tokens": 1201651,
+         "cap_elapsed_s": 120, "cap_tokens": 200000}]}
+
+
+def test_step_flags_absent_when_nothing_fired(workspace):
+    _finish("h0000f14", "g", "done", achieved=True)
+    card = curate_run("h0000f14")
+    assert "step_flags" not in card
+
+
 def test_empty_run_not_mineable(workspace):
     _finish("h0000008", "g", "done", achieved=True)
     card = curate_run("h0000008")

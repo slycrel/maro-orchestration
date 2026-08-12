@@ -45,7 +45,7 @@ def test_calculate_reports_current_previous_rates_and_deltas():
     current = report["current"]
     previous = report["previous"]
     assert current["counts"] == {
-        "validated": 2, "dismissed": 1, "unprobed": 1,
+        "validated": 2, "dismissed": 1, "insufficient": 0, "unprobed": 1,
         "unrunnable": 1, "unknown": 0,
     }
     assert current["reviewer_verdict_retention_rate"] == 0.666667

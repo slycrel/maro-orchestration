@@ -201,6 +201,7 @@ def read_run(run_dir: Path) -> Optional[Dict[str, Any]]:
         "tool_missing": triage["tool_missing"],
         "residue": triage["residue"],
         "residue_samples": triage["residue_samples"],
+        "step_flags": card.get("step_flags") or {},
     }
 
 
@@ -258,6 +259,16 @@ def main(argv: Optional[List[str]] = None) -> int:
                 print(f"{row['handle_id']} avoidable retries "
                       f"({row['avoidable_retries']}): {', '.join(row['avoidable_detail'][:12])}"
                       + (" ..." if row["avoidable_retries"] > 12 else ""))
+    for row in rows:
+        too_broad = row["step_flags"].get("too_broad") or []
+        if too_broad:
+            detail = ", ".join(
+                f"step {f.get('step_index')} "
+                f"({f.get('elapsed_s')}s/{(f.get('tokens') or 0) // 1000}K vs "
+                f"caps {f.get('cap_elapsed_s')}s/{(f.get('cap_tokens') or 0) // 1000}K)"
+                for f in too_broad)
+            print(f"\n{row['handle_id']} steps over watchdog caps "
+                  f"({len(too_broad)}): {detail}")
     for row in rows:
         if row["residue_samples"]:
             print(f"\n{row['handle_id']} residue — errors we could not explain "

@@ -48,6 +48,29 @@ crash duplicates are reconcilable by the dedup sweep; disappearance is
 not), or a recoverable move marker/WAL. Sized as its own chunk: both
 promotion routes + the crash-window reconciliation story + pins.
 
+### Async the post-run tail — return the result, don't make the user wait for closure + learning (Jeremy, 2026-08-11)
+
+His phrasing: "at some point we should async the 'cleanup and therefore'
+part of the job at the end and return the run's result; no need to make
+the end user wait for closure while all that runs." Data from run
+`2a3b1f85-sunny-wren` (clean agenda research run, same day): final step
+ended 23:35:56, closure verdict 23:43:28, claim probes 23:44:25, run
+done 23:44:30 — **the user-facing answer waited 8m34s after the work was
+finished, ~40% of a 22-minute run's wall clock**, on closure + quality
+gate + curation + the learning/maintenance tail (11 skill-promotion
+validations, 10 knowledge-node promotion validations, 7 skill rewrites,
+lesson/knowledge extraction — ~30 LLM calls). Shape: deliver
+RESULT.md/answer at final-step compile; closure verdict arrives as a
+follow-up stamp on the same record (verdict_history already supports
+supersede); learning/maintenance runs detached. Watch-fors: the answer
+synthesis (`curation.synthesize_answer`) currently rides the tail —
+either move it ahead or deliver the raw result first; the dispatch
+reply lane must be able to send "result now, verdict pending"; and the
+**tail's ~30 calls are invisible in `total_cost_usd` today** — the
+b05af61 cost-truth lane sums loop-step provider costs only, so the card
+under-reports true run cost by the whole maintenance tail (fold into
+the async chunk or fix separately).
+
 ### Session-fork lane for claude -p (Jeremy idea 2026-08-08) — **SHIPPED same day, opt-in; daemon variant = residual edge**
 
 His phrasing: "storing some meta-data and having a master subagent
@@ -2038,6 +2061,37 @@ capture**, which is what makes the rung amortize instead of evaporate.
   outcome-row `summary` at 500 in `handle.py` (NOW lane) — untouched, and
   now the tighter of the two lanes. These bound the record *forever*, so
   they deserve a deliberate retention decision rather than a default.
+
+  **STORE worklist additions (2026-08-11, run-2a3b1f85 exam — every one
+  observed cutting MID-WORD in a durable record of a clean run; Jeremy:
+  "I'm ready to be wordy and data driven, I don't love the character/token
+  limits we've created for ourselves"):**
+  - `handle.py:2745` — `goal_verdict_summary` = `closure.summary[:300]`
+    into metadata.json → run card → `decision_prior.why`. Observed: "…and
+    an adversarial ver". Siblings on the same lane: `:2436` (re-stamp
+    reason) and `:2847` (closure_error), both `[:300]`; `:657` shows it at
+    `[:120]` in the CLI. This is the run's headline verdict rationale,
+    recalled by future re-attempts — STORE-grade, and the doc comment at
+    `closure_verify.py:312` treats the 300 as a given rather than a
+    decision.
+  - `closure_verify.py:2278` / `:2437` — closure-judge and verdict-audit
+    `reason` `[:300]` into closure_verdicts.jsonl. Observed: the pass-audit
+    reason for today's run ends "…rather t". The audit lane exists to
+    justify overriding/confirming verdicts; its own justification is the
+    thing being cut.
+  - `run_curation.py:1197` — per-lesson text `str(lesson)[:200]` into
+    `decision_prior.lessons`; plus `decision_prior.py:57-58`
+    (`what_was_tried`/`why` at `_DECISION_TRIED_CHARS=400`). Observed:
+    lesson stored as "…several planne", tried-list as "…for practit".
+    These are exactly what a warm re-run recalls — a cut here is a lesson
+    the next run half-learns.
+  - `handle_queue.py:368` — dispatch-navigator `reasoning` `[:300]` into
+    metadata origin. Observed: "…effectiveness at catching b". Now that
+    the navigator acts LIVE at dispatch (can block a run), its recorded
+    rationale is audit evidence, not decoration.
+  Method stays the audit's: measure the real distribution per site, then
+  widen with an honest `clip()` marker (or budget) — not delete the bound
+  blindly.
 
   **Method that worked, for whoever picks this up:** don't argue about the
   number — pull the actual distribution out of `runs/*/build/loop-*.json`

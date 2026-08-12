@@ -24,6 +24,7 @@ free dismissal). Consumers: quality_gate, factory_thin, verification_agent.
 from __future__ import annotations
 
 import logging
+import re
 import shlex
 import textwrap
 from typing import List
@@ -34,6 +35,68 @@ log = logging.getLogger("maro.claim_probe")
 
 # Read-only probes must be quick; the reviewer is told <15s.
 PROBE_TIMEOUT_SEC = 15
+
+# --- Numeric-claim sufficiency guard ---------------------------------------
+# 2026-08-11 (run 2a3b1f85): a reviewer contested "obra/superpowers has
+# 270,734 stars" and supplied
+#   curl -fs … | grep -o '"stargazers_count":[0-9]*'
+# which exits 0 for ANY star count — it tests that the field exists, not what
+# it holds (and GitHub's `": "` spacing meant zero digits were even captured).
+# The dispute was dismissed by a probe that could not have failed; the claim
+# happened to be true, so the outcome was right by luck. The guard below is
+# shape-level: when a contested claim disputes a number, an exit-0 probe that
+# neither references any of the claim's numbers nor performs a numeric
+# comparison cannot settle the dispute, so it maps to the neutral status
+# `insufficient` (verdict untouched) instead of `dismissed`.
+#
+# Erring direction is deliberate and matches module doctrine: a wrongly-
+# `insufficient` probe leaves a contestation standing (advisory noise, same
+# posture as unrunnable); a wrongly-`dismissed` one lets a fabricated number
+# pass unchallenged and corrupts reviewer calibration.
+_CLAIM_NUM_RE = re.compile(r"(?<![A-Za-z0-9_.])\d[\d,]*(?![A-Za-z0-9_])")
+_CMD_COMPARISON_RE = re.compile(
+    r"[<>]=?\s*\d"                     # jq/awk-style: > 250000, >= 4
+    r"|==\s*\d"                        # jq equality: == 49
+    r"|-(?:eq|ne|ge|gt|le|lt)\s+\d"    # test(1) integer comparisons
+)
+
+
+def _claim_numbers(text: str) -> set:
+    """Standalone numbers in a claim, ≥2 digits, comma-stripped.
+
+    Digit runs embedded in identifiers/hashes (``X2.py``, ``4d20b559``) are
+    excluded by the word-boundary lookarounds; single digits don't count —
+    too often incidental prose ("one of 2 repos"). The fabrication-prone
+    class (star counts, sizes, dates) is multi-digit in practice.
+    """
+    out = set()
+    for tok in _CLAIM_NUM_RE.findall(text or ""):
+        digits = tok.replace(",", "")
+        if len(digits) >= 2:
+            out.add(digits)
+    return out
+
+
+def probe_insufficient_for_numbers(claim_text: str, cmd: str) -> str:
+    """Why an exit-0 probe cannot settle this numeric claim ('' = it can).
+
+    A probe is sufficient for a numeric claim when it either references one
+    of the claim's numbers (comma-insensitive substring — covers `grep 270734`
+    and URL/threshold mentions) or contains an explicit numeric comparison
+    (`jq -e '.x > N'`, `test N -ge M`). Anything else is an existence check
+    wearing a value-check's clothes — exit 0 proves the field/file/endpoint
+    exists, never that the disputed number is wrong.
+    """
+    nums = _claim_numbers(claim_text)
+    if not nums:
+        return ""
+    if _CMD_COMPARISON_RE.search(cmd):
+        return ""
+    cmd_digits = cmd.replace(",", "")
+    if any(n in cmd_digits for n in nums):
+        return ""
+    return ("claim disputes a number but the probe neither references it "
+            "nor compares any value — exit 0 can't settle it")
 
 # Probes are authored by reviewer LLMs (gate Pass-2 contestations, the council
 # probe-armed seat, verification_agent) and executed with shell=True. Prompt
@@ -115,6 +178,12 @@ SETTLED_BY_COMMAND_CLAUSE = textwrap.dedent("""\
       - Claim "tool Y is not installed" → `command -v Y`
       - Claim "branch Z does not exist" → `git ls-remote --heads origin | grep -q Z`
       - Claim "server does not respond" → `curl -fs -m 5 http://localhost:PORT/path`
+    When your contestation disputes a NUMBER (a count, size, date, version),
+    the command must test the VALUE, not just that the field exists — use a
+    threshold with slack for natural drift, e.g. contesting "repo has ~270k
+    stars" → `curl -fs -m 5 https://api.github.com/repos/OWNER/NAME | jq -e '.stargazers_count > 250000'`
+    A probe that only checks the field exists exits 0 for any value, settles
+    nothing, and is scored `insufficient` rather than dismissing your claim.
     Set `settled_by_command` to null when the claim is genuinely un-probe-able
     (subjective interpretation, future-looking, requires an unreachable system).
     Don't invent commands that can't run — null is correct when you can't
@@ -134,6 +203,11 @@ def probe_contested_claims(claims: list) -> list:
       - Command fails the read-only guard (`probe_command_rejected`) →
         `probe_status=blocked`, never executed; verdict untouched — the
         concern stands, same neutrality as unrunnable
+      - Probe exits 0 against a NUMERIC claim without testing the value
+        (`probe_insufficient_for_numbers`) → `probe_status=insufficient`,
+        verdict untouched — an existence check can't settle a quantity
+        dispute, so nobody wins (2026-08-11: a field-exists grep dismissed
+        a 270k-star contestation it structurally could not have refuted).
       - Probe exits 0 → reviewer's contestation was likely wrong about the
         concrete fact: downgrade verdict to "DISMISSED_BY_PROBE", set
         `probe_status=dismissed`. The claim will still appear in the record
@@ -196,10 +270,16 @@ def probe_contested_claims(claims: list) -> list:
             combined = (result.stdout or "") + (result.stderr or "")
             probe_out = combined[:400]
             if result.returncode == 0:
-                probe_status = "dismissed"
-                original_verdict = safe_str(claim.get("verdict", "CONTESTED"))
-                claim["original_verdict"] = original_verdict
-                claim["verdict"] = "DISMISSED_BY_PROBE"
+                _why_insufficient = probe_insufficient_for_numbers(
+                    safe_str(claim.get("claim", "")), cmd)
+                if _why_insufficient:
+                    probe_status = "insufficient"
+                    probe_out = f"[{_why_insufficient}] {probe_out}"[:400]
+                else:
+                    probe_status = "dismissed"
+                    original_verdict = safe_str(claim.get("verdict", "CONTESTED"))
+                    claim["original_verdict"] = original_verdict
+                    claim["verdict"] = "DISMISSED_BY_PROBE"
             else:
                 probe_status = "validated"
         except subprocess.TimeoutExpired:

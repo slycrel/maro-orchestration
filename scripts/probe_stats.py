@@ -6,7 +6,8 @@ reviewer's verdict; it does *not* prove the reviewer was correct because a weak
 or broken probe can produce the same status. ``dismissed`` means a zero exit
 caused the producer to dismiss the reviewer objection. The summary ratio is
 therefore named reviewer verdict retention rate, not accuracy or agreement.
-Unprobed and unrunnable claims are reported separately.
+Unprobed, unrunnable, and insufficient claims (zero exit that tested no value
+against a numeric claim — cannot settle the dispute) are reported separately.
 """
 
 from __future__ import annotations
@@ -23,7 +24,8 @@ from typing import Any, Iterable
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-STATUSES = ("validated", "dismissed", "unprobed", "unrunnable", "unknown")
+STATUSES = ("validated", "dismissed", "insufficient", "unprobed", "unrunnable",
+            "unknown")
 
 
 def _utc(value: str) -> datetime | None:
@@ -144,6 +146,10 @@ def calculate(
             ),
             "dismissed": (
                 "probe returned zero and producer dismissed reviewer objection"
+            ),
+            "insufficient": (
+                "probe returned zero but tested no value against a numeric "
+                "claim; reviewer verdict retained — excluded from decisive"
             ),
             "reviewer_verdict_retention_rate": (
                 "validated / (validated + dismissed); not an accuracy score"

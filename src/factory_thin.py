@@ -410,6 +410,8 @@ def _ground_adversarial_findings(raw: str) -> str:
             suffix = " (settled by probe — original contestation was wrong)"
         elif probe_status == "validated":
             suffix = " (probe confirmed contestation)"
+        elif probe_status == "insufficient":
+            suffix = " (probe ran but tested no value; verdict stands)"
         elif probe_status == "unrunnable":
             suffix = " (probe un-runnable; verdict stands)"
         elif probe_status == "blocked":

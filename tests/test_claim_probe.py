@@ -15,7 +15,11 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from claim_probe import probe_command_rejected, probe_contested_claims
+from claim_probe import (
+    probe_command_rejected,
+    probe_contested_claims,
+    probe_insufficient_for_numbers,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -35,6 +39,9 @@ class TestProbeCommandGuard:
         "git log --oneline -5",
         "git rev-parse --verify HEAD",
         "curl -fs -m 5 http://localhost:8080/health",   # the clause's own example
+        # the clause's numeric-comparison example: quoted `>` is a jq filter,
+        # not a shell operator — must clear the guard
+        "curl -fs -m 5 https://api.github.com/repos/o/r | jq -e '.stargazers_count > 250000'",
         'find . -name "*.py" -maxdepth 2',
         "cat file.txt | wc -l",
         "ls -la src/",
@@ -129,3 +136,79 @@ class TestProbeContestedClaims:
     def test_non_dict_passthrough(self):
         out = probe_contested_claims(["just a string"])
         assert out == ["just a string"]
+
+
+# ---------------------------------------------------------------------------
+# Numeric-claim sufficiency guard — an exit-0 probe that tests no value must
+# not dismiss a quantity dispute (2026-08-11, run 2a3b1f85: a field-exists
+# grep dismissed a 270k-star contestation it structurally could not refute).
+# ---------------------------------------------------------------------------
+
+def _num_claim(cmd, text="repo has 270,734 stars"):
+    return {"claim": text, "verdict": "CONTESTED", "settled_by_command": cmd}
+
+
+class TestNumericSufficiencyGuard:
+    def test_existence_probe_exit_zero_is_insufficient_not_dismissed(self):
+        # `test -d /tmp` exits 0 everywhere and mentions no number — the
+        # run-2a3b1f85 shape (grep for the field name, value never compared).
+        out = probe_contested_claims([_num_claim("test -d /tmp")])
+        assert out[0]["probe_status"] == "insufficient"
+        # Neutrality: verdict untouched — the concern STANDS.
+        assert out[0]["verdict"] == "CONTESTED"
+        assert "settle" in out[0]["probe_output_preview"]
+
+    def test_comparison_probe_exit_zero_still_dismisses(self):
+        out = probe_contested_claims(
+            [_num_claim("test 300000 -gt 250000")])
+        assert out[0]["probe_status"] == "dismissed"
+        assert out[0]["verdict"] == "DISMISSED_BY_PROBE"
+
+    def test_probe_referencing_claim_number_still_dismisses(self):
+        # find exits 0 with no matches; the command cites the claim's number.
+        out = probe_contested_claims(
+            [_num_claim("find /tmp -maxdepth 0 -name 270734")])
+        assert out[0]["probe_status"] == "dismissed"
+
+    def test_single_digit_numbers_do_not_arm_guard(self):
+        out = probe_contested_claims(
+            [_num_claim("test -d /tmp", text="repo has 3 contributors")])
+        assert out[0]["probe_status"] == "dismissed"
+
+    def test_nonzero_exit_still_validates(self):
+        out = probe_contested_claims([_num_claim("test -f /nonexistent-xyz")])
+        assert out[0]["probe_status"] == "validated"
+        assert out[0]["verdict"] == "CONTESTED"
+
+    def test_insufficient_emits_calibration_event(self, monkeypatch):
+        captured = []
+        import captains_log as _cl
+        monkeypatch.setattr(
+            _cl, "log_event",
+            lambda et, **kw: captured.append((et, kw)) or {})
+        probe_contested_claims([_num_claim("test -d /tmp")])
+        assert len(captured) == 1
+        assert captured[0][1]["context"]["probe_status"] == "insufficient"
+
+    @pytest.mark.parametrize("claim,cmd,why_expected", [
+        # the actual run-2a3b1f85 probe: field-exists grep, no value tested
+        ("obra/superpowers has 270,734★ / 24,189 forks",
+         "curl -fs -m 10 https://api.github.com/repos/obra/superpowers "
+         "| grep -o '\"stargazers_count\":[0-9]*'", True),
+        # jq threshold comparison — sufficient
+        ("obra/superpowers has 270,734 stars",
+         "curl -fs -m 5 https://api.github.com/repos/obra/superpowers "
+         "| jq -e '.stargazers_count > 250000'", False),
+        # probe cites the claim's number (comma-insensitive) — sufficient
+        ("has 213,779 stars", "grep -q 213779 stats.json", False),
+        # no numbers in claim → guard never arms
+        ("branch main does not exist", "git ls-remote --heads origin | grep -q main",
+         False),
+        # digits inside identifiers/hashes are not claim numbers
+        ("module X2.py at commit 4d20b559 is dead code", "test -f X2.py", False),
+        # dates are values too — a digit-less probe can't settle them
+        ("repo last pushed 2026-08-08", "test -d /tmp", True),
+    ])
+    def test_sufficiency_shapes(self, claim, cmd, why_expected):
+        why = probe_insufficient_for_numbers(claim, cmd)
+        assert bool(why) == why_expected, f"{claim!r} / {cmd!r} → {why!r}"

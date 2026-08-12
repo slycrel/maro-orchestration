@@ -692,6 +692,45 @@ def spend_transparency(rd: Path, meta: dict, card: dict) -> None:
     card["spend_transparency"] = {"threshold_usd": threshold, "bundle": bundle}
 
 
+def surface_step_flags(rd: Path, meta: dict, card: dict) -> None:
+    """Lift per-step watchdog events from the captain's-log slice onto the card.
+
+    2026-08-11 (run 2a3b1f85): STEP_TOO_BROAD fired at 6x the token cap on the
+    run's most expensive step and nothing consumed it — the event lived only in
+    the per-run log slice, invisible to cross-run tooling. Surfacing it here is
+    advisory only (no verdict or spend effect); it makes the watchdog's firings
+    queryable across run cards so the caps can be tuned from data instead of
+    anecdote. Card key is absent when nothing fired — the common case stays
+    clean.
+    """
+    slice_path = rd / "build" / "captains_log_slice.jsonl"
+    if not slice_path.is_file():
+        return
+    too_broad: List[dict] = []
+    try:
+        lines = slice_path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return
+    for line in lines:
+        try:
+            row = json.loads(line)
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if not isinstance(row, dict) or row.get("event_type") != "STEP_TOO_BROAD":
+            continue
+        ctx = row.get("context")
+        ctx = ctx if isinstance(ctx, dict) else {}
+        too_broad.append({
+            "step_index": ctx.get("step_index"),
+            "elapsed_s": ctx.get("elapsed_s"),
+            "tokens": ctx.get("tokens"),
+            "cap_elapsed_s": ctx.get("cap_elapsed_s"),
+            "cap_tokens": ctx.get("cap_tokens"),
+        })
+    if too_broad:
+        card["step_flags"] = {"too_broad": too_broad}
+
+
 # --- skills-lite promotion (Rider A, post-Purgatorio decision batch) ---------
 
 _LITE_TIER = "skills-lite"
@@ -1360,6 +1399,7 @@ _CURATOR_SPECS: List[CuratorSpec] = [
                 optional_requires=("deliverables", "result_path")),
     CuratorSpec(spend_transparency, optional_provides=("spend_transparency",),
                 requires=("success_class", "total_cost_usd")),
+    CuratorSpec(surface_step_flags, optional_provides=("step_flags",)),
     CuratorSpec(promote_skills_lite, optional_provides=("skills_lite",),
                 requires=("success_class",), phase="maintenance"),
     CuratorSpec(scrape_scripts,              # #2 script scraper
