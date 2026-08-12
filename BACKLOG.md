@@ -1974,6 +1974,24 @@ capture**, which is what makes the rung amortize instead of evaporate.
   2400 are deliberate shapes; note the artifact seat already tells its
   model "you see only this", which is the honest pattern the gate lacked.)
 
+- [ ] **Small observations from the 2a3b1f85 exam** (2026-08-11, none
+  load-bearing — three one-liners so they don't evaporate):
+  (1) *Decompose mangles step titles via template stuffing* — "Run Fetch
+  GitHub star, fork, and save output to a file", "Read the captured
+  output and review, pauhu/claude-codex-review, …" — comma-spliced
+  fragments where the planner slots a phrase into a "Run X and save
+  output" template. Cosmetic, but these titles are what reports, ledger
+  rows, and diagnosis prose show. (2) *Knowledge-node age-path promotion
+  stamps `active` with 0 re-observations* — three nodes promoted
+  candidate→active same-run at confidence 0.30, "Re-observed 0x". Age
+  alone promoting an unre-observed hypothesis to active is the evolver
+  denominator-shape; watch item — check what `active` gates before
+  tightening. (3) *Quality-gate cross-ref count vs claim probes*: the
+  hosted_free lane logged `checked=4 disputed=2` while 3 CLAIM_PROBED
+  events fired in the same window (Pass-2 lane) — probably two lanes
+  reporting one pool; unverified, worth a 10-minute trace next time
+  someone is in quality_gate.
+
 - [ ] **Executor image ships no pytest** (found 2026-08-02 via `d9607baa`).
   `maro-executor:2.1.210` has git/python3/curl by design — the Dockerfile
   comment says the toolset is "what worker transcripts actually use". A
