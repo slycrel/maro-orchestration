@@ -384,3 +384,28 @@ def test_attribution_to_dict_round_trip():
     assert restored.failure_mode == attr.failure_mode
     assert restored.confidence == attr.confidence
     assert restored.failed_skill == attr.failed_skill
+
+
+# ---------------------------------------------------------------------------
+# MH #13 delegation gap (subagent edge, 2026-08-11)
+# ---------------------------------------------------------------------------
+
+def test_delegation_gap_provision_shaped_reasons():
+    from attribution import delegation_gap
+    assert delegation_gap("the source CSV was not provided in the ticket")
+    assert delegation_gap("no access to the analytics dashboard")
+    assert delegation_gap("unclear which repository the directive means")
+    assert delegation_gap("the ticket does not say what format is wanted")
+
+
+def test_delegation_gap_execution_shaped_reasons_are_not_flagged():
+    from attribution import delegation_gap
+    assert not delegation_gap("subprocess crashed with exit code 137")
+    assert not delegation_gap("LLM call failed: rate limit")
+    assert not delegation_gap("retried the same command five times, stuck")
+
+
+def test_delegation_gap_empty_is_false():
+    from attribution import delegation_gap
+    assert not delegation_gap("")
+    assert not delegation_gap(None)

@@ -592,12 +592,13 @@ def run_director(
     total_tokens_in += compile_tokens[0]
     total_tokens_out += compile_tokens[1]
 
-    # MH #6 Communication Failure (subagent edge): a DONE worker whose
-    # content made no lexical contact with the compiled report was dropped
-    # on the way to the parent — candidate-grade evidence (the #7
-    # contradiction-candidate convention), advisory only, never control
-    # flow. Blocked workers are excluded: their absence from the report is
-    # visible through status already.
+    # MH subagent-edge candidates (#6 + #13) — candidate-grade evidence
+    # (the #7 contradiction-candidate convention), advisory only, never
+    # control flow. #6: a DONE worker whose content made no lexical
+    # contact with the compiled report was dropped on the way to the
+    # parent (blocked workers excluded — their absence is visible through
+    # status already). #13: a BLOCKED worker whose reason is
+    # provision-shaped points at the delegation, not the execution.
     for _r in worker_results:
         if _r.status == "done" and _r.report_echoed is False:
             try:
@@ -620,6 +621,28 @@ def run_director(
                         "mh_class": "communication_failure_candidate",
                     },
                 )
+            except Exception:
+                pass
+        if _r.status == "blocked":
+            try:
+                from attribution import delegation_gap as _delegation_gap
+                if _delegation_gap(_r.stuck_reason or ""):
+                    from captains_log import WORKER_DELEGATION_GAP
+                    log_event(
+                        WORKER_DELEGATION_GAP,
+                        subject="director_dispatch",
+                        summary=(f"{_r.worker_type} worker blocked on a "
+                                 f"provision-shaped reason — the ticket "
+                                 f"may have under-specified the work"),
+                        context={
+                            "director_id": director_id,
+                            "worker_type": _r.worker_type,
+                            "ticket_preview": (_r.ticket or "")[:120],
+                            "reason_preview": (_r.stuck_reason or "")[:200],
+                            "mh_edge": "subagent",
+                            "mh_class": "delegation_failure_candidate",
+                        },
+                    )
             except Exception:
                 pass
 
@@ -952,6 +975,15 @@ def _compile_report(
 # Log writing
 # ---------------------------------------------------------------------------
 
+def _delegation_gap_row(r: WorkerResult) -> bool:
+    """Log-row helper: classify a blocked worker's reason, never raising."""
+    try:
+        from attribution import delegation_gap
+        return delegation_gap(r.stuck_reason or "")
+    except Exception:
+        return False
+
+
 def _write_director_log(
     project: Optional[str],
     director_id: str,
@@ -1006,6 +1038,10 @@ def _write_director_log(
                     # MH #6: did this worker's content reach the compiled
                     # report? False = dropped (see _report_echo).
                     "report_echoed": r.report_echoed,
+                    # MH #13: blocked on a provision-shaped reason
+                    # (attribution.delegation_gap; False for done workers).
+                    "delegation_gap": (r.status == "blocked"
+                                       and _delegation_gap_row(r)),
                     "tokens_in": r.tokens_in,
                     "tokens_out": r.tokens_out,
                 }

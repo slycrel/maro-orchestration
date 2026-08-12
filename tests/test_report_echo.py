@@ -146,3 +146,22 @@ class TestDirectorLogRow:
         log_file = output_root() / "artifacts" / "director" / "director-d-test-log.json"
         payload = json.loads(log_file.read_text(encoding="utf-8"))
         assert payload["worker_results"][0]["report_echoed"] is False
+
+    def test_log_row_carries_delegation_gap(self, tmp_path):
+        # MH #13: blocked worker with a provision-shaped reason flags the
+        # row; a done worker never does (status guard, not just keywords).
+        from director import _write_director_log
+        blocked = _wr("partial", status="blocked")
+        blocked.stuck_reason = "the source CSV was not provided"
+        done = _wr("fine output with the phrase not provided in prose")
+        path = _write_director_log(
+            project=None, director_id="d-gap", directive="d", spec="s",
+            tickets=[], worker_results=[blocked, done], status="stuck",
+            elapsed_ms=1)
+        assert path is not None
+        from orch import output_root
+        log_file = output_root() / "artifacts" / "director" / "director-d-gap-log.json"
+        payload = json.loads(log_file.read_text(encoding="utf-8"))
+        rows = payload["worker_results"]
+        assert rows[0]["delegation_gap"] is True
+        assert rows[1]["delegation_gap"] is False

@@ -185,6 +185,36 @@ _STUCK_LOOP_KEYWORDS = frozenset([
     "no progress", "not advancing",
 ])
 
+# MH #13 Delegation Failure (subagent edge, 2026-08-11). Provision-shaped
+# blockage: the worker says it lacked something the DELEGATION should have
+# carried (input, scope, access, referent). Live-source note: the taxonomy
+# ruling assumed a structured "Task-call input" shape — none exists; the
+# delegation input is the ticket + context strings and the block signal is
+# flag_blocked's free-text reason, so a keyword lane is the honest
+# mechanical floor. Candidate-grade by construction: whether the parent or
+# the worker is at FAULT cannot be settled mechanically (workers name the
+# missing thing in the ticket's own vocabulary, so lexical contact cannot
+# discriminate — measured against the #6 echo design and rejected).
+_DELEGATION_GAP_KEYWORDS = frozenset([
+    "not provided", "wasn't provided", "was not provided", "no such file",
+    "not specified", "not included", "wasn't included", "was not included",
+    "missing", "no access", "cannot access", "can't access", "unclear",
+    "ambiguous", "which one", "not stated", "no context", "need more",
+    "not given", "wasn't given", "was not given", "does not say",
+    "doesn't say", "no url", "no path", "no input", "unspecified",
+])
+
+
+def delegation_gap(stuck_reason: str) -> bool:
+    """Does a blocked worker's reason describe a delegation gap — something
+    the ticket should have provided (input, referent, access, scope) rather
+    than an execution failure? Pure keyword floor over the flag_blocked
+    free-text reason; candidate-grade, advisory only."""
+    text = (stuck_reason or "").lower()
+    if not text:
+        return False
+    return any(kw in text for kw in _DELEGATION_GAP_KEYWORDS)
+
 
 def _heuristic_failure_mode(stuck_reason: str) -> tuple[str, float]:
     """Return (failure_mode, confidence) based on keyword analysis."""

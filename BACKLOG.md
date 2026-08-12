@@ -292,6 +292,22 @@ retracted by the step-9 adversarial pass — see below):
 - **#13 Delegation Failure (subagent edge), INFERRED** — extend
   `attribution.failed_skill` toward scope/dependency mismatch vs
   Task-call input; assumes Task-call input shape, not re-verified.
+  **BUILT 2026-08-11** (detection-only) — and caveat (a) earned its keep
+  again: re-verification showed the assumed "Task-call input shape" does
+  NOT exist (delegation input is the ticket+context strings; the block
+  signal is `flag_blocked`'s free-text reason), so the honest mechanical
+  floor is `attribution.delegation_gap` — a provision-shaped keyword
+  lane over blocked reasons ("not provided" / "no access" / "unclear
+  which" / …), deliberately NOT a lexical-contact check (workers name
+  the missing thing in the ticket's own vocabulary, so the #6 echo
+  design cannot discriminate here — considered and rejected). Wired at
+  the director's post-compile candidate loop: BLOCKED worker +
+  provision-shaped reason → `delegation_gap: true` on the director-log
+  row + `WORKER_DELEGATION_GAP` event (mh_edge subagent / mh_class
+  delegation_failure_candidate — candidate-grade by construction:
+  parent-vs-worker FAULT can't be settled mechanically). Same honest
+  bound as #6: forward-only, low-traffic lane. Pins in
+  test_attribution.py + test_report_echo.py.
 
 Plus two SKIP rulings the verdict flags as genuine unresolved gaps, not
 dismissals: **Memory Following Failure** (`memory_slice_injected` is an

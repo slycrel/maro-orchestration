@@ -196,6 +196,14 @@ WORKER_SLICE_INJECTED = "WORKER_SLICE_INJECTED"
 # mh_edge, mh_class.
 WORKER_REPORT_OMISSION = "WORKER_REPORT_OMISSION"
 
+# MH #13 Delegation Failure candidate (subagent edge, 2026-08-11): a BLOCKED
+# worker's flag_blocked reason is provision-shaped (attribution.
+# delegation_gap) — the ticket may have under-specified the work; fault
+# points at the delegation, not the execution. Candidate-grade, advisory.
+# Context: director_id, worker_type, ticket_preview, reason_preview,
+# mh_edge, mh_class.
+WORKER_DELEGATION_GAP = "WORKER_DELEGATION_GAP"
+
 # Decisions
 DECISION_RECORDED = "DECISION_RECORDED"
 METACOGNITIVE_DECISION = "METACOGNITIVE_DECISION"  # mid-loop re-decompose/retry decisions
@@ -338,6 +346,7 @@ EVENT_TYPES = {
     LESSON_DELTA_DEMOTED, LESSON_REMINT_PATTERN,
     LESSON_EXTRACTION, LESSON_DECAYED, LESSON_RECOVERED,
     MEMORY_CONSOLIDATED, WORKER_SLICE_INJECTED, WORKER_REPORT_OMISSION,
+    WORKER_DELEGATION_GAP,
     HYPOTHESIS_CREATED, HYPOTHESIS_PROMOTED, HYPOTHESIS_CONTRADICTED,
     KNOWLEDGE_NODE_PROMOTED,
     STANDING_RULE_CONTRADICTED, RULE_GRADUATED, RULE_DEMOTED, CANON_CANDIDATE,

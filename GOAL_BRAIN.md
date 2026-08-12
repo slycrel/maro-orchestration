@@ -7089,3 +7089,15 @@ under the same two-measurement standard).
   teaching (explicit size trigger in EXECUTE_SYSTEM), re-test on a
   future corpus dispatch — not another same-corpus run today (axis
   exhaustion + spend judgment left for Jeremy).
+- **2026-08-11** — MH #13 Delegation Failure BUILT (subagent edge,
+  detection-only; MH entry now has #4/#8 + Rationale Erosion +
+  #1-prevention remaining). Re-verification killed the ruling's premise:
+  no "Task-call input shape" exists — delegation is ticket+context
+  strings, blockage is flag_blocked free text — so the honest floor is
+  `attribution.delegation_gap`, a provision-shaped keyword lane over
+  blocked reasons (NOT lexical contact: workers name the missing thing
+  in the ticket's own vocabulary, so the #6 echo design can't
+  discriminate here — considered, rejected). Wired beside the #6
+  candidate loop: blocked + provision-shaped → director-log
+  `delegation_gap` + WORKER_DELEGATION_GAP candidate event. Advisory,
+  forward-only, low-traffic lane. Suite 8191/0 skipped.
