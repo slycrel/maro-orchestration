@@ -7255,3 +7255,20 @@ under the same two-measurement standard).
   Rejected: typed blocked-origin (conservative "" default is the
   design). New residual: import-side near-dup reconciliation policy.
   Suite 8259/0 skipped.
+
+- **2026-08-11** — Watchdog-cap census answered: **no tuning, and the
+  posture is general.** Jeremy, on the 61-run/140-firing census (median
+  4x over the token cap): *"I'm not looking to make a decision on this
+  right now; it's data, and correctness wins over frugality. Don't want
+  to arbitrarily limit the data, we keep running into problems doing
+  that — we can revisit/optimize that later. And [I] get there's a
+  token/cost tension there, but not sure magic numbers are (will ever
+  be?) the right fix there."* Standing reading: STEP_TOO_BROAD stays
+  observational — visibility and data, never enforcement; don't tighten
+  or act on caps on frugality grounds; when the revisit comes, the fix
+  should not be another magic constant (measure-first, or a
+  consumer-priced budget — the truncation audit's method). This
+  GENERALIZES the arbitrary-truncation decree from evidence cuts to
+  resource caps as a class; third costume of the same principle after
+  the truncation decree and the budget-extension ladder ("work and be
+  expensive rather than not work and be budget friendly").
