@@ -10,7 +10,7 @@
 3. Read MILESTONES.md — prioritized work queue. This is what to do next.
 4. Read BACKLOG.md — active deferred items, bugs, ideas. Update as you work. When an item ships, move it to BACKLOG_DONE.md with its context intact (the archive is ingested by `dev-recall` for historical "why/how/rejected" context).
 5. Looking for a specific doc? `docs/INDEX.md` maps questions → docs and carries the status legend (living / dormant-design / history).
-6. Check `~/claude/grok-response-*.txt` for unprocessed feedback
+6. Check `~/claude/grok-response-*.txt` for unprocessed feedback (the two files there as of 2026-08-11 — rounds 2–3, March — are long processed; only NEW files matter)
 
 **When you need to recall something from prior correspondence (design docs, conversation logs, rationale for a past decision), use `dev-recall` instead of blind grep.** It's full-text (FTS5/BM25) retrieval over docs/, lat.md/, GOAL_BRAIN/VISION/MILESTONES/BACKLOG/BACKLOG_DONE/ROADMAP/CLAUDE, and auto-memory:
 
@@ -102,7 +102,7 @@ See `docs/ARCHITECTURE_OVERVIEW.md` for the full map with intent-vs-implementati
 ## Repo layout
 
 ```
-src/                 All production Python (~158 flat modules; REFACTOR_PLAN Tier 4 = subpackage plan)
+src/                 All production Python (~170 flat modules; REFACTOR_PLAN Tier 4 = subpackage plan)
   agent_loop.py      Core loop entry (physical phases split into loop_*.py modules)
   handle.py          Entry point — routes to NOW or AGENDA lane
   intent.py          Goal classifier (NOW vs AGENDA)
@@ -120,7 +120,7 @@ src/                 All production Python (~158 flat modules; REFACTOR_PLAN Tie
   constraint.py      Pre-execution constraint enforcement
   ...
 
-tests/               pytest suite (run via bash scripts/test-safe.sh; counts change weekly; zero skips is the invariant)
+tests/               pytest suite (run via bash scripts/test-safe.sh; counts change weekly; the invariant is zero UNCONDITIONAL skips — platform/feature-gated skipifs (Darwin-only probe, docker-gated e2e, corpus-gated) are the only allowed kind, so expect ~1 skip on this box)
 scripts/             smoke.sh, audit-phases.sh, enqueue.sh
 personas/            YAML persona specs
 docs/                Architecture, memory systems, self-reflection design

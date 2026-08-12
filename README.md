@@ -32,7 +32,7 @@ Works standalone or alongside OpenClaw, Telegram, Slack, or any other interface 
 - **Learning pipeline**: skills synthesized and promoted at run finalization; per-run statistical scans record improvement suggestions — see [Memory and self-improvement](#memory-and-self-improvement) for exactly what fires today vs what's still experimental
 - **Skill library**: reusable step patterns extracted from successful runs; scored, tested, and promoted automatically
 - **Interface-agnostic**: Telegram, Slack, CLI, or call `run_agent_loop()` directly from Python — same behavior regardless of how a goal arrives
-- **Token-efficient research**: pre-fetch layer intercepts URLs before LLM calls, uses Jina Reader for clean markdown, authenticated X/Twitter access via CLI
+- **Token-efficient research**: pre-fetch layer intercepts URLs before LLM calls, uses Jina Reader for clean markdown, authenticated X/Twitter access via CLI; workers get `maro-fetch` (fetch-to-disk instead of into-context) and `maro-read` (a $0 free-tier sub-model answers one question about large local files, returning the answer + an honest what-was-read receipt instead of the file's bytes)
 - **Cost reporting**: summarize `memory/step-costs.jsonl` into grouped latency/token/cost tables instead of eyeballing raw JSONL
 
 **What that looks like in practice** — real asks, one sentence in, one answer out:
@@ -532,8 +532,9 @@ Use this when a worker needs nested artifact paths, injected environment variabl
 ```bash
 # Run tests (all LLM calls mocked)
 .venv/bin/python -m pytest tests/ -q
-bash scripts/test-safe.sh           # full suite, resource-conscious 40-file chunks
+bash scripts/test-safe.sh           # full suite, one parallel pytest sized to a capped core budget
 bash scripts/test-safe.sh --fast    # skip tests explicitly marked slow
+bash scripts/test-safe.sh --jobs 1  # sequential chunked fallback (ordering-dependent failure hunting)
 
 # Dry-run (no LLM calls)
 python3 src/agent_loop.py "test goal" --dry-run --verbose
