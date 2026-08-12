@@ -25,6 +25,7 @@ it; the queue's history is part of the decision record).
 
 | Added | Doc | Why / decision needed |
 |---|---|---|
+| 2026-08-11 | [Compound-thinking §10 + §9.7 — the owed discussion](https://github.com/slycrel/maro-orchestration/blob/main/docs/COMPOUND_THINKING_DESIGN.md) | Not a doc-read — a conversation. The one genuine discussion left from your 2026-07-28 spitfire adjudication: §10 taste calibration (you flagged it LOAD-BEARING — "hard to get right (and keep simple)", not to be folded into a build chunk casually) together with §9.7/cross-goal scoping (what knowledge earns globality; klingon-won't-have-much-use-globally). Lead's judgment on record: they're the same conversation and it should happen before any §9.7 build. Queued so it stops living only in session memory. |
 | 2026-08-09 | [World-facts slices 2+3 shipped](https://github.com/slycrel/maro-orchestration/blob/main/docs/WORLD_FACTS_DESIGN.md) | Arc complete per your §7 calls; two calls I made without a decree on point, review or veto: (1) **planner-seeded facts never land back into stores** (sticky `source="planner"` — they derive from injected context, landing them would launder stored knowledge into fresh confidence; a step restating a rendered fact doesn't upgrade it); (2) **hypothesis promotion bar left at the lane's existing 2 confirmations** — two runs declaring the same pattern guess promotes a StandingRule (pinned; contradiction-check + refight are the backstops; raise the bar for world_fact-sourced hypotheses if live runs promote junk). |
 
 ## Done
