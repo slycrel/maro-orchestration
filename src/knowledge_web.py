@@ -677,13 +677,26 @@ def _reinforce_tiered_lesson(tl: TieredLesson, *, tier: str,
         # incoming text can differ in exactly the operative clause — keep it
         # on the row instead of discarding it. Data preservation, not trust
         # movement: contested rows keep variants too (refight evidence,
-        # like the frozen counter). Prompt-derived incomings never reach
-        # this function (provenance gate returns early upstream).
+        # like the frozen counter). Guards (adversarial review, same day):
+        # (a) the caller's dedup match was made OUTSIDE this lock — a
+        # concurrent refight may have revised the row's text, so the
+        # similarity is rechecked against the row as it is NOW before
+        # attaching an unrelated variant (the counters above share that
+        # race pre-existing; BACKLOG residual); (b) prompt-classified
+        # incomings are skipped affirmatively — today record_tiered_lesson's
+        # early return already keeps them out, this survives that return
+        # changing. Bounded claim, not an invariant: with the provenance
+        # gate OFF, minted_from is "" and unclassified prompt text can land
+        # here — but gate-off exposes the canonical lesson text identically
+        # (it becomes a full row), so variants are never MORE exposed than
+        # the store itself. Per-variant provenance is the stronger fix if
+        # pack quarantine ever needs to filter variants (BACKLOG residual).
         _var = (incoming_text or "").strip()
-        if (_var and _var != row.lesson
-                and _var not in row.merged_variants
-                and len(row.merged_variants) < _MERGED_VARIANTS_CAP):
-            row.merged_variants.append(_var)
+        if _var and incoming_minted_from != "prompt":
+            from memory_ledger import _text_similarity as _sim
+            if _sim(row.lesson, _var) > 0.8:
+                from memory_ledger import _absorb_variant
+                _absorb_variant(row.merged_variants, _var, row.lesson)
         result["tl"] = row
         return all_lessons
 
@@ -1610,6 +1623,12 @@ Output ONLY valid JSON:
             # text that survives the revision (2026-08-09 review, 3/3).
             _archive_lessons([replace(row)], reason="refight_revise")
             row.lesson = new_text
+            # A retained variant may BE the corrected text — it is canonical
+            # now, not a variant (adversarial review 2026-08-11: revision
+            # left the same string in both places, wasting a cap slot and
+            # breaking merge idempotence).
+            row.merged_variants = [v for v in row.merged_variants
+                                   if v != new_text]
             row.contested = {}
             row.provisional = True   # corrected text must re-earn its record
             row.sessions_validated = 0

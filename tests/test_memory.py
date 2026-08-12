@@ -1432,6 +1432,70 @@ class TestDeduplicateLessons:
         assert len(kept[0]["merged_variants"]) == _MERGED_VARIANTS_CAP
         assert kept[0]["times_reinforced"] == len(fillers)
 
+    def test_merge_unions_absorbed_rows_own_variants(self, monkeypatch, tmp_path):
+        """Adversarial review 2026-08-11 (both lenses): a dropped row may
+        itself carry absorbed variants — the merge must be closed under
+        its own output, exact and near branches both."""
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        import json
+        lessons_path = self._lessons_path(tmp_path)
+        base = "Always validate user inputs at the system boundary before processing any data."
+        survivor = self._make_lesson(base, lesson_id="L001")
+        absorbed_exact = self._make_lesson(base, lesson_id="L002")
+        absorbed_exact["merged_variants"] = ["an operative variant from an earlier merge"]
+        near = base.replace("any", "all")
+        absorbed_near = self._make_lesson(near, lesson_id="L003")
+        absorbed_near["merged_variants"] = ["a second operative variant"]
+        self._write_lessons(lessons_path, [survivor, absorbed_exact, absorbed_near])
+
+        from memory_ledger import deduplicate_lessons
+        deduplicate_lessons()
+        kept = [json.loads(l) for l in lessons_path.read_text().splitlines() if l.strip()]
+        assert len(kept) == 1
+        variants = kept[0]["merged_variants"]
+        assert "an operative variant from an earlier merge" in variants
+        assert "a second operative variant" in variants
+        assert near in variants
+
+    def test_variants_are_byte_bounded_with_marked_cut(self, monkeypatch, tmp_path):
+        """Adversarial review 2026-08-11: the cap bounded count, not bytes
+        (a 1.8MB row probe) — variants clip at _VARIANT_MAX_CHARS with the
+        marked-cut idiom."""
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        import json
+        from memory_ledger import _VARIANT_MAX_CHARS
+        lessons_path = self._lessons_path(tmp_path)
+        base = "Always validate user inputs at the system boundary before processing any data."
+        huge = base.replace("any data.", "all data. ") + ("boundary inputs " * 400)
+        self._write_lessons(lessons_path, [
+            self._make_lesson(base, lesson_id="L001"),
+            self._make_lesson(huge, lesson_id="L002"),
+        ])
+        from memory_ledger import deduplicate_lessons
+        deduplicate_lessons()
+        kept = [json.loads(l) for l in lessons_path.read_text().splitlines() if l.strip()]
+        if kept[0].get("merged_variants"):
+            v = kept[0]["merged_variants"][0]
+            assert len(v) < _VARIANT_MAX_CHARS + 100
+            assert "truncated" in v
+
+    def test_live_flat_near_dup_record_preserves_text(self, monkeypatch, tmp_path):
+        """Adversarial review 2026-08-11 (HIGH, both lenses): the flat
+        LIVE lane (record_lesson near-dup reinforce) was the third merge
+        path still discarding text — and the UU-4 dual-write's flat half,
+        so same-id tiered/flat rows silently diverged."""
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        import json
+        from memory_ledger import _store_lesson
+        base = "always validate user inputs at the system boundary before processing any data"
+        near = "always validate user inputs at the system boundary before processing all data"
+        _store_lesson("build", "done", base, "goal-1", minted_from="outcome")
+        _store_lesson("build", "done", near, "goal-2", minted_from="outcome")
+        lessons_path = self._lessons_path(tmp_path)
+        kept = [json.loads(l) for l in lessons_path.read_text().splitlines() if l.strip()]
+        assert len(kept) == 1
+        assert kept[0]["merged_variants"] == [near]
+
     def test_exact_dups_leave_no_variant_and_key_stays_absent(self, monkeypatch, tmp_path):
         """Identical text loses nothing — no variant recorded, and an empty
         merged_variants never lands on the row (_verdict_row discipline)."""

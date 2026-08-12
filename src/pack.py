@@ -633,6 +633,26 @@ def _import_hypotheses(content: str, *, pack_name: str, label: str, pack_tag: st
     return results
 
 
+def _import_variants(raw: Any) -> List[str]:
+    """Validate + re-bound imported merged_variants: strings only, local
+    per-variant clip and cap (the exporter's bounds are not this box's
+    contract). Anything malformed degrades to dropping that entry."""
+    if not isinstance(raw, list):
+        return []
+    from memory_ledger import _MERGED_VARIANTS_CAP, _VARIANT_MAX_CHARS
+    from context_budget import clip as _vclip
+    out: List[str] = []
+    for v in raw:
+        if not isinstance(v, str) or not v.strip():
+            continue
+        v = _vclip(v.strip(), _VARIANT_MAX_CHARS)
+        if v not in out:
+            out.append(v)
+        if len(out) >= _MERGED_VARIANTS_CAP:
+            break
+    return out
+
+
 def _import_lessons(content: str, *, pack_name: str, label: str, pack_tag: str,
                      now: str, dry_run: bool) -> List[Dict[str, Any]]:
     """Lessons enter MEDIUM tier regardless of origin tier, score capped at 0.5
@@ -729,6 +749,13 @@ def _import_lessons(content: str, *, pack_name: str, label: str, pack_tag: str,
                 provisional=bool(row.get("provisional", False)),
                 minted_from=minted_from,
                 imported=imported,
+                # Preserved rationale text crosses the border; trust
+                # counters reset above, data does not (adversarial review
+                # 2026-08-11: import silently dropped merged_variants).
+                # Validated + re-bounded locally: exported rows are already
+                # scrubbed, but the local cap and per-variant clip are this
+                # box's contract, not the exporter's.
+                merged_variants=_import_variants(row.get("merged_variants")),
             )
             if not dry_run:
                 _append_tiered_lesson(tl, tier=MemoryTier.MEDIUM)

@@ -24,6 +24,7 @@ from datetime import datetime, date, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
 
+from context_budget import clip as _clip
 from llm_parse import extract_json, safe_list, content_or_empty
 
 log = logging.getLogger("maro.memory.ledger")
@@ -1372,6 +1373,11 @@ def _store_lesson(
                 return ex
             # Reinforce existing lesson and persist the update
             ex.times_reinforced += 1
+            # Rationale erosion (adversarial review 2026-08-11: this flat
+            # live lane was the third merge path still discarding text —
+            # and the UU-4 dual-write's flat half, so tiered/flat rows with
+            # the same lesson_id silently diverged).
+            _absorb_variant(ex.merged_variants, lesson, ex.lesson)
             if not ex.contested:  # contested rows: sighting counted, nothing else moves
                 ex.confidence = min(1.0, ex.confidence + 0.05)
             if (ex.minted_from == "prompt" and minted_from == "outcome"
@@ -1753,6 +1759,27 @@ def load_outcomes(limit: int = 20) -> List[Outcome]:
 # variants beyond the cap are counted by times_reinforced but their text is
 # dropped — a bounded, named loss instead of the old total silent one.
 _MERGED_VARIANTS_CAP = 5
+# Per-variant byte bound (adversarial review 2026-08-11: the cap bounded
+# count, not bytes — five arbitrarily large near-dups made a 1.8MB row).
+# clip() marks the cut, so a truncated variant is visibly truncated.
+_VARIANT_MAX_CHARS = 500
+
+
+def _absorb_variant(variants: List[str], text: str, canonical: str) -> None:
+    """Preserve an absorbed near-dup text on a survivor row, bounded.
+
+    The ONE owner of the variant-union rule (adversarial review 2026-08-11:
+    three merge lanes — flat live, tiered live, sweep — implementing it
+    separately had already diverged by the first review). Mutates
+    ``variants`` in place; skips empties, the canonical text itself,
+    already-present texts, and everything past _MERGED_VARIANTS_CAP.
+    """
+    if len(variants) >= _MERGED_VARIANTS_CAP:
+        return
+    text = _clip((text or "").strip(), _VARIANT_MAX_CHARS)
+    if not text or text == canonical or text in variants:
+        return
+    variants.append(text)
 
 
 def deduplicate_lessons(*, dry_run: bool = False) -> dict:
@@ -1792,6 +1819,13 @@ def deduplicate_lessons(*, dry_run: bool = False) -> dict:
             exact_match = next((k for k in kept if k.lesson == l.lesson), None)
             if exact_match is not None:
                 exact_match.times_reinforced += 1
+                # The dropped row may itself carry absorbed variants —
+                # union them or they vanish with the row (adversarial
+                # review 2026-08-11: the merge was not closed under its
+                # own output).
+                for _v in l.merged_variants:
+                    _absorb_variant(exact_match.merged_variants, _v,
+                                    exact_match.lesson)
                 stats["removed_exact"] += 1
                 continue
 
@@ -1804,11 +1838,13 @@ def deduplicate_lessons(*, dry_run: bool = False) -> dict:
                 near_match.times_reinforced += 1
                 near_match.confidence = min(1.0, near_match.confidence + 0.05)
                 # Rationale erosion fix (MH, 2026-08-11): the dropped text
-                # can differ in exactly the operative clause — keep it on
-                # the survivor instead of discarding it silently.
-                if (l.lesson not in near_match.merged_variants
-                        and len(near_match.merged_variants) < _MERGED_VARIANTS_CAP):
-                    near_match.merged_variants.append(l.lesson)
+                # can differ in exactly the operative clause — keep it AND
+                # the dropped row's own absorbed variants (closure union).
+                _absorb_variant(near_match.merged_variants, l.lesson,
+                                near_match.lesson)
+                for _v in l.merged_variants:
+                    _absorb_variant(near_match.merged_variants, _v,
+                                    near_match.lesson)
                 stats["removed_near"] += 1
                 continue
 

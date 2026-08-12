@@ -148,11 +148,13 @@ class TestDirectorLogRow:
         assert payload["worker_results"][0]["report_echoed"] is False
 
     def test_log_row_carries_delegation_gap(self, tmp_path):
-        # MH #13: blocked worker with a provision-shaped reason flags the
-        # row; a done worker never does (status guard, not just keywords).
+        # MH #13: a WORKER-AUTHORED blocked reason with provision shape
+        # flags the row; a done worker never does (status guard, not just
+        # keywords).
         from director import _write_director_log
         blocked = _wr("partial", status="blocked")
         blocked.stuck_reason = "the source CSV was not provided"
+        blocked.blocked_origin = "worker"
         done = _wr("fine output with the phrase not provided in prose")
         path = _write_director_log(
             project=None, director_id="d-gap", directive="d", spec="s",
@@ -165,3 +167,18 @@ class TestDirectorLogRow:
         rows = payload["worker_results"]
         assert rows[0]["delegation_gap"] is True
         assert rows[1]["delegation_gap"] is False
+
+    def test_adapter_origin_blocked_is_not_a_delegation_candidate(self, tmp_path):
+        # Adversarial review 2026-08-11: "LLM call failed: no access to
+        # endpoint" pattern-matches the provision keywords but is an
+        # infrastructure failure — only worker-authored flag_blocked
+        # reasons are classified.
+        from director import _delegation_gap_row
+        adapter_blocked = _wr("", status="blocked")
+        adapter_blocked.stuck_reason = "LLM call failed: no access to model endpoint"
+        adapter_blocked.blocked_origin = "adapter"
+        assert _delegation_gap_row(adapter_blocked) is False
+        worker_blocked = _wr("", status="blocked")
+        worker_blocked.stuck_reason = "no access to the analytics dashboard was provided"
+        worker_blocked.blocked_origin = "worker"
+        assert _delegation_gap_row(worker_blocked) is True

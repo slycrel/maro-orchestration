@@ -623,7 +623,11 @@ def run_director(
                 )
             except Exception:
                 pass
-        if _r.status == "blocked":
+        if _r.status == "blocked" and _r.blocked_origin == "worker":
+            # Worker-authored reasons only (adversarial review 2026-08-11):
+            # adapter failures and empty-output blocks pattern-match the
+            # provision keywords ("LLM call failed: no access…") and would
+            # systematically contaminate the candidate corpus.
             try:
                 from attribution import delegation_gap as _delegation_gap
                 if _delegation_gap(_r.stuck_reason or ""):
@@ -976,7 +980,10 @@ def _compile_report(
 # ---------------------------------------------------------------------------
 
 def _delegation_gap_row(r: WorkerResult) -> bool:
-    """Log-row helper: classify a blocked worker's reason, never raising."""
+    """Log-row helper: classify a blocked worker's reason, never raising.
+    Worker-authored reasons only — same scoping as the event emission."""
+    if r.blocked_origin != "worker":
+        return False
     try:
         from attribution import delegation_gap
         return delegation_gap(r.stuck_reason or "")

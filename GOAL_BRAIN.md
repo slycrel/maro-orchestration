@@ -7153,3 +7153,22 @@ under the same two-measurement standard).
   we work" optimization question, folded into the §10 taste-calibration
   discussion, which he queued next ("finish that arc and then jump into
   the 10 discussion").
+- **2026-08-11** — Batch adversarial review of the day's four chunks
+  (Codex 2-lens, fdb11d1..bf05be3): REJECT-as-reviewed → remediated
+  same session; 8th earning round. The weight landed exactly where
+  predicted (the one non-advisory change, the rationale-erosion write
+  path): a THIRD merge lane (flat live `_store_lesson`) still discarded
+  text and made UU-4 dual-written rows diverge → `_absorb_variant` now
+  the single owner across all three lanes; dedup wasn't closed under
+  its own output (absorbed rows' variants vanished) → closure union;
+  outside-the-lock dedup match could attach variants to
+  refight-revised rows → in-lock similarity recheck; count-cap wasn't
+  a byte-cap (1.8MB-row probe) → 500-char marked clip; pack import
+  dropped the field → carried + locally re-bounded; refight revise
+  left canonical duplicated in variants → pruned; MH #13 classified
+  adapter failures as delegation gaps → WorkerResult.blocked_origin,
+  worker-authored reasons only. Suite 8231/0 skipped. **Review also
+  found a pre-existing HIGH: MEDIUM→LONG promotion is
+  remove-then-append and silently loses the row (variants and all) on
+  destination-write failure — filed at the top of the Actionable
+  Stack, retention-decree violation, own chunk.**

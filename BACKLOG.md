@@ -33,6 +33,21 @@ full triage: 2026-07-04.
 
 Ordered open work that matters. Top of the list is next.
 
+### MEDIUM→LONG promotion can lose a lesson outright on destination-write failure (FOUND 2026-08-11, adversarial review of the rationale-erosion chunk — pre-existing, HIGH)
+
+Both promotion routes remove the row from MEDIUM under that tier's lock,
+then append it to LONG as a separate operation
+(`knowledge_web.py` ~L1741 and ~L1869 as of `bf05be3`). An `OSError`
+from `_append_tiered_lesson` between the two leaves the lesson in
+NEITHER tier — reproduced by the reviewer; the auto-reinforcement caller
+catches the exception and continues, so the loss is silent and
+permanent (all merged_variants included). Violates the retention decree
+harder than anything the erosion chunk fixed. Fix shape:
+destination-first write (append to LONG, then remove from MEDIUM —
+crash duplicates are reconcilable by the dedup sweep; disappearance is
+not), or a recoverable move marker/WAL. Sized as its own chunk: both
+promotion routes + the crash-window reconciliation story + pins.
+
 ### Session-fork lane for claude -p (Jeremy idea 2026-08-08) — **SHIPPED same day, opt-in; daemon variant = residual edge**
 
 His phrasing: "storing some meta-data and having a master subagent
@@ -384,7 +399,33 @@ silent: playbook curation already archives the full prior version
 removes raw outcomes after LLM-summarizing them by design
 (space-reclaim with keep_recent guard + outcome_ids provenance) —
 whether the summary preserves enough rationale is a separate question
-from these merge fixes).
+from these merge fixes). **Codex 2-lens adversarial review same day
+(scope fdb11d1..bf05be3): REJECT-as-reviewed → remediated same
+session — 8th round in this arc to earn its cost, with repros.**
+Fixed: (1) the flat LIVE lane (`_store_lesson` near-dup reinforce) was
+a THIRD merge path still discarding text — and the UU-4 dual-write's
+flat half, so same-id tiered/flat rows silently diverged →
+`_absorb_variant` is now the ONE owner of the union rule, used by all
+three lanes; (2) dedup dropped an absorbed row's own merged_variants
+(merge not closed under its own output) → closure union in both exact
+and near branches; (3) the outside-the-lock dedup match could attach a
+variant to a refight-REVISED row → similarity rechecked against the
+live row inside the lock before attaching (the counters/provisional
+side of that race is PRE-EXISTING — residual below); (4) cap bounded
+count not bytes (1.8MB-row probe) → per-variant clip at 500 chars,
+marked cut; (5) pack import silently dropped merged_variants →
+carried, validated, re-bounded locally; (6) refight revise could leave
+the new canonical duplicated inside variants → pruned; (7) MH #13
+keywords fired on adapter failures ("LLM call failed: no access…") →
+`WorkerResult.blocked_origin` (worker/adapter/empty) and the
+classifier reads worker-authored reasons only; (8) the "prompt text
+cannot land here" comment overclaimed → bounded honestly (gate-off
+exposes canonical text identically; variants never MORE exposed than
+the store). **Residuals filed:** MEDIUM→LONG promotion atomicity (new
+top-of-stack entry — pre-existing HIGH); reinforce-race
+counters/provisional-clear on refight-revised rows (pre-existing,
+needs a fingerprint-revalidation design); per-variant provenance if
+pack quarantine ever needs to filter variants.
 
 Standing caveats to honor before building ANY of these: (a) every ruling
 is static-source-reading — "code path present," never "problem solved";

@@ -181,6 +181,36 @@ def test_record_dedup_preserves_near_dup_text(monkeypatch, tmp_path):
     assert lessons[0].merged_variants == [near]
 
 
+def test_reinforce_recheck_blocks_variant_on_revised_row(monkeypatch, tmp_path):
+    """Adversarial review 2026-08-11 (consensus): the dedup match is made
+    outside the mutation lock — if the row's text was revised in between
+    (refight), the incoming text no longer matches and must NOT attach as
+    a variant of the unrelated new text."""
+    _setup(monkeypatch, tmp_path)
+    from knowledge_web import (MemoryTier, _reinforce_tiered_lesson,
+                               load_tiered_lessons, record_tiered_lesson)
+    base = "always validate user inputs at the system boundary before processing any data"
+    record_tiered_lesson(base, "research", "done", "goal-1")
+    stale_copy = load_tiered_lessons(tier=MemoryTier.MEDIUM, task_type="research")[0]
+
+    # Simulate a concurrent revision: rewrite the row's canonical text to
+    # something unrelated while the caller holds the stale copy.
+    import knowledge_web as kw
+
+    def _revise(lessons):
+        for l in lessons:
+            if l.lesson_id == stale_copy.lesson_id:
+                l.lesson = "completely unrelated replacement thesis"
+        return lessons
+
+    kw._mutate_tiered_lessons(MemoryTier.MEDIUM, _revise)
+
+    _reinforce_tiered_lesson(stale_copy, tier=MemoryTier.MEDIUM,
+                             incoming_text=base.replace("any", "all"))
+    row = load_tiered_lessons(tier=MemoryTier.MEDIUM, task_type="research")[0]
+    assert row.merged_variants == []
+
+
 def test_record_dedup_identical_text_leaves_no_variant(monkeypatch, tmp_path):
     """Identical re-records lose nothing — no variant recorded."""
     _setup(monkeypatch, tmp_path)

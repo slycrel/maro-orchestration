@@ -62,6 +62,13 @@ class WorkerResult:
     # verbatim concatenation, or too little to judge); see
     # director._report_echo.
     report_echoed: Optional[bool] = None
+    # Who authored a blocked result's stuck_reason (adversarial review
+    # 2026-08-11): "worker" = the model's own flag_blocked call; "adapter"
+    # = the LLM call itself failed; "empty" = no useful output. The MH #13
+    # delegation-gap classifier reads worker-authored reasons ONLY —
+    # "LLM call failed: no access to endpoint" is an infrastructure
+    # failure, not an under-specified ticket. "" for done results.
+    blocked_origin: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -281,6 +288,7 @@ def dispatch_worker(
             status="blocked",
             result="",
             stuck_reason=f"LLM call failed: {exc}",
+            blocked_origin="adapter",
         )
 
     if resp.tool_calls:
@@ -306,6 +314,7 @@ def dispatch_worker(
                 stuck_reason=tc.arguments.get("reason", "unknown"),
                 tokens_in=resp.input_tokens,
                 tokens_out=resp.output_tokens,
+                blocked_origin="worker",
             )
 
     # Fallback: treat content as result
@@ -325,6 +334,7 @@ def dispatch_worker(
         status="blocked",
         result=resp.content,
         stuck_reason="Worker produced no useful output",
+        blocked_origin="empty",
     )
 
 

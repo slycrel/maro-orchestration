@@ -232,6 +232,20 @@ class TestRevise:
         assert revised.sessions_validated == 0
         assert revised.times_reinforced == 0
 
+    def test_revise_prunes_variant_matching_new_canonical(self, monkeypatch, tmp_path):
+        """Adversarial review 2026-08-11: a revision may promote a retained
+        merged_variant to canonical — the same string must not sit in both
+        places (wasted cap slot, broken merge idempotence)."""
+        _setup(monkeypatch, tmp_path)
+        row = _mint_contested()
+        _set(row.lesson_id, merged_variants=[
+            "Use the NEW staging endpoint.", "another retained variant"])
+        action = refight_lesson(_raw(row.lesson_id), _FakeAdapter(REVISE))
+        assert action == "revise"
+        revised = _raw(row.lesson_id)
+        assert revised.lesson == "Use the NEW staging endpoint."
+        assert revised.merged_variants == ["another retained variant"]
+
     def test_revise_leaves_flat_row_contested(self, monkeypatch, tmp_path):
         """The flat row still carries the refuted ORIGINAL text — clearing it
         would resurrect that text on the recall surfaces."""
