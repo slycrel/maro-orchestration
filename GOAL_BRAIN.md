@@ -7283,3 +7283,12 @@ under the same two-measurement standard).
   live, so flat/tiered consistency is load-bearing forward; (3)
   arch-memory-knowledge skill carries the variant/move-safety model.
   Suite 8259/0 skipped.
+- **2026-08-12** — Star skill consolidation pass (Jeremy's "what's the
+  state of the star skill" check — it was 2 weeks stale, last touched
+  07-29). The skill's own ~3-arcs consolidation condition had fired;
+  prior version archived (docs/history/2026-08-12-star-skill-
+  pre-consolidation.md), five contract deltas folded in from landed
+  arcs: prior-attempt check, assumption-labeled context partitioning,
+  teach-as-decision-rule, evidence-modality refutation at judge,
+  toolset-stamped reopen conditions. Anti-prompt-soup rule held:
+  contract changes + pointers only, war stories stayed in history docs.
