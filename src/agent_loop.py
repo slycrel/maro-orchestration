@@ -146,6 +146,7 @@ def run_agent_loop(
     parent_loop_id: Optional[str] = None,
     admission_wait_s: Optional[float] = None,  # seconds to poll a busy project slot; None = config (default: refuse immediately)
     defer_learning: bool = False,  # data-r2-01: caller runs closure + finalize_deferred_learning() afterwards — skip verdict-blind lesson extraction/crystallization at finalize
+    defer_maintenance: bool = False,  # async-tail decree: caller drains handle._POST_NOTIFY_MAINTENANCE post-notify — NOT implied by defer_learning (CLI lanes set that and drain nothing)
     measurement_class: str = "",  # explicit organic/smoke/control/benchmark provenance; empty = unknown direct caller
     handle_id: str = "",  # top-level request key; continuations reuse it for report dedup
     introspection_access: bool = False,  # introspection-shaped goal: containerized steps get ro run-records + maro source (decree 2026-07-18)
@@ -201,6 +202,7 @@ def run_agent_loop(
         parent_loop_id=parent_loop_id,
         admission_wait_s=admission_wait_s,
         defer_learning=defer_learning,
+        defer_maintenance=defer_maintenance,
         measurement_class=measurement_class,
         handle_id=handle_id,
     )

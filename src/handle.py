@@ -2260,6 +2260,11 @@ def _handle_impl(
         # learning) so learning sees the verdict instead of running blind
         # at loop finalize. Restart re-runs inherit via dict(_loop_kwargs).
         _loop_kwargs["defer_learning"] = True
+        # Async-tail decree: this lane's finalize (the finally block below)
+        # drains _POST_NOTIFY_MAINTENANCE after the run_completed notify —
+        # the explicit opt-in the maintenance deferral requires. The
+        # direct-CLI lanes set defer_learning without this and stay inline.
+        _loop_kwargs["defer_maintenance"] = True
 
         loop_result = run_agent_loop(message, **_loop_kwargs)
         elapsed = int((time.monotonic() - started_at) * 1000)

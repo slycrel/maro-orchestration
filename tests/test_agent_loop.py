@@ -2033,26 +2033,42 @@ def _stub_maintenance(monkeypatch):
 
 
 def test_finalize_defers_maintenance_on_closure_lane(monkeypatch):
-    """defer_learning=True + handle_id → maintenance registers post-notify,
-    nothing runs inline; the drain runs it with the loop's adapter."""
+    """defer_maintenance=True + handle_id → maintenance registers
+    post-notify, nothing runs inline; the drain runs it with the loop's
+    adapter, inside the loop's captains-log scope."""
     import handle as handle_mod
+    import captains_log
     ran = _stub_maintenance(monkeypatch)
+    seen_loop_ids = []
+    import loop_finalize
+    _record = loop_finalize.run_post_run_maintenance
+
+    def _record_with_scope(**kw):
+        seen_loop_ids.append(captains_log._current_loop_id.get())
+        return _record(**kw)
+
+    monkeypatch.setattr(loop_finalize, "run_post_run_maintenance",
+                        _record_with_scope)
 
     class _FakeAdapter:
         model_key = "test"
 
     _adapter = _FakeAdapter()
     _finalize_loop(**_finalize_kwargs(
-        adapter=_adapter, defer_learning=True, handle_id="mt-hid"))
+        adapter=_adapter, defer_learning=True, defer_maintenance=True,
+        handle_id="mt-hid"))
     assert ran == []
     assert "mt-hid" in handle_mod._POST_NOTIFY_MAINTENANCE
     assert handle_mod._drain_deferred_maintenance("mt-hid") == 1
     assert len(ran) == 1
     assert ran[0]["adapter"] is _adapter
+    # Attribution survives the deferral: drain re-entered the loop's scope
+    # (review of 6f58bf3 — SKILL_REWRITE etc. attribute via the ambient id).
+    assert seen_loop_ids == ["mt-loop"]
 
 
-def test_finalize_runs_maintenance_inline_without_closure_lane(monkeypatch):
-    """defer_learning=False (no post-notify contract) → inline, unchanged."""
+def test_finalize_runs_maintenance_inline_without_defer_contract(monkeypatch):
+    """No defer_maintenance opt-in → inline, unchanged."""
     import handle as handle_mod
     ran = _stub_maintenance(monkeypatch)
     _finalize_loop(**_finalize_kwargs(handle_id="mt-hid-inline"))
@@ -2060,11 +2076,25 @@ def test_finalize_runs_maintenance_inline_without_closure_lane(monkeypatch):
     assert "mt-hid-inline" not in handle_mod._POST_NOTIFY_MAINTENANCE
 
 
+def test_finalize_cli_shape_defer_learning_alone_stays_inline(monkeypatch):
+    """The direct-CLI lanes (maro run/resume) pass defer_learning=True +
+    handle_id but drain no registry — maintenance must run inline there.
+    Review of 6f58bf3, consensus HIGH: inferring maintenance deferral from
+    defer_learning silently dropped their whole maintenance tail."""
+    import handle as handle_mod
+    ran = _stub_maintenance(monkeypatch)
+    _finalize_loop(**_finalize_kwargs(
+        defer_learning=True, handle_id="mt-hid-cli"))
+    assert len(ran) == 1
+    assert "mt-hid-cli" not in handle_mod._POST_NOTIFY_MAINTENANCE
+
+
 def test_finalize_dry_run_neither_runs_nor_registers_maintenance(monkeypatch):
     import handle as handle_mod
     ran = _stub_maintenance(monkeypatch)
     _finalize_loop(**_finalize_kwargs(
-        dry_run=True, defer_learning=True, handle_id="mt-hid-dry"))
+        dry_run=True, defer_learning=True, defer_maintenance=True,
+        handle_id="mt-hid-dry"))
     assert ran == []
     assert "mt-hid-dry" not in handle_mod._POST_NOTIFY_MAINTENANCE
 
@@ -2079,7 +2109,7 @@ def test_finalize_maintenance_defer_failure_falls_back_inline(monkeypatch):
 
     monkeypatch.setattr(handle_mod, "_defer_maintenance_post_notify", _boom)
     _finalize_loop(**_finalize_kwargs(
-        defer_learning=True, handle_id="mt-hid-boom"))
+        defer_learning=True, defer_maintenance=True, handle_id="mt-hid-boom"))
     assert len(ran) == 1
     assert "mt-hid-boom" not in handle_mod._POST_NOTIFY_MAINTENANCE
 

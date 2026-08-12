@@ -7298,11 +7298,20 @@ under the same two-measurement standard).
   probes, statistical scans, run-cadence evolver + inspector — the
   ~70% slice of 2a3b1f85's 8m34s post-work tail) no longer runs inline
   before closure. Extracted to `loop_finalize.run_post_run_maintenance`;
-  the closure lane registers it into `handle._POST_NOTIFY_MAINTENANCE`
-  (twin of the 2026-07-17 answer-first learning lane), drained by
-  handle()'s finalize after run_completed + the learning drain. Inline
-  fallback when there's no post-notify contract or registration fails —
-  moved in time, never dropped. The quality-gate early drain deliberately
-  does NOT drain it (the retry needs lessons, not promotions). Remaining:
-  phase 2 (verdict-pending reply at final-step compile) + the tail's ~30
-  calls still invisible in `total_cost_usd`. Suite 8266/0 skipped.
+  the handle lane opts in via an explicit `defer_maintenance` flag and
+  registers it into `handle._POST_NOTIFY_MAINTENANCE` (twin of the
+  2026-07-17 answer-first learning lane), drained by handle()'s finalize
+  after run_completed + the learning drain, re-entering the loop's
+  captains-log scope. Everyone else inline — moved in time, never
+  dropped. The quality-gate early drain deliberately does NOT drain it
+  (the retry needs lessons, not promotions). **Codex 2-lens adversarial
+  review REJECTED the first cut (6f58bf3) with a consensus HIGH, fixed
+  same session:** the drain contract was inferred from `defer_learning`,
+  which the direct-CLI lanes (maro run/resume) set while draining
+  nothing — their whole maintenance tail would have silently dropped;
+  plus loop-attribution loss at drain time. Residuals accepted + filed
+  in the BACKLOG entry (card/slice tail visibility joins the
+  total_cost_usd item; gate's inspector summary one-firing lag;
+  retry/restart-chain maintenance lag; shared _hid=None registry-strand
+  class). Remaining: phase 2 (verdict-pending reply at final-step
+  compile). Suite 8266/0 skipped.

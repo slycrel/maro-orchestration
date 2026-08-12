@@ -514,6 +514,15 @@ class LoopContext:
     # to call finalize_deferred_learning() — finalize skips lesson extraction
     # and skill crystallization so they can run verdict-aware instead of blind.
     defer_learning: bool = False
+    # Async-tail decree (2026-08-12 review round): caller promises to drain
+    # handle._POST_NOTIFY_MAINTENANCE after the run_completed notify, so
+    # finalize registers the maintenance tail there instead of running it
+    # inline. EXPLICITLY distinct from defer_learning: the direct-CLI lanes
+    # (maro run/resume) set defer_learning=True but finalize learning
+    # themselves and drain no registry — inferring maintenance deferral from
+    # defer_learning silently dropped their whole maintenance tail (Codex
+    # 2-lens review of 6f58bf3, consensus HIGH). Only handle.py sets this.
+    defer_maintenance: bool = False
 
     # Adaptive execution (Phase 64)
     steps_since_last_check: int = 0

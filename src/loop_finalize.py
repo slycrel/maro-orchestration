@@ -366,6 +366,7 @@ def _build_result_and_finalize(
         failure_chain=failure_chain,
         recovery_steps=recovery_step_count,
         defer_learning=getattr(ctx, "defer_learning", False),
+        defer_maintenance=getattr(ctx, "defer_maintenance", False),
         measurement_class=ctx.measurement_class,
         handle_id=ctx.handle_id,
         stop_verdict=ctx.stop_verdict,
@@ -564,6 +565,7 @@ def _finalize_loop(
     failure_chain: Optional[List[str]] = None,
     recovery_steps: int = 0,
     defer_learning: bool = False,
+    defer_maintenance: bool = False,
     measurement_class: str = "",
     handle_id: str = "",
     stop_verdict: str = "",
@@ -808,23 +810,32 @@ def _finalize_loop(
     # health probes, statistical scans, and the run-cadence evolver +
     # inspector used to run inline HERE — before closure, the gate, and the
     # user-facing notify (~6min of the 8m34s post-work answer delay measured
-    # on 2a3b1f85-sunny-wren, ~70% of the tail). On the closure lane
-    # (defer_learning=True) the caller promises a post-notify drain, so the
-    # whole phase registers there instead — same contract deferred learning
-    # rides. No-closure callers (defer_learning=False) keep it inline, and a
-    # registration failure falls back inline: maintenance may move in time,
-    # never silently drop.
+    # on 2a3b1f85-sunny-wren, ~70% of the tail). When the caller has promised
+    # a post-notify drain (defer_maintenance — handle.py only; NOT implied by
+    # defer_learning, which the direct-CLI lanes set while draining nothing:
+    # Codex review of 6f58bf3, consensus HIGH), the whole phase registers
+    # there instead. Everyone else keeps it inline, and a registration
+    # failure falls back inline: maintenance may move in time, never
+    # silently drop.
     if not dry_run:
         _maint_deferred = False
-        if defer_learning and handle_id:
+        if defer_maintenance and handle_id:
             try:
                 from handle import _defer_maintenance_post_notify
-                _maint_adapter = adapter
-                _maint_verbose = verbose
+
+                def _deferred_maintenance(_adapter=adapter, _verbose=verbose,
+                                          _lid=loop_id):
+                    # Re-enter this loop's captains-log scope: the drain
+                    # runs after run_agent_loop's loop_id_scope has exited,
+                    # and maintenance emitters (SKILL_REWRITE, ...)
+                    # attribute through the ambient id (BACKLOG #17).
+                    from captains_log import loop_id_scope as _lscope
+                    with _lscope(_lid):
+                        run_post_run_maintenance(
+                            adapter=_adapter, verbose=_verbose)
+
                 _defer_maintenance_post_notify(
-                    handle_id,
-                    lambda: run_post_run_maintenance(
-                        adapter=_maint_adapter, verbose=_maint_verbose))
+                    handle_id, _deferred_maintenance)
                 _maint_deferred = True
             except Exception as _defer_exc:
                 log.debug("maintenance defer failed — running inline: %s",

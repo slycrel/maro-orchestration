@@ -87,35 +87,71 @@ promotion routes + the crash-window reconciliation story + pins.
 slice) no longer runs inline before closure. `_finalize_loop`'s five
 maintenance blocks (skill maintenance, health probes, statistical scans,
 run-cadence evolver, run-cadence inspector) extracted to
-`loop_finalize.run_post_run_maintenance()`; on the closure lane
-(defer_learning=True + handle_id) it registers into
-`handle._POST_NOTIFY_MAINTENANCE` — a twin of the answer-first learning
-registry, drained by handle()'s finalize AFTER the run_completed notify
-and after the learning drain (promotions see this run's crystallization
-one cycle earlier; nothing here feeds the run card, so no refresh).
-No-closure callers (defer_learning=False, e.g. direct loop runs) and
-registration failures fall back inline — maintenance moves in time,
-never silently drops. Deliberately NOT drained at the quality-gate
-early-drain site: the escalated retry needs the failed loop's LESSONS,
-not its promotions, and putting the multi-minute tail ahead of the retry
-is exactly the wait the decree removes (the retry now sees
-pre-maintenance skill state — threshold-based, one-cycle lag, benign).
-Crash before the drain loses at most one cadence cycle; every sub-system
-is threshold/cadence-based and re-fires on the next run's tail, and
+`loop_finalize.run_post_run_maintenance()`; when the caller has promised
+a post-notify drain (**explicit `defer_maintenance` flag, threaded
+run_agent_loop → ctx → finalize; handle.py is the only setter**) it
+registers into `handle._POST_NOTIFY_MAINTENANCE` — a twin of the
+answer-first learning registry, drained by handle()'s finalize AFTER the
+run_completed notify and after the learning drain (promotions see this
+run's crystallization one cycle earlier; nothing here feeds the run
+card, so no refresh). All other callers and registration failures run it
+inline — maintenance moves in time, never silently drops. The deferred
+callable re-enters the loop's `captains_log.loop_id_scope` so
+maintenance events stay loop-attributed. Deliberately NOT drained at the
+quality-gate early-drain site: the escalated retry needs the failed
+loop's LESSONS, not its promotions, and putting the multi-minute tail
+ahead of the retry is exactly the wait the decree removes. Crash before
+the drain loses at most one cadence cycle; every sub-system is
+threshold/cadence-based and re-fires on the next run's tail, and
 heartbeat still runs skill maintenance on its own tick. Pins:
-tests/test_agent_loop.py (defer/inline/dry-run/registration-failure
-fallback), tests/test_handle.py `TestAsyncMaintenanceTail` (registry
-drain semantics, notify→learning→maintenance ordering through handle(),
-early-drain leaves maintenance registered). Suite 8266/0 skipped.
+tests/test_agent_loop.py (defer/inline/CLI-shape/dry-run/registration-
+failure fallback/scope attribution), tests/test_handle.py
+`TestAsyncMaintenanceTail` (registry drain semantics,
+notify→learning→maintenance ordering through handle(), early-drain
+leaves maintenance registered). Suite 8266/0 skipped.
 
-**REMAINING — phase 2 + cost visibility (open):** (2) the real design
+**Codex 2-lens adversarial review of the first cut (6f58bf3) — REJECT,
+consensus HIGH, fixed same session (7th earning round for this arc's
+modules):** the first cut inferred the drain contract from
+`defer_learning + handle_id`, but the direct-CLI lanes (`maro run`
+cli.py:716, `maro resume` cli.py:2406) set defer_learning=True, finalize
+learning THEMSELVES (`_finalize_cli_deferred_learning` calls
+finalize_deferred_learning directly — no registry involved), and drain
+nothing — their whole maintenance tail would have silently dropped,
+violating the entry's own "never silently drop" contract. Fix: the
+explicit `defer_maintenance` opt-in above. Second accepted finding:
+deferral ran maintenance outside `loop_id_scope`, orphaning SKILL_* /
+EVOLVER_* captains-log attribution — fixed with the scope re-enter.
+**Residuals from the review, accepted + filed rather than fixed:**
+(a) deferred maintenance events/calls land AFTER `close_run` cut the
+captains-log slice and built the card, so run_card `n_calls` + the
+run's log slice under-report the tail — same class as the deferred
+LEARNING lane has had since 2026-07-17, and the cost half was already
+filed below; treat as one visibility item (card/slice/cost) in phase 2
+or the cost-truth follow-on. (b) When `inspector.run_cadence` is
+enabled, the quality gate now reads the PREVIOUS cadence firing's
+inspector summary (one-firing lag on cadence-fire runs only; default
+OFF). (c) The gate-escalation retry (and mid-run restart-chain loops)
+no longer see same-run maintenance products — concretely, a skill whose
+circuit opened THIS run stays open (excluded from recall) instead of
+possibly entering the retry half-open-rewritten; accepted: the failure
+mode is a missing nice-to-have, not a poisoned input, and the decree
+targets exactly that pre-answer wait. Revisit if a gate-escalated retry
+is ever observed failing on a skill the old ordering would have
+rewritten. (d) Pre-existing, now shared by both registries: an
+exception path where handle() can't recover the handle id (`_hid=None`)
+strands registered callables in a long-lived process — same class as
+the learning lane, fix both together if it ever bites.
+
+**REMAINING — phase 2 + visibility (open):** (2) the real design
 chunk: notify/reply at final-step compile with "verdict pending",
 closure verdict arrives as a follow-up stamp (verdict_history already
 supports supersede), sweep for crash-orphaned unstamped runs via the
 repair-audits contract — the answer-synthesis and
 goal_achieved-at-notify watch-fors below belong to this phase. And the
 tail's ~30 calls are STILL invisible in `total_cost_usd` (unchanged by
-phase 1 — the calls just run later); fold into phase 2 or fix
+phase 1 — the calls just run later), now joined by the card
+`n_calls`/log-slice under-report above; fold into phase 2 or fix
 separately.
 
 Original entry:
