@@ -1390,6 +1390,63 @@ class TestDeduplicateLessons:
         assert stats["after"] == 1
         assert stats["removed_near"] >= 1
 
+    def test_near_dup_merge_preserves_dropped_text(self, monkeypatch, tmp_path):
+        """MH Memory Rationale Erosion (2026-08-11): at 0.8 overlap the
+        dropped 20% can be the operative clause — the survivor must keep
+        the absorbed text (merged_variants), not discard it silently."""
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        import json
+        lessons_path = self._lessons_path(tmp_path)
+        base = "Always validate user inputs at the system boundary before processing any data."
+        near = "Always validate user inputs at the system boundary before processing all data."
+        self._write_lessons(lessons_path, [
+            self._make_lesson(base, lesson_id="L001"),
+            self._make_lesson(near, lesson_id="L002"),
+        ])
+
+        from memory_ledger import deduplicate_lessons
+        deduplicate_lessons()
+        kept = [json.loads(l) for l in lessons_path.read_text().splitlines() if l.strip()]
+        assert len(kept) == 1
+        assert kept[0]["lesson"] == base            # older survives
+        assert kept[0]["merged_variants"] == [near]  # dropped text preserved
+
+    def test_merged_variants_cap_bounds_row_growth(self, monkeypatch, tmp_path):
+        """Beyond the cap, merges still count (times_reinforced) but the
+        variant text is dropped — bounded, named loss."""
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        import json
+        from memory_ledger import _MERGED_VARIANTS_CAP, deduplicate_lessons
+        lessons_path = self._lessons_path(tmp_path)
+        base = "Always validate user inputs at the system boundary before processing any data."
+        rows = [self._make_lesson(base, lesson_id="L000")]
+        fillers = ["all", "each", "every", "some", "most", "the", "that"]
+        for i, w in enumerate(fillers):
+            near = base.replace("any", w)
+            rows.append(self._make_lesson(near, lesson_id=f"L{i + 1:03d}"))
+        self._write_lessons(lessons_path, rows)
+
+        deduplicate_lessons()
+        kept = [json.loads(l) for l in lessons_path.read_text().splitlines() if l.strip()]
+        assert len(kept) == 1
+        assert len(kept[0]["merged_variants"]) == _MERGED_VARIANTS_CAP
+        assert kept[0]["times_reinforced"] == len(fillers)
+
+    def test_exact_dups_leave_no_variant_and_key_stays_absent(self, monkeypatch, tmp_path):
+        """Identical text loses nothing — no variant recorded, and an empty
+        merged_variants never lands on the row (_verdict_row discipline)."""
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        import json
+        lessons_path = self._lessons_path(tmp_path)
+        lesson = self._make_lesson("Always test edge cases.", lesson_id="L001")
+        self._write_lessons(lessons_path, [lesson, lesson])
+
+        from memory_ledger import deduplicate_lessons
+        deduplicate_lessons()
+        kept = [json.loads(l) for l in lessons_path.read_text().splitlines() if l.strip()]
+        assert len(kept) == 1
+        assert "merged_variants" not in kept[0]
+
     def test_dry_run_does_not_write(self, monkeypatch, tmp_path):
         """dry_run=True reports what would change but leaves the file untouched."""
         monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))

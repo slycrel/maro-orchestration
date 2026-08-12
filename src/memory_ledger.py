@@ -207,6 +207,14 @@ class Lesson:
     # TieredLesson.grounding field (dual-written rows carry the same
     # stamps). Absent key stays off the row (_verdict_row discipline).
     grounding: List[Dict[str, Any]] = field(default_factory=list)
+    # MH Memory Rationale Erosion (2026-08-11): texts of near-duplicate
+    # lessons this row absorbed in dedup. At 0.8 word overlap the dropped
+    # 20% can be the operative clause — discarding the text silently was
+    # the erosion (retention decree: decay trust, never data). Capped at
+    # _MERGED_VARIANTS_CAP per survivor (beyond it, only times_reinforced
+    # counts the merge — bounded, named loss). Absent key stays off the
+    # row (_verdict_row discipline).
+    merged_variants: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -480,6 +488,8 @@ def _verdict_row(obj: Any) -> Dict[str, Any]:
         row.pop("contested")
     if "grounding" in row and not row["grounding"]:
         row.pop("grounding")
+    if "merged_variants" in row and not row["merged_variants"]:
+        row.pop("merged_variants")
     return row
 
 
@@ -1739,6 +1749,12 @@ def load_outcomes(limit: int = 20) -> List[Outcome]:
 # Lesson deduplication (cleanup utility)
 # ---------------------------------------------------------------------------
 
+# Bound on preserved near-dup texts per survivor (rationale-erosion fix):
+# variants beyond the cap are counted by times_reinforced but their text is
+# dropped — a bounded, named loss instead of the old total silent one.
+_MERGED_VARIANTS_CAP = 5
+
+
 def deduplicate_lessons(*, dry_run: bool = False) -> dict:
     """Deduplicate lessons.jsonl by exact text match and near-duplicate word overlap.
 
@@ -1787,6 +1803,12 @@ def deduplicate_lessons(*, dry_run: bool = False) -> dict:
             if near_match is not None:
                 near_match.times_reinforced += 1
                 near_match.confidence = min(1.0, near_match.confidence + 0.05)
+                # Rationale erosion fix (MH, 2026-08-11): the dropped text
+                # can differ in exactly the operative clause — keep it on
+                # the survivor instead of discarding it silently.
+                if (l.lesson not in near_match.merged_variants
+                        and len(near_match.merged_variants) < _MERGED_VARIANTS_CAP):
+                    near_match.merged_variants.append(l.lesson)
                 stats["removed_near"] += 1
                 continue
 

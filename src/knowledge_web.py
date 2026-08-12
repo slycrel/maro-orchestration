@@ -32,7 +32,7 @@ from typing import Any, Dict, List, Optional
 
 log = logging.getLogger(__name__)
 
-from memory_ledger import _memory_dir, _text_similarity
+from memory_ledger import _MERGED_VARIANTS_CAP, _memory_dir, _text_similarity
 
 # Hybrid retrieval (BM25 + RRF) — graceful fallback to TF-IDF if unavailable
 try:
@@ -148,6 +148,15 @@ class TieredLesson:
     # carries times_reinforced_at_contest so re-sightings since the contest
     # are countable refight evidence. Old rows deserialize to {}.
     contested: Dict[str, Any] = field(default_factory=dict)
+    # MH Memory Rationale Erosion (2026-08-11): texts of near-duplicate
+    # incoming lessons this row absorbed at record-time dedup (>0.8
+    # similarity → reinforce; the incoming text was previously discarded).
+    # The dropped 20% can be the operative clause — retention decree: decay
+    # trust, never data. Capped (flat-store sibling shares the bound via
+    # memory_ledger._MERGED_VARIANTS_CAP); prompt-derived re-records never
+    # reach the reinforce path, so instruction text cannot land here
+    # (provenance gate upstream). Old rows deserialize to [].
+    merged_variants: List[str] = field(default_factory=list)
     # Δ-gate (2026-08-06, delta_replay.py): replay-measured effect evidence
     # when this lesson promoted by effect rather than tenure — {delta,
     # jackknife_spread, n_calls, stratum, measured_at, route: "effect"}.
@@ -411,7 +420,8 @@ def record_tiered_lesson(
                 return _reinforce_tiered_lesson(
                     ex, tier=MemoryTier.LONG, confirming=not provisional,
                     incoming_minted_from=minted_from,
-                    incoming_evidence=evidence_sources)
+                    incoming_evidence=evidence_sources,
+                    incoming_text=lesson_text)
             max_sim = max(max_sim, sim)
 
     # Scan-and-append is one critical section (review finding: the dedup
@@ -432,7 +442,8 @@ def record_tiered_lesson(
                 return _reinforce_tiered_lesson(
                     ex, tier=tier, confirming=not provisional,
                     incoming_minted_from=minted_from,
-                    incoming_evidence=evidence_sources)
+                    incoming_evidence=evidence_sources,
+                    incoming_text=lesson_text)
             max_sim = max(max_sim, sim)
 
         # Chunk 6: novelty term — a lesson unlike anything stored starts above
@@ -574,7 +585,8 @@ _REINFORCE_EVIDENCE_CAP = 8  # distinct evidence refs kept per row (first N sigh
 def _reinforce_tiered_lesson(tl: TieredLesson, *, tier: str,
                              confirming: bool = True,
                              incoming_minted_from: str = "",
-                             incoming_evidence: Optional[List[str]] = None) -> TieredLesson:
+                             incoming_evidence: Optional[List[str]] = None,
+                             incoming_text: str = "") -> TieredLesson:
     """Reinforce an existing lesson: bump score and sessions_validated, rewrite file.
 
     ``tl.score`` is expected to be the *effective* (decay-derived) score —
@@ -661,6 +673,17 @@ def _reinforce_tiered_lesson(tl: TieredLesson, *, tier: str,
             if row.sessions_validated >= 3:
                 row.confidence = max(row.confidence, _CONFIDENCE_MULTI_SESSION)
         row.times_reinforced += 1
+        # Rationale erosion fix (MH, 2026-08-11): at >0.8 similarity the
+        # incoming text can differ in exactly the operative clause — keep it
+        # on the row instead of discarding it. Data preservation, not trust
+        # movement: contested rows keep variants too (refight evidence,
+        # like the frozen counter). Prompt-derived incomings never reach
+        # this function (provenance gate returns early upstream).
+        _var = (incoming_text or "").strip()
+        if (_var and _var != row.lesson
+                and _var not in row.merged_variants
+                and len(row.merged_variants) < _MERGED_VARIANTS_CAP):
+            row.merged_variants.append(_var)
         result["tl"] = row
         return all_lessons
 

@@ -166,6 +166,31 @@ def test_record_tiered_lesson_dedup_reinforces(monkeypatch, tmp_path):
     assert len(lessons) == 1
 
 
+def test_record_dedup_preserves_near_dup_text(monkeypatch, tmp_path):
+    """MH Memory Rationale Erosion (2026-08-11): a >0.8-similar incoming
+    lesson's text was discarded at the record-time dedup — the dropped
+    words can be the operative clause. The survivor keeps it now."""
+    _setup(monkeypatch, tmp_path)
+    base = "always validate user inputs at the system boundary before processing any data"
+    near = "always validate user inputs at the system boundary before processing all data"
+    record_tiered_lesson(base, "research", "done", "goal-1")
+    record_tiered_lesson(near, "research", "done", "goal-2")
+    lessons = load_tiered_lessons(tier=MemoryTier.MEDIUM, task_type="research")
+    assert len(lessons) == 1
+    assert lessons[0].lesson == base
+    assert lessons[0].merged_variants == [near]
+
+
+def test_record_dedup_identical_text_leaves_no_variant(monkeypatch, tmp_path):
+    """Identical re-records lose nothing — no variant recorded."""
+    _setup(monkeypatch, tmp_path)
+    record_tiered_lesson("unique lesson here", "research", "done", "goal-1")
+    record_tiered_lesson("unique lesson here", "research", "done", "goal-2")
+    lessons = load_tiered_lessons(tier=MemoryTier.MEDIUM, task_type="research")
+    assert len(lessons) == 1
+    assert lessons[0].merged_variants == []
+
+
 def test_record_tiered_lesson_different_types_both_stored(monkeypatch, tmp_path):
     _setup(monkeypatch, tmp_path)
     record_tiered_lesson("same words same words", "research", "done", "goal-A")

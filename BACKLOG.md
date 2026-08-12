@@ -365,7 +365,26 @@ both director dispatch sites onto `WorkerResult.memory_slice_echoed`
 and into the director-log worker_results payload, so the A/B now has a
 behavior column, not just an exposure column) and **Memory Rationale
 Erosion** (compress/dedup rewrite records, nothing checks rationale
-drift — still open).
+drift — **ADDRESSED 2026-08-11 in both dedup lanes**: at >0.8 word
+overlap the dropped ~20% can be exactly the operative clause ("when Y"
+vs "when NOT Y"), and both merge paths discarded the incoming/dropped
+text silently — a retention-decree violation (decay trust, never
+data). Now the survivor keeps absorbed texts under `merged_variants`
+(capped at `memory_ledger._MERGED_VARIANTS_CAP`=5 per row — beyond it
+the merge still counts via times_reinforced; bounded, NAMED loss):
+(a) the sweep lane, `deduplicate_lessons` near-dup merge; (b) the live
+lane, `record_tiered_lesson`'s two dedup scans →
+`_reinforce_tiered_lesson(incoming_text=…)` — contested rows keep
+variants too (refight evidence, like the frozen counter), and
+prompt-derived re-records still never reach reinforce (provenance
+gate), so instruction text cannot land in stores. 5 pins
+(test_memory.py, test_tiered_memory.py). Remaining lanes, named not
+silent: playbook curation already archives the full prior version
+(append-only) before compress; the three-layer outcome compression
+removes raw outcomes after LLM-summarizing them by design
+(space-reclaim with keep_recent guard + outcome_ids provenance) —
+whether the summary preserves enough rationale is a separate question
+from these merge fixes).
 
 Standing caveats to honor before building ANY of these: (a) every ruling
 is static-source-reading — "code path present," never "problem solved";

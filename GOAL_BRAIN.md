@@ -7127,3 +7127,17 @@ under the same two-measurement standard).
   bare command line). Residuals named in BACKLOG: failure_mode dropped
   at execution (blocks a mechanical drift census), scope-absent lane
   least-anchored. Suite 8219/0 skipped.
+- **2026-08-11** — MH Memory Rationale Erosion ADDRESSED in both dedup
+  lanes (the MH entry's open remainder is now #8 wiring — Jeremy's
+  READING_QUEUE call — and #1-prevention). The erosion, concretely: at
+  >0.8 word overlap the dropped ~20% can be the operative clause
+  ("when Y" vs "when NOT Y"), and both merge paths discarded that text
+  silently — a retention-decree violation. Survivors now keep absorbed
+  texts under `merged_variants` (cap 5/row; beyond it the merge counts
+  via times_reinforced — bounded, named loss): sweep lane
+  (deduplicate_lessons) + live lane (record_tiered_lesson dedup scans →
+  _reinforce_tiered_lesson(incoming_text=…)). Contested rows keep
+  variants (refight evidence); prompt-derived re-records still never
+  reach reinforce (provenance gate). Playbook curation already archives
+  full prior versions; outcome compression's post-summary removal is
+  by-design and named, not silently exempted. 5 pins; suite 8224/0.
