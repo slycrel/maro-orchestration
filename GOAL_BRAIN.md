@@ -7272,3 +7272,14 @@ under the same two-measurement standard).
   resource caps as a class; third costume of the same principle after
   the truncation decree and the budget-extension ladder ("work and be
   expensive rather than not work and be budget friendly").
+- **2026-08-11** — Erosion-arc closeout ("anything else while we're
+  here?"): (1) the reinforce-race residual CLOSED — version binding now
+  voids the WHOLE sighting on a mid-flight revision (counters and
+  confirmation included, not just the variant attach; by-id
+  reinforcement exempt by design); (2) live-store census on box: 0
+  interrupted-move leftovers / 0 LONG dup ids / 0 cross-type twins —
+  the pre-existing promotion-loss and sweep bugs never fired in
+  production, the fixes are prophylactic; 96 UU-4 dual-write pairs
+  live, so flat/tiered consistency is load-bearing forward; (3)
+  arch-memory-knowledge skill carries the variant/move-safety model.
+  Suite 8259/0 skipped.

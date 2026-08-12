@@ -627,6 +627,19 @@ def _reinforce_tiered_lesson(tl: TieredLesson, *, tier: str,
             # GC'd or promoted out between the caller's load and now. Same
             # outcome as before: nothing to reinforce, nothing written back.
             return all_lessons
+        if matched_lesson_text and row.lesson != matched_lesson_text:
+            # Version binding, whole-reinforcement (fixpoint review
+            # 2026-08-11, counter-side follow-up): the caller matched a
+            # TEXT, not an id — if a concurrent refight revised the row in
+            # between, the sighting confirmed the OLD text and means
+            # nothing for the new one. Full no-op: no counter, no score,
+            # no confirmation, no variant. (Similarity cannot stand in for
+            # identity here — "always…"→"never…" scores 0.88.) Callers
+            # that reinforce BY ID (applied-reinforcement) pass no matched
+            # text and are exempt: id-addressed means "this row as it is."
+            log.info("reinforcement of %s dropped: row text was revised "
+                     "mid-flight (version binding)", lesson_id)
+            return all_lessons
         # Retirement-by-contradiction: a contested lesson may still be
         # re-sighted (dedup re-records land here). The sighting is counted
         # (times_reinforced — honest evidence for a future refight) but
@@ -697,10 +710,10 @@ def _reinforce_tiered_lesson(tl: TieredLesson, *, tier: str,
         # (it becomes a full row), so variants are never MORE exposed than
         # the store itself. Per-variant provenance is the stronger fix if
         # pack quarantine ever needs to filter variants (BACKLOG residual).
+        # Version binding already enforced at the top of _apply — reaching
+        # here means the row's canonical is the text the caller matched.
         _var = (incoming_text or "").strip()
-        if (_var and incoming_minted_from != "prompt"
-                and matched_lesson_text
-                and row.lesson == matched_lesson_text):
+        if _var and incoming_minted_from != "prompt":
             from memory_ledger import _absorb_variant
             _absorb_variant(row.merged_variants, _var, row.lesson)
         result["tl"] = row

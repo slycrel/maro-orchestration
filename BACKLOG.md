@@ -491,8 +491,16 @@ cannot land here" comment overclaimed → bounded honestly (gate-off
 exposes canonical text identically; variants never MORE exposed than
 the store). **Residuals filed:** MEDIUM→LONG promotion atomicity (new
 top-of-stack entry — pre-existing HIGH; FIXED same evening); reinforce-race
-counters/provisional-clear on refight-revised rows (pre-existing,
-needs a fingerprint-revalidation design); per-variant provenance if
+counters/provisional-clear on refight-revised rows (pre-existing —
+**CLOSED 2026-08-11 late evening**: reinforcement is now version-bound
+whole-hog, not just the variant attach — `matched_lesson_text` rides
+both dedup call sites and a mid-flight revision voids the entire
+sighting as a no-op; by-id reinforcement passes no matched text and is
+exempt by design. Live-store census on box, same evening: 0
+interrupted-move leftovers, 0 LONG duplicate ids, 0 cross-type twins —
+the promotion-loss and sweep bugs never fired in production; 96 UU-4
+dual-write pairs are live, so the flat/tiered consistency fixes are
+load-bearing forward); per-variant provenance if
 pack quarantine ever needs to filter variants.
 
 **Fixpoint round (2026-08-11 evening, Jeremy's ask: review work+fixes

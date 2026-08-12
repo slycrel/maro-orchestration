@@ -143,6 +143,25 @@ Reinforcement: When a lesson is re-confirmed, score += 0.3 capped at 1.0, sessio
 
 **Mint form: observations, not procedures (what-not-how, 2026-08-02 — Jeremy: "how is ok when asking for work, but usually we aren't — asking for the right result is the more important part"):** every LLM mint-site prompt carries `memory._LESSON_FORM_RULES` — lessons state WHAT was derived (the mismatch, the requirement, the observed failure), never a prescribed procedure; a repeated failure is stated as the observation, not a countermeasure; no self-credit capability claim without the observed instance; procedure form only when the goal itself asked for a procedure. Composed into `_REFLECT_SYSTEM` (deferred extraction rides it too) and `_STEP_LESSON_SYSTEM`; thinkback constrains only `key_lessons` (step reviews/retry_strategy stay prescriptive — review output, not memory). Finalize's deterministic templates use `_recovery_plan_lesson_text`/`_auto_diagnosis_lesson_text` (diagnosis as observation, action marked "advisor-proposed (unverified)"; deterministic per input so recurring plans still dedup-reinforce). Evidence stamping is the structural half: reflect/deferred/finalize tiered mints pass `evidence_sources=[loop:<id>]`, and `_reinforce_tiered_lesson` merges incoming refs (cap `_REINFORCE_EVIDENCE_CAP`=8, contested rows excluded) so a row records *where* it repeated, not just how often — this is what makes the Phase 60 citation-penalty ranking meaningful. The S2 seed-reader exemplar ("emulate this style" + top LONG lesson verbatim) was REMOVED 2026-08-06 on the sanctioned A/B verdict (13 runs × 2 arms: no measurable quality gain, 3.5× lesson_type anchoring toward the seed's type, ~60% cross-run homogenization; `~/.maro/workspace/output/seed-reader-ab/RESULTS.md`) — the extraction prompt names no stored lesson as a style model, pinned in `test_mint_form.TestNoSeedExemplar`. Certified failure shapes: surprise-read L4/M9/M13/M14. Tests: `tests/test_mint_form.py`.
 
+**Variant preservation + move safety (rationale-erosion arc, 2026-08-11,
+three review rounds):** every near-dup merge preserves the absorbed text
+on the survivor as `merged_variants` — `memory_ledger._absorb_variant` is
+the ONE owner of the union rule (cap 5/row, 500-char marked clip,
+identity judged before clipping) across all three lanes: flat live
+(`_store_lesson` → `_reinforce_flat_row`, a single-row locked RMW — the
+mutation applies to the on-disk row, never a pre-lock copy), tiered live
+(`_reinforce_tiered_lesson(incoming_text=…, matched_lesson_text=…)` —
+reinforcement is VERSION-BOUND: if a concurrent refight revised the
+canonical, the whole sighting is a no-op; similarity is not identity),
+and the sweep (`deduplicate_lessons` — task_type-scoped by contract,
+closed under its own output, survivor absorbs the dropped row's
+reinforcement history). MEDIUM→LONG promotion is destination-first
+(`_move_medium_to_long`: LONG append-if-absent before MEDIUM removal,
+mid-move stamp aborts with rollback; `run_decay_cycle` reconciles
+crash-window duplicates). Pack transport carries variants both ways,
+locally re-bounded; identical-canonical collisions union variants into
+the local twin.
+
 **Decay is a read-time derivation, never persisted** (session 40 invariant). The stored score is the score as of `last_reinforced`; the effective score is computed on load. Any code that rewrites a lessons file MUST load with `raw=True, limit=None` — persisting an effective (decayed) score without re-anchoring `last_reinforced` compounds decay, and the default `limit=50` silently truncates larger stores on rewrite.
 
 ## Consolidation (the "dream cycle", session 40)
