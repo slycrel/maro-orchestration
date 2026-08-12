@@ -67,13 +67,6 @@ cannot fill one in, ask the user — that gap is itself a finding.
 4. **Budget**: max delegations this run (default 8). Hitting the cap =
    stop and report honestly, never push past it silently.
 
-**Prior-attempt check (re-run identity, 2026-08-10):** before the first
-delegation, ask whether this goal — or its dead ends — has run before
-(prior ledgers, stop verdicts, existing deliverables). A re-run points
-taste at the prior result's residuals instead of re-treading; an
-IDENTICAL goal re-asked will mostly re-find the old answer, so either
-aim at what the last run did NOT settle or name the different axis.
-
 ## The loop (repeat 0..n times)
 
 1. **TASTE — choose the next task.** From the goal + everything judged so
@@ -95,17 +88,7 @@ aim at what the last run did NOT settle or name the different axis.
      sub-agent cannot complete, it must return a typed `blocked_on`
      block instead of a shrug (see Diagnosis at the failure boundary);
    - the minimum context it needs — partition, don't forward the whole
-     history. Partitioned context must keep facts and assumptions
-     separable: judged-accepted findings pass as established; anything
-     unjudged (a hypothesis, a prior task's unverified claim) passes
-     labeled as an assumption, never restated as fact — an unproven
-     fact is just an assumption, and honest labeling is what licenses
-     passing it at all (world-facts §7.1 as amended, 2026-08-11).
-   - if success depends on the sub-agent using a specific tool or
-     method, state it in the criteria as a decision rule ("if X, do Y —
-     do not Z"), not a mention: advertisement-only teaching was
-     measured insufficient (A/B-4, 2026-08-11 — the advertised verb
-     rode every prompt and was invoked zero times).
+     history.
 
    When a prior task came back `blocked_on`, routing its recommendation
    is itself a taste act with its own ledger row: run the proposed
@@ -122,17 +105,11 @@ aim at what the last run did NOT settle or name the different axis.
 3. **JUDGE.** Validate the answer against the criteria stated in step 1
    *before* integrating it. Sub-agent reports are claims — spot-verify
    the load-bearing ones against the tree/artifacts yourself (reads and
-   probes only; 0–78% of unverified reviewer claims are wrong across
-   many measurements — later review rounds measured 0%, so the rate is
-   unpredictable and verification stays unconditional). Verdict is
-   tri-state: **accept** / **reject-with-evidence** / **inconclusive**.
-   Inconclusive is never silently promoted to accept — it either
-   becomes a new probing task or is reported as inconclusive.
-   Verdict trust rides evidence modality (MH #1 pass-audit,
-   2026-08-10): an accept built solely on static reads — nothing
-   executed, nothing probed — gets ONE adversarial refutation question
-   ("what executed check would catch this being wrong?") before it
-   stands; if the answer names a runnable check, run it.
+   probes only; ~30-78% of unverified reviewer claims are wrong, five
+   independent measurements). Verdict is tri-state: **accept** /
+   **reject-with-evidence** / **inconclusive**. Inconclusive is never
+   silently promoted to accept — it either becomes a new probing task or
+   is reported as inconclusive.
    For `recon` tasks judgement asks a different question: did the map
    actually change, and are the new landmarks/edges REAL? Spot-probe
    claimed edges (a claim should name what settles it — the
@@ -246,13 +223,7 @@ routing decision lands its new capability or data.
   §3a/§13b). A run that doesn't reach done ends with one of four stop
   verdicts, each recorded with its **evidence** and its **reopen
   condition** — a stop verdict is a cached observation, not a permanent
-  fact (Jeremy 2026-07-23: dead ends don't stay dead). A reopen
-  condition should also name the TOOLSET the stop was declared under:
-  a dead end that predates a new capability is re-examinable with one
-  cheap probe — "sometimes you have to revisit previous dead ends with
-  new tools... for a path to open up" (Jeremy, §14h 2026-08-11; depth
-  is bridge-building / puzzle-solving / pathfinding, and revisits are
-  the puzzle-solving mode). *When* to declare
+  fact (Jeremy 2026-07-23: dead ends don't stay dead). *When* to declare
   one is no longer left to taste alone — see the structural-stall
   trigger below:
   - **thesis-refuted** — avenues exhausted, nothing connects; evidence =
@@ -342,19 +313,5 @@ history docs, this file gets the rule + a pointer); consolidation pass
 when the file doubles or ~3 arcs pass, whichever first, archiving the
 prior version (playbook-curation discipline); the DEV_PATTERNS
 graduation valve applies — anything that gains a deterministic home
-(census/test) leaves this file. A runtime port of this contract is the
-NOW retry rung — shallow half SHIPPED (artifact-seeded retry; the
-star-shaped arm (ii) stays a pre-registered open experiment, see
-BACKLOG "NOW retry rung").
-
-**Consolidation pass 2026-08-12** (the ~3-arcs condition fired:
-verdict-integrity, REPL A/B, world-facts arcs all closed since the KEEP
-verdict; prior version archived at
-`docs/history/2026-08-12-star-skill-pre-consolidation.md`). Five
-contract deltas folded in, each from a landed arc: prior-attempt check
-(re-run identity), assumption-labeled context partitioning (world-facts
-§7.1 amendment), teach-as-decision-rule (A/B-4 falsifier a),
-evidence-modality refutation at judge (MH #1 pass-audit),
-toolset-stamped reopen conditions (§14h revisit mechanic). Claim-error
-range updated 30–78% → 0–78% (later rounds measured 0%; verification
-stays unconditional).
+(census/test) leaves this file. A runtime port of this contract is
+proposed as the NOW retry rung — see BACKLOG "NOW retry rung".
