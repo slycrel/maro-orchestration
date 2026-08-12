@@ -2230,8 +2230,15 @@ def _audit_positive_verdict(
     try:
         from llm import LLMMessage
 
+        # Description first: each check's DECLARED purpose beside its
+        # command, so a check that verifies something other than what it
+        # claims — the MH #4 instruction—grader-mismatch edge — is visible
+        # to the auditor instead of hidden behind a bare command line.
+        # (Same rendering in both audit lanes, deliberately.)
         checks_lines = [
-            f"- [{r.get('outcome', '?')}] {str(r.get('command', ''))[:200]}"
+            f"- [{r.get('outcome', '?')}] "
+            f"{str(r.get('description', '') or '(no declared purpose)')[:120]}"
+            f" — cmd: {str(r.get('command', ''))[:200]}"
             for r in check_results
         ]
         evidence_block = _audit_artifact_evidence(check_results, workspace_path)
@@ -2370,8 +2377,15 @@ def _audit_negative_verdict(
     try:
         from llm import LLMMessage
 
+        # Description first: each check's DECLARED purpose beside its
+        # command, so a check that verifies something other than what it
+        # claims — the MH #4 instruction—grader-mismatch edge — is visible
+        # to the auditor instead of hidden behind a bare command line.
+        # (Same rendering in both audit lanes, deliberately.)
         checks_lines = [
-            f"- [{r.get('outcome', '?')}] {str(r.get('command', ''))[:200]}"
+            f"- [{r.get('outcome', '?')}] "
+            f"{str(r.get('description', '') or '(no declared purpose)')[:120]}"
+            f" — cmd: {str(r.get('command', ''))[:200]}"
             for r in check_results
         ]
         evidence_block = _audit_artifact_evidence(check_results, workspace_path)

@@ -7115,3 +7115,15 @@ under the same two-measurement standard).
   unambiguous). Quantifies the Missed Read edge; direct input to the
   memory-as-module bake-off priority (arc -1). READING_QUEUE row
   added: wire-at-cadence and/or bump bake-off is Jeremy's call.
+- **2026-08-11** — MH #4 RE-VERIFIED → mostly ALREADY_HAVE (MH entry
+  now: #8 wiring + Rationale Erosion + #1-prevention are the open
+  remainder). The INFERRED ruling under-counted existing anti-drift
+  structure (scope-inversion anchoring, declared deliverables with
+  pre-flighted preconditions, ground-truth file inventory, per-check
+  failure_mode+description bindings, mandatory behavioral probes with
+  waiver accounting, and post-#1 pass_audit holding the goal). Shipped
+  the one cheap gap: BOTH audit lanes now render each check's declared
+  purpose beside its command (a mismatched check was hidden behind a
+  bare command line). Residuals named in BACKLOG: failure_mode dropped
+  at execution (blocks a mechanical drift census), scope-absent lane
+  least-anchored. Suite 8219/0 skipped.

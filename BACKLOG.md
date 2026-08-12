@@ -220,6 +220,26 @@ retracted by the step-9 adversarial pass — see below):
   (artifacts-over-streams). Pins in test_step_exec.py.
 - **#4 Instruction-Grader Mismatch (owner—model), med-high, INFERRED** —
   closure checks derive from the owner instruction; drift = pass-but-wrong.
+  **RE-VERIFIED 2026-08-11 → mostly ALREADY_HAVE; one evidence
+  improvement SHIPPED.** The ruling's premise under-counted the existing
+  anti-drift structure: check generation is anchored by scope
+  failure-modes (inversion), explicitly-declared deliverables with
+  pre-flighted preconditions, and a ground-truth file inventory ("probe
+  these exact paths, do not invent names"); each check carries a
+  declared binding (`failure_mode` + `description` in the plan schema);
+  runtime-shaped deliverables REQUIRE a behavioral probe with explicit
+  waiver accounting; and post-#1, `pass_audit` second-opinions
+  all-static positives with the goal in hand. Shipped: both audit lanes
+  (pass_audit + verdict_audit) now render each check's DECLARED PURPOSE
+  beside its command — a check verifying something other than what it
+  claims was previously hidden behind a bare command line (pinned in
+  test_closure_verdict_audit.py). Named residuals, not built: (a) the
+  plan's `failure_mode` field is dropped at check execution
+  (check_results keep description/command/modality only) — preserving
+  it would enable a mechanical drift census over closure_verdicts.jsonl;
+  (b) the scope-absent lane (scope_generation OFF, scope-raw-FAILED
+  runs) does its own inversion from the goal alone — the least-anchored
+  derivation path, no cheap fix shape identified.
 - **#5 Tool Feedback Neglect (model—tool)** — `tool_transcript` already
   logs `is_error`; cheapest build (classifier over existing data).
   **BUILT 2026-08-09** (with #10/#11/#12 — see the classifier note below).

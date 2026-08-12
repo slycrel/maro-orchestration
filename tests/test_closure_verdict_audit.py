@@ -390,6 +390,19 @@ class TestPassAudit:
         # The audit record still persists for analysis.
         assert v.verdict_audit["pass_audit"] is True
 
+    def test_auditor_sees_declared_purpose_beside_command(
+            self, monkeypatch, tmp_path):
+        # MH #4 instruction—grader mismatch (2026-08-11): a check that
+        # verifies something other than what it claims is only visible if
+        # the auditor sees the DECLARED purpose next to the command — a
+        # bare command line hides the binding.
+        adapter = _adapter(PLAN, PASS_ACHIEVED, PASS_AUDIT_AGREES)
+        _run_pass(monkeypatch, tmp_path, adapter)
+        audit_msgs = adapter.complete.call_args_list[-1][0][0]
+        audit_user = audit_msgs[-1].content
+        assert "crosscheck exists" in audit_user  # the declared purpose
+        assert "cmd: cat artifacts/crosscheck.md" in audit_user
+
     def test_behavioral_check_present_skips_pass_audit(self, monkeypatch, tmp_path):
         plan = {"checks": [
             {"description": "runs", "command": "python3 thing.py && grep ok out.txt"},
