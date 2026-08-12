@@ -1070,3 +1070,42 @@ was the distillation's, more than his.
   n=30–100 (touches 14b), "good run" defined independently of its
   own done-means, and the observation-repair ablation on the three
   canonical failures as the first measurement.
+
+### 14h. Work-depth pass (Jeremy + fable, 2026-08-11 evening)
+
+Entry point: the world-facts cap call ("more shallow, 2-3 per run for
+the moment"), which Jeremy explicitly framed as an instance of "a
+greater optimization/tuning framing of… how long should we work and
+what does that look like."
+
+- **Earned depth — direction agreed, held loosely.** Fable's position
+  (shallow default, deepening earned per signal — surprise,
+  contradiction, closure stall — same born-invisible/earn-active shape
+  as V3 promotion and 14f's targeted reps): "tend to agree and I go
+  back and forth on this. We want genuinely heavy sub-goals sometimes,
+  but they likely should be earned." Direction, not decree.
+- **The revisit mechanic (new, his):** leaning into the game metaphor —
+  "sometimes you have to revisit previous dead ends with new tools (or
+  just to take a look at something you missed) in order for a path to
+  open up. So sometimes it's building a bridge and sometimes it's
+  solving a puzzle, in addition to pathfinding/trail blazing." Depth
+  isn't one axis: bridge-building (heavy earned sub-goals),
+  puzzle-solving (revisit with new tools), and pathfinding are
+  distinct work modes, and only the last is what the loop does
+  natively today. Captured as a `target` capability row
+  (tool-acquisition events re-examining standing dead ends —
+  CAPABILITIES.md Tier 5); composes with §13b (stop verdicts are
+  observations, not facts). "No rules but what we make ourselves and
+  that's exciting and scary both."
+- **Contested 14a: deferred, with a stated prior.** He'll re-examine
+  when fresher; his gut reading of the contest — "there isn't an exact
+  answer… and my gut says 'uh… yes?'" — i.e. scope likely wants
+  probabilistic/fuzzy treatment, not an exact category. He named the
+  meta-edge he keeps hitting with LLMs generally: reaching for factual
+  certainty where probabilistic direction is the right tool, "and
+  sometimes it's both." (Which is, in fact, what the round-2 contest
+  claims: the category boundary is the wrong SHAPE, not that no answer
+  exists — his gut and the panel agree more than the boiled-down
+  summary suggested.)
+- **14g build threads (honesty contract, immersion/LOD): "that can be
+  not yet."**

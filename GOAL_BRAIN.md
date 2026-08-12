@@ -7198,3 +7198,16 @@ under the same two-measurement standard).
   lane verified live (card == provider sum to the digit), pass-audit
   ran correctly on a positive verdict, four-layer verdict stack
   agreed unassisted — second consecutive clean-verdict run.
+- **2026-08-11** — §10/§14 work-depth pass (evening, recorded §14h):
+  earned-depth direction AGREED-held-loosely ("tend to agree and I go
+  back and forth… genuinely heavy sub-goals sometimes, but they likely
+  should be earned" — direction, not decree). NEW mechanic from Jeremy:
+  revisit dead ends with new tools — depth is three work modes
+  (bridge-building / puzzle-solving / pathfinding), only pathfinding is
+  native today; captured as target capability (CAPABILITIES.md Tier 5,
+  tool-acquisition × standing-dead-ends join). Contested-14a DEFERRED
+  to fresher with stated prior: scope likely fuzzy/probabilistic, not
+  exact-category ("my gut says 'uh… yes?'"). 14g build threads: "not
+  yet." Meta-edge he named: LLMs (and he) reaching for exact
+  correctness where probabilistic direction is the tool — "sometimes
+  it's both."
