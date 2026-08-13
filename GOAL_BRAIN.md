@@ -7533,3 +7533,11 @@ under the same two-measurement standard).
   AND transcripts show >=1 invocation; falsifier (a) plan never names
   it -> next lever is deterministic step-rewrite, (b) named but not
   invoked -> lever moves to verification. 7 pins + DEFAULTS row.
+- **2026-08-13 (overnight)** — Planner read-verb lever same-day skeptic
+  review: 4/4 findings real (reviewer hallucination 0), all fixed. The
+  load-bearing one: the teach gate now keys on container MODE only,
+  never live suppression state — plan text outlives its writing moment
+  (a run planned under breaker suppression can checkpoint-resume
+  containerized, where the taught command doesn't exist), so the gate
+  uses config intent exactly like the scratch-clone decision.
+  Lane-detection exceptions fail closed. 9 pins; suite 8418/1 skip.

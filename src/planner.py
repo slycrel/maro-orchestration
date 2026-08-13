@@ -241,8 +241,10 @@ READ_QUERY_STEP_RULES = textwrap.dedent("""\
     scraped corpora, long documents) rather than editing them, write the
     sub-query invocation into the step text itself, e.g.:
       "Extract <the specific answer> from <file> by running:
-       __READ_CLI__ "<one focused question>" <file> — then verify any
+       __READ_CLI__ '<one focused question>' '<file>' — then verify any
        quote you re-use with grep -Fn before citing it"
+    (single-quote the question and each file path — paths may contain
+    spaces, and step text rides a JSON array)
     Why: executors default to reading whole files into context, and their
     conversation is re-sent every turn — a 200KB read costs ~50k tokens
     on EVERY remaining turn, while the sub-query returns the answer plus
@@ -972,24 +974,22 @@ def decompose(
 
     # Large-file extraction steps (A/B-4 consequence — see the constant's
     # comment). Taught only when the verb is invocable where the step will
-    # run: emission switch AND executor.read_query killswitch AND the host
-    # lane (the executor image bakes no maro-read; a container-configured
-    # run must not get plans naming a command that doesn't exist — a
-    # breaker-suppressed container run degrades to host, where it does).
+    # run: emission switch AND executor.read_query killswitch AND
+    # container mode "off". Mode, not live suppression state: plan text
+    # OUTLIVES the moment it was written (checkpoint resume re-enters with
+    # suppression reset), so the gate keys on config intent like the
+    # scratch-clone decision — a breaker-suppressed container run just
+    # loses this optimization for the run. Exceptions fail CLOSED (skeptic
+    # round, 2026-08-13): if the lane can't be determined, don't teach a
+    # command that may not exist — uncertainty suppresses advertisement.
     _read_step_rules = ""
     try:
         from config import get as _cfg_get_rq
         if bool(_cfg_get_rq("planner.read_query_steps", True)):
             from read_query import read_query_enabled as _rq_enabled
             if _rq_enabled():
-                _host_lane = True
-                try:
-                    import container_exec as _ce
-                    _host_lane = (_ce.container_mode() == "off"
-                                  or _ce.container_suppressed())
-                except Exception:
-                    _host_lane = True
-                if _host_lane:
+                import container_exec as _ce
+                if _ce.container_mode() == "off":
                     from step_exec import _read_cli_path as _rq_cli
                     _read_step_rules = READ_QUERY_STEP_RULES.replace(
                         "__READ_CLI__", _rq_cli())

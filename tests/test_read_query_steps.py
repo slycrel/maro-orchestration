@@ -93,11 +93,13 @@ class TestReadStepEmission:
                   max_steps=4)
         assert not _taught(adapter)
 
-    def test_suppressed_container_degrades_to_host_and_teaches(
-            self, monkeypatch):
-        # Breaker-suppressed container runs execute on the host, where
-        # the verb IS reachable — same lane logic as
-        # step_exec.execute_system_for_lane.
+    def test_suppressed_container_is_still_not_taught(self, monkeypatch):
+        # Skeptic round (2026-08-13): plan text OUTLIVES the moment it
+        # was written — a run planned under suppression can resume with
+        # suppression reset and execute containerized, where the taught
+        # command doesn't exist. The gate keys on config MODE (stable),
+        # not live suppression state; a suppressed run just loses the
+        # optimization.
         import container_exec
         from planner import decompose
         monkeypatch.setattr(container_exec, "container_mode", lambda: "on")
@@ -106,7 +108,34 @@ class TestReadStepEmission:
         adapter = _PlanCapturingAdapter()
         decompose("audit the spec against the raw captures", adapter,
                   max_steps=4)
-        assert _taught(adapter)
+        assert not _taught(adapter)
+
+    def test_lane_detection_failure_fails_closed(self, monkeypatch):
+        # Uncertainty must suppress advertisement, not enable it.
+        import container_exec
+        from planner import decompose
+
+        def _boom():
+            raise RuntimeError("lane detection down")
+
+        monkeypatch.setattr(container_exec, "container_mode", _boom)
+        adapter = _PlanCapturingAdapter()
+        decompose("audit the spec against the raw captures", adapter,
+                  max_steps=4)
+        assert not _taught(adapter)
+
+    def test_taught_command_is_the_resolved_cli(self):
+        # Not just placeholder-substituted: the taught copy carries the
+        # exact command step_exec resolves for this environment, so the
+        # advertisement and the executable path can't drift apart.
+        from planner import decompose
+        from step_exec import _read_cli_path
+        adapter = _PlanCapturingAdapter()
+        decompose("audit the spec against the raw captures", adapter,
+                  max_steps=4)
+        taught = [s for s in adapter.system_prompts
+                  if "LARGE-FILE EXTRACTION STEPS" in s]
+        assert taught and all(_read_cli_path() in s for s in taught)
 
     def test_staged_pass_lane_is_taught(self, monkeypatch):
         # Unlike WORLD_FACT_RULES (needs injected context), this is a

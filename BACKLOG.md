@@ -3838,11 +3838,18 @@ and maintainable over time."** Step 1 is greenlit:
   extraction-step text for likely-large (>~50KB) files, making the verb the
   stated work instead of an ambient capability. Gates:
   `planner.read_query_steps` emission switch (DEFAULTS row) AND
-  `executor.read_query` killswitch AND host lane (never advertise a
-  command the executor environment can't run — container verb-parity
-  principle; breaker-suppressed container degrades to host and teaches).
-  Taught in assembled + staged lanes, excluded from the cuts JSON
-  prompt. 7 pins (tests/test_read_query_steps.py).
+  `executor.read_query` killswitch AND container mode off (never
+  advertise a command the executor environment can't run — container
+  verb-parity principle; mode not suppression state, since plan text
+  outlives its writing moment and a suppressed run can RESUME
+  containerized; lane-detection exceptions fail closed). Taught in
+  assembled + staged lanes, excluded from the cuts JSON prompt. 9 pins
+  (tests/test_read_query_steps.py). **Same-day skeptic review: 4/4
+  findings real, all fixed** — (1) plan-time suppression snapshot vs
+  resume-time lane (the gate now keys on config mode only), (2)
+  exception fail-open -> fail closed, (3) taught example now
+  single-quotes question + paths (spaced paths, JSON step arrays), (4)
+  pin that the taught command IS step_exec's resolved CLI.
   **A/B-5 PREDICTION REGISTERED 2026-08-13 (before any dispatch):** on
   the next naturally corpus-shaped dispatch (host lane), (i) the PLAN
   contains >=1 step naming the sub-query CLI, and (ii) the step
