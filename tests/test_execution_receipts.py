@@ -77,9 +77,11 @@ class TestLoad:
         ])
         loaded = load_receipts(tmp_path)
         assert [r["command"] for r in loaded["rows"]] == ["real command"]
-        # Round 3: no-command tool events and empty commands skip
-        # silently (normal), but a type-corrupt event is COUNTED.
-        assert loaded["malformed_events"] == 1
+        # Round 3: no-command tool events (Read) skip silently; a
+        # type-corrupt event is COUNTED. Round 5: an empty command on a
+        # SHELL event is shape corruption and counts too (the recorder
+        # always writes a Bash command) — so 2, not 1.
+        assert loaded["malformed_events"] == 2
 
     def test_type_corrupt_command_event_is_counted(self, tmp_path):
         # Round 3: {"command": 42} could have been the missing execution
@@ -466,3 +468,81 @@ class TestReviewRound4:
         assert "cannot edit the record" not in block
         assert "not tamper-proof" in block
         assert "strong corroboration" in block
+
+
+class TestReviewRound5:
+    """Skeptic re-review of the round-4 fixes (2026-08-13): coverage
+    holes in the new positive-refutation branch."""
+
+    # -- mixed backends: refutation needs FULL coverage -----------------
+
+    def test_mixed_backend_record_does_not_claim_zero_executions(
+            self, tmp_path, monkeypatch):
+        # One empty capture-capable call + one codex call that may have
+        # done the claimed work invisibly. The strong "ZERO executions"
+        # refutation must not fire on a record blind to half the calls.
+        calls = tmp_path / "build/calls"
+        _write_call(calls, 1, [], backend="subprocess")
+        _write_call(calls, 2, [], backend="codex")
+        monkeypatch.setattr("runs.current_run_dir", lambda: tmp_path)
+        block = audit_receipt_block([])
+        assert "ZERO executions" not in block
+        assert "PARTIAL COVERAGE" in block
+        assert "1 of 2 call(s)" in block
+        assert "invisible to receipts" in block
+        assert "treat as no signal" in block
+
+    def test_full_capture_coverage_still_reads_as_positive_state(
+            self, tmp_path, monkeypatch):
+        calls = tmp_path / "build/calls"
+        _write_call(calls, 1, [], backend="subprocess")
+        _write_call(calls, 2, [], backend="subprocess")
+        monkeypatch.setattr("runs.current_run_dir", lambda: tmp_path)
+        block = audit_receipt_block([])
+        assert "RECORD PRESENT, ZERO executions" in block
+
+    # -- command-less shell events are corruption, not absence ----------
+
+    def test_bash_event_without_command_counts_malformed(self, tmp_path):
+        _write_call(tmp_path / "build/calls", 1,
+                    [{"name": "Bash", "input": {}}], backend="subprocess")
+        loaded = load_receipts(tmp_path)
+        assert loaded["rows"] == []
+        assert loaded["malformed_events"] == 1
+
+    def test_bash_event_with_whitespace_command_counts_malformed(
+            self, tmp_path):
+        _write_call(tmp_path / "build/calls", 1,
+                    [{"name": "Bash", "input": {"command": "   "}}],
+                    backend="subprocess")
+        assert load_receipts(tmp_path)["malformed_events"] == 1
+
+    def test_command_less_bash_record_degrades_to_incomplete_not_refutation(
+            self, tmp_path, monkeypatch):
+        # An unparseable shell receipt must make the record incomplete —
+        # never affirmative absence.
+        _write_call(tmp_path / "build/calls", 1,
+                    [{"name": "Bash", "input": {}}], backend="subprocess")
+        monkeypatch.setattr("runs.current_run_dir", lambda: tmp_path)
+        block = audit_receipt_block([])
+        assert "ZERO executions" not in block
+        assert "could not be fully read" in block
+
+    def test_non_shell_events_without_command_stay_silent_skips(
+            self, tmp_path):
+        # Read/Write tools legitimately carry no command — the malformed
+        # tightening applies past the shell-name filter only.
+        _write_call(tmp_path / "build/calls", 1,
+                    [{"name": "Read", "input": {"file_path": "/x"}},
+                     {"name": "Write", "input": {"file_path": "/y"}}],
+                    backend="subprocess")
+        assert load_receipts(tmp_path)["malformed_events"] == 0
+
+    # -- the module's own documentation matches the mechanism -----------
+
+    def test_module_docstring_no_longer_claims_unforgeable(self):
+        import execution_receipts
+        doc = execution_receipts.__doc__
+        assert "cannot forge" not in doc
+        assert "cannot reach post-hoc" not in doc
+        assert "strong corroboration, not proof" in doc

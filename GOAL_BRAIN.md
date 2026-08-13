@@ -7513,3 +7513,12 @@ under the same two-measurement standard).
   auditor reads it. Attempt-blindness honest-labeled (RUN-WIDE scope
   line) rather than fixed — recorder-side loop stamps filed as the
   upgrade edge in BACKLOG. 12 new pins; suite 8383/1 skip exit 0.
+- **2026-08-13 (overnight)** — Receipts round 5 (skeptic re-review of
+  round 4, per review-to-fixpoint): 3/3 findings real, all fixed —
+  mixed-backend records now render PARTIAL COVERAGE instead of the
+  ZERO-executions refutation (refutation requires full capture
+  coverage), command-less shell events count malformed (corruption ≠
+  absence), module docstring no longer claims the record is
+  unforgeable. +8 pins; suite 8409/1 skip exit 0. Round-5 findings
+  were all artifacts of round-4's new code — treating this as the
+  fixpoint for the receipts arc.

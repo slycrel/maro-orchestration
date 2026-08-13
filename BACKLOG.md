@@ -84,6 +84,19 @@ hallucination 0 again):
 round: recorder-side attempt/loop stamps (2), hash-chained or
 out-of-workspace records (5), codex-lane tool-event capture (6).
 
+**Round 5 (2026-08-13, skeptic re-review of the fixes — 3/3 real,
+reviewer hallucination 0 for the fifth round running; all FIXED):**
+(a) mixed-backend records no longer fire the ZERO-executions
+refutation — full capture coverage required, else "PARTIAL COVERAGE …
+{blind} call(s) invisible to receipts / treat as no signal"; (b) a
+shell event missing/empty its command is shape corruption past the
+name filter (counts malformed → record incomplete, never affirmative
+absence); (c) module docstring's "cannot forge / cannot reach
+post-hoc" overclaim rewritten to least-reachable/strong-corroboration
+(pinned so a revert trips). +8 pins (TestReviewRound5). Fixpoint
+looks reached: round 5 findings were all consequences of round 4's
+own new code, none reach back further.
+
 
 
 ### Container verb parity + container auth expiry watch (FOUND 2026-08-13, A/B-4 re-test setup — the dispatch lane was silently DOWN)
