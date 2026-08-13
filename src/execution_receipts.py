@@ -58,13 +58,38 @@ MAX_LISTED_RECEIPTS = 8
 # new runner, teach this one too. A match means the command TEXT looks
 # like a runner invocation — it is a surfacing heuristic, not proof the
 # work happened (``echo pytest`` matches; the rendered command line is
-# what lets the auditor tell them apart).
+# what lets the auditor tell them apart). The list is NECESSARILY
+# incomplete (fixpoint round 2: jest/vitest/gradle projects exist), so
+# a no-match digest shows a sample of the actual commands and never
+# claims "no process work" — only "no KNOWN-runner match".
 _PROCESS_MARKERS = re.compile(
-    r"\b(pytest|go test|cargo (test|build)|(npm|pnpm|yarn) (run )?"
-    r"(test|build)|make (test|build)|tox|python3? -m (pytest|unittest))\b"
+    r"\b(pytest|go test|cargo (test|build)|(npm|pnpm|yarn|bun) (run )?"
+    r"(test|build)|make (test|build)|tox|python3? -m (pytest|unittest)"
+    r"|jest|vitest|ctest|rspec|mvn (test|verify|package)"
+    r"|gradlew? (test|build|check))\b"
 )
 
 _PATH_TOKEN = re.compile(r"[\w./-]*/[\w./-]+|\b[\w-]+\.(?:py|md|txt|json|jsonl|sh|yml|yaml|html)\b")
+
+
+def neutralize_fence_text(text: str) -> str:
+    """Mangle ``<<<`` runs in untrusted text so it cannot spoof-close a
+    prompt fence (``<<<END ...>>>``) and impersonate harness-authored
+    prose after the early close. Rendered receipts/excerpts are a
+    DISPLAY of the recorded text, never re-executed, so the cosmetic
+    cost (a bash herestring renders as ``<< <``) is acceptable. Shared
+    with closure_verify's artifact-evidence lane — same hole, same fix
+    (2026-08-12 fixpoint round 2)."""
+    return text.replace("<<<", "<< <")
+
+
+def _display(text: str) -> str:
+    """One-line, fence-safe display form of untrusted command/output
+    text. Newlines are flattened (fixpoint round 2: a command containing
+    ``\\n`` would otherwise break out of its ``$ ...`` line and forge an
+    unindented, harness-looking status line inside the receipt block)."""
+    return neutralize_fence_text(
+        str(text).replace("\r", " ").replace("\n", " "))
 
 
 def load_receipts(run_dir, cap: int = MAX_RECEIPTS) -> Dict[str, Any]:
@@ -79,16 +104,26 @@ def load_receipts(run_dir, cap: int = MAX_RECEIPTS) -> Dict[str, Any]:
     Receipt rows carry the command, a bounded output head, the
     harness-recorded error flag, and the source call file name.
     """
+    if not isinstance(cap, int) or cap <= 0:
+        cap = MAX_RECEIPTS
     rows: List[Dict[str, Any]] = []
     unreadable = 0
     truncated = False
     try:
-        calls = sorted(Path(run_dir).glob("build/calls/call-*.json"))
+        # islice bounds DISCOVERY too (fixpoint round 2: a junk-spammed
+        # calls dir must not force an unbounded glob+sort before the
+        # cap). Sorting the bounded slice means the "first N" are in
+        # filesystem order, not sequence order — acceptable at the
+        # pathological margin; normal runs stay well under the bound.
+        from itertools import islice
+        calls = list(islice(Path(run_dir).glob("build/calls/call-*.json"),
+                            MAX_SCANNED_FILES + 1))
     except Exception:
         return {"rows": rows, "unreadable_files": 0, "truncated": False}
     if len(calls) > MAX_SCANNED_FILES:
         calls = calls[:MAX_SCANNED_FILES]
         truncated = True
+    calls.sort()
     for path in calls:
         if len(rows) >= cap:
             truncated = True
@@ -103,6 +138,11 @@ def load_receipts(run_dir, cap: int = MAX_RECEIPTS) -> Dict[str, Any]:
             continue
         events = data.get("tool_events") if isinstance(data, dict) else None
         if not isinstance(events, list):
+            # Valid JSON, wrong shape: the recorder always writes a
+            # tool_events LIST, so this is a corrupt/foreign record —
+            # count it (fixpoint round 2: silently skipping reopened
+            # the partial-record-claims-completeness hole).
+            unreadable += 1
             continue
         for ev in events:
             if len(rows) >= cap:
@@ -169,24 +209,41 @@ def render_receipt_evidence(loaded: Dict[str, Any],
             "absence of an entry below is NOT established.")
     process = [r for r in rows if _PROCESS_MARKERS.search(r["command"])]
     if process:
+        shown = process[:MAX_LISTED_RECEIPTS]
+        showing = (f" (showing first {len(shown)} of {len(process)})"
+                   if len(process) > len(shown) else "")
         lines.append(
-            f"Commands whose text matches test/build runners: {len(process)} — "
+            f"Commands whose text matches KNOWN test/build runners: "
+            f"{len(process)}{showing} — "
             "(text match only; read each command line — e.g. `echo pytest` "
             "or an `echo`/`printf` printing test-like output is NOT a run)")
-        for r in process[:MAX_LISTED_RECEIPTS]:
+        for r in shown:
             flag = " [HARNESS FLAGGED ERROR]" if r.get("is_error") else ""
-            lines.append(f"  $ {r['command'][:160]}{flag}")
+            lines.append(f"  $ {_display(r['command'])[:160]}{flag}")
             if r["output_head"]:
-                lines.append(f"    -> {r['output_head'][:160]}")
-    elif incomplete_bits:
-        lines.append(
-            "Commands whose text matches test/build runners: none among "
-            "the READABLE records (record incomplete — not evidence of "
-            "absence).")
+                lines.append(f"    -> {_display(r['output_head'])[:160]}")
     else:
+        # The marker list is not exhaustive (fixpoint round 2), so a
+        # no-match record never claims "no process work" outright — it
+        # states the scoped fact and shows a sample of what DID run so
+        # the auditor can judge unrecognized runners itself.
+        if incomplete_bits:
+            lines.append(
+                "Commands matching KNOWN test/build runner patterns: none "
+                "among the READABLE records (record incomplete — not "
+                "evidence of absence).")
+        else:
+            lines.append(
+                "Commands matching KNOWN test/build runner patterns: NONE "
+                "recorded (pattern list is not exhaustive — judge the "
+                "recorded commands below before treating this as absence "
+                "of process work).")
+        sample = rows[:MAX_LISTED_RECEIPTS]
         lines.append(
-            "Commands whose text matches test/build runners: NONE recorded."
-        )
+            f"Sample of recorded commands ({len(sample)} of {len(rows)}):")
+        for r in sample:
+            flag = " [HARNESS FLAGGED ERROR]" if r.get("is_error") else ""
+            lines.append(f"  $ {_display(r['command'])[:160]}{flag}")
     bases = _check_path_tokens(check_results or [])
     if bases:
         touched = []
@@ -194,13 +251,16 @@ def render_receipt_evidence(loaded: Dict[str, Any],
             hits = [r for r in rows if base in r["command"]]
             if hits:
                 touched.append(f"  {base}: {len(hits)} recorded command(s), "
-                               f"e.g. $ {hits[0]['command'][:120]}")
+                               f"e.g. $ {_display(hits[0]['command'])[:120]}")
         if touched:
             lines.append("Checked-artifact provenance (commands mentioning "
                          "files the static checks inspect):")
             lines.extend(touched[:MAX_LISTED_RECEIPTS])
-    text = "\n".join(lines)
-    return text[:MAX_EVIDENCE_CHARS]
+    text = neutralize_fence_text("\n".join(lines))
+    if len(text) > MAX_EVIDENCE_CHARS:
+        marker = "\n[digest truncated for length]"
+        text = text[:MAX_EVIDENCE_CHARS - len(marker)] + marker
+    return text
 
 
 def audit_receipt_block(check_results: Optional[List[dict]] = None) -> str:

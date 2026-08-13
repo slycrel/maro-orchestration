@@ -385,9 +385,28 @@ retracted by the step-9 adversarial pass — see below):
   bounds: 8MB/file + 1000-file scan cap, oversized counts unreadable;
   (5) adversarial pins for all of the above (echo look-alike verbatim,
   failed-runner flag, incomplete-never-claims-absence, fence-in-prompt).
-  Deferred, evidence-gated: mechanical receipt→check matching as
-  a closure-check INPUT (skip-the-LLM upgrade) — build if pass-audit
-  stamps accumulate showing receipts alone would have decided.
+  **Fixpoint round 2 2026-08-12** (codex, inline-prompt after two
+  0%-CPU hangs on file-pointer prompts): 6 more findings, again ALL
+  verified real → fixed same night: (1) schema-invalid call files
+  (valid JSON, non-list tool_events) now COUNTED unreadable; (2) the
+  big one — narrow runner regex + "complete record refutes" doctrine
+  was a false-degradation lane for jest/vitest/gradle/bazel projects:
+  regex widened, NONE claim scoped to "KNOWN patterns (not
+  exhaustive)", no-match digest now shows a sample of actual recorded
+  commands, auditor told to judge from commands not the summary line;
+  (3) newline-in-command harness-line forgery (fake "RECORD
+  INCOMPLETE" injection) → `_display()` flattens CR/LF; also
+  fence-spoof neutralizer (`neutralize_fence_text` mangles `<<<`)
+  added to BOTH receipt and artifact-evidence lanes (self-found:
+  artifact excerpts could close their own fence early — injection_guard
+  has no fence-marker pattern); (4) glob discovery bounded via islice
+  (junk-spammed calls dir can't force unbounded glob+sort); (5)
+  listing/clip truncation now visible ("showing first 8 of N",
+  "[digest truncated for length]"); (6) bogus cap falls back instead
+  of raising. 30 pins. Deferred, evidence-gated: mechanical
+  receipt→check matching as a closure-check INPUT (skip-the-LLM
+  upgrade) — build if pass-audit stamps accumulate showing receipts
+  alone would have decided.
 - **#3 Observation Failure (env—model), high** — `step_exec.py`
   `_summarize_tool_events` truncates 2000 chars / 50 events silently
   (same class as the arbitrary-truncation audit already on this backlog).
