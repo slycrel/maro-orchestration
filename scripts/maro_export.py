@@ -2,11 +2,20 @@
 """maro-export / maro-import — workspace backup and restore.
 
 Exports ~/.maro/workspace/ to a timestamped tar.gz, excluding secrets.
-Import restores from a tar.gz, merging with existing data.
+Import restores from a tar.gz into workspace_root() (MARO_WORKSPACE
+overrides the destination). By default import MERGES: archive files
+overwrite, existing files not in the archive remain; --clean moves the
+existing workspace aside first (never deletes it).
 
 Usage:
     python3 scripts/maro_export.py export [--output PATH]
-    python3 scripts/maro_export.py import ARCHIVE_PATH [--dry-run]
+    python3 scripts/maro_export.py import ARCHIVE_PATH [--dry-run] [--clean]
+
+Known non-transfers (live-tested box→M1 2026-08-12, see the BACKLOG
+"Workspace export/import" entry): user-tier ~/.maro/config.yml and
+~/.maro/experiments/ live outside the workspace, and machine semantics
+embedded in the data (absolute paths, symlink targets, CLI session ids)
+ride along but do not resolve on another host.
 """
 
 from __future__ import annotations
@@ -21,39 +30,83 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 
-# Patterns to exclude from export (relative to workspace root)
-_EXCLUDE_PATTERNS = {
-    "secrets",          # API keys, tokens
-    "secrets/",
+# Two exclusion classes, with deliberately different reach (2026-08-12
+# cleanup — the old single anywhere-matched set ate .git/logs/* reflogs
+# inside archived project repos):
+#   - secret-shaped patterns match ANYWHERE: over-exclusion errs safe.
+#   - bulk/transient patterns anchor to the WORKSPACE ROOT: data under
+#     runs/ or projects/ that happens to contain a "logs" or
+#     "prototypes" component is workspace data — retention wins.
+_EXCLUDE_ANYWHERE = {
+    "secrets",          # API keys, tokens (dir or file, any depth)
     ".env",
     "*.key",
     "*.pem",
+}
+_EXCLUDE_ROOT = {
     "telegram_offset.txt",  # Ephemeral state
     "prototypes",       # Legacy, large, not needed for restore
-    "prototypes/",
-    "logs/",            # Transient logs
+    "logs",             # Transient logs (workspace-root only)
 }
 
 
-def _should_exclude(path: str) -> bool:
-    """Check if a path should be excluded from export."""
+def _rel_parts(path: str) -> tuple:
+    """Path components relative to the workspace root.
+
+    Export passes tar arcnames ("workspace/memory/..."); import passes
+    already-stripped names ("memory/..."). Normalize to the stripped
+    shape so root-anchored patterns mean the same thing on both sides.
+    """
     parts = Path(path).parts
-    for pattern in _EXCLUDE_PATTERNS:
-        if pattern.endswith("/"):
-            # Directory prefix match
-            dirname = pattern.rstrip("/")
-            if dirname in parts:
+    if parts and parts[0] == "workspace":
+        parts = parts[1:]
+    return parts
+
+
+def _should_exclude(path: str) -> bool:
+    """Check if a path should be excluded from export/import."""
+    import fnmatch
+    parts = _rel_parts(path)
+    if not parts:
+        return False
+    name = parts[-1]
+    for pattern in _EXCLUDE_ANYWHERE:
+        if "*" in pattern:
+            if fnmatch.fnmatch(name, pattern):
                 return True
-        elif "*" in pattern:
-            # Glob-style match on filename
-            import fnmatch
-            if fnmatch.fnmatch(Path(path).name, pattern):
-                return True
-        else:
-            # Exact component match
-            if pattern in parts or Path(path).name == pattern:
-                return True
-    return False
+        elif pattern in parts:
+            return True
+    return parts[0] in _EXCLUDE_ROOT
+
+
+def _snapshot_sqlite(src: Path, dst: Path) -> bool:
+    """Copy a sqlite database consistently via the backup API.
+
+    The workspace is exported hot (runs may be mid-write); a raw byte
+    copy of a live sqlite file can be torn. Returns False when src is
+    not a readable sqlite database — the caller falls back to raw bytes
+    rather than dropping the file.
+    """
+    import sqlite3
+    con = out = None
+    try:
+        con = sqlite3.connect(f"file:{src}?mode=ro", uri=True, timeout=30)
+        out = sqlite3.connect(str(dst))
+        con.backup(out)
+        return True
+    except Exception:
+        try:
+            dst.unlink()
+        except OSError:
+            pass
+        return False
+    finally:
+        for c in (con, out):
+            if c is not None:
+                try:
+                    c.close()
+                except Exception:
+                    pass
 
 
 def export_workspace(output_path: Path = None, verbose: bool = False) -> Path:
@@ -78,30 +131,84 @@ def export_workspace(output_path: Path = None, verbose: bool = False) -> Path:
         output_path = Path.home() / f"maro-export-{timestamp}.tar.gz"
 
     file_count = 0
+    other_count = 0  # directories + symlinks (counted honestly, apart)
     total_bytes = 0
+    # sqlite family deferred to the snapshot pass: (arcname, abs path)
+    db_files: list[tuple[str, Path]] = []
+    sidecars: list[tuple[str, Path]] = []  # -wal/-shm, keyed by base later
+
+    def _abs_for(rel: str) -> Path:
+        return ws / Path(*_rel_parts(rel))
 
     def _filter(tarinfo: tarfile.TarInfo) -> tarfile.TarInfo | None:
-        nonlocal file_count, total_bytes
-        # Get path relative to workspace
+        nonlocal file_count, other_count, total_bytes
         rel = tarinfo.name
         if _should_exclude(rel):
             if verbose:
                 print(f"  skip: {rel}", file=sys.stderr)
             return None
-        file_count += 1
-        total_bytes += tarinfo.size
+        name = Path(rel).name
+        if tarinfo.isfile() and name.endswith((".db", ".db-wal", ".db-shm")):
+            # Hot sqlite files are torn-copy hazards — handled below.
+            if name.endswith(".db"):
+                db_files.append((rel, _abs_for(rel)))
+            else:
+                sidecars.append((rel, _abs_for(rel)))
+            return None
+        if tarinfo.isfile():
+            file_count += 1
+            total_bytes += tarinfo.size
+        else:
+            other_count += 1
         if verbose:
             print(f"  add:  {rel} ({tarinfo.size:,} bytes)", file=sys.stderr)
         return tarinfo
 
     print(f"Exporting {ws} → {output_path}", file=sys.stderr)
 
-    with tarfile.open(output_path, "w:gz") as tar:
+    import tempfile
+    with tarfile.open(output_path, "w:gz") as tar, \
+            tempfile.TemporaryDirectory(prefix="maro-export-db-") as tmpd:
         tar.add(str(ws), arcname="workspace", filter=_filter)
+
+        # Snapshot pass: each .db goes in via the sqlite backup API so the
+        # archived copy is consistent even mid-run. On success its -wal/-shm
+        # sidecars are folded into the snapshot and must NOT ship alongside
+        # (a fresh snapshot next to a stale wal corrupts on open). On
+        # failure (not sqlite / unreadable) fall back to raw bytes, WITH
+        # sidecars — a raw db+wal pair is at least recoverable.
+        snapshotted_bases: set = set()
+        for i, (rel, src) in enumerate(db_files):
+            snap = Path(tmpd) / f"snap-{i}.db"
+            if _snapshot_sqlite(src, snap):
+                tar.add(str(snap), arcname=rel, recursive=False)
+                snapshotted_bases.add(rel)
+                file_count += 1
+                total_bytes += snap.stat().st_size
+                if verbose:
+                    print(f"  add:  {rel} (sqlite snapshot)", file=sys.stderr)
+            else:
+                tar.add(str(src), arcname=rel, recursive=False)
+                file_count += 1
+                total_bytes += src.stat().st_size
+                if verbose:
+                    print(f"  add:  {rel} (raw — not a readable sqlite db)",
+                          file=sys.stderr)
+        for rel, src in sidecars:
+            base = rel[: rel.rfind("-")]  # strip -wal/-shm
+            if base in snapshotted_bases:
+                if verbose:
+                    print(f"  skip: {rel} (folded into snapshot)",
+                          file=sys.stderr)
+                continue
+            tar.add(str(src), arcname=rel, recursive=False)
+            file_count += 1
+            total_bytes += src.stat().st_size
 
     archive_size = output_path.stat().st_size
     print(
-        f"Done: {file_count} files, {total_bytes:,} bytes → {archive_size:,} bytes compressed",
+        f"Done: {file_count} files (+{other_count} dirs/links), "
+        f"{total_bytes:,} bytes → {archive_size:,} bytes compressed",
         file=sys.stderr,
     )
     print(str(output_path))
@@ -113,17 +220,22 @@ def import_workspace(
     *,
     dry_run: bool = False,
     verbose: bool = False,
+    clean: bool = False,
 ) -> int:
     """Import (restore) workspace from a tar.gz archive.
 
-    Extracts into ~/.maro/workspace/, creating directories as needed.
-    Existing files are overwritten. This is a merge, not a clean restore —
-    files not in the archive are left untouched.
+    Extracts into workspace_root(), creating directories as needed.
+    Existing files are overwritten. By default this is a MERGE, not a
+    clean restore — files not in the archive are left untouched, and a
+    non-empty destination gets a loud warning. clean=True moves the
+    existing workspace aside to <ws>.pre-import-<timestamp> first
+    (retention decree: moved, never deleted).
 
     Args:
         archive_path: Path to the .tar.gz archive.
         dry_run: List contents without extracting.
         verbose: Print files being extracted.
+        clean: Move an existing non-empty workspace aside before import.
 
     Returns:
         Number of files extracted.
@@ -143,6 +255,22 @@ def import_workspace(
             for m in members:
                 print(f"  {m.name} ({m.size:,} bytes)")
             return 0
+
+        if ws.exists() and any(ws.iterdir()):
+            if clean:
+                aside = ws.with_name(
+                    ws.name + time.strftime(".pre-import-%Y%m%dT%H%M%S"))
+                ws.rename(aside)
+                print(f"--clean: existing workspace moved aside to {aside} "
+                      f"(nothing deleted)", file=sys.stderr)
+            else:
+                print(
+                    "WARNING: importing into a non-empty workspace — this "
+                    "MERGES: archive files overwrite, existing files not in "
+                    "the archive remain (an unmarked hybrid). Pass --clean "
+                    "to move the existing workspace aside first.",
+                    file=sys.stderr,
+                )
 
         print(f"Importing {archive_path} → {ws}", file=sys.stderr)
         ws.mkdir(parents=True, exist_ok=True)
@@ -168,7 +296,15 @@ def import_workspace(
 
             if verbose:
                 print(f"  extract: {member.name}", file=sys.stderr)
-            tar.extract(member, path=str(ws))
+            try:
+                # 'tar' filter: strips absolute paths / '..' escapes and
+                # silences the Python 3.14 unfiltered-extract deprecation,
+                # while still permitting symlink members (their targets are
+                # machine semantics — dangling off-box is expected and
+                # documented). The manual traversal guard above stays.
+                tar.extract(member, path=str(ws), filter="tar")
+            except TypeError:  # Python without the filter kwarg (<3.11.4)
+                tar.extract(member, path=str(ws))
             extracted += 1
 
         print(f"Done: {extracted} files extracted to {ws}", file=sys.stderr)
@@ -189,6 +325,9 @@ def main():
     imp = sub.add_parser("import", help="Import workspace from tar.gz")
     imp.add_argument("archive", type=Path, help="Archive to import")
     imp.add_argument("--dry-run", action="store_true", help="List contents only")
+    imp.add_argument("--clean", action="store_true",
+                     help="Move an existing non-empty workspace aside "
+                          "(never deleted) instead of merging into it")
     imp.add_argument("--verbose", "-v", action="store_true")
 
     args = parser.parse_args()
@@ -196,7 +335,8 @@ def main():
     if args.command == "export":
         export_workspace(output_path=args.output, verbose=args.verbose)
     elif args.command == "import":
-        import_workspace(args.archive, dry_run=args.dry_run, verbose=args.verbose)
+        import_workspace(args.archive, dry_run=args.dry_run,
+                         verbose=args.verbose, clean=args.clean)
     else:
         parser.print_help()
 
