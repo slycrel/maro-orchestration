@@ -1082,6 +1082,21 @@ _CONTAINER_ENV_PASSTHROUGH = (
 _CURRENT_STEP_LINK = "/tmp/maro-current-step.log"
 
 
+def _scrub_secret_values(text: str, secret_env: Dict[str, str]) -> str:
+    """Replace injected secret VALUES with [REDACTED:<NAME>] markers.
+
+    Applied to captured container output before it becomes result text
+    (adversarial review 2026-08-13, Architect): inside the container the
+    hosted-free keys are in the worker's env by design — the decree's
+    accepted exposure — so a goal-driven `env` would otherwise persist the
+    values into transcripts/receipts/memory records that outlive the
+    container. Exact-value replacement only; empty values are skipped."""
+    for name, value in (secret_env or {}).items():
+        if value:
+            text = text.replace(value, f"[REDACTED:{name}]")
+    return text
+
+
 def _run_subprocess_safe(cmd, *, input=None, timeout=600,
                          liveness_timeout=None, poll_interval=2.0, cwd=None,
                          stream_probe=None, container_name=None,
@@ -1141,6 +1156,15 @@ def _run_subprocess_safe(cmd, *, input=None, timeout=600,
         stdin_f.flush()
         stdin_f.seek(0)
 
+    # Hosted-free key values injected into a container this call (set in the
+    # container branch below; read by _read_captured). Captured output is
+    # scrubbed of these exact values before it becomes result text: inside
+    # the container the keys ARE in the worker's env by design (the decree's
+    # accepted exposure), so a goal-driven `env` would otherwise land the
+    # values in transcripts/memory records that persist far beyond the
+    # container's life (adversarial review 2026-08-13, Architect).
+    _secret_env: Dict[str, str] = {}
+
     combined_f = tempfile.NamedTemporaryFile(
         mode="w+b", suffix=".out", delete=False)
     combined_path = combined_f.name
@@ -1174,7 +1198,8 @@ def _run_subprocess_safe(cmd, *, input=None, timeout=600,
     def _read_captured():
         combined_f.flush()
         combined_f.seek(0)
-        return combined_f.read().decode("utf-8", errors="replace")
+        text = combined_f.read().decode("utf-8", errors="replace")
+        return _scrub_secret_values(text, _secret_env)
 
     # Stream-probe incremental reader state: a second read handle on the
     # merged file plus a partial-line buffer (NDJSON events can arrive split
@@ -1330,7 +1355,12 @@ def _run_subprocess_safe(cmd, *, input=None, timeout=600,
         # the docker argv — so the baked maro-read verb can reach its
         # sub-query providers. Empty unless the image bakes the verbs, the
         # host operator consented (validate.hosted_free.enabled), and a key
-        # exists host-side. Never logged.
+        # exists host-side. Never logged. Honest scope (review 2026-08-13):
+        # argv is clean, but the values live in this client process's env
+        # (owner/root-readable via /proc — same trust domain as the .env
+        # file they came from) and in the container worker's env (the
+        # decree's accepted exposure); _read_captured scrubs them from
+        # captured output so they never persist in transcripts.
         _secret_env = _ce.hosted_free_container_env()
         if _secret_env:
             # Into the docker CLIENT's env only — the bare -e flags below

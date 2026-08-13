@@ -312,12 +312,20 @@ def execute_system_for_lane() -> str:
     the safe direction). The inverse — advertising host-path verbs into
     a container where they cannot exist — is the A/B-4 confound this
     exists to prevent. An r3+ image bakes the verb shims, so its prompt
-    advertises them by their baked names (still no host paths).
+    advertises them by their baked names (still no host paths) — but ONLY
+    when the lane is actually reachable right now (docker up, auth breaker
+    clear): a mode-on degrade runs the step on the HOST, where the baked
+    prompt would flip from under- to OVER-advertising (adversarial review
+    2026-08-13, both lenses). Degraded or uncertain → the honest-absence
+    container prompt, which under-advertises everywhere. The residual is
+    the true TOCTOU (lane dies between this render and dispatch) — loud
+    command-not-found, worker falls back.
     """
     try:
         import container_exec as _ce
         if _ce.container_mode() != "off" and not _ce.container_suppressed():
-            if _ce.image_bakes_verbs():
+            if (_ce.image_bakes_verbs() and _ce.docker_probe()[0]
+                    and _ce.auth_breaker_blocks() is None):
                 return EXECUTE_SYSTEM_CONTAINER_VERBS
             return EXECUTE_SYSTEM_CONTAINER
         return EXECUTE_SYSTEM

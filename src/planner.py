@@ -1000,7 +1000,13 @@ def decompose(
                     _read_step_rules = READ_QUERY_STEP_RULES.replace(
                         "__READ_CLI__", _rq_cli())
                 elif (not _ce.container_suppressed()
-                      and _ce.image_bakes_verbs()):
+                      and _ce.image_bakes_verbs()
+                      and _ce.docker_probe()[0]
+                      and _ce.auth_breaker_blocks() is None):
+                    # Availability joins the gate (adversarial review
+                    # 2026-08-13): a plan written while docker is down or
+                    # the auth breaker is tripped would teach a name its
+                    # steps (degrading to host) can't run.
                     # r3+ images bake the verb shims (2026-08-13 decree
                     # chunk), so container-lane plans may teach too — by
                     # the BAKED name, never a host path. Pre-r3 images

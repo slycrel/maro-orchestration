@@ -184,7 +184,12 @@ def image_bakes_verbs() -> bool:
     (executor.container_image naming anything else) answers False —
     conservative, because advertising a verb into an image that lacks it
     is the A/B-4 confound, while under-advertising only costs the
-    optimization. Never raises."""
+    optimization. Honest limit (review 2026-08-13): the tag is the
+    OPERATOR'S declaration, not capability evidence — docker tags are
+    mutable, and an operator who retags an r2 image as `-r3` has asserted
+    verbs that aren't there. Config is a host-trust surface here, same as
+    executor.container itself; a runtime shim probe would be the upgrade
+    if that trust ever proves misplaced. Never raises."""
     try:
         m = _IMAGE_TAG_RE.match(container_image())
         return bool(m) and int(m.group(1)) >= _VERBS_BAKED_FROM_REVISION

@@ -89,10 +89,27 @@ Two coupled finds from one diagnosis (full trail in the A/B-4 entry):
   baked names only) and relaxes the planner read-verb gate to
   un-suppressed r3+ container lanes (baked name taught). Live-smoked
   end-to-end: containerized `maro-read` answered a real sub-query via
-  Groq with injected keys and an honest receipt. Residuals: taught
-  baked name goes dead for steps degraded to host AFTER planning
-  (command-not-found is loud, worker falls back); r3 src snapshot is
-  build-time (rebuild + revision bump moves baked verb behavior).
+  Groq with injected keys and an honest receipt.
+  **2-lens adversarial review same day — REJECT, fixed same session
+  (verdict: docs/history/2026-08-13-executor-r3-adversarial-review.md,
+  0/9 reviewer hallucination):** consent carrier now honored only
+  inside a container (/.dockerenv marker — a stray host export can
+  never authorize egress); lane AVAILABILITY (docker probe + auth
+  breaker) joins both the prompt render and the plan-time teach gate
+  (a mode-on degrade was flipping the verbs prompt from under- to
+  over-advertising); injected key values scrubbed from captured
+  output at the capture seam (`[REDACTED:<NAME>]` — in-container
+  `env` can no longer persist values into transcripts); exposure
+  claims reworded to exactly what holds (argv clean, client env
+  owner-scoped /proc, container env = the decree's accepted exposure).
+  **Residuals (filed, not built):** true TOCTOU (lane dies between
+  render/plan and dispatch — loud command-not-found, worker falls
+  back); tag revision is operator declaration not capability evidence
+  (retagged r2-as-r3 lies; runtime shim probe is the upgrade if that
+  trust misplaces); container hosted-free runs on DEFAULT provider
+  order/models (host config overrides don't transport — ride the env
+  pattern when it first bites); r3 src snapshot is build-time
+  (rebuild + revision bump moves baked verb behavior).
 - [x] **Container OAuth expiry is invisible until the lane dies.**
   maro-claude-auth seeded 07-14 interactive; expired ~08-12; every
   agenda dispatch with executor steps then died at step-execute

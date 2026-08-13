@@ -85,6 +85,16 @@ def _cfg(key: str, default):
         return default
 
 
+def _in_container() -> bool:
+    """Is this process running inside a docker container? /.dockerenv is the
+    marker the docker runtime creates at container root — unlike an env var,
+    a host process cannot acquire it by exporting something."""
+    try:
+        return os.path.exists("/.dockerenv")
+    except Exception:
+        return False
+
+
 def hosted_free_enabled() -> bool:
     """Explicit egress opt-in; an unset API key still makes the tier inert."""
     # A credential proves authentication, not consent to send step output to
@@ -95,10 +105,13 @@ def hosted_free_enabled() -> bool:
     # at spin-up; the container has no config.yml). It is set only by
     # container_exec.hosted_free_container_env, which itself requires the
     # HOST-side config consent — the env var is a carrier, not a second
-    # consent surface. Host-side config still wins when present.
+    # consent surface. Honored ONLY inside a container (the /.dockerenv
+    # marker docker itself creates — not settable via env), so a stray
+    # host-side export can never authorize egress (adversarial review
+    # 2026-08-13, both lenses); config still wins over the carrier.
     env_val = os.environ.get("MARO_HOSTED_FREE_ENABLED", "").strip().lower()
     val = _cfg("enabled", None)
-    if val is None and env_val:
+    if val is None and env_val and _in_container():
         return env_val not in ("false", "0", "no", "off")
     if val is None:
         return False

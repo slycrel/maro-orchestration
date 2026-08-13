@@ -107,6 +107,10 @@ class TestReadStepEmission:
                             lambda: False)
         monkeypatch.setattr(container_exec, "image_bakes_verbs",
                             lambda: True)
+        monkeypatch.setattr(container_exec, "docker_probe",
+                            lambda: (True, "test"))
+        monkeypatch.setattr(container_exec, "auth_breaker_blocks",
+                            lambda: None)
         adapter = _PlanCapturingAdapter()
         decompose("audit the spec against the raw captures", adapter,
                   max_steps=4)
@@ -130,6 +134,44 @@ class TestReadStepEmission:
                             lambda: True)
         monkeypatch.setattr(container_exec, "image_bakes_verbs",
                             lambda: True)
+        adapter = _PlanCapturingAdapter()
+        decompose("audit the spec against the raw captures", adapter,
+                  max_steps=4)
+        assert not _taught(adapter)
+
+    def test_container_lane_docker_down_is_not_taught(self, monkeypatch):
+        # Adversarial review 2026-08-13: a plan written while docker is
+        # down (or the auth breaker is tripped, below) would teach a name
+        # its steps — degrading to host — can't run. Availability joins
+        # the plan-time gate; a post-plan outage stays the loud residual.
+        import container_exec
+        from planner import decompose
+        monkeypatch.setattr(container_exec, "container_mode", lambda: "on")
+        monkeypatch.setattr(container_exec, "container_suppressed",
+                            lambda: False)
+        monkeypatch.setattr(container_exec, "image_bakes_verbs",
+                            lambda: True)
+        monkeypatch.setattr(container_exec, "docker_probe",
+                            lambda: (False, "daemon down"))
+        monkeypatch.setattr(container_exec, "auth_breaker_blocks",
+                            lambda: None)
+        adapter = _PlanCapturingAdapter()
+        decompose("audit the spec against the raw captures", adapter,
+                  max_steps=4)
+        assert not _taught(adapter)
+
+    def test_container_lane_auth_breaker_is_not_taught(self, monkeypatch):
+        import container_exec
+        from planner import decompose
+        monkeypatch.setattr(container_exec, "container_mode", lambda: "on")
+        monkeypatch.setattr(container_exec, "container_suppressed",
+                            lambda: False)
+        monkeypatch.setattr(container_exec, "image_bakes_verbs",
+                            lambda: True)
+        monkeypatch.setattr(container_exec, "docker_probe",
+                            lambda: (True, "test"))
+        monkeypatch.setattr(container_exec, "auth_breaker_blocks",
+                            lambda: "auth session expired")
         adapter = _PlanCapturingAdapter()
         decompose("audit the spec against the raw captures", adapter,
                   max_steps=4)

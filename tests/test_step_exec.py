@@ -814,14 +814,48 @@ class TestContainerVerbParity:
     def test_lane_selector_verb_baking_image_gets_verbs_variant(
             self, monkeypatch):
         # r3+ image (2026-08-13 decree chunk): the container prompt
-        # advertises the BAKED shim names, never host paths.
+        # advertises the BAKED shim names, never host paths. The lane must
+        # also be REACHABLE (docker up, breaker clear) — see the degraded
+        # pins below.
         import container_exec as ce
         from step_exec import (execute_system_for_lane,
                                EXECUTE_SYSTEM_CONTAINER_VERBS)
         monkeypatch.setattr(ce, "container_mode", lambda: "on")
         monkeypatch.setattr(ce, "container_suppressed", lambda: False)
         monkeypatch.setattr(ce, "image_bakes_verbs", lambda: True)
+        monkeypatch.setattr(ce, "docker_probe", lambda: (True, "test"))
+        monkeypatch.setattr(ce, "auth_breaker_blocks", lambda: None)
         assert execute_system_for_lane() == EXECUTE_SYSTEM_CONTAINER_VERBS
+
+    def test_lane_selector_docker_down_degrades_to_honest_absence(
+            self, monkeypatch):
+        # Adversarial review 2026-08-13 (both lenses): a mode-on docker-down
+        # degrade runs the step on the HOST — the verbs prompt there would
+        # flip from under- to OVER-advertising (the baked names are not on
+        # the host PATH). Degraded lane -> honest-absence container prompt.
+        import container_exec as ce
+        from step_exec import (execute_system_for_lane,
+                               EXECUTE_SYSTEM_CONTAINER)
+        monkeypatch.setattr(ce, "container_mode", lambda: "on")
+        monkeypatch.setattr(ce, "container_suppressed", lambda: False)
+        monkeypatch.setattr(ce, "image_bakes_verbs", lambda: True)
+        monkeypatch.setattr(ce, "docker_probe", lambda: (False, "down"))
+        monkeypatch.setattr(ce, "auth_breaker_blocks", lambda: None)
+        assert execute_system_for_lane() == EXECUTE_SYSTEM_CONTAINER
+
+    def test_lane_selector_auth_breaker_degrades_to_honest_absence(
+            self, monkeypatch):
+        # Same direction for the 08-12 outage shape: docker up, auth dead.
+        import container_exec as ce
+        from step_exec import (execute_system_for_lane,
+                               EXECUTE_SYSTEM_CONTAINER)
+        monkeypatch.setattr(ce, "container_mode", lambda: "on")
+        monkeypatch.setattr(ce, "container_suppressed", lambda: False)
+        monkeypatch.setattr(ce, "image_bakes_verbs", lambda: True)
+        monkeypatch.setattr(ce, "docker_probe", lambda: (True, "test"))
+        monkeypatch.setattr(ce, "auth_breaker_blocks",
+                            lambda: "auth session expired")
+        assert execute_system_for_lane() == EXECUTE_SYSTEM_CONTAINER
 
     def test_container_verbs_prompt_names_shims_never_host_paths(self):
         from step_exec import EXECUTE_SYSTEM_CONTAINER_VERBS as V

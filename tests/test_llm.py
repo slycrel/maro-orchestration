@@ -2545,6 +2545,34 @@ class TestContainerExecutorWrap:
 # Streaming-iterator protocol (BACKLOG #14): StreamEvent + LLMAdapter._collect
 # ---------------------------------------------------------------------------
 
+class TestSecretScrubbing:
+    """Injected hosted-free key VALUES must never persist in captured
+    output (adversarial review 2026-08-13, Architect): in-container they
+    are in the worker's env by design, so a goal-driven `env` would land
+    them in transcripts/receipts/memory records."""
+
+    def test_scrub_replaces_each_value_with_named_marker(self):
+        from llm import _scrub_secret_values
+        text = "before gsk_live_abc123 middle AIzaSyXYZ after"
+        out = _scrub_secret_values(
+            text, {"GROQ_API_KEY": "gsk_live_abc123",
+                   "GEMINI_API_KEY": "AIzaSyXYZ"})
+        assert "gsk_live_abc123" not in out
+        assert "AIzaSyXYZ" not in out
+        assert "[REDACTED:GROQ_API_KEY]" in out
+        assert "[REDACTED:GEMINI_API_KEY]" in out
+
+    def test_scrub_empty_env_is_identity(self):
+        from llm import _scrub_secret_values
+        assert _scrub_secret_values("unchanged", {}) == "unchanged"
+
+    def test_scrub_empty_value_never_corrupts_text(self):
+        # str.replace("", marker) would interleave the marker between every
+        # character — empty values must be skipped.
+        from llm import _scrub_secret_values
+        assert _scrub_secret_values("abc", {"K": ""}) == "abc"
+
+
 class TestCollectStreamEvents:
     """LLMAdapter._collect is the one shared fold from a StreamEvent iterator
     to an LLMResponse — tested directly against the protocol, independent of

@@ -7612,3 +7612,17 @@ under the same two-measurement standard).
   built on the box, containerized maro-read answered a real sub-query
   through injected Groq keys with an honest receipt. ~36 new pins;
   suite 8445/1 skip exit 0.
+- **2026-08-13 (day)** — r3 chunk same-day 2-lens review (Skeptic +
+  Architect codex): REJECT -> fixed same session, 5 deduped findings
+  all real (streak: 0 reviewer hallucination across 7 rounds). The
+  three highs were the change failing its own stated guarantees:
+  consent carrier was a second HOST-side consent surface (now gated on
+  the /.dockerenv marker docker itself creates), degraded lanes
+  over-advertised the baked verbs (availability joins the render and
+  plan-time gates; pre-r3 the same degrade direction was safe
+  under-advertisement — the verbs variant had silently flipped it),
+  and in-container `env` could persist injected key VALUES into
+  transcripts (capture seam now scrubs to [REDACTED:<NAME>]).
+  Accepted-not-built: tag-revision trust (operator declaration), host
+  config overrides not transporting (defaults are the live path).
+  Verdict doc in docs/history/.

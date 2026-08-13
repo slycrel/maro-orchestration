@@ -406,12 +406,26 @@ class TestConsentEnvTransport:
     def _real_gate(self, monkeypatch):
         monkeypatch.setattr(hf, "hosted_free_enabled",
                             _REAL_HOSTED_FREE_ENABLED)
+        # Most pins here model the IN-CONTAINER reader; the host-side pin
+        # overrides this back to False.
+        monkeypatch.setattr(hf, "_in_container", lambda: True)
 
     def test_env_flag_enables_when_config_unset(self, monkeypatch):
         import hosted_free as hf
         monkeypatch.setattr(hf, "_cfg", lambda k, d=None: d)
         monkeypatch.setenv("MARO_HOSTED_FREE_ENABLED", "1")
         assert hf.hosted_free_enabled() is True
+
+    def test_env_flag_alone_never_enables_on_the_host(self, monkeypatch):
+        # Adversarial review 2026-08-13 (both lenses): the carrier must not
+        # be a second HOST-side consent surface — a stray host export plus a
+        # stored key must not authorize egress. Outside a container
+        # (/.dockerenv absent) the env flag is inert.
+        import hosted_free as hf
+        monkeypatch.setattr(hf, "_in_container", lambda: False)
+        monkeypatch.setattr(hf, "_cfg", lambda k, d=None: d)
+        monkeypatch.setenv("MARO_HOSTED_FREE_ENABLED", "1")
+        assert hf.hosted_free_enabled() is False
 
     def test_config_false_beats_env_flag(self, monkeypatch):
         import hosted_free as hf
