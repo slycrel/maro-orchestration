@@ -101,15 +101,22 @@ Two coupled finds from one diagnosis (full trail in the A/B-4 entry):
   advertisement otherwise (honest prompt > dead command). (b) is
   correct regardless of (a) — never advertise what the environment
   can't run.
-- [ ] **Container OAuth expiry is invisible until the lane dies.**
+- [x] **Container OAuth expiry is invisible until the lane dies.**
   maro-claude-auth seeded 07-14 interactive; expired ~08-12; every
   agenda dispatch with executor steps then died at step-execute
-  (two runs interrupted before diagnosis). `login_probe` exists but
-  only behind `doctor --live`. Wire a cheap watch: health-lane probe
-  on stuck_reason pattern match, or scheduled login_probe every N
-  days with a Telegram ping at failure (it costs one token). Config
-  currently TEMP `container: off` (comment carries the re-seed
-  command); restore after Jeremy re-logs-in the volume.
+  (two runs interrupted before diagnosis).
+  **SHIPPED 2026-08-13 as a reactive auth breaker** (Jeremy re-seeded
+  the volume same morning; `container: on` restored): a containerized
+  call failing with a CLI login-failure signature trips
+  `container_exec` breaker state → `on` degrades to host/fence-only,
+  `require` refuses, one `backend_actionable` Telegram with re-seed
+  instructions; self-clears via a cheap credentials-file check (live
+  shape + newer-than-trip, ≤1 docker cat / 5 min — no token spend,
+  no flapping on server-side revocation). Doctor row + system_health
+  `container_auth` row (SILENT while tripped). Design:
+  CONTAINER_EXECUTOR_DESIGN.md §3 "Auth breaker". Chose the breaker
+  over the scheduled-login_probe watch: zero happy-path spend, and
+  the failure itself is the most reliable detector.
 
 ### MEDIUM→LONG promotion can lose a lesson outright on destination-write failure (FOUND 2026-08-11, adversarial review of the rationale-erosion chunk — pre-existing, HIGH; **FIXED same day, Jeremy: "let's fix that now"**)
 

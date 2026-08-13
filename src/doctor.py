@@ -231,6 +231,7 @@ def run_doctor() -> bool:
         from container_exec import (
             container_mode, container_mode_raw, container_image,
             docker_probe, image_probe, auth_volume_probe,
+            auth_breaker_snapshot,
         )
         _cmode = container_mode()
         if _cmode == "off":
@@ -258,6 +259,16 @@ def run_doctor() -> bool:
                 results.append(_check("  Container image", _img_ok, _img_detail))
                 _vol_ok, _vol_detail = auth_volume_probe()
                 results.append(_check("  Container auth volume", _vol_ok, _vol_detail))
+                # Reactive auth breaker (container_exec) — tripped means the
+                # volume's OAuth session died mid-lane; cheap file read.
+                _ab = auth_breaker_snapshot()
+                results.append(_check(
+                    "  Container auth breaker",
+                    _ab is None,
+                    "clear" if _ab is None else (
+                        f"TRIPPED — {str(_ab.get('reason', ''))[:80]}; re-seed the "
+                        "auth volume (maro-bootstrap container-setup step 2)"),
+                ))
     except Exception as exc:
         results.append(_check("Container executor", False, str(exc)[:80]))
 

@@ -2677,6 +2677,18 @@ class ClaudeSubprocessAdapter(_JSONToolPromptMixin, LLMAdapter):
                     detail = str(_err_obj["result"])[:300]
                 else:
                     detail = result.stdout.strip()[:300] or "(no output)"
+                # A CONTAINERIZED call dying on a login/auth failure means the
+                # auth volume's OAuth session is dead (host creds are separate
+                # by design) — trip the container auth breaker so subsequent
+                # executor calls degrade/refuse at resolve time instead of
+                # each paying a doomed container run (08-12 outage shape).
+                # The error still propagates: this step already failed.
+                if _container_name is not None:
+                    try:
+                        from container_exec import note_container_failure
+                        note_container_failure(detail)
+                    except Exception:
+                        log.debug("container auth-breaker note failed", exc_info=True)
                 raise RuntimeError(f"claude subprocess failed (rc={result.returncode}): {detail}")
 
         # Translate the fully-captured stream-json output into the canonical

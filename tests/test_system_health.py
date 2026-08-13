@@ -577,3 +577,37 @@ class TestRegistry:
         summary = run_health_probes()
         assert "error" not in summary
         assert summary["ran"] == len(sh.DECLARED_PROCESSES)
+
+
+class TestContainerAuthProbe:
+    """The container_auth row reads breaker state only — no docker, no LLM."""
+
+    def _patch(self, monkeypatch, mode, state):
+        import container_exec as ce
+        monkeypatch.setattr(ce, "container_mode", lambda: mode)
+        monkeypatch.setattr(ce, "auth_breaker_snapshot", lambda: state)
+
+    def test_off_mode_is_ok(self, monkeypatch):
+        self._patch(monkeypatch, "off", None)
+        status, evidence, obs = sh._probe_container_auth({})
+        assert status == OK and "not in play" in evidence
+
+    def test_armed_and_clear_is_ok(self, monkeypatch):
+        self._patch(monkeypatch, "on", None)
+        status, evidence, obs = sh._probe_container_auth({})
+        assert status == OK and obs["breaker_tripped"] is False
+
+    def test_tripped_is_silent_immediately(self, monkeypatch):
+        # A tripped breaker is a definite state, not cross-cycle noise — no
+        # streak grace before SILENT.
+        self._patch(monkeypatch, "on", {"tripped_at": 1755100000.0,
+                                        "reason": "oauth session expired"})
+        status, evidence, obs = sh._probe_container_auth({})
+        assert status == SILENT
+        assert "re-seed" in evidence and "degrade to host" in evidence
+
+    def test_tripped_require_names_refusal(self, monkeypatch):
+        self._patch(monkeypatch, "require", {"tripped_at": 1755100000.0,
+                                             "reason": "not logged in"})
+        status, evidence, _ = sh._probe_container_auth({})
+        assert status == SILENT and "REFUSE" in evidence

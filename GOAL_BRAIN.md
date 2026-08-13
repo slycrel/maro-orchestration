@@ -7461,3 +7461,21 @@ under the same two-measurement standard).
   construction (nothing ambient calls the verb). **The 2026-08-12
   LeAct go is now fully landed**: competence-redundancy decay v1 +
   canon door, both same-day adversarially reviewed.
+
+- **2026-08-13** — Container auth outage closed end-to-end (Jeremy
+  re-seeded maro-claude-auth interactively; `executor.container: on`
+  restored same morning). Jeremy decisions: (1) the container lane
+  KEEPS its dedicated second OAuth session — "agree that a separate
+  session is the better option", no symlink/share of host ~/.claude
+  creds; (2) auth failure must FAIL OVER, not require a manual config
+  flip — "not turning it off and having it fail over to no container
+  unless there's a force container switch". The tri-state he sketched
+  already existed (off/on/require: on=auto-degrade, require=force);
+  the shipped gap-fix is the reactive auth breaker (container_exec):
+  first auth-failed containerized call trips it → on degrades to
+  host/fence-only, require refuses, one backend_actionable Telegram;
+  self-clears on a real re-seed (live-shaped creds newer than trip,
+  ≤1 docker cat/5min, zero token spend). Doctor + system_health
+  `container_auth` rows. Ops lesson: the /login URL truncates at
+  terminal width ("Unknown scope: use" = clipped scope param) —
+  stty cols 400 or de-wrap in an editor.

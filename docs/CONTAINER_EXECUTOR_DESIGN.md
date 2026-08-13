@@ -130,6 +130,28 @@ that. Mounting it read-only instead breaks token refresh mid-run.
 > account — same subscription, same quota, same ToS posture as the host lane
 > (README caveat added 2026-07-12 covers it).
 
+**Auth breaker (2026-08-13).** The volume's session can die independently of
+docker — it did on 08-12 (seeded 07-14, refresh expired), and because the
+degrade path only asked "is docker up?", every executor step entered the
+container and died on "OAuth session expired", until a human flipped
+`executor.container` off by hand. Auth failure is now a degrade condition
+with the same on/require contract as docker-down, implemented as a reactive
+breaker (`container_exec.py`, "Container auth breaker" section): the first
+containerized call failing with a CLI login-failure signature trips it
+(one `backend_actionable` notify with the re-seed instructions), after which
+`on` degrades to host/fence-only and `require` refuses at resolve time. No
+happy-path probe spend. Reset is automatic and cheap — while tripped, at
+most every 5 minutes one docker `cat` of the volume's credentials file; the
+breaker clears only for a live-shaped file (refreshToken present) *newer
+than the trip*, i.e. an actual operator re-seed — a server-side revocation
+with an intact-looking file stays tripped instead of flapping. State is a
+file (`memory/container_auth_breaker.json`) so all processes share one
+breaker; doctor shows a "Container auth breaker" row and system_health
+carries a `container_auth` liveness row (SILENT while tripped). Operator
+tip learned during the 08-13 re-seed: the interactive `/login` URL
+truncates when the TUI wraps it at terminal width — `stty cols 400` first,
+or de-wrap the copied URL in an editor.
+
 ## 4. Mount map
 
 Derived from the fence machinery — the fence already computes exactly what a

@@ -347,7 +347,7 @@ class TestResolveContainerRun:
         with caplog.at_level("WARNING"):
             assert ce.resolve_container_run(no_tools=False, executor=True) is None
             assert ce.resolve_container_run(no_tools=False, executor=True) is None  # second call
-        warns = [r for r in caplog.records if "docker is unavailable" in r.message]
+        warns = [r for r in caplog.records if "container lane is unavailable" in r.message]
         assert len(warns) == 1  # throttled within the 60s window
 
     def test_require_without_docker_refuses(self, monkeypatch):
@@ -657,6 +657,21 @@ class TestDoctorContainerRows:
         out = capsys.readouterr().out
         assert "Container image" in out
         assert "Container auth volume" in out
+        assert "Container auth breaker" in out
+
+    def test_tripped_breaker_row_says_reseed(self, monkeypatch, tmp_path, capsys):
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+        monkeypatch.setattr(ce, "get", lambda k, d=None: "on" if k == "executor.container" else d)
+        monkeypatch.setattr(ce, "docker_probe", lambda: (True, "docker 24.0.5"))
+        monkeypatch.setattr(ce, "image_probe", lambda img=None: (True, "maro-executor:x"))
+        monkeypatch.setattr(ce, "auth_volume_probe", lambda: (True, "volume present"))
+        monkeypatch.setattr(ce, "auth_breaker_snapshot",
+                            lambda: {"tripped_at": 1.0, "reason": "oauth session expired"})
+        self._fake_llm(monkeypatch)
+        from doctor import run_doctor
+        run_doctor()
+        out = capsys.readouterr().out
+        assert "TRIPPED" in out and "re-seed" in out
 
 
 # ---------------------------------------------------------------------------
@@ -1035,3 +1050,161 @@ class TestIntrospectionProvision:
         assert (R(runs), "ro") in mounts
         assert (R(tmp_path), "ro") not in mounts
         assert (R(tmp_path), "rw") not in mounts
+
+
+class TestAuthBreaker:
+    """Container auth breaker (2026-08-13) — auth failure as a degrade
+    condition, the outage shape the docker probe can't see."""
+
+    @pytest.fixture(autouse=True)
+    def _isolated_breaker(self, tmp_path, monkeypatch):
+        self.path = tmp_path / "container_auth_breaker.json"
+        monkeypatch.setattr(ce, "_auth_breaker_path", lambda: self.path)
+
+    def _mode(self, monkeypatch, value):
+        monkeypatch.setattr(ce, "get", lambda k, d=None: value if k == "executor.container" else d)
+
+    def _trip(self, monkeypatch, mode="on", detail="OAuth session expired and could not be refreshed"):
+        self._mode(monkeypatch, mode)
+        import notify
+        monkeypatch.setattr(notify, "emit", lambda *a, **k: True)
+        ce.note_container_failure(detail)
+
+    # -- signature matching -------------------------------------------------
+
+    @pytest.mark.parametrize("text", [
+        "OAuth session expired and could not be refreshed",
+        "Not logged in · Please run /login",
+        "oauth token revoked",
+        "API Error: authentication_error",
+    ])
+    def test_auth_error_text_matches_cli_login_failures(self, text):
+        assert ce.is_auth_error_text(text) is True
+
+    @pytest.mark.parametrize("text", [
+        "fetch failed with 403 Forbidden",   # worker-work HTTP error, not the lane
+        "401 from upstream API in step output",
+        "rate limit exceeded",
+        "",
+    ])
+    def test_auth_error_text_ignores_non_lane_errors(self, text):
+        assert ce.is_auth_error_text(text) is False
+
+    # -- trip ---------------------------------------------------------------
+
+    def test_note_failure_trips_on_auth_error(self, monkeypatch):
+        self._trip(monkeypatch)
+        state = ce.auth_breaker_snapshot()
+        assert state is not None
+        assert "OAuth session expired" in state["reason"]
+
+    def test_note_failure_ignores_non_auth_error(self, monkeypatch):
+        self._trip(monkeypatch, detail="claude subprocess failed (rc=1): boom")
+        assert ce.auth_breaker_snapshot() is None
+
+    def test_second_trip_does_not_renotify(self, monkeypatch):
+        self._mode(monkeypatch, "on")
+        import notify
+        calls = []
+        monkeypatch.setattr(notify, "emit", lambda et, p, **k: calls.append(et))
+        ce.note_container_failure("oauth session expired")
+        ce.note_container_failure("oauth session expired")
+        assert calls == ["backend_actionable"]
+
+    def test_trip_never_raises_even_with_broken_store(self, monkeypatch):
+        monkeypatch.setattr(ce, "_write_auth_breaker",
+                            lambda s: (_ for _ in ()).throw(OSError("disk")))
+        self._trip(monkeypatch)  # must not raise — rides an error path
+
+    # -- resolve integration ------------------------------------------------
+
+    def test_on_tripped_degrades_to_host(self, monkeypatch, caplog):
+        self._trip(monkeypatch)
+        monkeypatch.setattr(ce, "docker_probe", lambda: (True, "docker 24"))
+        ce.reset_container_caches()
+        with caplog.at_level("WARNING"):
+            assert ce.resolve_container_run(no_tools=False, executor=True) is None
+        assert any("auth breaker" in r.message for r in caplog.records)
+
+    def test_require_tripped_refuses(self, monkeypatch):
+        self._trip(monkeypatch, mode="require")
+        monkeypatch.setattr(ce, "docker_probe", lambda: (True, "docker 24"))
+        with pytest.raises(ce.ContainerUnavailable, match="auth breaker"):
+            ce.resolve_container_run(no_tools=False, executor=True)
+
+    def test_fresh_trip_blocks_without_docker_recheck(self, monkeypatch):
+        # last_recheck is stamped at trip time, so the resolve path pays no
+        # docker cost until the TTL elapses.
+        self._trip(monkeypatch)
+        probed = {"hit": False}
+        monkeypatch.setattr(ce, "_reseed_probe",
+                            lambda t: probed.update(hit=True) or (False, "x"))
+        assert ce.auth_breaker_blocks() is not None
+        assert probed["hit"] is False
+
+    # -- recheck / self-clear -----------------------------------------------
+
+    def _age_state(self):
+        import json
+        state = json.loads(self.path.read_text())
+        state["last_recheck"] = 0.0
+        self.path.write_text(json.dumps(state))
+
+    def test_recheck_clears_on_reseed(self, monkeypatch):
+        self._trip(monkeypatch)
+        self._age_state()
+        monkeypatch.setattr(ce, "_reseed_probe", lambda t: (True, "re-seeded"))
+        assert ce.auth_breaker_blocks() is None
+        assert ce.auth_breaker_snapshot() is None  # state file removed
+
+    def test_recheck_still_bad_stays_tripped_and_rearms_ttl(self, monkeypatch):
+        self._trip(monkeypatch)
+        self._age_state()
+        monkeypatch.setattr(ce, "_reseed_probe", lambda t: (False, "still wiped"))
+        assert ce.auth_breaker_blocks() is not None
+        state = ce.auth_breaker_snapshot()
+        assert state["last_recheck"] > 0.0  # TTL re-armed — no per-call docker spin
+
+    def test_blocks_fails_open_on_broken_store(self, monkeypatch):
+        self.path.write_text("{not json")
+        assert ce.auth_breaker_blocks() is None  # bad session just re-trips
+
+    # -- reseed probe parsing -----------------------------------------------
+
+    def _probe_out(self, mtime, creds):
+        import json
+        return f"{mtime}\n{json.dumps(creds)}"
+
+    def test_reseed_probe_accepts_fresh_live_creds(self, monkeypatch):
+        creds = {"claudeAiOauth": {"refreshToken": "r", "expiresAt": 9}}
+        monkeypatch.setattr(ce, "_run",
+                            lambda cmd, t: (True, self._probe_out(2000, creds)))
+        ok, detail = ce._reseed_probe(tripped_at=1000)
+        assert ok is True and "re-seeded" in detail
+
+    def test_reseed_probe_rejects_wiped_creds(self, monkeypatch):
+        # The CLI wipes refreshToken after a failed refresh — that file is
+        # exactly the tripped state, however fresh its mtime.
+        creds = {"claudeAiOauth": {"expiresAt": 0}}
+        monkeypatch.setattr(ce, "_run",
+                            lambda cmd, t: (True, self._probe_out(2000, creds)))
+        ok, _ = ce._reseed_probe(tripped_at=1000)
+        assert ok is False
+
+    def test_reseed_probe_rejects_unchanged_creds(self, monkeypatch):
+        # Intact-looking but server-side-revoked creds must not clear the
+        # breaker (would flap trip/clear forever) — only a file NEWER than
+        # the trip counts as a re-seed.
+        creds = {"claudeAiOauth": {"refreshToken": "r"}}
+        monkeypatch.setattr(ce, "_run",
+                            lambda cmd, t: (True, self._probe_out(500, creds)))
+        ok, _ = ce._reseed_probe(tripped_at=1000)
+        assert ok is False
+
+    def test_reseed_probe_handles_docker_failure(self, monkeypatch):
+        monkeypatch.setattr(ce, "_run", lambda cmd, t: (False, "daemon wedged"))
+        ok, _ = ce._reseed_probe(tripped_at=1000)
+        assert ok is False
+
+    def test_clear_is_idempotent(self):
+        ce.clear_auth_breaker()  # no state file — must not raise

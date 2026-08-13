@@ -411,6 +411,37 @@ def _probe_closure_verdicts(prior: Dict[str, Any]) -> Tuple[str, str, dict]:
     return OK, f"{len(done_rows)}/{len(done_rows)} recent done runs verdicted", obs
 
 
+def _probe_container_auth(prior: Dict[str, Any]) -> Tuple[str, str, dict]:
+    """A configured container lane must hold a live OAuth session — the
+    08-12 outage shape: docker green, auth volume dead, every dispatch step
+    failing until a human noticed. The reactive breaker (container_exec)
+    trips on the first auth-failed step; this probe surfaces the tripped
+    state each cycle so a degraded lane can't fade into background noise.
+    Reads the breaker's state file only — no docker, no LLM (probe contract).
+    """
+    from container_exec import container_mode, auth_breaker_snapshot
+    mode = container_mode()
+    state = auth_breaker_snapshot()
+    obs = {"mode": mode, "breaker_tripped": state is not None}
+    if mode == "off":
+        return OK, "executor.container=off — container lane not in play", obs
+    if state is None:
+        return OK, f"container lane armed (mode {mode}), auth breaker clear", obs
+    tripped_at = state.get("tripped_at")
+    try:
+        when = datetime.fromtimestamp(
+            float(tripped_at), tz=timezone.utc).isoformat()[:16]
+    except (TypeError, ValueError):
+        when = "unknown"
+    consequence = ("executor steps REFUSE" if mode == "require"
+                   else "executor steps degrade to host/fence-only")
+    return SILENT, (
+        f"container auth breaker tripped since {when} — {consequence}; "
+        f"re-seed the maro-claude-auth volume (maro-bootstrap "
+        f"container-setup step 2); reason: "
+        f"{str(state.get('reason', ''))[:120]}"), obs
+
+
 # ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
@@ -460,6 +491,12 @@ DECLARED_PROCESSES: List[ProcessDeclaration] = [
         description="closure verdict stamping on done runs",
         expectation="done agenda runs get goal-verdicted",
         probe=_probe_closure_verdicts,
+    ),
+    ProcessDeclaration(
+        name="container_auth",
+        description="containerized executor auth session (maro-claude-auth volume)",
+        expectation="configured container lane holds a live OAuth session (breaker clear)",
+        probe=_probe_container_auth,
     ),
 ]
 

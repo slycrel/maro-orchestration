@@ -466,6 +466,202 @@ def introspection_provision() -> Optional[dict]:
         return None
 
 
+# ---------------------------------------------------------------------------
+# Container auth breaker (2026-08-13)
+# ---------------------------------------------------------------------------
+# The degrade path in resolve_container_run originally asked one question —
+# "is docker up?" — so when the auth volume's OAuth session expired (08-12)
+# docker was fine, every executor step entered the container and died with
+# "OAuth session expired and could not be refreshed", and the dispatch lane
+# was down until a human flipped executor.container off by hand. This breaker
+# makes auth failure a degrade condition too, the same reactive shape as the
+# llm.py backend circuit: the first failing step trips it (no happy-path
+# probe spend), `on` then degrades to host/fence-only, `require` refuses.
+#
+# Reset is automatic and CHEAP — no login_probe/token spend in the resolve
+# path. While tripped, at most every _AUTH_RECHECK_TTL_S we read the volume's
+# credentials file (one docker cat, ro mount) and clear the breaker only when
+# the file is (a) shaped like a live session (refreshToken present — the CLI
+# wipes it after a failed refresh, which is exactly the tripped state) AND
+# (b) newer than the trip — i.e. the operator actually re-seeded. Without the
+# newer-than-trip guard, a server-side revocation with an intact-looking file
+# would clear and re-trip every TTL forever. If a re-seeded session is still
+# bad, the first step re-trips: worst case one failed step per re-seed, never
+# a flapping lane. State is a file (not module state) so every process in a
+# multi-process run sees one breaker, and doctor/system_health can report it.
+
+# Substrings that identify a CLI login/auth failure — deliberately NARROWER
+# than llm_errors._AUTH_PATTERNS: generic "401"/"403"/"forbidden" would let a
+# worker step that merely *encountered* an HTTP error in its work trip the
+# lane. These only match the claude CLI's own login-failure surfaces.
+_AUTH_ERROR_MARKERS = (
+    "oauth session expired",
+    "oauth token expired",
+    "oauth token revoked",
+    "not logged in",
+    "please run /login",
+    "invalid bearer token",
+    "authentication_error",
+)
+# While tripped, recheck the volume's credentials at most this often.
+_AUTH_RECHECK_TTL_S = 300.0
+# The recheck launches a container just to cat a file; cold starts included.
+_RESEED_PROBE_TIMEOUT_S = 20
+
+
+def is_auth_error_text(text: str) -> bool:
+    """Does this CLI error output name a login/auth failure (see markers)?"""
+    low = (text or "").lower()
+    return any(m in low for m in _AUTH_ERROR_MARKERS)
+
+
+def _auth_breaker_path():
+    from pathlib import Path
+    from config import memory_dir
+    return Path(memory_dir()) / "container_auth_breaker.json"
+
+
+def auth_breaker_snapshot() -> Optional[dict]:
+    """The persisted breaker state, or None when clear. Cheap (file read only)
+    — doctor and system_health report from this without touching docker."""
+    import json
+    try:
+        path = _auth_breaker_path()
+        if not path.exists():
+            return None
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) and data.get("tripped_at") else None
+    except Exception:
+        return None
+
+
+def _write_auth_breaker(state: dict) -> None:
+    import json
+    from file_lock import atomic_write
+    path = _auth_breaker_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write(path, json.dumps(state, sort_keys=True) + "\n")
+
+
+def clear_auth_breaker(reason: str = "") -> None:
+    """Remove the breaker state (recovery or operator action). Never raises."""
+    try:
+        path = _auth_breaker_path()
+        if path.exists():
+            path.unlink()
+            log.info("container auth breaker CLEARED%s — executor calls "
+                     "containerize again", f" ({reason})" if reason else "")
+    except Exception:
+        log.debug("clear_auth_breaker failed", exc_info=True)
+
+
+def note_container_failure(detail: str) -> None:
+    """Called by the subprocess seam when a CONTAINERIZED call fails: trips
+    the breaker iff the failure is an auth failure. Never raises — this rides
+    an error path that must keep propagating the original error."""
+    try:
+        if not is_auth_error_text(detail):
+            return
+        if auth_breaker_snapshot() is not None:
+            return  # already tripped — don't re-notify per step
+        state = {
+            "tripped_at": time.time(),
+            "reason": str(detail)[:300],
+            "last_recheck": time.time(),
+        }
+        _write_auth_breaker(state)
+        mode = container_mode()
+        consequence = (
+            "executor steps now REFUSE (executor.container=require)"
+            if mode == "require"
+            else "executor steps now run on the HOST under the write-fence")
+        log.warning(
+            "container auth breaker TRIPPED: %s — %s until the auth volume "
+            "is re-seeded (maro-bootstrap container-setup step 2)",
+            str(detail)[:200], consequence)
+        # backend_actionable: auth failure with a fix only the operator can
+        # apply (interactive /login). First trip only — see the guard above.
+        try:
+            from notify import emit
+            emit("backend_actionable", {
+                "reason": f"container executor auth expired: {str(detail)[:160]}",
+                "summary": (
+                    f"Container executor OAuth session is dead — {consequence}. "
+                    "Re-seed the maro-claude-auth volume: run "
+                    "`maro-bootstrap container-setup` step 2 (interactive "
+                    "claude /login; widen the terminal or de-wrap the URL)."),
+                "status": "auth_expired",
+            })
+        except Exception:
+            log.debug("auth breaker notify failed", exc_info=True)
+    except Exception:
+        log.debug("note_container_failure failed", exc_info=True)
+
+
+def _reseed_probe(tripped_at: float) -> Tuple[bool, str]:
+    """Has the operator re-seeded the auth volume since the trip? One docker
+    cat of the credentials file (ro mount, executor uid — see _user_args).
+    True only for a live-shaped file (refreshToken present) NEWER than the
+    trip; see the section comment for why both conditions."""
+    import json
+    cred_path = f"{AUTH_MOUNT}/.credentials.json"
+    ok, out = _run([
+        "docker", "run", "--rm", *_user_args(),
+        "-e", f"HOME={CONTAINER_HOME}",
+        "--mount", (f"type=volume,source={AUTH_VOLUME},"
+                    f"target={AUTH_MOUNT},readonly"),
+        "--entrypoint", "sh", container_image(),
+        "-c", f"stat -c %Y {cred_path} && cat {cred_path}",
+    ], _RESEED_PROBE_TIMEOUT_S)
+    if not ok:
+        return False, f"credentials probe failed: {out[:120]}"
+    try:
+        first, _, rest = out.partition("\n")
+        mtime = float(first.strip())
+        creds = json.loads(rest)
+        oauth = creds.get("claudeAiOauth", creds) if isinstance(creds, dict) else {}
+        has_refresh = bool(oauth.get("refreshToken"))
+    except Exception as exc:
+        return False, f"credentials unreadable: {exc}"
+    if not has_refresh:
+        return False, "credentials still wiped (no refresh token) — not re-seeded"
+    if mtime <= tripped_at:
+        return False, "credentials unchanged since trip — not re-seeded"
+    return True, "auth volume re-seeded (fresh credentials with refresh token)"
+
+
+def auth_breaker_blocks() -> Optional[str]:
+    """The reason the container lane is auth-blocked, or None when usable.
+
+    While tripped, rechecks the volume via _reseed_probe at most every
+    _AUTH_RECHECK_TTL_S and self-clears on a real re-seed — the operator
+    never has to touch config to restore the lane. Never raises; a broken
+    breaker store must not take down the resolve path (fails open to the
+    container, where a bad session just re-trips)."""
+    try:
+        state = auth_breaker_snapshot()
+        if state is None:
+            return None
+        reason = str(state.get("reason", "auth failure"))
+        try:
+            last = float(state.get("last_recheck", 0.0))
+            tripped_at = float(state.get("tripped_at", 0.0))
+        except (TypeError, ValueError):
+            last, tripped_at = 0.0, 0.0
+        if time.time() - last >= _AUTH_RECHECK_TTL_S:
+            ok, detail = _reseed_probe(tripped_at)
+            if ok:
+                clear_auth_breaker(detail)
+                return None
+            state["last_recheck"] = time.time()
+            _write_auth_breaker(state)
+            log.debug("auth breaker recheck: still tripped (%s)", detail)
+        return reason
+    except Exception:
+        log.debug("auth_breaker_blocks failed (failing open)", exc_info=True)
+        return None
+
+
 def _current_loop_id() -> str:
     """Best-effort owning-run id for the container name (design: maro-exec-
     <loop_id>-…). Falls back to the PID when no run dir is active."""
@@ -520,10 +716,16 @@ def resolve_container_run(no_tools: bool, executor: bool) -> Optional[str]:
         return None
     ok, reason = docker_probe()  # fresh every call — honest degrade/refuse
     if ok:
-        return container_name(_current_loop_id(), next(_seq_counter))
+        # Docker is up but the auth volume's OAuth session may be dead — the
+        # 08-12 outage shape the docker probe can't see. Same refuse/degrade
+        # contract as docker-down; self-clears after a re-seed (see breaker).
+        auth_block = auth_breaker_blocks()
+        if auth_block is None:
+            return container_name(_current_loop_id(), next(_seq_counter))
+        reason = f"container auth breaker tripped ({auth_block[:120]})"
     if mode == "require":
         raise ContainerUnavailable(
-            f"executor.container=require but docker is unavailable: {reason}"
+            f"executor.container=require but the container lane is unavailable: {reason}"
         )
     # mode == "on": degrade to host/fence-only, but say so (SF-6: the
     # difference between sandboxed and not must be visible) — throttled so a
@@ -531,8 +733,9 @@ def resolve_container_run(no_tools: bool, executor: bool) -> Optional[str]:
     now = time.monotonic()
     if now - _last_degrade_warn >= _WARN_THROTTLE_S:
         log.warning(
-            "executor.container=on but docker is unavailable (%s) — worker steps "
-            "run on the host under the write-fence, NOT containerized", reason
+            "executor.container=on but the container lane is unavailable (%s) — "
+            "worker steps run on the host under the write-fence, NOT containerized",
+            reason
         )
         _last_degrade_warn = now
     return None
