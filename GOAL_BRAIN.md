@@ -7625,4 +7625,6 @@ under the same two-measurement standard).
   transcripts (capture seam now scrubs to [REDACTED:<NAME>]).
   Accepted-not-built: tag-revision trust (operator declaration), host
   config overrides not transporting (defaults are the live path).
-  Verdict doc in docs/history/.
+  Verdict doc in docs/history/. r3 image REBUILT post-fix (baked src
+  now matches main) and the end-to-end smoke re-run through the new
+  in-container consent gate — answer + receipt, exit 0.
