@@ -109,6 +109,16 @@ failure fallback/scope attribution), tests/test_handle.py
 `TestAsyncMaintenanceTail` (registry drain semantics,
 notify→learning→maintenance ordering through handle(), early-drain
 leaves maintenance registered). Suite 8266/0 skipped.
+**Live-verified on the M1 2026-08-12, two instrumented runs (notify/
+drain seams wrapped, pre-registered pass criteria): both PASS.** Run 1
+(`e3b2e8d3`, $1.18, achieved/closure) proved the mechanism — drain n=1
+after notify, after learning. Run 2 (`c58a9186`, $1.34, achieved/
+closure, warm: same goal → reused run-1's fork-master, 4 of 7 steps
+read_artifact auditing run 1's note) proved the magnitude — run 1's
+fresh data gave maintenance real work, and **136.7s of skill-promotion
+validations (3 LLM calls) ran entirely post-notify; post-notify tail
+182.3s total**. Under pre-phase-1 ordering that maintenance would have
+sat before closure, ahead of the user's answer.
 
 **Codex 2-lens adversarial review of the first cut (6f58bf3) — REJECT,
 consensus HIGH, fixed same session (7th earning round for this arc's
