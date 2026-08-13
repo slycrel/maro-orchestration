@@ -7403,3 +7403,14 @@ under the same two-measurement standard).
   silently DOWN (~2 days). `executor.container` TEMP off (comment
   carries Jeremy's re-seed command); re-test re-dispatched on host
   executors so it measures teaching alone.
+- **2026-08-13** — Competence-redundancy decay v1 SHIPPED (1411f4f),
+  closing the LeAct decreed sequence's last step (go 807572df).
+  `route="effect-inert"`: a precise full-floor null (|Δ| ≤ 0.02 AND
+  spread ≤ 0.02, ≥6 error-free reason-stratum oracle calls) frees the
+  lesson's decision-injection slot; tenure deliberately NOT blocked
+  (inert = redundant, not harmful; exclusion is route-based so it
+  survives promotion to LONG). `delta_replay --inert` applies it
+  weakest-signal-last; killswitch `knowledge.effect_inert_enabled`;
+  calendar 0.85/day decay still runs (retiring it needs corpus-wide
+  inert coverage, not 51 calls). Remaining from the go: doorless
+  `get_canon_candidates` threshold.

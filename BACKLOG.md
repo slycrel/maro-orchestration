@@ -5184,6 +5184,26 @@ open — verification ≠ repair; each needs a wire-or-retire decision):**
     decay** (the sequence's last step), and the doorless
     `get_canon_candidates` threshold one lane over. §5 cuts
     (evolver/thinkback trace scoring, un-contest verb) stay cut.
+    **Competence-redundancy decay v1 SHIPPED 2026-08-13 (1411f4f)**:
+    `inert_lesson_by_effect` stamps `route="effect-inert"` on a PRECISE
+    full-floor null — |Δ| ≤ 0.02 AND jackknife spread ≤ 0.02 (precision
+    substitutes for dominance; spread<|Δ| is unsatisfiable at Δ≈0), ≥6
+    error-free oracle calls, reason stratum, killswitch
+    `knowledge.effect_inert_enabled`. Frees the decision-injection slot
+    (both MEDIUM and LONG filter sites) but does NOT block tenure —
+    inert = redundant, not harmful, and the exclusion is route-based/
+    tier-agnostic so it survives promotion. Distinct from
+    `route="measured"` (noisy null keeps circulating). Census:
+    `delta_replay --inert`, applied weakest-signal-last after
+    promote/confirm/demote; strike-3 remint lane untouched. Same
+    operator acting standard as demotion (two agreeing full-set 0-error
+    runs). 15 pins + LESSON_DELTA_INERT event + 3 DEFAULTS rows.
+    "Replaces calendar 0.85/day" from the original steal is deliberately
+    NOT v1 — calendar decay still runs; inert only takes the injection
+    slot. Retiring calendar decay would need inert coverage across the
+    corpus, and only 51 oracle calls exist. **Remaining from the go:
+    doorless `get_canon_candidates` threshold** (canon-lesson promote
+    path — next chunk).
 
 ### Standing test-goal menu (future ideas)
 
