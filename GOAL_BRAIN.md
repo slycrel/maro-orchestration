@@ -7501,3 +7501,15 @@ under the same two-measurement standard).
   `container_auth` rows. Ops lesson: the /login URL truncates at
   terminal width ("Unknown scope: use" = clipped scope param) —
   stty cols 400 or de-wrap in an editor.
+- **2026-08-13 (overnight)** — Receipts review round 4 ADJUDICATED
+  (the six 2026-08-12 filed findings; 6/6 verified real, fixed in
+  execution_receipts + closure_verify): zero-executions on a
+  capture-capable record is now POSITIVE refutation material ("RECORD
+  PRESENT, ZERO executions"), executions are Bash-tool events only
+  (MCP command-arg fabrication closed), display clips are marked
+  head/tail (decisive suffixes survive), the tamper-proofness claim
+  now matches the mechanism (recorder-written, not hash-chained), and
+  non-capturing backends (codex lane) are named as v1 scope where the
+  auditor reads it. Attempt-blindness honest-labeled (RUN-WIDE scope
+  line) rather than fixed — recorder-side loop stamps filed as the
+  upgrade edge in BACKLOG. 12 new pins; suite 8383/1 skip exit 0.

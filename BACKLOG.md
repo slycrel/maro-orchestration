@@ -44,40 +44,45 @@ full triage: 2026-07-04.
 
 Ordered open work that matters. Top of the list is next.
 
-### Execution receipts — six cross-model review findings need adjudication (3-lens Codex review of 6f58bf3..707a541, 2026-08-12; filed not fixed — this is the receipts session's active lane, and v1 scope calls may already answer some)
+### Execution receipts — six cross-model review findings ADJUDICATED 2026-08-13 (all six verified real against the tree; 5 fixed, 1 honest-labeled)
 
-All six were probed by reviewers (details in their words; verify against
-current code before acting — the arc moves fast):
-1. **Zero-executions reads as UNAVAILABLE (Minimalist HIGH):** a valid
-   call file with `tool_events: []` renders "record unavailable = no
-   signal", so the simplest gaming case — claiming tests passed while
-   executing nothing — evades the claimed-but-unrecorded refutation.
-   Needs a capture-availability signal distinguishing "recorded: none
-   ran" from "no record".
-2. **Handle-wide, attempt-blind receipts (all three lenses):** loader
-   scans every call file in the run dir; call records carry no loop_id;
-   closure restarts/resume reuse the dir → attempt N's audit sees
-   attempt N-1's passing pytest receipt as support for work it never
-   did. Reviewer probe confirmed cross-attempt leakage.
-3. **Any `input.command` counts as shell execution (Skeptic):** loader
-   ignores the tool event's `name` — an MCP/custom tool with a `command`
-   arg (probe: `mcp__ticketing__create_issue`) manufactures positive
-   process evidence.
-4. **160-char silent clip on commands/outputs (Skeptic+Minimalist):**
-   a decisive suffix (`|| true; echo '100 passed'`) vanishes with no
-   truncation marker while the prompt says judge each command "on its
-   face" — a JUDGE-lane cut, squarely under the truncation decree; needs
-   a marked head/tail render at minimum.
-5. **"Outside the fence" is overstated (Architect HIGH):** receipts are
-   ordinary workspace files and host executors run
-   `--dangerously-skip-permissions` — a later step can rewrite an
-   earlier call-*.json. True unforgeability needs out-of-workspace or
-   hash-chained records; at minimum the auditor prompt should not claim
-   more than the mechanism provides.
-6. **Codex backend emits no tool_events (Architect):** receipts inactive
-   on that adapter — pass-audit reports unavailable for a supported
-   backend (may be accepted v1 scope; if so, say so where the auditor
-   reads it).
+Adjudication (verify-before-fix pass; 6/6 code claims held — reviewer
+hallucination 0 again):
+1. **FIXED — zero-executions is now a POSITIVE state.** `load_receipts`
+   counts `readable_calls` and `capture_calls` (backend=="subprocess",
+   the only tool-event-relaying adapter — verified against a live run:
+   event names Bash/Read/Write, backend stamps on every record). A
+   clean capture-capable record with zero shell executions renders
+   "RECORD PRESENT, ZERO executions … does not support that claim";
+   unknown/missing backend stays conservative no-signal.
+2. **HONEST-LABELED (v1) — attempt-blindness named at the surface.**
+   Digest carries "Scope: RUN-WIDE — may span restarted/resumed
+   attempts; not scoped to the final attempt", and the pass-audit
+   system bullet tells the judge to tie receipts to the claim, not the
+   run. Attempt-SCOPED records need recorder-side loop stamps in
+   runs.record_call — real fix, upgrade edge, not built (recorder
+   schema change; do it when a live cross-attempt false-support case
+   shows up or the recorder is next open anyway).
+3. **FIXED — shell-tool events only.** Rows require event
+   name=="Bash" (`_SHELL_TOOL_NAMES`); an MCP/custom tool with a
+   `command` arg is not an execution; a NAMELESS command event is
+   shape-corrupt and counts malformed.
+4. **FIXED — marked head/tail clips.** `_clip()` renders
+   `head …[+N chars]… tail40` at every listing site (the `|| true;
+   echo '100 passed'` suffix survives); capture-time output truncation
+   stamps `output_clipped` → "…[output continues]" marker.
+5. **FIXED — trust claim matches mechanism.** Prompt now says
+   recorder-written / least-reachable / NOT tamper-proof (no hash
+   chain; host-lane filesystem access exists) — "cannot edit the
+   record" removed here and in the closure_verify bullet. Hash-chained
+   or out-of-workspace records stay future work.
+6. **FIXED as accepted-v1-scope, stated where the auditor reads it.**
+   Non-capturing-backend records render "N call(s) recorded, but none
+   rode a tool-event-capturing backend — receipts cover the subprocess
+   lane only in v1". Codex-lane capture remains an upgrade edge.
+12 new pins (TestReviewRound4). Remaining upgrade edges from this
+round: recorder-side attempt/loop stamps (2), hash-chained or
+out-of-workspace records (5), codex-lane tool-event capture (6).
 
 
 

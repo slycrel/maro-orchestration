@@ -25,10 +25,13 @@ from execution_receipts import (  # noqa: E402
 )
 
 
-def _write_call(calls_dir, n, events):
+def _write_call(calls_dir, n, events, backend=None):
     calls_dir.mkdir(parents=True, exist_ok=True)
+    rec = {"tool_events": events}
+    if backend is not None:
+        rec["backend"] = backend
     (calls_dir / f"call-{n:05d}.json").write_text(
-        json.dumps({"tool_events": events}), encoding="utf-8")
+        json.dumps(rec), encoding="utf-8")
 
 
 def _bash(cmd, output="ok", is_error=False):
@@ -354,3 +357,112 @@ class TestPassAuditWiring:
         assert user_msg.index("RECORDED BY THE HARNESS") < \
             user_msg.index("BEGIN UNTRUSTED ARTIFACT EXCERPTS")
         assert "<<<BEGIN HARNESS RECEIPTS>>>" in user_msg
+
+
+class TestReviewRound4:
+    """2026-08-13 cross-model review adjudication: shell-tool-only rows,
+    backend-aware zero-execution states, marked clips, run-wide scope,
+    honest trust claim."""
+
+    # -- finding 3: only shell-tool events are executions ---------------
+
+    def test_mcp_tool_with_command_arg_is_not_an_execution(self, tmp_path):
+        _write_call(tmp_path / "build/calls", 1, [
+            {"name": "mcp__ticketing__create_issue",
+             "input": {"command": "pytest -q"}, "output": "8266 passed"},
+        ])
+        loaded = load_receipts(tmp_path)
+        assert loaded["rows"] == []
+        # a legit tool with an unlucky arg name is not corruption either
+        assert loaded["malformed_events"] == 0
+
+    def test_nameless_command_event_counts_as_malformed(self, tmp_path):
+        # The recorder always writes a name; a nameless event is
+        # shape-corrupt and must be visible, not vanish.
+        _write_call(tmp_path / "build/calls", 1,
+                    [{"input": {"command": "pytest -q"}}])
+        loaded = load_receipts(tmp_path)
+        assert loaded["rows"] == []
+        assert loaded["malformed_events"] == 1
+
+    # -- findings 1+6: backend-aware call accounting --------------------
+
+    def test_readable_and_capture_calls_counted(self, tmp_path):
+        calls = tmp_path / "build/calls"
+        _write_call(calls, 1, [], backend="subprocess")
+        _write_call(calls, 2, [], backend="codex")
+        _write_call(calls, 3, [])
+        loaded = load_receipts(tmp_path)
+        assert loaded["readable_calls"] == 3
+        assert loaded["capture_calls"] == 1
+
+    def test_zero_executions_on_capture_backend_is_positive_state(
+            self, tmp_path, monkeypatch):
+        # The simplest gaming case: claim tests passed, execute nothing.
+        # This must read as refutation material, not "no signal".
+        _write_call(tmp_path / "build/calls", 1,
+                    [{"name": "Read", "input": {"file_path": "/x"}}],
+                    backend="subprocess")
+        monkeypatch.setattr("runs.current_run_dir", lambda: tmp_path)
+        block = audit_receipt_block([])
+        assert "RECORD PRESENT, ZERO executions" in block
+        assert "UNAVAILABLE" not in block
+        assert "does not support that claim" in block
+
+    def test_non_capturing_backend_names_the_scope(self, tmp_path,
+                                                   monkeypatch):
+        # Finding 6 (accepted v1 scope): codex-lane records carry no
+        # tool events — that is capture scope, never evidence of absence.
+        _write_call(tmp_path / "build/calls", 1, [], backend="codex")
+        monkeypatch.setattr("runs.current_run_dir", lambda: tmp_path)
+        block = audit_receipt_block([])
+        assert "UNAVAILABLE" in block
+        assert "subprocess lane" in block
+        assert "not as evidence of absence" in block
+
+    def test_unknown_backend_zero_events_stays_no_signal(self, tmp_path,
+                                                         monkeypatch):
+        # No backend stamp → capture capability unknown → conservative:
+        # never the positive zero-executions claim.
+        _write_call(tmp_path / "build/calls", 1, [])
+        monkeypatch.setattr("runs.current_run_dir", lambda: tmp_path)
+        block = audit_receipt_block([])
+        assert "UNAVAILABLE" in block
+        assert "RECORD PRESENT, ZERO executions" not in block
+
+    # -- finding 4: marked clips ----------------------------------------
+
+    def test_decisive_command_suffix_survives_display_clip(self, tmp_path):
+        long_cmd = ("python3 scripts/setup.py --with-a-very-long-flag "
+                    + "x" * 200 + " || true; echo '100 passed'")
+        _write_call(tmp_path / "build/calls", 1, [_bash(long_cmd)])
+        text = render_receipt_evidence(load_receipts(tmp_path))
+        assert "echo '100 passed'" in text
+        assert "chars]…" in text  # the cut is marked, not silent
+
+    def test_output_capture_clip_is_marked(self, tmp_path):
+        _write_call(tmp_path / "build/calls", 1,
+                    [_bash("pytest -q", "x" * 500)])
+        loaded = load_receipts(tmp_path)
+        assert loaded["rows"][0]["output_clipped"] is True
+        text = render_receipt_evidence(loaded)
+        assert "…[output continues]" in text
+
+    # -- finding 2: run-wide scope named --------------------------------
+
+    def test_digest_names_run_wide_scope(self, tmp_path):
+        _write_call(tmp_path / "build/calls", 1, [_bash("pytest -q")])
+        text = render_receipt_evidence(load_receipts(tmp_path))
+        assert "RUN-WIDE" in text
+        assert "not scoped to the final attempt" in text
+
+    # -- finding 5: the trust claim matches the mechanism ---------------
+
+    def test_prompt_no_longer_overclaims_tamper_proofness(self, tmp_path,
+                                                          monkeypatch):
+        _write_call(tmp_path / "build/calls", 1, [_bash("pytest -q")])
+        monkeypatch.setattr("runs.current_run_dir", lambda: tmp_path)
+        block = audit_receipt_block([])
+        assert "cannot edit the record" not in block
+        assert "not tamper-proof" in block
+        assert "strong corroboration" in block
