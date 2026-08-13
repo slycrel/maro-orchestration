@@ -7413,4 +7413,16 @@ under the same two-measurement standard).
   weakest-signal-last; killswitch `knowledge.effect_inert_enabled`;
   calendar 0.85/day decay still runs (retiring it needs corpus-wide
   inert coverage, not 51 calls). Remaining from the go: doorless
-  `get_canon_candidates` threshold.
+  `get_canon_candidates` threshold. Adversarial review same-day
+  (1-lens codex Skeptic, 5 findings verified): expected_lesson
+  binding + DEFAULTS wording fixed; stale-overwrite race rejected
+  (decreed operator standard); LONG-census discovery + tier-aware
+  arm construction deferred as v2 (noted in BACKLOG).
+- **2026-08-13** — A/B-4 re-test JUDGED (run be7c618a-patient-delta,
+  host executors, environment confound removed): falsifier (a) fires
+  AGAIN — the worker faced multiple >50KB files with read_query.py
+  taught and reachable, achieved the goal via exhaustive grep +
+  manual tracing, and invoked the verb ZERO times. Pre-registered
+  consequence stands: next lever is planner-level (plan steps naming
+  the verb), not more prompt wording — the prompt-teaching axis is
+  exhausted on two corpora.

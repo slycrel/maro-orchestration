@@ -638,6 +638,23 @@ class TestEffectInert:
         row = next(l for l in longs if l.lesson_id == tl.lesson_id)
         assert row.delta_evidence["route"] == "effect"
 
+    def test_expected_lesson_mismatch_refuses(self, monkeypatch, tmp_path):
+        # Text binding (skeptic finding 4, same discipline as
+        # confirm_lesson_by_delta): a concurrent refight/revise swaps the
+        # row's text; a null measured against the OLD text must not stamp
+        # the new one. The census passes the measured snapshot.
+        tl = _seed_medium_lesson(monkeypatch, tmp_path)
+        import knowledge_web as kw
+        assert kw.inert_lesson_by_effect(
+            tl.lesson_id, INERT_EVIDENCE,
+            expected_lesson="text that was never measured") is False
+        mediums = kw.load_tiered_lessons(tier=kw.MemoryTier.MEDIUM, min_score=0.0)
+        fresh = next(l for l in mediums if l.lesson_id == tl.lesson_id)
+        assert not fresh.delta_evidence
+        # matching snapshot still stamps
+        assert kw.inert_lesson_by_effect(
+            tl.lesson_id, INERT_EVIDENCE, expected_lesson=tl.lesson) is True
+
     def test_inert_measurement_replaces_demote_stamp(self, monkeypatch, tmp_path):
         tl = _seed_medium_lesson(monkeypatch, tmp_path)
         import knowledge_web as kw

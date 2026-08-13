@@ -601,7 +601,10 @@ def run_effect_route(
         # lane's contract stays promote/demote/measured.
         inerted = False
         if inert and not promoted and not confirmed and not demoted:
-            inerted = inert_lesson_by_effect(t.lesson_id, ev)
+            # Bind the stamp to the text that was actually replayed — a
+            # concurrent refight/revise must not inherit this null.
+            inerted = inert_lesson_by_effect(t.lesson_id, ev,
+                                             expected_lesson=t.lesson)
         watch_cleared = False
         if ((remint_pending or promote or demote or inert)
                 and (t.delta_evidence or {}).get("route") == "remint-watch"

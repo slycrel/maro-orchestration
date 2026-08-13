@@ -2307,8 +2307,15 @@ def effect_inert_enabled() -> bool:
         return True
 
 
-def inert_lesson_by_effect(lesson_id: str, delta_evidence: Dict[str, Any]) -> bool:
+def inert_lesson_by_effect(lesson_id: str, delta_evidence: Dict[str, Any],
+                           expected_lesson: str = "") -> bool:
     """Stamp a measured-inert Δ (route="effect-inert") on a lesson.
+
+    expected_lesson, when non-empty, is compared against the fresh in-lock
+    row text (same discipline as confirm_lesson_by_delta): a concurrent
+    refight/revise swaps the row's text, and a null measured against the
+    OLD text says nothing about the new one — stamping it would exclude a
+    lesson that was never measured.
 
     What the stamp does (see _is_delta_inert): frees the row's
     decision-injection slot. What it does NOT do: block tenure (inert is
@@ -2373,6 +2380,8 @@ def inert_lesson_by_effect(lesson_id: str, delta_evidence: Dict[str, Any]) -> bo
     def _stamp(lessons: List[TieredLesson]) -> List[TieredLesson]:
         t = next((l for l in lessons if l.lesson_id == lesson_id), None)
         if t is None:
+            return lessons
+        if expected_lesson and t.lesson != expected_lesson:
             return lessons
         t.delta_evidence = {
             "delta": float(delta),

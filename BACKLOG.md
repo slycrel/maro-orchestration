@@ -3661,6 +3661,18 @@ and maintainable over time."** Step 1 is greenlit:
   lane; re-seed command in the workspace config comment) so it
   measures TEACHING alone on host executors, where the advertised
   path exists. Container verb parity filed as its own item below.
+  **RE-TEST JUDGED 2026-08-13 (run be7c618a-patient-delta, host
+  executors, verb reachable): FALSIFIER (a) FIRES AGAIN — cleanly this
+  time, environment confound removed.** goal_achieved=True; the run
+  faced multiple >50KB files (92KB step-5-output.txt listings, its own
+  566KB audit_grep.txt which it then "manually traced"), the
+  read_query.py advertisement appeared in 6 of its prompts, and the
+  worker made ZERO invocations — it chose exhaustive grep sweeps +
+  manual tracing instead (AUDIT.md names the method). Zero attempts
+  with the verb reachable and taught = the pre-registered consequence
+  stands: **the next lever is planner-level (plan steps naming the
+  verb), not more prompt wording.** Prompt-teaching axis is now
+  exhausted on two corpora with the environment clean.
 - Relation to existing items: this is the generalized form of the #22
   errand-envelope lever and the designated reader for RUN_TEACHINGS
   chunk-1's input stage; it is NOT a replacement for the cheaper
@@ -5204,6 +5216,21 @@ open — verification ≠ repair; each needs a wire-or-retire decision):**
     corpus, and only 51 oracle calls exist. **Remaining from the go:
     doorless `get_canon_candidates` threshold** (canon-lesson promote
     path — next chunk).
+    **Adversarial review (1-lens codex Skeptic, 2026-08-13, 5 findings
+    all code-verified):** fixed same-day — expected_lesson text binding
+    on the inert stamp (confirm-route discipline; census passes the
+    measured snapshot) + DEFAULTS killswitch wording honesty (census
+    reports raw Δ/spread, no would-stamp field). Rejected: stale-
+    measurement overwrite race (measurement-replaces-measurement is
+    decreed; two-agreeing-full-set-runs operator standard covers it,
+    same as demote). Deferred v2 candidates: (a) census discovery is
+    MEDIUM-only — already-LONG rows can't be measured for inertness,
+    yet internalized LONG lessons are exactly the original steal's
+    decay target; (b) replay arm construction appends absent lessons
+    under the LONG header regardless of tier (pre-existing harness
+    shape shared by promote/confirm/demote since 08-06, validated
+    against known specimens — a tier-aware arm builder would remove
+    the residual prompt-shape confound).
 
 ### Standing test-goal menu (future ideas)
 
