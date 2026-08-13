@@ -57,6 +57,21 @@ Two coupled finds from one diagnosis (full trail in the A/B-4 entry):
   `_read_cli_path()` resolves to live-repo paths that
   `build_mount_map` hard-excludes, so every containerized teaching
   measurement (A/B-4 included) was structurally unable to invoke.
+  **3-lens review of (b) + the auth breaker 2026-08-13 — REJECT,
+  fixed same day (7d470be):** require-mode host bypasses closed
+  (suppression + missing-cwd now refuse under require; attribution
+  follows the ACTUAL lane), notification guaranteed-or-retried +
+  its Telegram/bootstrap consumer side wired, FailoverAdapter stands
+  down for container-owned auth errors (no shared-circuit trip, no
+  contradictory host-/login alert), breaker transitions serialized,
+  detail secret-scrubbed, probe shape-only, doctor/health honest on
+  unreadable markers + docker-down. Verdict: docs/history/
+  2026-08-13-container-auth-breaker-verb-parity-adversarial-review.md.
+  **Residual (filed, not built):** typed per-call lane pass-through
+  (prompt-lane and dispatch-lane each read config independently; a
+  mid-step config flip can mismatch them for one step — rare,
+  self-corrects; the exception-path fail direction IS fixed toward
+  under-advertising).
 - [ ] **(a) bake the maro package into the executor image — now
   DECISION-SHAPED, Jeremy's call.** COPY repo + pip install +
   IMAGE_REVISION bump gives containers the verbs, BUT `maro-read` is
@@ -386,13 +401,22 @@ Look-before-you-import for the sharing use case: read-only, prints
 provenance + custody, verifies the workspace-shape digest against the
 archive's own bytes, and previews what import WOULD skip (unsafe member
 types/links, secret-shaped meta, traversal) — nothing extracted or
-mutated. Exit 0 clean / 2 digest MISMATCH / 3 unsupported-newer-format,
-so it scripts. Self-reviewed only (the v2 codex security review tripped
-codex's cyber-risk filter and cost a Fable downgrade — see
-[[feedback_adversarial_review_cyber_filter]]; a cross-model pass can run
-later with the skill's new defensive framing). 5 pins (TestInspect).
-Verified on the real box archive (23,696 files, digest OK, 0 unsafe).
-Suite 8407/0 skipped.
+mutated. **Cross-model 2-lens review RAN 2026-08-13 (the deferred pass;
+defensive framing worked, no cyber-filter trip) — REJECT, all 5 findings
+fixed same day (9c4d23c):** exit codes now fail closed (3 newer / 2
+mismatch / 5 malformed provenance / 4 unsafe present / 0 clean only),
+one shared streaming classifier feeds both inspect preview and import
+enforcement (the two had already diverged on meta screens, exclusions,
+and provenance selection; import's own quadratic partition fixed by the
+same pass), provenance format must be a canonical int and import
+refuses malformed provenance outright, archive-authored text sanitized
+at every print, and inspect prints the archive sha256 which import can
+pin via --expect-sha256. Verdict:
+docs/history/2026-08-13-maro-export-inspect-adversarial-review.md.
+15 pins (TestInspect + TestInspectReviewHardening). Re-verified on the
+real box archive (23,696 files, 0 unsafe; its digest MISMATCH is
+genuine hot-export drift, identical under the pre-refactor tool).
+Suite 8464/0 skipped.
 
 **Meta staging placement — DECIDED 2026-08-13 (delegated: "up to
 you"):** stays under the workspace at `<ws>/.import-meta/`, now one

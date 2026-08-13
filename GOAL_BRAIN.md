@@ -7564,3 +7564,37 @@ under the same two-measurement standard).
   captured slice as the whole run), quoting guidance apostrophe-aware,
   config-flip-between-plan-and-resume accepted as operator-action
   residual. Suite 8429/1 skip.
+- **2026-08-13 (morning)** — The two remaining unreviewed overnight
+  chunks got their cross-model passes (Claude→Codex, 5 reviewers total,
+  defensive framing — zero cyber-filter trips): **both REJECT, all
+  accepted findings fixed same session** (7d470be auth-breaker/verb-
+  parity, 9c4d23c inspect; verdicts in docs/history/). 8th and 9th
+  earning rounds for this arc's modules. Standouts: `require` had TWO
+  silent host-execution bypasses (suppression early-return, missing-cwd
+  fallback); the auth breaker's single actionable Telegram was
+  droppable at four independent layers (persist-failure swallow,
+  no-delivery-retry, formatter rendering it as a bare status line,
+  bootstrap starter config filtering the event) — write side without
+  its read side, again; FailoverAdapter double-alerted with WRONG
+  (host /login) instructions and tripped the shared subprocess circuit
+  on a container-only auth death; inspect's exit-0 "clean" was
+  reachable with unsafe members present, and inspect/import policy had
+  already measurably diverged (now one shared streaming classifier).
+  Rejected with rationale: same-second reseed loosening (errs toward a
+  notify loop), full typed-lane plumbing (filed as residual).
+  Suite-green collaterals rooted out, not skipped: the overnight
+  planner lever leaked the checkout username into fresh-install
+  decompose prompts via the absolute CLI path (box's `clawd` leaks the
+  same way, unseen) — resolvers now emit a runnable double-quoted
+  "$HOME/..." form; the current-step symlink tests raced the real
+  machine-shared /tmp path under xdist — seam extracted
+  (llm._CURRENT_STEP_LINK), tests isolated. Suite 8464/0 skipped.
+  **Reconciliation with the concurrent sweep above (981261c) — the two
+  sessions reviewed the same commits in parallel:** merged best-of-both
+  at rebase. Their deep-text breaker search + marker variants + 6h
+  cross-trip notify throttle kept and COMPOSED with this round's
+  delivery guarantee (sidecar stamps only DELIVERED notifies; a flap
+  re-trip inside the window marks the trip notified so the retry lane
+  stands down). Their "self-healing races" disposition is superseded —
+  the serialized transitions were already built and land with this
+  merge. Both TOCTOU residual filings agree.
