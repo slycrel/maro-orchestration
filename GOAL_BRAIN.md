@@ -7326,3 +7326,16 @@ under the same two-measurement standard).
   incl. prompt-wiring + fence-ordering. Suite 8266/1 conditional skip,
   exit 0. Star skill same session: version field introduced at 7
   (tested-bump rule), usage 8-10+ per Jeremy.
+- **2026-08-12** — Receipts skeptic round (codex, 1-lens) landed same
+  evening: all 5 findings verified REAL (0% hallucination — the 0–78%
+  range now spans a clean-sweep-real round too). Hardened: is_error
+  surfaced + [HARNESS FLAGGED ERROR]; runner match relabeled TEXT
+  heuristic (echo look-alikes render verbatim + caveat); receipt
+  content gets its own fence + data-never-instructions doctrine (trust
+  covers the record, not the executor-authored text inside); partial
+  records counted and flagged INCOMPLETE — "NONE recorded" only on a
+  complete record, all-unreadable → UNAVAILABLE; 8MB/file + 1000-file
+  scan bounds. 22 pins now. Suite 8272 passed/1 conditional skip,
+  exit 0. Fixpoint judgment: single round sufficient — findings were
+  presentation/honesty hardening, no architecture change; the deferred
+  mechanical receipt→check matching stays evidence-gated.

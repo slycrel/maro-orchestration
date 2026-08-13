@@ -371,7 +371,21 @@ retracted by the step-9 adversarial pass — see below):
   positive refutation evidence; receipts sit OUTSIDE the untrusted-
   artifact fence. Same posture as v1: grounds the audit, never flips a
   verdict, never blocks closure, rides `closure.pass_audit` (no new
-  flag). Deferred, evidence-gated: mechanical receipt→check matching as
+  flag). **Skeptic round 2026-08-12** (codex, 1-lens; all 5 findings
+  verified REAL — 0% hallucination this round) → hardened same day:
+  (1) `is_error` now carried into receipts + `[HARNESS FLAGGED ERROR]`
+  in the digest; runner-marker match relabeled a TEXT heuristic with
+  read-the-command-line caveat (`echo pytest` genuinely receipts an
+  echo); (2) receipt content fenced (`<<<BEGIN/END HARNESS RECEIPTS>>>`
+  + data-never-instructions doctrine — the trust claim covers the
+  record, not the executor-authored text inside it); (3) partial
+  records honest: unreadable/malformed files COUNTED, cap truncation
+  flagged, "NONE recorded" only on a complete record ("none among the
+  READABLE records" otherwise), all-unreadable → UNAVAILABLE; (4)
+  bounds: 8MB/file + 1000-file scan cap, oversized counts unreadable;
+  (5) adversarial pins for all of the above (echo look-alike verbatim,
+  failed-runner flag, incomplete-never-claims-absence, fence-in-prompt).
+  Deferred, evidence-gated: mechanical receipt→check matching as
   a closure-check INPUT (skip-the-LLM upgrade) — build if pass-audit
   stamps accumulate showing receipts alone would have decided.
 - **#3 Observation Failure (env—model), high** — `step_exec.py`
