@@ -7355,3 +7355,29 @@ under the same two-measurement standard).
   verify-before-fix range now includes a clean-sweep reviewer;
   verification stays unconditional. Ops: codex file-pointer prompts
   hang (0% CPU); inline-everything + foreground + timeout works.
+- **2026-08-12** — Jeremy's three go-signals (evening, "here I am
+  ready for more"): (1) LeAct knowledge-layer arc GO — "go when
+  you're ready for it, no reason to wait" (decision 807572df); by the
+  time of the go the decreed sequence was mostly shipped, so it lands
+  on competence-redundancy decay + the doorless canon-lesson
+  threshold (stale BACKLOG closing line corrected). (2) A/B-4 re-test
+  dispatch NOW (decision 1810ec2f) — corpus = finish-and-correct-the-
+  tire, prediction pre-registered. (3) Star-vs-harness comparison
+  sanctioned ("worth trying the star skill against the most recent
+  real run").
+- **2026-08-13** — Star-vs-harness head-to-head RAN (record:
+  docs/history/2026-08-13-star-vs-harness-comparison.md): same goal
+  as sunny-wren (top-5 code-review skills), star v7 = ~100× cheaper
+  (~57k vs 5.86M tokens), ~6× faster, comparable-or-better answer
+  with symmetric blind spots (harness missed both dedicated-skill
+  leaders; star missed one 215k★ framework bundle). Confounds named
+  (model, date, n=1). Keep-signal data point at use ~#11.
+- **2026-08-13** — A/B-4 re-test setup surfaced TWO infrastructure
+  finds (BACKLOG "Container verb parity" item): containerized
+  executors can't invoke the advertised read/fetch verbs at all
+  (repo-path advertisement vs hard-excluded mounts) — recolors
+  A/B-4's zero invocations as teaching+environment conflated; and
+  the container OAuth expired ~08-12 leaving the dispatch lane
+  silently DOWN (~2 days). `executor.container` TEMP off (comment
+  carries Jeremy's re-seed command); re-test re-dispatched on host
+  executors so it measures teaching alone.

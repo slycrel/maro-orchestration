@@ -44,6 +44,36 @@ full triage: 2026-07-04.
 
 Ordered open work that matters. Top of the list is next.
 
+### Container verb parity + container auth expiry watch (FOUND 2026-08-13, A/B-4 re-test setup — the dispatch lane was silently DOWN)
+
+Two coupled finds from one diagnosis (full trail in the A/B-4 entry):
+
+- [ ] **Containerized executors cannot invoke the advertised verbs.**
+  The executor image bakes node/claude/git/python3 only; `maro-read`
+  is on no PATH anywhere, so `_read_cli_path()`/_fetch_cli_path()
+  resolve to LIVE-REPO file paths — which `build_mount_map`
+  hard-excludes from containers by design. EXECUTE_SYSTEM therefore
+  advertises commands that do not exist in the worker's filesystem
+  whenever `executor.container: on`. Every containerized teaching
+  measurement (A/B-4 included) was structurally unable to invoke.
+  Fix candidates, pick after the host re-test lands: (a) bake the
+  maro package into the executor image (COPY repo + pip install,
+  IMAGE_REVISION bump — matches the "CLI is BAKED" philosophy); (b)
+  a container-aware `_read_cli_path()` that renders an in-container
+  invocation only when the verb is actually reachable, and DROPS the
+  advertisement otherwise (honest prompt > dead command). (b) is
+  correct regardless of (a) — never advertise what the environment
+  can't run.
+- [ ] **Container OAuth expiry is invisible until the lane dies.**
+  maro-claude-auth seeded 07-14 interactive; expired ~08-12; every
+  agenda dispatch with executor steps then died at step-execute
+  (two runs interrupted before diagnosis). `login_probe` exists but
+  only behind `doctor --live`. Wire a cheap watch: health-lane probe
+  on stuck_reason pattern match, or scheduled login_probe every N
+  days with a Telegram ping at failure (it costs one token). Config
+  currently TEMP `container: off` (comment carries the re-seed
+  command); restore after Jeremy re-logs-in the volume.
+
 ### MEDIUM→LONG promotion can lose a lesson outright on destination-write failure (FOUND 2026-08-11, adversarial review of the rationale-erosion chunk — pre-existing, HIGH; **FIXED same day, Jeremy: "let's fix that now"**)
 
 **FIXED 2026-08-11** (`knowledge_web._move_medium_to_long`, both routes):
@@ -3547,7 +3577,32 @@ and maintainable over time."** Step 1 is greenlit:
   identity brief or contrive an axis). Prediction for that re-test:
   >=1 invocation on any file >50KB, or falsifier (a) fires AGAIN and
   the next lever is planner-level (plan steps naming the verb), not
-  more prompt wording.
+  more prompt wording. **RE-TEST DISPATCHED 2026-08-12 (Jeremy: "fire
+  up a sub-agent for the A/B-4 re-test"):** corpus =
+  finish-and-correct-the-tire (1.25MB raw HTML capture + 92KB listings
+  file — different domain from the exhausted chlorination corpus),
+  goal = audit wheel_spec.md claims against the raw captures with
+  exact quotes (answers-not-editing over >50KB files by construction;
+  verb not named in the goal). Prediction unchanged from above,
+  registered before dispatch. **ENVIRONMENTAL CONFOUND FOUND during
+  re-test setup (2026-08-13), recolors the original A/B-4 verdict:**
+  the first two re-test dispatches died at step-execute — the
+  maro-claude-auth container OAuth (seeded 07-14) expired ~08-12,
+  dispatch lane DOWN. Diagnosing that surfaced the bigger fact: the
+  executor image bakes only node/claude/git/python3, `maro-read` is on
+  no PATH anywhere, so EXECUTE_SYSTEM advertises
+  `python3 /home/clawd/claude/maro-orchestration/src/read_query.py` —
+  a path build_mount_map HARD-EXCLUDES from containers (live repo +
+  workspace root exclusion). **A containerized worker could never have
+  invoked the verb no matter how good the teaching** — A/B-4
+  (lucid-forge ran containerized) measured teaching+environment
+  conflated; zero attempts (vs zero successes) still indicts the
+  advertisement, but falsifier (a)'s "teaching fix owed" was only half
+  the story. Same holds for __FETCH_CLI__. Re-test therefore runs with
+  `executor.container: off` (TEMP — also restores the downed dispatch
+  lane; re-seed command in the workspace config comment) so it
+  measures TEACHING alone on host executors, where the advertised
+  path exists. Container verb parity filed as its own item below.
 - Relation to existing items: this is the generalized form of the #22
   errand-envelope lever and the designated reader for RUN_TEACHINGS
   chunk-1's input stage; it is NOT a replacement for the cheaper
@@ -5061,9 +5116,16 @@ open — verification ≠ repair; each needs a wire-or-retire decision):**
     LT-1 step with and without the candidate lesson injected. Sequence:
     seed-reader A/B first (contamination check, cheap) → stratify
     rule-vs-reason → Δ route to tenure → competence-redundancy decay.
-    **Still needs a Jeremy go** — this is a knowledge-layer arc opening
-    while SP and world-facts are in flight, and priority between them
-    is his call, not the readiness check's.
+    ~~Still needs a Jeremy go~~ **GO GIVEN 2026-08-12** ("go when
+    you're ready for it, no reason to wait" — decision 807572df). By
+    then the sequence was mostly built (this closing line had gone
+    stale): seed-reader A/B ran 2026-08-06, strata + Δ-promotion route
+    shipped 2026-08-06/07 (delta_replay.py + promote_lesson_by_effect),
+    demotion + tombstones + noise calibration 2026-08-08. The go
+    therefore lands on the remaining pieces: **competence-redundancy
+    decay** (the sequence's last step), and the doorless
+    `get_canon_candidates` threshold one lane over. §5 cuts
+    (evolver/thinkback trace scoring, un-contest verb) stay cut.
 
 ### Standing test-goal menu (future ideas)
 
