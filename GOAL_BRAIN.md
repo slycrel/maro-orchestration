@@ -7363,6 +7363,28 @@ under the same two-measurement standard).
   catch: the Ubuntu box still identifies as hostname
   jeremy-Macmini-2014.** v1 archives import clean. Suite 8342/0
   skipped.
+- **2026-08-13** — 3-lens Codex review of format v2 (c257a48) —
+  **REJECT, all fixed same session; every accepted finding reproduced
+  first.** The frame the reviewers enforced: an archive is UNTRUSTED
+  input on import, and the first cut trusted it — the security-blurb
+  work invited exactly the right scrutiny. Three HIGHs: line-based
+  credential redactor leaked nested/block/inline YAML + clobbered
+  benign max_tokens (→ structural YAML redaction, string-values-only,
+  fail-closed on unparseable); import extracted hostile member
+  types/links — `workspace/leak → /etc/passwd` imported live via the
+  `tar` filter + unfiltered <3.11.4 fallback (→ preflight
+  type+link-target allowlist before any mutation, `data` filter);
+  `--apply-meta` applied a stale prior-import config (→ fresh per-import
+  staging dir + gated on current provenance). Mediums: format-version
+  gate (v99 half-imported → refused), malformed-provenance
+  crash-after-extract (→ validated first), terminal injection via
+  provenance strings (→ sanitized), digest overstated ("verified" →
+  "shape, self-attested, UNSIGNED"), custody didn't survive a hop (→
+  re-export carries the prior chain), zip-bomb caps, import-side secret
+  screening. This module's arc: v1 cleanup review, then v2 feature
+  review, both REJECT→fixed — the untrusted-input surface earns its
+  review every time. +22 pins. Live box→M1 round-trip clean. Suite
+  8366/0 skipped.
 - **2026-08-12** — MH #1 prevention half v1 SHIPPED (evening session,
   "let's continue"): execution_receipts.py digests the recorder's
   build/calls tool_events into the pass-audit prompt — the one evidence

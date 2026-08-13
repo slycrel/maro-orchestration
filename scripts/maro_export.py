@@ -4,45 +4,51 @@
 Archive format v2 (2026-08-13, Jeremy: "the behavior IS data … intent has
 always been data sharing, and that's always meant all of our metadata"):
 
-  workspace/**          the workspace, as before (secrets excluded,
-                        sqlite via consistent snapshots)
-  meta/user-config.yml  user-tier ~/.maro/config.yml — behavior config
-                        (model prefs, scope_generation, …), credential-
-                        shaped values redacted at export
-  meta/experiments/**   ~/.maro/experiments/
-  meta/symlinks.json    external symlinks (absolute or escaping the
-                        workspace) are recorded HERE instead of shipped —
-                        a link to /usr/bin/python3 resolves to the WRONG
-                        binary on another OS rather than dangling, so
-                        machine-pointing links travel as data, not links.
-                        Internal relative links still travel as links.
-  meta/provenance.json  who exported, from where, with what tool, content
-                        digest, and a custody chain that every import
-                        appends to. First brick of the future security /
-                        sharing layer — an integrity hint, NOT tamper
-                        proof (no signing yet).
+  workspace/**          the workspace (secrets excluded, sqlite via
+                        consistent snapshots)
+  meta/user-config.yml  user-tier ~/.maro/config.yml — behavior config,
+                        credential-shaped values redacted STRUCTURALLY
+                        at export (fails closed if the YAML won't parse)
+  meta/experiments/**   ~/.maro/experiments/ (regular files)
+  meta/symlinks.json    machine-pointing links (absolute target, or
+                        resolving/looping outside the workspace) recorded
+                        as data, not shipped as links — a link to
+                        /usr/bin/python3 resolves to the WRONG binary on
+                        another OS. Internal relative links still travel.
+  meta/provenance.json  who exported, from where, tool fingerprint, a
+                        workspace-shape digest (self-attested, UNSIGNED —
+                        an integrity hint, not tamper proof), and a
+                        custody chain each import appends to and each
+                        re-export carries forward.
 
-Import extracts workspace/** into workspace_root() (MARO_WORKSPACE
-overrides) and stages meta/** NON-DESTRUCTIVELY under
-<workspace>/.import-meta/ — it never silently changes the importing
-machine's behavior. --apply-meta places user-config.yml at the real
-user-tier path (existing config backed up, never deleted). By default
-import MERGES; --clean moves the existing workspace aside first (never
-deletes it).
+SECURITY POSTURE (3-lens review of c257a48, 2026-08-13): an archive may
+come from another machine or another person, so on IMPORT every member is
+UNTRUSTED input. Import (a) gates on archive format, (b) preflights every
+member against a type + link-target allowlist before touching the
+destination, (c) validates provenance shape before any mutation, (d)
+stages meta into a fresh per-import dir under <ws>/.import-meta/<ts>/
+without ever changing this machine's behavior, screening secret-shaped
+meta out, and (e) sanitizes archive-authored strings before printing.
+The shape digest is explicitly a hint, not a signature — the real
+security layer is later work; this is its groundwork.
 
-Back-compat: v1 archives (no meta/) import cleanly; a v1 importer given
-a v2 archive extracts meta/ as a plain directory inside the workspace —
-untidy but harmless.
+Import stages meta NON-DESTRUCTIVELY. --apply-meta places THIS import's
+user config at the real user-tier path (existing config backed up, never
+deleted; symlink destinations refused). By default import MERGES;
+--clean moves the existing workspace aside first (never deletes it).
+
+Back-compat: v1 archives (no meta/) import cleanly.
 
 Usage:
     python3 scripts/maro_export.py export [--output PATH]
     python3 scripts/maro_export.py import ARCHIVE [--dry-run] [--clean]
                                           [--apply-meta]
 
-Still not carried (inherent): machine semantics embedded in the data —
+Still not carried (inherent): machine semantics embedded IN data —
 absolute paths inside artifacts/checkpoints, CLI session ids — and file
-ownership maps to the importing user. provenance.json records the source
-workspace root so a future consumer can rewrite embedded paths.
+ownership maps to the importing user. provenance records the source
+workspace root so a future consumer can rewrite embedded paths (BACKLOG
+path-token item).
 """
 
 from __future__ import annotations
@@ -52,6 +58,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import sys
 import tarfile
 import time
@@ -62,6 +69,15 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 ARCHIVE_FORMAT = 2
 _META_PREFIX = "meta/"
 _STAGING_DIRNAME = ".import-meta"
+_REDACT_MARKER = "REDACTED-BY-EXPORT"
+
+# Untrusted-archive resource caps (import side).
+_MAX_MEMBERS = 2_000_000
+_MAX_META_FILE_BYTES = 512 * 1024 * 1024   # streamed; skip+warn beyond
+_MAX_PROVENANCE_BYTES = 4 * 1024 * 1024
+_MAX_CUSTODY_PRINT = 50
+_PRINT_FIELD_CAP = 300
+_COPY_CHUNK = 1024 * 1024
 
 # Two exclusion classes, with deliberately different reach (2026-08-12
 # cleanup — the old single anywhere-matched set ate .git/logs/* reflogs
@@ -83,13 +99,19 @@ _EXCLUDE_ROOT = {
     _STAGING_DIRNAME,   # a re-export must not re-ship staged import meta
 }
 
-# Config keys whose VALUES get redacted when the user config rides the
-# archive. Config.yml should hold no credentials by convention (they live
-# in env / secrets/.env) — this is enforcement for the sharing use case,
-# not a substitute for the convention.
-_REDACT_KEY_TOKENS = (
-    "token", "secret", "password", "api_key", "apikey", "bearer",
-    "credential",
+# Whole-WORD credential key match (review of c257a48: substring "token"
+# clobbered benign `max_tokens`). Split the key on non-alphanumerics; a
+# word hit OR an explicit compound phrase marks the key credential-shaped.
+# Redaction additionally requires the VALUE be a string, so numeric
+# settings like max_tokens / token_budget are never touched even when the
+# key matches.
+_CRED_WORDS = {
+    "token", "secret", "password", "passwd", "apikey", "bearer",
+    "credential", "credentials", "pat", "privatekey",
+}
+_CRED_PHRASES = (
+    "api_key", "apikey", "access_key", "secret_key", "private_key",
+    "client_secret", "auth_token",
 )
 
 
@@ -131,67 +153,79 @@ def _should_exclude(path: str) -> bool:
     return parts[0] in _EXCLUDE_ROOT
 
 
-def _redact_config_text(text: str) -> tuple[str, int]:
-    """Redact values of credential-shaped keys in YAML-ish config text.
+def _is_cred_key(key) -> bool:
+    k = str(key).lower()
+    words = set(re.split(r"[^a-z0-9]+", k))
+    if words & _CRED_WORDS:
+        return True
+    return any(p in k for p in _CRED_PHRASES)
 
-    Line-based on purpose: preserves comments/layout and never fails on
-    odd YAML. Returns (redacted_text, redaction_count).
+
+def _redact_tree(node, parent_is_cred: bool = False) -> int:
+    """Redact string values under credential-shaped keys, in place.
+
+    A credential-shaped key redacts its whole subtree (so
+    `api_keys: {openai: sk-...}` is caught), but only STRING leaves are
+    replaced — numeric/bool settings survive. Returns redaction count.
     """
-    out_lines = []
-    redacted = 0
-    for line in text.splitlines(keepends=True):
-        stripped = line.split("#", 1)[0]
-        if ":" in stripped:
-            key = stripped.split(":", 1)[0].strip().lower()
-            value = stripped.split(":", 1)[1].strip()
-            if value and any(t in key for t in _REDACT_KEY_TOKENS):
-                indent = line[: len(line) - len(line.lstrip())]
-                raw_key = stripped.split(":", 1)[0].strip()
-                out_lines.append(
-                    f"{indent}{raw_key}: REDACTED-BY-EXPORT\n")
-                redacted += 1
-                continue
-        out_lines.append(line)
-    return "".join(out_lines), redacted
+    count = 0
+    if isinstance(node, dict):
+        for k, v in list(node.items()):
+            cred = parent_is_cred or _is_cred_key(k)
+            if isinstance(v, (dict, list)):
+                count += _redact_tree(v, cred)
+            elif cred and isinstance(v, str) and v:
+                node[k] = _REDACT_MARKER
+                count += 1
+    elif isinstance(node, list):
+        for i, v in enumerate(node):
+            if isinstance(v, (dict, list)):
+                count += _redact_tree(v, parent_is_cred)
+            elif parent_is_cred and isinstance(v, str) and v:
+                node[i] = _REDACT_MARKER
+                count += 1
+    return count
 
 
-def _manifest_digest(entries) -> str:
-    """sha256 over sorted 'name<TAB>size' lines of workspace file members.
+def _redact_config_text(text: str):
+    """Structurally redact credential-shaped values in YAML config text.
 
-    An integrity HINT for provenance (detects accidental corruption and
-    casual tampering with names/sizes) — not content-proof and not
-    signed. The future security layer strengthens this; provenance says
-    so explicitly.
+    Returns (out_text, redaction_count, ok). ok=False means the config
+    could not be safely transformed (unparseable, or not a mapping) —
+    the caller MUST NOT ship it (fail closed): shipping raw could leak a
+    secret the line matcher would miss. When redactions==0 the ORIGINAL
+    text is returned verbatim so comments/layout survive the common
+    (credential-free) case; when >0 a structural re-dump is returned
+    (comments lost — a deliberate trade for guaranteed redaction).
     """
-    lines = sorted(f"{name}\t{size}" for name, size in entries)
-    return hashlib.sha256("\n".join(lines).encode("utf-8")).hexdigest()
-
-
-def _identity() -> str:
-    import getpass
-    import socket
+    import yaml
     try:
-        user = getpass.getuser()
+        data = yaml.safe_load(text)
     except Exception:
-        user = "unknown"
-    try:
-        host = socket.gethostname()
-    except Exception:
-        host = "unknown"
-    return f"{user}@{host}"
+        return "", 0, False
+    if data is None:
+        return text, 0, True  # empty config, nothing to hide
+    if not isinstance(data, dict):
+        return "", 0, False  # unexpected shape — refuse rather than guess
+    count = _redact_tree(data)
+    if count == 0:
+        return text, 0, True
+    return yaml.safe_dump(data, default_flow_style=False,
+                          sort_keys=False), count, True
 
 
-def _utcnow() -> str:
-    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+def _classify_symlink_target(target: str, member_rel_parts: tuple) -> bool:
+    """True if the link is INTERNAL (relative, staying inside the tree).
 
-
-def _add_bytes(tar: tarfile.TarFile, arcname: str, data: bytes,
-               mode: int = 0o644) -> None:
-    ti = tarfile.TarInfo(name=arcname)
-    ti.size = len(data)
-    ti.mode = mode
-    ti.mtime = int(time.time())
-    tar.addfile(ti, io.BytesIO(data))
+    Pure string containment (no FS) so it works identically at export and
+    import and can't be defeated by a resolve-loop. member_rel_parts are
+    the link's own path parts relative to the workspace root.
+    """
+    if os.path.isabs(target):
+        return False
+    base = Path(*member_rel_parts[:-1]) if len(member_rel_parts) > 1 else Path()
+    combined = os.path.normpath(str(base / target))
+    return not (combined == ".." or combined.startswith(".." + os.sep))
 
 
 def _snapshot_sqlite(src: Path, dst: Path) -> bool:
@@ -205,10 +239,8 @@ def _snapshot_sqlite(src: Path, dst: Path) -> bool:
     Path goes in as a percent-encoded file: URI (via as_uri) — naive
     f-string interpolation let a '?' or '#' in the filename truncate the
     URI, silently opening a DIFFERENT (empty) database and "succeeding"
-    with an empty snapshot (3-lens review of 707a541, Skeptic HIGH,
-    reproduced). Belt-and-suspenders, success also requires page-count
-    parity between source and snapshot — kills that whole silent-empty
-    class even if some other URI quirk slips through.
+    with an empty snapshot (review of 707a541, reproduced). Success also
+    requires page-count parity between source and snapshot.
     """
     import sqlite3
     con = out = None
@@ -240,16 +272,83 @@ def _snapshot_sqlite(src: Path, dst: Path) -> bool:
                     pass
 
 
-def export_workspace(output_path: Path = None, verbose: bool = False) -> Path:
-    """Export workspace + user-tier metadata to a tar.gz archive.
+def _manifest_digest(entries) -> str:
+    """sha256 over sorted 'name<TAB>size' lines of workspace file members.
 
-    Args:
-        output_path: Where to write the archive. Default: ~/maro-export-TIMESTAMP.tar.gz
-        verbose: Print files being added.
-
-    Returns:
-        Path to the created archive.
+    A WORKSPACE-SHAPE hint (names+sizes only — NOT bytes, meta, or link
+    targets) for detecting accidental corruption / casual tampering.
+    Never called "verified" without the "shape, self-attested, unsigned"
+    qualifier (review of c257a48: the old "manifest verified" overstated
+    it). The future security layer signs a payload manifest; this is not
+    that.
     """
+    lines = sorted(f"{name}\t{size}" for name, size in entries)
+    return hashlib.sha256("\n".join(lines).encode("utf-8")).hexdigest()
+
+
+def _sanitize_for_terminal(value, cap: int = _PRINT_FIELD_CAP) -> str:
+    """Strip control characters and cap length before printing an
+    archive-authored string. A hostile provenance blob otherwise injects
+    newlines / ANSI escapes to forge digest or custody lines (review of
+    c257a48, reproduced)."""
+    s = str(value)
+    s = re.sub(r"[\x00-\x1f\x7f-\x9f]", "?", s)
+    if len(s) > cap:
+        s = s[:cap] + "…"
+    return s
+
+
+def _identity() -> str:
+    import getpass
+    import socket
+    try:
+        user = getpass.getuser()
+    except Exception:
+        user = "unknown"
+    try:
+        host = socket.gethostname()
+    except Exception:
+        host = "unknown"
+    return f"{user}@{host}"
+
+
+def _utcnow() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def _add_bytes(tar: tarfile.TarFile, arcname: str, data: bytes,
+               mode: int = 0o644) -> None:
+    ti = tarfile.TarInfo(name=arcname)
+    ti.size = len(data)
+    ti.mode = mode
+    ti.mtime = int(time.time())
+    tar.addfile(ti, io.BytesIO(data))
+
+
+def _prior_custody(ws: Path) -> list:
+    """The custody chain of the newest prior import staged in this
+    workspace — carried forward so lineage survives a re-export
+    (A→B→C), the point of a custody chain (review of c257a48)."""
+    staging = ws / _STAGING_DIRNAME
+    if not staging.is_dir():
+        return []
+    provs = sorted(staging.glob("*/provenance.json"))
+    if not provs:
+        return []
+    try:
+        prov = json.loads(provs[-1].read_text())
+        chain = prov.get("custody")
+        return chain if isinstance(chain, list) else []
+    except Exception:
+        return []
+
+
+# ---------------------------------------------------------------------------
+# Export
+# ---------------------------------------------------------------------------
+
+def export_workspace(output_path: Path = None, verbose: bool = False) -> Path:
+    """Export workspace + user-tier metadata to a tar.gz archive."""
     from config import _maro_dir, _user_config_path, workspace_root
     ws = workspace_root()
 
@@ -265,21 +364,22 @@ def export_workspace(output_path: Path = None, verbose: bool = False) -> Path:
     other_count = 0  # directories + internal symlinks (counted apart)
     meta_count = 0
     total_bytes = 0
-    # (stripped rel name, size) for every workspace file member — feeds
-    # the provenance manifest digest.
     manifest_entries: list[tuple[str, int]] = []
-    # sqlite family deferred to the snapshot pass: (arcname, abs path)
     db_files: list[tuple[str, Path]] = []
-    sidecars: list[tuple[str, Path]] = []  # -wal/-shm, keyed by base later
-    # Machine-pointing symlinks travel as data (meta/symlinks.json), not
-    # as links (Jeremy 2026-08-13: config-driven or at least
-    # non-destructive — portability over verisimilitude).
+    sidecars: list[tuple[str, Path]] = []
     external_symlinks: list[dict] = []
 
     def _abs_for(rel: str) -> Path:
         return ws / Path(*_rel_parts(rel))
 
-    def _filter(tarinfo: tarfile.TarInfo) -> tarfile.TarInfo | None:
+    def _record_external(parts: tuple, target: str) -> None:
+        external_symlinks.append(
+            {"path": str(Path(*parts)), "target": target})
+        if verbose:
+            print(f"  meta: {'/'.join(parts)} → symlinks.json "
+                  f"(external target {target})", file=sys.stderr)
+
+    def _filter(tarinfo: tarfile.TarInfo):
         nonlocal file_count, other_count, total_bytes
         rel = tarinfo.name
         if _should_exclude(rel):
@@ -288,31 +388,15 @@ def export_workspace(output_path: Path = None, verbose: bool = False) -> Path:
             return None
         if tarinfo.issym():
             parts = _rel_parts(rel)
-            target = tarinfo.linkname
-            portable = False
-            if not os.path.isabs(target):
-                try:
-                    resolved = (ws / Path(*parts[:-1]) / target).resolve()
-                    resolved.relative_to(ws.resolve())
-                    portable = True
-                except (ValueError, OSError):
-                    portable = False
-            if portable:
+            if _classify_symlink_target(tarinfo.linkname, parts):
                 other_count += 1
-                return tarinfo  # relative link staying inside the tree
-            external_symlinks.append(
-                {"path": str(Path(*parts)), "target": target})
-            if verbose:
-                print(f"  meta: {rel} → symlinks.json (external target "
-                      f"{target})", file=sys.stderr)
+                return tarinfo  # internal relative link stays in the tree
+            _record_external(parts, tarinfo.linkname)
             return None
         name = Path(rel).name
         if tarinfo.isfile() and name.endswith((".db", ".db-wal", ".db-shm")):
-            # Hot sqlite files are torn-copy hazards — handled below.
-            if name.endswith(".db"):
-                db_files.append((rel, _abs_for(rel)))
-            else:
-                sidecars.append((rel, _abs_for(rel)))
+            (db_files if name.endswith(".db") else sidecars).append(
+                (rel, _abs_for(rel)))
             return None
         if tarinfo.isfile():
             file_count += 1
@@ -336,18 +420,16 @@ def export_workspace(output_path: Path = None, verbose: bool = False) -> Path:
 
         # Snapshot pass: each .db goes in via the sqlite backup API so the
         # archived copy is consistent even mid-run. On success its -wal/-shm
-        # sidecars are folded into the snapshot and must NOT ship alongside
-        # (a fresh snapshot next to a stale wal corrupts on open). On
-        # failure (not sqlite / unreadable) fall back to raw bytes, WITH
-        # sidecars — a raw db+wal pair is at least recoverable.
+        # sidecars fold into the snapshot and must NOT ship alongside (a
+        # fresh snapshot next to a stale wal corrupts on open). On failure
+        # (not sqlite / unreadable) fall back to raw bytes, WITH sidecars.
         snapshotted_bases: set = set()
         for i, (rel, src) in enumerate(db_files):
             snap = Path(tmpd) / f"snap-{i}.db"
             if _snapshot_sqlite(src, snap):
-                # Carry the SOURCE file's metadata (mode/mtime/owner) with
-                # the snapshot's bytes — tar.add(snap) would stamp the temp
-                # file's 0644/now, silently broadening a 0600 database on
-                # restore (review of 707a541, reproduced).
+                # Carry the SOURCE file's metadata (mode/mtime) with the
+                # snapshot bytes — tar.add(snap) would stamp 0644/now,
+                # broadening a 0600 database on restore (review of 707a541).
                 ti = tar.gettarinfo(str(src), arcname=rel)
                 ti.size = snap.stat().st_size
                 with open(snap, "rb") as fh:
@@ -369,7 +451,7 @@ def export_workspace(output_path: Path = None, verbose: bool = False) -> Path:
                     print(f"  add:  {rel} (raw — not a readable sqlite db)",
                           file=sys.stderr)
         for rel, src in sidecars:
-            base = rel[: rel.rfind("-")]  # strip -wal/-shm
+            base = rel[: rel.rfind("-")]
             if base in snapshotted_bases:
                 if verbose:
                     print(f"  skip: {rel} (folded into snapshot)",
@@ -385,32 +467,54 @@ def export_workspace(output_path: Path = None, verbose: bool = False) -> Path:
         cfg_path = _user_config_path()
         if cfg_path.exists():
             try:
-                text = cfg_path.read_text()
-                text, user_config_redactions = _redact_config_text(text)
+                red_text, user_config_redactions, ok = _redact_config_text(
+                    cfg_path.read_text())
+            except Exception as exc:
+                ok = False
+                print(f"  WARN: user config unreadable, not exported: {exc}",
+                      file=sys.stderr)
+            if ok:
                 _add_bytes(tar, _META_PREFIX + "user-config.yml",
-                           text.encode("utf-8"), mode=0o600)
+                           red_text.encode("utf-8"), mode=0o600)
                 user_config_present = True
                 meta_count += 1
                 if user_config_redactions and verbose:
                     print(f"  meta: user-config.yml "
                           f"({user_config_redactions} value(s) redacted)",
                           file=sys.stderr)
-            except Exception as exc:
-                print(f"  WARN: user config unreadable, not exported: {exc}",
+            else:
+                print("  WARN: user config could not be safely redacted "
+                      "(unparseable YAML) — NOT exported (fail closed)",
                       file=sys.stderr)
 
         exp_dir = _maro_dir() / "experiments"
         exp_files = 0
+        exp_links = 0
         if exp_dir.is_dir():
             for p in sorted(exp_dir.rglob("*")):
-                if not p.is_file() or p.is_symlink():
-                    continue
                 rel = p.relative_to(exp_dir)
-                if _secret_shaped(("experiments",) + rel.parts):
+                mparts = ("experiments",) + rel.parts
+                if _secret_shaped(mparts):
                     if verbose:
                         print(f"  skip: experiments/{rel} (secret-shaped)",
                               file=sys.stderr)
                     continue
+                if p.is_symlink():
+                    # Same portability policy as the workspace: external
+                    # links become records, not shipped links.
+                    target = os.readlink(p)
+                    if _classify_symlink_target(target, mparts):
+                        ti = tarfile.TarInfo(
+                            _META_PREFIX + "experiments/" + str(rel))
+                        ti.type = tarfile.SYMTYPE
+                        ti.linkname = target
+                        tar.addfile(ti)
+                    else:
+                        _record_external(mparts, target)
+                        exp_links += 1
+                    continue
+                if not p.is_file():
+                    continue  # empty dirs not preserved (documented)
                 tar.add(str(p),
                         arcname=_META_PREFIX + "experiments/" + str(rel),
                         recursive=False)
@@ -421,9 +525,9 @@ def export_workspace(output_path: Path = None, verbose: bool = False) -> Path:
             _add_bytes(
                 tar, _META_PREFIX + "symlinks.json",
                 json.dumps({"format": ARCHIVE_FORMAT,
-                            "note": ("symlinks whose targets are absolute "
-                                     "or escape the workspace — recorded, "
-                                     "not shipped; recreate by hand on a "
+                            "note": ("links whose targets are absolute or "
+                                     "escape the workspace — recorded, not "
+                                     "shipped; recreate by hand on a "
                                      "matching host if ever needed"),
                             "links": external_symlinks},
                            indent=2).encode("utf-8"))
@@ -431,9 +535,15 @@ def export_workspace(output_path: Path = None, verbose: bool = False) -> Path:
 
         try:
             script_sha = hashlib.sha256(
-                Path(__file__).read_bytes()).hexdigest()[:16]
+                Path(__file__).read_bytes()).hexdigest()
         except Exception:
             script_sha = "unknown"
+
+        # Carry prior lineage forward so custody survives re-export.
+        custody = list(_prior_custody(ws))
+        custody.append(
+            {"event": "export", "at": _utcnow(), "by": _identity()})
+
         provenance = {
             "format": ARCHIVE_FORMAT,
             "created_at": _utcnow(),
@@ -447,10 +557,10 @@ def export_workspace(output_path: Path = None, verbose: bool = False) -> Path:
             "contents": {
                 "files": file_count,
                 "bytes": total_bytes,
-                "manifest_sha256": _manifest_digest(manifest_entries),
-                "manifest_note": ("sha256 over sorted 'name\\tsize' lines "
-                                  "of workspace file members — integrity "
-                                  "hint, not tamper-proof (no signing yet)"),
+                "workspace_shape_sha256": _manifest_digest(manifest_entries),
+                "digest_covers": ("workspace file names+sizes only — NOT "
+                                  "bytes, meta, or link targets; "
+                                  "self-attested, UNSIGNED integrity hint"),
             },
             "meta": {
                 "user_config": user_config_present,
@@ -458,13 +568,7 @@ def export_workspace(output_path: Path = None, verbose: bool = False) -> Path:
                 "experiments_files": exp_files,
                 "external_symlinks": len(external_symlinks),
             },
-            # Chain of custody: every import appends an event. The point
-            # (Jeremy 2026-08-13): when pieces of functionality get shared,
-            # know where they came from and who shared them — groundwork
-            # for the injection-guard security layer, not the layer itself.
-            "custody": [
-                {"event": "export", "at": _utcnow(), "by": _identity()},
-            ],
+            "custody": custody,
         }
         _add_bytes(tar, _META_PREFIX + "provenance.json",
                    json.dumps(provenance, indent=2).encode("utf-8"))
@@ -481,38 +585,120 @@ def export_workspace(output_path: Path = None, verbose: bool = False) -> Path:
     return output_path
 
 
-def _stage_meta(tar: tarfile.TarFile, meta_members, staging: Path,
-                verbose: bool) -> int:
-    """Extract meta/** members into the staging dir. Returns files staged."""
-    staged = 0
+# ---------------------------------------------------------------------------
+# Import — every member is untrusted
+# ---------------------------------------------------------------------------
+
+def _validate_provenance(obj):
+    """Coerce archive provenance to a safe shape. Returns a dict with the
+    expected sub-types (never raises downstream) or None if unusable.
+    Import must never crash on hostile provenance AFTER mutating the
+    workspace (review of c257a48, reproduced)."""
+    if not isinstance(obj, dict):
+        return None
+    def _d(k):
+        v = obj.get(k)
+        return v if isinstance(v, dict) else {}
+    custody = obj.get("custody")
+    custody = [e for e in custody if isinstance(e, dict)] \
+        if isinstance(custody, list) else []
+    return {
+        "format": obj.get("format"),
+        "created_at": obj.get("created_at", "?"),
+        "exporter": obj.get("exporter", "?"),
+        "source": _d("source"),
+        "contents": _d("contents"),
+        "meta": _d("meta"),
+        "custody": custody,
+    }
+
+
+def _safe_workspace_member(member, rel_name: str, ws: Path):
+    """(ok, reason) — type + link-target allowlist for an untrusted
+    member. Only regular files, dirs, and INTERNAL relative symlinks are
+    allowed; special files, hardlinks, and absolute/escaping links are
+    rejected (review of c257a48 — filter='tar' permitted FIFOs and
+    absolute link targets; the <3.11.4 fallback was fully unfiltered)."""
+    # Containment of the member's own name.
+    dest = (ws / rel_name).resolve()
+    try:
+        dest.relative_to(ws.resolve())
+    except ValueError:
+        return False, "path traversal"
+    # A workspace member must never land inside the staging dir.
+    if _STAGING_DIRNAME in Path(rel_name).parts:
+        return False, "targets staging dir"
+    if member.isdir() or member.isreg():
+        return True, ""
+    if member.issym():
+        if _classify_symlink_target(member.linkname, _rel_parts(rel_name)):
+            return True, ""
+        return False, f"external symlink target {member.linkname!r}"
+    if member.islnk():
+        return False, "hardlink member"
+    return False, "special file (fifo/device)"
+
+
+def _copy_member_streamed(tar, member, dest: Path) -> bool:
+    """Stream a meta member to disk in chunks with a size cap (no full
+    read into memory — hostile archives can hide a decompression bomb).
+    Returns True if written, False if skipped."""
+    src = tar.extractfile(member)
+    if src is None:
+        return False
+    written = 0
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    with open(dest, "wb") as out:
+        while True:
+            chunk = src.read(_COPY_CHUNK)
+            if not chunk:
+                break
+            written += len(chunk)
+            if written > _MAX_META_FILE_BYTES:
+                out.close()
+                dest.unlink(missing_ok=True)
+                print(f"  SKIP (meta file exceeds "
+                      f"{_MAX_META_FILE_BYTES} bytes): {member.name}",
+                      file=sys.stderr)
+                return False
+            out.write(chunk)
+    return True
+
+
+def _stage_meta(tar, meta_members, staging: Path, verbose: bool):
+    """Extract meta/** into a FRESH staging dir. Returns the set of
+    staged relative names. Secret-shaped meta is screened out; modes are
+    normalized (an attacker-chosen 0444 must not later break the custody
+    write); traversal within meta is guarded."""
+    staged = set()
     for member in meta_members:
         rel = member.name[len(_META_PREFIX):]
         if not rel:
+            continue
+        if _secret_shaped(("meta",) + Path(rel).parts):
+            if verbose:
+                print(f"  screen: {member.name} (secret-shaped meta)",
+                      file=sys.stderr)
             continue
         dest = (staging / rel).resolve()
         try:
             dest.relative_to(staging.resolve())
         except ValueError:
-            print(f"  SKIP (path traversal in meta): {member.name}",
-                  file=sys.stderr)
+            print(f"  SKIP (meta traversal): {member.name}", file=sys.stderr)
             continue
         if member.isdir():
             dest.mkdir(parents=True, exist_ok=True)
             continue
-        if not member.isfile():
-            continue  # no links or specials in the meta area
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        src = tar.extractfile(member)
-        if src is None:
-            continue
-        dest.write_bytes(src.read())
-        try:
-            dest.chmod(member.mode & 0o777)
-        except OSError:
-            pass
-        staged += 1
-        if verbose:
-            print(f"  stage: {member.name} → {dest}", file=sys.stderr)
+        if not member.isreg():
+            continue  # no links/specials in meta
+        if _copy_member_streamed(tar, member, dest):
+            try:
+                dest.chmod(0o600)
+            except OSError:
+                pass
+            staged.add(rel)
+            if verbose:
+                print(f"  stage: {member.name} → {dest}", file=sys.stderr)
     return staged
 
 
@@ -524,30 +710,8 @@ def import_workspace(
     clean: bool = False,
     apply_meta: bool = False,
 ) -> int:
-    """Import (restore) a Maro export archive.
-
-    workspace/** extracts into workspace_root(), creating directories as
-    needed. meta/** (v2 archives: user config, experiments, symlink
-    record, provenance) stages NON-DESTRUCTIVELY under
-    <workspace>/.import-meta/ — importing never silently changes this
-    machine's behavior. apply_meta=True additionally places
-    user-config.yml at the real user-tier path, backing up any existing
-    config (never deleted); experiments stay staged either way, with a
-    printed pointer.
-
-    By default this is a MERGE, not a clean restore — files not in the
-    archive are left untouched, and a non-empty destination gets a loud
-    warning. clean=True moves the existing workspace aside to
-    <ws>.pre-import-<timestamp> first (retention decree: moved, never
-    deleted).
-
-    The archive's provenance (if present) is printed, its manifest
-    digest verified, and an import event appended to the staged custody
-    chain.
-
-    Returns:
-        Number of workspace files extracted.
-    """
+    """Import a Maro export archive. See module docstring for the security
+    posture. Returns the number of workspace files extracted."""
     from config import _user_config_path, workspace_root
     ws = workspace_root()
 
@@ -557,22 +721,71 @@ def import_workspace(
 
     with tarfile.open(archive_path, "r:gz") as tar:
         members = tar.getmembers()
+        if len(members) > _MAX_MEMBERS:
+            print(f"Error: archive has {len(members)} members "
+                  f"(> {_MAX_MEMBERS} cap) — refusing", file=sys.stderr)
+            sys.exit(1)
 
         if dry_run:
             print(f"Archive contains {len(members)} entries:", file=sys.stderr)
             for m in members:
-                print(f"  {m.name} ({m.size:,} bytes)")
+                print(f"  {_sanitize_for_terminal(m.name)} ({m.size:,} bytes)")
             return 0
 
         meta_members = [m for m in members
                         if m.name == "meta" or m.name.startswith(_META_PREFIX)]
         ws_members = [m for m in members if m not in meta_members]
 
+        # --- preflight BEFORE any mutation ------------------------------
+        prov = None
+        for m in meta_members:
+            if m.name == _META_PREFIX + "provenance.json" and m.isreg():
+                if m.size > _MAX_PROVENANCE_BYTES:
+                    print("WARNING: provenance.json exceeds size cap — "
+                          "ignoring", file=sys.stderr)
+                    break
+                try:
+                    fh = tar.extractfile(m)
+                    prov = _validate_provenance(
+                        json.loads(fh.read().decode("utf-8"))) if fh else None
+                except Exception as exc:
+                    print(f"WARNING: provenance.json unreadable "
+                          f"({_sanitize_for_terminal(exc)}) — treating as "
+                          f"absent", file=sys.stderr)
+                break
+
+        # Format gate: refuse a newer archive rather than half-importing it.
+        if prov is not None and isinstance(prov["format"], int) \
+                and prov["format"] > ARCHIVE_FORMAT:
+            print(f"Error: archive format {prov['format']} is newer than "
+                  f"this tool supports (v{ARCHIVE_FORMAT}). Upgrade "
+                  f"maro-export before importing. Nothing was changed.",
+                  file=sys.stderr)
+            sys.exit(1)
+
+        # Classify workspace members; skips are reported, never fatal.
+        safe_members = []
+        for member in ws_members:
+            if member.name == "workspace":
+                continue
+            rel = member.name[len("workspace/"):] \
+                if member.name.startswith("workspace/") else member.name
+            if not rel:
+                continue
+            if _should_exclude(rel):
+                if verbose:
+                    print(f"  skip: {rel}", file=sys.stderr)
+                continue
+            ok, reason = _safe_workspace_member(member, rel, ws)
+            if not ok:
+                print(f"  SKIP ({reason}): {_sanitize_for_terminal(rel)}",
+                      file=sys.stderr)
+                continue
+            safe_members.append((member, rel))
+
+        # --- mutation begins --------------------------------------------
         if ws.exists() and any(ws.iterdir()):
             if clean:
-                # Unique aside name: second-resolution timestamps collide on
-                # back-to-back clean imports (review of 707a541, reproduced
-                # — rename onto an existing non-empty dir raises).
                 base = ws.name + time.strftime(".pre-import-%Y%m%dT%H%M%S")
                 aside = ws.with_name(base)
                 n = 1
@@ -580,10 +793,6 @@ def import_workspace(
                     n += 1
                     aside = ws.with_name(f"{base}-{n}")
                 ws.rename(aside)
-                # Not failure-atomic by design: if extraction dies midway,
-                # the fresh workspace is partial but the aside still holds
-                # the complete pre-import state — recovery is renaming it
-                # back. Nothing is ever deleted.
                 print(f"--clean: existing workspace moved aside to {aside} "
                       f"(nothing deleted; rename back to recover)",
                       file=sys.stderr)
@@ -600,148 +809,146 @@ def import_workspace(
         ws.mkdir(parents=True, exist_ok=True)
 
         extracted = 0
-        other = 0  # directories + symlinks, reported apart (honest counts)
+        other = 0
         manifest_entries: list[tuple[str, int]] = []
-        for member in ws_members:
-            # Strip the "workspace/" prefix and extract relative to ws
-            if member.name.startswith("workspace/"):
-                member.name = member.name[len("workspace/"):]
-            elif member.name == "workspace":
-                continue  # Skip the root directory entry
-
-            # Security: prevent path traversal. relative_to, not a string
-            # prefix — "/x/workspace-evil" startswith "/x/workspace", so the
-            # old check passed sibling escapes; combined with the pre-filter
-            # extract fallback below that was a real out-of-workspace write
-            # on Python 3.10 (3-lens review of 707a541, consensus HIGH,
-            # reproduced by all three reviewers).
-            dest = (ws / member.name).resolve()
-            try:
-                dest.relative_to(ws.resolve())
-            except ValueError:
-                print(f"  SKIP (path traversal): {member.name}", file=sys.stderr)
-                continue
-
-            if _should_exclude(member.name):
-                if verbose:
-                    print(f"  skip: {member.name}", file=sys.stderr)
-                continue
-
+        for member, rel in safe_members:
+            member.name = rel  # extract relative to ws (prefix stripped)
             if verbose:
-                print(f"  extract: {member.name}", file=sys.stderr)
+                print(f"  extract: {rel}", file=sys.stderr)
             try:
-                # 'tar' filter: strips absolute paths / '..' escapes and
-                # silences the Python 3.14 unfiltered-extract deprecation,
-                # while still permitting symlink members (v2 archives only
-                # carry INTERNAL relative links; external ones ride
-                # meta/symlinks.json). The manual traversal guard above
-                # stays and is the ONLY guard on pythons without the filter
-                # kwarg (<3.11.4) — which is why it must be
-                # relative_to-sound.
-                tar.extract(member, path=str(ws), filter="tar")
-            except TypeError:  # Python without the filter kwarg (<3.11.4)
+                # 'data' filter clamps link targets and rejects special
+                # files — defense in depth atop the preflight above. The
+                # <3.11.4 fallback is safe BECAUSE preflight already
+                # vetted every member (type + link target + containment).
+                tar.extract(member, path=str(ws), filter="data")
+            except TypeError:
                 tar.extract(member, path=str(ws))
             if member.isfile():
                 extracted += 1
-                manifest_entries.append((member.name, member.size))
+                manifest_entries.append((rel, member.size))
             else:
                 other += 1
 
-        staged = 0
+        # --- meta staging (non-destructive, fresh per import) -----------
+        staged_count = 0
+        this_import_dir = None
         if meta_members:
-            staging = ws / _STAGING_DIRNAME
-            staging.mkdir(parents=True, exist_ok=True)
-            staged = _stage_meta(tar, meta_members, staging, verbose)
+            base = ws / _STAGING_DIRNAME
+            stamp = time.strftime("import-%Y%m%dT%H%M%S")
+            this_import_dir = base / stamp
+            n = 1
+            while this_import_dir.exists():
+                n += 1
+                this_import_dir = base / f"{stamp}-{n}"
+            this_import_dir.mkdir(parents=True)
+            staged = _stage_meta(tar, meta_members, this_import_dir, verbose)
+            staged_count = len(staged)
 
-            prov_path = staging / "provenance.json"
-            if prov_path.exists():
-                try:
-                    prov = json.loads(prov_path.read_text())
-                except Exception as exc:
-                    prov = None
-                    print(f"WARNING: provenance.json unreadable: {exc}",
+            actual_shape = _manifest_digest(manifest_entries)
+            if prov is not None:
+                claimed = prov["contents"].get("workspace_shape_sha256", "")
+                shape_ok = bool(claimed) and claimed == actual_shape
+                meta_info = prov["meta"]
+                print("PROVENANCE (self-attested, UNSIGNED):", file=sys.stderr)
+                print(f"  exported by {_sanitize_for_terminal(prov['exporter'])}"
+                      f" at {_sanitize_for_terminal(prov['created_at'])} from "
+                      f"{_sanitize_for_terminal(prov['source'].get('workspace_root', '?'))}",
+                      file=sys.stderr)
+                print(f"  workspace shape digest: "
+                      f"{'OK' if shape_ok else 'MISMATCH'} "
+                      f"(names+sizes only — not a signature)", file=sys.stderr)
+                if not shape_ok:
+                    print("  WARNING: workspace shape does not match the "
+                          "exporter's digest — corrupted, tampered, or a "
+                          "partial extract. Treat with suspicion.",
                           file=sys.stderr)
-                if prov:
-                    claimed = (prov.get("contents") or {}).get(
-                        "manifest_sha256", "")
-                    actual = _manifest_digest(manifest_entries)
-                    digest_ok = bool(claimed) and claimed == actual
-                    meta_info = prov.get("meta") or {}
-                    print("PROVENANCE:", file=sys.stderr)
-                    print(f"  exported by {prov.get('exporter', '?')} at "
-                          f"{prov.get('created_at', '?')} from "
-                          f"{(prov.get('source') or {}).get('workspace_root', '?')}",
+                print(f"  meta: user-config="
+                      f"{bool(meta_info.get('user_config'))} "
+                      f"(redactions={meta_info.get('user_config_redactions', 0)}), "
+                      f"experiments={meta_info.get('experiments_files', 0)}, "
+                      f"external-symlinks={meta_info.get('external_symlinks', 0)}",
+                      file=sys.stderr)
+                for ev in prov["custody"][:_MAX_CUSTODY_PRINT]:
+                    print(f"  custody: {_sanitize_for_terminal(ev.get('event', '?'))}"
+                          f" by {_sanitize_for_terminal(ev.get('by', '?'))} at "
+                          f"{_sanitize_for_terminal(ev.get('at', '?'))}",
                           file=sys.stderr)
-                    print(f"  contents: {extracted} files — manifest digest "
-                          f"{'OK' if digest_ok else 'MISMATCH'}",
-                          file=sys.stderr)
-                    if not digest_ok:
-                        print("  WARNING: archive contents do not match the "
-                              "exporter's manifest — corrupted, tampered, "
-                              "or a partial extract. Treat with suspicion.",
-                              file=sys.stderr)
-                    print(f"  meta: user-config="
-                          f"{meta_info.get('user_config', False)} "
-                          f"(redactions="
-                          f"{meta_info.get('user_config_redactions', 0)}), "
-                          f"experiments={meta_info.get('experiments_files', 0)}, "
-                          f"external-symlinks="
-                          f"{meta_info.get('external_symlinks', 0)}",
-                          file=sys.stderr)
-                    for ev in prov.get("custody", []):
-                        print(f"  custody: {ev.get('event', '?')} by "
-                              f"{ev.get('by', '?')} at {ev.get('at', '?')}",
-                              file=sys.stderr)
-                    prov.setdefault("custody", []).append({
-                        "event": "import",
-                        "at": _utcnow(),
-                        "by": _identity(),
-                        "dest": str(ws),
-                        "manifest_verified": digest_ok,
-                    })
-                    prov_path.write_text(json.dumps(prov, indent=2))
+                if len(prov["custody"]) > _MAX_CUSTODY_PRINT:
+                    print(f"  custody: … {len(prov['custody']) - _MAX_CUSTODY_PRINT}"
+                          f" earlier event(s) not shown", file=sys.stderr)
+                # Append this import to the staged chain (never the source).
+                prov["custody"].append({
+                    "event": "import", "at": _utcnow(), "by": _identity(),
+                    "dest": str(ws), "shape_verified": shape_ok,
+                })
+                (this_import_dir / "provenance.json").write_text(
+                    json.dumps(prov, indent=2))
             else:
-                print("note: archive carries meta/ but no provenance.json",
+                print("note: archive carries meta/ but no usable provenance.json",
                       file=sys.stderr)
 
-            staged_cfg = staging / "user-config.yml"
-            if staged_cfg.exists():
-                if apply_meta:
-                    real_cfg = _user_config_path()
-                    real_cfg.parent.mkdir(parents=True, exist_ok=True)
-                    if real_cfg.exists():
-                        base = (real_cfg.name
-                                + time.strftime(".pre-import-%Y%m%dT%H%M%S"))
-                        backup = real_cfg.with_name(base)
-                        n = 1
-                        while backup.exists():
-                            n += 1
-                            backup = real_cfg.with_name(f"{base}-{n}")
-                        real_cfg.rename(backup)
-                        print(f"--apply-meta: existing user config backed up "
-                              f"to {backup}", file=sys.stderr)
-                    real_cfg.write_bytes(staged_cfg.read_bytes())
-                    try:
-                        real_cfg.chmod(0o600)
-                    except OSError:
-                        pass
-                    print(f"--apply-meta: user config applied to {real_cfg}",
-                          file=sys.stderr)
-                else:
-                    print(f"meta staged (behavior not applied): user config "
-                          f"at {staged_cfg} — re-run with --apply-meta or "
-                          f"place it manually", file=sys.stderr)
-            if (staging / "experiments").is_dir():
-                print(f"meta staged: experiments at {staging / 'experiments'}"
-                      f" — move into ~/.maro/experiments/ if wanted",
-                      file=sys.stderr)
+            _apply_user_config(this_import_dir, prov, apply_meta,
+                               _user_config_path())
+            if (this_import_dir / "experiments").is_dir():
+                print(f"meta staged: experiments at "
+                      f"{this_import_dir / 'experiments'} — move into "
+                      f"~/.maro/experiments/ if wanted", file=sys.stderr)
         else:
             print("note: v1 archive (no meta/) — no provenance record",
                   file=sys.stderr)
 
         print(f"Done: {extracted} files (+{other} dirs/links, "
-              f"{staged} meta staged) extracted to {ws}", file=sys.stderr)
+              f"{staged_count} meta staged) extracted to {ws}",
+              file=sys.stderr)
         return extracted
+
+
+def _apply_user_config(import_dir: Path, prov, apply_meta: bool,
+                       real_cfg: Path) -> None:
+    """Place THIS import's user config, gated on provenance and validated
+    against the current archive (review of c257a48: apply must not place a
+    stale file from a prior import, nor follow a symlinked destination)."""
+    staged_cfg = import_dir / "user-config.yml"
+    if not staged_cfg.exists():
+        return
+    # Only apply what THIS archive actually declared.
+    declared = bool(prov and prov["meta"].get("user_config"))
+    if not declared:
+        print("note: staged user config is not declared by this archive's "
+              "provenance — not applying", file=sys.stderr)
+        return
+    if not apply_meta:
+        print(f"meta staged (behavior not applied): user config at "
+              f"{staged_cfg} — re-run with --apply-meta or place it "
+              f"manually", file=sys.stderr)
+        return
+    # Refuse a symlinked destination (writing through it escapes the tier).
+    if real_cfg.is_symlink() or (os.path.lexists(real_cfg)
+                                 and not real_cfg.is_file()):
+        print(f"--apply-meta: refusing — {real_cfg} exists and is not a "
+              f"regular file (symlink/special); place config manually",
+              file=sys.stderr)
+        return
+    real_cfg.parent.mkdir(parents=True, exist_ok=True)
+    if real_cfg.exists():
+        base = real_cfg.name + time.strftime(".pre-import-%Y%m%dT%H%M%S")
+        backup = real_cfg.with_name(base)
+        n = 1
+        while backup.exists():
+            n += 1
+            backup = real_cfg.with_name(f"{base}-{n}")
+        real_cfg.rename(backup)
+        print(f"--apply-meta: existing user config backed up to {backup}",
+              file=sys.stderr)
+    # Atomic install via same-dir temp.
+    tmp = real_cfg.with_name(real_cfg.name + ".tmp-import")
+    tmp.write_bytes(staged_cfg.read_bytes())
+    try:
+        tmp.chmod(0o600)
+    except OSError:
+        pass
+    tmp.replace(real_cfg)
+    print(f"--apply-meta: user config applied to {real_cfg}", file=sys.stderr)
 
 
 def main():

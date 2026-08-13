@@ -398,6 +398,11 @@ class TestMetaArea:
         monkeypatch.setenv("MARO_USER_DIR", str(d))
         return d
 
+    def _staged_dir(self, dest):
+        dirs = sorted((dest / ".import-meta").glob("import-*"))
+        assert dirs, "no per-import staging dir created"
+        return dirs[-1]
+
     def test_meta_carried_and_staged_not_applied(
             self, workspace, tmp_path, monkeypatch, capsys):
         user = self._user_dir(monkeypatch, tmp_path)
@@ -419,7 +424,7 @@ class TestMetaArea:
         dest.mkdir()
         monkeypatch.setenv("MARO_WORKSPACE", str(dest))
         import_workspace(archive)
-        staging = dest / ".import-meta"
+        staging = self._staged_dir(dest)
         assert (staging / "user-config.yml").read_text().startswith("model:")
         assert (staging / "experiments" / "lt4" / "results.md").exists()
         # Behavior NOT applied without the flag: the importing machine's
@@ -441,6 +446,7 @@ class TestMetaArea:
         dest.mkdir()
         monkeypatch.setenv("MARO_WORKSPACE", str(dest))
         import_workspace(archive, apply_meta=True)
+        # 0-redaction config ships raw, so it round-trips byte-for-byte.
         assert (user / "config.yml").read_text() == "model: opus\n"
         backups = list(user.glob("config.yml.pre-import-*"))
         assert len(backups) == 1
@@ -451,14 +457,15 @@ class TestMetaArea:
         user = self._user_dir(monkeypatch, tmp_path)
         (user / "config.yml").write_text(
             "model: haiku\ntelegram:\n  bot_token: 12345:AAbbCC\n"
-            "  chat_id: 42\n")
+            "  chat_id: 42\nmax_tokens: 4096\n")
         archive = tmp_path / "export.tar.gz"
         export_workspace(output_path=archive)
         with tarfile.open(archive, "r:gz") as tar:
             text = tar.extractfile("meta/user-config.yml").read().decode()
         assert "12345:AAbbCC" not in text
-        assert "bot_token: REDACTED-BY-EXPORT" in text
-        assert "chat_id: 42" in text  # not credential-shaped — kept
+        assert "REDACTED-BY-EXPORT" in text
+        assert "42" in text          # chat_id — not credential-shaped
+        assert "4096" in text        # max_tokens — key matches but value int
 
     def test_provenance_digest_and_custody_chain(
             self, workspace, tmp_path, monkeypatch, capsys):
@@ -470,20 +477,20 @@ class TestMetaArea:
         monkeypatch.setenv("MARO_WORKSPACE", str(dest))
         import_workspace(archive)
         err = capsys.readouterr().err
-        assert "PROVENANCE:" in err
-        assert "manifest digest OK" in err
+        assert "PROVENANCE (self-attested, UNSIGNED):" in err
+        assert "workspace shape digest: OK" in err
         prov = json.loads(
-            (dest / ".import-meta" / "provenance.json").read_text())
+            (self._staged_dir(dest) / "provenance.json").read_text())
         events = [e["event"] for e in prov["custody"]]
         assert events == ["export", "import"]
-        assert prov["custody"][1]["manifest_verified"] is True
+        assert prov["custody"][1]["shape_verified"] is True
 
     def test_digest_mismatch_warns(
             self, workspace, tmp_path, monkeypatch, capsys):
         self._user_dir(monkeypatch, tmp_path)
         archive = tmp_path / "export.tar.gz"
         export_workspace(output_path=archive)
-        # Tamper: append a workspace file the manifest never saw.
+        # Tamper: append a workspace file the shape digest never saw.
         with tarfile.open(tmp_path / "tampered.tar.gz", "w:gz") as out, \
                 tarfile.open(archive, "r:gz") as tar:
             for m in tar.getmembers():
@@ -501,8 +508,8 @@ class TestMetaArea:
         err = capsys.readouterr().err
         assert "MISMATCH" in err
         prov = json.loads(
-            (dest / ".import-meta" / "provenance.json").read_text())
-        assert prov["custody"][-1]["manifest_verified"] is False
+            (self._staged_dir(dest) / "provenance.json").read_text())
+        assert prov["custody"][-1]["shape_verified"] is False
 
     def test_v1_archive_without_meta_imports_clean(
             self, workspace, tmp_path, monkeypatch, capsys):
@@ -530,6 +537,337 @@ class TestMetaArea:
         with tarfile.open(archive, "r:gz") as tar:
             names = [m.name for m in tar.getmembers()]
         assert not any(".import-meta" in n for n in names)
+
+
+class TestV2ReviewHardening:
+    """Pins for the 3-lens review of c257a48 — every defect below was
+    reproduced by a reviewer (or the lead) before being fixed. Archives
+    are treated as UNTRUSTED input on import."""
+
+    def _user_dir(self, monkeypatch, tmp_path):
+        d = tmp_path / "maro-user"
+        d.mkdir(exist_ok=True)
+        monkeypatch.setenv("MARO_USER_DIR", str(d))
+        return d
+
+    def _staged(self, dest):
+        dirs = sorted((dest / ".import-meta").glob("import-*"))
+        return dirs[-1] if dirs else None
+
+    # --- redactor: structural, all leak shapes, no benign clobber -------
+
+    def test_redactor_catches_nested_block_and_inline(self, monkeypatch,
+                                                      tmp_path):
+        from maro_export import _redact_config_text
+        text = ("api_key:\n  primary: NESTED-SECRET\n"
+                "bot_token: |\n  BLOCK-SECRET\n"
+                "auth: {api_key: INLINE-SECRET}\n"
+                "max_tokens: 4096\n"
+                "token_budget: 2000\n")
+        out, n, ok = _redact_config_text(text)
+        assert ok and n == 3
+        for leaked in ("NESTED-SECRET", "BLOCK-SECRET", "INLINE-SECRET"):
+            assert leaked not in out
+        assert "4096" in out and "2000" in out  # int values under cred keys
+
+    def test_redactor_fails_closed_on_unparseable(self):
+        from maro_export import _redact_config_text
+        out, n, ok = _redact_config_text("model: [unclosed\n")
+        assert ok is False and out == ""
+
+    def test_unparseable_config_not_exported(self, workspace, tmp_path,
+                                             monkeypatch, capsys):
+        user = self._user_dir(monkeypatch, tmp_path)
+        (user / "config.yml").write_text("model: [unterminated\n")
+        archive = tmp_path / "export.tar.gz"
+        export_workspace(output_path=archive)
+        with tarfile.open(archive, "r:gz") as tar:
+            names = [m.name for m in tar.getmembers()]
+        assert "meta/user-config.yml" not in names
+        assert "fail closed" in capsys.readouterr().err
+
+    # --- import member-type / link-target allowlist --------------------
+
+    def test_hostile_absolute_symlink_member_rejected(
+            self, tmp_path, monkeypatch):
+        arc = tmp_path / "evil.tar.gz"
+        with tarfile.open(arc, "w:gz") as tar:
+            ti = tarfile.TarInfo("workspace/leak")
+            ti.type = tarfile.SYMTYPE
+            ti.linkname = "/etc/passwd"
+            tar.addfile(ti)
+        dest = tmp_path / "ws"
+        dest.mkdir()
+        monkeypatch.setenv("MARO_WORKSPACE", str(dest))
+        import_workspace(arc)
+        assert not (dest / "leak").exists()
+        assert not (dest / "leak").is_symlink()
+
+    def test_hostile_fifo_member_rejected(self, tmp_path, monkeypatch):
+        arc = tmp_path / "evil.tar.gz"
+        with tarfile.open(arc, "w:gz") as tar:
+            ti = tarfile.TarInfo("workspace/pipe")
+            ti.type = tarfile.FIFOTYPE
+            tar.addfile(ti)
+        dest = tmp_path / "ws"
+        dest.mkdir()
+        monkeypatch.setenv("MARO_WORKSPACE", str(dest))
+        import_workspace(arc)
+        assert not (dest / "pipe").exists()
+
+    def test_internal_relative_symlink_still_imports(
+            self, tmp_path, monkeypatch):
+        arc = tmp_path / "ok.tar.gz"
+        with tarfile.open(arc, "w:gz") as tar:
+            d = tarfile.TarInfo("workspace/venv/lib")
+            d.type = tarfile.DIRTYPE
+            tar.addfile(d)
+            ti = tarfile.TarInfo("workspace/venv/lib64")
+            ti.type = tarfile.SYMTYPE
+            ti.linkname = "lib"
+            tar.addfile(ti)
+        dest = tmp_path / "ws"
+        dest.mkdir()
+        monkeypatch.setenv("MARO_WORKSPACE", str(dest))
+        import_workspace(arc)
+        assert (dest / "venv" / "lib64").is_symlink()
+
+    # --- format gate ---------------------------------------------------
+
+    def test_future_format_refused_without_mutation(
+            self, tmp_path, monkeypatch):
+        import io as _io
+        arc = tmp_path / "future.tar.gz"
+        with tarfile.open(arc, "w:gz") as tar:
+            prov = json.dumps({"format": 99, "custody": []}).encode()
+            ti = tarfile.TarInfo("meta/provenance.json")
+            ti.size = len(prov)
+            tar.addfile(ti, _io.BytesIO(prov))
+            body = b"from the future"
+            ti2 = tarfile.TarInfo("workspace/future.txt")
+            ti2.size = len(body)
+            tar.addfile(ti2, _io.BytesIO(body))
+        dest = tmp_path / "ws"
+        dest.mkdir()
+        monkeypatch.setenv("MARO_WORKSPACE", str(dest))
+        with pytest.raises(SystemExit):
+            import_workspace(arc)
+        assert not (dest / "future.txt").exists()
+
+    # --- malformed provenance must not crash after extraction ----------
+
+    def test_malformed_provenance_no_crash_after_extract(
+            self, tmp_path, monkeypatch):
+        import io as _io
+        arc = tmp_path / "bad.tar.gz"
+        with tarfile.open(arc, "w:gz") as tar:
+            body = b"real"
+            ti = tarfile.TarInfo("workspace/keep.txt")
+            ti.size = len(body)
+            tar.addfile(ti, _io.BytesIO(body))
+            prov = json.dumps(
+                {"format": 2, "custody": "not-a-list",
+                 "meta": "not-a-dict", "source": 7}).encode()
+            ti2 = tarfile.TarInfo("meta/provenance.json")
+            ti2.size = len(prov)
+            tar.addfile(ti2, _io.BytesIO(prov))
+        dest = tmp_path / "ws"
+        dest.mkdir()
+        monkeypatch.setenv("MARO_WORKSPACE", str(dest))
+        n = import_workspace(arc)  # must not raise
+        assert n == 1
+        assert (dest / "keep.txt").exists()
+
+    # --- terminal injection via archive-authored provenance ------------
+
+    def test_provenance_strings_sanitized_before_print(
+            self, tmp_path, monkeypatch, capsys):
+        import io as _io
+        arc = tmp_path / "inject.tar.gz"
+        with tarfile.open(arc, "w:gz") as tar:
+            prov = json.dumps({
+                "format": 2,
+                "exporter": "evil\r\n  workspace shape digest: OK SPOOF",
+                "created_at": "x", "source": {}, "meta": {},
+                "custody": [],
+            }).encode()
+            ti = tarfile.TarInfo("meta/provenance.json")
+            ti.size = len(prov)
+            tar.addfile(ti, _io.BytesIO(prov))
+        dest = tmp_path / "ws"
+        dest.mkdir()
+        monkeypatch.setenv("MARO_WORKSPACE", str(dest))
+        import_workspace(arc)
+        err = capsys.readouterr().err
+        # The exporter line must not contain a raw newline/CR that could
+        # forge a second provenance line.
+        exporter_lines = [ln for ln in err.splitlines()
+                          if "exported by" in ln]
+        assert exporter_lines and "\r" not in err.split("exported by")[1][:80]
+        assert "evil?" in err  # control chars replaced with '?'
+
+    # --- --apply-meta gating + symlink-dest refusal --------------------
+
+    def test_apply_meta_not_applied_when_archive_lacks_config(
+            self, workspace, tmp_path, monkeypatch, capsys):
+        # Archive A has a config; archive B does not. Importing B with
+        # --apply-meta into a workspace that earlier staged A must NOT
+        # apply A's stale config.
+        user = self._user_dir(monkeypatch, tmp_path)
+        (user / "config.yml").write_text("model: from-A\n")
+        arc_a = tmp_path / "a.tar.gz"
+        export_workspace(output_path=arc_a)
+
+        # Build B: workspace-only, no meta/user-config.
+        arc_b = tmp_path / "b.tar.gz"
+        with tarfile.open(arc_b, "w:gz") as tar:
+            tar.add(str(workspace / "playbook.md"),
+                    arcname="workspace/playbook.md")
+
+        dest = tmp_path / "ws"
+        dest.mkdir()
+        monkeypatch.setenv("MARO_WORKSPACE", str(dest))
+        import_workspace(arc_a)               # stages A's config
+        (user / "config.yml").write_text("model: local\n")
+        import_workspace(arc_b, apply_meta=True)  # B has no config
+        assert (user / "config.yml").read_text() == "model: local\n"
+
+    def test_apply_meta_refuses_symlinked_destination(
+            self, workspace, tmp_path, monkeypatch, capsys):
+        user = self._user_dir(monkeypatch, tmp_path)
+        (user / "config.yml").write_text("model: opus\n")
+        archive = tmp_path / "export.tar.gz"
+        export_workspace(output_path=archive)
+
+        # Importing machine: config.yml is a symlink to an external file.
+        external = tmp_path / "external-target.yml"
+        external.write_text("model: victim\n")
+        (user / "config.yml").unlink()
+        (user / "config.yml").symlink_to(external)
+        dest = tmp_path / "ws"
+        dest.mkdir()
+        monkeypatch.setenv("MARO_WORKSPACE", str(dest))
+        import_workspace(archive, apply_meta=True)
+        assert "refusing" in capsys.readouterr().err
+        assert external.read_text() == "model: victim\n"  # not clobbered
+
+    # --- custody survives a hop (export→import→re-export) ---------------
+
+    def test_custody_chain_survives_reexport(
+            self, workspace, tmp_path, monkeypatch):
+        self._user_dir(monkeypatch, tmp_path)
+        arc1 = tmp_path / "a.tar.gz"
+        export_workspace(output_path=arc1)
+        dest = tmp_path / "ws"
+        dest.mkdir()
+        monkeypatch.setenv("MARO_WORKSPACE", str(dest))
+        import_workspace(arc1)
+        # Re-export the imported workspace: lineage must carry forward.
+        arc2 = tmp_path / "b.tar.gz"
+        export_workspace(output_path=arc2)
+        with tarfile.open(arc2, "r:gz") as tar:
+            prov = json.loads(
+                tar.extractfile("meta/provenance.json").read().decode())
+        events = [e["event"] for e in prov["custody"]]
+        assert events == ["export", "import", "export"]
+
+    # --- meta-side secret screening on import --------------------------
+
+    def test_secret_shaped_meta_screened_on_import(
+            self, tmp_path, monkeypatch, capsys):
+        import io as _io
+        arc = tmp_path / "sneaky.tar.gz"
+        with tarfile.open(arc, "w:gz") as tar:
+            prov = json.dumps({"format": 2, "meta": {}, "custody": []}).encode()
+            ti = tarfile.TarInfo("meta/provenance.json")
+            ti.size = len(prov)
+            tar.addfile(ti, _io.BytesIO(prov))
+            body = b"sk-leaked"
+            ti2 = tarfile.TarInfo("meta/experiments/secrets/key.txt")
+            ti2.size = len(body)
+            tar.addfile(ti2, _io.BytesIO(body))
+        dest = tmp_path / "ws"
+        dest.mkdir()
+        monkeypatch.setenv("MARO_WORKSPACE", str(dest))
+        import_workspace(arc)
+        staged = self._staged(dest)
+        assert not (staged / "experiments" / "secrets" / "key.txt").exists()
+
+
+class TestSymlinkPortability:
+    """External symlinks travel as data (meta/symlinks.json), not links —
+    a link to /usr/bin/python3 resolves to the WRONG binary on another
+    OS (Jeremy 2026-08-13: portable, or at least non-destructive)."""
+
+    def test_external_absolute_symlink_recorded_not_shipped(
+            self, workspace, tmp_path, monkeypatch):
+        self_dir = tmp_path / "maro-user"
+        self_dir.mkdir(exist_ok=True)
+        monkeypatch.setenv("MARO_USER_DIR", str(self_dir))
+        scratch = workspace / "runs" / "r1" / "scratch"
+        scratch.mkdir(parents=True)
+        (scratch / "pybin").symlink_to("/usr/bin/python3")
+        (scratch / "loglink").symlink_to("/tmp/nonexistent-target.out")
+
+        archive = tmp_path / "export.tar.gz"
+        export_workspace(output_path=archive)
+        with tarfile.open(archive, "r:gz") as tar:
+            links = [m.name for m in tar.getmembers() if m.issym()]
+            rec = json.loads(
+                tar.extractfile("meta/symlinks.json").read().decode())
+        assert links == []
+        recorded = {l["path"]: l["target"] for l in rec["links"]}
+        assert recorded["runs/r1/scratch/pybin"] == "/usr/bin/python3"
+        assert recorded["runs/r1/scratch/loglink"] == \
+            "/tmp/nonexistent-target.out"
+
+    def test_internal_relative_symlink_still_ships_as_link(
+            self, workspace, tmp_path, monkeypatch):
+        self_dir = tmp_path / "maro-user"
+        self_dir.mkdir(exist_ok=True)
+        monkeypatch.setenv("MARO_USER_DIR", str(self_dir))
+        venv = workspace / "runs" / "r1" / "venv"
+        venv.mkdir(parents=True)
+        (venv / "lib").mkdir()
+        (venv / "lib64").symlink_to("lib")
+
+        archive = tmp_path / "export.tar.gz"
+        export_workspace(output_path=archive)
+        with tarfile.open(archive, "r:gz") as tar:
+            syms = {m.name: m.linkname
+                    for m in tar.getmembers() if m.issym()}
+        assert syms == {"workspace/runs/r1/venv/lib64": "lib"}
+
+    def test_escaping_relative_symlink_recorded_not_shipped(
+            self, workspace, tmp_path, monkeypatch):
+        self_dir = tmp_path / "maro-user"
+        self_dir.mkdir(exist_ok=True)
+        monkeypatch.setenv("MARO_USER_DIR", str(self_dir))
+        (workspace / "sneaky").symlink_to("../outside-the-tree")
+
+        archive = tmp_path / "export.tar.gz"
+        export_workspace(output_path=archive)
+        with tarfile.open(archive, "r:gz") as tar:
+            links = [m.name for m in tar.getmembers() if m.issym()]
+            rec = json.loads(
+                tar.extractfile("meta/symlinks.json").read().decode())
+        assert links == []
+        assert rec["links"][0]["path"] == "sneaky"
+
+    def test_cyclic_symlink_does_not_abort_export(
+            self, workspace, tmp_path, monkeypatch):
+        self_dir = tmp_path / "maro-user"
+        self_dir.mkdir(exist_ok=True)
+        monkeypatch.setenv("MARO_USER_DIR", str(self_dir))
+        loop = workspace / "runs" / "r1"
+        loop.mkdir(parents=True)
+        (loop / "a").symlink_to("b")
+        (loop / "b").symlink_to("a")
+
+        archive = tmp_path / "export.tar.gz"
+        # Must not raise (cyclic resolve was an unhandled RuntimeError).
+        export_workspace(output_path=archive)
+        assert archive.exists()
 
 
 class TestSymlinkPortability:

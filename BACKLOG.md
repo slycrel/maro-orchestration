@@ -364,18 +364,53 @@ Provenance's first catch: **the Ubuntu box's hostname is still
 embedded `/home/clawd` paths inside artifacts/checkpoints —
 provenance now records `source.workspace_root` so a future consumer
 CAN rewrite them; ownership maps to the importing user. Live copy:
-`~/maro-box-copy/workspace` (`MARO_WORKSPACE`), archive
-`~/maro-box-export-v3.tar.gz`; prior copy kept aside at
-`workspace.pre-import-20260813T002048` (prune when convenient).
+`~/maro-box-copy/workspace` (`MARO_WORKSPACE`); prior copies kept aside
+at `workspace.pre-import-*` (prune when convenient).
+
+**3-lens Codex review of format v2 (c257a48) — REJECT, all fixed
+2026-08-13; every accepted finding reproduced first.** The review's
+frame was correct: an archive is UNTRUSTED input on import, and the
+first cut trusted it. Three HIGHs: (1) the line-based credential
+redactor leaked nested/block/inline YAML secrets AND clobbered benign
+`max_tokens` — replaced with structural YAML redaction (whole-word
+credential-key match, string-values-only so numeric settings survive,
+fail-CLOSED when the YAML won't parse: config not exported rather than
+shipped raw); (2) import extracted hostile member types/links —
+`filter="tar"` permitted FIFOs and absolute symlink targets, the
+<3.11.4 fallback was fully unfiltered; a crafted `workspace/leak →
+/etc/passwd` imported as a live link — now every member is preflighted
+against a type + link-target allowlist BEFORE any mutation, with
+`filter="data"` defense-in-depth; (3) `--apply-meta` applied a STALE
+config from a prior import when the current archive had none — meta now
+stages into a fresh per-import dir `<ws>/.import-meta/import-<ts>/` and
+apply is gated on the current archive's provenance. Mediums fixed: no
+format gate (a v99 archive silently half-imported → refused before
+mutation); malformed provenance crashed AFTER extraction (→ validated/
+coerced to a safe shape first); terminal injection via archive-authored
+provenance (CR/newline/ANSI forged fake digest lines → sanitized +
+capped before print); digest overstated coverage ("manifest verified" →
+"workspace shape digest, names+sizes only, self-attested, UNSIGNED",
+custody key `shape_verified`); custody didn't survive a hop (re-export
+now carries the prior chain forward: export→import→export); zip-bomb
+exposure (meta streamed with per-file/member-count/provenance-size/
+custody-print caps); secret-shaped meta now screened at import too.
+Lows: cyclic symlink aborted export (→ recorded external); experiment
+external symlinks routed through symlinks.json for parity; script
+fingerprint stored full-length. +22 pins (TestV2ReviewHardening +
+additions). Live box→M1 round-trip clean. Archive
+`~/mbx-v3b.tar.gz` (regenerate as needed). Suite 8366/0 skipped.
 
 **Meta staging placement — DECIDED 2026-08-13 (delegated: "up to
-you"):** stays under the workspace at `<ws>/.import-meta/`. Jeremy's
-gut ("operational/working data → under the workspace") is what's
-already built: staged meta travels with the workspace copy, gets moved
-aside together by `--clean`, and re-exports skip it. The `meta/`-vs-
-`workspace/` split inside the ARCHIVE is a format concern (routing +
-back-compat), not a statement about where meta lives at rest. No
-change.
+you"):** stays under the workspace at `<ws>/.import-meta/`, now one
+subdir PER import (`import-<ts>/`) after the v2 review (each import's
+meta + custody isolated, so a later import can't apply an earlier one's
+stale config). Jeremy's gut ("operational/working data → under the
+workspace") is what's built: staged meta travels with the workspace
+copy, gets moved aside together by `--clean`, and re-exports skip the
+whole `.import-meta` subtree (while READING its newest provenance to
+carry custody forward). The `meta/`-vs-`workspace/` split inside the
+ARCHIVE is a format concern (routing + back-compat), not a statement
+about where meta lives at rest.
 
 **Path-token rewriting (`/home/clawd` → `${MARO_HOME}` at export,
 reverse at import) — FILED 2026-08-13, low priority by Jeremy's call,
