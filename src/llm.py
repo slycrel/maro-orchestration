@@ -2686,7 +2686,17 @@ class ClaudeSubprocessAdapter(_JSONToolPromptMixin, LLMAdapter):
                 if _container_name is not None:
                     try:
                         from container_exec import note_container_failure
-                        note_container_failure(detail)
+                        # The breaker searches DEEPER than the 300-char
+                        # display detail (skeptic review 2026-08-13: an auth
+                        # message past byte 300 silently missed the trip).
+                        # Structured CLI error text is CLI-authored → safe to
+                        # search in full; the raw-stdout fallback stays
+                        # shallower to bound false-positive surface.
+                        if _err_obj is not None and _err_obj.get("result"):
+                            _breaker_text = str(_err_obj["result"])[:4000]
+                        else:
+                            _breaker_text = result.stdout.strip()[:2000]
+                        note_container_failure(_breaker_text)
                     except Exception:
                         log.debug("container auth-breaker note failed", exc_info=True)
                 raise RuntimeError(f"claude subprocess failed (rc={result.returncode}): {detail}")

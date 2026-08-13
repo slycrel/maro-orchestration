@@ -243,8 +243,9 @@ READ_QUERY_STEP_RULES = textwrap.dedent("""\
       "Extract <the specific answer> from <file> by running:
        __READ_CLI__ '<one focused question>' '<file>' — then verify any
        quote you re-use with grep -Fn before citing it"
-    (single-quote the question and each file path — paths may contain
-    spaces, and step text rides a JSON array)
+    (quote the question and each file path — single quotes unless the
+    text itself contains one; paths may contain spaces, and step text
+    rides a JSON array)
     Why: executors default to reading whole files into context, and their
     conversation is re-sent every turn — a 200KB read costs ~50k tokens
     on EVERY remaining turn, while the sub-query returns the answer plus
@@ -982,6 +983,11 @@ def decompose(
     # loses this optimization for the run. Exceptions fail CLOSED (skeptic
     # round, 2026-08-13): if the lane can't be determined, don't teach a
     # command that may not exist — uncertainty suppresses advertisement.
+    # Named residual (fix-layer review, accepted): an operator flipping
+    # container mode ON between plan time and a checkpoint resume can
+    # still strand a taught command — a deliberate config change, unlike
+    # the automatic breaker transitions this gate closes; the worker
+    # falls back to its reading protocol on the dead command.
     _read_step_rules = ""
     try:
         from config import get as _cfg_get_rq

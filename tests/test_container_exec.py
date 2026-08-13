@@ -1059,7 +1059,9 @@ class TestAuthBreaker:
     @pytest.fixture(autouse=True)
     def _isolated_breaker(self, tmp_path, monkeypatch):
         self.path = tmp_path / "container_auth_breaker.json"
+        self.notify_path = tmp_path / "container_auth_notified.json"
         monkeypatch.setattr(ce, "_auth_breaker_path", lambda: self.path)
+        monkeypatch.setattr(ce, "_auth_notify_path", lambda: self.notify_path)
 
     def _mode(self, monkeypatch, value):
         monkeypatch.setattr(ce, "get", lambda k, d=None: value if k == "executor.container" else d)
@@ -1077,9 +1079,23 @@ class TestAuthBreaker:
         "Not logged in · Please run /login",
         "oauth token revoked",
         "API Error: authentication_error",
+        # Wording variants (skeptic review 2026-08-13 finding 1): the CLI's
+        # phrasing is not under our control — close variants must trip too.
+        "OAuth session has expired. Please run /login again",
+        "OAuth token has expired",
+        "OAuth access token expired",
     ])
     def test_auth_error_text_matches_cli_login_failures(self, text):
         assert ce.is_auth_error_text(text) is True
+
+    def test_auth_marker_past_byte_300_still_trips(self, monkeypatch):
+        # Finding 1's other half: the seam now hands the breaker more than
+        # the 300-char display detail, so a marker after diagnostics
+        # preamble must still trip.
+        self._trip(monkeypatch,
+                   detail=("diagnostic preamble " * 20)
+                   + "OAuth session expired")
+        assert ce.auth_breaker_snapshot() is not None
 
     @pytest.mark.parametrize("text", [
         "fetch failed with 403 Forbidden",   # worker-work HTTP error, not the lane
@@ -1108,6 +1124,43 @@ class TestAuthBreaker:
         calls = []
         monkeypatch.setattr(notify, "emit", lambda et, p, **k: calls.append(et))
         ce.note_container_failure("oauth session expired")
+        ce.note_container_failure("oauth session expired")
+        assert calls == ["backend_actionable"]
+
+    def test_flap_does_not_renotify_within_window(self, monkeypatch):
+        # Skeptic review 2026-08-13 finding 3: a false clear (credentials
+        # touched without a real re-seed) re-trips on the next call. The
+        # notify throttle lives in a sidecar that SURVIVES the clear, so a
+        # trip→clear→trip flap sends one Telegram, not one per cycle.
+        self._mode(monkeypatch, "on")
+        import notify
+        calls = []
+        monkeypatch.setattr(notify, "emit", lambda et, p, **k: calls.append(et))
+        ce.note_container_failure("oauth session expired")
+        ce.clear_auth_breaker("false clear")
+        ce.note_container_failure("oauth session expired")
+        assert ce.auth_breaker_snapshot() is not None  # re-tripped...
+        assert calls == ["backend_actionable"]          # ...but one notify
+
+    def test_flap_renotifies_after_window(self, monkeypatch):
+        self._mode(monkeypatch, "on")
+        import notify, json, time as _time
+        calls = []
+        monkeypatch.setattr(notify, "emit", lambda et, p, **k: calls.append(et))
+        ce.note_container_failure("oauth session expired")
+        ce.clear_auth_breaker("false clear")
+        self.notify_path.write_text(json.dumps(
+            {"at": _time.time() - ce._AUTH_NOTIFY_TTL_S - 1}) + "\n")
+        ce.note_container_failure("oauth session expired")
+        assert calls == ["backend_actionable", "backend_actionable"]
+
+    def test_broken_notify_throttle_fails_open_to_notifying(self, monkeypatch):
+        # A broken throttle must not silence a real outage.
+        self._mode(monkeypatch, "on")
+        import notify
+        calls = []
+        monkeypatch.setattr(notify, "emit", lambda et, p, **k: calls.append(et))
+        self.notify_path.write_text("not json")
         ce.note_container_failure("oauth session expired")
         assert calls == ["backend_actionable"]
 

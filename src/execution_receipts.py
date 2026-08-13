@@ -299,6 +299,16 @@ def render_receipt_evidence(loaded: Dict[str, Any],
             f"{loaded['malformed_events']} tool event(s) malformed")
     if loaded.get("truncated"):
         incomplete_bits.append("collection capped before the end of the record")
+    # Round 5 fix-layer review: backend blindness is incompleteness in the
+    # WITH-rows render too, not just the empty-rows audit branch — a mixed
+    # record (one captured echo + one codex call that ran the real tests)
+    # must not present its captured slice as the whole run's process work.
+    _blind = (int(loaded.get("readable_calls", 0) or 0)
+              - int(loaded.get("capture_calls", 0) or 0))
+    if _blind > 0:
+        incomplete_bits.append(
+            f"{_blind} of {loaded.get('readable_calls', 0)} call(s) rode "
+            "non-capturing backends and are invisible to receipts")
     lines: List[str] = [
         f"{len(rows)} command execution(s) recorded during the run.",
         # Finding 2 (honest scope): call records carry no attempt

@@ -817,6 +817,43 @@ class TestContainerVerbParity:
         assert execute_system_for_lane() == EXECUTE_SYSTEM
 
 
+
+    def test_execute_step_sends_lane_prompt_to_the_adapter(
+            self, tmp_path, monkeypatch):
+        # Integration pin (skeptic review of 23c59fa): the rendered-string
+        # pins above can't catch a call site left on EXECUTE_SYSTEM. Assert
+        # the container-lane prompt actually reaches the adapter's system
+        # message, and that the session cache key hashes the SAME prompt.
+        import hashlib
+        import container_exec
+        from step_exec import execute_step, EXECUTE_SYSTEM_CONTAINER
+        monkeypatch.setattr(container_exec, "container_mode", lambda: "on")
+        monkeypatch.setattr(container_exec, "container_suppressed",
+                            lambda: False)
+        adapter = _CaptureSessionAdapter()
+        captured = {}
+        _orig = adapter.complete
+
+        def _capture(messages, **kwargs):
+            captured["system"] = next(
+                m.content for m in messages if m.role == "system")
+            return _orig(messages, **kwargs)
+
+        adapter.complete = _capture
+        execute_step(
+            goal="g", step_text="s", step_num=1, total_steps=1,
+            completed_context=[], adapter=adapter, tools=[],
+            project_dir=str(tmp_path),
+            executor_session={"session_id": "x", "signature": "sig"},
+            session_context_key="charter",
+        )
+        assert captured["system"] == EXECUTE_SYSTEM_CONTAINER
+        assert "maro-fetch" not in captured["system"]
+        expected_key = hashlib.sha256(
+            ("charter\n" + EXECUTE_SYSTEM_CONTAINER).encode("utf-8")
+        ).hexdigest()
+        assert adapter.kwargs["session_context_key"] == expected_key
+
 class TestSpecificClaimDetection:
     """Test _has_specific_claims heuristic for cross-ref triggering."""
 

@@ -546,3 +546,28 @@ class TestReviewRound5:
         assert "cannot forge" not in doc
         assert "cannot reach post-hoc" not in doc
         assert "strong corroboration, not proof" in doc
+
+
+class TestFixLayerReview:
+    """2026-08-13 fix-layer re-review: backend blindness must surface in
+    the WITH-rows render, not only the empty-rows audit branch."""
+
+    def test_mixed_backend_record_with_rows_flags_blindness(self, tmp_path):
+        calls = tmp_path / "build/calls"
+        _write_call(calls, 1, [_bash("echo setup")], backend="subprocess")
+        _write_call(calls, 2, [], backend="codex")
+        text = render_receipt_evidence(load_receipts(tmp_path))
+        assert "invisible to receipts" in text
+        assert "1 of 2 call(s)" in text
+        # The no-runner line must use the incomplete wording, never the
+        # affirmative "NONE recorded" on a partially-blind record.
+        assert "NONE recorded" not in text
+        assert "not evidence of absence" in text
+
+    def test_full_coverage_record_with_rows_stays_unflagged(self, tmp_path):
+        calls = tmp_path / "build/calls"
+        _write_call(calls, 1, [_bash("echo setup")], backend="subprocess")
+        _write_call(calls, 2, [_bash("ls")], backend="subprocess")
+        text = render_receipt_evidence(load_receipts(tmp_path))
+        assert "invisible to receipts" not in text
+        assert "RECORD INCOMPLETE" not in text

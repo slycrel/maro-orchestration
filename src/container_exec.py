@@ -496,7 +496,10 @@ def introspection_provision() -> Optional[dict]:
 # lane. These only match the claude CLI's own login-failure surfaces.
 _AUTH_ERROR_MARKERS = (
     "oauth session expired",
+    "oauth session has expired",
     "oauth token expired",
+    "oauth token has expired",
+    "oauth access token expired",
     "oauth token revoked",
     "not logged in",
     "please run /login",
@@ -519,6 +522,48 @@ def _auth_breaker_path():
     from pathlib import Path
     from config import memory_dir
     return Path(memory_dir()) / "container_auth_breaker.json"
+
+
+# Re-notify the operator about the SAME dead-auth condition at most this
+# often. Lives in a sidecar (not the breaker file) so it survives
+# clear_auth_breaker: a false clear (e.g. credentials touched without a real
+# re-seed) re-trips on the next call, and without this the flap would send a
+# fresh Telegram per cycle (skeptic review 2026-08-13, finding 3).
+_AUTH_NOTIFY_TTL_S = 6 * 3600.0
+
+
+def _auth_notify_path():
+    from pathlib import Path
+    from config import memory_dir
+    return Path(memory_dir()) / "container_auth_notified.json"
+
+
+def _auth_notify_due() -> bool:
+    """True when enough time has passed since the last operator notify.
+    Read side of the throttle; never raises (fails open to notifying —
+    a broken throttle must not silence a real outage)."""
+    import json
+    try:
+        from llm_parse import safe_float
+        path = _auth_notify_path()
+        if not path.exists():
+            return True
+        data = json.loads(path.read_text(encoding="utf-8"))
+        last = safe_float(data.get("at"), default=0.0)
+        return time.time() - last >= _AUTH_NOTIFY_TTL_S
+    except Exception:
+        return True
+
+
+def _stamp_auth_notify() -> None:
+    import json
+    from file_lock import atomic_write
+    try:
+        path = _auth_notify_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write(path, json.dumps({"at": time.time()}) + "\n")
+    except Exception:
+        log.debug("auth notify stamp failed", exc_info=True)
 
 
 def auth_breaker_snapshot() -> Optional[dict]:
@@ -580,9 +625,16 @@ def note_container_failure(detail: str) -> None:
             "is re-seeded (maro-bootstrap container-setup step 2)",
             str(detail)[:200], consequence)
         # backend_actionable: auth failure with a fix only the operator can
-        # apply (interactive /login). First trip only — see the guard above.
+        # apply (interactive /login). First trip only — see the guard above —
+        # AND throttled across trips (a clear→re-trip flap must not send a
+        # fresh Telegram per cycle).
+        if not _auth_notify_due():
+            log.info("auth breaker re-tripped within the notify window — "
+                     "operator already notified, not re-sending")
+            return
         try:
             from notify import emit
+            _stamp_auth_notify()
             emit("backend_actionable", {
                 "reason": f"container executor auth expired: {str(detail)[:160]}",
                 "summary": (

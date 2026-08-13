@@ -7541,3 +7541,26 @@ under the same two-measurement standard).
   containerized, where the taught command doesn't exist), so the gate
   uses config intent exactly like the scratch-clone decision.
   Lane-detection exceptions fail closed. 9 pins; suite 8418/1 skip.
+- **2026-08-13 (Jeremy, morning)** — Container secrets decree: keys are
+  INJECTED at container spin-up as ENV values from host-held storage —
+  never baked into the image ("host values stay stored and maintained
+  on the host"). His pattern: ARG values for defaults, ENVs set to the
+  arg values in custom containers. Backup lane: a mounted READ-ONLY dir
+  carrying on-disk keys as configuration injection. This resolves the
+  READING_QUEUE fix-(a) ask: bake the maro PACKAGE into the executor
+  image (no secrets in layers), plumb hosted-free keys via -e at spin-up.
+- **2026-08-13 (day)** — Review-coverage sweep per Jeremy's morning ask
+  ("adversarial-review all the changes if that hasn't been done yet"):
+  three codex Skeptic rounds over the unreviewed chunks. (1) Verb
+  parity 23c59fa: 2 findings — mid-step config-flip TOCTOU accepted as
+  residual (fix folds into the container ENV chunk), integration pin
+  added binding the container prompt + cache key through execute_step
+  to the adapter. (2) Auth breaker fdb64ff: 5 findings, 3 fixed
+  (deep-text breaker search + marker variants; clear-surviving 6h
+  notify throttle killing flap spam), 2 dispositioned (self-healing
+  races; corrupt-marker fail-open self-repairs). (3) Overnight fix
+  layers 5c0e714+acfc8cf: 3 findings — backend blindness now surfaces
+  in the WITH-rows receipt render (mixed record can't present its
+  captured slice as the whole run), quoting guidance apostrophe-aware,
+  config-flip-between-plan-and-resume accepted as operator-action
+  residual. Suite 8429/1 skip.

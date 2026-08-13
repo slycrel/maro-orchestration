@@ -2293,15 +2293,21 @@ class TestContainerExecutorWrap:
         with pytest.raises(ce.ContainerUnavailable):
             a.complete([LLMMessage("user", "build")], executor=True)
 
-    def _mock_auth_failure(self):
+    def _mock_auth_failure(self, result_text="OAuth session expired · Please run /login"):
         m = MagicMock()
         m.returncode = 1
         m.stdout = json.dumps({
             "type": "result", "subtype": "error_during_execution",
             "is_error": True,
-            "result": "OAuth session expired · Please run /login"})
+            "result": result_text})
         m.stderr = ""
         return m
+
+    def _isolate_breaker(self, ce, monkeypatch, tmp_path):
+        monkeypatch.setattr(ce, "_auth_breaker_path",
+                            lambda: tmp_path / "breaker.json")
+        monkeypatch.setattr(ce, "_auth_notify_path",
+                            lambda: tmp_path / "notified.json")
 
     def test_containerized_auth_failure_trips_breaker(self, monkeypatch, tmp_path):
         # The 08-12 outage shape: docker fine, auth volume dead. The failing
@@ -2309,8 +2315,7 @@ class TestContainerExecutorWrap:
         import container_exec as ce
         import notify
         ce.reset_container_caches()
-        breaker = tmp_path / "breaker.json"
-        monkeypatch.setattr(ce, "_auth_breaker_path", lambda: breaker)
+        self._isolate_breaker(ce, monkeypatch, tmp_path)
         monkeypatch.setattr(ce, "get", lambda k, d=None: "on" if k == "executor.container" else d)
         monkeypatch.setattr(ce, "docker_probe", lambda: (True, "docker 24"))
         emitted = []
@@ -2322,13 +2327,32 @@ class TestContainerExecutorWrap:
         assert ce.auth_breaker_snapshot() is not None
         assert emitted == ["backend_actionable"]
 
+    def test_auth_marker_past_display_truncation_still_trips(self, monkeypatch, tmp_path):
+        # Skeptic review 2026-08-13 finding 1: the display detail truncates
+        # at 300 chars, but the breaker searches the full structured CLI
+        # error text — an auth message after long diagnostics must trip.
+        import container_exec as ce
+        import notify
+        ce.reset_container_caches()
+        self._isolate_breaker(ce, monkeypatch, tmp_path)
+        monkeypatch.setattr(ce, "get", lambda k, d=None: "on" if k == "executor.container" else d)
+        monkeypatch.setattr(ce, "docker_probe", lambda: (True, "docker 24"))
+        monkeypatch.setattr(notify, "emit", lambda et, p, **kw: True)
+        long_error = ("diagnostic context line\n" * 30
+                      + "OAuth session has expired. Please run /login")
+        a = ClaudeSubprocessAdapter()
+        with patch("llm._run_subprocess_safe",
+                   return_value=self._mock_auth_failure(long_error)):
+            with pytest.raises(RuntimeError):
+                a.complete([LLMMessage("user", "build a thing")], executor=True)
+        assert ce.auth_breaker_snapshot() is not None
+
     def test_host_auth_failure_does_not_trip_breaker(self, monkeypatch, tmp_path):
         # A HOST call dying on auth is the host session's problem (llm_errors
         # lane) — it must not degrade the container lane.
         import container_exec as ce
         ce.reset_container_caches()
-        breaker = tmp_path / "breaker.json"
-        monkeypatch.setattr(ce, "_auth_breaker_path", lambda: breaker)
+        self._isolate_breaker(ce, monkeypatch, tmp_path)
         monkeypatch.setattr(ce, "get", lambda k, d=None: d)  # container off
         monkeypatch.setattr("llm._session_fork_enabled", lambda: False)
         a = ClaudeSubprocessAdapter()

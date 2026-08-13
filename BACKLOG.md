@@ -84,6 +84,20 @@ Two coupled finds from one diagnosis (full trail in the A/B-4 entry):
   CONTAINER_EXECUTOR_DESIGN.md §3 "Auth breaker". Chose the breaker
   over the scheduled-login_probe watch: zero happy-path spend, and
   the failure itself is the most reliable detector.
+  **Skeptic review 2026-08-13 (Jeremy: "adversarial-review all the
+  changes"): 5 findings, 3 fixed / 2 dispositioned.** Fixed: (1) the
+  breaker now searches the FULL structured CLI error text (4000 chars;
+  raw-stdout fallback 2000) instead of the 300-char display detail, +
+  wording-variant markers ("oauth session has expired", "oauth access
+  token expired", ...); (3) notify throttle in a sidecar that SURVIVES
+  clear_auth_breaker (6h) — a touch-without-reseed flap can't spam
+  Telegram (also mutes finding 2's double-notify). Accepted residuals:
+  (2) unlocked read-then-write races self-heal within one recheck TTL,
+  worst case one duplicate notify; (4) marker breadth
+  ("authentication_error" etc.) on CLI-authored error text — false
+  trips only degrade-to-host and the notification names the state.
+  Rejected: (5) corrupt-marker fail-open — the next auth failure
+  overwrites the corrupt file, self-healing by construction.
 
 ### MEDIUM→LONG promotion can lose a lesson outright on destination-write failure (FOUND 2026-08-11, adversarial review of the rationale-erosion chunk — pre-existing, HIGH; **FIXED same day, Jeremy: "let's fix that now"**)
 
