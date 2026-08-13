@@ -7643,3 +7643,18 @@ under the same two-measurement standard).
   per-call `cost_usd` on build/calls records, and a drained tail
   re-slices + refreshes the card. Killswitch `notify.verdict_followup`.
   Same-day 3-lens cross-model review; suite 8501/0 skipped.
+- **2026-08-13 (day, cont.)** — Phase-2 3-lens review REJECTED round 1;
+  all accepted findings fixed same session (d9790f4; verdict doc in
+  docs/history/). The arc's 10th earning round. Standouts: I re-created
+  the morning's at-most-once-attempted notify class in my own new code
+  (notified_early ignored emit's result — now hook_configured +
+  hook_delivered gate a run_completed downgrade); the orphan sweep was
+  wired into the evolver cadence the default health-only heartbeat
+  never runs (moved to stranded_state_sweep) and trusted marker age
+  without pid-liveness (fixed); repair now finishes the USER-visible
+  story (surfaces + owed follow-up in both branches);
+  refresh_run_card_classification removes omitted only-when-stamped
+  keys (whole stale-key class); answer_changed keys on an actual
+  replacement loop, not stochastic synthesis drift. Rejected with
+  rationale: cross-store transactional locking, notify outbox,
+  "missing"-ledger-row strictness. Suite 8506/0 skipped.
