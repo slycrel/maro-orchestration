@@ -44,6 +44,16 @@ _STATUS_LABEL = {
     "incomplete": ("⚠", "Incomplete"),
 }
 
+# Escalation-class events that carry their ask in summary/reason/user_action
+# (notify.ESCALATION_FILE_EVENTS minus `escalation`, which has its own richer
+# shape). Kept as a local literal so this command stays runnable standalone;
+# tests pin it against notify's set so the two can't drift.
+_ESCALATION_CLASS_EVENTS = frozenset({
+    "backend_actionable", "stranded_run", "resume_refused_busy",
+    "resume_lock_unavailable", "recursion_checkin",
+    "self_improvement_verdict",
+})
+
 
 def _cfg(key: str, default):
     try:
@@ -165,6 +175,25 @@ def format_message(payload: dict) -> str:
         point = payload.get("point")
         if point:
             lines.append(f"(at {point}; job {payload.get('job_id', '?')})")
+        return "\n".join(lines)
+
+    # Escalation-class events other than `escalation` (backend_actionable,
+    # stranded_run, …) previously fell through to the run-completed formatter,
+    # which dropped their summary/reason — the auth-breaker's re-seed
+    # instructions rendered as "ℹ run auth_expired" (review 2026-08-13).
+    # Render the class generically: headline, then the actionable detail.
+    if event in _ESCALATION_CLASS_EVENTS:
+        lines = [f"⚠ maro: {event.replace('_', ' ')}"]
+        if goal_line:
+            lines.append(f"Goal: {goal_line}")
+        summary = str(payload.get("summary", "")).strip()
+        reason = str(payload.get("reason", "")).strip()
+        action = str(payload.get("user_action", "")).strip()
+        lines.append(summary or reason or "(no detail recorded)")
+        if reason and summary and reason not in summary:
+            lines.append(f"Why: {reason[:300]}")
+        if action and action not in summary and action not in reason:
+            lines.append(f"Fix: {action[:200]}")
         return "\n".join(lines)
 
     # run_completed (and anything unrecognized — degrade to a status line)

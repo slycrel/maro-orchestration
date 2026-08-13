@@ -665,13 +665,45 @@ class TestDoctorContainerRows:
         monkeypatch.setattr(ce, "docker_probe", lambda: (True, "docker 24.0.5"))
         monkeypatch.setattr(ce, "image_probe", lambda img=None: (True, "maro-executor:x"))
         monkeypatch.setattr(ce, "auth_volume_probe", lambda: (True, "volume present"))
-        monkeypatch.setattr(ce, "auth_breaker_snapshot",
-                            lambda: {"tripped_at": 1.0, "reason": "oauth session expired"})
+        monkeypatch.setattr(
+            ce, "auth_breaker_state",
+            lambda: ({"tripped_at": 1.0, "reason": "oauth session expired"},
+                     "tripped"))
         self._fake_llm(monkeypatch)
         from doctor import run_doctor
         run_doctor()
         out = capsys.readouterr().out
         assert "TRIPPED" in out and "re-seed" in out
+
+    def test_breaker_row_renders_with_docker_down(self, monkeypatch, tmp_path, capsys):
+        # The breaker is a file read — a tripped lane must not hide behind a
+        # down daemon (review 2026-08-13): the re-seed action is the same.
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+        monkeypatch.setattr(ce, "get", lambda k, d=None: "on" if k == "executor.container" else d)
+        monkeypatch.setattr(ce, "docker_probe", lambda: (False, "daemon not running"))
+        monkeypatch.setattr(
+            ce, "auth_breaker_state",
+            lambda: ({"tripped_at": 1.0, "reason": "oauth session expired"},
+                     "tripped"))
+        self._fake_llm(monkeypatch)
+        from doctor import run_doctor
+        run_doctor()
+        out = capsys.readouterr().out
+        assert "Container auth breaker" in out
+        assert "TRIPPED" in out
+
+    def test_unreadable_breaker_row_is_loud(self, monkeypatch, tmp_path, capsys):
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+        monkeypatch.setattr(ce, "get", lambda k, d=None: "on" if k == "executor.container" else d)
+        monkeypatch.setattr(ce, "docker_probe", lambda: (True, "docker 24"))
+        monkeypatch.setattr(ce, "image_probe", lambda img=None: (True, "img"))
+        monkeypatch.setattr(ce, "auth_volume_probe", lambda: (True, "vol"))
+        monkeypatch.setattr(ce, "auth_breaker_state", lambda: (None, "unreadable"))
+        self._fake_llm(monkeypatch)
+        from doctor import run_doctor
+        run_doctor()
+        out = capsys.readouterr().out
+        assert "UNREADABLE" in out
 
 
 # ---------------------------------------------------------------------------
@@ -1062,6 +1094,7 @@ class TestAuthBreaker:
         self.notify_path = tmp_path / "container_auth_notified.json"
         monkeypatch.setattr(ce, "_auth_breaker_path", lambda: self.path)
         monkeypatch.setattr(ce, "_auth_notify_path", lambda: self.notify_path)
+        monkeypatch.setattr(ce, "_MEM_AUTH_BREAKER", None)
 
     def _mode(self, monkeypatch, value):
         monkeypatch.setattr(ce, "get", lambda k, d=None: value if k == "executor.container" else d)
@@ -1132,21 +1165,28 @@ class TestAuthBreaker:
         # touched without a real re-seed) re-trips on the next call. The
         # notify throttle lives in a sidecar that SURVIVES the clear, so a
         # trip→clear→trip flap sends one Telegram, not one per cycle.
+        # (emit returns True = DELIVERED; the sidecar stamps only on
+        # delivery under the merged delivery-guarantee semantics.)
         self._mode(monkeypatch, "on")
         import notify
         calls = []
-        monkeypatch.setattr(notify, "emit", lambda et, p, **k: calls.append(et))
+        monkeypatch.setattr(notify, "emit",
+                            lambda et, p, **k: calls.append(et) or True)
         ce.note_container_failure("oauth session expired")
         ce.clear_auth_breaker("false clear")
         ce.note_container_failure("oauth session expired")
         assert ce.auth_breaker_snapshot() is not None  # re-tripped...
         assert calls == ["backend_actionable"]          # ...but one notify
+        # The suppressed re-trip is marked notified — the retry lane must
+        # not fire either (composition with the delivery guarantee).
+        assert ce.auth_breaker_snapshot().get("notified") is True
 
     def test_flap_renotifies_after_window(self, monkeypatch):
         self._mode(monkeypatch, "on")
         import notify, json, time as _time
         calls = []
-        monkeypatch.setattr(notify, "emit", lambda et, p, **k: calls.append(et))
+        monkeypatch.setattr(notify, "emit",
+                            lambda et, p, **k: calls.append(et) or True)
         ce.note_container_failure("oauth session expired")
         ce.clear_auth_breaker("false clear")
         self.notify_path.write_text(json.dumps(
@@ -1159,15 +1199,98 @@ class TestAuthBreaker:
         self._mode(monkeypatch, "on")
         import notify
         calls = []
-        monkeypatch.setattr(notify, "emit", lambda et, p, **k: calls.append(et))
+        monkeypatch.setattr(notify, "emit",
+                            lambda et, p, **k: calls.append(et) or True)
         self.notify_path.write_text("not json")
         ce.note_container_failure("oauth session expired")
         assert calls == ["backend_actionable"]
 
-    def test_trip_never_raises_even_with_broken_store(self, monkeypatch):
-        monkeypatch.setattr(ce, "_write_auth_breaker",
-                            lambda s: (_ for _ in ()).throw(OSError("disk")))
-        self._trip(monkeypatch)  # must not raise — rides an error path
+    def test_trip_with_broken_store_still_notifies_and_degrades(self, monkeypatch):
+        # Review 2026-08-13: a persist failure used to swallow the notify
+        # entirely AND leave the lane containerizing — the original silent
+        # outage. Now: never raises, still emits the actionable event, and
+        # degrades process-locally via the in-memory fallback breaker.
+        self._mode(monkeypatch, "on")
+        monkeypatch.setattr(ce, "_trip_auth_breaker",
+                            lambda r: (_ for _ in ()).throw(OSError("disk")))
+        import notify
+        emitted = []
+        monkeypatch.setattr(notify, "emit", lambda et, p, **k: emitted.append(et) or True)
+        ce.note_container_failure("oauth session expired")  # must not raise
+        assert emitted == ["backend_actionable"]
+        assert ce.auth_breaker_blocks() is not None  # mem fallback degrades
+        # A second failure in the same process doesn't re-notify.
+        ce.note_container_failure("oauth session expired")
+        assert emitted == ["backend_actionable"]
+
+    def test_failed_notify_is_retried_on_recheck_cadence(self, monkeypatch):
+        # Review 2026-08-13: "one notification" used to mean "at most one
+        # ATTEMPT" — a transient Telegram outage forfeited it forever.
+        import notify
+        sent = {"ok": False}
+        emitted = []
+        monkeypatch.setattr(notify, "emit",
+                            lambda et, p, **k: emitted.append(et) or sent["ok"])
+        self._mode(monkeypatch, "on")
+        ce.note_container_failure("oauth session expired")
+        assert emitted == ["backend_actionable"]  # attempted, delivery failed
+        assert ce.auth_breaker_snapshot().get("notified") is False
+        # Recheck window elapses, probe still bad → retry fires and succeeds.
+        self._age_state()
+        monkeypatch.setattr(ce, "_reseed_probe", lambda t: (False, "still wiped"))
+        sent["ok"] = True
+        assert ce.auth_breaker_blocks() is not None
+        assert emitted == ["backend_actionable", "backend_actionable"]
+        assert ce.auth_breaker_snapshot().get("notified") is True
+        # Delivered — the next recheck does not emit again.
+        self._age_state()
+        assert ce.auth_breaker_blocks() is not None
+        assert len(emitted) == 2
+
+    def test_trip_reason_is_secret_scrubbed(self, monkeypatch):
+        # Auth error text can embed credential-shaped material; it must not
+        # reach the marker or the notification (review 2026-08-13).
+        import notify
+        payloads = []
+        monkeypatch.setattr(notify, "emit",
+                            lambda et, p, **k: payloads.append(p) or True)
+        self._mode(monkeypatch, "on")
+        ce.note_container_failure(
+            "authentication_error: invalid bearer token sk-ant-abcdef1234567890XYZ")
+        state = ce.auth_breaker_snapshot()
+        assert "sk-ant-" not in state["reason"]
+        assert "[REDACTED]" in state["reason"]
+        assert all("sk-ant-" not in str(p) for p in payloads)
+
+    def test_clear_if_leaves_a_newer_trip_alone(self, monkeypatch):
+        # A probe vouches only for the trip it read. A NEW trip landing while
+        # the probe ran must survive the clear (review 2026-08-13).
+        import json
+        self._trip(monkeypatch)
+        old_tripped_at = ce.auth_breaker_snapshot()["tripped_at"]
+        newer = {"tripped_at": old_tripped_at + 60.0, "reason": "new failure",
+                 "last_recheck": 0.0, "notified": True}
+        self.path.write_text(json.dumps(newer))
+        ce._clear_auth_breaker_if(old_tripped_at, "probe ok")
+        assert ce.auth_breaker_snapshot() is not None  # newer trip survives
+        ce._clear_auth_breaker_if(old_tripped_at + 60.0, "probe ok")
+        assert ce.auth_breaker_snapshot() is None  # matching trip clears
+
+    def test_recheck_touch_does_not_resurrect_cleared_breaker(self, monkeypatch):
+        # A stale failed probe must not rewrite state a peer already cleared
+        # (review 2026-08-13: the resurrection race).
+        self._trip(monkeypatch)
+        tripped_at = ce.auth_breaker_snapshot()["tripped_at"]
+        self.path.unlink()  # peer cleared while our probe ran
+        ce._touch_auth_breaker_recheck(tripped_at)
+        assert ce.auth_breaker_snapshot() is None
+
+    def test_unreadable_marker_is_distinguished_from_clear(self):
+        state, status = ce.auth_breaker_state()
+        assert (state, status) == (None, "clear")
+        self.path.write_text("{not json")
+        state, status = ce.auth_breaker_state()
+        assert state is None and status == "unreadable"
 
     # -- resolve integration ------------------------------------------------
 
@@ -1184,6 +1307,21 @@ class TestAuthBreaker:
         monkeypatch.setattr(ce, "docker_probe", lambda: (True, "docker 24"))
         with pytest.raises(ce.ContainerUnavailable, match="auth breaker"):
             ce.resolve_container_run(no_tools=False, executor=True)
+
+    def test_require_suppressed_refuses_not_host(self, monkeypatch):
+        # require means isolation-or-nothing: a suppressed run (scratch clone
+        # unavailable) must REFUSE, never silently execute on the host
+        # (review 2026-08-13 — the suppression early-return bypassed require).
+        self._mode(monkeypatch, "require")
+        monkeypatch.setattr(ce, "container_suppressed", lambda: True)
+        with pytest.raises(ce.ContainerUnavailable, match="suppressed"):
+            ce.resolve_container_run(no_tools=False, executor=True)
+
+    def test_on_suppressed_still_degrades_to_host(self, monkeypatch):
+        # 'on' keeps the C3 doctrine: suppressed → host under the write-fence.
+        self._mode(monkeypatch, "on")
+        monkeypatch.setattr(ce, "container_suppressed", lambda: True)
+        assert ce.resolve_container_run(no_tools=False, executor=True) is None
 
     def test_fresh_trip_blocks_without_docker_recheck(self, monkeypatch):
         # last_recheck is stamped at trip time, so the resolve path pays no
@@ -1224,23 +1362,34 @@ class TestAuthBreaker:
 
     # -- reseed probe parsing -----------------------------------------------
 
-    def _probe_out(self, mtime, creds):
-        import json
-        return f"{mtime}\n{json.dumps(creds)}"
+    def _probe_out(self, mtime, has_refresh):
+        # The probe is SHAPE-only (stat mtime + refreshToken grep count) —
+        # credential bytes never transit to the host (review 2026-08-13).
+        return f"{mtime}\n{1 if has_refresh else 0}"
 
     def test_reseed_probe_accepts_fresh_live_creds(self, monkeypatch):
-        creds = {"claudeAiOauth": {"refreshToken": "r", "expiresAt": 9}}
         monkeypatch.setattr(ce, "_run",
-                            lambda cmd, t: (True, self._probe_out(2000, creds)))
+                            lambda cmd, t: (True, self._probe_out(2000, True)))
         ok, detail = ce._reseed_probe(tripped_at=1000)
         assert ok is True and "re-seeded" in detail
+
+    def test_reseed_probe_never_cats_credentials(self, monkeypatch):
+        # The docker command itself must not copy credential bytes out of
+        # the volume (review 2026-08-13: the old probe cat'd the full file).
+        seen = {}
+        monkeypatch.setattr(
+            ce, "_run",
+            lambda cmd, t: seen.update(cmd=cmd) or (True, self._probe_out(2000, True)))
+        ce._reseed_probe(tripped_at=1000)
+        shell = " ".join(seen["cmd"])
+        assert "cat " not in shell
+        assert "grep -c" in shell and "stat" in shell
 
     def test_reseed_probe_rejects_wiped_creds(self, monkeypatch):
         # The CLI wipes refreshToken after a failed refresh — that file is
         # exactly the tripped state, however fresh its mtime.
-        creds = {"claudeAiOauth": {"expiresAt": 0}}
         monkeypatch.setattr(ce, "_run",
-                            lambda cmd, t: (True, self._probe_out(2000, creds)))
+                            lambda cmd, t: (True, self._probe_out(2000, False)))
         ok, _ = ce._reseed_probe(tripped_at=1000)
         assert ok is False
 
@@ -1248,9 +1397,8 @@ class TestAuthBreaker:
         # Intact-looking but server-side-revoked creds must not clear the
         # breaker (would flap trip/clear forever) — only a file NEWER than
         # the trip counts as a re-seed.
-        creds = {"claudeAiOauth": {"refreshToken": "r"}}
         monkeypatch.setattr(ce, "_run",
-                            lambda cmd, t: (True, self._probe_out(500, creds)))
+                            lambda cmd, t: (True, self._probe_out(500, True)))
         ok, _ = ce._reseed_probe(tripped_at=1000)
         assert ok is False
 

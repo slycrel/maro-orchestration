@@ -528,7 +528,10 @@ def _auth_breaker_path():
 # often. Lives in a sidecar (not the breaker file) so it survives
 # clear_auth_breaker: a false clear (e.g. credentials touched without a real
 # re-seed) re-trips on the next call, and without this the flap would send a
-# fresh Telegram per cycle (skeptic review 2026-08-13, finding 3).
+# fresh Telegram per cycle (skeptic review 2026-08-13, finding 3). The
+# sidecar stamps DELIVERED notifies only — composition with the notified
+# flag below: the flag guarantees at-least-one delivery per trip (retry on
+# the recheck cadence), the sidecar caps cross-trip flap spam.
 _AUTH_NOTIFY_TTL_S = 6 * 3600.0
 
 
@@ -566,31 +569,123 @@ def _stamp_auth_notify() -> None:
         log.debug("auth notify stamp failed", exc_info=True)
 
 
-def auth_breaker_snapshot() -> Optional[dict]:
-    """The persisted breaker state, or None when clear. Cheap (file read only)
-    — doctor and system_health report from this without touching docker."""
+def auth_breaker_state() -> Tuple[Optional[dict], str]:
+    """(state, status) — status is 'clear' / 'tripped' / 'unreadable'.
+
+    A PRESENT-but-unparseable marker is 'unreadable', distinct from clear:
+    the resolve path still fails open on it (doctrine below: a dead session
+    just re-trips, self-healing), but doctor/system_health must not report
+    a corrupt marker as a clear lane (review 2026-08-13)."""
     import json
+    path = _auth_breaker_path()
     try:
-        path = _auth_breaker_path()
-        if not path.exists():
-            return None
-        data = json.loads(path.read_text(encoding="utf-8"))
-        return data if isinstance(data, dict) and data.get("tripped_at") else None
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return None, "clear"
     except Exception:
-        return None
+        return None, "unreadable"
+    try:
+        data = json.loads(text)
+        if isinstance(data, dict) and data.get("tripped_at"):
+            return data, "tripped"
+    except Exception:
+        pass
+    return None, "unreadable"
 
 
-def _write_auth_breaker(state: dict) -> None:
+def auth_breaker_snapshot() -> Optional[dict]:
+    """The persisted breaker state, or None when clear/unreadable. Cheap
+    (file read only) — doctor and system_health report from this without
+    touching docker; surfaces that need the unreadable distinction use
+    auth_breaker_state()."""
+    return auth_breaker_state()[0]
+
+
+# Process-local fallback when the marker can't be PERSISTED (read-only fs,
+# permission break): this process still degrades instead of re-paying doomed
+# container runs; other processes re-trip on their own first failure
+# (review 2026-08-13: a trip-write failure must not restore the silent
+# outage the breaker exists to prevent).
+_MEM_AUTH_BREAKER: Optional[dict] = None
+
+
+def _trip_auth_breaker(reason: str) -> Optional[dict]:
+    """Serialized trip transition (review 2026-08-13: check→write→notify was
+    unlocked, so two concurrent first failures both 'won' the trip). Returns
+    the new state when THIS call tripped the breaker; None when a peer
+    already had — the winner owns the notification."""
     import json
-    from file_lock import atomic_write
+    from file_lock import locked_write, atomic_write
     path = _auth_breaker_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    atomic_write(path, json.dumps(state, sort_keys=True) + "\n")
+    with locked_write(path):
+        current, _status = auth_breaker_state()
+        if current is not None:
+            return None
+        # 'unreadable' falls through: replace the corrupt marker with a
+        # fresh valid trip (self-heal, worst case one duplicate notify).
+        state = {
+            "tripped_at": time.time(),
+            "reason": reason,
+            "last_recheck": time.time(),
+            "notified": False,
+        }
+        atomic_write(path, json.dumps(state, sort_keys=True) + "\n")
+        return state
+
+
+def _touch_auth_breaker_recheck(tripped_at: float) -> None:
+    """Record a failed re-seed probe against the SAME trip we probed for.
+    A peer may have cleared the breaker (or a new trip landed) while our
+    probe ran — rewriting our stale snapshot would resurrect a cleared
+    breaker (review 2026-08-13). Never raises."""
+    import json
+    from file_lock import locked_write, atomic_write
+    path = _auth_breaker_path()
+    try:
+        with locked_write(path):
+            state, _status = auth_breaker_state()
+            if state is None:
+                return
+            try:
+                if float(state.get("tripped_at", 0.0)) != tripped_at:
+                    return
+            except (TypeError, ValueError):
+                return
+            state["last_recheck"] = time.time()
+            atomic_write(path, json.dumps(state, sort_keys=True) + "\n")
+    except Exception:
+        log.debug("_touch_auth_breaker_recheck failed", exc_info=True)
+
+
+def _mark_auth_breaker_notified() -> None:
+    """Persist that the trip's actionable notification was DELIVERED.
+    Until this lands, auth_breaker_blocks retries the emit on the recheck
+    cadence — 'exactly one notification' previously meant 'at most one
+    attempt' (review 2026-08-13). Never raises."""
+    global _MEM_AUTH_BREAKER
+    import json
+    from file_lock import locked_write, atomic_write
+    if _MEM_AUTH_BREAKER is not None:
+        _MEM_AUTH_BREAKER["notified"] = True
+    path = _auth_breaker_path()
+    try:
+        with locked_write(path):
+            state, _status = auth_breaker_state()
+            if state is None:
+                return
+            state["notified"] = True
+            atomic_write(path, json.dumps(state, sort_keys=True) + "\n")
+    except Exception:
+        log.debug("_mark_auth_breaker_notified failed", exc_info=True)
 
 
 def clear_auth_breaker(reason: str = "") -> None:
-    """Remove the breaker state (recovery or operator action). Never raises."""
+    """Remove the breaker state (operator action / census). Unconditional —
+    the probe-driven self-clear uses _clear_auth_breaker_if. Never raises."""
+    global _MEM_AUTH_BREAKER
     try:
+        _MEM_AUTH_BREAKER = None
         path = _auth_breaker_path()
         if path.exists():
             path.unlink()
@@ -600,62 +695,125 @@ def clear_auth_breaker(reason: str = "") -> None:
         log.debug("clear_auth_breaker failed", exc_info=True)
 
 
+def _clear_auth_breaker_if(tripped_at: float, reason: str) -> None:
+    """Clear ONLY the trip our probe vouched for. A new trip landing while
+    the probe ran must survive — deleting it would erase an unprobed
+    failure (review 2026-08-13). Never raises."""
+    from file_lock import locked_write
+    path = _auth_breaker_path()
+    try:
+        with locked_write(path):
+            state, _status = auth_breaker_state()
+            if state is not None:
+                try:
+                    if float(state.get("tripped_at", 0.0)) != tripped_at:
+                        return
+                except (TypeError, ValueError):
+                    pass  # corrupt tripped_at: the probed clear still stands
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
+        log.info("container auth breaker CLEARED (%s) — executor calls "
+                 "containerize again", reason)
+    except Exception:
+        log.debug("_clear_auth_breaker_if failed", exc_info=True)
+
+
+def _auth_breaker_consequence(mode: str) -> str:
+    return ("executor steps now REFUSE (executor.container=require)"
+            if mode == "require"
+            else "executor steps now run on the HOST under the write-fence")
+
+
+def _auth_breaker_payload(reason: str, consequence: str) -> dict:
+    return {
+        "reason": f"container executor auth expired: {reason[:160]}",
+        "summary": (
+            f"Container executor OAuth session is dead — {consequence}. "
+            "Re-seed the maro-claude-auth volume: run "
+            "`maro-bootstrap container-setup` step 2 (interactive "
+            "claude /login; widen the terminal or de-wrap the URL)."),
+        "status": "auth_expired",
+    }
+
+
 def note_container_failure(detail: str) -> None:
     """Called by the subprocess seam when a CONTAINERIZED call fails: trips
     the breaker iff the failure is an auth failure. Never raises — this rides
     an error path that must keep propagating the original error."""
+    global _MEM_AUTH_BREAKER
     try:
         if not is_auth_error_text(detail):
             return
-        if auth_breaker_snapshot() is not None:
-            return  # already tripped — don't re-notify per step
-        state = {
-            "tripped_at": time.time(),
-            "reason": str(detail)[:300],
-            "last_recheck": time.time(),
-        }
-        _write_auth_breaker(state)
+        # Auth error text can carry credential-shaped material — scrub before
+        # it reaches the marker, the log, or a notification (review 2026-08-13).
+        try:
+            from secret_scrub import scrub
+            reason = str(scrub(str(detail)))[:300]
+        except Exception:
+            reason = "container auth failure (detail unavailable)"
+        state = None
+        persist_failed = False
+        try:
+            state = _trip_auth_breaker(reason)
+        except Exception:
+            persist_failed = True
+        if state is None and not persist_failed:
+            return  # a peer's trip won — it owns the notification
+        if persist_failed:
+            if _MEM_AUTH_BREAKER is not None:
+                return  # this process already degraded and notified
+            _MEM_AUTH_BREAKER = {
+                "tripped_at": time.time(),
+                "reason": reason,
+                "last_recheck": time.time(),
+                "notified": False,
+            }
+            log.error("container auth breaker could not be persisted — "
+                      "degrading process-locally only", exc_info=True)
         mode = container_mode()
-        consequence = (
-            "executor steps now REFUSE (executor.container=require)"
-            if mode == "require"
-            else "executor steps now run on the HOST under the write-fence")
+        consequence = _auth_breaker_consequence(mode)
         log.warning(
             "container auth breaker TRIPPED: %s — %s until the auth volume "
             "is re-seeded (maro-bootstrap container-setup step 2)",
-            str(detail)[:200], consequence)
+            reason[:200], consequence)
         # backend_actionable: auth failure with a fix only the operator can
-        # apply (interactive /login). First trip only — see the guard above —
-        # AND throttled across trips (a clear→re-trip flap must not send a
-        # fresh Telegram per cycle).
+        # apply (interactive /login). Two guards compose (both reviews,
+        # 2026-08-13): the trip's winner emits, and a delivery failure
+        # leaves notified=False so auth_breaker_blocks retries on the
+        # recheck cadence (the notify must not be forfeited by a persist
+        # failure or a transient Telegram outage) — while the cross-trip
+        # sidecar throttle keeps a clear→re-trip FLAP from sending a fresh
+        # Telegram per cycle: a recent DELIVERED notify marks this trip
+        # notified without re-sending.
         if not _auth_notify_due():
             log.info("auth breaker re-tripped within the notify window — "
                      "operator already notified, not re-sending")
+            _mark_auth_breaker_notified()
             return
+        sent = False
         try:
             from notify import emit
-            _stamp_auth_notify()
-            emit("backend_actionable", {
-                "reason": f"container executor auth expired: {str(detail)[:160]}",
-                "summary": (
-                    f"Container executor OAuth session is dead — {consequence}. "
-                    "Re-seed the maro-claude-auth volume: run "
-                    "`maro-bootstrap container-setup` step 2 (interactive "
-                    "claude /login; widen the terminal or de-wrap the URL)."),
-                "status": "auth_expired",
-            })
+            sent = emit("backend_actionable",
+                        _auth_breaker_payload(reason, consequence))
         except Exception:
             log.debug("auth breaker notify failed", exc_info=True)
+        if sent:
+            _stamp_auth_notify()
+            _mark_auth_breaker_notified()
     except Exception:
         log.debug("note_container_failure failed", exc_info=True)
 
 
 def _reseed_probe(tripped_at: float) -> Tuple[bool, str]:
     """Has the operator re-seeded the auth volume since the trip? One docker
-    cat of the credentials file (ro mount, executor uid — see _user_args).
-    True only for a live-shaped file (refreshToken present) NEWER than the
-    trip; see the section comment for why both conditions."""
-    import json
+    stat+grep of the credentials file (ro mount, executor uid — see
+    _user_args). SHAPE only: the credential bytes never transit to the host
+    process or its logs (review 2026-08-13 — the previous probe cat'd the
+    full file). True only for a live-shaped file (refreshToken present —
+    the CLI wipes it after a failed refresh) NEWER than the trip; see the
+    section comment for why both conditions."""
     cred_path = f"{AUTH_MOUNT}/.credentials.json"
     ok, out = _run([
         "docker", "run", "--rm", *_user_args(),
@@ -663,21 +821,25 @@ def _reseed_probe(tripped_at: float) -> Tuple[bool, str]:
         "--mount", (f"type=volume,source={AUTH_VOLUME},"
                     f"target={AUTH_MOUNT},readonly"),
         "--entrypoint", "sh", container_image(),
-        "-c", f"stat -c %Y {cred_path} && cat {cred_path}",
+        "-c", (f"stat -c %Y {cred_path} && "
+               f"{{ grep -c refreshToken {cred_path} || true; }}"),
     ], _RESEED_PROBE_TIMEOUT_S)
     if not ok:
         return False, f"credentials probe failed: {out[:120]}"
     try:
         first, _, rest = out.partition("\n")
         mtime = float(first.strip())
-        creds = json.loads(rest)
-        oauth = creds.get("claudeAiOauth", creds) if isinstance(creds, dict) else {}
-        has_refresh = bool(oauth.get("refreshToken"))
+        has_refresh = int(rest.strip().splitlines()[0]) > 0
     except Exception as exc:
-        return False, f"credentials unreadable: {exc}"
+        return False, f"credentials probe unparseable: {exc}"
     if not has_refresh:
         return False, "credentials still wiped (no refresh token) — not re-seeded"
     if mtime <= tripped_at:
+        # Whole-second stat vs fractional trip time: a re-seed landing in the
+        # SAME wall-clock second as the trip is missed. Accepted (review
+        # 2026-08-13, rejected finding): interactive re-seeds take minutes,
+        # and loosening the comparison errs toward false self-clear →
+        # re-trip → notification loop, the worse direction.
         return False, "credentials unchanged since trip — not re-seeded"
     return True, "auth volume re-seeded (fresh credentials with refresh token)"
 
@@ -687,11 +849,18 @@ def auth_breaker_blocks() -> Optional[str]:
 
     While tripped, rechecks the volume via _reseed_probe at most every
     _AUTH_RECHECK_TTL_S and self-clears on a real re-seed — the operator
-    never has to touch config to restore the lane. Never raises; a broken
-    breaker store must not take down the resolve path (fails open to the
-    container, where a bad session just re-trips)."""
+    never has to touch config to restore the lane. The probe runs OUTSIDE
+    the state lock; clear/recheck commits are identity-checked against the
+    probed trip so a stale probe can't resurrect a peer's clear (review
+    2026-08-13). An undelivered trip notification is retried on the same
+    cadence. Never raises; a broken/unreadable breaker store must not take
+    down the resolve path (fails open to the container, where a bad session
+    just re-trips)."""
+    global _MEM_AUTH_BREAKER
     try:
-        state = auth_breaker_snapshot()
+        state, _status = auth_breaker_state()
+        if state is None:
+            state = _MEM_AUTH_BREAKER  # persisted marker unavailable
         if state is None:
             return None
         reason = str(state.get("reason", "auth failure"))
@@ -703,11 +872,29 @@ def auth_breaker_blocks() -> Optional[str]:
         if time.time() - last >= _AUTH_RECHECK_TTL_S:
             ok, detail = _reseed_probe(tripped_at)
             if ok:
-                clear_auth_breaker(detail)
+                _clear_auth_breaker_if(tripped_at, detail)
+                _MEM_AUTH_BREAKER = None
                 return None
-            state["last_recheck"] = time.time()
-            _write_auth_breaker(state)
+            _touch_auth_breaker_recheck(tripped_at)
+            if _MEM_AUTH_BREAKER is not None:
+                _MEM_AUTH_BREAKER["last_recheck"] = time.time()
             log.debug("auth breaker recheck: still tripped (%s)", detail)
+            if not state.get("notified") and _auth_notify_due():
+                # Delivery failed at trip time (Telegram down, crash before
+                # send) — retry until one emit succeeds, throttled to the
+                # recheck cadence (and the cross-trip sidecar window).
+                sent = False
+                try:
+                    from notify import emit
+                    sent = emit(
+                        "backend_actionable",
+                        _auth_breaker_payload(
+                            reason, _auth_breaker_consequence(container_mode())))
+                except Exception:
+                    log.debug("auth breaker notify retry failed", exc_info=True)
+                if sent:
+                    _stamp_auth_notify()
+                    _mark_auth_breaker_notified()
         return reason
     except Exception:
         log.debug("auth_breaker_blocks failed (failing open)", exc_info=True)
@@ -765,6 +952,13 @@ def resolve_container_run(no_tools: bool, executor: bool) -> Optional[str]:
         # A git-repo run whose scratch clone could not be provisioned: never
         # containerize it, because its cwd is the LIVE repo and mounting that rw
         # is the one thing the clone exists to prevent (fail closed to host).
+        if mode == "require":
+            # require means isolation-or-nothing: refusing beats silently
+            # executing on the host (review 2026-08-13 — the suppression
+            # early-return used to bypass the require contract entirely).
+            raise ContainerUnavailable(
+                "executor.container=require but containerization is "
+                "suppressed for this run (scratch clone unavailable)")
         return None
     ok, reason = docker_probe()  # fresh every call — honest degrade/refuse
     if ok:

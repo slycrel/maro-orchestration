@@ -808,7 +808,16 @@ class FailoverAdapter(LLMAdapter):
                 _info = exc.info if isinstance(exc, BackendError) \
                     else classify_error(exc, backend=_bname)
                 _chain.append(f"{_bname or '?'}({_info.error_class})")
-                if _info.error_class in (BILLING_ACTIONABLE, AUTH_ACTIONABLE):
+                # A container-lane auth death is NOT this backend's death:
+                # host creds are separate by design, the container breaker
+                # already degrades/refuses at resolve time and emitted the
+                # precise re-seed alert. Tripping the process circuit here
+                # would reroute healthy HOST calls to the next (paid)
+                # backend, and the generic alert below names the wrong fix
+                # (host /login) — both stand down (review 2026-08-13).
+                _container_owned = getattr(exc, "container_auth_owned", False)
+                if (_info.error_class in (BILLING_ACTIONABLE, AUTH_ACTIONABLE)
+                        and not _container_owned):
                     # Dead credits/credentials stay dead — trip the process-
                     # wide circuit so later FailoverAdapters skip this backend
                     # instead of re-failing (and re-alerting) on every call.
@@ -820,7 +829,10 @@ class FailoverAdapter(LLMAdapter):
                     # stderr, run metadata, notify) renders the fix instead of
                     # a traceback (BACKEND_RESILIENCE_DESIGN §2).
                     if not isinstance(exc, BackendError) and is_actionable(_info):
-                        raise BackendError(_info) from exc
+                        _wrapped = BackendError(_info)
+                        if _container_owned:
+                            _wrapped.container_auth_owned = True  # type: ignore[attr-defined]
+                        raise _wrapped from exc
                     raise
                 next_backend = getattr(self._adapters[idx + 1], "backend", "?")
                 log.warning(
@@ -833,7 +845,8 @@ class FailoverAdapter(LLMAdapter):
                 # Once per (backend, error_class) per process — the 8:23/8:24/
                 # 8:57 triple-alert on one dead OpenRouter key was pure noise.
                 try:
-                    if is_actionable(_info) and _alert_once(_bname, _info.error_class):
+                    if (is_actionable(_info) and not _container_owned
+                            and _alert_once(_bname, _info.error_class)):
                         from notify import emit as _notify_emit
                         _notify_emit("backend_actionable", {
                             "status": "degraded",
@@ -1263,7 +1276,14 @@ def _run_subprocess_safe(cmd, *, input=None, timeout=600,
         # No resolvable working dir means no project mount to give the worker —
         # the container would run in an empty HOME with a filesystem view that
         # silently differs from the host path. Fall back to host rather than
-        # ship that split (adversarial-review 2026-07-12).
+        # ship that split (adversarial-review 2026-07-12) — unless the operator
+        # pinned require, where isolation-or-nothing wins over any fallback
+        # (review 2026-08-13: this fallback bypassed the require contract).
+        import container_exec as _ce_req
+        if _ce_req.container_mode() == "require":
+            raise _ce_req.ContainerUnavailable(
+                "executor.container=require but the container working dir "
+                f"did not resolve ({cwd!r}) — refusing host fallback")
         log.warning("_run_subprocess_safe: container requested but no working dir "
                     "resolved; running on host instead of an empty container")
     elif container_name:
@@ -1440,7 +1460,13 @@ def _run_subprocess_safe(cmd, *, input=None, timeout=600,
 
     stdout = _read_captured()
     _cleanup_files()
-    return subprocess.CompletedProcess(cmd, proc.returncode, stdout, "")
+    result = subprocess.CompletedProcess(cmd, proc.returncode, stdout, "")
+    # The lane this call ACTUALLY ran on — a requested container can fall
+    # back to host (unresolvable cwd above); failure attribution must follow
+    # reality, not the request (review 2026-08-13: a host auth failure was
+    # trippable into the CONTAINER breaker).
+    result.container_executed = _container is not None  # type: ignore[attr-defined]
+    return result
 
 
 def _subprocess_timeout_error(binary: str, exc: subprocess.TimeoutExpired,
@@ -2682,10 +2708,14 @@ class ClaudeSubprocessAdapter(_JSONToolPromptMixin, LLMAdapter):
                 # by design) — trip the container auth breaker so subsequent
                 # executor calls degrade/refuse at resolve time instead of
                 # each paying a doomed container run (08-12 outage shape).
-                # The error still propagates: this step already failed.
-                if _container_name is not None:
+                # Gate on the lane the call ACTUALLY ran on, not the request —
+                # a host fallback's auth failure is a HOST story (review
+                # 2026-08-13). The error still propagates: this step failed.
+                _container_auth_owned = False
+                if getattr(result, "container_executed", False):
                     try:
-                        from container_exec import note_container_failure
+                        from container_exec import (note_container_failure,
+                                                    is_auth_error_text)
                         # The breaker searches DEEPER than the 300-char
                         # display detail (skeptic review 2026-08-13: an auth
                         # message past byte 300 silently missed the trip).
@@ -2697,9 +2727,19 @@ class ClaudeSubprocessAdapter(_JSONToolPromptMixin, LLMAdapter):
                         else:
                             _breaker_text = result.stdout.strip()[:2000]
                         note_container_failure(_breaker_text)
+                        _container_auth_owned = is_auth_error_text(_breaker_text)
                     except Exception:
                         log.debug("container auth-breaker note failed", exc_info=True)
-                raise RuntimeError(f"claude subprocess failed (rc={result.returncode}): {detail}")
+                _err = RuntimeError(
+                    f"claude subprocess failed (rc={result.returncode}): {detail}")
+                if _container_auth_owned:
+                    # The breaker owns this failure's story: FailoverAdapter
+                    # must neither trip the process-wide backend circuit
+                    # (host creds are healthy) nor emit its generic host
+                    # /login alert on top of the breaker's precise one
+                    # (review 2026-08-13).
+                    _err.container_auth_owned = True  # type: ignore[attr-defined]
+                raise _err
 
         # Translate the fully-captured stream-json output into the canonical
         # chunk/tool_call/done vocabulary and fold it into an LLMResponse

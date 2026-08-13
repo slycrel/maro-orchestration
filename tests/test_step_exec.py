@@ -816,6 +816,30 @@ class TestContainerVerbParity:
         monkeypatch.setattr(ce, "container_mode", lambda: "off")
         assert execute_system_for_lane() == EXECUTE_SYSTEM
 
+    def test_lane_selector_exception_falls_toward_container(self, monkeypatch):
+        # Review 2026-08-13: a transient error in lane detection must not
+        # pick the OVER-advertising direction. With config intent readable
+        # as container, the fallback is the container prompt (host verbs
+        # advertised into a container is the A/B-4 confound).
+        import container_exec as ce
+        from step_exec import execute_system_for_lane, EXECUTE_SYSTEM_CONTAINER
+        monkeypatch.setattr(ce, "container_mode",
+                            lambda: (_ for _ in ()).throw(RuntimeError("boom")))
+        import config as config_mod
+        monkeypatch.setattr(config_mod, "get",
+                            lambda k, d=None: "on" if k == "executor.container" else d)
+        assert execute_system_for_lane() == EXECUTE_SYSTEM_CONTAINER
+
+    def test_lane_selector_exception_with_off_intent_stays_host(self, monkeypatch):
+        import container_exec as ce
+        from step_exec import execute_system_for_lane, EXECUTE_SYSTEM
+        monkeypatch.setattr(ce, "container_mode",
+                            lambda: (_ for _ in ()).throw(RuntimeError("boom")))
+        import config as config_mod
+        monkeypatch.setattr(config_mod, "get",
+                            lambda k, d=None: "off" if k == "executor.container" else d)
+        assert execute_system_for_lane() == EXECUTE_SYSTEM
+
 
 
     def test_execute_step_sends_lane_prompt_to_the_adapter(

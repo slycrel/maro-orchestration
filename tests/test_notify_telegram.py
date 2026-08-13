@@ -133,6 +133,42 @@ def test_format_escalation():
     assert "dispatch" in msg
 
 
+def test_format_backend_actionable_renders_the_instructions():
+    # Review 2026-08-13: this event fell through to the run-completed
+    # formatter and rendered as "ℹ run auth_expired" — the re-seed
+    # instructions (the entire point of the notification) were dropped.
+    msg = format_message({
+        "event_type": "backend_actionable",
+        "status": "auth_expired",
+        "reason": "container executor auth expired: oauth session expired",
+        "summary": ("Container executor OAuth session is dead — executor "
+                    "steps now run on the HOST under the write-fence. "
+                    "Re-seed the maro-claude-auth volume: run "
+                    "`maro-bootstrap container-setup` step 2."),
+    })
+    assert "Re-seed the maro-claude-auth volume" in msg
+    assert "backend actionable" in msg
+    assert msg != "ℹ run auth_expired"
+
+
+def test_format_backend_actionable_user_action_line():
+    msg = format_message({
+        "event_type": "backend_actionable",
+        "status": "degraded",
+        "summary": "openrouter auth_actionable (chain: ...)",
+        "user_action": "Update OPENROUTER_API_KEY",
+    })
+    assert "Fix: Update OPENROUTER_API_KEY" in msg
+
+
+def test_escalation_class_events_match_notify_registry():
+    # _ESCALATION_CLASS_EVENTS is a local literal (standalone command);
+    # this pin keeps it from drifting against notify's source of truth.
+    from notify import ESCALATION_FILE_EVENTS
+    from notify_telegram import _ESCALATION_CLASS_EVENTS
+    assert _ESCALATION_CLASS_EVENTS == frozenset(ESCALATION_FILE_EVENTS) - {"escalation"}
+
+
 def test_format_escalation_without_summary_uses_reason():
     msg = format_message({
         "event_type": "escalation",

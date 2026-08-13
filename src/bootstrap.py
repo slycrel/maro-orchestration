@@ -79,7 +79,7 @@ _STARTER_CONFIG = """\
 # The command receives the run_card JSON on stdin.
 #notify:
 #  command: "maro-notify-telegram"   # or any shell command
-#  events: [run_completed, escalation]
+#  events: [run_completed, escalation, backend_actionable]
 
 # --- Telegram (used by maro-notify-telegram and the listener) -----------------
 # TELEGRAM_BOT_TOKEN comes from the environment; chat_id doubles as the

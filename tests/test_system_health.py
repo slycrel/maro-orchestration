@@ -582,10 +582,12 @@ class TestRegistry:
 class TestContainerAuthProbe:
     """The container_auth row reads breaker state only — no docker, no LLM."""
 
-    def _patch(self, monkeypatch, mode, state):
+    def _patch(self, monkeypatch, mode, state, status=None):
         import container_exec as ce
         monkeypatch.setattr(ce, "container_mode", lambda: mode)
-        monkeypatch.setattr(ce, "auth_breaker_snapshot", lambda: state)
+        monkeypatch.setattr(
+            ce, "auth_breaker_state",
+            lambda: (state, status or ("tripped" if state else "clear")))
 
     def test_off_mode_is_ok(self, monkeypatch):
         self._patch(monkeypatch, "off", None)
@@ -611,3 +613,22 @@ class TestContainerAuthProbe:
                                              "reason": "not logged in"})
         status, evidence, _ = sh._probe_container_auth({})
         assert status == SILENT and "REFUSE" in evidence
+
+    def test_unreadable_marker_is_not_reported_clear(self, monkeypatch):
+        # A corrupt marker is unknown lane state, not a clear lane — the
+        # health surface must not lie about it (review 2026-08-13). The
+        # resolve path still fails open (a dead session just re-trips).
+        self._patch(monkeypatch, "on", None, status="unreadable")
+        status, evidence, obs = sh._probe_container_auth({})
+        assert status == SILENT
+        assert "UNREADABLE" in evidence
+        assert obs["breaker_status"] == "unreadable"
+
+    def test_clear_wording_claims_no_failure_not_liveness(self, monkeypatch):
+        # OK means "no auth failure observed", never "session is live" —
+        # nothing here probes liveness (review 2026-08-13).
+        self._patch(monkeypatch, "on", None)
+        status, evidence, _ = sh._probe_container_auth({})
+        assert status == OK
+        assert "no auth failure observed" in evidence
+        assert "live" not in evidence.lower()

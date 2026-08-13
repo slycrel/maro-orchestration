@@ -2293,7 +2293,13 @@ class TestContainerExecutorWrap:
         with pytest.raises(ce.ContainerUnavailable):
             a.complete([LLMMessage("user", "build")], executor=True)
 
-    def _mock_auth_failure(self, result_text="OAuth session expired · Please run /login"):
+    def _mock_auth_failure(self, container_executed=True,
+                           result_text="OAuth session expired · Please run /login"):
+        # container_executed mirrors _run_subprocess_safe's actual-lane stamp
+        # (review 2026-08-13): attribution follows where the call RAN, so the
+        # mock must say so explicitly — a bare MagicMock attribute is truthy
+        # and would silently claim the container lane. result_text feeds the
+        # structured CLI error object (the breaker searches it in full).
         m = MagicMock()
         m.returncode = 1
         m.stdout = json.dumps({
@@ -2301,6 +2307,7 @@ class TestContainerExecutorWrap:
             "is_error": True,
             "result": result_text})
         m.stderr = ""
+        m.container_executed = container_executed
         return m
 
     def _isolate_breaker(self, ce, monkeypatch, tmp_path):
@@ -2356,10 +2363,105 @@ class TestContainerExecutorWrap:
         monkeypatch.setattr(ce, "get", lambda k, d=None: d)  # container off
         monkeypatch.setattr("llm._session_fork_enabled", lambda: False)
         a = ClaudeSubprocessAdapter()
-        with patch("llm._run_subprocess_safe", return_value=self._mock_auth_failure()):
+        with patch("llm._run_subprocess_safe",
+                   return_value=self._mock_auth_failure(container_executed=False)):
             with pytest.raises(RuntimeError, match="OAuth session expired"):
                 a.complete([LLMMessage("user", "build a thing")], executor=True)
         assert ce.auth_breaker_snapshot() is None
+
+    def test_container_fallback_to_host_does_not_trip_breaker(self, monkeypatch, tmp_path):
+        # A REQUESTED container that actually ran on the host (cwd fallback)
+        # is a host story — its auth failure must not degrade the container
+        # lane (review 2026-08-13: attribution keyed on the request).
+        import container_exec as ce
+        import notify
+        ce.reset_container_caches()
+        breaker = tmp_path / "breaker.json"
+        monkeypatch.setattr(ce, "_auth_breaker_path", lambda: breaker)
+        monkeypatch.setattr(ce, "get", lambda k, d=None: "on" if k == "executor.container" else d)
+        monkeypatch.setattr(ce, "docker_probe", lambda: (True, "docker 24"))
+        emitted = []
+        monkeypatch.setattr(notify, "emit", lambda et, p, **kw: emitted.append(et) or True)
+        a = ClaudeSubprocessAdapter()
+        with patch("llm._run_subprocess_safe",
+                   return_value=self._mock_auth_failure(container_executed=False)):
+            with pytest.raises(RuntimeError, match="OAuth session expired"):
+                a.complete([LLMMessage("user", "build a thing")], executor=True)
+        assert ce.auth_breaker_snapshot() is None
+        assert emitted == []
+
+    def test_containerized_auth_error_marks_ownership(self, monkeypatch, tmp_path):
+        # The raised error carries container_auth_owned so FailoverAdapter
+        # neither trips the shared backend circuit nor re-alerts with host
+        # /login instructions (review 2026-08-13).
+        import container_exec as ce
+        import notify
+        ce.reset_container_caches()
+        breaker = tmp_path / "breaker.json"
+        monkeypatch.setattr(ce, "_auth_breaker_path", lambda: breaker)
+        monkeypatch.setattr(ce, "get", lambda k, d=None: "on" if k == "executor.container" else d)
+        monkeypatch.setattr(ce, "docker_probe", lambda: (True, "docker 24"))
+        monkeypatch.setattr(notify, "emit", lambda *a, **k: True)
+        a = ClaudeSubprocessAdapter()
+        with patch("llm._run_subprocess_safe",
+                   return_value=self._mock_auth_failure(container_executed=True)):
+            with pytest.raises(RuntimeError) as ei:
+                a.complete([LLMMessage("user", "build a thing")], executor=True)
+        assert getattr(ei.value, "container_auth_owned", False) is True
+
+    def test_failover_stands_down_for_container_owned_auth_error(self, monkeypatch):
+        # One container auth death must not trip the process-wide subprocess
+        # circuit (healthy HOST calls would reroute to the next, paid,
+        # backend) nor emit the generic host-/login alert on top of the
+        # breaker's precise one (review 2026-08-13).
+        import llm as llm_mod
+        import notify
+        emitted = []
+        monkeypatch.setattr(notify, "emit", lambda et, p, **kw: emitted.append(et) or True)
+        circuit = []
+        monkeypatch.setattr(llm_mod, "_circuit_trip",
+                            lambda b, i: circuit.append(b))
+        err = RuntimeError(
+            "claude subprocess failed (rc=1): OAuth session expired · Please run /login")
+        err.container_auth_owned = True
+        failing = MagicMock()
+        failing.backend = "claude subprocess"
+        failing.complete = MagicMock(side_effect=err)
+        fa = llm_mod.FailoverAdapter([failing])
+        with pytest.raises(Exception):
+            fa.complete([LLMMessage("user", "x")])
+        assert circuit == []
+        assert emitted == []
+
+    def test_missing_cwd_with_require_refuses_host_fallback(self, monkeypatch):
+        # Review 2026-08-13: the cwd fallback (adversarial-review 2026-07-12)
+        # bypassed require — isolation-or-nothing wins over any fallback.
+        import container_exec as ce
+        import llm as llm_mod
+        monkeypatch.setattr(ce, "container_mode", lambda: "require")
+        with pytest.raises(ce.ContainerUnavailable, match="working dir"):
+            llm_mod._run_subprocess_safe(
+                ["echo", "x"], cwd="/nonexistent-dir-xyz",
+                container_name="maro-exec-test-1")
+
+    def test_failover_still_trips_circuit_for_host_auth_error(self, monkeypatch):
+        # The stand-down is container-owned ONLY — a host auth death keeps
+        # the existing circuit + alert behavior.
+        import llm as llm_mod
+        import notify
+        monkeypatch.setattr(notify, "emit", lambda et, p, **kw: True)
+        circuit = []
+        monkeypatch.setattr(llm_mod, "_circuit_trip",
+                            lambda b, i: circuit.append(b))
+        err = RuntimeError(
+            "claude subprocess failed (rc=1): OAuth session expired · Please run /login")
+        failing = MagicMock()
+        failing.backend = "claude subprocess"
+        failing.complete = MagicMock(side_effect=err)
+        fa = llm_mod.FailoverAdapter([failing])
+        with pytest.raises(Exception):
+            fa.complete([LLMMessage("user", "x")])
+        assert circuit == ["claude subprocess"]
 
     def test_run_subprocess_safe_wraps_inner_cmd(self, monkeypatch, tmp_path):
         """With a container_name, the seam wraps the inner cmd via

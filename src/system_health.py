@@ -419,14 +419,24 @@ def _probe_container_auth(prior: Dict[str, Any]) -> Tuple[str, str, dict]:
     state each cycle so a degraded lane can't fade into background noise.
     Reads the breaker's state file only — no docker, no LLM (probe contract).
     """
-    from container_exec import container_mode, auth_breaker_snapshot
+    from container_exec import container_mode, auth_breaker_state
     mode = container_mode()
-    state = auth_breaker_snapshot()
-    obs = {"mode": mode, "breaker_tripped": state is not None}
+    state, breaker_status = auth_breaker_state()
+    obs = {"mode": mode, "breaker_tripped": state is not None,
+           "breaker_status": breaker_status}
     if mode == "off":
         return OK, "executor.container=off — container lane not in play", obs
+    if breaker_status == "unreadable":
+        return SILENT, (
+            "container auth breaker marker is UNREADABLE — lane state "
+            "unknown (resolve fails open; a dead session re-trips). "
+            "Inspect memory/container_auth_breaker.json"), obs
     if state is None:
-        return OK, f"container lane armed (mode {mode}), auth breaker clear", obs
+        # Honest claim only: clear means NO auth failure has been observed
+        # since the last trip/clear — it does not prove the session is live
+        # (zero-token probe contract; review 2026-08-13).
+        return OK, (f"container lane armed (mode {mode}) — no auth failure "
+                    "observed (reactive breaker clear)"), obs
     tripped_at = state.get("tripped_at")
     try:
         when = datetime.fromtimestamp(
@@ -495,7 +505,8 @@ DECLARED_PROCESSES: List[ProcessDeclaration] = [
     ProcessDeclaration(
         name="container_auth",
         description="containerized executor auth session (maro-claude-auth volume)",
-        expectation="configured container lane holds a live OAuth session (breaker clear)",
+        expectation=("no unresolved auth failure on the container lane "
+                     "(reactive breaker clear; liveness is not probed)"),
         probe=_probe_container_auth,
     ),
 ]

@@ -288,9 +288,22 @@ def execute_system_for_lane() -> str:
         import container_exec as _ce
         if _ce.container_mode() != "off" and not _ce.container_suppressed():
             return EXECUTE_SYSTEM_CONTAINER
+        return EXECUTE_SYSTEM
     except Exception:
-        pass
-    return EXECUTE_SYSTEM
+        # Exceptions must not pick the over-advertising direction: when
+        # config intent still reads as container, under-advertise (the
+        # container prompt on the host merely falls back to its reading
+        # protocol; host verbs advertised INTO a container is the A/B-4
+        # confound). Review 2026-08-13 — the bare host fallback here could
+        # over-advertise on a transient error.
+        try:
+            from config import get as _cfg_get
+            _raw = str(_cfg_get("executor.container", "off") or "off").lower()
+            if _raw in ("on", "require", "true"):
+                return EXECUTE_SYSTEM_CONTAINER
+        except Exception:
+            pass
+        return EXECUTE_SYSTEM
 
 # ---------------------------------------------------------------------------
 # Data pipeline enforcement helpers

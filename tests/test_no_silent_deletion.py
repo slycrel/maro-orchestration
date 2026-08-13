@@ -35,6 +35,9 @@ sys.path.insert(0, str(SRC))
 # ephemeral (temp/lock/marker files that are not run or user data), move
 # (data is written elsewhere before the original is removed).
 ALLOWED_DELETION_SITES = {
+    ("container_exec.py", "_clear_auth_breaker_if"):
+        "ephemeral breaker marker — identity-checked probe-driven clear "
+        "(same class as clear_auth_breaker; review 2026-08-13)",
     ("container_exec.py", "clear_auth_breaker"):
         "ephemeral: the container auth breaker's own state marker "
         "(memory/container_auth_breaker.json) — same class as interrupt.py's "
