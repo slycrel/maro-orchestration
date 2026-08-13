@@ -803,6 +803,122 @@ def test_get_canon_candidates_only_long_tier(monkeypatch, tmp_path):
     assert not any(c["lesson_id"] == tl.lesson_id for c in candidates)
 
 
+def _seed_canon_candidate(text="lead with action, not reasoning"):
+    """A LONG lesson over both canon bars (15 hits, 5 task types)."""
+    tl = record_tiered_lesson(text, "general", "done", "g1", tier=MemoryTier.LONG)
+    for task_type in ["research", "build", "ops", "general", "now"]:
+        for _ in range(3):
+            _record_canon_hit(tl.lesson_id, tier=MemoryTier.LONG, task_type=task_type)
+    return tl
+
+
+def _stamp_delta_evidence(lesson_id, evidence):
+    import knowledge_web as kw
+
+    def _apply(lessons):
+        for l in lessons:
+            if l.lesson_id == lesson_id:
+                l.delta_evidence = evidence
+        return lessons
+
+    kw._mutate_tiered_lessons(MemoryTier.LONG, _apply)
+
+
+def test_canon_candidates_exclude_delta_inert(monkeypatch, tmp_path):
+    # Δ-gate exclusion: a lesson measured redundant has no claim on
+    # identity, whatever its pre-measurement apply-count says.
+    _setup(monkeypatch, tmp_path)
+    tl = _seed_canon_candidate()
+    _stamp_delta_evidence(tl.lesson_id, {"route": "effect-inert", "delta": 0.0})
+    candidates = get_canon_candidates(min_hits=10, min_task_types=3)
+    assert not any(c["lesson_id"] == tl.lesson_id for c in candidates)
+
+
+def test_canon_candidates_exclude_delta_demoted(monkeypatch, tmp_path):
+    _setup(monkeypatch, tmp_path)
+    tl = _seed_canon_candidate()
+    _stamp_delta_evidence(tl.lesson_id, {"route": "effect-demote", "delta": -0.137})
+    candidates = get_canon_candidates(min_hits=10, min_task_types=3)
+    assert not any(c["lesson_id"] == tl.lesson_id for c in candidates)
+
+
+def test_canon_candidates_carry_measured_delta(monkeypatch, tmp_path):
+    _setup(monkeypatch, tmp_path)
+    tl = _seed_canon_candidate()
+    _stamp_delta_evidence(tl.lesson_id, {"route": "effect", "delta": 0.59})
+    c = next(c for c in get_canon_candidates(min_hits=10, min_task_types=3)
+             if c["lesson_id"] == tl.lesson_id)
+    assert c["measured_delta"] == 0.59
+
+
+def test_canon_candidates_no_delta_measurement_is_null(monkeypatch, tmp_path):
+    _setup(monkeypatch, tmp_path)
+    tl = _seed_canon_candidate()
+    c = next(c for c in get_canon_candidates(min_hits=10, min_task_types=3)
+             if c["lesson_id"] == tl.lesson_id)
+    assert c["measured_delta"] is None
+
+
+def test_promote_canon_lesson_door(monkeypatch, tmp_path):
+    # The door itself: playbook write + canon stamp + leaves the
+    # candidate list + second promote refused.
+    _setup(monkeypatch, tmp_path)
+    from knowledge_web import promote_canon_lesson
+    tl = _seed_canon_candidate("verify the artifact exists before claiming done")
+    result = promote_canon_lesson(tl.lesson_id)
+    assert result["ok"] is True
+    playbook = (tmp_path / "playbook.md").read_text(encoding="utf-8")
+    assert "verify the artifact exists before claiming done" in playbook
+    assert f"canon:{tl.lesson_id}" in playbook
+    row = next(l for l in load_tiered_lessons(tier=MemoryTier.LONG, min_score=0.0)
+               if l.lesson_id == tl.lesson_id)
+    assert row.canon["target"] == "playbook"
+    assert not any(c["lesson_id"] == tl.lesson_id
+                   for c in get_canon_candidates(min_hits=10, min_task_types=3))
+    again = promote_canon_lesson(tl.lesson_id)
+    assert again["ok"] is False
+
+
+def test_promote_canon_lesson_refuses_non_candidate(monkeypatch, tmp_path):
+    _setup(monkeypatch, tmp_path)
+    from knowledge_web import promote_canon_lesson
+    # Below the bars: recorded but barely applied
+    tl = record_tiered_lesson("not identity material yet", "general", "done",
+                              "g1", tier=MemoryTier.LONG)
+    _record_canon_hit(tl.lesson_id, tier=MemoryTier.LONG, task_type="research")
+    result = promote_canon_lesson(tl.lesson_id)
+    assert result["ok"] is False
+    assert "not a current canon candidate" in result["reason"]
+    assert not (tmp_path / "playbook.md").exists() or \
+        "not identity material yet" not in (tmp_path / "playbook.md").read_text(encoding="utf-8")
+
+
+def test_promote_canon_lesson_refuses_delta_inert(monkeypatch, tmp_path):
+    # The door shares the surfacer's Δ-gate exclusions — one bar
+    # definition, not two.
+    _setup(monkeypatch, tmp_path)
+    from knowledge_web import promote_canon_lesson
+    tl = _seed_canon_candidate()
+    _stamp_delta_evidence(tl.lesson_id, {"route": "effect-inert", "delta": 0.0})
+    assert promote_canon_lesson(tl.lesson_id)["ok"] is False
+
+
+def test_promote_canon_lesson_dry_run(monkeypatch, tmp_path):
+    _setup(monkeypatch, tmp_path)
+    from knowledge_web import promote_canon_lesson
+    tl = _seed_canon_candidate()
+    result = promote_canon_lesson(tl.lesson_id, dry_run=True)
+    assert result["ok"] is True and result["dry_run"] is True
+    # nothing written, nothing stamped, still a candidate
+    assert not (tmp_path / "playbook.md").exists() or \
+        tl.lesson not in (tmp_path / "playbook.md").read_text(encoding="utf-8")
+    row = next(l for l in load_tiered_lessons(tier=MemoryTier.LONG, min_score=0.0)
+               if l.lesson_id == tl.lesson_id)
+    assert not row.canon
+    assert any(c["lesson_id"] == tl.lesson_id
+               for c in get_canon_candidates(min_hits=10, min_task_types=3))
+
+
 def test_get_canon_candidates_sorted_by_hits(monkeypatch, tmp_path):
     _setup(monkeypatch, tmp_path)
     tl1 = record_tiered_lesson("lesson one", "general", "done", "g1", tier=MemoryTier.LONG)

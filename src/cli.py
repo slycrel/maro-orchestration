@@ -1307,13 +1307,27 @@ def _cmd_memory(args: argparse.Namespace) -> int:
             if not candidates:
                 print(f"No canon candidates (min_hits={min_hits}, min_task_types={min_task_types})")
             else:
-                print(f"Canon candidates ({len(candidates)}) — human review required before writing to AGENTS.md:")
+                print(f"Canon candidates ({len(candidates)}) — human review required; door: maro-memory canon-promote <id>:")
                 for c in candidates:
                     print(f"\n  [{c['lesson_id']}] applied={c['times_applied']}x across {len(c['task_types_seen'])} task types")
                     print(f"  Task types: {', '.join(c['task_types_seen'])}")
                     print(f"  Lesson: {c['lesson']}")
                     print(f"  Score={c['score']} sessions={c['sessions_validated']} recorded={c['recorded_at']}")
+                    if c.get("measured_delta") is not None:
+                        print(f"  Measured Δ: {c['measured_delta']:+.3f} (replay instrument)")
                     print(f"  → {c['recommendation']}")
+    elif memory_cmd == "canon-promote":
+        from memory import promote_canon_lesson
+        result = promote_canon_lesson(args.lesson_id,
+                                      dry_run=getattr(args, "dry_run", False))
+        if not result.get("ok"):
+            print(f"refused: {result.get('reason')}")
+            return 1
+        verb = "would promote (dry-run)" if result.get("dry_run") else "promoted"
+        print(f"{verb}: lesson_id={args.lesson_id} -> playbook Canon")
+        print(f"  entry: {result['entry']}")
+        if result.get("measured_delta") is not None:
+            print(f"  measured Δ: {result['measured_delta']:+.3f}")
     elif memory_cmd == "migrate":
         import hashlib
         from pathlib import Path as _Path

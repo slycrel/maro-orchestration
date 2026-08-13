@@ -366,7 +366,10 @@ class TestEventTypes:
         # +1 (2026-08-13): LESSON_DELTA_INERT — competence-redundancy decay:
         # a precise full-floor null (|Δ| ≤ 0.02, spread ≤ 0.02) frees the
         # lesson's decision-injection slot without blocking tenure.
-        assert len(EVENT_TYPES) == 85
+        # +1 (2026-08-13): CANON_PROMOTED — the canon door: operator verb
+        # promotes a surfaced LONG candidate to playbook Canon (closes the
+        # doorless CANON_APPLY_THRESHOLD).
+        assert len(EVENT_TYPES) == 86
 
     def test_previously_unregistered_events_in_set(self):
         from captains_log import EVOLVER_REVERTED, EVOLVER_VERIFY, PLAYBOOK_UPDATED

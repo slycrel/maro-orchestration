@@ -86,7 +86,8 @@ from knowledge_web import (  # noqa: F401, E402
     run_decay_cycle, maybe_consolidate, consolidation_due,
     inject_tiered_lessons, query_lessons,
     _increment_times_applied, _canon_stats_path, _record_canon_hit,
-    _load_canon_stats, get_canon_candidates, memory_status,
+    _load_canon_stats, get_canon_candidates, promote_canon_lesson,
+    memory_status,
 )
 from knowledge_lens import (  # noqa: F401, E402
     StandingRule, Hypothesis, Decision,

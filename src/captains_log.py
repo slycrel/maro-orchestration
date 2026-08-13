@@ -118,7 +118,8 @@ HYPOTHESIS_CONTRADICTED = "HYPOTHESIS_CONTRADICTED"
 STANDING_RULE_CONTRADICTED = "STANDING_RULE_CONTRADICTED"
 RULE_GRADUATED = "RULE_GRADUATED"
 RULE_DEMOTED = "RULE_DEMOTED"
-CANON_CANDIDATE = "CANON_CANDIDATE"  # reserved: Stage 2→3 canon promotion, no emitter yet (BACKLOG #8)
+CANON_CANDIDATE = "CANON_CANDIDATE"  # reserved: candidate-surfacing event, no emitter yet (BACKLOG #8)
+CANON_PROMOTED = "CANON_PROMOTED"    # canon door walked through: LONG lesson → playbook Canon (knowledge_web.promote_canon_lesson, operator verb)
 # Decay-by-invalidation v0 (2026-06-11): a contested standing rule was
 # re-derived against its contradiction evidence (knowledge_lens.refight_rule,
 # run from the evolver cycle). Context carries action (keep|revise|retire),
@@ -351,6 +352,7 @@ EVENT_TYPES = {
     HYPOTHESIS_CREATED, HYPOTHESIS_PROMOTED, HYPOTHESIS_CONTRADICTED,
     KNOWLEDGE_NODE_PROMOTED,
     STANDING_RULE_CONTRADICTED, RULE_GRADUATED, RULE_DEMOTED, CANON_CANDIDATE,
+    CANON_PROMOTED,
     RULE_REFOUGHT, RULE_VERIFIED, LOG_ROTATED,
     EVOLVER_APPLIED, EVOLVER_GENERATED, EVOLVER_SKIPPED, GRADUATION_PROPOSED,
     GRADUATION_VERIFIED,

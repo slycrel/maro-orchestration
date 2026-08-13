@@ -170,6 +170,13 @@ class TieredLesson:
     # (injection marker, seed-reader skip); nothing here blocks a mint.
     # Empty = no parseable claims OR minted before grounding existed.
     grounding: List[Dict[str, Any]] = field(default_factory=list)
+    # Canon door (2026-08-13, promote_canon_lesson — closes the doorless
+    # CANON_APPLY_THRESHOLD): non-empty = this LONG row was promoted to
+    # always-active identity ({promoted_at, target: "playbook"}). Stamped
+    # rows stop surfacing as canon candidates (the door was walked
+    # through); the row itself is untouched otherwise. Old rows
+    # deserialize to {}.
+    canon: Dict[str, Any] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -3059,10 +3066,18 @@ def get_canon_candidates(
     min_hits: int = CANON_APPLY_THRESHOLD,
     min_task_types: int = CANON_TASK_TYPE_MIN,
 ) -> List[Dict[str, Any]]:
-    """Return long-tier lessons eligible for promotion to AGENTS.md identity.
+    """Return long-tier lessons eligible for promotion to always-active identity.
 
     Eligibility: times_applied >= min_hits AND distinct task_types >= min_task_types.
-    Candidates are surfaced for human review — never auto-written to AGENTS.md.
+    Candidates are surfaced for human review — nothing here writes; the door
+    is the operator verb `promote_canon_lesson` (maro-memory canon-promote),
+    which appends to playbook.md's Canon section. Rows measured harmful
+    (effect-demote) or redundant (effect-inert) by the Δ-gate are excluded —
+    a lesson that measurably does nothing has no claim on identity. Rows
+    already promoted (canon stamp) stop surfacing. When a positive Δ
+    measurement exists (route effect/effect-confirm) it rides along as
+    measured_delta — the Δ-gate is a better promotion signal than raw
+    apply-counts, so show it to the human deciding.
     """
     stats = _load_canon_stats()
     long_lessons = load_tiered_lessons(tier=MemoryTier.LONG, min_score=0.0, limit=200)
@@ -3081,9 +3096,16 @@ def get_canon_candidates(
             continue
         if _is_quarantined(lesson) or _is_contested(lesson):
             # A quarantined/contested row can accumulate stale canon hits
-            # from before its stamp — never recommend it for AGENTS.md
-            # identity.
+            # from before its stamp — never recommend it for identity.
             continue
+        if _is_delta_demoted(lesson) or _is_delta_inert(lesson):
+            # Δ-gate exclusion: measured harmful or measured redundant.
+            # Apply-counts accrued BEFORE the measurement don't outrank
+            # the measurement (measurement-replaces-measurement).
+            continue
+        if lesson.canon:
+            continue  # door already walked through
+        _dev = lesson.delta_evidence or {}
         candidates.append({
             "lesson_id": lid,
             "lesson": lesson.lesson,
@@ -3093,11 +3115,84 @@ def get_canon_candidates(
             "task_types_seen": sorted(s["task_types"]),
             "sessions_validated": lesson.sessions_validated,
             "recorded_at": lesson.recorded_at[:10],
-            "recommendation": "PROMOTE TO AGENTS.md — identity-level pattern",
+            "measured_delta": (_dev.get("delta")
+                               if _dev.get("route") in ("effect",
+                                                        "effect-confirm")
+                               else None),
+            "recommendation": ("PROMOTE TO CANON (playbook.md) — "
+                               "identity-level pattern; door: "
+                               "maro-memory canon-promote " + lid),
         })
 
     candidates.sort(key=lambda x: x["times_applied"], reverse=True)
     return candidates
+
+
+def promote_canon_lesson(lesson_id: str, *, dry_run: bool = False) -> Dict[str, Any]:
+    """The canon door (2026-08-13): promote a surfaced candidate to identity.
+
+    Closes the doorless-threshold gap (V3's lesson-side twin): since
+    2026-08-02 `get_canon_candidates` surfaced rows recommending a
+    promotion no verb could execute. This verb IS the promotion:
+    append the lesson to playbook.md's Canon section — the always-active
+    operational surface (ranked injection via recall substrate #7) — and
+    stamp the row so it stops surfacing as a candidate.
+
+    Operator-driven only (nothing ambient calls it; the evolver surfaces
+    candidates as Suggestions, a human decides, this verb is the yes).
+    Eligibility is delegated wholesale to get_canon_candidates — one bar
+    definition, not two — so quarantined/contested/Δ-demoted/Δ-inert
+    rows and rows below the hit/task-type floors are refused here for
+    exactly the reasons they don't surface there.
+
+    Returns {ok, reason?, entry?}. dry_run validates without writing.
+    """
+    candidates = get_canon_candidates()
+    cand = next((c for c in candidates if c["lesson_id"] == lesson_id), None)
+    if cand is None:
+        return {"ok": False,
+                "reason": (f"{lesson_id} is not a current canon candidate — "
+                           "run maro-memory canon-candidates for the "
+                           "eligible set (bars, Δ-gate and quarantine/"
+                           "contested exclusions all live there)")}
+    entry = cand["lesson"]
+    if dry_run:
+        return {"ok": True, "dry_run": True, "entry": entry,
+                "measured_delta": cand.get("measured_delta")}
+
+    from playbook import append_to_playbook
+    append_to_playbook(entry, section="Canon",
+                       source=f"canon:{lesson_id}")
+
+    stamped: Dict[str, Any] = {}
+
+    def _stamp(lessons: List[TieredLesson]) -> List[TieredLesson]:
+        t = next((l for l in lessons if l.lesson_id == lesson_id), None)
+        if t is not None and not t.canon:
+            t.canon = {"promoted_at": datetime.now(timezone.utc).isoformat(),
+                       "target": "playbook"}
+            stamped["t"] = t
+        return lessons
+
+    _mutate_tiered_lessons(MemoryTier.LONG, _stamp)
+    try:
+        from captains_log import log_event, CANON_PROMOTED
+        log_event(
+            event_type=CANON_PROMOTED,
+            subject=lesson_id,
+            summary=(f"Canon door: lesson {lesson_id} promoted to playbook "
+                     f"Canon ({cand['times_applied']} applies across "
+                     f"{len(cand['task_types_seen'])} task types): "
+                     f"{entry[:100]}"),
+            context={"times_applied": cand["times_applied"],
+                     "task_types_seen": cand["task_types_seen"],
+                     "measured_delta": cand.get("measured_delta")},
+        )
+    except Exception:
+        pass
+    log.info("promote_canon_lesson: %s -> playbook Canon", lesson_id)
+    return {"ok": True, "entry": entry,
+            "measured_delta": cand.get("measured_delta")}
 
 
 # ---------------------------------------------------------------------------
