@@ -7337,6 +7337,32 @@ under the same two-measurement standard).
   (restart/resume inherit prior attempt's passing pytest as support),
   any input.command counts as shell (MCP forgery), 160-char silent
   JUDGE-lane clip. Suite 8316/0 skipped.
+
+- **2026-08-13** — **Export-scope decree (Jeremy, three clauses) + archive
+  format v2 SHIPPED same session.** His words: (1) *"the behavior IS
+  data … intent has always been data sharing, and that's always meant
+  all of our metadata, not just the workspace"* — user-tier
+  ~/.maro/config.yml + ~/.maro/experiments/ now ride the archive under
+  meta/ (config credential-redacted at export; box config verified
+  credential-free, 0 redactions); (2) symlinks *"config-driven … or at
+  least non-destructive; keep things portable"* — machine-pointing links
+  (absolute or resolving outside the tree, chained-link aware: the
+  venv's python→python3→/usr/bin/python3 chain classifies external)
+  travel as meta/symlinks.json data, internal relative links still ship
+  as links; (3) *"a blurb of ownership metadata … at some point we're
+  going to want a security layer (prompt/data injection) … nice to know
+  where they came from and who shared it"* — meta/provenance.json:
+  exporter identity, source roots, tool fingerprint, manifest digest
+  (integrity hint, explicitly not tamper-proof — "not enough, but a
+  start", his words), and a CUSTODY CHAIN every import appends to.
+  Import stages meta NON-DESTRUCTIVELY under <ws>/.import-meta/ (never
+  silently changes the importing machine's behavior); --apply-meta
+  places user config with backup. Live round-trip box→M1: digest OK,
+  custody export(clawd@…)→import(jeremy@…), 380 experiments files
+  staged, 5/6 symlinks correctly externalized. **Provenance's first
+  catch: the Ubuntu box still identifies as hostname
+  jeremy-Macmini-2014.** v1 archives import clean. Suite 8342/0
+  skipped.
 - **2026-08-12** — MH #1 prevention half v1 SHIPPED (evening session,
   "let's continue"): execution_receipts.py digests the recorder's
   build/calls tool_events into the pass-audit prompt — the one evidence

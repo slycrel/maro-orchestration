@@ -385,3 +385,209 @@ class TestReviewHardening:
         # Fixture exports 5 real files (memory/skills dirs ride apart).
         assert n == 5
         assert "Done: 5 files" in err
+
+
+class TestMetaArea:
+    """Archive format v2 (Jeremy 2026-08-13: 'the behavior IS data') —
+    user-tier config + experiments ride the archive under meta/, staged
+    non-destructively at import; provenance carries a custody chain."""
+
+    def _user_dir(self, monkeypatch, tmp_path):
+        d = tmp_path / "maro-user"
+        d.mkdir(exist_ok=True)
+        monkeypatch.setenv("MARO_USER_DIR", str(d))
+        return d
+
+    def test_meta_carried_and_staged_not_applied(
+            self, workspace, tmp_path, monkeypatch, capsys):
+        user = self._user_dir(monkeypatch, tmp_path)
+        (user / "config.yml").write_text(
+            "model: haiku\nscope_generation: true\n")
+        exp = user / "experiments"
+        (exp / "lt4").mkdir(parents=True)
+        (exp / "lt4" / "results.md").write_text("# results\n")
+
+        archive = tmp_path / "export.tar.gz"
+        export_workspace(output_path=archive)
+        with tarfile.open(archive, "r:gz") as tar:
+            names = [m.name for m in tar.getmembers()]
+        assert "meta/user-config.yml" in names
+        assert "meta/experiments/lt4/results.md" in names
+        assert "meta/provenance.json" in names
+
+        dest = tmp_path / "dest"
+        dest.mkdir()
+        monkeypatch.setenv("MARO_WORKSPACE", str(dest))
+        import_workspace(archive)
+        staging = dest / ".import-meta"
+        assert (staging / "user-config.yml").read_text().startswith("model:")
+        assert (staging / "experiments" / "lt4" / "results.md").exists()
+        # Behavior NOT applied without the flag: the importing machine's
+        # user tier is untouched.
+        err = capsys.readouterr().err
+        assert "behavior not applied" in err
+        assert not (user / "config.yml").read_text().startswith("REDACTED")
+
+    def test_apply_meta_places_config_with_backup(
+            self, workspace, tmp_path, monkeypatch):
+        user = self._user_dir(monkeypatch, tmp_path)
+        (user / "config.yml").write_text("model: opus\n")
+        archive = tmp_path / "export.tar.gz"
+        export_workspace(output_path=archive)
+
+        # Simulate the importing machine: same user dir, different config.
+        (user / "config.yml").write_text("model: haiku  # local\n")
+        dest = tmp_path / "dest"
+        dest.mkdir()
+        monkeypatch.setenv("MARO_WORKSPACE", str(dest))
+        import_workspace(archive, apply_meta=True)
+        assert (user / "config.yml").read_text() == "model: opus\n"
+        backups = list(user.glob("config.yml.pre-import-*"))
+        assert len(backups) == 1
+        assert backups[0].read_text() == "model: haiku  # local\n"
+
+    def test_credential_shaped_config_values_redacted(
+            self, workspace, tmp_path, monkeypatch):
+        user = self._user_dir(monkeypatch, tmp_path)
+        (user / "config.yml").write_text(
+            "model: haiku\ntelegram:\n  bot_token: 12345:AAbbCC\n"
+            "  chat_id: 42\n")
+        archive = tmp_path / "export.tar.gz"
+        export_workspace(output_path=archive)
+        with tarfile.open(archive, "r:gz") as tar:
+            text = tar.extractfile("meta/user-config.yml").read().decode()
+        assert "12345:AAbbCC" not in text
+        assert "bot_token: REDACTED-BY-EXPORT" in text
+        assert "chat_id: 42" in text  # not credential-shaped — kept
+
+    def test_provenance_digest_and_custody_chain(
+            self, workspace, tmp_path, monkeypatch, capsys):
+        self._user_dir(monkeypatch, tmp_path)
+        archive = tmp_path / "export.tar.gz"
+        export_workspace(output_path=archive)
+        dest = tmp_path / "dest"
+        dest.mkdir()
+        monkeypatch.setenv("MARO_WORKSPACE", str(dest))
+        import_workspace(archive)
+        err = capsys.readouterr().err
+        assert "PROVENANCE:" in err
+        assert "manifest digest OK" in err
+        prov = json.loads(
+            (dest / ".import-meta" / "provenance.json").read_text())
+        events = [e["event"] for e in prov["custody"]]
+        assert events == ["export", "import"]
+        assert prov["custody"][1]["manifest_verified"] is True
+
+    def test_digest_mismatch_warns(
+            self, workspace, tmp_path, monkeypatch, capsys):
+        self._user_dir(monkeypatch, tmp_path)
+        archive = tmp_path / "export.tar.gz"
+        export_workspace(output_path=archive)
+        # Tamper: append a workspace file the manifest never saw.
+        with tarfile.open(tmp_path / "tampered.tar.gz", "w:gz") as out, \
+                tarfile.open(archive, "r:gz") as tar:
+            for m in tar.getmembers():
+                f = tar.extractfile(m) if m.isfile() else None
+                out.addfile(m, f)
+            import io as _io
+            ti = tarfile.TarInfo("workspace/injected.txt")
+            payload = b"surprise"
+            ti.size = len(payload)
+            out.addfile(ti, _io.BytesIO(payload))
+        dest = tmp_path / "dest"
+        dest.mkdir()
+        monkeypatch.setenv("MARO_WORKSPACE", str(dest))
+        import_workspace(tmp_path / "tampered.tar.gz")
+        err = capsys.readouterr().err
+        assert "MISMATCH" in err
+        prov = json.loads(
+            (dest / ".import-meta" / "provenance.json").read_text())
+        assert prov["custody"][-1]["manifest_verified"] is False
+
+    def test_v1_archive_without_meta_imports_clean(
+            self, workspace, tmp_path, monkeypatch, capsys):
+        # Hand-build a v1-shaped archive: workspace members only.
+        archive = tmp_path / "v1.tar.gz"
+        with tarfile.open(archive, "w:gz") as tar:
+            tar.add(str(workspace / "playbook.md"),
+                    arcname="workspace/playbook.md")
+        dest = tmp_path / "dest"
+        dest.mkdir()
+        monkeypatch.setenv("MARO_WORKSPACE", str(dest))
+        n = import_workspace(archive)
+        err = capsys.readouterr().err
+        assert n == 1
+        assert "v1 archive (no meta/)" in err
+        assert not (dest / ".import-meta").exists()
+
+    def test_reexport_of_imported_workspace_skips_staging_dir(
+            self, workspace, tmp_path, monkeypatch):
+        staging = workspace / ".import-meta"
+        staging.mkdir()
+        (staging / "provenance.json").write_text("{}")
+        archive = tmp_path / "export.tar.gz"
+        export_workspace(output_path=archive)
+        with tarfile.open(archive, "r:gz") as tar:
+            names = [m.name for m in tar.getmembers()]
+        assert not any(".import-meta" in n for n in names)
+
+
+class TestSymlinkPortability:
+    """External symlinks travel as data (meta/symlinks.json), not links —
+    a link to /usr/bin/python3 resolves to the WRONG binary on another
+    OS (Jeremy 2026-08-13: portable, or at least non-destructive)."""
+
+    def test_external_absolute_symlink_recorded_not_shipped(
+            self, workspace, tmp_path, monkeypatch):
+        self_dir = tmp_path / "maro-user"
+        self_dir.mkdir(exist_ok=True)
+        monkeypatch.setenv("MARO_USER_DIR", str(self_dir))
+        scratch = workspace / "runs" / "r1" / "scratch"
+        scratch.mkdir(parents=True)
+        (scratch / "pybin").symlink_to("/usr/bin/python3")
+        (scratch / "loglink").symlink_to("/tmp/nonexistent-target.out")
+
+        archive = tmp_path / "export.tar.gz"
+        export_workspace(output_path=archive)
+        with tarfile.open(archive, "r:gz") as tar:
+            links = [m.name for m in tar.getmembers() if m.issym()]
+            rec = json.loads(
+                tar.extractfile("meta/symlinks.json").read().decode())
+        assert links == []
+        recorded = {l["path"]: l["target"] for l in rec["links"]}
+        assert recorded["runs/r1/scratch/pybin"] == "/usr/bin/python3"
+        assert recorded["runs/r1/scratch/loglink"] == \
+            "/tmp/nonexistent-target.out"
+
+    def test_internal_relative_symlink_still_ships_as_link(
+            self, workspace, tmp_path, monkeypatch):
+        self_dir = tmp_path / "maro-user"
+        self_dir.mkdir(exist_ok=True)
+        monkeypatch.setenv("MARO_USER_DIR", str(self_dir))
+        venv = workspace / "runs" / "r1" / "venv"
+        venv.mkdir(parents=True)
+        (venv / "lib").mkdir()
+        (venv / "lib64").symlink_to("lib")
+
+        archive = tmp_path / "export.tar.gz"
+        export_workspace(output_path=archive)
+        with tarfile.open(archive, "r:gz") as tar:
+            syms = {m.name: m.linkname
+                    for m in tar.getmembers() if m.issym()}
+        assert syms == {"workspace/runs/r1/venv/lib64": "lib"}
+
+    def test_escaping_relative_symlink_recorded_not_shipped(
+            self, workspace, tmp_path, monkeypatch):
+        self_dir = tmp_path / "maro-user"
+        self_dir.mkdir(exist_ok=True)
+        monkeypatch.setenv("MARO_USER_DIR", str(self_dir))
+        (workspace / "sneaky").symlink_to("../outside-the-tree")
+
+        archive = tmp_path / "export.tar.gz"
+        export_workspace(output_path=archive)
+        with tarfile.open(archive, "r:gz") as tar:
+            links = [m.name for m in tar.getmembers() if m.issym()]
+            rec = json.loads(
+                tar.extractfile("meta/symlinks.json").read().decode())
+        assert links == []
+        assert rec["links"][0]["path"] == "sneaky"

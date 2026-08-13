@@ -333,8 +333,33 @@ tables both sides. **Residual gaps are now location and semantics, not
 fidelity** — unchanged classes: user-tier `~/.maro/config.yml` +
 `~/.maro/experiments/` (outside the workspace), 5,401 files embedding
 `/home/clawd` paths, 6 box-target symlinks, ownership mapped to the
-importing user. Live copy: `~/maro-box-copy/workspace`
-(`MARO_WORKSPACE`), archive `~/maro-box-export-v2.tar.gz`.
+importing user.
+
+**ROUND 3 — archive format v2 (2026-08-13, Jeremy's export-scope
+decree: "the behavior IS data … all of our metadata"): the location
+gaps are CLOSED, carried under a new `meta/` area.** user-config.yml
+(credential-shaped values redacted at export; box config verified
+credential-free) + experiments/ (380 files) now ride the archive;
+machine-pointing symlinks travel as `meta/symlinks.json` data instead
+of links (chained-link aware — the venv python→python3→/usr/bin chain
+correctly classifies external; internal relative links still ship as
+links); `meta/provenance.json` carries exporter identity, source
+roots, tool fingerprint, a manifest digest (integrity hint, NOT
+tamper-proof — no signing yet, deliberately labeled), and a custody
+chain every import appends to — groundwork for the future
+injection-guard/sharing security layer. Import stages all meta
+non-destructively under `<ws>/.import-meta/` (behavior never applied
+silently); `--apply-meta` places user config with a backup. Live
+box→M1 round-trip: digest OK, custody chain
+export(clawd@…)→import(jeremy@…), v1 archives still import clean.
+Provenance's first catch: **the Ubuntu box's hostname is still
+`jeremy-Macmini-2014`.** REMAINING (inherent semantics, not location):
+embedded `/home/clawd` paths inside artifacts/checkpoints —
+provenance now records `source.workspace_root` so a future consumer
+CAN rewrite them; ownership maps to the importing user. Live copy:
+`~/maro-box-copy/workspace` (`MARO_WORKSPACE`), archive
+`~/maro-box-export-v3.tar.gz`; prior copy kept aside at
+`workspace.pre-import-20260813T002048` (prune when convenient).
 
 **Review-hardened same day (3-lens Codex review of 707a541 — REJECT →
 fixed):** all reproduced before fixing. (1) traversal guard was
