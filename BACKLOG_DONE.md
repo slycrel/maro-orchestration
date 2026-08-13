@@ -7988,3 +7988,35 @@ Original item:
   age+content instead of re-observation.~~ **DECIDED 2026-08-08: judge
   on age+content** (decision 1addc859, Jeremy ambivalent, went with
   recommendation — the re-observation design is empirically refuted).
+
+## Doorless canon threshold (V3's lesson-side twin) — completed 2026-08-13
+
+Surfaced 2026-08-03 (LeAct contrast audit), shipped 2026-08-13 (1f34ca9)
+as the second piece of Jeremy's 2026-08-12 LeAct go. Original problem:
+V3 gave knowledge NODES an earned promote path
+(`promote_knowledge_candidates`) 2026-08-02; the canon-LESSON path never
+got one — `get_canon_candidates` surfaced rows at
+`CANON_APPLY_THRESHOLD = 10` recommending "PROMOTE TO AGENTS.md" while
+no `promote_canon_*` existed anywhere (verified 2026-08-03, re-verified
+2026-08-08; all consumers were readers). It stopped being cosmetic when
+the receipt write-back (2026-07-29) made `times_applied` actually accrue,
+so candidates would genuinely arrive at a threshold with no door — and
+the consumer-first read is that a threshold with no door is worse than
+no threshold. The 2026-08-03 Opus contrast praised the node path without
+noticing this twin, which is how it survived two reviews.
+
+Door-or-no-door decided: DOOR, and the sequencing note ("the Δ-gate
+would give this path a better gate than V3's if it lands first") cashed
+in — the Δ-gate had landed by build time. Shape shipped:
+`promote_canon_lesson(lesson_id, dry_run)` operator verb (CLI
+`maro-memory canon-promote`) appends the lesson to playbook.md's Canon
+section (the always-active ranked-injection surface — the honest maro
+equivalent of the old "AGENTS.md identity" language) and stamps the row
+`canon={promoted_at, target}` so it leaves the candidate list.
+Eligibility delegates wholesale to `get_canon_candidates` (one bar
+definition), which now ALSO excludes Δ-demoted and Δ-inert rows
+(measured harmful/redundant ≠ identity) and annotates `measured_delta`
+when a positive replay measurement exists. Human stays in the loop by
+construction: the evolver surfaces candidates as Suggestions, nothing
+ambient calls the verb. CANON_PROMOTED captain's-log event;
+CANON_CANDIDATE stays reserved for a future candidate-surfacing emitter.

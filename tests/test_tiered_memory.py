@@ -903,6 +903,54 @@ def test_promote_canon_lesson_refuses_delta_inert(monkeypatch, tmp_path):
     assert promote_canon_lesson(tl.lesson_id)["ok"] is False
 
 
+def test_promote_canon_lesson_lands_in_canon_section(monkeypatch, tmp_path):
+    # Section membership, not whole-file substring (skeptic finding 1):
+    # the canon source marker must sit under ## Canon.
+    _setup(monkeypatch, tmp_path)
+    from knowledge_web import promote_canon_lesson
+    tl = _seed_canon_candidate("prefer executed probes over narrated checks")
+    assert promote_canon_lesson(tl.lesson_id)["ok"] is True
+    text = (tmp_path / "playbook.md").read_text(encoding="utf-8")
+    canon_start = text.index("## Canon")
+    canon_end = text.find("\n## ", canon_start + 1)
+    canon_section = text[canon_start:canon_end if canon_end >= 0 else len(text)]
+    assert f"canon:{tl.lesson_id}" in canon_section
+
+
+def test_promote_canon_lesson_refuses_on_dedup(monkeypatch, tmp_path):
+    # append_to_playbook silently skips when the entry text already
+    # exists anywhere in the playbook — the door must not report success
+    # or stamp on a skipped write (skeptic finding 1).
+    _setup(monkeypatch, tmp_path)
+    from knowledge_web import promote_canon_lesson
+    from playbook import append_to_playbook
+    tl = _seed_canon_candidate("dedup me: this text predates the promotion")
+    append_to_playbook(tl.lesson, section="Learned", source="evolver:test")
+    result = promote_canon_lesson(tl.lesson_id)
+    assert result["ok"] is False
+    assert "deduped" in result["reason"]
+    # not stamped — still a candidate for after the operator curates
+    row = next(l for l in load_tiered_lessons(tier=MemoryTier.LONG, min_score=0.0)
+               if l.lesson_id == tl.lesson_id)
+    assert not row.canon
+    assert any(c["lesson_id"] == tl.lesson_id
+               for c in get_canon_candidates(min_hits=10, min_task_types=3))
+
+
+def test_promote_canon_lesson_custom_bars(monkeypatch, tmp_path):
+    # A candidate surfaced with lowered bars can walk through the same
+    # door (skeptic finding 3 — bars pass through, no silent revert to
+    # defaults).
+    _setup(monkeypatch, tmp_path)
+    from knowledge_web import promote_canon_lesson
+    tl = record_tiered_lesson("young but real pattern", "general", "done",
+                              "g1", tier=MemoryTier.LONG)
+    _record_canon_hit(tl.lesson_id, tier=MemoryTier.LONG, task_type="research")
+    assert promote_canon_lesson(tl.lesson_id)["ok"] is False  # default bars
+    result = promote_canon_lesson(tl.lesson_id, min_hits=1, min_task_types=1)
+    assert result["ok"] is True
+
+
 def test_promote_canon_lesson_dry_run(monkeypatch, tmp_path):
     _setup(monkeypatch, tmp_path)
     from knowledge_web import promote_canon_lesson

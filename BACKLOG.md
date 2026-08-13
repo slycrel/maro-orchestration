@@ -4901,32 +4901,11 @@ BACKLOG; era refs in `docs/KNOWLEDGE_JOURNEY.md` + era files):**
 **Battery side-finds V3/V4: both SHIPPED — moved to BACKLOG_DONE.md
 2026-08-02 (V3 promote path shipped that day; V4 shipped 2026-07-29).**
 
-- [ ] **V3's lesson-side twin is still a doorless threshold — and it just
-  started receiving traffic (surfaced 2026-08-03, LeAct contrast audit).**
-  V3 gave knowledge NODES an earned promote path
-  (`promote_knowledge_candidates`, knowledge_web.py). The **canon-LESSON**
-  path never got one: `get_canon_candidates` (knowledge_web.py:1663)
-  surfaces rows at `CANON_APPLY_THRESHOLD = 10` and **nothing promotes
-  them** — no `promote_canon_*` exists. Verified against the tree
-  2026-08-03; the only `CANON_APPLY_THRESHOLD` consumers are the surfacer
-  and a memory.py re-export. **STILL TRUE, re-verified 2026-08-08** (line
-  numbers drifted — the surfacer is now `knowledge_web.py:2180`, the
-  threshold `:2130`): `promote_canon_*` returns zero hits across `src/`;
-  the only consumers remain `cli.py:1275`, `evolver_scans.py:589`,
-  `knowledge.py:65` and the `memory.py` re-export — all readers, no door. Two reasons this stops being cosmetic now:
-  (1) the receipt write-back thread (SHIPPED 2026-07-29) made
-  `times_applied` actually accrue on lessons for the first time — before
-  that every row sat at 0 and the threshold was unreachable, so the
-  missing door cost nothing; candidates will now genuinely arrive.
-  (2) The 2026-08-03 Opus contrast praised the node promote path without
-  noticing the lesson twin, which is how this stayed invisible through two
-  reviews. Decide door-or-no-door deliberately: either mirror V3's shape
-  (numeric gates + validation, same degradation contract) or retire the
-  surfacer so nothing implies a promotion that can't happen — the
-  consumer-first read is that a threshold with no door is worse than no
-  threshold. Related: the Δ-gate work below would give this path a
-  *better* gate than V3's if it lands first, so check sequencing before
-  building the mirror.
+- [x] **V3's lesson-side twin (doorless canon threshold) — SHIPPED
+  2026-08-13 (1f34ca9), moved to BACKLOG_DONE.md with full context.**
+  Door built, Δ-gate-aware: `promote_canon_lesson` operator verb →
+  playbook.md Canon section; surfacer excludes Δ-demoted/Δ-inert rows
+  and annotates measured Δ. This closed the LeAct go's second piece.
 
 **Era-file C-tier drops (grounding-checker review §C — out-of-arc,
 batched here so the drop is deliberate; full context in each era file's

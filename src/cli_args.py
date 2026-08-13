@@ -423,6 +423,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_mem_canon_promote = memory_sub.add_parser("canon-promote", help="The canon door: promote a surfaced candidate to playbook.md's Canon section (always-active identity). Refuses non-candidates — same bars and exclusions as canon-candidates")
     p_mem_canon_promote.add_argument("lesson_id", help="Lesson ID from canon-candidates")
     p_mem_canon_promote.add_argument("--dry-run", action="store_true", help="Validate eligibility without writing")
+    p_mem_canon_promote.add_argument("--min-hits", type=int, default=10, help="Match the bars you surfaced the candidate with (default 10)")
+    p_mem_canon_promote.add_argument("--min-task-types", type=int, default=3, help="Match the bars you surfaced the candidate with (default 3)")
     p_mem_migrate = memory_sub.add_parser("migrate", help="Migrate existing JSONL memory files to SQLite backend idempotently (Phase 40)")
     p_mem_migrate.add_argument("--src-dir", default=None, help="Source directory containing JSONL files (default: memory_dir from config)")
     p_mem_migrate.add_argument("--db-path", default=None, help="Destination SQLite database path (default: memory_dir/memory.db)")

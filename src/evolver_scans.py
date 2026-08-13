@@ -611,7 +611,7 @@ def scan_canon_candidates(
                 f"PROMOTE TO IDENTITY (Stage 3): '{lesson_text}' — "
                 f"applied {times}x across {len(types)} task types "
                 f"({', '.join(types[:4])}). "
-                f"Add to AGENTS.md or persona system prompt to eliminate retrieval cost."
+                f"Door: maro-memory canon-promote {lid} (writes playbook Canon — always-active)."
             ),
             failure_pattern=f"lesson_id={lid} times_applied={times} task_types={len(types)}",
             confidence=min(0.95, 0.5 + times * 0.03 + len(types) * 0.05),

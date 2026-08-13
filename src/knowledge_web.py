@@ -3128,7 +3128,9 @@ def get_canon_candidates(
     return candidates
 
 
-def promote_canon_lesson(lesson_id: str, *, dry_run: bool = False) -> Dict[str, Any]:
+def promote_canon_lesson(lesson_id: str, *, dry_run: bool = False,
+                         min_hits: int = CANON_APPLY_THRESHOLD,
+                         min_task_types: int = CANON_TASK_TYPE_MIN) -> Dict[str, Any]:
     """The canon door (2026-08-13): promote a surfaced candidate to identity.
 
     Closes the doorless-threshold gap (V3's lesson-side twin): since
@@ -3145,9 +3147,15 @@ def promote_canon_lesson(lesson_id: str, *, dry_run: bool = False) -> Dict[str, 
     rows and rows below the hit/task-type floors are refused here for
     exactly the reasons they don't surface there.
 
+    min_hits/min_task_types mirror get_canon_candidates so a candidate
+    surfaced with lowered bars (canon-candidates --min-hits N) can walk
+    through the same door it was advertised (skeptic finding 3 — the CLI
+    passes the operator's bars through).
+
     Returns {ok, reason?, entry?}. dry_run validates without writing.
     """
-    candidates = get_canon_candidates()
+    candidates = get_canon_candidates(min_hits=min_hits,
+                                      min_task_types=min_task_types)
     cand = next((c for c in candidates if c["lesson_id"] == lesson_id), None)
     if cand is None:
         return {"ok": False,
@@ -3160,21 +3168,52 @@ def promote_canon_lesson(lesson_id: str, *, dry_run: bool = False) -> Dict[str, 
         return {"ok": True, "dry_run": True, "entry": entry,
                 "measured_delta": cand.get("measured_delta")}
 
-    from playbook import append_to_playbook
-    append_to_playbook(entry, section="Canon",
-                       source=f"canon:{lesson_id}")
+    # Append, then VERIFY the entry actually landed before stamping —
+    # append_to_playbook silently dedupes when the entry text already
+    # appears anywhere in the playbook (e.g. under Learned), and stamping
+    # on a skipped write would hide the candidate forever while never
+    # making it Canon (skeptic finding 1). The source marker is the
+    # verifiable fingerprint of THIS append.
+    from playbook import append_to_playbook, load_playbook
+    marker = f"canon:{lesson_id}"
+    append_to_playbook(entry, section="Canon", source=marker)
+    if marker not in load_playbook():
+        return {"ok": False,
+                "reason": (f"playbook append was deduped — the lesson text "
+                           f"already appears in playbook.md outside Canon. "
+                           f"Nothing was stamped; curate the existing entry "
+                           f"into ## Canon by hand, then re-run (the row "
+                           f"stays a candidate until the {marker} marker "
+                           f"exists)")}
 
     stamped: Dict[str, Any] = {}
 
     def _stamp(lessons: List[TieredLesson]) -> List[TieredLesson]:
         t = next((l for l in lessons if l.lesson_id == lesson_id), None)
-        if t is not None and not t.canon:
-            t.canon = {"promoted_at": datetime.now(timezone.utc).isoformat(),
-                       "target": "playbook"}
-            stamped["t"] = t
+        if t is None or t.canon:
+            return lessons
+        # Re-validate exclusions on the fresh in-lock row — a concurrent
+        # replay/contest between the candidate read and this write must
+        # not be laundered into identity (skeptic finding 2).
+        if (_is_quarantined(t) or _is_contested(t)
+                or _is_delta_demoted(t) or _is_delta_inert(t)):
+            return lessons
+        t.canon = {"promoted_at": datetime.now(timezone.utc).isoformat(),
+                   "target": "playbook"}
+        stamped["t"] = t
         return lessons
 
     _mutate_tiered_lessons(MemoryTier.LONG, _stamp)
+    if "t" not in stamped:
+        # The playbook entry stands (data retention — never unwrite);
+        # report the truth instead of a hollow success.
+        return {"ok": False, "entry": entry,
+                "reason": (f"playbook Canon entry was appended, but the row "
+                           f"could not be stamped — {lesson_id} was removed "
+                           f"or newly excluded (contested/quarantined/"
+                           f"Δ-measured) mid-promotion. Review the Canon "
+                           f"entry by hand; canon-candidates shows the "
+                           f"row's current state")}
     try:
         from captains_log import log_event, CANON_PROMOTED
         log_event(

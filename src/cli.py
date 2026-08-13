@@ -1318,8 +1318,11 @@ def _cmd_memory(args: argparse.Namespace) -> int:
                     print(f"  → {c['recommendation']}")
     elif memory_cmd == "canon-promote":
         from memory import promote_canon_lesson
-        result = promote_canon_lesson(args.lesson_id,
-                                      dry_run=getattr(args, "dry_run", False))
+        result = promote_canon_lesson(
+            args.lesson_id,
+            dry_run=getattr(args, "dry_run", False),
+            min_hits=getattr(args, "min_hits", 10),
+            min_task_types=getattr(args, "min_task_types", 3))
         if not result.get("ok"):
             print(f"refused: {result.get('reason')}")
             return 1

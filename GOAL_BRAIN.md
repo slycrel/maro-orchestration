@@ -7426,3 +7426,12 @@ under the same two-measurement standard).
   consequence stands: next lever is planner-level (plan steps naming
   the verb), not more prompt wording — the prompt-teaching axis is
   exhausted on two corpora.
+- **2026-08-13** — Canon door SHIPPED (1f34ca9): the LeAct go's second
+  and final piece. `promote_canon_lesson` operator verb (maro-memory
+  canon-promote) → playbook.md Canon section + canon stamp;
+  get_canon_candidates now Δ-gate-aware (excludes effect-demote/
+  effect-inert rows, annotates measured Δ) — the 2026-08-03 sequencing
+  note's "better gate than V3's" cashed in. Human-in-the-loop by
+  construction (nothing ambient calls the verb). **The 2026-08-12
+  LeAct go is now fully landed**: competence-redundancy decay v1 +
+  canon door, both same-day adversarially reviewed.

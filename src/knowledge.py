@@ -279,9 +279,9 @@ def print_promote_actions() -> None:
         print()
 
     if not _fmt_error(s3) and s3["canon_candidates"]:
-        print(f"  Stage 3→identity (long→AGENTS.md): {s3['canon_candidates']} candidate(s)")
+        print(f"  Stage 3→identity (long→playbook Canon): {s3['canon_candidates']} candidate(s)")
         print(f"    maro-memory canon-candidates  # review first")
-        print(f"    # HUMAN GATE — no auto-writer by design; promote by editing AGENTS.md by hand")
+        print(f"    maro-memory canon-promote <id>  # HUMAN GATE — the verb is your yes")
         print()
 
     if not _fmt_error(s4) and s4["promote_ready"]:
