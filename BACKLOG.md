@@ -361,6 +361,46 @@ CAN rewrite them; ownership maps to the importing user. Live copy:
 `~/maro-box-export-v3.tar.gz`; prior copy kept aside at
 `workspace.pre-import-20260813T002048` (prune when convenient).
 
+**Meta staging placement — DECIDED 2026-08-13 (delegated: "up to
+you"):** stays under the workspace at `<ws>/.import-meta/`. Jeremy's
+gut ("operational/working data → under the workspace") is what's
+already built: staged meta travels with the workspace copy, gets moved
+aside together by `--clean`, and re-exports skip it. The `meta/`-vs-
+`workspace/` split inside the ARCHIVE is a format concern (routing +
+back-compat), not a statement about where meta lives at rest. No
+change.
+
+**Path-token rewriting (`/home/clawd` → `${MARO_HOME}` at export,
+reverse at import) — FILED 2026-08-13, low priority by Jeremy's call,
+with his worry on record: "I'm a little concerned that's setting us up
+for troublesome bugs in the future if we don't go there." 5,401 files
+embed source-machine paths. DO NOT build this as a naive regex over
+the archive — the traps, pre-documented so future-us doesn't learn
+them live:**
+- **Content-addressed stores must NEVER be rewritten**: archived
+  project repos carry `.git/objects/**` — rewriting bytes there
+  corrupts the repo (and any hash recorded over file content breaks
+  the same way).
+- **Binaries and sqlite**: correspondence.db and friends contain paths
+  INSIDE database pages; regexing a db file corrupts it. Path fixes in
+  sqlite need SQL-level updates per known column, or exclusion.
+- **The provenance manifest digest** describes the bytes in the
+  archive — rewrite at export means digesting rewritten bytes (fine,
+  but decide explicitly); rewrite at import means the digest no longer
+  matches the on-disk result (also fine, but the custody event must
+  say transformed=true).
+- **Three candidate shapes**, roughly in order of ascending safety:
+  (a) export-time rewrite of text files only (fast import, but the
+  archive no longer matches the source — reconciliation vs the box
+  gets harder); (b) import-time rewrite, text files only, recorded in
+  custody (archive stays a faithful copy — leans on provenance's
+  `source.workspace_root`/`maro_user_dir`, which were recorded for
+  exactly this); (c) no byte munging at all — a runtime path-alias
+  layer where consumers translate via provenance source roots (zero
+  corruption risk, but touches every consumer). Lean (b) when this
+  gets built; (c) is the durable end-state if cross-machine sharing
+  becomes routine.
+
 **Review-hardened same day (3-lens Codex review of 707a541 — REJECT →
 fixed):** all reproduced before fixing. (1) traversal guard was
 `str.startswith` — `<ws>-evil` passed as inside `<ws>`, and on Python
