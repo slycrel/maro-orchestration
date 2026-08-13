@@ -95,19 +95,23 @@ def _display(text: str) -> str:
 def load_receipts(run_dir, cap: int = MAX_RECEIPTS) -> Dict[str, Any]:
     """Collect recorded tool executions from a run dir's call files.
 
-    Returns ``{"rows": [...], "unreadable_files": int, "truncated":
-    bool}`` and never raises — missing dir yields empty rows; each
-    unreadable/oversized/malformed file fails alone and is COUNTED
-    (skeptic round: a silently skipped file must not let the remainder
-    masquerade as the complete record). ``truncated`` means the
-    collection hit a cap (rows or files) with record left unscanned.
-    Receipt rows carry the command, a bounded output head, the
-    harness-recorded error flag, and the source call file name.
+    Returns ``{"rows": [...], "unreadable_files": int,
+    "malformed_events": int, "truncated": bool}`` and never raises —
+    missing dir yields empty rows; each unreadable/oversized/malformed
+    file fails alone and is COUNTED (skeptic round: a silently skipped
+    file must not let the remainder masquerade as the complete record),
+    and type-corrupt tool events inside readable files are counted too
+    (round 3: a non-string ``command`` could have been the missing
+    execution receipt). ``truncated`` means the collection hit a cap
+    (rows or files) with record left unscanned. Receipt rows carry the
+    command, a bounded output head, the harness-recorded error flag,
+    and the source call file name.
     """
     if not isinstance(cap, int) or cap <= 0:
         cap = MAX_RECEIPTS
     rows: List[Dict[str, Any]] = []
     unreadable = 0
+    malformed = 0
     truncated = False
     try:
         # islice bounds DISCOVERY too (fixpoint round 2: a junk-spammed
@@ -119,7 +123,8 @@ def load_receipts(run_dir, cap: int = MAX_RECEIPTS) -> Dict[str, Any]:
         calls = list(islice(Path(run_dir).glob("build/calls/call-*.json"),
                             MAX_SCANNED_FILES + 1))
     except Exception:
-        return {"rows": rows, "unreadable_files": 0, "truncated": False}
+        return {"rows": rows, "unreadable_files": 0, "malformed_events": 0,
+                "truncated": False}
     if len(calls) > MAX_SCANNED_FILES:
         calls = calls[:MAX_SCANNED_FILES]
         truncated = True
@@ -149,10 +154,23 @@ def load_receipts(run_dir, cap: int = MAX_RECEIPTS) -> Dict[str, Any]:
                 truncated = True
                 break
             if not isinstance(ev, dict):
+                # Round 3: type-corrupt events are counted, not silently
+                # dropped — the corrupt entry could have been the missing
+                # execution receipt. Events merely LACKING a command
+                # (Read/Write/etc. tools) stay a normal silent skip.
+                malformed += 1
                 continue
             inp = ev.get("input")
+            if inp is not None and not isinstance(inp, dict):
+                malformed += 1
+                continue
             cmd = inp.get("command") if isinstance(inp, dict) else None
-            if not isinstance(cmd, str) or not cmd.strip():
+            if cmd is None:
+                continue
+            if not isinstance(cmd, str):
+                malformed += 1
+                continue
+            if not cmd.strip():
                 continue
             output = ev.get("output")
             rows.append({
@@ -163,7 +181,7 @@ def load_receipts(run_dir, cap: int = MAX_RECEIPTS) -> Dict[str, Any]:
                 "call": path.name,
             })
     return {"rows": rows, "unreadable_files": unreadable,
-            "truncated": truncated}
+            "malformed_events": malformed, "truncated": truncated}
 
 
 def _check_path_tokens(check_results: List[dict]) -> List[str]:
@@ -198,6 +216,9 @@ def render_receipt_evidence(loaded: Dict[str, Any],
     if loaded.get("unreadable_files"):
         incomplete_bits.append(
             f"{loaded['unreadable_files']} call file(s) unreadable")
+    if loaded.get("malformed_events"):
+        incomplete_bits.append(
+            f"{loaded['malformed_events']} tool event(s) malformed")
     if loaded.get("truncated"):
         incomplete_bits.append("collection capped before the end of the record")
     lines: List[str] = [
@@ -207,10 +228,23 @@ def render_receipt_evidence(loaded: Dict[str, Any],
         lines.append(
             "RECORD INCOMPLETE (" + "; ".join(incomplete_bits) + ") — "
             "absence of an entry below is NOT established.")
+    # Round 3: the error AGGREGATE is display-cap-independent — a failed
+    # ninth runner must not vanish behind eight benign listed commands.
+    err_total = sum(1 for r in rows if r.get("is_error"))
+    if err_total:
+        lines.append(
+            f"Harness-flagged errors across ALL {len(rows)} recorded "
+            f"command(s): {err_total} (error-flagged entries listed "
+            "first below).")
+    # Error-flagged rows sort to the front of every bounded listing so
+    # display caps can never hide the decisive failure (stable sort —
+    # record order kept within each group).
+    _errs_first = lambda r: not r.get("is_error")  # noqa: E731
     process = [r for r in rows if _PROCESS_MARKERS.search(r["command"])]
     if process:
-        shown = process[:MAX_LISTED_RECEIPTS]
-        showing = (f" (showing first {len(shown)} of {len(process)})"
+        shown = sorted(process, key=_errs_first)[:MAX_LISTED_RECEIPTS]
+        showing = (f" (showing {len(shown)} of {len(process)}, "
+                   "error-flagged first)"
                    if len(process) > len(shown) else "")
         lines.append(
             f"Commands whose text matches KNOWN test/build runners: "
@@ -238,9 +272,10 @@ def render_receipt_evidence(loaded: Dict[str, Any],
                 "recorded (pattern list is not exhaustive — judge the "
                 "recorded commands below before treating this as absence "
                 "of process work).")
-        sample = rows[:MAX_LISTED_RECEIPTS]
+        sample = sorted(rows, key=_errs_first)[:MAX_LISTED_RECEIPTS]
         lines.append(
-            f"Sample of recorded commands ({len(sample)} of {len(rows)}):")
+            f"Sample of recorded commands ({len(sample)} of {len(rows)}, "
+            "error-flagged first):")
         for r in sample:
             flag = " [HARNESS FLAGGED ERROR]" if r.get("is_error") else ""
             lines.append(f"  $ {_display(r['command'])[:160]}{flag}")
@@ -286,10 +321,12 @@ def audit_receipt_block(check_results: Optional[List[dict]] = None) -> str:
                     "not as evidence of absence.")
         loaded = load_receipts(run_dir)
         if not loaded["rows"]:
-            if loaded["unreadable_files"]:
+            if (loaded["unreadable_files"] or loaded["malformed_events"]
+                    or loaded["truncated"]):
                 return ("Harness execution receipts: UNAVAILABLE (call "
-                        "record present but unreadable) — treat as no "
-                        "signal, not as evidence of absence.")
+                        "record present but could not be fully read — "
+                        "unreadable, malformed, or capped before the end) "
+                        "— treat as no signal, not as evidence of absence.")
             return ("Harness execution receipts: UNAVAILABLE (record mode "
                     "off or no tool events captured) — treat as no signal, "
                     "not as evidence of absence.")

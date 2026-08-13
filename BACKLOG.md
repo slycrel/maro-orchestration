@@ -457,10 +457,23 @@ retracted by the step-9 adversarial pass — see below):
   (junk-spammed calls dir can't force unbounded glob+sort); (5)
   listing/clip truncation now visible ("showing first 8 of N",
   "[digest truncated for length]"); (6) bogus cap falls back instead
-  of raising. 30 pins. Deferred, evidence-gated: mechanical
-  receipt→check matching as a closure-check INPUT (skip-the-LLM
-  upgrade) — build if pass-audit stamps accumulate showing receipts
-  alone would have decided.
+  of raising. 30 pins. **Round 3 2026-08-12 — FIXPOINT DECLARED**: 3
+  findings (1H/1M/1L, again all real), pure display-accounting class →
+  fixed: error AGGREGATE line independent of display caps + error-
+  flagged rows sort to the front of every bounded listing (a failed
+  9th runner can't hide behind 8 benign look-alikes); type-corrupt
+  tool events (non-string command, non-dict event/input) counted as
+  `malformed_events` → RECORD INCOMPLETE (no-command events still skip
+  silently — that's normal Read/Write traffic); zero-rows-with-
+  corruption names the right UNAVAILABLE reason (not "record mode
+  off"). 35 pins. Severity trend 3H→2H→1H-narrow, round-3 class was
+  accounting not architecture → stopped per converges-by-3-4. Ops
+  note: codex CLI flaky tonight — file-pointer prompts hung twice at
+  0% CPU; inline-everything + foreground + timeout is the reliable
+  shape. Deferred, evidence-gated: mechanical receipt→check matching
+  as a closure-check INPUT (skip-the-LLM upgrade) — build if
+  pass-audit stamps accumulate showing receipts alone would have
+  decided.
 - **#3 Observation Failure (env—model), high** — `step_exec.py`
   `_summarize_tool_events` truncates 2000 chars / 50 events silently
   (same class as the arbitrary-truncation audit already on this backlog).

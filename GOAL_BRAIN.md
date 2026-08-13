@@ -7339,3 +7339,19 @@ under the same two-measurement standard).
   exit 0. Fixpoint judgment: single round sufficient — findings were
   presentation/honesty hardening, no architecture change; the deferred
   mechanical receipt→check matching stays evidence-gated.
+- **2026-08-12** — Receipts review ran to FIXPOINT after all (r2+r3
+  same night, superseding the single-round judgment above): r2 found 6
+  real (biggest: narrow runner regex + refute-on-complete-record
+  doctrine = false-degradation lane for jest/vitest/gradle projects —
+  fixed with widened regex, KNOWN-patterns scoping, command sample,
+  judge-the-commands doctrine; plus newline/fence forgery closed in
+  BOTH receipt and artifact lanes — the artifact-fence spoof was
+  self-found, injection_guard has no fence pattern); r3 found 3 real
+  (display-cap error hiding → cap-independent error aggregate +
+  errors-first listings; type-corrupt events counted; honest
+  UNAVAILABLE reasons). 35 pins, suite 8284/1 skip exit 0. Severity
+  converged 3H→2H→1H-narrow; stopped at r3 per converges-by-3-4.
+  Reviewer hallucination rate across all 3 rounds: 0/14 — the 0–78%
+  verify-before-fix range now includes a clean-sweep reviewer;
+  verification stays unconditional. Ops: codex file-pointer prompts
+  hang (0% CPU); inline-everything + foreground + timeout works.

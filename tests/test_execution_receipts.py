@@ -72,8 +72,22 @@ class TestLoad:
             "not-a-dict",
             _bash("real command"),
         ])
-        assert [r["command"] for r in load_receipts(tmp_path)["rows"]] == [
-            "real command"]
+        loaded = load_receipts(tmp_path)
+        assert [r["command"] for r in loaded["rows"]] == ["real command"]
+        # Round 3: no-command tool events and empty commands skip
+        # silently (normal), but a type-corrupt event is COUNTED.
+        assert loaded["malformed_events"] == 1
+
+    def test_type_corrupt_command_event_is_counted(self, tmp_path):
+        # Round 3: {"command": 42} could have been the missing execution
+        # receipt — it must degrade the record, not vanish.
+        _write_call(tmp_path / "build/calls", 1, [
+            {"name": "Bash", "input": {"command": 42}},
+            {"name": "Bash", "input": "not-a-dict-input"},
+        ])
+        loaded = load_receipts(tmp_path)
+        assert loaded["rows"] == []
+        assert loaded["malformed_events"] == 2
 
     def test_cap_bounds_the_collection_and_flags_truncation(self, tmp_path):
         _write_call(tmp_path / "build/calls", 1,
@@ -105,9 +119,9 @@ class TestLoad:
         assert load_receipts(tmp_path, cap="1")["rows"]
 
 
-def _loaded(rows, unreadable=0, truncated=False):
+def _loaded(rows, unreadable=0, truncated=False, malformed=0):
     return {"rows": rows, "unreadable_files": unreadable,
-            "truncated": truncated}
+            "malformed_events": malformed, "truncated": truncated}
 
 
 class TestRender:
@@ -211,7 +225,29 @@ class TestRender:
         rows = [{"command": f"pytest tests/t{i}.py", "output_head": "",
                  "is_error": False, "call": "c"} for i in range(12)]
         text = render_receipt_evidence(_loaded(rows))
-        assert "(showing first 8 of 12)" in text
+        assert "(showing 8 of 12, error-flagged first)" in text
+
+    def test_failed_ninth_runner_cannot_hide_behind_display_cap(self):
+        # Round 3: eight benign look-alikes followed by the one REAL
+        # (failed) runner — the failure must appear both in the
+        # cap-independent aggregate and at the front of the listing.
+        rows = [{"command": f'echo "pytest suite {i} passed"',
+                 "output_head": "passed", "is_error": False, "call": "c"}
+                for i in range(8)]
+        rows.append({"command": "pytest -q", "output_head": "2 failed",
+                     "is_error": True, "call": "c"})
+        text = render_receipt_evidence(_loaded(rows))
+        assert "Harness-flagged errors across ALL 9 recorded command(s): 1" \
+            in text
+        assert "$ pytest -q [HARNESS FLAGGED ERROR]" in text
+
+    def test_malformed_events_render_incomplete(self):
+        rows = [{"command": "echo done", "output_head": "",
+                 "is_error": False, "call": "c"}]
+        text = render_receipt_evidence(_loaded(rows, malformed=2))
+        assert "RECORD INCOMPLETE" in text
+        assert "2 tool event(s) malformed" in text
+        assert "NONE recorded" not in text
 
     def test_digest_clip_carries_marker(self, monkeypatch):
         import execution_receipts as er
@@ -249,6 +285,18 @@ class TestAuditBlock:
         monkeypatch.setattr("runs.current_run_dir", lambda: tmp_path)
         block = audit_receipt_block([])
         assert "UNAVAILABLE" in block
+
+    def test_zero_rows_with_malformed_events_names_the_right_reason(
+            self, tmp_path, monkeypatch):
+        # Round 3: a present-but-corrupt record must not be described as
+        # "record mode off".
+        _write_call(tmp_path / "build/calls", 1,
+                    [{"name": "Bash", "input": {"command": 42}}])
+        monkeypatch.setattr("runs.current_run_dir", lambda: tmp_path)
+        block = audit_receipt_block([])
+        assert "UNAVAILABLE" in block
+        assert "could not be fully read" in block
+        assert "record mode off" not in block
 
     def test_all_files_unreadable_is_no_signal_not_absence(self, tmp_path,
                                                            monkeypatch):
