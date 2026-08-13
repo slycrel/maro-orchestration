@@ -3052,3 +3052,59 @@ class TestSessionFork:
         seed2 = run.call_args_list[2].args[0]
         assert "--tools" in seed1 and "--tools" not in seed2
         assert "--disallowedTools" in seed2
+
+
+class TestTailCostScope:
+    """Async-tail visibility (2026-08-13): calls completed under an active
+    metrics.tail_cost_scope write loop-joined provider-priced cost rows;
+    executor calls are excluded (a gate-escalation re-run's loop steps
+    write their own rows — no double counting)."""
+
+    def _fa(self):
+        inner = MagicMock()
+        inner.backend = "stub"
+        inner.model_key = "cheap"
+        inner.complete.return_value = LLMResponse(
+            content="ok", model="stub-model", backend="stub",
+            input_tokens=100, output_tokens=20, cost_usd=0.25)
+        from llm import FailoverAdapter
+        return FailoverAdapter([inner])
+
+    def test_scope_records_loop_joined_row(self, monkeypatch):
+        import metrics
+        rows = []
+        monkeypatch.setattr(
+            metrics, "record_step_cost",
+            lambda step_text, ti, to, status, **kw: rows.append(
+                {"step": step_text, **kw}))
+        from metrics import tail_cost_scope
+        fa = self._fa()
+        with tail_cost_scope("tl-1", "closure"):
+            fa.complete([LLMMessage("user", "judge it")],
+                        purpose="closure verdict")
+        assert len(rows) == 1
+        assert rows[0]["loop_id"] == "tl-1"
+        assert rows[0]["provider_cost_usd"] == pytest.approx(0.25)
+        assert rows[0]["step"].startswith("tail:closure:")
+
+    def test_executor_calls_are_excluded(self, monkeypatch):
+        import metrics
+        rows = []
+        monkeypatch.setattr(
+            metrics, "record_step_cost",
+            lambda *a, **kw: rows.append(kw))
+        from metrics import tail_cost_scope
+        fa = self._fa()
+        with tail_cost_scope("tl-2", "gate"):
+            fa.complete([LLMMessage("user", "do work")], executor=True)
+        assert rows == []
+
+    def test_no_scope_records_nothing(self, monkeypatch):
+        import metrics
+        rows = []
+        monkeypatch.setattr(
+            metrics, "record_step_cost",
+            lambda *a, **kw: rows.append(kw))
+        fa = self._fa()
+        fa.complete([LLMMessage("user", "plain call")])
+        assert rows == []

@@ -5538,6 +5538,38 @@ class TestAsyncMaintenanceTail:
         assert (calls.index("learning-drain")
                 < calls.index("maintenance-drain"))
 
+    def test_final_surfaces_refresh_after_maintenance_drain(
+            self, monkeypatch, tmp_path):
+        """Tail visibility (2026-08-13): the maintenance drain's events and
+        the tail's cost rows land after close_run cut the slice and built
+        the card — a drained tail re-slices, refreshes the pure curators,
+        and re-renders. Nothing drained → no extra pass."""
+        _setup(monkeypatch, tmp_path)
+        import handle as handle_mod
+        import loop_finalize
+        import notify
+        import runs as runs_mod
+        import run_curation as rc_mod
+        import loop_report as lr_mod
+        monkeypatch.setattr(notify, "emit", lambda *a, **kw: True)
+        monkeypatch.setattr(loop_finalize, "drain_deferred_maintenance",
+                            lambda hid: 1)
+        reslices, refreshes = [], []
+        _real_slice = runs_mod.slice_log_for_run
+        monkeypatch.setattr(runs_mod, "slice_log_for_run",
+                            lambda hid: (reslices.append(hid),
+                                         _real_slice(hid))[1])
+        monkeypatch.setattr(rc_mod, "refresh_run_card_classification",
+                            lambda hid, **kw: refreshes.append(hid) or {})
+        monkeypatch.setattr(lr_mod, "write_reports_for_run_dir",
+                            lambda rd, **kw: {})
+        result = handle("research winning polymarket strategies",
+                        dry_run=True)
+        assert result.lane == "agenda"
+        # close_run sliced once; the drained-tail pass sliced again.
+        assert len(reslices) >= 2
+        assert len(refreshes) >= 1
+
     def test_quality_gate_early_drain_leaves_maintenance_registered(self):
         """The escalation path drains learning early (its retry recalls
         lessons); maintenance must stay put until the final notify."""

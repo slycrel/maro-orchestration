@@ -750,6 +750,7 @@ class FailoverAdapter(LLMAdapter):
                         tokens_out=getattr(result, "output_tokens", None),
                         max_tokens_requested=max_tokens,
                         purpose=_purpose,
+                        cost_usd=getattr(result, "cost_usd", 0.0) or 0.0,
                     )
                     if _rec_path is not None:
                         # Cross-reference for rung-4 step I/O unification: the
@@ -757,6 +758,33 @@ class FailoverAdapter(LLMAdapter):
                         result.call_record = str(_rec_path)
                 except Exception:
                     pass
+                # Tail cost attribution (async-tail visibility, 2026-08-13):
+                # a call completed under an active tail scope writes a
+                # loop-joined cost row — closure/gate/learning/maintenance
+                # spend was previously invisible to spend_for_loops and the
+                # run card. Executor calls are excluded: a gate-escalation
+                # re-run's loop steps write their own rows (loop_post_step /
+                # loop_parallel / loop_blocked) and must not double-count.
+                if not kwargs.get("executor"):
+                    try:
+                        from metrics import (tail_cost_scope_active,
+                                             record_step_cost)
+                        _tail = tail_cost_scope_active()
+                        if _tail is not None:
+                            record_step_cost(
+                                f"tail:{_tail['phase']}:{_purpose or '?'}",
+                                getattr(result, "input_tokens", 0) or 0,
+                                getattr(result, "output_tokens", 0) or 0,
+                                "done",
+                                model=getattr(result, "model", "") or "",
+                                cache_read_tokens=getattr(
+                                    result, "cache_read_tokens", 0) or 0,
+                                loop_id=_tail["loop_id"],
+                                provider_cost_usd=getattr(
+                                    result, "cost_usd", 0.0) or 0.0,
+                            )
+                    except Exception:
+                        pass
                 # Runaway circuit accrual: estimate this call's cost into the
                 # armed meter. Never affects the request outcome.
                 if _meter is not None:

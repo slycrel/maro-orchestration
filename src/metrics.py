@@ -293,6 +293,43 @@ def successful_run_cost_p90(limit: int = RUN_COST_CARD_LIMIT) -> Optional[float]
         return None
 
 
+# --- tail cost attribution (async-tail visibility, 2026-08-13) -------------
+# The post-run tail (closure verdict, quality gate, deferred learning +
+# maintenance — ~30 LLM calls on a real run) previously wrote NO cost rows:
+# spend_for_loops only ever saw the loop writers' step rows, so run cards
+# under-reported true spend by the whole tail. Handle wraps each tail phase
+# in this scope; the llm record seam turns every non-executor call completed
+# under it into a provider-priced step-costs row for the owning loop.
+# ContextVar (not a global) per the concurrency rules — concurrent runs'
+# tails must not cross-attribute.
+import contextvars as _contextvars
+from contextlib import contextmanager as _contextmanager
+
+_TAIL_COST_SCOPE: "_contextvars.ContextVar[Optional[dict]]" = \
+    _contextvars.ContextVar("maro_tail_cost_scope", default=None)
+
+
+@_contextmanager
+def tail_cost_scope(loop_id: str, phase: str):
+    """Attribute LLM calls made inside to `loop_id` as tail-phase cost rows.
+
+    No-op shape when loop_id is empty (nothing to join to). Executor calls
+    are excluded at the recording seam — a gate-escalation re-run's loop
+    steps already write their own rows and must not double-count."""
+    token = _TAIL_COST_SCOPE.set(
+        {"loop_id": str(loop_id or ""), "phase": str(phase or "tail")})
+    try:
+        yield
+    finally:
+        _TAIL_COST_SCOPE.reset(token)
+
+
+def tail_cost_scope_active() -> Optional[dict]:
+    """The active tail scope ({loop_id, phase}) or None."""
+    scope = _TAIL_COST_SCOPE.get()
+    return scope if scope and scope.get("loop_id") else None
+
+
 def spend_for_loops(loop_ids) -> float:
     """Total recorded USD spend for the given loop id(s) (cost-per-run).
 

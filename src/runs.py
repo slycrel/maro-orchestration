@@ -1020,6 +1020,7 @@ def record_llm_call(prompt, response_text, *, backend="", model="",
                     max_tokens_requested=None,
                     purpose: str = "",
                     error: str = "",
+                    cost_usd: float = 0.0,
                     run_dir: Optional[Path] = None) -> Optional[Path]:
     """Persist one LLM call to `<run-dir>/build/calls/call-NNNNN.json` (scrubbed).
 
@@ -1054,6 +1055,10 @@ def record_llm_call(prompt, response_text, *, backend="", model="",
             # call record alone (not every backend enforces max_tokens).
             "max_tokens_requested": max_tokens_requested,
             "purpose": purpose or "",
+            # Provider-reported billed cost when the backend gave one (0.0 =
+            # not reported, NOT free) — per-call cost was previously only
+            # derivable for loop steps (async-tail visibility, 2026-08-13).
+            "cost_usd": float(cost_usd or 0.0),
             # UU-1 (BACKLOG LT arc): failed/killed attempts get a record too.
             # Before this, a timeout-killed call left ZERO bytes — the cold
             # chlorination run's most expensive wall-clock event (10min step-1

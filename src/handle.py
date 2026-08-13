@@ -970,11 +970,30 @@ def handle(
                         )
                 except Exception:
                     pass
+                # Tail cost lane (2026-08-13): the drains' LLM calls (lesson
+                # extraction, crystallization, promotion validation, evolver)
+                # join the loop's cost rows. Loop id from the card's lineage.
+                _tail_lid = ""
+                try:
+                    _lids = (_card or {}).get("loop_ids") or []
+                    _tail_lid = str(_lids[-1]) if _lids else ""
+                    if not _tail_lid:
+                        _tail_lid = str(_vp_meta.get("loop_id") or "")
+                except Exception:
+                    _tail_lid = ""
+                try:
+                    from metrics import tail_cost_scope as _drain_cost_scope
+                except Exception:
+                    from contextlib import nullcontext
+                    _drain_cost_scope = lambda *a, **k: nullcontext()  # noqa: E731
                 # Answer-first: deferred learning runs only now, after the
                 # user has heard the outcome. Lessons feed curation's
                 # decision priors and classification, so refresh those card
                 # fields + re-render — the same contract audit repair uses.
-                if _drain_deferred_learning(_hid):
+                _learning_drained = False
+                with _drain_cost_scope(_tail_lid, "learning"):
+                    _learning_drained = bool(_drain_deferred_learning(_hid))
+                if _learning_drained:
                     try:
                         from run_curation import refresh_run_card_classification
                         from loop_report import write_reports_for_run_dir
@@ -985,13 +1004,35 @@ def handle(
                         pass
                 # Maintenance tail drains after learning (async-tail decree):
                 # promotions read the freshest skill/lesson stats — this run's
-                # crystallization is now one cycle earlier in their view — and
-                # nothing here feeds the run card, so no refresh follows.
+                # crystallization is now one cycle earlier in their view.
+                _maintenance_drained = False
                 try:
                     from loop_finalize import drain_deferred_maintenance
-                    drain_deferred_maintenance(_hid)
+                    with _drain_cost_scope(_tail_lid, "maintenance"):
+                        _maintenance_drained = bool(
+                            drain_deferred_maintenance(_hid))
                 except Exception:
                     pass
+                # Final surfaces pass (tail visibility, 2026-08-13): the
+                # maintenance drain's events land AFTER close_run cut the
+                # captains-log slice and built the card, and the whole tail's
+                # cost rows landed after the card's total was computed — so
+                # re-slice (same recorded offset, now reaching EOF past the
+                # tail), refresh the pure curators (n_calls, total_cost_usd,
+                # step flags), and re-render. Mirrors
+                # audit_repair._refresh_surfaces; skipped when nothing
+                # drained (the close_run totals already stand).
+                if _learning_drained or _maintenance_drained:
+                    try:
+                        from runs import (slice_log_for_run as _reslice,
+                                          run_dir as _run_dir_final)
+                        from run_curation import refresh_run_card_classification
+                        from loop_report import write_reports_for_run_dir
+                        _reslice(_hid)
+                        refresh_run_card_classification(_hid)
+                        write_reports_for_run_dir(_run_dir_final(_hid))
+                    except Exception:
+                        pass
         except Exception:
             pass  # finalize must never affect the request outcome
         if not dry_run:
@@ -2483,18 +2524,23 @@ def _handle_impl(
                 _closure_diag = None
             try:
                 from director import evaluate_closure
-                _closure_decision = evaluate_closure(
-                    message,
-                    loop_result.steps,
-                    adapter,
-                    workspace_path=repo_path or "",
-                    channel=channel,
-                    scope=_scope,
-                    resolved_intent=_resolved_intent,
-                    diagnosis=_closure_diag,
-                    loop_id=getattr(loop_result, "loop_id", "") or "",
-                    project=project or getattr(loop_result, "project", "") or "",
-                )
+                from metrics import tail_cost_scope as _closure_cost_scope
+                # Tail cost lane (2026-08-13): closure's plan/verdict/audit
+                # calls join the loop's cost rows via the tail scope.
+                with _closure_cost_scope(
+                        getattr(loop_result, "loop_id", "") or "", "closure"):
+                    _closure_decision = evaluate_closure(
+                        message,
+                        loop_result.steps,
+                        adapter,
+                        workspace_path=repo_path or "",
+                        channel=channel,
+                        scope=_scope,
+                        resolved_intent=_resolved_intent,
+                        diagnosis=_closure_diag,
+                        loop_id=getattr(loop_result, "loop_id", "") or "",
+                        project=project or getattr(loop_result, "project", "") or "",
+                    )
                 _closure = _closure_decision.closure_verdict
             except Exception as _closure_exc:
                 _closure_decision = None
@@ -3139,7 +3185,14 @@ def _handle_impl(
                         if infer_worker_type(message) == WORKER_RESEARCH
                         else False
                     )
-                with default_subprocess_cwd(_qg_cwd):
+                from metrics import tail_cost_scope as _gate_cost_scope
+                with default_subprocess_cwd(_qg_cwd), \
+                     _gate_cost_scope(
+                         getattr(loop_result, "loop_id", "") or "", "gate"):
+                    # Tail cost lane (2026-08-13): the gate's verdict +
+                    # adversarial claim calls join the loop's cost rows.
+                    # The escalation RE-RUN below is outside this scope —
+                    # its loop steps write their own rows.
                     _gate_verdict = run_quality_gate(
                         message, loop_result.steps, adapter,
                         run_council=_strict_prefix,

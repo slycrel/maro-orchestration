@@ -744,3 +744,29 @@ def test_record_outcome_stores_model(monkeypatch, tmp_path):
     record_outcome("test goal", "done", "summary", model="mid")
     data = json.loads(outcomes_file.read_text().strip())
     assert data["model"] == "mid"
+
+
+# ---------------------------------------------------------------------------
+# Tail cost scope (async-tail visibility, 2026-08-13)
+# ---------------------------------------------------------------------------
+
+def test_tail_cost_scope_rows_join_the_loop():
+    # The post-run tail's calls previously wrote NO cost rows —
+    # spend_for_loops (and so the run card) under-reported by the whole
+    # tail. A row recorded under the scope joins the loop like a step row.
+    from metrics import (tail_cost_scope, tail_cost_scope_active,
+                         spend_for_loops)
+    assert tail_cost_scope_active() is None
+    with tail_cost_scope("tail-loop-1", "closure"):
+        scope = tail_cost_scope_active()
+        assert scope == {"loop_id": "tail-loop-1", "phase": "closure"}
+        record_step_cost("tail:closure:closure verdict", 100, 50, "done",
+                         loop_id=scope["loop_id"], provider_cost_usd=0.5)
+    assert tail_cost_scope_active() is None
+    assert spend_for_loops(["tail-loop-1"]) == pytest.approx(0.5)
+
+
+def test_tail_cost_scope_empty_loop_id_reads_inactive():
+    from metrics import tail_cost_scope, tail_cost_scope_active
+    with tail_cost_scope("", "closure"):
+        assert tail_cost_scope_active() is None

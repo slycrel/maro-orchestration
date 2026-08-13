@@ -316,3 +316,21 @@ def test_success_records_carry_empty_error_field(workspace):
     out = record_llm_call("p", "r")
     rec = json.loads(out.read_text())
     assert rec["error"] == ""
+
+
+def test_record_writes_cost_usd(workspace):
+    """Async-tail visibility (2026-08-13): per-call provider cost persists
+    on the record — previously derivable only for loop steps."""
+    rd = create_run_dir("hid000c1", prompt="do a thing")
+    set_current_run_dir(rd)
+    out = record_llm_call("p", "r", cost_usd=0.0123)
+    rec = json.loads(out.read_text())
+    assert rec["cost_usd"] == pytest.approx(0.0123)
+
+
+def test_record_cost_usd_defaults_to_zero(workspace):
+    rd = create_run_dir("hid000c2", prompt="do a thing")
+    set_current_run_dir(rd)
+    out = record_llm_call("p", "r")
+    rec = json.loads(out.read_text())
+    assert rec["cost_usd"] == 0.0
