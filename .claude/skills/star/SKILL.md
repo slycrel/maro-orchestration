@@ -1,5 +1,6 @@
 ---
 name: star
+version: 7
 description: ALPHA star-pattern mini-orchestrator — a master loop that owns taste (choose the next task) and judgement (validate the answer) and delegates everything else, 0..n dynamically chosen steps, no pre-planned pathway. Dev-side gut check for maro's orchestration patterns; also the modern melt-test of the 2026-03-31 factory branch.
 ---
 
@@ -346,6 +347,14 @@ graduation valve applies — anything that gains a deterministic home
 NOW retry rung — shallow half SHIPPED (artifact-seeded retry; the
 star-shaped arm (ii) stays a pre-registered open experiment, see
 BACKLOG "NOW retry rung").
+
+**Versioning (Jeremy, 2026-08-12):** the frontmatter `version` bumps on
+every contract change, and a bump asserts the changed contract has been
+exercised at least once — version is a tested-revision counter, not a
+edit counter. Set to 7 at introduction (matches the seven distinct
+change-days in git history: 07-21, 22, 23, 27, 28, 29, 08-12). Usage
+note, same date: exercised 8–10+ times by Jeremy's count (adjudication
+was at 2 uses) — keep signal standing.
 
 **Consolidation pass 2026-08-12** (the ~3-arcs condition fired:
 verdict-integrity, REPL A/B, world-facts arcs all closed since the KEEP
