@@ -189,6 +189,50 @@ single-flight dedup. And the **tail's ~30 calls are invisible in
 provider costs only, so the card under-reports true run cost by the
 whole maintenance tail (fold into the async chunk or fix separately).
 
+### Workspace export/import — live-tested box→M1 2026-08-12: file copy is exact, but four classes don't transfer (Jeremy: "I suspect that won't get us 'everything' and that's important to understand")
+
+Ran `scripts/maro_export.py export` on the box (389MB / 23,555 files →
+108MB tar.gz, niced, mid-cook), scp'd (sha256 match both ends), imported
+into a fresh M1 location via `MARO_WORKSPACE=~/maro-box-copy/workspace`.
+**File-level reconciliation EXACT: 23,555 − 37 excluded = 23,518
+imported.** The copy is served correctly by real tooling: 1,504 outcome
+rows via `load_outcomes` (beware its default `limit=20` when counting),
+152 run cards, `correspondence.db` PRAGMA integrity_check ok — noting it
+was hot-copied while the box was mid-run; **export has no quiesce/
+snapshot story**, sqlite survived this time, not guaranteed.
+
+**What does NOT transfer, by class:**
+1. **User-tier config — behavior, not data.** `~/.maro/config.yml` lives
+   OUTSIDE the workspace (model prefs, yolo, `scope_generation: true`,
+   adaptive_execution, notify/telegram, viz), as does
+   `~/.maro/experiments/`. Runs against an imported copy behave like a
+   fresh install for those (scope injection off, different model prefs) —
+   an uncontrolled condition delta for any A/B run against copied data.
+2. **Deliberate exclusions, one over-broad.** secrets (1) +
+   telegram_offset.txt (1) = by design. But the `logs/` exclusion is
+   path-COMPONENT based and ate 35 `.git/logs/*` reflog files inside
+   archived project repos (`projects/_archive/**/repo/.git/logs/*`,
+   ledger-kata) — archived clones import fsck-clean but
+   reflog-incomplete. Fix if archives ever need to be byte-complete:
+   anchor the pattern to workspace-root `logs/`.
+3. **Embedded machine semantics ride along but don't resolve.** 5,358
+   files (~23%) contain `/home/clawd` absolute paths (checkpoints,
+   artifact pointers, metadata); 6 symlinks point at box paths — and
+   `runs/*/scratch/venv/bin/python3 → /usr/bin/python3` RESOLVES on
+   macOS to the wrong binary rather than dangling, the sneakier failure.
+   Reading is fine; anything that resolves paths cross-machine (resume,
+   replay, provenance path checks) will misbehave.
+   `state/subprocess_fork_masters.json` carries box CLI session ids —
+   meaningless off-box, self-heals (evict → re-seed bare).
+4. **Import is a MERGE, not a restore.** Extract overwrites archive
+   files and leaves everything else — importing over a non-empty
+   workspace yields an unmarked hybrid. Fresh-dir import (as done here)
+   sidesteps it; a `--clean` / manifest mode is the fix if this ever
+   becomes a real restore lane.
+
+Cosmetic: export's "N files" count includes directory entries (reported
+29,123 vs 23,555 real files) — the number lies to a reconciler.
+
 ### Session-fork lane for claude -p (Jeremy idea 2026-08-08) — **SHIPPED same day, opt-in; daemon variant = residual edge**
 
 His phrasing: "storing some meta-data and having a master subagent
