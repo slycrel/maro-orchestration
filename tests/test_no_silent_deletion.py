@@ -35,6 +35,11 @@ sys.path.insert(0, str(SRC))
 # ephemeral (temp/lock/marker files that are not run or user data), move
 # (data is written elsewhere before the original is removed).
 ALLOWED_DELETION_SITES = {
+    ("container_exec.py", "clear_auth_breaker"):
+        "ephemeral: the container auth breaker's own state marker "
+        "(memory/container_auth_breaker.json) — same class as interrupt.py's "
+        "loop-running markers; removed only when the auth volume is verified "
+        "re-seeded (or by explicit operator call), never run/user data",
     ("checkpoint.py", "delete_checkpoint"):
         "user-invoked: `checkpoint delete` CLI only; no automatic caller "
         "(finalize's delete-on-done removed 2026-07-10, retention decree)",
