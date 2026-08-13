@@ -44,6 +44,43 @@ full triage: 2026-07-04.
 
 Ordered open work that matters. Top of the list is next.
 
+### Execution receipts — six cross-model review findings need adjudication (3-lens Codex review of 6f58bf3..707a541, 2026-08-12; filed not fixed — this is the receipts session's active lane, and v1 scope calls may already answer some)
+
+All six were probed by reviewers (details in their words; verify against
+current code before acting — the arc moves fast):
+1. **Zero-executions reads as UNAVAILABLE (Minimalist HIGH):** a valid
+   call file with `tool_events: []` renders "record unavailable = no
+   signal", so the simplest gaming case — claiming tests passed while
+   executing nothing — evades the claimed-but-unrecorded refutation.
+   Needs a capture-availability signal distinguishing "recorded: none
+   ran" from "no record".
+2. **Handle-wide, attempt-blind receipts (all three lenses):** loader
+   scans every call file in the run dir; call records carry no loop_id;
+   closure restarts/resume reuse the dir → attempt N's audit sees
+   attempt N-1's passing pytest receipt as support for work it never
+   did. Reviewer probe confirmed cross-attempt leakage.
+3. **Any `input.command` counts as shell execution (Skeptic):** loader
+   ignores the tool event's `name` — an MCP/custom tool with a `command`
+   arg (probe: `mcp__ticketing__create_issue`) manufactures positive
+   process evidence.
+4. **160-char silent clip on commands/outputs (Skeptic+Minimalist):**
+   a decisive suffix (`|| true; echo '100 passed'`) vanishes with no
+   truncation marker while the prompt says judge each command "on its
+   face" — a JUDGE-lane cut, squarely under the truncation decree; needs
+   a marked head/tail render at minimum.
+5. **"Outside the fence" is overstated (Architect HIGH):** receipts are
+   ordinary workspace files and host executors run
+   `--dangerously-skip-permissions` — a later step can rewrite an
+   earlier call-*.json. True unforgeability needs out-of-workspace or
+   hash-chained records; at minimum the auditor prompt should not claim
+   more than the mechanism provides.
+6. **Codex backend emits no tool_events (Architect):** receipts inactive
+   on that adapter — pass-audit reports unavailable for a supported
+   backend (may be accepted v1 scope; if so, say so where the auditor
+   reads it).
+
+
+
 ### Container verb parity + container auth expiry watch (FOUND 2026-08-13, A/B-4 re-test setup — the dispatch lane was silently DOWN)
 
 Two coupled finds from one diagnosis (full trail in the A/B-4 entry):
@@ -120,7 +157,12 @@ run-cadence evolver, run-cadence inspector) extracted to
 `loop_finalize.run_post_run_maintenance()`; when the caller has promised
 a post-notify drain (**explicit `defer_maintenance` flag, threaded
 run_agent_loop → ctx → finalize; handle.py is the only setter**) it
-registers into `handle._POST_NOTIFY_MAINTENANCE` — a twin of the
+registers into `loop_finalize._POST_NOTIFY_MAINTENANCE` (moved out of
+handle.py 2026-08-12: `python -m handle` runs handle as __main__, so a
+handle-owned registry split into two module copies and stranded every
+deferred callable on the box's documented dispatch lane — 3-lens review
+of 707a541, Architect HIGH; loop_finalize is only ever imported
+canonically) — a twin of the
 answer-first learning registry, drained by handle()'s finalize AFTER the
 run_completed notify and after the learning drain (promotions see this
 run's crystallization one cycle earlier; nothing here feeds the run
@@ -272,6 +314,22 @@ snapshot story**, sqlite survived this time, not guaranteed.
 
 Cosmetic: export's "N files" count includes directory entries (reported
 29,123 vs 23,555 real files) — the number lies to a reconciler.
+
+**Review-hardened same day (3-lens Codex review of 707a541 — REJECT →
+fixed):** all reproduced before fixing. (1) traversal guard was
+`str.startswith` — `<ws>-evil` passed as inside `<ws>`, and on Python
+≤3.11.3 the filter-less extract fallback made it a real
+out-of-workspace write (consensus HIGH, 3× reproduced) → `relative_to`
+containment; (2) `_snapshot_sqlite` built its `file:` URI by f-string —
+a `?` or `#` in the filename truncated the path and "succeeded" with an
+EMPTY snapshot (HIGH) → `as_uri()` percent-encoding + page-count parity
+required for success; (3) snapshots were tarred with the temp file's
+0644/now metadata, broadening a 0600 db on restore → source TarInfo
+carried onto snapshot bytes; (4) `--clean` aside names collided at
+1-second resolution → uniqued, and its non-atomicity documented (aside
+always holds complete pre-import state; recovery = rename back);
+(5) import counter counted dirs as files → files/others split like
+export. Pins: TestReviewHardening in test_conductor_export.py.
 
 ### Session-fork lane for claude -p (Jeremy idea 2026-08-08) — **SHIPPED same day, opt-in; daemon variant = residual edge**
 

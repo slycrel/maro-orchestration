@@ -7315,6 +7315,28 @@ under the same two-measurement standard).
   retry/restart-chain maintenance lag; shared _hid=None registry-strand
   class). Remaining: phase 2 (verdict-pending reply at final-step
   compile). Suite 8266/0 skipped.
+
+- **2026-08-12** — 3-lens Codex review of the whole range since the last
+  pass (6f58bf3..707a541: async-tail fixes, execution-receipts arc,
+  export/import cleanup) — **REJECT round; every accepted finding
+  reproduced before fixing.** Fixed same session (my chunks): maintenance
+  registry moved handle.py → loop_finalize (the `python -m handle` lane
+  runs handle as __main__ — a handle-owned registry split into two module
+  copies and stranded every deferred callable on the box's dispatch lane;
+  Architect HIGH); pipeline:/team:/direct: lanes now defer maintenance
+  (they drain in handle()'s finalize); auto-recovery re-run inherits both
+  deferral contracts (was double-running maintenance + learning
+  verdict-blind inline); export traversal guard startswith→relative_to
+  (consensus HIGH, sibling-dir escape, reproduced 3×); sqlite snapshot
+  URI as_uri + page-count parity (silent-EMPTY-backup HIGH); snapshot
+  carries source mode/mtime (0600 db broadened to 0644 on restore);
+  --clean asides uniqued; import counts honest. **Six receipts findings
+  FILED (not fixed — that session's active lane) at the top of the
+  Actionable Stack**, headliners: tool_events:[] reads as UNAVAILABLE
+  (zero-execution gaming evades refutation), attempt-blind receipts
+  (restart/resume inherit prior attempt's passing pytest as support),
+  any input.command counts as shell (MCP forgery), 160-char silent
+  JUDGE-lane clip. Suite 8316/0 skipped.
 - **2026-08-12** — MH #1 prevention half v1 SHIPPED (evening session,
   "let's continue"): execution_receipts.py digests the recorder's
   build/calls tool_events into the pass-audit prompt — the one evidence

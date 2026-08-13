@@ -203,34 +203,17 @@ def _drain_deferred_learning(handle_id: str) -> int:
     return len(fns)
 
 
-# Maintenance twin of _POST_NOTIFY_LEARNING (async-tail decree, 2026-08-11):
-# loop_finalize registers the run's maintenance tail here (skill promotion/
-# demotion/rewrite, health probes, statistical scans, run-cadence evolver +
-# inspector — ~28 LLM calls, ~6min of 2a3b1f85-sunny-wren's 8m34s post-work
-# tail) instead of running it inline before closure. Drained ONLY by
-# handle()'s finalize, after run_completed and after the learning drain —
-# never by the quality-gate early drain: the escalated retry needs the
-# lessons of the loop it is retrying, not its promotions, and putting the
-# multi-minute tail ahead of the retry is exactly the wait this removes.
-_POST_NOTIFY_MAINTENANCE: dict = {}
-
-
-def _defer_maintenance_post_notify(handle_id: str, fn) -> None:
-    _POST_NOTIFY_MAINTENANCE.setdefault(handle_id, []).append(fn)
-
-
-def _drain_deferred_maintenance(handle_id: str) -> int:
-    """Run + clear any registered deferred maintenance for handle_id.
-
-    Returns the number of callables run. Never raises."""
-    fns = _POST_NOTIFY_MAINTENANCE.pop(handle_id, [])
-    for fn in fns:
-        try:
-            fn()
-        except Exception as exc:
-            log.warning("deferred maintenance failed for handle %s: %s",
-                        handle_id, exc)
-    return len(fns)
+# The maintenance twin of this lane (async-tail decree, 2026-08-11) lives in
+# loop_finalize (defer_maintenance_post_notify / drain_deferred_maintenance)
+# — NOT here, because this module is also a `python -m handle` entry point:
+# run that way it executes as __main__, and loop_finalize's `import handle`
+# would load a second copy whose registry the finalize block below never
+# drains (3-lens review of 707a541). The learning registry above is safe in
+# this module: its registrar and drainer are both local, so they always
+# agree on module identity. Drained ONLY by handle()'s finalize, after
+# run_completed and after the learning drain — never by the quality-gate
+# early drain: the escalated retry needs the lessons of the loop it is
+# retrying, not its promotions.
 
 
 def _is_complex_directive(message: str) -> bool:
@@ -955,7 +938,11 @@ def handle(
                 # promotions read the freshest skill/lesson stats — this run's
                 # crystallization is now one cycle earlier in their view — and
                 # nothing here feeds the run card, so no refresh follows.
-                _drain_deferred_maintenance(_hid)
+                try:
+                    from loop_finalize import drain_deferred_maintenance
+                    drain_deferred_maintenance(_hid)
+                except Exception:
+                    pass
         except Exception:
             pass  # finalize must never affect the request outcome
         if not dry_run:
@@ -1804,6 +1791,12 @@ def _handle_impl(
                     measurement_class=measurement_class,
                     handle_id=handle_id,
                     introspection_access=introspects_self,
+                    # Async-tail: this lane returns through handle()'s
+                    # finalize, which drains post-notify — same contract as
+                    # the agenda lane (review of 707a541: these lanes were
+                    # missing the win). defer_learning stays off: no closure
+                    # runs here, so learning must extract at finalize.
+                    defer_maintenance=True,
                 )
                 return _loop_result_to_handle(
                     _pipe_result, handle_id=handle_id, message=message,
@@ -1827,6 +1820,7 @@ def _handle_impl(
                 measurement_class=measurement_class,
                 handle_id=handle_id,
                 introspection_access=introspects_self,
+                defer_maintenance=True,  # drains in handle()'s finalize
             )
             return _loop_result_to_handle(
                 _team_result, handle_id=handle_id, message=message,
@@ -1847,6 +1841,7 @@ def _handle_impl(
                 measurement_class=measurement_class,
                 handle_id=handle_id,
                 introspection_access=introspects_self,
+                defer_maintenance=True,  # drains in handle()'s finalize
             )
             return _loop_result_to_handle(
                 _direct_result, handle_id=handle_id, message=message,

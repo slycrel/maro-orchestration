@@ -86,13 +86,29 @@ def _snapshot_sqlite(src: Path, dst: Path) -> bool:
     copy of a live sqlite file can be torn. Returns False when src is
     not a readable sqlite database — the caller falls back to raw bytes
     rather than dropping the file.
+
+    Path goes in as a percent-encoded file: URI (via as_uri) — naive
+    f-string interpolation let a '?' or '#' in the filename truncate the
+    URI, silently opening a DIFFERENT (empty) database and "succeeding"
+    with an empty snapshot (3-lens review of 707a541, Skeptic HIGH,
+    reproduced). Belt-and-suspenders, success also requires page-count
+    parity between source and snapshot — kills that whole silent-empty
+    class even if some other URI quirk slips through.
     """
     import sqlite3
     con = out = None
     try:
-        con = sqlite3.connect(f"file:{src}?mode=ro", uri=True, timeout=30)
+        con = sqlite3.connect(
+            f"{src.resolve().as_uri()}?mode=ro", uri=True, timeout=30)
         out = sqlite3.connect(str(dst))
         con.backup(out)
+        src_pages = con.execute("PRAGMA page_count").fetchone()[0]
+        dst_pages = out.execute("PRAGMA page_count").fetchone()[0]
+        if src_pages != dst_pages or (src.stat().st_size > 0
+                                      and dst_pages == 0):
+            raise RuntimeError(
+                f"snapshot page-count mismatch: src={src_pages} "
+                f"dst={dst_pages}")
         return True
     except Exception:
         try:
@@ -181,7 +197,14 @@ def export_workspace(output_path: Path = None, verbose: bool = False) -> Path:
         for i, (rel, src) in enumerate(db_files):
             snap = Path(tmpd) / f"snap-{i}.db"
             if _snapshot_sqlite(src, snap):
-                tar.add(str(snap), arcname=rel, recursive=False)
+                # Carry the SOURCE file's metadata (mode/mtime/owner) with
+                # the snapshot's bytes — tar.add(snap) would stamp the temp
+                # file's 0644/now, silently broadening a 0600 database on
+                # restore (review of 707a541, reproduced).
+                ti = tar.gettarinfo(str(src), arcname=rel)
+                ti.size = snap.stat().st_size
+                with open(snap, "rb") as fh:
+                    tar.addfile(ti, fh)
                 snapshotted_bases.add(rel)
                 file_count += 1
                 total_bytes += snap.stat().st_size
@@ -258,11 +281,23 @@ def import_workspace(
 
         if ws.exists() and any(ws.iterdir()):
             if clean:
-                aside = ws.with_name(
-                    ws.name + time.strftime(".pre-import-%Y%m%dT%H%M%S"))
+                # Unique aside name: second-resolution timestamps collide on
+                # back-to-back clean imports (review of 707a541, reproduced
+                # — rename onto an existing non-empty dir raises).
+                base = ws.name + time.strftime(".pre-import-%Y%m%dT%H%M%S")
+                aside = ws.with_name(base)
+                n = 1
+                while aside.exists():
+                    n += 1
+                    aside = ws.with_name(f"{base}-{n}")
                 ws.rename(aside)
+                # Not failure-atomic by design: if extraction dies midway,
+                # the fresh workspace is partial but the aside still holds
+                # the complete pre-import state — recovery is renaming it
+                # back. Nothing is ever deleted.
                 print(f"--clean: existing workspace moved aside to {aside} "
-                      f"(nothing deleted)", file=sys.stderr)
+                      f"(nothing deleted; rename back to recover)",
+                      file=sys.stderr)
             else:
                 print(
                     "WARNING: importing into a non-empty workspace — this "
@@ -276,6 +311,7 @@ def import_workspace(
         ws.mkdir(parents=True, exist_ok=True)
 
         extracted = 0
+        other = 0  # directories + symlinks, reported apart (honest counts)
         for member in members:
             # Strip the "workspace/" prefix and extract relative to ws
             if member.name.startswith("workspace/"):
@@ -283,9 +319,16 @@ def import_workspace(
             elif member.name == "workspace":
                 continue  # Skip the root directory entry
 
-            # Security: prevent path traversal
+            # Security: prevent path traversal. relative_to, not a string
+            # prefix — "/x/workspace-evil" startswith "/x/workspace", so the
+            # old check passed sibling escapes; combined with the pre-filter
+            # extract fallback below that was a real out-of-workspace write
+            # on Python 3.10 (3-lens review of 707a541, consensus HIGH,
+            # reproduced by all three reviewers).
             dest = (ws / member.name).resolve()
-            if not str(dest).startswith(str(ws.resolve())):
+            try:
+                dest.relative_to(ws.resolve())
+            except ValueError:
                 print(f"  SKIP (path traversal): {member.name}", file=sys.stderr)
                 continue
 
@@ -301,13 +344,19 @@ def import_workspace(
                 # silences the Python 3.14 unfiltered-extract deprecation,
                 # while still permitting symlink members (their targets are
                 # machine semantics — dangling off-box is expected and
-                # documented). The manual traversal guard above stays.
+                # documented). The manual traversal guard above stays and is
+                # the ONLY guard on pythons without the filter kwarg
+                # (<3.11.4) — which is why it must be relative_to-sound.
                 tar.extract(member, path=str(ws), filter="tar")
             except TypeError:  # Python without the filter kwarg (<3.11.4)
                 tar.extract(member, path=str(ws))
-            extracted += 1
+            if member.isfile():
+                extracted += 1
+            else:
+                other += 1
 
-        print(f"Done: {extracted} files extracted to {ws}", file=sys.stderr)
+        print(f"Done: {extracted} files (+{other} dirs/links) extracted "
+              f"to {ws}", file=sys.stderr)
         return extracted
 
 

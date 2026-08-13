@@ -5492,21 +5492,21 @@ class TestAsyncMaintenanceTail:
     learning drain — and never by the quality-gate early drain."""
 
     def test_maintenance_registry_drain_runs_clears_and_swallows(self):
-        from handle import (_POST_NOTIFY_MAINTENANCE,
-                            _defer_maintenance_post_notify,
-                            _drain_deferred_maintenance)
+        from loop_finalize import (_POST_NOTIFY_MAINTENANCE,
+                                   defer_maintenance_post_notify,
+                                   drain_deferred_maintenance)
         ran = []
-        _defer_maintenance_post_notify("m-hid", lambda: ran.append(1))
+        defer_maintenance_post_notify("m-hid", lambda: ran.append(1))
 
         def _boom():
             ran.append(2)
             raise RuntimeError("swallowed")
 
-        _defer_maintenance_post_notify("m-hid", _boom)
-        assert _drain_deferred_maintenance("m-hid") == 2
+        defer_maintenance_post_notify("m-hid", _boom)
+        assert drain_deferred_maintenance("m-hid") == 2
         assert ran == [1, 2]
         assert "m-hid" not in _POST_NOTIFY_MAINTENANCE
-        assert _drain_deferred_maintenance("m-hid") == 0
+        assert drain_deferred_maintenance("m-hid") == 0
 
     def test_maintenance_drains_after_notify_and_after_learning(
             self, monkeypatch, tmp_path):
@@ -5516,6 +5516,7 @@ class TestAsyncMaintenanceTail:
         _setup(monkeypatch, tmp_path)
         calls = []
         import handle as handle_mod
+        import loop_finalize
         import notify
         monkeypatch.setattr(notify, "emit",
                             lambda event, *a, **kw: calls.append(event))
@@ -5525,7 +5526,7 @@ class TestAsyncMaintenanceTail:
             lambda hid: (calls.append("learning-drain"),
                          _real_learning_drain(hid))[1])
         monkeypatch.setattr(
-            handle_mod, "_drain_deferred_maintenance",
+            loop_finalize, "drain_deferred_maintenance",
             lambda hid: (calls.append("maintenance-drain"), 0)[1])
         result = handle("research winning polymarket strategies",
                         dry_run=True)
@@ -5540,17 +5541,17 @@ class TestAsyncMaintenanceTail:
     def test_quality_gate_early_drain_leaves_maintenance_registered(self):
         """The escalation path drains learning early (its retry recalls
         lessons); maintenance must stay put until the final notify."""
-        from handle import (_POST_NOTIFY_MAINTENANCE,
-                            _defer_learning_post_notify,
-                            _defer_maintenance_post_notify,
-                            _drain_deferred_learning,
-                            _drain_deferred_maintenance)
+        from handle import (_defer_learning_post_notify,
+                            _drain_deferred_learning)
+        from loop_finalize import (_POST_NOTIFY_MAINTENANCE,
+                                   defer_maintenance_post_notify,
+                                   drain_deferred_maintenance)
         _defer_learning_post_notify("g-hid", lambda: None)
-        _defer_maintenance_post_notify("g-hid", lambda: None)
+        defer_maintenance_post_notify("g-hid", lambda: None)
         # what the quality-gate escalation site calls:
         _drain_deferred_learning("g-hid")
         assert "g-hid" in _POST_NOTIFY_MAINTENANCE
-        assert _drain_deferred_maintenance("g-hid") == 1
+        assert drain_deferred_maintenance("g-hid") == 1
 
 
 class TestOperatorContextChannel:

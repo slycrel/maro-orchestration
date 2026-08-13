@@ -295,3 +295,93 @@ class TestImportCleanAndMerge:
         self._import_into(dest, archive, monkeypatch, clean=True)
         assert (dest / "playbook.md").exists()
         assert list(tmp_path.glob("dest-empty.pre-import-*")) == []
+
+    def test_clean_twice_in_same_second_gets_unique_asides(
+            self, workspace, tmp_path, monkeypatch):
+        """Second-resolution aside names collide on back-to-back clean
+        imports — rename onto an existing dir raises (review of 707a541,
+        reproduced). Aside names must be uniqued."""
+        archive = tmp_path / "export.tar.gz"
+        export_workspace(output_path=archive)
+
+        dest = tmp_path / "dest"
+        dest.mkdir()
+        (dest / "gen1.txt").write_text("1")
+        self._import_into(dest, archive, monkeypatch, clean=True)
+        (dest / "gen2.txt").write_text("2")
+        self._import_into(dest, archive, monkeypatch, clean=True)
+        asides = sorted(tmp_path.glob("dest.pre-import-*"))
+        assert len(asides) == 2
+        contents = {p.name for a in asides for p in a.iterdir()}
+        assert "gen1.txt" in contents and "gen2.txt" in contents
+
+
+class TestReviewHardening:
+    """Pins for the 3-lens review of 707a541 — every defect below was
+    reproduced by a reviewer (or by the lead) before being fixed."""
+
+    def test_traversal_sibling_prefix_rejected(self, tmp_path, monkeypatch):
+        """str.startswith containment passed '<ws>-evil' as inside '<ws>';
+        with the pre-filter extract fallback that was an out-of-workspace
+        write (consensus HIGH, reproduced 3×). relative_to must reject."""
+        ws = tmp_path / "workspace"
+        ws.mkdir()
+        monkeypatch.setenv("MARO_WORKSPACE", str(ws))
+
+        evil = tmp_path / "evil.tar.gz"
+        payload = tmp_path / "payload.txt"
+        payload.write_text("pwn")
+        with tarfile.open(evil, "w:gz") as tar:
+            tar.add(str(payload),
+                    arcname="workspace/../workspace-evil/pwn.txt")
+        import_workspace(evil)
+        assert not (tmp_path / "workspace-evil").exists()
+
+    def test_snapshot_survives_uri_metacharacters(self, tmp_path):
+        """f-string file: URIs let '?'/'#' in a filename truncate the path,
+        silently 'succeeding' with an EMPTY snapshot (HIGH, reproduced).
+        as_uri percent-encoding + page-count parity close the class."""
+        import sqlite3
+        from maro_export import _snapshot_sqlite
+        src = tmp_path / "valid?.db"
+        con = sqlite3.connect(str(src))
+        con.execute("CREATE TABLE t (k TEXT)")
+        con.execute("INSERT INTO t VALUES ('v1')")
+        con.commit()
+        con.close()
+        snap = tmp_path / "snap.db"
+        assert _snapshot_sqlite(src, snap) is True
+        c2 = sqlite3.connect(str(snap))
+        assert c2.execute("SELECT k FROM t").fetchone()[0] == "v1"
+        c2.close()
+
+    def test_snapshot_preserves_source_mode(self, workspace, tmp_path):
+        """tar.add on the temp snapshot stamped 0644/now over a 0600
+        source db — restore would broaden access (reproduced). The
+        snapshot's bytes must carry the SOURCE's metadata."""
+        import sqlite3
+        src = workspace / "private.db"
+        con = sqlite3.connect(str(src))
+        con.execute("CREATE TABLE t (k TEXT)")
+        con.commit()
+        con.close()
+        src.chmod(0o600)
+
+        archive = tmp_path / "export.tar.gz"
+        export_workspace(output_path=archive)
+        with tarfile.open(archive, "r:gz") as tar:
+            ti = tar.getmember("workspace/private.db")
+        assert ti.mode & 0o777 == 0o600
+
+    def test_import_counts_files_apart_from_dirs(
+            self, workspace, tmp_path, monkeypatch, capsys):
+        archive = tmp_path / "export.tar.gz"
+        export_workspace(output_path=archive)
+        dest = tmp_path / "count-dest"
+        dest.mkdir()
+        monkeypatch.setenv("MARO_WORKSPACE", str(dest))
+        n = import_workspace(archive)
+        err = capsys.readouterr().err
+        # Fixture exports 5 real files (memory/skills dirs ride apart).
+        assert n == 5
+        assert "Done: 5 files" in err

@@ -2036,11 +2036,10 @@ def test_finalize_defers_maintenance_on_closure_lane(monkeypatch):
     """defer_maintenance=True + handle_id → maintenance registers
     post-notify, nothing runs inline; the drain runs it with the loop's
     adapter, inside the loop's captains-log scope."""
-    import handle as handle_mod
     import captains_log
+    import loop_finalize
     ran = _stub_maintenance(monkeypatch)
     seen_loop_ids = []
-    import loop_finalize
     _record = loop_finalize.run_post_run_maintenance
 
     def _record_with_scope(**kw):
@@ -2058,8 +2057,8 @@ def test_finalize_defers_maintenance_on_closure_lane(monkeypatch):
         adapter=_adapter, defer_learning=True, defer_maintenance=True,
         handle_id="mt-hid"))
     assert ran == []
-    assert "mt-hid" in handle_mod._POST_NOTIFY_MAINTENANCE
-    assert handle_mod._drain_deferred_maintenance("mt-hid") == 1
+    assert "mt-hid" in loop_finalize._POST_NOTIFY_MAINTENANCE
+    assert loop_finalize.drain_deferred_maintenance("mt-hid") == 1
     assert len(ran) == 1
     assert ran[0]["adapter"] is _adapter
     # Attribution survives the deferral: drain re-entered the loop's scope
@@ -2067,13 +2066,27 @@ def test_finalize_defers_maintenance_on_closure_lane(monkeypatch):
     assert seen_loop_ids == ["mt-loop"]
 
 
+def test_maintenance_registry_lives_in_loop_finalize_not_handle():
+    """`python -m handle` runs handle as __main__; a registry owned by
+    handle.py would split into two copies (registrar in the canonical
+    module, drainer in __main__) and strand every deferred callable —
+    3-lens review of 707a541, Architect HIGH, module-identity probe.
+    loop_finalize is only ever imported canonically, so the registry
+    lives there; handle.py must never grow its own copy again."""
+    import handle as handle_mod
+    import loop_finalize
+    assert hasattr(loop_finalize, "_POST_NOTIFY_MAINTENANCE")
+    assert not hasattr(handle_mod, "_POST_NOTIFY_MAINTENANCE")
+    assert not hasattr(handle_mod, "_drain_deferred_maintenance")
+
+
 def test_finalize_runs_maintenance_inline_without_defer_contract(monkeypatch):
     """No defer_maintenance opt-in → inline, unchanged."""
-    import handle as handle_mod
+    import loop_finalize
     ran = _stub_maintenance(monkeypatch)
     _finalize_loop(**_finalize_kwargs(handle_id="mt-hid-inline"))
     assert len(ran) == 1
-    assert "mt-hid-inline" not in handle_mod._POST_NOTIFY_MAINTENANCE
+    assert "mt-hid-inline" not in loop_finalize._POST_NOTIFY_MAINTENANCE
 
 
 def test_finalize_cli_shape_defer_learning_alone_stays_inline(monkeypatch):
@@ -2081,37 +2094,37 @@ def test_finalize_cli_shape_defer_learning_alone_stays_inline(monkeypatch):
     handle_id but drain no registry — maintenance must run inline there.
     Review of 6f58bf3, consensus HIGH: inferring maintenance deferral from
     defer_learning silently dropped their whole maintenance tail."""
-    import handle as handle_mod
+    import loop_finalize
     ran = _stub_maintenance(monkeypatch)
     _finalize_loop(**_finalize_kwargs(
         defer_learning=True, handle_id="mt-hid-cli"))
     assert len(ran) == 1
-    assert "mt-hid-cli" not in handle_mod._POST_NOTIFY_MAINTENANCE
+    assert "mt-hid-cli" not in loop_finalize._POST_NOTIFY_MAINTENANCE
 
 
 def test_finalize_dry_run_neither_runs_nor_registers_maintenance(monkeypatch):
-    import handle as handle_mod
+    import loop_finalize
     ran = _stub_maintenance(monkeypatch)
     _finalize_loop(**_finalize_kwargs(
         dry_run=True, defer_learning=True, defer_maintenance=True,
         handle_id="mt-hid-dry"))
     assert ran == []
-    assert "mt-hid-dry" not in handle_mod._POST_NOTIFY_MAINTENANCE
+    assert "mt-hid-dry" not in loop_finalize._POST_NOTIFY_MAINTENANCE
 
 
 def test_finalize_maintenance_defer_failure_falls_back_inline(monkeypatch):
     """Registration failing must not drop maintenance — it runs inline."""
-    import handle as handle_mod
+    import loop_finalize
     ran = _stub_maintenance(monkeypatch)
 
     def _boom(handle_id, fn):
         raise RuntimeError("registry unavailable")
 
-    monkeypatch.setattr(handle_mod, "_defer_maintenance_post_notify", _boom)
+    monkeypatch.setattr(loop_finalize, "defer_maintenance_post_notify", _boom)
     _finalize_loop(**_finalize_kwargs(
         defer_learning=True, defer_maintenance=True, handle_id="mt-hid-boom"))
     assert len(ran) == 1
-    assert "mt-hid-boom" not in handle_mod._POST_NOTIFY_MAINTENANCE
+    assert "mt-hid-boom" not in loop_finalize._POST_NOTIFY_MAINTENANCE
 
 
 # ---------------------------------------------------------------------------

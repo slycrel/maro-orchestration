@@ -548,6 +548,36 @@ def _auto_diagnosis_lesson_text(failure_class: str, recommendation: str) -> str:
             f"classifier recommendation (unverified): {recommendation}")
 
 
+# Post-notify maintenance registry (async-tail decree). Lives HERE, not in
+# handle.py, because handle is also a documented `python -m handle` entry
+# point: run that way the module executes as __main__, while this module's
+# `import handle` would load a SECOND copy with its own registry — the
+# registrar and the drainer would hold different dicts and every deferred
+# callable would strand undrained (3-lens review of 707a541, Architect
+# HIGH, module-identity probe). loop_finalize is only ever imported by its
+# canonical name, so registrar (here) and drainer (handle's finalize, via
+# lazy import of this module) always share one registry.
+_POST_NOTIFY_MAINTENANCE: dict = {}
+
+
+def defer_maintenance_post_notify(handle_id: str, fn) -> None:
+    _POST_NOTIFY_MAINTENANCE.setdefault(handle_id, []).append(fn)
+
+
+def drain_deferred_maintenance(handle_id: str) -> int:
+    """Run + clear any registered deferred maintenance for handle_id.
+
+    Returns the number of callables run. Never raises."""
+    fns = _POST_NOTIFY_MAINTENANCE.pop(handle_id, [])
+    for fn in fns:
+        try:
+            fn()
+        except Exception as exc:
+            log.warning("deferred maintenance failed for handle %s: %s",
+                        handle_id, exc)
+    return len(fns)
+
+
 def _finalize_loop(
     loop_id: str,
     goal: str,
@@ -821,8 +851,6 @@ def _finalize_loop(
         _maint_deferred = False
         if defer_maintenance and handle_id:
             try:
-                from handle import _defer_maintenance_post_notify
-
                 def _deferred_maintenance(_adapter=adapter, _verbose=verbose,
                                           _lid=loop_id):
                     # Re-enter this loop's captains-log scope: the drain
@@ -834,7 +862,7 @@ def _finalize_loop(
                         run_post_run_maintenance(
                             adapter=_adapter, verbose=_verbose)
 
-                _defer_maintenance_post_notify(
+                defer_maintenance_post_notify(
                     handle_id, _deferred_maintenance)
                 _maint_deferred = True
             except Exception as _defer_exc:

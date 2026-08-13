@@ -660,6 +660,15 @@ def run_agent_loop(
                         token_budget=token_budget,
                         measurement_class=ctx.measurement_class,
                         handle_id=ctx.handle_id,
+                        # Inherit the caller's deferral contracts (review of
+                        # 707a541): without these the recovery re-run learned
+                        # verdict-blind inline AND ran maintenance inline
+                        # before closure, while the original loop's
+                        # registered maintenance still drained later —
+                        # double work plus the exact pre-decree latency.
+                        defer_learning=ctx.defer_learning,
+                        defer_maintenance=getattr(
+                            ctx, "defer_maintenance", False),
                         _recovery_in_progress=True,
                     )
                     log.info("auto-recovery result: status=%s", result.status)
