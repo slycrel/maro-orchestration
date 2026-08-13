@@ -771,6 +771,52 @@ class TestAntiHallucinationPrompt:
         assert "never invent or guess" in EXECUTE_SYSTEM
 
 
+class TestContainerVerbParity:
+    """Container verb parity (2026-08-13): the container-lane prompt must
+    never advertise verbs the image can't run (the A/B-4 confound), and
+    the host prompt keeps advertising them."""
+
+    def test_host_prompt_advertises_both_verbs(self):
+        from step_exec import EXECUTE_SYSTEM
+        assert "read_query" in EXECUTE_SYSTEM or "maro-read" in EXECUTE_SYSTEM
+        assert "fetch_tool" in EXECUTE_SYSTEM or "maro-fetch" in EXECUTE_SYSTEM
+        # no placeholder leaked through either render
+        assert "__FETCH_" not in EXECUTE_SYSTEM
+        assert "__READ_" not in EXECUTE_SYSTEM
+
+    def test_container_prompt_advertises_neither_verb(self):
+        from step_exec import EXECUTE_SYSTEM_CONTAINER as C
+        for dead in ("read_query", "maro-read", "fetch_tool", "maro-fetch",
+                     "__FETCH_", "__READ_"):
+            assert dead not in C, f"container prompt advertises {dead!r}"
+
+    def test_container_prompt_keeps_the_protective_rules(self):
+        # Dropping the verbs must not drop the budget rules they served.
+        from step_exec import EXECUTE_SYSTEM_CONTAINER as C
+        assert "NEVER `curl` a web page into context" in C
+        assert "LARGE LOCAL FILES" in C
+        assert "~50KB" in C
+        assert "NO fetch CLI" in C
+        assert "NO sub-query CLI" in C
+
+    def test_lane_selector_container_on(self, monkeypatch):
+        import container_exec as ce
+        from step_exec import (execute_system_for_lane,
+                               EXECUTE_SYSTEM, EXECUTE_SYSTEM_CONTAINER)
+        monkeypatch.setattr(ce, "container_mode", lambda: "on")
+        monkeypatch.setattr(ce, "container_suppressed", lambda: False)
+        assert execute_system_for_lane() == EXECUTE_SYSTEM_CONTAINER
+        # suppression (degrade-to-host for this run) restores the host prompt
+        monkeypatch.setattr(ce, "container_suppressed", lambda: True)
+        assert execute_system_for_lane() == EXECUTE_SYSTEM
+
+    def test_lane_selector_container_off(self, monkeypatch):
+        import container_exec as ce
+        from step_exec import execute_system_for_lane, EXECUTE_SYSTEM
+        monkeypatch.setattr(ce, "container_mode", lambda: "off")
+        assert execute_system_for_lane() == EXECUTE_SYSTEM
+
+
 class TestSpecificClaimDetection:
     """Test _has_specific_claims heuristic for cross-ref triggering."""
 

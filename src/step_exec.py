@@ -88,14 +88,7 @@ EXECUTE_SYSTEM = textwrap.dedent("""\
 
     URL FETCHING:
     Prefer the pre-fetched content in PRE-FETCHED URL CONTENT below when present.
-    For any OTHER url you need (e.g. one you found via search), fetch it with:
-        __FETCH_CLI__ "<url>"
-    (If that command is not present in this environment, say so in your result
-    rather than curling the page — a missing fetcher is a reportable condition,
-    not a reason to fall back to raw HTML.)
-    That returns clean markdown capped at ~5k tokens and saves the full raw HTML
-    to disk, printing its path. To pull a detail the summary dropped, grep/parse
-    that file — never cat it.
+    __FETCH_VERB_LINES__
     NEVER `curl` a web page into context: raw HTML is 20-100x larger than the
     markdown (one retailer page ~= 190k tokens) and will blow the step's budget.
     curl a JSON API only when the response is known-small — cap it anyway
@@ -155,7 +148,37 @@ EXECUTE_SYSTEM = textwrap.dedent("""\
     Check size before reading (ls -la / wc -c). DECISION RULE: file over
     ~50KB and you need ANSWERS from it (what does it say, find X,
     summarize Y) rather than to edit it — do NOT read it into context.
-    Ask the sub-query first:
+    __READ_VERB_LINES__
+    Small files (under ~50KB): just read them.
+""").strip()
+
+
+# Per-lane verb advertisements (container verb parity, 2026-08-13): the
+# host lane advertises the fetch/read CLIs; the container lane MUST NOT —
+# the executor image bakes no maro package and build_mount_map hard-excludes
+# the live repo, so the host-resolved commands do not exist in the worker's
+# filesystem. A/B-4 measured the cost of lying here: every containerized
+# teaching measurement was structurally unable to invoke the verb. Rule:
+# never advertise what the environment can't run.
+
+_FETCH_VERB_HOST = """\
+For any OTHER url you need (e.g. one you found via search), fetch it with:
+        __FETCH_CLI__ "<url>"
+    (If that command is not present in this environment, say so in your result
+    rather than curling the page — a missing fetcher is a reportable condition,
+    not a reason to fall back to raw HTML.)
+    That returns clean markdown capped at ~5k tokens and saves the full raw HTML
+    to disk, printing its path. To pull a detail the summary dropped, grep/parse
+    that file — never cat it."""
+
+_FETCH_VERB_CONTAINER = """\
+This environment has NO fetch CLI (containerized executor — the fetch verb
+    is not available in the image). For any OTHER url you need, treat the
+    missing fetcher as a reportable condition: record the URL and what you
+    needed from it in your result instead of fetching it yourself."""
+
+_READ_VERB_HOST = """\
+Ask the sub-query first:
         __READ_CLI__ "one focused question" file1 [file2 ...]
     A cheap out-of-band model reads bounded slices and returns only the
     answer + a receipt naming what it did and didn't read; the file's
@@ -170,9 +193,15 @@ EXECUTE_SYSTEM = textwrap.dedent("""\
     stays not read). Targeted direct reads stay correct for verification
     (grep -Fn a quote, sed -n a small line window) and for files you are
     editing. If the sub-query reports itself disabled or unavailable,
-    read directly per your reading protocol instead. Small files
-    (under ~50KB): just read them.
-""").strip()
+    read directly per your reading protocol instead."""
+
+_READ_VERB_CONTAINER = """\
+This environment has NO sub-query CLI (containerized executor — the read
+    verb is not available in the image). Use targeted extraction instead:
+    grep -n for the terms you need, sed -n for small line windows,
+    wc/head/tail for shape — your conversation is re-sent every turn, so
+    a 200KB direct read costs ~50k tokens on EVERY remaining turn of this
+    step. State in your result which parts of the file you did NOT read."""
 
 
 def _fetch_cli_path() -> str:
@@ -225,8 +254,43 @@ def _read_cli_path() -> str:
     return "python3 -m read_query"
 
 
-EXECUTE_SYSTEM = EXECUTE_SYSTEM.replace("__FETCH_CLI__", _fetch_cli_path())
-EXECUTE_SYSTEM = EXECUTE_SYSTEM.replace("__READ_CLI__", _read_cli_path())
+# Container render first (the template is consumed by the host render).
+# The container variant carries the honest-absence blocks and never names a
+# host path or console script.
+EXECUTE_SYSTEM_CONTAINER = (
+    EXECUTE_SYSTEM
+    .replace("__FETCH_VERB_LINES__", _FETCH_VERB_CONTAINER)
+    .replace("__READ_VERB_LINES__", _READ_VERB_CONTAINER)
+)
+
+EXECUTE_SYSTEM = (
+    EXECUTE_SYSTEM
+    .replace("__FETCH_VERB_LINES__", _FETCH_VERB_HOST)
+    .replace("__READ_VERB_LINES__", _READ_VERB_HOST)
+    .replace("__FETCH_CLI__", _fetch_cli_path())
+    .replace("__READ_CLI__", _read_cli_path())
+)
+
+
+def execute_system_for_lane() -> str:
+    """The execute prompt for the lane this call is CONFIGURED for.
+
+    Same cheap gate as the introspection mount-view notice: config says
+    container and the run hasn't suppressed it. The actual containerize
+    decision (docker probe) happens inside the adapter; a docker-down
+    degrade-to-host runs the container prompt on the host, which only
+    UNDER-advertises (the worker falls back to its reading protocol —
+    the safe direction). The inverse — advertising host-path verbs into
+    a container where they cannot exist — is the A/B-4 confound this
+    exists to prevent.
+    """
+    try:
+        import container_exec as _ce
+        if _ce.container_mode() != "off" and not _ce.container_suppressed():
+            return EXECUTE_SYSTEM_CONTAINER
+    except Exception:
+        pass
+    return EXECUTE_SYSTEM
 
 # ---------------------------------------------------------------------------
 # Data pipeline enforcement helpers
@@ -1378,8 +1442,11 @@ def execute_step(
         f"{_incremental_block}\n\n"
         "Complete this step now. Call complete_step when done or flag_stuck if blocked."
     )
+    # Lane-aware system prompt (container verb parity): resolved once per
+    # step so the cache key, first call, and tool-search retry all agree.
+    _exec_system = execute_system_for_lane()
     _static_session_context_key = hashlib.sha256(
-        (session_context_key + "\n" + EXECUTE_SYSTEM).encode("utf-8")
+        (session_context_key + "\n" + _exec_system).encode("utf-8")
     ).hexdigest()
 
     # Detect steps that run external commands — give them a longer timeout.
@@ -1451,7 +1518,7 @@ def execute_step(
         # agentic: the worker executor step — tools do the real work (executor=True)
         resp = adapter.complete(
             [
-                LLMMessage("system", EXECUTE_SYSTEM),
+                LLMMessage("system", _exec_system),
                 LLMMessage("user", user_msg),
             ],
             **_call_kwargs,
@@ -1562,7 +1629,7 @@ def execute_step(
                     # agentic: same worker executor step re-called with expanded tools
                     resp = adapter.complete(
                         [
-                            LLMMessage("system", EXECUTE_SYSTEM),
+                            LLMMessage("system", _exec_system),
                             LLMMessage("user", user_msg),
                             LLMMessage("assistant", f"[tool_search result for '{_ts_query}']"),
                             LLMMessage("user", _ts_result_block),
