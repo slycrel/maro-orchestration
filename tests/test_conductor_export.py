@@ -13,7 +13,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 # Import from the script
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
-from maro_export import export_workspace, import_workspace, _should_exclude
+from maro_export import (export_workspace, import_workspace, inspect_archive,
+                         _should_exclude)
 
 
 @pytest.fixture
@@ -870,62 +871,92 @@ class TestSymlinkPortability:
         assert archive.exists()
 
 
-class TestSymlinkPortability:
-    """External symlinks travel as data (meta/symlinks.json), not links —
-    a link to /usr/bin/python3 resolves to the WRONG binary on another
-    OS (Jeremy 2026-08-13: portable, or at least non-destructive)."""
 
-    def test_external_absolute_symlink_recorded_not_shipped(
-            self, workspace, tmp_path, monkeypatch):
-        self_dir = tmp_path / "maro-user"
-        self_dir.mkdir(exist_ok=True)
-        monkeypatch.setenv("MARO_USER_DIR", str(self_dir))
-        scratch = workspace / "runs" / "r1" / "scratch"
-        scratch.mkdir(parents=True)
-        (scratch / "pybin").symlink_to("/usr/bin/python3")
-        (scratch / "loglink").symlink_to("/tmp/nonexistent-target.out")
+class TestInspect:
+    """`inspect` is look-before-you-import (2026-08-13 overnight): show
+    provenance + custody, verify the shape digest, preview import skips —
+    all read-only, nothing extracted or mutated."""
 
+    def _user_dir(self, monkeypatch, tmp_path):
+        d = tmp_path / "maro-user"
+        d.mkdir(exist_ok=True)
+        monkeypatch.setenv("MARO_USER_DIR", str(d))
+        return d
+
+    def test_inspect_clean_archive_reports_and_exits_zero(
+            self, workspace, tmp_path, monkeypatch, capsys):
+        self._user_dir(monkeypatch, tmp_path)
         archive = tmp_path / "export.tar.gz"
         export_workspace(output_path=archive)
-        with tarfile.open(archive, "r:gz") as tar:
-            links = [m.name for m in tar.getmembers() if m.issym()]
-            rec = json.loads(
-                tar.extractfile("meta/symlinks.json").read().decode())
-        assert links == []
-        recorded = {l["path"]: l["target"] for l in rec["links"]}
-        assert recorded["runs/r1/scratch/pybin"] == "/usr/bin/python3"
-        assert recorded["runs/r1/scratch/loglink"] == \
-            "/tmp/nonexistent-target.out"
+        rc = inspect_archive(archive)
+        out = capsys.readouterr().out
+        assert rc == 0
+        assert "workspace shape digest: OK" in out
+        assert "exported by" in out
+        assert "custody:" in out
 
-    def test_internal_relative_symlink_still_ships_as_link(
-            self, workspace, tmp_path, monkeypatch):
-        self_dir = tmp_path / "maro-user"
-        self_dir.mkdir(exist_ok=True)
-        monkeypatch.setenv("MARO_USER_DIR", str(self_dir))
-        venv = workspace / "runs" / "r1" / "venv"
-        venv.mkdir(parents=True)
-        (venv / "lib").mkdir()
-        (venv / "lib64").symlink_to("lib")
-
+    def test_inspect_never_extracts(self, workspace, tmp_path, monkeypatch):
+        self._user_dir(monkeypatch, tmp_path)
         archive = tmp_path / "export.tar.gz"
         export_workspace(output_path=archive)
-        with tarfile.open(archive, "r:gz") as tar:
-            syms = {m.name: m.linkname
-                    for m in tar.getmembers() if m.issym()}
-        assert syms == {"workspace/runs/r1/venv/lib64": "lib"}
+        dest = tmp_path / "should-stay-empty"
+        dest.mkdir()
+        monkeypatch.setenv("MARO_WORKSPACE", str(dest))
+        inspect_archive(archive)
+        assert list(dest.iterdir()) == []  # inspect must not write anything
 
-    def test_escaping_relative_symlink_recorded_not_shipped(
-            self, workspace, tmp_path, monkeypatch):
-        self_dir = tmp_path / "maro-user"
-        self_dir.mkdir(exist_ok=True)
-        monkeypatch.setenv("MARO_USER_DIR", str(self_dir))
-        (workspace / "sneaky").symlink_to("../outside-the-tree")
-
+    def test_inspect_flags_digest_mismatch_nonzero(
+            self, workspace, tmp_path, monkeypatch, capsys):
+        self._user_dir(monkeypatch, tmp_path)
         archive = tmp_path / "export.tar.gz"
         export_workspace(output_path=archive)
-        with tarfile.open(archive, "r:gz") as tar:
-            links = [m.name for m in tar.getmembers() if m.issym()]
-            rec = json.loads(
-                tar.extractfile("meta/symlinks.json").read().decode())
-        assert links == []
-        assert rec["links"][0]["path"] == "sneaky"
+        tampered = tmp_path / "tampered.tar.gz"
+        import io as _io
+        with tarfile.open(tampered, "w:gz") as out, \
+                tarfile.open(archive, "r:gz") as tar:
+            for m in tar.getmembers():
+                out.addfile(m, tar.extractfile(m) if m.isfile() else None)
+            ti = tarfile.TarInfo("workspace/injected.txt")
+            ti.size = 3
+            out.addfile(ti, _io.BytesIO(b"xxx"))
+        rc = inspect_archive(tampered)
+        assert rc == 2
+        assert "MISMATCH" in capsys.readouterr().out
+
+    def test_inspect_previews_unsafe_members(
+            self, tmp_path, monkeypatch, capsys):
+        import io as _io
+        arc = tmp_path / "mixed.tar.gz"
+        with tarfile.open(arc, "w:gz") as tar:
+            body = b"ok"
+            ti = tarfile.TarInfo("workspace/good.txt")
+            ti.size = len(body)
+            tar.addfile(ti, _io.BytesIO(body))
+            sym = tarfile.TarInfo("workspace/leak")
+            sym.type = tarfile.SYMTYPE
+            sym.linkname = "/etc/passwd"
+            tar.addfile(sym)
+            fifo = tarfile.TarInfo("workspace/pipe")
+            fifo.type = tarfile.FIFOTYPE
+            tar.addfile(fifo)
+        rc = inspect_archive(arc)
+        out = capsys.readouterr().out
+        assert "import would SKIP 2 unsafe member" in out
+        assert "external symlink" in out
+        assert "special file" in out
+
+    def test_inspect_future_format_flagged_nonzero(self, tmp_path, capsys):
+        import io as _io
+        arc = tmp_path / "future.tar.gz"
+        with tarfile.open(arc, "w:gz") as tar:
+            prov = json.dumps({
+                "format": 99, "custody": [],
+                "contents": {"workspace_shape_sha256": ""},
+            }).encode()
+            ti = tarfile.TarInfo("meta/provenance.json")
+            ti.size = len(prov)
+            tar.addfile(ti, _io.BytesIO(prov))
+        rc = inspect_archive(arc)
+        out = capsys.readouterr().out
+        assert rc == 3
+        assert "NEWER than this tool" in out

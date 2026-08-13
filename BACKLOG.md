@@ -400,6 +400,19 @@ fingerprint stored full-length. +22 pins (TestV2ReviewHardening +
 additions). Live box→M1 round-trip clean. Archive
 `~/mbx-v3b.tar.gz` (regenerate as needed). Suite 8366/0 skipped.
 
+**`maro-export inspect ARCHIVE` — SHIPPED 2026-08-13 (overnight).**
+Look-before-you-import for the sharing use case: read-only, prints
+provenance + custody, verifies the workspace-shape digest against the
+archive's own bytes, and previews what import WOULD skip (unsafe member
+types/links, secret-shaped meta, traversal) — nothing extracted or
+mutated. Exit 0 clean / 2 digest MISMATCH / 3 unsupported-newer-format,
+so it scripts. Self-reviewed only (the v2 codex security review tripped
+codex's cyber-risk filter and cost a Fable downgrade — see
+[[feedback_adversarial_review_cyber_filter]]; a cross-model pass can run
+later with the skill's new defensive framing). 5 pins (TestInspect).
+Verified on the real box archive (23,696 files, digest OK, 0 unsafe).
+Suite 8407/0 skipped.
+
 **Meta staging placement — DECIDED 2026-08-13 (delegated: "up to
 you"):** stays under the workspace at `<ws>/.import-meta/`, now one
 subdir PER import (`import-<ts>/`) after the v2 review (each import's

@@ -41,8 +41,15 @@ Back-compat: v1 archives (no meta/) import cleanly.
 
 Usage:
     python3 scripts/maro_export.py export [--output PATH]
+    python3 scripts/maro_export.py inspect ARCHIVE
     python3 scripts/maro_export.py import ARCHIVE [--dry-run] [--clean]
                                           [--apply-meta]
+
+`inspect` is look-before-you-import: it prints provenance + custody,
+verifies the workspace-shape digest, and previews what import WOULD skip
+(unsafe member types/links, secret-shaped, traversal) — all read-only,
+nothing extracted. Use it to decide whether to trust an archive from
+someone else before importing.
 
 Still not carried (inherent): machine semantics embedded IN data —
 absolute paths inside artifacts/checkpoints, CLI session ids — and file
@@ -951,6 +958,142 @@ def _apply_user_config(import_dir: Path, prov, apply_meta: bool,
     print(f"--apply-meta: user config applied to {real_cfg}", file=sys.stderr)
 
 
+def _member_import_risk(member, rel: str):
+    """Pure-string (no destination) preview of why import would skip a
+    workspace member. Returns a reason string, or "" if it would import.
+    Mirrors _safe_workspace_member's checks minus the ws-relative bind so
+    inspect can run without a target workspace."""
+    norm = os.path.normpath(rel)
+    if norm == ".." or norm.startswith(".." + os.sep) or os.path.isabs(norm):
+        return "path traversal / absolute"
+    if _STAGING_DIRNAME in Path(rel).parts:
+        return "targets staging dir"
+    if member.isdir() or member.isreg():
+        return ""
+    if member.issym():
+        if _classify_symlink_target(member.linkname, _rel_parts(rel)):
+            return ""
+        return f"external symlink → {member.linkname}"
+    if member.islnk():
+        return "hardlink member"
+    return "special file (fifo/device)"
+
+
+def inspect_archive(archive_path: Path, verbose: bool = False) -> int:
+    """Read-only: report an archive's provenance, verify its shape digest,
+    and preview what an import would skip. Never extracts or mutates.
+
+    Exit 0 = safe-looking (digest OK or no provenance to check); 2 =
+    shape digest MISMATCH; 3 = unsupported/newer format. The caller gets
+    the exit code; details go to stderr/stdout."""
+    if not archive_path.exists():
+        print(f"Error: archive not found: {archive_path}", file=sys.stderr)
+        sys.exit(1)
+
+    with tarfile.open(archive_path, "r:gz") as tar:
+        members = tar.getmembers()
+        if len(members) > _MAX_MEMBERS:
+            print(f"Error: archive has {len(members)} members "
+                  f"(> {_MAX_MEMBERS} cap)", file=sys.stderr)
+            return 1
+        meta = [m for m in members
+                if m.name == "meta" or m.name.startswith(_META_PREFIX)]
+        ws = [m for m in members if m not in meta]
+
+        prov = None
+        for m in meta:
+            if m.name == _META_PREFIX + "provenance.json" and m.isreg() \
+                    and m.size <= _MAX_PROVENANCE_BYTES:
+                try:
+                    fh = tar.extractfile(m)
+                    prov = _validate_provenance(
+                        json.loads(fh.read().decode("utf-8"))) if fh else None
+                except Exception as exc:
+                    print(f"provenance.json unreadable: "
+                          f"{_sanitize_for_terminal(exc)}", file=sys.stderr)
+                break
+
+        print(f"Archive: {archive_path}")
+        fmt = prov["format"] if prov else None
+        if prov is None:
+            print("  format: v1 (no meta/provenance) — no lineage to show")
+        else:
+            print(f"  format: v{fmt}"
+                  + ("  ⚠ NEWER than this tool (v%d) — import would refuse"
+                     % ARCHIVE_FORMAT
+                     if isinstance(fmt, int) and fmt > ARCHIVE_FORMAT else ""))
+            print(f"  exported by {_sanitize_for_terminal(prov['exporter'])} "
+                  f"at {_sanitize_for_terminal(prov['created_at'])}")
+            print(f"  source: "
+                  f"{_sanitize_for_terminal(prov['source'].get('workspace_root', '?'))}")
+            mi = prov["meta"]
+            print(f"  meta: user-config={bool(mi.get('user_config'))} "
+                  f"(redactions={mi.get('user_config_redactions', 0)}), "
+                  f"experiments={mi.get('experiments_files', 0)}, "
+                  f"external-symlinks={mi.get('external_symlinks', 0)}")
+            print("  custody:")
+            for ev in prov["custody"][:_MAX_CUSTODY_PRINT]:
+                print(f"    {_sanitize_for_terminal(ev.get('event', '?'))} by "
+                      f"{_sanitize_for_terminal(ev.get('by', '?'))} at "
+                      f"{_sanitize_for_terminal(ev.get('at', '?'))}")
+            extra = len(prov["custody"]) - _MAX_CUSTODY_PRINT
+            if extra > 0:
+                print(f"    … {extra} earlier event(s) not shown")
+
+        # Verify the workspace-shape digest against the archive's own bytes.
+        entries = []
+        for m in ws:
+            if m.name == "workspace" or not m.isreg():
+                continue
+            rel = m.name[len("workspace/"):] \
+                if m.name.startswith("workspace/") else m.name
+            if _should_exclude(rel):
+                continue
+            entries.append((rel, m.size))
+        rc = 0
+        if prov is not None:
+            claimed = prov["contents"].get("workspace_shape_sha256", "")
+            actual = _manifest_digest(entries)
+            ok = bool(claimed) and claimed == actual
+            print(f"  workspace shape digest: "
+                  f"{'OK' if ok else 'MISMATCH'} "
+                  f"(names+sizes only — self-attested, UNSIGNED)")
+            if not ok:
+                print("  ⚠ archive contents do not match the exporter's "
+                      "digest — corrupted, tampered, or partial.")
+                rc = 2
+            if isinstance(fmt, int) and fmt > ARCHIVE_FORMAT:
+                rc = 3
+
+        # Preview what import would skip (the safety screen, without a ws).
+        skips = {}
+        for m in ws:
+            if m.name == "workspace":
+                continue
+            rel = m.name[len("workspace/"):] \
+                if m.name.startswith("workspace/") else m.name
+            if not rel:
+                continue
+            reason = _member_import_risk(m, rel)
+            if reason:
+                skips.setdefault(reason, []).append(rel)
+        secret_meta = [m.name for m in meta if m.isreg()
+                       and _secret_shaped(("meta",)
+                                          + Path(m.name[len(_META_PREFIX):]).parts)]
+        print(f"  workspace files: {len(entries)}; "
+              f"import would SKIP {sum(len(v) for v in skips.values())} "
+              f"unsafe member(s), screen {len(secret_meta)} secret-shaped "
+              f"meta")
+        for reason, names in sorted(skips.items()):
+            print(f"    - {reason}: {len(names)}"
+                  + (f"  e.g. {_sanitize_for_terminal(names[0])}"
+                     if verbose or len(names) <= 3 else ""))
+            if verbose:
+                for nm in names:
+                    print(f"        {_sanitize_for_terminal(nm)}")
+        return rc
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="maro-export",
@@ -962,6 +1105,11 @@ def main():
     exp = sub.add_parser("export", help="Export workspace + meta to tar.gz")
     exp.add_argument("--output", "-o", type=Path, help="Output archive path")
     exp.add_argument("--verbose", "-v", action="store_true")
+
+    ins = sub.add_parser("inspect", help="Show provenance + verify digest, "
+                                         "no extraction")
+    ins.add_argument("archive", type=Path, help="Archive to inspect")
+    ins.add_argument("--verbose", "-v", action="store_true")
 
     imp = sub.add_parser("import", help="Import archive")
     imp.add_argument("archive", type=Path, help="Archive to import")
@@ -978,6 +1126,8 @@ def main():
 
     if args.command == "export":
         export_workspace(output_path=args.output, verbose=args.verbose)
+    elif args.command == "inspect":
+        sys.exit(inspect_archive(args.archive, verbose=args.verbose))
     elif args.command == "import":
         import_workspace(args.archive, dry_run=args.dry_run,
                          verbose=args.verbose, clean=args.clean,
