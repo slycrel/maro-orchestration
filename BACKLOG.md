@@ -255,16 +255,34 @@ exception path where handle() can't recover the handle id (`_hid=None`)
 strands registered callables in a long-lived process — same class as
 the learning lane, fix both together if it ever bites.
 
-**REMAINING — phase 2 + visibility (open):** (2) the real design
-chunk: notify/reply at final-step compile with "verdict pending",
-closure verdict arrives as a follow-up stamp (verdict_history already
-supports supersede), sweep for crash-orphaned unstamped runs via the
-repair-audits contract — the answer-synthesis and
-goal_achieved-at-notify watch-fors below belong to this phase. And the
-tail's ~30 calls are STILL invisible in `total_cost_usd` (unchanged by
-phase 1 — the calls just run later), now joined by the card
-`n_calls`/log-slice under-report above; fold into phase 2 or fix
-separately.
+**PHASE 2 + VISIBILITY SHIPPED 2026-08-13 (7cba250 + c928833):**
+answer-first notify at final-step compile with an explicit
+`verdict_pending` metadata marker; the verdict follows as a
+`run_verdict` event (revised answer re-sent only when a gate
+escalation changed it, sha-compared). Handle lane only, killswitch
+`notify.verdict_followup` (default ON), non-done terminals stay
+synchronous. The marker is the durable contract: curation class
+`done-verdict-pending` (tri-state — any stamped verdict outranks),
+close_run's never-stamped tripwire stands down while ACTIVE and
+regains authority at finalize (resolution deliberately precedes the
+finalize close), and `audit_repair.sweep_verdict_orphans`
+(heartbeat-wired, shared repair pidfile, 1h grace over the marker's
+`since`) stamps crashed-mid-tail runs `verdict_pending_orphaned` —
+achieved stays None, marker resolves only AFTER the durable ledger
+stamp, and resolve-only when a real verdict landed. Visibility half:
+`metrics.tail_cost_scope` wraps closure/gate/drains (escalation
+re-run outside the scope; executor calls excluded at the llm seam) so
+the tail's ~30 calls now write provider-priced loop-joined
+step-costs rows; `record_llm_call` carries per-call `cost_usd`; a
+drained tail triggers re-slice + curator refresh + re-render.
+Watch-fors resolved as designed: answer synthesis runs verdict-blind
+at the early close (the post-verdict refresh re-pays it only when
+`curation.answer_synthesis` is ON — 2 curations per run instead of
+1); goal_achieved consumers at notify time already tolerated
+unjudged, and the pending class keeps them honest. NOTE for the box:
+the early close adds one extra `close_run` (snapshot/curate) per done
+run — watch the first live runs' tails for surprises. Cross-model
+3-lens review ran same day (see docs/history record).
 
 Original entry:
 

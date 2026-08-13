@@ -7628,3 +7628,18 @@ under the same two-measurement standard).
   Verdict doc in docs/history/. r3 image REBUILT post-fix (baked src
   now matches main) and the end-to-end smoke re-run through the new
   in-container consent gate — answer + receipt, exit 0.
+- **2026-08-13 (day)** — Async-tail PHASE 2 + visibility SHIPPED
+  (7cba250 + c928833), completing the 2026-08-11 decree: a DONE run's
+  answer now notifies at final-step compile with `verdict_pending`
+  stamped in metadata; closure/gate/probes run AFTER the user has the
+  result; the verdict lands as a `run_verdict` follow-up (revised
+  answer only when a gate escalation changed it). The marker is the
+  contract — curation tri-state class, tripwire stand-down/regain,
+  heartbeat crash-orphan sweep (`verdict_pending_orphaned`, achieved
+  stays None, clear-only-after-durable-stamp). Visibility: the tail's
+  ~30 calls (closure/gate/learning/maintenance) now write
+  provider-priced loop-joined cost rows via `metrics.tail_cost_scope`
+  (executor calls excluded — no double count on escalation re-runs),
+  per-call `cost_usd` on build/calls records, and a drained tail
+  re-slices + refreshes the card. Killswitch `notify.verdict_followup`.
+  Same-day 3-lens cross-model review; suite 8501/0 skipped.
