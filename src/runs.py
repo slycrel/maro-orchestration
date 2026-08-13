@@ -453,6 +453,24 @@ def stamp_run_metadata(fields: dict) -> Optional[Path]:
     """
     try:
         rd = current_run_dir()
+    except Exception:
+        return None
+    return _stamp_metadata_at(rd, fields)
+
+
+def stamp_run_metadata_for(handle_id: str, fields: dict) -> Optional[Path]:
+    """stamp_run_metadata by handle id — for finalize/repair paths that run
+    after (or outside) the pinned run context (async-tail phase 2: the
+    verdict_pending marker is resolved from handle()'s finalize)."""
+    try:
+        rd = run_dir(handle_id)
+    except Exception:
+        return None
+    return _stamp_metadata_at(rd, fields)
+
+
+def _stamp_metadata_at(rd: Optional[Path], fields: dict) -> Optional[Path]:
+    try:
         if rd is None or not fields:
             return None
         meta_path = rd / "metadata.json"
@@ -765,7 +783,15 @@ def close_run(
         try:
             meta = json.loads(
                 (run_dir(handle_id) / "metadata.json").read_text(encoding="utf-8"))
+            # Async-tail phase 2: the answer-first early close runs BEFORE
+            # closure by design — an ACTIVE verdict_pending marker means the
+            # verdict is owed but not yet due, not that closure forgot. The
+            # tripwire waits for the finalize-time close (marker resolved) or
+            # the crash-orphan sweep (audit_repair) to make the honest call.
+            _vp = meta.get("verdict_pending")
+            _vp_active = isinstance(_vp, dict) and not _vp.get("resolved_at")
             if (not meta.get("goal_verdict_source")
+                    and not _vp_active
                     and meta.get("lane") == "agenda"
                     and not meta.get("dry_run")):
                 # Modern runs carry plural loop_ids; the singular

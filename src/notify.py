@@ -61,7 +61,12 @@ log = logging.getLogger("notify")
 DEFAULT_EVENTS = ["run_completed", "escalation", "backend_actionable",
                   "stranded_run", "resume_refused_busy",
                   "resume_lock_unavailable", "recursion_checkin",
-                  "self_improvement_verdict"]
+                  "self_improvement_verdict",
+                  # Async-tail phase 2: the verdict follow-up to an
+                  # answer-first run_completed (which went out with
+                  # verdict_pending). Default-on — the split is only
+                  # honest if both halves arrive.
+                  "run_verdict"]
 
 # The event types that are notify-worthy AND easy to miss with no
 # notify.command lane configured (run_completed already has a durable home

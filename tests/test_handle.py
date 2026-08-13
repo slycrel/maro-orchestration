@@ -5554,6 +5554,130 @@ class TestAsyncMaintenanceTail:
         assert drain_deferred_maintenance("g-hid") == 1
 
 
+class TestVerdictFollowup:
+    """Async-tail phase 2 (decree 2026-08-11: "return the run's result; no
+    need to make the end user wait for closure while all that runs"): a
+    DONE run's answer notifies at final-step compile with the verdict
+    PENDING; closure/gate run after; the verdict follows as run_verdict.
+    The verdict_pending marker in run metadata is the durable contract
+    (curation class, close_run tripwire stand-down, crash-orphan sweep)."""
+
+    def _fake_loop_result(self):
+        from agent_loop import LoopResult, StepOutcome
+        return LoopResult(
+            loop_id="vf-loop", project="vf-proj", goal="build X",
+            status="done", stuck_reason=None,
+            steps=[StepOutcome(index=0, text="step", status="done",
+                               result="output", iteration=0)],
+        )
+
+    def _closure_decision(self):
+        from types import SimpleNamespace
+        from director import ClosureVerdict
+        return SimpleNamespace(
+            action="accept",
+            restart_context="",
+            closure_verdict=ClosureVerdict(
+                complete=True, confidence=0.9, gaps=[], summary="verified",
+                checks_run=2, checks_passed=2),
+        )
+
+    def _drive(self, monkeypatch, tmp_path, events):
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        _stub_build_adapter(monkeypatch)
+        import notify
+        monkeypatch.setattr(
+            notify, "emit",
+            lambda event, payload, **kw: events.append((event, payload)) or True)
+        gate = MagicMock()
+        gate.escalate = False
+        gate.contested_claims = []
+
+        def _fake_closure(*a, **kw):
+            events.append(("closure-ran", {}))
+            return self._closure_decision()
+
+        with patch("agent_loop.run_agent_loop",
+                   side_effect=lambda g, *a, **kw: self._fake_loop_result()), \
+             patch("intent.check_goal_clarity", return_value={"clear": True}), \
+             patch("director.evaluate_closure", side_effect=_fake_closure), \
+             patch("quality_gate.run_quality_gate", return_value=gate):
+            return handle("build X", force_lane="agenda", dry_run=False)
+
+    def test_answer_notify_precedes_closure_and_verdict_follows(
+            self, monkeypatch, tmp_path):
+        events = []
+        result = self._drive(monkeypatch, tmp_path, events)
+        names = [e for e, _ in events]
+        assert "run_completed" in names and "closure-ran" in names
+        # THE decree pin: the user hears the answer before closure runs.
+        assert names.index("run_completed") < names.index("closure-ran")
+        # Exactly one run_completed — the finalize sends the follow-up
+        # run_verdict instead of a duplicate completion.
+        assert names.count("run_completed") == 1
+        assert "run_verdict" in names
+        assert names.index("closure-ran") < names.index("run_verdict")
+        _, early_payload = events[names.index("run_completed")]
+        assert (early_payload.get("verdict_pending") is True
+                or early_payload.get("success_class") == "done-verdict-pending")
+        _, verdict_payload = events[names.index("run_verdict")]
+        assert verdict_payload.get("goal_achieved") is True
+        # The marker resolved on the way out — an ACTIVE marker after the
+        # finalize is exactly the crash signature the sweep hunts.
+        import json as _json
+        from runs import run_dir as _run_dir
+        meta = _json.loads(
+            (_run_dir(result.handle_id) / "metadata.json").read_text())
+        vp = meta.get("verdict_pending") or {}
+        assert vp.get("notified_early") is True
+        assert vp.get("resolved_at")
+
+    def test_killswitch_restores_synchronous_ordering(
+            self, monkeypatch, tmp_path):
+        import config as config_mod
+        _real_get = config_mod.get
+        monkeypatch.setattr(
+            config_mod, "get",
+            lambda k, d=None: (False if k == "notify.verdict_followup"
+                               else _real_get(k, d)))
+        events = []
+        self._drive(monkeypatch, tmp_path, events)
+        names = [e for e, _ in events]
+        assert names.count("run_completed") == 1
+        assert "run_verdict" not in names
+        # Synchronous ordering restored: closure before the notify.
+        assert names.index("closure-ran") < names.index("run_completed")
+
+    def test_non_done_terminal_keeps_synchronous_ordering(
+            self, monkeypatch, tmp_path):
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        _stub_build_adapter(monkeypatch)
+        events = []
+        import notify
+        monkeypatch.setattr(
+            notify, "emit",
+            lambda event, payload, **kw: events.append(event) or True)
+        from agent_loop import LoopResult, StepOutcome
+        stuck = LoopResult(
+            loop_id="vf-stuck", project="vf-proj", goal="build X",
+            status="stuck", stuck_reason="blocked",
+            steps=[StepOutcome(index=0, text="step", status="done",
+                               result="output", iteration=0)],
+        )
+        gate = MagicMock()
+        gate.escalate = False
+        gate.contested_claims = []
+        with patch("agent_loop.run_agent_loop",
+                   side_effect=lambda g, *a, **kw: stuck), \
+             patch("intent.check_goal_clarity", return_value={"clear": True}), \
+             patch("director.evaluate_closure",
+                   side_effect=lambda *a, **kw: self._closure_decision()), \
+             patch("quality_gate.run_quality_gate", return_value=gate):
+            handle("build X", force_lane="agenda", dry_run=False)
+        assert events.count("run_completed") == 1
+        assert "run_verdict" not in events
+
+
 class TestOperatorContextChannel:
     """Dispatch-envelope operator channel (docs/DISPATCH_ENVELOPE.md):
     operator framing reaches the loop as ancestry context while the goal

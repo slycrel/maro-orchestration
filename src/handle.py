@@ -21,6 +21,7 @@ CLI:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -885,6 +886,32 @@ def handle(
                     _hid = None
             if _hid:
                 _status = result.status if result is not None else "error"
+                # Async-tail phase 2: resolve the verdict_pending marker
+                # BEFORE the finalize close — with the marker resolved,
+                # close_run's finished-without-closure tripwire regains its
+                # authority over runs whose closure never stamped a verdict
+                # (an ACTIVE marker legitimately stands it down; a resolved
+                # one must not). The pre-resolution marker is kept locally to
+                # route the notify below. From here on, "marker still active"
+                # in any run dir is exactly the crash signature the
+                # audit_repair sweep hunts.
+                _vp_meta = {}
+                try:
+                    from runs import run_dir as _run_dir_vp
+                    _vp_meta = json.loads(
+                        (_run_dir_vp(_hid) / "metadata.json")
+                        .read_text(encoding="utf-8")).get(
+                            "verdict_pending") or {}
+                    if not isinstance(_vp_meta, dict):
+                        _vp_meta = {}
+                    if _vp_meta and not _vp_meta.get("resolved_at"):
+                        from runs import stamp_run_metadata_for as _srm_resolve
+                        _resolved = dict(_vp_meta)
+                        _resolved["resolved_at"] = datetime.now(
+                            timezone.utc).isoformat()
+                        _srm_resolve(_hid, {"verdict_pending": _resolved})
+                except Exception:
+                    _vp_meta = {}
                 # Shared run-dir finalization (slice log, snapshot repo, stamp
                 # status + backend_error, curate run_card, re-render reports).
                 # Returns the run_card, which IS the completion payload.
@@ -911,14 +938,36 @@ def handle(
                         pass
                 # Substrate notification: the run_card IS the completion payload
                 # (status, done!=achieved class, result excerpt + path).
+                # Async-tail phase 2: when the answer already went out at
+                # final-step compile (verdict_pending marker, notified_early),
+                # this emit becomes the VERDICT follow-up (run_verdict) —
+                # closure/gate have run by now, the marker was resolved just
+                # above (before close_run, so the tripwire kept its
+                # authority), and the re-curated card carries the verdict.
                 try:
                     from notify import emit as _notify_emit
                     from runs import run_dir as _run_dir_notify
-                    _notify_emit(
-                        "run_completed",
-                        _card or {"handle_id": _hid, "status": _status},
-                        run_dir=str(_run_dir_notify(_hid)),
-                    )
+                    if _vp_meta.get("notified_early"):
+                        _payload = dict(_card or {"handle_id": _hid,
+                                                  "status": _status})
+                        _final_answer = str(
+                            _payload.get("answer_summary", "") or "")
+                        _final_sha = (hashlib.sha256(
+                            _final_answer.encode("utf-8")).hexdigest()
+                            if _final_answer else "")
+                        _payload["answer_changed"] = bool(
+                            _final_sha
+                            and _final_sha != _vp_meta.get("answer_sha", ""))
+                        _notify_emit(
+                            "run_verdict", _payload,
+                            run_dir=str(_run_dir_notify(_hid)),
+                        )
+                    else:
+                        _notify_emit(
+                            "run_completed",
+                            _card or {"handle_id": _hid, "status": _status},
+                            run_dir=str(_run_dir_notify(_hid)),
+                        )
                 except Exception:
                     pass
                 # Answer-first: deferred learning runs only now, after the
@@ -2308,6 +2357,67 @@ def _handle_impl(
                     _run_loop_ids.append(loop_result.loop_id)
             except Exception as _rst_exc:
                 log.warning("handle: restart re-run failed: %s", _rst_exc)
+
+        # Async-tail phase 2 (decree 2026-08-11: "return the run's result; no
+        # need to make the end user wait for closure while all that runs"):
+        # a DONE loop's answer goes out NOW, verdict explicitly PENDING —
+        # closure, gate, and claim probes run after the user already has the
+        # result, and the verdict follows as a run_verdict notify from
+        # handle()'s finalize (which also supersedes the answer if a gate
+        # escalation revised it). The verdict_pending marker in run metadata
+        # is the durable contract: curation renders the pending class from
+        # it, the close_run tripwire stands down while it is ACTIVE, the
+        # finalize resolves it, and audit_repair's sweep catches runs whose
+        # process died between this notify and the resolution (the marker
+        # left active is exactly that crash signature). Non-done terminals
+        # keep the old ordering — their tail IS the story, not bookkeeping
+        # after an answer. Killswitch: notify.verdict_followup (DEFAULTS).
+        try:
+            from config import get as _vf_cfg_get
+            _verdict_followup = bool(_vf_cfg_get("notify.verdict_followup", True))
+        except Exception:
+            _verdict_followup = True
+        if (not dry_run and _verdict_followup
+                and getattr(loop_result, "status", "") == "done"):
+            try:
+                from runs import (close_run as _close_run_early,
+                                  current_handle_id as _chid_early,
+                                  run_dir as _run_dir_early,
+                                  stamp_run_metadata as _srm_pending)
+                _hid_early = _chid_early()
+                if _hid_early:
+                    # Marker BEFORE close_run (the tripwire keys on it), the
+                    # notified_early flag only AFTER the emit call returns —
+                    # a crash between the two leaves an active marker with no
+                    # flag, and the finalize then sends the normal
+                    # run_completed (the user never heard) instead of only
+                    # the follow-up.
+                    _vp_marker = {
+                        "since": datetime.now(timezone.utc).isoformat(),
+                        "loop_id": getattr(loop_result, "loop_id", "") or "",
+                    }
+                    _srm_pending({"verdict_pending": _vp_marker})
+                    _card_early = _close_run_early(_hid_early, status="done")
+                    _early_answer = str(
+                        (_card_early or {}).get("answer_summary", "") or "")
+                    from notify import emit as _notify_early
+                    _notify_early(
+                        "run_completed",
+                        _card_early or {"handle_id": _hid_early,
+                                        "status": "done",
+                                        "verdict_pending": True},
+                        run_dir=str(_run_dir_early(_hid_early)),
+                    )
+                    _vp_marker["notified_early"] = True
+                    if _early_answer:
+                        # So the finalize can tell a revised answer (gate
+                        # escalation) from a re-render of the same one.
+                        _vp_marker["answer_sha"] = hashlib.sha256(
+                            _early_answer.encode("utf-8")).hexdigest()
+                    _srm_pending({"verdict_pending": _vp_marker})
+            except Exception:
+                log.debug("early verdict-pending notify failed — the "
+                          "finalize notify covers it", exc_info=True)
 
         # Director closure check — verify the goal was actually achieved.
         # Runs on any terminal state that produced steps (not just "done"):

@@ -182,10 +182,23 @@ def classify_outcome(rd: Path, meta: dict, card: dict) -> None:
     achieved = meta.get("goal_achieved")  # may be absent = unverified
     audit_incomplete = bool(
         meta.get("audit_incomplete") or meta.get("audit_repair_required"))
+    # Async-tail phase 2: an ACTIVE verdict_pending marker (answer already
+    # delivered, closure still running) with no verdict yet is its own
+    # class — "pending" must never read as the terminal "unverified"
+    # (tri-state discipline: not-yet-judged ≠ never-judged). Any stamped
+    # verdict or source outranks the marker.
+    _vp = meta.get("verdict_pending")
+    _vp_active = (isinstance(_vp, dict) and not _vp.get("resolved_at")
+                  and achieved is None
+                  and not meta.get("goal_verdict_source"))
+    if _vp_active:
+        card["verdict_pending"] = True
     if status in _SUCCESS_STATUSES and achieved is True:
         cls = "success"
     elif status in _SUCCESS_STATUSES and achieved is False:
         cls = "done-not-achieved"   # finished but verdict says it didn't land
+    elif status in _SUCCESS_STATUSES and _vp_active:
+        cls = "done-verdict-pending"
     elif status in _SUCCESS_STATUSES:
         cls = "done-unverified"
     elif status == "incomplete" and achieved is False:
@@ -1384,7 +1397,8 @@ _CURATOR_SPECS: List[CuratorSpec] = [
                                    "goal_verdict_gaps",
                                    "clarification_question",
                                    "stop_verdict", "stop_evidence",
-                                   "pause_reason", "pause_family")),
+                                   "pause_reason", "pause_family",
+                                   "verdict_pending")),
     CuratorSpec(inventory_assets, provides=("inventory", "mineable")),
     CuratorSpec(excerpt_result,
                 optional_provides=("result_excerpt", "result_path")),

@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 import json
 import logging
 import math
+import time
 from pathlib import Path
 from typing import Callable, List, Optional
 
@@ -522,6 +523,147 @@ def _repair_one(
         return AuditRepairItemResult(
             candidate.handle_id, patch["loop_id"], status, detail)
     return _finish_surface_repair(candidate, patch["loop_id"])
+
+
+# Async-tail phase 2 crash-orphan sweep. Grace before declaring a still-
+# ACTIVE verdict_pending marker orphaned: the tail normally lands in
+# minutes (worst measured pre-decree: 8m34s, run 2a3b1f85); an hour of
+# active pending on a run with ended_at stamped means the owning process
+# died between the answer-first notify and handle()'s finalize, not that
+# closure is slow. Observational basis, not a tuning knob.
+_ORPHAN_GRACE_S = 3600.0
+
+
+def sweep_verdict_orphans(
+    *, grace_s: float = _ORPHAN_GRACE_S, limit: int = 20,
+) -> dict:
+    """Stamp crash-orphaned verdict_pending runs as honestly unverdicted.
+
+    A run whose verdict_pending marker is still ACTIVE (no resolved_at)
+    past `grace_s` with ended_at stamped is the phase-2 crash signature:
+    the user got the answer-first notify, then the process died before
+    closure resolved the marker. The repair stamps
+    VERDICT_SOURCE_PENDING_ORPHANED (goal_achieved stays None — a crash is
+    not failure evidence), resolves the marker LAST (repair-audits
+    contract: the flag clears only after the durable stamp), and refreshes
+    the run's surfaces. Serialized under the same workspace pidfile as
+    reconcile_pending_audits. Returns counts for the caller's log line.
+    """
+    from proc_lock import acquire_pidfile
+    from runs import runs_root
+
+    acquired = acquire_pidfile(
+        _REPAIR_LOCK, payload={"command": "verdict-orphan-sweep"})
+    if acquired.status == "busy":
+        return {"status": "busy", "stamped": 0}
+    if acquired.status == "unavailable":
+        return {"status": "unavailable", "stamped": 0,
+                "error": acquired.error}
+    stamped = 0
+    scanned = 0
+    try:
+        root = runs_root()
+        if not root.is_dir():
+            return {"status": "completed", "stamped": 0}
+        now = time.time()
+        for run_dir in root.iterdir():
+            if stamped >= max(1, int(limit)):
+                break
+            if not run_dir.is_dir():
+                continue
+            meta = _read_metadata(run_dir)
+            if meta is None or not meta.get("ended_at"):
+                continue
+            vp = meta.get("verdict_pending")
+            if not isinstance(vp, dict) or vp.get("resolved_at"):
+                continue
+            try:
+                since = datetime.fromisoformat(
+                    str(vp.get("since", "")).replace("Z", "+00:00"))
+                age_s = now - since.timestamp()
+            except (TypeError, ValueError):
+                # An unparseable `since` cannot prove youth — treat as aged
+                # (the marker is at minimum from a finished run).
+                age_s = grace_s + 1
+            if age_s <= grace_s:
+                continue
+            scanned += 1
+            handle_id = str(
+                meta.get("handle_id") or run_dir.name.split("-", 1)[0])
+            from stop_verdicts import VERDICT_SOURCE_PENDING_ORPHANED
+            if meta.get("goal_verdict_source"):
+                # Closure DID stamp a verdict and the process died between
+                # that and the marker resolution — the verdict is real;
+                # orphan-stamping over it would erase a judged source.
+                # Resolve the marker only.
+                try:
+                    from runs import stamp_run_metadata_for
+                    stamp_run_metadata_for(handle_id, {"verdict_pending": {
+                        **vp,
+                        "resolved_at": datetime.now(timezone.utc).isoformat(),
+                        "resolved_by": "verdict_orphan_sweep(verdict-present)",
+                    }})
+                    stamped += 1
+                except Exception:
+                    log.debug("verdict-orphan sweep: resolve-only failed for "
+                              "%s", handle_id, exc_info=True)
+                continue
+            loop_id = str(vp.get("loop_id") or "")
+            if not loop_id:
+                lids = meta.get("loop_ids") or []
+                loop_id = str(lids[-1]) if lids else ""
+            ledger_ok = True
+            if loop_id:
+                try:
+                    from memory_ledger import stamp_outcome_verdict
+                    res = stamp_outcome_verdict(
+                        loop_id,
+                        goal_achieved=None,
+                        goal_verdict_source=VERDICT_SOURCE_PENDING_ORPHANED,
+                    )
+                    ledger_ok = res.status in ("updated", "missing")
+                except Exception:
+                    ledger_ok = False
+            if not ledger_ok:
+                # Durable stamp failed — leave the marker ACTIVE so the next
+                # sweep retries (never clear the flag first).
+                log.warning("verdict-orphan sweep: ledger stamp failed for "
+                            "%s (loop %s) — retrying next sweep",
+                            handle_id, loop_id[:8])
+                continue
+            try:
+                from runs import stamp_run_metadata_for
+                fields = {"verdict_pending": {
+                    **vp,
+                    "resolved_at": datetime.now(timezone.utc).isoformat(),
+                    "resolved_by": "verdict_orphan_sweep",
+                }}
+                if not meta.get("goal_verdict_source"):
+                    fields["goal_verdict_source"] = (
+                        VERDICT_SOURCE_PENDING_ORPHANED)
+                stamp_run_metadata_for(handle_id, fields)
+            except Exception:
+                log.warning("verdict-orphan sweep: metadata resolve failed "
+                            "for %s", handle_id, exc_info=True)
+                continue
+            stamped += 1
+            try:
+                from run_curation import refresh_run_card_classification
+                from loop_report import write_reports_for_run_dir
+                refresh_run_card_classification(handle_id, run_dir=run_dir)
+                write_reports_for_run_dir(run_dir)
+            except Exception:
+                log.debug("verdict-orphan sweep: surface refresh failed for "
+                          "%s", handle_id, exc_info=True)
+            log.info("verdict-orphan sweep: %s stamped %s (marker aged %.0fs)",
+                     handle_id, VERDICT_SOURCE_PENDING_ORPHANED, age_s)
+        return {"status": "completed", "stamped": stamped,
+                "considered": scanned}
+    finally:
+        try:
+            acquired.handle.close()
+        except Exception:
+            pass
 
 
 def reconcile_pending_audits(

@@ -118,6 +118,46 @@ def test_classify_done_unverified(workspace):
     assert card["success_class"] == "done-unverified"
 
 
+def test_classify_done_verdict_pending(workspace):
+    # Async-tail phase 2: ACTIVE marker + no verdict = its own class —
+    # not-yet-judged must never read as the terminal "unverified".
+    rd = create_run_dir(
+        "h00000vp", prompt="g", lane="agenda", model="claude",
+        extra_metadata={"verdict_pending": {
+            "since": "2026-08-13T12:00:00+00:00", "loop_id": "vp1"}})
+    finalize_run("h00000vp", status="done")
+    card = curate_run("h00000vp")
+    assert card["success_class"] == "done-verdict-pending"
+    assert card["verdict_pending"] is True
+
+
+def test_classify_resolved_marker_falls_back_to_unverified(workspace):
+    rd = create_run_dir(
+        "h00000vq", prompt="g", lane="agenda", model="claude",
+        extra_metadata={"verdict_pending": {
+            "since": "2026-08-13T12:00:00+00:00", "loop_id": "vp1",
+            "resolved_at": "2026-08-13T12:05:00+00:00"}})
+    finalize_run("h00000vq", status="done")
+    card = curate_run("h00000vq")
+    assert card["success_class"] == "done-unverified"
+    assert "verdict_pending" not in card
+
+
+def test_classify_stamped_verdict_outranks_active_marker(workspace):
+    # A verdict landing while the marker is still active (finalize hasn't
+    # resolved it yet) classifies normally — the judgment wins.
+    rd = create_run_dir(
+        "h00000vr", prompt="g", lane="agenda", model="claude",
+        extra_metadata={"goal_achieved": True,
+                        "verdict_pending": {
+                            "since": "2026-08-13T12:00:00+00:00",
+                            "loop_id": "vp1"}})
+    finalize_run("h00000vr", status="done")
+    card = curate_run("h00000vr")
+    assert card["success_class"] == "success"
+    assert "verdict_pending" not in card
+
+
 def test_classify_audit_incomplete_never_as_success(workspace):
     rd = create_run_dir(
         "h00000ai", prompt="g", lane="agenda", model="claude",

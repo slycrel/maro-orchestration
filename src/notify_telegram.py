@@ -31,6 +31,7 @@ from pathlib import Path
 _CLASS_LABEL = {
     "success": ("✅", "Done — goal achieved"),
     "done-unverified": ("☑", "Done (not verified)"),
+    "done-verdict-pending": ("☑", "Done — verdict pending"),
     "done-not-achieved": ("⚠", "Finished — but goal NOT achieved"),
     "achieved-not-done": ("✅", "Goal achieved (run ended early)"),
     "partial": ("⚠", "Partial — stopped before finishing"),
@@ -175,6 +176,37 @@ def format_message(payload: dict) -> str:
         point = payload.get("point")
         if point:
             lines.append(f"(at {point}; job {payload.get('job_id', '?')})")
+        return "\n".join(lines)
+
+    # Async-tail phase 2: the verdict follow-up to an answer-first
+    # run_completed. Short by design — the user already has the answer; this
+    # is the verifier signing off (or dissenting). A revised answer (gate
+    # escalation re-ran the loop after the early notify) is the exception
+    # that re-sends content.
+    if event == "run_verdict":
+        achieved = payload.get("goal_achieved")
+        if achieved is True:
+            head = "✅ Verdict: goal achieved"
+        elif achieved is False:
+            head = "⚠ Verdict: goal NOT achieved"
+        else:
+            src = str(payload.get("goal_verdict_source", "") or "unverified")
+            head = f"☑ Verdict: not verified ({src})"
+        lines = [head]
+        goal = str(payload.get("goal", "")).strip()
+        if goal:
+            lines.append(f"Re: {goal[:100]}")
+        summary = str(payload.get("goal_verdict_summary", "") or "").strip()
+        if summary and achieved is not True:
+            # The why matters when the verifier dissents or abstains; a
+            # self-grade on success doesn't earn the screen space.
+            lines.append(summary[:300])
+        if payload.get("answer_changed"):
+            answer = str(payload.get("answer_summary", "") or "").strip()
+            if answer:
+                lines.append("")
+                lines.append("Revised answer:")
+                lines.append(answer)
         return "\n".join(lines)
 
     # Escalation-class events other than `escalation` (backend_actionable,

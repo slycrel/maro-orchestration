@@ -467,3 +467,97 @@ def test_targeted_missing_repair_is_not_reported_as_success():
     result = reconcile_pending_audits(
         handle_ref="does-not-exist", adapter_factory=LessonAdapter)
     assert result.status == "not_found"
+
+
+# ---------------------------------------------------------------------------
+# Async-tail phase 2: crash-orphan sweep over ACTIVE verdict_pending markers
+# ---------------------------------------------------------------------------
+
+def _seed_pending_marker(handle_id, loop_id, *, age_s=7200.0, resolved=False,
+                         verdict_source=None):
+    from datetime import datetime, timedelta, timezone
+    since = (datetime.now(timezone.utc) - timedelta(seconds=age_s)).isoformat()
+    marker = {"since": since, "loop_id": loop_id, "notified_early": True}
+    if resolved:
+        marker["resolved_at"] = datetime.now(timezone.utc).isoformat()
+    extra = {"loop_ids": [loop_id], "verdict_pending": marker}
+    if verdict_source:
+        extra["goal_verdict_source"] = verdict_source
+        extra["goal_achieved"] = True
+    rd = runs.create_run_dir(
+        handle_id, prompt="answer-first run", lane="agenda", model="mid",
+        extra_metadata=extra,
+    )
+    runs.finalize_run(handle_id, status="done")
+    record_outcome(
+        "answer-first run", "done", "work delivered",
+        lessons=[], loop_id=loop_id, handle_id=handle_id,
+    )
+    return rd
+
+
+def test_orphan_sweep_stamps_aged_active_marker():
+    from audit_repair import sweep_verdict_orphans
+    rd = _seed_pending_marker("vp000001", "vp-loop-1", age_s=7200.0)
+
+    res = sweep_verdict_orphans()
+
+    assert res["status"] == "completed"
+    assert res["stamped"] == 1
+    meta = _metadata(rd)
+    assert meta["verdict_pending"]["resolved_at"]
+    assert meta["verdict_pending"]["resolved_by"] == "verdict_orphan_sweep"
+    assert meta["goal_verdict_source"] == "verdict_pending_orphaned"
+    row = load_outcome_by_loop_id("vp-loop-1")
+    assert row.goal_verdict_source == "verdict_pending_orphaned"
+    # A crash is not failure evidence — unjudged, never False.
+    assert row.goal_achieved is None
+
+
+def test_orphan_sweep_leaves_young_markers_alone():
+    from audit_repair import sweep_verdict_orphans
+    rd = _seed_pending_marker("vp000002", "vp-loop-2", age_s=60.0)
+    res = sweep_verdict_orphans()
+    assert res["stamped"] == 0
+    meta = _metadata(rd)
+    assert "resolved_at" not in meta["verdict_pending"]
+    assert "goal_verdict_source" not in meta
+
+
+def test_orphan_sweep_leaves_resolved_markers_alone():
+    from audit_repair import sweep_verdict_orphans
+    rd = _seed_pending_marker("vp000003", "vp-loop-3", age_s=7200.0,
+                              resolved=True)
+    res = sweep_verdict_orphans()
+    assert res["stamped"] == 0
+    meta = _metadata(rd)
+    assert "goal_verdict_source" not in meta
+
+
+def test_orphan_sweep_never_overwrites_a_real_verdict():
+    # Closure stamped, process died before resolving the marker: the sweep
+    # resolves the marker only — orphan-stamping would erase a judged source.
+    from audit_repair import sweep_verdict_orphans
+    rd = _seed_pending_marker("vp000004", "vp-loop-4", age_s=7200.0,
+                              verdict_source="closure")
+    res = sweep_verdict_orphans()
+    assert res["stamped"] == 1
+    meta = _metadata(rd)
+    assert meta["goal_verdict_source"] == "closure"
+    assert meta["goal_achieved"] is True
+    assert meta["verdict_pending"]["resolved_by"] == \
+        "verdict_orphan_sweep(verdict-present)"
+
+
+def test_orphan_sweep_keeps_marker_active_on_ledger_failure(monkeypatch):
+    # Repair-audits contract: the flag clears only AFTER the durable stamp.
+    from audit_repair import sweep_verdict_orphans
+    import memory_ledger
+    rd = _seed_pending_marker("vp000005", "vp-loop-5", age_s=7200.0)
+    monkeypatch.setattr(
+        memory_ledger, "stamp_outcome_verdict",
+        lambda *a, **k: OutcomeVerdictStampResult(status="write_failed"))
+    res = sweep_verdict_orphans()
+    assert res["stamped"] == 0
+    meta = _metadata(rd)
+    assert "resolved_at" not in meta["verdict_pending"]

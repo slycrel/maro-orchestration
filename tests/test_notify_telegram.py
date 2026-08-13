@@ -384,3 +384,63 @@ def test_deliverable_link_preferred_over_report(monkeypatch):
         "result_path": "/anything/loop-x-RESULT.md",
     })
     assert "📄 Full report: http://192.168.0.45:8787/h9-nick/artifact/FINAL_REPORT.md" in msg
+
+
+def test_format_run_verdict_achieved_is_short():
+    # Async-tail phase 2: the user already has the answer — the follow-up is
+    # the verifier signing off, one line.
+    msg = format_message({
+        "event_type": "run_verdict",
+        "goal": "build the thing",
+        "goal_achieved": True,
+        "goal_verdict_summary": "verified by closure",
+        "answer_summary": "the answer",
+        "answer_changed": False,
+    })
+    assert "Verdict: goal achieved" in msg
+    assert "the answer" not in msg          # unchanged answer not re-sent
+    assert "verified by closure" not in msg  # self-grade on success skipped
+
+
+def test_format_run_verdict_not_achieved_says_why():
+    msg = format_message({
+        "event_type": "run_verdict",
+        "goal": "build the thing",
+        "goal_achieved": False,
+        "goal_verdict_summary": "artifact missing from the run dir",
+    })
+    assert "NOT achieved" in msg
+    assert "artifact missing" in msg
+
+
+def test_format_run_verdict_unjudged_names_source():
+    msg = format_message({
+        "event_type": "run_verdict",
+        "goal_achieved": None,
+        "goal_verdict_source": "closure_error",
+    })
+    assert "not verified (closure_error)" in msg
+
+
+def test_format_run_verdict_revised_answer_is_resent():
+    msg = format_message({
+        "event_type": "run_verdict",
+        "goal_achieved": True,
+        "answer_summary": "the better answer",
+        "answer_changed": True,
+    })
+    assert "Revised answer:" in msg
+    assert "the better answer" in msg
+
+
+def test_format_verdict_pending_class_label():
+    msg = format_message({
+        "event_type": "run_completed",
+        "status": "done",
+        "success_class": "done-verdict-pending",
+        "handle_id": "vp1",
+        "goal": "build the thing",
+        "answer_summary": "here is the answer",
+    })
+    assert "verdict pending" in msg.lower()
+    assert "here is the answer" in msg

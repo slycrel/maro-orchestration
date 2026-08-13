@@ -639,6 +639,45 @@ def test_close_run_done_without_verdict_logs_honesty_event(
     assert events[0]["audience"] == "user"
 
 
+def _close_with_pending_marker(workspace, tmp_path, monkeypatch, handle_id,
+                               *, resolved):
+    """open_run → stamp a verdict_pending marker → close_run, capture log."""
+    from runs import open_run, close_run, set_current_run_dir, stamp_run_metadata
+    log_path = tmp_path / "captains_log.jsonl"
+    import captains_log
+    monkeypatch.setattr(captains_log, "_log_path_override", log_path)
+    try:
+        open_run(handle_id, prompt="do it", lane="agenda")
+        marker = {"since": "2026-08-13T12:00:00+00:00", "loop_id": "vp-loop"}
+        if resolved:
+            marker["resolved_at"] = "2026-08-13T12:05:00+00:00"
+        stamp_run_metadata({"verdict_pending": marker})
+    finally:
+        set_current_run_dir(None)
+    close_run(handle_id, status="done")
+    return [e for e in _read_log_events(log_path)
+            if e["event_type"] == "DONE_WITHOUT_VERDICT"]
+
+
+def test_tripwire_stands_down_while_verdict_pending_is_active(
+        workspace, tmp_path, monkeypatch):
+    # Async-tail phase 2: the answer-first early close runs BEFORE closure by
+    # design — an ACTIVE marker means the verdict is owed but not yet due,
+    # and never_stamped here would poison every phase-2 run's ledger row.
+    events = _close_with_pending_marker(workspace, tmp_path, monkeypatch,
+                                        "vpa1", resolved=False)
+    assert events == []
+
+
+def test_tripwire_fires_once_verdict_pending_is_resolved(
+        workspace, tmp_path, monkeypatch):
+    # The finalize resolves the marker BEFORE its close_run precisely so the
+    # tripwire regains authority over a closure that never stamped.
+    events = _close_with_pending_marker(workspace, tmp_path, monkeypatch,
+                                        "vpa2", resolved=True)
+    assert len(events) == 1
+
+
 def test_close_run_verdicted_done_run_stays_silent(
         workspace, tmp_path, monkeypatch):
     events = _close_with_log(workspace, tmp_path, monkeypatch, "dwv2",

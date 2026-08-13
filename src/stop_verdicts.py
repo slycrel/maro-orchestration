@@ -120,6 +120,16 @@ VERDICT_SOURCE_RUN_ERRORED = "run_errored"
 # how a tripwire trains people to ignore it.
 VERDICT_SOURCE_NO_STEPS_COMPLETED = "closure_skipped_no_steps"
 
+# Async-tail phase 2: the answer went out with the verdict pending, and the
+# owning process died before closure could stamp one (the verdict_pending
+# marker was still ACTIVE past the sweep grace). Fourth member of the
+# family — distinct from NEVER_STAMPED (closure ran to finalize and didn't
+# deliver: closure bug) and RUN_ERRORED (nothing was owed): here a verdict
+# WAS owed and the process owing it is gone. goal_achieved stays None — a
+# crash is not failure evidence (f7b775c doctrine: a judge without
+# evidence stamps unjudged, never False).
+VERDICT_SOURCE_PENDING_ORPHANED = "verdict_pending_orphaned"
+
 # Typed pause reasons (§13e): WHY the run is paused, machine-readable.
 # Operator-class — a human is in the loop.
 PAUSE_OP_MANUAL = "manual-intervention"          # kill switch, operator stop directive
