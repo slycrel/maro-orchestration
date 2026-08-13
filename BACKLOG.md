@@ -291,12 +291,14 @@ snapshot story**, sqlite survived this time, not guaranteed.
    fresh install for those (scope injection off, different model prefs) —
    an uncontrolled condition delta for any A/B run against copied data.
 2. **Deliberate exclusions, one over-broad.** secrets (1) +
-   telegram_offset.txt (1) = by design. But the `logs/` exclusion is
-   path-COMPONENT based and ate 35 `.git/logs/*` reflog files inside
-   archived project repos (`projects/_archive/**/repo/.git/logs/*`,
-   ledger-kata) — archived clones import fsck-clean but
-   reflog-incomplete. Fix if archives ever need to be byte-complete:
-   anchor the pattern to workspace-root `logs/`.
+   telegram_offset.txt (1) = by design. But the `logs/` exclusion was
+   path-COMPONENT based and ate 35 logs-component files — archived
+   clones imported fsck-clean but reflog-incomplete. *(Correction
+   2026-08-13: only the 11 under `projects/**/.git/logs/*` were
+   verified reflogs; the 24 under `archive/` left the box before being
+   classified — the v1 note labeled all 35 "reflogs" from a truncated
+   head listing. The over-exclusion itself was real either way.)*
+   FIXED 2026-08-12: pattern anchored to workspace-root `logs/`.
 3. **Embedded machine semantics ride along but don't resolve.** 5,358
    files (~23%) contain `/home/clawd` absolute paths (checkpoints,
    artifact pointers, metadata); 6 symlinks point at box paths — and
@@ -314,6 +316,25 @@ snapshot story**, sqlite survived this time, not guaranteed.
 
 Cosmetic: export's "N files" count includes directory entries (reported
 29,123 vs 23,555 real files) — the number lies to a reconciler.
+
+**ROUND 2 — delete, re-export, re-import with the hardened tool
+(2026-08-13): the exporter now captures everything a tar CAN carry.**
+Name-level reconciliation (pre/post box file-list snapshots vs archive
+members vs imported tree, box mid-cook): 23,700 pre-export files →
+23,696 archived → 23,696 imported, archive↔copy delta ZERO. Predicted
+exclusions = exactly [secrets/.env, telegram_offset.txt]. The only
+other absentees were one cold backup db's `-wal`/`-shm` sidecars —
+**by design, and proven lossless: the folded snapshot matches the
+box's db+wal view row-for-row across all 9 tables, integrity ok.**
+Reflogs 11/11 ship (over-exclusion fix confirmed live). Honest counts
+confirmed ("23,696 files (+5,640 dirs/links)"). 600-mode files arrive
+600. Box has no sockets/fifos/hardlinks to lose. correspondence.db 15
+tables both sides. **Residual gaps are now location and semantics, not
+fidelity** — unchanged classes: user-tier `~/.maro/config.yml` +
+`~/.maro/experiments/` (outside the workspace), 5,401 files embedding
+`/home/clawd` paths, 6 box-target symlinks, ownership mapped to the
+importing user. Live copy: `~/maro-box-copy/workspace`
+(`MARO_WORKSPACE`), archive `~/maro-box-export-v2.tar.gz`.
 
 **Review-hardened same day (3-lens Codex review of 707a541 — REJECT →
 fixed):** all reproduced before fixing. (1) traversal guard was
