@@ -3832,6 +3832,34 @@ and maintainable over time."** Step 1 is greenlit:
   stands: **the next lever is planner-level (plan steps naming the
   verb), not more prompt wording.** Prompt-teaching axis is now
   exhausted on two corpora with the environment clean.
+  **PLANNER LEVER SHIPPED 2026-08-13 (overnight):**
+  `planner.READ_QUERY_STEP_RULES` — decompose is taught (guidance-form,
+  recon/world-facts precedent) to write the sub-query invocation INTO
+  extraction-step text for likely-large (>~50KB) files, making the verb the
+  stated work instead of an ambient capability. Gates:
+  `planner.read_query_steps` emission switch (DEFAULTS row) AND
+  `executor.read_query` killswitch AND host lane (never advertise a
+  command the executor environment can't run — container verb-parity
+  principle; breaker-suppressed container degrades to host and teaches).
+  Taught in assembled + staged lanes, excluded from the cuts JSON
+  prompt. 7 pins (tests/test_read_query_steps.py).
+  **A/B-5 PREDICTION REGISTERED 2026-08-13 (before any dispatch):** on
+  the next naturally corpus-shaped dispatch (host lane), (i) the PLAN
+  contains >=1 step naming the sub-query CLI, and (ii) the step
+  transcripts show >=1 actual invocation. Falsifiers: (a) plan never
+  names the verb -> planner guidance-form teaching is also insufficient;
+  next lever is deterministic (post-decompose step rewrite keyed on
+  file-size stat, or the #22 errand envelope), not more prompt wording;
+  (b) plan names it but the worker still reads/greps instead -> habit
+  overrides explicit step text; lever moves to verification (a named-
+  command step that didn't run the command fails its verify question).
+  Cost axes deliberately NOT re-registered (A/B-4's plan-shape confound:
+  step-count/plan-weight dominated tokens); direction is noted
+  qualitatively if (i)+(ii) hold. Corpus-run intermediates the run
+  GENERATES mid-flight (A/B-4's 566KB audit_grep.txt) are out of this
+  lever's reach by construction — the planner can't name files that
+  don't exist yet; that residual belongs to the executor axis (exhausted)
+  or the verification axis, not to more planner wording.
 - Relation to existing items: this is the generalized form of the #22
   errand-envelope lever and the designated reader for RUN_TEACHINGS
   chunk-1's input stage; it is NOT a replacement for the cheaper

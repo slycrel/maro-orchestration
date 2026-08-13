@@ -81,6 +81,12 @@ def _cfg_enabled() -> bool:
         return True
 
 
+def read_query_enabled() -> bool:
+    """Public killswitch check — teaching surfaces (planner step rules)
+    gate on this so a disabled verb is never advertised into plans."""
+    return _cfg_enabled()
+
+
 def _question_terms(question: str, cap: int = 8) -> List[str]:
     terms: List[str] = []
     for w in _WORD_RE.findall(question):

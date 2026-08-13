@@ -222,6 +222,39 @@ RECON_FLAVOR_RULES = textwrap.dedent("""\
 """).strip()
 
 
+# Large-file extraction steps (A/B-4 consequence, 2026-08-13). Two corpus
+# runs (2a3bb789 containerized, be7c618a host with the verb reachable and
+# advertised in 6 prompts) produced ZERO maro-read invocations — executors
+# keep their read-whole-file/grep habits no matter how the ambient
+# EXECUTE_SYSTEM advertisement is worded. The pre-registered next lever is
+# planner-level: the plan step NAMES the invocation, making the verb the
+# stated work instead of an ambient capability. Guidance-form like
+# WORLD_FACT_RULES; __READ_CLI__ is substituted at teach time with the
+# lane-correct command. Gated by `planner.read_query_steps` (emission
+# only) AND the verb actually being invocable (executor.read_query
+# killswitch + host lane) — never teach a command the step can't run
+# (container verb-parity principle, honest absence).
+READ_QUERY_STEP_RULES = textwrap.dedent("""\
+    LARGE-FILE EXTRACTION STEPS:
+    When a step's work is pulling answers, quotes, or facts OUT of
+    existing files that are likely large (>~50KB: raw captures, logs,
+    scraped corpora, long documents) rather than editing them, write the
+    sub-query invocation into the step text itself, e.g.:
+      "Extract <the specific answer> from <file> by running:
+       __READ_CLI__ "<one focused question>" <file> — then verify any
+       quote you re-use with grep -Fn before citing it"
+    Why: executors default to reading whole files into context, and their
+    conversation is re-sent every turn — a 200KB read costs ~50k tokens
+    on EVERY remaining turn, while the sub-query returns the answer plus
+    a file:line receipt for ~0. A step that names the command gets the
+    cheap path; a step that just says "analyze <file>" gets the expensive
+    habit. Only name files the goal or provided context establishes —
+    never invent paths. Steps that edit a file or verify a known quote
+    stay as-is (targeted grep/sed is correct there). Most plans need no
+    such steps.
+""").strip()
+
+
 # World-fact emission (WORLD_FACTS_DESIGN slice 3). Guidance-form on
 # purpose — the planner MAY emit facts, it is never told it must. Gated by
 # `planner.world_facts` (emission only; parse-side detection is
@@ -937,6 +970,34 @@ def decompose(
     if _fact_emission_on:
         extras.append(WORLD_FACT_RULES)
 
+    # Large-file extraction steps (A/B-4 consequence — see the constant's
+    # comment). Taught only when the verb is invocable where the step will
+    # run: emission switch AND executor.read_query killswitch AND the host
+    # lane (the executor image bakes no maro-read; a container-configured
+    # run must not get plans naming a command that doesn't exist — a
+    # breaker-suppressed container run degrades to host, where it does).
+    _read_step_rules = ""
+    try:
+        from config import get as _cfg_get_rq
+        if bool(_cfg_get_rq("planner.read_query_steps", True)):
+            from read_query import read_query_enabled as _rq_enabled
+            if _rq_enabled():
+                _host_lane = True
+                try:
+                    import container_exec as _ce
+                    _host_lane = (_ce.container_mode() == "off"
+                                  or _ce.container_suppressed())
+                except Exception:
+                    _host_lane = True
+                if _host_lane:
+                    from step_exec import _read_cli_path as _rq_cli
+                    _read_step_rules = READ_QUERY_STEP_RULES.replace(
+                        "__READ_CLI__", _rq_cli())
+    except Exception:
+        _read_step_rules = ""
+    if _read_step_rules:
+        extras.append(_read_step_rules)
+
     # Auto-inject user context if available (capped at 500 chars per file
     # to avoid inflating decomposition token cost). Resolution: workspace
     # overlay (~/.maro/workspace/user/) wins over the repo/install templates —
@@ -1010,13 +1071,14 @@ def decompose(
         except Exception:
             _cuts_on = False
         if _cuts_on:
-            # RECON_FLAVOR_RULES / WORLD_FACT_RULES are excluded: they teach
-            # the decompose OUTPUT format, which is noise inside the cuts
-            # JSON prompt — _cuts_plan is the lane's single (deterministic)
-            # tag emitter.
+            # RECON_FLAVOR_RULES / WORLD_FACT_RULES / read-step rules are
+            # excluded: they teach the decompose OUTPUT format, which is
+            # noise inside the cuts JSON prompt — _cuts_plan is the lane's
+            # single (deterministic) tag emitter.
             cuts = draw_cuts(goal, adapter, context_extras="\n\n".join(
                 x for x in extras
-                if x is not RECON_FLAVOR_RULES and x is not WORLD_FACT_RULES))
+                if x is not RECON_FLAVOR_RULES and x is not WORLD_FACT_RULES
+                and x is not _read_step_rules))
             if cuts is not None and not cuts.is_empty():
                 try:
                     from captains_log import log_event, CUTS_DRAWN
@@ -1085,8 +1147,7 @@ def decompose(
     # general scope estimator (Phase 58: scope estimation before decomposition).
     if _goal_scope in ("wide", "deep"):
         try:
-            _staged_kwargs: dict = {"max_tokens": 512, "temperature": 0.2,
-                                    "no_tools": True, "purpose": "decompose-staged"}
+            _staged_kwargs: dict = {"max_tokens": 512, "temperature": 0.2}
             if thinking_budget:
                 _staged_kwargs["thinking_budget"] = thinking_budget
             _staged_system = _STAGED_PASS_SYSTEM
@@ -1096,16 +1157,21 @@ def decompose(
                 _staged_system += "\n\n" + _STEP_CEILING_DIRECTIVE.format(n=_step_ceiling)
             if _recon_emission_on:
                 _staged_system += "\n\n" + RECON_FLAVOR_RULES
+            # Read-step rules ride the staged lane like recon: a
+            # step-WRITING form rule grounded in goal text (staged
+            # passes become executed steps), unlike world facts below.
+            if _read_step_rules:
+                _staged_system += "\n\n" + _read_step_rules
             # WORLD_FACT_RULES deliberately NOT taught here (2026-08-09
-            # adversarial review, 3-lens consensus): the staged lane
-            # replaces the assembled system prompt and never receives the
-            # injected-context extras, and the rules require a fact the
-            # planner "can point to in the provided context" — a staged
-            # FACT could only be a model prior wearing a grounding claim.
-            # parse-side detection below stays live regardless.
+            # review, 3-lens consensus): the staged lane never receives
+            # the injected-context extras, and the rules require a fact
+            # the planner "can point to in the provided context" — a
+            # staged FACT could only be a model prior wearing a grounding
+            # claim. parse-side detection below stays live regardless.
             resp = adapter.complete(
                 [LLMMessage("system", _staged_system),
                  LLMMessage("user", f"Goal: {goal}\n\nDecompose into 3-5 staged passes.")],
+                no_tools=True, purpose="decompose-staged",
                 **_staged_kwargs,
             )
             staged = parse_steps(resp.content.strip(), max_steps, facts_out)

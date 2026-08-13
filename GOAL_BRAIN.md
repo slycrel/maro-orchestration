@@ -7522,3 +7522,14 @@ under the same two-measurement standard).
   unforgeable. +8 pins; suite 8409/1 skip exit 0. Round-5 findings
   were all artifacts of round-4's new code — treating this as the
   fixpoint for the receipts arc.
+- **2026-08-13 (overnight)** — A/B-4's pre-registered consequence
+  cashed in: planner-level read-verb lever SHIPPED. Decompose now
+  teaches READ_QUERY_STEP_RULES (guidance-form) so extraction steps
+  over likely-large files name the maro-read invocation in the step
+  text — the verb becomes the stated work, not an ambient capability
+  two corpus runs proved workers ignore. Gated on emission switch +
+  verb killswitch + host lane (container verb-parity principle).
+  A/B-5 prediction registered before any dispatch: plan names the verb
+  AND transcripts show >=1 invocation; falsifier (a) plan never names
+  it -> next lever is deterministic step-rewrite, (b) named but not
+  invoked -> lever moves to verification. 7 pins + DEFAULTS row.
