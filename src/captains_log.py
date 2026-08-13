@@ -88,6 +88,7 @@ LESSON_REFOUGHT = "LESSON_REFOUGHT"
 # excluded from decision injection + tenure-to-LONG. Sibling of the two
 # above — every exclusion mechanism leaves an operator-readable audit row.
 LESSON_DELTA_DEMOTED = "LESSON_DELTA_DEMOTED"
+LESSON_DELTA_INERT = "LESSON_DELTA_INERT"
 # Δ-as-confirmation (§5 cut B, 2026-08-09): a provisional row's flag cleared
 # by a measured positive Δ (knowledge_web.confirm_lesson_by_delta — the
 # retention path for trace-minted provisional lessons). Same eligibility
@@ -343,7 +344,7 @@ EVENT_TYPES = {
     SKILL_CIRCUIT_OPEN, SKILL_CIRCUIT_HALF_OPEN, SKILL_CIRCUIT_CLOSED,
     SKILL_VARIANT_CREATED, AB_RETIRED, ISLAND_CULLED,
     LESSON_RECORDED, LESSON_REINFORCED, LESSON_QUARANTINED, LESSON_CONTESTED,
-    LESSON_DELTA_DEMOTED, LESSON_REMINT_PATTERN,
+    LESSON_DELTA_DEMOTED, LESSON_DELTA_INERT, LESSON_REMINT_PATTERN,
     LESSON_EXTRACTION, LESSON_DECAYED, LESSON_RECOVERED,
     MEMORY_CONSOLIDATED, WORKER_SLICE_INJECTED, WORKER_REPORT_OMISSION,
     WORKER_DELEGATION_GAP,

@@ -294,6 +294,24 @@ def _is_delta_demoted(tl: "TieredLesson") -> bool:
         return False
 
 
+def _is_delta_inert(tl: "TieredLesson") -> bool:
+    """Measured-inert lessons (competence-redundancy decay v1, 2026-08-13 —
+    the LeAct sequence's last step): Δ precisely ≈ 0 on decision replays
+    means the model decides the same with or without the lesson, so the
+    row stops consuming a decision-injection slot. Unlike effect-demote it
+    does NOT block tenure — inert is redundant, not harmful, and the
+    corpus-agreement route may still value the row; the injection
+    exclusion is route-based and tier-agnostic, so an inert row that
+    tenures to LONG stays off the decision surface anyway. Same
+    surface-scoping decree as demotion: no score mutation, no deletion,
+    no flat-ledger/query_lessons change. Measurement replaces
+    measurement: any later promote/demote-qualifying replay overwrites."""
+    try:
+        return (tl.delta_evidence or {}).get("route") == "effect-inert"
+    except Exception:
+        return False
+
+
 def confidence_from_k_samples(k_samples: int) -> float:
     """Map extraction method to standardized initial confidence (Feynman F5).
 
@@ -2264,6 +2282,138 @@ def demote_lesson_by_effect(lesson_id: str, delta_evidence: Dict[str, Any]) -> b
     return True
 
 
+# Competence-redundancy decay v1 (2026-08-13, LeAct sequence last step).
+# Inert = |Δ| within single-call resolution of zero on the full oracle set
+# (±1/51 ≈ 0.0196 → bar 0.02), AND the measurement itself tight (jackknife
+# spread ≤ 0.02 — for a zero claim, precision replaces the demote route's
+# spread<|Δ| dominance test, which is unsatisfiable at Δ≈0). The census
+# sweep observed exact 0.000 rows at ranks 2/27/50 — the candidate class.
+EFFECT_INERT_MAX_ABS_DELTA = 0.02
+EFFECT_INERT_MAX_SPREAD = 0.02
+
+
+def effect_inert_enabled() -> bool:
+    """Killswitch for the inert route (default ON — same ambient-spend
+    argument as promotion/demotion: it only acts on measurements an
+    operator deliberately produced). config: knowledge.effect_inert_enabled.
+    String-normalized like the sibling killswitches."""
+    try:
+        from config import get as _cfg_get
+        val = _cfg_get("knowledge.effect_inert_enabled", True)
+        if isinstance(val, str):
+            return val.strip().lower() not in ("false", "0", "no", "off")
+        return bool(val)
+    except Exception:
+        return True
+
+
+def inert_lesson_by_effect(lesson_id: str, delta_evidence: Dict[str, Any]) -> bool:
+    """Stamp a measured-inert Δ (route="effect-inert") on a lesson.
+
+    What the stamp does (see _is_delta_inert): frees the row's
+    decision-injection slot. What it does NOT do: block tenure (inert is
+    redundant, not harmful — unlike effect-demote), mutate score, delete,
+    or touch the flat ledger / query_lessons (surface-scoping decree).
+
+    Distinct from route="measured" (resolve_remint_watch's clean null):
+    "measured" records a re-measure that cleared no bar — often a noisy
+    or subset null — and keeps the row circulating; "effect-inert"
+    requires a PRECISE full-floor null (|Δ| ≤ 0.02, spread ≤ 0.02) and
+    acts on it. Eligibility:
+      - killswitch on (knowledge.effect_inert_enabled)
+      - |delta| <= knowledge.effect_inert_max_abs_delta (default 0.02)
+      - jackknife spread <= knowledge.effect_inert_max_spread (0.02)
+      - n_calls >= knowledge.effect_promotion_min_calls (shared floor)
+      - stratum == "reason", replay_errors == 0
+    Same no-citizenship-guard posture as demote (the stamp is a true
+    measurement either way), same two-tier stamping (a watch row may
+    have tenure-promoted), and measurement replaces measurement: a later
+    promote/demote-qualifying replay overwrites this stamp wholesale.
+    The two-agreeing-full-set-runs acting standard lives with the
+    operator/census discipline, exactly as it does for demotion.
+    """
+    if not effect_inert_enabled():
+        log.info("inert_lesson_by_effect: killswitch off — not stamping")
+        return False
+    try:
+        from config import get as _cfg_get
+        max_abs = float(_cfg_get("knowledge.effect_inert_max_abs_delta",
+                                 EFFECT_INERT_MAX_ABS_DELTA))
+        max_spread = float(_cfg_get("knowledge.effect_inert_max_spread",
+                                    EFFECT_INERT_MAX_SPREAD))
+        min_calls = int(_cfg_get("knowledge.effect_promotion_min_calls",
+                                 EFFECT_PROMOTE_MIN_CALLS))
+    except Exception:
+        max_abs, max_spread, min_calls = (EFFECT_INERT_MAX_ABS_DELTA,
+                                          EFFECT_INERT_MAX_SPREAD,
+                                          EFFECT_PROMOTE_MIN_CALLS)
+
+    ev = dict(delta_evidence or {})
+    delta = ev.get("delta")
+    # Finite-only — same round-4 guard as the sibling routes.
+    if not (isinstance(delta, (int, float)) and math.isfinite(delta)) \
+            or abs(delta) > max_abs:
+        return False
+    if int(ev.get("n_calls") or 0) < min_calls:
+        return False
+    spread = ev.get("jackknife_spread")
+    if not (isinstance(spread, (int, float)) and math.isfinite(spread)
+            and 0 <= spread <= max_spread):
+        return False
+    if ev.get("stratum") != "reason":
+        return False
+    if int(ev.get("replay_errors") or 0) != 0:
+        log.info("inert_lesson_by_effect: %s measurement carries %d replay "
+                 "errors — not stamping", lesson_id,
+                 int(ev.get("replay_errors") or 0))
+        return False
+
+    stamped: Dict[str, TieredLesson] = {}
+
+    def _stamp(lessons: List[TieredLesson]) -> List[TieredLesson]:
+        t = next((l for l in lessons if l.lesson_id == lesson_id), None)
+        if t is None:
+            return lessons
+        t.delta_evidence = {
+            "delta": float(delta),
+            "jackknife_spread": float(spread),
+            "n_calls": int(ev.get("n_calls") or 0),
+            "replay_errors": int(ev.get("replay_errors") or 0),
+            "stratum": "reason",
+            "measured_at": ev.get("measured_at") or datetime.now(timezone.utc).isoformat(),
+            "route": "effect-inert",
+        }
+        stamped["t"] = t
+        return lessons
+
+    _mutate_tiered_lessons(MemoryTier.MEDIUM, _stamp)
+    if "t" not in stamped:
+        # Same two-tier reach as demote: the effect is route-based and
+        # tier-agnostic, and a watch row may already live in LONG.
+        _mutate_tiered_lessons(MemoryTier.LONG, _stamp)
+    if "t" not in stamped:
+        return False
+    try:
+        from captains_log import log_event, LESSON_DELTA_INERT
+        log_event(
+            event_type=LESSON_DELTA_INERT,
+            subject=lesson_id,
+            summary=(f"Lesson {lesson_id} measured inert (Δ={float(delta):.3f} "
+                     f"over {int(ev.get('n_calls') or 0)} calls) — decision-"
+                     f"injection slot freed: {stamped['t'].lesson[:100]}"),
+            context={"delta": float(delta),
+                     "jackknife_spread": float(spread),
+                     "n_calls": int(ev.get("n_calls") or 0),
+                     "replay_errors": int(ev.get("replay_errors") or 0)},
+        )
+    except Exception:
+        pass
+    log.info("inert_lesson_by_effect: %s freed from decision injection "
+             "(Δ=%.3f over %d calls)", lesson_id, float(delta),
+             int(ev.get("n_calls") or 0))
+    return True
+
+
 # ---------------------------------------------------------------------------
 # Decay cycle (run via maybe_consolidate() or `maro-memory decay`)
 # ---------------------------------------------------------------------------
@@ -2649,7 +2799,7 @@ def inject_tiered_lessons(
         tier=MemoryTier.LONG, task_type=task_type, min_score=0.0,
         limit=None,
     ) if not (t.provisional or _is_quarantined(t) or _is_contested(t)
-              or _is_delta_demoted(t))
+              or _is_delta_demoted(t) or _is_delta_inert(t))
     ][:max_long * _pool_multiplier]
     if goal and len(long_candidates) > max_long:
         _ranker = _hybrid_rank if _USE_HYBRID else _tfidf_rank
@@ -2677,7 +2827,7 @@ def inject_tiered_lessons(
         tier=MemoryTier.MEDIUM, task_type=task_type, min_score=0.3,
         limit=None,
     ) if not (t.provisional or _is_quarantined(t) or _is_contested(t)
-              or _is_delta_demoted(t))
+              or _is_delta_demoted(t) or _is_delta_inert(t))
     ][:max_medium * _pool_multiplier]
     if goal and len(medium_candidates) > max_medium:
         _ranker = _hybrid_rank if _USE_HYBRID else _tfidf_rank

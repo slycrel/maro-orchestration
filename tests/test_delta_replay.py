@@ -509,6 +509,188 @@ class TestEffectDemotion:
         assert stamped.delta_evidence["route"] == "effect-demote"
 
 
+# ---------------------------------------------------------------------------
+# Effect inert route (knowledge_web.inert_lesson_by_effect, 2026-08-13) —
+# competence-redundancy decay v1: a PRECISE full-floor null frees the
+# decision-injection slot without blocking tenure or touching the ledger.
+# ---------------------------------------------------------------------------
+
+INERT_EVIDENCE = {"delta": 0.0, "jackknife_spread": 0.01, "n_calls": 51,
+                  "stratum": "reason"}
+
+
+class TestEffectInert:
+    def test_clears_bar_stamps_and_stays_medium(self, monkeypatch, tmp_path):
+        tl = _seed_medium_lesson(monkeypatch, tmp_path)
+        import knowledge_web as kw
+        assert kw.inert_lesson_by_effect(tl.lesson_id, INERT_EVIDENCE) is True
+        mediums = kw.load_tiered_lessons(tier=kw.MemoryTier.MEDIUM, min_score=0.0)
+        row = next(l for l in mediums if l.lesson_id == tl.lesson_id)
+        # inert is a stamp, not a tier move or deletion
+        assert row.delta_evidence["route"] == "effect-inert"
+        assert row.delta_evidence["delta"] == 0.0
+
+    def test_stamped_row_leaves_injection_surface(self, monkeypatch, tmp_path):
+        # The whole point of the route: the slot goes to the next lesson.
+        tl = _seed_medium_lesson(monkeypatch, tmp_path)
+        import knowledge_web as kw
+        assert tl.lesson in kw.inject_tiered_lessons("agenda")
+        assert kw.inert_lesson_by_effect(tl.lesson_id, INERT_EVIDENCE) is True
+        assert tl.lesson not in kw.inject_tiered_lessons("agenda")
+
+    def test_flat_query_surface_untouched(self, monkeypatch, tmp_path):
+        # Surface-scoping decree applies here identically to demotion.
+        tl = _seed_medium_lesson(monkeypatch, tmp_path)
+        import knowledge_web as kw
+        assert kw.inert_lesson_by_effect(tl.lesson_id, INERT_EVIDENCE) is True
+        hits = kw.query_lessons("deliverable path artifacts worker", n=5)
+        assert any(tl.lesson_id == h.lesson_id for h in hits)
+
+    def test_tenure_promotion_not_blocked(self, monkeypatch, tmp_path):
+        # Deliberate asymmetry vs effect-demote: inert = redundant, not
+        # harmful. Tenure may still promote; the exclusion is route-based
+        # and tier-agnostic, so the row stays off the decision surface in
+        # LONG anyway.
+        tl = _seed_medium_lesson(monkeypatch, tmp_path)
+        import knowledge_web as kw
+        assert kw.inert_lesson_by_effect(tl.lesson_id, INERT_EVIDENCE) is True
+
+        def _force_eligible(lessons):
+            for l in lessons:
+                if l.lesson_id == tl.lesson_id:
+                    l.score = 1.0
+                    l.sessions_validated = kw.PROMOTE_MIN_SESSIONS
+            return lessons
+
+        kw._mutate_tiered_lessons(kw.MemoryTier.MEDIUM, _force_eligible)
+        assert kw.promote_lesson(tl.lesson_id) is True
+        longs = kw.load_tiered_lessons(tier=kw.MemoryTier.LONG, min_score=0.0)
+        row = next(l for l in longs if l.lesson_id == tl.lesson_id)
+        # stamp rides along — LONG injection filter keeps excluding it
+        assert row.delta_evidence["route"] == "effect-inert"
+
+    def test_over_delta_bar_refused(self, monkeypatch, tmp_path):
+        # ±0.05 is a real (small) effect at 51 calls, not inert — 0.02 is
+        # single-call resolution (±1/51).
+        tl = _seed_medium_lesson(monkeypatch, tmp_path)
+        import knowledge_web as kw
+        assert kw.inert_lesson_by_effect(
+            tl.lesson_id, dict(INERT_EVIDENCE, delta=0.05)) is False
+        assert kw.inert_lesson_by_effect(
+            tl.lesson_id, dict(INERT_EVIDENCE, delta=-0.05)) is False
+
+    def test_loose_spread_refused(self, monkeypatch, tmp_path):
+        # Precision substitutes for dominance: spread < |Δ| is
+        # unsatisfiable at Δ≈0, so the bar is absolute (≤ 0.02). A noisy
+        # null (spread 0.1) is route="measured" territory, not inert.
+        tl = _seed_medium_lesson(monkeypatch, tmp_path)
+        import knowledge_web as kw
+        assert kw.inert_lesson_by_effect(
+            tl.lesson_id, dict(INERT_EVIDENCE, jackknife_spread=0.1)) is False
+
+    def test_non_finite_evidence_refused(self, monkeypatch, tmp_path):
+        tl = _seed_medium_lesson(monkeypatch, tmp_path)
+        import knowledge_web as kw
+        nan, inf = float("nan"), float("inf")
+        assert kw.inert_lesson_by_effect(
+            tl.lesson_id, dict(INERT_EVIDENCE, delta=nan)) is False
+        assert kw.inert_lesson_by_effect(
+            tl.lesson_id, dict(INERT_EVIDENCE, delta=inf)) is False
+        assert kw.inert_lesson_by_effect(
+            tl.lesson_id, dict(INERT_EVIDENCE, jackknife_spread=nan)) is False
+        assert kw.inert_lesson_by_effect(
+            tl.lesson_id, dict(INERT_EVIDENCE, jackknife_spread=-1.0)) is False
+
+    def test_too_few_calls_refused(self, monkeypatch, tmp_path):
+        tl = _seed_medium_lesson(monkeypatch, tmp_path)
+        import knowledge_web as kw
+        assert kw.inert_lesson_by_effect(
+            tl.lesson_id, dict(INERT_EVIDENCE, n_calls=3)) is False
+
+    def test_rule_stratum_refused(self, monkeypatch, tmp_path):
+        tl = _seed_medium_lesson(monkeypatch, tmp_path)
+        import knowledge_web as kw
+        assert kw.inert_lesson_by_effect(
+            tl.lesson_id, dict(INERT_EVIDENCE, stratum="rule")) is False
+
+    def test_replay_errors_refused(self, monkeypatch, tmp_path):
+        # An errored replay's null is absence of measurement, not a
+        # measurement of absence.
+        tl = _seed_medium_lesson(monkeypatch, tmp_path)
+        import knowledge_web as kw
+        assert kw.inert_lesson_by_effect(
+            tl.lesson_id, dict(INERT_EVIDENCE, replay_errors=2)) is False
+
+    def test_killswitch_off_refuses(self, monkeypatch, tmp_path):
+        tl = _seed_medium_lesson(monkeypatch, tmp_path)
+        import knowledge_web as kw
+        monkeypatch.setattr(kw, "effect_inert_enabled", lambda: False)
+        assert kw.inert_lesson_by_effect(tl.lesson_id, INERT_EVIDENCE) is False
+
+    def test_new_positive_measurement_replaces_stamp(self, monkeypatch, tmp_path):
+        # Measurement replaces measurement: a later promote-qualifying
+        # replay overwrites the inert stamp wholesale and the row tiers up.
+        tl = _seed_medium_lesson(monkeypatch, tmp_path)
+        import knowledge_web as kw
+        assert kw.inert_lesson_by_effect(tl.lesson_id, INERT_EVIDENCE) is True
+        assert kw.promote_lesson_by_effect(tl.lesson_id, GOOD_EVIDENCE) is True
+        longs = kw.load_tiered_lessons(tier=kw.MemoryTier.LONG, min_score=0.0)
+        row = next(l for l in longs if l.lesson_id == tl.lesson_id)
+        assert row.delta_evidence["route"] == "effect"
+
+    def test_inert_measurement_replaces_demote_stamp(self, monkeypatch, tmp_path):
+        tl = _seed_medium_lesson(monkeypatch, tmp_path)
+        import knowledge_web as kw
+        assert kw.demote_lesson_by_effect(tl.lesson_id, NEG_EVIDENCE) is True
+        assert kw.inert_lesson_by_effect(tl.lesson_id, INERT_EVIDENCE) is True
+        mediums = kw.load_tiered_lessons(tier=kw.MemoryTier.MEDIUM, min_score=0.0)
+        row = next(l for l in mediums if l.lesson_id == tl.lesson_id)
+        assert row.delta_evidence["route"] == "effect-inert"
+
+    def test_census_inert_applies_stamp(self, monkeypatch, tmp_path):
+        tl = _seed_medium_lesson(monkeypatch, tmp_path)
+        # Adapter keyed to a DIFFERENT lesson: both arms answer "execute",
+        # every recorded "execute" matches both ways → Δ = 0.0, spread 0.
+        import runs
+        rd = runs.create_run_dir("hinr", prompt="census", lane="agenda")
+        for i in range(1, 7):
+            _write_call(rd / "build" / "calls", i, "navigator decision",
+                        '{"move": "execute"}')
+        (rd / "run_card.json").write_text(json.dumps({"goal_achieved": True}))
+        from delta_replay import run_effect_route
+        adapter = ScriptedAdapter("an entirely unrelated lesson")
+        out = run_effect_route(adapter, inert=True, samples=1)
+        assert out["inert"] is True
+        row = next(r for r in out["census"] if r["lesson_id"] == tl.lesson_id)
+        assert row["delta"] == 0.0
+        assert row["inert_by_effect"] is True
+        assert row["promoted_by_effect"] is False
+        assert row["demoted_by_effect"] is False
+        import knowledge_web as kw
+        mediums = kw.load_tiered_lessons(tier=kw.MemoryTier.MEDIUM, min_score=0.0)
+        stamped = next(l for l in mediums if l.lesson_id == tl.lesson_id)
+        assert stamped.delta_evidence["route"] == "effect-inert"
+
+    def test_census_default_does_not_stamp(self, monkeypatch, tmp_path):
+        # Without --inert the same zero-Δ measurement is census-only.
+        tl = _seed_medium_lesson(monkeypatch, tmp_path)
+        import runs
+        rd = runs.create_run_dir("hinr2", prompt="census", lane="agenda")
+        for i in range(1, 7):
+            _write_call(rd / "build" / "calls", i, "navigator decision",
+                        '{"move": "execute"}')
+        (rd / "run_card.json").write_text(json.dumps({"goal_achieved": True}))
+        from delta_replay import run_effect_route
+        adapter = ScriptedAdapter("an entirely unrelated lesson")
+        out = run_effect_route(adapter, samples=1)
+        row = next(r for r in out["census"] if r["lesson_id"] == tl.lesson_id)
+        assert row["inert_by_effect"] is False
+        import knowledge_web as kw
+        mediums = kw.load_tiered_lessons(tier=kw.MemoryTier.MEDIUM, min_score=0.0)
+        fresh = next(l for l in mediums if l.lesson_id == tl.lesson_id)
+        assert not fresh.delta_evidence
+
+
 class TestEffectRouteCensus:
     def test_census_reports_both_routes_without_promoting(self, monkeypatch, tmp_path):
         tl = _seed_medium_lesson(monkeypatch, tmp_path)

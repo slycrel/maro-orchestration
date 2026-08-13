@@ -481,6 +481,7 @@ def run_effect_route(
     *,
     promote: bool = False,
     demote: bool = False,
+    inert: bool = False,
     samples: int = 3,
     limit: int = 5,
     lesson_ids: Optional[List[str]] = None,
@@ -510,7 +511,8 @@ def run_effect_route(
         REMINT_PATTERN_STRIKES,
         _is_contested, _is_quarantined, load_tiered_lessons,
         confirm_lesson_by_delta, demote_lesson_by_effect,
-        promote_lesson_by_effect, resolve_remint_watch,
+        inert_lesson_by_effect, promote_lesson_by_effect,
+        resolve_remint_watch,
     )
     calls = gather_oracle_decision_calls()
     rows = load_tiered_lessons(tier=MemoryTier.MEDIUM, min_score=0.0,
@@ -593,10 +595,18 @@ def run_effect_route(
         if (demote or (remint_pending and _is_watch)) and not promoted \
                 and not confirmed:
             demoted = demote_lesson_by_effect(t.lesson_id, ev)
+        # Weakest signal last (competence-redundancy decay v1, 2026-08-13):
+        # a precise full-floor null frees the row's decision-injection slot.
+        # Deliberately NOT part of the strike-3 forced re-measure — that
+        # lane's contract stays promote/demote/measured.
+        inerted = False
+        if inert and not promoted and not confirmed and not demoted:
+            inerted = inert_lesson_by_effect(t.lesson_id, ev)
         watch_cleared = False
-        if ((remint_pending or promote or demote)
+        if ((remint_pending or promote or demote or inert)
                 and (t.delta_evidence or {}).get("route") == "remint-watch"
-                and not promoted and not confirmed and not demoted):
+                and not promoted and not confirmed and not demoted
+                and not inerted):
             # Acting runs only — the census-only mode stays a true dry run.
             # Measurement replaces measurement: a clean full-set result that
             # cleared neither bar still ends the probation (route
@@ -615,6 +625,7 @@ def run_effect_route(
             "promoted_by_effect": promoted,
             "confirmed_by_effect": confirmed,
             "demoted_by_effect": demoted,
+            "inert_by_effect": inerted,
             "remint_watch_cleared": watch_cleared,
         })
     if dropped:
@@ -626,22 +637,29 @@ def run_effect_route(
         "samples": samples,
         "promote": promote,
         "demote": demote,
+        "inert": inert,
         "candidates_not_measured": dropped,
         "census": census,
     }
 
 
 def _main(argv: List[str]) -> int:
-    """CLI: `python3 -m delta_replay [--promote] [--demote] [--limit N]
-    [--samples N] [--lesson-id ID ...]` — census-only by default; --promote
-    applies the effect route to rows that clear the bar, --demote stamps
-    measured-negative rows out of decision injection. Hosted-free rung only
-    (the ~$0 replay backend); refuses to run without it rather than
-    silently spending on a paid tier."""
+    """CLI: `python3 -m delta_replay [--promote] [--demote] [--inert]
+    [--limit N] [--samples N] [--lesson-id ID ...]` — census-only by
+    default; --promote applies the effect route to rows that clear the
+    bar, --demote stamps measured-negative rows out of decision
+    injection, --inert stamps precise full-floor nulls (competence-
+    redundancy decay) out of decision injection without blocking tenure.
+    Hosted-free rung only (the ~$0 replay backend); refuses to run
+    without it rather than silently spending on a paid tier."""
     import argparse
     ap = argparse.ArgumentParser(prog="delta_replay")
     ap.add_argument("--promote", action="store_true")
     ap.add_argument("--demote", action="store_true")
+    ap.add_argument("--inert", action="store_true",
+                    help="stamp measured-inert rows (|Δ| and jackknife both "
+                         "<= 0.02 at the full call floor) out of decision "
+                         "injection — slot freed, tenure NOT blocked")
     ap.add_argument("--limit", type=int, default=5)
     ap.add_argument("--samples", type=int, default=3)
     ap.add_argument("--lesson-id", action="append", default=None)
@@ -694,6 +712,7 @@ def _main(argv: List[str]) -> int:
                 self._last = _time.time()
 
     out = run_effect_route(_Paced(), promote=args.promote, demote=args.demote,
+                           inert=args.inert,
                            limit=args.limit, samples=args.samples,
                            lesson_ids=args.lesson_id,
                            remint_pending=args.remint_pending,
