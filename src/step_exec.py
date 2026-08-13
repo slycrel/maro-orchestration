@@ -204,6 +204,26 @@ This environment has NO sub-query CLI (containerized executor — the read
     step. State in your result which parts of the file you did NOT read."""
 
 
+def _home_contract(path_str: str) -> str:
+    """Contract a $HOME-prefixed path to a double-quoted "$HOME/..." token.
+
+    The result stays runnable in the worker's shell (double quotes preserve
+    $HOME expansion AND cover spaces — and survive a model copying the
+    token verbatim, where a bare ~ would break the moment it gets quoted)
+    while keeping the operator's username out of LLM-bound prompt text —
+    the fresh-install personal-data tripwire caught the dev-checkout path
+    form leaking it into decompose prompts (2026-08-13; the box's `clawd`
+    leaked the same way)."""
+    try:
+        from pathlib import Path as _Path
+        home = str(_Path.home())
+        if home and path_str.startswith(home + os.sep):
+            return '"$HOME' + path_str[len(home):] + '"'
+    except Exception:
+        pass
+    return path_str
+
+
 def _fetch_cli_path() -> str:
     """Absolute path to the token-lean fetch CLI, for the execute prompt.
 
@@ -228,7 +248,7 @@ def _fetch_cli_path() -> str:
         from pathlib import Path as _Path
         p = _Path(__file__).resolve().parent / "fetch_tool.py"
         if p.is_file():
-            return f"python3 {p}"
+            return f"python3 {_home_contract(str(p))}"
     except Exception:
         pass
     return "python3 -m fetch_tool"
@@ -248,7 +268,7 @@ def _read_cli_path() -> str:
         from pathlib import Path as _Path
         p = _Path(__file__).resolve().parent / "read_query.py"
         if p.is_file():
-            return f"python3 {p}"
+            return f"python3 {_home_contract(str(p))}"
     except Exception:
         pass
     return "python3 -m read_query"

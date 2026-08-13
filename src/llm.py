@@ -1075,6 +1075,13 @@ _CONTAINER_ENV_PASSTHROUGH = (
 )
 
 
+# Operator-visibility symlink base path (see the block inside
+# _run_subprocess_safe). Module constant so tests can point it at a private
+# path — the real /tmp global is shared machine-wide, and parallel test
+# workers legitimately race on it (xdist flake, 2026-08-13).
+_CURRENT_STEP_LINK = "/tmp/maro-current-step.log"
+
+
 def _run_subprocess_safe(cmd, *, input=None, timeout=600,
                          liveness_timeout=None, poll_interval=2.0, cwd=None,
                          stream_probe=None, container_name=None,
@@ -1146,7 +1153,7 @@ def _run_subprocess_safe(cmd, *, input=None, timeout=600,
     # `/tmp/maro-current-step-<handle_id>.log` is also written when a
     # run-dir is active. Disable with MARO_CURRENT_STEP_SYMLINK=0.
     if os.environ.get("MARO_CURRENT_STEP_SYMLINK", "1") != "0":
-        link_targets = ["/tmp/maro-current-step.log"]
+        link_targets = [_CURRENT_STEP_LINK]
         try:
             from runs import current_handle_id
             hid = current_handle_id()

@@ -1,3 +1,7 @@
+---
+status: record
+---
+
 # Adversarial review — container verb parity + auth breaker (23c59fa, fdb64ff, cfb52f6)
 
 *2026-08-13, 3-lens Codex review (Skeptic + Architect + Minimalist), defensive

@@ -406,7 +406,6 @@ class TestExecutePromptWiring:
         resolves inside the executor container is a separate, unverified
         question — tracked in BACKLOG, not asserted here.)
         """
-        import shlex
         import subprocess
 
         from step_exec import EXECUTE_SYSTEM, _fetch_cli_path
@@ -415,7 +414,12 @@ class TestExecutePromptWiring:
         resolved = _fetch_cli_path()
         assert resolved in EXECUTE_SYSTEM, "prompt does not name the resolved command"
 
-        proc = subprocess.run(shlex.split(resolved) + ["--help"],
+        # Run it the way the CONSUMER does: workers invoke through their
+        # shell (Bash tool), and the resolved command may lean on shell
+        # expansion ("$HOME/..." — the home-contraction that keeps the
+        # operator's username out of prompt text, 2026-08-13). A no-shell
+        # shlex exec would test a caller that doesn't exist.
+        proc = subprocess.run(resolved + " --help", shell=True,
                               capture_output=True, text=True, timeout=60)
         assert proc.returncode == 0, f"{resolved} --help failed: {proc.stderr[:400]}"
         assert "--no-capture" in proc.stdout

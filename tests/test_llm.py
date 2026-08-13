@@ -1294,45 +1294,38 @@ def test_run_subprocess_safe_no_stdin_uses_devnull():
     assert result.stdout == ""
 
 
-def test_run_subprocess_safe_updates_current_step_symlink():
-    """During a run, /tmp/maro-current-step.log is created/updated as a symlink."""
+def test_run_subprocess_safe_updates_current_step_symlink(tmp_path, monkeypatch):
+    """During a run, the current-step link is created/updated as a symlink.
+
+    Points llm._CURRENT_STEP_LINK at a private path: the real /tmp global
+    is machine-shared and parallel test workers race on it (2026-08-13)."""
+    import llm as llm_mod
     from llm import _run_subprocess_safe
 
+    link = tmp_path / "maro-current-step.log"
+    monkeypatch.setattr(llm_mod, "_CURRENT_STEP_LINK", str(link))
     _run_subprocess_safe(
         ["sh", "-c", "printf ok"], input="", timeout=5,
         poll_interval=FAST_POLL,
     )
     # The stdout temp file gets deleted on cleanup, so the symlink dangles
     # after completion — that's by design. Just verify the link exists.
-    assert os.path.islink("/tmp/maro-current-step.log")
+    assert os.path.islink(link)
 
 
-def test_run_subprocess_safe_symlink_disabled_by_env(monkeypatch):
+def test_run_subprocess_safe_symlink_disabled_by_env(tmp_path, monkeypatch):
     """MARO_CURRENT_STEP_SYMLINK=0 suppresses the symlink update."""
+    import llm as llm_mod
     from llm import _run_subprocess_safe
 
-    # Record the symlink target (or absence) before our call.
-    before_target = None
-    if os.path.islink("/tmp/maro-current-step.log"):
-        try:
-            before_target = os.readlink("/tmp/maro-current-step.log")
-        except OSError:
-            pass
-
+    link = tmp_path / "maro-current-step.log"
+    monkeypatch.setattr(llm_mod, "_CURRENT_STEP_LINK", str(link))
     monkeypatch.setenv("MARO_CURRENT_STEP_SYMLINK", "0")
     _run_subprocess_safe(
         ["sh", "-c", "printf ok"], input="", timeout=5,
         poll_interval=FAST_POLL,
     )
-
-    after_target = None
-    if os.path.islink("/tmp/maro-current-step.log"):
-        try:
-            after_target = os.readlink("/tmp/maro-current-step.log")
-        except OSError:
-            pass
-    # When disabled, the link either stays at its pre-call target or stays absent.
-    assert after_target == before_target
+    assert not os.path.islink(link)  # disabled → never created
 
 
 def test_run_subprocess_safe_cleans_temp_files():

@@ -1,3 +1,7 @@
+---
+status: record
+---
+
 # Adversarial review — maro-export `inspect` subcommand (977f58f)
 
 *2026-08-13, 2-lens Codex review (Skeptic + Architect), defensive framing per
