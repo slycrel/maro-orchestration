@@ -44,81 +44,30 @@ full triage: 2026-07-04.
 
 Ordered open work that matters. Top of the list is next.
 
-### Execution receipts — six cross-model review findings ADJUDICATED 2026-08-13 (all six verified real against the tree; 5 fixed, 1 honest-labeled)
-
-Adjudication (verify-before-fix pass; 6/6 code claims held — reviewer
-hallucination 0 again):
-1. **FIXED — zero-executions is now a POSITIVE state.** `load_receipts`
-   counts `readable_calls` and `capture_calls` (backend=="subprocess",
-   the only tool-event-relaying adapter — verified against a live run:
-   event names Bash/Read/Write, backend stamps on every record). A
-   clean capture-capable record with zero shell executions renders
-   "RECORD PRESENT, ZERO executions … does not support that claim";
-   unknown/missing backend stays conservative no-signal.
-2. **HONEST-LABELED (v1) — attempt-blindness named at the surface.**
-   Digest carries "Scope: RUN-WIDE — may span restarted/resumed
-   attempts; not scoped to the final attempt", and the pass-audit
-   system bullet tells the judge to tie receipts to the claim, not the
-   run. Attempt-SCOPED records need recorder-side loop stamps in
-   runs.record_call — real fix, upgrade edge, not built (recorder
-   schema change; do it when a live cross-attempt false-support case
-   shows up or the recorder is next open anyway).
-3. **FIXED — shell-tool events only.** Rows require event
-   name=="Bash" (`_SHELL_TOOL_NAMES`); an MCP/custom tool with a
-   `command` arg is not an execution; a NAMELESS command event is
-   shape-corrupt and counts malformed.
-4. **FIXED — marked head/tail clips.** `_clip()` renders
-   `head …[+N chars]… tail40` at every listing site (the `|| true;
-   echo '100 passed'` suffix survives); capture-time output truncation
-   stamps `output_clipped` → "…[output continues]" marker.
-5. **FIXED — trust claim matches mechanism.** Prompt now says
-   recorder-written / least-reachable / NOT tamper-proof (no hash
-   chain; host-lane filesystem access exists) — "cannot edit the
-   record" removed here and in the closure_verify bullet. Hash-chained
-   or out-of-workspace records stay future work.
-6. **FIXED as accepted-v1-scope, stated where the auditor reads it.**
-   Non-capturing-backend records render "N call(s) recorded, but none
-   rode a tool-event-capturing backend — receipts cover the subprocess
-   lane only in v1". Codex-lane capture remains an upgrade edge.
-12 new pins (TestReviewRound4). Remaining upgrade edges from this
-round: recorder-side attempt/loop stamps (2), hash-chained or
-out-of-workspace records (5), codex-lane tool-event capture (6).
-
-**Round 5 (2026-08-13, skeptic re-review of the fixes — 3/3 real,
-reviewer hallucination 0 for the fifth round running; all FIXED):**
-(a) mixed-backend records no longer fire the ZERO-executions
-refutation — full capture coverage required, else "PARTIAL COVERAGE …
-{blind} call(s) invisible to receipts / treat as no signal"; (b) a
-shell event missing/empty its command is shape corruption past the
-name filter (counts malformed → record incomplete, never affirmative
-absence); (c) module docstring's "cannot forge / cannot reach
-post-hoc" overclaim rewritten to least-reachable/strong-corroboration
-(pinned so a revert trips). +8 pins (TestReviewRound5). Fixpoint
-looks reached: round 5 findings were all consequences of round 4's
-own new code, none reach back further.
-
-
-
 ### Container verb parity + container auth expiry watch (FOUND 2026-08-13, A/B-4 re-test setup — the dispatch lane was silently DOWN)
 
 Two coupled finds from one diagnosis (full trail in the A/B-4 entry):
 
-- [ ] **Containerized executors cannot invoke the advertised verbs.**
-  The executor image bakes node/claude/git/python3 only; `maro-read`
-  is on no PATH anywhere, so `_read_cli_path()`/_fetch_cli_path()
-  resolve to LIVE-REPO file paths — which `build_mount_map`
-  hard-excludes from containers by design. EXECUTE_SYSTEM therefore
-  advertises commands that do not exist in the worker's filesystem
-  whenever `executor.container: on`. Every containerized teaching
+- [x] **(b) SHIPPED 2026-08-13: lane-aware execute prompt** —
+  `EXECUTE_SYSTEM_CONTAINER` render carries honest-absence blocks
+  (names NO fetch/read CLI, teaches targeted grep/sed extraction +
+  state-what-you-didn't-read) and `execute_system_for_lane()` selects
+  by config intent; degrade-to-host only UNDER-advertises. The
+  original hole: the image bakes node/claude/git/python3 only,
+  `_read_cli_path()` resolves to live-repo paths that
+  `build_mount_map` hard-excludes, so every containerized teaching
   measurement (A/B-4 included) was structurally unable to invoke.
-  Fix candidates, pick after the host re-test lands: (a) bake the
-  maro package into the executor image (COPY repo + pip install,
-  IMAGE_REVISION bump — matches the "CLI is BAKED" philosophy); (b)
-  a container-aware `_read_cli_path()` that renders an in-container
-  invocation only when the verb is actually reachable, and DROPS the
-  advertisement otherwise (honest prompt > dead command). (b) is
-  correct regardless of (a) — never advertise what the environment
-  can't run.
+- [ ] **(a) bake the maro package into the executor image — now
+  DECISION-SHAPED, Jeremy's call.** COPY repo + pip install +
+  IMAGE_REVISION bump gives containers the verbs, BUT `maro-read` is
+  only useful with hosted-free provider keys reachable from inside
+  the container — plumbing egress credentials into an environment
+  that executes goal-driven commands is a secrets-exposure question,
+  not a build chore (2026-08-13 overnight assessment). Flagging for
+  Jeremy rather than building at 4am: options are keys-in-container
+  (exposure), a host-side proxy socket for the sub-query (no keys in
+  container, more machinery), or accept container lane = no maro-read
+  and let the planner lever stay host-only (status quo, honest).
 - [x] **Container OAuth expiry is invisible until the lane dies.**
   maro-claude-auth seeded 07-14 interactive; expired ~08-12; every
   agenda dispatch with executor steps then died at step-execute

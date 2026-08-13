@@ -8020,3 +8020,59 @@ when a positive replay measurement exists. Human stays in the loop by
 construction: the evolver surfaces candidates as Suggestions, nothing
 ambient calls the verb. CANON_PROMOTED captain's-log event;
 CANON_CANDIDATE stays reserved for a future candidate-surfacing emitter.
+
+
+### Execution receipts — six cross-model review findings ADJUDICATED 2026-08-13 (all six verified real against the tree; 5 fixed, 1 honest-labeled)
+
+Adjudication (verify-before-fix pass; 6/6 code claims held — reviewer
+hallucination 0 again):
+1. **FIXED — zero-executions is now a POSITIVE state.** `load_receipts`
+   counts `readable_calls` and `capture_calls` (backend=="subprocess",
+   the only tool-event-relaying adapter — verified against a live run:
+   event names Bash/Read/Write, backend stamps on every record). A
+   clean capture-capable record with zero shell executions renders
+   "RECORD PRESENT, ZERO executions … does not support that claim";
+   unknown/missing backend stays conservative no-signal.
+2. **HONEST-LABELED (v1) — attempt-blindness named at the surface.**
+   Digest carries "Scope: RUN-WIDE — may span restarted/resumed
+   attempts; not scoped to the final attempt", and the pass-audit
+   system bullet tells the judge to tie receipts to the claim, not the
+   run. Attempt-SCOPED records need recorder-side loop stamps in
+   runs.record_call — real fix, upgrade edge, not built (recorder
+   schema change; do it when a live cross-attempt false-support case
+   shows up or the recorder is next open anyway).
+3. **FIXED — shell-tool events only.** Rows require event
+   name=="Bash" (`_SHELL_TOOL_NAMES`); an MCP/custom tool with a
+   `command` arg is not an execution; a NAMELESS command event is
+   shape-corrupt and counts malformed.
+4. **FIXED — marked head/tail clips.** `_clip()` renders
+   `head …[+N chars]… tail40` at every listing site (the `|| true;
+   echo '100 passed'` suffix survives); capture-time output truncation
+   stamps `output_clipped` → "…[output continues]" marker.
+5. **FIXED — trust claim matches mechanism.** Prompt now says
+   recorder-written / least-reachable / NOT tamper-proof (no hash
+   chain; host-lane filesystem access exists) — "cannot edit the
+   record" removed here and in the closure_verify bullet. Hash-chained
+   or out-of-workspace records stay future work.
+6. **FIXED as accepted-v1-scope, stated where the auditor reads it.**
+   Non-capturing-backend records render "N call(s) recorded, but none
+   rode a tool-event-capturing backend — receipts cover the subprocess
+   lane only in v1". Codex-lane capture remains an upgrade edge.
+12 new pins (TestReviewRound4). Remaining upgrade edges from this
+round: recorder-side attempt/loop stamps (2), hash-chained or
+out-of-workspace records (5), codex-lane tool-event capture (6).
+
+**Round 5 (2026-08-13, skeptic re-review of the fixes — 3/3 real,
+reviewer hallucination 0 for the fifth round running; all FIXED):**
+(a) mixed-backend records no longer fire the ZERO-executions
+refutation — full capture coverage required, else "PARTIAL COVERAGE …
+{blind} call(s) invisible to receipts / treat as no signal"; (b) a
+shell event missing/empty its command is shape corruption past the
+name filter (counts malformed → record incomplete, never affirmative
+absence); (c) module docstring's "cannot forge / cannot reach
+post-hoc" overclaim rewritten to least-reachable/strong-corroboration
+(pinned so a revert trips). +8 pins (TestReviewRound5). Fixpoint
+looks reached: round 5 findings were all consequences of round 4's
+own new code, none reach back further.
+
+**MOVED TO DONE 2026-08-13 (overnight):** round 5 reached fixpoint (r5 findings were all artifacts of r4's own code); landed 32e3455 + 5c0e714. Upgrade edges (recorder-side attempt/loop stamps, hash-chained/out-of-workspace records, codex-lane capture) are filed in the item body above — evidence-gated, not owed.
