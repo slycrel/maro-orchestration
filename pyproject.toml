@@ -148,6 +148,7 @@ py-modules = [
     "evolver",
     "evolver_scans",
     "evolver_store",
+    "execution_receipts",
     "factory_minimal",
     "factory_thin",
     "finding_codes",

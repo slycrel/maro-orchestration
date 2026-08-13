@@ -360,11 +360,20 @@ retracted by the step-9 adversarial pass — see below):
   one adversarial refutation call on the shared audit evidence lane;
   a typed refutation caps confidence below the 0.7 learning floor and
   stamps `mh_class: specification_gaming_candidate` — never flips the
-  verdict (no new false-demotion lane). **Still open on this edge:**
-  prevention — harness-side execution receipts (tool transcripts,
-  event-log timestamps the executor can't forge post-hoc) as closure
-  check inputs, the structural answer the mint-grounding arc already
-  proved out for lessons.
+  verdict (no new false-demotion lane). **Prevention half v1 SHIPPED
+  2026-08-12** (`src/execution_receipts.py` + pass-audit wiring): the
+  recorder's call files (build/calls tool_events — written by the
+  harness at call time, executor can't forge post-hoc) are digested
+  into the pass-audit prompt as a three-valued receipt block: process
+  work recorded / NO process work recorded / record UNAVAILABLE (no
+  signal — absence of record is never evidence of absence). Auditor
+  taught: artifacts claiming process work with no recorded execution =
+  positive refutation evidence; receipts sit OUTSIDE the untrusted-
+  artifact fence. Same posture as v1: grounds the audit, never flips a
+  verdict, never blocks closure, rides `closure.pass_audit` (no new
+  flag). Deferred, evidence-gated: mechanical receipt→check matching as
+  a closure-check INPUT (skip-the-LLM upgrade) — build if pass-audit
+  stamps accumulate showing receipts alone would have decided.
 - **#3 Observation Failure (env—model), high** — `step_exec.py`
   `_summarize_tool_events` truncates 2000 chars / 50 events silently
   (same class as the arbitrary-truncation audit already on this backlog).

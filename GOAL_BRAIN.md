@@ -7315,3 +7315,14 @@ under the same two-measurement standard).
   retry/restart-chain maintenance lag; shared _hid=None registry-strand
   class). Remaining: phase 2 (verdict-pending reply at final-step
   compile). Suite 8266/0 skipped.
+- **2026-08-12** — MH #1 prevention half v1 SHIPPED (evening session,
+  "let's continue"): execution_receipts.py digests the recorder's
+  build/calls tool_events into the pass-audit prompt — the one evidence
+  surface the specification-gaming class can't reach (recorder-written,
+  not executor-authored). Three-valued honesty pinned (process
+  recorded / none recorded / record unavailable = no signal); receipts
+  render OUTSIDE the untrusted-artifact fence; grounds-never-flips
+  posture unchanged; no new flag (rides closure.pass_audit). 13 pins
+  incl. prompt-wiring + fence-ordering. Suite 8266/1 conditional skip,
+  exit 0. Star skill same session: version field introduced at 7
+  (tested-bump rule), usage 8-10+ per Jeremy.
