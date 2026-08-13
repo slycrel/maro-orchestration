@@ -152,6 +152,32 @@ tip learned during the 08-13 re-seed: the interactive `/login` URL
 truncates when the TUI wraps it at terminal width — `stty cols 400` first,
 or de-wrap the copied URL in an editor.
 
+### Baked verbs + spin-up key injection (r3, 2026-08-13)
+
+Image r3 bakes the maro **package** (never keys): `COPY src/` to
+`/opt/maro/src` (+ `PYTHONPATH`), printf shims `maro-read`/`maro-fetch`
+on PATH, and apt `python3-yaml python3-requests` — still **no pip in the
+image**, so the runtime supply-chain stance is unchanged. `.dockerignore`
+already excludes secrets/memory/.git from the build context. The src
+snapshot is build-time: changing verb behavior means rebuild + revision
+bump (`IMAGE_REVISION`), and `image_bakes_verbs()` reads the revision off
+the image tag (>= 3 → True; custom tags conservatively False).
+
+Hosted-free provider keys reach the container per Jeremy's 2026-08-13
+decree ("injected into the container with ENV values at spin-up time...
+host values stay stored and maintained on the host"):
+`hosted_free_container_env()` gathers keys from host env / credentials
+`.env` only when image_bakes_verbs AND host consent
+(`hosted_free_enabled()`) AND a key actually exists; the docker command
+gets bare `-e NAME` flags while the **values ride the docker client's
+process env** — never argv, never host process listings, never logs.
+Consent crosses the boundary as `MARO_HOSTED_FREE_ENABLED`, a carrier
+only: in-container config, if any, still wins. The decree's backup lane
+(read-only mounted key dir as configuration injection) is noted, not
+built. Downstream: `image_bakes_verbs()` selects a third execute-prompt
+render (baked names, no host paths) and relaxes the planner read-verb
+gate to un-suppressed container lanes.
+
 ## 4. Mount map
 
 Derived from the fence machinery — the fence already computes exactly what a

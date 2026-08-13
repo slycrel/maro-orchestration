@@ -388,3 +388,46 @@ def test_provider_order_drops_unknown(monkeypatch):
     monkeypatch.setattr("hosted_free._cfg", lambda key, default:
                          ["groq", "bogus", "gemini"] if key == "order" else default)
     assert hf.provider_order() == ["groq", "gemini"]
+
+
+_REAL_HOSTED_FREE_ENABLED = hf.hosted_free_enabled  # before the autouse stub
+
+
+class TestConsentEnvTransport:
+    """MARO_HOSTED_FREE_ENABLED transports host-side consent into an
+    executor container (2026-08-13 decree chunk). It is a CARRIER: config,
+    when present, always wins — the env var never overrides an explicit
+    host-side decision.
+
+    The module autouse fixture stubs hosted_free_enabled to True; these
+    pins test the REAL gate, so each restores it first."""
+
+    @pytest.fixture(autouse=True)
+    def _real_gate(self, monkeypatch):
+        monkeypatch.setattr(hf, "hosted_free_enabled",
+                            _REAL_HOSTED_FREE_ENABLED)
+
+    def test_env_flag_enables_when_config_unset(self, monkeypatch):
+        import hosted_free as hf
+        monkeypatch.setattr(hf, "_cfg", lambda k, d=None: d)
+        monkeypatch.setenv("MARO_HOSTED_FREE_ENABLED", "1")
+        assert hf.hosted_free_enabled() is True
+
+    def test_config_false_beats_env_flag(self, monkeypatch):
+        import hosted_free as hf
+        monkeypatch.setattr(
+            hf, "_cfg", lambda k, d=None: False if k == "enabled" else d)
+        monkeypatch.setenv("MARO_HOSTED_FREE_ENABLED", "1")
+        assert hf.hosted_free_enabled() is False
+
+    def test_unset_everywhere_stays_disabled(self, monkeypatch):
+        import hosted_free as hf
+        monkeypatch.setattr(hf, "_cfg", lambda k, d=None: d)
+        monkeypatch.delenv("MARO_HOSTED_FREE_ENABLED", raising=False)
+        assert hf.hosted_free_enabled() is False
+
+    def test_falsy_env_flag_does_not_enable(self, monkeypatch):
+        import hosted_free as hf
+        monkeypatch.setattr(hf, "_cfg", lambda k, d=None: d)
+        monkeypatch.setenv("MARO_HOSTED_FREE_ENABLED", "false")
+        assert hf.hosted_free_enabled() is False

@@ -805,10 +805,31 @@ class TestContainerVerbParity:
                                EXECUTE_SYSTEM, EXECUTE_SYSTEM_CONTAINER)
         monkeypatch.setattr(ce, "container_mode", lambda: "on")
         monkeypatch.setattr(ce, "container_suppressed", lambda: False)
+        monkeypatch.setattr(ce, "image_bakes_verbs", lambda: False)
         assert execute_system_for_lane() == EXECUTE_SYSTEM_CONTAINER
         # suppression (degrade-to-host for this run) restores the host prompt
         monkeypatch.setattr(ce, "container_suppressed", lambda: True)
         assert execute_system_for_lane() == EXECUTE_SYSTEM
+
+    def test_lane_selector_verb_baking_image_gets_verbs_variant(
+            self, monkeypatch):
+        # r3+ image (2026-08-13 decree chunk): the container prompt
+        # advertises the BAKED shim names, never host paths.
+        import container_exec as ce
+        from step_exec import (execute_system_for_lane,
+                               EXECUTE_SYSTEM_CONTAINER_VERBS)
+        monkeypatch.setattr(ce, "container_mode", lambda: "on")
+        monkeypatch.setattr(ce, "container_suppressed", lambda: False)
+        monkeypatch.setattr(ce, "image_bakes_verbs", lambda: True)
+        assert execute_system_for_lane() == EXECUTE_SYSTEM_CONTAINER_VERBS
+
+    def test_container_verbs_prompt_names_shims_never_host_paths(self):
+        from step_exec import EXECUTE_SYSTEM_CONTAINER_VERBS as V
+        assert "maro-read" in V and "maro-fetch" in V
+        assert "/src/read_query.py" not in V
+        assert "/src/fetch_tool.py" not in V
+        assert "python3 -m read_query" not in V
+        assert "__FETCH_" not in V and "__READ_" not in V
 
     def test_lane_selector_container_off(self, monkeypatch):
         import container_exec as ce
@@ -853,6 +874,8 @@ class TestContainerVerbParity:
         from step_exec import execute_step, EXECUTE_SYSTEM_CONTAINER
         monkeypatch.setattr(container_exec, "container_mode", lambda: "on")
         monkeypatch.setattr(container_exec, "container_suppressed",
+                            lambda: False)
+        monkeypatch.setattr(container_exec, "image_bakes_verbs",
                             lambda: False)
         adapter = _CaptureSessionAdapter()
         captured = {}

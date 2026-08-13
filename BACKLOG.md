@@ -72,17 +72,27 @@ Two coupled finds from one diagnosis (full trail in the A/B-4 entry):
   mid-step config flip can mismatch them for one step — rare,
   self-corrects; the exception-path fail direction IS fixed toward
   under-advertising).
-- [ ] **(a) bake the maro package into the executor image — now
-  DECISION-SHAPED, Jeremy's call.** COPY repo + pip install +
-  IMAGE_REVISION bump gives containers the verbs, BUT `maro-read` is
-  only useful with hosted-free provider keys reachable from inside
-  the container — plumbing egress credentials into an environment
-  that executes goal-driven commands is a secrets-exposure question,
-  not a build chore (2026-08-13 overnight assessment). Flagging for
-  Jeremy rather than building at 4am: options are keys-in-container
-  (exposure), a host-side proxy socket for the sub-query (no keys in
-  container, more machinery), or accept container lane = no maro-read
-  and let the planner lever stay host-only (status quo, honest).
+- [x] **(a) SHIPPED 2026-08-13 per Jeremy's morning decree** ("keys
+  should be injected into the container with ENV values at spin-up
+  time, not hosted directly... host values stay stored and maintained
+  on the host"; backup lane = read-only mounted config dir, noted not
+  built). Image r3 bakes the maro VERBS, never keys: `COPY src/` +
+  `maro-read`/`maro-fetch` shims + apt python3-yaml/-requests (still
+  no pip in the image — runtime supply-chain stance unchanged).
+  Spin-up injection: `hosted_free_container_env()` (keys from host
+  env/credentials .env + `MARO_HOSTED_FREE_ENABLED` consent CARRIER —
+  host config always wins; requires image_bakes_verbs + host consent +
+  a key) rides the docker CLIENT's env with bare `-e NAME` flags, so
+  values never appear in docker argv/host process listings.
+  `image_bakes_verbs()` (tag revision >= 3, custom images conservative
+  False) gates a third execute-prompt render (container-with-verbs,
+  baked names only) and relaxes the planner read-verb gate to
+  un-suppressed r3+ container lanes (baked name taught). Live-smoked
+  end-to-end: containerized `maro-read` answered a real sub-query via
+  Groq with injected keys and an honest receipt. Residuals: taught
+  baked name goes dead for steps degraded to host AFTER planning
+  (command-not-found is loud, worker falls back); r3 src snapshot is
+  build-time (rebuild + revision bump moves baked verb behavior).
 - [x] **Container OAuth expiry is invisible until the lane dies.**
   maro-claude-auth seeded 07-14 interactive; expired ~08-12; every
   agenda dispatch with executor steps then died at step-execute

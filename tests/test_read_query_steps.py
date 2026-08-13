@@ -79,31 +79,56 @@ class TestReadStepEmission:
                   max_steps=4)
         assert not _taught(adapter)
 
-    def test_container_lane_gates_teaching(self, monkeypatch):
-        # The executor image bakes no maro-read and build_mount_map
-        # excludes the repo path the fallback resolves to — a
+    def test_container_lane_without_baked_verbs_gates_teaching(
+            self, monkeypatch):
+        # A pre-r3/custom image bakes no maro-read and build_mount_map
+        # excludes the repo path the fallback resolves to — such a
         # container-configured run must not get plans naming the verb.
         import container_exec
         from planner import decompose
         monkeypatch.setattr(container_exec, "container_mode", lambda: "on")
         monkeypatch.setattr(container_exec, "container_suppressed",
                             lambda: False)
+        monkeypatch.setattr(container_exec, "image_bakes_verbs",
+                            lambda: False)
         adapter = _PlanCapturingAdapter()
         decompose("audit the spec against the raw captures", adapter,
                   max_steps=4)
         assert not _taught(adapter)
 
-    def test_suppressed_container_is_still_not_taught(self, monkeypatch):
-        # Skeptic round (2026-08-13): plan text OUTLIVES the moment it
-        # was written — a run planned under suppression can resume with
-        # suppression reset and execute containerized, where the taught
-        # command doesn't exist. The gate keys on config MODE (stable),
-        # not live suppression state; a suppressed run just loses the
-        # optimization.
+    def test_container_lane_with_baked_verbs_teaches_baked_name(
+            self, monkeypatch):
+        # r3+ images bake the shims (2026-08-13 decree chunk): the
+        # container lane teaches by the BAKED name, never a host path.
         import container_exec
         from planner import decompose
         monkeypatch.setattr(container_exec, "container_mode", lambda: "on")
         monkeypatch.setattr(container_exec, "container_suppressed",
+                            lambda: False)
+        monkeypatch.setattr(container_exec, "image_bakes_verbs",
+                            lambda: True)
+        adapter = _PlanCapturingAdapter()
+        decompose("audit the spec against the raw captures", adapter,
+                  max_steps=4)
+        taught = [s for s in adapter.system_prompts
+                  if "LARGE-FILE EXTRACTION STEPS" in s]
+        assert taught
+        assert all("maro-read" in s for s in taught)
+        assert all("/src/read_query.py" not in s for s in taught)
+
+    def test_suppressed_container_is_still_not_taught(self, monkeypatch):
+        # Skeptic round (2026-08-13): plan text OUTLIVES the moment it
+        # was written. A suppressed lane executes on the HOST, where the
+        # baked name is not on PATH — suppression never SELECTS a lane's
+        # command, it only suppresses the container teaching; a
+        # suppressed run just loses the optimization (even on a
+        # verb-baking image).
+        import container_exec
+        from planner import decompose
+        monkeypatch.setattr(container_exec, "container_mode", lambda: "on")
+        monkeypatch.setattr(container_exec, "container_suppressed",
+                            lambda: True)
+        monkeypatch.setattr(container_exec, "image_bakes_verbs",
                             lambda: True)
         adapter = _PlanCapturingAdapter()
         decompose("audit the spec against the raw captures", adapter,

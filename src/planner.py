@@ -999,6 +999,23 @@ def decompose(
                     from step_exec import _read_cli_path as _rq_cli
                     _read_step_rules = READ_QUERY_STEP_RULES.replace(
                         "__READ_CLI__", _rq_cli())
+                elif (not _ce.container_suppressed()
+                      and _ce.image_bakes_verbs()):
+                    # r3+ images bake the verb shims (2026-08-13 decree
+                    # chunk), so container-lane plans may teach too — by
+                    # the BAKED name, never a host path. Pre-r3 images
+                    # stay untaught (honest absence), and a suppressed
+                    # lane stays untaught too: its steps execute on the
+                    # HOST, where the baked name is not on PATH (this
+                    # does not re-introduce the suppression-selects-lane
+                    # problem — suppression only ever suppresses the new
+                    # teaching, never switches which command is taught).
+                    # Residual: a breaker trip AFTER planning strands the
+                    # taught name for degraded steps — command-not-found
+                    # is loud and the worker falls back to its reading
+                    # protocol.
+                    _read_step_rules = READ_QUERY_STEP_RULES.replace(
+                        "__READ_CLI__", "maro-read")
     except Exception:
         _read_step_rules = ""
     if _read_step_rules:

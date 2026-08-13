@@ -274,13 +274,22 @@ def _read_cli_path() -> str:
     return "python3 -m read_query"
 
 
-# Container render first (the template is consumed by the host render).
-# The container variant carries the honest-absence blocks and never names a
-# host path or console script.
+# Container renders first (the template is consumed by the host render).
+# The honest-absence variant names NO verb CLI (pre-r3 images bake none);
+# the verbs variant advertises the BAKED shim names — never host paths —
+# for images that carry them (image_bakes_verbs, Dockerfile r3+).
 EXECUTE_SYSTEM_CONTAINER = (
     EXECUTE_SYSTEM
     .replace("__FETCH_VERB_LINES__", _FETCH_VERB_CONTAINER)
     .replace("__READ_VERB_LINES__", _READ_VERB_CONTAINER)
+)
+
+EXECUTE_SYSTEM_CONTAINER_VERBS = (
+    EXECUTE_SYSTEM
+    .replace("__FETCH_VERB_LINES__", _FETCH_VERB_HOST)
+    .replace("__READ_VERB_LINES__", _READ_VERB_HOST)
+    .replace("__FETCH_CLI__", "maro-fetch")
+    .replace("__READ_CLI__", "maro-read")
 )
 
 EXECUTE_SYSTEM = (
@@ -302,11 +311,14 @@ def execute_system_for_lane() -> str:
     UNDER-advertises (the worker falls back to its reading protocol —
     the safe direction). The inverse — advertising host-path verbs into
     a container where they cannot exist — is the A/B-4 confound this
-    exists to prevent.
+    exists to prevent. An r3+ image bakes the verb shims, so its prompt
+    advertises them by their baked names (still no host paths).
     """
     try:
         import container_exec as _ce
         if _ce.container_mode() != "off" and not _ce.container_suppressed():
+            if _ce.image_bakes_verbs():
+                return EXECUTE_SYSTEM_CONTAINER_VERBS
             return EXECUTE_SYSTEM_CONTAINER
         return EXECUTE_SYSTEM
     except Exception:

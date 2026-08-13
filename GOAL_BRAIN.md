@@ -7598,3 +7598,17 @@ under the same two-measurement standard).
   stands down). Their "self-healing races" disposition is superseded —
   the serialized transitions were already built and land with this
   merge. Both TOCTOU residual filings agree.
+- **2026-08-13 (day)** — Decree chunk SHIPPED: executor image r3 bakes
+  the maro verbs, keys injected at spin-up. Dockerfile r3 = COPY src +
+  maro-read/maro-fetch shims + apt yaml/requests (no pip — supply-chain
+  stance unchanged); `image_bakes_verbs()` off the tag revision (custom
+  tags conservative False) gates a third execute-prompt render (baked
+  names) and relaxes the planner read-verb teach to un-suppressed r3+
+  container lanes. `hosted_free_container_env()` implements the decree:
+  keys from host storage ride the docker CLIENT's env with bare `-e
+  NAME` flags — values never in argv/listings; consent crosses as
+  MARO_HOSTED_FREE_ENABLED carrier (config wins, never a second consent
+  surface). Backup ro-mount lane noted, not built. Live-verified: r3
+  built on the box, containerized maro-read answered a real sub-query
+  through injected Groq keys with an honest receipt. ~36 new pins;
+  suite 8445/1 skip exit 0.

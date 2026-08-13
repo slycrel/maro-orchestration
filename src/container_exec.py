@@ -64,7 +64,13 @@ CLAUDE_CLI_VERSION = "2.1.210"
 # muscle memory, and the thing being audited here is a human decision to
 # change the toolset. If drift between this and the Dockerfile ever bites in
 # practice, that is the moment to switch to a digest — not before.
-IMAGE_REVISION = 2
+IMAGE_REVISION = 3
+
+# The first image revision whose build bakes the maro verb CLIs
+# (maro-read / maro-fetch shims + src tree, Dockerfile r3 2026-08-13).
+# image_bakes_verbs() keys on this so prompts advertise the verbs only
+# into containers that actually have them (honest absence, A/B-4 class).
+_VERBS_BAKED_FROM_REVISION = 3
 
 # Default executor image tag. Encodes the CLI pin AND the contents revision
 # (design §3: "image version is auditable"). Override via
@@ -129,6 +135,61 @@ def container_mode_raw() -> str:
 def container_image() -> str:
     """The executor image tag (config `executor.container_image` or default)."""
     return str(get("executor.container_image", DEFAULT_IMAGE) or DEFAULT_IMAGE)
+
+
+_IMAGE_TAG_RE = re.compile(r"^maro-executor:[^:]+-r(\d+)$")
+
+
+def hosted_free_container_env() -> dict:
+    """Env values that transport hosted-free capability into an executor
+    container at SPIN-UP (Jeremy decree 2026-08-13: keys are injected as
+    ENV values from host-held storage, never baked into the image).
+
+    Returns {} unless the image bakes the verbs, the host operator has
+    opted into hosted-free egress (consent is a host-side decision — the
+    env flag below only TRANSPORTS it), and at least one provider key is
+    present on the host (process env or the credentials .env). The values
+    ride the docker client's process env + bare `-e NAME` flags, never
+    the docker argv, so keys don't appear in host process listings.
+    Never raises; never logs values."""
+    try:
+        if not image_bakes_verbs():
+            return {}
+        import hosted_free as _hf
+        if not _hf.hosted_free_enabled():
+            return {}
+        env_file = _hf._load_env()
+        out = {}
+        for provider in _hf.provider_order():
+            key_name = _hf._ENV_KEYS.get(provider)
+            if not key_name:
+                continue
+            val = _hf._get_key(key_name, env_file)
+            if val:
+                out[key_name] = val
+        if not out:
+            return {}
+        out["MARO_HOSTED_FREE_ENABLED"] = "1"
+        return out
+    except Exception:
+        log.debug("hosted_free_container_env failed (no keys injected)",
+                  exc_info=True)
+        return {}
+
+
+def image_bakes_verbs() -> bool:
+    """Does the CONFIGURED executor image carry the baked maro verbs?
+
+    Parsed from the maro-executor tag's revision suffix; a custom image
+    (executor.container_image naming anything else) answers False —
+    conservative, because advertising a verb into an image that lacks it
+    is the A/B-4 confound, while under-advertising only costs the
+    optimization. Never raises."""
+    try:
+        m = _IMAGE_TAG_RE.match(container_image())
+        return bool(m) and int(m.group(1)) >= _VERBS_BAKED_FROM_REVISION
+    except Exception:
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -1284,6 +1345,7 @@ def build_run_command(
     workdir: Optional[str] = None,
     mounts: Optional[list] = None,
     worker_env: Optional[dict] = None,
+    passthrough_env: Optional[list] = None,
     owner_pid: Optional[int] = None,
     image: Optional[str] = None,
     network: Optional[str] = None,
@@ -1342,6 +1404,11 @@ def build_run_command(
     cmd += ["--network", network]
     for key, val in (worker_env or {}).items():
         cmd += ["-e", f"{key}={val}"]
+    # Bare -e NAME: docker copies the value from the CLIENT's process env,
+    # so secrets never appear in the docker argv (host process listings).
+    # The caller must put the value into the docker client's Popen env.
+    for key in (passthrough_env or []):
+        cmd += ["-e", str(key)]
     if workdir:
         cmd += ["-w", workdir]
     cmd.append(image)

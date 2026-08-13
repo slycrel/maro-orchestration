@@ -80,6 +80,8 @@ class TestConstants:
         KNOWN = {
             ("2.1.210", 1): "fbcb4ad9b4ffb9aa",
             ("2.1.210", 2): "1e0cf1a80909d799",   # + python3-pytest
+            ("2.1.210", 3): "4d4cc6d24e36487d",   # + baked maro verbs (src
+            # tree + maro-read/maro-fetch shims + python3-yaml/-requests)
         }
         key = (ce.CLAUDE_CLI_VERSION, ce.IMAGE_REVISION)
         expected = KNOWN.get(key)
@@ -1409,3 +1411,84 @@ class TestAuthBreaker:
 
     def test_clear_is_idempotent(self):
         ce.clear_auth_breaker()  # no state file — must not raise
+
+
+class TestBakedVerbs:
+    """r3 decree chunk (2026-08-13): the image bakes the maro verbs;
+    hosted-free keys arrive as ENV at spin-up, never in the image."""
+
+    def _image(self, monkeypatch, tag):
+        monkeypatch.setattr(
+            ce, "get",
+            lambda k, d=None: tag if k == "executor.container_image" else d)
+
+    def test_default_image_bakes_verbs(self, monkeypatch):
+        monkeypatch.setattr(ce, "get", lambda k, d=None: d)
+        assert ce.IMAGE_REVISION >= ce._VERBS_BAKED_FROM_REVISION
+        assert ce.image_bakes_verbs() is True
+
+    def test_pre_r3_image_does_not(self, monkeypatch):
+        self._image(monkeypatch, "maro-executor:2.1.210-r2")
+        assert ce.image_bakes_verbs() is False
+
+    def test_custom_image_is_conservative(self, monkeypatch):
+        # Advertising a verb into an image that lacks it is the A/B-4
+        # confound; an unrecognized tag answers False.
+        self._image(monkeypatch, "my-own-executor:latest")
+        assert ce.image_bakes_verbs() is False
+
+    def test_never_raises(self, monkeypatch):
+        monkeypatch.setattr(ce, "container_image",
+                            lambda: (_ for _ in ()).throw(RuntimeError()))
+        assert ce.image_bakes_verbs() is False
+
+    # -- spin-up env injection ---------------------------------------------
+
+    def test_passthrough_env_renders_bare_e_flags(self):
+        # Bare -e NAME: the value rides the docker CLIENT's env, never the
+        # argv — keys must not appear in host process listings.
+        cmd = ce.build_run_command(
+            ["claude", "-p", "x"], name="t",
+            passthrough_env=["GEMINI_API_KEY", "GROQ_API_KEY"])
+        joined = " ".join(cmd)
+        assert "-e GEMINI_API_KEY" in joined
+        assert "-e GROQ_API_KEY" in joined
+        assert "GEMINI_API_KEY=" not in joined
+        assert "GROQ_API_KEY=" not in joined
+
+    def test_container_env_empty_without_host_consent(self, monkeypatch):
+        import hosted_free as hf
+        monkeypatch.setattr(ce, "image_bakes_verbs", lambda: True)
+        monkeypatch.setattr(hf, "hosted_free_enabled", lambda: False)
+        monkeypatch.setenv("GROQ_API_KEY", "k")
+        assert ce.hosted_free_container_env() == {}
+
+    def test_container_env_empty_without_baked_verbs(self, monkeypatch):
+        import hosted_free as hf
+        monkeypatch.setattr(ce, "image_bakes_verbs", lambda: False)
+        monkeypatch.setattr(hf, "hosted_free_enabled", lambda: True)
+        monkeypatch.setenv("GROQ_API_KEY", "k")
+        assert ce.hosted_free_container_env() == {}
+
+    def test_container_env_carries_keys_and_consent_flag(self, monkeypatch):
+        import hosted_free as hf
+        monkeypatch.setattr(ce, "image_bakes_verbs", lambda: True)
+        monkeypatch.setattr(hf, "hosted_free_enabled", lambda: True)
+        monkeypatch.setattr(hf, "_load_env", lambda: {})
+        monkeypatch.setenv("GROQ_API_KEY", "groq-secret")
+        monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+        env = ce.hosted_free_container_env()
+        assert env["GROQ_API_KEY"] == "groq-secret"
+        assert env["MARO_HOSTED_FREE_ENABLED"] == "1"
+        assert "GEMINI_API_KEY" not in env
+
+    def test_container_env_empty_without_any_key(self, monkeypatch):
+        import hosted_free as hf
+        monkeypatch.setattr(ce, "image_bakes_verbs", lambda: True)
+        monkeypatch.setattr(hf, "hosted_free_enabled", lambda: True)
+        monkeypatch.setattr(hf, "_load_env", lambda: {})
+        monkeypatch.delenv("GROQ_API_KEY", raising=False)
+        monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+        # No keys -> no consent flag either: the flag transports a
+        # capability, not a bare opinion.
+        assert ce.hosted_free_container_env() == {}

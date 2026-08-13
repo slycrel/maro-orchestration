@@ -1325,9 +1325,22 @@ def _run_subprocess_safe(cmd, *, input=None, timeout=600,
         # (C4-BOX follow-up); None when there is no active run dir → /tmp stays
         # ephemeral, unchanged.
         _scratch = _ce.run_scratch_dir()
+        # Hosted-free key injection at spin-up (Jeremy decree 2026-08-13):
+        # values ride the docker CLIENT's env + bare `-e NAME` flags — never
+        # the docker argv — so the baked maro-read verb can reach its
+        # sub-query providers. Empty unless the image bakes the verbs, the
+        # host operator consented (validate.hosted_free.enabled), and a key
+        # exists host-side. Never logged.
+        _secret_env = _ce.hosted_free_container_env()
+        if _secret_env:
+            # Into the docker CLIENT's env only — the bare -e flags below
+            # copy them across the boundary; worker_env stays value-free.
+            child_env = {**child_env, **_secret_env}
         cmd = _ce.build_run_command(
             cmd, name=container_name, workdir=_cwd_real,
-            mounts=_mounts, worker_env=_worker_env, scratch_dir=_scratch)
+            mounts=_mounts, worker_env=_worker_env,
+            passthrough_env=sorted(_secret_env.keys()),
+            scratch_dir=_scratch)
         _container = container_name
 
     proc = subprocess.Popen(

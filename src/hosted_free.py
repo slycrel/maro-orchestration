@@ -89,7 +89,19 @@ def hosted_free_enabled() -> bool:
     """Explicit egress opt-in; an unset API key still makes the tier inert."""
     # A credential proves authentication, not consent to send step output to
     # another provider. External validation is therefore explicit opt-in.
-    val = _cfg("enabled", False)
+    #
+    # MARO_HOSTED_FREE_ENABLED transports that consent INTO an executor
+    # container (Jeremy decree 2026-08-13: keys + capability arrive as ENV
+    # at spin-up; the container has no config.yml). It is set only by
+    # container_exec.hosted_free_container_env, which itself requires the
+    # HOST-side config consent — the env var is a carrier, not a second
+    # consent surface. Host-side config still wins when present.
+    env_val = os.environ.get("MARO_HOSTED_FREE_ENABLED", "").strip().lower()
+    val = _cfg("enabled", None)
+    if val is None and env_val:
+        return env_val not in ("false", "0", "no", "off")
+    if val is None:
+        return False
     if isinstance(val, str):
         return val.strip().lower() not in ("false", "0", "no", "off")
     return bool(val)
