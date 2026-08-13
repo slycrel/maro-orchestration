@@ -1720,6 +1720,15 @@ def refresh_run_card_classification(
             card = {}
         if not isinstance(card, dict):
             card = {}
+        # Only-when-stamped pure keys the rebuild OMITTED must be removed,
+        # not merely left un-overwritten — a resolved verdict_pending (or a
+        # re-stamp that dropped goal_verdict_gaps) otherwise survives every
+        # refresh as a stale claim (review 2026-08-13). Maintenance keys are
+        # untouched: only keys the PURE curators own are eligible.
+        for fn in CURATORS:
+            for key in _SPEC_BY_NAME[fn.__name__].output_keys:
+                if key not in rebuilt:
+                    card.pop(key, None)
         card.update(deepcopy(rebuilt))
         refreshed["card"] = card
         return json.dumps(card, indent=2)

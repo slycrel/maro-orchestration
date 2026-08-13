@@ -1011,3 +1011,20 @@ def test_run_backlog_step_refused_busy_reverts_to_todo(tmp_path, monkeypatch):
     updated = next(i for i in items2 if i.index == todo.index)
     assert updated.state == oi.STATE_TODO
     assert heartbeat._backlog_drain_active is False
+
+
+def test_stranded_sweep_runs_verdict_orphan_sweep(monkeypatch, tmp_path):
+    """Review 2026-08-13: the orphan sweep was wired into the evolver
+    cadence, which the default health-only heartbeat never schedules — it
+    belongs in the every-tick stranded-state sweep (zero-LLM lane)."""
+    monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+    import audit_repair
+    import heartbeat as hb
+    called = {}
+    monkeypatch.setattr(
+        audit_repair, "sweep_verdict_orphans",
+        lambda **kw: called.update(kw) or {"status": "completed",
+                                           "stamped": 2})
+    result = hb.stranded_state_sweep()
+    assert called.get("limit") == 5
+    assert result.get("verdict_orphans_stamped") == 2

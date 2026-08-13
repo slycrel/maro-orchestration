@@ -5614,13 +5614,14 @@ class TestVerdictFollowup:
                 checks_run=2, checks_passed=2),
         )
 
-    def _drive(self, monkeypatch, tmp_path, events):
+    def _drive(self, monkeypatch, tmp_path, events, *, emit_returns=True):
         monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
         _stub_build_adapter(monkeypatch)
         import notify
         monkeypatch.setattr(
             notify, "emit",
-            lambda event, payload, **kw: events.append((event, payload)) or True)
+            lambda event, payload, **kw: (events.append((event, payload)),
+                                          emit_returns)[1])
         gate = MagicMock()
         gate.escalate = False
         gate.contested_claims = []
@@ -5679,6 +5680,25 @@ class TestVerdictFollowup:
         assert "run_verdict" not in names
         # Synchronous ordering restored: closure before the notify.
         assert names.index("closure-ran") < names.index("run_completed")
+
+    def test_failed_early_delivery_downgrades_to_full_completion(
+            self, monkeypatch, tmp_path):
+        # Review 2026-08-13: a CONFIGURED hook that failed to deliver the
+        # early answer must NOT be followed by a terse run_verdict — the
+        # user would get a verdict for an answer they never received. The
+        # finalize re-sends the full run_completed instead.
+        import config as config_mod
+        _real_get = config_mod.get
+        monkeypatch.setattr(
+            config_mod, "get",
+            lambda k, d=None: ("some-notify-cmd" if k == "notify.command"
+                               else _real_get(k, d)))
+        events = []
+        self._drive(monkeypatch, tmp_path, events, emit_returns=False)
+        names = [e for e, _ in events]
+        # Early attempt + finalize re-send — and no verdict-only follow-up.
+        assert names.count("run_completed") == 2
+        assert "run_verdict" not in names
 
     def test_non_done_terminal_keeps_synchronous_ordering(
             self, monkeypatch, tmp_path):

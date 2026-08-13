@@ -896,12 +896,15 @@ def handle(
                 # in any run dir is exactly the crash signature the
                 # audit_repair sweep hunts.
                 _vp_meta = {}
+                _meta_loop_ids: list = []
                 try:
                     from runs import run_dir as _run_dir_vp
-                    _vp_meta = json.loads(
+                    _meta_all = json.loads(
                         (_run_dir_vp(_hid) / "metadata.json")
-                        .read_text(encoding="utf-8")).get(
-                            "verdict_pending") or {}
+                        .read_text(encoding="utf-8"))
+                    _meta_loop_ids = [
+                        str(l) for l in (_meta_all.get("loop_ids") or []) if l]
+                    _vp_meta = _meta_all.get("verdict_pending") or {}
                     if not isinstance(_vp_meta, dict):
                         _vp_meta = {}
                     if _vp_meta and not _vp_meta.get("resolved_at"):
@@ -912,10 +915,26 @@ def handle(
                         _srm_resolve(_hid, {"verdict_pending": _resolved})
                 except Exception:
                     _vp_meta = {}
+                _tail_lid = ""
+                try:
+                    _tail_lid = (str(_meta_loop_ids[-1])
+                                 if _meta_loop_ids
+                                 else str(_vp_meta.get("loop_id") or ""))
+                except Exception:
+                    _tail_lid = ""
+                try:
+                    from metrics import tail_cost_scope as _fin_cost_scope
+                except Exception:
+                    from contextlib import nullcontext
+                    _fin_cost_scope = lambda *a, **k: nullcontext()  # noqa: E731
                 # Shared run-dir finalization (slice log, snapshot repo, stamp
                 # status + backend_error, curate run_card, re-render reports).
                 # Returns the run_card, which IS the completion payload.
-                _card = _close_run(_hid, status=_status, backend_error=_backend_err)
+                # Curation-scoped: answer synthesis is a real tail LLM call
+                # (review 2026-08-13).
+                with _fin_cost_scope(_tail_lid, "curation"):
+                    _card = _close_run(_hid, status=_status,
+                                       backend_error=_backend_err)
                 # Actionable backend death: ping the notify channel with the
                 # fix (auth/billing/context) — distinct from run_completed so
                 # substrates can render it as "act now", not "run finished".
@@ -947,16 +966,36 @@ def handle(
                 try:
                     from notify import emit as _notify_emit
                     from runs import run_dir as _run_dir_notify
-                    if _vp_meta.get("notified_early"):
+                    # The follow-up is only owed when the early notify
+                    # actually reached the user: a CONFIGURED hook that
+                    # failed to deliver downgrades back to a full
+                    # run_completed — a verdict for an answer the user never
+                    # received is worse than a late answer (review
+                    # 2026-08-13).
+                    _early_reached = bool(
+                        _vp_meta.get("notified_early")
+                        and (not _vp_meta.get("hook_configured")
+                             or _vp_meta.get("hook_delivered")))
+                    if _early_reached:
                         _payload = dict(_card or {"handle_id": _hid,
                                                   "status": _status})
+                        # "Revised answer" means a REPLACEMENT LOOP shipped
+                        # after the early notify (gate escalation / closure
+                        # restart) AND its text differs. A bare sha compare
+                        # false-fires when curation.answer_synthesis is ON —
+                        # two stochastic syntheses of the same run word the
+                        # same answer differently (review 2026-08-13).
                         _final_answer = str(
                             _payload.get("answer_summary", "") or "")
                         _final_sha = (hashlib.sha256(
                             _final_answer.encode("utf-8")).hexdigest()
                             if _final_answer else "")
+                        _loop_replaced = bool(
+                            _meta_loop_ids
+                            and _vp_meta.get("loop_id")
+                            and _meta_loop_ids[-1] != _vp_meta.get("loop_id"))
                         _payload["answer_changed"] = bool(
-                            _final_sha
+                            _loop_replaced and _final_sha
                             and _final_sha != _vp_meta.get("answer_sha", ""))
                         _notify_emit(
                             "run_verdict", _payload,
@@ -972,20 +1011,8 @@ def handle(
                     pass
                 # Tail cost lane (2026-08-13): the drains' LLM calls (lesson
                 # extraction, crystallization, promotion validation, evolver)
-                # join the loop's cost rows. Loop id from the card's lineage.
-                _tail_lid = ""
-                try:
-                    _lids = (_card or {}).get("loop_ids") or []
-                    _tail_lid = str(_lids[-1]) if _lids else ""
-                    if not _tail_lid:
-                        _tail_lid = str(_vp_meta.get("loop_id") or "")
-                except Exception:
-                    _tail_lid = ""
-                try:
-                    from metrics import tail_cost_scope as _drain_cost_scope
-                except Exception:
-                    from contextlib import nullcontext
-                    _drain_cost_scope = lambda *a, **k: nullcontext()  # noqa: E731
+                # join the loop's cost rows via the same scope.
+                _drain_cost_scope = _fin_cost_scope
                 # Answer-first: deferred learning runs only now, after the
                 # user has heard the outcome. Lessons feed curation's
                 # decision priors and classification, so refresh those card
@@ -2437,19 +2464,44 @@ def _handle_impl(
                         "since": datetime.now(timezone.utc).isoformat(),
                         "loop_id": getattr(loop_result, "loop_id", "") or "",
                     }
-                    _srm_pending({"verdict_pending": _vp_marker})
-                    _card_early = _close_run_early(_hid_early, status="done")
+                    if _srm_pending({"verdict_pending": _vp_marker}) is None:
+                        # No durable marker → no early publication: the
+                        # tripwire would fire never_stamped mid-tail and the
+                        # finalize would double-send run_completed (review
+                        # 2026-08-13). Fall back to synchronous ordering.
+                        raise RuntimeError(
+                            "verdict_pending marker not persisted")
+                    from metrics import tail_cost_scope as _curation_scope
+                    with _curation_scope(_vp_marker["loop_id"], "curation"):
+                        _card_early = _close_run_early(_hid_early,
+                                                       status="done")
                     _early_answer = str(
                         (_card_early or {}).get("answer_summary", "") or "")
                     from notify import emit as _notify_early
-                    _notify_early(
+                    _delivered = _notify_early(
                         "run_completed",
                         _card_early or {"handle_id": _hid_early,
                                         "status": "done",
                                         "verdict_pending": True},
                         run_dir=str(_run_dir_early(_hid_early)),
                     )
+                    # emit() returns True only when the notify HOOK ran
+                    # cleanly; False also means "no hook configured" (the
+                    # event still journals to events.jsonl). Record both
+                    # facts: the finalize downgrades run_verdict back to a
+                    # full run_completed when a CONFIGURED hook failed to
+                    # deliver — otherwise the user's only external message
+                    # would be a verdict for an answer they never received
+                    # (review 2026-08-13, the breaker's at-most-once-
+                    # attempted class again).
                     _vp_marker["notified_early"] = True
+                    _vp_marker["hook_delivered"] = bool(_delivered)
+                    try:
+                        from config import get as _nc_get
+                        _vp_marker["hook_configured"] = bool(
+                            str(_nc_get("notify.command", "") or "").strip())
+                    except Exception:
+                        _vp_marker["hook_configured"] = False
                     if _early_answer:
                         # So the finalize can tell a revised answer (gate
                         # escalation) from a re-render of the same one.
@@ -2703,19 +2755,25 @@ def _handle_impl(
                     # lets thesis-refuted (structural, evidence-bearing)
                     # outrank the generic demotion verdict.
                     try:
-                        _reverify_decision = evaluate_closure(
-                            message,
-                            loop_result.steps,
-                            adapter,
-                            workspace_path=repo_path or "",
-                            channel=channel,
-                            scope=_scope,
-                            resolved_intent=_resolved_intent,
-                            diagnosis=None,
-                            loop_id=getattr(loop_result, "loop_id", "") or "",
-                            project=project or getattr(loop_result, "project", "") or "",
-                            prior_verdict=_pre_restart_closure,
-                        )
+                        # Tail-scoped to the restarted loop (review
+                        # 2026-08-13 — restart re-verification was unscoped).
+                        from metrics import tail_cost_scope as _rv_scope
+                        with _rv_scope(
+                                getattr(loop_result, "loop_id", "") or "",
+                                "closure"):
+                            _reverify_decision = evaluate_closure(
+                                message,
+                                loop_result.steps,
+                                adapter,
+                                workspace_path=repo_path or "",
+                                channel=channel,
+                                scope=_scope,
+                                resolved_intent=_resolved_intent,
+                                diagnosis=None,
+                                loop_id=getattr(loop_result, "loop_id", "") or "",
+                                project=project or getattr(loop_result, "project", "") or "",
+                                prior_verdict=_pre_restart_closure,
+                            )
                         _closure = _reverify_decision.closure_verdict
                         if (
                             _reverify_decision.action == "declare-blocked"
@@ -3277,7 +3335,14 @@ def _handle_impl(
                         # Deferred learning drains early here: the retry's
                         # decompose recalls lessons from the loop it is
                         # retrying, so they must exist before it plans.
-                        _drain_deferred_learning(handle_id)
+                        # Tail-scoped: these extraction calls are the failed
+                        # loop's tail spend (review 2026-08-13 — escalation
+                        # paths were the unscoped remainder).
+                        from metrics import tail_cost_scope as _esc_scope
+                        with _esc_scope(
+                                getattr(loop_result, "loop_id", "") or "",
+                                "learning"):
+                            _drain_deferred_learning(handle_id)
                         _escalated_adapter = build_adapter(model=_next_tier)
                         _pre_escalation_loop = loop_result
                         _pre_escalation_loop_id = getattr(loop_result, "loop_id", None)
@@ -3371,18 +3436,26 @@ def _handle_impl(
                                 # Evidence-only read: the escalated re-run is
                                 # the version we ship — its verdict feeds
                                 # stamping/demotion, never another restart.
-                                _post_closure = _evaluate_post_escalate(
-                                    message,
-                                    loop_result.steps,
-                                    _escalated_adapter,
-                                    workspace_path=repo_path or "",
-                                    channel=channel,
-                                    scope=_scope,
-                                    resolved_intent=_resolved_intent,
-                                    diagnosis=_post_diag,
-                                    loop_id=getattr(loop_result, "loop_id", "") or "",
-                                    project=project or getattr(loop_result, "project", "") or "",
-                                ).closure_verdict
+                                # Tail-scoped to the SHIPPED loop (review
+                                # 2026-08-13 — escalation closure was the
+                                # unscoped remainder).
+                                from metrics import (
+                                    tail_cost_scope as _post_esc_scope)
+                                with _post_esc_scope(
+                                        getattr(loop_result, "loop_id", "")
+                                        or "", "closure"):
+                                    _post_closure = _evaluate_post_escalate(
+                                        message,
+                                        loop_result.steps,
+                                        _escalated_adapter,
+                                        workspace_path=repo_path or "",
+                                        channel=channel,
+                                        scope=_scope,
+                                        resolved_intent=_resolved_intent,
+                                        diagnosis=_post_diag,
+                                        loop_id=getattr(loop_result, "loop_id", "") or "",
+                                        project=project or getattr(loop_result, "project", "") or "",
+                                    ).closure_verdict
                                 if (
                                     _post_closure is not None
                                     and _post_closure.checks_run > 0

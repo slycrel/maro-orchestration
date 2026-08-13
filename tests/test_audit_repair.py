@@ -473,8 +473,18 @@ def test_targeted_missing_repair_is_not_reported_as_success():
 # Async-tail phase 2: crash-orphan sweep over ACTIVE verdict_pending markers
 # ---------------------------------------------------------------------------
 
+def _dead_pid():
+    """A real, just-exited pid — the sweep's liveness corroboration must
+    see the owner as dead (a made-up number could hit EINVAL or a live
+    process)."""
+    import subprocess
+    p = subprocess.Popen(["true"])
+    p.wait()
+    return p.pid
+
+
 def _seed_pending_marker(handle_id, loop_id, *, age_s=7200.0, resolved=False,
-                         verdict_source=None):
+                         verdict_source=None, pid=None):
     from datetime import datetime, timedelta, timezone
     since = (datetime.now(timezone.utc) - timedelta(seconds=age_s)).isoformat()
     marker = {"since": since, "loop_id": loop_id, "notified_early": True}
@@ -489,6 +499,11 @@ def _seed_pending_marker(handle_id, loop_id, *, age_s=7200.0, resolved=False,
         extra_metadata=extra,
     )
     runs.finalize_run(handle_id, status="done")
+    # write_metadata stamps the CURRENT process pid; the sweep's liveness
+    # corroboration needs the recorded owner to look dead (or as caller-set).
+    meta = json.loads((rd / "metadata.json").read_text())
+    meta["pid"] = pid if pid is not None else _dead_pid()
+    (rd / "metadata.json").write_text(json.dumps(meta, indent=2))
     record_outcome(
         "answer-first run", "done", "work delivered",
         lessons=[], loop_id=loop_id, handle_id=handle_id,
@@ -561,3 +576,50 @@ def test_orphan_sweep_keeps_marker_active_on_ledger_failure(monkeypatch):
     assert res["stamped"] == 0
     meta = _metadata(rd)
     assert "resolved_at" not in meta["verdict_pending"]
+
+
+def test_orphan_sweep_spares_a_live_owner():
+    # Review 2026-08-13: age alone must not orphan a wedged-but-alive tail —
+    # the recorded metadata pid alive means the owner may still finish.
+    import os as _os
+    from audit_repair import sweep_verdict_orphans
+    rd = _seed_pending_marker("vp000006", "vp-loop-6", age_s=7200.0,
+                              pid=_os.getpid())
+    res = sweep_verdict_orphans()
+    assert res["stamped"] == 0
+    meta = _metadata(rd)
+    assert "resolved_at" not in meta["verdict_pending"]
+    assert "goal_verdict_source" not in meta
+
+
+def test_orphan_sweep_sends_the_owed_followup(monkeypatch):
+    # The crashed process never sent its follow-up — repair finishes the
+    # user-visible story, routed like handle's finalize (review 2026-08-13).
+    import notify
+    from audit_repair import sweep_verdict_orphans
+    events = []
+    monkeypatch.setattr(notify, "emit",
+                        lambda et, p, **kw: events.append((et, p)) or True)
+    _seed_pending_marker("vp000007", "vp-loop-7", age_s=7200.0)
+    res = sweep_verdict_orphans()
+    assert res["stamped"] == 1
+    # notified_early + no hook configured → the answer reached the events
+    # lane → the owed half is the verdict follow-up.
+    assert [e for e, _ in events] == ["run_verdict"]
+
+
+def test_orphan_sweep_refresh_clears_pending_card_class(monkeypatch):
+    # The card must stop claiming "verdict pending" after repair — the
+    # merge-only refresh used to leave the stale key (review 2026-08-13).
+    import notify
+    from audit_repair import sweep_verdict_orphans
+    monkeypatch.setattr(notify, "emit", lambda *a, **kw: True)
+    rd = _seed_pending_marker("vp000008", "vp-loop-8", age_s=7200.0)
+    card = curate_run("vp000008")
+    assert card["success_class"] == "done-verdict-pending"
+    res = sweep_verdict_orphans()
+    assert res["stamped"] == 1
+    refreshed = json.loads((rd / "run_card.json").read_text())
+    assert refreshed.get("verdict_pending") is None
+    assert refreshed["success_class"] == "done-unverified"
+    assert refreshed["goal_verdict_source"] == "verdict_pending_orphaned"

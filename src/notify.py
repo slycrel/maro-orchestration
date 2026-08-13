@@ -132,11 +132,26 @@ def _emit(event_type: str, payload: dict, *, run_dir: Optional[str]) -> bool:
     # 1) Structured event for polling substrates — always, even with no hook.
     try:
         from observe import write_event
+        _detail = str(payload.get("result_excerpt",
+                                  payload.get("summary", "")))[:300]
+        if event_type == "run_verdict":
+            # The verdict IS this event's content — the generic projection
+            # dropped it entirely and polling substrates received an empty
+            # follow-up (review 2026-08-13). handle_id rides the detail:
+            # write_event has no field for it.
+            _detail = (f"[{handle_id}] goal_achieved="
+                       f"{payload.get('goal_achieved')}"
+                       + (f" source={payload.get('goal_verdict_source')}"
+                          if payload.get("goal_verdict_source") else "")
+                       + (" answer_changed"
+                          if payload.get("answer_changed") else "")
+                       + f"; {payload.get('goal_verdict_summary', '')}"
+                       )[:300]
         write_event(
             event_type,
             goal=str(payload.get("goal", payload.get("reason", "")))[:200],
             status=status,
-            detail=str(payload.get("result_excerpt", payload.get("summary", "")))[:300],
+            detail=_detail,
         )
     except Exception:
         pass

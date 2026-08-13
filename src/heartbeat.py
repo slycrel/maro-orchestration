@@ -425,6 +425,21 @@ def stranded_state_sweep(*, verbose: bool = False) -> dict:
     except Exception as exc:
         log.debug("sweep: stranded-card backfill failed: %s", exc)
 
+    # Async-tail phase 2 crash-orphan sweep: runs whose process died between
+    # the answer-first notify and the verdict resolution. Metadata reads +
+    # pid checks only (zero LLM) — belongs in this every-tick health lane,
+    # NOT the evolver cadence, which the default health-only heartbeat never
+    # schedules (review 2026-08-13: the sweep was unreachable by default).
+    try:
+        from audit_repair import sweep_verdict_orphans
+        _orphans = sweep_verdict_orphans(limit=5)
+        if _orphans.get("stamped"):
+            result["verdict_orphans_stamped"] = _orphans["stamped"]
+            log.info("verdict-orphan sweep stamped %d run(s)",
+                     _orphans["stamped"])
+    except Exception:
+        log.debug("verdict-orphan sweep failed", exc_info=True)
+
     try:
         result["resumable_runs"] = _find_resumable_runs()
         for entry in result["resumable_runs"]:
@@ -893,18 +908,7 @@ def _run_evolver_bg(*, dry_run: bool = False, verbose: bool = False,
     try:
         if not dry_run:
             try:
-                from audit_repair import (reconcile_pending_audits,
-                                          sweep_verdict_orphans)
-                # Async-tail phase 2: catch runs that died between the
-                # answer-first notify and the verdict resolution. Cheap
-                # (metadata reads only) and shares the repair pidfile.
-                try:
-                    _orphans = sweep_verdict_orphans(limit=5)
-                    if _orphans.get("stamped"):
-                        log.info("verdict-orphan sweep stamped %d run(s)",
-                                 _orphans["stamped"])
-                except Exception:
-                    log.debug("verdict-orphan sweep failed", exc_info=True)
+                from audit_repair import reconcile_pending_audits
                 repair = reconcile_pending_audits(
                     limit=3,
                     adapter_factory=lambda: (
