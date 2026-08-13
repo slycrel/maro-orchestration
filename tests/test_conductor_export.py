@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
 import tarfile
@@ -944,6 +945,9 @@ class TestInspect:
         assert "import would SKIP 2 unsafe member" in out
         assert "external symlink" in out
         assert "special file" in out
+        # Review 2026-08-13: unsafe members previously still exited 0 —
+        # "clean" as a scripting signal was a lie. rc 4 = unsafe present.
+        assert rc == 4
 
     def test_inspect_future_format_flagged_nonzero(self, tmp_path, capsys):
         import io as _io
@@ -960,3 +964,171 @@ class TestInspect:
         out = capsys.readouterr().out
         assert rc == 3
         assert "NEWER than this tool" in out
+
+
+class TestInspectReviewHardening:
+    """2026-08-13 cross-model review of 977f58f (REJECT — verdict in
+    docs/history/2026-08-13-maro-export-inspect-adversarial-review.md):
+    the exit-code gate failed open, inspect re-implemented import policy
+    and the two disagreed, caps applied after the full scan, and
+    archive-authored strings reached the terminal raw."""
+
+    def _arc(self, tmp_path, name="probe.tar.gz"):
+        return tmp_path / name
+
+    def _add(self, tar, name, body=b"", type=None, linkname=""):
+        import io as _io
+        ti = tarfile.TarInfo(name)
+        if type is not None:
+            ti.type = type
+        if linkname:
+            ti.linkname = linkname
+        ti.size = len(body)
+        tar.addfile(ti, _io.BytesIO(body) if body else None)
+
+    def test_non_int_format_is_malformed_not_v1(self, tmp_path, capsys):
+        # "99" (str) and 3.0 (float) previously ducked the newer-format
+        # gate AND read as clean v1 — fail closed instead.
+        for bad_fmt in ("99", 3.0, True):
+            arc = self._arc(tmp_path, f"fmt-{bad_fmt}.tar.gz")
+            with tarfile.open(arc, "w:gz") as tar:
+                prov = json.dumps({"format": bad_fmt, "custody": [],
+                                   "contents": {}}).encode()
+                self._add(tar, "meta/provenance.json", prov)
+            rc = inspect_archive(arc)
+            out = capsys.readouterr().out
+            assert rc == 5, f"format={bad_fmt!r} must flag malformed"
+            assert "MALFORMED" in out
+            assert "v1 (no meta/provenance)" not in out
+
+    def test_oversized_first_provenance_flags_and_no_duplicate_rescue(
+            self, tmp_path, capsys):
+        # Import stops at the FIRST provenance member; inspect previously
+        # skipped an oversized first and accepted a later duplicate — the
+        # two lanes disagreed about the same archive.
+        from maro_export import _MAX_PROVENANCE_BYTES
+        arc = self._arc(tmp_path)
+        with tarfile.open(arc, "w:gz") as tar:
+            self._add(tar, "meta/provenance.json",
+                      b"0" * (_MAX_PROVENANCE_BYTES + 1))
+            good = json.dumps({"format": 2, "custody": [],
+                               "exporter": "later-dupe", "contents": {},
+                               "source": {}, "meta": {}}).encode()
+            self._add(tar, "meta/provenance.json", good)
+        rc = inspect_archive(arc)
+        out = capsys.readouterr().out
+        assert rc == 5
+        assert "oversized" in out
+        assert "later-dupe" not in out  # duplicate must not rescue it
+
+    def test_import_refuses_malformed_provenance(self, tmp_path, monkeypatch):
+        # A provenance file that EXISTS but cannot be read is a crafted or
+        # corrupt archive — refuse before mutating anything.
+        arc = self._arc(tmp_path)
+        with tarfile.open(arc, "w:gz") as tar:
+            self._add(tar, "workspace/keep.txt", b"x")
+            self._add(tar, "meta/provenance.json", b"{not json")
+        dest = tmp_path / "ws"
+        dest.mkdir()
+        monkeypatch.setenv("MARO_WORKSPACE", str(dest))
+        with pytest.raises(SystemExit):
+            import_workspace(arc)
+        assert not (dest / "keep.txt").exists()
+
+    def test_meta_screens_are_previewed(self, tmp_path, capsys):
+        # inspect previously counted only secret-shaped regular files in
+        # meta — traversal, links, and specials staged nothing at import
+        # but previewed as zero findings.
+        arc = self._arc(tmp_path)
+        with tarfile.open(arc, "w:gz") as tar:
+            self._add(tar, "meta/../escaped.txt", b"x")
+            self._add(tar, "meta/link", type=tarfile.SYMTYPE,
+                      linkname="/etc/passwd")
+            self._add(tar, "meta/pipe", type=tarfile.FIFOTYPE)
+            self._add(tar, "meta/secrets/api.key", b"k")
+        rc = inspect_archive(arc)
+        out = capsys.readouterr().out
+        assert rc == 4
+        assert "meta traversal" in out
+        assert "meta non-regular member" in out
+        assert "secret-shaped meta" in out
+
+    def test_policy_excluded_files_are_reported(self, tmp_path, capsys):
+        # workspace/.env is silently skipped by import; the preview must
+        # say so instead of omitting it from every count.
+        arc = self._arc(tmp_path)
+        with tarfile.open(arc, "w:gz") as tar:
+            self._add(tar, "workspace/.env", b"SECRET=1")
+            self._add(tar, "workspace/ok.txt", b"x")
+        inspect_archive(arc)
+        out = capsys.readouterr().out
+        assert "exclude 1 policy-excluded file(s)" in out
+
+    def test_terminal_injection_via_linkname_and_counters(self, tmp_path, capsys):
+        # Reviewer reproduced ANSI clearing + forged lines through the
+        # symlink-target reason and raw meta counters.
+        arc = self._arc(tmp_path)
+        with tarfile.open(arc, "w:gz") as tar:
+            self._add(tar, "workspace/evil", type=tarfile.SYMTYPE,
+                      linkname="/tmp/\x1b[2J\nforged: line")
+            prov = json.dumps({
+                "format": 2, "custody": [], "contents": {}, "source": {},
+                "meta": {"user_config_redactions": "\x1b[31mRED\x1b[0m",
+                         "experiments_files": "12\nforged", }
+            }).encode()
+            self._add(tar, "meta/provenance.json", prov)
+        inspect_archive(arc)
+        out = capsys.readouterr().out
+        assert "\x1b" not in out
+        assert "\nforged" not in out
+
+    def test_member_cap_enforced_during_scan(self, tmp_path, monkeypatch, capsys):
+        # The cap must reject AS MEMBERS STREAM — previously the whole
+        # member list was materialized first, so the cap cost more than it
+        # protected.
+        import maro_export as mx
+        monkeypatch.setattr(mx, "_MAX_MEMBERS", 3)
+        arc = self._arc(tmp_path)
+        with tarfile.open(arc, "w:gz") as tar:
+            for i in range(6):
+                self._add(tar, f"workspace/f{i}.txt", b"x")
+        rc = inspect_archive(arc)
+        assert rc == 1
+        assert "member cap" in capsys.readouterr().err
+        dest = tmp_path / "ws"
+        dest.mkdir()
+        monkeypatch.setenv("MARO_WORKSPACE", str(dest))
+        with pytest.raises(SystemExit):
+            import_workspace(arc)
+        assert list(dest.iterdir()) == []
+
+    def test_inspect_prints_archive_sha256(self, workspace, tmp_path,
+                                           monkeypatch, capsys):
+        d = tmp_path / "maro-user"
+        d.mkdir(exist_ok=True)
+        monkeypatch.setenv("MARO_USER_DIR", str(d))
+        archive = tmp_path / "export.tar.gz"
+        export_workspace(output_path=archive)
+        inspect_archive(archive)
+        out = capsys.readouterr().out
+        digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+        assert f"sha256: {digest}" in out
+
+    def test_import_expect_sha256_binds_the_bytes(self, tmp_path, monkeypatch):
+        arc = self._arc(tmp_path)
+        with tarfile.open(arc, "w:gz") as tar:
+            self._add(tar, "workspace/keep.txt", b"x")
+        dest = tmp_path / "ws"
+        dest.mkdir()
+        monkeypatch.setenv("MARO_WORKSPACE", str(dest))
+        digest = hashlib.sha256(arc.read_bytes()).hexdigest()
+        # Wrong digest → refuse, nothing changed.
+        with pytest.raises(SystemExit):
+            import_workspace(arc, expect_sha256="0" * 64)
+        assert not (dest / "keep.txt").exists()
+        # Too-short prefix → refuse (accidental 8-char paste is not a bind).
+        with pytest.raises(SystemExit):
+            import_workspace(arc, expect_sha256=digest[:8])
+        # Matching prefix (>=16 chars, as inspect prints) → proceeds.
+        n = import_workspace(arc, expect_sha256=digest[:16])
+        assert n == 1 and (dest / "keep.txt").exists()

@@ -600,8 +600,16 @@ def _validate_provenance(obj):
     """Coerce archive provenance to a safe shape. Returns a dict with the
     expected sub-types (never raises downstream) or None if unusable.
     Import must never crash on hostile provenance AFTER mutating the
-    workspace (review of c257a48, reproduced)."""
+    workspace (review of c257a48, reproduced).
+
+    `format` must be a canonical int — a provenance whose format is "99" or
+    3.0 is crafted or corrupt, and letting it duck the newer-format gate
+    fails open (review 2026-08-13). bool is excluded explicitly (it passes
+    isinstance int)."""
     if not isinstance(obj, dict):
+        return None
+    fmt = obj.get("format")
+    if not isinstance(fmt, int) or isinstance(fmt, bool):
         return None
     def _d(k):
         v = obj.get(k)
@@ -610,7 +618,7 @@ def _validate_provenance(obj):
     custody = [e for e in custody if isinstance(e, dict)] \
         if isinstance(custody, list) else []
     return {
-        "format": obj.get("format"),
+        "format": fmt,
         "created_at": obj.get("created_at", "?"),
         "exporter": obj.get("exporter", "?"),
         "source": _d("source"),
@@ -618,6 +626,137 @@ def _validate_provenance(obj):
         "meta": _d("meta"),
         "custody": custody,
     }
+
+
+def _load_provenance(tar, meta_members):
+    """(prov, status) — status ∈ valid / absent / oversized / unreadable /
+    invalid-shape. The FIRST meta/provenance.json member wins, matching
+    import's stop-at-first behavior — inspect previously skipped an
+    oversized first member and could accept a later duplicate, so the two
+    lanes could disagree about the same archive (review 2026-08-13)."""
+    for m in meta_members:
+        if m.name != _META_PREFIX + "provenance.json":
+            continue
+        if not m.isreg():
+            return None, "invalid-shape"
+        if m.size > _MAX_PROVENANCE_BYTES:
+            return None, "oversized"
+        try:
+            fh = tar.extractfile(m)
+            obj = json.loads(fh.read().decode("utf-8")) if fh else None
+        except Exception:
+            return None, "unreadable"
+        prov = _validate_provenance(obj)
+        return (prov, "valid") if prov is not None else (None, "invalid-shape")
+    return None, "absent"
+
+
+class _ArchiveCapExceeded(Exception):
+    """Raised mid-scan when the archive exceeds a resource cap."""
+
+
+# Reasonable ceiling for a single member's path length (GNU longname headers
+# are otherwise unbounded — a hostile archive can pack megabyte names).
+_MAX_NAME_CHARS = 4096
+# Bound retained example names per skip reason — reporting stays honest via
+# counts; a hostile archive must not inflate host memory through its skips.
+_MAX_SKIP_EXAMPLES = 100
+
+
+def _meta_member_risk(member, rel: str):
+    """(code, detail) preview of why meta staging would not stage this
+    member, or None if it stages. Pure-string mirror of _stage_meta's
+    screens — the SINGLE policy both inspect and import consume (review
+    2026-08-13: inspect only counted secret-shaped regular files and missed
+    traversal, links, specials, and the size cap)."""
+    if _secret_shaped(("meta",) + Path(rel).parts):
+        return "secret-shaped meta (screened)", rel
+    norm = os.path.normpath(rel)
+    if norm == ".." or norm.startswith(".." + os.sep) or os.path.isabs(norm):
+        return "meta traversal", rel
+    if member.isdir():
+        return None
+    if not member.isreg():
+        return "meta non-regular member (link/special)", rel
+    if member.size > _MAX_META_FILE_BYTES:
+        return "meta file exceeds size cap", rel
+    return None
+
+
+def _scan_and_classify(tar):
+    """One-pass streaming scan + classification of an untrusted archive —
+    the shared policy core for inspect (preview) and import (enforcement).
+
+    Caps are enforced AS MEMBERS STREAM, so a hostile archive is rejected
+    at the cap rather than after the whole member list is materialized;
+    the meta/workspace partition happens in the same pass (review
+    2026-08-13: getmembers()-then-`m not in meta` was full-scan-then-
+    quadratic in BOTH lanes). tarfile still retains TarInfo objects on the
+    TarFile (needed for extraction), so peak memory is bounded by the cap,
+    not by the archive.
+
+    Only PURE-STRING policy runs here. Destination-dependent enforcement
+    (_safe_workspace_member's ws-relative bind, _stage_meta's staging
+    bind) stays at import time and is labeled as such in inspect output.
+
+    Returns a dict; raises _ArchiveCapExceeded on a cap breach.
+    """
+    out = {
+        "n_members": 0,
+        "meta_members": [],
+        "ws_candidates": [],      # (member, rel) that pass pure-string policy
+        "ws_entries": [],         # (rel, size) regular files in digest scope
+        "excluded": [],           # rel paths _should_exclude'd (policy skips)
+        "skips": {},              # code -> {"count": int, "examples": [str]}
+        "meta_skips": {},         # same shape, for meta staging screens
+    }
+
+    def _add_skip(table, code, display):
+        row = table.setdefault(code, {"count": 0, "examples": []})
+        row["count"] += 1
+        if len(row["examples"]) < _MAX_SKIP_EXAMPLES:
+            row["examples"].append(display)
+
+    while True:
+        member = tar.next()
+        if member is None:
+            break
+        out["n_members"] += 1
+        if out["n_members"] > _MAX_MEMBERS:
+            raise _ArchiveCapExceeded(
+                f"archive exceeds {_MAX_MEMBERS} member cap")
+        if len(member.name) > _MAX_NAME_CHARS:
+            _add_skip(out["skips"], "unreasonable member name length",
+                      member.name[:80] + "…")
+            continue
+        if member.name == "meta" or member.name.startswith(_META_PREFIX):
+            out["meta_members"].append(member)
+            rel = member.name[len(_META_PREFIX):]
+            if member.name != "meta" and rel:
+                risk = _meta_member_risk(member, rel)
+                if risk:
+                    _add_skip(out["meta_skips"], risk[0], risk[1])
+            continue
+        if member.name == "workspace":
+            continue
+        rel = member.name[len("workspace/"):] \
+            if member.name.startswith("workspace/") else member.name
+        if not rel:
+            continue
+        if _should_exclude(rel):
+            if len(out["excluded"]) < _MAX_SKIP_EXAMPLES:
+                out["excluded"].append(rel)
+            else:
+                out["excluded"].append(None)  # counted, name not retained
+            continue
+        code_detail = _member_import_risk(member, rel)
+        if code_detail:
+            _add_skip(out["skips"], code_detail[0], code_detail[1])
+            continue
+        out["ws_candidates"].append((member, rel))
+        if member.isreg():
+            out["ws_entries"].append((rel, member.size))
+    return out
 
 
 def _safe_workspace_member(member, rel_name: str, ws: Path):
@@ -716,6 +855,7 @@ def import_workspace(
     verbose: bool = False,
     clean: bool = False,
     apply_meta: bool = False,
+    expect_sha256: str = "",
 ) -> int:
     """Import a Maro export archive. See module docstring for the security
     posture. Returns the number of workspace files extracted."""
@@ -726,63 +866,76 @@ def import_workspace(
         print(f"Error: archive not found: {archive_path}", file=sys.stderr)
         sys.exit(1)
 
+    # Bind this import to the bytes a prior `inspect` vouched for (review
+    # 2026-08-13: inspect and import reopened the pathname independently, so
+    # the trust decision could apply to a swapped file). Prefixes are
+    # accepted at >=16 hex chars, full digest preferred.
+    if expect_sha256:
+        want = expect_sha256.strip().lower().rstrip("…")
+        if len(want) < 16 or not all(c in "0123456789abcdef" for c in want):
+            print("Error: --expect-sha256 needs at least 16 hex chars",
+                  file=sys.stderr)
+            sys.exit(1)
+        sha = hashlib.sha256()
+        with open(archive_path, "rb") as fh:
+            for chunk in iter(lambda: fh.read(1 << 20), b""):
+                sha.update(chunk)
+        actual = sha.hexdigest()
+        if not actual.startswith(want):
+            print(f"Error: archive sha256 {actual[:16]}… does not match "
+                  f"--expect-sha256 — the file changed since it was "
+                  f"inspected. Nothing was changed.", file=sys.stderr)
+            sys.exit(1)
+
     with tarfile.open(archive_path, "r:gz") as tar:
-        members = tar.getmembers()
-        if len(members) > _MAX_MEMBERS:
-            print(f"Error: archive has {len(members)} members "
-                  f"(> {_MAX_MEMBERS} cap) — refusing", file=sys.stderr)
+        # Shared one-pass scan/classify — the same policy inspect previews
+        # (review 2026-08-13: two implementations had already diverged, and
+        # both lanes paid getmembers()-then-quadratic-partition).
+        try:
+            scan = _scan_and_classify(tar)
+        except _ArchiveCapExceeded as exc:
+            print(f"Error: {exc} — refusing", file=sys.stderr)
             sys.exit(1)
 
         if dry_run:
-            print(f"Archive contains {len(members)} entries:", file=sys.stderr)
-            for m in members:
+            print(f"Archive contains {scan['n_members']} entries:",
+                  file=sys.stderr)
+            for m in tar.getmembers():
                 print(f"  {_sanitize_for_terminal(m.name)} ({m.size:,} bytes)")
             return 0
 
-        meta_members = [m for m in members
-                        if m.name == "meta" or m.name.startswith(_META_PREFIX)]
-        ws_members = [m for m in members if m not in meta_members]
+        meta_members = scan["meta_members"]
 
         # --- preflight BEFORE any mutation ------------------------------
-        prov = None
-        for m in meta_members:
-            if m.name == _META_PREFIX + "provenance.json" and m.isreg():
-                if m.size > _MAX_PROVENANCE_BYTES:
-                    print("WARNING: provenance.json exceeds size cap — "
-                          "ignoring", file=sys.stderr)
-                    break
-                try:
-                    fh = tar.extractfile(m)
-                    prov = _validate_provenance(
-                        json.loads(fh.read().decode("utf-8"))) if fh else None
-                except Exception as exc:
-                    print(f"WARNING: provenance.json unreadable "
-                          f"({_sanitize_for_terminal(exc)}) — treating as "
-                          f"absent", file=sys.stderr)
-                break
+        prov, prov_status = _load_provenance(tar, meta_members)
+        if prov_status not in ("valid", "absent"):
+            # A provenance file that EXISTS but can't be trusted (oversized,
+            # unreadable, malformed shape, non-int format) is a crafted or
+            # corrupt archive — fail closed before touching anything
+            # (review 2026-08-13: "treating as absent" let a malformed
+            # lineage duck the format gate).
+            print(f"Error: archive provenance is malformed ({prov_status}) "
+                  "— refusing to import an archive whose lineage cannot be "
+                  "read. Nothing was changed.", file=sys.stderr)
+            sys.exit(1)
 
         # Format gate: refuse a newer archive rather than half-importing it.
-        if prov is not None and isinstance(prov["format"], int) \
-                and prov["format"] > ARCHIVE_FORMAT:
+        if prov is not None and prov["format"] > ARCHIVE_FORMAT:
             print(f"Error: archive format {prov['format']} is newer than "
                   f"this tool supports (v{ARCHIVE_FORMAT}). Upgrade "
                   f"maro-export before importing. Nothing was changed.",
                   file=sys.stderr)
             sys.exit(1)
 
-        # Classify workspace members; skips are reported, never fatal.
+        # Pure-string screens already ran in the scan; report them, then
+        # apply the destination-bound half (_safe_workspace_member) that
+        # inspect honestly does not preview.
+        _print_skip_table("SKIP ", scan["skips"], verbose, file=sys.stderr)
+        if verbose and scan["excluded"]:
+            print(f"  skip: {len(scan['excluded'])} policy-excluded file(s) "
+                  "(exporter never ships these)", file=sys.stderr)
         safe_members = []
-        for member in ws_members:
-            if member.name == "workspace":
-                continue
-            rel = member.name[len("workspace/"):] \
-                if member.name.startswith("workspace/") else member.name
-            if not rel:
-                continue
-            if _should_exclude(rel):
-                if verbose:
-                    print(f"  skip: {rel}", file=sys.stderr)
-                continue
+        for member, rel in scan["ws_candidates"]:
             ok, reason = _safe_workspace_member(member, rel, ws)
             if not ok:
                 print(f"  SKIP ({reason}): {_sanitize_for_terminal(rel)}",
@@ -959,78 +1112,122 @@ def _apply_user_config(import_dir: Path, prov, apply_meta: bool,
 
 
 def _member_import_risk(member, rel: str):
-    """Pure-string (no destination) preview of why import would skip a
-    workspace member. Returns a reason string, or "" if it would import.
-    Mirrors _safe_workspace_member's checks minus the ws-relative bind so
-    inspect can run without a target workspace."""
+    """(code, detail) — pure-string (no destination) preview of why import
+    would skip a workspace member, or None if it would import. Mirrors
+    _safe_workspace_member's checks minus the ws-relative bind so inspect
+    can run without a target workspace. Codes are FIXED strings (bounded
+    grouping); archive-authored text rides only in `detail`, which every
+    printer must route through _sanitize_for_terminal (review 2026-08-13:
+    a linkname embedded in the reason string reached the terminal raw)."""
     norm = os.path.normpath(rel)
     if norm == ".." or norm.startswith(".." + os.sep) or os.path.isabs(norm):
-        return "path traversal / absolute"
+        return "path traversal / absolute", rel
     if _STAGING_DIRNAME in Path(rel).parts:
-        return "targets staging dir"
+        return "targets staging dir", rel
     if member.isdir() or member.isreg():
-        return ""
+        return None
     if member.issym():
         if _classify_symlink_target(member.linkname, _rel_parts(rel)):
-            return ""
-        return f"external symlink → {member.linkname}"
+            return None
+        return "external symlink target", f"{rel} -> {member.linkname}"
     if member.islnk():
-        return "hardlink member"
-    return "special file (fifo/device)"
+        return "hardlink member", rel
+    return "special file (fifo/device)", rel
+
+
+def _as_int(value, default=0) -> int:
+    """Archive-authored counter → int, defensively (review 2026-08-13:
+    meta counters printed raw could carry terminal escapes)."""
+    try:
+        if isinstance(value, bool):
+            return default
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _print_skip_table(label: str, table: dict, verbose: bool,
+                      file=None) -> int:
+    # file=None → current sys.stdout at CALL time (a def-time default would
+    # bind the original stream and dodge redirection/capture).
+    file = file if file is not None else sys.stdout
+    total = sum(row["count"] for row in table.values())
+    if not table:
+        return 0
+    for code, row in sorted(table.items()):
+        examples = row["examples"]
+        print(f"    - {label}{code}: {row['count']}"
+              + (f"  e.g. {_sanitize_for_terminal(examples[0])}"
+                 if examples and (verbose or row["count"] <= 3) else ""),
+              file=file)
+        if verbose:
+            for nm in examples:
+                print(f"        {_sanitize_for_terminal(nm)}", file=file)
+            if row["count"] > len(examples):
+                print(f"        … {row['count'] - len(examples)} more "
+                      "(names not retained)", file=file)
+    return total
 
 
 def inspect_archive(archive_path: Path, verbose: bool = False) -> int:
     """Read-only: report an archive's provenance, verify its shape digest,
     and preview what an import would skip. Never extracts or mutates.
 
-    Exit 0 = safe-looking (digest OK or no provenance to check); 2 =
-    shape digest MISMATCH; 3 = unsupported/newer format. The caller gets
-    the exit code; details go to stderr/stdout."""
+    Exit codes (precedence top-down — only a CLEAN archive exits 0; review
+    2026-08-13: unsafe members and malformed provenance previously still
+    exited 0, which defeats look-before-you-import for scripting):
+      3 = unsupported/newer format
+      2 = workspace shape digest MISMATCH
+      5 = provenance present but malformed (unreadable/oversized/bad shape)
+      4 = unsafe members or screened meta present (import would skip them)
+      1 = archive missing/unscannable
+      0 = clean
+    """
     if not archive_path.exists():
         print(f"Error: archive not found: {archive_path}", file=sys.stderr)
         sys.exit(1)
 
-    with tarfile.open(archive_path, "r:gz") as tar:
-        members = tar.getmembers()
-        if len(members) > _MAX_MEMBERS:
-            print(f"Error: archive has {len(members)} members "
-                  f"(> {_MAX_MEMBERS} cap)", file=sys.stderr)
-            return 1
-        meta = [m for m in members
-                if m.name == "meta" or m.name.startswith(_META_PREFIX)]
-        ws = [m for m in members if m not in meta]
+    # Whole-file digest first: the trust decision should be bindable to the
+    # exact bytes inspected — a swap between `inspect` and `import` is
+    # otherwise invisible (review 2026-08-13). Import accepts it via
+    # --expect-sha256.
+    sha = hashlib.sha256()
+    with open(archive_path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            sha.update(chunk)
+    archive_sha256 = sha.hexdigest()
 
-        prov = None
-        for m in meta:
-            if m.name == _META_PREFIX + "provenance.json" and m.isreg() \
-                    and m.size <= _MAX_PROVENANCE_BYTES:
-                try:
-                    fh = tar.extractfile(m)
-                    prov = _validate_provenance(
-                        json.loads(fh.read().decode("utf-8"))) if fh else None
-                except Exception as exc:
-                    print(f"provenance.json unreadable: "
-                          f"{_sanitize_for_terminal(exc)}", file=sys.stderr)
-                break
+    with tarfile.open(archive_path, "r:gz") as tar:
+        try:
+            scan = _scan_and_classify(tar)
+        except _ArchiveCapExceeded as exc:
+            print(f"Error: {exc} — refusing to scan further", file=sys.stderr)
+            return 1
+        prov, prov_status = _load_provenance(tar, scan["meta_members"])
 
         print(f"Archive: {archive_path}")
+        print(f"  sha256: {archive_sha256}")
+        print(f"    (verify at import: maro-export import --expect-sha256 "
+              f"{archive_sha256[:16]}…)")
         fmt = prov["format"] if prov else None
-        if prov is None:
+        if prov_status == "absent":
             print("  format: v1 (no meta/provenance) — no lineage to show")
+        elif prov_status != "valid":
+            print(f"  provenance: MALFORMED ({prov_status}) — a v2 archive "
+                  "whose lineage cannot be trusted; treat with suspicion")
         else:
             print(f"  format: v{fmt}"
                   + ("  ⚠ NEWER than this tool (v%d) — import would refuse"
-                     % ARCHIVE_FORMAT
-                     if isinstance(fmt, int) and fmt > ARCHIVE_FORMAT else ""))
+                     % ARCHIVE_FORMAT if fmt > ARCHIVE_FORMAT else ""))
             print(f"  exported by {_sanitize_for_terminal(prov['exporter'])} "
                   f"at {_sanitize_for_terminal(prov['created_at'])}")
             print(f"  source: "
                   f"{_sanitize_for_terminal(prov['source'].get('workspace_root', '?'))}")
             mi = prov["meta"]
             print(f"  meta: user-config={bool(mi.get('user_config'))} "
-                  f"(redactions={mi.get('user_config_redactions', 0)}), "
-                  f"experiments={mi.get('experiments_files', 0)}, "
-                  f"external-symlinks={mi.get('external_symlinks', 0)}")
+                  f"(redactions={_as_int(mi.get('user_config_redactions'))}), "
+                  f"experiments={_as_int(mi.get('experiments_files'))}, "
+                  f"external-symlinks={_as_int(mi.get('external_symlinks'))}")
             print("  custody:")
             for ev in prov["custody"][:_MAX_CUSTODY_PRINT]:
                 print(f"    {_sanitize_for_terminal(ev.get('event', '?'))} by "
@@ -1041,19 +1238,10 @@ def inspect_archive(archive_path: Path, verbose: bool = False) -> int:
                 print(f"    … {extra} earlier event(s) not shown")
 
         # Verify the workspace-shape digest against the archive's own bytes.
-        entries = []
-        for m in ws:
-            if m.name == "workspace" or not m.isreg():
-                continue
-            rel = m.name[len("workspace/"):] \
-                if m.name.startswith("workspace/") else m.name
-            if _should_exclude(rel):
-                continue
-            entries.append((rel, m.size))
-        rc = 0
+        digest_mismatch = False
         if prov is not None:
             claimed = prov["contents"].get("workspace_shape_sha256", "")
-            actual = _manifest_digest(entries)
+            actual = _manifest_digest(scan["ws_entries"])
             ok = bool(claimed) and claimed == actual
             print(f"  workspace shape digest: "
                   f"{'OK' if ok else 'MISMATCH'} "
@@ -1061,37 +1249,40 @@ def inspect_archive(archive_path: Path, verbose: bool = False) -> int:
             if not ok:
                 print("  ⚠ archive contents do not match the exporter's "
                       "digest — corrupted, tampered, or partial.")
-                rc = 2
-            if isinstance(fmt, int) and fmt > ARCHIVE_FORMAT:
-                rc = 3
+                digest_mismatch = True
 
-        # Preview what import would skip (the safety screen, without a ws).
-        skips = {}
-        for m in ws:
-            if m.name == "workspace":
-                continue
-            rel = m.name[len("workspace/"):] \
-                if m.name.startswith("workspace/") else m.name
-            if not rel:
-                continue
-            reason = _member_import_risk(m, rel)
-            if reason:
-                skips.setdefault(reason, []).append(rel)
-        secret_meta = [m.name for m in meta if m.isreg()
-                       and _secret_shaped(("meta",)
-                                          + Path(m.name[len(_META_PREFIX):]).parts)]
-        print(f"  workspace files: {len(entries)}; "
-              f"import would SKIP {sum(len(v) for v in skips.values())} "
-              f"unsafe member(s), screen {len(secret_meta)} secret-shaped "
-              f"meta")
-        for reason, names in sorted(skips.items()):
-            print(f"    - {reason}: {len(names)}"
-                  + (f"  e.g. {_sanitize_for_terminal(names[0])}"
-                     if verbose or len(names) <= 3 else ""))
-            if verbose:
-                for nm in names:
-                    print(f"        {_sanitize_for_terminal(nm)}")
-        return rc
+        # Preview what import would screen. Pure-string policy only —
+        # destination-dependent checks (existing-symlink containment in the
+        # real workspace, merge collisions) run at import time and are NOT
+        # previewed here (review 2026-08-13: say so, don't imply coverage).
+        n_unsafe = sum(row["count"] for row in scan["skips"].values())
+        n_meta_skip = sum(row["count"] for row in scan["meta_skips"].values())
+        n_excluded = len(scan["excluded"])
+        print(f"  workspace files: {len(scan['ws_entries'])}; "
+              f"import would SKIP {n_unsafe} unsafe member(s), screen "
+              f"{n_meta_skip} meta member(s), exclude {n_excluded} "
+              f"policy-excluded file(s)")
+        _print_skip_table("", scan["skips"], verbose)
+        _print_skip_table("meta: ", scan["meta_skips"], verbose)
+        if n_excluded:
+            shown = [x for x in scan["excluded"] if x]
+            print(f"    - policy-excluded (exporter never ships these): "
+                  f"{n_excluded}"
+                  + (f"  e.g. {_sanitize_for_terminal(shown[0])}"
+                     if shown else ""))
+        print("  note: destination-dependent checks (existing-symlink "
+              "containment, merge collisions) run at import time against "
+              "the real workspace and are not previewed here.")
+
+        if prov_status == "valid" and fmt > ARCHIVE_FORMAT:
+            return 3
+        if digest_mismatch:
+            return 2
+        if prov_status not in ("valid", "absent"):
+            return 5
+        if n_unsafe or n_meta_skip:
+            return 4
+        return 0
 
 
 def main():
@@ -1120,6 +1311,10 @@ def main():
     imp.add_argument("--apply-meta", action="store_true",
                      help="Also place the archive's user config at the real "
                           "user-tier path (existing config backed up)")
+    imp.add_argument("--expect-sha256", default="",
+                     help="Refuse unless the archive's sha256 starts with "
+                          "this hex prefix (>=16 chars; printed by inspect) "
+                          "— binds the import to the inspected bytes")
     imp.add_argument("--verbose", "-v", action="store_true")
 
     args = parser.parse_args()
@@ -1131,7 +1326,8 @@ def main():
     elif args.command == "import":
         import_workspace(args.archive, dry_run=args.dry_run,
                          verbose=args.verbose, clean=args.clean,
-                         apply_meta=args.apply_meta)
+                         apply_meta=args.apply_meta,
+                         expect_sha256=args.expect_sha256)
     else:
         parser.print_help()
 
