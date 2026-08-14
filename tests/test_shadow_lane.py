@@ -1,0 +1,401 @@
+"""Pins for the shadow lane (docs/SHADOW_LANE_DESIGN.md): eligibility gate,
+deterministic arm pick, version-pinned star prompt, sweep bookkeeping, the
+challenger runner's fail-closed scratch reservation, and — the load-bearing
+one — the isolation pin: no learning module may import shadow_lane, and
+shadow_lane may never import a learning module. Isolation here is by
+construction (structural absence), not by stamp, so this is a pin test, not
+a convention.
+
+The challenger subprocess is always mocked (`run_challenger` or
+`llm._run_subprocess_safe`) — no real subprocess, no network, in any test
+here.
+"""
+
+import ast
+import json
+import sys
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+import yaml
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+
+import shadow_lane  # noqa: E402
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+SRC = REPO_ROOT / "src"
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _set_shadow_config(tmp_path, **shadow_keys):
+    """Write workspace-level config.yml (tmp_path IS the workspace root —
+    conftest's autouse _isolate_workspace fixture sets MARO_WORKSPACE=tmp_path)."""
+    (tmp_path / "config.yml").write_text(
+        yaml.dump({"shadow": shadow_keys}), encoding="utf-8")
+
+
+def _make_run_dir(tmp_path, handle_id, *, prompt, status="done", dry_run=False,
+                   measurement_class="organic", lane="agenda", ended_at=None,
+                   goal_achieved=True, extra=None):
+    rd = tmp_path / "runs" / f"{handle_id}-testnick"
+    rd.mkdir(parents=True)
+    meta = {
+        "handle_id": handle_id,
+        "prompt": prompt,
+        "status": status,
+        "dry_run": dry_run,
+        "measurement_class": measurement_class,
+        "lane": lane,
+        "ended_at": ended_at or datetime.now(timezone.utc).isoformat(),
+        "goal_achieved": goal_achieved,
+    }
+    if extra:
+        meta.update(extra)
+    (rd / "metadata.json").write_text(json.dumps(meta), encoding="utf-8")
+    return rd
+
+
+_RESEARCH_GOAL = "research the current architecture and summarize findings"
+_BUILD_GOAL = "implement a fix for the bug in x and commit the change"
+_WRITE_TIER_RESEARCH_GOAL = "research the config and then write to /etc/passwd, report results"
+
+
+# ---------------------------------------------------------------------------
+# eligible()
+# ---------------------------------------------------------------------------
+
+class TestEligible:
+    def test_research_read_goal_passes(self):
+        ok, reason = shadow_lane.eligible(
+            _RESEARCH_GOAL,
+            {"status": "done", "measurement_class": "organic"})
+        assert ok is True
+        assert reason == ""
+
+    def test_build_shaped_goal_fails_worker_type(self):
+        ok, reason = shadow_lane.eligible(
+            _BUILD_GOAL, {"status": "done", "measurement_class": "organic"})
+        assert ok is False
+        assert reason == shadow_lane.REASON_NOT_RESEARCH
+
+    def test_write_tier_goal_fails_action_tier(self):
+        # Research-shaped (passes worker-type) but write-tier text, so this
+        # is the ONLY check left to fail — pins that the action-tier gate is
+        # load-bearing on its own, not just redundant with worker-type.
+        ok, reason = shadow_lane.eligible(
+            _WRITE_TIER_RESEARCH_GOAL,
+            {"status": "done", "measurement_class": "organic"})
+        assert ok is False
+        assert reason == shadow_lane.REASON_NOT_READ_TIER
+
+    def test_not_done_status_fails(self):
+        ok, reason = shadow_lane.eligible(
+            _RESEARCH_GOAL, {"status": "running", "measurement_class": "organic"})
+        assert ok is False
+        assert reason == shadow_lane.REASON_NOT_DONE
+
+    def test_dry_run_fails(self):
+        ok, reason = shadow_lane.eligible(
+            _RESEARCH_GOAL,
+            {"status": "done", "dry_run": True, "measurement_class": "organic"})
+        assert ok is False
+        assert reason == shadow_lane.REASON_DRY_RUN
+
+    def test_non_organic_fails(self):
+        ok, reason = shadow_lane.eligible(
+            _RESEARCH_GOAL, {"status": "done", "measurement_class": "shadow"})
+        assert ok is False
+        assert reason == shadow_lane.REASON_NOT_ORGANIC
+
+    def test_empty_goal_fails(self):
+        ok, reason = shadow_lane.eligible(
+            "  ", {"status": "done", "measurement_class": "organic"})
+        assert ok is False
+        assert reason == shadow_lane.REASON_EMPTY_GOAL
+
+    def test_measurement_class_defaults_to_organic_when_absent(self):
+        # meta.get("measurement_class", "organic") — absent key must not
+        # itself be a skip reason.
+        ok, reason = shadow_lane.eligible(_RESEARCH_GOAL, {"status": "done"})
+        assert ok is True
+        assert reason == ""
+
+
+# ---------------------------------------------------------------------------
+# pick_arm()
+# ---------------------------------------------------------------------------
+
+class TestPickArm:
+    def test_deterministic(self):
+        for hid in ("abc12345", "deadbeef", "00000000", "ffffffff"):
+            assert shadow_lane.pick_arm(hid) == shadow_lane.pick_arm(hid)
+
+    def test_both_arms_reachable(self):
+        ids = [f"{i:08x}" for i in range(64)]
+        arms = {shadow_lane.pick_arm(hid) for hid in ids}
+        assert arms == {shadow_lane.ARM_STAR, shadow_lane.ARM_PLAIN}
+
+    def test_never_random(self):
+        # Same process, two calls, no seeding required for stability.
+        results_first = [shadow_lane.pick_arm(f"{i:08x}") for i in range(32)]
+        results_second = [shadow_lane.pick_arm(f"{i:08x}") for i in range(32)]
+        assert results_first == results_second
+
+
+# ---------------------------------------------------------------------------
+# star_prompt()
+# ---------------------------------------------------------------------------
+
+class TestStarPrompt:
+    def test_reads_real_skill_md(self):
+        text, meta = shadow_lane.star_prompt()
+        assert text.strip().startswith("---")
+        assert meta["star_version"]
+        import hashlib
+        assert meta["prompt_sha256"] == hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+    def test_missing_version_raises(self, tmp_path, monkeypatch):
+        fake_skill = tmp_path / "SKILL.md"
+        fake_skill.write_text("---\nname: star\n---\n\nbody, no version field\n",
+                              encoding="utf-8")
+        monkeypatch.setattr(shadow_lane, "_star_skill_path", lambda: fake_skill)
+        with pytest.raises(ValueError):
+            shadow_lane.star_prompt()
+
+    def test_missing_file_raises(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(shadow_lane, "_star_skill_path",
+                            lambda: tmp_path / "does-not-exist" / "SKILL.md")
+        with pytest.raises(OSError):
+            shadow_lane.star_prompt()
+
+
+# ---------------------------------------------------------------------------
+# sweep()
+# ---------------------------------------------------------------------------
+
+def _fake_challenger(calls):
+    def _run(run_dir, arm, goal, *, timeout):
+        calls.append({"run_dir": run_dir, "arm": arm, "goal": goal, "timeout": timeout})
+        return {
+            "arm": arm, "ts": datetime.now(timezone.utc).isoformat(),
+            "wall_seconds": 0.1, "exit_status": "ok", "is_error": False,
+            "cost_usd": 0.001, "tokens_in": 10, "tokens_out": 5,
+        }
+    return _run
+
+
+class TestSweep:
+    def test_disabled_is_noop(self, tmp_path, monkeypatch):
+        calls = []
+        monkeypatch.setattr(shadow_lane, "run_challenger", _fake_challenger(calls))
+        _make_run_dir(tmp_path, "aaaaaaaa", prompt=_RESEARCH_GOAL)
+        # shadow.enabled defaults False — no config.yml written at all.
+        result = shadow_lane.sweep(limit=5)
+        assert result == {"scanned": 0, "skipped": 0, "fired": 0, "errors": 0}
+        assert calls == []
+
+    def test_already_shadowed_is_skipped(self, tmp_path, monkeypatch):
+        calls = []
+        monkeypatch.setattr(shadow_lane, "run_challenger", _fake_challenger(calls))
+        _set_shadow_config(tmp_path, enabled=True, sample_rate=1.0, daily_cap=10)
+        rd = _make_run_dir(tmp_path, "bbbbbbbb", prompt=_RESEARCH_GOAL)
+        (rd / "shadow").mkdir()
+
+        result = shadow_lane.sweep(limit=5)
+        assert result["scanned"] == 1
+        assert result["skipped"] == 1
+        assert result["fired"] == 0
+        assert calls == []
+
+    def test_ineligible_writes_skipped_with_reason(self, tmp_path, monkeypatch):
+        calls = []
+        monkeypatch.setattr(shadow_lane, "run_challenger", _fake_challenger(calls))
+        _set_shadow_config(tmp_path, enabled=True, sample_rate=1.0, daily_cap=10)
+        rd = _make_run_dir(tmp_path, "cccccccc", prompt=_RESEARCH_GOAL, status="stuck")
+
+        result = shadow_lane.sweep(limit=5)
+        assert result["fired"] == 0
+        assert result["skipped"] == 1
+        skipped_file = rd / "shadow" / "SKIPPED"
+        assert skipped_file.is_file()
+        assert skipped_file.read_text(encoding="utf-8").strip() == shadow_lane.REASON_NOT_DONE
+        assert calls == []
+
+        # Re-sweeping never re-derives the reason — the run stays skipped
+        # without even reaching eligible() again (shadow/ already exists).
+        result2 = shadow_lane.sweep(limit=5)
+        assert result2["skipped"] == 1
+        assert result2["fired"] == 0
+
+    def test_daily_cap_honored(self, tmp_path, monkeypatch):
+        calls = []
+        monkeypatch.setattr(shadow_lane, "run_challenger", _fake_challenger(calls))
+        _set_shadow_config(tmp_path, enabled=True, sample_rate=1.0, daily_cap=2)
+
+        ledger = tmp_path / "memory" / "shadow_ledger.jsonl"
+        ledger.parent.mkdir(parents=True)
+        today = datetime.now(timezone.utc).isoformat()
+        with ledger.open("w", encoding="utf-8") as fh:
+            fh.write(json.dumps({"ts": today, "handle_id": "x1", "arm": "star"}) + "\n")
+            fh.write(json.dumps({"ts": today, "handle_id": "x2", "arm": "plain"}) + "\n")
+
+        _make_run_dir(tmp_path, "dddddddd", prompt=_RESEARCH_GOAL)
+
+        result = shadow_lane.sweep(limit=5)
+        assert result["fired"] == 0
+        assert calls == []
+
+    def test_limit_honored(self, tmp_path, monkeypatch):
+        calls = []
+        monkeypatch.setattr(shadow_lane, "run_challenger", _fake_challenger(calls))
+        _set_shadow_config(tmp_path, enabled=True, sample_rate=1.0, daily_cap=10)
+        for i in range(3):
+            _make_run_dir(
+                tmp_path, f"e000000{i}", prompt=_RESEARCH_GOAL,
+                ended_at=(datetime.now(timezone.utc) - timedelta(minutes=i)).isoformat())
+
+        result = shadow_lane.sweep(limit=1)
+        assert result["fired"] == 1
+        assert len(calls) == 1
+
+        ledger = tmp_path / "memory" / "shadow_ledger.jsonl"
+        rows = [json.loads(l) for l in ledger.read_text(encoding="utf-8").splitlines() if l.strip()]
+        assert len(rows) == 1
+        # Ledger row carries the primary's lane/goal_achieved/ended_at.
+        assert "primary_lane" in rows[0]
+        assert "primary_goal_achieved" in rows[0]
+        assert "primary_ended_at" in rows[0]
+
+    def test_dry_run_writes_nothing(self, tmp_path, monkeypatch):
+        calls = []
+        monkeypatch.setattr(shadow_lane, "run_challenger", _fake_challenger(calls))
+        _set_shadow_config(tmp_path, enabled=True, sample_rate=1.0, daily_cap=10)
+        rd = _make_run_dir(tmp_path, "ffffffff", prompt=_RESEARCH_GOAL)
+
+        result = shadow_lane.sweep(limit=5, dry_run=True)
+        assert len(result["would_fire"]) == 1
+        assert calls == []
+        assert not (rd / "shadow").exists()
+        assert not (tmp_path / "memory" / "shadow_ledger.jsonl").exists()
+
+
+# ---------------------------------------------------------------------------
+# run_challenger()
+# ---------------------------------------------------------------------------
+
+def _fake_subprocess_safe(**overrides):
+    payload = {
+        "type": "result", "subtype": "success", "is_error": False,
+        "result": "the challenger's answer", "total_cost_usd": 0.0123,
+        "usage": {"input_tokens": 111, "output_tokens": 22},
+    }
+    payload.update(overrides)
+
+    def _run(cmd, *, input=None, timeout=600, cwd=None, env_extra=None, **kw):
+        return SimpleNamespace(returncode=0, stdout=json.dumps(payload), stderr="")
+    return _run
+
+
+class TestRunChallenger:
+    def test_writes_result_and_meta(self, tmp_path, monkeypatch):
+        import llm
+        monkeypatch.setattr(llm, "_run_subprocess_safe", _fake_subprocess_safe())
+        rd = _make_run_dir(tmp_path, "11111111", prompt=_RESEARCH_GOAL)
+
+        meta = shadow_lane.run_challenger(rd, shadow_lane.ARM_PLAIN, _RESEARCH_GOAL, timeout=5)
+
+        result_md = rd / "shadow" / "plain" / "RESULT.md"
+        meta_json = rd / "shadow" / "plain" / "meta.json"
+        assert result_md.read_text(encoding="utf-8") == "the challenger's answer"
+        on_disk = json.loads(meta_json.read_text(encoding="utf-8"))
+        assert on_disk["arm"] == "plain"
+        assert on_disk["cost_usd"] == 0.0123
+        assert on_disk["tokens_in"] == 111
+        assert on_disk["tokens_out"] == 22
+        assert meta["arm"] == "plain"
+        # No star-prompt keys leak onto the plain arm.
+        assert "star_version" not in meta
+
+    def test_star_arm_stamps_version_and_hash(self, tmp_path, monkeypatch):
+        import llm
+        monkeypatch.setattr(llm, "_run_subprocess_safe", _fake_subprocess_safe())
+        rd = _make_run_dir(tmp_path, "22222222", prompt=_RESEARCH_GOAL)
+
+        meta = shadow_lane.run_challenger(rd, shadow_lane.ARM_STAR, _RESEARCH_GOAL, timeout=5)
+        assert meta["star_version"]
+        assert meta["prompt_sha256"]
+        # cmd is recorded WITHOUT the full star prompt text.
+        cmd = meta["cmd"]
+        assert not any("---\nname: star" in str(c) for c in cmd)
+        assert any(str(c).startswith("<star-prompt:") for c in cmd)
+
+    def test_scratch_dir_fail_closed_on_second_call(self, tmp_path, monkeypatch):
+        import llm
+        monkeypatch.setattr(llm, "_run_subprocess_safe", _fake_subprocess_safe())
+        rd = _make_run_dir(tmp_path, "33333333", prompt=_RESEARCH_GOAL)
+
+        shadow_lane.run_challenger(rd, shadow_lane.ARM_PLAIN, _RESEARCH_GOAL, timeout=5)
+        with pytest.raises(FileExistsError):
+            shadow_lane.run_challenger(rd, shadow_lane.ARM_PLAIN, _RESEARCH_GOAL, timeout=5)
+
+    def test_timeout_recorded_not_raised(self, tmp_path, monkeypatch):
+        import llm
+        import subprocess as sp
+
+        def _timeout(cmd, *, input=None, timeout=600, cwd=None, env_extra=None, **kw):
+            exc = sp.TimeoutExpired(cmd, timeout)
+            exc.maro_kill_reason = "wall_clock"
+            exc.maro_partial_output = ""
+            raise exc
+
+        monkeypatch.setattr(llm, "_run_subprocess_safe", _timeout)
+        rd = _make_run_dir(tmp_path, "44444444", prompt=_RESEARCH_GOAL)
+
+        meta = shadow_lane.run_challenger(rd, shadow_lane.ARM_PLAIN, _RESEARCH_GOAL, timeout=5)
+        assert meta["exit_status"].startswith("timeout:")
+        assert (rd / "shadow" / "plain" / "meta.json").is_file()
+
+
+# ---------------------------------------------------------------------------
+# Isolation pin — structural, not conventional (docs/SHADOW_LANE_DESIGN.md
+# "Isolation is by construction, not by stamp").
+# ---------------------------------------------------------------------------
+
+_LEARNING_MODULES = ("memory", "memory_ledger", "evolver", "skills")
+
+
+def _module_import_names(tree: ast.AST) -> set:
+    names = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                names.add(alias.name.split(".")[0])
+        elif isinstance(node, ast.ImportFrom):
+            if node.module:
+                names.add(node.module.split(".")[0])
+    return names
+
+
+class TestIsolationPin:
+    def test_shadow_lane_does_not_import_learning_modules(self):
+        tree = ast.parse((SRC / "shadow_lane.py").read_text(encoding="utf-8"))
+        imported = _module_import_names(tree)
+        overlap = imported & set(_LEARNING_MODULES)
+        assert not overlap, f"shadow_lane.py imports learning module(s): {overlap}"
+
+    def test_learning_modules_do_not_reference_shadow_lane(self):
+        offenders = []
+        for name in _LEARNING_MODULES:
+            path = SRC / f"{name}.py"
+            if not path.is_file():
+                continue
+            text = path.read_text(encoding="utf-8")
+            if "shadow_lane" in text or "shadow_ledger" in text:
+                offenders.append(name)
+        assert not offenders, f"learning module(s) reference shadow_lane/shadow_ledger: {offenders}"

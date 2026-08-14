@@ -118,6 +118,27 @@ in either direction.
 | `llm.subprocess.weighted_input_ceiling_tokens` | `600000` | Ceiling #2 of the same brake: weighted ingest = fresh + cache_read/10 (input-side cost in fresh-token equivalents). Closes the transcript-amplification hole the fresh ceiling can't see (2026-07-27 adversarial review): 250K fresh then twenty re-reads of that cached transcript ≈ 5M input tokens while total_fresh never moves — but 750K weighted. 600K ≈ 2.3× the measured healthy p95 bound and above every step observed on this box (max 478K), so it fires only on the amplification shape; the fresh ceiling owns the grinder band. Same kill path, error_class `token_runaway` with `trigger="weighted"`. Env `MARO_SUBPROCESS_WEIGHTED_INPUT_CEILING` wins; `0` disables that ceiling only. |
 | `llm.subprocess.bash_max_output_chars` | `24000` | Per-tool-call ingest cap handed to the claude CLI as `BASH_MAX_OUTPUT_LENGTH` on agentic subprocess calls: the CLI itself persists oversized Bash output to a file and puts only a cap-sized slice (plus the file path) in the model's context — a giant `curl`/`cat`/multi-MB JSON response cannot inject more than ~6K tokens per **Bash** call (verified live on CLI 2.1.220, 2026-07-27). Honest scope (2026-07-27 review, accepted): this governs the Bash tool only — the Read tool has no equivalent knob, so `curl -o file` + Read bypasses it; a wholesale Read of a large capture lands as fresh ingest and the accumulation ceilings above are the backstop. 24000 chars keeps the fetch CLI's own capped output (~20.3K chars) passing through untruncated. Also forwarded through the container lane's env passthrough. An operator's own exported `BASH_MAX_OUTPUT_LENGTH` is respected (maro doesn't overwrite it); env `MARO_BASH_MAX_OUTPUT_CHARS` wins over both; `0` disables (the CLI's own default persistence threshold still applies). |
 
+## Shadow lane (champion-challenger measurement, decreed 2026-08-14)
+
+`src/shadow_lane.py` — the lane-honesty standing test (`docs/SHADOW_LANE_DESIGN.md`):
+a post-run sweep re-executes an eligible completed goal in a fresh, black-box
+headless subprocess (star-skill-primed or bare-prompt arm, randomized
+deterministically) so the harness's accrued learning/machinery can be
+measured against the pattern alone and against no pattern at all. Strictly
+decoupled from the primary run (fires from a sweep, never inline) and
+structurally isolated from every learning path (no `handle()`, no
+`record_outcome`, no lesson/skill/evolver ingestion — enforced by
+`tests/test_shadow_lane.py`'s isolation pin, not just these switches).
+
+| key | default | why / flip effect |
+|---|---|---|
+| `shadow.enabled` | `False` | Master switch for the sweep (`shadow_lane.sweep`): OFF for fresh installs per the no-silent-spend pattern — this lane re-executes goal text through a real headless `claude -p` subprocess. Flip ON to start accumulating star/plain challenger pairs; the eligibility gate (read/research-shaped, organic, not already shadowed) still applies per run regardless. |
+| `shadow.sample_rate` | `1.0` | Fraction of eligible runs that actually get shadowed, resolved deterministically from a hash of `handle_id` (never `random` — a re-sweep must resolve the same run the same way). `1.0` = every eligible run; lower to throttle box-time/rate-limit pressure once the lane is live without changing which runs are *eligible*. |
+| `shadow.daily_cap` | `4` | Hard ceiling on challengers fired per UTC day, counted from today's `memory/shadow_ledger.jsonl` rows. Serial + throttled by design (invariant 6): subscription tokens make the dollar cost ~0, box minutes and rate-limit pressure are the real budget this caps. |
+| `shadow.timeout_seconds` | `900` | Wall-clock timeout passed to `llm._run_subprocess_safe` for the challenger subprocess. A challenger that hangs records a `timeout:*` `exit_status` in its `meta.json` rather than blocking the sweep indefinitely. |
+| `shadow.lookback_hours` | `48` | How far back the sweep scans `runs.runs_root()` for candidate runs (newest `ended_at` first). Runs older than this are never picked up even if never shadowed — the lane measures current behavior, not a backlog to clear. |
+| `heartbeat.shadow_every` | `0` (`DEFAULT_SHADOW_EVERY`, heartbeat.py) | Tick cadence for the autonomous shadow-lane sweep (`shadow_lane.sweep(limit=1)`), same tick-gated background-thread shape as `heartbeat.backlog_every`. `0` = off — unlike backlog drain, off is the shipped default (double opt-in with `shadow.enabled`: both must be set for the lane to run unattended; the CLI `python3 -m shadow_lane sweep` always works regardless of this key). Gated on `_can_run` (the SlowUpdateScheduler idle window), not the plain busy check backlog drain uses — a challenger subprocess is its own decoupled cost/token spend, same idle-window discipline as evolver/inspector/eval. |
+
 ## Executor / sandboxing (containerized executor arc, 2026-07-12)
 
 The agentic executor lane — worker steps running `claude -p ...

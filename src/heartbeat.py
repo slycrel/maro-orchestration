@@ -34,6 +34,12 @@ log = logging.getLogger("maro.heartbeat")
 
 DEFAULT_BACKLOG_EVERY = 5
 DEFAULT_BACKLOG_BATCH_SIZE = 3
+
+# Shadow lane (docs/SHADOW_LANE_DESIGN.md): 0 = off. Unlike backlog_every,
+# off is the shipped default — the shadow lane re-executes goals via a
+# headless subprocess and needs explicit per-box opt-in (shadow.enabled
+# also gates it independently inside shadow_lane.sweep).
+DEFAULT_SHADOW_EVERY = 0
 DEFAULT_TASK_STORE_BATCH_SIZE = 6
 
 
@@ -827,6 +833,11 @@ def run_heartbeat(
 _backlog_drain_active = False
 _backlog_drain_lock = threading.Lock()
 
+# Shadow lane sweep (docs/SHADOW_LANE_DESIGN.md) — same active-flag +
+# threading.Lock guard shape as backlog drain, one sweep cycle at a time.
+_shadow_active = False
+_shadow_lock = threading.Lock()
+
 # Event-reactive heartbeat (STEAL_LIST: event-reactive heartbeat, M priority).
 # Any subsystem can call post_heartbeat_event() to wake the heartbeat immediately
 # instead of waiting for the next interval tick. The heartbeat loop replaces
@@ -1113,6 +1124,48 @@ def _run_backlog_step(*, dry_run: bool = False, verbose: bool = False, max_items
             _backlog_drain_active = False
 
 
+def _run_shadow_sweep_bg(*, verbose: bool = False) -> None:
+    """Run one shadow-lane sweep cycle in a background thread. Clears flag in finally.
+
+    Exceptions logged, never raised — a sweep failure must never take down
+    the heartbeat loop or touch the primary run it shadows (design doc
+    invariant 1: "the shadow fires from a post-run sweep, never inside the
+    primary run's process").
+    """
+    global _shadow_active
+    try:
+        from shadow_lane import sweep as _shadow_sweep
+        result = _shadow_sweep(limit=1, verbose=verbose)
+        if verbose:
+            print(f"[heartbeat] shadow sweep: {result}", file=sys.stderr)
+    except Exception as exc:
+        log.warning("shadow sweep failed: %s", exc)
+        if verbose:
+            print(f"[heartbeat] shadow sweep failed: {exc}", file=sys.stderr)
+    finally:
+        with _shadow_lock:
+            _shadow_active = False
+
+
+def _resolve_shadow_every(shadow_every: Optional[int]) -> int:
+    """Resolve shadow-lane sweep cadence. Config key: heartbeat.shadow_every.
+
+    0 (default) = off — the shadow lane requires explicit per-box opt-in,
+    unlike backlog_every's on-by-default cadence (`shadow.enabled` gates
+    the sweep independently too, so this is belt-and-braces).
+    """
+    if shadow_every is not None:
+        try:
+            return max(0, int(shadow_every))
+        except Exception:
+            return DEFAULT_SHADOW_EVERY
+    try:
+        from config import get as _cfg_get
+        return max(0, int(_cfg_get("heartbeat.shadow_every", DEFAULT_SHADOW_EVERY)))
+    except Exception:
+        return DEFAULT_SHADOW_EVERY
+
+
 def _resolve_backlog_every(backlog_every: Optional[int]) -> int:
     """Resolve autonomous backlog-drain cadence.
 
@@ -1140,6 +1193,7 @@ def heartbeat_loop(
     inspector_every: int = 20,
     mission_check_every: int = 5,
     backlog_every: Optional[int] = None,
+    shadow_every: Optional[int] = None,
     eval_every: int = 1440,   # Phase 42: ~24h at 60s interval
     dry_run: bool = False,
     verbose: bool = True,
@@ -1168,18 +1222,27 @@ def heartbeat_loop(
 
     Every `evolver_every * 5` cycles, runs the harness optimizer to propose
     word-level improvements to EXECUTE_SYSTEM/DECOMPOSE_SYSTEM based on stuck traces.
+
+    Every `shadow_every` cycles (docs/SHADOW_LANE_DESIGN.md, default 0 =
+    off), runs one shadow-lane sweep (`shadow_lane.sweep(limit=1)`) — a
+    post-run champion-challenger re-run of the same goal against a
+    star/plain headless subprocess. Fully decoupled from the primary run;
+    exceptions never propagate out of the background thread.
     """
     backlog_every = _resolve_backlog_every(backlog_every)
+    shadow_every = _resolve_shadow_every(shadow_every)
 
     if verbose:
         print(
             f"[heartbeat] loop started interval={interval}s "
             f"evolver_every={evolver_every} inspector_every={inspector_every} "
-            f"mission_check_every={mission_check_every} backlog_every={backlog_every}",
+            f"mission_check_every={mission_check_every} backlog_every={backlog_every} "
+            f"shadow_every={shadow_every}",
             file=sys.stderr,
         )
     global _evolver_active, _inspector_active, _backlog_drain_active
     global _task_store_drain_active, _eval_active, _harness_optimizer_active
+    global _shadow_active
     global _pidfile_hold
 
     # Daemon singleton: one heartbeat per workspace. The flock is held for
@@ -1390,6 +1453,30 @@ def heartbeat_loop(
             elif verbose:
                 print("[heartbeat] backlog drain already active — skipping tick", file=sys.stderr)
 
+        # Shadow lane sweep (docs/SHADOW_LANE_DESIGN.md): fires every
+        # `shadow_every` ticks (0 = off). Uses `_can_run` (the
+        # SlowUpdateScheduler idle-window gate), not `_any_busy` — a shadow
+        # challenger is its own decoupled subprocess, same idle-window
+        # discipline as evolver/inspector/eval rather than the backlog
+        # drain's plain busy check.
+        if shadow_every > 0 and tick % shadow_every == 0 and _can_run:
+            with _shadow_lock:
+                _sh_running = _shadow_active
+            if not _sh_running:
+                with _shadow_lock:
+                    _shadow_active = True
+                _st = threading.Thread(
+                    target=_run_shadow_sweep_bg,
+                    kwargs={"verbose": verbose},
+                    daemon=True,
+                    name="shadow-sweep",
+                )
+                _st.start()
+                if verbose:
+                    print("[heartbeat] shadow sweep started in background", file=sys.stderr)
+            elif verbose:
+                print("[heartbeat] shadow sweep already active — skipping tick", file=sys.stderr)
+
         # Phase 42: nightly eval — run once per ~24h cycle (skip if mission active)
         if tick % eval_every == 0 and tick > 0 and _can_run:
             with _eval_lock:
@@ -1483,6 +1570,7 @@ if __name__ == "__main__":
     parser.add_argument("--dry-run", action="store_true", help="Check without recovery or alerting")
     parser.add_argument("--no-escalate", action="store_true", help="Skip Telegram escalation")
     parser.add_argument("--backlog-every", type=int, default=None, help="Autonomous backlog drain cadence in heartbeat ticks (default: 5)")
+    parser.add_argument("--shadow-every", type=int, default=None, help="Shadow-lane sweep cadence in heartbeat ticks (default: 0, off)")
     parser.add_argument("--format", choices=["text", "json"], default="text")
     args = parser.parse_args()
 
@@ -1492,6 +1580,7 @@ if __name__ == "__main__":
             dry_run=args.dry_run,
             escalate=not args.no_escalate,
             backlog_every=args.backlog_every,
+            shadow_every=args.shadow_every,
         )
     else:
         report = run_heartbeat(dry_run=args.dry_run, escalate=not args.no_escalate)

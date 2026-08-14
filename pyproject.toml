@@ -242,6 +242,7 @@ py-modules = [
     "scope",
     "secret_scrub",
     "security",
+    "shadow_lane",
     "sheriff",
     "skill_lifecycle",
     "skill_loader",

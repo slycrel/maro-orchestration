@@ -2205,6 +2205,23 @@ Sample: the 2026-05-13..17 window of `~/.maro/workspace/runs/` (478 dirs total;
   any other item. Decision session tentatively the evening of 2026-07-15.
   Overnight guardrails held by Claude: no container flip (Jeremy's
   one-liner), no live-run spend batches — code work only.
+- **2026-08-14 (Jeremy) — Lane-honesty standing test decreed; shadow lane
+  sanctioned.** The framing (quoted): "the test I want to (continually) try
+  to prove is that AGENDA lanes are genuinely worth it; and that as we
+  continue over time, the NOW lane shouldn't get smaller and smaller,
+  necessarily, we just get better at asking the right questions in either
+  way." Star skill's identity clarified: it was intended to codify our
+  orchestration into a prompt "trying to keep us honest against the bitter
+  lesson" — the measurement instrument role; the runtime star-port arc
+  (NOW-rung arm c) is a SEPARATE architecture question that was muddying the
+  waters. The standing test is lane-fit, not lane-supremacy. Build sanctioned
+  ("Yeah, let's build it out"): a shadow lane — a second, strictly isolated
+  star-skill/plain-prompt run alongside regular runs (both lanes), output
+  living beside the primary run's result, adjudicated in batches; a live
+  black-box champion–challenger test of both systems. Workflow decree for the
+  build: build → review → test → fix → re-review to fixpoint (no
+  high/critical findings), iterate; subagents for non-frontier work; Claude
+  acts as maro for this featureset with freedom to change direction.
 
 ## Threads (system-maintained — nothing leaves this list silently)
 
