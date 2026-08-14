@@ -44,6 +44,21 @@ full triage: 2026-07-04.
 
 Ordered open work that matters. Top of the list is next.
 
+### Shadow lane — batch adjudication tooling (evidence-gated)
+
+- [ ] **Build the shadow adjudicator at first ~10 completed pairs (or
+  2026-09-13, whichever first).** Deliberately NOT built with v1 —
+  judging hypothetical data. Cross-model comparison pass over
+  `memory/shadow_ledger.jsonl` pairs (union/miss scoring per
+  docs/history/2026-08-13-star-vs-harness-comparison.md); keep/kill
+  signals pre-registered in docs/SHADOW_LANE_DESIGN.md; verdict lands
+  in GOAL_BRAIN Decisions either way. Watch items until then: ledger
+  rows with `primary_cost_usd: null` (accepted r3 residual — card
+  exists before cost finalizes; the first live fire be7c618a hit
+  exactly this) may need a reconciliation touch-up pass at
+  adjudication time; fallback `ledger-row.json` files in arm dirs
+  escape the daily cap until reconciled.
+
 ### Whole-changeset review 2026-08-13 — accepted-not-fixed residuals
 
 The "for fun" whole-changeset adversarial pass (35 commits, 3 codex

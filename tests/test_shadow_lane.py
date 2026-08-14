@@ -679,3 +679,53 @@ class TestReviewRound2Pins:
                           .read_text(encoding="utf-8"))
         assert meta["star_version"]
         assert any(str(c).startswith("<star-prompt:") for c in meta["cmd"])
+
+
+# ---------------------------------------------------------------------------
+# First-live-fire pins (2026-08-14, be7c618a/star) — the challenger wrote its
+# report into the LIVE project directory (overwriting the primary's own
+# deliverable) and adopted the primary's prior answer instead of working
+# independently. Fix: a symmetric containment preamble on the stdin prompt.
+# ---------------------------------------------------------------------------
+
+class TestLiveFirePins:
+    def _captured_input(self, monkeypatch, tmp_path, arm, hid):
+        import llm
+        seen = {}
+
+        def _capture(cmd, *, input=None, timeout=600, cwd=None,
+                     env_extra=None, **kw):
+            seen["input"] = input
+            payload = {"type": "result", "is_error": False, "result": "ok",
+                       "total_cost_usd": 0.01,
+                       "usage": {"input_tokens": 1, "output_tokens": 1}}
+            return SimpleNamespace(returncode=0, stdout=json.dumps(payload),
+                                   stderr="")
+
+        monkeypatch.setattr(llm, "_run_subprocess_safe", _capture)
+        rd = _make_run_dir(tmp_path, hid, prompt=_RESEARCH_GOAL)
+        meta = shadow_lane.run_challenger(rd, arm, _RESEARCH_GOAL, timeout=5)
+        return seen["input"], meta
+
+    def test_stdin_carries_containment_preamble_plain(self, tmp_path, monkeypatch):
+        stdin, meta = self._captured_input(
+            monkeypatch, tmp_path, shadow_lane.ARM_PLAIN, "aa11aa11")
+        assert stdin == shadow_lane.challenger_prompt(_RESEARCH_GOAL)
+        assert stdin.endswith(_RESEARCH_GOAL)
+        # The two live-fire failure modes are both named in the preamble.
+        assert "ONLY inside your current working directory" in stdin
+        assert "independent answer" in stdin
+        # meta keeps the RAW goal as the comparison identity, plus the
+        # preamble version so the batch judge can partition rows.
+        assert meta["goal"] == _RESEARCH_GOAL
+        assert (meta["containment_preamble_version"]
+                == shadow_lane.CONTAINMENT_PREAMBLE_VERSION)
+
+    def test_preamble_symmetric_across_arms(self, tmp_path, monkeypatch):
+        stdin_plain, _ = self._captured_input(
+            monkeypatch, tmp_path, shadow_lane.ARM_PLAIN, "bb22bb22")
+        stdin_star, _ = self._captured_input(
+            monkeypatch, tmp_path, shadow_lane.ARM_STAR, "cc33cc33")
+        # Identical stdin — the star arm differs only via the system prompt,
+        # so the preamble cancels out of any arm comparison.
+        assert stdin_plain == stdin_star

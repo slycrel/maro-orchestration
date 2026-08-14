@@ -77,6 +77,24 @@ experiment.
    the fields it will need (challenger cost/wall/model + primary
    cost/wall/model, star version + prompt sha, CLI version).
 
+**Live-fire finding (2026-08-14, first fire be7c618a/star):** the named
+textual-gate residual fired immediately, and taught two things. (1) A
+READ-tier-classified goal can still *instruct writing* ("write the audit
+as a cited report") — the challenger wrote its report into the live
+project directory, overwriting the primary run's own AUDIT.md
+deliverable (recovered from the run dir's `artifact/` copy; challenger
+version preserved in the arm dir). (2) The challenger *found the
+primary's prior answer* in that directory and verified-instead-of-redid
+— arms are not independent when primary deliverables are
+workspace-visible. Fix shipped same day: a versioned containment
+preamble prepended to the stdin prompt for BOTH arms (symmetric, so it
+cancels out of arm comparisons) — write-only-in-cwd + do-your-own-work.
+Instruction-level, same best-effort class as the gate itself; true
+independence needs snapshot isolation (upgrade edge below). Batch judge
+must still check RESULT.md for prior-answer reuse on
+pre-preamble rows and treat `containment_preamble_version` as a
+partition key.
+
 Accepted residuals (named, reviewed 2026-08-14): the heartbeat's
 idle-window gate is checked at challenger *launch*, not held for its
 lifetime — a primary run starting mid-challenger shares the box with it
@@ -194,3 +212,24 @@ ON on this box), registered in docs/DEFAULTS.md.
   machinery have done better?") — v1 keeps arms to star|plain to bound
   cost; revisit at first adjudication.
 - Viz rendering of primary/shadow pairs — after the first real rows exist.
+- Snapshot isolation: run challengers against a pre-primary snapshot of
+  the workspace paths the goal names, so primary deliverables can't leak
+  into challenger input (the live-fire independence finding). Expensive;
+  evidence-gated on the containment preamble proving insufficient.
+
+## Review record (build arc, 2026-08-14)
+
+Review-to-fixpoint per the standing workflow decree. Cross-model
+adversarial reviews; every accepted finding verified against the tree
+before fixing (verify-before-fix).
+
+| Round | Reviewers | Findings accepted | Commit |
+|---|---|---|---|
+| r1 | codex ×3 (skeptic/architect/minimalist) | 9 | 2122275 |
+| r2 | codex ×2 | 5 (incl. MARO_ORCH_ROOT/MEMORY_DIR scrub gaps, ts-after-lock cap fix) | fceb977 |
+| r3 | codex ×1 | 4 (incl. HIGH: wildcard scrub had unset MARO_WORKER_RUN, bypassing the pre-push guard — force-set "1") | 8e5a9e3 |
+| r4 | grok-4.3 ×1 (codex usage-capped until 08-19) | 0 — clean, fixpoint | — |
+
+Convergence signature 9 → 5 → 4 → 0, defects migrating into the fixes'
+own edges by r3 — the expected shape (feedback_review_to_fixpoint).
+Suite green after each round (8629 passed / 1 platform skip at r3).

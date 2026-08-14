@@ -7746,3 +7746,39 @@ under the same two-measurement standard).
   the load-bearing backstop, which is exactly where the update put it. v8 earned
   (contract change exercised). Record: docs/history/2026-08-13-star-coverage-
   refutation-exercise.md. Alpha keep-signal use logged.
+- **2026-08-14** — **Shadow lane v1 SHIPPED to fixpoint (the lane-honesty
+  decree's build).** src/shadow_lane.py: post-run sweep re-executes an
+  eligible completed goal (done + organic + research-shaped + READ-tier)
+  in an isolated headless `claude -p` challenger — arm star|plain by
+  sha256(handle_id) parity, three-way harness/star/plain comparison in
+  batch adjudication (~10 pairs or 30 days, pre-registered keep/kill).
+  Isolation is structural, not stamped: the challenger is NOT a maro run
+  (no handle/record_outcome/learning; AST pin tests both directions),
+  env prefix-scrubbed with MARO_WORKER_RUN force-set "1" so the pre-push
+  guard still sees an agent. Output lives at <run_dir>/shadow/<arm>/
+  beside the primary result; ledger memory/shadow_ledger.jsonl. Config
+  shadow.* (6 DEFAULTS.md rows, default OFF; heartbeat double opt-in via
+  shadow_every). Review-to-fixpoint r1–r4: 9→5→4→0 accepted findings
+  (r3 HIGH: the wildcard scrub had unset MARO_WORKER_RUN — safety
+  regression caught cross-model); r4 ran on grok-4.3 (codex usage-capped
+  until 08-19 — XAI lane's first production use). Suite 8629/1 platform
+  skip. shadow.enabled flipped ON for this box; first live fire =
+  be7c618a (star arm). Design + review record:
+  docs/SHADOW_LANE_DESIGN.md.
+- **2026-08-14** — **First live shadow fire: mechanically clean,
+  and the named residual fired on contact — fixed same session.** The
+  star-arm challenger completed be7c618a's audit goal end-to-end
+  (RESULT.md + meta + ledger row, star v8 stamped, $4.53/440s vs
+  primary $3.43/1016s — note star was MORE expensive at n=1, against
+  the pre-registered prediction; adjudication will tell). But it wrote
+  its report INTO the live project dir, overwriting the primary's
+  AUDIT.md deliverable (restored from the run dir's artifact/ copy —
+  data-retention held because runs keep their own deliverable copies;
+  challenger v2 preserved in the arm dir), and it found the primary's
+  prior answer and verified-instead-of-redid — arm independence broken
+  by workspace visibility. Fix: versioned containment preamble on the
+  challenger stdin prompt, symmetric across arms (write-only-in-cwd +
+  do-your-own-work), meta carries containment_preamble_version as a
+  judge partition key; +2 pins (42 total). Snapshot isolation filed as
+  the real fix, evidence-gated. The lane's first output was a finding
+  about the lane itself — the live black-box test doing its job.

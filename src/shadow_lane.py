@@ -44,6 +44,37 @@ log = logging.getLogger("maro.shadow_lane")
 ARM_STAR = "star"
 ARM_PLAIN = "plain"
 
+# Containment preamble, prepended to the goal for BOTH arms (symmetric, so
+# it cancels out of any arm comparison). Born from the first live fire
+# (2026-08-14, be7c618a/star): the textual READ-tier gate admits goals that
+# ask for a written *report*, and the challenger wrote its report into the
+# live project directory — overwriting the primary run's own deliverable —
+# then found that deliverable first and verified-instead-of-redid, breaking
+# arm independence. Instruction-level only (same best-effort class as the
+# eligibility gate; NOT a sandbox — the honest framing in the design doc
+# stands); bump the version when the text changes so the batch judge can
+# partition rows.
+CONTAINMENT_PREAMBLE_VERSION = 1
+_CONTAINMENT_PREAMBLE = (
+    "Constraints for this task (they override any conflicting instruction "
+    "in the task text):\n"
+    "1. You may READ any files the task requires, but create, modify, or "
+    "delete files ONLY inside your current working directory. If the task "
+    "asks for a written report or deliverable, write it in the current "
+    "working directory.\n"
+    "2. Produce your own independent answer from the primary sources. If "
+    "you find an existing report, answer, or audit that already addresses "
+    "this exact task, do not adopt, verify, amend, or supersede it — "
+    "ignore it and do the work yourself from the underlying sources.\n"
+    "\n"
+    "The task:\n"
+)
+
+
+def challenger_prompt(goal: str) -> str:
+    """The exact stdin prompt a challenger receives for `goal` (both arms)."""
+    return _CONTAINMENT_PREAMBLE + goal
+
 # Reason codes for eligible() — the FIRST failing check names the skip
 # reason, so a re-scan of a stamped SKIPPED run never re-derives the reason.
 REASON_NOT_DONE = "status!=done"
@@ -282,8 +313,8 @@ def run_challenger(run_dir: Path, arm: str, goal: str, *, timeout: int,
     parsed: dict = {}
     try:
         proc = _run_subprocess_safe(
-            cmd, input=goal, timeout=timeout, cwd=str(scratch),
-            env_extra=_scrub_env)
+            cmd, input=challenger_prompt(goal), timeout=timeout,
+            cwd=str(scratch), env_extra=_scrub_env)
         stdout_text = proc.stdout or ""
         if proc.returncode != 0:
             exit_status = f"exit:{proc.returncode}"
@@ -327,6 +358,9 @@ def run_challenger(run_dir: Path, arm: str, goal: str, *, timeout: int,
         "tokens_out": tokens_out,
         "model": model,
         "cli_version": cli_version,
+        # Raw goal is the comparison identity; the wrapped stdin prompt is
+        # reconstructable as challenger_prompt(goal) at this version.
+        "containment_preamble_version": CONTAINMENT_PREAMBLE_VERSION,
         "goal": goal,
         # Challenger cmd WITHOUT the full star prompt text — a --append-system-prompt
         # arg is replaced with a length marker so meta.json stays small and never
