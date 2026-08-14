@@ -8,6 +8,57 @@ Last split: 2026-04-16 (session 34).
 
 ---
 
+## Executor image ships no pytest — SHIPPED 2026-08-06; stale entry found + archived 2026-08-13
+
+**Resolution.** Both halves of the filed item shipped 2026-08-06 in two
+commits, in the order the entry asked for:
+
+- `fd57a56` "Make the executor tag name exactly one image" — the
+  tag-scheme call: tags became `maro-executor:<cli-version>-r<revision>`
+  (`IMAGE_REVISION` in `src/container_exec.py`; the CLI pin answers
+  "which claude", the revision answers "which image"), enforced by the
+  Dockerfile digest census test in `tests/test_container_exec.py`
+  (KNOWN table maps `(pin, revision) → digest`; any Dockerfile change
+  without a bump fails the suite).
+- `0c23a5a` "Bake pytest into the executor image" — `python3-pytest`
+  via apt (bookworm's 7.2.1), r2. Transcript evidence, not guesswork:
+  run `d9607baa` bootstrapped pip and installed bare `pytest` FIFTEEN
+  times (once per step — fresh container each step), never a plugin or
+  a second package, so exactly that got baked. apt NOT pip,
+  deliberately: shipping pip would hand every step arbitrary run-time
+  PyPI installs — a supply-chain surface far wider than the problem.
+  The rationale lives as a comment block in
+  `deploy/docker/Dockerfile.executor`.
+
+**Why the entry went stale.** Both commits were briefly reverted the
+same day by a concurrent session committing stale dirty files (the
+2026-08-06 tree-triage war story now in CLAUDE.md §concurrent-sessions),
+then restored; in the churn the BACKLOG entry never moved here. Found
+still-open 2026-08-13 when the item was picked up to build — the work
+was already on main, wearing r3 (`9f5e645` baked the maro verbs on top).
+
+**Verified 2026-08-13:** `IMAGE_REVISION = 3`, digest census green on
+main; live probe of the dev Mac's `maro-executor:2.1.210-r3` answers
+`pytest 7.2.1`; the box rebuilt its r3 2026-08-13 from the same
+Dockerfile state, so the runtime image carries it deterministically.
+
+Original entry, verbatim:
+
+- [x] **Executor image ships no pytest** (found 2026-08-02 via `d9607baa`).
+  `maro-executor:2.1.210` has git/python3/curl by design — the Dockerfile
+  comment says the toolset is "what worker transcripts actually use". A
+  transcript now shows otherwise: the #7 run bootstrapped pip from
+  `get-pip.py --user --break-system-packages` (no root, no apt, no
+  ensurepip, no venv), **twice**, because the install does not survive
+  between steps — each step is a fresh container. It solved the problem
+  resourcefully, and it paid steps and money to do it; every "run the
+  tests" goal pays that tax. Two wrinkles before acting: adding packages
+  widens a deliberately minimal isolation surface, and the image tag
+  encodes the **CLI pin**, not image contents, so a rebuild under the same
+  tag makes `maro-executor:2.1.210` ambiguous — which the Dockerfile's
+  own "image version auditable" goal cares about. Needs a tag-scheme call,
+  not just a `RUN apt-get install`.
+
 ## Moved 2026-08-11 — maintenance sweep
 
 Closed `[x]` sub-blocks archived out of still-live BACKLOG sections
