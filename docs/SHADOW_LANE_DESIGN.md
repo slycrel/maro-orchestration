@@ -46,12 +46,22 @@ experiment.
    `measurement_class=shadow`; no learning path may ingest them (outcomes,
    lessons, skill stats, evolver, knowledge). Enforced by test, not
    convention.
-4. **Side-effect guard (hard)**: a shadow *re-executes a goal*. Only
-   read/research-shaped goals are eligible. Anything that could send,
-   commit, spend, or mutate outside its scratch dir is ineligible in v1.
-   Sandboxing is an upgrade edge, not a v1 promise.
+4. **Side-effect guard (best-effort textual gate + named residual)**: a
+   shadow *re-executes a goal*. Only read/research-shaped goals are
+   eligible (worker-type AND action-tier classifiers, both keyword/regex
+   over goal text — a textual gate, honestly labeled: an implicit or
+   fetched instruction inside a research-looking goal can pass it). The
+   residual is bounded, not eliminated: the challenger runs in the same
+   trust class as maro's own executor subprocesses on this box
+   (skip-permissions, ambient HOME), with the maro workspace env pointers
+   scrubbed from its environment and a fresh scratch cwd. True
+   sandboxing (container/worktree) is the upgrade edge that would make
+   the guard hard; it is evidence-gated, not a v1 promise.
 5. **Output beside the primary**: `<run-dir>/shadow/<arm>/RESULT.md` + a
    ledger row — mirrors the re-run surface so viz can render the pair.
+   The challenger's scratch cwd also lives inside this boundary
+   (`<run-dir>/shadow/<arm>/scratch/`) — one inspectable unit per shadow,
+   no write surface outside the run dir + ledger.
 6. **Serial + throttled**: one shadow at a time (box rule), config sample
    rate + daily cap. Subscription tokens make the dollar cost ~0; box
    minutes and rate-limit pressure are the real budget.
@@ -61,7 +71,19 @@ experiment.
 8. **Batch adjudication**: no per-run judging. A periodic cross-model pass
    compares accumulated pairs (union/miss scoring, the head-to-head
    discipline from docs/history/2026-08-13-star-vs-harness-comparison.md)
-   and writes comparison verdicts.
+   and writes comparison verdicts. The adjudication *tooling* deliberately
+   ships with the first batch, not with v1 — building the judge before ten
+   pairs exist would be judging hypothetical data. The ledger rows carry
+   the fields it will need (challenger cost/wall/model + primary
+   cost/wall/model, star version + prompt sha, CLI version).
+
+Accepted residuals (named, reviewed 2026-08-14): the heartbeat's
+idle-window gate is checked at challenger *launch*, not held for its
+lifetime — a primary run starting mid-challenger shares the box with it
+(bounded by serial + daily cap + timeout; revisit if primaries visibly
+degrade). The daily cap counts ledger rows, so a challenger whose ledger
+append failed (fallback row in its arm dir) escapes the count until
+reconciled — bounded by the same cap's small value.
 
 ## Pre-registered adjudication (the test that can fail)
 

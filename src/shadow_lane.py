@@ -11,11 +11,15 @@ challenger is a bare headless subprocess, not a maro run: no handle(), no
 run dir of its own, no record_outcome.
 
 Isolation is by construction, not by stamp (recon 2026-08-14): the only
-writes this module makes are `<run-dir>/shadow/<arm>/{RESULT.md,meta.json}`,
-`<run-dir>/shadow/SKIPPED`, and `memory/shadow_ledger.jsonl`. No learning
+writes this module makes live under `<run-dir>/shadow/` (RESULT.md,
+meta.json, scratch/, SKIPPED, ERROR, ledger-row.json fallback) plus
+`memory/shadow_ledger.jsonl` and its sweep lock sentinel. No learning
 module (memory.py, memory_ledger.py, evolver.py, skills.py) may import this
 module, and this module must never import any of them — enforced by
-tests/test_shadow_lane.py's isolation pin, not just convention.
+tests/test_shadow_lane.py's isolation pin, not just convention. (The
+generic storage lanes — workspace export/import and the sqlite backend
+migration — carry `shadow_ledger.jsonl` like any other memory file; that
+is data transport, not learning ingestion, and is deliberately in-bounds.)
 
 CLI (dev tool, like maro-introspect):
     PYTHONPATH=src python3 -m shadow_lane sweep [--limit N] [--verbose] [--dry-run]
@@ -162,7 +166,14 @@ def _parse_cli_result(text: str) -> dict:
     except (json.JSONDecodeError, ValueError):
         pass
 
+    # Prefer the LAST result-shaped object, and a typed one over an
+    # untyped one (review 2026-08-14, Skeptic): the stream merges stdout
+    # and stderr, so a warning or tool-produced JSON blob carrying a
+    # coincidental "result" key could precede the real CLI payload — the
+    # genuine payload is the final result-typed object the CLI prints.
     decoder = json.JSONDecoder()
+    best: dict = {}
+    best_typed: dict = {}
     start = text.find("{")
     while start != -1:
         try:
@@ -170,10 +181,13 @@ def _parse_cli_result(text: str) -> dict:
         except json.JSONDecodeError:
             start = text.find("{", start + 1)
             continue
-        if isinstance(data, dict) and ("result" in data or data.get("type") == "result"):
-            return data
+        if isinstance(data, dict):
+            if data.get("type") == "result":
+                best_typed = data
+            elif "result" in data:
+                best = data
         start = text.find("{", start + consumed)
-    return {}
+    return best_typed or best
 
 
 def run_challenger(run_dir: Path, arm: str, goal: str, *, timeout: int) -> dict:
@@ -189,10 +203,16 @@ def run_challenger(run_dir: Path, arm: str, goal: str, *, timeout: int) -> dict:
         raise ValueError(f"unknown shadow arm: {arm!r}")
 
     from llm import _CLAUDE_BIN, _run_subprocess_safe
-    import orch_items
 
-    handle_id = _handle_id_from_run_dir(run_dir)
-    scratch = orch_items.output_root() / "shadow-workspaces" / f"{handle_id}-{arm}"
+    # Scratch lives INSIDE the isolation boundary (<run-dir>/shadow/<arm>/
+    # scratch/) — review 2026-08-14, all three lenses: the original
+    # output_root()/shadow-workspaces/ location was a third, untracked
+    # write surface that violated the module's own confinement claim, and
+    # its global <handle>-<arm> name meant a crashed attempt collided
+    # forever. Per-run placement keeps the claim dir and the challenger's
+    # working tree one inspectable unit; still fail-closed (a prior
+    # attempt's scratch is evidence, never deleted or reused).
+    scratch = run_dir / "shadow" / arm / "scratch"
     scratch.mkdir(parents=True, exist_ok=False)
 
     cmd = [_CLAUDE_BIN, "-p", "--output-format", "json", "--dangerously-skip-permissions"]
@@ -202,6 +222,30 @@ def run_challenger(run_dir: Path, arm: str, goal: str, *, timeout: int) -> dict:
         cmd = cmd + ["--append-system-prompt", star_text]
         arm_meta.update(star_meta)
 
+    # Black-box env scrub (review 2026-08-14, Architect/Minimalist): the
+    # wrapper clones os.environ, so without this the challenger inherits
+    # every MARO_* pointer to the real workspace (and, when a run context
+    # is live in the calling process, a fetch-capture path INTO the
+    # primary's run dir). None = unset-in-child (the wrapper's documented
+    # contract). This scrubs the pointers we own; it is NOT a sandbox —
+    # see the design doc's honest side-effect-guard framing.
+    _scrub_env: Dict[str, Any] = {
+        "MARO_WORKSPACE": None,
+        "OPENCLAW_WORKSPACE": None,
+        "WORKSPACE_ROOT": None,
+        "MARO_ENV_FILE": None,
+        "OPENCLAW_CFG": None,
+        "MARO_FETCH_CAPTURE_DIR": None,
+    }
+
+    cli_version = None
+    try:
+        _v = subprocess.run([_CLAUDE_BIN, "--version"], capture_output=True,
+                            text=True, timeout=10)
+        cli_version = (_v.stdout or "").strip() or None
+    except Exception:
+        pass
+
     started_at = datetime.now(timezone.utc)
     t0 = time.monotonic()
     exit_status = "ok"
@@ -209,7 +253,8 @@ def run_challenger(run_dir: Path, arm: str, goal: str, *, timeout: int) -> dict:
     parsed: dict = {}
     try:
         proc = _run_subprocess_safe(
-            cmd, input=goal, timeout=timeout, cwd=str(scratch), env_extra=None)
+            cmd, input=goal, timeout=timeout, cwd=str(scratch),
+            env_extra=_scrub_env)
         stdout_text = proc.stdout or ""
         if proc.returncode != 0:
             exit_status = f"exit:{proc.returncode}"
@@ -229,15 +274,30 @@ def run_challenger(run_dir: Path, arm: str, goal: str, *, timeout: int) -> dict:
     tokens_in = usage.get("input_tokens") if usage else None
     tokens_out = usage.get("output_tokens") if usage else None
 
+    # Challenger model, defensively: the CLI result payload may carry
+    # `model` or `modelUsage` keys depending on version; both absent → None
+    # (interpretability field for the batch judge, review 2026-08-14 —
+    # a changing CLI default model must not masquerade as an arm effect).
+    model = parsed.get("model")
+    if not model and isinstance(parsed.get("modelUsage"), dict):
+        _mu = list(parsed["modelUsage"].keys())
+        model = _mu[0] if len(_mu) == 1 else (_mu or None)
+
     meta = {
         "arm": arm,
-        "ts": started_at.isoformat(),
+        # `started_at`, not `ts` (review 2026-08-14, Skeptic): the ledger
+        # row's `ts` is APPEND time — `**challenger_meta` was silently
+        # overwriting it with this start time, which skewed the UTC daily
+        # cap for challengers crossing midnight.
+        "started_at": started_at.isoformat(),
         "wall_seconds": round(wall_seconds, 3),
         "exit_status": exit_status,
         "is_error": bool(parsed.get("is_error")) if parsed else None,
         "cost_usd": parsed.get("total_cost_usd"),
         "tokens_in": tokens_in,
         "tokens_out": tokens_out,
+        "model": model,
+        "cli_version": cli_version,
         "goal": goal,
         # Challenger cmd WITHOUT the full star prompt text — a --append-system-prompt
         # arg is replaced with a length marker so meta.json stays small and never
@@ -357,6 +417,32 @@ def sweep(*, limit: int = 1, verbose: bool = False, dry_run: bool = False) -> di
     if not get("shadow.enabled", False):
         return summary
 
+    # Cross-process serialization (review 2026-08-14, all three lenses):
+    # the per-run mkdir claim alone left "serial + capped" an in-process
+    # property — a CLI sweep and the heartbeat sweep could both read one
+    # free cap slot and fire two challengers concurrently. One workspace-
+    # level flock held for the WHOLE fire section makes serial a system
+    # invariant and puts the cap read inside the same critical section.
+    # Short timeout: a second sweep reports "locked" and exits rather than
+    # queuing behind a 15-min challenger.
+    from file_lock import locked_write, FileLockTimeout
+    from config import workspace_root
+    _sentinel = workspace_root() / "memory" / "shadow_sweep"
+    try:
+        with locked_write(_sentinel, timeout_s=2.0):
+            return _sweep_locked(summary, limit=limit, verbose=verbose,
+                                 dry_run=dry_run)
+    except FileLockTimeout:
+        summary["locked"] = True
+        if verbose:
+            log.info("shadow sweep: another sweep holds the lock — skipping")
+        return summary
+
+
+def _sweep_locked(summary: Dict[str, Any], *, limit: int, verbose: bool,
+                  dry_run: bool) -> dict:
+    from config import get
+
     sample_rate = float(get("shadow.sample_rate", 1.0))
     daily_cap = int(get("shadow.daily_cap", 4))
     timeout_seconds = int(get("shadow.timeout_seconds", 900))
@@ -393,7 +479,13 @@ def sweep(*, limit: int = 1, verbose: bool = False, dry_run: bool = False) -> di
 
         ok, reason = eligible(goal, meta)
         if not ok:
-            if not dry_run:
+            # Stamp SKIPPED only for runs that are actually OVER
+            # (`ended_at` present). A sweep that sees a still-RUNNING
+            # primary (status None/unset, no ended_at) must leave no
+            # trace, or the run is permanently excluded before it ever
+            # becomes eligible (review 2026-08-14, Skeptic #1 — confirmed
+            # empirically: live runs carry status None until finalize).
+            if not dry_run and meta.get("ended_at"):
                 shadow_dir.mkdir(parents=True, exist_ok=True)
                 (shadow_dir / "SKIPPED").write_text(reason + "\n", encoding="utf-8")
             summary["skipped"] += 1
@@ -413,6 +505,18 @@ def sweep(*, limit: int = 1, verbose: bool = False, dry_run: bool = False) -> di
             fired += 1
             continue
 
+        # Star availability is checked BEFORE the claim (review 2026-08-14,
+        # Minimalist): a transient star-skill problem must not consume the
+        # run's one shadow slot — unclaimed, the run is retried next sweep.
+        if arm == ARM_STAR:
+            try:
+                star_prompt()
+            except Exception as exc:
+                summary["errors"] += 1
+                log.warning("shadow sweep: star prompt unavailable, leaving %s "
+                            "unclaimed for a later sweep: %s", handle_id, exc)
+                continue
+
         # Claim BEFORE launching: creating shadow/<arm>/ is the fail-closed
         # claim itself, so a concurrent sweep loses the mkdir race rather
         # than double-firing.
@@ -422,35 +526,48 @@ def sweep(*, limit: int = 1, verbose: bool = False, dry_run: bool = False) -> di
             summary["skipped"] += 1
             continue
 
-        if arm == ARM_STAR:
-            try:
-                star_prompt()
-            except Exception as exc:
-                (shadow_dir / "SKIPPED").write_text(f"star_prompt_unavailable:{exc}\n", encoding="utf-8")
-                summary["errors"] += 1
-                log.warning("shadow sweep: star arm skipped for %s: %s", handle_id, exc)
-                continue
-
         try:
             challenger_meta = run_challenger(run_dir, arm, goal, timeout=timeout_seconds)
         except Exception as exc:
+            # The claim stands (deliberately terminal — no auto-retry, the
+            # partial state is evidence), but it must be VISIBLE: an empty
+            # claim dir was indistinguishable from a crash mid-write
+            # (review 2026-08-14, Skeptic/Architect).
             summary["errors"] += 1
             log.warning("shadow sweep: challenger failed for %s (arm=%s): %s", handle_id, arm, exc)
+            try:
+                (shadow_dir / arm / "ERROR").write_text(
+                    f"{datetime.now(timezone.utc).isoformat()} {exc}\n",
+                    encoding="utf-8")
+            except OSError:
+                pass
             continue
 
         row = {
             "handle_id": handle_id,
-            "arm": arm,
-            "ts": datetime.now(timezone.utc).isoformat(),
             "primary_lane": meta.get("lane"),
             "primary_goal_achieved": meta.get("goal_achieved"),
             "primary_ended_at": meta.get("ended_at"),
+            **_primary_comparison_fields(run_dir, meta),
             **challenger_meta,
+            # Append time — the daily cap's counting field. Placed AFTER
+            # the challenger meta merge so nothing can shadow it.
+            "ts": datetime.now(timezone.utc).isoformat(),
         }
         try:
             _append_ledger_row(row)
         except Exception as exc:
-            log.warning("shadow sweep: ledger append failed for %s: %s", handle_id, exc)
+            # The ledger is the cap's only counting source — a lost row
+            # means an executed challenger the next sweep can't see. Keep
+            # a durable per-run copy for reconciliation (review
+            # 2026-08-14, Architect).
+            log.error("shadow sweep: ledger append failed for %s — writing "
+                      "fallback row: %s", handle_id, exc)
+            try:
+                (shadow_dir / arm / "ledger-row.json").write_text(
+                    json.dumps(row, indent=2, default=str), encoding="utf-8")
+            except OSError:
+                pass
 
         fired += 1
         summary["fired"] += 1
@@ -458,6 +575,33 @@ def sweep(*, limit: int = 1, verbose: bool = False, dry_run: bool = False) -> di
             log.info("shadow sweep: fired arm=%s handle_id=%s", arm, handle_id)
 
     return summary
+
+
+def _primary_comparison_fields(run_dir: Path, meta: dict) -> dict:
+    """Primary-side fields the batch adjudication needs (review 2026-08-14,
+    Architect: a ledger row that can't say what the PRIMARY cost can't
+    support the cost-comparison half of the pre-registered questions).
+    Best-effort — absent sources yield None, never block the row."""
+    out: Dict[str, Any] = {
+        "primary_model": meta.get("model"),
+        "primary_cost_usd": None,
+        "primary_wall_seconds": None,
+    }
+    try:
+        card = json.loads((run_dir / "run_card.json").read_text(encoding="utf-8"))
+        out["primary_cost_usd"] = card.get("total_cost_usd")
+    except (OSError, ValueError):
+        pass
+    try:
+        _s = meta.get("started_at")
+        _e = meta.get("ended_at")
+        if _s and _e:
+            _sd = datetime.fromisoformat(str(_s).replace("Z", "+00:00"))
+            _ed = datetime.fromisoformat(str(_e).replace("Z", "+00:00"))
+            out["primary_wall_seconds"] = round((_ed - _sd).total_seconds(), 3)
+    except ValueError:
+        pass
+    return out
 
 
 # ---------------------------------------------------------------------------

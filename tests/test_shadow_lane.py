@@ -399,3 +399,179 @@ class TestIsolationPin:
             if "shadow_lane" in text or "shadow_ledger" in text:
                 offenders.append(name)
         assert not offenders, f"learning module(s) reference shadow_lane/shadow_ledger: {offenders}"
+
+
+# ---------------------------------------------------------------------------
+# Review-round pins (2026-08-14 adversarial review fixes)
+# ---------------------------------------------------------------------------
+
+class TestReviewRoundPins:
+    def test_scratch_lives_inside_run_dir_boundary(self, tmp_path, monkeypatch):
+        """All three lenses: scratch outside <run-dir>/shadow/ violated the
+        module's own confinement claim. Pin: scratch is under the arm dir."""
+        import llm
+        monkeypatch.setattr(llm, "_run_subprocess_safe", _fake_subprocess_safe())
+        rd = _make_run_dir(tmp_path, "55555555", prompt=_RESEARCH_GOAL)
+
+        meta = shadow_lane.run_challenger(rd, shadow_lane.ARM_PLAIN, _RESEARCH_GOAL, timeout=5)
+        scratch = Path(meta["scratch_cwd"])
+        assert scratch == rd / "shadow" / "plain" / "scratch"
+        assert scratch.is_dir()
+
+    def test_challenger_env_scrubs_workspace_pointers(self, tmp_path, monkeypatch):
+        """Architect: env_extra=None inherited every MARO_* pointer into the
+        'black box'. Pin: the scrub unsets the workspace pointers (None =
+        unset-in-child per _run_subprocess_safe's contract)."""
+        import llm
+        captured = {}
+
+        def _capture(cmd, *, input=None, timeout=600, cwd=None, env_extra=None, **kw):
+            captured["env_extra"] = env_extra
+            return SimpleNamespace(returncode=0, stdout="{}", stderr="")
+
+        monkeypatch.setattr(llm, "_run_subprocess_safe", _capture)
+        rd = _make_run_dir(tmp_path, "66666666", prompt=_RESEARCH_GOAL)
+        shadow_lane.run_challenger(rd, shadow_lane.ARM_PLAIN, _RESEARCH_GOAL, timeout=5)
+
+        env_extra = captured["env_extra"]
+        for key in ("MARO_WORKSPACE", "OPENCLAW_WORKSPACE", "WORKSPACE_ROOT",
+                    "MARO_ENV_FILE", "MARO_FETCH_CAPTURE_DIR"):
+            assert key in env_extra and env_extra[key] is None, key
+
+    def test_meta_uses_started_at_not_ts(self, tmp_path, monkeypatch):
+        """Skeptic: challenger meta's `ts` silently overwrote the ledger
+        row's append-time `ts`, skewing the UTC daily cap."""
+        import llm
+        monkeypatch.setattr(llm, "_run_subprocess_safe", _fake_subprocess_safe())
+        rd = _make_run_dir(tmp_path, "77777777", prompt=_RESEARCH_GOAL)
+        meta = shadow_lane.run_challenger(rd, shadow_lane.ARM_PLAIN, _RESEARCH_GOAL, timeout=5)
+        assert "started_at" in meta
+        assert "ts" not in meta
+
+    def test_running_primary_left_unstamped(self, tmp_path, monkeypatch):
+        """Skeptic #1 (confirmed live): a still-running primary (status None,
+        no ended_at) must leave NO shadow/ trace, or it is permanently
+        excluded before it ever becomes eligible."""
+        _set_shadow_config(tmp_path, enabled=True)
+        rd = tmp_path / "runs" / "88888888-running"
+        rd.mkdir(parents=True)
+        (rd / "metadata.json").write_text(json.dumps({
+            "handle_id": "88888888", "prompt": _RESEARCH_GOAL,
+            "status": None, "dry_run": False,
+        }), encoding="utf-8")
+
+        result = shadow_lane.sweep(limit=1)
+        assert result["skipped"] == 1
+        assert not (rd / "shadow").exists()
+
+    def test_terminal_ineligible_still_stamped(self, tmp_path):
+        """The stamp remains for genuinely-over ineligible runs (ended_at
+        present) so they are not re-derived forever."""
+        _set_shadow_config(tmp_path, enabled=True)
+        rd = _make_run_dir(tmp_path, "99999999", prompt=_BUILD_GOAL)
+        result = shadow_lane.sweep(limit=1)
+        assert result["skipped"] == 1
+        assert (rd / "shadow" / "SKIPPED").read_text(encoding="utf-8").strip() \
+            == shadow_lane.REASON_NOT_RESEARCH
+
+    def test_sweep_lock_excludes_concurrent_sweep(self, tmp_path):
+        """All three lenses: serial+cap was in-process only. Pin: a held
+        sweep lock makes a second sweep return locked=True without scanning."""
+        from config import workspace_root
+        from file_lock import locked_write
+        _set_shadow_config(tmp_path, enabled=True)
+        _make_run_dir(tmp_path, "aaaa1111", prompt=_RESEARCH_GOAL)
+
+        sentinel = workspace_root() / "memory" / "shadow_sweep"
+        with locked_write(sentinel):
+            # locked_write is reentrant PER THREAD, so hold it from a
+            # second thread's perspective by checking the flag path:
+            # simplest honest check — run sweep in a subthread.
+            import threading
+            out = {}
+
+            def _sweep_in_thread():
+                out["result"] = shadow_lane.sweep(limit=1)
+
+            t = threading.Thread(target=_sweep_in_thread)
+            t.start()
+            t.join(timeout=30)
+            assert not t.is_alive()
+        assert out["result"].get("locked") is True
+        assert out["result"]["fired"] == 0
+
+    def test_challenger_failure_writes_error_marker(self, tmp_path, monkeypatch):
+        """Skeptic/Architect: an empty claim dir after a crash was
+        indistinguishable from mid-write. Pin: failure writes ERROR."""
+        _set_shadow_config(tmp_path, enabled=True)
+        rd = _make_run_dir(tmp_path, "bbbb2222", prompt=_RESEARCH_GOAL)
+
+        def _boom(run_dir, arm, goal, *, timeout):
+            raise RuntimeError("challenger exploded")
+
+        monkeypatch.setattr(shadow_lane, "run_challenger", _boom)
+        result = shadow_lane.sweep(limit=1)
+        assert result["errors"] == 1
+        arm = shadow_lane.pick_arm("bbbb2222")
+        assert (rd / "shadow" / arm / "ERROR").read_text(encoding="utf-8")
+
+    def test_star_unavailable_leaves_run_unclaimed(self, tmp_path, monkeypatch):
+        """Minimalist: a transient star-skill problem must not consume the
+        run's one shadow slot. Pin: no shadow/ dir, retriable next sweep."""
+        _set_shadow_config(tmp_path, enabled=True)
+        # Find a handle_id whose deterministic arm is star.
+        hid = next(h for h in ("cccc3333", "dddd4444", "eeee5555", "ffff6666",
+                               "12121212", "34343434")
+                   if shadow_lane.pick_arm(h) == shadow_lane.ARM_STAR)
+        rd = _make_run_dir(tmp_path, hid, prompt=_RESEARCH_GOAL)
+
+        def _no_star():
+            raise ValueError("star skill unavailable")
+
+        monkeypatch.setattr(shadow_lane, "star_prompt", _no_star)
+        result = shadow_lane.sweep(limit=1)
+        assert result["errors"] == 1
+        assert not (rd / "shadow").exists()
+        # Retriable: a second sweep sees it again (same error, not a skip).
+        result2 = shadow_lane.sweep(limit=1)
+        assert result2["errors"] == 1
+
+    def test_parse_prefers_last_typed_result(self):
+        """Skeptic: a decoy JSON blob with a coincidental `result` key before
+        the genuine payload must not win; the CLI's final typed result does."""
+        decoy = json.dumps({"result": "decoy from stderr noise"})
+        real = json.dumps({"type": "result", "result": "the real answer",
+                           "total_cost_usd": 0.5})
+        merged = f"warning: something\n{decoy}\nmore noise\n{real}\n"
+        parsed = shadow_lane._parse_cli_result(merged)
+        assert parsed.get("result") == "the real answer"
+
+    def test_ledger_row_carries_primary_comparison_fields(self, tmp_path, monkeypatch):
+        """Architect: the batch judge needs primary cost/wall/model beside
+        the challenger's numbers or the cost half of the pre-registered
+        questions cannot be answered."""
+        _set_shadow_config(tmp_path, enabled=True)
+        start = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
+        end = datetime.now(timezone.utc).isoformat()
+        rd = _make_run_dir(tmp_path, "abab5656", prompt=_RESEARCH_GOAL,
+                           ended_at=end,
+                           extra={"started_at": start, "model": "test-model"})
+        (rd / "run_card.json").write_text(
+            json.dumps({"total_cost_usd": 1.23}), encoding="utf-8")
+
+        def _fake_challenger(run_dir, arm, goal, *, timeout):
+            return {"arm": arm, "started_at": "2026-08-14T00:00:00+00:00",
+                    "wall_seconds": 60.0, "exit_status": "ok"}
+
+        monkeypatch.setattr(shadow_lane, "run_challenger", _fake_challenger)
+        result = shadow_lane.sweep(limit=1)
+        assert result["fired"] == 1
+
+        rows = [json.loads(l) for l in
+                (tmp_path / "memory" / "shadow_ledger.jsonl")
+                .read_text(encoding="utf-8").splitlines() if l.strip()]
+        row = rows[-1]
+        assert row["primary_cost_usd"] == 1.23
+        assert row["primary_model"] == "test-model"
+        assert 590 < row["primary_wall_seconds"] < 610
+        assert "ts" in row and "started_at" in row and row["ts"] != row["started_at"]
