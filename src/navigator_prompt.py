@@ -14,6 +14,7 @@ import logging
 import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from context_budget import clip, VERDICT_PROSE_CAP
 from navigator import (
     NavigatorDecision,
     NavigatorInput,
@@ -293,7 +294,7 @@ def _log_decision(
             "move": decision.move,
             "confidence": decision.confidence,
             "input_digest": nav_input.digest(),
-            "reasoning": decision.reasoning[:600],
+            "reasoning": clip(decision.reasoning, VERDICT_PROSE_CAP),
             "payload_digest": decision.payload_digest(),
             "elapsed_ms": elapsed_ms,
             "shadow": shadow,

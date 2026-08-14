@@ -1311,8 +1311,16 @@ def index_decision_prior(rd: Path, meta: dict, card: dict) -> None:
     if cls in ("partial", "failed", "done-not-achieved"):
         _be = meta.get("backend_error")
         _be_action = _be.get("user_action") if isinstance(_be, dict) else ""
+        _tail = excerpt[-1000:]
+        if len(excerpt) > 1000:
+            # Labeled tail selection (fixpoint review 2026-08-14): a bare
+            # [-1000:] silently dropped the head AND could keep an
+            # upstream clip marker whose "first N of M" no longer
+            # described the surviving text.
+            _tail = (f"[final 1000 of {len(excerpt)} excerpt chars] …"
+                     f"{_tail}")
         why = ((card.get("partial_rescue") or {}).get("stuck_reason")
-               or why or _be_action or excerpt[-1000:])
+               or why or _be_action or _tail)
     why = str(why or "")
 
     card["decision_prior"] = make_decision_prior(

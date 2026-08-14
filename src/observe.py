@@ -28,6 +28,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from context_budget import clip as _cb_clip
+
 
 # ---------------------------------------------------------------------------
 # Path helpers (mirrors orch_root / config fallbacks)
@@ -535,7 +537,9 @@ def write_event(
             "cache_read_tokens": cache_read_tokens,
             "model": model,
             "elapsed_ms": elapsed_ms,
-            "detail": detail[:200],
+            # 200 is load-bearing (PIPE_BUF row atomicity) — kept, but the
+            # cut announces itself now.
+            "detail": _cb_clip(detail, 200),
         }
         if tool_pathologies:
             # Capped like every other field (PIPE_BUF atomicity): at most 3

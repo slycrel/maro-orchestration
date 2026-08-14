@@ -14,6 +14,7 @@ import sys
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
+from context_budget import clip, VERDICT_PROSE_CAP
 from loop_types import LoopContext, StepOutcome, _orch, step_from_decompose
 from loop_planning import _is_combined_exec_analyze, _shape_steps, _split_exec_analyze
 from step_exec import generate_refinement_hint as _generate_refinement_hint
@@ -705,7 +706,7 @@ def _navigator_act_blocked_step(
 
         stuck_reason = (
             f"NAVIGATOR_ESCALATE: recovery overridden at blocked step "
-            f"(conf {conf:.2f}) — {reasoning[:300]}"
+            f"(conf {conf:.2f}) — {clip(reasoning, 800)}"
         )
         log.warning("navigator escalate override at blocked step %s: %s",
                     step_idx, stuck_reason[:200])
@@ -723,7 +724,7 @@ def _navigator_act_blocked_step(
                     "point": "blocked_step",
                     "move": move,
                     "confidence": conf,
-                    "reasoning": reasoning[:500],
+                    "reasoning": clip(reasoning, VERDICT_PROSE_CAP),
                     "goal_preview": goal[:200],
                     "step_preview": step_text[:200],
                     "step_idx": step_idx,
@@ -765,7 +766,7 @@ def _navigator_act_blocked_step(
                 "goal": goal,
                 "status": "stuck",
                 "summary": stuck_reason,
-                "reason": reasoning,
+                "reason": clip(reasoning, VERDICT_PROSE_CAP),
                 "loop_id": loop_id,
                 "point": "blocked_step",
                 "step": step_text[:200],

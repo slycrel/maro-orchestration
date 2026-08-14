@@ -151,7 +151,11 @@ def format_prior_decisions(attempts: Any, *, goal: str = "",
             line += f". Why it ended: {why}"
         lessons = dp.get("lessons") or []
         if lessons:
-            line += ". Lessons: " + "; ".join(lessons[:3])
+            # All stored lessons ride (the schema already caps the list at
+            # _DECISION_LESSON_CAP); the aggregate budget below is the one
+            # announced cut. The old silent [:3] dropped stored lessons
+            # with no notice (fixpoint review 2026-08-14).
+            line += ". Lessons: " + "; ".join(lessons)
         if dp.get("resume_from"):
             line += f". Resume: {dp['resume_from']}"
         briefs.append(line)
@@ -188,6 +192,12 @@ def format_prior_decisions(attempts: Any, *, goal: str = "",
         # adversarial review: clipping the rendered block ate the footer
         # instruction and overshot max_chars by the marker length).
         frame = len(_render([""], omitted))
-        briefs[0] = clip(briefs[0], max(200, max_chars - frame - 64))
+        briefs[0] = clip(briefs[0], max(0, max_chars - frame - 64))
         block = _render(briefs, omitted)
+    if len(block) > max_chars:
+        # Degenerate budget (smaller than the frame itself): the bound
+        # wins over the marker — there is no room to announce anything
+        # (fixpoint review 2026-08-14: the old floor returned 4x a small
+        # requested budget).
+        block = block[:max_chars]
     return block

@@ -533,7 +533,7 @@ def _interactive_now_verdict_enabled() -> bool:
     return bool(val)
 
 
-def _now_verdict_rationale(raw: str, limit: int = 400) -> str:
+def _now_verdict_rationale(raw: str, limit: int = VERDICT_PROSE_CAP) -> str:
     """The judge's prose reason, minus the JSON verdict it leads with.
 
     Found by run `ea4ebe4a` diagnosing `ed7cf400` (2026-08-02): the NOW judge
@@ -556,7 +556,7 @@ def _now_verdict_rationale(raw: str, limit: int = 400) -> str:
                 text = text[i + 1:].strip()
                 break
     text = " ".join(text.split())
-    return text[:limit]
+    return clip(text, limit)
 
 
 _NOW_VERIFY_CUT = 2000
@@ -618,8 +618,9 @@ def _verify_now_outcome(
         out["status"] = "incomplete"
         out["goal_achieved"] = False
         out["provenance_missing"] = _missing
-        out["goal_verdict_summary"] = (
-            f"claimed input/output(s) not found: {_missing}")
+        out["goal_verdict_summary"] = clip(
+            f"claimed input/output(s) not found: {_missing}",
+            VERDICT_PROSE_CAP)
         # Typed stop verdict, same as the agenda twin (handle ~2475). The
         # §13b taxonomy names the provenance guard as a lost-the-plot source
         # in stop_verdicts.py's own docstring, and the agenda guard has
@@ -630,8 +631,8 @@ def _verify_now_outcome(
         # "I couldn't" carries no map observation, and the four verdicts are
         # observations about the map.
         out["stop_verdict"] = "lost-the-plot"
-        out["stop_evidence"] = (
-            f"provenance: claimed input/output(s) not found: {_missing}")[:500]
+        out["stop_evidence"] = clip(
+            f"provenance: claimed input/output(s) not found: {_missing}", 800)
         log.info(
             "provenance: claimed input/output(s) not found %s — demoted to incomplete",
             _missing,
@@ -1483,8 +1484,8 @@ def _handle_impl(
                     _now_stop = str(outcome.get("stop_verdict") or "")
                     if _now_stop:
                         _now_extra["stop_verdict"] = _now_stop
-                        _now_extra["stop_evidence"] = str(
-                            outcome.get("stop_evidence") or "")[:500]
+                        _now_extra["stop_evidence"] = clip(
+                            outcome.get("stop_evidence"), 800)
                     _wm_now(
                         _rd_now, handle_id=handle_id, prompt=_raw_input,
                         extra=_now_extra,
@@ -1536,7 +1537,7 @@ def _handle_impl(
                     # row). record_outcome has accepted these since the
                     # verdict shipped; the NOW call site never passed them.
                     stop_verdict=str(outcome.get("stop_verdict") or ""),
-                    stop_evidence=str(outcome.get("stop_evidence") or "")[:500],
+                    stop_evidence=clip(outcome.get("stop_evidence"), 800),
                 )
             except Exception:
                 pass  # outcome recording must never block the NOW response
@@ -1609,8 +1610,10 @@ def _handle_impl(
                 # An errored retry was never JUDGED — the escalation context
                 # below must not claim two judged failures (2026-07-29
                 # adversarial review, 3/3 lens consensus).
+                _retry_delivered = False
                 if _retry.get("status") != "error":
                     outcome = _retry
+                    _retry_delivered = True
                     _rung_retry_judged = "goal_achieved" in _retry
                 elapsed = int((time.monotonic() - started_at) * 1000)
                 _write_now_artifact(
@@ -1626,19 +1629,38 @@ def _handle_impl(
                         if "goal_achieved" in outcome:
                             _extra_rr["goal_achieved"] = \
                                 bool(outcome["goal_achieved"])
-                            _extra_rr["goal_verdict_source"] = \
-                                "now_self_verdict"
-                            # The delivered outcome's rationale replaces the
-                            # first attempt's (2026-08-13 adversarial
-                            # review: the retry re-stamped the boolean but
-                            # left the pre-retry summary standing).
-                            _rr_sum = str(
-                                outcome.get("goal_verdict_summary") or "")
-                            if _rr_sum:
-                                _extra_rr["goal_verdict_summary"] = clip(
-                                    _rr_sum, VERDICT_PROSE_CAP)
+                            # Source mirrors the terminal stamp's selection
+                            # (the old hardcoded "now_self_verdict" mislabeled
+                            # provenance-demoted retries).
+                            _extra_rr["goal_verdict_source"] = (
+                                "provenance"
+                                if outcome.get("provenance_missing")
+                                else ("now_self_verdict_free"
+                                      if outcome.get("now_verify_family")
+                                      == "hosted_free"
+                                      else "now_self_verdict"))
+                            # REPLACE semantics on the whole tuple (fixpoint
+                            # review 2026-08-14, consensus HIGH):
+                            # write_metadata preserves omitted keys, so a
+                            # judged retry with a bare boolean would leave
+                            # the FIRST attempt's failure rationale standing
+                            # beside the retry's verdict. Always write the
+                            # summary — placeholder when the judge gave none.
+                            _extra_rr["goal_verdict_summary"] = (
+                                clip(outcome.get("goal_verdict_summary"),
+                                     VERDICT_PROSE_CAP)
+                                or "retry judged; no rationale recorded by "
+                                   "the self-verdict")
                         _wm_rr(_rd_rr, handle_id=handle_id,
                                prompt=_raw_input, extra=_extra_rr)
+                        if _retry_delivered and "goal_achieved" not in outcome:
+                            # Delivered but UNJUDGED retry: the first
+                            # attempt's verdict tuple must not describe the
+                            # delivered outcome — absence is the schema's
+                            # "unjudged", and it has to be written
+                            # explicitly (same review finding).
+                            from runs import clear_run_verdict as _cv_rr
+                            _cv_rr()
                 except Exception:
                     pass
                 if not dry_run:
@@ -2876,8 +2898,9 @@ def _handle_impl(
                             _prov_extra = {
                                 "goal_achieved": False,
                                 "goal_verdict_source": "provenance",
-                                "goal_verdict_summary":
-                                    f"claimed input/output(s) not found: {_prov_missing}",
+                                "goal_verdict_summary": clip(
+                                    "claimed input/output(s) not found: "
+                                    f"{_prov_missing}", VERDICT_PROSE_CAP),
                             }
                             # Closure disagreeing with the guard is recorded,
                             # not silently discarded. Additive only — the
@@ -3013,7 +3036,7 @@ def _handle_impl(
                         # (2026-07-16) surfaced goal_achieved=false beside a
                         # summary whose visible prefix read "Goal achieved."
                         _gaps = [
-                            str(g)[:200] for g in (_closure.gaps or []) if g
+                            clip(g, 500) for g in (_closure.gaps or []) if g
                         ][:5]
                         if _gaps and not _closure.complete:
                             _verdict_extra["goal_verdict_gaps"] = _gaps
@@ -3526,7 +3549,7 @@ def _handle_impl(
                                         if loop_result.stuck_reason is None:
                                             loop_result.stuck_reason = (
                                                 "post-escalate closure verification: "
-                                                f"{str(_post_closure.summary)[:300]}"
+                                                f"{clip(_post_closure.summary, VERDICT_PROSE_CAP)}"
                                             )
                                         _stamp_stop_on_demotion(
                                             loop_result, "lost-the-plot",

@@ -264,6 +264,11 @@ class RecallResult:
         text = "== Recall (what the system already knows) ==\n" + "\n\n".join(parts)
         if len(text) <= max_chars:
             return text
+        if max_chars <= 128:
+            # Degenerate budget: no room for an announced cut — the bound
+            # wins (fixpoint review 2026-08-14: max_chars - 64 went
+            # negative and produced a nonsense marker).
+            return text[:max(0, max_chars)]
         # Reserve room for clip's marker so the return honors max_chars.
         return clip(text, max_chars - 64)
 

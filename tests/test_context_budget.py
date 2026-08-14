@@ -214,6 +214,24 @@ class TestStoreWorklistSitesUseClip:
         ("memory_ledger", '(stop_evidence or "")[:500]'),
         ("run_curation", "text[:500] + "),
         ("run_curation", "t[:200] for t in step_txts"),
+        # 2026-08-14 fixpoint round: producers, siblings, and consumers
+        # the review-fix round itself missed (or introduced).
+        ("handle", "return text[:limit]"),
+        ("handle", "or \"\")[:500]"),
+        ("loop_init", '(evidence or "")[:500]'),
+        ("agent_loop", "_fence_msg[:500]"),
+        ("loop_finalize", "{_cmerge.detail}\"[:500]"),
+        ("director", "{reasoning}\"\n    )[:500]"),
+        ("navigator_prompt", "decision.reasoning[:600]"),
+        ("loop_blocked", "reasoning[:300]"),
+        ("loop_blocked", "reasoning[:500]"),
+        ("navigator_shadow", '"reasoning", ""))[:600]'),
+        ("cli", "str(_verdict.summary)[:300]"),
+        ("notify", '"summary", "")))[:300]'),
+        ("observe", "detail[:200],"),
+        ("notify_telegram", "summary[:300]"),
+        ("run_curation", "excerpt[-1000:])"),
+        ("decision_prior", "lessons[:3]"),
     ])
     def test_old_bare_slice_gone(self, module, gone):
         import importlib
@@ -326,3 +344,79 @@ class TestReviewRoundBehaviors:
         assert len(block) <= 6000
         assert block.rstrip().endswith("change the approach.")
         assert "[truncated:" in block
+
+
+class TestFixpointRoundBehaviors:
+    """Behavior pins from the 2026-08-14 fixpoint adversarial review."""
+
+    def test_clip_bound_holds_against_marker_shaped_input(self):
+        # A forged/coincidental marker suffix with huge digit runs must not
+        # ride the idempotence path through an arbitrarily small cap.
+        from context_budget import _CLIP_MARKER_MAX, clip
+        forged = "AB" + " … [truncated: first " + "1" * 25000 + " of 9 characters]"
+        out = clip(forged, 10)
+        assert len(out) <= 10 + _CLIP_MARKER_MAX + 64
+        # A GENUINE clipped value still passes through unchanged.
+        real = clip("z" * 3000, 2000)
+        assert clip(real, 2000) == real
+
+    def test_clear_run_verdict_removes_the_whole_tuple(self, tmp_path, monkeypatch):
+        import runs
+        rd = tmp_path / "run"
+        rd.mkdir()
+        (rd / "metadata.json").write_text(json.dumps({
+            "handle_id": "h1", "goal_achieved": False,
+            "goal_verdict_source": "now_self_verdict",
+            "goal_verdict_confidence": 0.9,
+            "goal_verdict_summary": "first attempt failed",
+            "goal_verdict_gaps": ["missing"], "status": "done"}))
+        monkeypatch.setattr(runs, "current_run_dir", lambda: rd)
+        monkeypatch.setattr(runs, "index_run_dir", lambda *a, **k: None)
+        runs.clear_run_verdict()
+        meta = json.loads((rd / "metadata.json").read_text())
+        for key in ("goal_achieved", "goal_verdict_source",
+                    "goal_verdict_confidence", "goal_verdict_summary",
+                    "goal_verdict_gaps"):
+            assert key not in meta, key
+        assert meta["status"] == "done"   # non-verdict keys untouched
+
+    def test_retry_stamp_always_replaces_summary(self):
+        # Source pin for the consensus HIGH: the judged-retry stamp must
+        # write goal_verdict_summary unconditionally (placeholder when the
+        # judge gave a bare boolean), because write_metadata preserves
+        # omitted keys. The unjudged path must clear the stale tuple.
+        import importlib
+        from pathlib import Path
+        src = Path(importlib.import_module("handle").__file__).read_text()
+        assert "retry judged; no rationale recorded by " in src
+        assert "clear_run_verdict as _cv_rr" in src
+
+    def test_small_budget_contracts_hold(self, tmp_path, monkeypatch):
+        import decision_prior as dp
+        card = {"handle_id": "sm", "goal": "g", "success_class": "failed",
+                "decision_prior": {
+                    "handle_id": "sm", "goal": "g", "outcome": "failed",
+                    "goal_achieved": False, "when": "2026-08-14",
+                    "what_was_tried": "t" * 900, "why": "w" * 300,
+                    "lessons": []}}
+        rd = tmp_path / "sm"
+        rd.mkdir()
+        (rd / "run_card.json").write_text(json.dumps(card))
+        monkeypatch.setattr(dp, "_run_dir_for", lambda hid: rd)
+        for budget in (32, 100, 300):
+            out = dp.format_prior_decisions(
+                [{"handle_id": "sm"}], max_chars=budget)
+            assert len(out) <= budget, budget
+
+    def test_recall_block_small_budget_holds(self):
+        from recall import PriorAttempt, RecallResult
+        attempts = [PriorAttempt(goal="g" * 500, handle_id="h",
+                                 status="stuck",
+                                 when="2026-08-14T00:00:00+00:00",
+                                 match="exact")]
+        r = RecallResult(thread=None, prior_attempts=attempts,
+                         lessons="L" * 5000)
+        for budget in (0, 20, 32, 128, 1200):
+            out = r.as_context_block(max_chars=budget)
+            assert len(out) <= budget, budget
+            assert "first -" not in out   # no nonsense negative marker

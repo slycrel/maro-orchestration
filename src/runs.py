@@ -643,6 +643,43 @@ def stamp_run_verdict(
         return None
 
 
+def clear_run_verdict() -> Optional[Path]:
+    """Remove the active run's goal-verdict tuple entirely.
+
+    The unjudged twin of ``stamp_run_verdict``'s replace semantics
+    (fixpoint review 2026-08-14): when the DELIVERED attempt was never
+    judged, an earlier attempt's boolean, source, summary, and gaps must
+    not stand — ``write_metadata`` preserves omitted keys, so absence has
+    to be written explicitly. Key-absent is the schema's "unjudged".
+    No-op when no run dir is pinned or no verdict was stamped.
+    """
+    try:
+        rd = current_run_dir()
+        if rd is None:
+            return None
+        meta_path = rd / "metadata.json"
+
+        def _strip(old: str) -> str:
+            try:
+                existing = json.loads(old) if old else {}
+            except Exception:
+                existing = {}
+            if not isinstance(existing, dict):
+                existing = {}
+            for key in ("goal_achieved", "goal_verdict_source",
+                        "goal_verdict_confidence", "goal_verdict_summary",
+                        "goal_verdict_downgrade_reason", "goal_verdict_gaps"):
+                existing.pop(key, None)
+            index_run_dir(rd, existing)
+            return json.dumps(existing, indent=2, default=str)
+
+        from file_lock import locked_rmw
+        locked_rmw(meta_path, _strip)
+        return meta_path
+    except Exception:
+        return None
+
+
 def finalize_run(
     handle_id: str,
     *,

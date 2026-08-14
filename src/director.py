@@ -1272,10 +1272,9 @@ def _stamp_close_stop_verdict(loop_id: str, *, depth: int, confidence: int,
     """
     if not loop_id:
         return
-    evidence = (
+    evidence = _clip(
         f"director escalation close at depth {depth} "
-        f"(confidence {confidence}/10): {reasoning}"
-    )[:500]
+        f"(confidence {confidence}/10): {reasoning}", 800)
     row_evidence = evidence  # picks up the [refines: …] note when metadata had a prior verdict
     try:
         from runs import resolve_run_dir

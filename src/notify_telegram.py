@@ -25,6 +25,8 @@ import json
 import sys
 from pathlib import Path
 
+from context_budget import clip as _tg_clip
+
 # Plain-language outcome headers — the first line IS the message for a user
 # glancing at a phone. The old format led with the internal class name
 # ("maro run done-not-achieved"); a user shouldn't need the taxonomy.
@@ -165,7 +167,7 @@ def format_message(payload: dict) -> str:
         if decision:
             lines.append(decision)
             if summary and summary not in decision:
-                lines.append(f"Detail: {summary[:300]}")
+                lines.append(f"Detail: {_tg_clip(summary, 300)}")
         else:
             lines.append(summary or reason or "escalated with no summary")
             if summary and reason and reason not in summary:
@@ -199,8 +201,9 @@ def format_message(payload: dict) -> str:
         summary = str(payload.get("goal_verdict_summary", "") or "").strip()
         if summary and achieved is not True:
             # The why matters when the verifier dissents or abstains; a
-            # self-grade on success doesn't earn the screen space.
-            lines.append(summary[:300])
+            # self-grade on success doesn't earn the screen space. 300 is a
+            # deliberate screen cap — announced, not silent.
+            lines.append(_tg_clip(summary, 300))
         if payload.get("answer_changed"):
             answer = str(payload.get("answer_summary", "") or "").strip()
             if answer:

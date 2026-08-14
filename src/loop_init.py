@@ -55,9 +55,10 @@ def _stamp_refusal_verdict(verdict: str, evidence: str,
     """
     try:
         from runs import stamp_run_metadata
+        from context_budget import clip
         fields = {
             "stop_verdict": verdict,
-            "stop_evidence": (evidence or "")[:500],
+            "stop_evidence": clip(evidence, 800),
         }
         if pause_reason:
             fields["pause_reason"] = pause_reason

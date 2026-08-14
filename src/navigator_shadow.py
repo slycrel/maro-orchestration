@@ -48,6 +48,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from context_budget import clip as _cb_clip
+
 log = logging.getLogger("navigator")
 
 from ancestry import Origin
@@ -637,7 +639,9 @@ def analyze_live_agreement(
             "tier": c.get("tier"),
             "pipeline": pa.get("move_equivalent"),
             "point": pa.get("point") or "dispatch",
-            "reasoning": str(c.get("reasoning", ""))[:600],
+            # Read-side render cap — announced, since the stored value can
+            # legitimately run to VERDICT_PROSE_CAP now.
+            "reasoning": _cb_clip(str(c.get("reasoning", "")), 600),
             "goal_preview": str(
                 (c.get("input_digest") or {}).get("goal_preview", ""))[:80],
             # V5 A/B marker: _log_decision stamps lessons_injected only when

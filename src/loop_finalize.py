@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Optional
 from loop_types import LoopContext, LoopResult, StepOutcome, _orch, _project_dir_root
 from loop_artifacts import _write_loop_log, _write_plan_manifest
 from loop_report import write_run_report as _write_run_report, write_runs_index as _write_runs_index
-from context_budget import ContextBudget, STORE_ENTRY_CAP, STORE_TOTAL_BUDGET
+from context_budget import ContextBudget, STORE_ENTRY_CAP, STORE_TOTAL_BUDGET, clip
 
 log = logging.getLogger("maro.loop")
 
@@ -419,7 +419,8 @@ def _build_result_and_finalize(
                     # Landing machinery failed after the goal work — infra,
                     # not a mid-goal shortfall (survey: "partial" merged them).
                     result.stop_verdict = "external-interrupt"
-                    result.stop_evidence = f"container clone merge failed: {_cmerge.detail}"[:500]
+                    result.stop_evidence = clip(
+                        f"container clone merge failed: {_cmerge.detail}", 800)
         except Exception as _cc_exc:
             # A merge-back exception must NOT be reported as a clean 'done' — the
             # worker's clone work never reached the fence. Downgrade and name the
@@ -459,10 +460,9 @@ def _build_result_and_finalize(
                 )
                 if not result.stop_verdict:
                     result.stop_verdict = "external-interrupt"
-                    result.stop_evidence = (
+                    result.stop_evidence = clip(
                         f"worktree merge failed — work preserved on "
-                        f"{_merge.branch}: {_merge.detail}"
-                    )[:500]
+                        f"{_merge.branch}: {_merge.detail}", 800)
         except Exception as _wt_exc:
             log.warning("run worktree finalize error: %s", _wt_exc)
         ctx.run_worktree = None

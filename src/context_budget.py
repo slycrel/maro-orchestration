@@ -91,8 +91,13 @@ VERDICT_PROSE_CAP = 2000
 LESSON_ENTRY_CAP = 800
 
 
+# Digit runs bounded (fixpoint review 2026-08-14): with unbounded \d+ a
+# forged marker-shaped suffix could be arbitrarily long, and the
+# idempotence check below would pass the whole string through unbounded.
 _CLIP_MARKER_RE = re.compile(
-    r" … \[truncated: first (\d+) of \d+ characters\]$")
+    r" … \[truncated: first (\d{1,9}) of \d{1,9} characters\]$")
+# Longest legitimate marker: fixed text + two 9-digit counts.
+_CLIP_MARKER_MAX = 64
 
 
 def clip(text, cap: int) -> str:
@@ -118,7 +123,14 @@ def clip(text, cap: int) -> str:
     if len(text) <= cap:
         return text
     m = _CLIP_MARKER_RE.search(text)
-    if m and m.start() <= cap:
+    if (m and m.start() <= cap
+            and len(text) - m.start() <= _CLIP_MARKER_MAX):
+        # Already clipped at or below this cap: pass through so the true
+        # source length survives. The two guards keep the invariant honest
+        # even against marker-SHAPED payload text: the result is never
+        # longer than cap + _CLIP_MARKER_MAX. (The counts themselves are
+        # advisory prose — a payload that fakes them fakes only its own
+        # provenance note, never the bound.)
         return text
     return (f"{text[:cap]} … [truncated: first {cap} of "
             f"{len(text)} characters]")

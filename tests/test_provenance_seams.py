@@ -256,7 +256,13 @@ class TestNowVerdictRationale:
         assert self._rationale()("Just a reason.") == "Just a reason."
 
     def test_output_is_bounded(self):
-        assert len(self._rationale()("x " * 5000)) <= 400
+        # VERDICT_PROSE_CAP + clip marker since the 2026-08-14 fixpoint
+        # round (the old bare 400 cut the judge's reason silently — the
+        # exact loss this seam exists to prevent).
+        from context_budget import VERDICT_PROSE_CAP
+        out = self._rationale()("x " * 5000)
+        assert len(out) <= VERDICT_PROSE_CAP + 64
+        assert "truncated" in out
 
     def test_empty_and_none_are_safe(self):
         assert self._rationale()("") == ""

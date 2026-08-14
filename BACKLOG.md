@@ -2501,6 +2501,52 @@ capture**, which is what makes the rung amortize instead of evaporate.
   pins updated to the new contract; pin table extended with all
   review-round spellings + behavior tests (idempotence, stamp writer,
   schema-max brief). Suite 8576/0 skipped.
+  **Fixpoint round 2026-08-14 (3 lenses, Jeremy: "we gotta end that
+  streak") — the streak survived: ~21 raw findings deduping to 9, all
+  real, 0 hallucination, INCLUDING a 2-lens consensus HIGH in the
+  previous round's own fix.** The HIGH: the NOW retry verdict stamp
+  wrote the summary only-when-present while `runs.write_metadata`
+  PRESERVES omitted keys — a recovered retry stamped
+  `goal_achieved=true` beside the FIRST attempt's failure rationale,
+  and an unjudged delivered retry kept the stale false verdict
+  outright (both reproduced e2e by two independent reviewers). Fixed
+  with replace semantics on the whole tuple + new
+  `runs.clear_run_verdict()` (absence written explicitly — the
+  unjudged twin of stamp_run_verdict's replace doctrine) + retry
+  source now mirrors the terminal stamp's provenance/hosted-free
+  selection. The rest of the round, all fixed: stop_evidence's
+  SIX remaining pre-cut writers (NOW provenance/metadata/outcome,
+  loop_init refusal, agent_loop fence, loop_finalize clone+worktree
+  merges, director escalation close, handle post-escalate) → clip 800;
+  navigator reasoning's remaining homes (NAVIGATOR_DECIDED 600,
+  blocked-step ACTED 500/300, escalation payload UNBOUNDED the other
+  way, read-side re-cut) → clip at 2000/800/announced-600;
+  `_now_verdict_rationale` bare 400 → clip 2000; provenance
+  goal_verdict_summary was UNBOUNDED (2.5KB observed — too wide is
+  also a defect) → clip 2000; verdict gaps 200/300 → clip 500 (both
+  homes); cli JSON re-cut 300 → whole (schema-bounded upstream) + the
+  cli closure stuck_reason twin; notify projection + telegram → clip
+  at their deliberate channel caps (announced); **observe event rows
+  KEEP their 200 — the cap is load-bearing (PIPE_BUF append
+  atomicity), now documented + announced on site** — the one bound
+  this audit defends rather than widens. clip() hardened against
+  marker-SHAPED payload (bounded digit runs + suffix-length guard —
+  a forged marker could previously ride the idempotence path through
+  ANY cap unbounded); `excerpt[-1000:]` tail selection now labeled
+  (bare form kept a stale upstream marker describing text it had
+  dropped); prior-brief render emits all stored lessons (silent [:3]);
+  small-budget contracts honored (negative-cap nonsense marker,
+  min-200 floor overshooting tiny budgets). Pins: +18 banned
+  spellings, +5 behavior tests (forged marker, clear_run_verdict,
+  retry replace, small budgets ×2); old-cap pins updated. Suite
+  8597/0 skipped. **Accepted residuals, filed not built:** structural
+  truncation provenance (the marker is prose — a forged count fakes
+  only its own provenance note, never the bound; typed
+  truncation metadata is the upgrade if it ever matters); competing
+  budget owners on the recall path (as_context_block clips the
+  combined block and can still eat the prior-brief footer — the deep
+  fix is the outer assembler passing remaining budget into the
+  renderer; belongs with the wide-view-seat design question).
 
   **Method that worked, for whoever picks this up:** don't argue about the
   number — pull the actual distribution out of `runs/*/build/loop-*.json`
