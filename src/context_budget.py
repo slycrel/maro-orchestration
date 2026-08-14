@@ -70,6 +70,25 @@ DEFAULT_TOTAL_BUDGET = 24000
 STORE_ENTRY_CAP = 500
 STORE_TOTAL_BUDGET = 4000
 
+# STORE-grade cap for VERDICT/RATIONALE prose — the single fields that say
+# WHY a run got its verdict: goal_verdict_summary and its stamp siblings,
+# the stored closure summary, judge/audit reasons, the dispatch navigator's
+# recorded reasoning, the NOW answer excerpt. These are recalled by future
+# re-attempts and audited by humans; a mid-word cut here is a rationale the
+# next run half-reads. Measured 2026-08-13 over the box workspace (156
+# metadata stamps, 50 closure rows): the old 300-char cut bit 70% of
+# verdict summaries and the 500-char store cap bit 90% — every censored
+# max observed was <= 500, so 2,000 (~500 tokens) clears everything real
+# by 4x while still bounding the pathological case. Always applied via
+# clip(), never bare slicing — the reader must see when it bound.
+VERDICT_PROSE_CAP = 2000
+
+# STORE-grade cap for ONE lesson's text in a decision-prior brief. Measured
+# 2026-08-13 over the live lesson store (n=459): median 254, p99 478, max
+# 573 — the old 200-char cut fell below the MEDIAN (95% of stored entries
+# were cut mid-word). 800 holds every lesson yet observed, whole.
+LESSON_ENTRY_CAP = 800
+
 
 def clip(text, cap: int) -> str:
     """Cut text at cap and say so — never silently.

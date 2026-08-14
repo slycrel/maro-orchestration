@@ -43,6 +43,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from ancestry import Origin
+from context_budget import clip, VERDICT_PROSE_CAP
 
 
 # ---------------------------------------------------------------------------
@@ -1506,7 +1507,7 @@ def _handle_impl(
                 _record_outcome(
                     goal=message,
                     status=outcome["status"],
-                    summary=str(outcome.get("result", ""))[:500],
+                    summary=clip(outcome.get("result", ""), VERDICT_PROSE_CAP),
                     task_type="now",
                     tokens_in=outcome["tokens_in"],
                     tokens_out=outcome["tokens_out"],
@@ -2676,7 +2677,7 @@ def _handle_impl(
                             "goal_achieved": False,
                             "goal_verdict_source": "closure_stamp_failed",
                             "goal_verdict_confidence": float(_closure.confidence),
-                            "goal_verdict_summary": _stamp_reason[:300],
+                            "goal_verdict_summary": clip(_stamp_reason, VERDICT_PROSE_CAP),
                             "loop_ids": list(_run_loop_ids),
                         })
                         if _meta_path is None:
@@ -2795,8 +2796,9 @@ def _handle_impl(
                             if loop_result.status == "done":
                                 loop_result.status = "incomplete"
                                 if loop_result.stuck_reason is None:
-                                    loop_result.stuck_reason = (
-                                        _reverify_decision.stop_evidence[:300]
+                                    loop_result.stuck_reason = clip(
+                                        _reverify_decision.stop_evidence,
+                                        VERDICT_PROSE_CAP,
                                     )
                             _stamp_stop_on_demotion(
                                 loop_result,
@@ -2950,12 +2952,13 @@ def _handle_impl(
                 loop_result.status = "incomplete"
                 if loop_result.stuck_reason is None:
                     loop_result.stuck_reason = (
-                        f"closure verification: {str(_closure.summary)[:300]}"
+                        "closure verification: "
+                        f"{clip(_closure.summary, VERDICT_PROSE_CAP)}"
                     )
                 _stamp_stop_on_demotion(
                     loop_result, "lost-the-plot",
                     f"closure contradicts done (conf={_closure.confidence:.2f}): "
-                    f"{str(_closure.summary)[:300]}",
+                    f"{clip(_closure.summary, VERDICT_PROSE_CAP)}",
                 )
 
             # Record the goal verdict as its own metadata dimension — process
@@ -2991,10 +2994,11 @@ def _handle_impl(
                             "goal_verdict_source": (
                                 "closure" if _judged else "closure_unverifiable"
                             ),
-                            "goal_verdict_summary": str(_closure.summary)[:300],
+                            "goal_verdict_summary": clip(
+                                _closure.summary, VERDICT_PROSE_CAP),
                         }
-                        # Gaps ride as their own field: the 300-char summary
-                        # can truncate away the "why not" — merry-nettle
+                        # Gaps ride as their own field: a truncated summary
+                        # can lose the "why not" — merry-nettle
                         # (2026-07-16) surfaced goal_achieved=false beside a
                         # summary whose visible prefix read "Goal achieved."
                         _gaps = [
@@ -3008,7 +3012,7 @@ def _handle_impl(
                             getattr(_closure, "downgrade_reason", "") or "")
                         if _downgrade:
                             _verdict_extra["goal_verdict_downgrade_reason"] = (
-                                _downgrade[:300])
+                                clip(_downgrade, VERDICT_PROSE_CAP))
                         if _judged:
                             _verdict_extra["goal_achieved"] = bool(_closure.complete)
                         _wm_verdict(
@@ -3093,7 +3097,8 @@ def _handle_impl(
                             _rd_ce, handle_id=handle_id, prompt=_raw_input,
                             extra={
                                 "goal_verdict_source": "closure_error",
-                                "goal_verdict_summary": _closure_error[:300],
+                                "goal_verdict_summary": clip(
+                                    _closure_error, VERDICT_PROSE_CAP),
                             },
                         )
                 except Exception:
@@ -3306,13 +3311,15 @@ def _handle_impl(
                             f"@{_closure.confidence:.2f} — closure wins, "
                             f"no re-run",
                             context={
-                                "gate_reason": str(_gate_verdict.reason)[:400],
+                                "gate_reason": clip(
+                                    _gate_verdict.reason, VERDICT_PROSE_CAP),
                                 "closure_checks_run": int(_closure.checks_run),
                                 "closure_checks_passed": int(
                                     _closure.checks_passed),
                                 "closure_confidence": float(
                                     _closure.confidence),
-                                "closure_summary": str(_closure.summary)[:300],
+                                "closure_summary": clip(
+                                    _closure.summary, VERDICT_PROSE_CAP),
                             },
                             loop_id=getattr(loop_result, "loop_id", None),
                         )

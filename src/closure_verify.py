@@ -23,6 +23,7 @@ from typing import Any, Dict, List, Optional, TYPE_CHECKING
 if TYPE_CHECKING:
     from conversation import ConversationChannel
 
+from context_budget import clip, VERDICT_PROSE_CAP
 from llm_parse import extract_json, safe_float, safe_str, safe_list, content_or_empty
 
 log = logging.getLogger("maro.closure_verify")
@@ -309,8 +310,9 @@ _VERDICT_OPENER_RE = re.compile(
 def _verdict_first_summary(summary: str, *, complete: bool, judged: bool) -> str:
     """Open the stored summary with the FLAG's verdict, deterministically.
 
-    Every surface that shows goal_verdict_summary truncates it ([:300] metadata
-    stamps, [:120] logs), and the LLM's prose opener has already contradicted
+    Every surface that shows goal_verdict_summary bounds it (VERDICT_PROSE_CAP
+    metadata stamps — honest-clipped since the 2026-08-13 STORE widening —
+    [:120] logs), and the LLM's prose opener has already contradicted
     the flag once: run d2f4e2f4 recorded goal_achieved=false beside a summary
     whose visible prefix read "Goal achieved." The flag writes the opener; the
     prose can only elaborate, never contradict, in any truncated view.
@@ -1219,7 +1221,7 @@ def verify_goal_completion(
                         )
                         verdict_audit["overturned"] = "downgrade-cancelled"
                         verdict_audit["cancelled_reasons"] = [
-                            r[:200] for r in _pending_downgrades
+                            clip(r, 500) for r in _pending_downgrades
                         ]
                         behavioral_gap_reason = ""
                     else:
@@ -1344,8 +1346,8 @@ def verify_goal_completion(
         # Stamp the downgrade INTO the summary, leading, so every surface
         # that shows goal_verdict_summary (run card, CLI, decision prior)
         # carries the cause instead of the LLM's pre-downgrade "Goal
-        # achieved." narrative — leading keeps it inside the [:300]
-        # truncation the metadata write sites apply (run d2f4e2f4: card
+        # achieved." narrative — leading keeps it inside even the tightest
+        # bounded view the write sites apply (run d2f4e2f4: card
         # showed goal_achieved=false beside a 0.92-confidence positive
         # summary with the reason only in the worker log).
         downgrade_reason = "; ".join(
@@ -1590,7 +1592,7 @@ def verify_goal_completion(
                         1 for r in check_results if r.get("target_file_content")
                     ),
                     "commands": [r.get("command", "")[:200] for r in check_results],
-                    "summary": summary[:400],
+                    "summary": clip(summary, VERDICT_PROSE_CAP),
                     **_mh_label,
                 },
                 loop_id=loop_id or None,
@@ -1621,7 +1623,7 @@ def verify_goal_completion(
             "downgrade_reason": downgrade_reason,
             "verdict_audit": verdict_audit,
             "gaps": [str(g)[:300] for g in gaps],
-            "summary": summary[:500],
+            "summary": clip(summary, VERDICT_PROSE_CAP),
             "failed_checks": list(verdict.failed_checks),
             **_mh_label,
             "fingerprint": closure_fingerprint(verdict),
@@ -2305,7 +2307,7 @@ def _audit_positive_verdict(
             "ran": True,
             "agrees": raw_agrees,
             "agrees_typed": True,
-            "reason": safe_str(data.get("reason", ""))[:300],
+            "reason": clip(safe_str(data.get("reason", "")), VERDICT_PROSE_CAP),
             "confidence": safe_float(data.get("confidence"), default=0.0,
                                      min_val=0.0, max_val=1.0),
         }
@@ -2432,7 +2434,7 @@ def _audit_negative_verdict(
         evidence_block = _audit_artifact_evidence(check_results, workspace_path)
         reasons_block = (
             "Deterministic downgrade reason(s): " + "; ".join(
-                r[:200] for r in downgrade_reasons)
+                clip(r, 500) for r in downgrade_reasons)
             if downgrade_reasons else
             "Verdict source: the closure judge itself returned complete=False."
         )
@@ -2475,7 +2477,7 @@ def _audit_negative_verdict(
             "ran": True,
             "agrees": raw_agrees,
             "agrees_typed": True,
-            "reason": safe_str(data.get("reason", ""))[:300],
+            "reason": clip(safe_str(data.get("reason", "")), VERDICT_PROSE_CAP),
             "confidence": safe_float(data.get("confidence"), default=0.0,
                                      min_val=0.0, max_val=1.0),
         }

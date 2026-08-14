@@ -25,7 +25,16 @@ import json
 from pathlib import Path
 from typing import Any, List, Optional
 
-_DECISION_TRIED_CHARS = 400
+from context_budget import clip, LESSON_ENTRY_CAP
+
+# STORE-grade rationale caps, widened 2026-08-13 (arbitrary-truncation
+# audit, STORE worklist; measured over 155 live run cards): the old 400
+# bit 65% of what_was_tried values mid-word, and `why` NEVER reached it —
+# its input (goal_verdict_summary) arrived pre-cut at 300 upstream, a
+# stacked pair widened together in the same change. Cuts announce
+# themselves via clip(); a silent slice here is a rationale the next
+# re-attempt half-reads.
+_DECISION_TRIED_CHARS = 2000
 _DECISION_LESSON_CAP = 5
 
 
@@ -54,9 +63,14 @@ def make_decision_prior(
         "outcome": outcome,
         "goal_achieved": goal_achieved,
         "when": when,
-        "what_was_tried": str(what_was_tried or "")[:_DECISION_TRIED_CHARS],
-        "why": str(why or "")[:_DECISION_TRIED_CHARS],
-        "lessons": list(lessons or [])[:_DECISION_LESSON_CAP],
+        "what_was_tried": clip(what_was_tried, _DECISION_TRIED_CHARS),
+        "why": clip(why, _DECISION_TRIED_CHARS),
+        # Per-lesson cap enforced HERE (the schema owner), not at the
+        # callers: measured 2026-08-13, the old caller-side 200 fell below
+        # the MEDIAN stored lesson (254); LESSON_ENTRY_CAP holds every
+        # lesson yet observed whole.
+        "lessons": [clip(l, LESSON_ENTRY_CAP)
+                    for l in list(lessons or [])[:_DECISION_LESSON_CAP]],
     }
     if resume_from:
         prior["resume_from"] = resume_from
@@ -99,7 +113,7 @@ def load_decision_prior(handle_id: str) -> Optional[dict]:
         "outcome": card.get("success_class"),
         "goal_achieved": card.get("goal_achieved"),
         "when": card.get("started_at"),
-        "what_was_tried": (card.get("result_excerpt") or "")[:_DECISION_TRIED_CHARS],
+        "what_was_tried": clip(card.get("result_excerpt"), _DECISION_TRIED_CHARS),
         "why": card.get("goal_verdict_summary") or "",
         "lessons": [],
     }
@@ -107,7 +121,7 @@ def load_decision_prior(handle_id: str) -> Optional[dict]:
 
 def format_prior_decisions(attempts: Any, *, goal: str = "",
                            exclude_handle_id: str = "", k: int = 3,
-                           max_chars: int = 1000) -> str:
+                           max_chars: int = 6000) -> str:
     """Render up to k prior attempts' decision-priors as one injectable block.
 
     `attempts` are recall.PriorAttempt-shaped (only `.handle_id` is required;
@@ -145,8 +159,26 @@ def format_prior_decisions(attempts: Any, *, goal: str = "",
             break
     if not briefs:
         return ""
-    block = ("## Prior attempts at this goal — read before planning\n"
-             + "\n".join(briefs)
-             + "\nDo not repeat an approach that already failed the same way; "
-               "build on what worked, resume a partial, or change the approach.")
-    return block[:max_chars]
+
+    # Over-budget handling widened 2026-08-13 (truncation audit): the old
+    # `block[:1000]` was the BINDING hop for this whole lane — it silently
+    # cut mid-brief, mid-instruction, and after the entry caps widened it
+    # would have swallowed most of what they preserved. Whole briefs drop
+    # instead (announced), so what survives is readable; only a single
+    # pathologically long brief still gets clipped, and clip() says so.
+    def _render(bs: List[str], omitted: int) -> str:
+        note = (f"\n({omitted} older prior attempt(s) omitted for space.)"
+                if omitted else "")
+        return ("## Prior attempts at this goal — read before planning\n"
+                + "\n".join(bs) + note
+                + "\nDo not repeat an approach that already failed the same "
+                  "way; build on what worked, resume a partial, or change "
+                  "the approach.")
+
+    omitted = 0
+    block = _render(briefs, omitted)
+    while len(block) > max_chars and len(briefs) > 1:
+        briefs.pop()
+        omitted += 1
+        block = _render(briefs, omitted)
+    return clip(block, max_chars)

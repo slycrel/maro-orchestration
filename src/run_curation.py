@@ -52,6 +52,7 @@ log = logging.getLogger("run_curation")
 # names so existing call sites (this module's own CLI, prior_decision_context
 # below) and any external `run_curation.<name>` access keep working
 # (adversarial-review R1 batch-1 finding #2).
+from context_budget import clip
 from decision_prior import (
     make_decision_prior,
     load_decision_prior,
@@ -1189,9 +1190,12 @@ def rescue_partial(rd: Path, meta: dict, card: dict) -> None:
     log = _load_loop_log(rd)
     if log:
         steps = log.get("steps") or []
-        done = [{"index": s.get("index"), "text": (s.get("text") or "")[:200]}
+        # 500 holds the p99 step text whole (measured 2026-08-13: median 94,
+        # p99 456, max 1,036 over 3,375 steps); the old 200 bit ~10% of
+        # steps mid-word in the very brief meant to make resume possible.
+        done = [{"index": s.get("index"), "text": clip(s.get("text"), 500)}
                 for s in steps if s.get("status") == "done"]
-        blocked = [{"index": s.get("index"), "text": (s.get("text") or "")[:200]}
+        blocked = [{"index": s.get("index"), "text": clip(s.get("text"), 500)}
                    for s in steps if s.get("status") not in ("done", None)]
         rescue["done_steps"] = done
         rescue["n_done"] = len(done)
@@ -1199,7 +1203,9 @@ def rescue_partial(rd: Path, meta: dict, card: dict) -> None:
         if blocked:
             rescue["stuck_at"] = blocked[0]
         if log.get("stuck_reason"):
-            rescue["stuck_reason"] = str(log["stuck_reason"])[:300]
+            # 800 holds the max stuck_reason yet observed (594; the old 300
+            # cut the MEDIAN, 291 — measured 2026-08-13 over 183 loops).
+            rescue["stuck_reason"] = clip(log["stuck_reason"], 800)
     # Existing artifacts are the salvage — a follow-up shouldn't regenerate them.
     inv = card.get("inventory") or {}
     if inv.get("artifacts"):
@@ -1246,7 +1252,10 @@ def _run_lessons(meta: dict) -> List[str]:
             if key in seen:
                 continue
             seen.add(key)
-            out.append(str(lesson)[:200])
+            # No cap here — make_decision_prior clips each lesson at
+            # LESSON_ENTRY_CAP with a visible marker (the old 200 here cut
+            # the MEDIAN stored lesson, 254 chars, silently).
+            out.append(str(lesson))
             if len(out) >= _DECISION_LESSON_CAP:
                 return out
     return out
@@ -1274,14 +1283,23 @@ def index_decision_prior(rd: Path, meta: dict, card: dict) -> None:
         step_txts = [(s.get("text") or "").strip() for s in log["steps"]]
         step_txts = [t for t in step_txts if t][:6]
         if step_txts:
-            tried_parts.append("steps: " + "; ".join(t[:80] for t in step_txts))
+            # 200/step holds the p90 step title whole (median 94, p90 198,
+            # measured 2026-08-13 over 3,375 steps); the old 80 cut most of
+            # them. The composed field is bounded honestly downstream by
+            # make_decision_prior's clip — no silent pre-cut here.
+            tried_parts.append("steps: " + "; ".join(t[:200] for t in step_txts))
     if inv.get("scripts"):
         tried_parts.append("scripts: " + ", ".join(inv["scripts"][:5]))
     if inv.get("artifacts"):
         tried_parts.append("produced: " + ", ".join(inv["artifacts"][:5]))
     if not tried_parts and excerpt:
-        tried_parts.append(excerpt[:_DECISION_TRIED_CHARS])
-    what_was_tried = (" | ".join(tried_parts))[:_DECISION_TRIED_CHARS] or "no captured detail"
+        tried_parts.append(excerpt)
+    # No pre-slice: make_decision_prior owns the size caps and clips with a
+    # visible marker. A bare cut here at the same constant would silently
+    # pre-trim the value so the schema owner's clip never announces itself
+    # (the stacked-cut trap this lane was full of — see BACKLOG truncation
+    # audit, 2026-08-13 STORE pass).
+    what_was_tried = " | ".join(tried_parts) or "no captured detail"
 
     cls = card.get("success_class")
     why = card.get("goal_verdict_summary") or ""
@@ -1289,8 +1307,8 @@ def index_decision_prior(rd: Path, meta: dict, card: dict) -> None:
         _be = meta.get("backend_error")
         _be_action = _be.get("user_action") if isinstance(_be, dict) else ""
         why = ((card.get("partial_rescue") or {}).get("stuck_reason")
-               or why or _be_action or excerpt[-300:])
-    why = str(why or "")[:400]
+               or why or _be_action or excerpt[-1000:])
+    why = str(why or "")
 
     card["decision_prior"] = make_decision_prior(
         handle_id=card.get("handle_id"),

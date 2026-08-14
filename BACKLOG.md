@@ -2439,6 +2439,38 @@ capture**, which is what makes the rung amortize instead of evaporate.
   widen with an honest `clip()` marker (or budget) — not delete the bound
   blindly.
 
+  **STORE pass SHIPPED 2026-08-13 — every 2026-08-11 site plus the
+  stacked partners the trace found.** Measured first (box-copy workspace,
+  156 metadata stamps / 50 closure rows / 155 run cards / 459 lessons /
+  3,375 steps): verdict summaries **70% at-cap(300)**, stored closure
+  summaries **90% at-cap**, `decision_prior.lessons` **95.3% at-cap(200)**
+  — the cap sat below the MEDIAN lesson (254; p99 478, max 573) —
+  `what_was_tried` 65% at-cap(400), NOW summaries 29% at-cap(500), step
+  text p90 198 vs its [:200], stuck_reason median 291 vs its [:300]. And
+  `why` NEVER bound at 400 because its input arrived pre-cut at 300
+  upstream — the lane was full of stacked cuts where the silent hop hides
+  the honest one. Shipped: `VERDICT_PROSE_CAP` (2,000) +
+  `LESSON_ENTRY_CAP` (800) in context_budget, sized from the
+  distributions; all filed sites now `clip()` (goal_verdict_summary
+  stamps ×4 + stop-evidence/stuck_reason siblings, stored closure
+  summary + event twin, judge/audit parsed `reason` ×2, downgrade-reason
+  entries 200→500, navigator dispatch reasoning, NOW outcome summary);
+  stacked partners fixed in the same change so the widening actually
+  reaches disk: run_curation's hardcoded `why[:400]`, the tried-parts
+  pre-slices, step titles 80→200, resume-brief step text 200→500 +
+  stuck_reason 300→800, and `format_prior_decisions`' silent
+  `block[:1000]` — the binding hop for the whole read side — now drops
+  WHOLE briefs with an announced omission at a 6,000 default. The
+  gate-overrule captains-log context (gate_reason/closure_summary) was
+  caught by the new pin mid-build and widened too. Pins:
+  `TestStoreWorklistSitesUseClip` (idiom + cap floors + behavior). Suite
+  8561/0 skipped. **Still open here:** the `compress_old_outcomes`
+  compactor / retention decision (Jeremy's — now nearer, since rows can
+  carry ~2KB rationale); handle.py's `stop_evidence[:500]` trio and the
+  gaps entries ([:200]/[:300]) — unfiled, left unmeasured this pass;
+  the introspect lens item stays folded into the wide-view-seat design
+  question.
+
   **Method that worked, for whoever picks this up:** don't argue about the
   number — pull the actual distribution out of `runs/*/build/loop-*.json`
   (`result_length` is right there), tabulate `cut → % payloads intact / %

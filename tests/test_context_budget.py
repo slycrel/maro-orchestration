@@ -6,6 +6,8 @@ step re-sends everything before it. The old call sites had it backwards on
 both axes -- factory_thin capped entries at 200 chars (too tight to be
 evidence) with no total bound (unbounded where it actually grows).
 """
+import json
+
 import pytest
 
 from context_budget import (
@@ -173,3 +175,90 @@ class TestPromptWorklistSitesUseClip:
         from pathlib import Path
         src = Path(importlib.import_module(module).__file__).read_text()
         assert gone not in src, f"{module} still carries the silent cut {gone!r}"
+
+
+class TestStoreWorklistSitesUseClip:
+    """The 2026-08-13 STORE-worklist sites persist rationale honestly now.
+
+    Same pin style as the PROMPT class above: the *idiom* (no bare slice at
+    the old width), not line numbers. These fields are durable — a silent
+    mid-word cut here is a rationale a future re-attempt half-reads.
+    """
+
+    @pytest.mark.parametrize("module,gone", [
+        ("handle", "_stamp_reason[:300]"),
+        ("handle", "str(_closure.summary)[:300]"),
+        ("handle", "_closure_error[:300]"),
+        ("handle", 'outcome.get("result", ""))[:500]'),
+        ("closure_verify", 'data.get("reason", ""))[:300]'),
+        ("closure_verify", '"summary": summary[:500]'),
+        ("closure_verify", '"summary": summary[:400]'),
+        ("run_curation", "str(lesson)[:200]"),
+        ("run_curation", "excerpt[:_DECISION_TRIED_CHARS]"),
+        ("run_curation", 'str(log["stuck_reason"])[:300]'),
+        ("run_curation", 'str(why or "")[:400]'),
+        ("handle_queue", '"reasoning", ""))[:300]'),
+        ("decision_prior", 'str(why or "")[:_DECISION_TRIED_CHARS]'),
+        ("decision_prior", "return block[:max_chars]"),
+    ])
+    def test_old_bare_slice_gone(self, module, gone):
+        import importlib
+        from pathlib import Path
+        src = Path(importlib.import_module(module).__file__).read_text()
+        assert gone not in src, f"{module} still carries the silent cut {gone!r}"
+
+    def test_store_caps_hold_the_measured_distributions(self):
+        # Floors, not exact values: the caps were sized 2026-08-13 from the
+        # live distributions (closure/verdict prose censored max 500; lesson
+        # p99 478, max 573). Shrinking below these floors re-introduces the
+        # mid-word cuts the audit removed; growing them is a judgment call.
+        from context_budget import LESSON_ENTRY_CAP, VERDICT_PROSE_CAP
+        assert VERDICT_PROSE_CAP >= 2000
+        assert LESSON_ENTRY_CAP >= 800
+
+    def test_decision_prior_clips_announce_themselves(self):
+        from context_budget import LESSON_ENTRY_CAP
+        from decision_prior import make_decision_prior, _DECISION_TRIED_CHARS
+        long_lesson = "L" * (LESSON_ENTRY_CAP + 100)
+        long_tried = "T" * (_DECISION_TRIED_CHARS + 100)
+        prior = make_decision_prior(
+            handle_id="h1", goal="g", outcome="success", goal_achieved=True,
+            when="2026-08-13", what_was_tried=long_tried, why="w",
+            lessons=[long_lesson])
+        assert "[truncated:" in prior["what_was_tried"]
+        assert "[truncated:" in prior["lessons"][0]
+        # And a fitting value passes through whole, no marker.
+        assert make_decision_prior(
+            handle_id="h2", goal="g", outcome="success", goal_achieved=True,
+            when="2026-08-13", what_was_tried="short", why="w",
+            lessons=["small lesson"])["lessons"] == ["small lesson"]
+
+    def test_format_prior_decisions_drops_whole_briefs_not_midword(self, tmp_path, monkeypatch):
+        # Three fat priors against a budget that fits one: the block keeps
+        # whole briefs, announces the omission, and keeps its instruction
+        # footer — the old block[:1000] cut mid-brief with no notice.
+        import decision_prior as dp
+        briefs = {}
+        for i in range(3):
+            hid = f"run-{i}"
+            card = {"handle_id": hid, "goal": "g", "success_class": "failed",
+                    "goal_achieved": False, "started_at": "2026-08-13",
+                    "decision_prior": {
+                        "handle_id": hid, "goal": "g", "outcome": "failed",
+                        "goal_achieved": False, "when": "2026-08-13",
+                        "what_was_tried": f"attempt {i}: " + "x" * 600,
+                        "why": "y" * 200, "lessons": []}}
+            rd = tmp_path / hid
+            rd.mkdir()
+            (rd / "run_card.json").write_text(json.dumps(card))
+            briefs[hid] = rd
+        monkeypatch.setattr(dp, "_run_dir_for", lambda hid: briefs.get(hid))
+        block = dp.format_prior_decisions(
+            [{"handle_id": h} for h in briefs], max_chars=1200)
+        assert "attempt 0" in block
+        assert "omitted for space" in block
+        assert block.rstrip().endswith("change the approach.")
+        # Wide default: all three ride whole, nothing dropped or clipped.
+        full = dp.format_prior_decisions([{"handle_id": h} for h in briefs])
+        assert all(f"attempt {i}" in full for i in range(3))
+        assert "omitted for space" not in full and "[truncated:" not in full

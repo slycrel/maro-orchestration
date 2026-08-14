@@ -22,6 +22,7 @@ from datetime import datetime, timezone
 from typing import List, Optional
 
 from ancestry import Origin
+from context_budget import clip, VERDICT_PROSE_CAP
 
 log = logging.getLogger("maro.handle")
 
@@ -364,8 +365,13 @@ def handle_task(
                         "move": str(getattr(_nav_decision, "move", "")),
                         "confidence": float(
                             getattr(_nav_decision, "confidence", 0.0) or 0.0),
-                        "reasoning": str(
-                            getattr(_nav_decision, "reasoning", ""))[:300],
+                        # Verdict-grade prose: the navigator acts LIVE at
+                        # dispatch (can block a run), so its recorded
+                        # rationale is audit evidence — honest-clipped, not
+                        # silently cut at 300 (2026-08-13 STORE widening).
+                        "reasoning": clip(
+                            getattr(_nav_decision, "reasoning", ""),
+                            VERDICT_PROSE_CAP),
                     }
                 except Exception:
                     pass
