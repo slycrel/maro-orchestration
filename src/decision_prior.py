@@ -171,6 +171,15 @@ def format_prior_decisions(attempts: Any, *, goal: str = "",
             line += f". Resume: {dp['resume_from']}"
         briefs.append(line)
         if len(briefs) >= k:
+            # Count cut announced (round-14 review): more usable priors
+            # may exist beyond the render cap.
+            remaining = sum(
+                1 for b in (attempts or [])[len(seen):]
+                if (b.get("handle_id") if isinstance(b, dict)
+                    else getattr(b, "handle_id", None)))
+            if remaining:
+                briefs.append(f"(+{remaining} earlier attempt(s) not "
+                              "shown; recall serves the most recent)")
             break
     if not briefs:
         return ""

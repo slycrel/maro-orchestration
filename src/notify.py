@@ -103,12 +103,20 @@ def escalations_path():
 
 def _write_escalation_file(event_type: str, payload: dict) -> None:
     from datetime import datetime, timezone
+    from context_budget import clip as _esc_clip
     from file_lock import locked_append
     entry = {
         "ts": datetime.now(timezone.utc).isoformat(),
         "event_type": event_type,
         **payload,
     }
+    # The durable escalation ledger owns its bounds (round-14 review: a
+    # sender passed 5,000 chars of raw navigator reasoning straight to
+    # disk while the captain's-log copy was clipped — per-sender bounding
+    # cannot be trusted at a shared boundary).
+    for _k in ("summary", "reason", "detail"):
+        if isinstance(entry.get(_k), str):
+            entry[_k] = _esc_clip(entry[_k], 2000)
     locked_append(escalations_path(), json.dumps(entry, default=str))
 
 

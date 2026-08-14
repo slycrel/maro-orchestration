@@ -1,3 +1,7 @@
+---
+status: record
+---
+
 # Why every review round finds severe edges — retrospective at round 13
 
 **Question (Jeremy, 2026-08-14):** "Let's see if we can identify why we

@@ -1194,7 +1194,14 @@ class TestDecisionDirective:
         # valid ones don't eat the budget (chunk-3 adversarial review).
         assert decs is not None and len(decs) == 2
         assert decs[0]["decision"] == "Use CSV output"
-        assert len(decs[0]["rationale"]) == 300  # capped
+        # 800 + announced marker since the 2026-08-14 round-14 review (the
+        # old chained-.strip() bare 300 evaded the AST tripwire and cut a
+        # durable-journal rationale silently). The probe rationale is 400
+        # chars, so it now rides whole.
+        assert len(decs[0]["rationale"]) == 400
+        long_rationale = "r" * 900
+        from context_budget import clip as _clip_probe
+        assert "truncated: first 800 of 900" in _clip_probe(long_rationale, 800)
         assert decs[1]["decision"] == "Second valid decision"
 
     def test_decisions_context_injection(self, tmp_path, monkeypatch):

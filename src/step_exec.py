@@ -1813,8 +1813,13 @@ def execute_step(
                         break
                     if not isinstance(_rd, dict):
                         continue
-                    _d_txt = str(_rd.get("decision", "")).strip()[:200]
-                    _d_why = str(_rd.get("rationale", "")).strip()[:300]
+                    from context_budget import clip as _dc_clip
+                    _d_txt = _dc_clip(str(_rd.get("decision", "")).strip(), 500)
+                    # 800: stuck_reason-family sizing; this rationale rides
+                    # the durable decision journal and later prompt
+                    # injection (round-14 review — the chained .strip()
+                    # had evaded the AST tripwire).
+                    _d_why = _dc_clip(str(_rd.get("rationale", "")).strip(), 800)
                     if _d_txt and _d_why:
                         _clean_decisions.append(
                             {"decision": _d_txt, "rationale": _d_why})

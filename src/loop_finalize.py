@@ -1109,7 +1109,12 @@ def _mint_run_risks_to_project(project: str, loop_id: str) -> int:
                 if isinstance(row, dict) and row.get("loop_id") == loop_id:
                     verdict_row = row  # last matching row wins (restarts append)
         if verdict_row and not verdict_row.get("skipped"):
-            for gap in (verdict_row.get("gaps") or [])[:3]:
+            _all_vgaps = list(verdict_row.get("gaps") or [])
+            if len(_all_vgaps) > 3:
+                lines.append(
+                    f"({len(_all_vgaps) - 3} more closure gap(s) beyond the "
+                    f"three below — full list in the run's closure verdict)")
+            for gap in _all_vgaps[:3]:
                 # One physical line per gap — LLM-derived gap text can carry
                 # embedded newlines, which would break the markdown bullet
                 # and make the <=3 cap a lie (round-2 review 2026-08-10).

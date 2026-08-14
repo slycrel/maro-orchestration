@@ -619,6 +619,8 @@ def _closure_verdict_pass(goal_str: str, result, *, dry_run: bool = False):
             summary=str(_verdict.summary),
             downgrade_reason=str(
                 getattr(_verdict, "downgrade_reason", "") or ""),
+            gaps=([g for g in (getattr(_verdict, "gaps", None) or []) if g]
+                  if not _verdict.complete else None),
         )
     except Exception:
         pass

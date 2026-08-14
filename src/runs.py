@@ -595,7 +595,7 @@ def stamp_run_verdict(
     confidence: float,
     summary: str,
     downgrade_reason: str = "",
-    gaps: Optional[list] = None,
+    gaps: Optional[list],
 ) -> Optional[Path]:
     """Replace the active run's latest goal verdict, preserving tri-state.
 
@@ -610,8 +610,12 @@ def stamp_run_verdict(
     ``gaps`` likewise (2026-08-14 fixpoint round, 3-lens consensus HIGH:
     this writer replaced every tuple member EXCEPT gaps, so an achieved
     retry kept its failed predecessor's "Missing:" list): a non-empty list
-    replaces ``goal_verdict_gaps`` (each entry honest-clipped, at most 5);
-    None/empty removes any stale one. The verdict tuple is replaced WHOLE
+    replaces ``goal_verdict_gaps`` (each entry honest-clipped; at most 5
+    ride, with an explicit omission entry when more existed); None/empty
+    removes any stale one. ``gaps`` is REQUIRED, no default (round-14
+    review, 3-lens consensus: a destructive default let two unmigrated
+    callers silently CLEAR their verdicts' real gaps — every caller must
+    choose set-or-clear explicitly). The verdict tuple is replaced WHOLE
     or not at all.
     """
     try:
@@ -636,7 +640,14 @@ def stamp_run_verdict(
                     clip(downgrade_reason, VERDICT_PROSE_CAP))
             else:
                 existing.pop("goal_verdict_downgrade_reason", None)
-            _gaps = [clip(g, 500) for g in (gaps or []) if g][:5]
+            _all_gaps = [clip(g, 500) for g in (gaps or []) if g]
+            _gaps = _all_gaps[:5]
+            if len(_all_gaps) > 5:
+                # Count cuts announce themselves like char cuts do
+                # (round-14 review: five-of-seven gaps rendered as
+                # a complete list).
+                _gaps.append(f"(+{len(_all_gaps) - 5} more gap(s) in the "
+                             "closure verdict artifact)")
             if _gaps:
                 existing["goal_verdict_gaps"] = _gaps
             else:
@@ -645,6 +656,70 @@ def stamp_run_verdict(
                 existing.pop("goal_achieved", None)
             else:
                 existing["goal_achieved"] = bool(goal_achieved)
+            index_run_dir(rd, existing)
+            return json.dumps(existing, indent=2, default=str)
+
+        from file_lock import locked_rmw
+        locked_rmw(meta_path, _merge)
+        return meta_path
+    except Exception:
+        return None
+
+
+def stamp_delivered_now_retry(
+    *,
+    retry_marker: str,
+    judged: bool,
+    goal_achieved: Optional[bool] = None,
+    source: str = "",
+    summary: str = "",
+    stop_verdict: str = "",
+    stop_evidence: str = "",
+) -> Optional[Path]:
+    """Replace the active run's delivered-retry state in ONE locked write.
+
+    Round-14 review (Skeptic HIGH): the retry block's write-then-clear
+    sequence was three separate mutations whose clear halves swallowed
+    failures — an injected failure between them recreated exactly the
+    contradictory states (achieved=true beside a stale lost-the-plot;
+    an unjudged delivery beside its predecessor's false verdict) the
+    round-13 fixes existed to remove. One merge function now sets the
+    retry marker, then sets OR removes the verdict tuple (judged /
+    unjudged) and the stop tuple, atomically. Returns None on failure —
+    callers must surface that, not ignore it.
+    """
+    try:
+        rd = current_run_dir()
+        if rd is None:
+            return None
+        meta_path = rd / "metadata.json"
+
+        def _merge(old: str) -> str:
+            try:
+                existing = json.loads(old) if old else {}
+            except Exception:
+                existing = {}
+            if not isinstance(existing, dict):
+                existing = {}
+            existing["now_artifact_retry"] = retry_marker
+            if judged:
+                existing["goal_achieved"] = bool(goal_achieved)
+                existing["goal_verdict_source"] = source
+                existing["goal_verdict_summary"] = clip(
+                    summary, VERDICT_PROSE_CAP)
+            else:
+                for key in ("goal_achieved", "goal_verdict_source",
+                            "goal_verdict_confidence",
+                            "goal_verdict_summary",
+                            "goal_verdict_downgrade_reason",
+                            "goal_verdict_gaps"):
+                    existing.pop(key, None)
+            if stop_verdict:
+                existing["stop_verdict"] = str(stop_verdict)
+                existing["stop_evidence"] = clip(stop_evidence, 800)
+            else:
+                existing.pop("stop_verdict", None)
+                existing.pop("stop_evidence", None)
             index_run_dir(rd, existing)
             return json.dumps(existing, indent=2, default=str)
 

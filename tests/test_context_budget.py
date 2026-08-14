@@ -320,7 +320,7 @@ class TestReviewRoundBehaviors:
         runs.stamp_run_verdict(
             source="closure", confidence=0.9,
             summary="s" * 900, goal_achieved=True,
-            downgrade_reason="d" * 900)
+            downgrade_reason="d" * 900, gaps=None)
         meta = json.loads((rd / "metadata.json").read_text())
         assert meta["goal_verdict_summary"].startswith("s" * 900)
         assert meta["goal_verdict_downgrade_reason"].startswith("d" * 900)
@@ -381,15 +381,54 @@ class TestFixpointRoundBehaviors:
         assert meta["status"] == "done"   # non-verdict keys untouched
 
     def test_retry_stamp_always_replaces_summary(self):
-        # Source pin for the consensus HIGH: the judged-retry stamp must
-        # write goal_verdict_summary unconditionally (placeholder when the
-        # judge gave a bare boolean), because write_metadata preserves
-        # omitted keys. The unjudged path must clear the stale tuple.
+        # Source pin for the consensus HIGH, updated for round 14: the
+        # delivered retry's state is replaced in ONE atomic write
+        # (stamp_delivered_now_retry) — judged retries carry a summary
+        # unconditionally (placeholder when the judge gave a bare
+        # boolean); unjudged delivery clears the verdict tuple; the stop
+        # tuple sets-or-clears in the same write; a failed stamp is
+        # surfaced, not swallowed.
         import importlib
         from pathlib import Path
         src = Path(importlib.import_module("handle").__file__).read_text()
-        assert "retry judged; no rationale recorded by " in src
-        assert "clear_run_verdict as _cv_rr" in src
+        assert "retry judged; no rationale recorded " in src
+        assert "stamp_delivered_now_retry as _sdr_rr" in src
+        assert "delivered-state stamp FAILED" in src
+
+    def test_stamp_delivered_now_retry_state_matrix(self, tmp_path, monkeypatch):
+        # The round-14 state matrix through the real writer: judged
+        # replaces the tuple; unjudged clears it; stop tuple follows its
+        # own set-or-clear in the SAME atomic write.
+        import runs
+        rd = tmp_path / "run"
+        rd.mkdir()
+        (rd / "metadata.json").write_text(json.dumps({
+            "handle_id": "h1", "goal_achieved": False,
+            "goal_verdict_source": "provenance",
+            "goal_verdict_summary": "first attempt failed",
+            "goal_verdict_gaps": ["stale gap"],
+            "stop_verdict": "lost-the-plot",
+            "stop_evidence": "old evidence", "status": "done"}))
+        monkeypatch.setattr(runs, "current_run_dir", lambda: rd)
+        monkeypatch.setattr(runs, "index_run_dir", lambda *a, **k: None)
+        runs.stamp_delivered_now_retry(
+            retry_marker="recovered", judged=True, goal_achieved=True,
+            source="now_self_verdict", summary="retry delivered")
+        meta = json.loads((rd / "metadata.json").read_text())
+        assert meta["goal_achieved"] is True
+        assert meta["goal_verdict_summary"] == "retry delivered"
+        assert "stop_verdict" not in meta and "stop_evidence" not in meta
+        assert meta["now_artifact_retry"] == "recovered"
+        # Unjudged delivery clears the whole verdict tuple.
+        runs.stamp_delivered_now_retry(
+            retry_marker="unrecovered", judged=False,
+            stop_verdict="lost-the-plot", stop_evidence="retry evidence")
+        meta = json.loads((rd / "metadata.json").read_text())
+        for key in ("goal_achieved", "goal_verdict_source",
+                    "goal_verdict_summary", "goal_verdict_gaps"):
+            assert key not in meta, key
+        assert meta["stop_verdict"] == "lost-the-plot"
+        assert meta["stop_evidence"] == "retry evidence"
 
     def test_small_budget_contracts_hold(self, tmp_path, monkeypatch):
         import decision_prior as dp
@@ -446,7 +485,8 @@ class TestRound13Behaviors:
         # predecessor's "Missing:" list.
         runs, rd = self._seeded(tmp_path, monkeypatch)
         runs.stamp_run_verdict(goal_achieved=True, source="closure",
-                               confidence=0.95, summary="delivered")
+                               confidence=0.95, summary="delivered",
+                               gaps=None)
         meta = json.loads((rd / "metadata.json").read_text())
         assert meta["goal_achieved"] is True
         assert "goal_verdict_gaps" not in meta

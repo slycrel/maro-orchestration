@@ -55,6 +55,17 @@ def _name_hint(node: ast.AST) -> str:
             a = node.args[1]
             if isinstance(a, ast.Constant) and isinstance(a.value, str):
                 return a.value
+        if isinstance(f, ast.Attribute):
+            # Chained normalizers — x.strip()[:N], " ".join(x)[:N] — carry
+            # the base value's identity (round-14 review: .strip() evaded
+            # the sweep and hid a durable-journal rationale cut).
+            h = _name_hint(f.value)
+            if h:
+                return h
+            for a in node.args:
+                h = _name_hint(a)
+                if h:
+                    return h
     if isinstance(node, ast.BinOp):
         return _name_hint(node.left) or _name_hint(node.right)
     if isinstance(node, ast.JoinedStr):
@@ -77,10 +88,10 @@ def scan_bare_family_slices() -> Counter:
     rationale-family name in src/."""
     hits: Counter = Counter()
     for path in sorted((REPO / "src").glob("*.py")):
-        try:
-            tree = ast.parse(path.read_text())
-        except SyntaxError:
-            continue
+        # Unparseable source is a hard failure, not a skip: a SyntaxError
+        # silently excluded a whole module from the census once (the file
+        # healed, and its every site then read as "new").
+        tree = ast.parse(path.read_text())
         for node in ast.walk(tree):
             if not isinstance(node, ast.Subscript):
                 continue
@@ -123,10 +134,36 @@ def test_no_new_silent_rationale_slices():
 def test_inventory_only_shrinks_marker():
     """The frozen debt count, asserted as a ceiling with its vintage.
 
-    2026-08-14 baseline: 163 occurrences across 120 sites (down from 168
-    before the round-13 fixes). Raising the ceiling requires editing this
-    test — which is the point: growth is a decision someone has to own in
-    review, never a drift. Shrink it as the burn-down proceeds.
+    2026-08-14 baseline: 164 occurrences across 120 sites (down from 168
+    before the round-13 fixes; the round-14 scanner upgrade sees chained
+    normalizers, so the census is broader AND smaller). Raising the
+    ceiling requires editing this test — which is the point: growth is a
+    decision someone has to own in review, never a drift. Shrink it as
+    the burn-down proceeds.
     """
     inventory = json.loads(INVENTORY_PATH.read_text())
-    assert sum(inventory.values()) <= 163
+    assert sum(inventory.values()) <= 164
+
+
+def test_scanner_detects_each_supported_shape():
+    """Must-detect fixtures (round-14 review: the scanner had been
+    validated only against its own census, never against shapes designed
+    to evade it)."""
+    shapes = {
+        "plain name": "x = summary[:300]\n",
+        "attribute": "x = obj.reasoning[:600]\n",
+        "str() wrap": "x = str(reason)[:300]\n",
+        "dict get": 'x = d.get("stop_evidence", "")[:500]\n',
+        "getattr": 'x = getattr(o, "rationale", "")[:300]\n',
+        "chained strip": "x = str(rationale).strip()[:300]\n",
+        "join over parts": 'x = " ".join(lesson)[:200]\n',
+        "f-string": 'x = f"why: {why}"[:400]\n',
+    }
+    for label, src in shapes.items():
+        tree = ast.parse(src)
+        found = False
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Subscript):
+                hint = _name_hint(node.value)
+                found = bool(hint and FAMILY.search(hint))
+        assert found, f"scanner missed the {label} shape: {src!r}"

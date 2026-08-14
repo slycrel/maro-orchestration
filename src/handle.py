@@ -1620,60 +1620,60 @@ def _handle_impl(
                     handle_id, message, _retry.get("result", ""),
                     _retry.get("elapsed_ms", 0), suffix="-retry")
                 try:
-                    from runs import write_metadata as _wm_rr
-                    from runs import current_run_dir as _crd_rr
-                    _rd_rr = _crd_rr()
-                    if _rd_rr is not None:
-                        _extra_rr = {"now_artifact_retry": (
-                            "recovered" if _recovered else "unrecovered")}
-                        if "goal_achieved" in outcome:
-                            _extra_rr["goal_achieved"] = \
-                                bool(outcome["goal_achieved"])
+                    _rr_marker = "recovered" if _recovered else "unrecovered"
+                    if _retry_delivered:
+                        # ONE atomic replacement of the delivered state
+                        # (round-14 review, Skeptic HIGH: the previous
+                        # write-then-clear trio could fail between
+                        # mutations and recreate the very contradictions
+                        # — achieved=true beside stale lost-the-plot —
+                        # the round-13 fixes removed). Judged retries
+                        # replace the verdict tuple; unjudged delivery
+                        # clears it (absence = the schema's "unjudged");
+                        # the stop tuple sets or clears in the same write.
+                        from runs import (
+                            stamp_delivered_now_retry as _sdr_rr)
+                        _rr_judged = "goal_achieved" in outcome
+                        _rr_path = _sdr_rr(
+                            retry_marker=_rr_marker,
+                            judged=_rr_judged,
+                            goal_achieved=(bool(outcome["goal_achieved"])
+                                           if _rr_judged else None),
                             # Source mirrors the terminal stamp's selection
-                            # (the old hardcoded "now_self_verdict" mislabeled
+                            # (a hardcoded "now_self_verdict" mislabeled
                             # provenance-demoted retries).
-                            _extra_rr["goal_verdict_source"] = (
-                                "provenance"
-                                if outcome.get("provenance_missing")
-                                else ("now_self_verdict_free"
-                                      if outcome.get("now_verify_family")
-                                      == "hosted_free"
-                                      else "now_self_verdict"))
-                            # REPLACE semantics on the whole tuple (fixpoint
-                            # review 2026-08-14, consensus HIGH):
-                            # write_metadata preserves omitted keys, so a
-                            # judged retry with a bare boolean would leave
-                            # the FIRST attempt's failure rationale standing
-                            # beside the retry's verdict. Always write the
-                            # summary — placeholder when the judge gave none.
-                            _extra_rr["goal_verdict_summary"] = (
-                                clip(outcome.get("goal_verdict_summary"),
-                                     VERDICT_PROSE_CAP)
-                                or "retry judged; no rationale recorded by "
-                                   "the self-verdict")
-                        # Stop tuple gets the same replace-or-clear treatment
-                        # (fixpoint round 2026-08-14, Skeptic HIGH: a
-                        # recovered retry kept attempt one's
-                        # stop_verdict="lost-the-plot" beside status=done).
-                        if _retry_delivered and outcome.get("stop_verdict"):
-                            _extra_rr["stop_verdict"] = str(
-                                outcome["stop_verdict"])
-                            _extra_rr["stop_evidence"] = clip(
-                                outcome.get("stop_evidence"), 800)
-                        _wm_rr(_rd_rr, handle_id=handle_id,
-                               prompt=_raw_input, extra=_extra_rr)
-                        if (_retry_delivered
-                                and not outcome.get("stop_verdict")):
-                            from runs import clear_run_stop_verdict as _cs_rr
-                            _cs_rr()
-                        if _retry_delivered and "goal_achieved" not in outcome:
-                            # Delivered but UNJUDGED retry: the first
-                            # attempt's verdict tuple must not describe the
-                            # delivered outcome — absence is the schema's
-                            # "unjudged", and it has to be written
-                            # explicitly (same review finding).
-                            from runs import clear_run_verdict as _cv_rr
-                            _cv_rr()
+                            source=("provenance"
+                                    if outcome.get("provenance_missing")
+                                    else ("now_self_verdict_free"
+                                          if outcome.get("now_verify_family")
+                                          == "hosted_free"
+                                          else "now_self_verdict")),
+                            summary=(str(outcome.get(
+                                "goal_verdict_summary") or "")
+                                or "retry judged; no rationale recorded "
+                                   "by the self-verdict"),
+                            stop_verdict=str(
+                                outcome.get("stop_verdict") or ""),
+                            stop_evidence=str(
+                                outcome.get("stop_evidence") or ""),
+                        )
+                        if _rr_path is None:
+                            log.warning(
+                                "now-retry: delivered-state stamp FAILED — "
+                                "metadata may describe attempt 1, not the "
+                                "delivered retry (handle %s)", handle_id)
+                    else:
+                        # Errored retry: attempt 1 remains the delivered
+                        # outcome and its tuples stand — record only the
+                        # attempt marker (merge write is fine, nothing to
+                        # clear).
+                        from runs import write_metadata as _wm_rr
+                        from runs import current_run_dir as _crd_rr
+                        _rd_rr = _crd_rr()
+                        if _rd_rr is not None:
+                            _wm_rr(_rd_rr, handle_id=handle_id,
+                                   prompt=_raw_input,
+                                   extra={"now_artifact_retry": _rr_marker})
                 except Exception:
                     pass
                 if not dry_run:
@@ -1698,6 +1698,14 @@ def _handle_impl(
                                 if _r_judged else ""),
                             measurement_class=measurement_class,
                             handle_id=handle_id,
+                            # Round-14 review (Architect HIGH): the retry
+                            # row carried no stop tuple while metadata and
+                            # the attempt-1 row both did — a demoted retry
+                            # looked clean in the ledger.
+                            stop_verdict=str(
+                                _retry.get("stop_verdict") or ""),
+                            stop_evidence=clip(
+                                _retry.get("stop_evidence"), 800),
                         )
                     except Exception:
                         pass
@@ -3544,6 +3552,11 @@ def _handle_impl(
                                             downgrade_reason=str(getattr(
                                                 _post_closure,
                                                 "downgrade_reason", "") or ""),
+                                            gaps=([g for g in (
+                                                _post_closure.gaps or [])
+                                                if g]
+                                                if not _post_closure.complete
+                                                else None),
                                         )
                                     except Exception:
                                         pass

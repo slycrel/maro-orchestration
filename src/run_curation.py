@@ -1214,6 +1214,8 @@ def rescue_partial(rd: Path, meta: dict, card: dict) -> None:
     inv = card.get("inventory") or {}
     if inv.get("artifacts"):
         rescue["artifacts"] = inv["artifacts"][:20]
+        if len(inv["artifacts"]) > 20:
+            rescue["artifacts_omitted"] = len(inv["artifacts"]) - 20
     # Point at the human-readable partial transcript when one was written.
     build = rd / "build"
     partials = sorted(build.glob("loop-*-PARTIAL.md")) if build.is_dir() else []
@@ -1252,7 +1254,10 @@ def _run_lessons(meta: dict) -> List[str]:
         except Exception:
             oc = None
         for lesson in (getattr(oc, "lessons", None) or []):
-            key = str(lesson)[:80]
+            # Full-text identity (round-14 review: an 80-char dedup key
+            # merged distinct lessons sharing a prefix, and the loss was
+            # unannounceable downstream).
+            key = str(lesson)
             if key in seen:
                 continue
             seen.add(key)

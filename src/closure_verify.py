@@ -1574,7 +1574,9 @@ def verify_goal_completion(
                     "gap_count": len(gaps),
                     # Gap text, not just count — burn-in batch 2 adjudication
                     # needed the actual gaps to attribute a wrong verdict.
-                    "gaps": [clip(g, 500) for g in gaps[:5]],
+                    "gaps": ([clip(g, 500) for g in gaps[:5]]
+                             + ([f"(+{len(gaps) - 5} more)"]
+                                if len(gaps) > 5 else [])),
                     "scope_supplied": scope is not None,
                     "modality_distribution": modality_dist,
                     "behavioral_probe_waived": behavioral_probe_waived,

@@ -2582,6 +2582,34 @@ capture**, which is what makes the rung amortize instead of evaporate.
   probes through real writers + adversarial self-probe of every new
   contract before landing. Suite 8602/0 skipped. Round 14 = the
   convergence check.
+  **Round 14 (2026-08-14) — REJECT, but narrowing: 2 HIGHs + ~6
+  mediums deduped, all in the tuple/count/scanner domain (no new field
+  classes), all real, all fixed same session; the Minimalist
+  independently confirmed the round-13 retry matrix now passes.** The
+  HIGHs were round-13's own code, again: (1) the write-then-clear trio
+  was non-atomic with swallowed failures — an injected failure between
+  mutations recreated the exact contradictions round 13 fixed; now ONE
+  atomic `runs.stamp_delivered_now_retry()` (marker + verdict tuple
+  set-or-clear + stop tuple set-or-clear in a single locked_rmw,
+  failure surfaced via log.warning); (2) the delivered retry's OUTCOME
+  ROW carried no stop tuple while metadata did (ledger looked clean on
+  a demoted retry) — now passed through. The instructive medium: my
+  round-13 `gaps=None` DEFAULT flipped the failure direction — two
+  unmigrated callers (CLI closure, post-escalation) silently CLEARED
+  their negative verdicts' real gaps; `gaps` is now a REQUIRED kwarg
+  (a destructive default let incomplete migrations pass silently) and
+  both callers pass it. Count caps announce everywhere they bite
+  (schema-owner gaps [:5] "+N more", closure event gaps, prior-attempt
+  render k, rescue artifacts, risk-mint [:3]); the escalation ledger
+  owns its bounds (a sender wrote 5,000 raw navigator-reasoning chars
+  verbatim to escalations.jsonl); `_run_lessons` dedup uses full-text
+  identity (80-char key merged distinct lessons); step-decision
+  rationale clip 800 (the chained `.strip()[:300]` that EVADED the
+  tripwire — scanner now unwraps chained normalizers, has must-detect
+  fixtures for every supported shape, and hard-fails on unparseable
+  src after the census silently skipped a file with a transient syntax
+  error and mislabeled its sites "new"). Inventory rebuilt: 164/120.
+  Suite 8604/0 skipped. Round 15 next.
 
   **Method that worked, for whoever picks this up:** don't argue about the
   number — pull the actual distribution out of `runs/*/build/loop-*.json`

@@ -473,8 +473,7 @@ def test_stamp_run_verdict_replaces_boolean_with_unjudged(workspace):
             goal_achieved=None,
             source="closure_unverifiable",
             confidence=0.4,
-            summary="checks were inconclusive",
-        )
+            summary="checks were inconclusive", gaps=None)
         meta = json.loads((rd / "metadata.json").read_text())
         assert "goal_achieved" not in meta
         assert meta["goal_verdict_source"] == "closure_unverifiable"
@@ -498,8 +497,7 @@ def test_stamp_run_verdict_downgrade_reason_only_when_nonempty(workspace):
             confidence=0.92,
             summary="Downgraded to not-achieved — no behavioral probe. "
                     "Original verdict: Goal achieved.",
-            downgrade_reason="no behavioral probe and no logged waiver",
-        )
+            downgrade_reason="no behavioral probe and no logged waiver", gaps=None)
         meta = json.loads((rd / "metadata.json").read_text())
         assert meta["goal_verdict_downgrade_reason"] == (
             "no behavioral probe and no logged waiver")
@@ -507,8 +505,7 @@ def test_stamp_run_verdict_downgrade_reason_only_when_nonempty(workspace):
             goal_achieved=True,
             source="closure",
             confidence=0.95,
-            summary="Goal achieved on retry.",
-        )
+            summary="Goal achieved on retry.", gaps=None)
         meta = json.loads((rd / "metadata.json").read_text())
         assert "goal_verdict_downgrade_reason" not in meta
     finally:
