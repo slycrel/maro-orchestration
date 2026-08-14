@@ -818,7 +818,10 @@ def test_risk_mint_writes_gaps_and_scope_failure(monkeypatch, tmp_path):
 
 def test_risk_mint_caps_total_at_three(monkeypatch, tmp_path):
     """Adversarial review 2026-08-10: three gaps + the scope sentinel made
-    four lines. <=3 TOTAL; the sentinel outranks the trailing gap."""
+    four lines. <=3 RISK lines; the sentinel outranks the trailing gap.
+    Round-15 update: the selection is computed FIRST and one annotation
+    line announces exactly what was dropped (the earlier note-then-cap
+    order capped the note WITH the gaps and made it a lie)."""
     _setup(monkeypatch, tmp_path)
     import loop_finalize
     from orch_items import ensure_project, risks_path
@@ -827,10 +830,11 @@ def test_risk_mint_caps_total_at_three(monkeypatch, tmp_path):
                   gaps=["gap one", "gap two", "gap three"],
                   scope_failed=True)
     n = loop_finalize._mint_run_risks_to_project("proj-r6", "lp-r6")
-    assert n == 3
+    assert n == 4  # 3 risk lines + 1 omission annotation
     text = risks_path("proj-r6").read_text(encoding="utf-8")
     assert "gap one" in text and "gap two" in text
     assert "gap three" not in text
+    assert "1 more closure gap(s) from run lp-r6 not minted" in text
     assert "without scope injection" in text
 
 

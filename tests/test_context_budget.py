@@ -288,12 +288,12 @@ class TestStoreWorklistSitesUseClip:
         block = dp.format_prior_decisions(
             [{"handle_id": h} for h in briefs], max_chars=1200)
         assert "attempt 0" in block
-        assert "omitted for space" in block
+        assert "more prior attempt(s) not shown" in block
         assert block.rstrip().endswith("change the approach.")
         # Wide default: all three ride whole, nothing dropped or clipped.
         full = dp.format_prior_decisions([{"handle_id": h} for h in briefs])
         assert all(f"attempt {i}" in full for i in range(3))
-        assert "omitted for space" not in full and "[truncated:" not in full
+        assert "not shown" not in full and "[truncated:" not in full
 
 
 class TestReviewRoundBehaviors:
@@ -405,7 +405,9 @@ class TestFixpointRoundBehaviors:
         (rd / "metadata.json").write_text(json.dumps({
             "handle_id": "h1", "goal_achieved": False,
             "goal_verdict_source": "provenance",
+            "goal_verdict_confidence": 0.91,
             "goal_verdict_summary": "first attempt failed",
+            "goal_verdict_downgrade_reason": "no behavioral probe",
             "goal_verdict_gaps": ["stale gap"],
             "stop_verdict": "lost-the-plot",
             "stop_evidence": "old evidence", "status": "done"}))
@@ -417,6 +419,12 @@ class TestFixpointRoundBehaviors:
         meta = json.loads((rd / "metadata.json").read_text())
         assert meta["goal_achieved"] is True
         assert meta["goal_verdict_summary"] == "retry delivered"
+        # WHOLE-tuple replacement (round-15 review: this branch's own
+        # field list had drifted — stale confidence/downgrade/gaps
+        # survived a judged transition).
+        for key in ("goal_verdict_confidence",
+                    "goal_verdict_downgrade_reason", "goal_verdict_gaps"):
+            assert key not in meta, key
         assert "stop_verdict" not in meta and "stop_evidence" not in meta
         assert meta["now_artifact_retry"] == "recovered"
         # Unjudged delivery clears the whole verdict tuple.

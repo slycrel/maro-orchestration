@@ -141,7 +141,14 @@ def format_prior_decisions(attempts: Any, *, goal: str = "",
     exclude_handle_id is belt-and-suspenders. Empty string when no prior has a
     usable brief. This is the READ half of run_curation's miner #3; recall()
     calls it so a re-attempt of the same/rephrased goal arrives warm."""
-    briefs: List[str] = []
+    # Collect every USABLE brief first, then cap — the omission count is
+    # metadata owned by the final cap, never a string inside the capped
+    # collection (round-15 review, 3-lens: a count entry appended into
+    # `briefs` got popped by the budget loop and counted as ONE omitted
+    # attempt while hiding its own tally; and a `len(seen)`-based
+    # remainder guess counted duplicates and card-less attempts as
+    # "not shown").
+    usable: List[str] = []
     seen: set = set()
     for a in (attempts or []):
         if isinstance(a, dict):
@@ -169,20 +176,11 @@ def format_prior_decisions(attempts: Any, *, goal: str = "",
             line += ". Lessons: " + "; ".join(lessons)
         if dp.get("resume_from"):
             line += f". Resume: {dp['resume_from']}"
-        briefs.append(line)
-        if len(briefs) >= k:
-            # Count cut announced (round-14 review): more usable priors
-            # may exist beyond the render cap.
-            remaining = sum(
-                1 for b in (attempts or [])[len(seen):]
-                if (b.get("handle_id") if isinstance(b, dict)
-                    else getattr(b, "handle_id", None)))
-            if remaining:
-                briefs.append(f"(+{remaining} earlier attempt(s) not "
-                              "shown; recall serves the most recent)")
-            break
-    if not briefs:
+        usable.append(line)
+    if not usable:
         return ""
+    briefs = usable[:k]
+    omitted = len(usable) - len(briefs)
 
     # Over-budget handling widened 2026-08-13 (truncation audit): the old
     # `block[:1000]` was the BINDING hop for this whole lane — it silently
@@ -191,15 +189,16 @@ def format_prior_decisions(attempts: Any, *, goal: str = "",
     # instead (announced), so what survives is readable; only a single
     # pathologically long brief still gets clipped, and clip() says so.
     def _render(bs: List[str], omitted: int) -> str:
-        note = (f"\n({omitted} older prior attempt(s) omitted for space.)"
-                if omitted else "")
+        # One note covers BOTH omission causes (beyond-k and evicted for
+        # space) — the count is computed from what actually renders.
+        note = (f"\n({omitted} more prior attempt(s) not shown; recall "
+                "serves the most recent.)" if omitted else "")
         return ("## Prior attempts at this goal — read before planning\n"
                 + "\n".join(bs) + note
                 + "\nDo not repeat an approach that already failed the same "
                   "way; build on what worked, resume a partial, or change "
                   "the approach.")
 
-    omitted = 0
     block = _render(briefs, omitted)
     while len(block) > max_chars and len(briefs) > 1:
         briefs.pop()

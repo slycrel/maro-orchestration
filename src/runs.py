@@ -588,6 +588,57 @@ def stamp_run_audit_failure(fields: dict) -> Optional[Path]:
         return None
 
 
+_VERDICT_KEYS = ("goal_achieved", "goal_verdict_source",
+                 "goal_verdict_confidence", "goal_verdict_summary",
+                 "goal_verdict_downgrade_reason", "goal_verdict_gaps")
+
+
+def _apply_verdict_tuple(existing: dict, *, goal_achieved, source: str,
+                         confidence, summary: str, downgrade_reason: str,
+                         gaps) -> None:
+    """THE verdict-tuple replacement. Mutates ``existing`` in place.
+
+    One implementation for every verdict writer (round-15 review, 3-lens:
+    a second hand-maintained field list in the retry stamp had already
+    drifted — judged retries left stale confidence/downgrade/gaps).
+    Every member is set or popped; nothing is ever left to a merge.
+    ``confidence=None`` pops the key (the NOW lane records no
+    confidence); ``goal_achieved=None`` pops the boolean (unjudged);
+    empty downgrade/gaps pop theirs.
+    """
+    existing["goal_verdict_source"] = source
+    existing["goal_verdict_summary"] = clip(summary, VERDICT_PROSE_CAP)
+    if confidence is None:
+        existing.pop("goal_verdict_confidence", None)
+    else:
+        existing["goal_verdict_confidence"] = float(confidence)
+    if downgrade_reason:
+        existing["goal_verdict_downgrade_reason"] = (
+            clip(downgrade_reason, VERDICT_PROSE_CAP))
+    else:
+        existing.pop("goal_verdict_downgrade_reason", None)
+    _all_gaps = [clip(g, 500) for g in (gaps or []) if g]
+    _gaps = _all_gaps[:5]
+    if len(_all_gaps) > 5:
+        # Count cuts announce themselves like char cuts do (round-14
+        # review: five-of-seven gaps rendered as a complete list).
+        _gaps.append(f"(+{len(_all_gaps) - 5} more gap(s) in the "
+                     "closure verdict artifact)")
+    if _gaps:
+        existing["goal_verdict_gaps"] = _gaps
+    else:
+        existing.pop("goal_verdict_gaps", None)
+    if goal_achieved is None:
+        existing.pop("goal_achieved", None)
+    else:
+        existing["goal_achieved"] = bool(goal_achieved)
+
+
+def _clear_verdict_keys(existing: dict) -> None:
+    for key in _VERDICT_KEYS:
+        existing.pop(key, None)
+
+
 def stamp_run_verdict(
     *,
     goal_achieved: Optional[bool],
@@ -630,32 +681,10 @@ def stamp_run_verdict(
                 existing = {}
             if not isinstance(existing, dict):
                 existing = {}
-            existing.update({
-                "goal_verdict_source": source,
-                "goal_verdict_confidence": float(confidence),
-                "goal_verdict_summary": clip(summary, VERDICT_PROSE_CAP),
-            })
-            if downgrade_reason:
-                existing["goal_verdict_downgrade_reason"] = (
-                    clip(downgrade_reason, VERDICT_PROSE_CAP))
-            else:
-                existing.pop("goal_verdict_downgrade_reason", None)
-            _all_gaps = [clip(g, 500) for g in (gaps or []) if g]
-            _gaps = _all_gaps[:5]
-            if len(_all_gaps) > 5:
-                # Count cuts announce themselves like char cuts do
-                # (round-14 review: five-of-seven gaps rendered as
-                # a complete list).
-                _gaps.append(f"(+{len(_all_gaps) - 5} more gap(s) in the "
-                             "closure verdict artifact)")
-            if _gaps:
-                existing["goal_verdict_gaps"] = _gaps
-            else:
-                existing.pop("goal_verdict_gaps", None)
-            if goal_achieved is None:
-                existing.pop("goal_achieved", None)
-            else:
-                existing["goal_achieved"] = bool(goal_achieved)
+            _apply_verdict_tuple(
+                existing, goal_achieved=goal_achieved, source=source,
+                confidence=confidence, summary=summary,
+                downgrade_reason=downgrade_reason, gaps=gaps)
             index_run_dir(rd, existing)
             return json.dumps(existing, indent=2, default=str)
 
@@ -703,17 +732,16 @@ def stamp_delivered_now_retry(
                 existing = {}
             existing["now_artifact_retry"] = retry_marker
             if judged:
-                existing["goal_achieved"] = bool(goal_achieved)
-                existing["goal_verdict_source"] = source
-                existing["goal_verdict_summary"] = clip(
-                    summary, VERDICT_PROSE_CAP)
+                # THE shared tuple replacement — every member set or
+                # popped (round-15 review, 3-lens: this branch's own
+                # field list had already drifted from the schema owner's,
+                # leaving stale confidence/downgrade/gaps standing).
+                _apply_verdict_tuple(
+                    existing, goal_achieved=bool(goal_achieved),
+                    source=source, confidence=None, summary=summary,
+                    downgrade_reason="", gaps=None)
             else:
-                for key in ("goal_achieved", "goal_verdict_source",
-                            "goal_verdict_confidence",
-                            "goal_verdict_summary",
-                            "goal_verdict_downgrade_reason",
-                            "goal_verdict_gaps"):
-                    existing.pop(key, None)
+                _clear_verdict_keys(existing)
             if stop_verdict:
                 existing["stop_verdict"] = str(stop_verdict)
                 existing["stop_evidence"] = clip(stop_evidence, 800)
@@ -787,10 +815,7 @@ def clear_run_verdict() -> Optional[Path]:
                 existing = {}
             if not isinstance(existing, dict):
                 existing = {}
-            for key in ("goal_achieved", "goal_verdict_source",
-                        "goal_verdict_confidence", "goal_verdict_summary",
-                        "goal_verdict_downgrade_reason", "goal_verdict_gaps"):
-                existing.pop(key, None)
+            _clear_verdict_keys(existing)
             index_run_dir(rd, existing)
             return json.dumps(existing, indent=2, default=str)
 

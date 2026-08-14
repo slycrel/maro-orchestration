@@ -114,7 +114,13 @@ def _write_escalation_file(event_type: str, payload: dict) -> None:
     # sender passed 5,000 chars of raw navigator reasoning straight to
     # disk while the captain's-log copy was clipped — per-sender bounding
     # cannot be trusted at a shared boundary).
-    for _k in ("summary", "reason", "detail"):
+    # Field inventory includes the live sender aliases (round-15 review:
+    # recursion check-ins ride "reasoning"/"summary_for_user", which
+    # reached disk unbounded while the three canonical names clipped).
+    # A typed per-event schema is the deeper fix if senders keep minting
+    # aliases; until then, keep this list synced with emit() callers.
+    for _k in ("summary", "reason", "detail", "reasoning",
+               "summary_for_user"):
         if isinstance(entry.get(_k), str):
             entry[_k] = _esc_clip(entry[_k], 2000)
     locked_append(escalations_path(), json.dumps(entry, default=str))

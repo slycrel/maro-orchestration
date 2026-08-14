@@ -62,10 +62,14 @@ def _name_hint(node: ast.AST) -> str:
             h = _name_hint(f.value)
             if h:
                 return h
-            for a in node.args:
-                h = _name_hint(a)
-                if h:
-                    return h
+        # Conservative recursion into ANY call's arguments — a wrapper
+        # like scrub(str(detail))[:N] transforms the value but not its
+        # identity (round-15 review: wrapper-by-wrapper recognition
+        # certified a durable silent cut out of the inventory).
+        for a in node.args:
+            h = _name_hint(a)
+            if h:
+                return h
     if isinstance(node, ast.BinOp):
         return _name_hint(node.left) or _name_hint(node.right)
     if isinstance(node, ast.JoinedStr):

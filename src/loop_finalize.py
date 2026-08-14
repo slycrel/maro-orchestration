@@ -1108,29 +1108,38 @@ def _mint_run_risks_to_project(project: str, loop_id: str) -> int:
                     continue
                 if isinstance(row, dict) and row.get("loop_id") == loop_id:
                     verdict_row = row  # last matching row wins (restarts append)
+        _vgaps: list = []
         if verdict_row and not verdict_row.get("skipped"):
-            _all_vgaps = list(verdict_row.get("gaps") or [])
-            if len(_all_vgaps) > 3:
-                lines.append(
-                    f"({len(_all_vgaps) - 3} more closure gap(s) beyond the "
-                    f"three below — full list in the run's closure verdict)")
-            for gap in _all_vgaps[:3]:
+            for gap in (verdict_row.get("gaps") or []):
                 # One physical line per gap — LLM-derived gap text can carry
                 # embedded newlines, which would break the markdown bullet
                 # and make the <=3 cap a lie (round-2 review 2026-08-10).
                 gap = " ".join(str(gap).split())
                 if gap:
-                    lines.append(
-                        f"Open gap from run {loop_id} (closure): "
-                        f"{clip(gap, 500)}")
+                    _vgaps.append(gap)
+        _sentinel = None
         if (rd / "build" / "scope-raw-FAILED.txt").exists():
-            lines.append(
+            _sentinel = (
                 f"Run {loop_id} executed without scope injection "
                 "(scope parse failed; raw output in build/scope-raw-FAILED.txt)")
-        # <=3 TOTAL per run (gaps + sentinel combined) — noise cap; when
-        # both would overflow it, keep the leading gaps + the sentinel.
-        if len(lines) > 3:
-            lines = lines[:2] + [lines[-1]]
+        # <=3 TOTAL risk lines per run (gaps + sentinel) — noise cap. The
+        # final selection is computed FIRST and the omission note rides as
+        # an annotation describing exactly what survived (round-15 review,
+        # 3-lens: a note rendered before the cap got capped WITH the gaps
+        # and became a lie — "three below" above two survivors, with a
+        # middle gap silently dropped).
+        _gap_slots = 3 - (1 if _sentinel else 0)
+        _shown = _vgaps[:_gap_slots]
+        for gap in _shown:
+            lines.append(
+                f"Open gap from run {loop_id} (closure): {clip(gap, 500)}")
+        if _sentinel:
+            lines.append(_sentinel)
+        if len(_vgaps) > len(_shown):
+            lines.append(
+                f"({len(_vgaps) - len(_shown)} more closure gap(s) from "
+                f"run {loop_id} not minted — full list in the run's "
+                "closure verdict)")
         if not lines:
             return 0
         rp = risks_path(project)

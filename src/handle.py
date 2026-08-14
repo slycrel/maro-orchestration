@@ -3606,9 +3606,18 @@ def _handle_impl(
                                             source="closure_error",
                                             confidence=0.0,
                                             summary=_pe_err,
+                                            gaps=None,
                                         )
-                                    except Exception:
-                                        pass
+                                    except Exception as _srv_err_exc:
+                                        # Never silent (round-15 review:
+                                        # a swallowed TypeError here left
+                                        # the SUPERSEDED attempt's verdict
+                                        # standing with no trace).
+                                        log.warning(
+                                            "post-escalate closure_error "
+                                            "stamp failed — metadata may "
+                                            "hold the superseded verdict: "
+                                            "%s", _srv_err_exc)
                                     try:
                                         from audit_policy import (
                                             persist_delivered_outcome_verdict as _pdov_err)

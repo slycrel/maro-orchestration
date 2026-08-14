@@ -815,8 +815,12 @@ def note_container_failure(detail: str) -> None:
         # Auth error text can carry credential-shaped material — scrub before
         # it reaches the marker, the log, or a notification (review 2026-08-13).
         try:
+            from context_budget import clip as _cb_clip
             from secret_scrub import scrub
-            reason = str(scrub(str(detail)))[:300]
+            # 500 announced (round-15 review: the scrub wrapper hid this
+            # durable breaker reason from the truncation census, and the
+            # bare 300 cut the CLI's error text silently).
+            reason = _cb_clip(str(scrub(str(detail))), 500)
         except Exception:
             reason = "container auth failure (detail unavailable)"
         state = None

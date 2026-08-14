@@ -2610,6 +2610,33 @@ capture**, which is what makes the rung amortize instead of evaporate.
   src after the census silently skipped a file with a transient syntax
   error and mislabeled its sites "new"). Inventory rebuilt: 164/120.
   Suite 8604/0 skipped. Round 15 next.
+  **Round 15 (2026-08-14) — first HIGH-free Skeptic verdict of the
+  arc, but 2-lens HIGH elsewhere: my "make gaps required" fix missed a
+  FOURTH caller found only by alias-aware AST census (`_srv_err`,
+  post-escalate closure_error path) — its TypeError was swallowed by
+  the blanket except, so a crashed post-escalation verifier left the
+  SUPERSEDED attempt's verdict standing with zero trace. The lexical
+  caller grep failed exactly like the lexical pin table did. Fixed +
+  the except now logs.** Also fixed, all real: (1) the verdict tuple
+  finally has ONE implementation — `runs._apply_verdict_tuple` +
+  `_clear_verdict_keys` shared by stamp_run_verdict /
+  stamp_delivered_now_retry / clear_run_verdict (the retry stamp's
+  hand copy had already drifted: judged transitions left stale
+  confidence/downgrade/gaps — 3-lens); (2) count-note COMPOSITION
+  bugs: the risk-mint omission note was rendered before the 3-line
+  cap and got capped into a lie ("three below" over two survivors, a
+  middle gap silently dropped) — selection first, note last, as an
+  annotation line; the prior-attempts note could be popped by the
+  budget loop and counted as one omitted attempt while hiding its own
+  tally, plus a len(seen) remainder guess that counted duplicates —
+  reworked to collect-then-cap with the count as metadata; (3) the
+  escalation ledger's field whitelist missed live sender aliases
+  (`reasoning`/`summary_for_user` hit disk at 5,000 chars unmarked) —
+  added, typed-schema noted as the deeper fix; (4) the scanner now
+  recurses into arbitrary call args (`scrub(str(detail))[:300]` was
+  certified out of the census; the breaker-reason site itself fixed to
+  clip 500). Retry matrix test now asserts the COMPLETE key set after
+  every transition. Suite 8604/0 skipped. Round 16 next.
 
   **Method that worked, for whoever picks this up:** don't argue about the
   number — pull the actual distribution out of `runs/*/build/loop-*.json`
