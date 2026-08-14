@@ -37,6 +37,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from ancestry import Origin
+from context_budget import clip
 
 log = logging.getLogger("recall")
 
@@ -197,8 +198,19 @@ class RecallResult:
             "window_minutes": window_minutes,
         }
 
-    def as_context_block(self, *, max_chars: int = 1200) -> str:
-        """One injectable string for ancestry context. Empty when nothing known."""
+    def as_context_block(self, *, max_chars: int = 4000) -> str:
+        """One injectable string for ancestry context. Empty when nothing known.
+
+        The default was 1200 with a bare tail slice until 2026-08-13
+        (adversarial review of the STORE widening): the prior-decisions
+        block alone can legitimately run past that, so dispatch and the
+        navigator received briefs severed mid-instruction with no marker
+        while the loop lane got the full text. 4000 fits the widened
+        briefs plus the memory blocks in the common case; the bound is
+        honest now (clip marker), though the number itself is a judgment
+        call, not a measured distribution — noted in the BACKLOG audit
+        entry rather than dressed up as data.
+        """
         parts: List[str] = []
         if self.thread and self.thread.parent_goal:
             parts.append(
@@ -250,7 +262,10 @@ class RecallResult:
         if not parts:
             return ""
         text = "== Recall (what the system already knows) ==\n" + "\n\n".join(parts)
-        return text[:max_chars]
+        if len(text) <= max_chars:
+            return text
+        # Reserve room for clip's marker so the return honors max_chars.
+        return clip(text, max_chars - 64)
 
     def as_loop_block(self) -> str:
         """The loop-start memory context, assembled in `_build_loop_context`'s

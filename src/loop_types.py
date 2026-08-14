@@ -19,6 +19,7 @@ from typing import Any, Callable, ClassVar, Dict, List, Optional
 
 # terrain.py is stdlib-only and imports nothing from the loop — safe to
 # import at module load (this module's whole point is being import-safe).
+from context_budget import clip  # stdlib-only, same import-safe contract
 from terrain import TerrainMemory
 # world_facts.py: same stdlib-only contract as terrain.py.
 from world_facts import WorldFactLedger
@@ -566,7 +567,7 @@ class LoopContext:
                 "stamp_stop: off-vocabulary verdict %r dropped", verdict)
             return
         self.stop_verdict = verdict
-        self.stop_evidence = (evidence or "")[:500]
+        self.stop_evidence = clip(evidence, 800)
 
     def stamp_pause(self, reason: str) -> None:
         """Record the typed pause reason (§13e). First write wins, same

@@ -200,6 +200,20 @@ class TestStoreWorklistSitesUseClip:
         ("handle_queue", '"reasoning", ""))[:300]'),
         ("decision_prior", 'str(why or "")[:_DECISION_TRIED_CHARS]'),
         ("decision_prior", "return block[:max_chars]"),
+        # 2026-08-13 adversarial-review round: the lanes the first pass
+        # missed (shared writers + downstream consumers that re-cut).
+        ("runs", "str(summary)[:300]"),
+        ("runs", "str(downgrade_reason)[:300]"),
+        ("runs", "'reasoning') or '')[:300]"),
+        ("recall", "return text[:max_chars]"),
+        ("handle", ".strip()[:400]"),
+        ("handle", '_retry.get("result", ""))[:500]'),
+        ("handle", "reasoning[:500]"),
+        ("handle", '(evidence or "")[:500]'),
+        ("loop_types", '(evidence or "")[:500]'),
+        ("memory_ledger", '(stop_evidence or "")[:500]'),
+        ("run_curation", "text[:500] + "),
+        ("run_curation", "t[:200] for t in step_txts"),
     ])
     def test_old_bare_slice_gone(self, module, gone):
         import importlib
@@ -262,3 +276,53 @@ class TestStoreWorklistSitesUseClip:
         full = dp.format_prior_decisions([{"handle_id": h} for h in briefs])
         assert all(f"attempt {i}" in full for i in range(3))
         assert "omitted for space" not in full and "[truncated:" not in full
+
+
+class TestReviewRoundBehaviors:
+    """Behavior pins from the 2026-08-13 adversarial-review round."""
+
+    def test_clip_idempotent_at_same_or_wider_cap(self):
+        from context_budget import clip
+        once = clip("z" * 3000, 2000)
+        assert clip(once, 2000) == once, "same-cap re-clip must be a no-op"
+        assert clip(once, 4000) == once, "wider re-clip must be a no-op"
+        assert "first 2000 of 3000" in once
+        # A strictly tighter cap still cuts (the payload genuinely
+        # does not fit the smaller bound).
+        tighter = clip(once, 500)
+        assert len(tighter) < len(once) and "truncated" in tighter
+
+    def test_stamp_run_verdict_persists_long_summary_with_marker(self, tmp_path, monkeypatch):
+        import runs
+        rd = tmp_path / "run"
+        rd.mkdir()
+        (rd / "metadata.json").write_text(json.dumps({"handle_id": "h1"}))
+        monkeypatch.setattr(runs, "current_run_dir", lambda: rd)
+        monkeypatch.setattr(runs, "index_run_dir", lambda *a, **k: None)
+        runs.stamp_run_verdict(
+            source="closure", confidence=0.9,
+            summary="s" * 900, goal_achieved=True,
+            downgrade_reason="d" * 900)
+        meta = json.loads((rd / "metadata.json").read_text())
+        assert meta["goal_verdict_summary"].startswith("s" * 900)
+        assert meta["goal_verdict_downgrade_reason"].startswith("d" * 900)
+
+    def test_format_prior_decisions_schema_max_brief_honors_budget(self, tmp_path, monkeypatch):
+        # One legal schema-max prior (2000 tried + 2000 why + 3x800
+        # lessons) overflows the 6000 default: the frame (header, footer
+        # instruction) must survive and the return must honor max_chars.
+        import decision_prior as dp
+        card = {"handle_id": "big", "goal": "g", "success_class": "failed",
+                "decision_prior": {
+                    "handle_id": "big", "goal": "g", "outcome": "failed",
+                    "goal_achieved": False, "when": "2026-08-13",
+                    "what_was_tried": "t" * 2000, "why": "w" * 2000,
+                    "lessons": ["l" * 800] * 3}}
+        rd = tmp_path / "big"
+        rd.mkdir()
+        (rd / "run_card.json").write_text(json.dumps(card))
+        monkeypatch.setattr(dp, "_run_dir_for", lambda hid: rd)
+        block = dp.format_prior_decisions([{"handle_id": "big"}])
+        assert len(block) <= 6000
+        assert block.rstrip().endswith("change the approach.")
+        assert "[truncated:" in block

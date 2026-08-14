@@ -666,7 +666,7 @@ def _verify_now_outcome(
             out["tokens_in"] = outcome.get("tokens_in", 0) + getattr(resp, "input_tokens", 0)
             out["tokens_out"] = outcome.get("tokens_out", 0) + getattr(resp, "output_tokens", 0)
             out["goal_verdict_summary"] = (
-                str(verdict.get("why") or "").strip()[:400]
+                clip(str(verdict.get("why") or "").strip(), VERDICT_PROSE_CAP)
                 or _now_verdict_rationale(resp.content))
             log.info("now-verify: response reports non-fulfillment — status demoted to incomplete (%s)",
                      out["goal_verdict_summary"][:120] or "no rationale given")
@@ -776,7 +776,9 @@ def _stamp_stop_on_demotion(loop_result, verdict: str, evidence: str) -> None:
     if getattr(loop_result, "stop_verdict", ""):
         return
     loop_result.stop_verdict = verdict
-    loop_result.stop_evidence = (evidence or "")[:500]
+    # 800 holds the stuck_reason-family max observed (594; median 291) —
+    # same sizing as the resume-brief stuck_reason, honest-clipped.
+    loop_result.stop_evidence = clip(evidence, 800)
     try:
         from runs import stamp_run_metadata
         stamp_run_metadata({
@@ -1626,6 +1628,15 @@ def _handle_impl(
                                 bool(outcome["goal_achieved"])
                             _extra_rr["goal_verdict_source"] = \
                                 "now_self_verdict"
+                            # The delivered outcome's rationale replaces the
+                            # first attempt's (2026-08-13 adversarial
+                            # review: the retry re-stamped the boolean but
+                            # left the pre-retry summary standing).
+                            _rr_sum = str(
+                                outcome.get("goal_verdict_summary") or "")
+                            if _rr_sum:
+                                _extra_rr["goal_verdict_summary"] = clip(
+                                    _rr_sum, VERDICT_PROSE_CAP)
                         _wm_rr(_rd_rr, handle_id=handle_id,
                                prompt=_raw_input, extra=_extra_rr)
                 except Exception:
@@ -1637,7 +1648,7 @@ def _handle_impl(
                         _record_retry(
                             goal=message,
                             status=_retry["status"],
-                            summary=str(_retry.get("result", ""))[:500],
+                            summary=clip(_retry.get("result", ""), VERDICT_PROSE_CAP),
                             task_type="now",
                             tokens_in=_retry.get("tokens_in", 0),
                             tokens_out=_retry.get("tokens_out", 0),
@@ -3911,7 +3922,10 @@ def _navigator_act_dispatch(
                     "point": "dispatch",
                     "move": move,
                     "confidence": conf,
-                    "reasoning": reasoning[:500],
+                    # The ONLY durable home for an acted (run-preventing)
+                    # decision's rationale — no run dir ever exists, so no
+                    # origin record. Verdict-grade, honest-clipped.
+                    "reasoning": clip(reasoning, VERDICT_PROSE_CAP),
                     "goal_preview": goal[:200],
                     "job_id": job_id,
                     "source": source,

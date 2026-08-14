@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import Optional
 
 from ancestry import Origin
+from context_budget import clip, VERDICT_PROSE_CAP
 
 
 _ADJECTIVES = (
@@ -368,8 +369,11 @@ def create_run_dir(
                 _conf = 0.0
             thread_brain.append_decision(
                 rd,
+                # Secondary render — the canonical full-length copy rides
+                # origin.dispatch_navigator (VERDICT_PROSE_CAP); this line
+                # keeps the brain doc scannable but announces its cut.
                 f"dispatch navigator: {_nav.get('move') or '?'}({_conf:.2f})"
-                f" — {str(_nav.get('reasoning') or '')[:300]}",
+                f" — {clip(_nav.get('reasoning'), 500)}",
             )
         # Fan-out defense: a new child registers in its parent's Threads
         # section so nothing leaves the parent's list silently.
@@ -618,11 +622,11 @@ def stamp_run_verdict(
             existing.update({
                 "goal_verdict_source": source,
                 "goal_verdict_confidence": float(confidence),
-                "goal_verdict_summary": str(summary)[:300],
+                "goal_verdict_summary": clip(summary, VERDICT_PROSE_CAP),
             })
             if downgrade_reason:
                 existing["goal_verdict_downgrade_reason"] = (
-                    str(downgrade_reason)[:300])
+                    clip(downgrade_reason, VERDICT_PROSE_CAP))
             else:
                 existing.pop("goal_verdict_downgrade_reason", None)
             if goal_achieved is None:

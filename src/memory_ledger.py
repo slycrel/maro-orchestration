@@ -596,7 +596,7 @@ def record_outcome(
         measurement_class=measurement_class,
         handle_id=handle_id,
         stop_verdict=stop_verdict,
-        stop_evidence=(stop_evidence or "")[:500],
+        stop_evidence=_clip(stop_evidence, 800),
         pause_reason=pause_reason,
     )
 
@@ -911,7 +911,7 @@ def stamp_outcome_stop_verdict(loop_id: str, stop_verdict: str,
             if isinstance(row, dict) and row.get("loop_id") == loop_id:
                 row["stop_verdict"] = stop_verdict
                 if stop_evidence:
-                    row["stop_evidence"] = (stop_evidence or "")[:500]
+                    row["stop_evidence"] = _clip(stop_evidence, 800)
                 lines[i] = json.dumps(row)
                 hit["v"] = True
                 break
@@ -1823,9 +1823,6 @@ _MERGED_VARIANTS_CAP = 5
 _VARIANT_MAX_CHARS = 500
 
 
-_CLIP_MARKER_RE = re.compile(r" … \[truncated: first \d+ of \d+ characters\]$")
-
-
 def _absorb_variant(variants: List[str], text: str, canonical: str) -> None:
     """Preserve an absorbed near-dup text on a survivor row, bounded.
 
@@ -1837,9 +1834,11 @@ def _absorb_variant(variants: List[str], text: str, canonical: str) -> None:
 
     Identity is judged BEFORE clipping (fixpoint review, round 2: clipping
     first made a >500-char canonical's exact re-record look like a new
-    variant, and re-processing a stored clipped variant re-clipped it into
-    a fresh textual twin — the clip marker is not idempotent). A text that
-    already carries the clip marker is stored as-is, never re-clipped.
+    variant). Re-processing a stored clipped variant is a no-op by
+    construction since 2026-08-13 — clip() itself is idempotent at the
+    same or a wider cap — so the old marker-detection bypass is gone; it
+    also let a text clipped elsewhere at a WIDER cap through unbounded,
+    which the unconditional clip below now bounds.
     """
     if len(variants) >= _MERGED_VARIANTS_CAP:
         return
@@ -1847,12 +1846,11 @@ def _absorb_variant(variants: List[str], text: str, canonical: str) -> None:
     canonical = (canonical or "").strip()
     if not text or text == canonical or text in variants:
         return
-    if not _CLIP_MARKER_RE.search(text):
-        text = _clip(text, _VARIANT_MAX_CHARS)
-        # Re-check identity in clipped form: the clipped twin of the
-        # canonical or of an existing variant is still a twin.
-        if text == canonical or text in variants:
-            return
+    text = _clip(text, _VARIANT_MAX_CHARS)
+    # Re-check identity in clipped form: the clipped twin of the
+    # canonical or of an existing variant is still a twin.
+    if text == canonical or text in variants:
+        return
     variants.append(text)
 
 

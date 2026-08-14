@@ -245,5 +245,16 @@ def test_run_card_excerpt_truncates_long_results(workspace):
         {"handle_id": "hidexc02", "result": "x" * 2000}))
     finalize_run("hidexc02", status="done")
     card = curate_run("hidexc02")
-    assert len(card["result_excerpt"]) == 501  # 500 + ellipsis
-    assert card["result_excerpt"].endswith("…")
+    # VERDICT_PROSE_CAP (2000) since the 2026-08-13 STORE widening: a
+    # 2000-char answer rides whole; past the cap the cut announces itself
+    # (the old 500 + bare ellipsis silently pre-bound decision_prior's
+    # what_was_tried/why fallbacks).
+    assert card["result_excerpt"] == "x" * 2000
+    rd3 = create_run_dir("hidexc03", prompt="longer", lane="now")
+    (rd3 / "artifact").mkdir(exist_ok=True)
+    (rd3 / "artifact" / "now-hidexc03.json").write_text(json.dumps(
+        {"handle_id": "hidexc03", "result": "y" * 2500}))
+    finalize_run("hidexc03", status="done")
+    card3 = curate_run("hidexc03")
+    assert card3["result_excerpt"].startswith("y" * 2000)
+    assert "truncated: first 2000 of 2500" in card3["result_excerpt"]

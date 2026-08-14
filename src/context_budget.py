@@ -32,6 +32,7 @@ suggests. The volume is still real, and the budget is set for volume.
 """
 from __future__ import annotations
 
+import re
 from typing import List
 
 # ~99% of single step results fit (p99 is 4,671 chars); one pathological
@@ -90,6 +91,10 @@ VERDICT_PROSE_CAP = 2000
 LESSON_ENTRY_CAP = 800
 
 
+_CLIP_MARKER_RE = re.compile(
+    r" … \[truncated: first (\d+) of \d+ characters\]$")
+
+
 def clip(text, cap: int) -> str:
     """Cut text at cap and say so — never silently.
 
@@ -98,9 +103,22 @@ def clip(text, cap: int) -> str:
     be able to tell complete evidence from trimmed evidence. Multi-entry
     sites want ContextBudget instead; this is the scalar counterpart.
     Returns the text unchanged when it fits.
+
+    Idempotent at the same or a wider cap (2026-08-13 adversarial review):
+    a value that flows through two same-cap clip sites (metadata stamp →
+    decision prior) keeps its original marker and TRUE source length
+    instead of being re-cut to "first N of N+marker". A strictly TIGHTER
+    re-clip still cuts (the payload genuinely doesn't fit), at the cost of
+    nesting the old marker inside the new payload — the outer marker's
+    counts then describe the clipped text it received, not the original.
+    memory_ledger._absorb_variant carried a local workaround for exactly
+    this ("the clip marker is not idempotent") before it moved here.
     """
     text = str(text or "")
     if len(text) <= cap:
+        return text
+    m = _CLIP_MARKER_RE.search(text)
+    if m and m.start() <= cap:
         return text
     return (f"{text[:cap]} … [truncated: first {cap} of "
             f"{len(text)} characters]")

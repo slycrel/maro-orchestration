@@ -2466,10 +2466,41 @@ capture**, which is what makes the rung amortize instead of evaporate.
   `TestStoreWorklistSitesUseClip` (idiom + cap floors + behavior). Suite
   8561/0 skipped. **Still open here:** the `compress_old_outcomes`
   compactor / retention decision (Jeremy's — now nearer, since rows can
-  carry ~2KB rationale); handle.py's `stop_evidence[:500]` trio and the
-  gaps entries ([:200]/[:300]) — unfiled, left unmeasured this pass;
-  the introspect lens item stays folded into the wide-view-seat design
-  question.
+  carry ~2KB rationale); the gaps entries ([:200]/[:300]) — unfiled,
+  left unmeasured this pass; the introspect lens item stays folded into
+  the wide-view-seat design question.
+  **Same-day 2-lens codex adversarial review (Skeptic + Architect): 11
+  deduped findings, ALL real (0 hallucination, streak intact), all
+  accepted and fixed same session — every one a lane the first pass
+  missed, i.e. [[feedback_fix_every_lane_not_one]] again.** Consensus
+  standouts: (1) `runs.stamp_run_verdict` — the SHARED verdict writer
+  (CLI closure + post-escalation lanes) — still bare-sliced summary and
+  downgrade_reason at 300, bypassing the whole widening for any
+  escalated retry's delivered verdict; now clips at the schema owner.
+  (2) `recall.as_context_block` re-cut the widened prior-decisions
+  block to a silent 1200 for dispatch + navigator consumers (loop lane
+  got full text) — now 4000 default, honors max_chars, bound honest;
+  the 4000 is a judgment call, not a measured distribution. (3) A
+  schema-max decision-prior brief legally overflows the 6000 render
+  default; single-brief overflow now clips the BRIEF inside a preserved
+  frame instead of eating the footer instruction. Also fixed: NOW judge
+  rationale [:400] + NOW retry summary [:500] + the retry not
+  re-stamping `goal_verdict_summary` (pre-retry rationale stood on the
+  delivered outcome); stop_evidence's FOUR homes (handle,
+  loop_types.stamp_stop, memory_ledger record + post-hoc) 500→clip 800;
+  navigator acted-path captains-log rationale (the only durable home
+  when a run is prevented) → 2000, goal-brain line → clip 500
+  (secondary render, canonical copy in origin); `excerpt_result`'s
+  upstream 500 pre-cut that made the decision-prior fallbacks inert →
+  2000; step-title slice made honest (clip 500/title); `clip()` made
+  IDEMPOTENT at same-or-wider caps (Architect: re-clip rewrote true
+  provenance to "first 2000 of 2045") — which also retired
+  memory_ledger._absorb_variant's local marker-detection workaround
+  AND closed its unbounded-foreign-marker hole;
+  `_DECISION_TRIED_CHARS` now derives from `VERDICT_PROSE_CAP`. Old-cap
+  pins updated to the new contract; pin table extended with all
+  review-round spellings + behavior tests (idempotence, stamp writer,
+  schema-max brief). Suite 8576/0 skipped.
 
   **Method that worked, for whoever picks this up:** don't argue about the
   number — pull the actual distribution out of `runs/*/build/loop-*.json`

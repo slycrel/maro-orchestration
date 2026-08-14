@@ -79,11 +79,19 @@ class TestStampRail:
         assert ctx.stop_verdict == OUT_OF_BUDGET
         assert ctx.stop_evidence == "hit the cap"
 
-    def test_ctx_stamp_evidence_capped_at_500(self):
+    def test_ctx_stamp_evidence_capped_at_800_with_marker(self):
+        # 800 since the 2026-08-13 STORE widening (old 500 cut the
+        # stuck_reason-family max of 594 silently); the cut announces
+        # itself via the clip marker.
         from loop_types import LoopContext
         ctx = LoopContext(loop_id="lp-1", goal="g")
         ctx.stamp_stop(OUT_OF_BUDGET, "x" * 900)
-        assert len(ctx.stop_evidence) == 500
+        assert ctx.stop_evidence.startswith("x" * 800)
+        assert "truncated: first 800 of 900" in ctx.stop_evidence
+        # A fitting value rides whole, no marker.
+        ctx2 = LoopContext(loop_id="lp-2", goal="g")
+        ctx2.stamp_stop(OUT_OF_BUDGET, "y" * 700)
+        assert ctx2.stop_evidence == "y" * 700
 
     def test_loop_result_summary_mentions_verdict_only_when_set(self):
         from loop_types import LoopResult
@@ -144,14 +152,16 @@ class TestStampRail:
         assert by_loop["lp-ev"]["stop_evidence"].startswith("exhausted:")
         assert "stop_evidence" not in by_loop["lp-noev"]
 
-    def test_record_outcome_evidence_capped_at_500(self, workspace):
+    def test_record_outcome_evidence_capped_at_800_with_marker(self, workspace):
+        # Same 2026-08-13 contract as the ctx stamp above.
         from memory_ledger import _outcomes_path, record_outcome
         record_outcome("g", "stuck", "s", loop_id="lp-cap",
                        stop_verdict=OUT_OF_BUDGET, stop_evidence="x" * 900)
         rows = [json.loads(l) for l in
                 _outcomes_path().read_text().splitlines() if l.strip()]
         row = next(r for r in rows if r.get("loop_id") == "lp-cap")
-        assert len(row["stop_evidence"]) == 500
+        assert row["stop_evidence"].startswith("x" * 800)
+        assert "truncated: first 800 of 900" in row["stop_evidence"]
 
     def test_posthoc_stamp_carries_evidence(self, workspace):
         from memory_ledger import (

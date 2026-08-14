@@ -52,7 +52,7 @@ log = logging.getLogger("run_curation")
 # names so existing call sites (this module's own CLI, prior_decision_context
 # below) and any external `run_curation.<name>` access keep working
 # (adversarial-review R1 batch-1 finding #2).
-from context_budget import clip
+from context_budget import clip, VERDICT_PROSE_CAP
 from decision_prior import (
     make_decision_prior,
     load_decision_prior,
@@ -329,7 +329,11 @@ def excerpt_result(rd: Path, meta: dict, card: dict) -> None:
     if not res:
         return
     text = (res.get("result") or "").strip()
-    card["result_excerpt"] = text[:500] + ("…" if len(text) > 500 else "")
+    # VERDICT_PROSE_CAP, not the old 500 + bare ellipsis: this excerpt is
+    # the answer record for card-only readers AND the upstream source of
+    # decision_prior's what_was_tried/why fallbacks — at 500 it silently
+    # pre-bound everything the 2026-08-13 widening opened downstream.
+    card["result_excerpt"] = clip(text, VERDICT_PROSE_CAP)
     card["result_path"] = res.get("result_path")
 
 
@@ -1283,11 +1287,12 @@ def index_decision_prior(rd: Path, meta: dict, card: dict) -> None:
         step_txts = [(s.get("text") or "").strip() for s in log["steps"]]
         step_txts = [t for t in step_txts if t][:6]
         if step_txts:
-            # 200/step holds the p90 step title whole (median 94, p90 198,
-            # measured 2026-08-13 over 3,375 steps); the old 80 cut most of
-            # them. The composed field is bounded honestly downstream by
-            # make_decision_prior's clip — no silent pre-cut here.
-            tried_parts.append("steps: " + "; ".join(t[:200] for t in step_txts))
+            # clip() at 500/step (p99 456, measured 2026-08-13 over 3,375
+            # steps; the old 80 cut most of them) — a bare slice here was
+            # still a SILENT cut for the ~10% of titles over it, hidden
+            # under the aggregate cap (adversarial review, same day).
+            tried_parts.append(
+                "steps: " + "; ".join(clip(t, 500) for t in step_txts))
     if inv.get("scripts"):
         tried_parts.append("scripts: " + ", ".join(inv["scripts"][:5]))
     if inv.get("artifacts"):

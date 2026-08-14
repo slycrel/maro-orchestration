@@ -25,7 +25,7 @@ import json
 from pathlib import Path
 from typing import Any, List, Optional
 
-from context_budget import clip, LESSON_ENTRY_CAP
+from context_budget import clip, LESSON_ENTRY_CAP, VERDICT_PROSE_CAP
 
 # STORE-grade rationale caps, widened 2026-08-13 (arbitrary-truncation
 # audit, STORE worklist; measured over 155 live run cards): the old 400
@@ -34,7 +34,7 @@ from context_budget import clip, LESSON_ENTRY_CAP
 # stacked pair widened together in the same change. Cuts announce
 # themselves via clip(); a silent slice here is a rationale the next
 # re-attempt half-reads.
-_DECISION_TRIED_CHARS = 2000
+_DECISION_TRIED_CHARS = VERDICT_PROSE_CAP
 _DECISION_LESSON_CAP = 5
 
 
@@ -181,4 +181,13 @@ def format_prior_decisions(attempts: Any, *, goal: str = "",
         briefs.pop()
         omitted += 1
         block = _render(briefs, omitted)
-    return clip(block, max_chars)
+    if len(block) > max_chars:
+        # Sole remaining brief still over budget (a schema-max prior —
+        # 2000 tried + 2000 why + 3×800 lessons — legally exceeds the
+        # default). Clip the BRIEF and keep the frame whole (2026-08-13
+        # adversarial review: clipping the rendered block ate the footer
+        # instruction and overshot max_chars by the marker length).
+        frame = len(_render([""], omitted))
+        briefs[0] = clip(briefs[0], max(200, max_chars - frame - 64))
+        block = _render(briefs, omitted)
+    return block
