@@ -2661,7 +2661,19 @@ capture**, which is what makes the rung amortize instead of evaporate.
   (family-preferring candidate resolution, mapping-subscript keys,
   method-name identity; +12 pre-existing sites surfaced → inventory
   176/129 with the two-directions note on the ceiling). Suite 8640/0
-  skipped. Round 17 next.
+  skipped.
+  **Convergence loop PAUSED 2026-08-14 before round 17: the codex
+  account hit its usage limit (resets Aug 19 ~10:35 PM) — all three
+  round-17 reviewers died at spawn, confirmed by a direct probe.**
+  State at pause: every accepted finding from rounds 11-16 fixed and
+  landed; round 16's Skeptic verdict was the arc's first with no high;
+  the exit condition (nothing above low from a genuine 3-lens attempt)
+  has NOT been reached. Resume = re-run the 3-lens fixpoint review
+  against the then-HEAD arc diff (`git diff b2c49a4^ HEAD -- src
+  tests`), fresh lenses, same convergence framing as this entry's
+  round history. NOTE for the other session: the box's own
+  adversarial-review rounds share this codex account and will hit the
+  same wall until the reset.
 
   **Method that worked, for whoever picks this up:** don't argue about the
   number — pull the actual distribution out of `runs/*/build/loop-*.json`
