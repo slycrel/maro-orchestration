@@ -7658,3 +7658,21 @@ under the same two-measurement standard).
   replacement loop, not stochastic synthesis drift. Rejected with
   rationale: cross-store transactional locking, notify outbox,
   "missing"-ledger-row strictness. Suite 8506/0 skipped.
+- **2026-08-13 (day)** — Whole-changeset adversarial pass ("just for
+  fun", Jeremy) over the 35-commit 24h stretch (9772cb7..HEAD), 3 codex
+  lenses hunting cross-chunk seams: 9 real findings (0 hallucination), 5
+  fixed same session, 4 filed. It earned its cost twice over — the top
+  find was a LIVE regression a per-chunk review fix introduced hours
+  earlier (the r3 output-scrub blanket-matched "1" from the consent
+  carrier, corrupting every container stream response), and the most
+  interesting was a pure cross-chunk seam five separate fixpoint reviews
+  couldn't see: the receipts auditor counted a FAILED subprocess attempt
+  (error-stamped, tool_events=[] because the adapter raised pre-parse) as
+  clean capture coverage, so a failed run that ran pytest could render a
+  FALSE "ZERO executions" refutation. Also fixed: archive redaction leaked
+  secrets via YAML alias + !!binary (both shipped in exports), workspace
+  import had no decompression-bomb byte cap, planner killswitch ignored
+  string "false". Filed not-fixed: require/verb-parity enforced only in
+  ClaudeSubprocessAdapter (codex executor bypasses the container control —
+  latent on this box), digest TOCTOU, <3.11.4 symlink fallback (dead on
+  py3.14), canon-door races, hardlink drop. Verdict doc in docs/history/.

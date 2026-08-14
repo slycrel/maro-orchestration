@@ -25,11 +25,13 @@ from execution_receipts import (  # noqa: E402
 )
 
 
-def _write_call(calls_dir, n, events, backend=None):
+def _write_call(calls_dir, n, events, backend=None, error=None):
     calls_dir.mkdir(parents=True, exist_ok=True)
     rec = {"tool_events": events}
     if backend is not None:
         rec["backend"] = backend
+    if error is not None:
+        rec["error"] = error
     (calls_dir / f"call-{n:05d}.json").write_text(
         json.dumps(rec), encoding="utf-8")
 
@@ -571,3 +573,55 @@ class TestFixLayerReview:
         text = render_receipt_evidence(load_receipts(tmp_path))
         assert "invisible to receipts" not in text
         assert "RECORD INCOMPLETE" not in text
+
+
+class TestWholeChangesetReview:
+    """2026-08-13 whole-changeset review (Architect): a FAILED capture-
+    backend attempt (error-stamped, tool_events=[] because the adapter
+    raised before parsing) must not count as clean capture coverage — it
+    would let a real execution vanish and produce a FALSE 'RECORD PRESENT,
+    ZERO executions' refutation. The receipts arc and the failed-attempt
+    recorder (runs.py UU-1) were reviewed in isolation; neither saw this
+    seam."""
+
+    def test_error_stamped_capture_record_is_not_counted_as_capture(
+            self, tmp_path):
+        calls = tmp_path / "build/calls"
+        _write_call(calls, 1, [], backend="subprocess",
+                    error="TimeoutExpired: killed after 600s")
+        loaded = load_receipts(tmp_path)
+        assert loaded["readable_calls"] == 1
+        assert loaded["capture_calls"] == 0  # error attempt is blind
+
+    def test_error_attempt_alone_yields_no_zero_executions_refutation(
+            self, tmp_path, monkeypatch):
+        import execution_receipts as er
+        import runs
+        calls = tmp_path / "build/calls"
+        _write_call(calls, 1, [], backend="subprocess",
+                    error="TimeoutExpired")
+        monkeypatch.setattr(runs, "current_run_dir", lambda: tmp_path)
+        block = er.audit_receipt_block()
+        assert "ZERO executions" not in block
+        assert "not as evidence of absence" in block
+
+    def test_clean_record_still_refutes(self, tmp_path, monkeypatch):
+        # The fix must not disarm the genuine positive refutation.
+        import execution_receipts as er
+        import runs
+        calls = tmp_path / "build/calls"
+        _write_call(calls, 1, [], backend="subprocess")
+        monkeypatch.setattr(runs, "current_run_dir", lambda: tmp_path)
+        block = er.audit_receipt_block()
+        assert "RECORD PRESENT, ZERO executions" in block
+
+    def test_clean_plus_error_degrades_to_partial_coverage(
+            self, tmp_path, monkeypatch):
+        import execution_receipts as er
+        import runs
+        calls = tmp_path / "build/calls"
+        _write_call(calls, 1, [], backend="subprocess")
+        _write_call(calls, 2, [], backend="subprocess", error="boom")
+        monkeypatch.setattr(runs, "current_run_dir", lambda: tmp_path)
+        block = er.audit_receipt_block()
+        assert "PARTIAL COVERAGE" in block

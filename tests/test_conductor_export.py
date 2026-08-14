@@ -572,6 +572,21 @@ class TestV2ReviewHardening:
             assert leaked not in out
         assert "4096" in out and "2000" in out  # int values under cred keys
 
+    def test_redactor_catches_yaml_alias_copy(self):
+        # Whole-changeset review 2026-08-13 (Architect): an anchor aliases
+        # a secret out from under its credential key into a benign one.
+        from maro_export import _redact_config_text
+        out, n, ok = _redact_config_text(
+            "api_key: &s supersecret\nlabel: *s\n")
+        assert ok and "supersecret" not in out
+
+    def test_redactor_catches_binary_scalar_under_cred_key(self):
+        # !!binary secret is bytes, which the str-only check skipped.
+        from maro_export import _redact_config_text
+        out, n, ok = _redact_config_text(
+            "api_key: !!binary c3VwZXJzZWNyZXQ=\n")
+        assert ok and "c3VwZXJzZWNyZXQ" not in out
+
     def test_redactor_fails_closed_on_unparseable(self):
         from maro_export import _redact_config_text
         out, n, ok = _redact_config_text("model: [unclosed\n")

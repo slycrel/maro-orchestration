@@ -1110,17 +1110,30 @@ _CONTAINER_ENV_PASSTHROUGH = (
 _CURRENT_STEP_LINK = "/tmp/maro-current-step.log"
 
 
+# The consent CARRIER is not secret material and its value ("1") would
+# blanket-match every digit in captured output — scrubbing it corrupts
+# normal stream-JSON (`{"num_turns":1}` -> invalid). Only real provider
+# key VALUES are scrubbed, and only when long enough to be a credential
+# (whole-changeset review 2026-08-13, Minimalist: the earlier fix pass
+# scrubbed the whole injected map, "1" included).
+_NEVER_SCRUB_NAMES = frozenset({"MARO_HOSTED_FREE_ENABLED"})
+_MIN_SCRUB_VALUE_LEN = 8
+
+
 def _scrub_secret_values(text: str, secret_env: Dict[str, str]) -> str:
-    """Replace injected secret VALUES with [REDACTED:<NAME>] markers.
+    """Replace injected provider-key VALUES with [REDACTED:<NAME>] markers.
 
     Applied to captured container output before it becomes result text
     (adversarial review 2026-08-13, Architect): inside the container the
     hosted-free keys are in the worker's env by design — the decree's
     accepted exposure — so a goal-driven `env` would otherwise persist the
     values into transcripts/receipts/memory records that outlive the
-    container. Exact-value replacement only; empty values are skipped."""
+    container. Skips the non-secret consent carrier and any value too
+    short to be a credential (guards against blanket over-matching)."""
     for name, value in (secret_env or {}).items():
-        if value:
+        if name in _NEVER_SCRUB_NAMES:
+            continue
+        if value and len(value) >= _MIN_SCRUB_VALUE_LEN:
             text = text.replace(value, f"[REDACTED:{name}]")
     return text
 

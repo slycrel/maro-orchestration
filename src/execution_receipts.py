@@ -210,7 +210,17 @@ def load_receipts(run_dir, cap: int = MAX_RECEIPTS) -> Dict[str, Any]:
             unreadable += 1
             continue
         readable_calls += 1
-        if data.get("backend") in _CAPTURE_BACKENDS:
+        # A record stamped with `error` is a FAILED/killed attempt (runs.py
+        # UU-1: "consumers treat error-records as attempts, not results").
+        # Its tool_events are known-incomplete — the subprocess adapter
+        # raises BEFORE parsing them, so a failed attempt that actually ran
+        # `pytest` records backend=subprocess with tool_events=[]. Counting
+        # it as clean capture coverage would let a real execution vanish and
+        # produce a FALSE "RECORD PRESENT, ZERO executions" refutation
+        # (whole-changeset review 2026-08-13, Architect — the receipts arc
+        # and the failed-attempt recorder were reviewed in isolation and
+        # never saw this seam). Treat error-records as non-capturing (blind).
+        if data.get("backend") in _CAPTURE_BACKENDS and not data.get("error"):
             capture_calls += 1
         for ev in events:
             if len(rows) >= cap:

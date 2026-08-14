@@ -81,6 +81,12 @@ _REDACT_MARKER = "REDACTED-BY-EXPORT"
 # Untrusted-archive resource caps (import side).
 _MAX_MEMBERS = 2_000_000
 _MAX_META_FILE_BYTES = 512 * 1024 * 1024   # streamed; skip+warn beyond
+# Untrusted-import workspace payload caps (decompression-bomb defense —
+# whole-changeset review 2026-08-13). Generous enough for real workspaces
+# (large sqlite memory stores) while bounding a hostile archive's blast
+# radius to something a host disk survives.
+_MAX_WS_FILE_BYTES = 4 * 1024 * 1024 * 1024      # 4 GiB per regular file
+_MAX_WS_TOTAL_BYTES = 16 * 1024 * 1024 * 1024    # 16 GiB aggregate payload
 _MAX_PROVENANCE_BYTES = 4 * 1024 * 1024
 _MAX_CUSTODY_PRINT = 50
 _PRINT_FIELD_CAP = 300
@@ -168,27 +174,77 @@ def _is_cred_key(key) -> bool:
     return any(p in k for p in _CRED_PHRASES)
 
 
-def _redact_tree(node, parent_is_cred: bool = False) -> int:
-    """Redact string values under credential-shaped keys, in place.
+# Two secret-leak vectors closed by the whole-changeset review 2026-08-13
+# (Architect): (1) a YAML anchor aliases a secret value out from under its
+# credential key (`api_key: &s SECRET` / `label: *s`) — safe_load resolves
+# it into an independent leaf under a benign key _is_cred_key never flags;
+# (2) a `!!binary`-encoded secret under a credential key is `bytes`, which
+# the str-only check skipped. Fix: redact str AND bytes under a credential
+# key, and sweep the tree for any leaf equal to a collected secret value.
+# Numeric/bool leaves under a credential key are deliberately LEFT ALONE —
+# `max_tokens: 4096`, `token_budget: 2000` are cred-SHAPED by keyword but
+# are settings, not secrets (the numeric-survives contract, pinned).
+_SWEEP_MIN_LEN = 4
+
+
+def _is_redactable_scalar(v) -> bool:
+    return isinstance(v, (str, bytes)) and len(v) > 0
+
+
+def _redact_tree(node, parent_is_cred: bool = False, secrets=None) -> int:
+    """Redact scalar values under credential-shaped keys, in place.
 
     A credential-shaped key redacts its whole subtree (so
-    `api_keys: {openai: sk-...}` is caught), but only STRING leaves are
-    replaced — numeric/bool settings survive. Returns redaction count.
-    """
+    `api_keys: {openai: sk-...}` is caught). Under a credential key ALL
+    scalar leaves are replaced — str, bytes (!!binary), and numerics — a
+    numeric/binary secret is still a secret; the numeric-settings-survive
+    rule only holds under BENIGN keys, which are left untouched. When a
+    `secrets` set is passed, str/bytes secret values (len >= _SWEEP_MIN_LEN)
+    are collected so _sweep_secret_values can scrub anchor/alias copies of
+    them under benign keys. Returns redaction count."""
     count = 0
     if isinstance(node, dict):
         for k, v in list(node.items()):
             cred = parent_is_cred or _is_cred_key(k)
             if isinstance(v, (dict, list)):
-                count += _redact_tree(v, cred)
-            elif cred and isinstance(v, str) and v:
+                count += _redact_tree(v, cred, secrets)
+            elif cred and _is_redactable_scalar(v):
+                if secrets is not None and isinstance(v, (str, bytes)) \
+                        and len(v) >= _SWEEP_MIN_LEN:
+                    secrets.add(v)
                 node[k] = _REDACT_MARKER
                 count += 1
     elif isinstance(node, list):
         for i, v in enumerate(node):
             if isinstance(v, (dict, list)):
-                count += _redact_tree(v, parent_is_cred)
-            elif parent_is_cred and isinstance(v, str) and v:
+                count += _redact_tree(v, parent_is_cred, secrets)
+            elif parent_is_cred and _is_redactable_scalar(v):
+                if secrets is not None and isinstance(v, (str, bytes)) \
+                        and len(v) >= _SWEEP_MIN_LEN:
+                    secrets.add(v)
+                node[i] = _REDACT_MARKER
+                count += 1
+    return count
+
+
+def _sweep_secret_values(node, secrets) -> int:
+    """Second pass: replace any str/bytes leaf equal to a collected secret
+    value (an anchor/alias copy under a benign key). Returns count."""
+    if not secrets:
+        return 0
+    count = 0
+    if isinstance(node, dict):
+        for k, v in list(node.items()):
+            if isinstance(v, (dict, list)):
+                count += _sweep_secret_values(v, secrets)
+            elif isinstance(v, (str, bytes)) and v in secrets:
+                node[k] = _REDACT_MARKER
+                count += 1
+    elif isinstance(node, list):
+        for i, v in enumerate(node):
+            if isinstance(v, (dict, list)):
+                count += _sweep_secret_values(v, secrets)
+            elif isinstance(v, (str, bytes)) and v in secrets:
                 node[i] = _REDACT_MARKER
                 count += 1
     return count
@@ -214,7 +270,9 @@ def _redact_config_text(text: str):
         return text, 0, True  # empty config, nothing to hide
     if not isinstance(data, dict):
         return "", 0, False  # unexpected shape — refuse rather than guess
-    count = _redact_tree(data)
+    _secrets: set = set()
+    count = _redact_tree(data, secrets=_secrets)
+    count += _sweep_secret_values(data, _secrets)
     if count == 0:
         return text, 0, True
     return yaml.safe_dump(data, default_flow_style=False,
@@ -706,6 +764,7 @@ def _scan_and_classify(tar):
         "meta_members": [],
         "ws_candidates": [],      # (member, rel) that pass pure-string policy
         "ws_entries": [],         # (rel, size) regular files in digest scope
+        "ws_total_bytes": 0,      # aggregate workspace payload (bomb cap)
         "excluded": [],           # rel paths _should_exclude'd (policy skips)
         "skips": {},              # code -> {"count": int, "examples": [str]}
         "meta_skips": {},         # same shape, for meta staging screens
@@ -755,6 +814,23 @@ def _scan_and_classify(tar):
             continue
         out["ws_candidates"].append((member, rel))
         if member.isreg():
+            # Decompression-bomb / disk-exhaustion cap (whole-changeset
+            # review 2026-08-13, 3/3 consensus): meta had a per-file cap but
+            # WORKSPACE members — the main payload — had none, so a tiny
+            # gzip declaring a multi-TB regular file passed the member-count
+            # check and inflated until the destination filled. member.size
+            # is the tar header's true uncompressed size, so this rejects
+            # the bomb BEFORE any extraction/mutation. Enforced as members
+            # stream, same as the count cap.
+            if member.size > _MAX_WS_FILE_BYTES:
+                raise _ArchiveCapExceeded(
+                    f"workspace member {rel!r} is {member.size:,} bytes, "
+                    f"over the {_MAX_WS_FILE_BYTES:,}-byte per-file cap")
+            out["ws_total_bytes"] += member.size
+            if out["ws_total_bytes"] > _MAX_WS_TOTAL_BYTES:
+                raise _ArchiveCapExceeded(
+                    f"workspace payload exceeds the {_MAX_WS_TOTAL_BYTES:,}"
+                    "-byte total cap")
             out["ws_entries"].append((rel, member.size))
     return out
 

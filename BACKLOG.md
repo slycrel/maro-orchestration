@@ -44,6 +44,70 @@ full triage: 2026-07-04.
 
 Ordered open work that matters. Top of the list is next.
 
+### Whole-changeset review 2026-08-13 — accepted-not-fixed residuals
+
+The "for fun" whole-changeset adversarial pass (35 commits, 3 codex
+lenses) confirmed 9 real findings; 5 were fixed same session (scrub
+over-match, YAML alias+binary redaction leak, workspace decompression-bomb
+cap, receipts false-clean-after-failed-attempt, planner killswitch string
+normalization — verdict doc
+`docs/history/2026-08-13-whole-changeset-adversarial-review.md`). Four
+accepted-not-fixed, filed here:
+
+- [ ] **Container `require` + verb parity are enforced only in
+  ClaudeSubprocessAdapter — any other executor adapter bypasses them.**
+  `resolve_container_run` is called only from
+  `ClaudeSubprocessAdapter.complete` (llm.py); `CodexCLIAdapter.complete`
+  ignores `executor=True` and runs on the host. Repro: `MARO_BACKEND=codex`
+  + `executor.container=require` → executor work runs on the host with NO
+  refusal (require is a security control — isolation-or-nothing — silently
+  void), and the planner/prompt can advertise `maro-read` while codex runs
+  where the baked shim doesn't exist. NOT hit on this box today (executor
+  is always subprocess; codex is opt-in and not in the executor lane), so
+  latent, but a require bypass is real. Fix: move the container decision to
+  the executor SEAM (step_exec/workers), or guard — if `executor` and mode
+  `require` and the adapter isn't container-capable, refuse; gate verb
+  advertisement on executor-backend container-capability too.
+
+- [ ] **`--expect-sha256` doesn't bind the import to the inspected bytes
+  (TOCTOU).** `import_workspace` (scripts/maro_export.py) hashes an
+  `open()`ed pathname, closes it, then `tarfile.open(archive_path)`
+  reopens the pathname — a concurrent atomic replace in the window swaps
+  the bytes. Narrow: the swapped archive still passes every `filter="data"`
+  + `_safe_workspace_member` safety screen, so the loss is "you imported
+  bytes you didn't inspect", not arbitrary extraction. Fix: retain one
+  file descriptor / inode through validation and extraction (hash the
+  opened stream, extract from the same fd).
+
+- [ ] **`<3.11.4` unfiltered-extraction fallback permits a symlink-order
+  escape.** On Pythons whose `tar.extract` lacks `filter=`, the `TypeError`
+  branch extracts unfiltered; preflight resolves destinations before any
+  archive symlink exists, so a merge import into a workspace already
+  holding `out -> /victim` can be escaped by an archive ordered
+  `link (->out)` then `link/payload`. DEAD on this box (Python 3.14 →
+  `filter="data"` always runs); real only for pre-3.11.4 install targets.
+  Fix: refuse the unfiltered fallback (raise) on unsupported Pythons rather
+  than extract, or use dirfd + `O_NOFOLLOW` containment.
+
+- [ ] **Canon door: text-identity TOCTOU + marker-membership false-verify.**
+  `promote_canon_lesson` (knowledge_web.py) snapshots `cand["lesson"]`,
+  appends that text, then the in-lock recheck re-validates
+  quarantine/contested/Δ exclusions but NOT text identity: a concurrent
+  `refight_lesson(action="revise")` between candidate-read and stamp lands
+  the OLD text in Canon while the row is stamped promoted. Separately, the
+  `marker not in load_playbook()` verify passes if an existing non-Canon
+  entry already carries that exact `canon:<id>` marker (contrived). Narrow
+  (needs concurrent operator/GC actions on one lesson sub-second). Fix:
+  bind a validation/text fingerprint at candidate read, re-check in-lock,
+  partial-fail if changed.
+
+- [ ] **Exporter emits hardlinks its own importer drops.** `export_workspace`
+  uses `tar.add()`, which encodes a second path to one inode as a hardlink;
+  import rejects `member.islnk()`, so a workspace with hardlinked files
+  exports fine but restores with the second path missing. Box has no
+  hardlinks today, but this is a portable feature. Fix: dereference/copy
+  hardlinked regular files at export, or reject them loudly.
+
 ### Container verb parity + container auth expiry watch (FOUND 2026-08-13, A/B-4 re-test setup — the dispatch lane was silently DOWN)
 
 Two coupled finds from one diagnosis (full trail in the A/B-4 entry):

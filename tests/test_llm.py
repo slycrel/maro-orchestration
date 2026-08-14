@@ -2572,6 +2572,24 @@ class TestSecretScrubbing:
         from llm import _scrub_secret_values
         assert _scrub_secret_values("abc", {"K": ""}) == "abc"
 
+    def test_consent_carrier_boolean_is_never_scrubbed(self):
+        # Whole-changeset review 2026-08-13 (Minimalist): the earlier fix
+        # pass scrubbed the whole injected map, so MARO_HOSTED_FREE_ENABLED
+        # ="1" blanket-replaced every digit and corrupted stream-JSON. The
+        # consent carrier is not secret; only provider key values scrub.
+        from llm import _scrub_secret_values
+        env = {"MARO_HOSTED_FREE_ENABLED": "1",
+               "GROQ_API_KEY": "gsk_realkey_longvalue"}
+        out = _scrub_secret_values('{"num_turns":1,"result":"v1"}', env)
+        assert out == '{"num_turns":1,"result":"v1"}'
+        assert _scrub_secret_values("leak gsk_realkey_longvalue", env) == \
+            "leak [REDACTED:GROQ_API_KEY]"
+
+    def test_short_values_are_not_blanket_scrubbed(self):
+        # A too-short value would over-match; real API keys are long.
+        from llm import _scrub_secret_values
+        assert _scrub_secret_values("a on b", {"X": "on"}) == "a on b"
+
 
 class TestCollectStreamEvents:
     """LLMAdapter._collect is the one shared fold from a StreamEvent iterator
