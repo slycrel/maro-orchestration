@@ -204,6 +204,22 @@ class TestReadStepEmission:
                   if "LARGE-FILE EXTRACTION STEPS" in s]
         assert taught and all(_read_cli_path() in s for s in taught)
 
+    def test_empty_string_switch_matches_sibling_enabled(self, monkeypatch):
+        # Fixpoint review 2026-08-13 (Skeptic + Architect): the planner
+        # switch treated a quoted "" as OFF while the sibling
+        # executor.read_query treated "" as ON. Shared normalize_flag now
+        # makes "" mean unset -> enabled for both.
+        import config
+        from planner import decompose
+        monkeypatch.setattr(
+            config, "get",
+            lambda key, default=None:
+                "" if key == "planner.read_query_steps" else default)
+        adapter = _PlanCapturingAdapter()
+        decompose("audit the spec against the raw captures", adapter,
+                  max_steps=4)
+        assert _taught(adapter)
+
     def test_staged_pass_lane_is_taught(self, monkeypatch):
         # Unlike WORLD_FACT_RULES (needs injected context), this is a
         # step-writing form rule grounded in the goal text — staged

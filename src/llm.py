@@ -1112,12 +1112,13 @@ _CURRENT_STEP_LINK = "/tmp/maro-current-step.log"
 
 # The consent CARRIER is not secret material and its value ("1") would
 # blanket-match every digit in captured output — scrubbing it corrupts
-# normal stream-JSON (`{"num_turns":1}` -> invalid). Only real provider
-# key VALUES are scrubbed, and only when long enough to be a credential
-# (whole-changeset review 2026-08-13, Minimalist: the earlier fix pass
-# scrubbed the whole injected map, "1" included).
+# normal stream-JSON (`{"num_turns":1}` -> invalid). The right guard is
+# skipping it by NAME, not a length floor: the injection boundary
+# (hosted_free_container_env) accepts every non-empty provider value, so a
+# short-but-real key must still be scrubbed — a length floor left it in the
+# transcript (fixpoint review 2026-08-13). To add a future non-secret
+# carrier, name it here rather than reaching for a length test.
 _NEVER_SCRUB_NAMES = frozenset({"MARO_HOSTED_FREE_ENABLED"})
-_MIN_SCRUB_VALUE_LEN = 8
 
 
 def _scrub_secret_values(text: str, secret_env: Dict[str, str]) -> str:
@@ -1128,13 +1129,15 @@ def _scrub_secret_values(text: str, secret_env: Dict[str, str]) -> str:
     hosted-free keys are in the worker's env by design — the decree's
     accepted exposure — so a goal-driven `env` would otherwise persist the
     values into transcripts/receipts/memory records that outlive the
-    container. Skips the non-secret consent carrier and any value too
-    short to be a credential (guards against blanket over-matching)."""
-    for name, value in (secret_env or {}).items():
-        if name in _NEVER_SCRUB_NAMES:
-            continue
-        if value and len(value) >= _MIN_SCRUB_VALUE_LEN:
-            text = text.replace(value, f"[REDACTED:{name}]")
+    container. Skips the non-secret consent carrier by name; every other
+    non-empty value is scrubbed, LONGEST FIRST so an overlapping shorter
+    secret can't leave the tail of a longer one behind (fixpoint review
+    2026-08-13: `prefix01` redacted before `prefix0123456789` left
+    `23456789` exposed)."""
+    items = [(n, v) for n, v in (secret_env or {}).items()
+             if v and n not in _NEVER_SCRUB_NAMES]
+    for name, value in sorted(items, key=lambda kv: len(kv[1]), reverse=True):
+        text = text.replace(value, f"[REDACTED:{name}]")
     return text
 
 

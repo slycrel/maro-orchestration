@@ -67,16 +67,23 @@ _STOPWORDS = frozenset({
 })
 
 
+def normalize_flag(val) -> bool:
+    """Shared config-flag normalization for read-verb killswitches.
+
+    A quoted `"false"` in YAML must not fail a killswitch OPEN (bool("false")
+    is True). Empty string means "unset" → the flag's default (enabled) — the
+    planner's sibling gate MUST use this same function so the two switches
+    can't drift on the empty-string case (fixpoint review 2026-08-13: the
+    planner treated "" as OFF while this treated it as ON)."""
+    if isinstance(val, str):
+        return val.strip().lower() not in ("false", "0", "no", "off")
+    return bool(val)
+
+
 def _cfg_enabled() -> bool:
     try:
         from config import get
-        val = get("executor.read_query", True)
-        # String-boolean normalization (adversarial review 2026-08-11 —
-        # same bool("false") class as the 2026-08-08 verdict bug): a
-        # quoted "false" in YAML must not fail the killswitch open.
-        if isinstance(val, str):
-            return val.strip().lower() not in ("false", "0", "no", "off")
-        return bool(val)
+        return normalize_flag(get("executor.read_query", True))
     except Exception:
         return True
 

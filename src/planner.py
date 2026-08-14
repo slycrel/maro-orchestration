@@ -991,16 +991,11 @@ def decompose(
     _read_step_rules = ""
     try:
         from config import get as _cfg_get_rq
-        _rq_switch = _cfg_get_rq("planner.read_query_steps", True)
-        # String-normalize like the sibling executor.read_query switch:
-        # YAML `planner.read_query_steps: "false"` must DISABLE, but
-        # bool("false") is True (whole-changeset review 2026-08-13).
-        if isinstance(_rq_switch, str):
-            _rq_on = _rq_switch.strip().lower() not in (
-                "false", "0", "no", "off", "")
-        else:
-            _rq_on = bool(_rq_switch)
-        if _rq_on:
+        from read_query import normalize_flag as _rq_norm
+        # Shared normalizer with the sibling executor.read_query switch so
+        # the two can't drift (fixpoint review 2026-08-13: this treated a
+        # quoted "" as OFF while the sibling treated it as ON).
+        if _rq_norm(_cfg_get_rq("planner.read_query_steps", True)):
             from read_query import read_query_enabled as _rq_enabled
             if _rq_enabled():
                 import container_exec as _ce

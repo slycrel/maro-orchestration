@@ -587,6 +587,45 @@ class TestV2ReviewHardening:
             "api_key: !!binary c3VwZXJzZWNyZXQ=\n")
         assert ok and "c3VwZXJzZWNyZXQ" not in out
 
+    def test_redactor_catches_alias_copied_into_a_key(self):
+        # Fixpoint review 2026-08-13 (Skeptic): an anchor aliased into a
+        # KEY position — the value-only sweep missed it.
+        from maro_export import _redact_config_text
+        out, n, ok = _redact_config_text(
+            "api_key: &s abcd1234\nbenign: {*s: allowed}\n")
+        assert ok and "abcd1234" not in out
+
+    def test_redactor_does_not_corrupt_coincidental_lookalike(self):
+        # Fixpoint review 2026-08-13 (Skeptic + Architect): the old
+        # value-equality sweep redacted an unrelated `environment: prod`
+        # just because it equalled a 4-char secret. Identity-based sweep
+        # only touches the true alias.
+        from maro_export import _redact_config_text
+        out, n, ok = _redact_config_text("api_key: prod\nenvironment: prod\n")
+        assert ok and out.count("REDACTED-BY-EXPORT") == 1
+        assert "environment: prod" in out
+
+    def test_redactor_fails_closed_on_unredactable_container(self):
+        # Fixpoint review 2026-08-13 (Architect): a !!set/!!omap under a
+        # credential key can't be redacted in place — must fail closed, not
+        # ship raw YAML with ok=True.
+        from maro_export import _redact_config_text
+        for text in ("api_key: !!set {supersecret: null}\n",
+                     "api_key: !!omap [{k: sekritvalue}]\n"):
+            out, n, ok = _redact_config_text(text)
+            assert ok is False and out == "", text
+
+    def test_import_byte_caps_are_env_overridable(self, monkeypatch):
+        # Fixpoint review 2026-08-13 (Architect): a legitimate >16 GiB
+        # workspace exports fine but couldn't be re-imported — a trusted
+        # owner needs an escape hatch.
+        import maro_export as me
+        assert me._max_ws_file_bytes() == me._DEFAULT_MAX_WS_FILE_BYTES
+        monkeypatch.setenv("MARO_IMPORT_MAX_FILE_BYTES", str(50 * 1024**3))
+        assert me._max_ws_file_bytes() == 50 * 1024**3
+        monkeypatch.setenv("MARO_IMPORT_MAX_FILE_BYTES", "garbage")
+        assert me._max_ws_file_bytes() == me._DEFAULT_MAX_WS_FILE_BYTES
+
     def test_redactor_fails_closed_on_unparseable(self):
         from maro_export import _redact_config_text
         out, n, ok = _redact_config_text("model: [unclosed\n")

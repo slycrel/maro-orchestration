@@ -84,9 +84,30 @@ _MAX_META_FILE_BYTES = 512 * 1024 * 1024   # streamed; skip+warn beyond
 # Untrusted-import workspace payload caps (decompression-bomb defense —
 # whole-changeset review 2026-08-13). Generous enough for real workspaces
 # (large sqlite memory stores) while bounding a hostile archive's blast
-# radius to something a host disk survives.
-_MAX_WS_FILE_BYTES = 4 * 1024 * 1024 * 1024      # 4 GiB per regular file
-_MAX_WS_TOTAL_BYTES = 16 * 1024 * 1024 * 1024    # 16 GiB aggregate payload
+# radius to something a host disk survives. OVERRIDABLE via env (fixpoint
+# review 2026-08-13, Architect: export has no matching cap, so a legitimate
+# >16 GiB workspace exported fine but could not be re-imported — a trusted
+# owner needs an escape hatch the bomb defense otherwise denies).
+_DEFAULT_MAX_WS_FILE_BYTES = 4 * 1024 * 1024 * 1024      # 4 GiB per file
+_DEFAULT_MAX_WS_TOTAL_BYTES = 16 * 1024 * 1024 * 1024    # 16 GiB aggregate
+
+
+def _env_bytes(name: str, default: int) -> int:
+    """Positive int from env, else the default (fail-safe on garbage)."""
+    try:
+        v = int(os.environ.get(name, "").strip())
+        return v if v > 0 else default
+    except (ValueError, AttributeError):
+        return default
+
+
+def _max_ws_file_bytes() -> int:
+    return _env_bytes("MARO_IMPORT_MAX_FILE_BYTES", _DEFAULT_MAX_WS_FILE_BYTES)
+
+
+def _max_ws_total_bytes() -> int:
+    return _env_bytes("MARO_IMPORT_MAX_TOTAL_BYTES",
+                      _DEFAULT_MAX_WS_TOTAL_BYTES)
 _MAX_PROVENANCE_BYTES = 4 * 1024 * 1024
 _MAX_CUSTODY_PRINT = 50
 _PRINT_FIELD_CAP = 300
@@ -179,72 +200,106 @@ def _is_cred_key(key) -> bool:
 # credential key (`api_key: &s SECRET` / `label: *s`) — safe_load resolves
 # it into an independent leaf under a benign key _is_cred_key never flags;
 # (2) a `!!binary`-encoded secret under a credential key is `bytes`, which
-# the str-only check skipped. Fix: redact str AND bytes under a credential
-# key, and sweep the tree for any leaf equal to a collected secret value.
-# Numeric/bool leaves under a credential key are deliberately LEFT ALONE —
-# `max_tokens: 4096`, `token_budget: 2000` are cred-SHAPED by keyword but
-# are settings, not secrets (the numeric-survives contract, pinned).
-_SWEEP_MIN_LEN = 4
+# the str-only check skipped. The fixpoint round (2026-08-13) found the
+# first fix's value-equality sweep did both too little AND too much: it
+# missed aliases copied into KEY positions and into !!set/!!omap containers,
+# and it CORRUPTED benign values that coincidentally equalled a short secret
+# (`api_key: prod` redacted an unrelated `environment: prod`). This version:
+#   - redacts str/bytes under a credential key (numeric/bool settings under
+#     cred-shaped keys survive — `max_tokens: 4096`, the pinned contract);
+#   - FAILS CLOSED on any container type it can't traverse in place
+#     (!!set/!!omap/tuple) under a credential context, so a secret can never
+#     slip through as raw YAML with ok=True;
+#   - sweeps anchor/alias copies by OBJECT IDENTITY, not value equality —
+#     PyYAML resolves an alias to the SAME object as its anchor (verified),
+#     while two coincidentally-equal scalars are distinct objects, so
+#     identity catches every real alias (key OR value) and never touches a
+#     look-alike. Redacted objects are pinned in a list so their id() can't
+#     be reused by a later allocation during the walk.
+
+
+class _UnredactableShape(Exception):
+    """A credential subtree holds a container we can't redact in place
+    (!!set/!!omap/tuple) — the caller must fail closed."""
 
 
 def _is_redactable_scalar(v) -> bool:
     return isinstance(v, (str, bytes)) and len(v) > 0
 
 
-def _redact_tree(node, parent_is_cred: bool = False, secrets=None) -> int:
-    """Redact scalar values under credential-shaped keys, in place.
+def _redact_tree(node, parent_is_cred: bool = False,
+                 secret_ids=None, pinned=None) -> int:
+    """Redact str/bytes values under credential-shaped keys, in place.
 
-    A credential-shaped key redacts its whole subtree (so
-    `api_keys: {openai: sk-...}` is caught). Under a credential key ALL
-    scalar leaves are replaced — str, bytes (!!binary), and numerics — a
-    numeric/binary secret is still a secret; the numeric-settings-survive
-    rule only holds under BENIGN keys, which are left untouched. When a
-    `secrets` set is passed, str/bytes secret values (len >= _SWEEP_MIN_LEN)
-    are collected so _sweep_secret_values can scrub anchor/alias copies of
-    them under benign keys. Returns redaction count."""
+    Raises _UnredactableShape if a credential context contains a container
+    type this cannot safely redact (set/tuple/frozenset). When `secret_ids`
+    /`pinned` are passed, each redacted secret object's id() is collected
+    (and the object pinned alive) so _sweep_by_id can catch alias copies."""
+    def _collect(v):
+        if secret_ids is not None:
+            pinned.append(v)          # keep alive → id() stable, no reuse
+            secret_ids.add(id(v))
+
     count = 0
     if isinstance(node, dict):
         for k, v in list(node.items()):
             cred = parent_is_cred or _is_cred_key(k)
             if isinstance(v, (dict, list)):
-                count += _redact_tree(v, cred, secrets)
-            elif cred and _is_redactable_scalar(v):
-                if secrets is not None and isinstance(v, (str, bytes)) \
-                        and len(v) >= _SWEEP_MIN_LEN:
-                    secrets.add(v)
-                node[k] = _REDACT_MARKER
-                count += 1
+                count += _redact_tree(v, cred, secret_ids, pinned)
+            elif _is_redactable_scalar(v):
+                if cred:
+                    _collect(v)
+                    node[k] = _REDACT_MARKER
+                    count += 1
+            elif v is None or isinstance(v, (int, float, bool)):
+                pass  # numeric/bool/null settings survive
+            elif cred:
+                raise _UnredactableShape(type(v).__name__)
     elif isinstance(node, list):
         for i, v in enumerate(node):
             if isinstance(v, (dict, list)):
-                count += _redact_tree(v, parent_is_cred, secrets)
-            elif parent_is_cred and _is_redactable_scalar(v):
-                if secrets is not None and isinstance(v, (str, bytes)) \
-                        and len(v) >= _SWEEP_MIN_LEN:
-                    secrets.add(v)
-                node[i] = _REDACT_MARKER
-                count += 1
+                count += _redact_tree(v, parent_is_cred, secret_ids, pinned)
+            elif _is_redactable_scalar(v):
+                if parent_is_cred:
+                    _collect(v)
+                    node[i] = _REDACT_MARKER
+                    count += 1
+            elif v is None or isinstance(v, (int, float, bool)):
+                pass
+            elif parent_is_cred:
+                raise _UnredactableShape(type(v).__name__)
     return count
 
 
-def _sweep_secret_values(node, secrets) -> int:
-    """Second pass: replace any str/bytes leaf equal to a collected secret
-    value (an anchor/alias copy under a benign key). Returns count."""
-    if not secrets:
+def _sweep_by_id(node, secret_ids) -> int:
+    """Second pass: replace any leaf — dict KEY or value, list item — whose
+    object identity matches a redacted secret (an anchor aliased elsewhere).
+    Identity, not equality, so a benign look-alike is never touched."""
+    if not secret_ids:
         return 0
     count = 0
     if isinstance(node, dict):
+        rekey = False
+        items = []
         for k, v in list(node.items()):
-            if isinstance(v, (dict, list)):
-                count += _sweep_secret_values(v, secrets)
-            elif isinstance(v, (str, bytes)) and v in secrets:
-                node[k] = _REDACT_MARKER
+            nk = k
+            if id(k) in secret_ids:
+                nk, rekey = _REDACT_MARKER, True
                 count += 1
+            if isinstance(v, (dict, list)):
+                count += _sweep_by_id(v, secret_ids)
+            elif id(v) in secret_ids:
+                v = _REDACT_MARKER
+                count += 1
+            items.append((nk, v))
+        node.clear()
+        for nk, nv in items:
+            node[nk] = nv
     elif isinstance(node, list):
         for i, v in enumerate(node):
             if isinstance(v, (dict, list)):
-                count += _sweep_secret_values(v, secrets)
-            elif isinstance(v, (str, bytes)) and v in secrets:
+                count += _sweep_by_id(v, secret_ids)
+            elif id(v) in secret_ids:
                 node[i] = _REDACT_MARKER
                 count += 1
     return count
@@ -254,12 +309,13 @@ def _redact_config_text(text: str):
     """Structurally redact credential-shaped values in YAML config text.
 
     Returns (out_text, redaction_count, ok). ok=False means the config
-    could not be safely transformed (unparseable, or not a mapping) —
-    the caller MUST NOT ship it (fail closed): shipping raw could leak a
-    secret the line matcher would miss. When redactions==0 the ORIGINAL
-    text is returned verbatim so comments/layout survive the common
-    (credential-free) case; when >0 a structural re-dump is returned
-    (comments lost — a deliberate trade for guaranteed redaction).
+    could not be safely transformed (unparseable, not a mapping, or holding
+    a credential subtree we can't redact in place) — the caller MUST NOT
+    ship it (fail closed): shipping raw could leak a secret the line matcher
+    would miss. When redactions==0 the ORIGINAL text is returned verbatim so
+    comments/layout survive the common (credential-free) case; when >0 a
+    structural re-dump is returned (comments lost — a deliberate trade for
+    guaranteed redaction).
     """
     import yaml
     try:
@@ -270,9 +326,13 @@ def _redact_config_text(text: str):
         return text, 0, True  # empty config, nothing to hide
     if not isinstance(data, dict):
         return "", 0, False  # unexpected shape — refuse rather than guess
-    _secrets: set = set()
-    count = _redact_tree(data, secrets=_secrets)
-    count += _sweep_secret_values(data, _secrets)
+    secret_ids: set = set()
+    pinned: list = []
+    try:
+        count = _redact_tree(data, secret_ids=secret_ids, pinned=pinned)
+    except _UnredactableShape:
+        return "", 0, False  # fail closed on an unredactable cred subtree
+    count += _sweep_by_id(data, secret_ids)
     if count == 0:
         return text, 0, True
     return yaml.safe_dump(data, default_flow_style=False,
@@ -822,15 +882,19 @@ def _scan_and_classify(tar):
             # is the tar header's true uncompressed size, so this rejects
             # the bomb BEFORE any extraction/mutation. Enforced as members
             # stream, same as the count cap.
-            if member.size > _MAX_WS_FILE_BYTES:
+            _file_cap = _max_ws_file_bytes()
+            if member.size > _file_cap:
                 raise _ArchiveCapExceeded(
                     f"workspace member {rel!r} is {member.size:,} bytes, "
-                    f"over the {_MAX_WS_FILE_BYTES:,}-byte per-file cap")
+                    f"over the {_file_cap:,}-byte per-file cap (raise "
+                    "MARO_IMPORT_MAX_FILE_BYTES for a trusted large archive)")
             out["ws_total_bytes"] += member.size
-            if out["ws_total_bytes"] > _MAX_WS_TOTAL_BYTES:
+            _total_cap = _max_ws_total_bytes()
+            if out["ws_total_bytes"] > _total_cap:
                 raise _ArchiveCapExceeded(
-                    f"workspace payload exceeds the {_MAX_WS_TOTAL_BYTES:,}"
-                    "-byte total cap")
+                    f"workspace payload exceeds the {_total_cap:,}-byte total "
+                    "cap (raise MARO_IMPORT_MAX_TOTAL_BYTES for a trusted "
+                    "large archive)")
             out["ws_entries"].append((rel, member.size))
     return out
 

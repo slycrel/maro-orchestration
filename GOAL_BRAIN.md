@@ -7676,3 +7676,20 @@ under the same two-measurement standard).
   ClaudeSubprocessAdapter (codex executor bypasses the container control —
   latent on this box), digest TOCTOU, <3.11.4 symlink fallback (dead on
   py3.14), canon-door races, hardlink drop. Verdict doc in docs/history/.
+- **2026-08-13 (day)** — Fixpoint round (Jeremy: "do we run one more
+  adversarial review?"): re-reviewed the whole-changeset FIX commit
+  (505260d) with 2 lenses. REJECT -> all fixed same session; ~7 real
+  findings, both lenses CLEARED the receipts fix. Vindicated the practice:
+  the prior fix's value-equality redaction sweep both over-corrected
+  (redacted a benign `environment: prod` that equalled a 4-char secret)
+  and under-covered (missed aliases in KEY positions and !!set/!!omap
+  containers -> shipped raw with ok=True). Replaced with OBJECT-IDENTITY
+  redaction — PyYAML resolves an alias to the same object as its anchor
+  (verified), coincidental equals are distinct objects, so identity is
+  precise both ways; unredactable containers under a cred key now fail
+  closed. Also: scrub dropped the 8-char floor (left short real keys in
+  transcripts) + now replaces longest-first (prefix-overlap tail leak);
+  import byte caps made env-overridable (a legit >16GiB workspace couldn't
+  be restored); planner/read_query "" parity via a shared normalize_flag.
+  Calling this the arc fixpoint (r1 found 9, r2 found 7, defects now in
+  the fixes' own edges). Verdict doc in docs/history/. Suite green.

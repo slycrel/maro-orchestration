@@ -2585,10 +2585,24 @@ class TestSecretScrubbing:
         assert _scrub_secret_values("leak gsk_realkey_longvalue", env) == \
             "leak [REDACTED:GROQ_API_KEY]"
 
-    def test_short_values_are_not_blanket_scrubbed(self):
-        # A too-short value would over-match; real API keys are long.
+    def test_short_provider_key_is_scrubbed(self):
+        # Fixpoint review 2026-08-13: the injection boundary accepts every
+        # non-empty value, so a short-but-real key must still be scrubbed —
+        # the earlier 8-char floor left it in the transcript. Carrier-skip
+        # (by name) is the guard against the "1" over-match, not length.
         from llm import _scrub_secret_values
-        assert _scrub_secret_values("a on b", {"X": "on"}) == "a on b"
+        assert _scrub_secret_values("env: abc123", {"GROQ_API_KEY": "abc123"}) \
+            == "env: [REDACTED:GROQ_API_KEY]"
+
+    def test_overlapping_secrets_scrub_longest_first(self):
+        # Fixpoint review 2026-08-13 (Skeptic): a shorter secret that is a
+        # prefix of a longer one, redacted first, left the longer's tail
+        # exposed. Longest-first replacement fixes it.
+        from llm import _scrub_secret_values
+        out = _scrub_secret_values(
+            "prefix0123456789",
+            {"SHORT": "prefix01", "LONG": "prefix0123456789"})
+        assert out == "[REDACTED:LONG]"
 
 
 class TestCollectStreamEvents:
