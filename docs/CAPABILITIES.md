@@ -111,6 +111,29 @@ levers are routing (unchanged) and the worker's own tool-loop churn
 re-read/rewrite inside worker subprocesses, not cache re-reads — steer
 toward patch/diff edits).
 
+**Run 5 — async-tail phase-2 live test + envelope re-check (2026-08-13,
+loop 155656ad, forced `--lane agenda`):** this run's primary job was to be
+the first live exercise of async-tail phase-2 (answer notified at final-step
+compile, verdict follows after the tail) — it passed cleanly: answer emitted
+`run_completed` at 05:16:38Z, the `verdict_pending` marker went through its
+full lifecycle (set → `notified_early`+`hook_delivered=true` → `resolved_at`),
+and the `run_verdict` follow-up landed at 05:17:58Z, ~80s later, with
+`goal_achieved=True source=closure` and no `answer_changed` (clean
+no-revision path). Content: correct — 4 ethanol-free stations within 25 mi,
+same shape as the prior ACHIEVED deliverable, which this run found and
+re-verified as a freshness re-check. **Envelope: $2.42 / ~10min-to-answer /
+7 steps / 27 LLM calls — over the $2.00 transparency threshold and above the
+prior $1.52 best.** Not apples-to-apples with the $1.52 Run 3 (that was a
+cold-ish run; this one re-read and re-verified an existing 4-station list, so
+it answers *faster* but spends *more* per step on artifact re-verification —
+the cost is token-volume-per-step, not step count). Two side-notes worth a
+look: (1) a **long post-verdict learning tail** — ~7+ min of skill
+crystallization (5 skills) and knowledge-node-promotion LLM calls ran *after*
+the user had the answer, which is exactly the wall-clock async-tail phase-2
+hides but is itself un-budgeted background spend; (2) the subprocess backend
+does not enforce `max_tokens` on those promotion calls (logged, non-fatal).
+**Cost-envelope gap: still open, and did not improve on re-run.**
+
 ---
 
 ## Example catalog
@@ -123,7 +146,7 @@ real phrasing beats cleaned-up phrasing.
 
 | Goal (as asked) | Success looks like | Exercises | Status |
 |---|---|---|---|
-| "Where can I get non-ethanol gas in or around Manti, Utah?" | 1–3 named stations w/ locations + confidence caveats, sourced | multi-source research, synthesis, stop criteria | `target` — content verified live 2026-07-10; routing fixed 2026-07-12 (naturally routes agenda, no forced lane); cost envelope still fails the contract, see canonical-case section. Crystallized as `skills/errand_research.md` 2026-07-13 (BACKLOG #22) — not separately re-run this pass, same cost/time class as this case |
+| "Where can I get non-ethanol gas in or around Manti, Utah?" | 1–3 named stations w/ locations + confidence caveats, sourced | multi-source research, synthesis, stop criteria | `target` — content verified live 2026-07-10; routing fixed 2026-07-12 (naturally routes agenda, no forced lane); cost envelope still fails the contract (re-confirmed 2026-08-13: $2.42 as a freshness re-check, above the $2 threshold and the prior $1.52 best), see canonical-case section Run 5. Crystallized as `skills/errand_research.md` 2026-07-13 (BACKLOG #22) — not separately re-run this pass, same cost/time class as this case |
 | "What are the library hours in [town] this Saturday, and do I need an appointment for [service]?" | direct answer + source link, flags stale pages | freshness judgment, official-source preference | `target` |
 | "Compare the three cheapest ways to ship a 40lb box from Utah to Ohio this week." | small table, prices dated, winner recommended | structured comparison, quantitative extraction | `target` |
 | "Is [product] compatible with [other product]? People online seem to disagree." | verdict + why the disagreement exists | conflicting-source adjudication | `target` |

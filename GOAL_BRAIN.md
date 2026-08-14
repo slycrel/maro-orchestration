@@ -7693,3 +7693,22 @@ under the same two-measurement standard).
   be restored); planner/read_query "" parity via a shared normalize_flag.
   Calling this the arc fixpoint (r1 found 9, r2 found 7, defects now in
   the fixes' own edges). Verdict doc in docs/history/. Suite green.
+- **2026-08-13 (night)** — Async-tail PHASE 2 LIVE-VERIFIED (first real
+  fire; Jeremy: "test the async tail work... pick something from our
+  testing list that hasn't worked so well"). Ran the Manti canonical case
+  (`--lane agenda`, loop 155656ad): the answer emitted `run_completed` at
+  05:16:38Z, the `verdict_pending` marker walked its full lifecycle (set →
+  `notified_early`+`hook_delivered=true` → `resolved_at`), and the
+  `run_verdict` follow-up landed ~80s later (05:17:58Z) with
+  `goal_achieved=True source=closure`, no `answer_changed` — the clean
+  no-revision path, both halves delivered through the Hermes hook. Before
+  this the whole event log had ZERO `run_verdict` events. The value showed
+  up starkly: a ~7-min post-verdict learning tail (5 skills crystallized +
+  knowledge-node promotion) ran AFTER the user had the answer — exactly the
+  wall-clock phase-2 hides (answer at ~10min vs process exit ~19min).
+  Secondary finding: the cost envelope did NOT improve — $2.42 as a
+  freshness re-check (7 steps/27 calls), over the $2 threshold and above the
+  prior $1.52 best; faster-to-answer but pricier per step (artifact
+  re-verification token volume). The subprocess backend still ignores
+  `max_tokens` on promotion calls (logged, non-fatal). CAPABILITIES.md Run 5
+  updated; cost-envelope gap stays open.
