@@ -140,7 +140,16 @@ def format_prior_decisions(attempts: Any, *, goal: str = "",
     current run has no card yet at read time, so it self-excludes;
     exclude_handle_id is belt-and-suspenders. Empty string when no prior has a
     usable brief. This is the READ half of run_curation's miner #3; recall()
-    calls it so a re-attempt of the same/rephrased goal arrives warm."""
+    calls it so a re-attempt of the same/rephrased goal arrives warm.
+
+    ``max_chars`` has a documented MINIMUM of 512 (round-16 review:
+    budgets below an honest frame forced a bare mid-header slice — a
+    request that small gets the minimum instead, and the returned block
+    always either fits whole or announces its cuts). At most ``k + 1``
+    run cards are read; the omission note says "or more" when attempts
+    beyond that exist (round-16: exact counting opened every card —
+    200 reads to render three briefs)."""
+    max_chars = max(int(max_chars), 512)
     # Collect every USABLE brief first, then cap — the omission count is
     # metadata owned by the final cap, never a string inside the capped
     # collection (round-15 review, 3-lens: a count entry appended into
@@ -177,10 +186,13 @@ def format_prior_decisions(attempts: Any, *, goal: str = "",
         if dp.get("resume_from"):
             line += f". Resume: {dp['resume_from']}"
         usable.append(line)
+        if len(usable) > k:
+            break   # k+1 proves "more exist"; don't open every card
     if not usable:
         return ""
     briefs = usable[:k]
     omitted = len(usable) - len(briefs)
+    omitted_note = f"{omitted}+" if omitted else ""
 
     # Over-budget handling widened 2026-08-13 (truncation audit): the old
     # `block[:1000]` was the BINDING hop for this whole lane — it silently
@@ -188,35 +200,31 @@ def format_prior_decisions(attempts: Any, *, goal: str = "",
     # would have swallowed most of what they preserved. Whole briefs drop
     # instead (announced), so what survives is readable; only a single
     # pathologically long brief still gets clipped, and clip() says so.
-    def _render(bs: List[str], omitted: int) -> str:
+    def _render(bs: List[str], note_count: str) -> str:
         # One note covers BOTH omission causes (beyond-k and evicted for
-        # space) — the count is computed from what actually renders.
-        note = (f"\n({omitted} more prior attempt(s) not shown; recall "
-                "serves the most recent.)" if omitted else "")
+        # space); "N+" means attempts beyond the k+1 probe may exist.
+        note = (f"\n({note_count} more prior attempt(s) not shown; recall "
+                "serves the most recent.)" if note_count else "")
         return ("## Prior attempts at this goal — read before planning\n"
                 + "\n".join(bs) + note
                 + "\nDo not repeat an approach that already failed the same "
                   "way; build on what worked, resume a partial, or change "
                   "the approach.")
 
-    block = _render(briefs, omitted)
+    block = _render(briefs, omitted_note)
     while len(block) > max_chars and len(briefs) > 1:
         briefs.pop()
         omitted += 1
-        block = _render(briefs, omitted)
+        omitted_note = (f"{omitted}+" if len(usable) > k else str(omitted))
+        block = _render(briefs, omitted_note)
     if len(block) > max_chars:
         # Sole remaining brief still over budget (a schema-max prior —
         # 2000 tried + 2000 why + 3×800 lessons — legally exceeds the
         # default). Clip the BRIEF and keep the frame whole (2026-08-13
         # adversarial review: clipping the rendered block ate the footer
-        # instruction and overshot max_chars by the marker length).
-        frame = len(_render([""], omitted))
+        # instruction and overshot max_chars by the marker length). The
+        # 512 floor above guarantees the frame itself always fits.
+        frame = len(_render([""], omitted_note))
         briefs[0] = clip(briefs[0], max(0, max_chars - frame - 64))
-        block = _render(briefs, omitted)
-    if len(block) > max_chars:
-        # Degenerate budget (smaller than the frame itself): the bound
-        # wins over the marker — there is no room to announce anything
-        # (fixpoint review 2026-08-14: the old floor returned 4x a small
-        # requested budget).
-        block = block[:max_chars]
+        block = _render(briefs, omitted_note)
     return block

@@ -450,10 +450,15 @@ class TestFixpointRoundBehaviors:
         rd.mkdir()
         (rd / "run_card.json").write_text(json.dumps(card))
         monkeypatch.setattr(dp, "_run_dir_for", lambda hid: rd)
-        for budget in (32, 100, 300):
+        # Documented minimum budget of 512 since round 16 (budgets too
+        # small for an honest frame forced a bare mid-header slice) —
+        # tiny requests are clamped UP and the block stays semantically
+        # whole: frame intact, cuts announced.
+        for budget in (32, 100, 300, 512):
             out = dp.format_prior_decisions(
                 [{"handle_id": "sm"}], max_chars=budget)
-            assert len(out) <= budget, budget
+            assert len(out) <= 512, budget
+            assert out.rstrip().endswith("change the approach.")
 
     def test_recall_block_small_budget_holds(self):
         from recall import PriorAttempt, RecallResult

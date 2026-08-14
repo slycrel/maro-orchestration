@@ -3514,9 +3514,25 @@ def _handle_impl(
                                         project=project or getattr(loop_result, "project", "") or "",
                                     ).closure_verdict
                                 if (
-                                    _post_closure is not None
-                                    and _post_closure.checks_run > 0
+                                    _post_closure is None
+                                    or _post_closure.checks_run == 0
                                 ):
+                                    # Shipped rerun with a null/zero-check
+                                    # closure: no verdict — and the
+                                    # PARENT's tuple must not stand as the
+                                    # delivered attempt's (round-16
+                                    # review: this branch simply had no
+                                    # clearing arm; absence is the
+                                    # schema's "unverified").
+                                    from runs import (
+                                        clear_run_verdict as _cvz_post)
+                                    if _cvz_post() is None:
+                                        log.warning(
+                                            "post-escalate: null-closure "
+                                            "verdict clear failed — "
+                                            "metadata may hold the "
+                                            "superseded verdict")
+                                elif _post_closure.checks_run > 0:
                                     _post_judged = getattr(_post_closure, "judged", True)
                                     _post_source = (
                                         "closure" if _post_judged

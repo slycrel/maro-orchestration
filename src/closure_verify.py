@@ -1263,7 +1263,8 @@ def verify_goal_completion(
                             content_or_empty(_retry_resp), dict,
                             log_tag="director.closure_verdict_retry")
                     except Exception as _retry_exc:
-                        verdict_audit["retry_failed"] = str(_retry_exc)[:200]
+                        verdict_audit["retry_failed"] = clip(
+                            str(_retry_exc), 800)
                         log.warning(
                             "closure: verdict audit retry call failed — "
                             "original verdict preserved: %s", _retry_exc)

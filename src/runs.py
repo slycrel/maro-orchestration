@@ -24,8 +24,11 @@ import contextlib
 import contextvars
 import hashlib
 import json
+import logging
 import os
 from datetime import datetime, timezone
+
+log = logging.getLogger("maro.runs")
 from pathlib import Path
 from typing import Optional
 
@@ -590,7 +593,14 @@ def stamp_run_audit_failure(fields: dict) -> Optional[Path]:
 
 _VERDICT_KEYS = ("goal_achieved", "goal_verdict_source",
                  "goal_verdict_confidence", "goal_verdict_summary",
-                 "goal_verdict_downgrade_reason", "goal_verdict_gaps")
+                 "goal_verdict_downgrade_reason", "goal_verdict_gaps",
+                 # Contest standing is part of the verdict record
+                 # (round-16 review: an uncontested replacement left the
+                 # predecessor's disputed marker standing, and
+                 # rerun_identity told future runs to distrust the NEW
+                 # verdict). The disputed writer re-stamps AFTER a
+                 # replacement when the new verdict is itself contested.
+                 "goal_verdict_contested", "goal_verdict_contested_by")
 
 
 def _apply_verdict_tuple(existing: dict, *, goal_achieved, source: str,
@@ -632,6 +642,8 @@ def _apply_verdict_tuple(existing: dict, *, goal_achieved, source: str,
         existing.pop("goal_achieved", None)
     else:
         existing["goal_achieved"] = bool(goal_achieved)
+    existing.pop("goal_verdict_contested", None)
+    existing.pop("goal_verdict_contested_by", None)
 
 
 def _clear_verdict_keys(existing: dict) -> None:
@@ -691,7 +703,12 @@ def stamp_run_verdict(
         from file_lock import locked_rmw
         locked_rmw(meta_path, _merge)
         return meta_path
-    except Exception:
+    except Exception as exc:
+        # NEVER silent (round-16 review, 3-lens: every caller
+        # ignored the None and a failed write left the
+        # superseded state standing with zero trace).
+        log.warning("runs: verdict stamp FAILED — metadata may hold "
+                    "superseded state: %s", exc)
         return None
 
 
@@ -754,7 +771,12 @@ def stamp_delivered_now_retry(
         from file_lock import locked_rmw
         locked_rmw(meta_path, _merge)
         return meta_path
-    except Exception:
+    except Exception as exc:
+        # NEVER silent (round-16 review, 3-lens: every caller
+        # ignored the None and a failed write left the
+        # superseded state standing with zero trace).
+        log.warning("runs: delivered-retry stamp FAILED — metadata may hold "
+                    "superseded state: %s", exc)
         return None
 
 
@@ -788,7 +810,12 @@ def clear_run_stop_verdict() -> Optional[Path]:
         from file_lock import locked_rmw
         locked_rmw(meta_path, _strip)
         return meta_path
-    except Exception:
+    except Exception as exc:
+        # NEVER silent (round-16 review, 3-lens: every caller
+        # ignored the None and a failed write left the
+        # superseded state standing with zero trace).
+        log.warning("runs: stop-tuple clear FAILED — metadata may hold "
+                    "superseded state: %s", exc)
         return None
 
 
@@ -822,7 +849,12 @@ def clear_run_verdict() -> Optional[Path]:
         from file_lock import locked_rmw
         locked_rmw(meta_path, _strip)
         return meta_path
-    except Exception:
+    except Exception as exc:
+        # NEVER silent (round-16 review, 3-lens: every caller
+        # ignored the None and a failed write left the
+        # superseded state standing with zero trace).
+        log.warning("runs: verdict clear FAILED — metadata may hold "
+                    "superseded state: %s", exc)
         return None
 
 

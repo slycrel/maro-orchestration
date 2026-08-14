@@ -38,53 +38,65 @@ FAMILY = re.compile(
 CAP_MIN, CAP_MAX = 60, 5000
 
 
-def _name_hint(node: ast.AST) -> str:
+def _hint_candidates(node: ast.AST) -> list:
+    """Every name-shaped identity a sliced expression might carry, in
+    rough priority order. The caller prefers a FAMILY match over the
+    first candidate (round-16 review: first-nonempty resolution let
+    wrap(prefix, rationale)[:N] hide behind "prefix", and mapping
+    subscripts like row["reason"][:N] carried no hint at all)."""
+    out: list = []
     if isinstance(node, ast.Name):
-        return node.id
-    if isinstance(node, ast.Attribute):
-        return node.attr
-    if isinstance(node, ast.Call):
+        out.append(node.id)
+    elif isinstance(node, ast.Attribute):
+        out.append(node.attr)
+    elif isinstance(node, ast.Subscript):
+        # row["reason"] — the string key is the identity.
+        sl = node.slice
+        if isinstance(sl, ast.Constant) and isinstance(sl.value, str):
+            out.append(sl.value)
+        out.extend(_hint_candidates(node.value))
+    elif isinstance(node, ast.Call):
         f = node.func
         if isinstance(f, ast.Name) and f.id == "str" and node.args:
-            return _name_hint(node.args[0])
+            out.extend(_hint_candidates(node.args[0]))
         if isinstance(f, ast.Attribute) and f.attr == "get" and node.args:
             a = node.args[0]
             if isinstance(a, ast.Constant) and isinstance(a.value, str):
-                return a.value
+                out.append(a.value)
         if isinstance(f, ast.Name) and f.id == "getattr" and len(node.args) >= 2:
             a = node.args[1]
             if isinstance(a, ast.Constant) and isinstance(a.value, str):
-                return a.value
+                out.append(a.value)
         if isinstance(f, ast.Attribute):
-            # Chained normalizers — x.strip()[:N], " ".join(x)[:N] — carry
-            # the base value's identity (round-14 review: .strip() evaded
-            # the sweep and hid a durable-journal rationale cut).
-            h = _name_hint(f.value)
-            if h:
-                return h
+            # result.summary()[:N] — the METHOD name carries identity;
+            # chained normalizers (.strip()) carry the base value's.
+            out.append(f.attr)
+            out.extend(_hint_candidates(f.value))
         # Conservative recursion into ANY call's arguments — a wrapper
         # like scrub(str(detail))[:N] transforms the value but not its
-        # identity (round-15 review: wrapper-by-wrapper recognition
-        # certified a durable silent cut out of the inventory).
+        # identity (round-15 review).
         for a in node.args:
-            h = _name_hint(a)
-            if h:
-                return h
-    if isinstance(node, ast.BinOp):
-        return _name_hint(node.left) or _name_hint(node.right)
-    if isinstance(node, ast.JoinedStr):
+            out.extend(_hint_candidates(a))
+    elif isinstance(node, ast.BinOp):
+        out.extend(_hint_candidates(node.left))
+        out.extend(_hint_candidates(node.right))
+    elif isinstance(node, ast.JoinedStr):
         for v in node.values:
             if isinstance(v, ast.FormattedValue):
-                h = _name_hint(v.value)
-                if h:
-                    return h
-    if isinstance(node, (ast.Tuple, ast.BoolOp)):
+                out.extend(_hint_candidates(v.value))
+    elif isinstance(node, (ast.Tuple, ast.BoolOp)):
         elts = node.elts if isinstance(node, ast.Tuple) else node.values
         for e in elts:
-            h = _name_hint(e)
-            if h:
-                return h
-    return ""
+            out.extend(_hint_candidates(e))
+    return [h for h in out if h]
+
+
+def _name_hint(node: ast.AST) -> str:
+    candidates = _hint_candidates(node)
+    for h in candidates:
+        if FAMILY.search(h):
+            return h
+    return candidates[0] if candidates else ""
 
 
 def scan_bare_family_slices() -> Counter:
@@ -138,15 +150,18 @@ def test_no_new_silent_rationale_slices():
 def test_inventory_only_shrinks_marker():
     """The frozen debt count, asserted as a ceiling with its vintage.
 
-    2026-08-14 baseline: 164 occurrences across 120 sites (down from 168
-    before the round-13 fixes; the round-14 scanner upgrade sees chained
-    normalizers, so the census is broader AND smaller). Raising the
-    ceiling requires editing this test — which is the point: growth is a
-    decision someone has to own in review, never a drift. Shrink it as
-    the burn-down proceeds.
+    2026-08-14 baseline: 176 occurrences across 129 sites. The number
+    moves in two directions for two different reasons: fixes shrink it
+    (168 → 163 in round 13), scanner upgrades GROW it by surfacing
+    already-existing debt (round 14 added chained normalizers; round 16
+    added mapping subscripts, method names, and family-preferring arg
+    resolution — +12 pre-existing sites became visible). Raising the
+    ceiling for a scanner upgrade is honest; raising it for new code is
+    not — the per-site test above tells the two apart. Shrink it as the
+    burn-down proceeds.
     """
     inventory = json.loads(INVENTORY_PATH.read_text())
-    assert sum(inventory.values()) <= 164
+    assert sum(inventory.values()) <= 176
 
 
 def test_scanner_detects_each_supported_shape():
@@ -162,6 +177,11 @@ def test_scanner_detects_each_supported_shape():
         "chained strip": "x = str(rationale).strip()[:300]\n",
         "join over parts": 'x = " ".join(lesson)[:200]\n',
         "f-string": 'x = f"why: {why}"[:400]\n',
+        # Round-16 evasion shapes: a distracting first argument, a
+        # mapping subscript, and a method whose NAME is the identity.
+        "distracting arg": "x = wrap(prefix, rationale)[:300]\n",
+        "mapping subscript": 'x = row["reason"][:300]\n',
+        "method name": "x = result.summary()[:400]\n",
     }
     for label, src in shapes.items():
         tree = ast.parse(src)
@@ -169,5 +189,5 @@ def test_scanner_detects_each_supported_shape():
         for node in ast.walk(tree):
             if isinstance(node, ast.Subscript):
                 hint = _name_hint(node.value)
-                found = bool(hint and FAMILY.search(hint))
+                found = found or bool(hint and FAMILY.search(hint))
         assert found, f"scanner missed the {label} shape: {src!r}"

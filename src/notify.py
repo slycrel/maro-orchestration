@@ -120,7 +120,7 @@ def _write_escalation_file(event_type: str, payload: dict) -> None:
     # A typed per-event schema is the deeper fix if senders keep minting
     # aliases; until then, keep this list synced with emit() callers.
     for _k in ("summary", "reason", "detail", "reasoning",
-               "summary_for_user"):
+               "summary_for_user", "revert_detail"):
         if isinstance(entry.get(_k), str):
             entry[_k] = _esc_clip(entry[_k], 2000)
     locked_append(escalations_path(), json.dumps(entry, default=str))

@@ -2637,6 +2637,31 @@ capture**, which is what makes the rung amortize instead of evaporate.
   certified out of the census; the breaker-reason site itself fixed to
   clip 500). Retry matrix test now asserts the COMPLETE key set after
   every transition. Suite 8604/0 skipped. Round 16 next.
+  **Round 16 (2026-08-14) — REJECT, narrower again: the consensus HIGH
+  is a FAILURE-PATH class, not a new field class — every shared
+  verdict/stop writer converts persistence failures to an unchecked
+  `return None` (both remaining lenses injected a locked_rmw failure
+  and watched the superseded tuple stand with zero trace; the round-15
+  caller-side warning couldn't see an error swallowed INSIDE the
+  writer). Fixed: all four writers log.warning on failure before
+  returning None; plus the zero-check hole (a shipped post-escalation
+  rerun whose closure ran 0 checks had NO clearing arm — the parent's
+  tuple stood as the delivered attempt's; now clears, honoring the
+  2026-07-02 no-record-of-null-verdicts decision while refusing to
+  inherit), contested standing joined the verdict tuple
+  (`goal_verdict_contested/_by` — an uncontested replacement left the
+  predecessor's disputed marker and rerun_identity told future runs to
+  distrust the NEW verdict), audit_repair.error bounded at entry
+  (10KB exception rode the canonical record unbounded, duplicated),
+  closure audit retry_failed 200→clip 800, escalation whitelist +
+  revert_detail, decision-prior render gets a documented 512 minimum
+  budget (kills the last degenerate bare slice) and reads at most k+1
+  cards (exact omission counting had opened 200 cards to render 3
+  briefs — "N+" says more exist), scanner upgraded again
+  (family-preferring candidate resolution, mapping-subscript keys,
+  method-name identity; +12 pre-existing sites surfaced → inventory
+  176/129 with the two-directions note on the ceiling). Suite 8640/0
+  skipped. Round 17 next.
 
   **Method that worked, for whoever picks this up:** don't argue about the
   number — pull the actual distribution out of `runs/*/build/loop-*.json`

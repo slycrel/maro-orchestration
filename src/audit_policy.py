@@ -14,6 +14,8 @@ from datetime import datetime, timezone
 import logging
 from typing import Iterable, Literal, Optional
 
+from context_budget import clip
+
 
 log = logging.getLogger("maro.audit_policy")
 
@@ -69,7 +71,10 @@ def persist_delivered_outcome_verdict(
         status = stamp.status
     except Exception as exc:
         status = "exception"
-        error = str(exc) or type(exc).__name__
+        # Bounded at the entry seam (round-16 review: a 10KB writer
+        # exception rode the canonical repair record — duplicated —
+        # unbounded, while the breadcrumb silently cut it at 300).
+        error = clip(str(exc) or type(exc).__name__, 2000)
 
     detail = error or "outcome verdict was not updated"
     if attempts:
@@ -108,7 +113,7 @@ def persist_delivered_outcome_verdict(
             "goal_verdict_stamp_failed": True,
             "goal_verdict_stamp_failed_label": goal_verdict_source,
             "goal_verdict_stamp_failed_loop_id": loop_id,
-            "goal_verdict_stamp_failed_detail": detail[:300],
+            "goal_verdict_stamp_failed_detail": clip(detail, 300),
         })
         metadata_persisted = path is not None
     except Exception as exc:
