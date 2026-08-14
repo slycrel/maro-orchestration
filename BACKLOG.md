@@ -2557,6 +2557,32 @@ capture**, which is what makes the rung amortize instead of evaporate.
   `stuck|0 steps` across the memory stores returns ~151 rows and is
   almost entirely noise — match on the asserted mechanism text, not the
   symptom word, or you will talk yourself into a fix that isn't needed.
+  **RE-MEASURED 2026-08-13 — still contained, stays a watch item; but
+  the 08-08 method was too narrow and missed a second specimen.** Store
+  is 552 rows (was 547), applied still 5, zero new family rows since
+  08-03. The literal `"blocks indefinitely"` grep returns 0, which the
+  08-08 pass read as "specimen gone" — but suggestion `88b45cba-00`
+  (minted 2026-08-03, `applied: false`) asserts the same mechanism in
+  different words ("Two stuck runs blocked at 0/1 steps on the same
+  pytest invocation … with no resolution or diagnostic") and is
+  fabricated on BOTH filed axes, verified by run identity against
+  outcomes.jsonl: (1) count — exactly one pytest/ledger-kata stuck
+  outcome existed at mint time (`0f296024`); the "second stuck run" in
+  its 50-outcome window was `68f8760a`, the evolver's OWN
+  `evolver_verify` auto-apply task from a day earlier, unrelated goal,
+  merged into "the same pytest invocation"; (2) mechanism — `0f296024`
+  stalled 72s (not indefinitely) and its failure_chain names a terminal
+  (`NAVIGATOR_ESCALATE: recovery overridden at blocked step, conf
+  0.95`), so "no resolution or diagnostic" is false against the record.
+  Family census total: two specimens ever (08-02, 08-03), both
+  `applied: false`, none since — 10 days quiet, no growth, no surgery.
+  Method correction for the next re-check: the literal mechanism string
+  is also insufficient — grep the mechanism FAMILY (indefinite-block /
+  no-diagnostic claims on stuck outcomes), then verify survivors
+  against the row's own `elapsed_ms` + `failure_chain` and count
+  occurrences by run identity. That hand-check IS the filed cheap fix
+  run manually; build it into outcome analysis only if the family
+  starts minting again.
 
 - [ ] **LT-3 — bridge asks (the rungs themselves).** Worked example, the
   web-reading ladder Jeremy named — mostly built, never assembled as a
