@@ -459,12 +459,16 @@ class TestRecordStepTrace:
         trace = json.loads((tmp_path / "step_traces.jsonl").read_text().strip())
         assert "stuck_reason" not in trace["steps"][0]
 
-    def test_result_truncated_to_500(self, monkeypatch, tmp_path):
+    def test_result_truncated_to_500_with_marker(self, monkeypatch, tmp_path):
+        # Cap kept (per-step volume store, breadth over depth) but the cut
+        # announces itself since the 2026-08-14 fixpoint round.
         monkeypatch.setattr("memory_ledger._step_traces_path", lambda: tmp_path / "step_traces.jsonl")
         step_outcomes = [_make_step_outcome(result="x" * 1000)]
         record_step_trace("o-003", "goal", step_outcomes)
         trace = json.loads((tmp_path / "step_traces.jsonl").read_text().strip())
-        assert len(trace["steps"][0]["result"]) <= 500
+        stored = trace["steps"][0]["result"]
+        assert stored.startswith("x" * 500)
+        assert "truncated: first 500 of 1000" in stored
 
     def test_empty_step_outcomes_writes_empty_trace(self, monkeypatch, tmp_path):
         monkeypatch.setattr("memory_ledger._step_traces_path", lambda: tmp_path / "step_traces.jsonl")

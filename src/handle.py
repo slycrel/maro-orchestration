@@ -1651,8 +1651,21 @@ def _handle_impl(
                                      VERDICT_PROSE_CAP)
                                 or "retry judged; no rationale recorded by "
                                    "the self-verdict")
+                        # Stop tuple gets the same replace-or-clear treatment
+                        # (fixpoint round 2026-08-14, Skeptic HIGH: a
+                        # recovered retry kept attempt one's
+                        # stop_verdict="lost-the-plot" beside status=done).
+                        if _retry_delivered and outcome.get("stop_verdict"):
+                            _extra_rr["stop_verdict"] = str(
+                                outcome["stop_verdict"])
+                            _extra_rr["stop_evidence"] = clip(
+                                outcome.get("stop_evidence"), 800)
                         _wm_rr(_rd_rr, handle_id=handle_id,
                                prompt=_raw_input, extra=_extra_rr)
+                        if (_retry_delivered
+                                and not outcome.get("stop_verdict")):
+                            from runs import clear_run_stop_verdict as _cs_rr
+                            _cs_rr()
                         if _retry_delivered and "goal_achieved" not in outcome:
                             # Delivered but UNJUDGED retry: the first
                             # attempt's verdict tuple must not describe the
@@ -3019,39 +3032,34 @@ def _handle_impl(
             ):
                 _judged = getattr(_closure, "judged", True)
                 try:
-                    from runs import write_metadata as _wm_verdict
                     from runs import current_run_dir as _crd_verdict
+                    from runs import stamp_run_verdict as _srv_closure
                     _rd_v = _crd_verdict()
                     if _rd_v is not None:
-                        _verdict_extra = {
-                            "goal_verdict_confidence": float(_closure.confidence),
-                            "goal_verdict_source": (
-                                "closure" if _judged else "closure_unverifiable"
-                            ),
-                            "goal_verdict_summary": clip(
-                                _closure.summary, VERDICT_PROSE_CAP),
-                        }
+                        # Routed through the schema-owning replacement API
+                        # (fixpoint round 2026-08-14): the old
+                        # write_metadata merge left every OMITTED tuple
+                        # member standing — an unjudged re-verdict kept a
+                        # stale boolean, and stale gaps outlived the
+                        # verdict that minted them. stamp_run_verdict
+                        # replaces the tuple WHOLE: unjudged pops the
+                        # boolean, empty gaps/downgrade pop their keys.
                         # Gaps ride as their own field: a truncated summary
                         # can lose the "why not" — merry-nettle
                         # (2026-07-16) surfaced goal_achieved=false beside a
                         # summary whose visible prefix read "Goal achieved."
-                        _gaps = [
-                            clip(g, 500) for g in (_closure.gaps or []) if g
-                        ][:5]
-                        if _gaps and not _closure.complete:
-                            _verdict_extra["goal_verdict_gaps"] = _gaps
-                        # Only-when-stamped: key absent means "no downgrade",
-                        # never "" — same convention as the event fields.
-                        _downgrade = str(
-                            getattr(_closure, "downgrade_reason", "") or "")
-                        if _downgrade:
-                            _verdict_extra["goal_verdict_downgrade_reason"] = (
-                                clip(_downgrade, VERDICT_PROSE_CAP))
-                        if _judged:
-                            _verdict_extra["goal_achieved"] = bool(_closure.complete)
-                        _wm_verdict(
-                            _rd_v, handle_id=handle_id, prompt=_raw_input,
-                            extra=_verdict_extra,
+                        _gaps = [g for g in (_closure.gaps or []) if g]
+                        _srv_closure(
+                            goal_achieved=(bool(_closure.complete)
+                                           if _judged else None),
+                            source=("closure" if _judged
+                                    else "closure_unverifiable"),
+                            confidence=float(_closure.confidence),
+                            summary=str(_closure.summary),
+                            downgrade_reason=str(
+                                getattr(_closure, "downgrade_reason", "")
+                                or ""),
+                            gaps=(_gaps if not _closure.complete else None),
                         )
                         # Compiled-truth half (MILESTONES #3a): a closure
                         # verdict with checks actually run is a verified
@@ -3067,7 +3075,7 @@ def _handle_impl(
                                 f"closure verdict: {_verdict_word}"
                                 f" (conf {float(_closure.confidence):.2f}, "
                                 f"{int(_closure.checks_run)} checks) — "
-                                f"{str(_closure.summary)[:200]}",
+                                f"{clip(_closure.summary, 500)}",
                             )
                         except Exception:
                             pass
@@ -3555,7 +3563,7 @@ def _handle_impl(
                                             loop_result, "lost-the-plot",
                                             "post-escalate closure contradicts done "
                                             f"(conf={_post_closure.confidence:.2f}): "
-                                            f"{str(_post_closure.summary)[:300]}",
+                                            f"{_post_closure.summary}",
                                         )
                                 if verbose and _post_closure is not None:
                                     print(

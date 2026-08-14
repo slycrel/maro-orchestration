@@ -595,6 +595,7 @@ def stamp_run_verdict(
     confidence: float,
     summary: str,
     downgrade_reason: str = "",
+    gaps: Optional[list] = None,
 ) -> Optional[Path]:
     """Replace the active run's latest goal verdict, preserving tri-state.
 
@@ -606,6 +607,12 @@ def stamp_run_verdict(
     ``downgrade_reason`` follows the only-when-stamped convention: nonempty
     writes ``goal_verdict_downgrade_reason``; empty removes any stale one
     from an earlier attempt (same replace-semantics as ``goal_achieved``).
+    ``gaps`` likewise (2026-08-14 fixpoint round, 3-lens consensus HIGH:
+    this writer replaced every tuple member EXCEPT gaps, so an achieved
+    retry kept its failed predecessor's "Missing:" list): a non-empty list
+    replaces ``goal_verdict_gaps`` (each entry honest-clipped, at most 5);
+    None/empty removes any stale one. The verdict tuple is replaced WHOLE
+    or not at all.
     """
     try:
         rd = current_run_dir()
@@ -629,6 +636,11 @@ def stamp_run_verdict(
                     clip(downgrade_reason, VERDICT_PROSE_CAP))
             else:
                 existing.pop("goal_verdict_downgrade_reason", None)
+            _gaps = [clip(g, 500) for g in (gaps or []) if g][:5]
+            if _gaps:
+                existing["goal_verdict_gaps"] = _gaps
+            else:
+                existing.pop("goal_verdict_gaps", None)
             if goal_achieved is None:
                 existing.pop("goal_achieved", None)
             else:
@@ -638,6 +650,40 @@ def stamp_run_verdict(
 
         from file_lock import locked_rmw
         locked_rmw(meta_path, _merge)
+        return meta_path
+    except Exception:
+        return None
+
+
+def clear_run_stop_verdict() -> Optional[Path]:
+    """Remove the active run's stop-verdict tuple (verdict + evidence).
+
+    The stop-tuple twin of ``clear_run_verdict`` (fixpoint round
+    2026-08-14, Skeptic HIGH: a recovered NOW retry kept the failed first
+    attempt's ``stop_verdict="lost-the-plot"`` beside ``status=done`` /
+    ``goal_achieved=true``). The delivered attempt's state replaces its
+    predecessor's — including the absence of a stop verdict.
+    """
+    try:
+        rd = current_run_dir()
+        if rd is None:
+            return None
+        meta_path = rd / "metadata.json"
+
+        def _strip(old: str) -> str:
+            try:
+                existing = json.loads(old) if old else {}
+            except Exception:
+                existing = {}
+            if not isinstance(existing, dict):
+                existing = {}
+            for key in ("stop_verdict", "stop_evidence"):
+                existing.pop(key, None)
+            index_run_dir(rd, existing)
+            return json.dumps(existing, indent=2, default=str)
+
+        from file_lock import locked_rmw
+        locked_rmw(meta_path, _strip)
         return meta_path
     except Exception:
         return None

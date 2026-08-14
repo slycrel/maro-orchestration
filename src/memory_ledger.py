@@ -383,11 +383,14 @@ def record_step_trace(
         entry: Dict[str, Any] = {
             "step": getattr(s, "text", "") or getattr(s, "step", ""),
             "status": getattr(s, "status", ""),
-            "result": (getattr(s, "result", "") or "")[:500],
+            # 500 kept deliberately (per-step volume store, breadth over
+            # depth — same trade as STORE_ENTRY_CAP) but announced now;
+            # stuck_reason below widened to the measured family cap.
+            "result": _clip(getattr(s, "result", ""), 500),
         }
         sr = getattr(s, "stuck_reason", None)
         if sr:
-            entry["stuck_reason"] = str(sr)[:300]
+            entry["stuck_reason"] = _clip(sr, 800)
         # Per-step learning (2026-07-27): the verify ladder's per-step
         # confidence ("strong"|"weak"|"inferred"|"unverified") is the
         # granularity step-level extraction keys on — persist it so the

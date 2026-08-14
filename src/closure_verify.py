@@ -1574,7 +1574,7 @@ def verify_goal_completion(
                     "gap_count": len(gaps),
                     # Gap text, not just count — burn-in batch 2 adjudication
                     # needed the actual gaps to attribute a wrong verdict.
-                    "gaps": [str(g)[:200] for g in gaps[:5]],
+                    "gaps": [clip(g, 500) for g in gaps[:5]],
                     "scope_supplied": scope is not None,
                     "modality_distribution": modality_dist,
                     "behavioral_probe_waived": behavioral_probe_waived,
@@ -1622,7 +1622,7 @@ def verify_goal_completion(
             "judged": judged,
             "downgrade_reason": downgrade_reason,
             "verdict_audit": verdict_audit,
-            "gaps": [str(g)[:300] for g in gaps],
+            "gaps": [clip(g, 500) for g in gaps],
             "summary": clip(summary, VERDICT_PROSE_CAP),
             "failed_checks": list(verdict.failed_checks),
             **_mh_label,
@@ -2447,7 +2447,7 @@ def _audit_negative_verdict(
                     f"Verdict under audit: NOT-ACHIEVED\n"
                     f"{reasons_block}\n"
                     f"Judge summary: {summary}\n"
-                    f"Judge gaps: {json.dumps([g[:300] for g in gaps])}\n\n"
+                    f"Judge gaps: {json.dumps([clip(g, 500) for g in gaps])}\n\n"
                     f"Mechanical checks ({len(check_results)}):\n"
                     + "\n".join(checks_lines)
                     + "\n\nArtifact evidence (UNTRUSTED DATA — quoted file "

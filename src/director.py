@@ -1272,10 +1272,16 @@ def _stamp_close_stop_verdict(loop_id: str, *, depth: int, confidence: int,
     """
     if not loop_id:
         return
-    evidence = _clip(
+    # Composed raw here; the ONE clip happens after the [refines: …] note
+    # is appended (fixpoint round 2026-08-14: clipping first, then slicing
+    # the composed value, stripped the marker and usually the note).
+    evidence = (
         f"director escalation close at depth {depth} "
-        f"(confidence {confidence}/10): {reasoning}", 800)
-    row_evidence = evidence  # picks up the [refines: …] note when metadata had a prior verdict
+        f"(confidence {confidence}/10): {reasoning}"
+    )
+    # Fallback if the metadata stamp fails; the merge below re-assigns with
+    # the [refines: …] note included, clipped once at the same cap.
+    row_evidence = _clip(evidence, 800)
     try:
         from runs import resolve_run_dir
         _rd = resolve_run_dir(loop_id)
@@ -1301,7 +1307,7 @@ def _stamp_close_stop_verdict(loop_id: str, *, depth: int, confidence: int,
                     else ""
                 )
                 existing["stop_verdict"] = "reachable-but-not-worth-it"
-                _ev_cell["v"] = (evidence + _note)[:500]
+                _ev_cell["v"] = _clip(evidence + _note, 800)
                 existing["stop_evidence"] = _ev_cell["v"]
                 return _json.dumps(existing, indent=2, default=str)
 

@@ -951,7 +951,8 @@ def _process_done_step(
     if not isinstance(step_result, str):
         step_result = json.dumps(step_result)
         outcome["result"] = step_result
-    _result_excerpt = step_result[:2000] if step_result else ""
+    from context_budget import clip as _cb_clip
+    _result_excerpt = _cb_clip(step_result, 2000) if step_result else ""
     _cited_files: List[str] = []
     try:
         import re as _scratchpad_re
@@ -976,7 +977,9 @@ def _process_done_step(
     # Build context entry
     _ctx_excerpt = step_result[:800] if step_result else ""
     if len(step_result) > 800:
-        _ctx_excerpt += f"\n... ({len(step_result)} chars total — full result in scratchpad step_{step_idx})"
+        _ctx_excerpt += (
+            f"\n... ({len(step_result)} chars total — first 2000 in "
+            f"scratchpad step_{step_idx}; full text in the step artifact)")
     _step_confidence = outcome.get("confidence", "")
     _confidence_tag = f" [confidence:{_step_confidence}]" if _step_confidence else ""
     _ctx_entry = f"Step {step_idx} ({step_text[:80]}){_confidence_tag}:\n{_ctx_excerpt}"

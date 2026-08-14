@@ -38,6 +38,17 @@ _DECISION_TRIED_CHARS = VERDICT_PROSE_CAP
 _DECISION_LESSON_CAP = 5
 
 
+def _capped_lessons(lessons) -> List[str]:
+    all_lessons = [str(l) for l in (lessons or []) if l]
+    out = [clip(l, LESSON_ENTRY_CAP)
+           for l in all_lessons[:_DECISION_LESSON_CAP]]
+    omitted = len(all_lessons) - _DECISION_LESSON_CAP
+    if omitted > 0:
+        out.append(f"(+{omitted} more lesson(s) recorded on the run's "
+                   "outcome rows, not carried here)")
+    return out
+
+
 def make_decision_prior(
     *,
     handle_id: str,
@@ -68,9 +79,9 @@ def make_decision_prior(
         # Per-lesson cap enforced HERE (the schema owner), not at the
         # callers: measured 2026-08-13, the old caller-side 200 fell below
         # the MEDIAN stored lesson (254); LESSON_ENTRY_CAP holds every
-        # lesson yet observed whole.
-        "lessons": [clip(l, LESSON_ENTRY_CAP)
-                    for l in list(lessons or [])[:_DECISION_LESSON_CAP]],
+        # lesson yet observed whole. The COUNT cap announces itself too
+        # (fixpoint round 2026-08-14: a silent [:5] hid stored lessons).
+        "lessons": _capped_lessons(lessons),
     }
     if resume_from:
         prior["resume_from"] = resume_from

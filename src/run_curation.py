@@ -1260,8 +1260,10 @@ def _run_lessons(meta: dict) -> List[str]:
             # LESSON_ENTRY_CAP with a visible marker (the old 200 here cut
             # the MEDIAN stored lesson, 254 chars, silently).
             out.append(str(lesson))
-            if len(out) >= _DECISION_LESSON_CAP:
-                return out
+            # No count cap here: make_decision_prior owns it and announces
+            # the omission (a producer-side stop at the same cap made the
+            # schema owner's omission note structurally unreachable —
+            # fixpoint round 2026-08-14).
     return out
 
 
@@ -1283,20 +1285,28 @@ def index_decision_prior(rd: Path, meta: dict, card: dict) -> None:
 
     tried_parts: List[str] = []
     log = _load_loop_log(rd)
+    def _joined(label: str, items: list, keep: int, sep: str) -> str:
+        # Count cuts announce themselves like char cuts do (fixpoint round
+        # 2026-08-14: silent [:6]/[:5] hid dropped steps and artifacts).
+        shown = sep.join(items[:keep])
+        extra = len(items) - keep
+        return (f"{label}: {shown}"
+                + (f" (+{extra} more)" if extra > 0 else ""))
+
     if log and log.get("steps"):
         step_txts = [(s.get("text") or "").strip() for s in log["steps"]]
-        step_txts = [t for t in step_txts if t][:6]
+        step_txts = [t for t in step_txts if t]
         if step_txts:
             # clip() at 500/step (p99 456, measured 2026-08-13 over 3,375
             # steps; the old 80 cut most of them) — a bare slice here was
             # still a SILENT cut for the ~10% of titles over it, hidden
             # under the aggregate cap (adversarial review, same day).
-            tried_parts.append(
-                "steps: " + "; ".join(clip(t, 500) for t in step_txts))
+            tried_parts.append(_joined(
+                "steps", [clip(t, 500) for t in step_txts], 6, "; "))
     if inv.get("scripts"):
-        tried_parts.append("scripts: " + ", ".join(inv["scripts"][:5]))
+        tried_parts.append(_joined("scripts", list(inv["scripts"]), 5, ", "))
     if inv.get("artifacts"):
-        tried_parts.append("produced: " + ", ".join(inv["artifacts"][:5]))
+        tried_parts.append(_joined("produced", list(inv["artifacts"]), 5, ", "))
     if not tried_parts and excerpt:
         tried_parts.append(excerpt)
     # No pre-slice: make_decision_prior owns the size caps and clips with a

@@ -827,7 +827,8 @@ def _adjudicate_one(row: Dict[str, Any], adapter) -> Optional[Dict[str, str]]:
     verdict = str(obj.get("verdict", "")).strip()
     if verdict not in ADJ_VERDICTS:
         return None
-    return {"verdict": verdict, "rationale": str(obj.get("rationale", ""))[:300]}
+    return {"verdict": verdict,
+            "rationale": _cb_clip(str(obj.get("rationale", "")), 2000)}
 
 
 def _adjudicate_lock_path() -> Path:

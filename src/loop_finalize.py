@@ -436,7 +436,8 @@ def _build_result_and_finalize(
             )
             if not result.stop_verdict:
                 result.stop_verdict = "external-interrupt"
-                result.stop_evidence = f"container clone merge errored: {_cc_exc}"[:500]
+                result.stop_evidence = clip(
+                    f"container clone merge errored: {_cc_exc}", 800)
         ctx.container_clone = None
 
     # busy_policy=worktree: merge the run's isolated worktree back into the
@@ -1115,7 +1116,8 @@ def _mint_run_risks_to_project(project: str, loop_id: str) -> int:
                 gap = " ".join(str(gap).split())
                 if gap:
                     lines.append(
-                        f"Open gap from run {loop_id} (closure): {gap[:200]}")
+                        f"Open gap from run {loop_id} (closure): "
+                        f"{clip(gap, 500)}")
         if (rd / "build" / "scope-raw-FAILED.txt").exists():
             lines.append(
                 f"Run {loop_id} executed without scope injection "

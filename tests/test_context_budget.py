@@ -420,3 +420,59 @@ class TestFixpointRoundBehaviors:
             out = r.as_context_block(max_chars=budget)
             assert len(out) <= budget, budget
             assert "first -" not in out   # no nonsense negative marker
+
+
+class TestRound13Behaviors:
+    """Behavior pins from the 2026-08-14 round-13 review (convergence loop)."""
+
+    def _seeded(self, tmp_path, monkeypatch):
+        import runs
+        rd = tmp_path / "run"
+        rd.mkdir()
+        (rd / "metadata.json").write_text(json.dumps({
+            "handle_id": "h1", "goal_achieved": False,
+            "goal_verdict_source": "closure", "goal_verdict_confidence": 0.9,
+            "goal_verdict_summary": "failed", "goal_verdict_gaps": ["OLD GAP"],
+            "goal_verdict_downgrade_reason": "old downgrade",
+            "stop_verdict": "lost-the-plot", "stop_evidence": "old evidence",
+            "status": "done"}))
+        monkeypatch.setattr(runs, "current_run_dir", lambda: rd)
+        monkeypatch.setattr(runs, "index_run_dir", lambda *a, **k: None)
+        return runs, rd
+
+    def test_stamp_run_verdict_replaces_gaps_too(self, tmp_path, monkeypatch):
+        # Round-13 consensus HIGH: the replacement API replaced every tuple
+        # member EXCEPT gaps, so an achieved retry kept its failed
+        # predecessor's "Missing:" list.
+        runs, rd = self._seeded(tmp_path, monkeypatch)
+        runs.stamp_run_verdict(goal_achieved=True, source="closure",
+                               confidence=0.95, summary="delivered")
+        meta = json.loads((rd / "metadata.json").read_text())
+        assert meta["goal_achieved"] is True
+        assert "goal_verdict_gaps" not in meta
+        assert "goal_verdict_downgrade_reason" not in meta
+        # And a verdict WITH gaps replaces rather than merges.
+        runs.stamp_run_verdict(goal_achieved=False, source="closure",
+                               confidence=0.8, summary="regressed",
+                               gaps=["NEW GAP"])
+        meta = json.loads((rd / "metadata.json").read_text())
+        assert meta["goal_verdict_gaps"] == ["NEW GAP"]
+
+    def test_clear_run_stop_verdict_removes_stop_tuple(self, tmp_path, monkeypatch):
+        # Round-13 Skeptic HIGH: a recovered NOW retry kept attempt one's
+        # stop_verdict="lost-the-plot" beside status=done.
+        runs, rd = self._seeded(tmp_path, monkeypatch)
+        runs.clear_run_stop_verdict()
+        meta = json.loads((rd / "metadata.json").read_text())
+        assert "stop_verdict" not in meta
+        assert "stop_evidence" not in meta
+        assert meta["goal_verdict_summary"] == "failed"  # verdict untouched
+
+    def test_lesson_count_cap_announces_omission(self):
+        from decision_prior import make_decision_prior
+        prior = make_decision_prior(
+            handle_id="h", goal="g", outcome="success", goal_achieved=True,
+            when="2026-08-14", what_was_tried="t", why="w",
+            lessons=[f"lesson {i}" for i in range(7)])
+        assert len(prior["lessons"]) == 6
+        assert "+2 more lesson(s)" in prior["lessons"][-1]

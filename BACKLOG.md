@@ -2547,6 +2547,41 @@ capture**, which is what makes the rung amortize instead of evaporate.
   combined block and can still eat the prior-brief footer — the deep
   fix is the outer assembler passing remaining budget into the
   renderer; belongs with the wide-view-seat design question).
+  **Round 13 (2026-08-14, Jeremy's convergence /goal: "review until
+  only lows") — REJECT, 8 deduped findings, 2 HIGHs, 0 hallucination,
+  all fixed same session.** The HIGHs are the round-12 class one key
+  over: (1) 3-lens consensus — `stamp_run_verdict` replaced every
+  tuple member EXCEPT `goal_verdict_gaps` (an achieved retry kept its
+  failed predecessor's "Missing:" list; Telegram rendered it); fixed
+  at the schema owner (gaps replace-or-clear) AND the main closure
+  writer re-routed through `stamp_run_verdict` instead of a raw
+  write_metadata merge (unjudged re-verdicts now pop stale members);
+  (2) Skeptic, probed via real handle(): a recovered NOW retry kept
+  attempt one's `stop_verdict="lost-the-plot"` beside status=done —
+  new `runs.clear_run_stop_verdict()`, retry block replaces-or-clears
+  the stop tuple. Mediums fixed: director close re-cut its own
+  clipped evidence (marker stripped) — compose-then-clip-once; the
+  `_cc_exc` exception twin; post-escalate pre-slice; closure gaps
+  chain (durable row/event/audit prompt/risk-mint) → clip 500;
+  step_traces result/stuck_reason announced (500 kept —
+  volume-store trade — /800); adjudication rationale → 2000; count
+  caps announce omissions (lessons "+N more", tried-parts "(+N
+  more)"; producer stop that made the schema owner's omission note
+  unreachable removed); scratchpad "full result" pointer no longer
+  lies. **Structural close: `tests/test_truncation_discipline.py` —
+  the reviewers' AST sweep as a permanent tripwire.** Census: the
+  bare-slice-on-rationale-name population was 168 when rounds were
+  finding ~10 each; now frozen at 163/120 sites in
+  `tests/data/truncation_inventory.json` — new sites FAIL, un-trimmed
+  fixed rows FAIL, ceiling pinned. Burn-down = fix a site, delete its
+  row. **Why-the-streak retrospective (Jeremy's question) in
+  docs/history/2026-08-14-review-streak-retrospective.md** — three
+  causes (list-work vs class-work; new contracts reasoned-not-probed;
+  caller-owned semantics), each with a shipped countermeasure; the
+  new round-close discipline: field-name census + state-transition
+  probes through real writers + adversarial self-probe of every new
+  contract before landing. Suite 8602/0 skipped. Round 14 = the
+  convergence check.
 
   **Method that worked, for whoever picks this up:** don't argue about the
   number — pull the actual distribution out of `runs/*/build/loop-*.json`
