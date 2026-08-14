@@ -1,6 +1,6 @@
 ---
 name: star
-version: 7
+version: 8
 description: ALPHA star-pattern mini-orchestrator — a master loop that owns taste (choose the next task) and judgement (validate the answer) and delegates everything else, 0..n dynamically chosen steps, no pre-planned pathway. Dev-side gut check for maro's orchestration patterns; also the modern melt-test of the 2026-03-31 factory branch.
 ---
 
@@ -134,6 +134,21 @@ aim at what the last run did NOT settle or name the different axis.
    executed, nothing probed — gets ONE adversarial refutation question
    ("what executed check would catch this being wrong?") before it
    stands; if the answer names a runnable check, run it.
+   For **enumeration or ranking goals** (top-N, "best X", "all the Y")
+   the verdict carries a SECOND refutation — the **coverage** question,
+   distinct from correctness: every row can be internally verified (its
+   stars/dates real) and the set still MISS a category leader the search
+   axis structurally could not reach. Before an enumeration stands, name
+   the discovery axis the delegation actually used and ask what a
+   *different* axis would surface that this one can't — the adjacent
+   category (a dedicated tool vs a framework bundle that carries the same
+   capability), a different discovery surface (curated index vs registry
+   search vs org-backing/dependents). If that names a plausible missing
+   class, it is a coverage PROBE to run (one narrow re-delegation or a
+   master-side probe), not a caveat to write. Grounds: the star-vs-harness
+   head-to-head (docs/history/2026-08-13-star-vs-harness-comparison.md) —
+   both runs verified every row yet each missed one category leader the
+   other's single axis caught; union beat either.
    For `recon` tasks judgement asks a different question: did the map
    actually change, and are the new landmarks/edges REAL? Spot-probe
    claimed edges (a claim should name what settles it — the
@@ -367,3 +382,18 @@ evidence-modality refutation at judge (MH #1 pass-audit),
 toolset-stamped reopen conditions (§14h revisit mechanic). Claim-error
 range updated 30–78% → 0–78% (later rounds measured 0%; verification
 stays unconditional).
+
+**Version 8 (2026-08-13):** coverage refutation at JUDGE for enumeration
+goals (the second refutation, symmetric to evidence-modality). Exercised
+same day on a re-run of the code-review-skills goal (the target of the
+2026-08-13 star-vs-harness head-to-head): it FIRED. The coverage-aware
+*delegation* still missed two `gh api`-verified category leaders —
+mattpocock/skills (216,678★ bundle shipping `skills/engineering/code-review/`)
+and awesome-skills/code-review-skill (1,703★, the dedicated leader) — even
+with the criteria demanding bundle enumeration and an explicit "a prior run
+missed a 200k+★ bundle" warning (it stopped at the first 200k bundle it
+found, obra/superpowers). The master's JUDGE-step coverage PROBE caught both.
+Finding: criteria-level coverage teaching is insufficient (the A/B-4
+advertisement-only lesson, again) — the judge-side probe is the load-bearing
+backstop, which is why the rule makes coverage a probe to RUN, not a caveat
+to write. Record: docs/history/2026-08-13-star-coverage-refutation-exercise.md

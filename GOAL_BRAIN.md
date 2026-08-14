@@ -7712,3 +7712,20 @@ under the same two-measurement standard).
   re-verification token volume). The subprocess backend still ignores
   `max_tokens` on promotion calls (logged, non-fatal). CAPABILITIES.md Run 5
   updated; cost-envelope gap stays open.
+- **2026-08-13 (night)** — Star skill v7→v8 (Jeremy: "update the star skill
+  and run it against the same target"). Update = a COVERAGE refutation at the
+  JUDGE step for enumeration/ranking goals, symmetric to evidence-modality —
+  fixing the one weakness the 08-13 head-to-head found (star's single-axis
+  delegation verifies every row yet can miss a category leader; "union beats
+  either"). Exercised on the same target (the code-review-skills goal): the
+  guard FIRED. The coverage-aware delegation STILL missed two gh-verified
+  leaders — mattpocock/skills (216,678★ bundle w/ `skills/engineering/code-review/`,
+  the prior run's exact miss) and awesome-skills/code-review-skill (1,703★, the
+  dedicated leader) — even with explicit bundle-enumeration criteria + a "prior
+  run missed a 200k bundle" warning (it anchored on the first 200k bundle,
+  obra/superpowers, and stopped). The master's JUDGE-step coverage PROBE caught
+  both → corrected top-5. Finding: criteria-level coverage teaching is
+  insufficient (A/B-4 advertisement-only lesson again); the judge-side probe is
+  the load-bearing backstop, which is exactly where the update put it. v8 earned
+  (contract change exercised). Record: docs/history/2026-08-13-star-coverage-
+  refutation-exercise.md. Alpha keep-signal use logged.
