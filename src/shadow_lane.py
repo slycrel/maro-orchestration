@@ -53,6 +53,17 @@ REASON_EMPTY_GOAL = "empty_goal"
 REASON_NOT_RESEARCH = "worker_type!=research"
 REASON_NOT_READ_TIER = "action_tier!=READ"
 
+# Reasons that can NEVER change for a given run and therefore earn a
+# permanent SKIPPED stamp (review 2026-08-14 r3: an explicit terminal set,
+# not "everything except status"). NOT_DONE is mutable (a stuck run can be
+# resumed to done); EMPTY_GOAL is conservatively treated as mutable too (a
+# half-written metadata.json can be repaired in place) — both are simply
+# rescanned while inside the lookback window.
+_TERMINAL_REASONS = frozenset({
+    REASON_DRY_RUN, REASON_NOT_ORGANIC, REASON_NOT_RESEARCH,
+    REASON_NOT_READ_TIER,
+})
+
 
 def eligible(goal: str, meta: dict) -> Tuple[bool, str]:
     """Eligibility gate for a shadow (design doc "Side-effect guard (hard)").
@@ -248,7 +259,13 @@ def run_challenger(run_dir: Path, arm: str, goal: str, *, timeout: int,
     _scrub_env["WORKSPACE_ROOT"] = None
     # Not always in os.environ but injected by the wrapper conditionally:
     _scrub_env["MARO_FETCH_CAPTURE_DIR"] = None
-    _scrub_env["MARO_WORKER_RUN"] = None
+    # NOT scrubbed — force-set (review 2026-08-14 r3): the pre-push hook's
+    # git guard keys on this marker (scripts/hooks/pre-push exits 0 when
+    # unset, i.e. treats the process as human). The challenger is a
+    # spawned agent and must stay marked as one, or it bypasses
+    # default-branch push protection. An inert 1-bit marker is an accepted
+    # black-box impurity in exchange for keeping the guard live.
+    _scrub_env["MARO_WORKER_RUN"] = "1"
 
     cli_version = None
     try:
@@ -491,27 +508,28 @@ def _sweep_locked(summary: Dict[str, Any], *, limit: int, verbose: bool,
 
         ok, reason = eligible(goal, meta)
         if not ok:
-            # Stamp SKIPPED only for reasons that can NEVER change:
-            # content/provenance reasons (dry_run, non-organic goal shape,
-            # empty goal) are fixed at run creation; status is NOT — a
-            # running primary carries status None (confirmed live, r1
-            # Skeptic #1), and a stuck/incomplete run can be resumed to
-            # done with its stale ended_at still present (r2 Architect #1
-            # — the ended_at heuristic this replaces stamped those
-            # terminally). Non-done runs are simply rescanned while inside
-            # the lookback window; bounded cost, no permanent exclusion.
-            if not dry_run and reason != REASON_NOT_DONE:
+            # Stamp SKIPPED only for reasons in the explicit terminal set
+            # (r3: not "everything except status"). Mutable-state reasons
+            # (status, empty goal) leave no trace and are rescanned while
+            # inside the lookback window; bounded cost, no permanent
+            # exclusion (r1 Skeptic #1 confirmed live: running primaries
+            # carry status None; r2 Architect #1: a resumed stuck run
+            # keeps a stale ended_at while live again).
+            if not dry_run and reason in _TERMINAL_REASONS:
                 shadow_dir.mkdir(parents=True, exist_ok=True)
                 (shadow_dir / "SKIPPED").write_text(reason + "\n", encoding="utf-8")
             summary["skipped"] += 1
             continue
 
-        # Defer until the primary is CURATED (run_card.json present) —
-        # review 2026-08-14 r2: close_run writes the card before finalize
-        # stamps ended_at, but the async tail can still be refreshing it;
-        # a challenger fired in that window would ledger primary_cost_usd
-        # None with no reconciliation path. No stamp — just not yet.
-        if not (run_dir / "run_card.json").is_file():
+        # Defer until the primary is fully FINALIZED: ended_at is stamped
+        # by finalize (after the async tail drains and refreshes the card)
+        # and run_card.json exists. Gating on the card alone (r2) still
+        # snapshotted a PRELIMINARY card's cost into the append-only
+        # ledger (r3) — ended_at is the durable "the numbers are final"
+        # signal. No stamp — just not yet; a run whose curation never
+        # lands falls out of the lookback window (bounded, and abnormal
+        # enough that the primary's own health lanes are the right alarm).
+        if not meta.get("ended_at") or not (run_dir / "run_card.json").is_file():
             summary["skipped"] += 1
             continue
 

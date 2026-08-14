@@ -452,9 +452,11 @@ class TestReviewRoundPins:
 
         env_extra = captured["env_extra"]
         for key in ("MARO_WORKSPACE", "WORKSPACE_ROOT", "MARO_FETCH_CAPTURE_DIR",
-                    "MARO_ORCH_ROOT", "MARO_MEMORY_DIR", "MARO_FUTURE_UNKNOWN_VAR",
-                    "MARO_WORKER_RUN"):
+                    "MARO_ORCH_ROOT", "MARO_MEMORY_DIR", "MARO_FUTURE_UNKNOWN_VAR"):
             assert key in env_extra and env_extra[key] is None, key
+        # NOT scrubbed (r3): the pre-push hook's git guard keys on this
+        # marker — the challenger must stay marked as a spawned agent.
+        assert env_extra["MARO_WORKER_RUN"] == "1"
 
     def test_meta_uses_started_at_not_ts(self, tmp_path, monkeypatch):
         """Skeptic: challenger meta's `ts` silently overwrote the ledger
@@ -524,7 +526,7 @@ class TestReviewRoundPins:
         _set_shadow_config(tmp_path, enabled=True)
         rd = _make_run_dir(tmp_path, "bbbb2222", prompt=_RESEARCH_GOAL)
 
-        def _boom(run_dir, arm, goal, *, timeout):
+        def _boom(run_dir, arm, goal, *, timeout, star=None):
             raise RuntimeError("challenger exploded")
 
         monkeypatch.setattr(shadow_lane, "run_challenger", _boom)
@@ -631,16 +633,33 @@ class TestReviewRound2Pins:
         result2 = shadow_lane.sweep(limit=1, dry_run=True)
         assert len(result2["would_fire"]) == 1
 
+    def test_unfinalized_run_deferred_even_with_card(self, tmp_path):
+        """r3 Skeptic #2: a PRELIMINARY card (written at close_run, refreshed
+        by the tail) passed the card-only gate and snapshotted stale cost.
+        Pin: no ended_at -> deferred regardless of the card."""
+        _set_shadow_config(tmp_path, enabled=True)
+        rd = _make_run_dir(tmp_path, "cafe0033", prompt=_RESEARCH_GOAL)
+        meta = json.loads((rd / "metadata.json").read_text(encoding="utf-8"))
+        del meta["ended_at"]
+        (rd / "metadata.json").write_text(json.dumps(meta), encoding="utf-8")
+
+        result = shadow_lane.sweep(limit=1, dry_run=True)
+        assert result["skipped"] == 1
+        assert not (rd / "shadow").exists()
+
     def test_star_prompt_read_once_and_handed_down(self, tmp_path, monkeypatch):
         """r2 both lenses: the sweep's preflight star_prompt() plus
         run_challenger's own re-read was a TOCTOU — a failure between the
-        two terminally claimed the slot. Pin: exactly ONE read per fire,
-        and the challenger uses the handed-down payload."""
+        two terminally claimed the slot. Pin (r3-strengthened: the REAL
+        run_challenger runs, only the subprocess is mocked — so a second
+        read inside the production runner would be caught): exactly ONE
+        read per fire, end to end."""
+        import llm
         _set_shadow_config(tmp_path, enabled=True)
         hid = next(h for h in ("cccc3333", "dddd4444", "eeee5555", "ffff6666",
                                "12121212", "34343434")
                    if shadow_lane.pick_arm(h) == shadow_lane.ARM_STAR)
-        _make_run_dir(tmp_path, hid, prompt=_RESEARCH_GOAL)
+        rd = _make_run_dir(tmp_path, hid, prompt=_RESEARCH_GOAL)
 
         calls = {"n": 0}
         real_star = shadow_lane.star_prompt
@@ -649,18 +668,14 @@ class TestReviewRound2Pins:
             calls["n"] += 1
             return real_star()
 
-        received = {}
-
-        def _fake_challenger(run_dir, arm, goal, *, timeout, star=None):
-            received["star"] = star
-            return {"arm": arm, "started_at": "2026-08-14T00:00:00+00:00",
-                    "wall_seconds": 1.0, "exit_status": "ok"}
-
         monkeypatch.setattr(shadow_lane, "star_prompt", _counting_star)
-        monkeypatch.setattr(shadow_lane, "run_challenger", _fake_challenger)
+        monkeypatch.setattr(llm, "_run_subprocess_safe", _fake_subprocess_safe())
         result = shadow_lane.sweep(limit=1)
         assert result["fired"] == 1
         assert calls["n"] == 1
-        assert received["star"] is not None
-        text, meta = received["star"]
-        assert "star" in text and meta["star_version"]
+        # The handed-down prompt actually reached the challenger cmd (the
+        # meta records the star version + a prompt-length marker).
+        meta = json.loads((rd / "shadow" / "star" / "meta.json")
+                          .read_text(encoding="utf-8"))
+        assert meta["star_version"]
+        assert any(str(c).startswith("<star-prompt:") for c in meta["cmd"])
