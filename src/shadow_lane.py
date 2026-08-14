@@ -190,7 +190,8 @@ def _parse_cli_result(text: str) -> dict:
     return best_typed or best
 
 
-def run_challenger(run_dir: Path, arm: str, goal: str, *, timeout: int) -> dict:
+def run_challenger(run_dir: Path, arm: str, goal: str, *, timeout: int,
+                   star: Optional[Tuple[str, dict]] = None) -> dict:
     """Run one challenger (star|plain) for `goal` in a fresh scratch cwd.
 
     Writes <run_dir>/shadow/<arm>/RESULT.md + meta.json and returns the
@@ -218,25 +219,36 @@ def run_challenger(run_dir: Path, arm: str, goal: str, *, timeout: int) -> dict:
     cmd = [_CLAUDE_BIN, "-p", "--output-format", "json", "--dangerously-skip-permissions"]
     arm_meta: Dict[str, Any] = {}
     if arm == ARM_STAR:
-        star_text, star_meta = star_prompt()
+        # Single-read discipline (review 2026-08-14 r2, both lenses): the
+        # sweep pre-reads the star prompt BEFORE claiming and hands it
+        # down — a second read here would reintroduce the TOCTOU where a
+        # transient skill problem lands AFTER the claim and terminally
+        # consumes the run's shadow slot. `star=None` (standalone/test
+        # callers) reads once here instead.
+        star_text, star_meta = star if star is not None else star_prompt()
         cmd = cmd + ["--append-system-prompt", star_text]
         arm_meta.update(star_meta)
 
-    # Black-box env scrub (review 2026-08-14, Architect/Minimalist): the
-    # wrapper clones os.environ, so without this the challenger inherits
-    # every MARO_* pointer to the real workspace (and, when a run context
-    # is live in the calling process, a fetch-capture path INTO the
-    # primary's run dir). None = unset-in-child (the wrapper's documented
-    # contract). This scrubs the pointers we own; it is NOT a sandbox —
-    # see the design doc's honest side-effect-guard framing.
+    # Black-box env scrub (review 2026-08-14 r1; widened r2): the wrapper
+    # clones os.environ, so without this the challenger inherits every
+    # MARO_* pointer to the real workspace. Round 2 caught the enumerated
+    # list missing MARO_ORCH_ROOT and MARO_MEMORY_DIR (both real storage
+    # roots) — an allowlist-of-denials is whack-a-mole, so scrub by
+    # PREFIX: every MARO_*/OPENCLAW_* var present in this process, plus
+    # WORKSPACE_ROOT, is unset in the child (None = unset-in-child, the
+    # wrapper's documented contract; its own late re-adds are merged
+    # BEFORE env_extra, so the None wins). A future MARO_ var can't leak
+    # by omission. This is still NOT a sandbox — see the design doc's
+    # honest side-effect-guard framing.
+    import os as _os
     _scrub_env: Dict[str, Any] = {
-        "MARO_WORKSPACE": None,
-        "OPENCLAW_WORKSPACE": None,
-        "WORKSPACE_ROOT": None,
-        "MARO_ENV_FILE": None,
-        "OPENCLAW_CFG": None,
-        "MARO_FETCH_CAPTURE_DIR": None,
+        k: None for k in _os.environ
+        if k.startswith(("MARO_", "OPENCLAW_"))
     }
+    _scrub_env["WORKSPACE_ROOT"] = None
+    # Not always in os.environ but injected by the wrapper conditionally:
+    _scrub_env["MARO_FETCH_CAPTURE_DIR"] = None
+    _scrub_env["MARO_WORKER_RUN"] = None
 
     cli_version = None
     try:
@@ -479,15 +491,27 @@ def _sweep_locked(summary: Dict[str, Any], *, limit: int, verbose: bool,
 
         ok, reason = eligible(goal, meta)
         if not ok:
-            # Stamp SKIPPED only for runs that are actually OVER
-            # (`ended_at` present). A sweep that sees a still-RUNNING
-            # primary (status None/unset, no ended_at) must leave no
-            # trace, or the run is permanently excluded before it ever
-            # becomes eligible (review 2026-08-14, Skeptic #1 — confirmed
-            # empirically: live runs carry status None until finalize).
-            if not dry_run and meta.get("ended_at"):
+            # Stamp SKIPPED only for reasons that can NEVER change:
+            # content/provenance reasons (dry_run, non-organic goal shape,
+            # empty goal) are fixed at run creation; status is NOT — a
+            # running primary carries status None (confirmed live, r1
+            # Skeptic #1), and a stuck/incomplete run can be resumed to
+            # done with its stale ended_at still present (r2 Architect #1
+            # — the ended_at heuristic this replaces stamped those
+            # terminally). Non-done runs are simply rescanned while inside
+            # the lookback window; bounded cost, no permanent exclusion.
+            if not dry_run and reason != REASON_NOT_DONE:
                 shadow_dir.mkdir(parents=True, exist_ok=True)
                 (shadow_dir / "SKIPPED").write_text(reason + "\n", encoding="utf-8")
+            summary["skipped"] += 1
+            continue
+
+        # Defer until the primary is CURATED (run_card.json present) —
+        # review 2026-08-14 r2: close_run writes the card before finalize
+        # stamps ended_at, but the async tail can still be refreshing it;
+        # a challenger fired in that window would ledger primary_cost_usd
+        # None with no reconciliation path. No stamp — just not yet.
+        if not (run_dir / "run_card.json").is_file():
             summary["skipped"] += 1
             continue
 
@@ -505,12 +529,15 @@ def _sweep_locked(summary: Dict[str, Any], *, limit: int, verbose: bool,
             fired += 1
             continue
 
-        # Star availability is checked BEFORE the claim (review 2026-08-14,
-        # Minimalist): a transient star-skill problem must not consume the
-        # run's one shadow slot — unclaimed, the run is retried next sweep.
+        # Star prompt is read ONCE, before the claim, and handed down
+        # (review 2026-08-14 r1 Minimalist; r2 both lenses closed the
+        # remaining TOCTOU): a transient star-skill problem must not
+        # consume the run's one shadow slot — unclaimed, the run is
+        # retried next sweep.
+        star_payload: Optional[Tuple[str, dict]] = None
         if arm == ARM_STAR:
             try:
-                star_prompt()
+                star_payload = star_prompt()
             except Exception as exc:
                 summary["errors"] += 1
                 log.warning("shadow sweep: star prompt unavailable, leaving %s "
@@ -527,7 +554,9 @@ def _sweep_locked(summary: Dict[str, Any], *, limit: int, verbose: bool,
             continue
 
         try:
-            challenger_meta = run_challenger(run_dir, arm, goal, timeout=timeout_seconds)
+            challenger_meta = run_challenger(run_dir, arm, goal,
+                                             timeout=timeout_seconds,
+                                             star=star_payload)
         except Exception as exc:
             # The claim stands (deliberately terminal — no auto-retry, the
             # partial state is evidence), but it must be VISIBLE: an empty

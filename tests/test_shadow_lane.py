@@ -42,7 +42,7 @@ def _set_shadow_config(tmp_path, **shadow_keys):
 
 def _make_run_dir(tmp_path, handle_id, *, prompt, status="done", dry_run=False,
                    measurement_class="organic", lane="agenda", ended_at=None,
-                   goal_achieved=True, extra=None):
+                   goal_achieved=True, extra=None, card=True):
     rd = tmp_path / "runs" / f"{handle_id}-testnick"
     rd.mkdir(parents=True)
     meta = {
@@ -58,6 +58,11 @@ def _make_run_dir(tmp_path, handle_id, *, prompt, status="done", dry_run=False,
     if extra:
         meta.update(extra)
     (rd / "metadata.json").write_text(json.dumps(meta), encoding="utf-8")
+    if card:
+        # A finished run normally has a curated card (close_run writes it
+        # before finalize stamps ended_at); the sweep defers uncurated runs.
+        (rd / "run_card.json").write_text(
+            json.dumps({"total_cost_usd": None}), encoding="utf-8")
     return rd
 
 
@@ -180,7 +185,7 @@ class TestStarPrompt:
 # ---------------------------------------------------------------------------
 
 def _fake_challenger(calls):
-    def _run(run_dir, arm, goal, *, timeout):
+    def _run(run_dir, arm, goal, *, timeout, star=None):
         calls.append({"run_dir": run_dir, "arm": arm, "goal": goal, "timeout": timeout})
         return {
             "arm": arm, "ts": datetime.now(timezone.utc).isoformat(),
@@ -217,14 +222,19 @@ class TestSweep:
         calls = []
         monkeypatch.setattr(shadow_lane, "run_challenger", _fake_challenger(calls))
         _set_shadow_config(tmp_path, enabled=True, sample_rate=1.0, daily_cap=10)
-        rd = _make_run_dir(tmp_path, "cccccccc", prompt=_RESEARCH_GOAL, status="stuck")
+        # Content-terminal reason (non-organic provenance — can never
+        # change) gets the stamp. Status-based ineligibility is
+        # deliberately NOT stamped anymore (r2 review: a stuck run can be
+        # resumed to done and must stay shadowable — see TestReviewRound2Pins).
+        rd = _make_run_dir(tmp_path, "cccccccc", prompt=_RESEARCH_GOAL,
+                           measurement_class="smoke")
 
         result = shadow_lane.sweep(limit=5)
         assert result["fired"] == 0
         assert result["skipped"] == 1
         skipped_file = rd / "shadow" / "SKIPPED"
         assert skipped_file.is_file()
-        assert skipped_file.read_text(encoding="utf-8").strip() == shadow_lane.REASON_NOT_DONE
+        assert skipped_file.read_text(encoding="utf-8").strip() == shadow_lane.REASON_NOT_ORGANIC
         assert calls == []
 
         # Re-sweeping never re-derives the reason — the run stays skipped
@@ -419,8 +429,10 @@ class TestReviewRoundPins:
         assert scratch.is_dir()
 
     def test_challenger_env_scrubs_workspace_pointers(self, tmp_path, monkeypatch):
-        """Architect: env_extra=None inherited every MARO_* pointer into the
-        'black box'. Pin: the scrub unsets the workspace pointers (None =
+        """r1 Architect: env_extra=None inherited every MARO_* pointer into
+        the 'black box'. r2 both lenses: the enumerated scrub list missed
+        MARO_ORCH_ROOT/MARO_MEMORY_DIR — pin the PREFIX scrub instead: any
+        MARO_*/OPENCLAW_* var present in the parent env is unset (None =
         unset-in-child per _run_subprocess_safe's contract)."""
         import llm
         captured = {}
@@ -430,12 +442,18 @@ class TestReviewRoundPins:
             return SimpleNamespace(returncode=0, stdout="{}", stderr="")
 
         monkeypatch.setattr(llm, "_run_subprocess_safe", _capture)
+        # Plant the two r2 leak vars plus a NOVEL one the module has never
+        # heard of — the prefix scrub must catch all three by construction.
+        monkeypatch.setenv("MARO_ORCH_ROOT", "/real/orch/root")
+        monkeypatch.setenv("MARO_MEMORY_DIR", "/real/memory")
+        monkeypatch.setenv("MARO_FUTURE_UNKNOWN_VAR", "leak")
         rd = _make_run_dir(tmp_path, "66666666", prompt=_RESEARCH_GOAL)
         shadow_lane.run_challenger(rd, shadow_lane.ARM_PLAIN, _RESEARCH_GOAL, timeout=5)
 
         env_extra = captured["env_extra"]
-        for key in ("MARO_WORKSPACE", "OPENCLAW_WORKSPACE", "WORKSPACE_ROOT",
-                    "MARO_ENV_FILE", "MARO_FETCH_CAPTURE_DIR"):
+        for key in ("MARO_WORKSPACE", "WORKSPACE_ROOT", "MARO_FETCH_CAPTURE_DIR",
+                    "MARO_ORCH_ROOT", "MARO_MEMORY_DIR", "MARO_FUTURE_UNKNOWN_VAR",
+                    "MARO_WORKER_RUN"):
             assert key in env_extra and env_extra[key] is None, key
 
     def test_meta_uses_started_at_not_ts(self, tmp_path, monkeypatch):
@@ -559,7 +577,7 @@ class TestReviewRoundPins:
         (rd / "run_card.json").write_text(
             json.dumps({"total_cost_usd": 1.23}), encoding="utf-8")
 
-        def _fake_challenger(run_dir, arm, goal, *, timeout):
+        def _fake_challenger(run_dir, arm, goal, *, timeout, star=None):
             return {"arm": arm, "started_at": "2026-08-14T00:00:00+00:00",
                     "wall_seconds": 60.0, "exit_status": "ok"}
 
@@ -575,3 +593,74 @@ class TestReviewRoundPins:
         assert row["primary_model"] == "test-model"
         assert 590 < row["primary_wall_seconds"] < 610
         assert "ts" in row and "started_at" in row and row["ts"] != row["started_at"]
+
+
+class TestReviewRound2Pins:
+    def test_resumed_run_with_stale_ended_at_not_stamped(self, tmp_path):
+        """r2 Architect #1: a stuck run resumed in place keeps its stale
+        ended_at while live again — the old ended_at-based stamp rule
+        excluded it terminally. Pin: status-based ineligibility NEVER
+        stamps, even with ended_at present."""
+        _set_shadow_config(tmp_path, enabled=True)
+        rd = _make_run_dir(tmp_path, "cafe0011", prompt=_RESEARCH_GOAL,
+                           status="stuck")  # ended_at defaults to now (stale)
+        result = shadow_lane.sweep(limit=1)
+        assert result["skipped"] == 1
+        assert not (rd / "shadow").exists()
+
+        # ...and once resumed to done, it becomes eligible normally.
+        meta = json.loads((rd / "metadata.json").read_text(encoding="utf-8"))
+        meta["status"] = "done"
+        (rd / "metadata.json").write_text(json.dumps(meta), encoding="utf-8")
+        result2 = shadow_lane.sweep(limit=1, dry_run=True)
+        assert len(result2["would_fire"]) == 1
+
+    def test_uncurated_done_run_deferred_without_stamp(self, tmp_path):
+        """r2 Architect #3: firing before run_card.json exists ledgered
+        primary_cost_usd None forever. Pin: no card -> deferred, no stamp,
+        retriable once curation lands."""
+        _set_shadow_config(tmp_path, enabled=True)
+        rd = _make_run_dir(tmp_path, "cafe0022", prompt=_RESEARCH_GOAL,
+                           card=False)
+        result = shadow_lane.sweep(limit=1, dry_run=True)
+        assert result["skipped"] == 1
+        assert not (rd / "shadow").exists()
+
+        (rd / "run_card.json").write_text(
+            json.dumps({"total_cost_usd": 0.5}), encoding="utf-8")
+        result2 = shadow_lane.sweep(limit=1, dry_run=True)
+        assert len(result2["would_fire"]) == 1
+
+    def test_star_prompt_read_once_and_handed_down(self, tmp_path, monkeypatch):
+        """r2 both lenses: the sweep's preflight star_prompt() plus
+        run_challenger's own re-read was a TOCTOU — a failure between the
+        two terminally claimed the slot. Pin: exactly ONE read per fire,
+        and the challenger uses the handed-down payload."""
+        _set_shadow_config(tmp_path, enabled=True)
+        hid = next(h for h in ("cccc3333", "dddd4444", "eeee5555", "ffff6666",
+                               "12121212", "34343434")
+                   if shadow_lane.pick_arm(h) == shadow_lane.ARM_STAR)
+        _make_run_dir(tmp_path, hid, prompt=_RESEARCH_GOAL)
+
+        calls = {"n": 0}
+        real_star = shadow_lane.star_prompt
+
+        def _counting_star():
+            calls["n"] += 1
+            return real_star()
+
+        received = {}
+
+        def _fake_challenger(run_dir, arm, goal, *, timeout, star=None):
+            received["star"] = star
+            return {"arm": arm, "started_at": "2026-08-14T00:00:00+00:00",
+                    "wall_seconds": 1.0, "exit_status": "ok"}
+
+        monkeypatch.setattr(shadow_lane, "star_prompt", _counting_star)
+        monkeypatch.setattr(shadow_lane, "run_challenger", _fake_challenger)
+        result = shadow_lane.sweep(limit=1)
+        assert result["fired"] == 1
+        assert calls["n"] == 1
+        assert received["star"] is not None
+        text, meta = received["star"]
+        assert "star" in text and meta["star_version"]
