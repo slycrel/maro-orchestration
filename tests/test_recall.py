@@ -435,6 +435,62 @@ class TestLoopSlice:
         ctx = [kw for et, kw in events if et == "RECALL_PERFORMED"][0]["context"]
         assert tl.lesson_id in ctx["lesson_ids_cited"]
 
+    def test_portability_weighting_reorders_selection_and_logs_frame(
+            self, monkeypatch, tmp_path):
+        """§14a slice-2 fork integration (r1 skeptic: the recall glue —
+        apply → [:3] → render → frame extra — had no test). Four scored
+        agenda candidates; the cache boosts the raw-#4 foreign lesson
+        (5s/0f → ×~1.71) into the top 3 and demotes the raw-#3 (0s/4f →
+        ×0.33) out of it. Camera candidates keep RAW scores; the
+        re-weights ride extra.portability_adjusted."""
+        import json as _json
+        _setup(monkeypatch, tmp_path)
+        import memory
+        import knowledge_web
+        import camera_log
+        from knowledge_web import record_tiered_lesson
+
+        tls = {}
+        for key, text in (("a", "lesson alpha about sockets"),
+                          ("b", "lesson bravo about parsing"),
+                          ("c", "lesson charlie about caching"),
+                          ("d", "lesson delta about retries")):
+            tls[key] = record_tiered_lesson(
+                text, task_type="agenda", outcome="done",
+                source_goal="a foreign origin goal entirely unlike ours")
+        scored = [(tls["a"], 1.0), (tls["b"], 0.9),
+                  (tls["c"], 0.8), (tls["d"], 0.7)]
+        monkeypatch.setattr(knowledge_web, "query_lessons_scored",
+                            lambda *a, **kw: list(scored))
+        monkeypatch.setattr(memory, "load_lessons", lambda **kw: [])
+
+        from portability import cache_path
+        cache_path().parent.mkdir(parents=True, exist_ok=True)
+        cache_path().write_text(_json.dumps({"lessons": {
+            tls["d"].lesson_id: {"foreign_s": 5, "foreign_f": 0},
+            tls["c"].lesson_id: {"foreign_s": 0, "foreign_f": 4},
+        }}), encoding="utf-8")
+
+        frames = []
+        monkeypatch.setattr(
+            camera_log, "log_fork_frame",
+            lambda fork, **kw: frames.append(kw) or True)
+
+        r = recall("investigate the flaky deployment", slice="loop")
+
+        assert "lesson delta" in r.lessons      # boosted in
+        assert "lesson charlie" not in r.lessons  # demoted out
+        assert "lesson alpha" in r.lessons and "lesson bravo" in r.lessons
+        (fr,) = frames
+        # Frame candidates keep RAW ranker scores (F4 contract).
+        agenda_scores = {c["lesson_id"]: c["score"]
+                         for c in fr["candidates"]["agenda"]}
+        assert agenda_scores[tls["d"].lesson_id] == 0.7
+        adj = {a["lesson_id"]: a for a in fr["extra"]["portability_adjusted"]}
+        assert set(adj) == {tls["d"].lesson_id, tls["c"].lesson_id}
+        assert adj[tls["d"].lesson_id]["weight"] > 1.5
+        assert adj[tls["c"].lesson_id]["weight"] < 0.5
+
     def test_flat_topup_skips_dual_written_twin(self, monkeypatch, tmp_path):
         """Extraction dual-writes the same text to both stores — the flat
         top-up must not inject a tiered lesson's twin a second time, but

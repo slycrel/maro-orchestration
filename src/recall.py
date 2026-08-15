@@ -660,7 +660,7 @@ def recall(
             from memory import load_lessons, _MAX_LESSON_INJECT_CHARS
             from knowledge_web import query_lessons_scored
             from age_stamp import age_stamps_enabled, age_suffix
-            from portability import apply_portability
+            from portability import apply_portability, load_cache
             # Chunk A camera frames: fetch a WIDER scored window (10) than
             # the selection window (3) so the frame records the road not
             # taken. _cam_candidates keeps RAW ranker scores (frame data
@@ -675,8 +675,12 @@ def recall(
             _scored_agenda = query_lessons_scored(
                 goal, n=10, task_type="agenda")
             _cam_candidates["agenda"] = _scored_agenda
+            # One cache snapshot for both apply calls — a concurrent
+            # finalize refresh landing between them must not show the
+            # agenda and untyped passes different evidence (r1 skeptic).
+            _port_cache = load_cache()
             _sel_agenda, _port_adj = apply_portability(
-                _scored_agenda, goal, project)
+                _scored_agenda, goal, project, cache=_port_cache)
             _lessons = [_l for _l, _ in _sel_agenda[:3]]
             if len(_lessons) < 3:
                 # Untyped/other-type tiered writers (evolver, verify-learn,
@@ -688,7 +692,7 @@ def recall(
                 _scored_untyped = query_lessons_scored(goal, n=10)
                 _cam_candidates["untyped"] = _scored_untyped
                 _sel_untyped, _adj_untyped = apply_portability(
-                    _scored_untyped, goal, project)
+                    _scored_untyped, goal, project, cache=_port_cache)
                 _port_adj = _port_adj + [
                     a for a in _adj_untyped
                     if a["lesson_id"] not in {p["lesson_id"]
@@ -937,8 +941,10 @@ def recall(
             }
             if _port_adj:
                 # §14a slice 2: candidates above keep raw ranker scores;
-                # this records which of them selection actually re-weighted
-                # (earned foreign-evidence globality) and by how much.
+                # this records every fetched candidate whose score was
+                # re-weighted — NOT only those that changed the chosen
+                # set (r1 skeptic: rank effects need the join — diff
+                # chosen against the raw candidate order to see them).
                 _cam_extra["portability_adjusted"] = _port_adj
             if _cam_degraded:
                 # Ranked selection died mid-flight; candidates show what it

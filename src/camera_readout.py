@@ -117,12 +117,17 @@ def _fmt_pct(num: int, den: int) -> str:
     return f"{num}/{den} ({100.0 * num / den:.0f}%)" if den else "0/0 (—)"
 
 
-def _lesson_origins() -> Dict[str, Dict[str, str]]:
+def _lesson_origins(warn=print) -> Dict[str, Dict[str, str]]:
     """lesson_id -> {source_goal, task_type, preview} from the tiered
     stores (MEDIUM + LONG) plus the archive — no decay filtering, and
     archived lessons resolve too: a lesson cited while live and archived
     since still has its citations as evidence (live census: 23/79 cited
-    ids had been archived by read time)."""
+    ids had been archived by read time).
+
+    ``warn`` defaults to print for the CLI readout; runtime callers
+    (portability.refresh_cache rides loop finalize) pass a logger so an
+    instrument warning can never pollute a run's captured stdout
+    (slice-2 r1, architect)."""
     out: Dict[str, Dict[str, str]] = {}
     for tier in ("medium", "long"):
         try:
@@ -137,8 +142,8 @@ def _lesson_origins() -> Dict[str, Dict[str, str]]:
                                          60),
                     }
         except Exception as exc:
-            print(f"  WARNING: {tier}-tier lesson store read failed "
-                  f"({exc}) — that tier's ids will report unresolved")
+            warn(f"  WARNING: {tier}-tier lesson store read failed "
+                 f"({exc}) — that tier's ids will report unresolved")
     try:
         from knowledge_web import _lessons_archive_path
         with _lessons_archive_path().open(encoding="utf-8") as fh:
@@ -157,8 +162,8 @@ def _lesson_origins() -> Dict[str, Dict[str, str]]:
     except FileNotFoundError:
         pass
     except Exception as exc:
-        print(f"  WARNING: lesson archive read failed ({exc}) — archived "
-              f"ids will report unresolved")
+        warn(f"  WARNING: lesson archive read failed ({exc}) — archived "
+             f"ids will report unresolved")
     return out
 
 
@@ -173,7 +178,8 @@ from portability import (  # noqa: E402
 )
 
 
-def portability_census(per_run: List[Dict[str, Any]]) -> Dict[str, Any]:
+def portability_census(per_run: List[Dict[str, Any]],
+                       warn=print) -> Dict[str, Any]:
     """Per-lesson citation×verdict aggregation (§14a slice 1). Pure read.
 
     Home/foreign uses the same goal→slug derivation the run side uses
@@ -192,7 +198,7 @@ def portability_census(per_run: List[Dict[str, Any]]) -> Dict[str, Any]:
     fresher authority. Measured divergence across the 50 frame-bearing
     runs at review time: 0.
     """
-    origins = _lesson_origins()
+    origins = _lesson_origins(warn=warn)
     lessons: defaultdict = defaultdict(lambda: {
         "cites": 0, "runs": set(), "home": 0, "foreign": 0,
         "foreign_s": 0, "foreign_f": 0, "unjudged": 0,

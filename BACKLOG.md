@@ -44,6 +44,26 @@ full triage: 2026-07-04.
 
 Ordered open work that matters. Top of the list is next.
 
+### Portability weighting v2 — selection-bias exploration (accepted v1 residual, 2026-08-15)
+
+- [ ] **Watch for winner-take-all entrenchment in portability-weighted
+  lesson selection; add an exploration mechanism if it shows.** §14a
+  slice 2 r1 (architect, verified reasoning): foreign-citation evidence
+  is run-level, not causally isolated per lesson — a boosted lesson
+  present in runs that succeed for unrelated reasons accrues favorable
+  evidence, while rivals below the top-3 can never earn their own ≥3
+  citations (cold-start starvation). The Beta posterior assumes
+  unbiased draws; deterministic top-3 selection breaks that. Amplifier:
+  the one-run cache lag means a newly-boosted-but-bad lesson can be
+  selected 2-3× in a tight burst before its first failure verdict
+  lands. Named falsifier to watch (camera frames carry
+  `extra.portability_adjusted`): a lesson holding a boosted slot ≥N
+  consecutive selections for one goal-shape while same-pool rivals stay
+  evidence-starved. If seen → v2 = epsilon-slot or Thompson-sample one
+  of the 3 injection slots. Bounds that keep v1 honest meanwhile: only
+  6 lessons qualify at ≥3 today, weight ∈ [0.8, 1.71] live, and
+  weighting rides ONE slot-set of a multi-source selection.
+
 ### Shadow lane — batch adjudication tooling (evidence-gated)
 
 - [ ] **Build the shadow adjudicator at first ~10 completed pairs (or

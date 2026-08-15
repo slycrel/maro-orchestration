@@ -97,6 +97,21 @@ class TestApplyPortability:
         out, adj = apply_portability(scored, "current goal", "proj")
         assert out is scored and adj == []
 
+    def test_one_malformed_cache_entry_does_not_disable_the_rest(
+            self, tmp_path, monkeypatch):
+        """r1 skeptic: a single corrupt cache row must skip that entry
+        only, not fail the whole call open (unweighted)."""
+        ws = _ws(tmp_path, monkeypatch)
+        _write_cache(ws, {"a": "not-a-dict",
+                          "b": {"foreign_s": "junk", "foreign_f": None},
+                          "c": {"foreign_s": 5, "foreign_f": 0}})
+        scored = [(_lesson("a"), 1.0), (_lesson("b"), 0.9),
+                  (_lesson("c"), 0.5)]
+        out, adj = apply_portability(scored, "current goal", "proj")
+        assert [a["lesson_id"] for a in adj] == ["c"]
+        assert [t.lesson_id for t, _ in out] == ["a", "b", "c"]
+        assert abs(out[2][1] - 0.5 * 2 * beta_mean(5, 0)) < 1e-9
+
     def test_killswitch_off_is_identity(self, tmp_path, monkeypatch):
         ws = _ws(tmp_path, monkeypatch)
         _write_cache(ws, {"a": {"foreign_s": 9, "foreign_f": 0}})
@@ -104,6 +119,29 @@ class TestApplyPortability:
         scored = [(_lesson("a"), 1.0)]
         out, adj = apply_portability(scored, "current goal", "proj")
         assert out is scored and adj == []
+
+
+class TestRankerRegimePin:
+    def test_lesson_ranking_rides_bm25_not_rrf(self):
+        """Known-gap pin (slice-2 r1, architect): hybrid_rank_scored
+        fuses RRF only when docs carry a created_at attribute or the
+        caller passes recency_key. RRF scores are COMPRESSED (~1.15×
+        spread across a 10-window at k=60), so the [0,2] portability
+        multiplier would dominate rank entirely in that regime — any
+        qualifying lesson could vault from #10 to #1 on 3 citations.
+        The lesson path is safe today only because TieredLesson has no
+        created_at and query_lessons_scored passes no recency_key. If
+        this pin fails, re-derive the multiplier against the live score
+        regime before trusting the weighting."""
+        import inspect
+
+        from knowledge_web import TieredLesson, query_lessons_scored
+        tl = TieredLesson(
+            lesson_id="x", task_type="agenda", outcome="done", lesson="t",
+            source_goal="g", confidence=0.8, tier="medium", score=1.0,
+            last_reinforced="2026-08-01")
+        assert not hasattr(tl, "created_at")
+        assert "recency_key" not in inspect.getsource(query_lessons_scored)
 
 
 class TestCacheRefresh:

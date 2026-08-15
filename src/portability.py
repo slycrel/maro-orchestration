@@ -130,15 +130,22 @@ def refresh_cache() -> int:
 
         root = runs_root()
         per_run: List[Dict[str, Any]] = []
+        n_torn = 0
         if root.exists():
             for rd in root.iterdir():
                 if not rd.is_dir():
                     continue
-                frames, _torn = _load_frames(rd)
+                frames, torn = _load_frames(rd)
+                n_torn += torn
                 if frames:
                     per_run.append({"dir": rd, "frames": frames,
                                     "card": None})
-        census = portability_census(per_run)
+        if n_torn:
+            log.debug("portability refresh: %d torn frame lines skipped",
+                      n_torn)
+        # warn=log.debug — this rides loop finalize; an instrument
+        # warning printed to stdout would pollute captured run output.
+        census = portability_census(per_run, warn=log.debug)
         lessons = {
             r["lesson_id"]: {"foreign_s": r["foreign_s"],
                              "foreign_f": r["foreign_f"]}
@@ -188,9 +195,14 @@ def apply_portability(
             lid = getattr(tl, "lesson_id", "") or ""
             ev = cache.get(lid)
             weight = 1.0
-            if ev and isinstance(score, (int, float)):
-                s = int(ev.get("foreign_s", 0) or 0)
-                f = int(ev.get("foreign_f", 0) or 0)
+            # Per-entry validation (r1 skeptic): one malformed cache row
+            # must not fail the whole call open — skip that entry only.
+            if isinstance(ev, dict) and isinstance(score, (int, float)):
+                try:
+                    s = int(ev.get("foreign_s", 0) or 0)
+                    f = int(ev.get("foreign_f", 0) or 0)
+                except (TypeError, ValueError):
+                    s = f = 0
                 src_goal = getattr(tl, "source_goal", "") or ""
                 if (s + f >= MIN_FOREIGN_EVIDENCE
                         and not unattributable_source(src_goal)
