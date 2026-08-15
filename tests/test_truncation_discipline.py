@@ -164,7 +164,7 @@ def test_inventory_only_shrinks_marker():
     burn-down proceeds.
     """
     inventory = json.loads(INVENTORY_PATH.read_text())
-    assert sum(inventory.values()) <= 139   # 176 at freeze; tranche 1: -37
+    assert sum(inventory.values()) <= 135   # 176 at freeze; tranche 1: -37; r4 sibling sweep: -4
 
 
 def test_scanner_detects_each_supported_shape():

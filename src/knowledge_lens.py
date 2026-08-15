@@ -16,6 +16,8 @@ from __future__ import annotations
 import json
 import textwrap
 import logging
+
+from context_budget import clip
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -645,15 +647,19 @@ def _rule_contradiction_evidence(rule_id: str, *, limit: int = 5) -> List[str]:
             if rule_id not in (ctx.get("contradicted_ids") or []):
                 continue
             evidence.append(
-                (f"run {ctx.get('loop_id', '?')} failed "
-                 f"({str(ctx.get('failure_summary') or 'no summary')[:120]}); "
-                 f"judge: {str(ctx.get('reasoning') or '')[:150]}")[:300])
+                # PER-FIELD honest clips, no outer cut (round-4 review:
+                # this was the verbatim sibling of knowledge_web's
+                # starvation site — the outer 300 could cut the judge's
+                # reasoning out entirely; bounded by construction now).
+                f"run {ctx.get('loop_id', '?')} failed "
+                f"({clip(ctx.get('failure_summary') or 'no summary', 120)}); "
+                f"judge: {clip(ctx.get('reasoning') or '', 150)}")
         for e in query_log(
             f"rule:{rule_id}",
             event_type="STANDING_RULE_CONTRADICTED",
             limit=limit,
         ):
-            evidence.append(str(e.get("summary") or "")[:200])
+            evidence.append(clip(e.get("summary") or "", 200))
     except Exception:
         pass
     return evidence[:limit * 2]
