@@ -59,13 +59,20 @@ def test_history_docs_are_records():
 
 
 def test_history_naming_dated_or_rolling_log():
-    # Dated snapshot (YYYY-MM-DD-name.md) or a known rolling log.
+    # Dated snapshot (YYYY-MM-DD-name.md) or a known rolling log. The
+    # goal-brain-* family (2026-08-16 GOAL_BRAIN rotation) is a declared
+    # rolling family: journal/decisions segments named by CONTENT range,
+    # not rotation date — a new segment appears at each rotation, so the
+    # family is blessed by pattern rather than by enumerating file names.
     rolling = {"CHANGELOG.md", "ROADMAP_ARCHIVE.md", "README.md"}
     dated = re.compile(r"^\d{4}-\d{2}-\d{2}-[a-z0-9-]+\.md$")
+    rolling_family = re.compile(r"^goal-brain-(journal|decisions)-[a-z0-9-]+\.md$")
     stray = [
         p.name
         for p in sorted(HISTORY.glob("*.md"))
-        if p.name not in rolling and not dated.match(p.name)
+        if p.name not in rolling
+        and not dated.match(p.name)
+        and not rolling_family.match(p.name)
     ]
     assert not stray, f"history files must be dated or a declared rolling log: {stray}"
 

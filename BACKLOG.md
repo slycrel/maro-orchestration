@@ -2242,6 +2242,16 @@ capture**, which is what makes the rung amortize instead of evaporate.
   and recording seam can stay. Review record:
   docs/history/2026-08-16-closure-claim-coverage-review.md.
 
+- [ ] **BACKLOG.md split is overdue** (2026-08-16, found during the
+  GOAL_BRAIN rotation): this file is 388KB — past the 256KB whole-file
+  Read limit, so sessions can no longer ingest it whole (the exact
+  failure GOAL_BRAIN just fixed). The mechanism already exists
+  (BACKLOG_DONE.md; "Last split: 2026-04-16") — a session should sweep
+  long-shipped/stale items into BACKLOG_DONE with context intact and
+  consider a history rotation for the remaining bulk. Needs care, not
+  mechanics: many items carry Jeremy quotes and open decisions — read
+  before moving.
+
 - [ ] **land.sh ci-watch is silently inert on the dev Mac** (found
   2026-08-16 while landing chunk 3 from the Mac): the post-land spawn is
   `( setsid nohup scripts/ci-watch.sh ... & ) || true` and macOS ships no
