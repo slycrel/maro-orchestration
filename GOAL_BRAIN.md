@@ -8012,6 +8012,27 @@ under the same two-measurement standard).
   navigator_right (cumulative 91/12; lesson-inject A/B 56% vs 41%
   agreement); coverage re-measured 80.18% → floor ratcheted 70→75
   (72752a1); test-cov.sh -n-auto footgun got throttle knobs (ff48e9f).
+- **2026-08-15 (PM, §14a slice 1 SHIPPED — portability census; probe-first
+  datapoint #1 CONFIRMED).** `camera_readout --portability`: per-lesson
+  citation×verdict census (camera frames × metadata.json), home/foreign
+  via mint-cap-aware exact match + resolve_project_slug, foreign
+  verdicted citations → Beta posterior mean. INSTRUMENT ONLY.
+  Fact ledger (8 executed probes) killed the outcomes.jsonl join design
+  pre-code (lessons stored as TEXT not ids) and surfaced the archive
+  fallback need (23/79 cited ids archived since citation). Live: 79/79
+  resolve, 100 foreign verdicted citations (pre-registered gate ~30),
+  estimate DISCRIMINATES 0.25–0.86 → slice-2 gate OPEN. Review r1
+  (2 lenses, claims-audit contract): both attacked the labeled residue
+  and hit — architect HIGH: source_goal stored TRUNCATED to 120 at mint,
+  exact-match home leg dead for 121/123 verdicted citations (residue
+  note had the legs inverted; slug leg was doing the work) — fixed with
+  mint-cap-aware compare; sentinel-source finding confirmed structurally,
+  quantified ZERO live contamination; unattributable bucket added +
+  pinned. r2: QUIET with traced pre-fix test simulation. **Fixpoint in
+  2 rounds — first confirming datapoint for the experimental probe-first
+  prediction (baseline 3–4).** Landed 71c4f3e, 2592d0e. Suite 8819.
+  Next: slice 2 (mint-time method/world stamp + portability consumption
+  in injection ranking) — gate evidence cleared, held loosely per decree.
 - **2026-08-15 (PM, correction on Jeremy's verify-ask).** The "§10 +
   §9.7 owed discussion" line this lane carried in MILESTONES/journal
   entries above was STALE: that discussion happened 2026-07-30 and is
