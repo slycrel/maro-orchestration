@@ -677,11 +677,37 @@ class TestBackchainLayer:
 
     def test_off_vocabulary_class_noted_not_laundered(self, tmp_path):
         """A misspelled/drifted class must not render as an honest
-        'unknown' with no trace (r1, minimalist)."""
+        'unknown' with no trace (r1, minimalist) — and repeated drift
+        produces ONE deduplicated note, not one per link (r2, architect)."""
         rd = _write_run(tmp_path, steps=_STEPS)
-        _write_backchain(rd, [{"condition": "c", "class": "establishedd"}])
+        _write_backchain(rd, [
+            {"condition": "c1", "class": "establishedd"},
+            {"condition": "c2", "class": "establishedd"},
+        ])
         m = build_map(rd)
-        assert any("unrecognized link class" in n for n in m.notes)
+        hits = [n for n in m.notes if "unrecognized link class" in n]
+        assert len(hits) == 1 and "establishedd" in hits[0]
+
+    def test_single_wrong_shape_line_still_noted(self, tmp_path):
+        """A valid-JSON non-dict line alone must produce a note — pins
+        the r2 skeptic claim (refuted by probe) that shape corruption
+        slips through without the syntax-error line beside it."""
+        rd = _write_run(tmp_path, steps=_STEPS)
+        (rd / "build" / "backchain.jsonl").write_text("[1, 2]\n",
+                                                      encoding="utf-8")
+        m = build_map(rd)
+        assert m.backchain == []
+        assert any("backchain" in n for n in m.notes)
+
+    def test_flagless_verifiable_link_noted_not_claimed(self, tmp_path):
+        """A foreign/pre-upgrade record with no injection flag must not
+        silently render as acted-on (r2, skeptic)."""
+        rd = _write_run(tmp_path, steps=_STEPS)
+        _write_backchain(rd, [
+            {"condition": "c", "class": "verifiable", "probe": "p"},
+        ])
+        m = build_map(rd)
+        assert any("no injection flag" in n for n in m.notes)
 
     def test_uninjected_probe_marked_in_text(self, tmp_path):
         """A capped-out probe link must not render identically to one

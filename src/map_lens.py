@@ -398,6 +398,8 @@ def build_map(run_dir: Path) -> RunMap:
         if len(_chains) > 1:
             notes.append(f"backchain: {len(_chains)} chains drawn "
                          "(re-plans); latest rendered")
+        _off_vocab = set()
+        _flagless = 0
         for row in (_chains[-1].get("links") or []):
             if isinstance(row, dict):
                 _cls = str(row.get("class") or "")
@@ -405,8 +407,13 @@ def build_map(run_dir: Path) -> RunMap:
                     # Off-vocabulary is corruption/drift, not an honest
                     # "unknown" — laundering it into the unknown bucket
                     # would hide exactly the drift a note exists for.
-                    notes.append("backchain: unrecognized link class "
-                                 f"{_cls!r}")
+                    _off_vocab.add(_cls)
+                if _cls == "verifiable" and row.get("injected") is None:
+                    # The writer always stamps the flag; a flag-less
+                    # verifiable link is a foreign/pre-upgrade record
+                    # whose injection status is unknowable — say so
+                    # rather than render it as acted-on (r2, skeptic).
+                    _flagless += 1
                 m.backchain.append({
                     "condition": str(row.get("condition") or ""),
                     "class": _cls,
@@ -414,6 +421,14 @@ def build_map(run_dir: Path) -> RunMap:
                     "probe": str(row.get("probe") or ""),
                     "injected": row.get("injected"),
                 })
+        if _off_vocab:
+            notes.append("backchain: unrecognized link class(es) "
+                         + ", ".join(repr(c) for c in sorted(_off_vocab)))
+        if _flagless:
+            notes.append(f"backchain: {_flagless} verifiable link(s) "
+                         "carry no injection flag (foreign or "
+                         "pre-upgrade record) — probe lines may or may "
+                         "not have run")
 
     # §9.5 re-anchor checks (2026-08-15): milestone-boundary coherence
     # verdicts. Kept as a separate layer rather than step nodes — an anchor

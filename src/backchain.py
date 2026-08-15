@@ -98,7 +98,7 @@ class Backchain:
         return [l for l in self.links
                 if l.link_class == "verifiable" and l.probe.strip()]
 
-    def to_record(self, injected: int = 0) -> dict:
+    def to_record(self, injected: int = 0, step_offset: int = 0) -> dict:
         # "injected" marks which verifiable links actually became plan
         # steps — derived from the caller's REAL injection count, not by
         # re-deriving probe_steps' cap rule here (r1 review: without the
@@ -106,12 +106,22 @@ class Backchain:
         # a positional re-derivation would be a guard duplicating its
         # detector). probe_steps takes probe links in order, so the first
         # `injected` probe links are the acted-on ones.
+        #
+        # "step_offset" shifts established refs to the FINAL plan
+        # numbering (prepended probes move every original step down).
+        # Arithmetic lives HERE, at serialization, so the in-memory links
+        # always hold the numbering draw_backchain validated against —
+        # r2 review: the first cut mutated .step in place, making
+        # correctness hang on an unenforced must-run-before-record
+        # ordering.
         injected_ids = {id(l) for l in self.probe_links[:max(0, injected)]}
         return {
             "ts": datetime.now(timezone.utc).isoformat(),
             "links": [
                 {"condition": l.condition, "class": l.link_class,
-                 "step": l.step, "probe": l.probe or None,
+                 "step": (l.step + step_offset
+                          if l.step is not None else None),
+                 "probe": l.probe or None,
                  **({"injected": id(l) in injected_ids}
                     if l.link_class == "verifiable" else {})}
                 for l in self.links
@@ -205,8 +215,12 @@ def record_backchain(chain: Backchain, injected: int) -> None:
     Append, not overwrite: restart/escalation loops re-plan in the same
     run dir (real runs carry multiple loop_ids), and each re-plan draws
     its own chain — a later chain must not erase an earlier loop's
-    record (r1 review, two lenses independently)."""
-    rec = chain.to_record(injected=injected)
+    record (r1 review, two lenses independently).
+
+    Recorded step refs are shifted to post-injection numbering
+    (step_offset == injected: each prepended probe moves every original
+    step down one)."""
+    rec = chain.to_record(injected=injected, step_offset=injected)
     rec["probes_injected"] = injected
     try:
         from runs import current_run_dir
@@ -266,24 +280,20 @@ def apply_backchain(goal: str, steps: List[str], adapter) -> List[str]:
             # structurally excludes cuts plans from this lane.)
             if goal_step_ceiling(goal) is not None:
                 return steps
-        except Exception:
+        except Exception as _excl_exc:
             # Can't prove the plan ISN'T a boundary/ceiling plan — skip
             # rather than fire on the excluded lane (fail closed, same
-            # direction as the config gate; r1 review, two lenses).
+            # direction as the config gate; r1 review, two lenses). Logged
+            # because a broken import here would otherwise silently kill
+            # the feature while looking like a legitimate skip (r2, both
+            # lenses).
+            log.debug("backchain: exclusion checks unavailable — "
+                      "skipping (fail closed): %s", _excl_exc)
             return steps
         chain = draw_backchain(goal, steps, adapter)
         if chain is None:
             return steps
         probes = probe_steps(chain)
-        if probes:
-            # Recorded step refs must match the FINAL numbering: prepending
-            # shifts every original step down by len(probes), and the map
-            # lens / milestone indices / loop log all number the final list
-            # (r1 review, both lenses' HIGH — the exact off-by-injection
-            # class this commit fixed for milestone_step_indices).
-            for _l in chain.links:
-                if _l.step is not None:
-                    _l.step += len(probes)
         record_backchain(chain, injected=len(probes))
         if probes:
             log.info("backchain: %d precondition probe(s) prepended (%d link(s))",

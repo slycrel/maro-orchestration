@@ -1160,7 +1160,7 @@ before?"), classifies links established/verifiable/unknown (a step
 reference outside the plan or a probe-less "verifiable" is downgraded —
 no fabricated establishment); unmet verifiable preconditions become
 `[recon:]` probe steps prepended to the plan (max 2 — draw_cuts' cap;
-rides the §9.2 machinery wholesale). Chain → build/backchain.json +
+rides the §9.2 machinery wholesale). Chain → build/backchain.jsonl (append; post-injection step refs) +
 BACKCHAIN_DRAWN; map lens renders the backward frontier (✓ established /
 ⌕ probe / ○ unknown) — established links ARE the frontier-convergence
 evidence of §3, now visible per-run. Wired BEFORE pre-flight review so
