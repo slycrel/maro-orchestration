@@ -651,6 +651,24 @@ def _clear_verdict_keys(existing: dict) -> None:
         existing.pop(key, None)
 
 
+def _apply_stop_tuple(existing: dict, stop_verdict, stop_evidence) -> None:
+    """THE stop-tuple replacement. Mutates ``existing`` in place.
+
+    Nonempty verdict sets both members (evidence honest-clipped at the
+    stuck-reason-family 800); empty verdict pops both — this ending has
+    no stop verdict, and a stale predecessor's must not stand (the same
+    replace-whole-or-not-at-all doctrine as ``_apply_verdict_tuple``).
+    One implementation for every stop writer (2026-08-15 bypass
+    burn-down: three call sites and the retry stamp each hand-rolled
+    this pair)."""
+    if stop_verdict:
+        existing["stop_verdict"] = str(stop_verdict)
+        existing["stop_evidence"] = clip(stop_evidence, 800)
+    else:
+        existing.pop("stop_verdict", None)
+        existing.pop("stop_evidence", None)
+
+
 def stamp_run_verdict(
     *,
     goal_achieved: Optional[bool],
@@ -659,6 +677,7 @@ def stamp_run_verdict(
     summary: str,
     downgrade_reason: str = "",
     gaps: Optional[list],
+    extra: Optional[dict] = None,
 ) -> Optional[Path]:
     """Replace the active run's latest goal verdict, preserving tri-state.
 
@@ -680,7 +699,14 @@ def stamp_run_verdict(
     callers silently CLEAR their verdicts' real gaps — every caller must
     choose set-or-clear explicitly). The verdict tuple is replaced WHOLE
     or not at all.
+
+    ``extra`` rides non-tuple context fields (e.g. the loop_ids a
+    closure-stamp-failure records) in the SAME locked write — splitting
+    them into a second raw write is the non-atomic write-then-clear
+    shape round 14 removed. Tuple members inside extra are a ValueError
+    (2026-08-15 bypass burn-down).
     """
+    _guard_owner_extra(extra)
     try:
         rd = current_run_dir()
         if rd is None:
@@ -697,6 +723,8 @@ def stamp_run_verdict(
                 existing, goal_achieved=goal_achieved, source=source,
                 confidence=confidence, summary=summary,
                 downgrade_reason=downgrade_reason, gaps=gaps)
+            for k, v in (extra or {}).items():
+                existing[k] = v
             index_run_dir(rd, existing)
             return json.dumps(existing, indent=2, default=str)
 
@@ -710,6 +738,182 @@ def stamp_run_verdict(
         log.warning("runs: verdict stamp FAILED — metadata may hold "
                     "superseded state: %s", exc)
         return None
+
+
+def stamp_run_stop_verdict(
+    *,
+    stop_verdict: str,
+    stop_evidence: str,
+    pause_reason: str = "",
+    run_dir: Optional[Path] = None,
+    refine_note: bool = False,
+) -> Optional[Path]:
+    """Replace a run's stop-verdict tuple in one locked write.
+
+    The SET twin of ``clear_run_stop_verdict`` (2026-08-15 bypass
+    burn-down: agent_loop's fence stamp, loop_finalize's ending stamp,
+    handle's demotion stamp, and director's close stamp each hand-rolled
+    the pair through raw writers — one of them through a bare locked_rmw
+    that skipped ``index_run_dir`` entirely, so the index could hold a
+    stale row). Semantics owned here:
+
+    - Nonempty ``stop_verdict`` sets both members (evidence clipped 800);
+      EMPTY clears both — metadata reflects THIS ending, not the first.
+      Consumers read ``meta.get("stop_verdict") or ""``, so key-absent is
+      the schema's "no stop verdict" (parity with the clear helper).
+    - ``pause_reason``: truthy writes it; falsy leaves any existing value
+      untouched (a resumed run's fresh context has no pause_reason, and
+      an unconditional clear would erase the stranded sweep's post-hoc
+      writer-died stamp — 2026-07-31 slice-1 review #2).
+    - ``run_dir``: an explicit target (e.g. resolved by loop_id after the
+      run ended); default is the active run dir.
+    - ``refine_note=True``: when a DIFFERENT nonempty verdict is being
+      replaced, append " [refines: <prior>]" to the evidence before the
+      clip — atomically, inside the lock (the close-refinement
+      convention: a later, more specific verdict records what it
+      refined instead of silently overwriting it).
+    """
+    try:
+        rd = run_dir if run_dir is not None else current_run_dir()
+        if rd is None:
+            return None
+        meta_path = rd / "metadata.json"
+
+        def _merge(old: str) -> str:
+            try:
+                existing = json.loads(old) if old else {}
+            except Exception:
+                existing = {}
+            if not isinstance(existing, dict):
+                existing = {}
+            evidence = stop_evidence
+            if refine_note and stop_verdict:
+                _prior = existing.get("stop_verdict") or ""
+                if _prior and _prior != stop_verdict:
+                    evidence = f"{stop_evidence} [refines: {_prior}]"
+            _apply_stop_tuple(existing, stop_verdict, evidence)
+            if pause_reason:
+                existing["pause_reason"] = str(pause_reason)
+            index_run_dir(rd, existing)
+            return json.dumps(existing, indent=2, default=str)
+
+        from file_lock import locked_rmw
+        locked_rmw(meta_path, _merge)
+        return meta_path
+    except Exception as exc:
+        # NEVER silent (round-16 review, 3-lens: every caller
+        # ignored the None and a failed write left the
+        # superseded state standing with zero trace).
+        log.warning("runs: stop-verdict stamp FAILED — metadata may hold "
+                    "superseded state: %s", exc)
+        return None
+
+
+def stamp_unjudged_verdict_source(source: str, summary: str = "") -> Optional[Path]:
+    """Record WHY there is no goal verdict, without inventing one.
+
+    The deliberate-partial owner (2026-08-15 bypass burn-down): two
+    handle lanes stamp only ``goal_verdict_source`` (+ optionally a
+    summary) while ``goal_achieved`` stays ABSENT — a skipped closure
+    (no steps completed) and a crashed judge (closure_error) are
+    measurement gaps, not verdicts, and absence-means-not-judged is the
+    schema's tri-state. Routing these through ``stamp_run_verdict``
+    would flatten that: the tuple owner replaces WHOLE, popping members
+    these lanes must not touch. This owner touches exactly source (+
+    summary when nonempty, clipped) and nothing else — the partiality
+    is the point, and now it has one named, documented home.
+    """
+    try:
+        rd = current_run_dir()
+        if rd is None:
+            return None
+        meta_path = rd / "metadata.json"
+
+        def _merge(old: str) -> str:
+            try:
+                existing = json.loads(old) if old else {}
+            except Exception:
+                existing = {}
+            if not isinstance(existing, dict):
+                existing = {}
+            existing["goal_verdict_source"] = str(source)
+            if summary:
+                existing["goal_verdict_summary"] = clip(
+                    summary, VERDICT_PROSE_CAP)
+            index_run_dir(rd, existing)
+            return json.dumps(existing, indent=2, default=str)
+
+        from file_lock import locked_rmw
+        locked_rmw(meta_path, _merge)
+        return meta_path
+    except Exception as exc:
+        log.warning("runs: unjudged-source stamp FAILED — metadata may hold "
+                    "superseded state: %s", exc)
+        return None
+
+
+def stamp_run_verdict_contested(
+    *,
+    contested_by: str,
+    extra: Optional[dict] = None,
+) -> Optional[Path]:
+    """Set the durable disputed marker on the active run's verdict.
+
+    The contested pair is popped by every tuple replacement
+    (``_apply_verdict_tuple``) and re-stamped AFTER by the lane that
+    disputes the fresh verdict — this owner is that re-stamp (2026-08-15
+    bypass burn-down: three sites hand-rolled it through write_metadata).
+    ``extra`` carries the dispute's context fields (e.g. the closure
+    confidence a provenance demotion overrode) in the same locked write;
+    it must not carry verdict/stop tuple members — those belong to the
+    tuple owners (ValueError, fail loud).
+    """
+    _guard_owner_extra(extra)
+    try:
+        rd = current_run_dir()
+        if rd is None:
+            return None
+        meta_path = rd / "metadata.json"
+
+        def _merge(old: str) -> str:
+            try:
+                existing = json.loads(old) if old else {}
+            except Exception:
+                existing = {}
+            if not isinstance(existing, dict):
+                existing = {}
+            existing["goal_verdict_contested"] = True
+            existing["goal_verdict_contested_by"] = str(contested_by)
+            for k, v in (extra or {}).items():
+                existing[k] = v
+            index_run_dir(rd, existing)
+            return json.dumps(existing, indent=2, default=str)
+
+        from file_lock import locked_rmw
+        locked_rmw(meta_path, _merge)
+        return meta_path
+    except Exception as exc:
+        log.warning("runs: contested marker stamp FAILED — metadata may "
+                    "hold superseded state: %s", exc)
+        return None
+
+
+_OWNER_EXTRA_FORBIDDEN = frozenset(_VERDICT_KEYS) | {
+    "stop_verdict", "stop_evidence"}
+
+
+def _guard_owner_extra(extra: Optional[dict]) -> None:
+    """``extra`` riders on the owners must not smuggle tuple members —
+    that would recreate the exact partial-write drift the owners exist
+    to end. Fail loud: a ValueError at the call site beats a silently
+    inconsistent verdict record."""
+    if not extra:
+        return
+    bad = sorted(set(extra) & _OWNER_EXTRA_FORBIDDEN)
+    if bad:
+        raise ValueError(
+            f"owner extra must not carry verdict/stop tuple keys {bad} — "
+            "pass them through the owner's own parameters")
 
 
 def stamp_delivered_now_retry(
@@ -759,12 +963,7 @@ def stamp_delivered_now_retry(
                     downgrade_reason="", gaps=None)
             else:
                 _clear_verdict_keys(existing)
-            if stop_verdict:
-                existing["stop_verdict"] = str(stop_verdict)
-                existing["stop_evidence"] = clip(stop_evidence, 800)
-            else:
-                existing.pop("stop_verdict", None)
-                existing.pop("stop_evidence", None)
+            _apply_stop_tuple(existing, stop_verdict, stop_evidence)
             index_run_dir(rd, existing)
             return json.dumps(existing, indent=2, default=str)
 

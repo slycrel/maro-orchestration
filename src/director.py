@@ -1289,30 +1289,24 @@ def _stamp_close_stop_verdict(loop_id: str, *, depth: int, confidence: int,
         _rd = None
     if _rd is not None:
         try:
+            # Schema owner (2026-08-15 bypass burn-down): this was a bare
+            # locked_rmw that also skipped index_run_dir, so the run index
+            # could hold a stale row after a close. refine_note composes
+            # " [refines: <prior>]" atomically inside the owner's lock;
+            # the written evidence is read back for the ledger row.
             import json as _json
-            from file_lock import locked_rmw
-            _ev_cell = {"v": evidence}
-
-            def _merge(old: str) -> str:
-                try:
-                    existing = _json.loads(old) if old else {}
-                except Exception:
-                    existing = {}
-                if not isinstance(existing, dict):
-                    existing = {}
-                _prior = existing.get("stop_verdict") or ""
-                _note = (
-                    f" [refines: {_prior}]"
-                    if _prior and _prior != "reachable-but-not-worth-it"
-                    else ""
-                )
-                existing["stop_verdict"] = "reachable-but-not-worth-it"
-                _ev_cell["v"] = _clip(evidence + _note, 800)
-                existing["stop_evidence"] = _ev_cell["v"]
-                return _json.dumps(existing, indent=2, default=str)
-
-            locked_rmw(_rd / "metadata.json", _merge)
-            row_evidence = _ev_cell["v"]
+            from runs import stamp_run_stop_verdict as _stamp_close_stop
+            _meta_path = _stamp_close_stop(
+                stop_verdict="reachable-but-not-worth-it",
+                stop_evidence=evidence,
+                run_dir=_rd,
+                refine_note=True,
+            )
+            if _meta_path is not None:
+                _written = _json.loads(
+                    _meta_path.read_text(encoding="utf-8"))
+                row_evidence = (_written.get("stop_evidence")
+                                or row_evidence)
         except Exception as exc:
             log.debug("close stop-verdict metadata stamp failed: %s", exc)
     try:

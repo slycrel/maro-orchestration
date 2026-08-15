@@ -209,10 +209,93 @@ _TUPLE_KEYS = frozenset((
 ))
 _RAW_WRITERS = ("write_metadata", "stamp_run_metadata")
 
-# Frozen 2026-08-14. Each entry is file::writer::key. Burn down by
+# Frozen 2026-08-14 at 12 entries; BURNED TO ZERO 2026-08-15 (every site
+# routed through a runs.py schema owner: stamp_run_verdict[+extra],
+# stamp_run_stop_verdict, stamp_unjudged_verdict_source,
+# stamp_run_verdict_contested). The inventory is {} and must stay {} —
+# any hit is a NEW bypass. Each entry is file::writer::key. Burn down by
 # routing the site through a runs.py schema owner, then delete its rows.
 KNOWN_BYPASSES_PATH = (Path(__file__).resolve().parent / "data"
                        / "verdict_bypass_inventory.json")
+
+
+def _verdict_bypass_hits(tree: ast.AST, filename: str) -> Counter:
+    """Bypass hits for one parsed module. Split out so the must-detect
+    fixtures can feed source strings through the REAL scanner (round-14
+    lesson: a scanner validated only against its own census misses the
+    shapes designed to evade it)."""
+    hits: Counter = Counter()
+    # Raw locked_rmw merges over metadata.json — the director shape
+    # (2026-08-15 burn-down): a bare read-modify-write that no
+    # writer-name census can see, and that skipped index_run_dir.
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        callee = node.func
+        is_rmw = ((isinstance(callee, ast.Name)
+                   and callee.id == "locked_rmw")
+                  or (isinstance(callee, ast.Attribute)
+                      and callee.attr == "locked_rmw"))
+        if not is_rmw:
+            continue
+        if any(isinstance(sub, ast.Constant)
+               and sub.value == "metadata.json"
+               for sub in ast.walk(node)):
+            hits[f"{filename}::locked_rmw::metadata.json"] += 1
+    # Map aliases of the raw writers imported from runs.
+    aliases = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module == "runs":
+            for a in node.names:
+                if a.name in _RAW_WRITERS:
+                    aliases[a.asname or a.name] = a.name
+    if not aliases:
+        return hits
+    # Var-flow: dict literals assigned to a NAME, plus later
+    # NAME["key"] = ... additions, count when the NAME reaches a raw
+    # writer (2026-08-15 burn-down: the NOW lane's `_now_extra` and the
+    # provenance lane's `_prov_extra` were invisible to the
+    # literal-in-call scan — the two biggest real bypasses). Tracking is
+    # file-global: a same-named var in another function can over-count,
+    # which errs toward detection, never past it.
+    var_keys: dict = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign):
+            continue
+        if isinstance(node.value, ast.Dict):
+            for tgt in node.targets:
+                if isinstance(tgt, ast.Name):
+                    var_keys.setdefault(tgt.id, set()).update(
+                        k.value for k in node.value.keys
+                        if isinstance(k, ast.Constant))
+        tgt = node.targets[0]
+        if (isinstance(tgt, ast.Subscript)
+                and isinstance(tgt.value, ast.Name)
+                and tgt.value.id in var_keys
+                and isinstance(tgt.slice, ast.Constant)):
+            var_keys[tgt.value.id].add(tgt.slice.value)
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id in aliases):
+            continue
+        writer = aliases[node.func.id]
+        dicts = [a for a in node.args if isinstance(a, ast.Dict)]
+        dicts += [kw.value for kw in node.keywords
+                  if isinstance(kw.value, ast.Dict)]
+        for d in dicts:
+            for key_node in d.keys:
+                if (isinstance(key_node, ast.Constant)
+                        and key_node.value in _TUPLE_KEYS):
+                    hits[f"{filename}::{writer}::{key_node.value}"] += 1
+        names = [a for a in node.args if isinstance(a, ast.Name)]
+        names += [kw.value for kw in node.keywords
+                  if isinstance(kw.value, ast.Name)]
+        for nm in names:
+            for key in sorted(var_keys.get(nm.id, ())):
+                if key in _TUPLE_KEYS:
+                    hits[f"{filename}::{writer}::{key}"] += 1
+    return hits
 
 
 def scan_verdict_bypasses() -> Counter:
@@ -221,30 +304,7 @@ def scan_verdict_bypasses() -> Counter:
         if path.name == "runs.py":
             continue   # the schema owners themselves
         tree = ast.parse(path.read_text())
-        # Map aliases of the raw writers imported from runs.
-        aliases = {}
-        for node in ast.walk(tree):
-            if isinstance(node, ast.ImportFrom) and node.module == "runs":
-                for a in node.names:
-                    if a.name in _RAW_WRITERS:
-                        aliases[a.asname or a.name] = a.name
-        if not aliases:
-            continue
-        for node in ast.walk(tree):
-            if not (isinstance(node, ast.Call)
-                    and isinstance(node.func, ast.Name)
-                    and node.func.id in aliases):
-                continue
-            writer = aliases[node.func.id]
-            dicts = [a for a in node.args if isinstance(a, ast.Dict)]
-            dicts += [kw.value for kw in node.keywords
-                      if isinstance(kw.value, ast.Dict)]
-            for d in dicts:
-                for key_node in d.keys:
-                    if (isinstance(key_node, ast.Constant)
-                            and key_node.value in _TUPLE_KEYS):
-                        hits[f"src/{path.name}::{writer}::"
-                             f"{key_node.value}"] += 1
+        hits.update(_verdict_bypass_hits(tree, f"src/{path.name}"))
     return hits
 
 
@@ -263,3 +323,50 @@ def test_no_new_verdict_tuple_bypasses():
     assert not stale, (
         f"Bypass fixed but inventory not trimmed — update "
         f"{KNOWN_BYPASSES_PATH.name}: {sorted(stale)}")
+
+
+def test_bypass_scanner_detects_each_supported_shape():
+    """Must-detect fixtures for the bypass census (same discipline as the
+    slice scanner's): each shape below is a real evasion the 2026-08-15
+    burn-down found in live code or closed pre-emptively."""
+    shapes = {
+        "literal in call": (
+            "from runs import stamp_run_metadata\n"
+            'stamp_run_metadata({"stop_verdict": v})\n'),
+        "aliased import": (
+            "from runs import write_metadata as _wm\n"
+            '_wm(rd, extra={"goal_achieved": False})\n'),
+        "var-assigned dict": (
+            "from runs import write_metadata\n"
+            'extra = {"goal_verdict_source": "x"}\n'
+            "write_metadata(rd, extra=extra)\n"),
+        "var grown by subscript": (
+            "from runs import write_metadata\n"
+            "extra = {}\n"
+            'extra["stop_evidence"] = e\n'
+            "write_metadata(rd, extra=extra)\n"),
+        "positional var": (
+            "from runs import stamp_run_metadata\n"
+            'fields = {"stop_verdict": v}\n'
+            "stamp_run_metadata(fields)\n"),
+        "bare locked_rmw on metadata.json": (
+            "from file_lock import locked_rmw\n"
+            'locked_rmw(rd / "metadata.json", merge)\n'),
+        "attribute locked_rmw": (
+            "import file_lock\n"
+            'file_lock.locked_rmw(rd / "metadata.json", merge)\n'),
+    }
+    for label, src in shapes.items():
+        hits = _verdict_bypass_hits(ast.parse(src), "fixture.py")
+        assert hits, f"bypass scanner missed the {label} shape: {src!r}"
+
+
+def test_bypass_scanner_ignores_benign_writes():
+    """Non-tuple keys through the raw writers stay legal — the census
+    polices the verdict/stop family, not metadata writes in general."""
+    benign = (
+        "from runs import stamp_run_metadata\n"
+        'stamp_run_metadata({"audit_incomplete": True})\n'
+        'fields = {"loop_ids": ids}\n'
+        "stamp_run_metadata(fields)\n")
+    assert not _verdict_bypass_hits(ast.parse(benign), "fixture.py")

@@ -529,3 +529,156 @@ class TestRound13Behaviors:
             lessons=[f"lesson {i}" for i in range(7)])
         assert len(prior["lessons"]) == 6
         assert "+2 more lesson(s)" in prior["lessons"][-1]
+
+
+class TestBypassBurndownBehaviors:
+    """Owner pins for the 2026-08-15 verdict-bypass burn-down: every raw
+    write_metadata/stamp_run_metadata site carrying tuple keys was routed
+    through a runs.py schema owner; these pin the owners' semantics."""
+
+    def _pin(self, tmp_path, monkeypatch, seed):
+        import runs
+        rd = tmp_path / "run"
+        rd.mkdir(exist_ok=True)
+        (rd / "metadata.json").write_text(json.dumps(seed))
+        monkeypatch.setattr(runs, "current_run_dir", lambda: rd)
+        monkeypatch.setattr(runs, "index_run_dir", lambda *a, **k: None)
+        return runs, rd
+
+    def test_stop_owner_sets_pair_and_clips(self, tmp_path, monkeypatch):
+        runs, rd = self._pin(tmp_path, monkeypatch, {"status": "stuck"})
+        runs.stamp_run_stop_verdict(
+            stop_verdict="external-interrupt", stop_evidence="e" * 2000)
+        meta = json.loads((rd / "metadata.json").read_text())
+        assert meta["stop_verdict"] == "external-interrupt"
+        assert meta["stop_evidence"].startswith("e" * 800)
+        assert "[truncated: first 800 of 2000 characters]" \
+            in meta["stop_evidence"]
+
+    def test_stop_owner_empty_verdict_clears_stale_pair(
+            self, tmp_path, monkeypatch):
+        # loop_finalize's contract: metadata reflects THIS ending — an
+        # earlier restarted loop's verdict must not stand. The owner POPS
+        # (parity with clear_run_stop_verdict); consumers read
+        # `meta.get("stop_verdict") or ""` so absent == the old "".
+        runs, rd = self._pin(tmp_path, monkeypatch, {
+            "stop_verdict": "lost-the-plot", "stop_evidence": "old",
+            "status": "done"})
+        runs.stamp_run_stop_verdict(stop_verdict="", stop_evidence="")
+        meta = json.loads((rd / "metadata.json").read_text())
+        assert "stop_verdict" not in meta
+        assert "stop_evidence" not in meta
+        assert meta["status"] == "done"
+
+    def test_stop_owner_pause_reason_preserves_history(
+            self, tmp_path, monkeypatch):
+        # Falsy pause_reason leaves the stranded sweep's post-hoc
+        # writer-died stamp standing (2026-07-31 slice-1 review #2);
+        # a new typed reason still overwrites.
+        runs, rd = self._pin(tmp_path, monkeypatch, {
+            "pause_reason": "writer-died"})
+        runs.stamp_run_stop_verdict(
+            stop_verdict="out-of-budget", stop_evidence="x")
+        meta = json.loads((rd / "metadata.json").read_text())
+        assert meta["pause_reason"] == "writer-died"
+        runs.stamp_run_stop_verdict(
+            stop_verdict="out-of-budget", stop_evidence="x",
+            pause_reason="operator-manual")
+        meta = json.loads((rd / "metadata.json").read_text())
+        assert meta["pause_reason"] == "operator-manual"
+
+    def test_stop_owner_refine_note_composes_in_lock(
+            self, tmp_path, monkeypatch):
+        # director.close: a later, more specific verdict records what it
+        # refined instead of silently overwriting (and the composition
+        # happens inside the owner's lock, not around it).
+        runs, rd = self._pin(tmp_path, monkeypatch, {
+            "stop_verdict": "external-interrupt", "stop_evidence": "old"})
+        runs.stamp_run_stop_verdict(
+            stop_verdict="reachable-but-not-worth-it",
+            stop_evidence="closed by operator", run_dir=rd,
+            refine_note=True)
+        meta = json.loads((rd / "metadata.json").read_text())
+        assert meta["stop_verdict"] == "reachable-but-not-worth-it"
+        assert meta["stop_evidence"] \
+            == "closed by operator [refines: external-interrupt]"
+        # Same verdict re-stamped → no self-referential note.
+        runs.stamp_run_stop_verdict(
+            stop_verdict="reachable-but-not-worth-it",
+            stop_evidence="closed again", run_dir=rd, refine_note=True)
+        meta = json.loads((rd / "metadata.json").read_text())
+        assert meta["stop_evidence"] == "closed again"
+
+    def test_stop_owner_explicit_run_dir_wins(self, tmp_path, monkeypatch):
+        import runs
+        other = tmp_path / "other"
+        other.mkdir()
+        (other / "metadata.json").write_text(json.dumps({}))
+        runs_mod, rd = self._pin(tmp_path, monkeypatch, {})
+        runs_mod.stamp_run_stop_verdict(
+            stop_verdict="v", stop_evidence="e", run_dir=other)
+        assert "stop_verdict" not in json.loads(
+            (rd / "metadata.json").read_text())
+        assert json.loads(
+            (other / "metadata.json").read_text())["stop_verdict"] == "v"
+
+    def test_unjudged_source_owner_touches_nothing_else(
+            self, tmp_path, monkeypatch):
+        # The deliberate-partial owner: absence-means-not-judged is the
+        # tri-state — goal_achieved and gaps must NOT be popped or set.
+        runs, rd = self._pin(tmp_path, monkeypatch, {
+            "goal_achieved": False, "goal_verdict_gaps": ["real gap"],
+            "status": "incomplete"})
+        runs.stamp_unjudged_verdict_source("closure_error", "judge crashed")
+        meta = json.loads((rd / "metadata.json").read_text())
+        assert meta["goal_verdict_source"] == "closure_error"
+        assert meta["goal_verdict_summary"] == "judge crashed"
+        assert meta["goal_achieved"] is False
+        assert meta["goal_verdict_gaps"] == ["real gap"]
+
+    def test_unjudged_source_owner_empty_summary_writes_none(
+            self, tmp_path, monkeypatch):
+        runs, rd = self._pin(tmp_path, monkeypatch, {})
+        runs.stamp_unjudged_verdict_source("no_steps_completed")
+        meta = json.loads((rd / "metadata.json").read_text())
+        assert meta["goal_verdict_source"] == "no_steps_completed"
+        assert "goal_verdict_summary" not in meta
+
+    def test_contested_owner_sets_pair_plus_context(
+            self, tmp_path, monkeypatch):
+        runs, rd = self._pin(tmp_path, monkeypatch, {
+            "goal_achieved": False})
+        runs.stamp_run_verdict_contested(
+            contested_by="closure",
+            extra={"closure_complete": True, "closure_confidence": 0.92})
+        meta = json.loads((rd / "metadata.json").read_text())
+        assert meta["goal_verdict_contested"] is True
+        assert meta["goal_verdict_contested_by"] == "closure"
+        assert meta["closure_confidence"] == 0.92
+        assert meta["goal_achieved"] is False
+
+    def test_owner_extra_rejects_tuple_keys(self, tmp_path, monkeypatch):
+        # Smuggling a tuple member through extra recreates the exact
+        # partial-write drift the owners end — fail loud at the call.
+        import pytest as _pytest
+        runs, rd = self._pin(tmp_path, monkeypatch, {})
+        with _pytest.raises(ValueError):
+            runs.stamp_run_verdict_contested(
+                contested_by="closure",
+                extra={"goal_achieved": True})
+        with _pytest.raises(ValueError):
+            runs.stamp_run_verdict(
+                goal_achieved=True, source="s", confidence=0.5,
+                summary="x", gaps=None,
+                extra={"stop_verdict": "smuggled"})
+
+    def test_verdict_owner_extra_rides_the_same_write(
+            self, tmp_path, monkeypatch):
+        runs, rd = self._pin(tmp_path, monkeypatch, {})
+        runs.stamp_run_verdict(
+            goal_achieved=False, source="closure_stamp_failed",
+            confidence=0.7, summary="why", gaps=None,
+            extra={"loop_ids": ["a", "b"]})
+        meta = json.loads((rd / "metadata.json").read_text())
+        assert meta["goal_achieved"] is False
+        assert meta["loop_ids"] == ["a", "b"]

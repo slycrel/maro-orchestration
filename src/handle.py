@@ -781,11 +781,14 @@ def _stamp_stop_on_demotion(loop_result, verdict: str, evidence: str) -> None:
     # same sizing as the resume-brief stuck_reason, honest-clipped.
     loop_result.stop_evidence = clip(evidence, 800)
     try:
-        from runs import stamp_run_metadata
-        stamp_run_metadata({
-            "stop_verdict": verdict,
-            "stop_evidence": loop_result.stop_evidence,
-        })
+        # Schema owner (2026-08-15 bypass burn-down) — the owner clips at
+        # the same 800; the pre-clipped result field stays for the ledger
+        # row below.
+        from runs import stamp_run_stop_verdict
+        stamp_run_stop_verdict(
+            stop_verdict=verdict,
+            stop_evidence=loop_result.stop_evidence,
+        )
     except Exception as exc:
         log.debug("stop-verdict metadata stamp failed on demotion: %s", exc)
     try:
@@ -1456,40 +1459,43 @@ def _handle_impl(
         # request was actually fulfilled. Absent key = unverified.
         if not dry_run and "goal_achieved" in outcome:
             try:
-                from runs import write_metadata as _wm_now
                 from runs import current_run_dir as _crd_now
+                from runs import stamp_run_stop_verdict as _srs_now
+                from runs import stamp_run_verdict as _srv_now
                 _rd_now = _crd_now()
                 if _rd_now is not None:
-                    _now_extra = {
-                        "goal_achieved": bool(outcome["goal_achieved"]),
-                        "goal_verdict_source": (
+                    # Tuple owner (2026-08-15 bypass burn-down; the run dir
+                    # was bound with handle_id/prompt at creation, so this
+                    # write carries only the verdict). Summary is the WHY,
+                    # not just that a verdict landed: the old two-key dict
+                    # made it structurally impossible for a NOW run to
+                    # record a reason — ed7cf400 presented as "incomplete,
+                    # no explanation" while its judge's rationale sat in
+                    # build/calls/ the whole time (found by ea4ebe4a,
+                    # LT-1 #8). confidence=None: the NOW lane records no
+                    # confidence, and the owner pops the key.
+                    _srv_now(
+                        goal_achieved=bool(outcome["goal_achieved"]),
+                        source=(
                             "provenance" if outcome.get("provenance_missing")
                             else ("now_self_verdict_free"
                                   if outcome.get("now_verify_family") == "hosted_free"
                                   else "now_self_verdict")),
-                    }
-                    # WHY the verdict landed, not just that it did. This dict
-                    # carried exactly two keys until 2026-08-02, which made it
-                    # structurally impossible for a NOW run to record a reason
-                    # — ed7cf400 presented as "incomplete, no explanation"
-                    # while its judge's rationale sat in build/calls/ the whole
-                    # time. Found by ea4ebe4a (LT-1 #8) reading live source.
-                    _now_summary = str(outcome.get("goal_verdict_summary") or "")
-                    if _now_summary:
-                        _now_extra["goal_verdict_summary"] = _now_summary
-                    # Typed stop verdict rides the same write. classify_outcome
-                    # reads meta["stop_verdict"] straight onto the run card, so
-                    # this is the NOW lane's equivalent of the agenda rail's
-                    # stamp_run_metadata leg.
+                        confidence=None,
+                        summary=str(outcome.get("goal_verdict_summary") or ""),
+                        gaps=None,
+                    )
+                    # Typed stop verdict: classify_outcome reads
+                    # meta["stop_verdict"] straight onto the run card, so
+                    # this is the NOW lane's equivalent of the agenda
+                    # rail's stop stamp (owner clips evidence at 800).
                     _now_stop = str(outcome.get("stop_verdict") or "")
                     if _now_stop:
-                        _now_extra["stop_verdict"] = _now_stop
-                        _now_extra["stop_evidence"] = clip(
-                            outcome.get("stop_evidence"), 800)
-                    _wm_now(
-                        _rd_now, handle_id=handle_id, prompt=_raw_input,
-                        extra=_now_extra,
-                    )
+                        _srs_now(
+                            stop_verdict=_now_stop,
+                            stop_evidence=str(
+                                outcome.get("stop_evidence") or ""),
+                        )
             except Exception:
                 pass
 
@@ -2601,9 +2607,11 @@ def _handle_impl(
                 and not _ran_any_step):
             try:
                 from stop_verdicts import VERDICT_SOURCE_NO_STEPS_COMPLETED
-                from runs import stamp_run_metadata as _srm_nosteps
-                _srm_nosteps(
-                    {"goal_verdict_source": VERDICT_SOURCE_NO_STEPS_COMPLETED})
+                # Deliberate-partial owner (2026-08-15 bypass burn-down):
+                # source only, goal_achieved stays ABSENT — no work, no
+                # verdict, and absence-means-not-judged is the tri-state.
+                from runs import stamp_unjudged_verdict_source as _srm_nosteps
+                _srm_nosteps(VERDICT_SOURCE_NO_STEPS_COMPLETED)
                 _nosteps_loop = getattr(loop_result, "loop_id", "") or ""
                 if _nosteps_loop:
                     # The ledger row exists for these runs (they DO reach
@@ -2726,14 +2734,20 @@ def _handle_impl(
                     loop_result.status = "incomplete"
                     loop_result.stuck_reason = _stamp_reason
                     try:
-                        from runs import stamp_run_metadata as _stamp_failed_meta
-                        _meta_path = _stamp_failed_meta({
-                            "goal_achieved": False,
-                            "goal_verdict_source": "closure_stamp_failed",
-                            "goal_verdict_confidence": float(_closure.confidence),
-                            "goal_verdict_summary": clip(_stamp_reason, VERDICT_PROSE_CAP),
-                            "loop_ids": list(_run_loop_ids),
-                        })
+                        # Tuple owner (2026-08-15 bypass burn-down): the
+                        # whole tuple replaces — the old raw stamp's merge
+                        # left a predecessor's downgrade_reason/gaps
+                        # standing beside this failure verdict. loop_ids
+                        # rides the same locked write via extra.
+                        from runs import stamp_run_verdict as _stamp_failed_meta
+                        _meta_path = _stamp_failed_meta(
+                            goal_achieved=False,
+                            source="closure_stamp_failed",
+                            confidence=float(_closure.confidence),
+                            summary=_stamp_reason,
+                            gaps=None,
+                            extra={"loop_ids": list(_run_loop_ids)},
+                        )
                         if _meta_path is None:
                             raise RuntimeError("active run metadata was not updated")
                     except Exception as _meta_exc:
@@ -2912,17 +2926,24 @@ def _handle_impl(
                         f"provenance: claimed input/output(s) not found: {_prov_missing}",
                     )
                     try:
-                        from runs import write_metadata as _wm_prov
                         from runs import current_run_dir as _crd_prov
+                        from runs import stamp_run_verdict as _srv_prov
                         _rd_p = _crd_prov()
                         if _rd_p is not None:
-                            _prov_extra = {
-                                "goal_achieved": False,
-                                "goal_verdict_source": "provenance",
-                                "goal_verdict_summary": clip(
-                                    "claimed input/output(s) not found: "
-                                    f"{_prov_missing}", VERDICT_PROSE_CAP),
-                            }
+                            # Tuple owner (2026-08-15 bypass burn-down; the
+                            # run dir carries handle_id/prompt from
+                            # creation). The owner pops the contested pair
+                            # with every replacement, so the dispute
+                            # marker is re-stamped AFTER — same order as
+                            # the main closure lane.
+                            _srv_prov(
+                                goal_achieved=False,
+                                source="provenance",
+                                confidence=None,
+                                summary=("claimed input/output(s) not "
+                                         f"found: {_prov_missing}"),
+                                gaps=None,
+                            )
                             # Closure disagreeing with the guard is recorded,
                             # not silently discarded. Additive only — the
                             # demotion still stands. Two false demotions on
@@ -2935,7 +2956,19 @@ def _handle_impl(
                                 _contested = contested_by_closure(
                                     _closure, _prov_missing)
                                 if _contested:
-                                    _prov_extra.update(_contested)
+                                    from runs import (
+                                        stamp_run_verdict_contested
+                                        as _src_prov)
+                                    _src_prov(
+                                        contested_by=str(_contested.pop(
+                                            "goal_verdict_contested_by",
+                                            "closure")),
+                                        extra={
+                                            k: v for k, v in
+                                            _contested.items()
+                                            if k != "goal_verdict_contested"
+                                        },
+                                    )
                                     _contested_verdict_loop_ids.add(
                                         getattr(loop_result, "loop_id", "") or "")
                                     log.warning(
@@ -2946,10 +2979,6 @@ def _handle_impl(
                                     )
                             except Exception:
                                 pass
-                            _wm_prov(
-                                _rd_p, handle_id=handle_id, prompt=_raw_input,
-                                extra=_prov_extra,
-                            )
                             # Compiled-truth half (MILESTONES #3a): the
                             # provenance guard is deterministic — the most
                             # trustworthy verified-claim source there is.
@@ -3120,18 +3149,10 @@ def _handle_impl(
                 try:
                     if (getattr(_closure, "verdict_audit", {}) or {}).get(
                             "disputed"):
-                        from runs import write_metadata as _wm_vad
-                        from runs import current_run_dir as _crd_vad
-                        _rd_vad = _crd_vad()
-                        if _rd_vad is not None:
-                            _wm_vad(
-                                _rd_vad, handle_id=handle_id,
-                                prompt=_raw_input,
-                                extra={
-                                    "goal_verdict_contested": True,
-                                    "goal_verdict_contested_by":
-                                        "verdict_audit",
-                                })
+                        # Contested owner (2026-08-15 bypass burn-down).
+                        from runs import (stamp_run_verdict_contested
+                                          as _src_vad)
+                        _src_vad(contested_by="verdict_audit")
                 except Exception:
                     pass
             elif _closure is None and _closure_error:
@@ -3139,18 +3160,13 @@ def _handle_impl(
                 # the source must say WHY there is no verdict — a crashed
                 # judge is a measurement gap, not an ineligible run.
                 try:
-                    from runs import write_metadata as _wm_cerr
-                    from runs import current_run_dir as _crd_cerr
-                    _rd_ce = _crd_cerr()
-                    if _rd_ce is not None:
-                        _wm_cerr(
-                            _rd_ce, handle_id=handle_id, prompt=_raw_input,
-                            extra={
-                                "goal_verdict_source": "closure_error",
-                                "goal_verdict_summary": clip(
-                                    _closure_error, VERDICT_PROSE_CAP),
-                            },
-                        )
+                    # Deliberate-partial owner (2026-08-15 bypass
+                    # burn-down): source + why, goal_achieved stays
+                    # ABSENT — a crashed judge is a measurement gap,
+                    # not a verdict. The owner clips the summary.
+                    from runs import (stamp_unjudged_verdict_source
+                                      as _srm_cerr)
+                    _srm_cerr("closure_error", _closure_error)
                 except Exception:
                     pass
                 # The ledger row needs the same why (adversarial review
@@ -3588,22 +3604,13 @@ def _handle_impl(
                                         if (getattr(_post_closure,
                                                     "verdict_audit", {})
                                                 or {}).get("disputed"):
+                                            # Contested owner (2026-08-15
+                                            # bypass burn-down).
                                             from runs import (
-                                                write_metadata as _wm_pvad)
-                                            from runs import (
-                                                current_run_dir as _crd_pvad)
-                                            _rd_pvad = _crd_pvad()
-                                            if _rd_pvad is not None:
-                                                _wm_pvad(
-                                                    _rd_pvad,
-                                                    handle_id=handle_id,
-                                                    prompt=_raw_input,
-                                                    extra={
-                                                        "goal_verdict_contested":
-                                                            True,
-                                                        "goal_verdict_contested_by":
-                                                            "verdict_audit",
-                                                    })
+                                                stamp_run_verdict_contested
+                                                as _src_pvad)
+                                            _src_pvad(
+                                                contested_by="verdict_audit")
                                     except Exception:
                                         pass
                                     if (

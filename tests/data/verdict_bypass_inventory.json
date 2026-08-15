@@ -1,14 +1,1 @@
-{
- "src/agent_loop.py::stamp_run_metadata::stop_evidence": 1,
- "src/agent_loop.py::stamp_run_metadata::stop_verdict": 1,
- "src/handle.py::stamp_run_metadata::goal_achieved": 1,
- "src/handle.py::stamp_run_metadata::goal_verdict_confidence": 1,
- "src/handle.py::stamp_run_metadata::goal_verdict_source": 2,
- "src/handle.py::stamp_run_metadata::goal_verdict_summary": 1,
- "src/handle.py::stamp_run_metadata::stop_evidence": 1,
- "src/handle.py::stamp_run_metadata::stop_verdict": 1,
- "src/handle.py::write_metadata::goal_verdict_source": 1,
- "src/handle.py::write_metadata::goal_verdict_summary": 1,
- "src/loop_finalize.py::stamp_run_metadata::stop_evidence": 1,
- "src/loop_finalize.py::stamp_run_metadata::stop_verdict": 1
-}
+{}

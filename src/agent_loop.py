@@ -402,12 +402,13 @@ def run_agent_loop(
             # Infra failure, not a goal verdict — the goal was never attempted
             # (stop-path survey: "stuck" here read downstream as goal failure).
             try:
-                from context_budget import clip as _clip_fence
-                from runs import stamp_run_metadata as _stamp_fence_meta
-                _stamp_fence_meta({
-                    "stop_verdict": "external-interrupt",
-                    "stop_evidence": _clip_fence(_fence_msg, 800),
-                })
+                # Schema owner (2026-08-15 bypass burn-down) — owns the
+                # pair-completeness and the 800 evidence clip.
+                from runs import stamp_run_stop_verdict as _stamp_fence_stop
+                _stamp_fence_stop(
+                    stop_verdict="external-interrupt",
+                    stop_evidence=_fence_msg,
+                )
             except Exception:
                 pass
             return LoopResult(

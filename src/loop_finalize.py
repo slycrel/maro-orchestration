@@ -481,18 +481,21 @@ def _build_result_and_finalize(
     # Stamped unconditionally: empty clears a stale verdict from an earlier
     # restarted loop so metadata always reflects THIS ending, not the first.
     try:
-        from runs import stamp_run_metadata as _stamp_stop_meta
-        _stamp_stop_meta({
-            "stop_verdict": result.stop_verdict,
-            "stop_evidence": result.stop_evidence,
-            # `or None`: stamp_run_metadata skips None but writes "" — and a
-            # resumed run's fresh context has no pause_reason, so an
-            # unconditional "" would erase the stranded sweep's post-hoc
-            # writer-died stamp from the reused run dir (2026-07-31 slice-1
-            # adversarial review #2). Empty preserves history; a new typed
-            # reason still overwrites.
-            "pause_reason": result.pause_reason or None,
-        })
+        # Schema owner (2026-08-15 bypass burn-down). Replace semantics
+        # match this site's contract: empty verdict CLEARS a stale one
+        # from an earlier restarted loop (the owner pops the pair, where
+        # the old raw stamp wrote "" — consumers read
+        # `meta.get("stop_verdict") or ""`, so absent and "" are the same
+        # value, and absent is the clear helper's convention). Falsy
+        # pause_reason leaves history untouched (2026-07-31 slice-1
+        # adversarial review #2 — the stranded sweep's post-hoc
+        # writer-died stamp must survive a resumed run's fresh context).
+        from runs import stamp_run_stop_verdict as _stamp_stop_meta
+        _stamp_stop_meta(
+            stop_verdict=result.stop_verdict,
+            stop_evidence=result.stop_evidence,
+            pause_reason=result.pause_reason or "",
+        )
     except Exception as _sv_exc:
         log.debug("stop-verdict metadata stamp failed: %s", _sv_exc)
 

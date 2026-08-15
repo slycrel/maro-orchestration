@@ -54,15 +54,15 @@ def _stamp_refusal_verdict(verdict: str, evidence: str,
     No-op when no run-dir is pinned (bare library calls).
     """
     try:
-        from runs import stamp_run_metadata
-        from context_budget import clip
-        fields = {
-            "stop_verdict": verdict,
-            "stop_evidence": clip(evidence, 800),
-        }
-        if pause_reason:
-            fields["pause_reason"] = pause_reason
-        stamp_run_metadata(fields)
+        # Schema owner (2026-08-15 bypass burn-down) — owns the pair
+        # completeness, the 800 evidence clip, and the falsy-pause
+        # preserve-history semantics this helper already wanted.
+        from runs import stamp_run_stop_verdict
+        stamp_run_stop_verdict(
+            stop_verdict=verdict,
+            stop_evidence=evidence,
+            pause_reason=pause_reason or "",
+        )
     except Exception:
         pass
 
