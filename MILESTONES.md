@@ -17,17 +17,22 @@ first-class milestones).
    renderers; json = the subtraction instrument for the eventual minimal
    map schema. SHIPPED 2026-08-15 (+ `stop_verdicts.REOPEN_CONDITIONS`
    promoted from docstring prose to data). — status below per review.
-2. **Chunk 2 — §13b evidence-specific reopen payloads**: record WHICH
-   budget / WHICH cost-value estimate at the director + budget stamp
-   sites (type-derived condition is now data; the specific half is the
-   remaining teeth). Candidate follow-on: render stop verdict + reopen
-   on the run report (census: nothing renders stop verdicts today).
+2. **Chunk 2 — Map panel on run pages**: `loop_report._render_map`
+   embeds the lens on the loop report + NOW page — the first renderer
+   of stop verdicts anywhere (census: nothing rendered them). SHIPPED
+   2026-08-15; historical reports re-rendered via backfill. (Chunk 2
+   was originally sketched as §13b evidence-specific reopen payloads;
+   re-pointed mid-arc — structured reopen payloads have no consumer
+   until the 14h revisit mechanic exists, and the evidence prose
+   already names the specific cap at every stamp site. Deferred, not
+   dropped: revisit WITH the revisit mechanic.)
 3. **Chunk 3 (candidate) — §9.5 mid-meander re-anchor experiment**:
    needs a milestone-boundary hook first (census: none exists — the
    only boundary-ish seam is pre-execution milestone expansion,
    loop_execute.py:663). Scope the boundary concept before building.
 4. **Later, with appetite**: §9.9 backward-chaining generator; 14h
-   revisit mechanic (tool-acquisition reopens standing dead ends).
+   revisit mechanic (tool-acquisition reopens standing dead ends —
+   takes the deferred §13b structured reopen payloads with it).
    NOT solo-buildable: §10 calibration + §9.7 scoping (owed discussion
    with Jeremy).
 

@@ -1780,3 +1780,50 @@ def test_run_report_page_carries_map_panel(monkeypatch, tmp_path):
         elapsed_ms=10, replan_count=0, report_dir=build, index_link=None,
     )
     assert "Map</span></h2>" in html
+
+
+def test_render_map_panel_zero_step_run_with_stop_verdict(tmp_path):
+    """Round-3 pin: an early-interrupted run (stop verdict stamped before
+    any step executed) must still render its panel — the stop verdict is
+    the one thing this panel newly surfaces."""
+    import json as _json
+    run_dir = tmp_path / "runs" / "dead5678-early-stop"
+    (run_dir / "build").mkdir(parents=True)
+    (run_dir / "metadata.json").write_text(_json.dumps({
+        "handle_id": "dead5678", "prompt": "never got started",
+        "status": "interrupted",
+        "stop_verdict": "external-interrupt",
+        "stop_evidence": "fence failure before step 1"}))
+    html = lr._render_map(run_dir / "build")
+    assert "external-interrupt" in html
+    assert "reopens when: the interruption clears" in html
+
+
+def test_render_map_panel_still_empty_for_bare_now_run(tmp_path):
+    """No steps AND no stop/pause -> panel stays suppressed (NOW one-shot)."""
+    import json as _json
+    run_dir = tmp_path / "runs" / "beef9999-now"
+    (run_dir / "build").mkdir(parents=True)
+    (run_dir / "metadata.json").write_text(_json.dumps({
+        "handle_id": "beef9999", "prompt": "quick question",
+        "status": "done"}))
+    assert lr._render_map(run_dir / "build") == ""
+
+
+def test_render_map_panel_caps_length(tmp_path):
+    """Round-3 pin: the pre block truncates like every other large panel."""
+    import json as _json
+    run_dir = tmp_path / "runs" / "long1234-big"
+    build = run_dir / "build"
+    build.mkdir(parents=True)
+    (run_dir / "metadata.json").write_text(_json.dumps({
+        "handle_id": "long1234", "prompt": "big run", "status": "done",
+        "loops": []}))
+    steps = [{"index": i, "text": f"Step {i} " + "x" * 300, "status": "done"}
+             for i in range(1, 200)]
+    (build / "loop-ffff0000-log.json").write_text(
+        _json.dumps({"loop_id": "ffff0000", "steps": steps}))
+    html = lr._render_map(build)
+    # cap is 20000 on the raw text; allow escaping/markup overhead
+    assert len(html) < 30000
+    assert "truncated — full map: python3 -m map_lens long1234" in html

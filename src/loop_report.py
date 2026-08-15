@@ -1078,18 +1078,36 @@ def _render_map(report_dir: Path) -> str:
     try:
         from map_lens import build_map, render_text
         m = build_map(report_dir.parent)
-        if not any(n.kind == "step" for n in m.nodes):
+        # Suppress only when the map says nothing at all. A zero-step run
+        # WITH a stop verdict (e.g. external-interrupt stamped before any
+        # step ran) must still render — that stop verdict is the one thing
+        # this panel newly surfaces (round-3 review: the guard was hiding
+        # it for exactly the early-failure runs where it matters most).
+        has_steps = any(n.kind == "step" for n in m.nodes)
+        if not has_steps and not m.stop and not m.pause:
             return ""
         text = render_text(m)
     except Exception:
         return ""
     return (
         '<h2><span title="The run reconstructed as a self-surveying map: '
-        '&#9679; live (done) &middot; &#9684; grey (blocked/skipped) '
+        '&#9679; live (done) &middot; &#9680; grey (blocked/skipped) '
         '&middot; &#9675; fog (never ran). On-demand CLI: python3 -m '
         'map_lens &lt;run&gt;">Map</span></h2>\n'
-        f'<div class="panel"><pre>{_esc(text)}</pre></div>'
+        f'<div class="panel"><pre>{_esc(_cap_map_text(text, m.handle_id))}'
+        '</pre></div>'
     )
+
+
+def _cap_map_text(text: str, handle_id: str, limit: int = 20000) -> str:
+    """Cap the map text like every other large panel (round-3 review) —
+    but with a CLI pointer instead of _esc_truncated's full-text tooltip,
+    which would re-embed the whole map as a title attribute and defeat
+    the cap. The full map stays reachable on demand, where it lives."""
+    if len(text) <= limit:
+        return text
+    return (text[:limit].rstrip()
+            + f"\n… (truncated — full map: python3 -m map_lens {handle_id})")
 
 
 def _render_verdict(report_dir: Path) -> str:

@@ -7842,3 +7842,24 @@ under the same two-measurement standard).
   stop verdicts recorded but nothing renders them; recon stamps
   in-memory only — text is the durable carrier by adjudication) ran
   same day. MILESTONES.md resumed as the arc queue.
+- **2026-08-15** — **Treasure-map chunk 2 SHIPPED + review-to-fixpoint on
+  the arc's first two chunks (sonnet-medium lane's first outing).** Map
+  panel (`loop_report._render_map`) embeds the lens on loop-report AND
+  NOW pages — the first renderer of stop verdicts anywhere (census
+  confirmed nothing rendered them); 759 historical reports re-rendered
+  via backfill, 0 failures, so every run page on maro.feifdom.com now
+  carries its map. Review trajectory r1→r3: 10 findings (8 accepted, 2
+  HIGH: [after:N] index desync past malformed rows; non-dict metadata
+  crash) → 7 (7/7 real, 0 hallucinated — JSON-null dodged the corrupt
+  notes, floating landmarks after malformed rows, guard-test didn't
+  exercise the shipped detector) → 3 (1 M: step-count guard hid the
+  panel for early-interrupted zero-step runs, exactly the stop-verdict
+  case the panel exists for; 2 L: uncapped pre block, wrong tooltip
+  glyph entity). All fixed same-day; fixpoint declared at r3 per the
+  decree bar (no high/critical two consecutive rounds). Sonnet-medium
+  reviewer quality note for the lane decision: 1/20 findings
+  hallucinated across three rounds — comparable to codex's best rounds,
+  at a fraction of the cost. Chunk 2 re-pointed mid-arc from §13b
+  structured reopen payloads (store-before-consumer until the 14h
+  revisit mechanic; evidence prose already names the specific cap) —
+  MILESTONES records the re-point. Suite 8701/1 platform skip.
