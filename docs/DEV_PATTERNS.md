@@ -86,6 +86,45 @@ era citations are the receipts (`docs/KNOWLEDGE_JOURNEY.md`).
    2026-08-01, "missing != empty, and we're checking for a value" ·
    deterministic-home: none yet)*
 
+## Reviewer watch-list (inject into adversarial-review prompts up front)
+
+Seven recall probes, one per miss-pattern our own ~50 review rounds kept
+paying for — evidence + instances in
+`docs/history/2026-08-15-review-miss-taxonomy.md`. Reviewer precision has
+been fine (0-hallucination streak); these target what first passes DON'T
+see. Give reviewers these questions verbatim:
+
+1. **Fix layer:** the previous round's fixes are in your scope and are
+   historically the likeliest home of this round's HIGH — attack them
+   first.
+2. **Siblings:** for every field/value the diff touches, census ALL its
+   writers, readers, and branch twins (exception path, retry path,
+   escalation lane, parallel lane, CLI twin) — which members of the class
+   did NOT change, and should have?
+3. **Composition:** trace one LITERAL production call path end-to-end
+   (real entry point, real wrapper stack, real module identity). Do the
+   units compose the way the docstrings claim? Is any test on that
+   literal path?
+4. **Tests:** name a defect the new tests still pass on. Look for:
+   asserted-the-object-not-the-flow, captured-but-not-asserted, pins
+   encoding the bug, mocks proving the wrong path, single-row seeds that
+   can't distinguish orderings, guarantees with no capture assertion.
+5. **Claims:** for every guarantee in the comments/docstrings/commit
+   message, find the executing line — or flag the claim as unwired.
+6. **Degenerates + direction:** probe schema-max, empty/None, NaN,
+   string-typed booleans ("false", ""), forged markers — and for every
+   error/fallback branch ask which way it errs, and whether that's the
+   safe direction for THIS module's stated doctrine.
+7. **Instruments:** if the diff adds/extends a scanner, census, or pin,
+   demand must-detect fixtures (shapes built to evade it) and a negative
+   control — "found 0" is untrusted until the fixtures prove it can find.
+
+Calibrations that ride along: a finding is a lead, not a fact
+(verify-before-fix); consensus from a shared unmeasured premise is not
+evidence — run the settling probe; lens disagreement is signal, chase it;
+verify impact claims separately from code claims; record every deferral's
+premise and re-check it when config flips.
+
 ## Typed finding codes (the shared vocabulary for review findings)
 
 When a review (dev session, adversarial pass, evidence-path lens) writes
