@@ -328,6 +328,15 @@ def _update_metadata(
         # Run metadata describes the latest delivered attempt. Align it as
         # soon as that queue record repairs, even if an older exhausted sibling
         # keeps the run-level learning quarantine in place.
+        # SANCTIONED direct verdict-key merge (the bypass census's one
+        # inventoried site, reviewed 2026-08-15): this is a partial
+        # ALIGNMENT patch — source always, confidence/achieved
+        # set-or-popped from the repair record — on a FOREIGN run dir,
+        # atomic with the repair-record update above. Routing through
+        # runs.stamp_run_verdict would replace the tuple WHOLE and
+        # clobber summary/downgrade/gaps/contested that the original
+        # stamp legitimately owns; splitting into two locked writes
+        # would reintroduce the round-14 non-atomic class.
         align_latest_verdict = (
             verdict_patch is not None and target == len(repair_items) - 1)
         if align_latest_verdict:

@@ -212,11 +212,14 @@ _TUPLE_KEYS = frozenset((
 ))
 _RAW_WRITERS = ("write_metadata", "stamp_run_metadata")
 
-# Frozen 2026-08-14 at 12 entries; BURNED TO ZERO 2026-08-15 (every site
+# Frozen 2026-08-14 at 12 entries; BURNED DOWN 2026-08-15 (every site
 # routed through a runs.py schema owner: stamp_run_verdict[+extra],
 # stamp_run_stop_verdict, stamp_unjudged_verdict_source,
-# stamp_run_verdict_contested). The inventory is {} and must stay {} —
-# any hit is a NEW bypass. Each entry is file::writer::key. Burn down by
+# stamp_run_verdict_contested). ONE reviewed-justified site remains —
+# audit_repair's alignment patch (a partial set-or-pop on a FOREIGN run
+# dir, atomic with its repair record; see the comment at the site) —
+# surfaced by the round-2 scanner hardening, which the first cut could
+# not see. Any other hit is a NEW bypass. Entries are file::writer::key;
 # routing the site through a runs.py schema owner, then delete its rows.
 KNOWN_BYPASSES_PATH = (Path(__file__).resolve().parent / "data"
                        / "verdict_bypass_inventory.json")
@@ -228,9 +231,39 @@ def _verdict_bypass_hits(tree: ast.AST, filename: str) -> Counter:
     lesson: a scanner validated only against its own census misses the
     shapes designed to evade it)."""
     hits: Counter = Counter()
-    # Raw locked_rmw merges over metadata.json — the director shape
-    # (2026-08-15 burn-down): a bare read-modify-write that no
-    # writer-name census can see, and that skipped index_run_dir.
+    # Paths bound to a name that contains the "metadata.json" constant —
+    # `mp = rd / "metadata.json"` then `locked_rmw(mp, merge)` is the
+    # exact idiom the schema owners themselves use, and it evaded the
+    # first cut of this tripwire (round-2 review, executed probe).
+    path_vars: set = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and any(
+                isinstance(sub, ast.Constant)
+                and sub.value == "metadata.json"
+                for sub in ast.walk(node.value)):
+            for tgt in node.targets:
+                if isinstance(tgt, ast.Name):
+                    path_vars.add(tgt.id)
+    # Raw locked_rmw merges over metadata.json that WRITE tuple keys —
+    # the director shape (2026-08-15 burn-down): a bare
+    # read-modify-write no writer-name census can see. Scoped to the
+    # verdict/stop family: legitimate non-verdict merges (audit-repair
+    # reconciliation, the stranded sweep's status/pause stamp) stay
+    # legal. The merge callable is resolved by name to its FunctionDef
+    # and its body scanned; an unresolvable callable falls back to
+    # file-scope tuple-key presence (err toward detection).
+    fndefs = {n.name: n for n in ast.walk(tree)
+              if isinstance(n, ast.FunctionDef)}
+
+    def _writes_tuple_key(scope) -> bool:
+        for sub in ast.walk(scope):
+            if (isinstance(sub, ast.Assign)
+                    and isinstance(sub.targets[0], ast.Subscript)
+                    and isinstance(sub.targets[0].slice, ast.Constant)
+                    and sub.targets[0].slice.value in _TUPLE_KEYS):
+                return True
+        return False
+
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
@@ -241,18 +274,35 @@ def _verdict_bypass_hits(tree: ast.AST, filename: str) -> Counter:
                       and callee.attr == "locked_rmw"))
         if not is_rmw:
             continue
-        if any(isinstance(sub, ast.Constant)
-               and sub.value == "metadata.json"
-               for sub in ast.walk(node)):
+        inline = any(isinstance(sub, ast.Constant)
+                     and sub.value == "metadata.json"
+                     for sub in ast.walk(node))
+        via_var = any(isinstance(a, ast.Name) and a.id in path_vars
+                      for a in node.args)
+        if not (inline or via_var):
+            continue
+        merge_fn = None
+        if len(node.args) >= 2 and isinstance(node.args[1], ast.Name):
+            merge_fn = fndefs.get(node.args[1].id)
+        scope = merge_fn if merge_fn is not None else tree
+        if _writes_tuple_key(scope):
             hits[f"{filename}::locked_rmw::metadata.json"] += 1
-    # Map aliases of the raw writers imported from runs.
+    # Map aliases of the raw writers: `from runs import X [as Y]` AND
+    # module-attribute calls (`import runs [as r]; r.stamp_run_metadata`)
+    # — the attribute form is a live pattern and evaded the first cut
+    # (round-2 review, executed probe).
     aliases = {}
+    module_aliases: set = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom) and node.module == "runs":
             for a in node.names:
                 if a.name in _RAW_WRITERS:
                     aliases[a.asname or a.name] = a.name
-    if not aliases:
+        elif isinstance(node, ast.Import):
+            for a in node.names:
+                if a.name == "runs":
+                    module_aliases.add(a.asname or a.name)
+    if not aliases and not module_aliases:
         return hits
     # Var-flow: dict literals assigned to a NAME, plus later
     # NAME["key"] = ... additions, count when the NAME reaches a raw
@@ -261,43 +311,66 @@ def _verdict_bypass_hits(tree: ast.AST, filename: str) -> Counter:
     # literal-in-call scan — the two biggest real bypasses). Tracking is
     # file-global: a same-named var in another function can over-count,
     # which errs toward detection, never past it.
+    def _literal_keys(node) -> set:
+        """String keys carried by a dict-shaped expression: a literal,
+        a dict(...) constructor (round-2 review: evaded the first cut),
+        or nothing."""
+        if isinstance(node, ast.Dict):
+            return {k.value for k in node.keys
+                    if isinstance(k, ast.Constant)}
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                and node.func.id == "dict"):
+            return {kw.arg for kw in node.keywords if kw.arg}
+        return set()
+
     var_keys: dict = {}
     for node in ast.walk(tree):
-        if not isinstance(node, ast.Assign):
-            continue
-        if isinstance(node.value, ast.Dict):
-            for tgt in node.targets:
-                if isinstance(tgt, ast.Name):
-                    var_keys.setdefault(tgt.id, set()).update(
-                        k.value for k in node.value.keys
-                        if isinstance(k, ast.Constant))
-        tgt = node.targets[0]
-        if (isinstance(tgt, ast.Subscript)
-                and isinstance(tgt.value, ast.Name)
-                and tgt.value.id in var_keys
-                and isinstance(tgt.slice, ast.Constant)):
-            var_keys[tgt.value.id].add(tgt.slice.value)
+        if isinstance(node, ast.Assign):
+            keys = _literal_keys(node.value)
+            if keys:
+                for tgt in node.targets:
+                    if isinstance(tgt, ast.Name):
+                        var_keys.setdefault(tgt.id, set()).update(keys)
+            tgt = node.targets[0]
+            if (isinstance(tgt, ast.Subscript)
+                    and isinstance(tgt.value, ast.Name)
+                    and isinstance(tgt.slice, ast.Constant)):
+                var_keys.setdefault(tgt.value.id, set()).add(
+                    tgt.slice.value)
+        # tracked.update({...}) / tracked.update(dict(...)) — round-2
+        # review: the .update shape evaded the first cut.
+        elif (isinstance(node, ast.Call)
+              and isinstance(node.func, ast.Attribute)
+              and node.func.attr == "update"
+              and isinstance(node.func.value, ast.Name)
+              and node.args):
+            keys = _literal_keys(node.args[0])
+            if keys:
+                var_keys.setdefault(node.func.value.id, set()).update(keys)
+
     for node in ast.walk(tree):
-        if not (isinstance(node, ast.Call)
-                and isinstance(node.func, ast.Name)
-                and node.func.id in aliases):
+        if not isinstance(node, ast.Call):
             continue
-        writer = aliases[node.func.id]
-        dicts = [a for a in node.args if isinstance(a, ast.Dict)]
-        dicts += [kw.value for kw in node.keywords
-                  if isinstance(kw.value, ast.Dict)]
-        for d in dicts:
-            for key_node in d.keys:
-                if (isinstance(key_node, ast.Constant)
-                        and key_node.value in _TUPLE_KEYS):
-                    hits[f"{filename}::{writer}::{key_node.value}"] += 1
-        names = [a for a in node.args if isinstance(a, ast.Name)]
-        names += [kw.value for kw in node.keywords
-                  if isinstance(kw.value, ast.Name)]
-        for nm in names:
-            for key in sorted(var_keys.get(nm.id, ())):
-                if key in _TUPLE_KEYS:
-                    hits[f"{filename}::{writer}::{key}"] += 1
+        f = node.func
+        writer = None
+        if isinstance(f, ast.Name) and f.id in aliases:
+            writer = aliases[f.id]
+        elif (isinstance(f, ast.Attribute) and f.attr in _RAW_WRITERS
+              and isinstance(f.value, ast.Name)
+              and f.value.id in module_aliases):
+            writer = f.attr
+        if writer is None:
+            continue
+        seen_keys: set = set()
+        for a in list(node.args) + [kw.value for kw in node.keywords]:
+            seen_keys |= _literal_keys(a)
+            if isinstance(a, ast.Name):
+                seen_keys |= var_keys.get(a.id, set())
+        # **unpacked tracked dicts (keyword with arg=None) are already
+        # covered: their value is an ast.Name in node.keywords above.
+        for key in sorted(seen_keys):
+            if key in _TUPLE_KEYS:
+                hits[f"{filename}::{writer}::{key}"] += 1
     return hits
 
 
@@ -354,10 +427,45 @@ def test_bypass_scanner_detects_each_supported_shape():
             "stamp_run_metadata(fields)\n"),
         "bare locked_rmw on metadata.json": (
             "from file_lock import locked_rmw\n"
+            'x["stop_verdict"] = v\n'
             'locked_rmw(rd / "metadata.json", merge)\n'),
         "attribute locked_rmw": (
             "import file_lock\n"
+            'x["stop_verdict"] = v\n'
             'file_lock.locked_rmw(rd / "metadata.json", merge)\n'),
+        # Round-2 review shapes, each an executed-probe evasion of the
+        # first cut:
+        "module-attribute writer call": (
+            "import runs\n"
+            'runs.stamp_run_metadata({"stop_verdict": v})\n'),
+        "module-alias writer call": (
+            "import runs as r\n"
+            'r.write_metadata(rd, extra={"goal_achieved": False})\n'),
+        "dict constructor": (
+            "from runs import stamp_run_metadata\n"
+            "stamp_run_metadata(dict(stop_verdict=v))\n"),
+        "dict constructor via var": (
+            "from runs import write_metadata\n"
+            "extra = dict(goal_verdict_source='x')\n"
+            "write_metadata(rd, extra=extra)\n"),
+        "update with literal": (
+            "from runs import write_metadata\n"
+            "extra = {}\n"
+            'extra.update({"stop_evidence": e})\n'
+            "write_metadata(rd, extra=extra)\n"),
+        "kwargs unpack of tracked var": (
+            "from runs import stamp_run_metadata\n"
+            'fields = {"stop_verdict": v}\n'
+            "stamp_run_metadata(**fields)\n"),
+        "locked_rmw path bound to a var": (
+            "from file_lock import locked_rmw\n"
+            "def foo(rd):\n"
+            '    mp = rd / "metadata.json"\n'
+            "    def merge(old):\n"
+            '        existing = {}\n'
+            '        existing["stop_verdict"] = "x"\n'
+            "        return old\n"
+            "    locked_rmw(mp, merge)\n"),
     }
     for label, src in shapes.items():
         hits = _verdict_bypass_hits(ast.parse(src), "fixture.py")
@@ -366,10 +474,22 @@ def test_bypass_scanner_detects_each_supported_shape():
 
 def test_bypass_scanner_ignores_benign_writes():
     """Non-tuple keys through the raw writers stay legal — the census
-    polices the verdict/stop family, not metadata writes in general."""
+    polices the verdict/stop family, not metadata writes in general.
+    Same for locked_rmw merges that never touch tuple keys (the
+    stranded sweep's status/pause stamp, audit-repair bookkeeping)."""
     benign = (
         "from runs import stamp_run_metadata\n"
         'stamp_run_metadata({"audit_incomplete": True})\n'
         'fields = {"loop_ids": ids}\n'
         "stamp_run_metadata(fields)\n")
     assert not _verdict_bypass_hits(ast.parse(benign), "fixture.py")
+    benign_rmw = (
+        "from file_lock import locked_rmw\n"
+        "def sweep(meta_path):\n"
+        "    def _commit(old):\n"
+        "        cur = {}\n"
+        '        cur["status"] = "stranded"\n'
+        '        cur["pause_reason"] = "err:writer-died"\n'
+        "        return old\n"
+        '    locked_rmw(meta_path / "metadata.json", _commit)\n')
+    assert not _verdict_bypass_hits(ast.parse(benign_rmw), "fixture.py")

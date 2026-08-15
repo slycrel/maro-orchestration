@@ -706,7 +706,7 @@ def stamp_run_verdict(
     shape round 14 removed. Tuple members inside extra are a ValueError
     (2026-08-15 bypass burn-down).
     """
-    _guard_owner_extra(extra)
+    extra = _guard_owner_extra(extra)
     try:
         rd = current_run_dir()
         if rd is None:
@@ -747,6 +747,7 @@ def stamp_run_stop_verdict(
     pause_reason: str = "",
     run_dir: Optional[Path] = None,
     refine_note: bool = False,
+    evidence_out: Optional[list] = None,
 ) -> Optional[Path]:
     """Replace a run's stop-verdict tuple in one locked write.
 
@@ -772,6 +773,12 @@ def stamp_run_stop_verdict(
       clip — atomically, inside the lock (the close-refinement
       convention: a later, more specific verdict records what it
       refined instead of silently overwriting it).
+    - ``evidence_out``: a list the owner APPENDS the final written
+      stop_evidence to, captured INSIDE the lock (2026-08-15 round-2
+      review, probe-confirmed HIGH: the first cut made the refine-note
+      caller re-read the file after lock release for its ledger row — a
+      concurrent writer in that window silently substituted ITS content,
+      the exact drift class the owners exist to end).
     """
     try:
         rd = run_dir if run_dir is not None else current_run_dir()
@@ -792,6 +799,8 @@ def stamp_run_stop_verdict(
                 if _prior and _prior != stop_verdict:
                     evidence = f"{stop_evidence} [refines: {_prior}]"
             _apply_stop_tuple(existing, stop_verdict, evidence)
+            if evidence_out is not None:
+                evidence_out.append(existing.get("stop_evidence", ""))
             if pause_reason:
                 existing["pause_reason"] = str(pause_reason)
             index_run_dir(rd, existing)
@@ -868,7 +877,7 @@ def stamp_run_verdict_contested(
     it must not carry verdict/stop tuple members — those belong to the
     tuple owners (ValueError, fail loud).
     """
-    _guard_owner_extra(extra)
+    extra = _guard_owner_extra(extra)
     try:
         rd = current_run_dir()
         if rd is None:
@@ -902,18 +911,31 @@ _OWNER_EXTRA_FORBIDDEN = frozenset(_VERDICT_KEYS) | {
     "stop_verdict", "stop_evidence"}
 
 
-def _guard_owner_extra(extra: Optional[dict]) -> None:
+def _guard_owner_extra(extra: Optional[dict]) -> Optional[dict]:
     """``extra`` riders on the owners must not smuggle tuple members —
     that would recreate the exact partial-write drift the owners exist
-    to end. Fail loud: a ValueError at the call site beats a silently
-    inconsistent verdict record."""
+    to end. Returns a SANITIZED copy with forbidden keys stripped, after
+    a loud warning.
+
+    Deliberately warn-and-strip, not raise (round-2 review, Skeptic,
+    executed probe): every extra-carrying call site sits inside a
+    blanket ``except`` — a raise here is swallowed and the ENTIRE stamp
+    is lost, leaving the superseded verdict standing silently (the
+    round-16 failure class, reintroduced by the guard meant to prevent
+    drift). Dropping the smuggled key and landing the rest errs the
+    safe direction; the warning makes the coding bug visible.
+    """
     if not extra:
-        return
+        return extra
     bad = sorted(set(extra) & _OWNER_EXTRA_FORBIDDEN)
-    if bad:
-        raise ValueError(
-            f"owner extra must not carry verdict/stop tuple keys {bad} — "
-            "pass them through the owner's own parameters")
+    if not bad:
+        return extra
+    log.warning(
+        "runs: owner extra carried verdict/stop tuple keys %s — STRIPPED "
+        "(pass them through the owner's own parameters); the rest of the "
+        "stamp still lands", bad)
+    return {k: v for k, v in extra.items()
+            if k not in _OWNER_EXTRA_FORBIDDEN}
 
 
 def stamp_delivered_now_retry(

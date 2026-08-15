@@ -657,20 +657,51 @@ class TestBypassBurndownBehaviors:
         assert meta["closure_confidence"] == 0.92
         assert meta["goal_achieved"] is False
 
-    def test_owner_extra_rejects_tuple_keys(self, tmp_path, monkeypatch):
+    def test_owner_extra_strips_tuple_keys_and_still_lands(
+            self, tmp_path, monkeypatch, caplog):
         # Smuggling a tuple member through extra recreates the exact
-        # partial-write drift the owners end — fail loud at the call.
-        import pytest as _pytest
+        # partial-write drift the owners end. Round-2 review (Skeptic,
+        # executed probe): a raise here is swallowed by every call
+        # site's blanket except, losing the ENTIRE stamp — the round-16
+        # failure class. So the guard warns loudly, strips the smuggled
+        # key, and lands the rest.
+        import logging
         runs, rd = self._pin(tmp_path, monkeypatch, {})
-        with _pytest.raises(ValueError):
+        with caplog.at_level(logging.WARNING):
             runs.stamp_run_verdict_contested(
                 contested_by="closure",
-                extra={"goal_achieved": True})
-        with _pytest.raises(ValueError):
+                extra={"goal_achieved": True, "closure_confidence": 0.9})
+        meta = json.loads((rd / "metadata.json").read_text())
+        assert meta["goal_verdict_contested"] is True     # stamp landed
+        assert meta["closure_confidence"] == 0.9          # benign extra kept
+        assert "goal_achieved" not in meta                # smuggle stripped
+        assert any("STRIPPED" in r.getMessage() for r in caplog.records)
+        caplog.clear()
+        with caplog.at_level(logging.WARNING):
             runs.stamp_run_verdict(
                 goal_achieved=True, source="s", confidence=0.5,
                 summary="x", gaps=None,
                 extra={"stop_verdict": "smuggled"})
+        meta = json.loads((rd / "metadata.json").read_text())
+        assert meta["goal_achieved"] is True              # tuple landed
+        assert "stop_verdict" not in meta                 # smuggle stripped
+        assert any("STRIPPED" in r.getMessage() for r in caplog.records)
+
+    def test_stop_owner_evidence_out_captures_in_lock(
+            self, tmp_path, monkeypatch):
+        # Round-2 review (Minimalist, probe-confirmed HIGH): the first
+        # cut made director re-read the file AFTER lock release for its
+        # ledger row — a concurrent writer in that window substituted
+        # its content. evidence_out captures the written value inside
+        # the merge, so the caller never re-reads.
+        runs, rd = self._pin(tmp_path, monkeypatch, {
+            "stop_verdict": "external-interrupt", "stop_evidence": "old"})
+        out: list = []
+        runs.stamp_run_stop_verdict(
+            stop_verdict="reachable-but-not-worth-it",
+            stop_evidence="closed", run_dir=rd, refine_note=True,
+            evidence_out=out)
+        assert out == ["closed [refines: external-interrupt]"]
 
     def test_verdict_owner_extra_rides_the_same_write(
             self, tmp_path, monkeypatch):
