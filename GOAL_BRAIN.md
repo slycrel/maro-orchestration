@@ -7782,3 +7782,25 @@ under the same two-measurement standard).
   judge partition key; +2 pins (42 total). Snapshot isolation filed as
   the real fix, evidence-gated. The lane's first output was a finding
   about the lane itself — the live black-box test doing its job.
+- **2026-08-14** — **Fireworks direct account live (Jeremy bought prepaid
+  credits; ChatGPT/codex capped until ~08-19) + Hermes fallback lanes
+  wired.** Jeremy: "add this to the maro box's token backup and give this
+  key to the hermes install to use for both hermes installs, to keep chat
+  alive when codex is unavailable." FIREWORKS_API_KEY appended to
+  `~/.maro/workspace/secrets/.env` (9 keys) and credentials-backup
+  re-synced (the backup had drifted — it was missing XAI_API_KEY). Owner
+  Poe (mini2): key in `~/.hermes/.env`, `fallback_model: fireworks /
+  kimi-k2p6` in config.yaml — the gateway and interactive CLI walk the
+  chain on codex 429 (verified against the live exhaustion); a bare
+  `hermes -z` does NOT (upstream init-time gap, recorded in
+  AGENTIC_POE.md §9; no automation depends on it). Guest Agentic Poe
+  (thinkcentre container): stays zero-credential — new
+  `ai.hermes.fireworksproxy` on mini2 :8648 (key-injecting hermes-proxy
+  adapter, patch `proxy_fireworks_adapter.py` on the §8 reapply list),
+  second tunnel port (tunnel key `permitopen` extended to 8646+8648),
+  guest `fallback_model` → deepseek-v4-flash-0731 with a placeholder
+  api_key; live-verified end-to-end (guest turns answered while codex
+  exhausted). Recovery is automatic — new sessions re-resolve codex after
+  the reset. MODEL_ROUTE_EXPLORATION's "skip a direct Fireworks account"
+  is superseded by this purchase for the Hermes chat lane; maro's own
+  routing stays OpenRouter-first (unchanged).
