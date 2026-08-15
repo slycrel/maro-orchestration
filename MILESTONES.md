@@ -26,10 +26,22 @@ first-class milestones).
    until the 14h revisit mechanic exists, and the evidence prose
    already names the specific cap at every stamp site. Deferred, not
    dropped: revisit WITH the revisit mechanic.)
-3. **Chunk 3 (candidate) — §9.5 mid-meander re-anchor experiment**:
-   needs a milestone-boundary hook first (census: none exists — the
-   only boundary-ish seam is pre-execution milestone expansion,
-   loop_execute.py:663). Scope the boundary concept before building.
+3. **Chunk 3 — §9.5 mid-meander re-anchor experiment: SHIPPED
+   2026-08-15**, in two halves. (a) Enabler: the milestone boundary
+   didn't exist at runtime because pre-flight's reviewer was silently
+   dead — stale openrouter key built an adapter, failed every call,
+   scope="unknown" 100% since June, 488/488 calibration entries with
+   zero flags ever. Resurrected (d56470e): call-time candidate chain,
+   hosted-free (Groq/Gemini) first, heuristic scope on total failure.
+   (b) The check: `src/reanchor.py` behind `reanchor.enabled`
+   (OFF-default, ON this box) — at each milestone boundary, closure's
+   goal-level question against the committed interpretation
+   (resolved_intent.md artifact, goal text fallback); drift note joins
+   the milestone expansion's ancestry_context; every verdict →
+   build/reanchor.jsonl + REANCHOR_CHECKED event; map lens renders ⚓
+   anchors (text/json all verdicts, mermaid drift-only). No stop/replan
+   wiring yet — detection must earn correctives with data. Adjudicate
+   the record once boundaries have actually fired in live runs.
 4. **Later, with appetite**: §9.9 backward-chaining generator; 14h
    revisit mechanic (tool-acquisition reopens standing dead ends —
    takes the deferred §13b structured reopen payloads with it).

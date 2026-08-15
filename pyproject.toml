@@ -230,6 +230,7 @@ py-modules = [
     "provenance",
     "quality_gate",
     "read_query",
+    "reanchor",
     "recall",
     "repo_scan",
     "rerun_identity",

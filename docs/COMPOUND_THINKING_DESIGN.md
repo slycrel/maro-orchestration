@@ -1109,3 +1109,45 @@ what does that look like."
   summary suggested.)
 - **14g build threads (honesty contract, immersion/LOD): "that can be
   not yet."**
+
+### 14i. Build entries, treasure-map arc (fable, 2026-08-15, Jeremy AFK)
+
+**§9.1 map lens SHIPPED (chunks 1–2).** `src/map_lens.py` — the binding
+caveat ("any given run must be visualizable as a map on demand")
+implemented as a pure reader over existing run artifacts, per the decreed
+lens-not-schema call and the §12 nudge-4 discipline (no store, no new
+artifact; the `json` renderer is the subtraction instrument). Tri-state
+fog, recon glyphs with the decision they inform, `[after:N]` vs
+sequential edges, loop lineage, closure stalls, stop verdict + reopen
+condition (§13b prose promoted to `stop_verdicts.REOPEN_CONDITIONS`).
+Chunk 2 embedded it as a Map panel on every loop-report and NOW page
+(first renderer of stop verdicts anywhere; 759 historical reports
+backfilled). Reviews r1–r3 to fixpoint, sonnet-medium lane, 19/20
+findings real.
+
+**§9.5 mid-meander re-anchor SHIPPED as the experiment §14 item 3
+specified** (cadence, not mechanism — the run must first be able to
+fire it):
+
+- **Enabler, found by census:** the milestone boundary did not exist at
+  runtime. Pre-flight's reviewer had been silently dead for months — a
+  stale openrouter key BUILT an adapter, failed every call, and the
+  except path returned scope="unknown": 488/488 calibration entries
+  with zero flags, zero milestone candidates ever. Fixed 2026-08-15
+  (d56470e): reviewer candidates try at call time in cost order
+  (hosted-free Groq/Gemini first — the validation-ladder call class —
+  then paid API), heuristic scope on total failure. First live review
+  after the fix: scope=wide, milestone flagged, assumptions + unknowns.
+- **The check** (`src/reanchor.py`, `reanchor.enabled` OFF-default):
+  at each milestone boundary, before the expansion draws the sub-plan,
+  one cheap call asks closure's goal-level question against the
+  committed interpretation (read from the run's `resolved_intent.md`
+  artifact; goal text when absent). On drift the anchor note joins the
+  expansion's `ancestry_context` — the sub-plan about to be drawn is
+  re-anchored, nothing stops or replans (heavier correctives must earn
+  wiring with data). Every verdict → `build/reanchor.jsonl` +
+  `REANCHOR_CHECKED` event; the map lens renders them (⚓ in text/json,
+  drift-only nodes in mermaid). The experiment's falsifier per item 3:
+  if these records catch real drift, coherence never needed to be its
+  own signal; if N boundaries pass with zero drift caught while
+  closure still fails runs for drift, the cadence hypothesis is wrong.

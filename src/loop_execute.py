@@ -675,6 +675,29 @@ def _execute_main_loop(
                 and _would_be_step_idx not in _milestone_expanded
                 and _lx_step_flavor(step_text)[0] != "recon"):
             _milestone_expanded.add(_would_be_step_idx)
+            # §9.5 mid-meander re-anchor (COMPOUND_THINKING_DESIGN): at the
+            # boundary — before budget is committed to this sub-project — ask
+            # closure's goal-level coherence question against the committed
+            # interpretation. On drift the anchor note joins the expansion's
+            # ancestry context below; the check never blocks and records
+            # every verdict to build/reanchor.jsonl for later adjudication.
+            _ra_note = ""
+            try:
+                from config import get as _ra_cfg_get
+                if bool(_ra_cfg_get("reanchor.enabled", False)) and not dry_run:
+                    from reanchor import run_milestone_reanchor as _ra_run
+                    _ra_note = _ra_run(
+                        goal=goal,
+                        milestone_step=step_text,
+                        step_outcomes=step_outcomes,
+                        remaining_steps=list(remaining_steps),
+                        adapter=adapter,
+                        loop_id=loop_id,
+                        step_idx=_would_be_step_idx,
+                    )
+            except Exception as _ra_exc:
+                log.debug("reanchor: check failed (non-blocking): %s", _ra_exc)
+                _ra_note = ""
             try:
                 from planner import decompose as _ms_decompose
                 # Step-ceiling carry (same bug class as the boundary carry
@@ -692,6 +715,10 @@ def _execute_main_loop(
                     _ms_ancestry = (
                         f"{_ms_ceil_dir.format(n=_ms_ceiling)}\n"
                         f"Original goal (source of the step ceiling): {goal}")
+                if _ra_note:
+                    _ms_ancestry = (
+                        (_ms_ancestry + "\n\n" if _ms_ancestry else "")
+                        + f"Re-anchor (drift caught at this boundary): {_ra_note}")
                 _ms_sub = _ms_decompose(step_text, adapter,
                                         max_steps=_ms_max_steps,
                                         ancestry_context=_ms_ancestry,

@@ -7,8 +7,8 @@ adjudication ("gut says that's lens, not schema") with one binding caveat:
 that caveat implemented.
 
 It reads only what runs already write — metadata.json,
-build/loop-*-log.json, build/closure_verdicts.jsonl, run_card.json — and
-reconstructs the map: landmarks (steps) with tri-state fog (§2a), edges
+build/loop-*-log.json, build/closure_verdicts.jsonl, build/reanchor.jsonl,
+run_card.json — and reconstructs the map: landmarks (steps) with tri-state fog (§2a), edges
 (explicit [after:N] dependencies vs sequential default), recon moves with
 the decision they informed (§4), loop lineage as vantage moves (§13a),
 closure stalls (§9.3, identical consecutive fingerprints), and the stop
@@ -102,6 +102,9 @@ class RunMap:
     loops: List[Dict[str, Any]] = field(default_factory=list)
     closure: List[Dict[str, Any]] = field(default_factory=list)
     stall: bool = False     # two consecutive closure verdicts, same fingerprint
+    anchors: List[Dict[str, Any]] = field(default_factory=list)  # §9.5
+    # re-anchor checks (build/reanchor.jsonl): every milestone-boundary
+    # coherence verdict the runtime recorded, on course or not.
     notes: List[str] = field(default_factory=list)  # honest-missing markers
 
 
@@ -379,6 +382,20 @@ def build_map(run_dir: Path) -> RunMap:
             m.stall = True
         prev_fp = fp or None
 
+    # §9.5 re-anchor checks (2026-08-15): milestone-boundary coherence
+    # verdicts. Kept as a separate layer rather than step nodes — an anchor
+    # annotates the boundary BEFORE a step, it isn't a landmark itself.
+    for row in _read_jsonl(run_dir / "build" / "reanchor.jsonl",
+                           notes, "re-anchor checks"):
+        m.anchors.append({
+            "loop_id": str(row.get("loop_id") or ""),
+            "step_idx": row.get("step_idx"),
+            "on_course": bool(row.get("on_course", True)),
+            "drift_summary": str(row.get("drift_summary") or ""),
+            "anchor_source": str(row.get("anchor_source") or ""),
+            "error": str(row.get("error") or ""),
+        })
+
     return m
 
 
@@ -405,6 +422,16 @@ def render_text(m: RunMap) -> str:
         if e.kind == "after":
             explicit_deps.setdefault(e.dst, []).append(e.src)
 
+    # §9.5 anchors keyed by (loop stem, 1-based step index) — rendered on
+    # the line BEFORE the step whose boundary they checked. Anything that
+    # matches no rendered step falls to an "unplaced" section below so a
+    # verdict is never silently dropped.
+    anchors_by_key: Dict[Any, List[dict]] = {}
+    for a in m.anchors:
+        key = (str(a.get("loop_id") or "")[:8], a.get("step_idx"))
+        anchors_by_key.setdefault(key, []).append(a)
+    placed: set = set()
+
     current_loop = None
     loop_reasons = {lp["loop_id"][:8]: lp["loop_reason"] for lp in m.loops
                     if lp.get("loop_id")}
@@ -414,6 +441,9 @@ def render_text(m: RunMap) -> str:
             reason = loop_reasons.get(current_loop, "")
             suffix = f"  ({reason})" if reason else ""
             out.append(f"-- loop {current_loop}{suffix}")
+        for a in anchors_by_key.get((n.loop_id, n.index), []):
+            out.append(f"  {_anchor_line(a)}")
+            placed.add(id(a))
         glyph = _GLYPH.get(n.state, "?")
         mark = f"  ⌕ recon→ {n.recon_decision}" if n.flavor == "recon" else ""
         deps = explicit_deps.get(n.id)
@@ -423,6 +453,11 @@ def render_text(m: RunMap) -> str:
             dep_str = f"  [after {nums}]"
         out.append(f"  {glyph} {n.index}. {n.label}{dep_str}{mark}")
 
+    unplaced = [a for a in m.anchors if id(a) not in placed]
+    if unplaced:
+        out.append("re-anchor checks (no matching step rendered):")
+        out.extend(f"  {_anchor_line(a)}" for a in unplaced)
+
     if m.closure:
         out.append(f"closure attempts: {len(m.closure)}"
                    + ("  ⚠ STALL (repeated fingerprint)" if m.stall else ""))
@@ -431,8 +466,22 @@ def render_text(m: RunMap) -> str:
         out.extend(f"  - {note}" for note in m.notes)
     legend = (f"  {_GLYPH[STATE_LIVE]} live  {_GLYPH[STATE_GREY]} grey "
               f"(blocked/skipped)  {_GLYPH[STATE_FOG]} fog")
+    if m.anchors:
+        legend += "  ⚓ re-anchor"
     out.append(legend)
     return "\n".join(out)
+
+
+def _anchor_line(a: dict) -> str:
+    """One text line for a §9.5 re-anchor verdict."""
+    src = f" [{a['anchor_source']}]" if a.get("anchor_source") else ""
+    if a.get("on_course", True):
+        line = f"⚓ re-anchor{src}: on course"
+    else:
+        line = f"⚓ re-anchor{src}: DRIFT — {_clip(a.get('drift_summary') or '')}"
+    if a.get("error"):
+        line += f"  (check error: {_clip(a['error'], 80)})"
+    return line
 
 
 _MERMAID_UNSAFE = re.compile(r'["\[\]{}<>()#;`|]')
@@ -464,6 +513,15 @@ def render_mermaid(m: RunMap) -> str:
     if m.stop and any(n.kind == "step" for n in m.nodes):
         last_step = [n for n in m.nodes if n.kind == "step"][-1]
         lines.append(f'    {last_step.id.replace(":", "_")} -.-> stop')
+    # §9.5 drift anchors only — an on-course check is noise in a topology
+    # view (text/json carry every verdict).
+    node_ids = {n.id for n in m.nodes}
+    for i, a in enumerate(x for x in m.anchors if not x.get("on_course", True)):
+        label = _mermaid_label(a.get("drift_summary") or "drift caught")
+        lines.append(f'    anchor_{i}(["⚓ DRIFT: {label}"])')
+        tgt = f"{str(a.get('loop_id') or '')[:8]}:{a.get('step_idx')}"
+        if tgt in node_ids:
+            lines.append(f'    anchor_{i} --> {tgt.replace(":", "_")}')
     lines.append("    classDef grey fill:#999,color:#fff")
     lines.append("    classDef fog fill:#eee,stroke-dasharray: 5 5")
     grey = [n.id.replace(":", "_") for n in m.nodes

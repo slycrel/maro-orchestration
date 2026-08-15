@@ -508,3 +508,104 @@ class TestReviewRound2Pins:
         m = build_map(run_dir)
         seq = [(e.src, e.dst) for e in m.edges if e.kind == "seq"]
         assert (f"{stem}:1", f"{stem}:3") in seq  # bridged, not floating
+
+
+# ---------------------------------------------------------------------------
+# §9.5 re-anchor layer (build/reanchor.jsonl)
+# ---------------------------------------------------------------------------
+
+def _write_anchors(run_dir, rows):
+    lines = [json.dumps(r) for r in rows]
+    (run_dir / "build" / "reanchor.jsonl").write_text(
+        "\n".join(lines) + "\n", encoding="utf-8")
+
+
+class TestAnchors:
+    def test_anchors_read_into_map(self, tmp_path):
+        rd = _write_run(tmp_path, steps=_STEPS)
+        _write_anchors(rd, [
+            {"loop_id": "aaaa1111beef", "step_idx": 3, "on_course": True,
+             "anchor_source": "interpretation"},
+        ])
+        m = build_map(rd)
+        assert len(m.anchors) == 1
+        assert m.anchors[0]["on_course"] is True
+        assert m.anchors[0]["anchor_source"] == "interpretation"
+
+    def test_text_places_anchor_before_its_step(self, tmp_path):
+        rd = _write_run(tmp_path, steps=_STEPS)
+        _write_anchors(rd, [
+            {"loop_id": "aaaa1111beef", "step_idx": 3, "on_course": False,
+             "drift_summary": "chasing a tangent", "anchor_source": "goal"},
+        ])
+        text = render_text(build_map(rd))
+        anchor_pos = text.index("⚓ re-anchor")
+        step3_pos = text.index("3. Grep captures")
+        step2_pos = text.index("2. Read the listing")
+        assert step2_pos < anchor_pos < step3_pos
+        assert "DRIFT — chasing a tangent" in text
+        assert "⚓ re-anchor" in text.split("\n")[-1]  # legend gains the glyph
+
+    def test_text_on_course_line(self, tmp_path):
+        rd = _write_run(tmp_path, steps=_STEPS)
+        _write_anchors(rd, [
+            {"loop_id": "aaaa1111beef", "step_idx": 1, "on_course": True,
+             "anchor_source": "interpretation"},
+        ])
+        text = render_text(build_map(rd))
+        assert "⚓ re-anchor [interpretation]: on course" in text
+
+    def test_unmatched_anchor_never_silently_dropped(self, tmp_path):
+        """An anchor whose step was never rendered (e.g. the loop log is
+        missing) still appears — in the unplaced section."""
+        rd = _write_run(tmp_path, steps=_STEPS)
+        _write_anchors(rd, [
+            {"loop_id": "ffff9999dead", "step_idx": 42, "on_course": False,
+             "drift_summary": "orphaned verdict"},
+        ])
+        text = render_text(build_map(rd))
+        assert "no matching step rendered" in text
+        assert "orphaned verdict" in text
+
+    def test_check_error_surfaces_in_text(self, tmp_path):
+        rd = _write_run(tmp_path, steps=_STEPS)
+        _write_anchors(rd, [
+            {"loop_id": "aaaa1111beef", "step_idx": 1, "on_course": True,
+             "error": "RuntimeError: dead key"},
+        ])
+        text = render_text(build_map(rd))
+        assert "check error" in text
+        assert "dead key" in text
+
+    def test_mermaid_renders_drift_only(self, tmp_path):
+        rd = _write_run(tmp_path, steps=_STEPS)
+        _write_anchors(rd, [
+            {"loop_id": "aaaa1111beef", "step_idx": 1, "on_course": True},
+            {"loop_id": "aaaa1111beef", "step_idx": 3, "on_course": False,
+             "drift_summary": "went sideways"},
+        ])
+        mm = render_mermaid(build_map(rd))
+        assert mm.count("⚓ DRIFT") == 1
+        assert "went sideways" in mm
+        # The drift anchor links to its step node.
+        assert "anchor_0 --> aaaa1111_3" in mm
+
+    def test_json_carries_anchors(self, tmp_path):
+        rd = _write_run(tmp_path, steps=_STEPS)
+        _write_anchors(rd, [
+            {"loop_id": "aaaa1111beef", "step_idx": 2, "on_course": False,
+             "drift_summary": "d", "anchor_note": "n"},
+        ])
+        data = json.loads(render_json(build_map(rd)))
+        assert len(data["anchors"]) == 1
+        assert data["anchors"][0]["on_course"] is False
+
+    def test_no_anchor_file_no_layer_no_note(self, tmp_path):
+        """Absent reanchor.jsonl is the common case, not a gap — no anchors,
+        no legend glyph, and no missing-file note."""
+        rd = _write_run(tmp_path, steps=_STEPS)
+        m = build_map(rd)
+        assert m.anchors == []
+        text = render_text(m)
+        assert "⚓" not in text
+        assert not any("reanchor" in n for n in m.notes)

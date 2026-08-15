@@ -6313,3 +6313,64 @@ def test_inspector_cadence_exception_is_nonfatal(monkeypatch, tmp_path):
     monkeypatch.setattr(inspector_mod, "run_inspector", boom)
     # must not raise — failures are logged, never fatal to finalization
     _finalize_for_cadence(dry_run=False)
+
+
+# ---------------------------------------------------------------------------
+# §9.5 milestone-boundary re-anchor wiring (reanchor.enabled)
+# ---------------------------------------------------------------------------
+
+def test_milestone_reanchor_fires_and_drift_note_joins_ancestry(monkeypatch, tmp_path):
+    """With reanchor.enabled, the coherence check runs at the milestone
+    boundary BEFORE the expansion, and a drift anchor note rides the
+    expansion's ancestry_context into the sub-plan."""
+    _setup_workspace(monkeypatch, tmp_path)
+    (tmp_path / "config.yml").write_text("reanchor:\n  enabled: true\n")
+    from unittest.mock import MagicMock, patch
+
+    fake_pf = MagicMock()
+    fake_pf.milestone_step_indices = [1]
+    fake_pf.scope = "wide"
+    fake_pf.flags = []
+
+    with patch("pre_flight.review_plan", return_value=fake_pf), \
+         patch("reanchor.run_milestone_reanchor",
+               return_value="GO BACK TO THE ASK") as mock_ra, \
+         patch("planner.decompose",
+               return_value=["sub-step A", "sub-step B"]) as mock_decompose:
+        run_agent_loop(
+            "do a complex analysis",
+            adapter=_DryRunAdapter(),
+            dry_run=False,
+            max_iterations=10,
+        )
+
+    assert mock_ra.called
+    assert mock_ra.call_args.kwargs["step_idx"] == 1
+    carried = [c for c in mock_decompose.call_args_list
+               if "Re-anchor (drift caught at this boundary): GO BACK TO THE ASK"
+               in c.kwargs.get("ancestry_context", "")]
+    assert carried, "drift anchor note never reached the expansion ancestry"
+
+
+def test_milestone_reanchor_off_by_default(monkeypatch, tmp_path):
+    """No reanchor config → the check never runs (no silent LLM spend —
+    same posture as scope_generation)."""
+    _setup_workspace(monkeypatch, tmp_path)
+    from unittest.mock import MagicMock, patch
+
+    fake_pf = MagicMock()
+    fake_pf.milestone_step_indices = [1]
+    fake_pf.scope = "wide"
+    fake_pf.flags = []
+
+    with patch("pre_flight.review_plan", return_value=fake_pf), \
+         patch("reanchor.run_milestone_reanchor") as mock_ra, \
+         patch("planner.decompose", return_value=["sub A", "sub B"]):
+        run_agent_loop(
+            "do a complex analysis",
+            adapter=_DryRunAdapter(),
+            dry_run=False,
+            max_iterations=10,
+        )
+
+    assert not mock_ra.called

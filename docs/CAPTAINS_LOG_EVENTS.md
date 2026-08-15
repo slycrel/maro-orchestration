@@ -180,6 +180,7 @@ Written by `captains_log.log_event(...)`. Every entry has the four required fiel
 | `CLAIM_VERIFIER_OUTCOME` | agent_loop.py:1211 | step_idx, outcome, action, file_not_found, file_verified_count, symbol_not_found, symbol_verified_count | Per-step: file/symbol claims in a step result were verified and a downstream action taken. |
 | `CUTS_DRAWN` | planner.py:853 | goal_preview, constraints, probes, bounded, remainder | Qix-cuts pre-planning drew constraints-with-basis + probes before decompose. |
 | `BOUNDARY_EXPANDED` | loop_execute.py:455 | loop_id, remainder, sub_steps | A boundary step expanded into concrete sub-steps, with probe findings in its context. |
+| `REANCHOR_CHECKED` | reanchor.py | loop_id, step_idx, on_course, anchor_source | §9.5 mid-meander re-anchor: a milestone-boundary coherence check ran against the committed interpretation (or goal text), on course or drift. Full verdict in the run's build/reanchor.jsonl. |
 | `STEP_CEILING_ENFORCED` | planner.py:702 | goal_preview, ceiling, returned_steps, lane, dropped_steps | A goal-stated step-count ceiling was held by hard truncation after one corrective re-ask. |
 
 ### Run transparency (loop lifecycle + quality gate)
