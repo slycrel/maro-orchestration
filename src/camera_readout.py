@@ -17,9 +17,24 @@ reads each run's camera frames (camera_log.log_fork_frame), and reports:
      being quoted; treat this as an upper bound on waste, per-axis prior
      from the panel was 60-80% never-cited.
 
+  6. Portability census (--portability, §14a slice 1) — per-LESSON view
+     of the same join: every camera-cited lesson's citations split
+     home/foreign (run project vs the slug of the lesson's own
+     source_goal), verdicted foreign citations folded into a Beta
+     posterior mean (s+1)/(s+f+2). INSTRUMENT ONLY — selection behavior
+     is untouched; this is the evidence base the §14a
+     stamp-categorical/globality-probabilistic direction (decision
+     e2b83703) builds on IF the estimate discriminates. Pre-registered
+     gate: if at ~30 foreign verdicted citations the per-lesson spread
+     is indistinguishable from the 0.5 prior, the estimate is not
+     discriminating and the ranker-consumption slice does NOT build.
+     Unresolved lesson ids, unjudged runs, and metadata-less runs are
+     counted in the output, never silently dropped.
+
 Read-only. Usage:
 
     PYTHONPATH=src python3 -m camera_readout [--runs-root PATH] [--limit N]
+    PYTHONPATH=src python3 -m camera_readout --portability
 """
 from __future__ import annotations
 
@@ -30,6 +45,8 @@ import sys
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+from context_budget import clip as _clip
 
 _STOP = frozenset({
     "a", "an", "the", "and", "or", "but", "in", "on", "at", "to", "for",
@@ -100,12 +117,166 @@ def _fmt_pct(num: int, den: int) -> str:
     return f"{num}/{den} ({100.0 * num / den:.0f}%)" if den else "0/0 (—)"
 
 
+def _lesson_origins() -> Dict[str, Dict[str, str]]:
+    """lesson_id -> {source_goal, task_type, preview} from the tiered
+    stores (MEDIUM + LONG) plus the archive — no decay filtering, and
+    archived lessons resolve too: a lesson cited while live and archived
+    since still has its citations as evidence (live census: 23/79 cited
+    ids had been archived by read time)."""
+    out: Dict[str, Dict[str, str]] = {}
+    try:
+        from knowledge_web import load_tiered_lessons
+        for tier in ("medium", "long"):
+            for tl in load_tiered_lessons(tier, limit=None, min_score=0.0):
+                lid = getattr(tl, "lesson_id", "") or ""
+                if lid and lid not in out:
+                    out[lid] = {
+                        "source_goal": getattr(tl, "source_goal", "") or "",
+                        "task_type": getattr(tl, "task_type", "") or "",
+                        "preview": _clip(getattr(tl, "lesson", "") or "",
+                                         60),
+                    }
+    except Exception as exc:
+        print(f"  WARNING: lesson store read failed ({exc}) — all ids "
+              f"will report unresolved")
+    try:
+        from knowledge_web import _lessons_archive_path
+        with _lessons_archive_path().open(encoding="utf-8") as fh:
+            for line in fh:
+                try:
+                    row = json.loads(line)
+                except Exception:
+                    continue
+                lid = str(row.get("lesson_id") or "")
+                if lid and lid not in out:
+                    out[lid] = {
+                        "source_goal": str(row.get("source_goal") or ""),
+                        "task_type": str(row.get("task_type") or ""),
+                        "preview": _clip(str(row.get("lesson") or ""), 60),
+                    }
+    except FileNotFoundError:
+        pass
+    except Exception as exc:
+        print(f"  WARNING: lesson archive read failed ({exc}) — archived "
+              f"ids will report unresolved")
+    return out
+
+
+def _beta_mean(successes: int, failures: int) -> float:
+    return (successes + 1) / (successes + failures + 2)
+
+
+def portability_census(per_run: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Per-lesson citation×verdict aggregation (§14a slice 1). Pure read.
+
+    Home/foreign uses the same goal→slug derivation the run side uses
+    (loop_artifacts.resolve_project_slug on the lesson's source_goal vs
+    the run's recorded project) — time-dependent project matching means
+    a historical mismatch is possible; exact goal-text equality is also
+    honored as home to soften that edge.
+    """
+    origins = _lesson_origins()
+    try:
+        from loop_artifacts import resolve_project_slug
+    except Exception:
+        resolve_project_slug = None  # type: ignore[assignment]
+
+    lessons: defaultdict = defaultdict(lambda: {
+        "cites": 0, "runs": set(), "home": 0, "foreign": 0,
+        "foreign_s": 0, "foreign_f": 0, "unjudged": 0})
+    unresolved: Counter = Counter()
+    runs_no_meta = 0
+    for r in per_run:
+        meta = None
+        try:
+            meta = json.loads((r["dir"] / "metadata.json").read_text(
+                encoding="utf-8"))
+        except Exception:
+            runs_no_meta += 1
+        project = str((meta or {}).get("project") or "")
+        goal = str((meta or {}).get("prompt") or "")
+        achieved = (meta or {}).get("goal_achieved")
+        run_key = r["dir"].name
+        for f in r["frames"]:
+            for lid in (f.get("chosen") or {}).get("lesson_ids") or []:
+                origin = origins.get(lid)
+                if origin is None:
+                    unresolved[lid] += 1
+                    continue
+                rec = lessons[lid]
+                rec["cites"] += 1
+                rec["runs"].add(run_key)
+                src_goal = origin["source_goal"]
+                home = bool(src_goal) and (
+                    src_goal == goal
+                    or (resolve_project_slug is not None and project
+                        and resolve_project_slug(src_goal) == project))
+                if home:
+                    rec["home"] += 1
+                    continue
+                rec["foreign"] += 1
+                if achieved is True:
+                    rec["foreign_s"] += 1
+                elif achieved is False:
+                    rec["foreign_f"] += 1
+                else:
+                    rec["unjudged"] += 1
+    rows = []
+    for lid, rec in lessons.items():
+        s, fl = rec["foreign_s"], rec["foreign_f"]
+        rows.append({
+            "lesson_id": lid,
+            "preview": origins[lid]["preview"],
+            "cites": rec["cites"],
+            "runs": len(rec["runs"]),
+            "home": rec["home"],
+            "foreign": rec["foreign"],
+            "foreign_s": s,
+            "foreign_f": fl,
+            "foreign_unjudged": rec["unjudged"],
+            "portability": _beta_mean(s, fl) if (s + fl) else None,
+        })
+    rows.sort(key=lambda r: (-(r["foreign_s"] + r["foreign_f"]),
+                             -r["cites"]))
+    return {"rows": rows, "unresolved": unresolved,
+            "runs_no_meta": runs_no_meta}
+
+
+def _print_portability(per_run: List[Dict[str, Any]]) -> None:
+    print("\n== Portability census (§14a slice 1 — per-lesson "
+          "citation × verdict) ==")
+    c = portability_census(per_run)
+    rows = c["rows"]
+    if not rows:
+        print("  no resolvable cited lessons in the scanned runs")
+    total_fv = sum(r["foreign_s"] + r["foreign_f"] for r in rows)
+    for r in rows:
+        port = ("insufficient" if r["portability"] is None
+                else f"{r['portability']:.2f}")
+        print(f"  {r['lesson_id']:10s} cites={r['cites']:3d} "
+              f"runs={r['runs']:3d} home={r['home']:3d} "
+              f"foreign={r['foreign']:3d} "
+              f"judged(s/f)={r['foreign_s']}/{r['foreign_f']} "
+              f"portability={port:12s} {r['preview']}")
+    print(f"  -- foreign verdicted citations total: {total_fv} "
+          f"(pre-registered gate reads at ~30)")
+    if c["unresolved"]:
+        print(f"  -- unresolved lesson ids: {len(c['unresolved'])} "
+              f"({sum(c['unresolved'].values())} citations) — counted, "
+              f"not hidden")
+    if c["runs_no_meta"]:
+        print(f"  -- runs with frames but unreadable metadata.json: "
+              f"{c['runs_no_meta']} (their citations count as unjudged)")
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--runs-root", type=Path, default=None,
                     help="runs/ directory (default: workspace runs root)")
     ap.add_argument("--limit", type=int, default=None,
                     help="only the N most recently modified run dirs")
+    ap.add_argument("--portability", action="store_true",
+                    help="per-lesson citation×verdict census (§14a slice 1)")
     args = ap.parse_args(argv)
 
     root = args.runs_root
@@ -147,6 +318,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     if not per_run:
         print("no camera frames yet — the writer ships with this readout; "
               "frames appear as instrumented runs execute.")
+        return 0
+    if args.portability:
+        _print_portability(per_run)
         return 0
     with_card = [r for r in per_run if r["card"]]
     print(f"runs with frames + run_card: {len(with_card)} "
