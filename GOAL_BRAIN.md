@@ -7980,3 +7980,13 @@ under the same two-measurement standard).
   navigator_right (cumulative 91/12; lesson-inject A/B 56% vs 41%
   agreement); coverage re-measured 80.18% → floor ratcheted 70→75
   (72752a1); test-cov.sh -n-auto footgun got throttle knobs (ff48e9f).
+- **2026-08-15 (PM, correction on Jeremy's verify-ask).** The "§10 +
+  §9.7 owed discussion" line this lane carried in MILESTONES/journal
+  entries above was STALE: that discussion happened 2026-07-30 and is
+  fully recorded (COMPOUND_THINKING §14 + raw transcript in
+  docs/conversations/). Open remnants only: §14a scope contest
+  (deferred, Jeremy re-examines when fresher; prior = probabilistic
+  scope) and §14g build threads ("can be not yet"). MILESTONES item 6
+  corrected. Nothing the treasure-map builds surfaced constitutes a
+  new §10 edge — §9.9/revisit are structure/surface work, not
+  taste/calibration.

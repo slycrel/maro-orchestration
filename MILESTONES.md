@@ -66,8 +66,16 @@ first-class milestones).
    escalation close (depth+confidence). Live-fired: 786 runs scanned,
    7 standing dead ends, 0 candidates — honest (current population has
    no event-matchable verdicts). CLI `python3 -m revisit`.
-6. **Remaining treasure-map items — NOT solo-buildable:** §10
-   calibration + §9.7 scoping (owed discussion with Jeremy).
+6. **Remaining treasure-map items — NOT solo-buildable, and NOT owed:**
+   the §10 calibration + §9.7 scoping discussion already HAPPENED
+   2026-07-30 (COMPOUND_THINKING §14; raw transcript in
+   docs/conversations/2026-07-30-taste-camera-player.md) — the "owed"
+   label was a stale carry-over from the 07-28 flag the conversation
+   discharged (caught 2026-08-15 when Jeremy asked to verify). What's
+   genuinely open from it: §14a's contested scope question (deferred —
+   Jeremy re-examines when fresher; his stated prior: probabilistic/
+   fuzzy scope, not exact categories) and the §14g build threads
+   (honesty contract, immersion/LOD — decreed "can be not yet").
 
 Previous checkpoint: 2026-08-11 — **checkpoint pointer, not a work record: since
 2026-08-01 the executable queue has lived in BACKLOG.md's "Actionable
