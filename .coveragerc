@@ -6,11 +6,12 @@ omit =
     */tests/*
 
 [report]
-# Session 20 adversarial review finding 3.7: coverage was unmeasured. Current
-# 2026-07-14 full-suite baseline with these omits is 78.04%. Keep the 70% floor
-# as a conservative ratchet while the flat-module refactor is still active;
-# tighten over time, and fail CI if coverage drops below this.
-fail_under = 70
+# Session 20 adversarial review finding 3.7: coverage was unmeasured. The
+# floor is a ratchet — tighten as measured coverage improves, fail if it
+# drops below. Baselines: 78.04% (2026-07-14), 80.18% (2026-08-15 stale-test
+# sweep re-measure). Ratcheted 70 -> 75 on the 08-15 measure; 5 points of
+# headroom stays conservative while the flat-module refactor is active.
+fail_under = 75
 exclude_lines =
     pragma: no cover
     def __repr__
