@@ -45,7 +45,12 @@ individual rules below exist to keep it honest.
    production path end-to-end, and must-detect for every new test —
    stash the fix, watch it fail). A claim you could not probe ships
    HONESTLY LABELED "reasoned, not probed" in the commit message so
-   review can target exactly the unproven residue. The claim → probe →
+   review can target exactly the unproven residue — and a residue
+   deferred to a named eval hook requires checking that the hook's
+   SCHEMA actually captures the deferred dimension (2026-08-16
+   claims-audit round: a residue said "the calibration lane measures
+   it" while that lane recorded only an aggregate count — asserted as
+   monitored when it wasn't). The claim → probe →
    result record rides the commit. Then `bash scripts/test-safe.sh`
    (judge by exit code). "Done" without an executed check is a claim,
    not a fact. **Read the totals line too, not just the exit code** — a

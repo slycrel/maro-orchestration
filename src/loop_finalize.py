@@ -221,6 +221,16 @@ def _build_result_and_finalize(
                 "milestone_candidates": len(pf_review.milestone_step_indices),
                 "milestones_expanded": len(milestone_expanded),
                 "flag_count": len(pf_review.flags),
+                # Per-kind firing counts (claims-audit round 2026-08-16:
+                # the class-gap dimension's residue deferred efficacy to
+                # this lane, whose schema recorded only the aggregate —
+                # "asserted as monitored, when it isn't monitored").
+                # Firing counts make per-kind adjudication POSSIBLE;
+                # accuracy judgment stays adjudication-side.
+                "flag_kinds": {
+                    k: sum(1 for f in pf_review.flags if f.kind == k)
+                    for k in sorted({f.kind for f in pf_review.flags})
+                },
                 "actual_status": loop_status,
                 "steps_done": _steps_done,
                 "steps_total": len(step_outcomes),

@@ -81,7 +81,7 @@ _REVIEW_SYSTEM = textwrap.dedent("""\
 
 @dataclass
 class PlanFlag:
-    kind: str          # "assumption" | "milestone" | "unknown"
+    kind: str          # "assumption" | "milestone" | "unknown" | "class"
     step: int          # 1-based step index, 0 = whole plan
     message: str
     severity: str      # "info" | "warn"
@@ -230,8 +230,9 @@ def _parse_review(raw: str) -> Optional[PlanReview]:
         # touches one member gets a warn flag. Rides the open flags
         # mechanism — an absent key is byte-identical to today's
         # behavior (no flag, no gate), which is the safe advisory
-        # direction; efficacy is measured by the calibration lane, not
-        # asserted here.
+        # direction. Efficacy: the calibration lane records per-kind
+        # FIRING counts (flag_kinds); accuracy is adjudicated at real
+        # milestone boundaries, not asserted here.
         for c in data.get("class_gaps", []):
             flags.append(PlanFlag(
                 kind="class",
