@@ -2223,12 +2223,24 @@ capture**, which is what makes the rung amortize instead of evaporate.
   and closure_verdicts.jsonl rows. Advisory v1 — never flips a verdict
   deterministically. What remains is the star-v8 keep/kill adjudication
   once real runs accumulate:
-  `jq -c 'select(.claim_coverage) | .claim_coverage.counts' ~/.maro/workspace/runs/*/build/closure_verdicts.jsonl`
-  — keep only if `unwired` fires on runs whose deliverables state
-  behaviors; also spot-check guarantee texts against the run's step
-  results for fabricated guarantees (the labeled extraction residue).
-  Kill = drop plan-prompt reasoning item 5 + the join; the plan_index
-  stamp and recording seam can stay.
+  `jq -c 'select(.claim_coverage) | .claim_coverage' ~/.maro/workspace/runs/*/build/closure_verdicts.jsonl`
+  **Keep bar (tightened by the 2026-08-16 review round — `unwired`
+  firing alone is near-guaranteed by the prompt's own null-when-unsure
+  bias and proves nothing):** the corpus must show DISCRIMINATION —
+  both `exercised` and `unwired` firing across runs — plus spot-checks
+  in BOTH directions: guarantee texts vs step results (fabricated
+  guarantees) AND whether `exercised` mappings' checks genuinely
+  exercise their guarantee (the laundering direction). Watch the
+  `malformed` bucket (LLM shape drift would otherwise read as silence)
+  and the `inconclusive` bucket (no executing evidence; not in the
+  unwired count). **Known corpus bias, read accordingly:** a run that
+  narrates vaguely extracts zero guarantees and skips the probe — the
+  corpus over-represents over-narrating runs, and fleet-wide silence is
+  indistinguishable from fleet-wide honesty (extraction from
+  deliverable CONTENT, not just prose, is the future counter). Kill =
+  drop plan-prompt reasoning item 5 + the join; the plan_index stamp
+  and recording seam can stay. Review record:
+  docs/history/2026-08-16-closure-claim-coverage-review.md.
 
 - [ ] **Arbitrary-truncation audit** (opened 2026-08-03; **Jeremy:** *"this
   **Burn-down status 2026-08-15/16:** slice census ceiling 176 → 135

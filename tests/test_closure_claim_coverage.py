@@ -128,22 +128,39 @@ class TestClaimCoverageJoin:
         assert statuses == {"responds on port 8080": "exercised"}
 
     def test_cap_overflow_and_empty_text_dropped(self):
-        """Bounded honestly: entries beyond the cap are counted in
-        `overflow`, never silently dropped; empty guarantee text is not
-        an entry."""
+        """Counts cover EVERY guarantee; only the RECORDED list is capped
+        (2026-08-16 review round, Skeptic: capping counts would
+        undercount exactly the many-guarantees runs the evidence gate
+        most needs). Empty guarantee text is not an entry."""
         raw = [{"guarantee": f"guarantee {i}", "check_index": None}
                for i in range(10)]
         raw.insert(0, {"guarantee": "   ", "check_index": None})
         cov = _claim_coverage(raw, [])
         assert len(cov["guarantees"]) == closure_verify._MAX_STATED_GUARANTEES
         assert cov["overflow"] == 10 - closure_verify._MAX_STATED_GUARANTEES
-        assert cov["counts"]["unwired"] == closure_verify._MAX_STATED_GUARANTEES
+        assert cov["counts"]["unwired"] == 10
 
     def test_no_guarantees_returns_empty(self):
         assert _claim_coverage([], [{"plan_index": 0, "outcome": "pass"}]) == {}
         assert _claim_coverage(
             [{"guarantee": "", "check_index": 0}],
             [{"plan_index": 0, "outcome": "pass"}]) == {}
+
+    def test_string_shaped_entries_are_unwired_not_silence(self):
+        """Shape tolerance (review round, Architect): a bare-string list —
+        plausible cheap-model drift — must record as unwired guarantees,
+        not parse to {} like nothing was stated; junk-typed entries and a
+        non-list payload count in `malformed` so shape drift is visible
+        to the evidence gate instead of biasing it toward kill."""
+        cov = _claim_coverage(["warns when config missing", 42],
+                              [{"plan_index": 0, "outcome": "pass"}])
+        assert cov["counts"]["unwired"] == 1
+        assert cov["guarantees"][0]["guarantee"] == "warns when config missing"
+        assert cov["malformed"] == 1
+        non_list = _claim_coverage("warns when config missing", [])
+        assert non_list["malformed"] == 1
+        assert non_list["guarantees"] == []
+        assert non_list["counts"]["unwired"] == 0
 
 
 class TestBehaviorPreservation:
@@ -156,28 +173,51 @@ class TestBehaviorPreservation:
         runs_mod.set_current_run_dir(rd)
         plan = {"checks": [{"description": "passes", "command": "true"}]}
         adapter = _adapter(plan, _VERDICT_OK)
+        events = []
         try:
-            verdict = verify_goal_completion(
-                "build a thing", [], adapter, workspace_path=str(tmp_path))
+            with patch("captains_log.log_event",
+                       side_effect=lambda *a, **k: events.append((a, k))):
+                verdict = verify_goal_completion(
+                    "build a thing", [], adapter, workspace_path=str(tmp_path))
         finally:
             runs_mod.set_current_run_dir(None)
         assert verdict.claim_coverage == {}
+        # The judge-visible payload is byte-identical to the pre-probe
+        # world: no coverage block, and no plan_index leaking into the
+        # verification-results JSON (2026-08-16 review round — plan_index
+        # is the record's join key, not judge evidence).
         verdict_msg = adapter.complete.call_args_list[1].args[0][1].content
-        assert "Stated-but-unexercised" not in verdict_msg
+        assert "Stated-guarantee coverage" not in verdict_msg
+        assert "plan_index" not in verdict_msg
         rows = [json.loads(l) for l in
                 (rd / "build" / "closure_verdicts.jsonl")
                 .read_text().splitlines() if l]
         assert "claim_coverage" not in rows[0]
+        # The persisted row DOES carry plan_index on executed checks even
+        # without guarantees — deliberate additive schema (the join key
+        # documents which plan slot each row filled), asserted here so
+        # the difference from the judge payload is pinned, not accidental.
+        assert rows[0]["check_results"][0]["plan_index"] == 0
+        closure_events = [k for a, k in events
+                          if k.get("subject") == "closure_verdict"]
+        assert closure_events
+        assert "claim_coverage" not in closure_events[0]["context"]
 
 
 class TestJudgeVisibilityAndAdvisory:
-    def test_unwired_block_reaches_verdict_call(self, tmp_path):
-        """Unwired guarantees are named to the judge; exercised ones stay
-        out of the block (their evidence is the check results)."""
+    def test_coverage_block_reaches_verdict_call(self, tmp_path):
+        """Every recorded mapping is shown WITH its status marker
+        (2026-08-16 review round, three-lens convergence: an exercised
+        link the judge can't see is a laundering surface — the judge must
+        be able to attack the link, not just the outcome)."""
         plan = {
-            "checks": [{"description": "passes", "command": "true"}],
+            "checks": [
+                {"description": "passes", "command": "true"},
+                {"description": "fails", "command": "false"},
+            ],
             "stated_guarantees": [
                 {"guarantee": "responds on port 8080", "check_index": 0},
+                {"guarantee": "retries on failure", "check_index": 1},
                 {"guarantee": "logs errors to errors.log", "check_index": None},
             ],
         }
@@ -185,10 +225,11 @@ class TestJudgeVisibilityAndAdvisory:
         verify_goal_completion(
             "build a thing", [], adapter, workspace_path=str(tmp_path))
         verdict_msg = adapter.complete.call_args_list[1].args[0][1].content
-        assert "Stated-but-unexercised guarantees" in verdict_msg
-        assert "logs errors to errors.log" in verdict_msg
-        _block = verdict_msg.split("Stated-but-unexercised guarantees")[1]
-        assert "responds on port 8080" not in _block
+        assert "Stated-guarantee coverage" in verdict_msg
+        _block = verdict_msg.split("Stated-guarantee coverage")[1]
+        assert "- [unwired] logs errors to errors.log" in _block
+        assert "- [exercised] responds on port 8080" in _block
+        assert "- [contradicted] retries on failure" in _block
 
     def test_advisory_never_flips_or_recaps(self, tmp_path):
         """v1 posture: with unwired guarantees present and a positive
@@ -205,6 +246,94 @@ class TestJudgeVisibilityAndAdvisory:
             "build a thing", [], adapter, workspace_path=str(tmp_path))
         assert verdict.complete is True
         assert verdict.confidence == 0.9
+
+    def test_marked_coverage_gap_does_not_trip_signal1(self, tmp_path):
+        """The Signal-1 echo channel (review round HIGH): a judge that
+        follows the prompt — recording an unverified guarantee in gaps as
+        "Unverified claim: …" — must NOT trigger the deterministic
+        behavioral-gap downgrade; the advisory block would otherwise
+        manufacture True→False flips out of its own doctrine wording."""
+        plan = {
+            "checks": [{"description": "passes", "command": "true"}],
+            "stated_guarantees": [
+                {"guarantee": "caches results", "check_index": None},
+            ],
+        }
+        verdict_data = {
+            "complete": True, "confidence": 0.9,
+            "gaps": ["Unverified claim: caches results — was not exercised "
+                     "by any check"],
+            "summary": "Goal achieved.",
+        }
+        adapter = _adapter(plan, verdict_data)
+        verdict = verify_goal_completion(
+            "build a thing", [], adapter, workspace_path=str(tmp_path))
+        assert verdict.complete is True
+        assert verdict.downgrade_reason == ""
+
+    def test_organic_admission_still_trips_signal1(self, tmp_path):
+        """Scope pin for the echo filter: an UNMARKED runtime admission in
+        gaps fires Signal 1 exactly as before the probe existed — the
+        filter suppresses prompt-induced echoes only, never organic
+        self-contradictions."""
+        plan = {
+            "checks": [{"description": "passes", "command": "true"}],
+            "stated_guarantees": [
+                {"guarantee": "caches results", "check_index": None},
+            ],
+        }
+        verdict_data = {
+            "complete": True, "confidence": 0.9,
+            "gaps": ["the server was never started"],
+            "summary": "Goal achieved.",
+        }
+        adapter = _adapter(plan, verdict_data)
+        verdict = verify_goal_completion(
+            "build a thing", [], adapter, workspace_path=str(tmp_path))
+        assert verdict.complete is False
+        assert "runtime" in verdict.downgrade_reason
+
+    def test_plan_call_caps_pinned(self, tmp_path):
+        """max_tokens=1024 and the prompt-side "at most 8" guarantee cap
+        exist to keep one over-long JSON response from losing the CHECKS
+        array (review round: overflow fails extract_json entirely, a
+        regression against the guarantees-free world). Pinned so neither
+        can silently regress."""
+        plan = {"checks": [{"description": "passes", "command": "true"}]}
+        adapter = _adapter(plan, _VERDICT_OK)
+        verify_goal_completion(
+            "build a thing", [], adapter, workspace_path=str(tmp_path))
+        plan_call = adapter.complete.call_args_list[0]
+        assert plan_call.kwargs["max_tokens"] == 1024
+        assert "List at most 8 guarantees" in plan_call.args[0][0].content
+
+    def test_audit_lanes_receive_coverage_block(self):
+        """Both second-opinion audit lanes see the same pattern-5 evidence
+        the judge held (review round, Architect: without it the
+        negative-audit's "holds strictly more evidence" premise is false,
+        and the pass-audit — whose trigger is exactly the all-static
+        achieved shape pattern-5 targets — audits blind). Shared
+        renderer; must not fork."""
+        from closure_verify import (_audit_positive_verdict,
+                                    _audit_negative_verdict)
+        cov = {"guarantees": [{"guarantee": "caches results",
+                               "check_index": None, "status": "unwired"}],
+               "counts": {"exercised": 0, "contradicted": 0,
+                          "inconclusive": 0, "unwired": 1}}
+        for fn, kwargs in (
+            (_audit_positive_verdict, {}),
+            (_audit_negative_verdict, {"gaps": [], "downgrade_reasons": []}),
+        ):
+            adapter = MagicMock()
+            resp = MagicMock()
+            resp.content = json.dumps(
+                {"agrees": True, "reason": "ok", "confidence": 0.9})
+            adapter.complete.return_value = resp
+            fn(goal="g", adapter=adapter, summary="s", check_results=[],
+               workspace_path="", claim_coverage=cov, **kwargs)
+            msg = adapter.complete.call_args.args[0][1].content
+            assert "Stated-guarantee coverage" in msg
+            assert "- [unwired] caches results" in msg
 
 
 class TestEvidenceGateRecording:

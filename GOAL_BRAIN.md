@@ -8067,3 +8067,20 @@ under the same two-measurement standard).
   unmeasurable pre-land by construction; the evidence gate stays open
   in BACKLOG (star-v8 keep/kill: `unwired` must FIRE on real box runs;
   adjudication query on the entry). Record: BACKLOG_DONE.
+- **2026-08-16 (chunk-3 lane, review round) — sonnet-medium ×3 lenses,
+  16 findings, 0 hallucinated, fixed to green same session** (record:
+  docs/history/2026-08-16-closure-claim-coverage-review.md). Headline
+  HIGHs, all in seams mocked-judge tests can't see: the advisory
+  block's wording matched _RUNTIME_GAP_ADMISSION (judge echo would
+  manufacture deterministic True→False flips — fixed: regex-safe
+  wording + "Unverified claim:" marker + echo-strip at both detector
+  sites, organic admissions pinned still-firing); only-unwired
+  surfacing made fabricated "exercised" links LESS scrutinized than
+  honest unknowns (three-lens convergence — block now shows every
+  mapping with link-scrutiny doctrine; both audit lanes get it);
+  bare-string shape drift read as silence, biasing the keep/kill gate
+  toward kill (now unwired + malformed counter). Keep bar tightened:
+  DISCRIMINATION (exercised AND unwired both firing) + two-direction
+  spot-checks, not mere firing; evasion-by-vague-narration labeled a
+  corpus bias. Suite 8845/0. The protocol's prediction held: C1/C5's
+  probed deterministic core survived contact untouched.

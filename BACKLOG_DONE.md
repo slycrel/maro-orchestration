@@ -52,9 +52,34 @@ What shipped (src/closure_verify.py + tests/test_closure_claim_coverage.py):
   rule.
 - Advisory v1 (the receipts posture): recorded and surfaced, never flips
   a verdict deterministically. The evidence gate stays open in BACKLOG:
-  star-v8 keep/kill on whether `unwired` fires on real box runs.
+  star-v8 keep/kill on whether the coverage data DISCRIMINATES on real
+  box runs.
 
 Suite 8831 passed / 0 skipped (+9 tests, written red-first).
+
+**Adversarial review of the chunk (2026-08-16, sonnet-medium ×3 lenses —
+codex capped until ~08-19; claims-audit framing):** 16 findings, 0
+hallucinated, fixed to green same session — full record in
+`docs/history/2026-08-16-closure-claim-coverage-review.md`. The HIGHs
+were all in seams the author's mocked-judge tests structurally cannot
+see, exactly as the claims-audit protocol predicts: (1) the advisory
+block's own wording matched `_RUNTIME_GAP_ADMISSION`, so a judge echo
+in gaps would have converted advisory into a deterministic True→False
+flip — fixed with regex-safe wording, the "Unverified claim:" marker
+convention, and `_strip_coverage_echo_gaps` at both detector call
+sites (organic admissions still fire, pinned both directions); (2)
+three-lens convergence: surfacing only unwired entries made a
+mismapped/fabricated "exercised" link — the laundering direction —
+LESS scrutinized than an honest unknown; the block now shows every
+mapping with link-scrutiny doctrine, and both audit lanes receive it
+(must-not-fork); (3) LLM shape drift (bare-string guarantees) parsed
+as silence via safe_list, biasing the keep/kill data toward kill —
+now unwired entries + a `malformed` counter; plus counts-beyond-cap,
+prompt-side "at most 8" + max_tokens 1024 pinned, plan_index scrubbed
+from the judge payload (C2 restored). Keep-bar tightened on the
+BACKLOG gate entry: discrimination required, not mere firing; evasion-
+by-vague-narration recorded as a known corpus bias. Suite 8845 / 0
+after fixes (+5 tests).
 
 ## M1 complement stretch 2026-08-15 (PM): three chunks + review loop to fixpoint
 
