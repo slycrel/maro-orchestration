@@ -328,7 +328,12 @@ Inspired by Memento-Skills arXiv:2603.18743: one-step offline RL, multi-positive
 
 ---
 
-## Phase 18: Sandbox Hardening *(COMPLETE)*
+## Phase 18: Sandbox Hardening *(COMPLETE — since RETIRED)*
+
+> **Supersession note (2026-08-15 phase audit):** `src/sandbox.py` was
+> deliberately retired by the C4 container-executor cleanup (commit
+> 69265f6, design §7) — container isolation replaced the preexec-fn
+> sandbox. True when written; not in the current tree.
 
 **Production-grade skill isolation.** The current sandbox (Phase 15) runs skills in a plain `python3` subprocess with static content analysis. This phase hardens it to configurable resource limits, network isolation, and a full audit log.
 
@@ -482,7 +487,12 @@ Before high-volume or mission-critical workloads:
 
 ---
 
-### Phase 26: Container Image — Portable Deployment *(COMPLETE)*
+### Phase 26: Container Image — Portable Deployment *(COMPLETE — artifact SUPERSEDED)*
+
+> **Supersession note (2026-08-15 phase audit):** the root `Dockerfile` /
+> `docker run poe-orchestration` artifact described here no longer exists;
+> the containerization lane became `deploy/docker/Dockerfile.executor`
+> (C4-BOX executor containers). Different scope, same lineage.
 
 Shipped before dogfooding as recommended. Isolated containers give you clean integration-test runs without risking the main workspace. One afternoon of work → huge confidence before going "in anger."
 
@@ -1013,7 +1023,12 @@ The evolver (Phase 7) works at the pattern level — aggregating lessons across 
 
 ---
 
-### Phase 51: Passes — Unified Multi-Pass Review Pipeline *(DONE)*
+### Phase 51: Passes — Unified Multi-Pass Review Pipeline *(DONE — since DELETED)*
+
+> **Supersession note (2026-08-15 phase audit):** `src/passes.py` was
+> removed in the Tier 1 mechanical dead-code deletion (commit a278575,
+> ~9,600 net lines). The unified pass pipeline did ship; it later fell out
+> of the execution path and was deleted as dead code.
 
 *"Council, debate, and thinkback are more valuable together than separately."*
 
@@ -1051,7 +1066,12 @@ For factual claims in research output, query a second LLM context with no prior 
 
 ---
 
-### Phase 53: Persistent Identity Block — Session Coherence Fix *(DONE)*
+### Phase 53: Persistent Identity Block — Session Coherence Fix *(DONE — since RETIRED)*
+
+> **Supersession note (2026-08-15 phase audit):** `src/poe_self.py` /
+> `user/POE_IDENTITY.md` were removed by the de-default-the-persona
+> refactor (commit f2a8f62) — the framework now orchestrates as a neutral
+> role and personas are optional overlays (`personas/`).
 
 *"Agents without an always-in-context identity block lose coherence across sessions."*
 
@@ -1087,7 +1107,13 @@ Research GAP 3 addressed: long-running loops that fail, timeout, or get interrup
 
 ---
 
-### Phase 55: lat.md Knowledge Graph *(DONE)*
+### Phase 55: lat.md Knowledge Graph *(DONE — one claim never shipped)*
+
+> **Correction (2026-08-15 phase audit):** the content shipped and lives
+> (`lat.md/` + `# @lat:` backlinks in 5 modules), but the claimed
+> `lat check` broken-link validator has no trace in git history — that
+> line was aspirational when written. If link rot ever bites, build the
+> checker then.
 
 *"Flat AGENTS.md doesn't scale — concepts need cross-references, not prose paragraphs."*
 
