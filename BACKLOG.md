@@ -2211,16 +2211,24 @@ capture**, which is what makes the rung amortize instead of evaporate.
   model is ever retrained into discriminating range, goal-insensitive
   injection goes live; worth a tripwire.
 
-- [ ] **Closure claimed-but-unwired check (chunk 3 of the sanctioned
-  2026-08-16 sequence; chunks 1-2 SHIPPED).** Closure verification gains
-  the taxonomy's pattern-5 probe: for each guarantee the deliverable
-  STATES, find the executing evidence — receipts/provenance already do
-  this for files and commands; this extends it to stated behaviors.
-  Biggest build of the three; needs a fresh session. Prior art: author
-  claims-protocol in HOUSE_STYLE steps 1/3/6, pre-flight class_gaps
-  probe (eee98f1 + 9fd70b7, per-kind calibration counts), DEV_PATTERNS
-  probe-first fact ledger (box lane, EXPERIMENTAL). Evidence-gate like
-  star v8: keep only if the probe FIRES on real runs.
+- [ ] **Claimed-but-unwired evidence gate (box lane — the BUILD shipped;
+  chunk 3 of the 2026-08-16 sequence, sequence complete; record in
+  BACKLOG_DONE).** The pattern-5 probe is live in closure_verify: the
+  plan call extracts `stated_guarantees` (behaviors the work's prose
+  asserts) and maps each to the check that exercises it; a deterministic
+  plan_index join scores exercised / contradicted / inconclusive /
+  unwired; unwired guarantees are named to the verdict judge as
+  unverified claims; `claim_coverage` (per-guarantee records +
+  per-status counts) rides ClosureVerdict, the CLOSURE_VERDICT event,
+  and closure_verdicts.jsonl rows. Advisory v1 — never flips a verdict
+  deterministically. What remains is the star-v8 keep/kill adjudication
+  once real runs accumulate:
+  `jq -c 'select(.claim_coverage) | .claim_coverage.counts' ~/.maro/workspace/runs/*/build/closure_verdicts.jsonl`
+  — keep only if `unwired` fires on runs whose deliverables state
+  behaviors; also spot-check guarantee texts against the run's step
+  results for fabricated guarantees (the labeled extraction residue).
+  Kill = drop plan-prompt reasoning item 5 + the join; the plan_index
+  stamp and recording seam can stay.
 
 - [ ] **Arbitrary-truncation audit** (opened 2026-08-03; **Jeremy:** *"this
   **Burn-down status 2026-08-15/16:** slice census ceiling 176 → 135

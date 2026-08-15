@@ -8044,3 +8044,26 @@ under the same two-measurement standard).
   same conversation: the maro-side sequence (author fix checklist →
   pre-flight class-or-instance probe → closure claimed-but-unwired
   check), ordering as proposed 2026-08-15.
+- **2026-08-16 (chunk-3 lane, dev Mac) — Closure claimed-but-unwired
+  probe SHIPPED; the sanctioned maro-side sequence is COMPLETE (chunk 1
+  = 70d49d2 HOUSE_STYLE protocol, chunk 2 = eee98f1 + 9fd70b7 pre-flight
+  class_gaps, chunk 3 = this).** Closure verification now runs the
+  taxonomy's pattern-5 question — "does the promised behavior have an
+  executing line?": the plan call extracts `stated_guarantees` and maps
+  each to the check that exercises it; a deterministic plan_index join
+  (immune to the preflight-prepend / empty-command reordering — the
+  off-by-injection class) scores exercised / contradicted /
+  inconclusive / unwired; unwired guarantees are named to the verdict
+  judge as unverified-claims-not-facts (and not failure evidence —
+  insufficient-coverage doctrine); `claim_coverage` per-guarantee
+  records + per-status counts ride ClosureVerdict, the CLOSURE_VERDICT
+  event, and closure_verdicts.jsonl rows (eval-hook schema captures the
+  dimension, per the chunk-2 claims-audit lesson). Advisory v1
+  (receipts posture — never flips a verdict deterministically); no new
+  adapter call, no config gate (rides the plan call, max_tokens 512 →
+  768 so the added key can't starve the checks array). Suite 8831/0
+  (+9 tests red-first; C1–C5 probed, join/preservation/visibility/
+  advisory/recording). Labeled residue: live-LLM extraction accuracy —
+  unmeasurable pre-land by construction; the evidence gate stays open
+  in BACKLOG (star-v8 keep/kill: `unwired` must FIRE on real box runs;
+  adjudication query on the entry). Record: BACKLOG_DONE.

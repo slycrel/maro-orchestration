@@ -8,6 +8,54 @@ Last split: 2026-04-16 (session 34).
 
 ---
 
+## Closure claimed-but-unwired probe — SHIPPED 2026-08-16 (chunk 3 of 3; sequence complete)
+
+The sanctioned 2026-08-16 sequence (author fix checklist → pre-flight
+class-or-instance probe → closure claimed-but-unwired check, ordering as
+proposed 2026-08-15) is complete: chunk 1 = HOUSE_STYLE claims protocol
+(70d49d2), chunk 2 = pre-flight class_gaps dimension (eee98f1 +
+9fd70b7), chunk 3 = this. Source: review-miss taxonomy pattern 5,
+"prose guarantees with no executing line"
+(docs/history/2026-08-15-review-miss-taxonomy.md) — receipts/provenance
+already found executing evidence for files and commands; this extends
+the question to stated behaviors.
+
+What shipped (src/closure_verify.py + tests/test_closure_claim_coverage.py):
+
+- The closure PLAN call gains reasoning item 5: extract
+  `stated_guarantees` — behaviors the work summary / deliverable prose
+  ASSERTS ("warns when X", "logs errors to Y", "retries on failure") —
+  and map each to the 0-based index of the check that exercises it, or
+  null when none mechanically can. Explicitly told: never fabricate a
+  check to cover a guarantee, and a grep finding the WORD is not the
+  behavior executing. Rides the existing call — no new adapter call, no
+  config gate (chunk-2 precedent); plan max_tokens 512 → 768 so the new
+  key can't starve the checks array (one JSON object — a mid-list cut
+  loses the CHECKS too).
+- Every executed check row now carries `plan_index` (its index in the
+  plan's own checks array). `_claim_coverage()` joins guarantees to
+  outcomes on that key — NOT positionally, because failing preconditions
+  PREPEND synthetic rows and empty-command checks produce no row (the
+  off-by-injection class the backchain arc hit). Statuses: exercised /
+  contradicted / inconclusive / unwired; bool-typed indices rejected by
+  exact-type check (the audit `agrees` discipline).
+- Unwired guarantees are named to the verdict judge in a
+  "Stated-but-unexercised guarantees" block, with verdict-system
+  doctrine: unverified claim, not a fact — and not failure evidence
+  either (same insufficient-coverage doctrine as inconclusive probes).
+  Exercised/contradicted guarantees stay out of the block: their
+  evidence is already in the check results.
+- `claim_coverage` (per-guarantee records + per-status counts +
+  `overflow` beyond the 8-guarantee cap) rides ClosureVerdict, the
+  CLOSURE_VERDICT event, and the persisted closure_verdicts.jsonl row —
+  per-kind firing data, per the 2026-08-16 claims-audit eval-hook-schema
+  rule.
+- Advisory v1 (the receipts posture): recorded and surfaced, never flips
+  a verdict deterministically. The evidence gate stays open in BACKLOG:
+  star-v8 keep/kill on whether `unwired` fires on real box runs.
+
+Suite 8831 passed / 0 skipped (+9 tests, written red-first).
+
 ## M1 complement stretch 2026-08-15 (PM): three chunks + review loop to fixpoint
 
 Jeremy: "at least 3 significant pieces, review after each large chunk

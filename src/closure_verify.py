@@ -74,6 +74,22 @@ _CLOSURE_PLAN_SYSTEM = textwrap.dedent("""\
        - probe websocket upgrade: `python server.py >/tmp/s.log 2>&1 & pid=$!; trap 'kill $pid' EXIT; sleep 2; curl -i -N -H 'Connection: Upgrade' -H 'Upgrade: websocket' http://127.0.0.1:8080/ws | grep '101 Switching Protocols'`
        - exercise a CLI or built binary directly: `./bin/tool --help >/tmp/tool.out && grep -q 'usage' /tmp/tool.out`
 
+    5. Stated-guarantee coverage (claimed-but-unwired detection): the work
+       summary and deliverable descriptions may STATE behavioral guarantees —
+       "warns when X", "logs errors to Y", "retries on failure", "caches
+       results", "validates input", "sends a notification". List each such
+       stated behavior in "stated_guarantees" (short paraphrase is fine, but
+       only behaviors the prose actually asserts — never behaviors you infer
+       the work should have). Prefer generating checks that exercise stated
+       guarantees directly. For each guarantee set "check_index" to the
+       0-based index into your "checks" array of the check that exercises
+       that behavior, or null when no mechanical check in this environment
+       can. Do NOT fabricate a check just to cover a guarantee, and do NOT
+       map a guarantee to a check that merely finds its wording in a file —
+       a grep proving the WORD exists is not the behavior executing; null is
+       the honest answer. Purely informational prose ("the report has three
+       sections") is not a behavioral guarantee; leave it out.
+
     Output rules:
     - Generate 2–5 checks. Each must be a single shell command.
     - Each check MUST name which failure mode (or inversion hypothesis) it probes.
@@ -108,6 +124,7 @@ _CLOSURE_PLAN_SYSTEM = textwrap.dedent("""\
 
     Respond with JSON only:
     {"checks": [{"failure_mode": "...", "description": "...", "command": "..."}],
+     "stated_guarantees": [{"guarantee": "...", "check_index": 0}],
      "behavioral_probe_waived": "<reason — only when skipping a REQUIRED behavioral probe for a runtime-shaped deliverable; omit or empty string otherwise>"}
 """).strip()
 
@@ -137,6 +154,14 @@ _WORK_SUMMARY_RESULT_CUT = 4000
 # step did what it was asked.
 _WORK_SUMMARY_TEXT_CUT = 300
 _WORK_SUMMARY_STEPS = 6
+
+# Pattern-5 probe bounds (claimed-but-unwired, chunk 3 of the 2026-08-16
+# sequence). The plan generates ≤5 checks, so more than 8 stated guarantees
+# means most are unwirable by construction; entries past the cap are counted
+# in `overflow`, never silently dropped. Guarantee text is instruction-length
+# prose — same clip rationale as _WORK_SUMMARY_TEXT_CUT, marked cut.
+_MAX_STATED_GUARANTEES = 8
+_GUARANTEE_TEXT_CAP = 300
 
 
 def render_step_for_closure(text: str, result: str, index: int) -> str:
@@ -198,6 +223,14 @@ _CLOSURE_VERDICT_SYSTEM = textwrap.dedent("""\
     failed: the summary quotes and explains its own output, and those
     quotations are not the file.
 
+    The input may include "Stated-but-unexercised guarantees" — behaviors the
+    work's own prose asserts but no executed check exercised. Treat each as an
+    unverified claim, not a fact: do not count it as delivered evidence, and do
+    not treat the missing verification as failure evidence either — no probe
+    looked, which is insufficient coverage, the same doctrine as an
+    inconclusive probe. When completeness genuinely hinges on such a
+    guarantee, name it in gaps and reflect the uncertainty in confidence.
+
     Some failed checks carry "target_file_content" — the actual current content
     (bounded excerpt) of files the failed command referenced. That content is
     ground truth and outranks the probe's exit code: judge from it whether the
@@ -254,6 +287,17 @@ class ClosureVerdict:
     # disputed=True means the verdict stands but two judges disagree —
     # handle.py routes those loops into the contested learning holdout.
     verdict_audit: Dict[str, Any] = field(default_factory=dict)
+    # Pattern-5 probe (claimed-but-unwired, chunk 3 of the 2026-08-16
+    # sequence): the plan call's stated-guarantee extraction joined against
+    # executed check outcomes — {"guarantees": [{guarantee, check_index,
+    # status}], "counts": {per-status}, "overflow": n?}, status ∈
+    # exercised / contradicted / inconclusive / unwired. Advisory v1
+    # (receipts posture): recorded and surfaced to the judge, never flips
+    # a verdict deterministically. Empty when the plan stated no
+    # guarantees (research goals, pre-change plans). Evidence-gated:
+    # keep only if `unwired` fires on real runs — the BACKLOG entry
+    # carries the adjudication query over closure_verdicts.jsonl.
+    claim_coverage: Dict[str, Any] = field(default_factory=dict)
 
 
 def _failed_check_signature(row: dict) -> str:
@@ -659,6 +703,87 @@ def _project_file_inventory(root: str, cap: int = 120) -> str:
         return ""
 
 
+def _claim_coverage(raw_guarantees: list,
+                    check_results: List[dict]) -> Dict[str, Any]:
+    """Join the plan's stated guarantees against executed check outcomes
+    (pattern-5 probe: for each guarantee the deliverable STATES, find the
+    executing evidence).
+
+    Keyed by ``plan_index`` — the index each executed row carries from the
+    plan's own checks array — NOT by position in check_results: failing
+    preconditions PREPEND synthetic rows and empty-command checks produce
+    no row, so a positional join would attribute outcomes to the wrong
+    guarantee (the off-by-injection class the backchain arc hit).
+
+    Statuses: a guarantee whose mapped check passed is "exercised", failed
+    is "contradicted", couldn't run is "inconclusive"; no mapped check
+    (null / out-of-range / non-int index — bools excluded by exact-type
+    check, same discipline as the audit's `agrees` typing) is "unwired".
+    Returns {} when nothing was stated. Zero LLM, pure function.
+    """
+    if not raw_guarantees:
+        return {}
+    by_plan_index: Dict[int, dict] = {}
+    for r in check_results:
+        _pi = r.get("plan_index")
+        if type(_pi) is int:
+            by_plan_index[_pi] = r
+    entries: List[Dict[str, Any]] = []
+    overflow = 0
+    for g in raw_guarantees:
+        if not isinstance(g, dict):
+            continue
+        text = safe_str(g.get("guarantee", "")).strip()
+        if not text:
+            continue
+        if len(entries) >= _MAX_STATED_GUARANTEES:
+            overflow += 1
+            continue
+        ci = g.get("check_index")
+        if type(ci) is not int:
+            entries.append({"guarantee": clip(text, _GUARANTEE_TEXT_CAP),
+                            "check_index": None, "status": "unwired"})
+            continue
+        row = by_plan_index.get(ci)
+        if row is None:
+            status = "unwired"
+        else:
+            status = {"pass": "exercised", "fail": "contradicted"}.get(
+                row.get("outcome"), "inconclusive")
+        entries.append({"guarantee": clip(text, _GUARANTEE_TEXT_CAP),
+                        "check_index": ci, "status": status})
+    if not entries:
+        return {}
+    counts = {s: 0 for s in
+              ("exercised", "contradicted", "inconclusive", "unwired")}
+    for e in entries:
+        counts[e["status"]] += 1
+    out: Dict[str, Any] = {"guarantees": entries, "counts": counts}
+    if overflow:
+        out["overflow"] = overflow
+    return out
+
+
+def _unwired_guarantee_block(coverage: Dict[str, Any]) -> str:
+    """The verdict-call block naming stated-but-unexercised guarantees.
+
+    Unwired only: exercised/contradicted guarantees already have their
+    evidence in the check results the judge reads; the value added here is
+    exactly the taxonomy's pattern-5 question the judge never asks on its
+    own — "does the promised behavior have an executing line?"
+    """
+    unwired = [e for e in (coverage.get("guarantees") or [])
+               if e.get("status") == "unwired"]
+    if not unwired:
+        return ""
+    return (
+        "\n\nStated-but-unexercised guarantees (the work's prose asserts "
+        "these behaviors; no executed check exercised them — unverified "
+        "claims, not facts):\n"
+        + "\n".join(f"- {e['guarantee']}" for e in unwired)
+    )
+
+
 def verify_goal_completion(
     goal: str,
     steps: list,
@@ -921,7 +1046,11 @@ def verify_goal_completion(
                     f"Work done:\n{work_summary}"
                 ),
             ],
-            max_tokens=512,
+            # 512 → 768 with the stated_guarantees key (pattern-5 probe):
+            # the response is one JSON object, so a cap that cuts generation
+            # mid-list doesn't lose just the guarantees — extract_json fails
+            # and the run loses its CHECKS too. Headroom over frugality.
+            max_tokens=768,
             temperature=0.1,
             no_tools=True,
             purpose="closure plan",
@@ -932,16 +1061,22 @@ def verify_goal_completion(
         behavioral_probe_waived = safe_str(
             plan_data.get("behavioral_probe_waived", "") if plan_data else ""
         )
+        stated_guarantees_raw = safe_list(
+            plan_data.get("stated_guarantees") if plan_data else None,
+            element_type=dict)
 
         if not checks:
             # Research/writing goal — no executable checks, skip
             _emit_skip("no_checks_generated")
             return _null
 
-        # Phase 2: run checks mechanically
+        # Phase 2: run checks mechanically. Every executed row carries its
+        # index in the PLAN's checks array (plan_index) — the join key
+        # _claim_coverage needs, since check_results order diverges from
+        # plan order (preflight rows prepend, empty commands are skipped).
         check_results = []
         cwd = workspace_path or None
-        for check in checks[:5]:
+        for _plan_index, check in enumerate(checks[:5]):
             desc = safe_str(check.get("description", ""))
             cmd = safe_str(check.get("command", ""))
             modality = _classify_probe_modality(cmd)
@@ -958,7 +1093,7 @@ def verify_goal_completion(
                 # instead of running it somewhere arbitrary.
                 check_results.append({
                     "description": desc, "command": cmd,
-                    "modality": modality,
+                    "modality": modality, "plan_index": _plan_index,
                     "exit_code": -1, "stdout": "",
                     "stderr": "cwd unresolved — check not run",
                     "passed": False, "outcome": "inconclusive",
@@ -975,6 +1110,7 @@ def verify_goal_completion(
                     "description": desc,
                     "command": cmd,
                     "modality": modality,
+                    "plan_index": _plan_index,
                     "exit_code": proc.returncode,
                     "stdout": proc.stdout[:500],
                     "stderr": proc.stderr[:300],
@@ -1001,7 +1137,7 @@ def verify_goal_completion(
             except subprocess.TimeoutExpired:
                 check_results.append({
                     "description": desc, "command": cmd,
-                    "modality": modality,
+                    "modality": modality, "plan_index": _plan_index,
                     "exit_code": -1, "stdout": "", "stderr": "timed out",
                     "passed": False,
                     "outcome": "inconclusive",
@@ -1010,7 +1146,7 @@ def verify_goal_completion(
                 _stderr = str(exc)
                 check_results.append({
                     "description": desc, "command": cmd,
-                    "modality": modality,
+                    "modality": modality, "plan_index": _plan_index,
                     "exit_code": -1, "stdout": "", "stderr": _stderr,
                     "passed": False,
                     "outcome": _check_outcome(exit_code=-1, stderr=_stderr),
@@ -1030,6 +1166,11 @@ def verify_goal_completion(
         checks_run = len(check_results)
         checks_passed = sum(1 for r in check_results if r["passed"])
         inconclusive_checks = [r for r in check_results if r.get("outcome") == "inconclusive"]
+
+        # Pattern-5 probe: join stated guarantees against what actually
+        # executed. Computed after the preflight prepend on purpose — the
+        # join is plan_index-keyed, so the reordering is harmless.
+        _claim_cov = _claim_coverage(stated_guarantees_raw, check_results)
 
         # Emit verification progress to channel
         if channel is not None:
@@ -1060,6 +1201,7 @@ def verify_goal_completion(
             f"Work done:\n{work_summary}\n"
             f"{_ledger_block}\n"
             f"Verification results:\n{results_text}"
+            f"{_unwired_guarantee_block(_claim_cov)}"
         )
         verdict_resp = adapter.complete(
             [
@@ -1531,6 +1673,7 @@ def verify_goal_completion(
                 if r.get("outcome") == "fail" and r.get("command")
             ],
             verdict_audit=verdict_audit,
+            claim_coverage=_claim_cov,
         )
 
         # Emit needs_work if gaps found
@@ -1596,6 +1739,12 @@ def verify_goal_completion(
                     ),
                     "commands": [r.get("command", "")[:200] for r in check_results],
                     "summary": clip(summary, VERDICT_PROSE_CAP),
+                    # Pattern-5 firing data (guarantee texts are already
+                    # clipped at build time) — per-status counts AND
+                    # per-guarantee records, so the keep/kill gate can
+                    # adjudicate per kind, not from an aggregate (the
+                    # 2026-08-16 claims-audit eval-hook-schema rule).
+                    **({"claim_coverage": _claim_cov} if _claim_cov else {}),
                     **_mh_label,
                 },
                 loop_id=loop_id or None,
@@ -1628,6 +1777,7 @@ def verify_goal_completion(
             "gaps": [clip(g, 500) for g in gaps],
             "summary": clip(summary, VERDICT_PROSE_CAP),
             "failed_checks": list(verdict.failed_checks),
+            **({"claim_coverage": _claim_cov} if _claim_cov else {}),
             **_mh_label,
             "fingerprint": closure_fingerprint(verdict),
             "check_results": [
@@ -1638,6 +1788,10 @@ def verify_goal_completion(
                     "outcome": r.get("outcome", ""),
                     "stdout": safe_str(r.get("stdout", ""))[:500],
                     "stderr": safe_str(r.get("stderr", ""))[:300],
+                    # Join key for claim_coverage.check_index (absent on
+                    # preflight rows — those aren't plan checks).
+                    **({"plan_index": r["plan_index"]}
+                       if type(r.get("plan_index")) is int else {}),
                     **(
                         {"target_file_content":
                          safe_str(r.get("target_file_content"))[:2000]}
