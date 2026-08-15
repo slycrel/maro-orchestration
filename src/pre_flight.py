@@ -129,58 +129,48 @@ def _heuristic_scope(steps: List[str]) -> str:
     return "medium"
 
 
-def review_plan(
-    goal: str,
-    steps: List[str],
-    adapter,
-    *,
-    verbose: bool = False,
-) -> PlanReview:
-    """Run a cheap pre-flight review of the proposed plan.
+def _build_reviewers() -> List[tuple]:
+    """Candidate reviewer adapters in cost order: hosted-free, then paid API.
 
-    Returns a PlanReview with scope estimate, flags, and milestone candidates.
-    Never raises — on any error returns a minimal PlanReview with scope="unknown".
+    Hosted-free (Groq/Gemini — consent and keys resolved inside
+    build_hosted_free_adapter) goes first: a single cheap non-agentic
+    JSON call is exactly the validation-ladder call class, and on a box
+    whose paid keys have gone stale it is the only reviewer that answers.
+    Subprocess stays excluded (claude -p blocks while claude --continue
+    runs). Build failures here just drop a candidate — a key that BUILDS
+    but is dead fails at call time, which review_plan's loop handles.
     """
-    if not steps:
-        return PlanReview(scope="unknown", scope_note="no steps to review")
-
+    candidates: List[tuple] = []
     try:
-        from llm import LLMMessage, MODEL_CHEAP
-        # Build a separate adapter — must NOT consume from the main adapter's
-        # response queue (ScriptedAdapter in tests has ordered responses).
-        # Explicitly exclude subprocess backend to avoid hanging during
-        # interactive sessions (claude -p blocks while claude --continue runs).
-        _reviewer = None
-        if build_adapter is not None:
+        from hosted_free import build_hosted_free_adapter
+        _hf = build_hosted_free_adapter()
+        if _hf is not None:
+            candidates.append(("hosted-free", _hf))
+    except Exception:
+        pass
+    if build_adapter is not None:
+        try:
+            from llm import MODEL_CHEAP
             for _backend in ("openrouter", "anthropic"):
                 try:
-                    _reviewer = build_adapter(model=MODEL_CHEAP, backend=_backend)
-                    break
+                    candidates.append(
+                        (_backend, build_adapter(model=MODEL_CHEAP, backend=_backend)))
                 except Exception:
                     continue
-        if _reviewer is None:
-            # No API adapter available (subprocess-only environment).
-            # Fall back to heuristic scope estimate rather than returning unknown.
-            _scope = _heuristic_scope(steps)
-            log.info("pre_flight: no API adapter, using heuristic scope estimate: %s", _scope)
-            return PlanReview(
-                scope=_scope,
-                scope_note="heuristic estimate (no API adapter available for LLM review)",
-            )
+        except Exception:
+            pass
+    return candidates
 
-        steps_text = "\n".join(f"{i+1}. {s}" for i, s in enumerate(steps))
-        user_msg = f"Goal: {goal}\n\nProposed plan:\n{steps_text}"
 
-        resp = _reviewer.complete(
-            [LLMMessage("system", _REVIEW_SYSTEM), LLMMessage("user", user_msg)],
-            max_tokens=512,
-            temperature=0.1,
-            timeout=30,
-            no_tools=True,
-            purpose="plan review",
-        )
+def _parse_review(raw: str) -> Optional[PlanReview]:
+    """Parse a reviewer response into a PlanReview, or None if unusable.
 
-        raw = resp.content.strip()
+    None means "this reviewer failed" — the caller moves to the next
+    candidate, so a garbled answer is indistinguishable from no answer.
+    """
+    if not raw:
+        return None
+    try:
         # Strip markdown fences if present
         if raw.startswith("```"):
             raw = "\n".join(raw.splitlines()[1:])
@@ -214,13 +204,72 @@ def review_plan(
         for u in data.get("unknown_unknowns", []):
             flags.append(PlanFlag(kind="unknown", step=0, message=u, severity="info"))
 
-        review = PlanReview(
+        return PlanReview(
             scope=scope,
             scope_note=scope_note,
             flags=flags,
             milestone_step_indices=milestone_indices,
             raw=raw,
         )
+    except Exception as exc:
+        log.info("pre_flight: reviewer response unparseable (%s)", exc)
+        return None
+
+
+def review_plan(
+    goal: str,
+    steps: List[str],
+    adapter,
+    *,
+    verbose: bool = False,
+) -> PlanReview:
+    """Run a cheap pre-flight review of the proposed plan.
+
+    Returns a PlanReview with scope estimate, flags, and milestone candidates.
+    Never raises — when no reviewer answers (no keys, dead keys, garbled
+    output) it degrades to a heuristic scope estimate, never "unknown"
+    (2026-08-15: a dead OPENROUTER_API_KEY built fine, failed every call,
+    and this function returned scope="unknown" for months — 488/488
+    calibration entries with zero flags and zero milestone candidates).
+    """
+    if not steps:
+        return PlanReview(scope="unknown", scope_note="no steps to review")
+
+    try:
+        from llm import LLMMessage
+
+        steps_text = "\n".join(f"{i+1}. {s}" for i, s in enumerate(steps))
+        user_msg = f"Goal: {goal}\n\nProposed plan:\n{steps_text}"
+        messages = [LLMMessage("system", _REVIEW_SYSTEM), LLMMessage("user", user_msg)]
+
+        review: Optional[PlanReview] = None
+        for _name, _reviewer in _build_reviewers():
+            try:
+                resp = _reviewer.complete(
+                    messages,
+                    max_tokens=512,
+                    temperature=0.1,
+                    timeout=30,
+                    no_tools=True,
+                    purpose="plan review",
+                )
+                review = _parse_review((resp.content or "").strip())
+            except Exception as exc:
+                log.info("pre_flight: reviewer %s failed at call time (%s); trying next",
+                         _name, exc)
+                review = None
+            if review is not None:
+                break
+
+        if review is None:
+            # No reviewer answered usably. Heuristic beats "unknown": the
+            # scope signal survives even when milestone detection can't.
+            _scope = _heuristic_scope(steps)
+            log.info("pre_flight: no working reviewer, heuristic scope estimate: %s", _scope)
+            return PlanReview(
+                scope=_scope,
+                scope_note="heuristic estimate (no working reviewer for LLM review)",
+            )
 
         _log_level = logging.WARNING if review.has_concerns else logging.INFO
         log.log(_log_level, review.format_for_log())
@@ -228,7 +277,7 @@ def review_plan(
             import sys
             print(f"[maro] pre-flight: {review.summary()}", file=sys.stderr, flush=True)
             if review.scope == "wide":
-                print(f"[maro] pre-flight: scope WARNING — {scope_note}", file=sys.stderr, flush=True)
+                print(f"[maro] pre-flight: scope WARNING — {review.scope_note}", file=sys.stderr, flush=True)
             for f in review.flags:
                 if f.severity == "warn":
                     step_str = f"step {f.step}" if f.step else "plan"
@@ -238,7 +287,11 @@ def review_plan(
 
     except Exception as exc:
         log.debug("pre_flight review failed (non-blocking): %s", exc)
-        return PlanReview(scope="unknown", scope_note=f"review failed: {exc}")
+        try:
+            _scope = _heuristic_scope(steps)
+        except Exception:
+            return PlanReview(scope="unknown", scope_note=f"review failed: {exc}")
+        return PlanReview(scope=_scope, scope_note=f"heuristic estimate (review failed: {exc})")
 
 
 # ---------------------------------------------------------------------------

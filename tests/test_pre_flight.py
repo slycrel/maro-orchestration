@@ -126,14 +126,51 @@ class TestReviewPlan:
         assert review.scope in ("narrow", "medium", "wide")
         assert "heuristic" in review.scope_note
 
-    def test_malformed_json_returns_unknown(self):
+    def test_malformed_json_falls_back_to_heuristic(self):
+        """Garbled reviewer output degrades to heuristic scope, never "unknown"
+        (2026-08-15 contract change: unknown hid a months-dead reviewer)."""
         mock_adapter = MagicMock()
         resp = MagicMock()
         resp.content = "not json at all"
         mock_adapter.complete.return_value = resp
         with patch("pre_flight.build_adapter", return_value=mock_adapter):
             review = review_plan("goal", ["step 1"], MagicMock())
-        assert review.scope == "unknown"
+        assert review.scope in ("narrow", "medium", "wide")
+        assert "heuristic" in review.scope_note
+
+    def test_dead_key_falls_back_to_heuristic(self):
+        """A key that BUILDS an adapter but fails every call (the dead
+        OPENROUTER_API_KEY that silenced pre-flight for months) must
+        degrade to heuristic scope, not scope="unknown"."""
+        mock_adapter = MagicMock()
+        mock_adapter.complete.side_effect = RuntimeError("401 invalid api key")
+        with patch("pre_flight.build_adapter", return_value=mock_adapter):
+            review = review_plan("goal", ["Read config.py", "Check value"], MagicMock())
+        assert review.scope in ("narrow", "medium", "wide")
+        assert "heuristic" in review.scope_note
+
+    def test_dead_first_reviewer_next_candidate_answers(self):
+        """Call-time failure on the first candidate moves to the next one —
+        the review survives a single dead backend."""
+        dead = MagicMock()
+        dead.complete.side_effect = RuntimeError("401 invalid api key")
+        live = _make_adapter(_narrow_response())
+        with patch("pre_flight.build_adapter", side_effect=[dead, live]):
+            review = review_plan("goal", ["step 1"], MagicMock())
+        assert review.scope == "narrow"
+        assert live.complete.called
+
+    def test_hosted_free_reviewer_preferred(self):
+        """When the hosted-free tier is available it reviews first — the
+        paid API candidates are never called."""
+        hf = _make_adapter(_narrow_response())
+        paid = _make_adapter(_wide_response())
+        with patch("hosted_free.build_hosted_free_adapter", return_value=hf), \
+             patch("pre_flight.build_adapter", return_value=paid):
+            review = review_plan("goal", ["step 1"], MagicMock())
+        assert review.scope == "narrow"
+        assert hf.complete.called
+        assert not paid.complete.called
 
 
 # ---------------------------------------------------------------------------
