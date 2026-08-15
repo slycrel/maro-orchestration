@@ -2223,6 +2223,22 @@ Sample: the 2026-05-13..17 window of `~/.maro/workspace/runs/` (478 dirs total;
   high/critical findings), iterate; subagents for non-frontier work; Claude
   acts as maro for this featureset with freedom to change direction.
 
+- **2026-08-15 (Jeremy) — Review lane: Sonnet at medium effort for ~5 days
+  (through ~08-20).** "For the adversarial-reviews, let's run sonnet medium
+  for the next 5 days. Glad we had grok, and not sure I want to use that
+  spend on reviews." Codex resumes when its cap resets (08-19). Also noted:
+  a fireworks.ai API key exists in the backup env (hermes chat backup for
+  codex) — available "if needed at some point, but that's probably a
+  distraction." Piped to runtime journal (e9386e8a).
+- **2026-08-15 (Jeremy) — Treasure-map implementation arc OPENED.** "Please
+  keep going, let's get this treasure map implemented; modular,
+  maintainable, testable — I want to do it right for the long term. I think
+  we have a decent ways to go still, and encouraged that what we have is
+  functional even so." The treasure map = the compound-thinking
+  self-surveying map (docs/COMPOUND_THINKING_DESIGN.md). Standing workflow
+  decree applies (build → review → test → fix → re-review to fixpoint);
+  autonomous stretch sanctioned (Jeremy at Manti with the '71 truck).
+
 ## Threads (system-maintained — nothing leaves this list silently)
 
 Active:
@@ -7804,3 +7820,25 @@ under the same two-measurement standard).
   the reset. MODEL_ROUTE_EXPLORATION's "skip a direct Fireworks account"
   is superseded by this purchase for the Hermes chat lane; maro's own
   routing stays OpenRouter-first (unchanged).
+- **2026-08-15** — **Treasure-map arc chunk 1 SHIPPED: the map lens
+  (§9.1's binding caveat implemented).** `src/map_lens.py` renders any
+  run as its self-surveying map on demand — pure reader over artifacts
+  runs already write (metadata.json, loop logs, closure_verdicts.jsonl,
+  run card): landmarks with tri-state fog (done=live, blocked/skipped=
+  grey, unknown=fog), explicit [after:N] edges vs sequential default,
+  recon moves with their VOI decision, loop lineage as vantage moves,
+  closure-stall flag (repeated fingerprint — §9.3's evidence made
+  visible), stop verdict + evidence + reopen condition. Formats
+  text|mermaid|json; json is the §12-nudge-4 subtraction instrument
+  (whatever fields the lens needed = the empirical minimal map schema).
+  Charter enforced structurally: AST read-only pin (a lens that writes
+  has become a store) + no loop/learning imports. Sidecar:
+  `stop_verdicts.REOPEN_CONDITIONS` promotes the §13b type-derived
+  reopen condition from docstring prose to queryable data (coverage
+  pinned against VALID_STOP_VALUES). Live smoke surfaced an upstream
+  wrinkle worth knowing: plan-time clipping can truncate a `[recon:` tag
+  mid-string (sunny-wren step 10) — the lens notes it instead of
+  misclassifying. 23 pins. Census that shaped the arc (map lens absent;
+  stop verdicts recorded but nothing renders them; recon stamps
+  in-memory only — text is the durable carrier by adjudication) ran
+  same day. MILESTONES.md resumed as the arc queue.

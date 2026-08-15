@@ -2,7 +2,36 @@
 
 What to do next, in what order. Updated each session. Deferred ideas live in BACKLOG.md; completed phase history in docs/history/ROADMAP_ARCHIVE.md (ROADMAP.md is a stub). This file is the executable queue.
 
-Last updated: 2026-08-11 — **checkpoint pointer, not a work record: since
+Last updated: 2026-08-15 — **Treasure-map arc (multi-chunk build; this
+file resumes as its queue per the 08-11 note below).** Jeremy's decree:
+"let's get this treasure map implemented; modular, maintainable,
+testable — I want to do it right for the long term." The map = the
+compound-thinking self-surveying map (docs/COMPOUND_THINKING_DESIGN.md);
+census of shipped-vs-remaining ran 2026-08-15 (map lens absent, §13b
+reopen conditions prose-only, recon flavor text-carried by design, no
+first-class milestones).
+
+1. **Chunk 1 — map lens (§9.1 caveat)**: `src/map_lens.py` — any run
+   visualizable as a map on demand; pure reader over existing artifacts
+   (metadata/loop logs/closure verdicts/run card); text|mermaid|json
+   renderers; json = the subtraction instrument for the eventual minimal
+   map schema. SHIPPED 2026-08-15 (+ `stop_verdicts.REOPEN_CONDITIONS`
+   promoted from docstring prose to data). — status below per review.
+2. **Chunk 2 — §13b evidence-specific reopen payloads**: record WHICH
+   budget / WHICH cost-value estimate at the director + budget stamp
+   sites (type-derived condition is now data; the specific half is the
+   remaining teeth). Candidate follow-on: render stop verdict + reopen
+   on the run report (census: nothing renders stop verdicts today).
+3. **Chunk 3 (candidate) — §9.5 mid-meander re-anchor experiment**:
+   needs a milestone-boundary hook first (census: none exists — the
+   only boundary-ish seam is pre-execution milestone expansion,
+   loop_execute.py:663). Scope the boundary concept before building.
+4. **Later, with appetite**: §9.9 backward-chaining generator; 14h
+   revisit mechanic (tool-acquisition reopens standing dead ends).
+   NOT solo-buildable: §10 calibration + §9.7 scoping (owed discussion
+   with Jeremy).
+
+Previous checkpoint: 2026-08-11 — **checkpoint pointer, not a work record: since
 2026-08-01 the executable queue has lived in BACKLOG.md's "Actionable
 Stack" (top of list = next) with per-ship records in GOAL_BRAIN.md's
 dated log.** The LT live-learning arc, the verdict-integrity arc

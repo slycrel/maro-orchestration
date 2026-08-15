@@ -193,6 +193,7 @@ py-modules = [
     "loop_post_step",
     "loop_report",
     "loop_types",
+    "map_lens",
     "mcp_client",
     "memory",
     "memory_backends",

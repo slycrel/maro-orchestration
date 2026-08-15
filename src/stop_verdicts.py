@@ -89,6 +89,27 @@ INTERRUPT_STATUSES = frozenset(
 # same rows.
 PAUSED_STATUSES = INTERRUPT_STATUSES
 
+# §13b made queryable: the type-derived reopen condition as data, not
+# docstring prose. A stop verdict is an observation with a stated way back
+# — "a dead end doesn't stay a dead end." These strings are the vocabulary
+# module's single source of truth for that condition (the docstring above
+# narrates the same facts); consumers (map lens, run report, revisit
+# machinery) read them from here so the prose can never drift from the
+# data. Evidence-SPECIFIC reopen payloads (which budget, which cost
+# estimate) are a separate upgrade recorded at stamp time, not here.
+REOPEN_CONDITIONS = {
+    OUT_OF_BUDGET: "budget restored",
+    THESIS_REFUTED: "new connection evidence (a new landmark or vantage)",
+    NOT_WORTH_IT: "the cost or value estimate moves",
+    LOST_THE_PLOT: "re-anchor against the original ask",
+    EXTERNAL_INTERRUPT: "the interruption clears",
+}
+
+
+def reopen_condition(verdict: str) -> str:
+    """Type-derived reopen condition for a stop verdict ("" if unknown)."""
+    return REOPEN_CONDITIONS.get(verdict, "")
+
 # Statuses meaning the run actually FINISHED EXECUTING and could therefore
 # have been judged — the population a missing closure verdict is a gap in.
 # Deliberately excludes PAUSED_STATUSES (the run is not over, so no verdict
