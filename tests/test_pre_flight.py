@@ -96,6 +96,42 @@ class TestReviewPlan:
         assert len(milestone_flags) == 1
         assert milestone_flags[0].step == 5
 
+    def test_class_gap_flags_created(self):
+        # Class-or-instance probe (2026-08-16 decree): a class_gaps entry
+        # becomes a warn flag, so has_concerns and every downstream
+        # consumer sees it through the existing flags mechanism.
+        steps = ["fix the writer in handle.py", "run tests"]
+        resp = {
+            "scope": "narrow", "scope_note": "small",
+            "assumptions": [], "milestone_candidates": [],
+            "unknown_unknowns": [],
+            "class_gaps": [{"step": 1, "issue":
+                            "goal says EVERY writer; plan touches one"}],
+        }
+        with _patch_reviewer(resp):
+            review = review_plan("fix every verdict writer", steps, MagicMock())
+        class_flags = [f for f in review.flags if f.kind == "class"]
+        assert len(class_flags) == 1
+        assert class_flags[0].severity == "warn"
+        assert class_flags[0].step == 1
+        assert review.has_concerns
+        assert "class" in review.format_for_log()
+
+    def test_absent_class_gaps_is_todays_behavior(self):
+        # An answer WITHOUT the new key parses exactly as before — the
+        # advisory-safe direction (no flag, no gate, no crash).
+        steps = ["s1", "s2", "s3"]
+        resp = {
+            "scope": "narrow", "scope_note": "fine",
+            "assumptions": [], "milestone_candidates": [],
+            "unknown_unknowns": [],
+        }
+        with _patch_reviewer(resp):
+            review = review_plan("goal", steps, MagicMock())
+        assert review.scope == "narrow"
+        assert not [f for f in review.flags if f.kind == "class"]
+        assert not review.has_concerns
+
     def test_unknown_flags_created(self):
         steps = ["s1", "s2"]
         with _patch_reviewer(_wide_response()):

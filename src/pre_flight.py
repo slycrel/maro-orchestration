@@ -57,6 +57,14 @@ _REVIEW_SYSTEM = textwrap.dedent("""\
     4. UNKNOWN UNKNOWNS: What does this plan not know that it should?
        Things the agent will discover mid-execution that will require replanning.
 
+    5. CLASS COVERAGE: When the goal names a CLASS of targets ("every X",
+       "all writers of Y", "wherever Z happens") but the steps touch one
+       or two named members, flag it — name the class and the kind of
+       member the plan never enumerates. A plan that starts with an
+       enumeration/census step, or a goal about one specific target, is
+       fine (emit nothing). This is the instance-vs-class failure: fixing
+       the member you happened to look at while siblings keep the defect.
+
     Be terse. One sentence per flag. Don't pad.
 
     Respond ONLY with this JSON structure (no prose, no markdown):
@@ -65,7 +73,8 @@ _REVIEW_SYSTEM = textwrap.dedent("""\
       "scope_note": "<one sentence explanation>",
       "assumptions": [{"step": <1-based int or 0 for whole plan>, "issue": "<string>"}],
       "milestone_candidates": [{"step": <1-based int>, "reason": "<string>"}],
-      "unknown_unknowns": ["<string>", ...]
+      "unknown_unknowns": ["<string>", ...],
+      "class_gaps": [{"step": <1-based int or 0 for whole plan>, "issue": "<string>"}]
     }
 """).strip()
 
@@ -215,6 +224,21 @@ def _parse_review(raw: str) -> Optional[PlanReview]:
 
         for u in data.get("unknown_unknowns", []):
             flags.append(PlanFlag(kind="unknown", step=0, message=u, severity="info"))
+
+        # Class-or-instance probe (Jeremy decree 2026-08-16, the
+        # anti-naive-optimism arc): a goal implying a CLASS whose plan
+        # touches one member gets a warn flag. Rides the open flags
+        # mechanism — an absent key is byte-identical to today's
+        # behavior (no flag, no gate), which is the safe advisory
+        # direction; efficacy is measured by the calibration lane, not
+        # asserted here.
+        for c in data.get("class_gaps", []):
+            flags.append(PlanFlag(
+                kind="class",
+                step=int(c.get("step", 0)),
+                message=c.get("issue", ""),
+                severity="warn",
+            ))
 
         return PlanReview(
             scope=scope,
