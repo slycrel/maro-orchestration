@@ -6417,7 +6417,16 @@ def test_backchain_runs_before_preflight_review(monkeypatch, tmp_path):
     _setup_workspace(monkeypatch, tmp_path)
     from unittest.mock import MagicMock, patch
 
-    injected = ["probe X [recon: verifies precondition — y]", "s1", "s2"]
+    # Real apply_backchain on the literal production path (r1, architect:
+    # mocking all three units proved call order only) — only the LLM draw
+    # is stubbed, so the real config gate, probe rendering, step-shift,
+    # and record run inside run_agent_loop.
+    (tmp_path / "config.yml").write_text("planner:\n  backchain: true\n")
+    from backchain import Backchain, BackchainLink
+    chain = Backchain(links=[
+        BackchainLink("y is reachable", "verifiable", probe="probe X"),
+        BackchainLink("s2 covers z", "established", step=2),
+    ])
     seen_by_review = {}
 
     def _capture_review(goal, steps, adapter, **kw):
@@ -6429,7 +6438,7 @@ def test_backchain_runs_before_preflight_review(monkeypatch, tmp_path):
         return fake
 
     with patch("loop_planning._decompose_impl", return_value=["s1", "s2"]), \
-         patch("backchain.apply_backchain", return_value=injected) as mock_bc, \
+         patch("backchain.draw_backchain", return_value=chain) as mock_draw, \
          patch("pre_flight.review_plan", side_effect=_capture_review):
         run_agent_loop(
             "do the thing",
@@ -6438,10 +6447,15 @@ def test_backchain_runs_before_preflight_review(monkeypatch, tmp_path):
             max_iterations=10,
         )
 
-    assert mock_bc.called
-    fed = mock_bc.call_args[0][1]
+    assert mock_draw.called
+    fed = mock_draw.call_args[0][1]
     assert fed[:2] == ["s1", "s2"]  # fed the decomposed plan (maybe + verify step)
-    assert seen_by_review["steps"][0].startswith("probe X [recon:")
+    # The review saw the REAL rendered probe step, first. (The recorded
+    # step-shift is pinned deterministically in test_backchain.py — no
+    # run dir exists in this harness, so asserting on the record here
+    # would be pretend coverage behind an if-guard.)
+    assert seen_by_review["steps"][0].startswith("probe X [recon: ")
+    assert seen_by_review["steps"][1] == "s1"
 
 
 def test_backchain_not_called_for_preset_plans(monkeypatch, tmp_path):

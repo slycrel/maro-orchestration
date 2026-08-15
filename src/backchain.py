@@ -15,10 +15,17 @@ The chain is consumed two ways, both immediately (no store — §12 nudge 4):
    plan — riding the §9.2 recon machinery wholesale (tag grammar,
    step_flavor, map-edit verification, map lens glyphs). Capped at 2,
    mirroring draw_cuts' probe cap.
-2. The full chain is recorded to build/backchain.json in the run dir and
-   a BACKCHAIN_DRAWN event fires — the frontier-convergence evidence the
+2. The full chain is recorded to build/backchain.jsonl in the run dir
+   (append — restart/escalation loops re-plan in the same run dir, and a
+   later chain must not erase an earlier loop's record) and a
+   BACKCHAIN_DRAWN event fires — the frontier-convergence evidence the
    doc wants ("forward reaches it AND backward regresses to it" = the
    possibility estimate), adjudicable offline, rendered by the map lens.
+
+Recorded step numbers refer to the FINAL plan (post-injection): when
+probes are prepended, established links' step refs are shifted by the
+probe count before recording, so the record, the milestone indices, the
+loop log, and the map all share one numbering (r1 review, both lenses).
 
 Naming: "backchain", not "regression" — EvalRegression/
 detect_eval_regressions already own that word in the eval subsystem.
@@ -85,19 +92,28 @@ class BackchainLink:
 @dataclass
 class Backchain:
     links: List[BackchainLink] = field(default_factory=list)
-    raw: str = ""
 
     @property
     def probe_links(self) -> List[BackchainLink]:
         return [l for l in self.links
                 if l.link_class == "verifiable" and l.probe.strip()]
 
-    def to_record(self) -> dict:
+    def to_record(self, injected: int = 0) -> dict:
+        # "injected" marks which verifiable links actually became plan
+        # steps — derived from the caller's REAL injection count, not by
+        # re-deriving probe_steps' cap rule here (r1 review: without the
+        # flag, capped-out links render identically to acted-on ones; and
+        # a positional re-derivation would be a guard duplicating its
+        # detector). probe_steps takes probe links in order, so the first
+        # `injected` probe links are the acted-on ones.
+        injected_ids = {id(l) for l in self.probe_links[:max(0, injected)]}
         return {
             "ts": datetime.now(timezone.utc).isoformat(),
             "links": [
                 {"condition": l.condition, "class": l.link_class,
-                 "step": l.step, "probe": l.probe or None}
+                 "step": l.step, "probe": l.probe or None,
+                 **({"injected": id(l) in injected_ids}
+                    if l.link_class == "verifiable" else {})}
                 for l in self.links
             ],
         }
@@ -156,7 +172,7 @@ def draw_backchain(goal: str, steps: List[str], adapter) -> Optional[Backchain]:
                                        step=step_no, probe=probe))
         if not links:
             return None
-        return Backchain(links=links, raw=raw[:1000])
+        return Backchain(links=links)
     except Exception as exc:
         log.debug("backchain: draw failed (fail-open): %s", exc)
         return None
@@ -171,16 +187,26 @@ def probe_steps(chain: Backchain) -> List[str]:
     for link in chain.probe_links[:MAX_PROBE_STEPS]:
         cond = " ".join(link.condition.split())
         probe = " ".join(link.probe.split())
-        # Brackets would corrupt the tag grammar (same scrub _cuts_plan does).
+        # Brackets corrupt the tag grammar — and not only inside the tag:
+        # parse_dependencies/_AFTER_RE search the WHOLE step string, so a
+        # model-authored "[after:2]" in the probe body would forge a
+        # dependency edge. Scrub both fields (r1 review, three lenses:
+        # the original scrub guarded cond only).
+        probe = probe.replace("[", "(").replace("]", ")")
         voi = f"verifies precondition — {cond}".replace("[", "(").replace("]", ")")
         out.append(f"{probe} [recon: {voi}]")
     return out
 
 
 def record_backchain(chain: Backchain, injected: int) -> None:
-    """Persist the chain beside the run (build/backchain.json) + event.
-    Best-effort — never raises."""
-    rec = chain.to_record()
+    """Persist the chain beside the run (build/backchain.jsonl, append)
+    + event. Best-effort — never raises.
+
+    Append, not overwrite: restart/escalation loops re-plan in the same
+    run dir (real runs carry multiple loop_ids), and each re-plan draws
+    its own chain — a later chain must not erase an earlier loop's
+    record (r1 review, two lenses independently)."""
+    rec = chain.to_record(injected=injected)
     rec["probes_injected"] = injected
     try:
         from runs import current_run_dir
@@ -188,8 +214,8 @@ def record_backchain(chain: Backchain, injected: int) -> None:
         if rd is not None:
             build = Path(rd) / "build"
             build.mkdir(parents=True, exist_ok=True)
-            (build / "backchain.json").write_text(
-                json.dumps(rec, ensure_ascii=False, indent=2), encoding="utf-8")
+            with (build / "backchain.jsonl").open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
     except Exception as exc:
         log.debug("backchain: record failed (non-blocking): %s", exc)
     try:
@@ -229,15 +255,35 @@ def apply_backchain(goal: str, steps: List[str], adapter) -> List[str]:
         if len(steps) < 2:
             return steps
         try:
-            from planner import BOUNDARY_TAG
+            from planner import BOUNDARY_TAG, goal_step_ceiling
             if any(BOUNDARY_TAG in s for s in steps):
                 return steps
+            # An operator-stated step ceiling ("in at most 3 steps") binds
+            # the WHOLE plan; decompose enforced it before this splice, so
+            # injecting past it would override explicit operator intent —
+            # skip entirely. (Cuts probes need no such reconciliation:
+            # _cuts_plan always emits its boundary step, so the skip above
+            # structurally excludes cuts plans from this lane.)
+            if goal_step_ceiling(goal) is not None:
+                return steps
         except Exception:
-            pass
+            # Can't prove the plan ISN'T a boundary/ceiling plan — skip
+            # rather than fire on the excluded lane (fail closed, same
+            # direction as the config gate; r1 review, two lenses).
+            return steps
         chain = draw_backchain(goal, steps, adapter)
         if chain is None:
             return steps
         probes = probe_steps(chain)
+        if probes:
+            # Recorded step refs must match the FINAL numbering: prepending
+            # shifts every original step down by len(probes), and the map
+            # lens / milestone indices / loop log all number the final list
+            # (r1 review, both lenses' HIGH — the exact off-by-injection
+            # class this commit fixed for milestone_step_indices).
+            for _l in chain.links:
+                if _l.step is not None:
+                    _l.step += len(probes)
         record_backchain(chain, injected=len(probes))
         if probes:
             log.info("backchain: %d precondition probe(s) prepended (%d link(s))",

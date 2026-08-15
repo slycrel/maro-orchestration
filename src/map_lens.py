@@ -8,7 +8,7 @@ that caveat implemented.
 
 It reads only what runs already write — metadata.json,
 build/loop-*-log.json, build/closure_verdicts.jsonl, build/reanchor.jsonl,
-build/backchain.json, run_card.json — and reconstructs the map: landmarks (steps) with tri-state fog (§2a), edges
+build/backchain.jsonl, run_card.json — and reconstructs the map: landmarks (steps) with tri-state fog (§2a), edges
 (explicit [after:N] dependencies vs sequential default), recon moves with
 the decision they informed (§4), loop lineage as vantage moves (§13a),
 closure stalls (§9.3, identical consecutive fingerprints), and the stop
@@ -106,7 +106,7 @@ class RunMap:
     # re-anchor checks (build/reanchor.jsonl): every milestone-boundary
     # coherence verdict the runtime recorded, on course or not.
     backchain: List[Dict[str, Any]] = field(default_factory=list)  # §9.9
-    # goal-regression links (build/backchain.json): the backward frontier —
+    # goal-regression links (build/backchain.jsonl, latest chain): the backward frontier —
     # established links are convergence evidence, unknowns are named fog.
     notes: List[str] = field(default_factory=list)  # honest-missing markers
 
@@ -389,20 +389,31 @@ def build_map(run_dir: Path) -> RunMap:
     # not step nodes — links are conjectured preconditions (fog until a
     # forward step or probe connects them), and the file is absent for most
     # runs (planner.backchain OFF-default), which is not a gap worth a note.
-    bc = None
-    if (run_dir / "build" / "backchain.json").is_file():
-        bc = _read_json(run_dir / "build" / "backchain.json", notes, "backchain")
-    if isinstance(bc, dict):
-        for row in bc.get("links") or []:
+    # jsonl, one chain per planning pass (restart/escalation loops re-plan
+    # in the same run dir): the LATEST chain is the current picture and is
+    # what renders; earlier chains stay on disk, counted in a note.
+    _chains = _read_jsonl(run_dir / "build" / "backchain.jsonl",
+                          notes, "backchain")
+    if _chains:
+        if len(_chains) > 1:
+            notes.append(f"backchain: {len(_chains)} chains drawn "
+                         "(re-plans); latest rendered")
+        for row in (_chains[-1].get("links") or []):
             if isinstance(row, dict):
+                _cls = str(row.get("class") or "")
+                if _cls not in ("established", "verifiable", "unknown"):
+                    # Off-vocabulary is corruption/drift, not an honest
+                    # "unknown" — laundering it into the unknown bucket
+                    # would hide exactly the drift a note exists for.
+                    notes.append("backchain: unrecognized link class "
+                                 f"{_cls!r}")
                 m.backchain.append({
                     "condition": str(row.get("condition") or ""),
-                    "class": str(row.get("class") or ""),
+                    "class": _cls,
                     "step": row.get("step"),
                     "probe": str(row.get("probe") or ""),
+                    "injected": row.get("injected"),
                 })
-    elif bc is not None:
-        notes.append("corrupt: backchain.json is not an object")
 
     # §9.5 re-anchor checks (2026-08-15): milestone-boundary coherence
     # verdicts. Kept as a separate layer rather than step nodes — an anchor
@@ -488,8 +499,13 @@ def render_text(m: RunMap) -> str:
                 step_ref = f" (step {l['step']})" if l.get("step") else ""
                 out.append(f"  ✓ {_clip(l.get('condition') or '')}{step_ref}")
             elif cls == "verifiable":
+                # injected=False = the probe existed but lost to the cap —
+                # rendering it identically to an acted-on probe would claim
+                # action that never happened (r1 review, architect lens).
+                _cap = ("" if l.get("injected") in (True, None)
+                        else "  (not injected — over probe cap)")
                 out.append(f"  ⌕ {_clip(l.get('condition') or '')}"
-                           f"  → probe: {_clip(l.get('probe') or '', 60)}")
+                           f"  → probe: {_clip(l.get('probe') or '', 60)}{_cap}")
             else:
                 out.append(f"  {_GLYPH[STATE_FOG]} {_clip(l.get('condition') or '')}"
                            "  (unknown)")

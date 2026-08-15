@@ -615,9 +615,12 @@ class TestAnchors:
 # §9.9 backchain layer (build/backchain.json)
 # ---------------------------------------------------------------------------
 
-def _write_backchain(run_dir, links):
-    (run_dir / "build" / "backchain.json").write_text(
-        json.dumps({"links": links, "probes_injected": 1}), encoding="utf-8")
+def _write_backchain(run_dir, links, *, chains=None):
+    """Append one chain per entry (jsonl — one record per planning pass)."""
+    payloads = chains if chains is not None else [links]
+    with (run_dir / "build" / "backchain.jsonl").open("a", encoding="utf-8") as fh:
+        for p in payloads:
+            fh.write(json.dumps({"links": p, "probes_injected": 1}) + "\n")
 
 
 class TestBackchainLayer:
@@ -654,13 +657,54 @@ class TestBackchainLayer:
 
     def test_corrupt_backchain_noted_never_crashes(self, tmp_path):
         rd = _write_run(tmp_path, steps=_STEPS)
-        (rd / "build" / "backchain.json").write_text("[1, 2]", encoding="utf-8")
+        (rd / "build" / "backchain.jsonl").write_text(
+            "[1, 2]\nnot json\n", encoding="utf-8")
         m = build_map(rd)
         assert m.backchain == []
         assert any("backchain" in n for n in m.notes)
+
+    def test_multiple_chains_render_latest_with_note(self, tmp_path):
+        """Re-plans append chains; the map renders the LATEST (current
+        picture) and counts the rest — earlier chains must not vanish
+        silently NOR override the current one (r1 finding)."""
+        rd = _write_run(tmp_path, steps=_STEPS)
+        older = [{"condition": "stale precondition", "class": "unknown"}]
+        _write_backchain(rd, None, chains=[older, self._LINKS])
+        m = build_map(rd)
+        assert len(m.backchain) == 3
+        assert all(l["condition"] != "stale precondition" for l in m.backchain)
+        assert any("2 chains drawn" in n for n in m.notes)
+
+    def test_off_vocabulary_class_noted_not_laundered(self, tmp_path):
+        """A misspelled/drifted class must not render as an honest
+        'unknown' with no trace (r1, minimalist)."""
+        rd = _write_run(tmp_path, steps=_STEPS)
+        _write_backchain(rd, [{"condition": "c", "class": "establishedd"}])
+        m = build_map(rd)
+        assert any("unrecognized link class" in n for n in m.notes)
+
+    def test_uninjected_probe_marked_in_text(self, tmp_path):
+        """A capped-out probe link must not render identically to one
+        that actually became a plan step (r1, architect)."""
+        rd = _write_run(tmp_path, steps=_STEPS)
+        _write_backchain(rd, [
+            {"condition": "acted on", "class": "verifiable",
+             "probe": "p1", "injected": True},
+            {"condition": "capped out", "class": "verifiable",
+             "probe": "p2", "injected": False},
+        ])
+        text = render_text(build_map(rd))
+        assert "⌕ acted on  → probe: p1\n" in text + "\n"
+        assert "⌕ capped out  → probe: p2  (not injected — over probe cap)" in text
 
     def test_json_carries_backchain(self, tmp_path):
         rd = _write_run(tmp_path, steps=_STEPS)
         _write_backchain(rd, self._LINKS)
         data = json.loads(render_json(build_map(rd)))
         assert len(data["backchain"]) == 3
+        # Content, not just shape — a field-mapping bug in the serialized
+        # path would pass a count-only assert (r1, minimalist).
+        assert data["backchain"][0] == {
+            "condition": "report exists", "class": "established",
+            "step": 3, "probe": "", "injected": None}
+        assert data["backchain"][1]["probe"] == "git log -1"

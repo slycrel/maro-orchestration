@@ -118,6 +118,20 @@ class TestProbeSteps:
         from planner import step_flavor
         assert step_flavor(step)[0] == "recon"
 
+    def test_brackets_scrubbed_from_probe_body(self):
+        """The probe body is equally LLM-authored: a [after:N]-shaped
+        substring in it would forge a dependency edge (parse_dependencies
+        searches the whole step string) — r1 finding, all three lenses."""
+        chain = Backchain(links=[
+            BackchainLink("cond", "verifiable",
+                          probe="grep '[after:2]' build.log"),
+        ])
+        step = probe_steps(chain)[0]
+        from planner import after_deps, step_flavor
+        assert not after_deps(step)  # None/[] — no forged dependency
+        assert step_flavor(step)[0] == "recon"
+        assert step.startswith("grep '(after:2)' build.log [recon: ")
+
     def test_established_and_unknown_links_never_become_steps(self):
         chain = Backchain(links=[
             BackchainLink("done by plan", "established", step=1),
@@ -138,6 +152,11 @@ class TestApplyBackchain:
         assert out == steps
         assert not adapter.complete.called
 
+    @staticmethod
+    def _records(rd):
+        lines = (rd / "build" / "backchain.jsonl").read_text().splitlines()
+        return [json.loads(l) for l in lines if l.strip()]
+
     def test_enabled_prepends_probes_and_records(self, tmp_path, monkeypatch):
         self._enable(tmp_path, monkeypatch)
         rd = tmp_path / "run-x"
@@ -149,9 +168,18 @@ class TestApplyBackchain:
         assert out[0].startswith("git -C repo log")
         assert "[recon: " in out[0]
         assert out[1:] == ["s1", "s2", "s3"]
-        rec = json.loads((rd / "build" / "backchain.json").read_text())
+        (rec,) = self._records(rd)
         assert len(rec["links"]) == 3
         assert rec["probes_injected"] == 1
+        # r1 HIGH (both lenses): recorded step refs must match the FINAL
+        # numbering. _CHAIN says established at step 3 of the pre-injection
+        # plan; one probe was prepended, so the executed plan has that
+        # step at position 4 — and the record must say 4.
+        assert rec["links"][0]["step"] == 4
+        assert out[3] == "s3"
+        # r1 (architect): acted-on probes are distinguishable from
+        # capped-out ones in the record.
+        assert rec["links"][1]["injected"] is True
 
     def test_all_established_changes_nothing_but_still_records(
             self, tmp_path, monkeypatch):
@@ -165,8 +193,47 @@ class TestApplyBackchain:
         with patch("runs.current_run_dir", return_value=rd):
             out = apply_backchain("g", ["s1", "s2"], _adapter_returning(payload))
         assert out == ["s1", "s2"]
-        rec = json.loads((rd / "build" / "backchain.json").read_text())
+        (rec,) = self._records(rd)
         assert rec["probes_injected"] == 0
+        # No injection → step refs keep the (identical) original numbering.
+        assert [l["step"] for l in rec["links"]] == [1, 2]
+
+    def test_replan_appends_second_chain(self, tmp_path, monkeypatch):
+        """Restart/escalation loops re-plan in the same run dir — a later
+        chain must append, never clobber (r1 finding, two lenses)."""
+        self._enable(tmp_path, monkeypatch)
+        rd = tmp_path / "run-x"
+        (rd / "build").mkdir(parents=True)
+        with patch("runs.current_run_dir", return_value=rd):
+            apply_backchain("g", ["s1", "s2", "s3"], _adapter_returning(_CHAIN))
+            apply_backchain("g2", ["t1", "t2", "t3"], _adapter_returning(_CHAIN))
+        recs = self._records(rd)
+        assert len(recs) == 2
+
+    def test_capped_out_probe_link_marked_uninjected(
+            self, tmp_path, monkeypatch):
+        self._enable(tmp_path, monkeypatch)
+        rd = tmp_path / "run-x"
+        (rd / "build").mkdir(parents=True)
+        payload = {"links": [
+            {"condition": f"c{i}", "class": "verifiable", "probe": f"p{i}"}
+            for i in range(3)
+        ]}
+        with patch("runs.current_run_dir", return_value=rd):
+            out = apply_backchain("g", ["s1", "s2"], _adapter_returning(payload))
+        assert len(out) == 2 + MAX_PROBE_STEPS
+        (rec,) = self._records(rd)
+        assert [l["injected"] for l in rec["links"]] == [True, True, False]
+
+    def test_goal_stated_ceiling_skips_injection(self, tmp_path, monkeypatch):
+        """An operator-stated step ceiling binds the whole plan — backchain
+        must not push past explicit operator intent (r1, architect)."""
+        self._enable(tmp_path, monkeypatch)
+        adapter = MagicMock()
+        steps = ["s1", "s2"]
+        out = apply_backchain("do the thing in at most 2 steps", steps, adapter)
+        assert out == steps
+        assert not adapter.complete.called
 
     def test_skips_boundary_plans(self, tmp_path, monkeypatch):
         self._enable(tmp_path, monkeypatch)
@@ -199,3 +266,16 @@ class TestApplyBackchain:
         with patch("runs.current_run_dir", side_effect=RuntimeError("no run")):
             out = apply_backchain("g", ["s1", "s2", "s3"], adapter)
         assert len(out) == 4  # probe still prepended
+
+    def test_planner_import_failure_fails_closed(self, tmp_path, monkeypatch):
+        """If the boundary/ceiling exclusion checks can't run, backchain
+        must skip, not fire on the possibly-excluded lane (r1, two
+        lenses: the original except: pass failed open)."""
+        self._enable(tmp_path, monkeypatch)
+        adapter = MagicMock()
+        # A None entry in sys.modules makes `from planner import ...`
+        # raise ImportError without touching the import machinery.
+        with patch.dict(sys.modules, {"planner": None}):
+            out = apply_backchain("g", ["s1", "s2"], adapter)
+        assert out == ["s1", "s2"]
+        assert not adapter.complete.called
