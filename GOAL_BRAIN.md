@@ -7960,3 +7960,23 @@ under the same two-measurement standard).
   **Remaining treasure-map items are NOT solo-buildable: §10
   calibration + §9.7 scoping are owed discussion with Jeremy;
   adjudicate reanchor/backchain jsonl once real runs accumulate.**
+- **2026-08-15 (PM, stale-test sweep — Jeremy's named fallback lane run
+  as piece 4).** Five stale verification surfaces run, every flag
+  verified before acting; record =
+  `docs/history/2026-08-15-stale-test-sweep.md`. Headline:
+  **audit-phases.sh was broken AND lying** — untouched since Jul 4, it
+  pre-dates container mode ON; the dispatched run couldn't mount the
+  repo (goal-declared root outside the write scope), burned 1.5M
+  tokens proving its own blindness, and the script exited 0 on the
+  stuck run (taxonomy pattern 7 live in our own tooling). Fixed both
+  (honest exit d9ec4e4; repo as read-only
+  `executor.container_extra_mounts` on this box) and PROVEN by re-run:
+  3/3 done, full 55-phase audit report produced — 50 VERIFIED, 5 flags
+  all archive-staleness not code-rot (3 deliberate retirements, 1
+  superseded artifact, 1 never-shipped claim: `lat check` has no git
+  trace — aspirational when written). ROADMAP_ARCHIVE annotated
+  (70677e1). Also: dev-recall re-ingested (was 3 days stale, missing
+  the whole arc); navigator divergences adjudicated 3/3
+  navigator_right (cumulative 91/12; lesson-inject A/B 56% vs 41%
+  agreement); coverage re-measured 80.18% → floor ratcheted 70→75
+  (72752a1); test-cov.sh -n-auto footgun got throttle knobs (ff48e9f).
