@@ -142,6 +142,25 @@ class TestRankerRegimePin:
             last_reinforced="2026-08-01")
         assert not hasattr(tl, "created_at")
         assert "recency_key" not in inspect.getsource(query_lessons_scored)
+        # Behavioral leg (r2: the source grep alone misses indirection —
+        # kwargs forwarding, helpers): on TieredLesson docs the hybrid
+        # ranker must produce BM25 scores, i.e. byte-identical output to
+        # the pure-BM25 path. If RRF ever fuses here, scores collapse to
+        # the compressed 1/(k+rank) scale and this equality breaks.
+        from hybrid_search import bm25_rank_scored, hybrid_rank_scored
+        docs = [TieredLesson(
+            lesson_id=f"l{i}", task_type="agenda", outcome="done",
+            lesson=t, source_goal="g", confidence=0.8, tier="medium",
+            score=1.0, last_reinforced="2026-08-01")
+            for i, t in enumerate([
+                "socket retries need exponential backoff",
+                "parsing jsonl requires torn-line handling",
+                "cache invalidation wants explicit versioning",
+                "socket timeouts hide retry storms",
+            ])]
+        query = "socket retry behavior"
+        assert (hybrid_rank_scored(query, docs, top_k=4)
+                == bm25_rank_scored(query, docs, top_k=4))
 
 
 class TestCacheRefresh:

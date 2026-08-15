@@ -491,6 +491,56 @@ class TestLoopSlice:
         assert adj[tls["d"].lesson_id]["weight"] > 1.5
         assert adj[tls["c"].lesson_id]["weight"] < 0.5
 
+    def test_portability_topup_shares_one_cache_snapshot(
+            self, monkeypatch, tmp_path):
+        """r2: the untyped top-up's apply_portability call must reuse the
+        cache snapshot the agenda call loaded — reverting to per-call
+        load_cache() (the split-snapshot race r1 found) makes this count
+        assertion fail. Also drives the top-up branch itself, which the
+        boost/demote test never reaches (its agenda pool fills all 3
+        slots)."""
+        import json as _json
+        _setup(monkeypatch, tmp_path)
+        import memory
+        import knowledge_web
+        import portability
+        from knowledge_web import record_tiered_lesson
+
+        agenda_tl = record_tiered_lesson(
+            "agenda lesson about sockets", task_type="agenda",
+            outcome="done", source_goal="foreign origin goal one")
+        untyped = [record_tiered_lesson(
+            f"untyped lesson {k} about retries", task_type="general",
+            outcome="done", source_goal="foreign origin goal two")
+            for k in ("w", "x", "y", "z")]
+        untyped_scored = [(tl, 1.0 - 0.1 * i)
+                          for i, tl in enumerate(untyped)]
+        monkeypatch.setattr(
+            knowledge_web, "query_lessons_scored",
+            lambda *a, **kw: ([(agenda_tl, 1.0)]
+                              if kw.get("task_type") == "agenda"
+                              else list(untyped_scored)))
+        monkeypatch.setattr(memory, "load_lessons", lambda **kw: [])
+
+        from portability import cache_path
+        cache_path().parent.mkdir(parents=True, exist_ok=True)
+        cache_path().write_text(_json.dumps({"lessons": {
+            untyped[3].lesson_id: {"foreign_s": 6, "foreign_f": 0}}}),
+            encoding="utf-8")
+
+        calls = []
+        _real_load = portability.load_cache
+        monkeypatch.setattr(portability, "load_cache",
+                            lambda: calls.append(1) or _real_load())
+
+        r = recall("investigate the flaky deployment", slice="loop")
+
+        # Boost fired inside the top-up branch: raw-last untyped lesson
+        # (0.7 × 1.75 = 1.225) outranks its pool and reaches the render.
+        assert "untyped lesson z" in r.lessons
+        # One snapshot for the whole recall — both apply calls shared it.
+        assert len(calls) == 1
+
     def test_flat_topup_skips_dual_written_twin(self, monkeypatch, tmp_path):
         """Extraction dual-writes the same text to both stores — the flat
         top-up must not inject a tiered lesson's twin a second time, but
