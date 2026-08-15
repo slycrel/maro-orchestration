@@ -448,6 +448,21 @@ def enforce_backend_container_contract(adapter, executor: bool) -> None:
             "containerize executor work — refusing to run it on the host. "
             "Use the subprocess (claude) backend for executor steps, or set "
             "executor.container to on/off.")
+    warn_backend_host_run(backend)
+
+
+def warn_backend_host_run(backend: str) -> None:
+    """Throttled SF-6 visibility warning: an executor call is served by a
+    backend that cannot containerize while executor.container=on.
+
+    ONE implementation with one throttle stamp, two callers: the seam
+    guard above (bare adapters / all-incapable wrappers) and the
+    FailoverAdapter walk (2026-08-15 review, 3-lens consensus: the seam
+    guard runs on the WRAPPER, whose capability report is ANY-inner —
+    it structurally cannot see which inner actually serves, so a mixed
+    list's incapable first pick ran executor work on the host with zero
+    warning while the docstrings claimed otherwise)."""
+    global _last_backend_warn
     now = time.monotonic()
     if now - _last_backend_warn >= _WARN_THROTTLE_S:
         log.warning(

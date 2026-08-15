@@ -144,22 +144,36 @@ def load_playbook() -> str:
         return ""
 
 
+def _section_span(text: str, section: str):
+    """(header_end, section_end) char offsets of the named section's body,
+    or None when the file has no such header LINE.
+
+    LINE-anchored on purpose, and the ONE section-boundary implementation
+    (used by both append_to_playbook's insertion and section_text's
+    membership reads, so the two cannot drift): the original substring
+    lookup treated `## Canon` embedded ANYWHERE — including inside an
+    entry's own text — as the section header, so crafted entry content
+    could spoof section membership (2026-08-15 review, executed probe;
+    entry text is LLM/pipeline-derived, not operator-only)."""
+    m = re.search(rf"(?m)^##[ \t]+{re.escape(section)}[ \t]*$", text)
+    if m is None:
+        return None
+    nxt = re.search(r"(?m)^## ", text[m.end():])
+    end = m.end() + nxt.start() if nxt else len(text)
+    return m.end(), end
+
+
 def section_text(section: str) -> str:
     """The named section's text from the live playbook ('' when absent).
 
-    Slice contract mirrors append_to_playbook's insertion logic: from the
-    `## <section>` header to the next `\\n## ` header (or end of file).
     Exists so a caller verifying that an append LANDED IN a section can
     scope its membership check (2026-08-13 review: the canon door checked
     its marker against the WHOLE playbook, so a same-marker entry in any
-    other section false-verified a deduped append)."""
+    other section false-verified a deduped append). Boundary contract is
+    _section_span — shared with append_to_playbook, line-anchored."""
     text = load_playbook()
-    header = f"## {section}"
-    if header not in text:
-        return ""
-    remainder = text.split(header, 1)[1]
-    nxt = remainder.find("\n## ")
-    return remainder if nxt < 0 else remainder[:nxt]
+    span = _section_span(text, section)
+    return "" if span is None else text[span[0]:span[1]]
 
 
 def seed_playbook() -> None:
@@ -426,6 +440,15 @@ def append_to_playbook(
     if not entry:
         log.warning("playbook: rejected empty entry (section=%s, source=%s)", section, source)
         return
+    # An entry is ONE playbook line by contract (see docstring). Collapse
+    # embedded newlines instead of writing raw lines into the file: a
+    # multiline entry (or source/key marker) could otherwise land a
+    # `## <section>` header line of its own and spoof section membership
+    # for every later line-anchored read (2026-08-15 review, executed
+    # probe — entry text is LLM/pipeline-derived, not operator-only).
+    entry = " ".join(entry.split())
+    source = " ".join(str(source or "").split())
+    key = " ".join(str(key or "").split())
     if len(entry) > 500:
         entry = entry[:500] + "…"
 
@@ -468,24 +491,24 @@ def append_to_playbook(
             return
 
         section_header = f"## {section}"
+        # Line-anchored boundary via the SHARED helper (2026-08-15 review:
+        # the substring lookup here was the footgun section_text originally
+        # copied — an embedded "## <section>" inside entry text matched as
+        # the header; one implementation means one contract).
+        span = _section_span(text, section)
 
-        if section_header in text:
-            # Append after the section header
-            parts = text.split(section_header, 1)
-            # Find the end of this section (next ## or end of file)
-            remainder = parts[1]
-            next_section = remainder.find("\n## ")
-            if next_section >= 0:
-                insert_point = next_section
-            else:
-                # Before the "Last updated" line if it exists
-                last_updated = remainder.find("\n*Last updated:")
-                insert_point = last_updated if last_updated >= 0 else len(remainder)
-
+        if span is not None:
+            header_end, section_end = span
+            if section_end == len(text):
+                # Last section: insert before the "Last updated" stamp.
+                last_updated = text.find("\n*Last updated:", header_end)
+                if last_updated >= 0:
+                    section_end = last_updated
             updated = (
-                parts[0] + section_header +
-                remainder[:insert_point].rstrip() + "\n" + entry_line + "\n" +
-                remainder[insert_point:]
+                text[:header_end] +
+                text[header_end:section_end].rstrip() +
+                "\n" + entry_line + "\n" +
+                text[section_end:]
             )
         else:
             # Create new section before "Last updated" or at end

@@ -457,6 +457,13 @@ def _deref_hardlink(ti: tarfile.TarInfo, src: Path) -> tarfile.TarInfo:
     return ti
 
 
+def _tar_add_deref(tar: tarfile.TarFile, src: Path, arcname: str) -> None:
+    """Single-file tar.add with the hardlink dereference — one spelling
+    for the three raw-add lanes (raw-db fallback, sidecars, experiments)."""
+    tar.add(str(src), arcname=arcname, recursive=False,
+            filter=lambda ti: _deref_hardlink(ti, src))
+
+
 def _add_bytes(tar: tarfile.TarFile, arcname: str, data: bytes,
                mode: int = 0o644) -> None:
     ti = tarfile.TarInfo(name=arcname)
@@ -585,8 +592,7 @@ def export_workspace(output_path: Path = None, verbose: bool = False) -> Path:
                 if verbose:
                     print(f"  add:  {rel} (sqlite snapshot)", file=sys.stderr)
             else:
-                tar.add(str(src), arcname=rel, recursive=False,
-                        filter=lambda ti: _deref_hardlink(ti, src))
+                _tar_add_deref(tar, src, rel)
                 file_count += 1
                 total_bytes += src.stat().st_size
                 manifest_entries.append(
@@ -601,8 +607,7 @@ def export_workspace(output_path: Path = None, verbose: bool = False) -> Path:
                     print(f"  skip: {rel} (folded into snapshot)",
                           file=sys.stderr)
                 continue
-            tar.add(str(src), arcname=rel, recursive=False,
-                    filter=lambda ti: _deref_hardlink(ti, src))
+            _tar_add_deref(tar, src, rel)
             file_count += 1
             total_bytes += src.stat().st_size
             manifest_entries.append(
@@ -660,10 +665,8 @@ def export_workspace(output_path: Path = None, verbose: bool = False) -> Path:
                     continue
                 if not p.is_file():
                     continue  # empty dirs not preserved (documented)
-                tar.add(str(p),
-                        arcname=_META_PREFIX + "experiments/" + str(rel),
-                        recursive=False,
-                        filter=lambda ti: _deref_hardlink(ti, p))
+                _tar_add_deref(
+                    tar, p, _META_PREFIX + "experiments/" + str(rel))
                 exp_files += 1
                 meta_count += 1
 

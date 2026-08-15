@@ -63,6 +63,30 @@ every fix carrying a test that FAILS against the pre-fix code
 
 Suite 8667 passed / 0 skipped after the chunk (+22 tests).
 
+**Adversarial review of the chunk (2026-08-15, sonnet-medium ×3 lenses
+per Jeremy's 5-day decree — codex capped until ~08-19):** two
+probe-confirmed HIGHs, both in the chunk's own new code, both the
+sibling-lane class — (1) 3-lens consensus: the documented mode-`on`
+SF-6 warning was never wired for the production shape (build_adapter
+always wraps in FailoverAdapter, whose ANY-inner capability report
+no-ops the seam guard on a mixed list; the walk had no on-mode warn
+branch) — fixed by moving the warn INTO the walk per serving inner
+(`warn_backend_host_run`, one throttle, two callers) + a composition
+test on the literal production path; (2) Skeptic executed probe:
+`section_text` substring matching was spoofable by an embedded
+`## Canon` inside LLM-derived entry text — my helper had faithfully
+copied `append_to_playbook`'s own naive lookup — fixed with ONE shared
+line-anchored `_section_span` used by both, plus the documented
+one-line entry contract enforced at append (newlines in entry/source/
+key collapse, closing the header-injection lane). Also took the
+Minimalist's dedup (one `_tar_add_deref` for the three raw-add lanes).
+All five defect tests verified failing against pre-fix code. Suite
+8696 / 0 after fixes. Reviewer meta: sonnet round again produced
+0 hallucinated findings — and both HIGHs were exactly "the diff and
+comments read as correct, the tests asserted the wrong thing" (no
+log-capture assertion; no injected-content case), i.e. the
+claimed-but-unwired pattern.
+
 
 ## Executor image ships no pytest — SHIPPED 2026-08-06; stale entry found + archived 2026-08-13
 

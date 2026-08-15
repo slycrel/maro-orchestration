@@ -657,13 +657,18 @@ class FailoverAdapter(LLMAdapter):
 
     @property
     def container_capable(self) -> bool:  # type: ignore[override]
-        """ANY-inner aggregation, matched to its consumers: the require-mode
+        """ANY-inner aggregation, matched to ONE consumer: the require-mode
         seam guard must not refuse when the walk below would still reach a
         capable adapter (the walk skips incapable ones for executor calls
-        under require). Known residual: for verb ADVERTISEMENT under mode
-        `on` this is optimistic — a mixed list whose first healthy adapter
-        is incapable serves executor calls on the host while a capable
-        sibling exists; the throttled walk warning keeps that visible."""
+        under require). It deliberately does NOT answer "which inner will
+        serve" — only the walk knows that, which is why the on-mode SF-6
+        warning lives IN the walk (warn_backend_host_run per serving
+        inner), not in the seam guard (2026-08-15 review: relying on this
+        aggregate for the warning meant a mixed list's incapable first
+        pick served executor calls silently). Known residual: verb
+        ADVERTISEMENT gates read this aggregate and stay optimistic for a
+        mixed list — under-advertising is not available there, so the walk
+        warning is the visibility backstop."""
         return any(getattr(a, "container_capable", False)
                    for a in self._adapters)
 
@@ -707,18 +712,21 @@ class FailoverAdapter(LLMAdapter):
         # Executor-lane container contract (2026-08-13 review residual):
         # under require, an incapable inner adapter must be SKIPPED — never
         # served — so failover cannot migrate an executor call onto the
-        # host. Mode is read once per walk; the seam guard
-        # (container_exec.enforce_backend_container_contract) already
-        # refused when NO inner is capable, and a capable adapter's own
-        # resolve_container_run still refuses if docker is down.
-        _exec_require = False
+        # host; under on, the WALK owns the SF-6 warning because only the
+        # walk knows which inner actually serves (2026-08-15 review,
+        # 3-lens consensus: the seam guard sees the wrapper's ANY-inner
+        # capability and no-ops on a mixed list, so the documented warning
+        # never fired). Mode is read once per walk; a capable adapter's
+        # own resolve_container_run still refuses if docker is down.
+        _exec_container_mode = ""
         _skipped_incapable = 0
         if kwargs.get("executor"):
             try:
                 from container_exec import container_mode
-                _exec_require = container_mode() == "require"
+                _exec_container_mode = container_mode()
             except ImportError:
-                _exec_require = False
+                _exec_container_mode = ""
+        _exec_require = _exec_container_mode == "require"
         # Snapshot at entry: a trip recorded DURING this walk protects future
         # complete() calls, not later adapters in this one — the walk already
         # moves past the failed adapter on its own.
@@ -746,6 +754,15 @@ class FailoverAdapter(LLMAdapter):
                     "executor.container=require and this backend cannot "
                     "containerize", getattr(adapter, "backend", "?"))
                 continue
+            if (_exec_container_mode == "on"
+                    and not getattr(adapter, "container_capable", False)):
+                # Serving inner can't containerize: warn (throttled), don't
+                # filter — `on` is degrade-with-visibility, not refuse.
+                try:
+                    from container_exec import warn_backend_host_run
+                    warn_backend_host_run(getattr(adapter, "backend", "?"))
+                except ImportError:
+                    pass
             try:
                 result = adapter.complete(
                     messages,

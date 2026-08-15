@@ -2187,14 +2187,47 @@ class TestFailoverExecutorContainerContract:
         resp = fa.complete([LLMMessage("user", "x")])
         assert resp.content == "served-incapable"
 
-    def test_on_mode_walk_does_not_filter(self, monkeypatch):
-        # mode `on` degrades (visibly, via the seam guard's warning) —
-        # the walk itself must not reorder or refuse.
+    def test_on_mode_walk_serves_incapable_but_warns(
+            self, monkeypatch, caplog):
+        # mode `on` degrades — the walk must not reorder or refuse — but
+        # the degrade must be VISIBLE (SF-6), and only the walk knows
+        # which inner serves (2026-08-15 review, 3-lens consensus: the
+        # documented warning was never wired for wrapped mixed lists; the
+        # earlier version of this test asserted only the served content,
+        # so the silent host run was invisible to the suite).
+        import logging
+        import container_exec as ce
         from llm import FailoverAdapter, LLMMessage
         self._mode(monkeypatch, "on")
+        ce.reset_container_caches()
         fa = FailoverAdapter([self._incapable(), self._capable()])
-        resp = fa.complete([LLMMessage("user", "x")], executor=True)
+        with caplog.at_level(logging.WARNING):
+            resp = fa.complete([LLMMessage("user", "x")], executor=True)
         assert resp.content == "served-incapable"
+        warns = [r for r in caplog.records
+                 if "cannot containerize" in r.getMessage()]
+        assert len(warns) == 1
+        assert "codex" in warns[0].getMessage()
+
+    def test_on_mode_production_composition_warns(
+            self, monkeypatch, caplog):
+        # The literal production call path (2026-08-15 review,
+        # Minimalist): seam guard runs on the WRAPPER (ANY-inner capable
+        # → no-op by design), then the walk serves — the warning must
+        # come from the composition, not from either unit's synthetic
+        # stand-in for the other.
+        import logging
+        import container_exec as ce
+        from llm import FailoverAdapter, LLMMessage
+        self._mode(monkeypatch, "on")
+        ce.reset_container_caches()
+        fa = FailoverAdapter([self._incapable(), self._capable()])
+        with caplog.at_level(logging.WARNING):
+            ce.enforce_backend_container_contract(fa, executor=True)
+            resp = fa.complete([LLMMessage("user", "x")], executor=True)
+        assert resp.content == "served-incapable"
+        assert [r for r in caplog.records
+                if "cannot containerize" in r.getMessage()]
 
     def test_any_inner_capable_reported_for_seam_guard(self):
         from llm import FailoverAdapter

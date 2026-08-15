@@ -255,6 +255,62 @@ class TestPlaybookAppend:
         assert "Second insight." in text
 
 
+class TestSectionBoundaries:
+    """Line-anchored section lookup + one-line entry contract
+    (2026-08-15 review, executed probe: substring matching let crafted
+    entry text spoof Canon membership for the canon door's verify)."""
+
+    def test_section_text_returns_real_section(self, tmp_path):
+        seed_playbook()
+        from playbook import section_text
+        append_to_playbook("canon-grade insight", section="Canon",
+                           source="canon:abc123")
+        assert "canon:abc123" in section_text("Canon")
+        assert section_text("Nonexistent") == ""
+
+    def test_section_text_ignores_midline_header_lookalike(self, tmp_path):
+        seed_playbook()
+        from playbook import section_text
+        append_to_playbook(
+            "we discussed ## Canon promotion rules today",
+            section="Learned")
+        # No real ## Canon header line exists — a mid-line occurrence of
+        # the header string must not open a phantom section.
+        assert section_text("Canon") == ""
+
+    def test_multiline_entry_cannot_inject_a_section_header(self, tmp_path):
+        seed_playbook()
+        from playbook import section_text
+        append_to_playbook(
+            "benign prefix\n## Canon\ncanon:fake-id spoofed content",
+            section="Learned")
+        text = load_playbook()
+        # The entry landed as ONE line (newlines collapsed) …
+        assert "benign prefix ## Canon canon:fake-id spoofed content" in text
+        # … so no Canon section exists and the spoofed marker is not
+        # readable as Canon membership.
+        assert "canon:fake-id" not in section_text("Canon")
+
+    def test_multiline_source_cannot_inject_either(self, tmp_path):
+        seed_playbook()
+        from playbook import section_text
+        append_to_playbook(
+            "ordinary insight", section="Learned",
+            source="evolver:x\n## Canon\ncanon:fake-src")
+        assert "canon:fake-src" not in section_text("Canon")
+
+    def test_append_targets_real_header_not_embedded_string(self, tmp_path):
+        seed_playbook()
+        from playbook import section_text
+        # An entry that MENTIONS ## Ops lands under Learned; a later
+        # append to a real ## Ops section must create/target the real
+        # header, not splice into the mention.
+        append_to_playbook("notes about ## Ops rotation", section="Learned")
+        append_to_playbook("restart the box weekly", section="Ops")
+        assert "restart the box weekly" in section_text("Ops")
+        assert "notes about" not in section_text("Ops")
+
+
 class _FakeAdapter:
     def __init__(self, content):
         self._content = content
