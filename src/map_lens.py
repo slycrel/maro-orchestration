@@ -110,15 +110,25 @@ class RunMap:
 # ---------------------------------------------------------------------------
 
 def _read_json(path: Path, notes: List[str], what: str) -> Optional[Any]:
+    """Read one JSON artifact; None ALWAYS arrives with a note attached.
+
+    Contract (round-2 review, Skeptic): a file containing literal `null`
+    parses cleanly to None and used to slip past every corrupt-shape
+    check downstream — noted here so callers can treat None uniformly as
+    "absent, and the map already says why."
+    """
     if not path.is_file():
         notes.append(f"missing: {what} ({path.name})")
         return None
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        parsed = json.loads(path.read_text(encoding="utf-8"))
     except Exception as exc:  # narrow-except: any unreadable artifact is a
         # note on the map, never a crash — the lens must render partial runs.
         notes.append(f"unreadable: {what} ({path.name}: {exc})")
         return None
+    if parsed is None:
+        notes.append(f"corrupt: {what} is JSON null ({path.name})")
+    return parsed
 
 
 def _read_jsonl(path: Path, notes: List[str], what: str) -> List[dict]:
@@ -213,6 +223,9 @@ def build_map(run_dir: Path) -> RunMap:
     # Pause state (§13e) rides the card when typed; meta status names the
     # paused family. Only surface what is actually recorded.
     card = _read_json(run_dir / "run_card.json", notes, "run card")
+    if card is not None and not isinstance(card, dict):
+        notes.append("corrupt: run card is not a JSON object")
+        card = None
     if isinstance(card, dict):
         if card.get("pause_reason"):
             m.pause = {
@@ -237,7 +250,10 @@ def build_map(run_dir: Path) -> RunMap:
         notes.append("missing: loop logs (build/loop-*-log.json)")
     known_loop_order = [lp["loop_id"] for lp in m.loops if lp["loop_id"]]
 
-    def _log_sort_key(path: Path) -> Tuple[int, str]:
+    # Keys computed in one pass BEFORE sorting (round-2 review, Architect:
+    # a sort key with a notes side effect was correct only because CPython
+    # evaluates each key exactly once — fragile coupling, now gone).
+    def _order_of(path: Path) -> Tuple[int, str]:
         stem = path.name[len("loop-"):-len("-log.json")]
         for pos, lid in enumerate(known_loop_order):
             if lid.startswith(stem) or stem.startswith(lid[:8]):
@@ -250,8 +266,11 @@ def build_map(run_dir: Path) -> RunMap:
                          "(no matching loops[] entry in metadata)")
         return (len(known_loop_order), stem)
 
+    ordered_logs = sorted(log_paths, key={p: _order_of(p)
+                                          for p in log_paths}.get)
+
     prev_loop_last: Optional[str] = None
-    for log_path in sorted(log_paths, key=_log_sort_key):
+    for log_path in ordered_logs:
         loop_stem = log_path.name[len("loop-"):-len("-log.json")]
         data = _read_json(log_path, notes, f"loop log {loop_stem}")
         if data is None:
@@ -321,10 +340,16 @@ def build_map(run_dir: Path) -> RunMap:
                     else:
                         notes.append(f"dangling [after:{d}] on step {i} "
                                      f"(loop {loop_stem})")
-            elif i - 1 in node_ids:
-                m.edges.append(MapEdge(
-                    src=node_ids[i - 1], dst=node_ids[i],
-                    kind="seq", explicit=False))
+            else:
+                # Sequential default links to the nearest EARLIER surviving
+                # node, not strictly i-1 (round-2 review, Architect): a
+                # step right after a malformed row otherwise rendered as a
+                # floating landmark — the silent-drop class again.
+                prior = [j for j in node_ids if j < i]
+                if prior:
+                    m.edges.append(MapEdge(
+                        src=node_ids[max(prior)], dst=node_ids[i],
+                        kind="seq", explicit=False))
 
         if node_ids:
             first = node_ids[min(node_ids)]

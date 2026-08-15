@@ -262,6 +262,42 @@ class TestRenderers:
 # Charter pins (structural)
 # ---------------------------------------------------------------------------
 
+def _write_offenders(tree: ast.AST) -> list:
+    """THE write-detection logic — one implementation, used by the real pin
+    AND its guard test (round-2 review, both lenses: a hand-duplicated
+    detector in the guard test couldn't catch a regression in this one)."""
+    banned = {"write_text", "write_bytes", "mkdir", "unlink", "rmdir",
+              "rename", "touch", "rmtree", "makedirs"}
+    offenders = [
+        node.func.attr
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr in banned
+    ]
+    # open() in write mode — BOTH the builtin (`open(p, "w")`) and the
+    # method form (`p.open("w")`). Round-1 review (Skeptic + Architect,
+    # independently): a builtin-only check let a `path.open("w")` cache
+    # sail through — the literal threat this pin exists for.
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if isinstance(node.func, ast.Name) and node.func.id == "open":
+            mode_args = list(node.args[1:2])   # open(path, mode)
+        elif (isinstance(node.func, ast.Attribute)
+                and node.func.attr == "open"):
+            mode_args = list(node.args[0:1])   # path.open(mode)
+        else:
+            continue
+        mode_args += [kw.value for kw in node.keywords if kw.arg == "mode"]
+        for arg in mode_args:
+            if (isinstance(arg, ast.Constant)
+                    and isinstance(arg.value, str)
+                    and any(c in arg.value for c in "wax+")):
+                offenders.append("open-write")
+    return offenders
+
+
 class TestCharterPins:
     def test_lens_is_read_only(self):
         """Pure reader: no write/mkdir/unlink calls anywhere in the module.
@@ -271,55 +307,22 @@ class TestCharterPins:
         'just cache it' edit fails a test instead of a review.
         """
         tree = ast.parse((SRC / "map_lens.py").read_text(encoding="utf-8"))
-        banned = {"write_text", "write_bytes", "mkdir", "unlink", "rmdir",
-                  "rename", "touch", "rmtree", "makedirs"}
-        offenders = [
-            node.func.attr
-            for node in ast.walk(tree)
-            if isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Attribute)
-            and node.func.attr in banned
-        ]
-        # open() in write mode — BOTH the builtin (`open(p, "w")`) and the
-        # method form (`p.open("w")`). Round-1 review (Skeptic + Architect,
-        # independently): the original builtin-only check let a
-        # `path.open("w")`-based cache sail through — the literal threat
-        # this pin exists for.
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Call):
-                continue
-            if isinstance(node.func, ast.Name) and node.func.id == "open":
-                mode_args = list(node.args[1:2])   # open(path, mode)
-            elif (isinstance(node.func, ast.Attribute)
-                    and node.func.attr == "open"):
-                mode_args = list(node.args[0:1])   # path.open(mode)
-            else:
-                continue
-            mode_args += [kw.value for kw in node.keywords
-                          if kw.arg == "mode"]
-            for arg in mode_args:
-                if (isinstance(arg, ast.Constant)
-                        and isinstance(arg.value, str)
-                        and any(c in arg.value for c in "wax+")):
-                    offenders.append("open-write")
-        assert offenders == []
+        assert _write_offenders(tree) == []
 
-    def test_read_only_pin_catches_method_open(self, tmp_path):
-        """The pin's own teeth, demonstrated: a Path.open('w') call in a
-        module body must register as an offender. Guards the guard."""
-        snippet = 'from pathlib import Path\n(Path("x") / "y").open("w")\n'
-        tree = ast.parse(snippet)
-        caught = False
-        for node in ast.walk(tree):
-            if (isinstance(node, ast.Call)
-                    and isinstance(node.func, ast.Attribute)
-                    and node.func.attr == "open"):
-                for arg in list(node.args[:2]):
-                    if (isinstance(arg, ast.Constant)
-                            and isinstance(arg.value, str)
-                            and any(c in arg.value for c in "wax+")):
-                        caught = True
-        assert caught
+    def test_read_only_pin_catches_method_open(self):
+        """Guard-the-guard, against the REAL detector: Path.open('w') and
+        builtin open(p,'w') must register; reads must not."""
+        assert _write_offenders(ast.parse(
+            '(p / "y").open("w")')) == ["open-write"]
+        assert _write_offenders(ast.parse(
+            'open("x.txt", "w")')) == ["open-write"]
+        assert _write_offenders(ast.parse(
+            'p.open(mode="a")')) == ["open-write"]
+        # reads stay clean — incl. a filename containing 'x' (round-1's own
+        # first cut of this pin would have false-positived on it)
+        assert _write_offenders(ast.parse('open("x.txt")')) == []
+        assert _write_offenders(ast.parse('p.open()')) == []
+        assert _write_offenders(ast.parse('p.write_text("d")')) == ["write_text"]
 
     def test_lens_does_not_import_learning_or_loop_modules(self):
         """The lens reads artifacts, never live machinery: importing loop/
@@ -463,3 +466,45 @@ class TestReviewRound1Pins:
         for node in _ast.walk(tree):
             if isinstance(node, _ast.ImportFrom) and node.module == "planner":
                 assert not any(a.name.startswith("_") for a in node.names)
+
+
+# ---------------------------------------------------------------------------
+# Review round-2 pins (2026-08-15, sonnet 2-lens on the fix delta): 7/7 real.
+# ---------------------------------------------------------------------------
+
+class TestReviewRound2Pins:
+    def test_json_null_artifacts_are_noted(self, tmp_path):
+        """Skeptic: literal `null` parses cleanly to None and dodged every
+        corrupt-shape note — a whole loop could vanish untraceably."""
+        run_dir = tmp_path / "null-run"
+        (run_dir / "build").mkdir(parents=True)
+        (run_dir / "metadata.json").write_text("null", encoding="utf-8")
+        (run_dir / "build" / "loop-eeee5555-log.json").write_text(
+            "null", encoding="utf-8")
+        m = build_map(run_dir)
+        assert any("run metadata is JSON null" in n for n in m.notes)
+        assert any("loop log eeee5555 is JSON null" in n for n in m.notes)
+
+    def test_non_dict_run_card_noted(self, tmp_path):
+        run_dir = _write_run(tmp_path, steps=_STEPS)
+        (run_dir / "run_card.json").write_text('"just a string"',
+                                               encoding="utf-8")
+        m = build_map(run_dir)
+        assert any("run card is not a JSON object" in n for n in m.notes)
+
+    def test_sequential_edge_bridges_malformed_row(self, tmp_path):
+        """Architect: a no-tag step right after a malformed row floated —
+        the sequential default now links to the nearest earlier node."""
+        run_dir = _write_run(tmp_path, steps=None)
+        stem = "aaaa1111"
+        log = {"loop_id": stem, "steps": [
+            {"index": 1, "text": "First real step", "status": "done"},
+            "corrupt-row",
+            {"index": 3, "text": "Untagged step after the gap",
+             "status": "done"},
+        ]}
+        (run_dir / "build" / f"loop-{stem}-log.json").write_text(
+            json.dumps(log), encoding="utf-8")
+        m = build_map(run_dir)
+        seq = [(e.src, e.dst) for e in m.edges if e.kind == "seq"]
+        assert (f"{stem}:1", f"{stem}:3") in seq  # bridged, not floating
