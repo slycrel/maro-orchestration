@@ -32,6 +32,7 @@ from typing import Any, Dict, List, Optional
 
 log = logging.getLogger(__name__)
 
+from context_budget import clip
 from memory_ledger import _MERGED_VARIANTS_CAP, _memory_dir, _text_similarity
 
 # Hybrid retrieval (BM25 + RRF) — graceful fallback to TF-IDF if unavailable
@@ -394,7 +395,7 @@ def record_tiered_lesson(
     try:
         from memory_ledger import _lesson_looks_adversarial
         if _lesson_looks_adversarial(lesson_text):
-            log.warning("tiered lesson rejected (adversarial): %s", lesson_text[:80])
+            log.warning("tiered lesson rejected (adversarial): %s", clip(lesson_text, 80))
             # Return a dummy TieredLesson so callers don't crash
             return TieredLesson(
                 lesson_id="rejected", lesson=lesson_text[:50], task_type=task_type,
@@ -534,7 +535,7 @@ def record_tiered_lesson(
         _append_tiered_lesson(tl, tier=tier)
         if minted_from == "prompt":
             log.info("lesson %s quarantined at mint (prompt-derived): %s",
-                     tl.lesson_id, lesson_text[:80])
+                     tl.lesson_id, clip(lesson_text, 80))
 
     # Captain's log
     try:
@@ -549,7 +550,7 @@ def record_tiered_lesson(
         log_event(
             event_type=LESSON_RECORDED,
             subject=tl.lesson_id,
-            summary=f"New {tier} lesson (confidence: {confidence:.2f}): {lesson_text[:100]}",
+            summary=f"New {tier} lesson (confidence: {confidence:.2f}): {clip(lesson_text, 100)}",
             context=_rec_ctx,
         )
     except Exception:
@@ -569,7 +570,7 @@ def record_tiered_lesson(
                 summary=(f"Lesson re-minted after Δ-demotion with "
                          f"{int(remint_watch.get('agreements') or 0)} agreeing "
                          f"full-set runs behind it — demotion re-applied at "
-                         f"mint: {lesson_text[:100]}"),
+                         f"mint: {clip(lesson_text, 100)}"),
                 context={"delta": remint_watch.get("delta"),
                          "n_calls": remint_watch.get("n_calls"),
                          "agreements": remint_watch.get("agreements"),
@@ -589,7 +590,7 @@ def record_tiered_lesson(
                 event_type=LESSON_REMINT_PATTERN,
                 subject=tl.lesson_id,
                 summary=(f"Lesson re-minted {remint_watch['strikes']}x after "
-                         f"Δ-demotion — re-measure queued: {lesson_text[:100]}"),
+                         f"Δ-demotion — re-measure queued: {clip(lesson_text, 100)}"),
                 context={"strikes": remint_watch["strikes"],
                          "prior_lesson_id": remint_watch["prior_lesson_id"],
                          "prior_delta": remint_watch["prior_evidence"].get("delta"),
@@ -1197,7 +1198,7 @@ def reinforce_lesson(lesson_id: str, tier: str = MemoryTier.MEDIUM) -> Optional[
         log_event(
             event_type=LESSON_REINFORCED,
             subject=lesson_id,
-            summary=f"Reinforced (sessions: {target.sessions_validated}, score: {target.score:.2f}): {target.lesson[:80]}",
+            summary=f"Reinforced (sessions: {target.sessions_validated}, score: {target.score:.2f}): {clip(target.lesson, 80)}",
             context={
                 "tier": tier,
                 "sessions_validated": target.sessions_validated,
@@ -1341,7 +1342,7 @@ def set_lesson_minted_from(lesson_id: str, minted_from: str,
             event_type=LESSON_QUARANTINED,
             subject=lesson_id,
             summary=(f"Lesson {lesson_id} minted_from set to "
-                     f"{minted_from or 'unset'}: {hit['tl'].lesson[:100]}"),
+                     f"{minted_from or 'unset'}: {clip(hit['tl'].lesson, 100)}"),
             context={"tier": tier, "minted_from": minted_from,
                      "reason": reason},
         )
@@ -1381,7 +1382,7 @@ def contest_lesson(lesson_id: str, reason: str, *, source: str,
     wins the audit trail — but still returns True).
     """
     stamp = {
-        "reason": reason[:400],
+        "reason": clip(reason, 400),
         "source": source,
         "contested_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -1435,14 +1436,14 @@ def contest_lesson(lesson_id: str, reason: str, *, source: str,
             event_type=LESSON_CONTESTED,
             subject=lesson_id,
             summary=(f"Lesson {lesson_id} contested ({source}): "
-                     f"{lesson_text[:100]}"),
+                     f"{clip(lesson_text, 100)}"),
             context={"tier": found_tier, "flat": flat_hit,
                      "reason": stamp["reason"], "source": source},
         )
     except Exception:
         pass
     log.info("contest_lesson: %s (tier=%s flat=%s) contested by %s — %s",
-             lesson_id, found_tier or "-", flat_hit, source, reason[:120])
+             lesson_id, found_tier or "-", flat_hit, source, clip(reason, 120))
     return True
 
 
@@ -1519,12 +1520,14 @@ def _lesson_contest_evidence(lesson_id: str, *, limit: int = 5) -> List[str]:
             if lesson_id not in (ctx.get("contradicted_ids") or []):
                 continue
             evidence.append(
-                (f"run {ctx.get('loop_id', '?')} failed "
-                 f"({str(ctx.get('failure_summary') or 'no summary')[:120]}); "
-                 f"judge: {str(ctx.get('reasoning') or '')[:150]}")[:300])
+                # Compose-then-clip-once (round-13 lesson): one honest cut
+                # over the assembled row instead of three stacked ones.
+                clip((f"run {ctx.get('loop_id', '?')} failed "
+                      f"({ctx.get('failure_summary') or 'no summary'}); "
+                      f"judge: {ctx.get('reasoning') or ''}"), 300))
         for e in query_log(lesson_id, event_type="LESSON_CONTESTED",
                            limit=limit):
-            evidence.append(str(e.get("summary") or "")[:200])
+            evidence.append(clip(e.get("summary") or "", 200))
     except Exception:
         pass
     return evidence[:limit * 2]
@@ -1566,7 +1569,7 @@ The lesson (injected into planning until contested):
 (task type: {tl.task_type or "general"}; tier: {tl.tier}; validated in {tl.sessions_validated} session(s); re-sighted {since}x SINCE being contested)
 
 Contested {stamp.get('contested_at', 'unknown')} by {stamp.get('source', 'unknown')}:
-{str(stamp.get('reason') or '(no reason recorded)')[:400]}
+{clip(stamp.get('reason') or '(no reason recorded)', 400)}
 
 Contradiction evidence (newest first):
 {evidence_text}
@@ -1623,7 +1626,7 @@ Output ONLY valid JSON:
         return None
 
     action = str(parsed.get("action") or "").strip().lower()
-    reasoning = str(parsed.get("reasoning") or "")[:400]
+    reasoning = clip(parsed.get("reasoning") or "", 400)
     new_text = str(parsed.get("lesson") or "").strip()
     if action not in ("keep", "revise", "retire"):
         _consume_evidence()
@@ -1720,13 +1723,13 @@ Output ONLY valid JSON:
             subject=lesson_id,
             summary=(f"Re-fought (contested by {stamp.get('source', '?')}, "
                      f"{since} re-sighting(s) since) -> {action}: "
-                     f"{tl.lesson[:80]}"),
+                     f"{clip(tl.lesson, 80)}"),
             context={
                 "action": action,
                 "reasoning": reasoning,
                 "tier": tl.tier,
-                "old_lesson": tl.lesson[:200],
-                "new_lesson": new_text[:200] if action == "revise" else "",
+                "old_lesson": clip(tl.lesson, 200),
+                "new_lesson": clip(new_text, 200) if action == "revise" else "",
                 "contest_source": stamp.get("source", ""),
                 "reinforced_since_contest": since,
                 # None = not a keep (no flat clear attempted); False = keep
@@ -2114,7 +2117,7 @@ def confirm_lesson_by_delta(lesson_id: str, delta_evidence: Dict[str, Any],
             event_type=LESSON_DELTA_CONFIRMED,
             subject=lesson_id,
             summary=(f"Provisional lesson {lesson_id} confirmed by measured "
-                     f"Δ={float(delta):.3f}: {hit['tl'].lesson[:100]}"),
+                     f"Δ={float(delta):.3f}: {clip(hit['tl'].lesson, 100)}"),
             context={"delta": float(delta), "n_calls": int(ev.get("n_calls") or 0),
                      "minted_by": hit["tl"].minted_by},
         )
@@ -2275,7 +2278,7 @@ def demote_lesson_by_effect(lesson_id: str, delta_evidence: Dict[str, Any]) -> b
             subject=lesson_id,
             summary=(f"Lesson {lesson_id} Δ-demoted (Δ={float(delta):.3f} "
                      f"over {int(ev.get('n_calls') or 0)} calls): "
-                     f"{stamped['t'].lesson[:100]}"),
+                     f"{clip(stamped['t'].lesson, 100)}"),
             context={"delta": float(delta),
                      "jackknife_spread": float(spread),
                      "n_calls": int(ev.get("n_calls") or 0),
@@ -2416,7 +2419,7 @@ def inert_lesson_by_effect(lesson_id: str, delta_evidence: Dict[str, Any],
             subject=lesson_id,
             summary=(f"Lesson {lesson_id} measured inert (Δ={float(delta):.3f} "
                      f"over {int(ev.get('n_calls') or 0)} calls) — decision-"
-                     f"injection slot freed: {stamped['t'].lesson[:100]}"),
+                     f"injection slot freed: {clip(stamped['t'].lesson, 100)}"),
             context={"delta": float(delta),
                      "jackknife_spread": float(spread),
                      "n_calls": int(ev.get("n_calls") or 0),
@@ -3643,7 +3646,7 @@ def promote_knowledge_candidates(*, adapter: Any = None, dry_run: bool = False,
                     # an application arriving mid-judgment must still count
                     # as new evidence (round-2 review).
                     rejected[d["node_id"]] = (
-                        str(result.get("reason", ""))[:200],
+                        clip(result.get("reason", ""), 200),
                         int(d.get("times_applied", 0) or 0),
                     )
                 continue

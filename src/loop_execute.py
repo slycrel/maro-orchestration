@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import hashlib
 import logging
+
+from context_budget import clip
 import sys
 import time
 from pathlib import Path
@@ -1549,7 +1551,7 @@ def _execute_main_loop(
                     if _ae_decision.action == "continue":
                         stuck_streak = 0
                         log.info("adaptive [stuck/continue]: resetting streak — %s",
-                                 _ae_decision.reasoning[:100])
+                                 clip(_ae_decision.reasoning, 100))
                         _append_stuck_step_outcome()
                         continue
                     elif _ae_decision.action == "adjust" and _ae_decision.revised_steps:
@@ -1559,10 +1561,10 @@ def _execute_main_loop(
                         remaining_indices[:] = [-1] * len(_ae_new)
                         stuck_streak = 0
                         log.info("adaptive [stuck/adjust]: replaced %d steps — %s",
-                                 len(_ae_new), _ae_decision.reasoning[:100])
+                                 len(_ae_new), clip(_ae_decision.reasoning, 100))
                         if verbose:
                             print(f"[maro] adaptive adjust (stuck): {len(_ae_new)} steps — "
-                                  f"{_ae_decision.reasoning[:60]}", file=sys.stderr, flush=True)
+                                  f"{clip(_ae_decision.reasoning, 60)}", file=sys.stderr, flush=True)
                         _append_stuck_step_outcome()
                         continue
                     elif _ae_decision.action == "replan":
@@ -1592,13 +1594,13 @@ def _execute_main_loop(
                                     "(replan %d/%d) — %s",
                                     len(_ae_replan_steps),
                                     ctx.director_replan_count, ctx.director_budget_ceiling,
-                                    _ae_decision.reasoning[:80],
+                                    clip(_ae_decision.reasoning, 80),
                                 )
                                 if verbose:
                                     print(
                                         f"[maro] adaptive replan (stuck): "
                                         f"{len(_ae_replan_steps)} steps — "
-                                        f"{_ae_decision.reasoning[:60]}",
+                                        f"{clip(_ae_decision.reasoning, 60)}",
                                         file=sys.stderr, flush=True,
                                     )
                                 _append_stuck_step_outcome()
@@ -1980,11 +1982,11 @@ def _execute_main_loop(
                         remaining_steps[:] = _ae2_new
                         remaining_indices[:] = [-1] * len(_ae2_new)
                         log.info("adaptive [%s/adjust]: replaced %d steps — %s",
-                                 _ae2_trigger, len(_ae2_new), _ae2_decision.reasoning[:100])
+                                 _ae2_trigger, len(_ae2_new), clip(_ae2_decision.reasoning, 100))
                         if verbose:
                             print(
                                 f"[maro] adaptive adjust ({_ae2_trigger}): {len(_ae2_new)} steps — "
-                                f"{_ae2_decision.reasoning[:60]}", file=sys.stderr, flush=True,
+                                f"{clip(_ae2_decision.reasoning, 60)}", file=sys.stderr, flush=True,
                             )
                     elif _ae2_decision.action == "replan":
                         try:
@@ -2013,13 +2015,13 @@ def _execute_main_loop(
                                     "(replan %d/%d) — %s",
                                     _ae2_trigger, len(_ae2_replan_steps),
                                     ctx.director_replan_count, ctx.director_budget_ceiling,
-                                    _ae2_decision.reasoning[:80],
+                                    clip(_ae2_decision.reasoning, 80),
                                 )
                                 if verbose:
                                     print(
                                         f"[maro] adaptive replan ({_ae2_trigger}): "
                                         f"{len(_ae2_replan_steps)} steps — "
-                                        f"{_ae2_decision.reasoning[:60]}",
+                                        f"{clip(_ae2_decision.reasoning, 60)}",
                                         file=sys.stderr, flush=True,
                                     )
                         except Exception as _ae2_replan_exc:
@@ -2091,7 +2093,7 @@ def _execute_main_loop(
                                      _ae2_question[:150])
                     else:
                         log.info("adaptive [%s/continue]: %s",
-                                 _ae2_trigger, _ae2_decision.reasoning[:100])
+                                 _ae2_trigger, clip(_ae2_decision.reasoning, 100))
                 except Exception as _ae2_exc:
                     log.debug("adaptive execution error: %s", _ae2_exc)
 
@@ -2191,11 +2193,11 @@ def _execute_main_loop(
                         remaining_steps[:] = _inj_new
                         remaining_indices[:] = [-1] * len(_inj_new)
                         log.info("adaptive [injection/adjust]: replaced %d steps — %s",
-                                 len(_inj_new), _inj_decision.reasoning[:100])
+                                 len(_inj_new), clip(_inj_decision.reasoning, 100))
                         if verbose:
                             print(
                                 f"[maro] adaptive adjust (injection): {len(_inj_new)} steps — "
-                                f"{_inj_decision.reasoning[:60]}", file=sys.stderr, flush=True,
+                                f"{clip(_inj_decision.reasoning, 60)}", file=sys.stderr, flush=True,
                             )
                     elif _inj_decision.action == "replan":
                         try:
@@ -2225,13 +2227,13 @@ def _execute_main_loop(
                                     "(replan %d/%d) — %s",
                                     len(_inj_replan_steps),
                                     ctx.director_replan_count, ctx.director_budget_ceiling,
-                                    _inj_decision.reasoning[:80],
+                                    clip(_inj_decision.reasoning, 80),
                                 )
                                 if verbose:
                                     print(
                                         f"[maro] adaptive replan (injection): "
                                         f"{len(_inj_replan_steps)} steps — "
-                                        f"{_inj_decision.reasoning[:60]}",
+                                        f"{clip(_inj_decision.reasoning, 60)}",
                                         file=sys.stderr, flush=True,
                                     )
                         except Exception as _inj_replan_exc:
@@ -2289,7 +2291,7 @@ def _execute_main_loop(
                                      "logging question: %s", _inj_question[:150])
                     else:
                         log.info("adaptive [injection/continue]: %s",
-                                 _inj_decision.reasoning[:100])
+                                 clip(_inj_decision.reasoning, 100))
                 except Exception as _inj_exc:
                     log.debug("injection-trigger evaluation error: %s", _inj_exc)
             # Restart break — outside the try/except, mirroring _ae2

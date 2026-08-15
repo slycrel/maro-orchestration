@@ -150,7 +150,10 @@ def test_no_new_silent_rationale_slices():
 def test_inventory_only_shrinks_marker():
     """The frozen debt count, asserted as a ceiling with its vintage.
 
-    2026-08-14 baseline: 176 occurrences across 129 sites. The number
+    2026-08-14 baseline: 176 occurrences across 129 sites; first
+    burn-down tranche 2026-08-15 (knowledge_web + loop_execute swept to
+    honest clip()) brought the ceiling down — keep ratcheting it with
+    each tranche. The number
     moves in two directions for two different reasons: fixes shrink it
     (168 → 163 in round 13), scanner upgrades GROW it by surfacing
     already-existing debt (round 14 added chained normalizers; round 16
@@ -161,7 +164,7 @@ def test_inventory_only_shrinks_marker():
     burn-down proceeds.
     """
     inventory = json.loads(INVENTORY_PATH.read_text())
-    assert sum(inventory.values()) <= 176
+    assert sum(inventory.values()) <= 139   # 176 at freeze; tranche 1: -37
 
 
 def test_scanner_detects_each_supported_shape():
