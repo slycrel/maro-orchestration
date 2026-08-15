@@ -45,6 +45,23 @@ era citations are the receipts (`docs/KNOWLEDGE_JOURNEY.md`).
    out. "Needs a better model" is a claim requiring evidence, not a
    default. *(Jeremy 2026-07-21: "what scares me most is decisions NOT to
    do the work when the work is possible" · deterministic-home: none yet)*
+7. **[EXPERIMENTAL] Probe-first fact ledger.** Before building a chunk,
+   list the 3–6 environmental claims the design rests on (sibling-module
+   semantics, support-floor behavior, store formats, who-writes-what) and
+   EXECUTE a probe for each — one-liners, minutes of work. A claim with no
+   cheap probe becomes a pre-registered falsifier handed to the reviewers.
+   Basis: the 2026-08-15 stretch's r2 rounds caught almost exclusively
+   environment facts (3.10 Z-parse, naive/aware TypeError, query_log
+   string-compare since, lexicographic min over mixed offsets) — each
+   settleable pre-code for the cost of one line; each instead cost a full
+   review round. Companion: live-fire the wiring seam BEFORE r1, not after
+   fixpoint (watch-list #5 is the other class reviews keep paying rounds
+   for). *(Jeremy 2026-08-15: theory→work→outcome decreed over
+   prompt-assertion · tripwire/verification: probe-first chunks should
+   reach review fixpoint in ~2 rounds vs the 3–4-round baseline
+   (9→6→0, 8→8→0 measured this stretch); EXPERIMENTAL until 2–3 chunks
+   confirm — if convergence doesn't improve, this entry gets demoted, not
+   quietly kept. Do not treat as settled house style yet.)*
 
 ## Judgement — audit checks (apply while reviewing work, yours or an agent's)
 

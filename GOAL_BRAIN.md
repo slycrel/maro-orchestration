@@ -2238,6 +2238,38 @@ Sample: the 2026-05-13..17 window of `~/.maro/workspace/runs/` (478 dirs total;
   self-surveying map (docs/COMPOUND_THINKING_DESIGN.md). Standing workflow
   decree applies (build → review → test → fix → re-review to fixpoint);
   autonomous stretch sanctioned (Jeremy at Manti with the '71 truck).
+- **2026-08-15 (Jeremy) — theory→work→outcome DECREED over
+  prompt-assertion.** Verbatim: "I think I can definitively say that,
+  based on my observations over the past 2-4 weeks, theory -> work ->
+  outcome (with fact judgements) is genuinely better than
+  prompt-assertion only (guessing, even if well educated). I'd love to
+  understand how to better leverage that as we work on things (rather
+  than chunk work +4 iterations to fix it)." Read: the eval/scientific
+  method (pre-registered predictions, executed probes, live-fire,
+  verdicted outcomes) is now the confirmed working posture, not an
+  experiment — and the open design question is moving fact-judgement
+  UPSTREAM into the build loop so fixpoint reviews converge faster
+  (fewer iterations spent discovering facts a probe could have
+  established before the code was written).
+- **2026-08-15 (Jeremy) — probe-first fact ledger CODIFIED as
+  EXPERIMENTAL.** "Let's codify that like you said, but put an
+  experimental tag on it, in case any other session picks it up before
+  we're done verifying that ourselves." Lives as DEV_PATTERNS taste #7
+  + HOUSE_STYLE loop step 1b, both tagged; verification = 2–3
+  probe-first chunks hitting fixpoint in ~2 rounds vs the measured
+  3–4-round baseline; demote if convergence doesn't improve.
+- **2026-08-15 (Jeremy) — §14a scope direction SANCTIONED, held
+  loosely.** Stamp-categorical/globality-probabilistic split ("that's
+  as good a place as any to start, and we can refine it as we iterate
+  over the edges... might be close enough. I'm not sure there's a
+  right or wrong answer on this one, but there might be better and
+  worse ways to accomplish that"): method-vs-world provenance stamped
+  at mint (categorical, a fact about origin); globality a continuous
+  portability estimate updated by foreign-context citation × verdict
+  joins, thresholds only at injection-ranking time, never category
+  flips; contradiction bleeds weight. Data basis: verdict pipe 91%
+  coverage since Chunk B (58/64 rows post-07-31) vs 3% at the 07-30
+  conversation. Expect edge iteration, not a final answer.
 
 ## Threads (system-maintained — nothing leaves this list silently)
 

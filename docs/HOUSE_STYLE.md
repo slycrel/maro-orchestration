@@ -36,6 +36,17 @@ individual rules below exist to keep it honest.
    — census FIRST, by field/class, not after a reviewer asks — which
    class members the change must reach (every writer, reader, branch
    twin, sibling lane).
+1b. **[EXPERIMENTAL] Probe facts before building** — execute the
+   chunk's fact ledger (DEV_PATTERNS taste #7): one-line probes for the
+   ENVIRONMENTAL claims the design rests on (sibling semantics,
+   support-floor behavior, store formats), run BEFORE code — the
+   pre-build half of the same discipline steps 1/3 encode; unprobeable
+   claims become pre-registered falsifiers for step 6. Verification of
+   the whole probe-first shift is shared and still OPEN: 2–3 chunks
+   hitting fixpoint in ~2 rounds vs the measured 3–4 baseline
+   (9→6→0, 8→8→0, 2026-08-15). Other sessions: use it, but don't lean
+   on it as settled style, and record round counts so the verdict has
+   data (Jeremy 2026-08-15: experimental until we verify it ourselves).
 2. **Build** — `docs/CODING_NOTES.md` posture: seams visible, rework
    cheap, test seams not internals, don't refactor mid-feature.
 3. **Verify = run the experiment yourself** — the author probes every
