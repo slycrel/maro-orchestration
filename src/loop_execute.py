@@ -684,6 +684,12 @@ def _execute_main_loop(
             _ra_note = ""
             try:
                 from config import get as _ra_cfg_get
+                # `not dry_run` is defense-in-depth, unreachable today:
+                # loop_planning gates review_plan on the same flag, so
+                # pf_review is None in every dry run and this block is never
+                # entered. Kept because the reanchor call is real LLM spend
+                # and this line is the last gate if pf_review ever gains
+                # another source (checkpoint resume, injected review).
                 if bool(_ra_cfg_get("reanchor.enabled", False)) and not dry_run:
                     from reanchor import run_milestone_reanchor as _ra_run
                     _ra_note = _ra_run(

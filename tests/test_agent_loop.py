@@ -6353,9 +6353,13 @@ def test_milestone_reanchor_fires_and_drift_note_joins_ancestry(monkeypatch, tmp
 
 
 def test_milestone_reanchor_skipped_in_dry_run(monkeypatch, tmp_path):
-    """Round-1 review (Skeptic, MED): the `not dry_run` clause is the line
-    between a preview and real LLM spend — enabled config + dry run must
-    never fire the check."""
+    """Behavioral pin (round-1 Skeptic MED, sharpened round 2): dry run must
+    never fire the re-anchor LLM call. Two redundant gates enforce this —
+    loop_planning skips review_plan entirely in dry runs (so pf_review is
+    None and the milestone block is never entered), and the reanchor gate's
+    own `not dry_run` clause. This test pins the DISJUNCTION: it stays
+    green while either gate holds and fails only if both are removed —
+    which is the actual spend guarantee, not any single line."""
     _setup_workspace(monkeypatch, tmp_path)
     (tmp_path / "config.yml").write_text("reanchor:\n  enabled: true\n")
     from unittest.mock import MagicMock, patch

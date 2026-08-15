@@ -22,7 +22,7 @@ import json
 import logging
 import textwrap
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import Iterator, List, Optional
 
 try:
     from llm import build_adapter
@@ -129,7 +129,7 @@ def _heuristic_scope(steps: List[str]) -> str:
     return "medium"
 
 
-def _build_reviewers():
+def _build_reviewers() -> Iterator[tuple]:
     """Yield candidate reviewer adapters in cost order: hosted-free, then
     paid API.
 

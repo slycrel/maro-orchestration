@@ -181,15 +181,18 @@ class TestReviewPlan:
 
     def test_hosted_free_reviewer_preferred(self):
         """When the hosted-free tier is available it reviews first — the
-        paid API candidates are never called."""
+        paid API candidates are never called, and (round-2 review) never
+        even CONSTRUCTED: _build_reviewers is lazy, so a winning first
+        candidate means zero build_adapter calls, not just zero completes."""
         hf = _make_adapter(_narrow_response())
         paid = _make_adapter(_wide_response())
         with patch("hosted_free.build_hosted_free_adapter", return_value=hf), \
-             patch("pre_flight.build_adapter", return_value=paid):
+             patch("pre_flight.build_adapter", return_value=paid) as mock_build:
             review = review_plan("goal", ["step 1"], MagicMock())
         assert review.scope == "narrow"
         assert hf.complete.called
         assert not paid.complete.called
+        assert not mock_build.called
 
 
 # ---------------------------------------------------------------------------
