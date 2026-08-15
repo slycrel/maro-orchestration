@@ -42,11 +42,19 @@ first-class milestones).
    anchors (text/json all verdicts, mermaid drift-only). No stop/replan
    wiring yet — detection must earn correctives with data. Adjudicate
    the record once boundaries have actually fired in live runs.
-4. **Later, with appetite**: §9.9 backward-chaining generator; 14h
-   revisit mechanic (tool-acquisition reopens standing dead ends —
-   takes the deferred §13b structured reopen payloads with it).
-   NOT solo-buildable: §10 calibration + §9.7 scoping (owed discussion
-   with Jeremy).
+4. **Chunk 4 — §9.9 backward-chaining: SHIPPED 2026-08-15** ("now is
+   later" decree). `src/backchain.py` behind `planner.backchain`
+   (OFF-default, ON this box): goal regression after the forward plan;
+   links classified established/verifiable/unknown with honest
+   downgrades; unmet verifiable preconditions become [recon:] probe
+   steps (max 2, draw_cuts' cap); chain → build/backchain.json +
+   BACKCHAIN_DRAWN; map lens renders the backward frontier. Wired
+   before pre-flight review (milestone-index consistency with §9.5);
+   skips cuts-boundary and preset plans.
+5. **Chunk 5 (next) — 14h revisit mechanic** (tool-acquisition reopens
+   standing dead ends — takes the deferred §13b structured reopen
+   payloads with it). NOT solo-buildable: §10 calibration + §9.7
+   scoping (owed discussion with Jeremy).
 
 Previous checkpoint: 2026-08-11 — **checkpoint pointer, not a work record: since
 2026-08-01 the executable queue has lived in BACKLOG.md's "Actionable

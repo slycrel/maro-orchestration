@@ -109,6 +109,7 @@ py-modules = [
     "audit_repair",
     "audit_policy",
     "autonomy",
+    "backchain",
     "backend_benchmark",
     "benchmark_isolation",
     "background",

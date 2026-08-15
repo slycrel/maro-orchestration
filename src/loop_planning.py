@@ -420,6 +420,22 @@ def _decompose_goal(
         if _seeded and ctx.verbose:
             print(f"[maro] planner declared {_seeded} world fact(s)",
                   file=sys.stderr, flush=True)
+        # §9.9 backward-chaining (planner.backchain, OFF-default): goal
+        # regression against the forward plan; unmet verifiable
+        # preconditions become [recon:] probe steps prepended HERE — before
+        # pre-flight review runs, so milestone_step_indices (which the §9.5
+        # re-anchor keys on) are computed against the final list. LLM-path
+        # plans only: preset/rule plans are operator-authored.
+        try:
+            from backchain import apply_backchain as _apply_backchain
+            _bc_steps = _apply_backchain(ctx.goal, steps, _decompose_adapter)
+            if len(_bc_steps) != len(steps) and ctx.verbose:
+                print(f"[maro] backchain injected "
+                      f"{len(_bc_steps) - len(steps)} precondition probe(s)",
+                      file=sys.stderr, flush=True)
+            steps = _bc_steps
+        except Exception as _bc_exc:
+            log.debug("backchain: skipped (%s)", _bc_exc)
     if ctx.verbose:
         print(f"[maro] plan ({len(steps)} steps) loop_id={ctx.loop_id}:", file=sys.stderr, flush=True)
         for _pi, _ps in enumerate(steps, 1):

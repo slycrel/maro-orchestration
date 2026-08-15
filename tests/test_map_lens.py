@@ -609,3 +609,58 @@ class TestAnchors:
         text = render_text(m)
         assert "⚓" not in text
         assert not any("reanchor" in n for n in m.notes)
+
+
+# ---------------------------------------------------------------------------
+# §9.9 backchain layer (build/backchain.json)
+# ---------------------------------------------------------------------------
+
+def _write_backchain(run_dir, links):
+    (run_dir / "build" / "backchain.json").write_text(
+        json.dumps({"links": links, "probes_injected": 1}), encoding="utf-8")
+
+
+class TestBackchainLayer:
+    _LINKS = [
+        {"condition": "report exists", "class": "established", "step": 3},
+        {"condition": "git readable", "class": "verifiable",
+         "probe": "git log -1"},
+        {"condition": "module map accurate", "class": "unknown"},
+    ]
+
+    def test_backchain_read_into_map(self, tmp_path):
+        rd = _write_run(tmp_path, steps=_STEPS)
+        _write_backchain(rd, self._LINKS)
+        m = build_map(rd)
+        assert len(m.backchain) == 3
+        assert m.backchain[0]["class"] == "established"
+        assert m.backchain[0]["step"] == 3
+
+    def test_text_renders_three_classes(self, tmp_path):
+        rd = _write_run(tmp_path, steps=_STEPS)
+        _write_backchain(rd, self._LINKS)
+        text = render_text(build_map(rd))
+        assert "backchain (goal regression" in text
+        assert "✓ report exists (step 3)" in text
+        assert "⌕ git readable" in text and "probe: git log -1" in text
+        assert "○ module map accurate  (unknown)" in text
+
+    def test_absent_file_no_layer_no_note(self, tmp_path):
+        rd = _write_run(tmp_path, steps=_STEPS)
+        m = build_map(rd)
+        assert m.backchain == []
+        assert "backchain" not in render_text(m)
+        assert not any("backchain" in n for n in m.notes)
+
+    def test_corrupt_backchain_noted_never_crashes(self, tmp_path):
+        rd = _write_run(tmp_path, steps=_STEPS)
+        (rd / "build" / "backchain.json").write_text("[1, 2]", encoding="utf-8")
+        m = build_map(rd)
+        assert m.backchain == []
+        assert any("backchain" in n for n in m.notes)
+
+    def test_json_carries_backchain(self, tmp_path):
+        rd = _write_run(tmp_path, steps=_STEPS)
+        _write_backchain(rd, self._LINKS)
+        data = json.loads(render_json(build_map(rd)))
+        assert len(data["backchain"]) == 3

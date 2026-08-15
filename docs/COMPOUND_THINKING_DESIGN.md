@@ -1151,3 +1151,20 @@ fire it):
   if these records catch real drift, coherence never needed to be its
   own signal; if N boundaries pass with zero drift caught while
   closure still fails runs for drift, the cadence hypothesis is wrong.
+
+**§9.9 backward-chaining SHIPPED 2026-08-15 (same stretch, "now is
+later" decree)** — `src/backchain.py`, `planner.backchain` OFF-default.
+Exactly the doc's shape: goal regression as a RECON generator. One call
+regresses the goal against the forward plan ("what must be true just
+before?"), classifies links established/verifiable/unknown (a step
+reference outside the plan or a probe-less "verifiable" is downgraded —
+no fabricated establishment); unmet verifiable preconditions become
+`[recon:]` probe steps prepended to the plan (max 2 — draw_cuts' cap;
+rides the §9.2 machinery wholesale). Chain → build/backchain.json +
+BACKCHAIN_DRAWN; map lens renders the backward frontier (✓ established /
+⌕ probe / ○ unknown) — established links ARE the frontier-convergence
+evidence of §3, now visible per-run. Wired BEFORE pre-flight review so
+milestone indices (the §9.5 keys) are computed against the final list;
+skips cuts boundary plans (that lane already buys information) and
+preset/rule plans (operator-authored). Named "backchain" because
+"regression" is owned by the eval subsystem.

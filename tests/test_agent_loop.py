@@ -6404,3 +6404,57 @@ def test_milestone_reanchor_off_by_default(monkeypatch, tmp_path):
         )
 
     assert not mock_ra.called
+
+
+# ---------------------------------------------------------------------------
+# §9.9 backchain wiring (planner.backchain)
+# ---------------------------------------------------------------------------
+
+def test_backchain_runs_before_preflight_review(monkeypatch, tmp_path):
+    """The backchain-mutated step list is what pre-flight review sees —
+    milestone_step_indices (which the §9.5 re-anchor keys on) must be
+    computed against the FINAL list, never the pre-injection one."""
+    _setup_workspace(monkeypatch, tmp_path)
+    from unittest.mock import MagicMock, patch
+
+    injected = ["probe X [recon: verifies precondition — y]", "s1", "s2"]
+    seen_by_review = {}
+
+    def _capture_review(goal, steps, adapter, **kw):
+        seen_by_review["steps"] = list(steps)
+        fake = MagicMock()
+        fake.milestone_step_indices = []
+        fake.scope = "narrow"
+        fake.flags = []
+        return fake
+
+    with patch("loop_planning._decompose_impl", return_value=["s1", "s2"]), \
+         patch("backchain.apply_backchain", return_value=injected) as mock_bc, \
+         patch("pre_flight.review_plan", side_effect=_capture_review):
+        run_agent_loop(
+            "do the thing",
+            adapter=_DryRunAdapter(),
+            dry_run=False,
+            max_iterations=10,
+        )
+
+    assert mock_bc.called
+    fed = mock_bc.call_args[0][1]
+    assert fed[:2] == ["s1", "s2"]  # fed the decomposed plan (maybe + verify step)
+    assert seen_by_review["steps"][0].startswith("probe X [recon:")
+
+
+def test_backchain_not_called_for_preset_plans(monkeypatch, tmp_path):
+    """Preset/rule plans are operator-authored — no goal regression."""
+    _setup_workspace(monkeypatch, tmp_path)
+    from unittest.mock import patch
+
+    with patch("backchain.apply_backchain") as mock_bc:
+        run_agent_loop(
+            "do the thing",
+            adapter=_DryRunAdapter(),
+            dry_run=False,
+            max_iterations=10,
+            preset_steps=["preset 1", "preset 2"],
+        )
+    assert not mock_bc.called

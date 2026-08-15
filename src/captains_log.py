@@ -220,6 +220,10 @@ BOUNDARY_EXPANDED = "BOUNDARY_EXPANDED"
 # every milestone boundary the re-anchor check runs at, on course or not.
 REANCHOR_CHECKED = "REANCHOR_CHECKED"
 
+# §9.9 backward-chaining (COMPOUND_THINKING_DESIGN, 2026-08-15): fires when
+# goal regression drew a non-empty chain, whether or not probes were injected.
+BACKCHAIN_DRAWN = "BACKCHAIN_DRAWN"
+
 # Goal-stated step-count ceiling (BACKLOG step-count constraint, 2026-07-16):
 # fires when the planner hard-truncates a plan that still exceeded the goal's
 # explicit "N steps max" bound after one corrective re-ask.
@@ -365,7 +369,8 @@ EVENT_TYPES = {
     CONTRADICTION_CANDIDATE, CONTRADICTION_ADJUDICATED,
     AUTO_RECOVERY, DIAGNOSIS, INPUT_MISMATCH,
     DECISION_RECORDED, METACOGNITIVE_DECISION,
-    CUTS_DRAWN, BOUNDARY_EXPANDED, REANCHOR_CHECKED, STEP_CEILING_ENFORCED,
+    CUTS_DRAWN, BOUNDARY_EXPANDED, REANCHOR_CHECKED, BACKCHAIN_DRAWN,
+    STEP_CEILING_ENFORCED,
     SCOPE_GENERATED, SCOPE_PARSE_FAILED, SCOPE_SKIPPED, CLOSURE_VERDICT, CLAIM_PROBED,
     CLAIM_VERIFIER_OUTCOME, FABRICATION_DETECTED, SCAVENGE_DETECTED, FENCE_WRITE_BLOCKED,
     FENCE_EXTENDED,

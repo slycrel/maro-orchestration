@@ -1,0 +1,201 @@
+"""Tests for backchain.py — §9.9 backward-chaining as a recon generator."""
+
+import json
+import sys
+from unittest.mock import MagicMock, patch
+
+sys.path.insert(0, "src")
+
+from backchain import (
+    MAX_PROBE_STEPS,
+    Backchain,
+    BackchainLink,
+    apply_backchain,
+    draw_backchain,
+    probe_steps,
+)
+
+
+def _adapter_returning(payload) -> MagicMock:
+    adapter = MagicMock()
+    resp = MagicMock()
+    resp.content = json.dumps(payload)
+    adapter.complete.return_value = resp
+    return adapter
+
+
+_CHAIN = {
+    "links": [
+        {"condition": "the report file exists", "class": "established", "step": 3},
+        {"condition": "git history is readable", "class": "verifiable",
+         "probe": "git -C repo log --oneline -1"},
+        {"condition": "the module map is accurate", "class": "unknown"},
+    ]
+}
+
+
+class TestDrawBackchain:
+    def test_parses_all_three_classes(self):
+        chain = draw_backchain("goal", ["s1", "s2", "s3"], _adapter_returning(_CHAIN))
+        assert chain is not None
+        assert [l.link_class for l in chain.links] == \
+            ["established", "verifiable", "unknown"]
+        assert chain.links[0].step == 3
+        assert "git" in chain.links[1].probe
+
+    def test_established_with_out_of_range_step_downgrades_to_unknown(self):
+        """A step reference outside the plan is a fabricated establishment."""
+        payload = {"links": [
+            {"condition": "c", "class": "established", "step": 9}]}
+        chain = draw_backchain("g", ["s1", "s2"], _adapter_returning(payload))
+        assert chain.links[0].link_class == "unknown"
+        assert chain.links[0].step is None
+
+    def test_established_with_garbage_step_downgrades(self):
+        payload = {"links": [
+            {"condition": "c", "class": "established", "step": "three"}]}
+        chain = draw_backchain("g", ["s1"], _adapter_returning(payload))
+        assert chain.links[0].link_class == "unknown"
+
+    def test_verifiable_without_probe_downgrades_to_unknown(self):
+        payload = {"links": [
+            {"condition": "c", "class": "verifiable", "probe": "  "}]}
+        chain = draw_backchain("g", ["s1"], _adapter_returning(payload))
+        assert chain.links[0].link_class == "unknown"
+
+    def test_bad_class_and_empty_condition_dropped(self):
+        payload = {"links": [
+            {"condition": "", "class": "unknown"},
+            {"condition": "c", "class": "definitely"},
+            "not a dict",
+        ]}
+        assert draw_backchain("g", ["s1"], _adapter_returning(payload)) is None
+
+    def test_call_failure_returns_none(self):
+        adapter = MagicMock()
+        adapter.complete.side_effect = RuntimeError("boom")
+        assert draw_backchain("g", ["s1"], adapter) is None
+
+    def test_garbage_answer_returns_none(self):
+        adapter = MagicMock()
+        resp = MagicMock()
+        resp.content = "not json"
+        adapter.complete.return_value = resp
+        assert draw_backchain("g", ["s1"], adapter) is None
+
+    def test_no_adapter_or_no_steps_returns_none(self):
+        assert draw_backchain("g", ["s1"], None) is None
+        assert draw_backchain("g", [], MagicMock()) is None
+
+
+class TestProbeSteps:
+    def test_probes_carry_recon_tag_with_condition(self):
+        chain = Backchain(links=[
+            BackchainLink("git history is readable", "verifiable",
+                          probe="git log --oneline -1"),
+        ])
+        steps = probe_steps(chain)
+        assert len(steps) == 1
+        assert steps[0].startswith("git log --oneline -1 [recon: ")
+        assert "verifies precondition — git history is readable" in steps[0]
+
+    def test_capped_at_max(self):
+        chain = Backchain(links=[
+            BackchainLink(f"cond {i}", "verifiable", probe=f"probe {i}")
+            for i in range(5)
+        ])
+        assert len(probe_steps(chain)) == MAX_PROBE_STEPS
+
+    def test_brackets_scrubbed_from_tag(self):
+        """Brackets in a condition would corrupt the [recon: ...] grammar."""
+        chain = Backchain(links=[
+            BackchainLink("the [after:2] tag parses", "verifiable", probe="p"),
+        ])
+        step = probe_steps(chain)[0]
+        tag_body = step.split("[recon: ", 1)[1]
+        assert "[" not in tag_body[:-1]
+        # The tag must still be recognized as recon by the planner grammar.
+        from planner import step_flavor
+        assert step_flavor(step)[0] == "recon"
+
+    def test_established_and_unknown_links_never_become_steps(self):
+        chain = Backchain(links=[
+            BackchainLink("done by plan", "established", step=1),
+            BackchainLink("nobody knows", "unknown"),
+        ])
+        assert probe_steps(chain) == []
+
+
+class TestApplyBackchain:
+    def _enable(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+        (tmp_path / "config.yml").write_text("planner:\n  backchain: true\n")
+
+    def test_off_by_default_no_llm_call(self):
+        adapter = MagicMock()
+        steps = ["s1", "s2"]
+        out = apply_backchain("g", steps, adapter)
+        assert out == steps
+        assert not adapter.complete.called
+
+    def test_enabled_prepends_probes_and_records(self, tmp_path, monkeypatch):
+        self._enable(tmp_path, monkeypatch)
+        rd = tmp_path / "run-x"
+        (rd / "build").mkdir(parents=True)
+        adapter = _adapter_returning(_CHAIN)
+        with patch("runs.current_run_dir", return_value=rd):
+            out = apply_backchain("g", ["s1", "s2", "s3"], adapter)
+        assert len(out) == 4
+        assert out[0].startswith("git -C repo log")
+        assert "[recon: " in out[0]
+        assert out[1:] == ["s1", "s2", "s3"]
+        rec = json.loads((rd / "build" / "backchain.json").read_text())
+        assert len(rec["links"]) == 3
+        assert rec["probes_injected"] == 1
+
+    def test_all_established_changes_nothing_but_still_records(
+            self, tmp_path, monkeypatch):
+        self._enable(tmp_path, monkeypatch)
+        rd = tmp_path / "run-x"
+        (rd / "build").mkdir(parents=True)
+        payload = {"links": [
+            {"condition": "c1", "class": "established", "step": 1},
+            {"condition": "c2", "class": "established", "step": 2},
+        ]}
+        with patch("runs.current_run_dir", return_value=rd):
+            out = apply_backchain("g", ["s1", "s2"], _adapter_returning(payload))
+        assert out == ["s1", "s2"]
+        rec = json.loads((rd / "build" / "backchain.json").read_text())
+        assert rec["probes_injected"] == 0
+
+    def test_skips_boundary_plans(self, tmp_path, monkeypatch):
+        self._enable(tmp_path, monkeypatch)
+        from planner import BOUNDARY_TAG
+        adapter = MagicMock()
+        steps = ["probe A [recon: decides the boundary plan — x]",
+                 f"Plan and complete the rest {BOUNDARY_TAG}"]
+        out = apply_backchain("g", steps, adapter)
+        assert out == steps
+        assert not adapter.complete.called
+
+    def test_skips_trivial_plans(self, tmp_path, monkeypatch):
+        self._enable(tmp_path, monkeypatch)
+        adapter = MagicMock()
+        out = apply_backchain("g", ["only step"], adapter)
+        assert out == ["only step"]
+        assert not adapter.complete.called
+
+    def test_draw_failure_leaves_plan_untouched(self, tmp_path, monkeypatch):
+        self._enable(tmp_path, monkeypatch)
+        adapter = MagicMock()
+        adapter.complete.side_effect = RuntimeError("dead key")
+        steps = ["s1", "s2"]
+        assert apply_backchain("g", steps, adapter) == steps
+
+    def test_record_failure_never_blocks_probe_injection(
+            self, tmp_path, monkeypatch):
+        self._enable(tmp_path, monkeypatch)
+        adapter = _adapter_returning(_CHAIN)
+        with patch("runs.current_run_dir", side_effect=RuntimeError("no run")):
+            out = apply_backchain("g", ["s1", "s2", "s3"], adapter)
+        assert len(out) == 4  # probe still prepended

@@ -8,7 +8,7 @@ that caveat implemented.
 
 It reads only what runs already write — metadata.json,
 build/loop-*-log.json, build/closure_verdicts.jsonl, build/reanchor.jsonl,
-run_card.json — and reconstructs the map: landmarks (steps) with tri-state fog (§2a), edges
+build/backchain.json, run_card.json — and reconstructs the map: landmarks (steps) with tri-state fog (§2a), edges
 (explicit [after:N] dependencies vs sequential default), recon moves with
 the decision they informed (§4), loop lineage as vantage moves (§13a),
 closure stalls (§9.3, identical consecutive fingerprints), and the stop
@@ -105,6 +105,9 @@ class RunMap:
     anchors: List[Dict[str, Any]] = field(default_factory=list)  # §9.5
     # re-anchor checks (build/reanchor.jsonl): every milestone-boundary
     # coherence verdict the runtime recorded, on course or not.
+    backchain: List[Dict[str, Any]] = field(default_factory=list)  # §9.9
+    # goal-regression links (build/backchain.json): the backward frontier —
+    # established links are convergence evidence, unknowns are named fog.
     notes: List[str] = field(default_factory=list)  # honest-missing markers
 
 
@@ -382,6 +385,25 @@ def build_map(run_dir: Path) -> RunMap:
             m.stall = True
         prev_fp = fp or None
 
+    # §9.9 backchain (2026-08-15): the backward frontier. A separate layer,
+    # not step nodes — links are conjectured preconditions (fog until a
+    # forward step or probe connects them), and the file is absent for most
+    # runs (planner.backchain OFF-default), which is not a gap worth a note.
+    bc = None
+    if (run_dir / "build" / "backchain.json").is_file():
+        bc = _read_json(run_dir / "build" / "backchain.json", notes, "backchain")
+    if isinstance(bc, dict):
+        for row in bc.get("links") or []:
+            if isinstance(row, dict):
+                m.backchain.append({
+                    "condition": str(row.get("condition") or ""),
+                    "class": str(row.get("class") or ""),
+                    "step": row.get("step"),
+                    "probe": str(row.get("probe") or ""),
+                })
+    elif bc is not None:
+        notes.append("corrupt: backchain.json is not an object")
+
     # §9.5 re-anchor checks (2026-08-15): milestone-boundary coherence
     # verdicts. Kept as a separate layer rather than step nodes — an anchor
     # annotates the boundary BEFORE a step, it isn't a landmark itself.
@@ -457,6 +479,20 @@ def render_text(m: RunMap) -> str:
     if unplaced:
         out.append("re-anchor checks (no matching step rendered):")
         out.extend(f"  {_anchor_line(a)}" for a in unplaced)
+
+    if m.backchain:
+        out.append("backchain (goal regression, nearest-to-goal first):")
+        for l in m.backchain:
+            cls = l.get("class")
+            if cls == "established":
+                step_ref = f" (step {l['step']})" if l.get("step") else ""
+                out.append(f"  ✓ {_clip(l.get('condition') or '')}{step_ref}")
+            elif cls == "verifiable":
+                out.append(f"  ⌕ {_clip(l.get('condition') or '')}"
+                           f"  → probe: {_clip(l.get('probe') or '', 60)}")
+            else:
+                out.append(f"  {_GLYPH[STATE_FOG]} {_clip(l.get('condition') or '')}"
+                           "  (unknown)")
 
     if m.closure:
         out.append(f"closure attempts: {len(m.closure)}"
