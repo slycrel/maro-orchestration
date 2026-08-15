@@ -7892,3 +7892,14 @@ under the same two-measurement standard).
   8734/1 skip. Next in arc: adjudicate reanchor.jsonl once real
   milestone boundaries fire; later chunks per MILESTONES (§9.9,
   14h revisit); §10+§9.7 still owed discussion.
+- **2026-08-15 (PM, Jeremy heading out ~6h)** — Stretch decrees: **"Now is
+  later"** — the appetite-gated arc items (§9.9 backward-chaining, 14h
+  revisit mechanic) are sanctioned now. **"Review in a loop until we
+  actually fix the problems"** (fixpoint is the standing bar, per-chunk).
+  **"Let's also try and find more patterns in what we are missing in the
+  reviews so we can watch for those up front"** — review-miss taxonomy is
+  now a deliverable, not an observation. **"I think the eval/scientific
+  theory method helps us close loops on real work better (don't guess,
+  prove where possible)"** — live-fire/eval evidence over reviewed-but-
+  never-run. Fallback if blocked: run 4+ stale/never-run tests and learn.
+  At least 3 significant pieces this stretch; subagents as desired.
