@@ -224,6 +224,12 @@ REANCHOR_CHECKED = "REANCHOR_CHECKED"
 # goal regression drew a non-empty chain, whether or not probes were injected.
 BACKCHAIN_DRAWN = "BACKCHAIN_DRAWN"
 
+# §14h revisit mechanic (COMPOUND_THINKING_DESIGN §13b/§14h, 2026-08-15):
+# fires when a capability acquisition postdates a standing dead end whose
+# reopen condition it plausibly satisfies (revisit.sweep). A lead for the
+# operator — never an auto-rerun.
+REVISIT_CANDIDATE = "REVISIT_CANDIDATE"
+
 # Goal-stated step-count ceiling (BACKLOG step-count constraint, 2026-07-16):
 # fires when the planner hard-truncates a plan that still exceeded the goal's
 # explicit "N steps max" bound after one corrective re-ask.
@@ -370,6 +376,7 @@ EVENT_TYPES = {
     AUTO_RECOVERY, DIAGNOSIS, INPUT_MISMATCH,
     DECISION_RECORDED, METACOGNITIVE_DECISION,
     CUTS_DRAWN, BOUNDARY_EXPANDED, REANCHOR_CHECKED, BACKCHAIN_DRAWN,
+    REVISIT_CANDIDATE,
     STEP_CEILING_ENFORCED,
     SCOPE_GENERATED, SCOPE_PARSE_FAILED, SCOPE_SKIPPED, CLOSURE_VERDICT, CLAIM_PROBED,
     CLAIM_VERIFIER_OUTCOME, FABRICATION_DETECTED, SCAVENGE_DETECTED, FENCE_WRITE_BLOCKED,
@@ -409,6 +416,8 @@ USER_SURFACED_EVENTS = frozenset({
     # honesty findings the operator should hear
     FABRICATION_DETECTED, SUBSYSTEM_SILENT, SUBSYSTEM_RECOVERED,
     DONE_WITHOUT_VERDICT,
+    # a dead end may have reopened (§14h) — a lead the operator decides on
+    REVISIT_CANDIDATE,
     # spend decisions the operator should hear (never silent shared-resource
     # spend): a run was granted more budget than its configured envelope
     BUDGET_EXTENDED,

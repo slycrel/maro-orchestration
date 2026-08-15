@@ -42,7 +42,8 @@ _CONFIG_ABSENT = object()       # distinguishes missing key from explicit null
 
 
 def _stamp_refusal_verdict(verdict: str, evidence: str,
-                           pause_reason: str = "") -> None:
+                           pause_reason: str = "",
+                           reopen_payload: Optional[dict] = None) -> None:
     """Persist a pre-start refusal's stop verdict to run metadata.
 
     Pre-start refusals return a LoopResult without ever reaching
@@ -62,6 +63,7 @@ def _stamp_refusal_verdict(verdict: str, evidence: str,
             stop_verdict=verdict,
             stop_evidence=evidence,
             pause_reason=pause_reason or "",
+            reopen_payload=reopen_payload,
         )
     except Exception:
         pass
@@ -176,7 +178,17 @@ def _budget_gate(ctx, *, goal: str, project: Optional[str], dry_run: bool):
                     })
                 except Exception:
                     pass
-                _stamp_refusal_verdict("out-of-budget", _msg)
+                # §13b evidence-specific reopen payload: out-of-budget
+                # reopens trivially with budget — record WHICH budget and
+                # where it stood, so the revisit scanner can check the
+                # condition against numbers instead of prose.
+                _stamp_refusal_verdict(
+                    "out-of-budget", _msg,
+                    reopen_payload={
+                        "kind": "budget-daily",
+                        "daily_cap_usd": round(float(_daily_cap), 2),
+                        "spent_usd": round(float(_spent), 2),
+                    })
                 return LoopResult(
                     loop_id=ctx.loop_id,
                     goal=goal,

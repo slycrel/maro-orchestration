@@ -651,7 +651,8 @@ def _clear_verdict_keys(existing: dict) -> None:
         existing.pop(key, None)
 
 
-def _apply_stop_tuple(existing: dict, stop_verdict, stop_evidence) -> None:
+def _apply_stop_tuple(existing: dict, stop_verdict, stop_evidence,
+                      reopen_payload=None) -> None:
     """THE stop-tuple replacement. Mutates ``existing`` in place.
 
     Nonempty verdict sets both members (evidence honest-clipped at the
@@ -660,13 +661,26 @@ def _apply_stop_tuple(existing: dict, stop_verdict, stop_evidence) -> None:
     replace-whole-or-not-at-all doctrine as ``_apply_verdict_tuple``).
     One implementation for every stop writer (2026-08-15 bypass
     burn-down: three call sites and the retry stamp each hand-rolled
-    this pair)."""
+    this pair).
+
+    ``reopen_payload`` (§13b, 2026-08-15): evidence-SPECIFIC reopen data
+    recorded at stamp time — which budget, which cost estimate — the
+    upgrade the stop_verdicts.REOPEN_CONDITIONS comment names. Rides the
+    tuple's replace-whole doctrine: a new verdict without a payload pops
+    any stale one (a predecessor's numbers must not annotate this
+    ending), and clearing the verdict clears it too. Dict only; anything
+    else is dropped rather than persisted."""
     if stop_verdict:
         existing["stop_verdict"] = str(stop_verdict)
         existing["stop_evidence"] = clip(stop_evidence, 800)
+        if isinstance(reopen_payload, dict) and reopen_payload:
+            existing["stop_reopen_payload"] = reopen_payload
+        else:
+            existing.pop("stop_reopen_payload", None)
     else:
         existing.pop("stop_verdict", None)
         existing.pop("stop_evidence", None)
+        existing.pop("stop_reopen_payload", None)
 
 
 def stamp_run_verdict(
@@ -748,6 +762,7 @@ def stamp_run_stop_verdict(
     run_dir: Optional[Path] = None,
     refine_note: bool = False,
     evidence_out: Optional[list] = None,
+    reopen_payload: Optional[dict] = None,
 ) -> Optional[Path]:
     """Replace a run's stop-verdict tuple in one locked write.
 
@@ -779,6 +794,11 @@ def stamp_run_stop_verdict(
       caller re-read the file after lock release for its ledger row — a
       concurrent writer in that window silently substituted ITS content,
       the exact drift class the owners exist to end).
+    - ``reopen_payload`` (§13b): evidence-specific reopen data — which
+      budget, which cost estimate — stored as ``stop_reopen_payload``
+      beside the tuple; consumers are the map lens and the revisit
+      scanner. Follows the tuple's replace-whole doctrine (see
+      ``_apply_stop_tuple``).
     """
     try:
         rd = run_dir if run_dir is not None else current_run_dir()
@@ -798,7 +818,8 @@ def stamp_run_stop_verdict(
                 _prior = existing.get("stop_verdict") or ""
                 if _prior and _prior != stop_verdict:
                     evidence = f"{stop_evidence} [refines: {_prior}]"
-            _apply_stop_tuple(existing, stop_verdict, evidence)
+            _apply_stop_tuple(existing, stop_verdict, evidence,
+                              reopen_payload=reopen_payload)
             if evidence_out is not None:
                 evidence_out.append(existing.get("stop_evidence", ""))
             if pause_reason:

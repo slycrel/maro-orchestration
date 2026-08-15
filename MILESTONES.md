@@ -47,14 +47,27 @@ first-class milestones).
    (OFF-default, ON this box): goal regression after the forward plan;
    links classified established/verifiable/unknown with honest
    downgrades; unmet verifiable preconditions become [recon:] probe
-   steps (max 2, draw_cuts' cap); chain → build/backchain.json +
+   steps (max 2, draw_cuts' cap); chain → build/backchain.jsonl (append; post-injection step refs) +
    BACKCHAIN_DRAWN; map lens renders the backward frontier. Wired
    before pre-flight review (milestone-index consistency with §9.5);
    skips cuts-boundary and preset plans.
-5. **Chunk 5 (next) — 14h revisit mechanic** (tool-acquisition reopens
-   standing dead ends — takes the deferred §13b structured reopen
-   payloads with it). NOT solo-buildable: §10 calibration + §9.7
-   scoping (owed discussion with Jeremy).
+5. **Chunk 5 — 14h revisit mechanic + §13b reopen payloads: SHIPPED
+   2026-08-15.** `src/revisit.py` behind `revisit.enabled` (ON-default:
+   deterministic file reads, zero LLM, surfaces only): heartbeat sweep
+   matches capability-acquisition events (SKILL/CANON/RULE/NODE
+   promotions) against standing dead ends (thesis-refuted /
+   not-worth-it, goal unachieved); post-stop acquisitions surface as
+   REVISIT_CANDIDATE leads (capped 3/sweep, deduped via
+   memory/revisit_state.json) — never auto-rerun. out-of-budget /
+   lost-the-plot listed standing, never event-matched (their reopen
+   conditions are operator acts). §13b payloads: stamp_run_stop_verdict
+   grows `reopen_payload` (replace-whole doctrine with the tuple);
+   writers so far: daily-budget gate (cap+spent numbers) and director
+   escalation close (depth+confidence). Live-fired: 786 runs scanned,
+   7 standing dead ends, 0 candidates — honest (current population has
+   no event-matchable verdicts). CLI `python3 -m revisit`.
+6. **Remaining treasure-map items — NOT solo-buildable:** §10
+   calibration + §9.7 scoping (owed discussion with Jeremy).
 
 Previous checkpoint: 2026-08-11 — **checkpoint pointer, not a work record: since
 2026-08-01 the executable queue has lived in BACKLOG.md's "Actionable

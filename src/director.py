@@ -1305,6 +1305,14 @@ def _stamp_close_stop_verdict(loop_id: str, *, depth: int, confidence: int,
                 run_dir=_rd,
                 refine_note=True,
                 evidence_out=_ev_out,
+                # §13b: the reopen condition is "the cost or value
+                # estimate moves" — record the judgment this close was
+                # made at, so a revisit can compare against it.
+                reopen_payload={
+                    "kind": "escalation-close",
+                    "depth": int(depth),
+                    "confidence": int(confidence),
+                },
             )
             if _meta_path is not None and _ev_out:
                 row_evidence = _ev_out[0] or row_evidence

@@ -774,6 +774,22 @@ def run_heartbeat(
         except Exception as _sw_exc:
             log.warning("stranded-state sweep failed: %s", _sw_exc)
 
+    # --- §14h revisit sweep (deterministic, zero LLM): acquisition events
+    # matched against standing dead ends' reopen conditions. Surfaces
+    # REVISIT_CANDIDATE leads only — never auto-reruns anything (same
+    # never-auto-resume posture as the stranded sweep above).
+    if not dry_run:
+        try:
+            from revisit import sweep as _revisit_sweep
+            _rv = _revisit_sweep(verbose=verbose)
+            if _rv.get("new"):
+                report.checks["revisit"] = (
+                    f"candidates: {_rv['new']} dead end(s) may have "
+                    f"reopened ({_rv['matched']} matched of "
+                    f"{_rv['total']} standing)")
+        except Exception as _rv_exc:
+            log.warning("revisit sweep failed: %s", _rv_exc)
+
     # --- Tier 1: Scripted recovery ---
     tier1 = _tier1_scripted(health.checks)
     report.recovery_actions.extend(tier1)

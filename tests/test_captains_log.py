@@ -369,7 +369,10 @@ class TestEventTypes:
         # +1 (2026-08-13): CANON_PROMOTED — the canon door: operator verb
         # promotes a surfaced LONG candidate to playbook Canon (closes the
         # doorless CANON_APPLY_THRESHOLD).
-        assert len(EVENT_TYPES) == 88
+        # +1 (2026-08-15): REVISIT_CANDIDATE — §14h revisit mechanic: a
+        # capability acquisition postdates a standing dead end whose reopen
+        # condition it plausibly satisfies. A lead, never an auto-rerun.
+        assert len(EVENT_TYPES) == 89
 
     def test_previously_unregistered_events_in_set(self):
         from captains_log import EVOLVER_REVERTED, EVOLVER_VERIFY, PLAYBOOK_UPDATED

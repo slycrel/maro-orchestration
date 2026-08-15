@@ -235,6 +235,7 @@ py-modules = [
     "recall",
     "repo_scan",
     "rerun_identity",
+    "revisit",
     "router",
     "rules",
     "run_curation",

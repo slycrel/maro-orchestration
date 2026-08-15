@@ -181,7 +181,8 @@ Written by `captains_log.log_event(...)`. Every entry has the four required fiel
 | `CUTS_DRAWN` | planner.py:853 | goal_preview, constraints, probes, bounded, remainder | Qix-cuts pre-planning drew constraints-with-basis + probes before decompose. |
 | `BOUNDARY_EXPANDED` | loop_execute.py:455 | loop_id, remainder, sub_steps | A boundary step expanded into concrete sub-steps, with probe findings in its context. |
 | `REANCHOR_CHECKED` | reanchor.py | loop_id, step_idx, on_course, anchor_source | §9.5 mid-meander re-anchor: a milestone-boundary coherence check ran against the committed interpretation (or goal text), on course or drift. Full verdict in the run's build/reanchor.jsonl. |
-| `BACKCHAIN_DRAWN` | backchain.py | links (ts/condition/class/step/probe), probes_injected | §9.9 goal regression drew a non-empty backward chain; verifiable-unmet links became [recon:] probe steps. Chain persisted at the run's build/backchain.json. |
+| `BACKCHAIN_DRAWN` | backchain.py | links (ts/condition/class/step/probe/injected), probes_injected | §9.9 goal regression drew a non-empty backward chain; verifiable-unmet links became [recon:] probe steps (step refs use post-injection numbering). Chain appended to the run's build/backchain.jsonl. |
+| `REVISIT_CANDIDATE` | revisit.py | run, verdict, reopen_condition, signal_count, signals, reopen_payload? | §14h revisit mechanic: a capability acquisition (skill/canon/rule/node promotion) postdates a standing dead end whose reopen condition it plausibly satisfies. User-surfaced lead — never an auto-rerun; dedup state in memory/revisit_state.json fires each run once per new acquisition. |
 | `STEP_CEILING_ENFORCED` | planner.py:702 | goal_preview, ceiling, returned_steps, lane, dropped_steps | A goal-stated step-count ceiling was held by hard truncation after one corrective re-ask. |
 
 ### Run transparency (loop lifecycle + quality gate)
