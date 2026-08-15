@@ -6352,6 +6352,32 @@ def test_milestone_reanchor_fires_and_drift_note_joins_ancestry(monkeypatch, tmp
     assert carried, "drift anchor note never reached the expansion ancestry"
 
 
+def test_milestone_reanchor_skipped_in_dry_run(monkeypatch, tmp_path):
+    """Round-1 review (Skeptic, MED): the `not dry_run` clause is the line
+    between a preview and real LLM spend — enabled config + dry run must
+    never fire the check."""
+    _setup_workspace(monkeypatch, tmp_path)
+    (tmp_path / "config.yml").write_text("reanchor:\n  enabled: true\n")
+    from unittest.mock import MagicMock, patch
+
+    fake_pf = MagicMock()
+    fake_pf.milestone_step_indices = [1]
+    fake_pf.scope = "wide"
+    fake_pf.flags = []
+
+    with patch("pre_flight.review_plan", return_value=fake_pf), \
+         patch("reanchor.run_milestone_reanchor") as mock_ra, \
+         patch("planner.decompose", return_value=["sub A", "sub B"]):
+        run_agent_loop(
+            "do a complex analysis",
+            adapter=_DryRunAdapter(),
+            dry_run=True,
+            max_iterations=10,
+        )
+
+    assert not mock_ra.called
+
+
 def test_milestone_reanchor_off_by_default(monkeypatch, tmp_path):
     """No reanchor config → the check never runs (no silent LLM spend —
     same posture as scope_generation)."""

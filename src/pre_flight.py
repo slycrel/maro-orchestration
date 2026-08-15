@@ -129,8 +129,9 @@ def _heuristic_scope(steps: List[str]) -> str:
     return "medium"
 
 
-def _build_reviewers() -> List[tuple]:
-    """Candidate reviewer adapters in cost order: hosted-free, then paid API.
+def _build_reviewers():
+    """Yield candidate reviewer adapters in cost order: hosted-free, then
+    paid API.
 
     Hosted-free (Groq/Gemini — consent and keys resolved inside
     build_hosted_free_adapter) goes first: a single cheap non-agentic
@@ -139,27 +140,30 @@ def _build_reviewers() -> List[tuple]:
     Subprocess stays excluded (claude -p blocks while claude --continue
     runs). Build failures here just drop a candidate — a key that BUILDS
     but is dead fails at call time, which review_plan's loop handles.
+
+    A generator on purpose (round-1 review, Minimalist): cost order also
+    means not paying construction (adapter build + env-file reads) for
+    tiers the first working reviewer makes unreachable.
     """
-    candidates: List[tuple] = []
     try:
         from hosted_free import build_hosted_free_adapter
         _hf = build_hosted_free_adapter()
         if _hf is not None:
-            candidates.append(("hosted-free", _hf))
+            yield ("hosted-free", _hf)
     except Exception:
         pass
-    if build_adapter is not None:
+    if build_adapter is None:
+        return
+    try:
+        from llm import MODEL_CHEAP
+    except Exception:
+        return
+    for _backend in ("openrouter", "anthropic"):
         try:
-            from llm import MODEL_CHEAP
-            for _backend in ("openrouter", "anthropic"):
-                try:
-                    candidates.append(
-                        (_backend, build_adapter(model=MODEL_CHEAP, backend=_backend)))
-                except Exception:
-                    continue
+            _adapter = build_adapter(model=MODEL_CHEAP, backend=_backend)
         except Exception:
-            pass
-    return candidates
+            continue
+        yield (_backend, _adapter)
 
 
 def _parse_review(raw: str) -> Optional[PlanReview]:
@@ -178,7 +182,15 @@ def _parse_review(raw: str) -> Optional[PlanReview]:
                 raw = raw[:-3].strip()
 
         data = json.loads(raw)
-        scope = data.get("scope", "unknown")
+        scope = data.get("scope", "")
+        # Vocabulary gate (round-1 review, Skeptic+Architect): a
+        # syntactically-valid answer with a missing or off-vocabulary scope
+        # would sail through here and reintroduce the exact scope="unknown"
+        # calibration corruption this parser exists to kill. Off-vocabulary
+        # scope == failed reviewer — next candidate, then heuristic.
+        if scope not in ("narrow", "medium", "wide"):
+            log.info("pre_flight: reviewer scope %r off-vocabulary — treating as failed", scope)
+            return None
         scope_note = data.get("scope_note", "")
         flags: List[PlanFlag] = []
         milestone_indices: List[int] = []

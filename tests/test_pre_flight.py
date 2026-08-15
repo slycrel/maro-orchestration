@@ -160,6 +160,25 @@ class TestReviewPlan:
         assert review.scope == "narrow"
         assert live.complete.called
 
+    def test_off_vocabulary_scope_treated_as_failed_reviewer(self):
+        """Round-1 review (Skeptic+Architect, HIGH): a syntactically-valid
+        answer whose scope is missing or off-vocabulary must NOT produce a
+        "successful" review — that path would reintroduce the exact
+        scope="unknown" calibration corruption the parser exists to kill.
+        It falls through to the next candidate, then heuristic."""
+        bad = _make_adapter({"assumptions": [], "milestone_candidates": []})
+        with patch("pre_flight.build_adapter", return_value=bad):
+            review = review_plan("goal", ["step 1"], MagicMock())
+        assert review.scope in ("narrow", "medium", "wide")
+        assert "heuristic" in review.scope_note
+
+        garbage_scope = _make_adapter({**_narrow_response(), "scope": "wide-ish"})
+        live = _make_adapter(_narrow_response())
+        with patch("pre_flight.build_adapter", side_effect=[garbage_scope, live]):
+            review = review_plan("goal", ["step 1"], MagicMock())
+        assert review.scope == "narrow"
+        assert live.complete.called
+
     def test_hosted_free_reviewer_preferred(self):
         """When the hosted-free tier is available it reviews first — the
         paid API candidates are never called."""

@@ -216,12 +216,15 @@ class TestRunMilestoneReanchor:
         assert row["on_course"] is True
         assert "dead key" in row["error"]
 
-    def test_recent_work_uses_last_done_outcomes(self, tmp_path):
+    def test_recent_work_keeps_all_statuses_tagged(self, tmp_path):
+        """Round-1 review (Architect): a blocked stretch is often exactly
+        where drift lives — the summary keeps every status, tagged."""
         rd = self._run_dir(tmp_path)
         adapter = _adapter_returning({"on_course": True})
         outcomes = [
+            _outcome(result="oldest — outside the window"),
             _outcome(result="first"),
-            _outcome(status="blocked", result="SHOULD NOT APPEAR"),
+            _outcome(status="blocked", result="hit the wall"),
             _outcome(result="second"),
         ]
         with patch("runs.current_run_dir", return_value=rd), \
@@ -231,5 +234,17 @@ class TestRunMilestoneReanchor:
                 remaining_steps=[], adapter=adapter, loop_id="l", step_idx=1,
             )
         user_msg = adapter.complete.call_args[0][0][1].content
-        assert "first" in user_msg and "second" in user_msg
-        assert "SHOULD NOT APPEAR" not in user_msg
+        assert "[done] first" in user_msg
+        assert "[blocked] hit the wall" in user_msg
+        assert "[done] second" in user_msg
+        assert "oldest" not in user_msg
+
+    def test_upcoming_steps_truncation_is_marked(self):
+        """Round-1 review (Minimalist): >5 upcoming steps get an explicit
+        marker, never a silent cap."""
+        adapter = _adapter_returning({"on_course": True})
+        check_reanchor("g", "", "", "m",
+                       [f"step {i}" for i in range(8)], adapter)
+        user_msg = adapter.complete.call_args[0][0][1].content
+        assert "... (3 more)" in user_msg
+        assert "step 4" in user_msg and "step 5" not in user_msg

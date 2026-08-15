@@ -133,7 +133,10 @@ def check_reanchor(
             if interpretation
             else "(no binding interpretation was recorded — the goal text is the commitment)\n\n"
         )
-        upcoming = "\n".join(f"  {i + 1}. {s}" for i, s in enumerate(upcoming_steps[:5]))
+        upcoming_lines = [f"  {i + 1}. {s}" for i, s in enumerate(upcoming_steps[:5])]
+        if len(upcoming_steps) > 5:
+            upcoming_lines.append(f"  ... ({len(upcoming_steps) - 5} more)")
+        upcoming = "\n".join(upcoming_lines)
         user_msg = (
             f"Goal: {goal}\n\n"
             f"{commitment_block}"
@@ -197,9 +200,9 @@ def run_milestone_reanchor(
     course or when the check could not run).
 
     Reads the commitment from the run's resolved_intent.md artifact,
-    summarizes recent done-step results (same shape the adaptive triggers
-    use: last 3, 600 chars each), asks the coherence question, records
-    the verdict to build/reanchor.jsonl, and emits a captain's-log event.
+    summarizes the last 3 step outcomes (any status, tagged — 600 chars
+    each), asks the coherence question, records the verdict to
+    build/reanchor.jsonl, and emits a captain's-log event.
     """
     interpretation = ""
     try:
@@ -208,9 +211,14 @@ def run_milestone_reanchor(
     except Exception:
         pass
 
-    done = [o for o in step_outcomes if getattr(o, "status", "") == "done"]
+    # Last 3 outcomes REGARDLESS of status, each tagged (round-1 review,
+    # Architect): a blocked or skipped stretch is often exactly where drift
+    # lives — a done-only summary would hide the signal this check exists
+    # to catch.
     recent_work = "\n---\n".join(
-        (getattr(o, "result", "") or "")[:600] for o in done[-3:]
+        f"[{getattr(o, 'status', '?') or '?'}] "
+        + (getattr(o, "result", "") or "")[:600]
+        for o in step_outcomes[-3:]
     )
 
     verdict = check_reanchor(
