@@ -3576,6 +3576,36 @@ def _handle_impl(
                                         )
                                     except Exception:
                                         pass
+                                    # Durable disputed marker, sibling of
+                                    # the main closure lane's (round-17
+                                    # review: this lane consulted disputed
+                                    # only as in-memory routing — the exact
+                                    # 2026-08-09 pattern — so a disputed
+                                    # escalated verdict rendered to future
+                                    # runs as ordinary, uncontested
+                                    # evidence).
+                                    try:
+                                        if (getattr(_post_closure,
+                                                    "verdict_audit", {})
+                                                or {}).get("disputed"):
+                                            from runs import (
+                                                write_metadata as _wm_pvad)
+                                            from runs import (
+                                                current_run_dir as _crd_pvad)
+                                            _rd_pvad = _crd_pvad()
+                                            if _rd_pvad is not None:
+                                                _wm_pvad(
+                                                    _rd_pvad,
+                                                    handle_id=handle_id,
+                                                    prompt=_raw_input,
+                                                    extra={
+                                                        "goal_verdict_contested":
+                                                            True,
+                                                        "goal_verdict_contested_by":
+                                                            "verdict_audit",
+                                                    })
+                                    except Exception:
+                                        pass
                                     if (
                                         _post_judged
                                         and not _post_closure.complete

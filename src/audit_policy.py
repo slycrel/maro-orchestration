@@ -65,7 +65,10 @@ def persist_delivered_outcome_verdict(
             max_attempts=2,
         )
         attempts = int(stamp.attempts or 0)
-        error = str(stamp.error or "")
+        # Bounded on BOTH producer branches (round-17 review: the round-16
+        # clip covered only the exception path below; a write_failed status
+        # carried its error through this branch unbounded — 50KB probe).
+        error = clip(str(stamp.error or ""), 2000)
         if stamp.status in ("updated", "missing"):
             return DeliveredVerdictAudit(status=stamp.status)
         status = stamp.status

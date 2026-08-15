@@ -2689,6 +2689,35 @@ capture**, which is what makes the rung amortize instead of evaporate.
   round history. NOTE for the other session: the box's own
   adversarial-review rounds share this codex account and will hit the
   same wall until the reset.
+  **Round 17 RUN 2026-08-14 on the SAME-MODEL fallback (Jeremy: sonnet
+  medium via `claude -p`; "the majority of the adversarial review is
+  prompt + clean slate, the other model is bonus 20-30%") — and the
+  fallback earned its keep: Skeptic found 2 real probe-confirmed
+  findings, Minimalist returned the arc's FIRST clean lens verdict
+  (probes run, "genuine convergence for this lens"), Architect filed no
+  defects, only the structural recommendation below.** Fixed same
+  session: (1) `audit_policy.error` was bounded on only ONE of its two
+  producer branches — the round-16 fix covered the exception path while
+  a write_failed status rode through unbounded (50KB probe; the
+  Minimalist disputed reachability — current producers are short — but
+  the mechanism was real and the fix is one line); (2) the
+  post-escalation lane consulted its disputed verdict-audit only as
+  in-memory routing — the exact 2026-08-09 "routing state is not
+  verdict state" pattern reintroduced in the sibling lane, so a
+  disputed escalated verdict rendered to future runs as ordinary
+  uncontested evidence; the durable contested stamp now mirrors the
+  main lane. Architect's recommendation SHIPPED as structure: a second
+  frozen census (`scan_verdict_bypasses` +
+  tests/data/verdict_bypass_inventory.json, 12 sites) — raw
+  write_metadata/stamp_run_metadata calls carrying verdict/stop tuple
+  keys are frozen debt; NEW bypasses fail the suite (route through the
+  runs.py schema owners). Known census limit: dict LITERALS only —
+  variable-built extras (e.g. the NOW terminal `_now_extra`) are not
+  yet seen. Suite 8645/0 skipped. **Loop closed per Jeremy's
+  "last round" instruction; the only-low exit was never formally
+  reached (r17: 1 high-rated w/ contested severity + 1 medium, both
+  fixed; 2 of 3 lenses clean). Optional: a codex 3-lens confirm round
+  after the Aug 19 reset.**
 
   **Method that worked, for whoever picks this up:** don't argue about the
   number — pull the actual distribution out of `runs/*/build/loop-*.json`

@@ -191,3 +191,75 @@ def test_scanner_detects_each_supported_shape():
                 hint = _name_hint(node.value)
                 found = found or bool(hint and FAMILY.search(hint))
         assert found, f"scanner missed the {label} shape: {src!r}"
+
+
+# --- second census: verdict-tuple bypass writers ---------------------------
+# Round-17 Architect: every stale-tuple bug this arc fixed traces to raw
+# write_metadata/stamp_run_metadata calls carrying goal_verdict_*/stop
+# keys — merge semantics that can leave siblings standing. The schema
+# owners in runs.py exist; this census freezes the bypass population the
+# same way the slice census does: known sites are inventoried debt, NEW
+# sites fail (route them through stamp_run_verdict /
+# stamp_delivered_now_retry / the clear helpers instead).
+
+_TUPLE_KEYS = frozenset((
+    "goal_achieved", "goal_verdict_source", "goal_verdict_confidence",
+    "goal_verdict_summary", "goal_verdict_downgrade_reason",
+    "goal_verdict_gaps", "stop_verdict", "stop_evidence",
+))
+_RAW_WRITERS = ("write_metadata", "stamp_run_metadata")
+
+# Frozen 2026-08-14. Each entry is file::writer::key. Burn down by
+# routing the site through a runs.py schema owner, then delete its rows.
+KNOWN_BYPASSES_PATH = (Path(__file__).resolve().parent / "data"
+                       / "verdict_bypass_inventory.json")
+
+
+def scan_verdict_bypasses() -> Counter:
+    hits: Counter = Counter()
+    for path in sorted((REPO / "src").glob("*.py")):
+        if path.name == "runs.py":
+            continue   # the schema owners themselves
+        tree = ast.parse(path.read_text())
+        # Map aliases of the raw writers imported from runs.
+        aliases = {}
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module == "runs":
+                for a in node.names:
+                    if a.name in _RAW_WRITERS:
+                        aliases[a.asname or a.name] = a.name
+        if not aliases:
+            continue
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Name)
+                    and node.func.id in aliases):
+                continue
+            writer = aliases[node.func.id]
+            dicts = [a for a in node.args if isinstance(a, ast.Dict)]
+            dicts += [kw.value for kw in node.keywords
+                      if isinstance(kw.value, ast.Dict)]
+            for d in dicts:
+                for key_node in d.keys:
+                    if (isinstance(key_node, ast.Constant)
+                            and key_node.value in _TUPLE_KEYS):
+                        hits[f"src/{path.name}::{writer}::"
+                             f"{key_node.value}"] += 1
+    return hits
+
+
+def test_no_new_verdict_tuple_bypasses():
+    inventory = json.loads(KNOWN_BYPASSES_PATH.read_text())
+    current = scan_verdict_bypasses()
+    new = {k: n for k, n in current.items() if n > inventory.get(k, 0)}
+    assert not new, (
+        "NEW raw-writer call carrying verdict/stop tuple keys — merge "
+        "semantics leave omitted siblings standing (six review rounds of "
+        "evidence). Route it through runs.stamp_run_verdict / "
+        "stamp_delivered_now_retry / the clear helpers, or add the site "
+        f"to {KNOWN_BYPASSES_PATH.name} with a reviewed justification: "
+        f"{sorted(new)}")
+    stale = {k: n for k, n in inventory.items() if current.get(k, 0) < n}
+    assert not stale, (
+        f"Bypass fixed but inventory not trimmed — update "
+        f"{KNOWN_BYPASSES_PATH.name}: {sorted(stale)}")
