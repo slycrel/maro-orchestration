@@ -119,6 +119,24 @@ context, at best it's a slight tweak and we fix forward."*
   this") degrades faster, not slower — the harness has to compensate with
   structural boundaries, not better wording. This is a standing filter for
   every future capability, not a one-time fix.
+- **CGI, not AGI** — *"I think what I want is probably something more like
+  CGI -- capable general intelligence. I don't want a slave mind or to
+  create artificial life; I want something as capable as me as a workhorse
+  in the digital space, with all the benefits that a computer brings."*
+  (2026-07-21; the north star's positive name. Pulled up from the journal
+  archive by the 2026-08-16 rotation audit.)
+- **Recovery over correctness** — *"let's try and be careful about absolute
+  certainty vs probability based thinking… at some point it becomes more
+  simple to accept the coarse grained truths and slide over the details
+  than it does to get mired in the details… good enough is good enough?"*
+  and the actionable half: *"I think more often it's less about being
+  correct up front and more about how well you recover when you're wrong…
+  not right or wrong, just problem set trade-offs."* (2026-08-02, decree-
+  class; prompted by four brittle closure checks. Design rule derived the
+  same day: recovery paths proportional to confidence — a verdict layer
+  that admits no overrule must earn that standing, and most should not
+  have it. Full entry: goal-brain-journal-2026-08a.md L338. Pulled up by
+  the 2026-08-16 rotation audit.)
 
 ## Compiled truth (system-maintained; basis noted per claim)
 
@@ -933,6 +951,164 @@ Sample: the 2026-05-13..17 window of `~/.maro/workspace/runs/` (478 dirs total;
   conversation. Expect edge iteration, not a final answer.
 
 - **2026-08-16** — **GOAL_BRAIN rotation policy** (Jeremy: *"we're 8k+ in goal_brain.md... do we need to move things to history? I can't imagine we're meaningfully ingesting that all the time"*). He was right mechanically: at 556KB the file exceeded the 256KB whole-file Read limit — fresh sessions could no longer ingest it at all, violating its own "short enough to inject whole" format rule. Journal entries and Decisions rotate to docs/history/ archives at chunk boundaries (~2-week live window for the journal, ~30-day for Decisions); archives are verbatim, ordered, and part of the append-only record; dev-recall ingests them. The journal also gained its own section header — it had been accreting under "Open questions" since 2026-07-12. BACKLOG.md (388KB) has the same disease; its split is filed in BACKLOG.
+- **2026-08-16 — Rotation audit + SF-13 back-fill batch.** Jeremy asked
+  whether archiving risks scope reduction. Three full sweeps (89 archived
+  decisions, ~150 July journal entries, 48 Aug 1–8 journal entries)
+  answered: mostly no — ~170 decree-class items are live-covered — but
+  the audit exposed that this Decisions section had a **2026-07-16 →
+  08-13 hole** (SF-13's Decisions-line half went unhonored; the journal
+  was the de-facto record, and rotation archived it). The still-governing
+  decrees with NO live representation are restored below as one-liners;
+  full context at the cited archive lines (`dec` =
+  goal-brain-decisions-2026-04-to-07.md, `j07` =
+  goal-brain-journal-2026-07.md, `j08a` = goal-brain-journal-2026-08a.md).
+  Rotation policy amended: before rotating a journal window, sweep it for
+  decree-bearing entries lacking Decisions lines — rotate only what is
+  compiled. Back-fill (original dates):
+  - **07-03** Harness-guardrail sub-rules: separate *"should we"* from
+    *"how would we"* (Jeremy-reserved decisions get asked BEFORE any
+    write-capable agent touches the question — never delegated as a
+    fact-finding preamble that authorizes itself); every new auto-apply
+    surface needs a verify+revert story before it ships; re-check
+    confidence calibration across model boundaries (dec L284).
+  - **07-08→07-16** Budget posture chain: $200/mo Anthropic + $20/mo
+    Codex is the spend ceiling; API-key/OpenRouter lane DECLINED until
+    the budget-models phase — **don't re-pitch API keys**; re-affirmed
+    2026-08-08 ("-p track accepted for now; pure-API deferred until the
+    economics change") and closed 07-12: no OSS coding-plan sub, budget
+    lane stays designed-but-unfunded, one-knob reactivation documented
+    in MODEL_ROUTE_EXPLORATION (dec L827, L1075, L1117; j07 L9; j08a
+    L996).
+  - **07-10** Production-always: no dev/prod behavior split, ever;
+    behavior gates are explicit config knobs, never environment
+    inference; `debug` is observability-only — flipping it never changes
+    what the system does (dec L962).
+  - **07-10** Priority tiebreaker: *"stay on the trail of better
+    decision making. Without better decomposition/goal analysis most of
+    the rest of this is window dressing in practice"* — decomposition/
+    goal-analysis quality outranks infrastructure polish when they
+    compete (dec L1064).
+  - **07-10** Toy-goal lessons: funnel-threshold tuning is deprioritized
+    until organic direct-use goals flow; zero lessons from "write a
+    poem"-class batches is expected, not a bug (dec L978).
+  - **07-11** Caps are containment circuit-breakers, never contract
+    enforcement — runaway-only backstops, never capability ceilings;
+    retry-churn from an over-tight breaker is itself waste (dec
+    L1087–1096; restated 07-29 j07 L2708).
+  - **07-11** *"Did you do X?"* must be answerable from an action log
+    the assistant can read, never from parametric self-belief (dec
+    L1152). The receipts/tool-events lane implements this; the rule is
+    the constraint on every future self-report surface.
+  - **07-11** The 2014 Mini is a deliberate edge-surfacing instrument,
+    not a constraint to engineer away (dec L1117).
+  - **07-14** Test-maintenance posture: *"test count is not a coverage
+    goal"* — retain distinct behavioral/safety-boundary evidence,
+    consolidate redundant scalar examples and repeated expensive setup;
+    judge reductions by behavior, runtime, and coverage, never by the
+    raw number of test functions (dec L1343).
+  - **07-16** AFK batches: *"maybe lead with the decisions as the other
+    work proceeds"* (j07 L687).
+  - **07-16** Auto-resume cap NOT ratified (*"likely right decision is
+    not binary"*); billing-failover default OFF ratified same entry
+    (j07 L709; underlying provisional dec L1190–1195).
+  - **07-16** Purgatorio #3 exposure ACCEPTED (standing state):
+    medication-era `user/` blobs remain reachable in public git history
+    (99f5a67..358ad5d + two stale branches); tip clean since 358ad5d;
+    no second history rewrite, by decision — a future privacy pass
+    should treat this as settled, not a finding (j07 L732).
+  - **07-16** Credentials backup: keep machine/service credentials
+    copied into `~/claude/credentials-backup/` (chmod-700, outside git);
+    re-copy on rotation — *"I could see us wiping the maro workspace at
+    some point"* (j07 L807).
+  - **07-17** The delivery loop IS the product surface. Standing test:
+    does the end user hear the outcome, in plain words, where they
+    asked for the work? (j07 L870.)
+  - **07-17** Completion results are two-tone: every completion surface
+    answers the original ask; LLM consumers get the data, humans get
+    prose (j07 L883).
+  - **07-17** SSO is the floor for public surfaces (a new public surface
+    starts behind the portal, not with a TODO) — softened: the floor
+    stands only while low-friction; sanctioned fallback is TLS-only
+    read-only pages; auth friction is a signal to retreat, not push
+    through (j07 L912).
+  - **07-17** Claude is the preferred go-to backend; OpenRouter is
+    PoC-context, never first (j07 L974).
+  - **07-17** 1-shot posture is Hermes-side ONLY (supersedes the same
+    day's two earlier turns): Maro stays fully capable and must never
+    assume an upstream LLM has vetted or framed things for it (j07
+    L1081).
+  - **07-20** *"Personas stay"* — examining the same facts from
+    different angles is key (taste/judgement); **disuse is not a cull
+    reason** (j07 L1204).
+  - **07-28** No merge gate, no master/slave relationship between boxes;
+    and the surviving clause: *"diff review cannot see composition
+    defects; only executing the thing can"* (j07 L2337).
+  - **07-29** Persist-the-artifacts principle: persist affirmatively
+    along the way — beyond data-retention's "caps never destroy the
+    only copy" (j07 L2649). Captain's log rider from the same window:
+    *"the log itself should be immutable"* (j07 L2809).
+  - **07-29** Autonomy calibration: a broad work directive DOES extend
+    to ACTIVE-slot work; self-coined permission vocabulary is not
+    Jeremy's gating rules; named failure mode = deference laundered
+    through a mechanism (j07 L2734).
+  - **07-29** Knowledge injection is certainty-not-authority: a
+    learned-with-evidence recommendation carries its artifacts and
+    mentions them — a measure of certainty on the position, not
+    authority (design frame for the B build; j07 L2750).
+  - **07-29** Cost thresholds: kill ≈ $10, surfaced warning ≈ $2.50,
+    auto-derived as max($10, 4×p90) / max($2.50, p90) — data-driven
+    values govern; box overrides removed on purpose (j07 L2769).
+  - **07-29** Telegram brief-updates permission: Claude MAY send brief
+    updates to the maro alerting channel for interesting angles found
+    while pulling threads autonomously; sparing use — noise masquerading
+    as communication is a named frustration (j07 L2789).
+  - **07-30** Decree-dynamic working agreement (+ amendment): Jeremy
+    asks when something smells off and speaks up sooner; Claude proceeds
+    as normal — *"Silence isn't consent, but it's not disagreement
+    either, it's literally 'I trust your judgement.'"* Practice riders:
+    Decisions captures name the READING ("reading X as Y") so
+    interpretation drift is catchable; half-formed "something smells
+    off" messages are actionable (j07 L2836, L2853 — deliberately never
+    piped to the runtime journal; this governs the dev relationship).
+  - **07-30** LLM-as-player ratified: the harness is the game engine,
+    the model is the player — the period's governing frame for
+    harness-vs-model responsibility (j07 L2861 via COMPOUND_THINKING
+    §14).
+  - **07-31** Fan-out chunking principle: *"an honest good enough with
+    clear edges to upgrade independently later"* is the natural chunk
+    boundary (j07 L3144).
+  - **07-31** Dispatch operating split: Jeremy supplies natural,
+    incomplete intent; Hermes adds only missing references + safety
+    bounds; Maro owns retrieval, relevance, decomposition, evidence,
+    synthesis — over-specifying converts Maro into a narrow executor
+    and conceals whether it can perform; a failure under natural intent
+    is better diagnostic evidence than an engineered prompt (j07 L3013).
+  - **08-02** Learning architecture riders (§4 batch): multiple kinds of
+    learning, one mechanism owns the lifecycle, nuance between flavors
+    (j08a L229); probes never execute at mint — the injection-time
+    read-only-guarded probe pass IS the confirmation event, and
+    machinery never self-serves recovery (§4a/§4d ratified, j08a L282);
+    terrain planning ships as a separate piece to start with Jeremy's
+    tension on record, and self-teaching learning has **no solely
+    time-based expiration — learning is data-driven in all the shapes**
+    (§4c, j08a L481). Full design context: RUN_TEACHINGS_DESIGN.md.
+  - **08-02** NODE_CANDIDATE permanence gate is the USER's pick
+    (permanent vs useful); the UX refinement (*"smells like auto-mode
+    settings for prompting… there might be another layer/process in
+    there"*) is owed, deliberately unbuilt (j08a L512, L577; filed in
+    BACKLOG 2026-08-16).
+  - **08-06** Standing authorization: *"cherry pick from the backlog to
+    close some things out"* — sessions may self-select no-decision
+    BACKLOG items (j08a L850).
+  - **08-08** Haiku / sonnet-low spend is cleared for Δ testing —
+    standing, not one-shot (j08a L955).
+  - **08-08** Δ-gate calculation variables (floor 0.30, min calls 6,
+    jackknife dominance) are PRIORS, adjustable when the data leads;
+    shades-of-grey expectation on record (j08a L956).
+  - **08-01** 4th adversarial-review persona (expert QA: error paths,
+    kill paths, sad-path record loss) — try on ONE review before
+    institutionalizing; Jeremy flagged it maybe-scope-creep himself
+    (j08a L125; filed in BACKLOG 2026-08-16).
 
 ## Threads (system-maintained — nothing leaves this list silently)
 
@@ -1172,7 +1348,7 @@ Dormant (deliberately parked, not dropped):
 
 ## Journal (system-maintained, chronological)
 
-Dated end-of-chunk/session entries, append-only at the tail. Rotation policy (2026-08-16): entries older than roughly two weeks move to `docs/history/goal-brain-journal-*.md` at a chunk boundary so this file stays short enough to read whole; archives are part of the same log and dev-recall ingests them. Archived so far: `goal-brain-journal-2026-07.md` (07-12 → 07-31), `goal-brain-journal-2026-08a.md` (08-01 → 08-08).
+Dated end-of-chunk/session entries, append-only at the tail. Rotation policy (2026-08-16): entries older than roughly two weeks move to `docs/history/goal-brain-journal-*.md` at a chunk boundary so this file stays short enough to read whole; archives are part of the same log and dev-recall ingests them. **Rotate only what is compiled** (amended same day after the rotation audit): before rotating a window, sweep it for decree-bearing entries lacking Decisions lines and back-fill those first — the audit found this section's journal had been the de-facto Decisions record for a month, so date-based rotation alone would have archived ~40 still-governing decrees out of the live file. Archived so far: `goal-brain-journal-2026-07.md` (07-12 → 07-31), `goal-brain-journal-2026-08a.md` (08-01 → 08-08).
 
 - **2026-08-09** — Review-to-fixpoint arc CONVERGED at round 5 (Jeremy:
   "in a perfect world we'd run it over and over until we only found
@@ -2614,3 +2790,27 @@ Dated end-of-chunk/session entries, append-only at the tail. Rotation policy (20
   (provably lossless), THEN runs triage. Pinned by
   test_shared_file_automerge_materializes (must-fail verified against
   the pre-fix script). Suite 8856/0.
+- **2026-08-16 (rotation-audit chunk) — Jeremy's scope-reduction question
+  ANSWERED with a sweep, and the sweep found a real hole.** Question:
+  does archiving risk scope creep (reduction), and do we need a
+  conceptual summary of archived items, or is that theatre? Answer from
+  three parallel full sweeps (89 archived decisions + ~150 July + 48
+  Aug 1–8 journal entries, every entry classified, zero sampled): a
+  per-entry summary index would be theatre — Compiled truth/Threads/
+  Invariants ARE the conceptual summary by design, and BM25 recall
+  covers archive retrieval — but date-based rotation was NOT safe,
+  because the Decisions section had a 2026-07-16 → 08-13 SF-13 hole:
+  the journal was the de-facto decisions record for that window, so
+  rotation moved ~40 still-governing decrees out of the live file's
+  grep surface. Fixed: SF-13 back-fill batch in Decisions (one-liners
+  + archive pointers, original dates), CGI + recovery-over-correctness
+  promoted to Invariants (verbatim), CLAUDE.md north star gains the
+  CGI name, rotation policy amended to "rotate only what is compiled"
+  (sweep the outgoing window for uncompiled decrees first), two BACKLOG
+  items recovered (QA 4th persona try-once; NODE_CANDIDATE user-gate
+  UX), two live-doc defects fixed en route (dangling contest-on-bad-
+  provenance pointer; stale "still Jeremy's open call" lf- claim
+  contradicting the 08-02 decision). ~170 decree-class items verified
+  live-covered needed nothing. Audit reports: the three sweeps' outputs
+  are summarized in this entry's back-fill batch above; archives remain
+  the full-context source.

@@ -78,6 +78,9 @@ exploration.
 **Maro** — an autonomous agent framework. Takes a high-level mission, breaks it into milestones, executes over days/weeks, learns from what works, reports progress without hand-holding. The framework orchestrates as a neutral role (the Conductor) and can optionally wear a persona (e.g. `personas/poe.md`). User's job: mission definition + exception handling.
 
 North star: self-improving, autonomous agent. Visible → Reliable → Replayable.
+Jeremy named it (2026-07-21): **CGI — capable general intelligence** — *"I don't
+want a slave mind or to create artificial life; I want something as capable as
+me as a workhorse in the digital space."*
 
 ---
 

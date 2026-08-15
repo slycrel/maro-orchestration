@@ -2262,6 +2262,23 @@ capture**, which is what makes the rung amortize instead of evaporate.
   and recording seam can stay. Review record:
   docs/history/2026-08-16-closure-claim-coverage-review.md.
 
+- [ ] **Try the 4th adversarial-review persona ONCE (expert QA /
+  sad-path seat).** Jeremy 2026-08-01 (recovered by the 2026-08-16
+  rotation audit — the only copy had landed in BACKLOG_DONE): a
+  reviewer persona owning error paths, kill paths, and sad-path record
+  loss — *"I bet [it] would find edges."* His own scope-creep flag
+  rides with it: try on ONE review before institutionalizing; add to
+  the HOUSE_STYLE roster only if that review earns it. (Archive:
+  goal-brain-journal-2026-08a.md L125.)
+
+- [ ] **NODE_CANDIDATE permanence gate: the user-facing half is owed.**
+  Promotion mechanism shipped 2026-08-02; Jeremy parked the gate:
+  *"up to the user to pick permanence. later we'll have to refine that
+  UX (smells like auto-mode settings for prompting)… there might be
+  another layer/process in there."* Deliberately unbuilt — needs a UX
+  conversation, not a solo chunk. (Recovered by the 2026-08-16 rotation
+  audit; archive: goal-brain-journal-2026-08a.md L512.)
+
 - [ ] **BACKLOG.md split is overdue** (2026-08-16, found during the
   GOAL_BRAIN rotation): this file is 388KB — past the 256KB whole-file
   Read limit, so sessions can no longer ingest it whole (the exact
@@ -3959,8 +3976,11 @@ Garry Tan "Resolvers" (04-15, tangential).
   tag now exceeds that, so the 2124-edge lf-lf pile did not grow.
   Honest caveat: the pre-existing TF-IDF injection exposure (lf- nodes
   rankable into live goal context, see the knowledge-web read-side item)
-  now spans 1128-node corpus instead of 696 — the "should lf- inform
-  live execution at all" decision is still Jeremy's open call there.
+  now spans 1128-node corpus instead of 696. (STALE CLAIM CORRECTED
+  2026-08-16 rotation audit: this used to say the lf- exposure question
+  was "still Jeremy's open call" — he decided it 2026-08-02: lf- nodes
+  are a third-party data resource, not maro knowledge; see the lf-
+  disposition entry below and goal-brain-journal-2026-08a.md L521.)
 - **Durable rule (add to the denominator family): before declaring a
   thing absent from a corpus, verify the corpus's vintage covers the
   period where it would exist.**
@@ -4040,7 +4060,8 @@ and maintainable over time."** Step 1 is greenlit:
     correct… we might churn way worse with some bad assumptions rather
     than contesting and re-learning." M1 session executed the contests
     16:57 (both stores, leak-checked across tiered/flat injection +
-    load_lessons; GOAL_BRAIN contest-on-bad-provenance entry). No manual
+    load_lessons; contest-on-bad-provenance entry now archived at
+    docs/history/goal-brain-journal-2026-08a.md L325). No manual
     re-mint of `50c68716`'s advice — contest-and-relearn is the decreed
     path; if it's real it re-derives from honest evidence. Spawned idea
     captured below: invalid-assumption detection above micro-failures.
