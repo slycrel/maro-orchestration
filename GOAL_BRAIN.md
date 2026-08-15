@@ -2460,6 +2460,39 @@ Dated end-of-chunk/session entries, append-only at the tail. Rotation policy (20
   navigator_right (cumulative 91/12; lesson-inject A/B 56% vs 41%
   agreement); coverage re-measured 80.18% → floor ratcheted 70→75
   (72752a1); test-cov.sh -n-auto footgun got throttle knobs (ff48e9f).
+- **2026-08-15 (late PM, §14a slice 2 SHIPPED — portability-weighted
+  lesson selection; fixpoint r1→r3; probe-first datapoint #2 = 3
+  rounds).** Earned globality is now BEHAVIOR: `src/portability.py`
+  single-sources classification for census AND rank-time consumption;
+  loop finalize recounts verdicted foreign citations into
+  memory/portability_cache.json (~0.2s); recall's lesson fork re-weights
+  FOREIGN candidates with ≥3 verdicted foreign citations by
+  2×beta_mean(s,f) between the n=10 fetch and top-3 pick (killswitch
+  `recall.portability_weighting`, fresh installs naturally inert; frames
+  keep raw scores, re-weights ride extra.portability_adjusted). Fact
+  ledger (7 probes) refuted the environment-anchor regex for
+  method/world classification (3/188, 2 of 3 wrong) → mint-time scope
+  stamp DEFERRED to its own slice riding the extraction schema. Live:
+  64 cached lessons, 6 qualify, weights 0.80–1.71 incl. a genuine
+  demotion; ×1.667 fired on a real rank-path exercise. Review (sonnet
+  lane, codex capped): r1 2 lenses sandboxed to diff-only — every
+  source-contingent claim re-verified before acting; confirmed
+  instrument-print-on-finalize-path (fixed via warn callable),
+  cache/snapshot hardening; REFUTED the RRF-compression HIGH (lesson
+  path rides raw BM25 — TieredLesson lacks created_at) but pinned the
+  latent regime flip behaviorally (counterfactual probed: created_at
+  docs collapse to 1.03× RRF spread); accepted selection-bias/
+  no-exploration residual → BACKLOG entry with named frame-observable
+  falsifier (v2 = epsilon/Thompson slot). r2 caught the fixes
+  under-pinned (revert-passable shared-cache fix, shallow regime grep)
+  → both pinned; r3 QUIET with traced revert simulation. Landed
+  2557c08a, d43d678, d34f75e. Suite 8868. **Probe-first experiment:
+  datapoint #1 = 2 rounds, datapoint #2 = 3 rounds (baseline 3–4) —
+  nuance: the ledger killed pre-code design landmines both times, but
+  this chunk's review findings were runtime-coupling and
+  test-of-fix-coverage classes the ledger doesn't reach.** Next: §14a
+  slice 3 = mint-time method/world scope stamp riding
+  extract_lessons_via_llm's existing typed-JSON schema (no new judge).
 - **2026-08-15 (PM, §14a slice 1 SHIPPED — portability census; probe-first
   datapoint #1 CONFIRMED).** `camera_readout --portability`: per-lesson
   citation×verdict census (camera frames × metadata.json), home/foreign
