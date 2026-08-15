@@ -35,7 +35,7 @@ print(f'Summary: {result.summary}')
 fi
 
 mkdir -p output
-python3 -c "
+if python3 -c "
 import sys, os, time
 sys.path.insert(0, 'src')
 os.environ.setdefault('MARO_LOG_LEVEL', 'INFO')
@@ -56,6 +56,13 @@ print()
 print(f'Status: {result.status}')
 print(f'Summary: {result.summary()}')
 print(f'Tokens: {result.total_tokens_in + result.total_tokens_out:,}')
-" 2>&1 | tee output/phase-audit-run.log
-
-echo "=== Audit complete ==="
+sys.exit(0 if result.status == 'done' else 1)
+" 2>&1 | tee output/phase-audit-run.log; then
+    echo "=== Audit complete ==="
+else
+    echo "=== Audit FAILED: run did not finish 'done' — see output/phase-audit-run.log ===" >&2
+    echo "(If steps blocked with 'target does not exist' under container mode:" >&2
+    echo " the repo must be readable inside the executor container — add it to" >&2
+    echo " executor.container_extra_mounts (read-only) in the workspace config.)" >&2
+    exit 1
+fi
