@@ -112,12 +112,16 @@ class RevisitScan:
 def _parse_ts(value: str) -> Optional[datetime]:
     """ISO timestamp → AWARE datetime, or None.
 
-    Naive values are pinned to UTC (every runtime writer stamps UTC):
+    "Z" is normalized to "+00:00" first: requires-python floors at 3.10,
+    whose fromisoformat rejects "Z" (r2 review; sibling modules carry the
+    same normalization). Naive values are pinned to UTC — the runtime
+    writer (runs.py finalize) stamps datetime.now(timezone.utc), so naive
+    rows are foreign/hand-authored and UTC is the honest default:
     comparing naive against aware raises TypeError, and one such row
     would have unwound past scan() and silently zeroed the whole
     sweep's candidates (r1 review, both lenses' HIGH — probe-confirmed)."""
     try:
-        dt = datetime.fromisoformat(str(value))
+        dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
     except Exception:
         return None
     if dt.tzinfo is None:
@@ -240,11 +244,16 @@ def scan() -> RevisitScan:
     if not matchable:
         return result
     # Window heuristic only (per-run filtering below is the authority):
-    # restrict to PARSEABLE stop times so one garbage string can't
-    # poison the min.
-    _ends = [d["ended_at"] for d in matchable
-             if _parse_ts(d["ended_at"]) is not None]
-    oldest_end = min(_ends, default="")
+    # min over PARSED datetimes, not raw strings — a lexicographic min
+    # over mixed-offset ISO strings can pick the wrong element, and
+    # slicing a date off a non-UTC string can set the window a day late
+    # and exclude valid acquisitions (r2 review). Parseable-only so one
+    # garbage string can't poison the min.
+    _dts = [p for p in (_parse_ts(d["ended_at"]) for d in matchable)
+            if p is not None]
+    oldest_dt = min(_dts, default=None)
+    oldest_end = (oldest_dt.astimezone(timezone.utc).date().isoformat()
+                  if oldest_dt else "")
     acquisitions = _acquisitions_since(oldest_end)
     if not acquisitions:
         # No acquisitions ≠ no dead ends: the matchable runs are still

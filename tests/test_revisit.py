@@ -136,6 +136,37 @@ class TestScan:
         assert {c.run_name for c in result.candidates} == \
             {"aaa-naive", "bbb-aware"}
 
+    def test_z_suffixed_timestamps_parse_and_match(
+            self, tmp_path, monkeypatch):
+        """requires-python floors at 3.10, whose fromisoformat rejects
+        "Z" — a Z-suffixed ended_at or event ts would silently fall out
+        of matching (r2, skeptic HIGH). _parse_ts normalizes Z→+00:00
+        like its sibling modules."""
+        ws = _workspace(tmp_path, monkeypatch)
+        _write_run(ws, "zzz-zulu", verdict="thesis-refuted",
+                   ended_at="2026-08-01T00:00:00Z")
+        _write_events(ws, [("2026-08-10T00:00:00Z", "SKILL_PROMOTED", "s")])
+        result = scan()
+        assert {c.run_name for c in result.candidates} == {"zzz-zulu"}
+
+    def test_non_utc_offset_window_does_not_exclude_valid_signals(
+            self, tmp_path, monkeypatch):
+        """The acquisition window must come from the UTC-normalized min
+        datetime, not a raw-string min: slicing the date off a +05:00
+        ended_at sets the window a day late and silently drops
+        acquisitions that genuinely came after the stop (r2, architect
+        LOW upgraded by probe)."""
+        ws = _workspace(tmp_path, monkeypatch)
+        # 2026-08-01T00:00+05:00 == 2026-07-31T19:00Z; the acquisition
+        # at 20:00Z the same UTC day is after the stop but has a date
+        # prefix before the naive [:10] slice of the ended_at string.
+        _write_run(ws, "hhh-offset", verdict="thesis-refuted",
+                   ended_at="2026-08-01T00:00:00+05:00")
+        _write_events(
+            ws, [("2026-07-31T20:00:00+00:00", "SKILL_PROMOTED", "s")])
+        result = scan()
+        assert {c.run_name for c in result.candidates} == {"hhh-offset"}
+
     def test_payload_rides_the_candidate(self, tmp_path, monkeypatch):
         ws = _workspace(tmp_path, monkeypatch)
         _write_run(ws, "ggg-close", verdict="reachable-but-not-worth-it",

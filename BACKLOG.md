@@ -3835,6 +3835,15 @@ refresh attempt — see BACKLOG_DONE for the reconciliation note).
   dirs, via the post-curation hook). Fine now; revisit around ~10k run dirs
   (incremental index, or rebuild only on viz/backfill).
 
+- [ ] **Revisit sweep is O(all runs + full log corpus) per heartbeat and
+  dead ends are never pruned** (accepted r2 residual, 2026-08-15 architect
+  MEDIUM — accepted because both passes are linear, <1s at 786 runs, and
+  query_log's full-corpus scan happens regardless of window). Revisit at
+  the same ~10k-run-dirs horizon as the index rebuild above; likely
+  answer is a max-age cap on matchable dead ends (a 2-year-old dead end
+  reopened by a new skill is noise anyway) or the shared incremental
+  index.
+
 ---
 
 ### REPL-reading for large documents/corpora (SIDEQUEST OPENED 2026-08-02, Jeremy)
