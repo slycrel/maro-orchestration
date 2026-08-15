@@ -37,14 +37,23 @@ done
 # pytest-cov combines per-worker data itself, so the coverage run parallelizes
 # like the plain suite does (~3m -> ~45s here). Optional: without xdist this
 # falls back to the sequential run unchanged.
+# On a busy/shared box, `-n auto` can tip interactive sessions over (same
+# failure mode scripts/test-safe.sh exists for) — TEST_JOBS caps the worker
+# count and TEST_CORES pins CPU affinity, mirroring test-safe's knobs:
+#   TEST_JOBS=2 TEST_CORES=0,1 scripts/test-cov.sh
 JOBS=""
 if "$PYTHON" -c "import xdist" >/dev/null 2>&1; then
-    JOBS="-n auto"
+    JOBS="-n ${TEST_JOBS:-auto}"
+fi
+
+RUN_PREFIX=()
+if [[ -n "${TEST_CORES:-}" ]] && command -v taskset >/dev/null 2>&1; then
+    RUN_PREFIX=(taskset -c "$TEST_CORES")
 fi
 
 # Run with coverage. --cov-fail-under is read from .coveragerc but we pass
 # it explicitly here so it's obvious when the floor is being enforced.
-exec "$PYTHON" -m pytest "$TARGET" \
+exec "${RUN_PREFIX[@]}" "$PYTHON" -m pytest "$TARGET" \
     --ignore=tests/integration \
     --cov=src \
     --cov-report=term-missing:skip-covered \
