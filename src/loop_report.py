@@ -1064,6 +1064,34 @@ def _render_llm_calls(report_dir: Path, step_outcomes: List[StepOutcome]) -> str
     )
 
 
+def _render_map(report_dir: Path) -> str:
+    """Self-surveying map panel (treasure-map arc chunk 2, 2026-08-15).
+
+    Embeds map_lens.render_text — landmarks with tri-state fog, recon
+    moves, [after:N] edges, closure-stall warning, and the stop verdict
+    with its reopen condition (which nothing rendered before this panel;
+    census 2026-08-15). Same artifacts the CLI lens reads; the panel is a
+    view, not a store. Renders nothing when the map has no step landmarks
+    (e.g. NOW one-shots) or on any failure — a run page must never break
+    because its map couldn't build.
+    """
+    try:
+        from map_lens import build_map, render_text
+        m = build_map(report_dir.parent)
+        if not any(n.kind == "step" for n in m.nodes):
+            return ""
+        text = render_text(m)
+    except Exception:
+        return ""
+    return (
+        '<h2><span title="The run reconstructed as a self-surveying map: '
+        '&#9679; live (done) &middot; &#9684; grey (blocked/skipped) '
+        '&middot; &#9675; fog (never ran). On-demand CLI: python3 -m '
+        'map_lens &lt;run&gt;">Map</span></h2>\n'
+        f'<div class="panel"><pre>{_esc(text)}</pre></div>'
+    )
+
+
 def _render_verdict(report_dir: Path) -> str:
     """Outcome verdict from run_card.json when it exists next to this run's
     build/ dir — goal_achieved, the verdict summary, recorded cost. Written
@@ -1430,6 +1458,7 @@ def _render_report_html(
 <div class="meta"><b>Started:</b> {_esc(_fmt_ts(start_ts))} &middot; <b>Elapsed:</b> {elapsed_ms}ms &middot; <b>Tokens:</b> {_fmt_tokens_split(total_tokens_in, total_tokens_out)} &middot; <b><span title="Estimated from this report's step token counts — may differ from the run's recorded actual spend shown in the cross-run index.">Cost (est.):</span></b> {cost_str}</div>
 
 {_render_verdict(report_dir)}
+{_render_map(report_dir)}
 {_render_injections(injections)}
 <h2>Timeline</h2>
 <div class="panel">{_render_timeline(planned_steps, step_outcomes, windows, approx, marker_slots, status)}</div>
@@ -2354,6 +2383,7 @@ def _render_now_report_html(run_dir: Path, artifact: dict, meta: dict,
 <div class="meta"><b>Started:</b> {_esc(_fmt_ts(created_at))} &middot; <b>Elapsed:</b> {elapsed_ms}ms</div>
 
 {_render_verdict(build)}
+{_render_map(build)}
 <h2>Request</h2>
 <div class="panel"><pre>{_esc_truncated(message, 4000)}</pre></div>
 

@@ -1704,3 +1704,79 @@ def test_report_flags_run_finalizing_when_loop_done_but_run_running(monkeypatch,
     )
     assert "run finalizing" not in content
     assert 'http-equiv="refresh"' not in content
+
+
+# ---------------------------------------------------------------------------
+# _render_map — the self-surveying map panel (treasure-map arc chunk 2)
+# ---------------------------------------------------------------------------
+
+def _map_run_dir(tmp_path, *, stop=None):
+    import json as _json
+    run_dir = tmp_path / "runs" / "feed1234-test-map"
+    build = run_dir / "build"
+    build.mkdir(parents=True)
+    meta = {"handle_id": "feed1234", "prompt": "map panel goal",
+            "status": "done",
+            "loops": [{"loop_id": "abcd9876feed", "parent_loop_id": None,
+                       "loop_reason": "initial", "continuation_depth": 0}]}
+    if stop:
+        meta.update(stop)
+    (run_dir / "metadata.json").write_text(_json.dumps(meta))
+    log = {"loop_id": "abcd9876", "steps": [
+        {"index": 1, "text": "Survey the <b>terrain</b>", "status": "done"},
+        {"index": 2, "text": "Probe the edge [recon: decides route]",
+         "status": "blocked"},
+    ]}
+    (build / "loop-abcd9876-log.json").write_text(_json.dumps(log))
+    return build
+
+
+def test_render_map_panel_renders_landmarks_and_stop(tmp_path):
+    build = _map_run_dir(
+        tmp_path,
+        stop={"stop_verdict": "thesis-refuted",
+              "stop_evidence": "no connection after exhausting avenues"})
+    html = lr._render_map(build)
+    assert "Map</span></h2>" in html
+    assert "●" in html and "◐" in html          # live + grey landmarks
+    assert "recon→ decides route" in html
+    assert "thesis-refuted" in html
+    assert "reopens when: new connection evidence" in html
+
+
+def test_render_map_panel_escapes_step_text(tmp_path):
+    html = lr._render_map(_map_run_dir(tmp_path))
+    assert "<b>terrain</b>" not in html
+    assert "&lt;b&gt;terrain&lt;/b&gt;" in html
+
+
+def test_render_map_panel_empty_without_step_landmarks(tmp_path):
+    bare = tmp_path / "empty" / "build"
+    bare.mkdir(parents=True)
+    assert lr._render_map(bare) == ""
+
+
+def test_render_map_panel_never_raises(monkeypatch, tmp_path):
+    import map_lens as ml
+    def _boom(_):
+        raise RuntimeError("lens exploded")
+    monkeypatch.setattr(ml, "build_map", _boom)
+    build = _map_run_dir(tmp_path)
+    assert lr._render_map(build) == ""
+
+
+def test_run_report_page_carries_map_panel(monkeypatch, tmp_path):
+    """End-to-end: a real run-dir report includes the Map panel."""
+    import json as _json
+    monkeypatch.setenv("MARO_ORCH_ROOT", str(tmp_path))
+    build = _map_run_dir(tmp_path)
+    import runs as _runs
+    monkeypatch.setattr(_runs, "active_run_dir", lambda: build.parent,
+                        raising=False)
+    html = lr._render_report_html(
+        project="p", loop_id="abcd9876", goal="map panel goal",
+        planned_steps=["Survey", "Probe"], start_ts="2026-08-15T00:00:00+00:00",
+        step_outcomes=[_outcome("Survey", status="done")], status="done",
+        elapsed_ms=10, replan_count=0, report_dir=build, index_link=None,
+    )
+    assert "Map</span></h2>" in html
