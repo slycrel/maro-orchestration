@@ -156,6 +156,65 @@ class TestCensus:
         (row,) = c["rows"]
         assert row["foreign_unjudged"] == 1 and row["portability"] is None
 
+    def test_long_goal_home_survives_mint_truncation(
+            self, tmp_path, monkeypatch):
+        """source_goal is stored truncated to 120 chars at mint
+        (knowledge_web record_tiered_lesson); the home compare must
+        mirror that cap or the exact-match leg is dead for realistic
+        goals — 121/123 verdicted citations in the live corpus carried
+        a truncated source_goal (r1 review, architect HIGH)."""
+        ws = _workspace(tmp_path, monkeypatch)
+        goal = ("investigate the seventeen distinct failure modes of the "
+                "widget assembly line and produce a prioritized remediation "
+                "plan with cost estimates for each")
+        assert len(goal) > 120
+        _write_lesson(ws, "les1", source_goal=goal[:120])
+        _write_cited_run(ws, "aaa-r1", lesson_ids=["les1"],
+                         project="unrelated-project", goal=goal,
+                         goal_achieved=True)
+        c = portability_census(_per_run(ws))
+        (row,) = c["rows"]
+        assert row["home"] == 1 and row["foreign"] == 0
+
+    def test_same_project_different_goal_is_home_via_slug(
+            self, tmp_path, monkeypatch):
+        """The slug leg: a lesson minted from a different goal in the
+        SAME project is home (r1 review, skeptic HIGH — this leg was
+        untested)."""
+        ws = _workspace(tmp_path, monkeypatch)
+        src = "audit the payment gateway for timeout errors"
+        from loop_artifacts import resolve_project_slug
+        slug = resolve_project_slug(src)
+        _write_lesson(ws, "les1", source_goal=src)
+        _write_cited_run(ws, "aaa-r1", lesson_ids=["les1"], project=slug,
+                         goal="a totally different follow-up goal",
+                         goal_achieved=False)
+        c = portability_census(_per_run(ws))
+        (row,) = c["rows"]
+        assert row["home"] == 1 and row["foreign"] == 0
+        assert row["portability"] is None
+
+    def test_sentinel_source_goals_bucket_as_unattributable(
+            self, tmp_path, monkeypatch):
+        """manual/evolver-/prereq: mints carry sentinel source_goals
+        (three live callers); their citations can't be home/foreign
+        classified and must be counted, not folded into foreign (r1
+        review, architect MEDIUM-HIGH; live corpus today: 0 such
+        citations — this pin keeps the bucket visible if that changes)."""
+        ws = _workspace(tmp_path, monkeypatch)
+        for lid, sg in (("lesM", "manual"), ("lesE", "evolver-abc123"),
+                        ("lesP", "prereq:some topic"), ("lesX", "")):
+            _write_lesson(ws, lid, source_goal=sg)
+        _write_cited_run(ws, "aaa-r1",
+                         lesson_ids=["lesM", "lesE", "lesP", "lesX"],
+                         project="p", goal="g", goal_achieved=True)
+        c = portability_census(_per_run(ws))
+        assert len(c["rows"]) == 4
+        for row in c["rows"]:
+            assert row["unattributable"] == 1
+            assert row["foreign"] == 0 and row["home"] == 0
+            assert row["portability"] is None
+
     def test_census_is_pure_read(self, tmp_path, monkeypatch):
         """Instrument charter: the census writes nothing anywhere in the
         workspace tree."""

@@ -124,9 +124,9 @@ def _lesson_origins() -> Dict[str, Dict[str, str]]:
     since still has its citations as evidence (live census: 23/79 cited
     ids had been archived by read time)."""
     out: Dict[str, Dict[str, str]] = {}
-    try:
-        from knowledge_web import load_tiered_lessons
-        for tier in ("medium", "long"):
+    for tier in ("medium", "long"):
+        try:
+            from knowledge_web import load_tiered_lessons
             for tl in load_tiered_lessons(tier, limit=None, min_score=0.0):
                 lid = getattr(tl, "lesson_id", "") or ""
                 if lid and lid not in out:
@@ -136,9 +136,9 @@ def _lesson_origins() -> Dict[str, Dict[str, str]]:
                         "preview": _clip(getattr(tl, "lesson", "") or "",
                                          60),
                     }
-    except Exception as exc:
-        print(f"  WARNING: lesson store read failed ({exc}) — all ids "
-              f"will report unresolved")
+        except Exception as exc:
+            print(f"  WARNING: {tier}-tier lesson store read failed "
+                  f"({exc}) — that tier's ids will report unresolved")
     try:
         from knowledge_web import _lessons_archive_path
         with _lessons_archive_path().open(encoding="utf-8") as fh:
@@ -166,14 +166,40 @@ def _beta_mean(successes: int, failures: int) -> float:
     return (successes + 1) / (successes + failures + 2)
 
 
+_SOURCE_GOAL_EXCERPT = 120  # mint-time cap, knowledge_web record_tiered_lesson
+
+
+def _unattributable_source(src_goal: str) -> bool:
+    """True when source_goal is not real goal text: empty, or one of the
+    sentinel shapes three record_tiered_lesson callers pass (cli "manual",
+    evolver_store "evolver-{id}", prereq "prereq:{topic}") — r1 review.
+    Such citations can't be home/foreign-classified honestly; they get
+    their own counted bucket instead of silently polluting "foreign"
+    (live corpus today: 0 citations, pinned so it stays visible if that
+    changes)."""
+    return (not src_goal or src_goal == "manual"
+            or src_goal.startswith("evolver-")
+            or src_goal.startswith("prereq:"))
+
+
 def portability_census(per_run: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Per-lesson citation×verdict aggregation (§14a slice 1). Pure read.
 
     Home/foreign uses the same goal→slug derivation the run side uses
     (loop_artifacts.resolve_project_slug on the lesson's source_goal vs
     the run's recorded project) — time-dependent project matching means
-    a historical mismatch is possible; exact goal-text equality is also
-    honored as home to soften that edge.
+    a historical mismatch is possible. Exact goal-text equality is also
+    honored as home, compared under the mint-time 120-char excerpt cap
+    (r1 review: source_goal is stored truncated — 121/123 verdicted
+    citations in the live corpus — so full-string equality was dead for
+    realistic goals; the slug leg, first-five-words, was doing the real
+    work).
+
+    Verdict source is metadata.json (goal_achieved), NOT run_card.json
+    like this module's frame-level section 4: post-hoc verdict repairs
+    (audit_repair, operator re-stamp) land in metadata, so it is the
+    fresher authority. Measured divergence across the 50 frame-bearing
+    runs at review time: 0.
     """
     origins = _lesson_origins()
     try:
@@ -183,7 +209,8 @@ def portability_census(per_run: List[Dict[str, Any]]) -> Dict[str, Any]:
 
     lessons: defaultdict = defaultdict(lambda: {
         "cites": 0, "runs": set(), "home": 0, "foreign": 0,
-        "foreign_s": 0, "foreign_f": 0, "unjudged": 0})
+        "foreign_s": 0, "foreign_f": 0, "unjudged": 0,
+        "unattributable": 0})
     unresolved: Counter = Counter()
     runs_no_meta = 0
     for r in per_run:
@@ -207,8 +234,11 @@ def portability_census(per_run: List[Dict[str, Any]]) -> Dict[str, Any]:
                 rec["cites"] += 1
                 rec["runs"].add(run_key)
                 src_goal = origin["source_goal"]
-                home = bool(src_goal) and (
-                    src_goal == goal
+                if _unattributable_source(src_goal):
+                    rec["unattributable"] += 1
+                    continue
+                home = (
+                    src_goal == goal[:_SOURCE_GOAL_EXCERPT]
                     or (resolve_project_slug is not None and project
                         and resolve_project_slug(src_goal) == project))
                 if home:
@@ -234,6 +264,7 @@ def portability_census(per_run: List[Dict[str, Any]]) -> Dict[str, Any]:
             "foreign_s": s,
             "foreign_f": fl,
             "foreign_unjudged": rec["unjudged"],
+            "unattributable": rec["unattributable"],
             "portability": _beta_mean(s, fl) if (s + fl) else None,
         })
     rows.sort(key=lambda r: (-(r["foreign_s"] + r["foreign_f"]),
@@ -260,6 +291,11 @@ def _print_portability(per_run: List[Dict[str, Any]]) -> None:
               f"portability={port:12s} {r['preview']}")
     print(f"  -- foreign verdicted citations total: {total_fv} "
           f"(pre-registered gate reads at ~30)")
+    n_unattr = sum(r["unattributable"] for r in rows)
+    if n_unattr:
+        print(f"  -- citations from sentinel/empty-source lessons "
+              f"(manual/evolver/prereq mints): {n_unattr} — excluded from "
+              f"home/foreign, counted here")
     if c["unresolved"]:
         print(f"  -- unresolved lesson ids: {len(c['unresolved'])} "
               f"({sum(c['unresolved'].values())} citations) — counted, "
