@@ -139,6 +139,36 @@ class TestAutoRebase:
         status = _git(b, "status", "--porcelain").stdout
         assert " D " not in status and " M " not in status
 
+    def test_shared_file_automerge_materializes(self, race):
+        """First-live-fire pin (2026-08-16, GOAL_BRAIN.md): both sessions
+        edit ONE shared file in auto-mergeable regions. Post-converge the
+        working copy matches the PRE-replay commit — no longer an
+        ancestor, so tree-triage calls it REAL — and the ORIG_SHA blob
+        compare must materialize the merged version instead of leaving a
+        manual chore on exactly the files every session touches."""
+        _origin, a, b = race
+        shared = "journal.txt"
+        base = "".join(f"line{i}\n" for i in range(1, 21))
+        _commit_file(a, shared, base, "shared-base")
+        _git(a, "push", "-q", "origin", "main")
+        _git(b, "pull", "-q", "origin", "main")
+        # A edits the top, B edits the bottom — disjoint hunks, clean merge.
+        _win_race(a, name=shared,
+                  content=base.replace("line1\n", "A-entry\n"),
+                  msg="a-journal")
+        _commit_file(b, shared,
+                     base.replace("line20\n", "B-entry\n"), "b-journal")
+        (b / "scripts").mkdir()
+        shutil.copy(_TRIAGE, b / "scripts" / "tree-triage.sh")
+        (b / "scripts" / "tree-triage.sh").chmod(0o755)
+        res = _land(b)
+        assert res.returncode == 0, res.stderr
+        assert f"materialized: {shared}" in res.stdout
+        merged = (b / shared).read_text()
+        assert "A-entry" in merged and "B-entry" in merged
+        status = _git(b, "status", "--porcelain").stdout
+        assert shared not in status
+
     def test_conflict_aborts_to_manual(self, race):
         """Conflicting replay: no push, no caller mutation, no leaked
         worktree, and the manual recipe on stderr."""

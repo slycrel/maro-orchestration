@@ -8121,3 +8121,15 @@ under the same two-measurement standard).
   fixture. CLAUDE.md rule 4 updated. Also filed: ci-watch's setsid
   spawn is silently inert on the dev Mac (prints "spawned" anyway —
   taxonomy pattern 7 in our own tooling; BACKLOG).
+  **Live fire on its own landing:** the auto-rebase's first production
+  use was landing ITSELF (the §14a session had landed a journal commit
+  mid-chunk) — replay/land/converge all clean, and the fire surfaced a
+  real gap: a shared auto-merged file (GOAL_BRAIN.md, both sessions'
+  journal entries) post-converge matches the PRE-replay commit, which
+  is no longer an ancestor, so tree-triage conservatively calls it
+  REAL and leaves a manual chore on exactly the always-shared docs.
+  Fixed same session: converge now blob-compares dirty paths against
+  ORIG_SHA and materializes exact matches from the landed commit
+  (provably lossless), THEN runs triage. Pinned by
+  test_shared_file_automerge_materializes (must-fail verified against
+  the pre-fix script). Suite 8856/0.

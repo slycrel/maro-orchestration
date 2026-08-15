@@ -216,6 +216,22 @@ echo "landed: origin/main -> ${SHA}"
 if [ -n "$ORIG_SHA" ] && [ "$REF" = "HEAD" ]; then
     git reset --mixed -q "$SHA"
     echo "converged: local ref -> ${SHA:0:12} (ref/index only, tree untouched)"
+    # A path whose working copy still MATCHES the pre-replay commit is this
+    # session's own content in older clothing — the replay carried it into
+    # ${SHA} (verbatim or merged with upstream's edits), but the pre-replay
+    # commit is no longer an ancestor of main, so tree-triage's ancestor
+    # search cannot prove it stale and conservatively calls it REAL (first
+    # live fire, 2026-08-16: GOAL_BRAIN.md, where two sessions' journal
+    # entries had auto-merged). The blob compare against ORIG_SHA is exact,
+    # so restoring from the landed commit provably loses nothing.
+    git diff --name-only | while IFS= read -r p; do
+        if [ -f "$p" ] && \
+           [ "$(git hash-object -- "$p")" = \
+             "$(git rev-parse -q --verify "${ORIG_SHA}:${p}" 2>/dev/null || echo none)" ]; then
+            git checkout -q -- "$p"
+            echo "materialized: $p (working copy matched the pre-replay commit)"
+        fi
+    done
     if [ -x "$REPO_DIR/scripts/tree-triage.sh" ]; then
         bash "$REPO_DIR/scripts/tree-triage.sh" --fix || true
     else
