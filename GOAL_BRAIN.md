@@ -7990,3 +7990,25 @@ under the same two-measurement standard).
   corrected. Nothing the treasure-map builds surfaced constitutes a
   new §10 edge — §9.9/revisit are structure/surface work, not
   taste/calibration.
+- **2026-08-16 (Jeremy, decree — the meta-look at our own dev loop).**
+  Verbatim core: *"our review cycle is essentially what I'd call 'naive
+  development optimism'... we're making assertions on what we think
+  should work, and the review is checking and saying 'that's not
+  actually going to work for reasons'. We should be able to change our
+  approach so we don't have to find these things in review — we can
+  verify ourselves after we do the work (or plan better up front to be
+  more targeted towards the end). The cycle of it happening over and
+  over is because we're making guesses, not proving a theory when we
+  work... the way you approach work can change to be less error prone
+  (like we're trying to teach maro)... I think that applies to our work
+  chunks as well."* Encoded in HOUSE_STYLE's workflow loop: step 1 now
+  states the chunk's contract as falsifiable claims + class census up
+  front; step 3 is "run the experiment yourself" (author probes every
+  claim pre-land; unprobed claims ship labeled "reasoned, not probed");
+  step 6's review role shifts to auditing the claims record + the
+  labeled residue + what the author structurally can't see. Health
+  signal: convergence in 1-2 rounds; a round finding an UNLABELED
+  unprobed claim is a step-3 failure, not a review win. Also sanctioned
+  same conversation: the maro-side sequence (author fix checklist →
+  pre-flight class-or-instance probe → closure claimed-but-unwired
+  check), ordering as proposed 2026-08-15.

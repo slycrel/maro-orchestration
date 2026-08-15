@@ -29,16 +29,30 @@ individual rules below exist to keep it honest.
 1. **Shape** — read `docs/DEV_PATTERNS.md` (taste half): cuts-first,
    consumer-first, done-means named before building, scope inversion,
    possible-now bias. Load the relevant `skills/arch-*.md` before
-   touching a subsystem.
+   touching a subsystem. **State the chunk's contract as falsifiable
+   claims** (Jeremy decree 2026-08-16, the anti-"naive development
+   optimism" reframe: work is proving a theory, not making assertions
+   review will test for you): what must be true after this change, and
+   — census FIRST, by field/class, not after a reviewer asks — which
+   class members the change must reach (every writer, reader, branch
+   twin, sibling lane).
 2. **Build** — `docs/CODING_NOTES.md` posture: seams visible, rework
    cheap, test seams not internals, don't refactor mid-feature.
-3. **Verify** — the executed check named in step 1, plus
-   `bash scripts/test-safe.sh` (judge by exit code). "Done" without an
-   executed check is a claim, not a fact. **Read the totals line too, not
-   just the exit code** — a green exit says nothing about how many tests
-   *ran*. On 2026-08-02 this box had been silently skipping ten router
-   tests for want of `scikit-learn` (declared in pyproject's `dev` extra,
-   never installed), and the runner couldn't have told you: its own `-q`
+3. **Verify = run the experiment yourself** — the author probes every
+   claim from step 1 before landing; review's job is auditing the
+   evidence, not discovering that the assertion was never tested. Per
+   claim: the executing probe (degenerate inputs, the literal
+   production path end-to-end, and must-detect for every new test —
+   stash the fix, watch it fail). A claim you could not probe ships
+   HONESTLY LABELED "reasoned, not probed" in the commit message so
+   review can target exactly the unproven residue. The claim → probe →
+   result record rides the commit. Then `bash scripts/test-safe.sh`
+   (judge by exit code). "Done" without an executed check is a claim,
+   not a fact. **Read the totals line too, not just the exit code** — a
+   green exit says nothing about how many tests *ran*. On 2026-08-02
+   this box had been silently skipping ten router tests for want of
+   `scikit-learn` (declared in pyproject's `dev` extra, never
+   installed), and the runner couldn't have told you: its own `-q`
    stacked with pyproject's into `-qq`, which suppresses the "N passed,
    M skipped" line entirely. Both fixed; the habit is the durable part.
    A skip count above zero is a finding, not a footnote — the one
@@ -49,9 +63,17 @@ individual rules below exist to keep it honest.
 5. **Commit + land** — end-of-chunk discipline: document → commit →
    `bash scripts/land.sh`. Don't pile up unpushed commits; a box crash
    loses unlanded work.
-6. **Adversarial review, cross-model** — reviewers run on the opposite
-   model family (`codex exec` from Claude, `claude -p` from Codex),
-   never internal subagents (same-model review defeats the purpose).
+6. **Adversarial review** — with step 3 done honestly, review's role
+   SHIFTS (2026-08-16): audit the claims-and-probes record, attack the
+   labeled unproven residue, and cover what the author structurally
+   cannot (cross-chunk seams, an adversary's perspective, the
+   DEV_PATTERNS reviewer watch-list) — not re-derive untested
+   assertions. Convergence in 1-2 rounds is the health signal; a round
+   that finds an unprobed claim the author didn't label is a step-3
+   failure, not a review win. Reviewers run on the opposite model
+   family when available (`codex exec` from Claude, `claude -p` from
+   Codex); sonnet-medium same-model is the proven fallback (2026-08-14
+   decree window) — never internal subagents.
 7. **Verify-before-fix** — every reviewer finding gets checked against
    the tree before acting: measured hallucination rate across ten
    review rounds ran 0–78%, historically ~30–50%. A finding is a lead,
