@@ -13,9 +13,16 @@
 #   - pushes to main ONLY as a fast-forward; GitHub itself rejects a non-ff, and
 #     this script never uses --force on main.
 #   - refuses a dirty working tree when landing HEAD (commit first).
-#   - refuses a branch that has diverged from origin/main (rebase first).
-#   - touches refs only — never mutates a working tree, so it is safe to run
-#     while other sessions work in the repo (same discipline as
+#   - a ref that has diverged from origin/main is AUTO-REBASED: the commits
+#     are replayed onto fresh origin/main in a TEMP worktree (never the
+#     caller's tree — shared-tree rule 1) and the replayed sha is landed.
+#     Conflicts abort to manual with the recipe printed. --no-rebase
+#     restores the old refuse-outright behavior.
+#   - caller's tree: refs/index only — after an auto-rebased HEAD landing
+#     the local ref is converged onto the landed sha (reset --mixed) and
+#     stale paths are materialized via scripts/tree-triage.sh --fix, which
+#     restores only content already recorded by ancestor commits. The
+#     working tree is never rewritten beyond that (same discipline as
 #     deploy/hermes/land.sh).
 #
 # Usage:
@@ -23,16 +30,19 @@
 #   scripts/land.sh <ref>          # land a specific branch / sha
 #   scripts/land.sh --dry-run      # show what would land, push nothing
 #   scripts/land.sh --skip-checks  # bypass the pre-land structural gate
+#   scripts/land.sh --no-rebase    # refuse a diverged ref instead of auto-rebasing
 set -euo pipefail
 
 DRY=false
 SKIP_CHECKS=false
+NO_REBASE=false
 REF=HEAD
 for a in "$@"; do
     case "$a" in
         --dry-run) DRY=true ;;
         --skip-checks) SKIP_CHECKS=true ;;
-        -h|--help) sed -n '2,31p' "$0"; exit 0 ;;
+        --no-rebase) NO_REBASE=true ;;
+        -h|--help) sed -n '2,33p' "$0"; exit 0 ;;
         -*) echo "unknown flag: $a" >&2; exit 2 ;;
         *)  REF="$a" ;;
     esac
@@ -60,10 +70,51 @@ if [ "$SHA" = "$MAIN" ]; then
 fi
 
 # Fast-forward only: origin/main must be an ancestor of the ref being landed.
+# When it isn't (a landing race was lost), auto-rebase (2026-08-16, Jeremy):
+# replay the commits onto fresh origin/main in a TEMP worktree — never the
+# caller's tree, per shared-tree rule 1 — and land the replayed sha.
+# Conflicts abort to manual with the recipe printed.
+ORIG_SHA=""
 if ! git merge-base --is-ancestor "$MAIN" "$SHA"; then
-    echo "refuse: ${REF} has diverged from origin/main (not a fast-forward)." >&2
-    echo "       rebase onto fresh main first:  git fetch origin main && git rebase origin/main" >&2
-    exit 1
+    if $NO_REBASE; then
+        echo "refuse: ${REF} has diverged from origin/main (not a fast-forward)." >&2
+        echo "       rebase onto fresh main first:  git fetch origin main && git rebase origin/main" >&2
+        exit 1
+    fi
+    if [ -z "$(git rev-list "${MAIN}..${SHA}")" ]; then
+        # Diverged but contributes nothing new: SHA is strictly behind main.
+        echo "nothing to land — all commits of ${REF} are already contained in origin/main."
+        exit 0
+    fi
+    if [ -n "$(git rev-list --merges "${MAIN}..${SHA}")" ]; then
+        # cherry-pick can't replay merge commits; this repo's landings are
+        # linear by construction, so hitting this means something unusual —
+        # a human should look rather than the script guessing -m parents.
+        echo "refuse: ${REF} contains merge commits — auto-rebase can't replay those." >&2
+        echo "       rebase manually in a worktree, then land the result." >&2
+        exit 1
+    fi
+    RB_N="$(git rev-list --count "${MAIN}..${SHA}")"
+    echo "auto-rebase: origin/main moved — replaying ${RB_N} commit(s) onto ${MAIN:0:12} in a temp worktree"
+    RB_WT="$(mktemp -d /tmp/land-rebase.XXXXXX)"
+    git worktree add --detach -q "$RB_WT" "$MAIN"
+    if ! git -C "$RB_WT" cherry-pick "${MAIN}..${SHA}" >/dev/null 2>&1; then
+        git -C "$RB_WT" cherry-pick --abort >/dev/null 2>&1 || true
+        git worktree remove --force "$RB_WT" >/dev/null 2>&1 || true
+        echo "refuse: auto-rebase hit conflicts — resolve manually (in a worktree, not the shared tree):" >&2
+        echo "       git worktree add ../maro-wt-land origin/main && cd ../maro-wt-land" >&2
+        echo "       git cherry-pick ${MAIN:0:12}..${SHA:0:12}    # resolve, then: git cherry-pick --continue" >&2
+        echo "       bash scripts/land.sh HEAD && cd - && git worktree remove ../maro-wt-land" >&2
+        exit 1
+    fi
+    ORIG_SHA="$SHA"
+    SHA="$(git -C "$RB_WT" rev-parse HEAD)"
+    # The replayed commits live in the shared object store; the worktree
+    # has served its purpose. Eager removal (not a trap) because the
+    # pre-land gate below installs its own EXIT trap, which would replace
+    # ours and leak the directory.
+    git worktree remove --force "$RB_WT" >/dev/null 2>&1 || true
+    echo "auto-rebase: ${ORIG_SHA:0:12} -> ${SHA:0:12} (clean replay)"
 fi
 
 N="$(git rev-list --count "${MAIN}..${SHA}")"
@@ -147,8 +198,31 @@ if ! $SKIP_CHECKS; then
 fi
 
 # ff-only push to main over SSH. Never --force on main.
-git push origin "${SHA}:refs/heads/main"
+git push origin "${SHA}:refs/heads/main" || {
+    echo "push rejected — origin/main moved again during this land." >&2
+    echo "rerun scripts/land.sh: the auto-rebase will replay onto the new tip." >&2
+    exit 1
+}
 echo "landed: origin/main -> ${SHA}"
+
+# After an auto-rebased HEAD landing, the caller's checked-out ref still
+# points at the PRE-replay commits — converge it (ref/index only; the
+# working tree is never rewritten, per shared-tree rule 1) and materialize
+# paths the upstream commits touched. Without this, the local branch reads
+# as diverged-again on the next land and upstream files sit stale in the
+# tree — the exact two-valued-dirty-signal trap tree-triage exists for.
+# Scoped to REF=HEAD: an explicit-ref land is someone orchestrating by
+# hand; moving their checkout out from under them is not this script's call.
+if [ -n "$ORIG_SHA" ] && [ "$REF" = "HEAD" ]; then
+    git reset --mixed -q "$SHA"
+    echo "converged: local ref -> ${SHA:0:12} (ref/index only, tree untouched)"
+    if [ -x "$REPO_DIR/scripts/tree-triage.sh" ]; then
+        bash "$REPO_DIR/scripts/tree-triage.sh" --fix || true
+    else
+        echo "note: paths touched by the replayed-over upstream commits may show" >&2
+        echo "      stale in git status until materialized (tree-triage.sh not found)." >&2
+    fi
+fi
 
 # Post-land reading-page refresh (2026-08-03, Jeremy: he'd assumed the page
 # "got updated on commit", and found it three days stale because it only ever

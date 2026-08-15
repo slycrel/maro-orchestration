@@ -289,8 +289,13 @@ detached HEAD):
    commit, and don't touch shared living docs (GOAL_BRAIN.md, BACKLOG.md,
    DEV_LOG.md) in a commit while another session has them dirty — your
    staged copy would carry their half-written hunks.
-4. Landing races are fine: land.sh is ff-only; if you lose the race,
-   rebase **in a worktree** and land again.
+4. Landing races are fine: land.sh is ff-only, and since 2026-08-16 a
+   lost race is handled for you — land.sh replays your commits onto
+   fresh origin/main **in a temp worktree** (never this tree), lands
+   the replayed sha, converges your ref (ref/index only), and runs
+   tree-triage --fix to materialize upstream paths. Conflicts abort to
+   manual with the recipe printed; `--no-rebase` restores the old
+   refuse-outright behavior.
 
 ## End-of-chunk discipline
 

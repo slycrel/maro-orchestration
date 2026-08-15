@@ -2242,6 +2242,15 @@ capture**, which is what makes the rung amortize instead of evaporate.
   and recording seam can stay. Review record:
   docs/history/2026-08-16-closure-claim-coverage-review.md.
 
+- [ ] **land.sh ci-watch is silently inert on the dev Mac** (found
+  2026-08-16 while landing chunk 3 from the Mac): the post-land spawn is
+  `( setsid nohup scripts/ci-watch.sh ... & ) || true` and macOS ships no
+  `setsid`, so the subshell dies while the "ci-watch: spawned" line still
+  prints — a watch that reports armed but isn't (our own taxonomy
+  pattern 7). Harmless on the box (setsid exists; the box is the primary
+  landing host). Fix when touched: fall back to plain `nohup ... &` when
+  setsid is absent, or suppress the spawned message on failure.
+
 - [ ] **Arbitrary-truncation audit** (opened 2026-08-03; **Jeremy:** *"this
   **Burn-down status 2026-08-15/16:** slice census ceiling 176 → 135
   (tranche 1: knowledge_web 22 + loop_execute 15 + knowledge_lens

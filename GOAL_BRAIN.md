@@ -8105,3 +8105,19 @@ under the same two-measurement standard).
   spot-checks, not mere firing; evasion-by-vague-narration labeled a
   corpus bias. Suite 8845/0. The protocol's prediction held: C1/C5's
   probed deterministic core survived contact untouched.
+- **2026-08-16 (Jeremy sidequest → shipped) — land.sh auto-rebase.**
+  Jeremy compared the shared-tree worktree dance to his normal
+  branch → rebase → ff flow ("a bit of a hassle") and sanctioned
+  automating it: on a lost landing race, land.sh now replays the
+  commits onto fresh origin/main in a TEMP worktree (never the
+  caller's tree — rule 1 intact), lands the replayed sha ff-only,
+  converges the caller's ref (reset --mixed, HEAD-landings only), and
+  materializes upstream paths via tree-triage --fix; conflicts abort
+  to manual with the recipe printed; --no-rebase restores refusal;
+  merge-commit ranges and strictly-behind refs get honest refusals/
+  no-ops. 7 probes against throwaway file:// repos (must-fail verified
+  by stashed-script rerun: 5 fail on the old script), including the
+  triage-materialize path with the real tree-triage.sh copied into the
+  fixture. CLAUDE.md rule 4 updated. Also filed: ci-watch's setsid
+  spawn is silently inert on the dev Mac (prints "spawned" anyway —
+  taxonomy pattern 7 in our own tooling; BACKLOG).
