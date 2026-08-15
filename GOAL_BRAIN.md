@@ -7926,3 +7926,37 @@ under the same two-measurement standard).
   tranche round found compose-then-clip-once starving the judge field —
   all probe-confirmed, all in fix layers, exactly the taxonomy's
   patterns 1/5/7.
+- **2026-08-15 (PM, treasure-map lane — chunks 4+5 SHIPPED to fixpoint,
+  solo frontier EXHAUSTED).** (1) **§9.9 backward-chaining** (chunk 4):
+  one LLM goal-regression call after the forward plan; links classed
+  established/verifiable/unknown with honest downgrades; ≤2 [recon:]
+  probes prepended; records append to build/backchain.jsonl (restart
+  loops share the run dir); skips boundary/preset/short plans and
+  goal-stated step ceilings, fail-closed. `planner.backchain`
+  OFF-default, ON this box. Fixpoint r1–r3: 9 → 6 → 0; the r1 HIGH
+  (both lenses converged) was recorded step refs going stale after
+  probe injection — the same off-by-injection class the chunk fixed
+  for milestones, reintroduced for its own record. **Injection
+  live-fire PROVEN** on d9d81f0d-clever-wren: both probes injected as
+  recon steps 1–2 and executed, BACKCHAIN_DRAWN logged, map renders
+  the chain with injection flags; cuts-first exclusion also
+  live-proven (first attempt correctly skipped a boundary plan).
+  (2) **14h revisit mechanic + §13b reopen payloads** (chunk 5):
+  zero-LLM heartbeat sweep matches acquisition events (skill/canon/
+  rule/knowledge promotions) against standing dead ends
+  (thesis-refuted + not-worth-it are event-matchable; out-of-budget +
+  lost-the-plot stand until operator action); REVISIT_CANDIDATE
+  surfaces to the user lane (≤3/sweep, deduped via
+  memory/revisit_state.json, never auto-reruns);
+  `stamp_run_stop_verdict` gained reopen_payload (budget-daily +
+  escalation-close writers live). `revisit.enabled` ON-default
+  (zero-LLM, surface-only — terrain precedent). Fixpoint r1–r3:
+  8 → 8 (2 accepted+fixed: Z-timestamps break the 3.10 support floor;
+  lexicographic window min drops valid acquisitions across UTC
+  offsets — both pre-fix-failing tests pinned; rest
+  refuted-by-probe/verified/accepted-residual) → QUIET with traced
+  shown work. Landed across e0a52a0…8a84e3e. Suite 8805/1 skip.
+  Live-fire scan: 786 runs, 7 standing, 0 candidates — honest zero.
+  **Remaining treasure-map items are NOT solo-buildable: §10
+  calibration + §9.7 scoping are owed discussion with Jeremy;
+  adjudicate reanchor/backchain jsonl once real runs accumulate.**
