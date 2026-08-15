@@ -143,6 +143,29 @@ class TestDispatchWorkerWithAdapter:
         assert result.status == "blocked"
         assert "network down" in result.stuck_reason
 
+    def test_require_mode_incapable_backend_blocks_not_host_runs(
+            self, monkeypatch):
+        # 2026-08-13 review residual: executor.container=require with a
+        # backend that can't containerize must refuse the ticket, never
+        # silently run it on the host (require is isolation-or-nothing).
+        import container_exec as ce
+        monkeypatch.setattr(ce, "container_mode", lambda: "require")
+
+        class HostOnlyAdapter:
+            backend = "codex"
+            model_key = "test"
+            container_capable = False
+            def complete(self, messages, **kwargs):
+                raise AssertionError(
+                    "executor call reached a non-containerizable backend "
+                    "under require")
+
+        result = dispatch_worker(WORKER_OPS, "check status",
+                                 adapter=HostOnlyAdapter())
+        assert result.status == "blocked"
+        assert "require" in result.stuck_reason
+        assert "containerize" in result.stuck_reason
+
     def test_content_fallback_when_no_tool_calls(self):
         from llm import LLMResponse
 

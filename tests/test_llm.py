@@ -2134,6 +2134,75 @@ class TestFailoverAdapter:
         assert fa.model_key == "cheap"  # now on FallbackAdapter
 
 
+class TestFailoverExecutorContainerContract:
+    """require-mode walk filter (2026-08-13 review residual): failover
+    must never migrate an executor call onto a backend that cannot
+    containerize — the require contract is isolation-or-nothing."""
+
+    def _capable(self, name="subprocess"):
+        from llm import LLMAdapter, LLMResponse
+
+        class Capable(LLMAdapter):
+            backend = name
+            container_capable = True
+            def complete(self, messages, **kwargs):
+                return LLMResponse(content="served-capable",
+                                   stop_reason="end_turn")
+        return Capable()
+
+    def _incapable(self, name="codex", serve="served-incapable"):
+        from llm import LLMAdapter, LLMResponse
+
+        class Incapable(LLMAdapter):
+            backend = name
+            def complete(self, messages, **kwargs):
+                return LLMResponse(content=serve, stop_reason="end_turn")
+        return Incapable()
+
+    def _mode(self, monkeypatch, value):
+        import container_exec as ce
+        monkeypatch.setattr(ce, "container_mode", lambda: value)
+
+    def test_require_skips_incapable_and_serves_capable(self, monkeypatch):
+        from llm import FailoverAdapter, LLMMessage
+        self._mode(monkeypatch, "require")
+        fa = FailoverAdapter([self._incapable(), self._capable()])
+        resp = fa.complete([LLMMessage("user", "x")], executor=True)
+        assert resp.content == "served-capable"
+
+    def test_require_all_incapable_refuses(self, monkeypatch):
+        from llm import FailoverAdapter, LLMMessage
+        import container_exec as ce
+        self._mode(monkeypatch, "require")
+        fa = FailoverAdapter([self._incapable("codex"),
+                              self._incapable("openrouter", "also-host")])
+        with pytest.raises(ce.ContainerUnavailable) as exc:
+            fa.complete([LLMMessage("user", "x")], executor=True)
+        assert "not-container-capable" in str(exc.value)
+
+    def test_require_non_executor_call_unaffected(self, monkeypatch):
+        from llm import FailoverAdapter, LLMMessage
+        self._mode(monkeypatch, "require")
+        fa = FailoverAdapter([self._incapable()])
+        resp = fa.complete([LLMMessage("user", "x")])
+        assert resp.content == "served-incapable"
+
+    def test_on_mode_walk_does_not_filter(self, monkeypatch):
+        # mode `on` degrades (visibly, via the seam guard's warning) —
+        # the walk itself must not reorder or refuse.
+        from llm import FailoverAdapter, LLMMessage
+        self._mode(monkeypatch, "on")
+        fa = FailoverAdapter([self._incapable(), self._capable()])
+        resp = fa.complete([LLMMessage("user", "x")], executor=True)
+        assert resp.content == "served-incapable"
+
+    def test_any_inner_capable_reported_for_seam_guard(self):
+        from llm import FailoverAdapter
+        assert FailoverAdapter(
+            [self._incapable(), self._capable()]).container_capable
+        assert not FailoverAdapter([self._incapable()]).container_capable
+
+
 # ---------------------------------------------------------------------------
 # stream-json transcript parsing — the inner agent's REAL tool calls
 # ---------------------------------------------------------------------------

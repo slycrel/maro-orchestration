@@ -461,6 +461,14 @@ class LLMAdapter:
     """Abstract base. Subclass and implement `complete`."""
 
     backend: str = "base"
+    # Can this backend containerize executor calls (resolve_container_run)?
+    # Default False: a new adapter is refused for executor work under
+    # executor.container=require by construction (isolation-or-nothing)
+    # until it actually wires a container decision — see
+    # container_exec.enforce_backend_container_contract (2026-08-13 review
+    # residual: only the subprocess adapter ever made the decision, so
+    # every other backend silently ran executor work on the host).
+    container_capable: bool = False
 
     def complete(
         self,
@@ -647,6 +655,18 @@ class FailoverAdapter(LLMAdapter):
     def model_key(self) -> str:
         return getattr(self._adapters[self._current_idx], "model_key", "")
 
+    @property
+    def container_capable(self) -> bool:  # type: ignore[override]
+        """ANY-inner aggregation, matched to its consumers: the require-mode
+        seam guard must not refuse when the walk below would still reach a
+        capable adapter (the walk skips incapable ones for executor calls
+        under require). Known residual: for verb ADVERTISEMENT under mode
+        `on` this is optimistic — a mixed list whose first healthy adapter
+        is incapable serves executor calls on the host while a capable
+        sibling exists; the throttled walk warning keeps that visible."""
+        return any(getattr(a, "container_capable", False)
+                   for a in self._adapters)
+
     @staticmethod
     def _render_for_record(messages) -> str:
         """Flatten the message list into a single string for the call record."""
@@ -684,6 +704,21 @@ class FailoverAdapter(LLMAdapter):
             raise BudgetRunawayError(_meter["spent_usd"], _meter["ceiling_usd"])
         _skipped_info: Optional[Any] = None
         _chain: List[str] = []  # "backend(error_class)" per failed hop, for alert context
+        # Executor-lane container contract (2026-08-13 review residual):
+        # under require, an incapable inner adapter must be SKIPPED — never
+        # served — so failover cannot migrate an executor call onto the
+        # host. Mode is read once per walk; the seam guard
+        # (container_exec.enforce_backend_container_contract) already
+        # refused when NO inner is capable, and a capable adapter's own
+        # resolve_container_run still refuses if docker is down.
+        _exec_require = False
+        _skipped_incapable = 0
+        if kwargs.get("executor"):
+            try:
+                from container_exec import container_mode
+                _exec_require = container_mode() == "require"
+            except ImportError:
+                _exec_require = False
         # Snapshot at entry: a trip recorded DURING this walk protects future
         # complete() calls, not later adapters in this one — the walk already
         # moves past the failed adapter on its own.
@@ -702,6 +737,14 @@ class FailoverAdapter(LLMAdapter):
                 _chain.append(f"{getattr(adapter, 'backend', '?')}(circuit-open:{_tripped.error_class})")
                 log.info("FailoverAdapter: skipping %s — circuit open (%s)",
                          getattr(adapter, "backend", "?"), _tripped.error_class)
+                continue
+            if _exec_require and not getattr(adapter, "container_capable", False):
+                _skipped_incapable += 1
+                _chain.append(f"{getattr(adapter, 'backend', '?')}(not-container-capable)")
+                log.info(
+                    "FailoverAdapter: skipping %s for executor call — "
+                    "executor.container=require and this backend cannot "
+                    "containerize", getattr(adapter, "backend", "?"))
                 continue
             try:
                 result = adapter.complete(
@@ -896,6 +939,17 @@ class FailoverAdapter(LLMAdapter):
                     pass
         if last_exc is not None:
             raise last_exc
+        if _skipped_incapable:
+            # Every adapter that wasn't circuit-open was skipped for the
+            # require contract — refuse loudly (ContainerUnavailable is
+            # fatal/non-failover by classification, same as the subprocess
+            # adapter's own docker-down refusal).
+            from container_exec import ContainerUnavailable
+            raise ContainerUnavailable(
+                "executor.container=require but no configured backend can "
+                f"containerize executor work (chain: {' -> '.join(_chain)}). "
+                "Use the subprocess (claude) backend for executor steps, or "
+                "set executor.container to on/off.")
         if _skipped_info is not None:
             # Every adapter was circuit-open — surface the recorded fix
             # rather than re-proving a failure we already classified.
@@ -2435,6 +2489,9 @@ class ClaudeSubprocessAdapter(_JSONToolPromptMixin, LLMAdapter):
     """
 
     backend = "subprocess"
+    # The one backend that makes the container decision per executor call
+    # (resolve_container_run below) — see LLMAdapter.container_capable.
+    container_capable = True
 
     def __init__(self, model: str = MODEL_CHEAP, claude_bin: str = _CLAUDE_BIN, timeout: int = 600):
         self.model_key = model

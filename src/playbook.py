@@ -144,6 +144,24 @@ def load_playbook() -> str:
         return ""
 
 
+def section_text(section: str) -> str:
+    """The named section's text from the live playbook ('' when absent).
+
+    Slice contract mirrors append_to_playbook's insertion logic: from the
+    `## <section>` header to the next `\\n## ` header (or end of file).
+    Exists so a caller verifying that an append LANDED IN a section can
+    scope its membership check (2026-08-13 review: the canon door checked
+    its marker against the WHOLE playbook, so a same-marker entry in any
+    other section false-verified a deduped append)."""
+    text = load_playbook()
+    header = f"## {section}"
+    if header not in text:
+        return ""
+    remainder = text.split(header, 1)[1]
+    nxt = remainder.find("\n## ")
+    return remainder if nxt < 0 else remainder[:nxt]
+
+
 def seed_playbook() -> None:
     """Create the initial playbook with seed content."""
     path = _playbook_path()

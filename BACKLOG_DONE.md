@@ -8,6 +8,62 @@ Last split: 2026-04-16 (session 34).
 
 ---
 
+## Whole-changeset review 2026-08-13 — the five accepted-not-fixed residuals, ALL FIXED 2026-08-15
+
+The "for fun" whole-changeset adversarial pass (35 commits, 3 codex
+lenses) confirmed 9 real findings; 5 were fixed same session (verdict doc
+`docs/history/2026-08-13-whole-changeset-adversarial-review.md`), five
+accepted-not-fixed and filed in BACKLOG. All five closed 2026-08-15
+(M1 session, complement lane while the box built the treasure map),
+every fix carrying a test that FAILS against the pre-fix code
+(verified by stash-and-rerun):
+
+- **Container `require`/verb parity beyond the subprocess adapter.**
+  `LLMAdapter.container_capable = False` base attribute (subprocess
+  True) — a new backend is refused for executor work under `require`
+  by construction. `container_exec.enforce_backend_container_contract`
+  guards both executor seams (step_exec + workers): require+incapable →
+  ContainerUnavailable; on+incapable → throttled SF-6 warning.
+  `FailoverAdapter` walk skips incapable inners for require-mode
+  executor calls (failover can never migrate an executor call onto the
+  host) and raises ContainerUnavailable when everything was
+  capability-skipped. Verb advertisement gated on the backend too:
+  `execute_system_for_lane(adapter)` and the planner's maro-read teach
+  both return honest absence for an incapable backend (under-advertises
+  in every outcome — a failover hop could still containerize).
+  *Accepted residual:* `FailoverAdapter.container_capable` is
+  ANY-inner (matched to the require-seam consumer); for advertisement
+  under mode `on` that's optimistic when a mixed list's first healthy
+  adapter is incapable — the throttled walk warning keeps that shape
+  visible at runtime.
+- **`--expect-sha256` TOCTOU.** `import_workspace` now opens the
+  archive ONCE and hands the same descriptor to both the digest and
+  `tarfile.open(fileobj=…)` — a concurrent pathname swap can no longer
+  make extraction read bytes the digest never saw. Test replaces the
+  file at tarfile.open time and asserts the ORIGINAL bytes import.
+- **`<3.11.4` unfiltered-extraction fallback.** Refused outright:
+  `hasattr(tarfile, "data_filter")` gate before any mutation ("Nothing
+  was changed"), and the per-member `except TypeError → unfiltered
+  extract` fallback is deleted. Pre-3.11.4 targets get a clear refusal
+  instead of a symlink-order escape surface.
+- **Canon door TOCTOU + marker false-verify.** `_stamp` re-checks text
+  identity in-lock (concurrent refight/revise between candidate read
+  and stamp → partial-fail with an honest curate-by-hand reason; the
+  appended entry stands per data retention). Marker membership is now
+  CANON-SECTION-scoped via new `playbook.section_text()` — a
+  same-marker entry in another section no longer false-verifies a
+  deduped append; a marker already in Canon from a prior partial
+  promotion still passes (that IS the retry path, pinned by test).
+- **Exporter hardlink drop.** `_deref_hardlink` helper rewrites
+  LNKTYPE tarinfo to REGTYPE with real on-disk size, applied on EVERY
+  add lane (workspace tree filter, sqlite-snapshot gettarinfo, raw-db
+  fallback, sidecars, experiments) — a workspace with two paths to one
+  inode restores BOTH as independent files instead of silently losing
+  the second.
+
+Suite 8667 passed / 0 skipped after the chunk (+22 tests).
+
+
 ## Executor image ships no pytest — SHIPPED 2026-08-06; stale entry found + archived 2026-08-13
 
 **Resolution.** Both halves of the filed item shipped 2026-08-06 in two

@@ -404,11 +404,57 @@ _seq_counter = itertools.count()
 # per step. Reset by reset_container_caches() (test hook).
 _WARN_THROTTLE_S = 60.0
 _last_degrade_warn = 0.0
+# Separate stamp for the incapable-BACKEND warning below — sharing the
+# docker-down throttle would let one warning class silence the other.
+_last_backend_warn = 0.0
 
 
 class ContainerUnavailable(RuntimeError):
     """Raised when `executor.container: require` is set but docker can't run
     the call — the `require` contract refuses rather than silently degrading."""
+
+
+def enforce_backend_container_contract(adapter, executor: bool) -> None:
+    """Executor-lane backend gate (2026-08-13 review residual, fixed
+    2026-08-15): `resolve_container_run` lives inside the subprocess
+    adapter, so any OTHER backend serving an `executor=True` call simply
+    never made a container decision — under `require` that silently
+    voided a security control (isolation-or-nothing), and under `on` the
+    host run was invisible.
+
+    Called at the executor seams (step_exec / workers) with the adapter
+    about to serve the call. `adapter.container_capable` is a class
+    attribute defaulting to False on the LLMAdapter base — a new backend
+    is refused under `require` by construction until it actually wires a
+    container decision. FailoverAdapter reports any-inner-capable and its
+    walk skips incapable adapters for require-mode executor calls, so a
+    capable fallback still serves.
+
+    require + incapable → ContainerUnavailable (refuse loudly).
+    on + incapable → run on the host, with a throttled warning (SF-6:
+    the difference between sandboxed and not must be visible).
+    off / non-executor / capable → no-op.
+    """
+    global _last_backend_warn
+    if not executor or bool(getattr(adapter, "container_capable", False)):
+        return
+    mode = container_mode()
+    if mode == "off":
+        return
+    backend = getattr(adapter, "backend", "?")
+    if mode == "require":
+        raise ContainerUnavailable(
+            f"executor.container=require but the {backend!r} backend cannot "
+            "containerize executor work — refusing to run it on the host. "
+            "Use the subprocess (claude) backend for executor steps, or set "
+            "executor.container to on/off.")
+    now = time.monotonic()
+    if now - _last_backend_warn >= _WARN_THROTTLE_S:
+        log.warning(
+            "executor.container=on but the %r backend cannot containerize — "
+            "executor steps run on the host under the write-fence, NOT "
+            "containerized", backend)
+        _last_backend_warn = now
 
 
 # Run-scoped kill switch: when a git-repo run's self-dev scratch clone could NOT
@@ -433,8 +479,9 @@ def container_suppressed() -> bool:
 
 def reset_container_caches() -> None:
     """Reset the degrade-warning throttle and the container kill switch. Test hook."""
-    global _last_degrade_warn
+    global _last_degrade_warn, _last_backend_warn
     _last_degrade_warn = 0.0
+    _last_backend_warn = 0.0
     _container_suppressed.set(False)
     _introspection_run.set(False)
 

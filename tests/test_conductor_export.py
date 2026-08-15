@@ -1186,3 +1186,84 @@ class TestInspectReviewHardening:
         # Matching prefix (>=16 chars, as inspect prints) → proceeds.
         n = import_workspace(arc, expect_sha256=digest[:16])
         assert n == 1 and (dest / "keep.txt").exists()
+
+
+class TestReviewResiduals20260815:
+    """The three export/import residuals accepted-not-fixed by the
+    2026-08-13 whole-changeset review, closed 2026-08-15: sha256/extract
+    descriptor binding, no-unfiltered-extraction gate, hardlink
+    dereference at export."""
+
+    def test_import_extracts_from_the_hashed_descriptor(
+            self, workspace, tmp_path, monkeypatch):
+        """A pathname swap between the digest check and extraction must
+        not change what gets imported — the fd hashed IS the fd read."""
+        import os
+        (workspace / "memory" / "probe.jsonl").write_text('{"v":"original"}\n')
+        archive = tmp_path / "a.tar.gz"
+        export_workspace(output_path=archive)
+        digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+        # An attacker archive: same member paths, different bytes.
+        (workspace / "memory" / "probe.jsonl").write_text('{"v":"swapped"}\n')
+        evil = tmp_path / "evil.tar.gz"
+        export_workspace(output_path=evil)
+        (workspace / "memory" / "probe.jsonl").unlink()
+
+        real_open = tarfile.open
+
+        def swap_then_open(*args, **kwargs):
+            # The instant import moves from digest to extraction, replace
+            # the pathname — the exact race the fd binding closes.
+            os.replace(evil, archive)
+            return real_open(*args, **kwargs)
+
+        monkeypatch.setattr(tarfile, "open", swap_then_open)
+        import_workspace(archive, expect_sha256=digest)
+        assert (workspace / "memory" / "probe.jsonl").read_text() \
+            == '{"v":"original"}\n', (
+                "import extracted bytes the --expect-sha256 digest never saw "
+                "— the archive was reopened by pathname")
+
+    def test_import_refuses_without_extraction_filters(
+            self, workspace, tmp_path, monkeypatch, capsys):
+        """Pre-3.11.4 tarfile (no data_filter) refuses outright — the old
+        unfiltered fallback was orderable into a symlink escape through a
+        pre-existing external link on a merge import."""
+        archive = tmp_path / "a.tar.gz"
+        export_workspace(output_path=archive)
+        sentinel = workspace / "playbook.md"
+        sentinel.write_text("# local edits the archive would overwrite\n")
+        monkeypatch.delattr(tarfile, "data_filter")
+        with pytest.raises(SystemExit):
+            import_workspace(archive)
+        err = capsys.readouterr().err
+        assert "extraction filters" in err
+        assert "Nothing was changed" in err
+        assert sentinel.read_text() \
+            == "# local edits the archive would overwrite\n"
+
+    def test_export_dereferences_hardlinks(
+            self, workspace, tmp_path, monkeypatch):
+        """A workspace with two paths to one inode must restore BOTH as
+        independent regular files — tar.add's hardlink encoding shipped a
+        member the importer rejects, silently dropping the second path."""
+        import os
+        a = workspace / "memory" / "linked_a.jsonl"
+        a.write_text('{"v":"shared"}\n')
+        os.link(a, workspace / "memory" / "linked_b.jsonl")
+        archive = tmp_path / "a.tar.gz"
+        export_workspace(output_path=archive)
+        with tarfile.open(archive) as tar:
+            for name in ("workspace/memory/linked_a.jsonl",
+                         "workspace/memory/linked_b.jsonl"):
+                m = tar.getmember(name)
+                assert m.isreg() and not m.islnk(), f"{name} shipped as link"
+                assert m.size == a.stat().st_size
+        fresh = tmp_path / "fresh_ws"
+        fresh.mkdir()
+        monkeypatch.setenv("MARO_WORKSPACE", str(fresh))
+        import_workspace(archive)
+        assert (fresh / "memory" / "linked_a.jsonl").read_text() \
+            == '{"v":"shared"}\n'
+        assert (fresh / "memory" / "linked_b.jsonl").read_text() \
+            == '{"v":"shared"}\n'

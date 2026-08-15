@@ -268,6 +268,12 @@ def dispatch_worker(
     user_msg = f"Ticket: {ticket}{context_block}\n\nComplete this ticket. Call deliver_result when done."
 
     try:
+        # Executor-lane container contract (2026-08-13 review residual):
+        # same guard as the step_exec seam — a backend that can't
+        # containerize refuses under require / warns under on, instead of
+        # silently running ticket work on the host.
+        from container_exec import enforce_backend_container_contract
+        enforce_backend_container_contract(adapter, executor=True)
         # agentic: worker-ticket executor seam — model does the ticket's real work (executor=True, container lane)
         resp = adapter.complete(
             [

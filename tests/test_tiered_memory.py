@@ -967,6 +967,86 @@ def test_promote_canon_lesson_dry_run(monkeypatch, tmp_path):
                for c in get_canon_candidates(min_hits=10, min_task_types=3))
 
 
+def test_promote_canon_lesson_partial_fails_on_concurrent_revise(
+        monkeypatch, tmp_path):
+    # Text-identity TOCTOU (2026-08-13 review residual, fixed 2026-08-15):
+    # a refight/revise landing between the candidate read and the stamp
+    # means the appended Canon entry carries the OLD text — stamping the
+    # row would launder the swap into a promoted state whose identity
+    # surface says something else. Partial-fail; the row stays a
+    # candidate with its CURRENT text.
+    _setup(monkeypatch, tmp_path)
+    import playbook as pb
+    import knowledge_web as kw
+    from knowledge_web import promote_canon_lesson
+    tl = _seed_canon_candidate("original wording of the lesson")
+    real_append = pb.append_to_playbook
+
+    def race_append(entry, **kw_args):
+        real_append(entry, **kw_args)
+
+        def _revise(lessons):
+            for l in lessons:
+                if l.lesson_id == tl.lesson_id:
+                    l.lesson = "revised wording after a refight"
+            return lessons
+
+        kw._mutate_tiered_lessons(MemoryTier.LONG, _revise)
+
+    monkeypatch.setattr(pb, "append_to_playbook", race_append)
+    result = promote_canon_lesson(tl.lesson_id)
+    assert result["ok"] is False
+    assert "revised mid" in result["reason"]
+    row = next(l for l in load_tiered_lessons(tier=MemoryTier.LONG,
+                                              min_score=0.0)
+               if l.lesson_id == tl.lesson_id)
+    assert not row.canon
+    # The pre-revise text DID land in the playbook (data retention —
+    # never unwrite); the reason tells the operator to curate it.
+    assert "original wording of the lesson" in \
+        (tmp_path / "playbook.md").read_text(encoding="utf-8")
+
+
+def test_promote_canon_marker_outside_canon_does_not_false_verify(
+        monkeypatch, tmp_path):
+    # Membership is CANON-SECTION-scoped (2026-08-13 review residual):
+    # a same-marker entry sitting in another section, combined with a
+    # text-dedup skip, used to satisfy the whole-file check and stamp a
+    # row whose Canon entry never landed.
+    _setup(monkeypatch, tmp_path)
+    from knowledge_web import promote_canon_lesson
+    from playbook import append_to_playbook
+    tl = _seed_canon_candidate("text that will dedupe the canon append")
+    append_to_playbook(tl.lesson, section="Learned",
+                       source=f"canon:{tl.lesson_id}")
+    result = promote_canon_lesson(tl.lesson_id)
+    assert result["ok"] is False
+    assert "deduped" in result["reason"]
+    row = next(l for l in load_tiered_lessons(tier=MemoryTier.LONG,
+                                              min_score=0.0)
+               if l.lesson_id == tl.lesson_id)
+    assert not row.canon
+
+
+def test_promote_canon_prior_partial_promotion_can_retry(
+        monkeypatch, tmp_path):
+    # A marker already IN ## Canon (a prior run appended but died before
+    # stamping) passes the scoped check — the retry completes the stamp
+    # instead of refusing forever.
+    _setup(monkeypatch, tmp_path)
+    from knowledge_web import promote_canon_lesson
+    from playbook import append_to_playbook
+    tl = _seed_canon_candidate("already landed in canon once")
+    append_to_playbook(tl.lesson, section="Canon",
+                       source=f"canon:{tl.lesson_id}")
+    result = promote_canon_lesson(tl.lesson_id)
+    assert result["ok"] is True
+    row = next(l for l in load_tiered_lessons(tier=MemoryTier.LONG,
+                                              min_score=0.0)
+               if l.lesson_id == tl.lesson_id)
+    assert row.canon["target"] == "playbook"
+
+
 def test_get_canon_candidates_sorted_by_hits(monkeypatch, tmp_path):
     _setup(monkeypatch, tmp_path)
     tl1 = record_tiered_lesson("lesson one", "general", "done", "g1", tier=MemoryTier.LONG)

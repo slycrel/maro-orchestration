@@ -14,6 +14,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 
 class _PlanCapturingAdapter:
+    # Defaults to the shipped subprocess shape: container-capable. The
+    # teach gate consults this (2026-08-15 — an executor backend that
+    # can't containerize runs steps on the HOST, where the baked name
+    # is absent); the incapable-backend pin flips it explicitly.
+    container_capable = True
+
     def __init__(self, content='["step one", "step two"]'):
         self.system_prompts = []
         self._content = content
@@ -135,6 +141,29 @@ class TestReadStepEmission:
         monkeypatch.setattr(container_exec, "image_bakes_verbs",
                             lambda: True)
         adapter = _PlanCapturingAdapter()
+        decompose("audit the spec against the raw captures", adapter,
+                  max_steps=4)
+        assert not _taught(adapter)
+
+    def test_incapable_executor_backend_is_not_taught(self, monkeypatch):
+        # 2026-08-13 review residual: an executor backend that never
+        # calls resolve_container_run (anything but subprocess) runs its
+        # steps on the HOST even with container mode on — teaching the
+        # baked name there would over-advertise. Same under-advertise
+        # direction as the sibling execute_system_for_lane gate.
+        import container_exec
+        from planner import decompose
+        monkeypatch.setattr(container_exec, "container_mode", lambda: "on")
+        monkeypatch.setattr(container_exec, "container_suppressed",
+                            lambda: False)
+        monkeypatch.setattr(container_exec, "image_bakes_verbs",
+                            lambda: True)
+        monkeypatch.setattr(container_exec, "docker_probe",
+                            lambda: (True, "test"))
+        monkeypatch.setattr(container_exec, "auth_breaker_blocks",
+                            lambda: None)
+        adapter = _PlanCapturingAdapter()
+        adapter.container_capable = False
         decompose("audit the spec against the raw captures", adapter,
                   max_steps=4)
         assert not _taught(adapter)

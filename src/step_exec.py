@@ -301,7 +301,7 @@ EXECUTE_SYSTEM = (
 )
 
 
-def execute_system_for_lane() -> str:
+def execute_system_for_lane(adapter=None) -> str:
     """The execute prompt for the lane this call is CONFIGURED for.
 
     Same cheap gate as the introspection mount-view notice: config says
@@ -324,6 +324,17 @@ def execute_system_for_lane() -> str:
     try:
         import container_exec as _ce
         if _ce.container_mode() != "off" and not _ce.container_suppressed():
+            if adapter is not None and not getattr(
+                    adapter, "container_capable", False):
+                # Executor-backend gate (2026-08-13 review residual): this
+                # backend never calls resolve_container_run, so its steps
+                # run on the HOST (mode on) or refuse at the seam
+                # (require). Baked-verb advertisement would name shims
+                # that don't exist there; host verbs could still be wrong
+                # if a later failover hop lands on a capable backend —
+                # honest absence is the only choice that under-advertises
+                # in every outcome.
+                return EXECUTE_SYSTEM_CONTAINER
             if (_ce.image_bakes_verbs() and _ce.docker_probe()[0]
                     and _ce.auth_breaker_blocks() is None):
                 return EXECUTE_SYSTEM_CONTAINER_VERBS
@@ -1497,7 +1508,7 @@ def execute_step(
     )
     # Lane-aware system prompt (container verb parity): resolved once per
     # step so the cache key, first call, and tool-search retry all agree.
-    _exec_system = execute_system_for_lane()
+    _exec_system = execute_system_for_lane(adapter)
     _static_session_context_key = hashlib.sha256(
         (session_context_key + "\n" + _exec_system).encode("utf-8")
     ).hexdigest()
@@ -1568,6 +1579,14 @@ def execute_step(
             _call_kwargs["session_state"] = executor_session
             _call_kwargs["session_delta_prompt"] = session_delta_msg
             _call_kwargs["session_context_key"] = _static_session_context_key
+        # Executor-lane container contract (2026-08-13 review residual):
+        # only the subprocess adapter makes a container decision, so a
+        # backend that can't containerize must refuse under require /
+        # warn under on BEFORE the call — not silently run on the host.
+        # Raising here rides the same structured blocked path as the
+        # adapter's own docker-down ContainerUnavailable.
+        from container_exec import enforce_backend_container_contract
+        enforce_backend_container_contract(adapter, executor=True)
         # agentic: the worker executor step — tools do the real work (executor=True)
         resp = adapter.complete(
             [

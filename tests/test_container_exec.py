@@ -1492,3 +1492,71 @@ class TestBakedVerbs:
         # No keys -> no consent flag either: the flag transports a
         # capability, not a bare opinion.
         assert ce.hosted_free_container_env() == {}
+
+
+class TestEnforceBackendContainerContract:
+    """Executor-lane backend gate (2026-08-13 review residual, fixed
+    2026-08-15): resolve_container_run lives inside the subprocess
+    adapter, so any other backend serving executor=True never made a
+    container decision — require was silently void, on was invisibly
+    host-run."""
+
+    class _Backend:
+        def __init__(self, name, capable):
+            self.backend = name
+            self.container_capable = capable
+
+    def _mode(self, monkeypatch, value):
+        monkeypatch.setattr(
+            ce, "get",
+            lambda k, d=None: value if k == "executor.container" else d)
+
+    def test_require_incapable_refuses(self, monkeypatch):
+        self._mode(monkeypatch, "require")
+        with pytest.raises(ce.ContainerUnavailable) as exc:
+            ce.enforce_backend_container_contract(
+                self._Backend("codex", False), executor=True)
+        assert "codex" in str(exc.value)
+        assert "require" in str(exc.value)
+
+    def test_require_capable_passes(self, monkeypatch):
+        self._mode(monkeypatch, "require")
+        ce.enforce_backend_container_contract(
+            self._Backend("subprocess", True), executor=True)
+
+    def test_non_executor_never_gated(self, monkeypatch):
+        # Utility/orchestration calls are not the executor lane — the
+        # contract must not capture them even at require + incapable.
+        self._mode(monkeypatch, "require")
+        ce.enforce_backend_container_contract(
+            self._Backend("openrouter", False), executor=False)
+
+    def test_off_is_a_noop(self, monkeypatch):
+        self._mode(monkeypatch, "off")
+        ce.enforce_backend_container_contract(
+            self._Backend("codex", False), executor=True)
+
+    def test_on_incapable_warns_visibly_and_throttled(
+            self, monkeypatch, caplog):
+        # SF-6: the difference between sandboxed and not must be
+        # visible — but once per throttle window, not once per step.
+        import logging
+        self._mode(monkeypatch, "on")
+        ce.reset_container_caches()
+        with caplog.at_level(logging.WARNING, logger="maro.container_exec"):
+            ce.enforce_backend_container_contract(
+                self._Backend("codex", False), executor=True)
+            ce.enforce_backend_container_contract(
+                self._Backend("codex", False), executor=True)
+        warns = [r for r in caplog.records
+                 if "cannot containerize" in r.getMessage()]
+        assert len(warns) == 1
+        assert "host" in warns[0].getMessage()
+
+    def test_missing_capability_attr_reads_as_incapable(self, monkeypatch):
+        # Fail closed by construction: an adapter that never declared
+        # capability is refused under require, not waved through.
+        self._mode(monkeypatch, "require")
+        with pytest.raises(ce.ContainerUnavailable):
+            ce.enforce_backend_container_contract(
+                SimpleNamespace(backend="mystery"), executor=True)

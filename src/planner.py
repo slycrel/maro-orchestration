@@ -1004,9 +1004,20 @@ def decompose(
                     _read_step_rules = READ_QUERY_STEP_RULES.replace(
                         "__READ_CLI__", _rq_cli())
                 elif (not _ce.container_suppressed()
+                      and getattr(adapter, "container_capable", False)
                       and _ce.image_bakes_verbs()
                       and _ce.docker_probe()[0]
                       and _ce.auth_breaker_blocks() is None):
+                    # container_capable joins the gate (2026-08-13 review
+                    # residual): an executor backend that never calls
+                    # resolve_container_run runs its steps on the HOST,
+                    # where the baked name is not on PATH — teaching it
+                    # would over-advertise. The planner's adapter is a
+                    # backend-shape proxy for the executor adapter (same
+                    # build selection; models may differ, capability is a
+                    # class property). Incapable → honest absence, the
+                    # same under-advertise direction as the sibling
+                    # execute_system_for_lane gate.
                     # Availability joins the gate (adversarial review
                     # 2026-08-13): a plan written while docker is down or
                     # the auth breaker is tripped would teach a name its

@@ -441,6 +441,22 @@ def _utcnow() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
+def _deref_hardlink(ti: tarfile.TarInfo, src: Path) -> tarfile.TarInfo:
+    """tar encodes a second path to an already-added inode as a hardlink
+    member; the importer rejects those (`_safe_workspace_member` islnk /
+    meta staging isreg-only), so the second path silently vanished on
+    restore (accepted residual of the 2026-08-13 review). Rewrite to a
+    regular file with the real on-disk size so the bytes ship — both
+    paths restore as independent files, the honest portable meaning.
+    Applied on EVERY add lane: workspace tree filter, sqlite snapshot
+    tarinfo, raw-db/sidecar adds, experiments adds."""
+    if ti.islnk():
+        ti.type = tarfile.REGTYPE
+        ti.linkname = ""
+        ti.size = src.stat().st_size
+    return ti
+
+
 def _add_bytes(tar: tarfile.TarFile, arcname: str, data: bytes,
                mode: int = 0o644) -> None:
     ti = tarfile.TarInfo(name=arcname)
@@ -518,6 +534,7 @@ def export_workspace(output_path: Path = None, verbose: bool = False) -> Path:
                 return tarinfo  # internal relative link stays in the tree
             _record_external(parts, tarinfo.linkname)
             return None
+        _deref_hardlink(tarinfo, _abs_for(rel))  # see helper: islnk → REGTYPE
         name = Path(rel).name
         if tarinfo.isfile() and name.endswith((".db", ".db-wal", ".db-shm")):
             (db_files if name.endswith(".db") else sidecars).append(
@@ -555,7 +572,8 @@ def export_workspace(output_path: Path = None, verbose: bool = False) -> Path:
                 # Carry the SOURCE file's metadata (mode/mtime) with the
                 # snapshot bytes — tar.add(snap) would stamp 0644/now,
                 # broadening a 0600 database on restore (review of 707a541).
-                ti = tar.gettarinfo(str(src), arcname=rel)
+                ti = _deref_hardlink(tar.gettarinfo(str(src), arcname=rel),
+                                     snap)
                 ti.size = snap.stat().st_size
                 with open(snap, "rb") as fh:
                     tar.addfile(ti, fh)
@@ -567,7 +585,8 @@ def export_workspace(output_path: Path = None, verbose: bool = False) -> Path:
                 if verbose:
                     print(f"  add:  {rel} (sqlite snapshot)", file=sys.stderr)
             else:
-                tar.add(str(src), arcname=rel, recursive=False)
+                tar.add(str(src), arcname=rel, recursive=False,
+                        filter=lambda ti: _deref_hardlink(ti, src))
                 file_count += 1
                 total_bytes += src.stat().st_size
                 manifest_entries.append(
@@ -582,7 +601,8 @@ def export_workspace(output_path: Path = None, verbose: bool = False) -> Path:
                     print(f"  skip: {rel} (folded into snapshot)",
                           file=sys.stderr)
                 continue
-            tar.add(str(src), arcname=rel, recursive=False)
+            tar.add(str(src), arcname=rel, recursive=False,
+                    filter=lambda ti: _deref_hardlink(ti, src))
             file_count += 1
             total_bytes += src.stat().st_size
             manifest_entries.append(
@@ -642,7 +662,8 @@ def export_workspace(output_path: Path = None, verbose: bool = False) -> Path:
                     continue  # empty dirs not preserved (documented)
                 tar.add(str(p),
                         arcname=_META_PREFIX + "experiments/" + str(rel),
-                        recursive=False)
+                        recursive=False,
+                        filter=lambda ti: _deref_hardlink(ti, p))
                 exp_files += 1
                 meta_count += 1
 
@@ -1006,10 +1027,28 @@ def import_workspace(
         print(f"Error: archive not found: {archive_path}", file=sys.stderr)
         sys.exit(1)
 
+    # Extraction filters are the safety floor (the `data` filter clamps
+    # link targets and rejects specials); the preflight screens are defense
+    # in depth ABOVE it, not a substitute. On Pythons without them
+    # (<3.11.4 and no backport) the old TypeError fallback extracted
+    # unfiltered — orderable to escape through a pre-existing external
+    # symlink on a merge import (accepted residual of the 2026-08-13
+    # whole-changeset review). Refuse before touching anything.
+    if not hasattr(tarfile, "data_filter"):
+        print("Error: this Python's tarfile has no extraction filters "
+              "(needs 3.11.4+ or a filter backport) — refusing to extract "
+              "an untrusted archive without them. Nothing was changed.",
+              file=sys.stderr)
+        sys.exit(1)
+
     # Bind this import to the bytes a prior `inspect` vouched for (review
     # 2026-08-13: inspect and import reopened the pathname independently, so
     # the trust decision could apply to a swapped file). Prefixes are
-    # accepted at >=16 hex chars, full digest preferred.
+    # accepted at >=16 hex chars, full digest preferred. ONE descriptor
+    # carries both the digest and the extraction (the same review's TOCTOU
+    # residual): hashing a reopened pathname left a swap window in which
+    # tarfile.open could read bytes the digest never saw.
+    archive_fh = open(archive_path, "rb")
     if expect_sha256:
         want = expect_sha256.strip().lower().rstrip("…")
         if len(want) < 16 or not all(c in "0123456789abcdef" for c in want):
@@ -1017,9 +1056,9 @@ def import_workspace(
                   file=sys.stderr)
             sys.exit(1)
         sha = hashlib.sha256()
-        with open(archive_path, "rb") as fh:
-            for chunk in iter(lambda: fh.read(1 << 20), b""):
-                sha.update(chunk)
+        for chunk in iter(lambda: archive_fh.read(1 << 20), b""):
+            sha.update(chunk)
+        archive_fh.seek(0)
         actual = sha.hexdigest()
         if not actual.startswith(want):
             print(f"Error: archive sha256 {actual[:16]}… does not match "
@@ -1027,7 +1066,7 @@ def import_workspace(
                   f"inspected. Nothing was changed.", file=sys.stderr)
             sys.exit(1)
 
-    with tarfile.open(archive_path, "r:gz") as tar:
+    with archive_fh, tarfile.open(fileobj=archive_fh, mode="r:gz") as tar:
         # Shared one-pass scan/classify — the same policy inspect previews
         # (review 2026-08-13: two implementations had already diverged, and
         # both lanes paid getmembers()-then-quadratic-partition).
@@ -1115,14 +1154,13 @@ def import_workspace(
             member.name = rel  # extract relative to ws (prefix stripped)
             if verbose:
                 print(f"  extract: {rel}", file=sys.stderr)
-            try:
-                # 'data' filter clamps link targets and rejects special
-                # files — defense in depth atop the preflight above. The
-                # <3.11.4 fallback is safe BECAUSE preflight already
-                # vetted every member (type + link target + containment).
-                tar.extract(member, path=str(ws), filter="data")
-            except TypeError:
-                tar.extract(member, path=str(ws))
+            # 'data' filter clamps link targets and rejects special
+            # files — defense in depth atop the preflight above. Filter
+            # availability is guaranteed by the data_filter gate before
+            # any mutation; there is deliberately NO unfiltered fallback
+            # (the old TypeError branch was orderable into a symlink
+            # escape on pre-3.11.4 targets — 2026-08-13 review).
+            tar.extract(member, path=str(ws), filter="data")
             if member.isfile():
                 extracted += 1
                 manifest_entries.append((rel, member.size))

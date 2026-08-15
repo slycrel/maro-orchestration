@@ -3174,17 +3174,22 @@ def promote_canon_lesson(lesson_id: str, *, dry_run: bool = False,
     # on a skipped write would hide the candidate forever while never
     # making it Canon (skeptic finding 1). The source marker is the
     # verifiable fingerprint of THIS append.
-    from playbook import append_to_playbook, load_playbook
+    from playbook import append_to_playbook, section_text
     marker = f"canon:{lesson_id}"
     append_to_playbook(entry, section="Canon", source=marker)
-    if marker not in load_playbook():
+    # Membership is checked against the CANON SECTION, not the whole file
+    # (2026-08-13 review residual): a same-marker entry sitting in any
+    # other section would false-verify a deduped append, stamping a row
+    # whose Canon entry never landed. A marker already in Canon from a
+    # prior partial promotion still passes — that IS the retry path.
+    if marker not in section_text("Canon"):
         return {"ok": False,
                 "reason": (f"playbook append was deduped — the lesson text "
                            f"already appears in playbook.md outside Canon. "
                            f"Nothing was stamped; curate the existing entry "
                            f"into ## Canon by hand, then re-run (the row "
                            f"stays a candidate until the {marker} marker "
-                           f"exists)")}
+                           f"exists in ## Canon)")}
 
     stamped: Dict[str, Any] = {}
 
@@ -3198,6 +3203,14 @@ def promote_canon_lesson(lesson_id: str, *, dry_run: bool = False,
         if (_is_quarantined(t) or _is_contested(t)
                 or _is_delta_demoted(t) or _is_delta_inert(t)):
             return lessons
+        # Text-identity re-check (2026-08-13 review residual): a
+        # concurrent revise between the candidate read and this write
+        # means the Canon entry just appended carries the OLD text —
+        # stamping the row would launder the swap into a promoted state
+        # whose identity surface says something else. Partial-fail.
+        if t.lesson != entry:
+            stamped["text_changed"] = True
+            return lessons
         t.canon = {"promoted_at": datetime.now(timezone.utc).isoformat(),
                    "target": "playbook"}
         stamped["t"] = t
@@ -3207,6 +3220,15 @@ def promote_canon_lesson(lesson_id: str, *, dry_run: bool = False,
     if "t" not in stamped:
         # The playbook entry stands (data retention — never unwrite);
         # report the truth instead of a hollow success.
+        if stamped.get("text_changed"):
+            return {"ok": False, "entry": entry,
+                    "reason": (f"playbook Canon entry was appended, but "
+                               f"{lesson_id}'s text was revised mid-"
+                               f"promotion (concurrent refight/revise) — "
+                               f"the row was NOT stamped so it stays a "
+                               f"candidate with its CURRENT text. Review "
+                               f"the appended Canon entry by hand (it "
+                               f"carries the pre-revise text), then re-run")}
         return {"ok": False, "entry": entry,
                 "reason": (f"playbook Canon entry was appended, but the row "
                            f"could not be stamped — {lesson_id} was removed "

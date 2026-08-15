@@ -827,6 +827,30 @@ class TestContainerVerbParity:
         monkeypatch.setattr(ce, "auth_breaker_blocks", lambda: None)
         assert execute_system_for_lane() == EXECUTE_SYSTEM_CONTAINER_VERBS
 
+    def test_lane_selector_incapable_backend_gets_honest_absence(
+            self, monkeypatch):
+        # 2026-08-13 review residual: an executor backend that never
+        # calls resolve_container_run runs steps on the HOST even with
+        # the lane fully reachable — baked-verb advertisement would name
+        # shims that don't exist there. Honest absence under-advertises
+        # in every outcome (a failover hop could still containerize).
+        import container_exec as ce
+        from types import SimpleNamespace
+        from step_exec import (execute_system_for_lane,
+                               EXECUTE_SYSTEM_CONTAINER,
+                               EXECUTE_SYSTEM_CONTAINER_VERBS)
+        monkeypatch.setattr(ce, "container_mode", lambda: "on")
+        monkeypatch.setattr(ce, "container_suppressed", lambda: False)
+        monkeypatch.setattr(ce, "image_bakes_verbs", lambda: True)
+        monkeypatch.setattr(ce, "docker_probe", lambda: (True, "test"))
+        monkeypatch.setattr(ce, "auth_breaker_blocks", lambda: None)
+        incapable = SimpleNamespace(backend="codex", container_capable=False)
+        assert execute_system_for_lane(incapable) == EXECUTE_SYSTEM_CONTAINER
+        capable = SimpleNamespace(backend="subprocess",
+                                  container_capable=True)
+        assert execute_system_for_lane(capable) \
+            == EXECUTE_SYSTEM_CONTAINER_VERBS
+
     def test_lane_selector_docker_down_degrades_to_honest_absence(
             self, monkeypatch):
         # Adversarial review 2026-08-13 (both lenses): a mode-on docker-down
