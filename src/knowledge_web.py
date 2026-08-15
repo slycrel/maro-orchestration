@@ -1520,11 +1520,16 @@ def _lesson_contest_evidence(lesson_id: str, *, limit: int = 5) -> List[str]:
             if lesson_id not in (ctx.get("contradicted_ids") or []):
                 continue
             evidence.append(
-                # Compose-then-clip-once (round-13 lesson): one honest cut
-                # over the assembled row instead of three stacked ones.
-                clip((f"run {ctx.get('loop_id', '?')} failed "
-                      f"({ctx.get('failure_summary') or 'no summary'}); "
-                      f"judge: {ctx.get('reasoning') or ''}"), 300))
+                # PER-FIELD honest clips, no outer cut (tranche-1 review,
+                # executed probe: a single composed clip let a long
+                # failure_summary — commonly at its writers' 300 cap —
+                # starve the judge's reasoning out of the row entirely;
+                # the old per-field caps GUARANTEED both fields present.
+                # With both fields clipped and a fixed frame, the row is
+                # bounded by construction (~400 worst case incl. markers).
+                f"run {ctx.get('loop_id', '?')} failed "
+                f"({clip(ctx.get('failure_summary') or 'no summary', 120)}); "
+                f"judge: {clip(ctx.get('reasoning') or '', 150)}")
         for e in query_log(lesson_id, event_type="LESSON_CONTESTED",
                            limit=limit):
             evidence.append(clip(e.get("summary") or "", 200))
@@ -3247,7 +3252,8 @@ def promote_canon_lesson(lesson_id: str, *, dry_run: bool = False,
             summary=(f"Canon door: lesson {lesson_id} promoted to playbook "
                      f"Canon ({cand['times_applied']} applies across "
                      f"{len(cand['task_types_seen'])} task types): "
-                     f"{entry[:100]}"),
+                     f"{clip(entry, 100)}"),  # tranche-1 review: same-class
+                     # sibling under a name the census FAMILY regex misses
             context={"times_applied": cand["times_applied"],
                      "task_types_seen": cand["task_types_seen"],
                      "measured_delta": cand.get("measured_delta")},

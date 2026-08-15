@@ -252,16 +252,25 @@ def _verdict_bypass_hits(tree: ast.AST, filename: str) -> Counter:
     # legal. The merge callable is resolved by name to its FunctionDef
     # and its body scanned; an unresolvable callable falls back to
     # file-scope tuple-key presence (err toward detection).
-    fndefs = {n.name: n for n in ast.walk(tree)
-              if isinstance(n, ast.FunctionDef)}
+    # ALL same-named FunctionDefs, unioned (round-3 review, executed
+    # probe: a name→def dict resolved `_merge` to whichever same-named
+    # function walked last, so a real bypass next to a benign
+    # same-named merge was scored against the wrong body and silently
+    # missed — order-dependent. Union errs toward detection: if ANY
+    # candidate body writes a tuple key, the site flags.)
+    fndefs: dict = {}
+    for n in ast.walk(tree):
+        if isinstance(n, ast.FunctionDef):
+            fndefs.setdefault(n.name, []).append(n)
 
-    def _writes_tuple_key(scope) -> bool:
-        for sub in ast.walk(scope):
-            if (isinstance(sub, ast.Assign)
-                    and isinstance(sub.targets[0], ast.Subscript)
-                    and isinstance(sub.targets[0].slice, ast.Constant)
-                    and sub.targets[0].slice.value in _TUPLE_KEYS):
-                return True
+    def _writes_tuple_key(scopes) -> bool:
+        for scope in scopes:
+            for sub in ast.walk(scope):
+                if (isinstance(sub, ast.Assign)
+                        and isinstance(sub.targets[0], ast.Subscript)
+                        and isinstance(sub.targets[0].slice, ast.Constant)
+                        and sub.targets[0].slice.value in _TUPLE_KEYS):
+                    return True
         return False
 
     for node in ast.walk(tree):
@@ -281,11 +290,12 @@ def _verdict_bypass_hits(tree: ast.AST, filename: str) -> Counter:
                       for a in node.args)
         if not (inline or via_var):
             continue
-        merge_fn = None
+        scopes = [tree]
         if len(node.args) >= 2 and isinstance(node.args[1], ast.Name):
-            merge_fn = fndefs.get(node.args[1].id)
-        scope = merge_fn if merge_fn is not None else tree
-        if _writes_tuple_key(scope):
+            named = fndefs.get(node.args[1].id)
+            if named:
+                scopes = named
+        if _writes_tuple_key(scopes):
             hits[f"{filename}::locked_rmw::metadata.json"] += 1
     # Map aliases of the raw writers: `from runs import X [as Y]` AND
     # module-attribute calls (`import runs [as r]; r.stamp_run_metadata`)
@@ -466,6 +476,21 @@ def test_bypass_scanner_detects_each_supported_shape():
             '        existing["stop_verdict"] = "x"\n'
             "        return old\n"
             "    locked_rmw(mp, merge)\n"),
+        # Round-3 review, executed probe: the writing site defined FIRST,
+        # a benign SAME-NAMED merge defined after — name→def resolution
+        # picked the last one and silently missed the real bypass.
+        "same-named merge fns, benign last": (
+            "from file_lock import locked_rmw\n"
+            "def site_a(rd):\n"
+            "    def _merge(old):\n"
+            '        existing = {}\n'
+            '        existing["stop_verdict"] = "x"\n'
+            "        return old\n"
+            '    locked_rmw(rd / "metadata.json", _merge)\n'
+            "def site_b(rd):\n"
+            "    def _merge(old):\n"
+            "        return old\n"
+            '    locked_rmw(rd / "metadata.json", _merge)\n'),
     }
     for label, src in shapes.items():
         hits = _verdict_bypass_hits(ast.parse(src), "fixture.py")

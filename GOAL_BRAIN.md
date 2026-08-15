@@ -7903,3 +7903,26 @@ under the same two-measurement standard).
   prove where possible)"** — live-fire/eval evidence over reviewed-but-
   never-run. Fallback if blocked: run 4+ stale/never-run tests and learn.
   At least 3 significant pieces this stretch; subagents as desired.
+- **2026-08-15 (PM, M1 lane — complement stretch, 3 pieces landed).**
+  (1) **Review-miss taxonomy SHIPPED** (a4d8c58) —
+  `docs/history/2026-08-15-review-miss-taxonomy.md`: seven recall
+  patterns mined from ~50 rounds (3 parallel mining passes over
+  BACKLOG/BACKLOG_DONE, docs/history verdicts, ~60 round-fix commits;
+  every pattern ≥3 cited instances), distilled into a "Reviewer
+  watch-list" section in `docs/DEV_PATTERNS.md` for verbatim prompt
+  injection. **Box: the miss-patterns decree deliverable is DONE — don't
+  re-derive; extend the doc if new patterns surface.** Falsifier
+  registered: watch-list rounds should shift these classes into round 1.
+  (2) **Verdict-bypass census burned 12 → 1 sanctioned site** (46a4590 +
+  448553c): four new runs.py schema owners; scanner hardened
+  (var-flow, module-attr calls, dict()/update/**kwargs, path-var
+  locked_rmw scoped to tuple-key-writing merges) — the hardened scanner
+  immediately surfaced audit_repair's alignment patch (sanctioned,
+  justified at the site) and director.close's index_run_dir skip.
+  (3) **Truncation tranche 1** (02ccd7e): knowledge_web + loop_execute
+  swept to honest clip(), census ceiling 176 → 139. Watch-list's first
+  live rounds EARNED it: r2 found the director re-read TOCTOU +
+  swallowed guard raise; r3 found the scanner same-name collision; the
+  tranche round found compose-then-clip-once starving the judge field —
+  all probe-confirmed, all in fix layers, exactly the taxonomy's
+  patterns 1/5/7.

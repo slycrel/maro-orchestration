@@ -400,6 +400,30 @@ class TestEvidence:
         assert "410 Gone" in evidence
         assert "lp-x" in evidence
 
+    def test_evidence_keeps_judge_reasoning_beside_long_summary(
+            self, monkeypatch, tmp_path):
+        """Per-field clips guarantee BOTH fields survive (tranche-1
+        review, executed probe: a single composed clip let a
+        failure_summary at its writers' 300 cap starve the judge's
+        reasoning out of the row entirely — the causal-attribution
+        content the query exists to carry)."""
+        _setup(monkeypatch, tmp_path)
+        row = _mint_contested()
+        from captains_log import log_event
+        log_event(
+            "CONTRADICTION_ADJUDICATED",
+            subject="lp-y",
+            summary="Adjudicated candidate for loop lp-y: yes",
+            context={"loop_id": "lp-y", "verdict": "yes",
+                     "reasoning": "THE-CAUSAL-WHY " + "r" * 200,
+                     "contradicted_ids": [row.lesson_id],
+                     "failure_summary": "F" * 300},
+        )
+        from knowledge_web import _lesson_contest_evidence
+        evidence = "\n".join(_lesson_contest_evidence(row.lesson_id))
+        assert "judge: THE-CAUSAL-WHY" in evidence
+        assert "[truncated: first 120 of 300 characters]" in evidence
+
     def test_refight_prompt_carries_evidence(self, monkeypatch, tmp_path):
         _setup(monkeypatch, tmp_path)
         row = _mint_contested(sightings_since=3)
