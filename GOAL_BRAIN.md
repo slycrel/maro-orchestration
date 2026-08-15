@@ -7863,3 +7863,32 @@ under the same two-measurement standard).
   structured reopen payloads (store-before-consumer until the 14h
   revisit mechanic; evidence prose already names the specific cap) —
   MILESTONES records the re-point. Suite 8701/1 platform skip.
+- **2026-08-15 (later)** — **Treasure-map chunk 3 SHIPPED: §9.5 mid-meander
+  re-anchor + the dead pre-flight reviewer it exposed.** Census before
+  building found the milestone boundary didn't exist at runtime: the
+  pre-flight plan reviewer had been silently dead for months — the stale
+  openrouter key BUILDS an adapter fine, fails every call, and the except
+  path returned scope="unknown" (488/488 calibration entries with zero
+  flags, zero milestone candidates ever; 100% unknown since June).
+  Resurrected (d56470e): reviewer candidates try at CALL time in cost
+  order — hosted-free Groq/Gemini first (validation-ladder call class),
+  then paid — garbled output = failed reviewer, heuristic scope as
+  terminal fallback, never "unknown". First live review ever on this
+  box: scope=wide, milestone flagged, 2 assumptions, 2 unknowns. Then
+  the experiment itself (ff74f95): src/reanchor.py runs closure's
+  goal-level coherence question at each milestone boundary against the
+  interpretation committed in resolved_intent.md (goal-text fallback);
+  drift feeds the milestone expansion's ancestry_context; every verdict
+  → build/reanchor.jsonl + REANCHOR_CHECKED; map lens renders ⚓ anchors.
+  reanchor.enabled OFF-default (DEFAULTS.md row), ON this box. Reviews
+  to fixpoint r1–r3 (sonnet-medium): 6 findings (1 HIGH: scope-vocabulary
+  hole would reintroduce the exact unknown-corruption the fix killed) →
+  4 (1 HIGH: dry-run test vacuity — resolved as documented
+  defense-in-depth + disjunction pin; NOTE: the two r2 lenses
+  CONTRADICTED each other on the upstream gate's existence and the
+  disagreement is what surfaced the truth — Architect's shown-work was
+  wrong, first bad verification from the sonnet lane) → 0 clean with
+  traced shown work. Landed d56470e, ff74f95, 1e374f9, c494600. Suite
+  8734/1 skip. Next in arc: adjudicate reanchor.jsonl once real
+  milestone boundaries fire; later chunks per MILESTONES (§9.9,
+  14h revisit); §10+§9.7 still owed discussion.
