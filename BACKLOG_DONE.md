@@ -8,6 +8,64 @@ Last split: 2026-04-16 (session 34).
 
 ---
 
+## M1 complement stretch 2026-08-15 (PM): three chunks + review loop to fixpoint
+
+Jeremy: "at least 3 significant pieces, review after each large chunk
+(review in a loop until we actually fix the problems), find more
+patterns in what we are missing in the reviews, don't guess — prove."
+All landed; every review round ran sonnet-medium ×1-3 lenses WITH the
+new watch-list injected.
+
+1. **Review-miss taxonomy** (a4d8c58) — see the GOAL_BRAIN journal +
+   `docs/history/2026-08-15-review-miss-taxonomy.md`; watch-list in
+   DEV_PATTERNS.md. Its falsifier got same-day evidence: all six
+   findings across the day's rounds map to taxonomy patterns 1/2/5/7,
+   each probe-confirmed, each in a fix layer or a sibling.
+2. **Verdict-bypass burn-down** (46a4590 → 448553c → ff07e12 →
+   e58390b): census 12 → 1 sanctioned site (audit_repair's alignment
+   patch, justified at the site); four new runs.py owners
+   (stop-tuple replace/clear + pause preserve + atomic refine-note +
+   in-lock evidence_out; unjudged-source; contested re-stamp; verdict
+   extra rider with warn-and-strip guard); director.close's bare
+   locked_rmw (which also skipped index_run_dir) routed; scanner
+   var-flow + module-attr + dict()/update/**kwargs + path-var
+   locked_rmw scoped to tuple-key-writing merge bodies (same-name defs
+   unioned), all with must-detect fixtures + negative controls.
+3. **Truncation tranche 1** (02ccd7e + e58390b): knowledge_web (22) +
+   loop_execute (15) + knowledge_lens's starvation pair swept to
+   honest clip(); ceiling 176 → 135. The compose-then-clip-once
+   correction mid-tranche: per-field clips with NO outer cut where a
+   composed cut can starve the second field (both evidence-row sites,
+   pinned).
+
+**Review loop record (fixpoint REACHED):** r2 3 findings (1H: director
+re-read TOCTOU; swallowed guard raise; scanner evasions) → r3 1H
+(scanner same-name collision) + tranche round 1H (judge-field
+starvation) → r4 fix layer CLEAN, 1H in adjacent frozen debt (the
+knowledge_lens verbatim sibling, fixed) → **r5 clean, nothing above
+low** — exit condition met in the fix layer for two consecutive
+rounds. 0 hallucinated findings across all rounds; every accepted
+finding probe-confirmed by the reviewer before filing.
+
+**Stale-test archaeology (Jeremy's eval fallback, run as bonus):**
+(a) tests/test_container_e2e.py vs REAL docker: 20/20 (suite grew 4 →
+20 since the 2026-07-13 burn-in; image current at 2.1.210-r3, built
+2 days ago) — Mac container lane healthy, no pin drift; (b)
+tests/integration/ IS collected by the main suite (not a stale corner;
+the 2026-04 "review looked only in tests/" worry is moot for the run
+path) and 50/50 green standalone; (c) scripts/smoke.sh: smoke=ok —
+note: the deprecated `maro tick` lane logs the exec command 3x in one
+note (dup accumulation; deprecated lane, filed not fixed); (d)
+scripts/test-cov.sh: 80.19% vs the 70% floor and the 2026-07-14
+78.04% baseline — coverage IMPROVED ~2 points in a month.
+
+Tranche-2 targets carried forward (BACKLOG audit entry): claim_probe's
+composed [:400] (the one other starvation-shape member, found by r5's
+shape-based AST sweep, already inventoried), knowledge_lens's 8
+single-field cuts, loop_blocked (12), and the r5-noted coverage gap
+(the refight-evidence test only exercises short strings).
+
+
 ## Whole-changeset review 2026-08-13 — the five accepted-not-fixed residuals, ALL FIXED 2026-08-15
 
 The "for fun" whole-changeset adversarial pass (35 commits, 3 codex
