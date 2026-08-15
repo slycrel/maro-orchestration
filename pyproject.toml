@@ -223,6 +223,7 @@ py-modules = [
     "persona_dispatch",
     "planner",
     "playbook",
+    "portability",
     "pre_flight",
     "prefixes",
     "prereq",

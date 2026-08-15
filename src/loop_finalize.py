@@ -815,6 +815,19 @@ def _finalize_loop(
     except Exception as _reflect_exc:
         log.warning("reflect_and_record failed — run %s produced no learning data: %s", loop_id, _reflect_exc)
 
+    # §14a slice 2: refresh the portability evidence cache (full recount of
+    # camera-frame citations × metadata verdicts → memory/portability_cache
+    # .json, ~0.2s measured live at 50 runs). Post-reflect so this run's
+    # frames are on disk; verdicts stamped later (closure lane, audit
+    # repairs) get picked up by the next run's refresh. Never raises.
+    if not dry_run:
+        try:
+            from portability import refresh_cache, weighting_enabled
+            if weighting_enabled():
+                refresh_cache()
+        except Exception as _port_exc:
+            log.debug("portability cache refresh skipped: %s", _port_exc)
+
     # Per-step learning (2026-07-27): a failure-shaped ending fails the
     # run-level learnability gate, but steps that individually verified
     # still carry method evidence — extract PROVISIONAL lessons from them

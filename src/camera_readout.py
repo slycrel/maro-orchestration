@@ -162,24 +162,15 @@ def _lesson_origins() -> Dict[str, Dict[str, str]]:
     return out
 
 
-def _beta_mean(successes: int, failures: int) -> float:
-    return (successes + 1) / (successes + failures + 2)
-
-
-_SOURCE_GOAL_EXCERPT = 120  # mint-time cap, knowledge_web record_tiered_lesson
-
-
-def _unattributable_source(src_goal: str) -> bool:
-    """True when source_goal is not real goal text: empty, or one of the
-    sentinel shapes three record_tiered_lesson callers pass (cli "manual",
-    evolver_store "evolver-{id}", prereq "prereq:{topic}") — r1 review.
-    Such citations can't be home/foreign-classified honestly; they get
-    their own counted bucket instead of silently polluting "foreign"
-    (live corpus today: 0 citations, pinned so it stays visible if that
-    changes)."""
-    return (not src_goal or src_goal == "manual"
-            or src_goal.startswith("evolver-")
-            or src_goal.startswith("prereq:"))
+# Shared with rank-time consumption (§14a slice 2): the census and the
+# recall weighting hook must classify identically or the measurement and
+# the behavior drift apart. Definitions live in portability.py; the
+# aliases keep this module's census self-contained to read.
+from portability import (  # noqa: E402
+    beta_mean as _beta_mean,
+    is_home as _is_home,
+    unattributable_source as _unattributable_source,
+)
 
 
 def portability_census(per_run: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -202,11 +193,6 @@ def portability_census(per_run: List[Dict[str, Any]]) -> Dict[str, Any]:
     runs at review time: 0.
     """
     origins = _lesson_origins()
-    try:
-        from loop_artifacts import resolve_project_slug
-    except Exception:
-        resolve_project_slug = None  # type: ignore[assignment]
-
     lessons: defaultdict = defaultdict(lambda: {
         "cites": 0, "runs": set(), "home": 0, "foreign": 0,
         "foreign_s": 0, "foreign_f": 0, "unjudged": 0,
@@ -237,11 +223,7 @@ def portability_census(per_run: List[Dict[str, Any]]) -> Dict[str, Any]:
                 if _unattributable_source(src_goal):
                     rec["unattributable"] += 1
                     continue
-                home = (
-                    src_goal == goal[:_SOURCE_GOAL_EXCERPT]
-                    or (resolve_project_slug is not None and project
-                        and resolve_project_slug(src_goal) == project))
-                if home:
+                if _is_home(src_goal, goal, project):
                     rec["home"] += 1
                     continue
                 rec["foreign"] += 1

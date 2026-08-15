@@ -654,19 +654,30 @@ def recall(
         rules_cited: List[str] = []
         _applied_pairs: List[tuple] = []  # (lesson_id, tier) — rendered only
         _cam_candidates: Dict[str, list] = {}  # source -> [(lesson, score|None)]
+        _port_adj: List[dict] = []  # §14a portability re-weights, for the frame
         _cam_degraded = ""  # set when ranked selection fell back to legacy
         try:
             from memory import load_lessons, _MAX_LESSON_INJECT_CHARS
             from knowledge_web import query_lessons_scored
             from age_stamp import age_stamps_enabled, age_suffix
+            from portability import apply_portability
             # Chunk A camera frames: fetch a WIDER scored window (10) than
             # the selection window (3) so the frame records the road not
-            # taken. Selection semantics below are byte-identical to the
-            # pre-chunk-A first-3 windows — instrumentation, not behavior.
+            # taken. _cam_candidates keeps RAW ranker scores (frame data
+            # contract F4); §14a slice 2 selects over portability-adjusted
+            # scores — foreign-context lessons with >=3 verdicted foreign
+            # citations are re-weighted by 2*beta_mean (earned globality,
+            # decision e2b83703). No cache / no qualifying evidence →
+            # apply_portability is an identity and selection stays
+            # byte-identical to the pre-slice-2 first-3 windows. The
+            # adjustments ride the frame extra so the readout can see both
+            # rankings.
             _scored_agenda = query_lessons_scored(
                 goal, n=10, task_type="agenda")
             _cam_candidates["agenda"] = _scored_agenda
-            _lessons = [_l for _l, _ in _scored_agenda[:3]]
+            _sel_agenda, _port_adj = apply_portability(
+                _scored_agenda, goal, project)
+            _lessons = [_l for _l, _ in _sel_agenda[:3]]
             if len(_lessons) < 3:
                 # Untyped/other-type tiered writers (evolver, verify-learn,
                 # prereq) TOP UP — an existing agenda match must not mask
@@ -676,7 +687,13 @@ def recall(
                 _have_ids = {getattr(_l, "lesson_id", "") for _l in _lessons}
                 _scored_untyped = query_lessons_scored(goal, n=10)
                 _cam_candidates["untyped"] = _scored_untyped
-                for _t, _ in _scored_untyped[:3]:
+                _sel_untyped, _adj_untyped = apply_portability(
+                    _scored_untyped, goal, project)
+                _port_adj = _port_adj + [
+                    a for a in _adj_untyped
+                    if a["lesson_id"] not in {p["lesson_id"]
+                                              for p in _port_adj}]
+                for _t, _ in _sel_untyped[:3]:
                     if len(_lessons) >= 3:
                         break
                     if _t.lesson_id in _have_ids:
@@ -918,6 +935,11 @@ def recall(
                 "selection_window": 3,
                 "fetch_window": 10,
             }
+            if _port_adj:
+                # §14a slice 2: candidates above keep raw ranker scores;
+                # this records which of them selection actually re-weighted
+                # (earned foreign-evidence globality) and by how much.
+                _cam_extra["portability_adjusted"] = _port_adj
             if _cam_degraded:
                 # Ranked selection died mid-flight; candidates show what it
                 # saw before dying, chosen is empty because the legacy path
