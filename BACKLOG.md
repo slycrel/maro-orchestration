@@ -2211,7 +2211,27 @@ capture**, which is what makes the rung amortize instead of evaporate.
   model is ever retrained into discriminating range, goal-insensitive
   injection goes live; worth a tripwire.
 
+- [ ] **Closure claimed-but-unwired check (chunk 3 of the sanctioned
+  2026-08-16 sequence; chunks 1-2 SHIPPED).** Closure verification gains
+  the taxonomy's pattern-5 probe: for each guarantee the deliverable
+  STATES, find the executing evidence — receipts/provenance already do
+  this for files and commands; this extends it to stated behaviors.
+  Biggest build of the three; needs a fresh session. Prior art: author
+  claims-protocol in HOUSE_STYLE steps 1/3/6, pre-flight class_gaps
+  probe (eee98f1 + 9fd70b7, per-kind calibration counts), DEV_PATTERNS
+  probe-first fact ledger (box lane, EXPERIMENTAL). Evidence-gate like
+  star v8: keep only if the probe FIRES on real runs.
+
 - [ ] **Arbitrary-truncation audit** (opened 2026-08-03; **Jeremy:** *"this
+  **Burn-down status 2026-08-15/16:** slice census ceiling 176 → 135
+  (tranche 1: knowledge_web 22 + loop_execute 15 + knowledge_lens
+  starvation pair; per-field-clips rule for composed evidence rows);
+  verdict-bypass census 12 → 1 sanctioned site (audit_repair alignment
+  patch). Tranche-2 targets: claim_probe's composed [:400] (the one
+  other starvation-shape member, r5 shape-sweep), knowledge_lens's 8
+  single-field cuts, loop_blocked (12), inspector (8), director (9);
+  also the r5-noted coverage gap (refight-evidence test only exercises
+  short strings).
   was one of the first truncations early on and I've been uncomfortable
   making those trades for 'keeping the context small' by cutting so much…
   there are still way too many arbitrary truncations for my liking"*).
