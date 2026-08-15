@@ -206,6 +206,25 @@ def strip_recon_tag(step: str) -> str:
     return _RECON_RE.sub("", step or "").strip()
 
 
+def after_deps(step: str) -> Optional[set]:
+    """Public [after:N,M] reader for one step string.
+
+    Returns the set of 1-based dependency indices, or None when the step
+    carries no tag. Single grammar source for external consumers (map_lens
+    et al.) — parse_dependencies() remains the plan-level API; this is the
+    per-step half so callers never reach for the private regex.
+    """
+    m = _AFTER_RE.search(step or "")
+    if not m:
+        return None
+    return {int(x) for x in m.group(1).split(",")}
+
+
+def strip_after_tag(step: str) -> str:
+    """Remove the [after:N,M] tag from a step string (display use)."""
+    return _AFTER_RE.sub("", step or "").rstrip()
+
+
 RECON_FLAVOR_RULES = textwrap.dedent("""\
     STEP FLAVOR — COMMIT vs RECON:
     Most steps are commit steps: they buy deliverable progress. Some steps

@@ -280,19 +280,46 @@ class TestCharterPins:
             and isinstance(node.func, ast.Attribute)
             and node.func.attr in banned
         ]
-        # open() in write mode
+        # open() in write mode — BOTH the builtin (`open(p, "w")`) and the
+        # method form (`p.open("w")`). Round-1 review (Skeptic + Architect,
+        # independently): the original builtin-only check let a
+        # `path.open("w")`-based cache sail through — the literal threat
+        # this pin exists for.
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            if isinstance(node.func, ast.Name) and node.func.id == "open":
+                mode_args = list(node.args[1:2])   # open(path, mode)
+            elif (isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "open"):
+                mode_args = list(node.args[0:1])   # path.open(mode)
+            else:
+                continue
+            mode_args += [kw.value for kw in node.keywords
+                          if kw.arg == "mode"]
+            for arg in mode_args:
+                if (isinstance(arg, ast.Constant)
+                        and isinstance(arg.value, str)
+                        and any(c in arg.value for c in "wax+")):
+                    offenders.append("open-write")
+        assert offenders == []
+
+    def test_read_only_pin_catches_method_open(self, tmp_path):
+        """The pin's own teeth, demonstrated: a Path.open('w') call in a
+        module body must register as an offender. Guards the guard."""
+        snippet = 'from pathlib import Path\n(Path("x") / "y").open("w")\n'
+        tree = ast.parse(snippet)
+        caught = False
         for node in ast.walk(tree):
             if (isinstance(node, ast.Call)
-                    and isinstance(node.func, ast.Name)
-                    and node.func.id == "open"):
-                for arg in list(node.args[1:2]) + [
-                        kw.value for kw in node.keywords
-                        if kw.arg == "mode"]:
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "open"):
+                for arg in list(node.args[:2]):
                     if (isinstance(arg, ast.Constant)
                             and isinstance(arg.value, str)
                             and any(c in arg.value for c in "wax+")):
-                        offenders.append("open-write")
-        assert offenders == []
+                        caught = True
+        assert caught
 
     def test_lens_does_not_import_learning_or_loop_modules(self):
         """The lens reads artifacts, never live machinery: importing loop/
@@ -342,3 +369,97 @@ class TestCLI:
         rc = map_lens.main(["does-not-exist"])
         assert rc == 2
         assert "no run found" in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------------------
+# Review round-1 pins (2026-08-15, sonnet 3-lens): each fix keeps its test.
+# ---------------------------------------------------------------------------
+
+class TestReviewRound1Pins:
+    def test_after_edges_survive_non_dict_step_rows(self, tmp_path):
+        """Skeptic HIGH: filtered texts vs unfiltered enumerate desynced
+        [after:N] indices past any malformed row. Pin: a None row between
+        steps must not shift dependency attribution."""
+        run_dir = _write_run(tmp_path, steps=[("Step one", "done")])
+        stem = "aaaa1111"
+        log = {
+            "loop_id": stem,
+            "steps": [
+                {"index": 1, "text": "Gather sources", "status": "done"},
+                None,
+                {"index": 3, "text": "Synthesize report [after:1]",
+                 "status": "done"},
+            ],
+        }
+        (run_dir / "build" / f"loop-{stem}-log.json").write_text(
+            json.dumps(log), encoding="utf-8")
+        m = build_map(run_dir)
+        after = [(e.src, e.dst) for e in m.edges if e.kind == "after"]
+        assert (f"{stem}:1", f"{stem}:3") in after
+        assert any("step 2 row is not an object" in n for n in m.notes)
+
+    def test_non_dict_metadata_degrades_with_note(self, tmp_path):
+        run_dir = tmp_path / "weird-run"
+        (run_dir / "build").mkdir(parents=True)
+        (run_dir / "metadata.json").write_text('["not", "a", "dict"]',
+                                               encoding="utf-8")
+        m = build_map(run_dir)  # must not raise
+        assert any("not a JSON object" in n for n in m.notes)
+        assert m.handle_id  # dir-derived fallback engaged
+        assert any("derived from directory name" in n for n in m.notes)
+
+    def test_non_dict_loop_log_noted(self, tmp_path):
+        run_dir = _write_run(tmp_path, steps=None)
+        (run_dir / "build" / "loop-cccc3333-log.json").write_text(
+            "[1, 2, 3]", encoding="utf-8")
+        m = build_map(run_dir)
+        assert any("loop log cccc3333 is not a JSON object" in n
+                   for n in m.notes)
+
+    def test_non_list_steps_field_noted(self, tmp_path):
+        run_dir = _write_run(tmp_path, steps=None)
+        (run_dir / "build" / "loop-dddd4444-log.json").write_text(
+            json.dumps({"loop_id": "dddd4444", "steps": "oops"}),
+            encoding="utf-8")
+        m = build_map(run_dir)
+        assert any("steps is not a list" in n for n in m.notes)
+
+    def test_non_dict_jsonl_row_counted_as_malformed(self, tmp_path):
+        run_dir = _write_run(tmp_path, steps=_STEPS)
+        (run_dir / "build" / "closure_verdicts.jsonl").write_text(
+            '{"verdict": "ok", "fingerprint": "x"}\n[1,2]\n',
+            encoding="utf-8")
+        m = build_map(run_dir)
+        assert len(m.closure) == 1
+        assert any("malformed" in n for n in m.notes)
+
+    def test_guessed_loop_order_noted(self, tmp_path):
+        """Both lenses: unmatched log stems sorted lexically LOOKED causal.
+        Two logs with no loops[] metadata -> order-guess notes."""
+        run_dir = _write_run(tmp_path, meta={"loops": []},
+                             steps=[("Only step", "done")])
+        log2 = {"loop_id": "zzzz9999", "steps": [
+            {"index": 1, "text": "Later loop step", "status": "done"}]}
+        (run_dir / "build" / "loop-zzzz9999-log.json").write_text(
+            json.dumps(log2), encoding="utf-8")
+        m = build_map(run_dir)
+        assert any("loop order guessed" in n for n in m.notes)
+
+    def test_single_log_never_notes_order_guess(self, tmp_path):
+        """One log = no ordering question; the note would be noise."""
+        m = build_map(_write_run(tmp_path, meta={"loops": []},
+                                 steps=[("Only step", "done")]))
+        assert not any("loop order guessed" in n for n in m.notes)
+
+    def test_public_after_deps_grammar(self):
+        """The private-regex coupling is gone: planner exposes the per-step
+        reader and map_lens imports only public names."""
+        from planner import after_deps, strip_after_tag
+        assert after_deps("Synthesize [after:2,3]") == {2, 3}
+        assert after_deps("No tag here") is None
+        assert strip_after_tag("Synthesize [after:2,3]") == "Synthesize"
+        import ast as _ast
+        tree = _ast.parse((SRC / "map_lens.py").read_text(encoding="utf-8"))
+        for node in _ast.walk(tree):
+            if isinstance(node, _ast.ImportFrom) and node.module == "planner":
+                assert not any(a.name.startswith("_") for a in node.names)

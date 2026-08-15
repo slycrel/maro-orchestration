@@ -39,17 +39,14 @@ from __future__ import annotations
 
 import argparse
 import json
-import logging
 import re
 import sys
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from planner import step_flavor, strip_recon_tag, _AFTER_RE
+from planner import after_deps, step_flavor, strip_after_tag, strip_recon_tag
 from stop_verdicts import reopen_condition
-
-log = logging.getLogger("maro.map_lens")
 
 # Fog states (§2a). Values are the serialized vocabulary — renderers and
 # the json format both speak these strings.
@@ -141,6 +138,10 @@ def _read_jsonl(path: Path, notes: List[str], what: str) -> List[dict]:
                 continue
             if isinstance(row, dict):
                 rows.append(row)
+            else:
+                # Valid JSON, wrong shape — count it with the malformed
+                # lines so the partial note stays honest (round-1 review).
+                bad += 1
     except Exception as exc:
         notes.append(f"unreadable: {what} ({path.name}: {exc})")
         return rows
@@ -156,7 +157,7 @@ def _clip(text: str, limit: int = _LABEL_CLIP) -> str:
 
 def _step_label(text: str) -> str:
     """Display label: recon + after tags stripped, whitespace collapsed."""
-    return _clip(_AFTER_RE.sub("", strip_recon_tag(text)).rstrip())
+    return _clip(strip_after_tag(strip_recon_tag(text)))
 
 
 # ---------------------------------------------------------------------------
@@ -174,7 +175,17 @@ def build_map(run_dir: Path) -> RunMap:
     """
     run_dir = Path(run_dir)
     notes: List[str] = []
-    meta = _read_json(run_dir / "metadata.json", notes, "run metadata") or {}
+    meta = _read_json(run_dir / "metadata.json", notes, "run metadata")
+    if meta is not None and not isinstance(meta, dict):
+        # Valid JSON that isn't an object (round-1 review, Skeptic): `or {}`
+        # only catches falsy parses, so a stray list/string here crashed the
+        # whole render instead of degrading — the exact anti-contract.
+        notes.append("corrupt: run metadata is not a JSON object")
+        meta = None
+    if meta is None:
+        meta = {}
+    if not meta.get("handle_id"):
+        notes.append("handle_id derived from directory name (unrecorded)")
 
     m = RunMap(
         run_dir=str(run_dir),
@@ -231,26 +242,49 @@ def build_map(run_dir: Path) -> RunMap:
         for pos, lid in enumerate(known_loop_order):
             if lid.startswith(stem) or stem.startswith(lid[:8]):
                 return (pos, stem)
+        # Unmatched stems sort last, alphabetically — a GUESS, and the map
+        # must say so (round-1 review, both lenses): lineage edges built
+        # from guessed order look causal while being lexical.
+        if len(log_paths) > 1:
+            notes.append(f"loop order guessed for log {stem} "
+                         "(no matching loops[] entry in metadata)")
         return (len(known_loop_order), stem)
 
     prev_loop_last: Optional[str] = None
     for log_path in sorted(log_paths, key=_log_sort_key):
         loop_stem = log_path.name[len("loop-"):-len("-log.json")]
         data = _read_json(log_path, notes, f"loop log {loop_stem}")
-        if not isinstance(data, dict):
+        if data is None:
             continue
-        steps = data.get("steps") if isinstance(data.get("steps"), list) else []
-        texts = [str(s.get("text") or "") for s in steps if isinstance(s, dict)]
-        # Grammar single-source: explicit deps from planner's own parser.
+        if not isinstance(data, dict):
+            notes.append(f"corrupt: loop log {loop_stem} is not a JSON object")
+            continue
+        raw_steps = data.get("steps")
+        if raw_steps is None:
+            steps: List[Any] = []
+        elif isinstance(raw_steps, list):
+            steps = raw_steps
+        else:
+            notes.append(f"corrupt: loop log {loop_stem} steps is not a list")
+            steps = []
+        # Index space MUST stay aligned with `steps` (round-1 review,
+        # Skeptic HIGH): filtering non-dict rows here while the node loop
+        # enumerates unfiltered desynced every [after:N] edge past the
+        # first malformed row. Placeholder-"" keeps positions honest.
+        texts = [str(s.get("text") or "") if isinstance(s, dict) else ""
+                 for s in steps]
+        # Grammar single-source: planner's public per-step reader.
         explicit = {
-            i: {int(x) for x in mo.group(1).split(",")}
+            i: deps
             for i, t in enumerate(texts, 1)
-            if (mo := _AFTER_RE.search(t))
+            if (deps := after_deps(t)) is not None
         }
 
         node_ids: Dict[int, str] = {}
         for i, s in enumerate(steps, 1):
             if not isinstance(s, dict):
+                notes.append(f"corrupt: loop {loop_stem} step {i} row "
+                             "is not an object — omitted from map")
                 continue
             text = str(s.get("text") or "")
             status = str(s.get("status") or "")
