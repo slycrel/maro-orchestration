@@ -111,6 +111,31 @@ class TestScan:
         assert result.candidates == []
         assert any(d["run_name"] == "fff-no-ts" for d in result.standing)
 
+    def test_verdict_taxonomy_fully_partitioned(self):
+        """Every goal verdict is deliberately classed matchable or
+        standing-only — a new verdict added to stop_verdicts without a
+        revisit decision trips this (r1, minimalist: the standing set
+        must earn its keep as a coverage pin, not sit inert)."""
+        from revisit import EVENT_MATCHABLE_VERDICTS, STANDING_ONLY_VERDICTS
+        from stop_verdicts import GOAL_VERDICTS
+        assert EVENT_MATCHABLE_VERDICTS | STANDING_ONLY_VERDICTS == \
+            GOAL_VERDICTS
+        assert not (EVENT_MATCHABLE_VERDICTS & STANDING_ONLY_VERDICTS)
+
+    def test_mixed_naive_and_aware_timestamps_never_zero_the_scan(
+            self, tmp_path, monkeypatch):
+        """A tz-naive ended_at beside aware event stamps used to raise
+        TypeError out of scan(), silently zeroing the whole sweep (r1,
+        both lenses' HIGH, probe-confirmed). Naive pins to UTC."""
+        ws = _workspace(tmp_path, monkeypatch)
+        _write_run(ws, "aaa-naive", verdict="thesis-refuted",
+                   ended_at="2026-08-01T00:00:00")  # no tz
+        _write_run(ws, "bbb-aware", verdict="thesis-refuted", ended_at=_T0)
+        _write_events(ws, [(_T1, "SKILL_PROMOTED", "skill")])
+        result = scan()
+        assert {c.run_name for c in result.candidates} == \
+            {"aaa-naive", "bbb-aware"}
+
     def test_payload_rides_the_candidate(self, tmp_path, monkeypatch):
         ws = _workspace(tmp_path, monkeypatch)
         _write_run(ws, "ggg-close", verdict="reachable-but-not-worth-it",
@@ -172,6 +197,41 @@ class TestSweep:
             out = sweep()
         assert out["new"] == 0
 
+    def test_payload_reaches_event_context_and_state_hits_disk(
+            self, tmp_path, monkeypatch):
+        """The sweep path, not just the scan dataclass: the emitted
+        event's context carries the reopen payload, and dedup state is
+        really on disk (r1, architect)."""
+        ws = _workspace(tmp_path, monkeypatch)
+        _write_run(ws, "ggg-close", verdict="reachable-but-not-worth-it",
+                   ended_at=_T0,
+                   payload={"kind": "escalation-close", "depth": 2,
+                            "confidence": 7})
+        _write_events(ws, [(_T1, "SKILL_PROMOTED", "skill")])
+        captured = {}
+        with patch("captains_log.log_event",
+                   side_effect=lambda *a, **k: captured.update(k) or {}):
+            out = sweep()
+        assert out["new"] == 1
+        assert captured["context"]["reopen_payload"]["confidence"] == 7
+        state = json.loads(
+            (ws / "memory" / "revisit_state.json").read_text())
+        assert state["ggg-close"] == _T1
+
+    def test_contended_mutex_skips_cycle(self, tmp_path, monkeypatch):
+        """A held sweep mutex means another sweep is mid-flight — this
+        one must skip, not queue or double-emit (r1, two lenses)."""
+        ws = _workspace(tmp_path, monkeypatch)
+        _write_run(ws, "aaa-run", verdict="thesis-refuted", ended_at=_T0)
+        _write_events(ws, [(_T1, "SKILL_PROMOTED", "skill")])
+        from file_lock import FileLockTimeout
+        with patch("file_lock.locked_write",
+                   side_effect=FileLockTimeout("held")), \
+             patch("captains_log.log_event", return_value={}) as mock_ev:
+            out = sweep()
+        assert out == {"total": 0, "matched": 0, "new": 0}
+        assert not mock_ev.called
+
 
 class TestReopenPayloadStamp:
     """§13b: the schema owner stores/clears stop_reopen_payload with the
@@ -219,3 +279,17 @@ class TestReopenPayloadStamp:
         self._stamp(rd, stop_verdict="out-of-budget", stop_evidence="e",
                     reopen_payload="not a dict")
         assert "stop_reopen_payload" not in self._meta(rd)
+
+    def test_same_verdict_restamp_without_payload_pops_it(self, rd):
+        """Pins the doctrine (r1, skeptic raised it as a concern): even a
+        SAME-verdict re-stamp that doesn't resupply the payload pops it —
+        the payload describes the stamp that wrote it, and letting a
+        predecessor's numbers annotate a fresher ending is exactly the
+        stale-tuple drift the replace-whole doctrine exists to prevent."""
+        self._stamp(rd, stop_verdict="out-of-budget", stop_evidence="e1",
+                    reopen_payload={"kind": "budget-daily",
+                                    "daily_cap_usd": 25.0})
+        self._stamp(rd, stop_verdict="out-of-budget", stop_evidence="e2")
+        meta = self._meta(rd)
+        assert meta["stop_evidence"] == "e2"
+        assert "stop_reopen_payload" not in meta

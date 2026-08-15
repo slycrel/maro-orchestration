@@ -796,9 +796,12 @@ def stamp_run_stop_verdict(
       the exact drift class the owners exist to end).
     - ``reopen_payload`` (§13b): evidence-specific reopen data — which
       budget, which cost estimate — stored as ``stop_reopen_payload``
-      beside the tuple; consumers are the map lens and the revisit
-      scanner. Follows the tuple's replace-whole doctrine (see
-      ``_apply_stop_tuple``).
+      beside the tuple; consumer today is the revisit scanner
+      (candidate context + CLI). Follows the tuple's replace-whole
+      doctrine (see ``_apply_stop_tuple``): a re-stamp that doesn't
+      resupply the payload pops it, even for the SAME verdict — the
+      payload always describes the stamp that wrote it, never a
+      predecessor's numbers standing beside fresher evidence.
     """
     try:
         rd = run_dir if run_dir is not None else current_run_dir()

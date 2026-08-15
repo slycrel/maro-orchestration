@@ -45,6 +45,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from datetime import timezone
+
 from stop_verdicts import (
     NOT_WORTH_IT,
     OUT_OF_BUDGET,
@@ -56,14 +58,15 @@ from stop_verdicts import (
 log = logging.getLogger("maro.revisit")
 
 # Capability-acquisition event vocabulary (captains_log.py): the "new
-# tools" of §14h. Ordered by how much new capability each typically
-# represents — used only for display, matching treats them equally.
-ACQUISITION_EVENT_TYPES = (
+# tools" of §14h. Matching treats them equally; membership is the only
+# thing read (r1 review: an earlier comment claimed a display ordering
+# nothing implemented).
+ACQUISITION_EVENT_TYPES = frozenset((
     "SKILL_PROMOTED",
     "CANON_PROMOTED",
     "RULE_GRADUATED",
     "KNOWLEDGE_NODE_PROMOTED",
-)
+))
 
 # Verdicts whose type-derived reopen condition an acquisition can
 # plausibly satisfy (module docstring: the honest-matching rules).
@@ -76,7 +79,11 @@ STANDING_ONLY_VERDICTS = frozenset((OUT_OF_BUDGET, LOST_THE_PLOT))
 # runs, so nothing is lost).
 MAX_CANDIDATES_PER_SWEEP = 3
 
+# Signals shown per candidate (event summary and CLI alike).
+SIGNALS_SHOWN = 3
+
 _STATE_FILENAME = "revisit_state.json"
+_SWEEP_MUTEX_FILENAME = "revisit_sweep.lock"
 
 
 @dataclass
@@ -103,10 +110,19 @@ class RevisitScan:
 
 
 def _parse_ts(value: str) -> Optional[datetime]:
+    """ISO timestamp → AWARE datetime, or None.
+
+    Naive values are pinned to UTC (every runtime writer stamps UTC):
+    comparing naive against aware raises TypeError, and one such row
+    would have unwound past scan() and silently zeroed the whole
+    sweep's candidates (r1 review, both lenses' HIGH — probe-confirmed)."""
     try:
-        return datetime.fromisoformat(str(value))
+        dt = datetime.fromisoformat(str(value))
     except Exception:
         return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
 
 
 def _state_path() -> Path:
@@ -189,15 +205,17 @@ def _dead_ends() -> tuple:
 
 
 def _acquisitions_since(since_iso: str) -> List[dict]:
-    """Acquisition events on/after the given ISO date (active log +
-    archives via captains_log.query_log)."""
+    """Acquisition events on/after the given ISO date, one pass over the
+    log corpus (r1 review: the first cut called query_log once per event
+    type — four full active+archive scans per sweep; query_log's
+    event_type filter is a single prefix, so membership is filtered
+    here instead)."""
     out: List[dict] = []
     since_date = (since_iso or "")[:10] or None
     try:
         from captains_log import query_log
-        for etype in ACQUISITION_EVENT_TYPES:
-            for row in query_log("", event_type=etype, since=since_date,
-                                 limit=0):
+        for row in query_log("", since=since_date, limit=0):
+            if str(row.get("event_type") or "") in ACQUISITION_EVENT_TYPES:
                 out.append({
                     "ts": str(row.get("timestamp") or ""),
                     "event_type": str(row.get("event_type") or ""),
@@ -221,8 +239,12 @@ def scan() -> RevisitScan:
                        if d["verdict"] not in EVENT_MATCHABLE_VERDICTS]
     if not matchable:
         return result
-    oldest_end = min((d["ended_at"] for d in matchable if d["ended_at"]),
-                     default="")
+    # Window heuristic only (per-run filtering below is the authority):
+    # restrict to PARSEABLE stop times so one garbage string can't
+    # poison the min.
+    _ends = [d["ended_at"] for d in matchable
+             if _parse_ts(d["ended_at"]) is not None]
+    oldest_end = min(_ends, default="")
     acquisitions = _acquisitions_since(oldest_end)
     if not acquisitions:
         # No acquisitions ≠ no dead ends: the matchable runs are still
@@ -260,7 +282,7 @@ def scan() -> RevisitScan:
 def _emit_candidate(c: RevisitCandidate) -> None:
     from captains_log import log_event, REVISIT_CANDIDATE
     from context_budget import clip
-    latest = c.signals[-3:]
+    latest = c.signals[-SIGNALS_SHOWN:]
     sig_text = "; ".join(
         f"{s['event_type']} '{clip(s['subject'], 40)}'" for s in latest)
     more = len(c.signals) - len(latest)
@@ -298,24 +320,38 @@ def sweep(verbose: bool = False) -> dict:
         from config import get as _cfg_get
         if not bool(_cfg_get("revisit.enabled", True)):
             return out
-        result = scan()
-        out["total"] = len(result.candidates) + len(result.standing)
-        out["matched"] = len(result.candidates)
-        state = _load_state()
-        fresh = [c for c in result.candidates
-                 if c.newest_signal_ts > (state.get(c.run_name) or "")]
-        surfaced = fresh[:MAX_CANDIDATES_PER_SWEEP]
-        for c in surfaced:
-            try:
-                _emit_candidate(c)
-                state[c.run_name] = c.newest_signal_ts
-                out["new"] += 1
-            except Exception as exc:
-                log.warning("revisit: candidate emit failed for %s: %s",
-                            c.run_name, exc)
-        if surfaced:
-            _save_state({c.run_name: state[c.run_name] for c in surfaced
-                         if c.run_name in state})
+        # One sweep at a time: load-state → emit → save-state is a
+        # read-decide-write sequence, and two overlapping sweeps would
+        # both see stale dedup state and double-fire the same candidate
+        # (r1 review, two lenses). Non-blocking: a held mutex means a
+        # sweep is already doing this exact work — skip, don't queue.
+        from file_lock import locked_write, FileLockTimeout
+        from config import memory_dir
+        mutex = memory_dir() / _SWEEP_MUTEX_FILENAME
+        try:
+            with locked_write(mutex, timeout_s=1.0):
+                result = scan()
+                out["total"] = len(result.candidates) + len(result.standing)
+                out["matched"] = len(result.candidates)
+                state = _load_state()
+                fresh = [c for c in result.candidates
+                         if c.newest_signal_ts > (state.get(c.run_name) or "")]
+                surfaced = fresh[:MAX_CANDIDATES_PER_SWEEP]
+                for c in surfaced:
+                    try:
+                        _emit_candidate(c)
+                        state[c.run_name] = c.newest_signal_ts
+                        out["new"] += 1
+                    except Exception as exc:
+                        log.warning("revisit: candidate emit failed for "
+                                    "%s: %s", c.run_name, exc)
+                if out["new"]:
+                    # _save_state's newest-ts-wins merge makes passing the
+                    # whole dict equivalent to any subset (r1, minimalist).
+                    _save_state(state)
+        except FileLockTimeout:
+            log.debug("revisit: another sweep in flight — skipping")
+            return out
         if verbose and out["new"]:
             print(f"[revisit] {out['new']} dead end(s) may have reopened "
                   f"({out['matched']} matched of {out['total']} standing)")
@@ -353,14 +389,20 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"\n▸ {c.run_name}  [{c.verdict}]  stopped {c.ended_at[:10]}")
         print(f"  goal: {c.goal[:100]}")
         print(f"  reopen when: {c.reopen_cond}")
-        for s in c.signals[-3:]:
+        if c.reopen_payload:
+            print(f"  reopen data: {json.dumps(c.reopen_payload)}")
+        for s in c.signals[-SIGNALS_SHOWN:]:
             print(f"  + {s['ts'][:19]}  {s['event_type']}  {s['subject'][:50]}")
-        if len(c.signals) > 3:
-            print(f"    (+{len(c.signals) - 3} earlier acquisition(s))")
+        if len(c.signals) > SIGNALS_SHOWN:
+            print(f"    (+{len(c.signals) - SIGNALS_SHOWN} earlier "
+                  "acquisition(s))")
     for d in result.standing:
         cond = reopen_condition(d["verdict"]) or "?"
-        print(f"\n○ {d['run_name']}  [{d['verdict']}]  standing — "
-              f"reopen when: {cond}")
+        line = (f"\n○ {d['run_name']}  [{d['verdict']}]  standing — "
+                f"reopen when: {cond}")
+        if d.get("reopen_payload"):
+            line += f"  data: {json.dumps(d['reopen_payload'])}"
+        print(line)
     return 0
 
 
