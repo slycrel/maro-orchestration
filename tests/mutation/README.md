@@ -101,6 +101,7 @@ failure the sweep exists to find.
 | `dispatch_envelope.json` | The typed dispatch boundary: `parse_dispatch_payload` shape/version/type screens, `_safe_name`, `store_attachments` dedup + provenance sidecar, `land_in_run_dir` idempotence, `operator_block` authority label, and the extraction-exclusion decree at the `handle_queue` intake | 19 + 1 equivalent | 2026-08-16, all accounted for (12/20 on first pass, 7 gaps closed) |
 | `defaults_census.json` | The DEFAULTS.md registry tripwire itself (`tests/test_defaults_doc.py`): forward census getter set + alias resolution + rglob + dotless leg + `config.py` exemption, reverse census table-cell parse + read-evidence shapes + per-file keying, and the living-frontmatter check | 15 | 2026-08-16, all accounted for (3/14 on first pass, seam + 16 fixtures added) |
 | `dev_status.json` | The project-state readout: CAPABILITIES row-mark parsing (the shape that must never re-admit prose), the backlog three-way census and stop-rule detection, trend degradation to unknown, staleness rendering, and the DEV_LOG managed-block splice | 11 | 2026-08-16, all accounted for (2 gaps closed — an evasion fixture and one badly-built mutation of my own) |
+| `retention_decree.json` | The 2026-07-10 retention decree's tripwire (`tests/test_no_silent_deletion.py`): the AST deletion scanner's API legs + function attribution + nested-package scan, the (module, function) allowlist key, the stale-entry census, and the `delete_checkpoint` no-auto-caller pin | 15 | 2026-08-16, all accounted for (4/13 on first pass, seam + 21 fixtures added) |
 
 Note on `path_rewrite.json`: the first sweep of it ran green at 30/30 and
 a six-lens review still found four real defects afterward, two of them
@@ -132,14 +133,21 @@ Actionable Stack: tests that claim to enforce a decree first (silent by
 construction), then data-integrity boundaries, then operator-facing
 output, then churn.
 
-Three tier-1 decree surfaces are now swept, and the spread is the point.
+Four tier-1 decree surfaces are now swept, and the spread is the point.
 The e2b83703 scope decree was guarded by two tests that could not fail.
 The dispatch envelope's extraction exclusion held under both mutations
 aimed at it (leak operator prose into the goal; drop the operator
 channel) — a surface that passes clean is the result, not a failed hunt.
-The DEFAULTS.md census scored 3/14, the worst yet. The sweep is not a
-formality that always finds something, and it is not a formality that
-never does.
+The DEFAULTS.md census scored 3/14 and the retention tripwire 4/13. The
+sweep is not a formality that always finds something, and it is not a
+formality that never does.
+
+**Three of the four were tripwires, and two of those could not fail.**
+That is the standing lesson of this arc so far: the code a decree
+protects tends to be fine, and the guard claiming to protect it tends
+not to be. Enforcement written as a test attracts less scrutiny than
+enforcement written as a feature, because a passing test looks like
+evidence.
 
 ## Sweeping a tripwire: mutate the guard, not the guarded
 

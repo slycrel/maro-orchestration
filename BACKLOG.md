@@ -138,8 +138,19 @@ Ordered open work that matters. Top of the list is next.
   reverse census → `[]`) with a green suite, because it had no seam for
   synthetic input and so was untestable by construction. Fixed with
   `(src_root, doc_text)` parameters defaulting to the live repo plus 16
-  must-detect fixtures. Remaining tier-1 candidates: the Δ-gate floors,
-  the data-retention guarantees in `memory_ledger`/`knowledge_web`.
+  must-detect fixtures. `retention_decree.json` — 15 mutations, CLOSED
+  2026-08-16 at 15/15 from **4/13**: the 2026-07-10 retention decree's
+  tripwire had the same disease, all three assertions gutted with a green
+  suite, and its four DETECTED verdicts all routed through the single
+  stale-entry assertion that `stale = []` removes. Fixed the same way
+  (seam + 21 fixtures), plus the latent glob→rglob gap. Remaining tier-1
+  candidate: the Δ-gate floors.
+
+  **Three of the four surfaces swept so far were tripwires, and two could
+  not fail.** The code a decree protects tends to be fine; the guard
+  claiming to protect it tends not to be. Enforcement written as a test
+  attracts less scrutiny than enforcement written as a feature, because a
+  passing test looks like evidence.
 
   **Method note for the rest of the sweep: when the surface IS a guard,
   mutate the guard.** The question stops being "do the tests catch a
@@ -160,6 +171,22 @@ Ordered open work that matters. Top of the list is next.
   scrubs spaces/`;`/newlines/`$(...)` out of a dispatcher-chosen filename,
   which nothing tested. Redundancy in the code is fine; redundancy that
   makes a test unable to distinguish its subject is not.
+
+- [ ] **Decide the retention allowlist's granularity — a second deletion
+  inside an already-allowed function ships silently.** Surfaced by the
+  2026-08-16 retention sweep and named in
+  `tests/test_no_silent_deletion.py`'s Limits rather than fixed
+  drive-by, because it changes the maintenance contract for every future
+  contributor. The allowlist is keyed `(module, function)`, so the 29
+  allowed functions are a blind spot: an `.unlink` of a temp file
+  escalating to an `rmtree` over a run dir inside `cleanup_step_artifacts`
+  or `prune_run` would not trip the wire. **Options:** (a) leave it,
+  accepting that the 29 are reviewed once and trusted after; (b) record
+  the multiset of call shapes per site, so `.unlink` → `rmtree` trips but
+  a line move does not; (c) key by call line, which is precise and churns
+  on every refactor. (b) looks like the honest-good-enough slice. Related
+  limit, no action proposed: a shell-out `rm` bypasses the AST scan
+  entirely — none in src/ today, verified 2026-08-16.
 
 - [ ] **Close `tests/mutation/provenance_gate.json` — the contamination
   gate's enforcement is largely unpinned.** First tier-1 sweep, run

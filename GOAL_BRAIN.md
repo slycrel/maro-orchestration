@@ -3282,3 +3282,31 @@ Dated end-of-chunk/session entries, append-only at the tail. Rotation policy (20
   shape with no fixture is a claim, not a guard.** Tier-1 scoreboard now
   reads 3 swept — one unguarded (scope decree), one genuinely enforced
   (dispatch envelope), one unable to fail (defaults census).
+- **2026-08-16 (box)** — **Fourth tier-1 mutation sweep: the retention
+  decree's tripwire, 4/13 → 15/15** (`tests/mutation/retention_decree.json`
+  over `tests/test_no_silent_deletion.py`). Same disease as the DEFAULTS
+  census one commit earlier — all three assertions (`violations`,
+  `stale`, `offenders`) replaceable by `[]` with a green suite, so the
+  guard on Jeremy's 2026-07-10 "never auto-delete run/user data" decree
+  was a standing claim. Sharper detail: the four mutations it DID catch
+  all fired through the single stale-entry assertion (deleting a scanner
+  leg orphans allowlist rows), and that assertion is itself one of the
+  three that can be gutted — **coverage routed through one incidental
+  line is a coincidence with a good track record, not coverage.** Fixed
+  with the same seam + 21 must-detect fixtures; also closed the latent
+  `glob`→`rglob` gap (a deletion moving into `src/maro_assets/` would
+  have gone unseen; none exists today). One fixture was wrong on the
+  first pass and the sweep caught it — the async case asserted only that
+  *something* was reported, so dropping `visit_AsyncFunctionDef`
+  survived: the body is still walked, the violation still raised, just
+  attributed to `<module>`. Misattribution is worse than a miss when the
+  allowlist is keyed by function name. **Two limits now stated in the
+  docstring instead of implied**: the `(module, function)` key means a
+  second deletion inside an already-allowed function ships silently (new
+  BACKLOG decision item, options (a)/(b)/(c) — leaning record-the-call-
+  shapes), and a shell-out `rm` bypasses the AST entirely (none in src/).
+  Suite 9189 → 9216. **Standing read on the arc: three of four surfaces
+  swept were tripwires and two could not fail. The code a decree protects
+  tends to be fine; the guard claiming to protect it tends not to be —
+  enforcement written as a test attracts less scrutiny than enforcement
+  written as a feature, because a passing test looks like evidence.**
