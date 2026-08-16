@@ -93,6 +93,19 @@ Ordered open work that matters. Top of the list is next.
   itself — which is the one property the census needs. If backfill
   ever happens it must carry a per-row labeller stamp and be bucketed
   separately.
+- [ ] **Per-step mints (`extract_step_lessons`) stamp nothing — accepted
+  v1 boundary, revisit only if the bucket stays empty.** Slice 3 covered
+  the two run-level mint paths (finalize + deferred); the per-step
+  extractor is a separate function with its own inline prompt and parser,
+  so it was left alone rather than changed unprobed. Sized before
+  accepting: 6/188 live rows and 14/516 archived, all `provisional` —
+  and provisional rows are barred from every injection surface until a
+  confirming re-record, which arrives through the run-level path and
+  fills the empty stamp (fill-if-empty). So the rows that can actually
+  be cited do get stamped, just later. If the census's stamped bucket
+  fills too slowly to read, extending the per-step prompt is the first
+  lever — it needs its own leak probe (the run-level prompt needed two
+  iterations to stop putting scope values in the type slot).
 
 ### Shadow lane — batch adjudication tooling (evidence-gated)
 
