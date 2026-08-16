@@ -90,9 +90,24 @@ events that already happened). Shared vocabulary, different verbs.
    pinned in tests/test_mint_grounding.py. Slice 1 sub-slice: the
    loop_finalize recovery-lesson writers now stamp too (loop_id was
    already in hand).
+   **Slice 2a (2026-08-16) — writer completion + the R1-4 laundering
+   fix:** the remaining lesson writers stamp (step-lessons, prereq
+   against the sub-loop's own run, thinkback — a lane the R1-3 census
+   missed); evolver prompt_tweak documented stampless by construction
+   (apply-time ≠ observe-time, advice-shaped text). KnowledgeNode
+   gains `grounding`: the bridge grounds each node's OWN text against
+   the minting outcome's events at create (never the lesson's stamps —
+   different prose, would misattribute), re-observation never
+   re-grounds (mint-time semantics), stampless rows keep the absent-key
+   shape, and the promotion judge renders unsupported claims with a
+   weigh-don't-auto-reject instruction — advisory, per the no-new-judge
+   decree. Pins: tests/test_mint_grounding_slice2.py.
 2. **Skill mint** — skills-lite + provisional mints: method claims in
    the skill body vs the minting run's tool events. Stamp travels in
    frontmatter (`grounding:` block) + companion Skill record.
+   Slice-2a census of the sites: `evolver_store` (×2),
+   `loop_finalize:1072`, `run_curation:948` (the LT-4 finding-2
+   auto-promotion lane), `skill_lifecycle` (×2), `skills.py:315`.
 3. **Republish gate** — artifact-reuse and warm-arm lanes: copying a
    provenance claim forward requires `supported` or re-derivation.
    The ONLY fail-closed point.

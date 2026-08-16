@@ -1144,18 +1144,26 @@ capture**, which is what makes the rung amortize instead of evaporate.
   event-log receipts (supported/unsupported/unprobed) on both stores +
   both extraction paths; injection surfaces mark unsupported claims,
   seed-reader skips them (design + falsifiers:
-  `docs/MINT_GROUNDING_DESIGN.md`; slices 2 skill-mint / 3
-  republish-gate still open, gate = the only fail-closed point;
-  R1-3 from the 2026-08-06 24h-diff review: slice 1 covers the two
-  reflect paths only — step-lesson extraction `memory.py:601`,
-  `loop_finalize.py` recovery lessons, `prereq.py:185`, and
-  `evolver_store.py:458` still mint unstamped; the loop_finalize
-  recovery writers have `loop_id` in hand so those stamps are cheap,
-  fold into slice 2. R1-4 rider for the slice-2/3 design: the
-  knowledge layer launders groundings — `outcome_to_knowledge` /
-  `knowledge_bridge.py` carry only `outcome:<id>` and KnowledgeNode
-  has no grounding field, so an unsupported lesson can propagate into
-  decay-free knowledge with the stamp stripped);
+  `docs/MINT_GROUNDING_DESIGN.md`). **Slice 2a SHIPPED 2026-08-16**
+  (tests/test_mint_grounding_slice2.py, 9/11 probes red-first): the
+  R1-3 writers now stamp — step-lessons (`memory.py`), prereq
+  acquisition (against the sub-loop's OWN run), and thinkback (a lane
+  R1-3's list itself missed, found by the slice-2a census); evolver
+  prompt_tweak pinned stampless BY CONSTRUCTION (apply-time ≠
+  observe-time, advice-shaped). R1-4 laundering FIXED: KnowledgeNode
+  carries grounding (node's own text grounded against the minting
+  outcome's events at CREATE; re-observation never re-grounds —
+  mint-time semantics; absent-key row discipline), and the promotion
+  judge now sees the stamps (unsupported claims rendered with a
+  weigh-don't-auto-reject instruction — ADVISORY, per the fail-open
+  decree; a judged-valid node still promotes, pinned). **Still open:
+  slice 2b skill-mint** (census 2026-08-16: `evolver_store` ×2,
+  `loop_finalize:1072`, `run_curation:948` auto-promotion,
+  `skill_lifecycle` ×2, `skills.py:315`; frontmatter `grounding:`
+  block per design §3.2) **and slice 3 republish gate** — the only
+  fail-closed point (`pack.py:881` import lane + warm-arm reuse;
+  needs its own design pass: the reuse happens worker-side, not at a
+  harness seam);
   (d) ~~verdict-prior
   recalibration for future batches~~ **DONE 2026-08-09** — re-anchored
   base rates in the "Prediction anchors for the next batch" block at

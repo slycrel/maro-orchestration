@@ -585,7 +585,7 @@ def extract_step_lessons(
         return 0
 
     _step_types = frozenset({"execution", "planning", "verification", "cost"})
-    recorded = 0
+    step_items: List[tuple] = []
     for item in safe_list(raw, element_type=(dict, str), max_items=3):
         if isinstance(item, dict):
             lesson_text = str(item.get("lesson", "")).strip()
@@ -594,8 +594,23 @@ def extract_step_lessons(
             lesson_text, lesson_type = str(item).strip(), "execution"
         if lesson_type not in _step_types:
             lesson_type = "execution"
-        if not lesson_text:
-            continue
+        if lesson_text:
+            step_items.append((lesson_text, lesson_type))
+
+    # Mint-time grounding (MINT_GROUNDING_DESIGN §3, slice-2 writer
+    # completion 2026-08-16): step-lessons were minting unstamped even
+    # though loop_id was already in hand (R1-3). Fail-open as ever.
+    _step_groundings: List[list] = []
+    if step_items and loop_id:
+        try:
+            from mint_grounding import ground_lessons_for_run
+            _step_groundings = ground_lessons_for_run(
+                [t for t, _ in step_items], loop_id)
+        except Exception:
+            _step_groundings = []
+
+    recorded = 0
+    for _s_idx, (lesson_text, lesson_type) in enumerate(step_items):
         try:
             tl = record_tiered_lesson(
                 lesson_text=lesson_text,
@@ -609,6 +624,8 @@ def extract_step_lessons(
                 lesson_type=lesson_type,
                 provisional=True,
                 evidence_sources=[f"loop:{loop_id}"] if loop_id else [],
+                grounding=(_step_groundings[_s_idx]
+                           if _s_idx < len(_step_groundings) else None),
                 # R1-5: step results are the extraction input — scaffolding
                 # planted there must reach the provenance classifier.
                 source_evidence=_step_evidence_block,

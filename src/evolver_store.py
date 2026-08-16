@@ -492,7 +492,13 @@ def _apply_suggestion_action(d: dict) -> bool:
                 save_skill(new_skill)
 
         elif category == "prompt_tweak":
-            # Record as a tiered lesson so it gets injected into future prompts
+            # Record as a tiered lesson so it gets injected into future prompts.
+            # Deliberately NO mint-grounding stamp (slice-2 census,
+            # 2026-08-16): apply-time is not observe-time — the suggestion
+            # was minted by an evolver scan long before this apply runs, so
+            # there is no minting-run event log to join against here; and
+            # suggestion text is imperative advice, which the claim-shape
+            # discipline never stamps anyway.
             if record_tiered_lesson is None or MemoryTier is None:
                 raise RuntimeError("tiered lesson writer unavailable")
             recorded_lesson = record_tiered_lesson(

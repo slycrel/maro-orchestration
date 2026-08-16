@@ -182,6 +182,19 @@ def _spawn_knowledge_sub_loop(
         # Record as a medium-tier lesson so it's available in future loops.
         try:
             from memory import record_tiered_lesson, MemoryTier
+            # Mint-time grounding (slice-2 writer completion 2026-08-16):
+            # the sub-loop that produced this summary has its own run dir —
+            # join the summary's method claims against ITS events, not the
+            # parent's. Fail-open on any failure.
+            _grounding = None
+            try:
+                from mint_grounding import ground_lessons_for_run
+                _sub_loop_id = getattr(sub_result, "loop_id", "")
+                if _sub_loop_id:
+                    _grounding = ground_lessons_for_run(
+                        [f"[{topic}] {summary}"], _sub_loop_id)[0]
+            except Exception:
+                _grounding = None
             record_tiered_lesson(
                 f"[{topic}] {summary}",
                 task_type="research",
@@ -189,6 +202,7 @@ def _spawn_knowledge_sub_loop(
                 source_goal=f"prereq:{topic[:40]}",
                 tier=MemoryTier.MEDIUM,
                 acquired_for=goal_id,
+                grounding=_grounding,
             )
             if verbose:
                 log.info("prereq: recorded acquired knowledge for topic %r", topic[:40])

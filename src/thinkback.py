@@ -472,9 +472,19 @@ def _save_thinkback_lessons(goal: str, lessons: List[str], run_id: str) -> None:
 
     task_type = "general"  # thinkback lessons are cross-cutting
 
-    for lesson_text in lessons:
-        if not lesson_text.strip():
-            continue
+    texts = [t for t in lessons if t.strip()]
+    # Mint-time grounding (slice-2 writer completion 2026-08-16): thinkback
+    # re-reads a finished run's transcript, so its lessons' method claims
+    # ground against that run's own events. Fail-open.
+    groundings: List[list] = []
+    if texts and run_id:
+        try:
+            from mint_grounding import ground_lessons_for_run
+            groundings = ground_lessons_for_run(texts, run_id)
+        except Exception:
+            groundings = []
+
+    for i, lesson_text in enumerate(texts):
         try:
             record_tiered_lesson(
                 lesson_text,
@@ -486,6 +496,7 @@ def _save_thinkback_lessons(goal: str, lessons: List[str], run_id: str) -> None:
                 provisional=True,
                 minted_by="thinkback",
                 evidence_sources=[f"thinkback:{run_id}"],
+                grounding=groundings[i] if i < len(groundings) else None,
             )
         except Exception as exc:
             log.warning("thinkback: could not save lesson: %s", exc)

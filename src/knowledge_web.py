@@ -3365,6 +3365,13 @@ class KnowledgeNode:
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     validated_at: Optional[str] = None   # Last validation timestamp
     author: str = ""                   # Who contributed this (handle, system, etc.)
+    # Mint-time grounding (R1-4 laundering fix, 2026-08-16): receipt stamps
+    # for the node's own method/provenance claims, joined against the
+    # minting outcome's run events at CREATE time (mint_grounding.ground_text
+    # shape). Empty = no parseable claims OR minted before grounding existed
+    # OR no run ground-truth — absent-key discipline, never re-grounded on
+    # re-observation.
+    grounding: List[Dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -3394,7 +3401,12 @@ def append_knowledge_node(node: KnowledgeNode) -> None:
     p = _knowledge_nodes_path()
     p.parent.mkdir(parents=True, exist_ok=True)
     from file_lock import locked_append
-    locked_append(p, json.dumps(asdict(node), sort_keys=True))
+    row = asdict(node)
+    # Absent-key discipline (mint-grounding): a stampless node's row stays
+    # byte-identical to the pre-grounding shape.
+    if not row.get("grounding"):
+        row.pop("grounding", None)
+    locked_append(p, json.dumps(row, sort_keys=True))
     log.info("knowledge_node: added %s (%s) %r", node.node_id, node.node_type, node.title[:60])
 
 
@@ -3502,6 +3514,27 @@ def _validate_node_for_promotion(d: Dict[str, Any], adapter: Any) -> Dict[str, A
             f"Re-observed {d.get('times_applied', 0)} time(s), "
             f"confidence {float(d.get('confidence', 0) or 0):.2f}"
         )
+        # Mint-time grounding visibility (slice-2, 2026-08-16): the judge
+        # weighs receipt stamps — ADVISORY, per the fail-open decree ("no
+        # new judge"; consumers weigh, nothing deterministically blocks).
+        # A node without stamps renders byte-identically to before.
+        _g = d.get("grounding") or []
+        _unsup = [s for s in _g if isinstance(s, dict)
+                  and s.get("status") == "unsupported"]
+        if _unsup:
+            _heads = "; ".join(
+                str(s.get("claim", ""))[:80] for s in _unsup[:3])
+            node_text += (
+                f"\nMint-time grounding: {len(_unsup)} method claim(s) in "
+                f"this node's text were UNSUPPORTED by the minting run's "
+                f"own event log: \"{_heads}\". Weigh this as provenance "
+                f"evidence — it is not an automatic disqualifier."
+            )
+        elif _g:
+            _n_sup = sum(1 for s in _g if isinstance(s, dict)
+                         and s.get("status") == "supported")
+            node_text += (f"\nMint-time grounding: {_n_sup}/{len(_g)} "
+                          f"method claim(s) supported by event-log receipts.")
         resp = adapter.complete(
             [
                 LLMMessage("system", _NODE_VALIDATION_SYSTEM),

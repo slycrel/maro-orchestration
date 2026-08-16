@@ -198,6 +198,7 @@ def upsert_knowledge_from_candidate(
     *,
     existing_nodes,
     confidence_bump: float = 0.05,
+    grounding: Optional[List[Dict[str, Any]]] = None,
 ) -> Tuple[Any, bool]:
     """Insert a new node or update an existing similar one.
 
@@ -268,7 +269,12 @@ def upsert_knowledge_from_candidate(
         return existing, False
 
     else:
-        # Create new candidate node
+        # Create new candidate node. Grounding is MINT-time by definition
+        # (R1-4, 2026-08-16: the bridge used to strip lesson-layer stamps,
+        # so an unsupported provenance claim could launder into decay-free
+        # knowledge) — the update path above deliberately does NOT re-ground:
+        # re-observation adds confidence, not new claims, and the original
+        # mint's receipts remain the claim's provenance.
         node = KnowledgeNode(
             node_id=uuid.uuid4().hex[:12],
             node_type=node_type,
@@ -280,6 +286,7 @@ def upsert_knowledge_from_candidate(
             status=NODE_CANDIDATE,
             confidence=0.3,  # low initial confidence for auto-extracted nodes
             author="knowledge_bridge",
+            grounding=grounding or [],
         )
         append_knowledge_node(node)
         log.debug("knowledge_bridge: created node %s %r", node.node_id, node.title[:40])
@@ -391,7 +398,32 @@ def outcome_to_knowledge(
         new_count = 0
         sources = [f"outcome:{outcome_id}"] if outcome_id else []
 
+        # Mint-time grounding (R1-4 laundering fix, 2026-08-16): ground each
+        # candidate node's OWN text against the minting outcome's run events
+        # — reusing the lesson-layer stamps would misattribute (the node's
+        # extracted prose is not the lesson's prose). One event load per
+        # outcome; fail-open (events=None → nodes mint unstamped, absent-key).
+        _events = None
+        try:
+            _run_ref = getattr(outcome, "loop_id", "") or ""
+            if _run_ref:
+                from runs import resolve_run_dir
+                from mint_grounding import collect_run_tool_events
+                _rd = resolve_run_dir(_run_ref)
+                if _rd is not None:
+                    _events = collect_run_tool_events(_rd)
+        except Exception:
+            _events = None
+
         for title, description, node_type, domain in candidates:
+            _grounding = None
+            if _events is not None:
+                try:
+                    from mint_grounding import ground_text
+                    _grounding = ground_text(
+                        f"{title}. {description}", _events)
+                except Exception:
+                    _grounding = None
             try:
                 _node, is_new = upsert_knowledge_from_candidate(
                     title=title,
@@ -400,6 +432,7 @@ def outcome_to_knowledge(
                     domain=domain,
                     sources=sources,
                     existing_nodes=existing,
+                    grounding=_grounding,
                 )
                 if is_new:
                     new_count += 1
