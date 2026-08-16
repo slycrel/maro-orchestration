@@ -16,8 +16,8 @@
   {
     "name": "classifier :: prompt-authority regex loses forbids/prohibits",
     "file": "src/lesson_provenance.py",
-    "anchor": "    r\"forbids?|prohibits?)\\b\",",
-    "replacement": "    r\")\\b\",",
+    "anchor": "    r\"(?:says?|said|states?|stated|instructs?|tells?|told|demands?|\"\n    r\"forbids?|prohibits?)\\b\",",
+    "replacement": "    r\"(?:says?|said|states?|stated|instructs?|tells?|told|demands?)\\b\",",
     "tests": "tests/test_lesson_provenance.py"
   },
   {

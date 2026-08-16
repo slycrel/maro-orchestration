@@ -535,6 +535,33 @@ def test_the_graveyard_does_not_surface_quarantined_lessons(monkeypatch, tmp_pat
         "fixture never matched the search — the assertion above proved nothing"
 
 
+def test_the_graveyards_ARCHIVED_scan_excludes_quarantined_lessons(
+        monkeypatch, tmp_path):
+    """search_graveyard screens twice and the first spec only swept once.
+
+    Live rows in the decay band and decay_gc-archived rows are two separate
+    loops with the same exclusion, and the mutation sweep caught the mirror
+    only after the live leg was pinned (2026-08-16). The archived leg is the
+    more dangerous of the two: its recovery path is
+    resurrect_archived_lesson, which has no quarantine check of its own.
+    """
+    import knowledge_web as kw
+    tl = _quarantined_in_the_decay_band(monkeypatch, tmp_path)
+    rows = load_tiered_lessons(tier=MemoryTier.MEDIUM, min_score=0.0, limit=None,
+                               raw=True)
+    row = next(r for r in rows if r.lesson_id == tl.lesson_id)
+    kw._archive_lessons([row], reason="decay_gc")
+    kw._mutate_tiered_lessons(
+        MemoryTier.MEDIUM,
+        lambda rs: [r for r in rs if r.lesson_id != tl.lesson_id])
+    assert any(a.lesson_id == tl.lesson_id for a in kw._load_archived_lessons()), \
+        "fixture is not in the archive — this test would prove nothing"
+
+    hits = kw.search_graveyard("prompt explicitly escalate")
+    assert all(h.lesson_id != tl.lesson_id for h in hits), \
+        "an archived quarantined lesson was offered for resurrection"
+
+
 def test_the_decay_cycle_does_not_count_quarantined_rows_as_promoted(
         monkeypatch, tmp_path):
     """The tier move is refused downstream; the REPORT is not.
