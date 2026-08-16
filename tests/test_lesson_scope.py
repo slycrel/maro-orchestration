@@ -13,6 +13,7 @@ The shipped prompt drove that to 0/31 across two model lanes; the parser
 recovers anyway.
 """
 import json
+import logging
 import sys
 from pathlib import Path
 
@@ -86,6 +87,18 @@ class TestParseScope:
         out = _parse([{"lesson": "L1", "type": "world", "scope": "planning"}])
         assert out[0].lesson_type == "planning"
         assert out[0].scope == "world"
+
+    def test_scope_in_type_slot_survives_junk_in_the_scope_slot(self):
+        """r2 fix-audit: the (scope-word-in-type, junk-in-scope) cell.
+
+        Only-if-empty recovery dropped the one real scope answer in the row
+        whenever the model also filled the scope slot with something outside
+        the vocabulary — the row landed ("execution", ""), indistinguishable
+        from a lesson that was never stamped at all.
+        """
+        out = _parse([{"lesson": "L1", "type": "world", "scope": "global"}])
+        assert out[0].scope == "world"
+        assert out[0].lesson_type == "execution"
 
     def test_cross_type_cap_still_applies_with_scopes(self):
         out = _parse([
@@ -234,6 +247,27 @@ class TestStorePersistence:
         record_tiered_lesson(text, "research", "done", "goal two", scope="method")
         rows = load_tiered_lessons("medium", min_score=0.0)
         assert len(rows) == 1
+        assert rows[0].scope == "world"
+
+    def test_reinforce_heals_an_off_vocabulary_stamp(self):
+        """Fill-if-empty must mean fill-if-INVALID, not fill-if-falsy.
+
+        r2 Expert QA: a row carrying `"scope": "banana"` is not stamped — it
+        is corrupt — but it is truthy, so a truthiness test froze the garbage
+        in place permanently and no honest mint could ever displace it.
+        """
+        from knowledge_web import load_tiered_lessons, record_tiered_lesson
+        text = "Retries against a bot-challenged endpoint never recover"
+        d = self.ws / "memory" / "medium"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "lessons.jsonl").write_text(json.dumps({
+            "lesson_id": "forged1", "task_type": "research", "outcome": "done",
+            "lesson": text, "source_goal": "goal one", "confidence": 0.5,
+            "tier": "medium", "score": 1.0, "last_reinforced": "2026-08-01",
+            "scope": "banana"}) + "\n", encoding="utf-8")
+        record_tiered_lesson(text, "research", "done", "goal two", scope="world")
+        rows = load_tiered_lessons("medium", min_score=0.0)
+        assert len(rows) == 1, "expected dedup-reinforce, not a second row"
         assert rows[0].scope == "world"
 
     def test_reinforce_without_a_stamp_leaves_the_row_alone(self):
@@ -418,3 +452,142 @@ class TestReadoutHonesty:
                  + [(f"W{i}", "world", True, 4) for i in range(FLOOR)])
         out = self._run(capsys, monkeypatch, tmp_path, cited)
         assert "comparison is readable" in out
+
+
+class TestForgedStoreRows:
+    """Sad paths from r2 Expert QA: the store is JSON and nothing validates it
+    on READ, so a hand-edited or corrupted row can carry any decodable type.
+
+    Each of these crashed a different consumer before the fix — and one of
+    them wedged the rank-time portability cache workspace-wide, silently,
+    because `_scope_rollup` sits inside `refresh_cache`'s return path and the
+    failure was swallowed below the default log threshold.
+    """
+
+    @pytest.mark.parametrize("bad", ["weird", "  method  ", "World",
+                                     "мethod", 123, True, ["world"],
+                                     {"s": 1}])
+    def test_rollup_survives_any_forged_scope(self, bad):
+        from camera_readout import _scope_rollup
+        out = _scope_rollup([{"lesson_id": "x", "scope": bad, "cites": 1,
+                              "foreign": 1, "foreign_s": 1, "foreign_f": 0}])
+        assert set(out) == {"unstamped"}, f"{bad!r} minted its own bucket"
+        assert out["unstamped"]["malformed"] == 1
+
+    def test_null_scope_is_unstamped_not_malformed(self):
+        from camera_readout import _scope_rollup
+        out = _scope_rollup([{"lesson_id": "x", "scope": None, "cites": 1,
+                              "foreign": 0, "foreign_s": 0, "foreign_f": 0}])
+        assert out["unstamped"]["malformed"] == 0
+
+    @pytest.mark.parametrize("bad", ["weird", 123, ["world"], {"s": 1}])
+    def test_readout_does_not_crash_on_a_forged_scope(self, bad, capsys,
+                                                      monkeypatch, tmp_path):
+        """The whole --portability CLI died on these before the fix.
+
+        Two distinct crashes, which is why the row is sanitized at build time
+        AND the rollup validates again: a non-str scope killed the per-row
+        print's `:7s` format before the rollup ever ran, and an unhashable one
+        killed the rollup's bucket key.
+        """
+        import camera_readout
+        monkeypatch.setattr(camera_readout, "_lesson_origins", lambda warn=None: {
+            "L1": {"source_goal": "origin goal", "task_type": "research",
+                   "scope": bad, "preview": "p"}})
+        runs = []
+        for i in range(4):
+            d = tmp_path / f"r{i}"
+            d.mkdir()
+            (d / "metadata.json").write_text(json.dumps(
+                {"project": "other", "prompt": f"foreign {i}",
+                 "goal_achieved": True}), encoding="utf-8")
+            runs.append({"dir": d, "frames": [{"chosen": {"lesson_ids": ["L1"]}}]})
+        camera_readout._print_portability(runs)
+        out = capsys.readouterr().out
+        assert "WARNING" in out and "outside {method, world}" in out
+
+    def test_readout_names_evidence_under_an_unrecognized_scope(
+            self, capsys, monkeypatch):
+        """The belt to the read-site validation's suspenders.
+
+        `stamped` counts every non-unstamped bucket, so a scope category the
+        print branches don't know about makes `both` empty — and the old
+        `both[0]` index took the whole instrument down with an IndexError.
+        Unreachable through today's write paths by construction; pinned
+        anyway, because "the instrument crashed" is the one failure mode an
+        instrument may never have.
+        """
+        import camera_readout
+        # One resolvable row so the print gets past the no-rows branch and
+        # reaches the evidence branches, where the rogue bucket lives.
+        monkeypatch.setattr(camera_readout, "portability_census",
+                            lambda per_run, warn=None: {
+                                "rows": [{"lesson_id": "L1", "preview": "p",
+                                          "scope": "", "cites": 4, "runs": 4,
+                                          "home": 0, "foreign": 4,
+                                          "foreign_s": 4, "foreign_f": 0,
+                                          "foreign_unjudged": 0,
+                                          "unattributable": 0,
+                                          "portability": 0.83}],
+                                "unresolved": {}, "runs_no_meta": 0,
+                                "by_scope": {"banana": {
+                                    "lessons": 1, "cites": 4, "foreign": 4,
+                                    "foreign_s": 4, "foreign_f": 0,
+                                    "evidenced": 1, "pooled": 0.83,
+                                    "malformed": 0}}})
+        camera_readout._print_portability([])
+        out = capsys.readouterr().out
+        assert "no recognized scope" in out
+
+    def test_refresh_failure_is_logged_at_warning(self, monkeypatch, caplog):
+        """A refresh that fails every finalize must not be silent.
+
+        It rides loop finalize and feeds RANK-TIME weighting, so at debug
+        level the operator's only symptom was weighting that quietly stopped
+        updating — no error, no output, indefinitely.
+        """
+        import portability, camera_readout
+
+        def boom(*a, **k):
+            raise RuntimeError("forged store row")
+
+        monkeypatch.setattr(camera_readout, "portability_census", boom)
+        with caplog.at_level(logging.WARNING, logger="portability"):
+            assert portability.refresh_cache() == -1
+        assert any(r.levelno >= logging.WARNING for r in caplog.records)
+
+    def test_refresh_cache_survives_a_forged_row(self, tmp_path, monkeypatch):
+        """The HIGH one: a single bad row stopped the RANKING cache refreshing.
+
+        `_scope_rollup` runs inside portability_census's return expression, so
+        its crash discarded the good rows too and the cache never wrote again.
+        """
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+        mem = tmp_path / "memory" / "medium"
+        mem.mkdir(parents=True)
+        rows = [{"lesson_id": "good", "task_type": "research", "outcome": "done",
+                 "lesson": "a clean lesson", "source_goal": "origin goal",
+                 "confidence": 0.5, "tier": "medium", "score": 1.0,
+                 "last_reinforced": "2026-08-01", "scope": "method"},
+                {"lesson_id": "bad", "task_type": "research", "outcome": "done",
+                 "lesson": "a corrupted lesson", "source_goal": "origin goal",
+                 "confidence": 0.5, "tier": "medium", "score": 1.0,
+                 "last_reinforced": "2026-08-01", "scope": ["world"]}]
+        (mem / "lessons.jsonl").write_text(
+            "\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
+        runs_root = tmp_path / "runs"
+        for i, lid in enumerate(("good", "bad", "good")):
+            d = runs_root / f"run{i}" / "source"
+            d.mkdir(parents=True)
+            (d.parent / "metadata.json").write_text(json.dumps(
+                {"project": "other", "prompt": f"foreign goal {i}",
+                 "goal_achieved": True}), encoding="utf-8")
+            (d / "camera_frames.jsonl").write_text(json.dumps(
+                {"chosen": {"lesson_ids": [lid]}}) + "\n", encoding="utf-8")
+        import portability
+        # refresh_cache takes no args — it resolves runs_root() and
+        # memory_dir() itself, both off MARO_WORKSPACE (set above).
+        assert runs_root.exists()
+        n = portability.refresh_cache()
+        assert n >= 0, "refresh returned the -1 failure sentinel"
+        assert portability.cache_path().exists(), "cache never written"

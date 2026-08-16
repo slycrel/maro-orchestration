@@ -44,7 +44,7 @@ import re
 import sys
 from collections import Counter, defaultdict
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from context_budget import clip as _clip
 
@@ -185,6 +185,24 @@ from portability import (  # noqa: E402
 # alias at 3, and apply_portability reads the global at call time). The
 # functions above are safe to alias; a rebindable scalar is not.
 import portability as _portability  # noqa: E402
+from knowledge_web import _LESSON_SCOPES  # noqa: E402
+
+
+def _clean_scope(raw: Any) -> Tuple[str, bool]:
+    """Coerce a store-read scope value to the vocabulary. -> (scope, malformed).
+
+    Store rows are JSON and nothing validates them on read, so `scope` can
+    hold any decodable type — including unhashable ones. Membership testing an
+    unhashable value against a frozenset RAISES, and formatting an int with
+    `:7s` raises too, so this has to screen on TYPE before vocabulary
+    (r2 Expert QA: forged rows with list/int/bool scopes each crashed a
+    different consumer).
+    """
+    if isinstance(raw, str) and raw in _LESSON_SCOPES:
+        return raw, False
+    if raw in (None, ""):
+        return "", False
+    return "", True
 
 # Comparing the two stamped buckets on a handful of citations would be
 # numerology. Stated floor, per bucket, so the readout can say plainly whether
@@ -257,12 +275,22 @@ def portability_census(per_run: List[Dict[str, Any]],
     rows = []
     for lid, rec in lessons.items():
         s, fl = rec["foreign_s"], rec["foreign_f"]
+        scope_clean, scope_bad = _clean_scope(origins[lid].get("scope", ""))
         rows.append({
             "lesson_id": lid,
             "preview": origins[lid]["preview"],
             # §14a slice 3: mint-time method/world stamp, "" for rows minted
             # before the stamp existed (the whole pre-2026-08-15 corpus).
-            "scope": origins[lid].get("scope", ""),
+            # Sanitized HERE, the one place every downstream consumer (the
+            # per-row print, the rollup, refresh_cache) reads it from — a
+            # forged row's int scope crashed the print's `:7s` format and an
+            # unhashable one crashed the rollup's bucket key (r2 Expert QA).
+            "scope": scope_clean,
+            # The row carries the SANITIZED scope (see above), so the rollup
+            # can no longer tell "" apart from "was corrupt" — double
+            # sanitization would silently absorb exactly the corruption the
+            # WARNING exists to report. Carry the verdict alongside the value.
+            "scope_malformed": scope_bad,
             "cites": rec["cites"],
             "runs": len(rec["runs"]),
             "home": rec["home"],
@@ -298,8 +326,23 @@ def _scope_rollup(rows: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
     figures would hand them equal weight.
     """
     buckets: Dict[str, Dict[str, Any]] = {}
+    malformed = 0
     for r in rows:
-        b = buckets.setdefault(r.get("scope") or "unstamped",
+        # Validate at the READ site too, not just at every write site. The
+        # census reads rows off disk, and a hand-edited or corrupted store row
+        # carrying `"scope": "banana"` would otherwise mint its own bucket:
+        # invisible in the printed table (which walks a fixed name list) yet
+        # counted as stamped and evidenced, and — before this guard — able to
+        # crash the readout outright (r2 fix-audit reproduced the IndexError).
+        # Unrecognized values fold into "unstamped", which is what they are,
+        # and get counted so corruption is reported rather than absorbed.
+        raw_scope, bad = _clean_scope(r.get("scope", ""))
+        # OR, not either-or: rows off portability_census arrive pre-sanitized
+        # and carry their verdict in `scope_malformed`; rows handed straight to
+        # this function (tests, future callers) carry the raw value. Reading
+        # only one of the two loses the report on whichever path it isn't.
+        malformed += bool(bad or r.get("scope_malformed"))
+        b = buckets.setdefault(raw_scope or "unstamped",
                                {"lessons": 0, "cites": 0, "foreign": 0,
                                 "foreign_s": 0, "foreign_f": 0, "evidenced": 0})
         b["lessons"] += 1
@@ -315,6 +358,12 @@ def _scope_rollup(rows: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
     for b in buckets.values():
         fv = b["foreign_s"] + b["foreign_f"]
         b["pooled"] = _beta_mean(b["foreign_s"], b["foreign_f"]) if fv else None
+    for b in buckets.values():
+        b.setdefault("malformed", 0)
+    if malformed:
+        # Reported on the bucket the rows actually landed in, so the count
+        # can never be mistaken for a scope category of its own.
+        buckets["unstamped"]["malformed"] = malformed
     return buckets
 
 
@@ -373,7 +422,15 @@ def _print_portability(per_run: List[Dict[str, Any]]) -> None:
                 if (stamped_buckets.get(k) or {}).get("evidenced")]
         thinnest = min((stamped_buckets[k]["foreign_s"] + stamped_buckets[k]["foreign_f"]
                         for k in both), default=0)
-        if len(both) < 2:
+        if not both:
+            # Belt to the read-site validation's suspenders: `stamped` counts
+            # every non-unstamped bucket, so reaching here at all would mean a
+            # scope category exists that this branch does not know about.
+            # Indexing both[0] unguarded is what crashed the whole readout in
+            # the r2 audit — never let an instrument take the process down.
+            print("     (evidence exists under no recognized scope — the "
+                  "readout cannot name it; treat the store as suspect)")
+        elif len(both) < 2:
             print(f"     (only the {both[0]!r} bucket has evidence — a "
                   f"one-sided figure is not a comparison)")
         elif thinnest < _SCOPE_COMPARISON_FLOOR:
@@ -384,6 +441,11 @@ def _print_portability(per_run: List[Dict[str, Any]]) -> None:
             print(f"     (both buckets clear the floor of "
                   f"{_SCOPE_COMPARISON_FLOOR} verdicted citations — this "
                   f"comparison is readable)")
+    n_malformed = sum(v.get("malformed", 0) for v in by_scope.values())
+    if n_malformed:
+        print(f"     WARNING: {n_malformed} cited lesson(s) carry a scope value "
+              f"outside {{method, world}} — counted as unstamped; the store has "
+              f"rows no write path in this tree can produce")
     n_unattr = sum(r["unattributable"] for r in rows)
     if n_unattr:
         print(f"  -- citations from sentinel/empty-source lessons "

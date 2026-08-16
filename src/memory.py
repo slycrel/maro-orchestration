@@ -330,6 +330,12 @@ def as_typed_lesson(item) -> TypedLesson:
         except TypeError:
             log.warning("as_typed_lesson: uninterpretable item %r", type(item))
             return TypedLesson("", "execution", "")
+    if not parts:
+        # A wrong-length sequence degraded to an empty-text lesson with no
+        # log at all, while the sibling non-iterable branch warned — the
+        # quieter failure was the one that produced a writable empty row
+        # (r2 Expert QA).
+        log.warning("as_typed_lesson: empty item, no lesson text to keep")
     text = str(parts[0]) if parts else ""
     lesson_type = str(parts[1]) if len(parts) > 1 else "execution"
     scope = str(parts[2]).strip().lower() if len(parts) > 2 else ""
@@ -478,10 +484,16 @@ def extract_lessons_via_llm(
                     log.debug("lesson scope value %r arrived in the type slot", crossed)
                     if scope in _LESSON_TYPES:
                         lesson_type, scope = scope, crossed   # both crossed
-                    elif not scope:
+                    elif scope not in _LESSON_SCOPES:
+                        # Empty OR junk: either way the scope slot holds no
+                        # usable answer, and the crossed word is the only real
+                        # one in the row. Testing `not scope` instead threw the
+                        # recovery away whenever the junk was non-empty — the
+                        # exact destruction this block exists to prevent
+                        # (r2 fix-audit, the (scope-in-type, junk-in-scope) cell).
                         scope = crossed
-                    # else: scope already holds a real scope value — it was
-                    # answered correctly, so the crossed copy is redundant.
+                    # else: scope already holds a valid scope value — answered
+                    # correctly there, so the crossed copy is redundant.
                 elif scope in _LESSON_TYPES:
                     if lesson_type not in _LESSON_TYPES:
                         lesson_type = scope

@@ -757,7 +757,18 @@ def _reinforce_tiered_lesson(tl: TieredLesson, *, tier: str,
         # the first one a real mint produces. Contested rows fill too: this is
         # provenance, not trust movement, and the same reasoning that keeps
         # their counters honest applies.
-        if incoming_scope in _LESSON_SCOPES and not row.scope:
+        # The emptiness test is a VALIDITY test, not a truthiness test: a
+        # corrupted-but-truthy stamp (say "World", or a hand-edited value) read
+        # as "already stamped" and locked itself in forever, so the one
+        # self-heal this field has could never reach exactly the rows that
+        # needed it most — a permanently wrong stamp that reads as confidently
+        # classified everywhere downstream (r2 Expert QA, reproduced). Valid
+        # stamps still never flip.
+        if incoming_scope in _LESSON_SCOPES and row.scope not in _LESSON_SCOPES:
+            if row.scope:
+                log.warning("lesson %s carried an off-vocabulary scope %r — "
+                            "healed to %r by this mint",
+                            row.lesson_id, row.scope, incoming_scope)
             row.scope = incoming_scope
         row.times_reinforced += 1
         # Rationale erosion fix (MH, 2026-08-11): at >0.8 similarity the

@@ -161,7 +161,12 @@ def refresh_cache() -> int:
                      json.dumps(payload, indent=1) + "\n")
         return len(lessons)
     except Exception as exc:
-        log.debug("portability cache refresh failed: %s", exc)
+        # WARNING, not debug: this cache feeds rank-time weighting, and a
+        # refresh that fails every finalize is silent forever below the
+        # default threshold — the operator's only symptom is weighting that
+        # quietly stops updating (r2 Expert QA: one corrupted store row was
+        # enough to wedge it workspace-wide, invisibly).
+        log.warning("portability cache refresh failed: %s", exc)
         return -1
 
 
