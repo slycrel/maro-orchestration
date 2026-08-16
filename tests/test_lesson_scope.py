@@ -232,14 +232,31 @@ class TestScopeIsNotARankingInput:
         """
         root = Path(__file__).parent.parent / "src"
         offenders = []
-        for name in ("portability.py", "knowledge_lens.py", "recall.py"):
-            f = root / name
-            if not f.exists():
-                continue
-            for i, line in enumerate(f.read_text(encoding="utf-8").splitlines(), 1):
+
+        def _scan(name, text, base=1):
+            for i, line in enumerate(text.splitlines(), base):
                 bare = line.split("#")[0]
                 if ".scope" in bare or '"scope"' in bare or "'scope'" in bare:
                     offenders.append(f"{name}:{i}: {line.strip()}")
+
+        for name in ("portability.py", "knowledge_lens.py", "recall.py"):
+            f = root / name
+            if f.exists():
+                _scan(name, f.read_text(encoding="utf-8"))
+        # The module list missed the module that actually ranks lessons (r5
+        # test-auditor). knowledge_web owns the vocabulary, so the whole file
+        # cannot be scanned — scan the ranking functions BY NAME instead, which
+        # is the seam the decree is about. A live `sim *= 1.25 if scope ==
+        # "method"` inside _tfidf_rank_scored survived this whole file before.
+        import ast
+        src = (root / "knowledge_web.py").read_text(encoding="utf-8")
+        tree = ast.parse(src)
+        ranking = {"_tfidf_rank", "_tfidf_rank_scored", "query_lessons_scored",
+                   "query_lessons"}
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef) and node.name in ranking:
+                _scan(f"knowledge_web.py::{node.name}",
+                      ast.get_source_segment(src, node) or "", node.lineno)
         assert not offenders, (
             "a ranking-path module now reads the lesson scope stamp — that is "
             "the e2b83703 decree, not a style preference. If this is "
@@ -279,6 +296,40 @@ class TestScopeIsNotARankingInput:
         assert out is pairs and adj == [], (
             "the ranking hook reacted to lessons whose only distinguishing "
             "feature is the scope stamp")
+
+    def test_the_same_lesson_scores_the_same_stamped_or_not(self, tmp_path,
+                                                            monkeypatch):
+        """The decree as an equality, which is the only form that can fail.
+
+        The test above compares two DIFFERENT lesson texts and then explains
+        the score difference away — so it cannot detect a boost at all. r5
+        probe: `sim *= 1.25 if lesson.scope == "method"` dropped straight into
+        `_tfidf_rank_scored` survived this entire file. Same text, same
+        evidence, the stamp varied, the scores compared.
+
+        All three stamps in ONE test on purpose: sharing state across
+        parametrized cases would silently stop comparing anything the moment
+        the cases land on different xdist workers, and `scripts/test-safe.sh`
+        runs `-n 2`.
+        """
+        from knowledge_web import record_tiered_lesson, query_lessons_scored
+        text = "Timeouts on a bot-challenged endpoint never recover on retry"
+        seen = {}
+        for stamp in ("method", "world", ""):
+            ws = tmp_path / (stamp or "unstamped")
+            (ws / "memory").mkdir(parents=True, exist_ok=True)
+            monkeypatch.setenv("MARO_WORKSPACE", str(ws))
+            record_tiered_lesson(text, "research", "done", "g1",
+                                 **({"scope": stamp} if stamp else {}))
+            scored = query_lessons_scored("endpoint timeouts on retry",
+                                          task_type="research", n=10)
+            assert len(scored) == 1, (stamp, scored)
+            tl, score = scored[0]
+            assert tl.scope == stamp, "fixture wrong, not the ranker"
+            seen[stamp or "unstamped"] = score
+        assert len(set(seen.values())) == 1, (
+            "the same lesson ranks differently depending on its scope stamp "
+            f"— that is the e2b83703 decree, not a tuning knob: {seen}")
 
 
 class TestStorePersistence:
@@ -471,6 +522,47 @@ class TestStorePersistence:
         record_tiered_lesson(text, "research", "done", "goal two")
         assert any(r["lesson_id"] == "L-good" and r["times_reinforced"] == 1
                    for r in self._rows()), "the reinforce was lost"
+
+    def test_a_string_confidence_does_not_wedge_the_reinforce_path(self):
+        """The score wedge's sibling, and it had no test of its own.
+
+        `_reinforce_tiered_lesson` does `max(row.confidence,
+        _CONFIDENCE_MULTI_SESSION)`, so a store row carrying `"0.9"` raises
+        exactly like the string score did — and `"0.9"` PARSES, so quarantine
+        never sees it. The load-time `float(tl.confidence)` is what stops it,
+        and removing that line survived the suite (r5 test-auditor).
+        """
+        from knowledge_web import record_tiered_lesson
+        text = "Retries against a bot-challenged endpoint never recover"
+        d = self.ws / "memory" / "medium"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "lessons.jsonl").write_text(json.dumps({
+            "lesson_id": "L-conf", "task_type": "research", "outcome": "done",
+            "lesson": text, "source_goal": "g", "confidence": "0.9",
+            "tier": "medium", "score": 1.0, "last_reinforced": "2026-08-01",
+            "sessions_validated": 2}) + "\n", encoding="utf-8")
+        # sessions_validated 2 -> 3 crosses the multi-session promotion, which
+        # is the branch that touches confidence at all.
+        record_tiered_lesson(text, "research", "done", "goal two")
+        rows = self._rows()
+        assert len(rows) == 1 and rows[0]["times_reinforced"] == 1, \
+            "the reinforce was lost"
+        assert isinstance(rows[0]["confidence"], float), rows[0]["confidence"]
+
+    def test_the_plain_rewrite_path_quarantines_too(self):
+        """`_rewrite_tiered_lessons` is public surface with the same guarantee.
+
+        Only the mutate path is exercised through `record_tiered_lesson`;
+        removing quarantine from the rewrite path survived the suite (r5
+        test-auditor). It is re-exported through memory.py and used by
+        test_prereq, so "no in-tree caller today" is not the same as unused.
+        """
+        from knowledge_web import _rewrite_tiered_lessons
+        text = "Retries against a bot-challenged endpoint never recover"
+        self._seed_drift(text)
+        _rewrite_tiered_lessons("medium")
+        assert [r.get("lesson_id") for r in self._rows()] == ["L-good"]
+        assert [r.get("lesson_id") for r in self._sidecar()] == ["L-drift"]
 
     def _seed_drift(self, text):
         d = self.ws / "memory" / "medium"
@@ -892,6 +984,34 @@ class TestReadoutHonesty:
         assert "comparison is readable" in out
         assert "comparable within a labeller" not in out
 
+    def test_the_per_bucket_row_reports_its_imported_column(
+            self, capsys, monkeypatch, tmp_path):
+        # `grep -rn "imported=" tests/` found nothing before r5: the column
+        # that tells an operator a bucket is labeller-mixed was printed but
+        # never asserted, so it could be replaced by a constant.
+        out = self._run(capsys, monkeypatch, tmp_path,
+                        [("M1", "method", True, 4, False),
+                         ("I1", "method", True, 4, True),
+                         ("I2", "method", None, 4, True)])
+        assert "imported=2(1 cited)" in out, out
+
+    def test_a_grown_vocabulary_still_prints_its_bucket(self, capsys,
+                                                        monkeypatch, tmp_path):
+        """The THIRD hard-coded mirror of the vocabulary in this file.
+
+        r4 fixed the coverage counter and the coverage seed; the printed table
+        still iterated a literal ("method", "world", "unstamped"), so a grown
+        vocabulary would vanish from the readout while every total above it
+        kept counting the rows (r5 test-auditor).
+        """
+        import camera_readout, knowledge_web
+        grown = frozenset({"method", "world", "tool"})
+        monkeypatch.setattr(knowledge_web, "_LESSON_SCOPES", grown)
+        monkeypatch.setattr(camera_readout, "_LESSON_SCOPES", grown)
+        out = self._run(capsys, monkeypatch, tmp_path,
+                        [("T1", "tool", True, 4, False)])
+        assert "tool " in out and "lessons=  1" in out, out
+
     def test_all_local_stamps_still_read_as_a_comparison(
             self, capsys, monkeypatch, tmp_path):
         # The above must gate on `imported`, not merely suppress the verdict.
@@ -924,8 +1044,11 @@ class TestStampCoverage:
                 "last_reinforced": "2026-08-01"}
         rows = []
         for i, sc in enumerate(scopes):
+            # Minutes, not a bare `2026-08-1{i}` — that produced "2026-08-110"
+            # at i>=10 and quietly blocked any fixture past ten rows (r5
+            # test-auditor); the 60-row paging fixture needs one.
             r = dict(base, lesson_id=f"L{i}", lesson=f"lesson {i}",
-                     recorded_at=f"2026-08-1{i}T00:00:00+00:00")
+                     recorded_at=f"2026-08-10T00:{i:02d}:00+00:00")
             if sc is not None:
                 r["scope"] = sc
             rows.append(r)
@@ -1048,7 +1171,7 @@ class TestStampCoverage:
         # earlier fixture ordering let "newest over all rows" survive).
         from camera_readout import _stamp_coverage
         self._write("method", "world", None)
-        assert _stamp_coverage()["newest"].startswith("2026-08-11")
+        assert _stamp_coverage()["newest"] == "2026-08-10T00:01:00+00:00"
 
     def test_the_long_tier_is_counted_too(self):
         """"Whole store" means both tiers.
@@ -1104,10 +1227,15 @@ class TestStampCoverage:
 
     def test_a_working_write_path_does_not_raise_the_alarm(self, capsys):
         import camera_readout
-        self._write("method", None, None)
+        self._write("method", None, "banana")
         camera_readout._print_portability([])
         out = capsys.readouterr().out
-        assert "1/3 rows stamped" in out
+        # The whole coverage line, not just the fraction: `malformed` and
+        # `newest` were both replaceable by constants with a green suite
+        # (r5 test-auditor), and they are the two fields an operator reads to
+        # decide whether the number above them means anything.
+        assert ("1/3 rows stamped (method 1 / world 0 / malformed 1), "
+                "newest stamped mint 2026-08-10T00:00:00" in out), out
         assert "ZERO locally-minted stamps" not in out
 
     def test_an_empty_store_is_not_an_alarm(self, capsys):
@@ -1127,8 +1255,12 @@ class TestStampCoverage:
         monkeypatch.setattr(knowledge_web, "load_tiered_lessons", boom)
         camera_readout._print_portability([])
         out = capsys.readouterr().out
-        assert "stamp coverage: UNREADABLE" in out
-        assert "tier read exploded" in out
+        # ONE joined assertion. Split, this passed with the error text replaced
+        # by a constant, because "tier read exploded" also appears in the
+        # unrelated _lesson_origins WARNING the same call prints — the exact
+        # defect fixed 120 lines up in the portability logger-name pin, not
+        # applied here (r5 test-auditor).
+        assert "stamp coverage: UNREADABLE (tier read exploded)" in out
 
 
 class TestForgedStoreRows:

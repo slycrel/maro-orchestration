@@ -350,7 +350,8 @@ def _scope_rollup(rows: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
                                {"lessons": 0, "cites": 0, "foreign": 0,
                                 "foreign_s": 0, "foreign_f": 0, "evidenced": 0,
                                 "imported": 0})
-        b.setdefault("imported", 0)
+        # Only imported_fv needs the setdefault — it is absent from the literal
+        # above on purpose, so a bucket built by an older call still gains it.
         b.setdefault("imported_fv", 0)
         b["lessons"] += 1
         b["imported"] += bool(r.get("imported"))
@@ -505,7 +506,12 @@ def _print_portability(per_run: List[Dict[str, Any]]) -> None:
                   "say the corpus predates the stamp, which is also what a "
                   "silently broken extractor looks like.")
     by_scope = c.get("by_scope") or {}
-    for name in ("method", "world", "unstamped"):
+    # Vocabulary-driven, with "unstamped" pinned last — the third hard-coded
+    # mirror of _LESSON_SCOPES in this file (r4 fixed the coverage counter and
+    # the coverage seed and missed this one, r5 test-auditor). A grown
+    # vocabulary would have silently vanished from the printed table while
+    # every total above it kept counting the rows.
+    for name in sorted(_LESSON_SCOPES) + ["unstamped"]:
         b = by_scope.get(name)
         if not b:
             continue

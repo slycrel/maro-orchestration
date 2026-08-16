@@ -21,6 +21,8 @@ keeping.
 | r2 | 4 | 8 | Forged store rows: type-screening, malformed reporting |
 | r3 | 4 | 19 | **r2's own fix crashed the mint path**; two pre-existing store bugs; the coverage instrument |
 | r4 | 4 | 14 | **r3's own fix made rows immortal**; the imported gate; the false 290-row claim |
+| r4b | — | 9 | Broad-sweep coverage gaps; tests only, no production change |
+| r5 | 1 | 10 | **The decree's own tripwire didn't cover the ranker**; three more vocabulary mirrors |
 
 The rounds did not converge to QUIET. They converged to *smaller blast
 radius*: r1–r2 were about the feature, r3–r4 were about the store the
@@ -71,6 +73,53 @@ corruption and the writer dies on it*:
   promotion loop, with no enclosing try, and that row *parses cleanly* —
   so quarantine would never have caught it. Fixed generically off the
   dataclass annotations (`_coerce_int_fields`) rather than field by field.
+
+## r5: the decree was guarded by two tests that could not fail
+
+The r4 test-auditor's report arrived after r4/r4b had landed, written
+against r3. Most of it was already closed; six items were not, and one
+was the worst finding of the arc:
+
+**`scope` is not a ranking input — and nothing could have told us
+otherwise.** The decree had two guards, and a live
+`sim *= 1.25 if lesson.scope == "method"` dropped into
+`knowledge_web._tfidf_rank_scored` — the function that actually ranks
+lessons — sailed past both:
+
+- The **grep tripwire** scanned `portability.py`, `knowledge_lens.py`
+  and `recall.py`. The ranker is in `knowledge_web.py`, which was not on
+  the list and cannot simply be added: that module owns the vocabulary,
+  so every line mentioning `scope` would be an offender. It now parses
+  the file with `ast` and scans the ranking functions **by name**.
+- The **behavioral pin** ranked two lessons with *different text* and
+  then explained the score difference away in a comment. A test that
+  explains away the only signal it could observe is not a pin. Replaced
+  with an equality: the same lesson text, recorded three times into three
+  workspaces as `method` / `world` / unstamped, must produce one score.
+
+Both verified by mutation. The rest of r5 was the same vocabulary-mirror
+problem one more time (the printed bucket table was a *third* hard-coded
+`("method", "world", …)` after r4 fixed two), plus four unpinned lines:
+load-time `float(tl.confidence)` (the string-score wedge's sibling, and
+`"0.9"` parses so quarantine never sees it), quarantine on the
+`_rewrite_tiered_lessons` path, and the printed `malformed` / `newest` /
+`imported=` fields, all of which could be replaced by constants with a
+green suite.
+
+Also fixed: `test_an_unreadable_store_is_named_not_swallowed` passed with
+the error text replaced by a constant, because its two split assertions
+were both satisfied by an unrelated WARNING printed in the same call —
+the exact defect that had been fixed 120 lines above it and not applied
+here. One joined assertion now. And `TestStampCoverage._write` built
+`recorded_at` as `2026-08-1{i}`, which yields `2026-08-110T…` at i≥10 and
+had quietly blocked any fixture past ten rows — including r4b's 60-row
+paging test, which was therefore asserting over malformed timestamps.
+
+**What r5 says about the arc:** the rounds stopped finding bugs in the
+feature at r3. r4 found bugs in the store, r4b and r5 found bugs in the
+*tests* — and the r5 items are the most valuable of the three, because a
+guard that cannot fail is worse than no guard: it is a standing claim
+that the decree is enforced.
 
 ## Claims that did not survive
 

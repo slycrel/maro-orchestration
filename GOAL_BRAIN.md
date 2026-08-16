@@ -3139,3 +3139,36 @@ Dated end-of-chunk/session entries, append-only at the tail. Rotation policy (20
   passing test. Suite 9063/0/1. Live readout still 0/195 with the new
   coverage line rendering correctly. Full arc record:
   `docs/history/2026-08-16-14a-slice3-review-arc.md`.
+
+- **2026-08-16 (maro box)** — **§14a slice 3 r4b + r5 — the guards that
+  could not fail.** The r4 test-auditor's report landed after r4 had
+  shipped, written against r3; most of it was already closed, six items
+  were not. **The worst finding of the whole arc:** the e2b83703 decree
+  ("scope is NOT a ranking input") was guarded by two tests, and a live
+  `sim *= 1.25 if lesson.scope == "method"` dropped into
+  `knowledge_web._tfidf_rank_scored` — the function that actually ranks
+  lessons — passed both. The grep tripwire scanned three modules, none
+  of them the ranker's, and `knowledge_web.py` can't just be added to
+  the list because it owns the vocabulary; it now parses with `ast` and
+  scans the ranking functions by name. The behavioral pin ranked two
+  lessons with DIFFERENT text and explained the score gap away in a
+  comment — a test that explains away the only signal it could observe.
+  Replaced with an equality: one lesson text, three workspaces,
+  method/world/unstamped, one score. Both verified by mutation.
+  Everything else was the same shape one more time: a THIRD hard-coded
+  `("method","world",…)` mirror in the printed table after r4 fixed two;
+  load-time `float(tl.confidence)` unpinned (the string-score wedge's
+  sibling, and `"0.9"` parses so quarantine never sees it); quarantine
+  on the `_rewrite_tiered_lessons` path unpinned; the printed
+  `malformed`/`newest`/`imported=` fields all replaceable by constants
+  with a green suite. Plus a test that passed with its subject replaced
+  by a constant because its two split assertions were both satisfied by
+  an unrelated WARNING in the same output, and a fixture building
+  `recorded_at` as `2026-08-1{i}` — `2026-08-110T…` at i≥10, which had
+  silently blocked any fixture past ten rows including r4b's own 60-row
+  paging test. r4b: 9/9 must-detect, tests only. r5: 10/10 must-detect.
+  Suite 9068 → 9074, 1 skipped. **Standing lesson, now in HOUSE_STYLE
+  step 3:** derive the mutation list from the FILE, not the diff — a
+  diff-derived list tests whether your fixes are pinned, a file-derived
+  one tests whether the behavior is. And a guard that cannot fail is
+  worse than no guard: it is a standing claim that the rule is enforced.

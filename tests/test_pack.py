@@ -1032,6 +1032,37 @@ class TestProvenanceTransport:
         assert [t.lesson for t in rows] == ["a foreign-typed lesson"], res
         assert rows[0].lesson_type == ""
 
+    def test_an_imported_stamped_row_reaches_the_census_as_imported(
+            self, tmp_path, target_ws, monkeypatch):
+        """Both r3 claims at the one seam where neither was tested.
+
+        pack.py's comment says the census can separate foreign-minted stamps
+        "by construction"; camera_readout reads `imported` to enforce it. Every
+        test of that refusal monkeypatches `_lesson_origins` away, and every
+        test of the stamp crossing the border stops at the store — so the
+        actual chain (pack writes `imported` -> origins reads it -> the
+        cross-labeller refusal fires) had no end-to-end pin (r4/r5 auditors).
+        """
+        import camera_readout
+        from knowledge_web import load_tiered_lessons, MemoryTier
+        src_ws = _make_workspace(tmp_path / "src")
+        pack_path = _export_and_seal(src_ws, tmp_path)
+        _add_artifact(pack_path, cls="lessons", relpath="memory/long/lessons.jsonl",
+                      content=json.dumps({
+                          "lesson_id": "s7", "lesson": "a foreign world lesson",
+                          "task_type": "ops", "outcome": "success",
+                          "source_goal": "g", "confidence": 0.9, "tier": "long",
+                          "score": 1.0, "last_reinforced": "2020-01-01",
+                          "scope": "world"}) + "\n")
+        import_pack(pack_path, label="l", target=target_ws)
+        tl = load_tiered_lessons(tier=MemoryTier.MEDIUM, limit=None, raw=True)[0]
+        assert tl.scope == "world"
+        assert tl.imported, "pack did not stamp the row as imported"
+        monkeypatch.setenv("MARO_WORKSPACE", str(target_ws))
+        origins = camera_readout._lesson_origins(warn=lambda *a: None)
+        assert origins[tl.lesson_id]["scope"] == "world"
+        assert origins[tl.lesson_id]["imported"] is True
+
     @pytest.mark.parametrize("bad", ["0.9", "high"])
     def test_the_border_never_writes_a_row_its_own_loader_cannot_read(
             self, bad, tmp_path, target_ws):
