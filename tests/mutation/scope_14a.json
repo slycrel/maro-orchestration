@@ -1,0 +1,248 @@
+[
+  {
+    "name": "pack :: confidence loses its float() screen",
+    "file": "src/pack.py",
+    "anchor": "                confidence=float(row.get(\"confidence\", 0.5)),",
+    "replacement": "                confidence=row.get(\"confidence\", 0.5),",
+    "tests": "tests/test_pack.py"
+  },
+  {
+    "name": "knowledge_web :: unparseable rows destroyed again (no quarantine)",
+    "file": "src/knowledge_web.py",
+    "anchor": "        _quarantine_unparseable(path)\n        lessons = load_tiered_lessons(tier=tier, min_score=0.0, limit=None, raw=True)\n        lessons = mutate(lessons)",
+    "replacement": "        lessons = load_tiered_lessons(tier=tier, min_score=0.0, limit=None, raw=True)\n        lessons = mutate(lessons)",
+    "tests": "tests/test_lesson_scope.py"
+  },
+  {
+    "name": "knowledge_web :: quarantine writes the sidecar but never shrinks the live file",
+    "file": "src/knowledge_web.py",
+    "anchor": "        atomic_write(path, \"\".join(kept))",
+    "replacement": "        pass",
+    "tests": "tests/test_lesson_scope.py"
+  },
+  {
+    "name": "knowledge_web :: sidecar overwritten instead of appended",
+    "file": "src/knowledge_web.py",
+    "anchor": "        with side.open(\"a\", encoding=\"utf-8\") as fh:",
+    "replacement": "        with side.open(\"w\", encoding=\"utf-8\") as fh:",
+    "tests": "tests/test_lesson_scope.py"
+  },
+  {
+    "name": "knowledge_web :: int-field coercion removed (decay-cycle wedge returns)",
+    "file": "src/knowledge_web.py",
+    "anchor": "                _coerce_int_fields(tl)\n                days = _days_since",
+    "replacement": "                days = _days_since",
+    "tests": "tests/test_lesson_scope.py"
+  },
+  {
+    "name": "knowledge_web :: int coercion driven by a hand-list instead of annotations",
+    "file": "src/knowledge_web.py",
+    "anchor": "        if f.type in (\"int\", int):",
+    "replacement": "        if False:",
+    "tests": "tests/test_lesson_scope.py"
+  },
+  {
+    "name": "knowledge_web :: incoming_scope back to a bare membership test",
+    "file": "src/knowledge_web.py",
+    "anchor": "        if coerce_scope(incoming_scope)[0] and not stored_scope:",
+    "replacement": "        if incoming_scope in _LESSON_SCOPES and not stored_scope:",
+    "tests": "tests/test_lesson_scope.py"
+  },
+  {
+    "name": "knowledge_web :: mint stops warning on an off-vocabulary scope",
+    "file": "src/knowledge_web.py",
+    "anchor": "            scope=_scope_or_warn(scope, lesson_id),",
+    "replacement": "            scope=coerce_scope(scope)[0],",
+    "tests": "tests/test_lesson_scope.py"
+  },
+  {
+    "name": "camera_readout :: refusal back to bucket membership (uncited row voids it)",
+    "file": "src/camera_readout.py",
+    "anchor": "        elif any(stamped_buckets[k].get(\"imported_fv\") for k in both):",
+    "replacement": "        elif any(stamped_buckets[k].get(\"imported\") for k in both):",
+    "tests": "tests/test_lesson_scope.py"
+  },
+  {
+    "name": "camera_readout :: imported_fv counts every imported row",
+    "file": "src/camera_readout.py",
+    "anchor": "        if r.get(\"imported\") and (r[\"foreign_s\"] + r[\"foreign_f\"]) > 0:",
+    "replacement": "        if r.get(\"imported\"):",
+    "tests": "tests/test_lesson_scope.py"
+  },
+  {
+    "name": "camera_readout :: coverage denominator back to the loader's output",
+    "file": "src/camera_readout.py",
+    "anchor": "            out[\"total\"] += on_disk",
+    "replacement": "            out[\"total\"] += len(rows)",
+    "tests": "tests/test_lesson_scope.py"
+  },
+  {
+    "name": "camera_readout :: unreadable store no longer raises",
+    "file": "src/camera_readout.py",
+    "anchor": "            if on_disk and not rows:\n                raise RuntimeError(\n                    f\"{tier}: {on_disk} row(s) on disk, loader returned none\")",
+    "replacement": "            pass",
+    "tests": "tests/test_lesson_scope.py"
+  },
+  {
+    "name": "camera_readout :: imported stamps counted as local writer activity",
+    "file": "src/camera_readout.py",
+    "anchor": "                        out[\"imported\"] += 1",
+    "replacement": "                        pass",
+    "tests": "tests/test_lesson_scope.py"
+  },
+  {
+    "name": "camera_readout :: dead-writer alarm keyed on stamped, not local",
+    "file": "src/camera_readout.py",
+    "anchor": "        if cov[\"total\"] and not local:",
+    "replacement": "        if cov[\"total\"] and not stamped:",
+    "tests": "tests/test_lesson_scope.py"
+  },
+  {
+    "name": "tests :: a ranking module starts reading the stamp",
+    "file": "src/recall.py",
+    "anchor": "            _sel_agenda, _port_adj = apply_portability(",
+    "replacement": "            _decree = [t for t, _ in _scored_agenda\n                       if getattr(t, 'scope', '') == 'method']\n            _sel_agenda, _port_adj = apply_portability(",
+    "tests": "tests/test_lesson_scope.py"
+  },
+  {
+    "name": "camera_readout :: origins drop imported on the live-store reader",
+    "file": "src/camera_readout.py",
+    "anchor": "                        \"imported\": bool(getattr(tl, \"imported\", None)),",
+    "replacement": "                        \"imported\": False,",
+    "tests": "tests/test_lesson_scope.py"
+  },
+  {
+    "name": "camera_readout :: origins drop imported on the archive reader",
+    "file": "src/camera_readout.py",
+    "anchor": "                        \"imported\": bool(row.get(\"imported\")),",
+    "replacement": "                        \"imported\": False,",
+    "tests": "tests/test_lesson_scope.py"
+  },
+  {
+    "name": "camera_readout :: coverage scans the medium tier only",
+    "file": "src/camera_readout.py",
+    "anchor": "        for tier in (MemoryTier.MEDIUM, MemoryTier.LONG):",
+    "replacement": "        for tier in (MemoryTier.MEDIUM,):",
+    "tests": "tests/test_lesson_scope.py"
+  },
+  {
+    "name": "camera_readout :: coverage read falls back to the default page of 50",
+    "file": "src/camera_readout.py",
+    "anchor": "            rows = load_tiered_lessons(tier, limit=None, min_score=0.0,\n                                       raw=True)",
+    "replacement": "            rows = load_tiered_lessons(tier, min_score=0.0,\n                                       raw=True)",
+    "tests": "tests/test_lesson_scope.py"
+  },
+  {
+    "name": "camera_readout :: stamped counts method only, not the vocabulary",
+    "file": "src/camera_readout.py",
+    "anchor": "        stamped = sum(cov.get(sc, 0) for sc in _LESSON_SCOPES)",
+    "replacement": "        stamped = cov.get(\"method\", 0)",
+    "tests": "tests/test_lesson_scope.py"
+  },
+  {
+    "name": "camera_readout :: newest taken over all rows, not stamped ones",
+    "file": "src/camera_readout.py",
+    "anchor": "                    stamped_at = str(getattr(tl, \"recorded_at\", \"\") or \"\")\n                    if stamped_at > out[\"newest\"]:\n                        out[\"newest\"] = stamped_at",
+    "replacement": "                    pass\n                if str(getattr(tl, \"recorded_at\", \"\") or \"\") > out[\"newest\"]:\n                    out[\"newest\"] = str(getattr(tl, \"recorded_at\", \"\") or \"\")",
+    "tests": "tests/test_lesson_scope.py"
+  },
+  {
+    "name": "knowledge_web :: the heal stops warning",
+    "file": "src/knowledge_web.py",
+    "anchor": "            if stored_bad:\n                log.warning(\"lesson %s carried an off-vocabulary scope %r — \"",
+    "replacement": "            if False:\n                log.warning(\"lesson %s carried an off-vocabulary scope %r — \"",
+    "tests": "tests/test_lesson_scope.py"
+  },
+  {
+    "name": "knowledge_web :: quarantine stops warning",
+    "file": "src/knowledge_web.py",
+    "anchor": "    log.warning(\"%s: moved %d unparseable lesson row(s) to %s (schema drift \"",
+    "replacement": "    log.debug(\"%s: moved %d unparseable lesson row(s) to %s (schema drift \"",
+    "tests": "tests/test_lesson_scope.py"
+  },
+  {
+    "name": "pack :: lesson_type screened for type but not vocabulary",
+    "file": "src/pack.py",
+    "anchor": "                lesson_type=(row.get(\"lesson_type\", \"\")\n                             if isinstance(row.get(\"lesson_type\"), str)\n                             and row.get(\"lesson_type\") in _LESSON_TYPES\n                             else \"\"),",
+    "replacement": "                lesson_type=(row.get(\"lesson_type\", \"\")\n                             if isinstance(row.get(\"lesson_type\"), str)\n                             else \"\"),",
+    "tests": "tests/test_pack.py"
+  },
+  {
+    "name": "knowledge_web :: LIVE scope boost inside the real ranker",
+    "file": "src/knowledge_web.py",
+    "anchor": "        if not _has_cite:\n            sim *= _CITATION_PENALTY\n        scores.append((sim, lesson))",
+    "replacement": "        if not _has_cite:\n            sim *= _CITATION_PENALTY\n        if getattr(lesson, \"scope\", \"\") == \"method\":\n            sim *= 1.25\n        scores.append((sim, lesson))",
+    "tests": "tests/test_lesson_scope.py"
+  },
+  {
+    "name": "tests :: the grep tripwire stops scanning the real ranker",
+    "file": "src/knowledge_web.py",
+    "anchor": "    query_terms = _tokenize(query)\n    if not query_terms:\n        return [(l, 0.0) for l in lessons]  # no query signal — input order",
+    "replacement": "    query_terms = _tokenize(query)\n    _unused = [getattr(l, 'scope', '') for l in lessons]\n    if not query_terms:\n        return [(l, 0.0) for l in lessons]  # no query signal — input order",
+    "tests": "tests/test_lesson_scope.py"
+  },
+  {
+    "name": "knowledge_web :: load-time confidence float() removed",
+    "file": "src/knowledge_web.py",
+    "anchor": "                tl.confidence = float(tl.confidence)",
+    "replacement": "                pass",
+    "tests": "tests/test_lesson_scope.py"
+  },
+  {
+    "name": "knowledge_web :: _rewrite_tiered_lessons stops quarantining",
+    "file": "src/knowledge_web.py",
+    "anchor": "        _quarantine_unparseable(path)\n        if lessons is None:",
+    "replacement": "        if lessons is None:",
+    "tests": "tests/test_lesson_scope.py"
+  },
+  {
+    "name": "camera_readout :: UNREADABLE error text replaced by a constant",
+    "file": "src/camera_readout.py",
+    "anchor": "        out[\"error\"] = str(exc)",
+    "replacement": "        out[\"error\"] = \"unknown\"",
+    "tests": "tests/test_lesson_scope.py"
+  },
+  {
+    "name": "camera_readout :: printed table back to hard-coded bucket names",
+    "file": "src/camera_readout.py",
+    "anchor": "    for name in sorted(_LESSON_SCOPES) + [\"unstamped\"]:",
+    "replacement": "    for name in (\"method\", \"world\", \"unstamped\"):",
+    "tests": "tests/test_lesson_scope.py"
+  },
+  {
+    "name": "camera_readout :: printed malformed count replaced by a constant",
+    "file": "src/camera_readout.py",
+    "anchor": "              f\"malformed {cov['malformed']}){extra}, newest stamped mint \"",
+    "replacement": "              f\"malformed 0){extra}, newest stamped mint \"",
+    "tests": "tests/test_lesson_scope.py"
+  },
+  {
+    "name": "camera_readout :: printed newest replaced by a constant",
+    "file": "src/camera_readout.py",
+    "anchor": "              f\"{cov['newest'][:19] or 'none'}\")",
+    "replacement": "              f\"none\")",
+    "tests": "tests/test_lesson_scope.py"
+  },
+  {
+    "name": "camera_readout :: per-bucket imported column zeroed",
+    "file": "src/camera_readout.py",
+    "anchor": "              f\"imported={b.get('imported', 0)}\"",
+    "replacement": "              f\"imported=0\"",
+    "tests": "tests/test_lesson_scope.py"
+  },
+  {
+    "name": "pack :: imported stamp not written on import",
+    "file": "src/pack.py",
+    "anchor": "                scope=_scope_clean,\n                provisional=bool(row.get(\"provisional\", False)),\n                minted_from=minted_from,\n                imported=imported,",
+    "replacement": "                scope=_scope_clean,\n                provisional=bool(row.get(\"provisional\", False)),\n                minted_from=minted_from,\n                imported={},",
+    "tests": "tests/test_pack.py"
+  },
+  {
+    "name": "camera_readout :: scope counter back to a bare index",
+    "file": "src/camera_readout.py",
+    "anchor": "out[scope] = out.get(scope, 0) + 1",
+    "replacement": "out[scope] += 1",
+    "tests": "tests/test_lesson_scope.py",
+    "equivalent": "_stamp_coverage seeds out[sc]=0 for every member of _LESSON_SCOPES before the loop, and _clean_scope only returns members of that same frozenset — which camera_readout imports BY NAME from knowledge_web, so the two bindings cannot diverge in production. The .get form is defense against a future second vocabulary source."
+  }
+]
