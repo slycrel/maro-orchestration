@@ -121,6 +121,30 @@ Ordered open work that matters. Top of the list is next.
   agents that haven't read the module. Record: r4b/r5 in
   `docs/history/2026-08-16-14a-slice3-review-arc.md`.
 
+  **Runner SHIPPED 2026-08-16** (`scripts/mutate.py`, spec convention +
+  coverage ledger in `tests/mutation/README.md`). Runs against a
+  `git archive` copy by default, fails on an anchor that doesn't match
+  exactly once, and supports `equivalent` with a required reason.
+
+- [ ] **Close `tests/mutation/provenance_gate.json` — the contamination
+  gate's enforcement is largely unpinned.** First tier-1 sweep, run
+  2026-08-16, **landed deliberately red**: 6 of 18 accounted for. The
+  classifier's *behavior* is well covered against the four incident
+  lessons; what is not covered is everything around it. Confirmed gaps:
+  four of the five `_PROMPT_AUTHORITY_RE`/`_OBEDIENCE_RE` sub-patterns
+  can be deleted with a green suite (the adverb slot, `forbids|prohibits`,
+  the optional-article leg, and the pronoun-object requirement whose
+  whole job is keeping domain facts like "rate limits are a hard
+  constraint" clean), and two of three killswitch behaviors are unpinned
+  — a quoted `"false"` reading as truthy, and a config error failing
+  OPEN instead of closed. Four enforcement-site survivors are marked
+  `unverified` in the spec, not claimed as holes: the one site that WAS
+  probed (`promote_lesson`) turned out to have a redundant downstream
+  guard, so the others need the same one-line probe before anyone writes
+  a test for them. Do the probes first, then write only the tests that
+  pin something real. **Do not delete survivors to make the run green** —
+  the ledger is the deliverable.
+
 ### Portability weighting v2 — selection-bias exploration (accepted v1 residual, 2026-08-15)
 
 - [ ] **Watch for winner-take-all entrenchment in portability-weighted

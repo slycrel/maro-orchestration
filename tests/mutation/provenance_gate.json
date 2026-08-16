@@ -1,0 +1,133 @@
+[
+  {
+    "name": "classifier :: the whole gate returns OUTCOME",
+    "file": "src/lesson_provenance.py",
+    "anchor": "    text = lesson_text or \"\"",
+    "replacement": "    return MINTED_FROM_OUTCOME\n    text = lesson_text or \"\"",
+    "tests": "tests/test_lesson_provenance.py"
+  },
+  {
+    "name": "classifier :: prompt-authority regex loses the adverb slot",
+    "file": "src/lesson_provenance.py",
+    "anchor": "    r\"(?:explicitly\\s+|clearly\\s+)?\"",
+    "replacement": "    r\"\"",
+    "tests": "tests/test_lesson_provenance.py"
+  },
+  {
+    "name": "classifier :: prompt-authority regex loses forbids/prohibits",
+    "file": "src/lesson_provenance.py",
+    "anchor": "    r\"forbids?|prohibits?)\\b\",",
+    "replacement": "    r\")\\b\",",
+    "tests": "tests/test_lesson_provenance.py"
+  },
+  {
+    "name": "classifier :: prompt-authority requires an article",
+    "file": "src/lesson_provenance.py",
+    "anchor": "    r\"\\b(?:the\\s+|a\\s+|your\\s+)?(?:prompt|instructions?|directives?)\\s+\"",
+    "replacement": "    r\"\\b(?:the\\s+|a\\s+|your\\s+)(?:prompt|instructions?|directives?)\\s+\"",
+    "tests": "tests/test_lesson_provenance.py"
+  },
+  {
+    "name": "classifier :: obedience regex drops the pronoun object (false positives)",
+    "file": "src/lesson_provenance.py",
+    "anchor": "    r\"\\btreat\\s+(?:that|this|it|them)\\s+as\\s+(?:a\\s+)?hard\\s+constraints?\\b\"",
+    "replacement": "    r\"\\bas\\s+(?:a\\s+)?hard\\s+constraints?\\b\"",
+    "tests": "tests/test_lesson_provenance.py"
+  },
+  {
+    "name": "classifier :: obedience regex loses must-be-obeyed",
+    "file": "src/lesson_provenance.py",
+    "anchor": "    r\"|\\bmust\\s+be\\s+obeyed\\b\"",
+    "replacement": "    r\"\"",
+    "tests": "tests/test_lesson_provenance.py"
+  },
+  {
+    "name": "classifier :: scaffolding quarantines without a source echo",
+    "file": "src/lesson_provenance.py",
+    "anchor": "    if _SCAFFOLDING_RE.search(text):\n        for source in (goal_text, evidence_text):\n            if source and _SCAFFOLDING_RE.search(source):\n                return MINTED_FROM_PROMPT",
+    "replacement": "    if _SCAFFOLDING_RE.search(text):\n        return MINTED_FROM_PROMPT",
+    "tests": "tests/test_lesson_provenance.py"
+  },
+  {
+    "name": "classifier :: the evidence leg drops out (R1-5 regression)",
+    "file": "src/lesson_provenance.py",
+    "anchor": "        for source in (goal_text, evidence_text):",
+    "replacement": "        for source in (goal_text,):",
+    "tests": "tests/test_lesson_provenance.py"
+  },
+  {
+    "name": "killswitch :: a quoted \"false\" reads as truthy",
+    "file": "src/lesson_provenance.py",
+    "anchor": "        if isinstance(val, str):\n            return val.strip().lower() not in (\"false\", \"0\", \"no\", \"off\")",
+    "replacement": "        if False:\n            return val.strip().lower() not in (\"false\", \"0\", \"no\", \"off\")",
+    "tests": "tests/test_lesson_provenance.py tests/test_knowledge_web.py tests/test_delta_replay.py tests/test_recall.py tests/test_lesson_contested.py tests/test_memory_bridge.py tests/test_verdict_learning.py tests/test_trace_scoring.py"
+  },
+  {
+    "name": "killswitch :: gate defaults OFF",
+    "file": "src/lesson_provenance.py",
+    "anchor": "        val = _cfg_get(\"knowledge.provenance_gate_enabled\", True)",
+    "replacement": "        val = _cfg_get(\"knowledge.provenance_gate_enabled\", False)",
+    "tests": "tests/test_lesson_provenance.py tests/test_knowledge_web.py tests/test_delta_replay.py tests/test_recall.py tests/test_lesson_contested.py tests/test_memory_bridge.py tests/test_verdict_learning.py tests/test_trace_scoring.py"
+  },
+  {
+    "name": "killswitch :: a config error fails OPEN",
+    "file": "src/lesson_provenance.py",
+    "anchor": "    except Exception:\n        return True",
+    "replacement": "    except Exception:\n        return False",
+    "tests": "tests/test_lesson_provenance.py tests/test_knowledge_web.py tests/test_delta_replay.py tests/test_recall.py tests/test_lesson_contested.py tests/test_memory_bridge.py tests/test_verdict_learning.py tests/test_trace_scoring.py"
+  },
+  {
+    "name": "enforcement :: the quarantine predicate never fires",
+    "file": "src/knowledge_web.py",
+    "anchor": "    return tl.minted_from == \"prompt\"",
+    "replacement": "    return False",
+    "tests": "tests/test_lesson_provenance.py tests/test_knowledge_web.py tests/test_delta_replay.py tests/test_recall.py tests/test_lesson_contested.py tests/test_memory_bridge.py tests/test_verdict_learning.py tests/test_trace_scoring.py"
+  },
+  {
+    "name": "enforcement :: quarantined rows become promotable",
+    "file": "src/knowledge_web.py",
+    "anchor": "            if tl.provisional or _is_quarantined(tl) or _is_contested(tl):\n                continue",
+    "replacement": "            if tl.provisional or _is_contested(tl):\n                continue",
+    "tests": "tests/test_lesson_provenance.py tests/test_knowledge_web.py tests/test_delta_replay.py tests/test_recall.py tests/test_lesson_contested.py tests/test_memory_bridge.py tests/test_verdict_learning.py tests/test_trace_scoring.py",
+    "unverified": "SURVIVED against the broad set; NOT yet probed for a redundant downstream guard the way the canon site was. Treat as a lead, not a confirmed hole."
+  },
+  {
+    "name": "enforcement :: quarantined rows can be promoted to canon",
+    "file": "src/knowledge_web.py",
+    "anchor": "    if _is_quarantined(target):",
+    "replacement": "    if False:",
+    "tests": "tests/test_lesson_provenance.py tests/test_knowledge_web.py tests/test_delta_replay.py tests/test_recall.py tests/test_lesson_contested.py tests/test_memory_bridge.py tests/test_verdict_learning.py tests/test_trace_scoring.py",
+    "equivalent": "probed 2026-08-16: neutering ONLY this guard still returns False — a downstream _is_quarantined check in the promote flow catches the row (monkeypatching the predicate itself DOES promote, which is the 'predicate never fires' mutation above, and that one is DETECTED). Defense in depth, not an untested boundary. Do not delete the guard: the docstring says it exists because the CLI calls this directly."
+  },
+  {
+    "name": "enforcement :: quarantined rows clear the effect-promotion guard",
+    "file": "src/knowledge_web.py",
+    "anchor": "    if target.provisional or _is_quarantined(target) or _is_contested(target):",
+    "replacement": "    if target.provisional or _is_contested(target):",
+    "tests": "tests/test_lesson_provenance.py tests/test_knowledge_web.py tests/test_delta_replay.py tests/test_recall.py tests/test_lesson_contested.py tests/test_memory_bridge.py tests/test_verdict_learning.py tests/test_trace_scoring.py",
+    "unverified": "SURVIVED against the broad set; NOT yet probed for a redundant downstream guard the way the canon site was. Treat as a lead, not a confirmed hole."
+  },
+  {
+    "name": "storage :: the mint choke point stops classifying",
+    "file": "src/memory_ledger.py",
+    "anchor": "                minted_from = classify_lesson_provenance(",
+    "replacement": "                minted_from = \"outcome\" or classify_lesson_provenance(",
+    "tests": "tests/test_lesson_provenance.py tests/test_knowledge_web.py tests/test_delta_replay.py tests/test_recall.py tests/test_lesson_contested.py tests/test_memory_bridge.py tests/test_verdict_learning.py tests/test_trace_scoring.py"
+  },
+  {
+    "name": "enforcement :: quarantined rows clear the decay-cycle promote gate",
+    "file": "src/knowledge_web.py",
+    "anchor": "        # permanent without ever having been verified in a learnable run.\n        if (tl.score >= PROMOTE_MIN_SCORE\n                and tl.sessions_validated >= PROMOTE_MIN_SESSIONS\n                and not tl.provisional\n                and not _is_quarantined(tl)",
+    "replacement": "        # permanent without ever having been verified in a learnable run.\n        if (tl.score >= PROMOTE_MIN_SCORE\n                and tl.sessions_validated >= PROMOTE_MIN_SESSIONS\n                and not tl.provisional",
+    "tests": "tests/test_lesson_provenance.py tests/test_knowledge_web.py tests/test_delta_replay.py tests/test_recall.py tests/test_lesson_contested.py tests/test_memory_bridge.py tests/test_verdict_learning.py tests/test_trace_scoring.py",
+    "unverified": "SURVIVED against the broad set; NOT yet probed for a redundant downstream guard the way the canon site was. Treat as a lead, not a confirmed hole."
+  },
+  {
+    "name": "enforcement :: quarantined rows clear the second promote scan",
+    "file": "src/knowledge_web.py",
+    "anchor": "    for tl in effective:\n        if (tl.score >= PROMOTE_MIN_SCORE\n                and tl.sessions_validated >= PROMOTE_MIN_SESSIONS\n                and not tl.provisional\n                and not _is_quarantined(tl)",
+    "replacement": "    for tl in effective:\n        if (tl.score >= PROMOTE_MIN_SCORE\n                and tl.sessions_validated >= PROMOTE_MIN_SESSIONS\n                and not tl.provisional",
+    "tests": "tests/test_lesson_provenance.py tests/test_knowledge_web.py tests/test_delta_replay.py tests/test_recall.py tests/test_lesson_contested.py tests/test_memory_bridge.py tests/test_verdict_learning.py tests/test_trace_scoring.py",
+    "unverified": "SURVIVED against the broad set; NOT yet probed for a redundant downstream guard the way the canon site was. Treat as a lead, not a confirmed hole."
+  }
+]

@@ -48,11 +48,41 @@ the answer was unrecoverable by the next session.
   about the other 85% of that module. Do not read "swept" off a
   filename.
 
+## A SURVIVED verdict is a lead, not a fact
+
+Same discipline as verify-before-fix on a reviewer finding, and it bites
+for the same reason. Two ways this runner reports a survivor that isn't
+a hole, both hit on the first sweep after the tool landed:
+
+1. **Too narrow a `tests` target.** A mutation aimed at
+   `knowledge_web.py` but run only against `test_lesson_provenance.py`
+   "survives" work that `test_knowledge_web.py` does pin. Scope the
+   field to every file that plausibly covers the site — the run is
+   slower and the verdict means something.
+2. **A redundant downstream guard.** Removing `promote_lesson`'s own
+   `_is_quarantined` check still refuses the promotion, because another
+   check later in the flow catches it. Neutering the *predicate*
+   promotes the row, so the invariant IS tested; the individual guard is
+   defense in depth. Probe before calling it a hole: monkeypatch the one
+   thing and see whether the behavior actually changes.
+
+Both are recorded in the spec rather than in someone's memory —
+`equivalent` for a settled one, `unverified` for a survivor that hasn't
+had the probe yet. An unprobed survivor left unmarked reads as a
+confirmed hole to the next reader, which is the same false-confidence
+failure the sweep exists to find.
+
 ## Coverage ledger
 
 | Spec | Surface | Mutations | Swept |
 |---|---|---|---|
-| `scope_14a.json` | §14a scope/stamp/portability: `knowledge_web` scope screens, tiered-store load/rewrite/mutate, quarantine, reinforce heal, `_tfidf_rank_scored`; `camera_readout` census, `_lesson_origins`, `_stamp_coverage`, `_scope_rollup`, `_print_portability`; `pack` lesson transport border | 34 + 1 equivalent | 2026-08-16 |
+| `scope_14a.json` | §14a scope/stamp/portability: `knowledge_web` scope screens, tiered-store load/rewrite/mutate, quarantine, reinforce heal, `_tfidf_rank_scored`; `camera_readout` census, `_lesson_origins`, `_stamp_coverage`, `_scope_rollup`, `_print_portability`; `pack` lesson transport border | 34 + 1 equivalent | 2026-08-16, all accounted for |
+| `provenance_gate.json` | The db37d525 contamination gate: `lesson_provenance` classifier regexes + killswitch, the `_is_quarantined` predicate and its enforcement sites in `knowledge_web`, the `memory_ledger` mint choke point | 18 | 2026-08-16, **NOT closed** — 6 accounted for, 1 equivalent, 4 unverified leads, 6 confirmed gaps in the classifier/killswitch |
+
+`provenance_gate.json` is deliberately landed red. The sweep's value is
+the ledger of what is and isn't pinned; deleting the survivors to get a
+green run would destroy exactly the information it produced. Closing it
+is a named BACKLOG item.
 
 Everything else in `src/` (178 modules) has never had a file-derived
 sweep. The ordered plan for covering it is the top item in the BACKLOG
