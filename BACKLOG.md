@@ -293,43 +293,46 @@ Ordered open work that matters. Top of the list is next.
   buried in step logs. It should be a loud message at plan time —
   same class as the container verb-parity honest-absence work.
 
-### Source trust tiers, and reading the authoritative store rather than its export (Jeremy, 2026-08-16)
+### Reading a cited corpus: read the store, not its export (Jeremy, 2026-08-16 — and NO trusted-source class)
 
-- [ ] **Jeremy's framing, which is the durable half:** *"the link farm is
-  my curated content, so we can trust it more — in theory that won't be
-  the case for most random asks for a maro type system (but might be
-  different for my own personal use)."* A curated corpus and a fetched
-  web page are not the same kind of evidence, and today they are treated
-  identically: a run cites whatever it retrieved. A personal install's
-  own collection is closer to testimony from the operator; a random URL
-  is closer to a stranger's claim. **The design question is whether
-  trust tier is a property of the SOURCE (this path is curated) or of
-  the ASK (this user vouched for this corpus) — the second generalizes
-  to other installs, the first does not.** Decide that before building
-  anything; it changes where the tier is declared.
+- [x] **DECIDED, not built: there is no special class of trusted source
+  data.** Jeremy, on being offered a source-vs-ask trust-tier design:
+  *"I don't really want a class of trusted source data, so I'm fine with
+  maro knowing the concept of the link tree on the web to use as opposed
+  to some sort of special class of data, that seems like a
+  distraction."* Recorded so the idea does not get re-proposed: a
+  curated collection is a PLACE TO LOOK, not a privileged evidence
+  grade. The link farm's value is durability — Jeremy captures things
+  there so they survive the original going away — not authority. Runs
+  should keep grounding claims in what they retrieved and saying where
+  it came from, exactly as they do now.
 - [ ] **Consume the authoritative store, not a lossy export.** Live
-  finding: the run read `link-farm/posts_final_v3.json` — a JSON export
-  — and correctly reported what it contained. But the authoritative
-  store is `db/ai_links.db`, which carries a `post_thread_segments`
-  table the export does not, plus `enrichment_status`, curator `notes`,
-  and per-post review flags. A consumer reading the export gets a
-  quieter, older, structurally thinner view and cannot tell. Where a
-  corpus offers both, prefer the store and say which one was read.
-- [ ] **Surface the corpus's own completeness signals.** The same post
-  carried `enrichment_status: ok` while holding exactly ONE thread
-  segment (`type: op`) — the linked landing-page text and the reply
-  comment that actually contained the study screenshot were never
-  captured. Corpus-wide, 234 posts DO have multiple segments, so the
-  capture machinery works; it is silent when it misses. A run treating a
-  curated corpus as primary should read and report those signals
-  (`enrichment_status`, `subject`/`notes` review flags — this record
-  said "add to review" in both) rather than inferring completeness from
-  the presence of a record. Same false-green shape as a guard that
-  cannot fail, one repo over.
-- [ ] **Not maro's bug, and worth telling the operator anyway:** the
-  capture gap is in the link-farm pipeline. The maro-side obligation is
-  to notice and SAY that a cited corpus flags itself incomplete, not to
-  fix someone else's scraper.
+  finding, and the one real defect here: the run read
+  `link-farm/posts_final_v3.json` — a JSON export — and correctly
+  reported what it contained. The authoritative store is
+  `db/ai_links.db`, which carries `post_thread_segments`,
+  `enrichment_status`, curator `notes` and per-post review flags the
+  export drops. A consumer reading the export gets a thinner view and
+  cannot tell. Where a corpus offers both, prefer the store and say
+  which one was read.
+- [ ] **The gap Jeremy actually cares about is a SCHEMA gap, in
+  link-farm, not maro.** He pasted in the full text of the reply email
+  that carried the `ste` skill; it is not in the corpus. Cause,
+  verified 2026-08-16: **no table has anywhere to put it** — no
+  `email`/`body`/`attachment`/`page`/`html`/`raw` column exists in any
+  table, and `posts`' only long-text fields are `summary`, `content`
+  (the tweet) and `notes` (176 chars of curator flag here). Not a
+  scraper failure; there is no structure to capture it. The durable
+  shape of the ask: a gated link whose content was obtained
+  out-of-band (an email wall, a signup) needs a place to live beside
+  the post, with its own provenance ("obtained manually by the
+  operator, 2026-08-14"), because that is exactly the content the web
+  will not serve later.
+- [x] **NOT a gap: the un-captured 30-deep thread reply.** Corrected
+  by Jeremy — link-farm's multi-segment capture is for an OP's own
+  multi-post threads, by design, not for replies. He posted the image
+  directly precisely so nothing had to go digging. My earlier framing
+  of this as a capture miss was wrong.
 
 ### Concurrent milestone-area agents — why is the path A→B→C and not all three at once? (Jeremy, 2026-08-16)
 
