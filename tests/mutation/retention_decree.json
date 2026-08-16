@@ -1,0 +1,107 @@
+[
+  {
+    "name": "forward :: the tripwire reports no violations, ever",
+    "file": "tests/test_no_silent_deletion.py",
+    "anchor": "            if (py.name, func) not in allowed:\n                out.append(f\"{py.name}:{lineno} {func}() calls {call}\")",
+    "replacement": "            pass",
+    "tests": "tests/test_no_silent_deletion.py"
+  },
+  {
+    "name": "forward :: the allowlist is not consulted at all",
+    "file": "tests/test_no_silent_deletion.py",
+    "anchor": "            if (py.name, func) not in allowed:",
+    "replacement": "            if func not in {f for _m, f in allowed}:",
+    "tests": "tests/test_no_silent_deletion.py"
+  },
+  {
+    "name": "stale :: the reverse census reports no stale entries, ever",
+    "file": "tests/test_no_silent_deletion.py",
+    "anchor": "    return [entry for entry in allowed if entry not in live]",
+    "replacement": "    return []",
+    "tests": "tests/test_no_silent_deletion.py"
+  },
+  {
+    "name": "checkpoint :: the no-auto-caller pin reports nothing, ever",
+    "file": "tests/test_no_silent_deletion.py",
+    "anchor": "        if \"delete_checkpoint\" in py.read_text(encoding=\"utf-8\"):\n            offenders.append(py.name)",
+    "replacement": "        pass",
+    "tests": "tests/test_no_silent_deletion.py"
+  },
+  {
+    "name": "scan :: os.* deletion calls stop being recognised",
+    "file": "tests/test_no_silent_deletion.py",
+    "anchor": "                if base_name == \"os\" and f.attr in _OS_DELETION_ATTRS:\n                    hits.append((self.stack[-1], f\"os.{f.attr}\", node.lineno))",
+    "replacement": "                if False:\n                    hits.append((self.stack[-1], f\"os.{f.attr}\", node.lineno))",
+    "tests": "tests/test_no_silent_deletion.py"
+  },
+  {
+    "name": "scan :: rmtree stops being recognised",
+    "file": "tests/test_no_silent_deletion.py",
+    "anchor": "                elif f.attr == \"rmtree\":",
+    "replacement": "                elif False:",
+    "tests": "tests/test_no_silent_deletion.py"
+  },
+  {
+    "name": "scan :: Path.unlink / Path.rmdir stop being recognised",
+    "file": "tests/test_no_silent_deletion.py",
+    "anchor": "                elif base_name not in (\"os\", \"shutil\") and f.attr in _PATH_DELETION_ATTRS:",
+    "replacement": "                elif False:",
+    "tests": "tests/test_no_silent_deletion.py"
+  },
+  {
+    "name": "scan :: from-imported rmtree/unlink stop being recognised",
+    "file": "tests/test_no_silent_deletion.py",
+    "anchor": "            elif isinstance(f, ast.Name) and f.id in (\"rmtree\", \"unlink\"):",
+    "replacement": "            elif False:",
+    "tests": "tests/test_no_silent_deletion.py"
+  },
+  {
+    "name": "scan :: rmdir drops out of the Path deletion set",
+    "file": "tests/test_no_silent_deletion.py",
+    "anchor": "_PATH_DELETION_ATTRS = {\"unlink\", \"rmdir\"}",
+    "replacement": "_PATH_DELETION_ATTRS = {\"unlink\"}",
+    "tests": "tests/test_no_silent_deletion.py"
+  },
+  {
+    "name": "scan :: os.removedirs and os.rmdir drop out of the os set",
+    "file": "tests/test_no_silent_deletion.py",
+    "anchor": "_OS_DELETION_ATTRS = {\"remove\", \"unlink\", \"rmdir\", \"removedirs\"}",
+    "replacement": "_OS_DELETION_ATTRS = {\"remove\", \"unlink\"}",
+    "tests": "tests/test_no_silent_deletion.py"
+  },
+  {
+    "name": "scan :: the enclosing function is misattributed to <module>",
+    "file": "tests/test_no_silent_deletion.py",
+    "anchor": "        def visit_FunctionDef(self, node):\n            self.stack.append(node.name)\n            self.generic_visit(node)\n            self.stack.pop()",
+    "replacement": "        def visit_FunctionDef(self, node):\n            self.generic_visit(node)",
+    "tests": "tests/test_no_silent_deletion.py"
+  },
+  {
+    "name": "scan :: async functions stop being walked as functions",
+    "file": "tests/test_no_silent_deletion.py",
+    "anchor": "        visit_AsyncFunctionDef = visit_FunctionDef",
+    "replacement": "        pass",
+    "tests": "tests/test_no_silent_deletion.py"
+  },
+  {
+    "name": "checkpoint :: checkpoint.py stops being the only exempt module",
+    "file": "tests/test_no_silent_deletion.py",
+    "anchor": "        if py.name == \"checkpoint.py\":\n            continue",
+    "replacement": "        if py.name.endswith(\".py\"):\n            continue",
+    "tests": "tests/test_no_silent_deletion.py"
+  },
+  {
+    "name": "scan :: nested packages stop being scanned for violations",
+    "file": "tests/test_no_silent_deletion.py",
+    "anchor": "    for py in sorted(src_root.rglob(\"*.py\")):\n        for func, call, lineno in _deletion_sites(py):",
+    "replacement": "    for py in sorted(src_root.glob(\"*.py\")):\n        for func, call, lineno in _deletion_sites(py):",
+    "tests": "tests/test_no_silent_deletion.py"
+  },
+  {
+    "name": "forward :: the module-scoped allowlist key collapses to the filename",
+    "file": "tests/test_no_silent_deletion.py",
+    "anchor": "            if (py.name, func) not in allowed:\n                out.append",
+    "replacement": "            if py.name not in {m for m, _f in allowed}:\n                out.append",
+    "tests": "tests/test_no_silent_deletion.py"
+  }
+]
