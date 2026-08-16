@@ -119,6 +119,22 @@ were mine:
     "sidecar opened `w`". The helper's own contract needed a direct test.
   The pattern to watch: **a test whose subject is reached through a
   caller that would produce the same observable on its own.**
+- **A broad sweep found what a targeted harness cannot.** The r4
+  test-auditor ran ~12 mutations chosen by reading the code rather than
+  by reading the fix list, and every one survived. They were not fix
+  regressions — they were places the fixes had never been *aimed*: the
+  coverage census scanned one tier of two and would silently page at
+  the loader's default 50 (the live store is 195 rows); `stamped` summed
+  a vocabulary that no fixture ever exercised past `method`; the
+  `imported` flag was read off store and archive rows by two lines that
+  every test monkeypatched away; two WARNINGs that are the only trace a
+  corrupt row ever existed could be deleted silently; and pack's
+  `lesson_type` screen kept its `isinstance` half but not its vocabulary
+  half, because every junk fixture was a non-string. All nine surviving
+  mutants that still had an r4 anchor are now must-detect. **The lesson
+  is about harness design:** a mutation list derived from the diff tests
+  whether the fixes are pinned; a list derived from the file tests
+  whether the *behavior* is. Only the second one found these.
 - **One mutation was equivalent and is recorded as such.** The coverage
   scope counter's `out.get(scope, 0) + 1` cannot fail today — the seed
   loop pre-creates every vocabulary key and `camera_readout` imports the

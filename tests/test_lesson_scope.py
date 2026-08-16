@@ -337,7 +337,7 @@ class TestStorePersistence:
         assert len(rows) == 1
         assert rows[0].scope == "world"
 
-    def test_reinforce_heals_an_off_vocabulary_stamp(self):
+    def test_reinforce_heals_an_off_vocabulary_stamp(self, caplog):
         """Fill-if-empty must mean fill-if-INVALID, not fill-if-falsy.
 
         r2 Expert QA: a row carrying `"scope": "banana"` is not stamped — it
@@ -353,10 +353,16 @@ class TestStorePersistence:
             "lesson": text, "source_goal": "goal one", "confidence": 0.5,
             "tier": "medium", "score": 1.0, "last_reinforced": "2026-08-01",
             "scope": "banana"}) + "\n", encoding="utf-8")
-        record_tiered_lesson(text, "research", "done", "goal two", scope="world")
+        with caplog.at_level(logging.WARNING, logger="knowledge_web"):
+            record_tiered_lesson(text, "research", "done", "goal two",
+                                 scope="world")
         rows = load_tiered_lessons("medium", min_score=0.0)
         assert len(rows) == 1, "expected dedup-reinforce, not a second row"
         assert rows[0].scope == "world"
+        # Healing silently would erase the only trace that a corrupt row ever
+        # existed — the heal is the one moment anyone can see it (broad
+        # mutation sweep, r4: suppressing this warning survived the suite).
+        assert "carried an off-vocabulary scope" in caplog.text
 
     def test_reinforce_rejects_an_off_vocabulary_incoming_stamp(self):
         """`incoming_scope` is NOT filtered by the caller.
@@ -482,7 +488,7 @@ class TestStorePersistence:
         return ([json.loads(l) for l in p.read_text().splitlines() if l.strip()]
                 if p.exists() else [])
 
-    def test_unparseable_rows_are_quarantined_not_destroyed(self):
+    def test_unparseable_rows_are_quarantined_not_destroyed(self, caplog):
         """Data retention: a rewrite must never destroy the only copy.
 
         Rewrites rebuild the file from the PARSED list and the loader silently
@@ -495,9 +501,13 @@ class TestStorePersistence:
         from knowledge_web import record_tiered_lesson
         text = "Retries against a bot-challenged endpoint never recover"
         self._seed_drift(text)
-        record_tiered_lesson(text, "research", "done", "goal two")
+        with caplog.at_level(logging.WARNING, logger="knowledge_web"):
+            record_tiered_lesson(text, "research", "done", "goal two")
         assert [r.get("lesson_id") for r in self._rows()] == ["L-good"]
         assert [r.get("lesson_id") for r in self._sidecar()] == ["L-drift"]
+        # A quarantined row is invisible to every reader; silent quarantine is
+        # how the pre-r3 silent deletion went unnoticed for months.
+        assert "unparseable lesson row(s)" in caplog.text
 
     def test_quarantine_is_idempotent(self):
         """Append-only sidecar + shrunken live file = no duplication.
@@ -665,6 +675,36 @@ class TestCensusRollup:
         import camera_readout
         origins = camera_readout._lesson_origins(warn=lambda *a: None)
         assert origins["arch1"]["scope"] == "world"
+
+    def test_origins_carry_the_imported_flag_from_both_readers(
+            self, tmp_path, monkeypatch):
+        """The `imported` plumbing, driven for real rather than monkeypatched.
+
+        Every test of the cross-labeller refusal stubs `_lesson_origins`, so
+        the two lines that actually READ `imported` off a store row and an
+        archive row were uncovered — and the refusal is the only thing
+        stopping the readout from pooling two labellers' stamps (broad
+        mutation sweep, r4: both survived). Same flag, two readers, one of
+        which resolves ~29% of the live evidence base.
+        """
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+        mem = tmp_path / "memory"
+        (mem / "medium").mkdir(parents=True, exist_ok=True)
+        (mem / "medium" / "lessons.jsonl").write_text(json.dumps({
+            "lesson_id": "live1", "task_type": "research", "outcome": "done",
+            "lesson": "a foreign-minted lesson", "source_goal": "g",
+            "confidence": 0.5, "tier": "medium", "score": 1.0,
+            "last_reinforced": "2026-08-01", "scope": "world",
+            "imported": {"imported_from": "mini2"}}) + "\n", encoding="utf-8")
+        (mem / "lessons_archive.jsonl").write_text(json.dumps({
+            "lesson_id": "arch1", "source_goal": "an old goal",
+            "task_type": "research", "scope": "world",
+            "lesson": "an archived foreign lesson",
+            "imported": {"imported_from": "mini2"}}) + "\n", encoding="utf-8")
+        import camera_readout
+        origins = camera_readout._lesson_origins(warn=lambda *a: None)
+        assert origins["live1"]["imported"] is True
+        assert origins["arch1"]["imported"] is True
 
     def test_evidence_bar_follows_the_rank_time_constant(self, monkeypatch):
         """`evidenced` must track ranking's bar, not a value frozen at import.
@@ -1002,9 +1042,56 @@ class TestStampCoverage:
         assert cov["method"] == 1 and cov.get("tool") == 1, cov
 
     def test_newest_stamped_mint_is_reported(self):
+        # The NEWEST STAMPED row, not the newest row — the unstamped one is
+        # deliberately the most recent here, because the figure's whole job is
+        # to answer "when did the writer last fire?" (broad sweep, r4: the
+        # earlier fixture ordering let "newest over all rows" survive).
         from camera_readout import _stamp_coverage
-        self._write("method", None, "world")
-        assert _stamp_coverage()["newest"].startswith("2026-08-12")
+        self._write("method", "world", None)
+        assert _stamp_coverage()["newest"].startswith("2026-08-11")
+
+    def test_the_long_tier_is_counted_too(self):
+        """"Whole store" means both tiers.
+
+        Every coverage fixture writes to medium, so scanning medium only
+        survived the suite — and LONG is where promoted lessons live, i.e.
+        exactly the rows an operator would ask about first (broad sweep, r4).
+        """
+        from camera_readout import _stamp_coverage
+        long_d = self.d.parent / "long"
+        long_d.mkdir(parents=True, exist_ok=True)
+        (long_d / "lessons.jsonl").write_text(json.dumps({
+            "lesson_id": "Lg", "task_type": "research", "outcome": "done",
+            "lesson": "a promoted lesson", "source_goal": "g",
+            "confidence": 0.5, "tier": "long", "score": 1.0,
+            "last_reinforced": "2026-08-01", "scope": "world"}) + "\n",
+            encoding="utf-8")
+        self._write("method")
+        cov = _stamp_coverage()
+        assert (cov["total"], cov["method"], cov["world"]) == (2, 1, 1), cov
+
+    def test_the_coverage_read_is_not_paged(self):
+        """`load_tiered_lessons` defaults to limit=50.
+
+        Drop the explicit `limit=None` and the store-wide census silently
+        becomes a census of the top 50 rows by score — reporting a number
+        smaller than the truth in exactly the direction that looks like a
+        broken writer (broad sweep, r4). The live store is already 195 rows.
+        """
+        from camera_readout import _stamp_coverage
+        self._write(*["method"] * 60)
+        cov = _stamp_coverage()
+        assert (cov["total"], cov["readable"], cov["method"]) == (60, 60, 60), cov
+
+    def test_a_world_only_store_is_not_called_a_dead_writer(self, capsys):
+        # `stamped` sums the VOCABULARY; counting method alone would raise the
+        # alarm over a store the writer had stamped perfectly (broad sweep, r4).
+        import camera_readout
+        self._write("world", "world")
+        camera_readout._print_portability([])
+        out = capsys.readouterr().out
+        assert "2/2 rows stamped" in out
+        assert "ZERO locally-minted stamps" not in out
 
     def test_a_dead_write_path_says_so_in_words(self, capsys):
         """The whole point: this must NOT read like the healthy-but-early case."""

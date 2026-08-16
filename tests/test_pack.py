@@ -1006,6 +1006,32 @@ class TestProvenanceTransport:
         assert [t.lesson for t in rows] == ["a junk-typed lesson"], res
         assert rows[0].lesson_type == ""
 
+    def test_an_off_vocabulary_lesson_type_string_is_dropped(self, tmp_path,
+                                                             target_ws):
+        """The isinstance half is not the whole screen.
+
+        The junk cases above are all non-strings, so dropping the
+        `in _LESSON_TYPES` conjunct survived the suite (broad mutation sweep,
+        r4) — and a plain foreign string is the likelier drift: another
+        machine's vocabulary grows a type this one does not know, and it lands
+        in the store as a category nothing downstream can interpret. Same
+        policy as scope: keep the lesson, drop the label.
+        """
+        from knowledge_web import load_tiered_lessons, MemoryTier
+        src_ws = _make_workspace(tmp_path / "src")
+        pack_path = _export_and_seal(src_ws, tmp_path)
+        _add_artifact(pack_path, cls="lessons", relpath="memory/long/lessons.jsonl",
+                      content=json.dumps({
+                          "lesson_id": "s6", "lesson": "a foreign-typed lesson",
+                          "task_type": "ops", "outcome": "success",
+                          "source_goal": "g", "confidence": 0.9, "tier": "long",
+                          "score": 1.0, "last_reinforced": "2020-01-01",
+                          "lesson_type": "triage"}) + "\n")
+        res = import_pack(pack_path, label="l", target=target_ws)
+        rows = load_tiered_lessons(tier=MemoryTier.MEDIUM, limit=None, raw=True)
+        assert [t.lesson for t in rows] == ["a foreign-typed lesson"], res
+        assert rows[0].lesson_type == ""
+
     @pytest.mark.parametrize("bad", ["0.9", "high"])
     def test_the_border_never_writes_a_row_its_own_loader_cannot_read(
             self, bad, tmp_path, target_ws):
