@@ -2858,6 +2858,56 @@ Dated end-of-chunk/session entries, append-only at the tail. Rotation policy (20
   are summarized in this entry's back-fill batch above; archives remain
   the full-context source.
 
+- **2026-08-15 (§14a slice 3 SHIPPED — mint-time method/world scope
+  stamp; probe-first datapoint #3).** The arc's categorical half is in:
+  `extract_lessons_via_llm`'s typed JSON now carries a third key
+  (`scope`: method | world), `TieredLesson.scope` persists it, both
+  mint paths (finalize + the deferred lane organic runs actually take)
+  thread it, and `camera_readout --portability` cross-tabs portability
+  by stamp. No new judge — the existing extractor answers one more
+  question in the same call. **Scope is deliberately NOT a ranking
+  input**: earned globality (slice 2) keeps doing the behavioral work,
+  and the stamp's only consumer is the census. Stamp semantics:
+  write-once, filled from the first real mint that offers one, never
+  flipped after (a re-sighting with a different label loses to the
+  existing one). Suite 8908 green.
+  **What the pre-code fact ledger bought (8 probes, and it earned its
+  keep this time — datapoint #3, 0 review rounds so far):**
+  (a) the naive schema addition leaked a scope value into the `type`
+  slot on 2/18 live extractions, where the pre-existing unknown-type
+  fallback would have silently rewritten them to "execution" — a
+  corrupted lesson_type bought by adding a field; the shipped prompt
+  drove it to 0/31 across two lanes and the parser recovers anyway;
+  (b) my first hardened prompt shifted the type distribution because I
+  swapped an exemplar's type — the S2 seed-reader anchoring mechanism,
+  self-inflicted and caught before landing; exemplar types are now
+  pinned by test as a multiset (presence-checking sails past a
+  one-of-two swap);
+  (c) the first A/B was INVALID — arm B returned zero lessons on all 20
+  runs and the honest cause was free-tier quota exhaustion from arm A,
+  not the prompt; interleaving fixed it. A confident "the schema change
+  kills extraction" was one un-rerun probe away;
+  (d) the stamp is **labeller-dependent**: production mint lane ~81%
+  method with 97.5% two-pass self-agreement, hosted-free ~44% method at
+  88.8% — so stamps are comparable within a labeller, never across, and
+  a post-hoc backfill of the 188 legacy rows is refused on those grounds
+  (BACKLOG);
+  (e) the end-to-end probe (real reflect_and_record, production lane,
+  temp workspace) caught a missed 2-tuple unpack in the S5 cross-type
+  cap that every unit test passed over. 3/3 lessons stamped once fixed.
+  **Honest limit, stated up front:** the cross-tab reads
+  empty-by-construction today — all 79 cited lessons predate the stamp,
+  so the readout prints that in words rather than dressing an empty
+  comparison as a finding. What the probes DID show on the existing
+  corpus (post-hoc labeller): every resolvable lesson at the ≥3
+  verdicted-foreign-citation bar is method-scope and only 5 world-scope
+  lessons have any foreign citation — consistent with §14a's
+  "learning is almost entirely methodology", and exactly why scope was
+  kept out of ranking. BACKLOG carries the re-read trigger and the kill
+  criterion (if ~30 stamped-and-cited lessons show indistinguishable
+  pooled portability, the categorical axis loses to contested-14a's
+  structural-invariance alternative).
+
 - **2026-08-16 (dev Mac, split session)** — **BACKLOG split executed
   (393KB → 237KB) + BACKLOG_DONE rotation (606KB → 98KB) + ci-watch
   setsid fix.** All three landed files were past the 256KB Read limit

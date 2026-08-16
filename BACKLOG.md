@@ -64,6 +64,36 @@ Ordered open work that matters. Top of the list is next.
   6 lessons qualify at ≥3 today, weight ∈ [0.8, 1.71] live, and
   weighting rides ONE slot-set of a multi-source selection.
 
+### §14a scope stamp — the census comparison is not readable yet (evidence-gated, 2026-08-15)
+
+- [ ] **Re-read `camera_readout --portability`'s by-scope rollup once
+  stamped lessons start clearing the 3-verdict bar; only then judge
+  method-vs-world transferability.** Slice 3 shipped the mint-time
+  stamp and the cross-tab that consumes it, but the stamp is
+  prospective by construction: at ship, all 79 cited lessons were
+  minted pre-stamp, so every one lands in `unstamped` and the
+  method/world buckets are empty. The readout says so in words rather
+  than printing an empty comparison as if it were a finding. What the
+  pre-ship probes DID establish, on the existing corpus with a
+  post-hoc labeller: of the 6 lessons carrying ≥3 verdicted foreign
+  citations every resolvable one is method-scope, and only 5
+  world-scope lessons have ANY foreign citation — consistent with
+  §14a's "learning is almost entirely methodology", and the reason
+  scope was deliberately kept OUT of ranking. This entry is what turns
+  that into evidence instead of a prior. Kill criterion for the stamp
+  itself: if after ~30 stamped-and-cited lessons the two buckets'
+  pooled portability is indistinguishable, the categorical axis is not
+  earning its place and slice 3 should be reconsidered against the
+  contested-14a alternative (structural invariance, READING_QUEUE
+  2026-08-11).
+- [ ] **Do not backfill the legacy rows to fill the buckets faster.**
+  Probed and refused at ship: labellers disagree on the base rate by
+  ~2× (production lane ~81% method, hosted-free ~44% on the same
+  runs), so a column mixing instruments would not be comparable to
+  itself — which is the one property the census needs. If backfill
+  ever happens it must carry a per-row labeller stamp and be bucketed
+  separately.
+
 ### Shadow lane — batch adjudication tooling (evidence-gated)
 
 - [ ] **Build the shadow adjudicator at first ~10 completed pairs (or

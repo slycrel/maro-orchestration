@@ -1048,7 +1048,22 @@ was the distillation's, more than his.
   invariance across regimes rather than semantic category, and
   current "global methodology" may be an n=40 single-family artifact.
   Held open for Jeremy — settled conclusion, so re-examine, don't
-  silently amend.
+  silently amend. **Slices 1–3 SHIPPED 2026-08-15** and, notably, the
+  build was arranged so the contest stays winnable either way: slice 1
+  the pure-read portability census, slice 2 earned globality as
+  ranking behavior (`src/portability.py` — continuous, evidence-fed,
+  no category flips), slice 3 the mint-time method/world stamp
+  (`TieredLesson.scope`, written from the extractor's typed JSON) whose
+  ONLY consumer is the census cross-tab. Scope was deliberately kept
+  out of ranking: pre-ship probing found every resolvable lesson at
+  the ≥3-verdicted-foreign-citation bar is method-scope and only 5
+  world-scope lessons carry any foreign citation at all, so the
+  categorical axis has no discriminating evidence yet — and the stamp
+  itself proved labeller-dependent (~81% method on the production
+  mint lane, ~44% on hosted-free, same runs). The cross-tab is the
+  instrument that will either earn the method-vs-world axis or hand
+  the contest to structural invariance; it reads empty-by-construction
+  today (BACKLOG entry carries the kill criterion).
 - The five-lens panel verdict — RESOLVED same day: **PASS**. Five
   distinct missing-concepts, unanimous reconstruct-before-build,
   contrast surfaced against both participants (Jeremy's vantage
