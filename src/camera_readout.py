@@ -44,7 +44,7 @@ import re
 import sys
 from collections import Counter, defaultdict
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 from context_budget import clip as _clip
 
@@ -205,7 +205,7 @@ import portability as _portability  # noqa: E402
 # read, so `scope` can hold any decodable type: `["world"] in _LESSON_SCOPES`
 # RAISES, and `format(123, ":7s")` raises too, so the type check must come
 # before the vocabulary check for the per-row print to survive at all.
-from knowledge_web import _LESSON_SCOPES, coerce_scope as _clean_scope  # noqa: E402,F401
+from knowledge_web import _LESSON_SCOPES, coerce_scope as _clean_scope  # noqa: E402
 
 # Comparing the two stamped buckets on a handful of citations would be
 # numerology. Stated floor, per bucket, so the readout can say plainly whether
@@ -351,8 +351,16 @@ def _scope_rollup(rows: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
                                 "foreign_s": 0, "foreign_f": 0, "evidenced": 0,
                                 "imported": 0})
         b.setdefault("imported", 0)
+        b.setdefault("imported_fv", 0)
         b["lessons"] += 1
         b["imported"] += bool(r.get("imported"))
+        # Membership is not contamination. A pooled figure is only polluted by
+        # an imported row whose VERDICTS are in it — an imported row with zero
+        # foreign verdicted citations contributes nothing to foreign_s/f, so
+        # suppressing the comparison over its mere presence would let one
+        # uncited pack row void the §14a verdict permanently (r4, two lenses).
+        if r.get("imported") and (r["foreign_s"] + r["foreign_f"]) > 0:
+            b["imported_fv"] += 1
         b["cites"] += r["cites"]
         b["foreign"] += r["foreign"]
         b["foreign_s"] += r["foreign_s"]
@@ -396,18 +404,51 @@ def _stamp_coverage() -> Dict[str, Any]:
     indistinguishable (r3 Expert QA). This line separates them: it answers
     "is the stamp landing at all?" without waiting on citations.
     """
-    out = {"total": 0, "method": 0, "world": 0, "malformed": 0, "newest": ""}
+    out: Dict[str, Any] = {"total": 0, "readable": 0, "malformed": 0,
+                           "imported": 0, "quarantined": 0, "newest": ""}
+    for sc in _LESSON_SCOPES:
+        out[sc] = 0
     try:
-        from knowledge_web import load_tiered_lessons, MemoryTier
+        from knowledge_web import (load_tiered_lessons, MemoryTier,
+                                   _tiered_lessons_path,
+                                   unparseable_sidecar_count)
         for tier in (MemoryTier.MEDIUM, MemoryTier.LONG):
-            for tl in load_tiered_lessons(tier, limit=None, min_score=0.0,
-                                          raw=True):
-                out["total"] += 1
+            rows = load_tiered_lessons(tier, limit=None, min_score=0.0,
+                                       raw=True)
+            # Denominator from the FILE, not the loader. load_tiered_lessons
+            # swallows every read failure internally and returns [], so
+            # counting its output made an unreadable store look like an empty
+            # one — and unparseable rows are excluded by construction, so a
+            # store that is 90% unreadable printed "100% stamped" (r4, two
+            # lenses). "Whole store" has to mean the bytes on disk.
+            path = _tiered_lessons_path(tier)
+            on_disk = 0
+            if path.exists():
+                on_disk = sum(1 for line in
+                              path.read_text(encoding="utf-8",
+                                             errors="replace").splitlines()
+                              if line.strip())
+            if on_disk and not rows:
+                raise RuntimeError(
+                    f"{tier}: {on_disk} row(s) on disk, loader returned none")
+            out["total"] += on_disk
+            out["readable"] += len(rows)
+            out["quarantined"] += unparseable_sidecar_count(tier)
+            for tl in rows:
                 scope, bad = _clean_scope(getattr(tl, "scope", ""))
                 if bad:
                     out["malformed"] += 1
                 elif scope:
-                    out[scope] += 1
+                    # .get()+1, not out[scope]: driven by the vocabulary, so
+                    # adding a third scope value cannot KeyError the whole
+                    # instrument (r4 Expert QA).
+                    out[scope] = out.get(scope, 0) + 1
+                    if getattr(tl, "imported", None):
+                        # An imported stamp is evidence ANOTHER machine's
+                        # writer fired, not ours. BACKLOG reads this counter
+                        # as "did the production lane stamp?", so the two
+                        # must not be pooled.
+                        out["imported"] += 1
                     stamped_at = str(getattr(tl, "recorded_at", "") or "")
                     if stamped_at > out["newest"]:
                         out["newest"] = stamped_at
@@ -442,15 +483,24 @@ def _print_portability(per_run: List[Dict[str, Any]]) -> None:
               f"citation-gated lines below cannot be trusted as a statement "
               f"about the write path")
     else:
-        stamped = cov["method"] + cov["world"]
+        stamped = sum(cov.get(sc, 0) for sc in _LESSON_SCOPES)
+        local = stamped - cov["imported"]
+        extra = ""
+        if cov["imported"]:
+            extra += f", {cov['imported']} of them IMPORTED (another machine's labeller)"
+        if cov["quarantined"]:
+            extra += f", {cov['quarantined']} row(s) quarantined as unparseable"
+        if cov["readable"] != cov["total"]:
+            extra += (f", {cov['total'] - cov['readable']} row(s) on disk the "
+                      f"loader cannot read")
         print(f"     stamp coverage (whole store, not citation-gated): "
               f"{stamped}/{cov['total']} rows stamped "
-              f"(method {cov['method']} / world {cov['world']} / malformed "
-              f"{cov['malformed']}), newest stamped mint "
+              f"(method {cov.get('method', 0)} / world {cov.get('world', 0)} / "
+              f"malformed {cov['malformed']}){extra}, newest stamped mint "
               f"{cov['newest'][:19] or 'none'}")
-        if cov["total"] and not stamped:
-            print("     ^^ ZERO stamped rows store-wide: the write path has "
-                  "not landed a single stamp. Until this is non-zero the "
+        if cov["total"] and not local:
+            print("     ^^ ZERO locally-minted stamps store-wide: this box's "
+                  "write path has not landed a single stamp. Until this is non-zero the "
                   "lines below say nothing about method-vs-world — they only "
                   "say the corpus predates the stamp, which is also what a "
                   "silently broken extractor looks like.")
@@ -464,7 +514,8 @@ def _print_portability(per_run: List[Dict[str, Any]]) -> None:
         print(f"     {name:10s} lessons={b['lessons']:3d} cites={b['cites']:4d} "
               f"foreign={b['foreign']:3d} judged(s/f)={b['foreign_s']}/{b['foreign_f']} "
               f"pooled={pooled:12s} evidenced={b['evidenced']} "
-              f"imported={b.get('imported', 0)}")
+              f"imported={b.get('imported', 0)}"
+              f"({b.get('imported_fv', 0)} cited)")
     stamped_buckets = {k: v for k, v in by_scope.items() if k != "unstamped"}
     stamped = sum(v["lessons"] for v in stamped_buckets.values())
     bar = _portability.MIN_FOREIGN_EVIDENCE
@@ -501,7 +552,7 @@ def _print_portability(per_run: List[Dict[str, Any]]) -> None:
         elif len(both) < 2:
             print(f"     (only the {both[0]!r} bucket has evidence — a "
                   f"one-sided figure is not a comparison)")
-        elif any(stamped_buckets[k].get("imported") for k in both):
+        elif any(stamped_buckets[k].get("imported_fv") for k in both):
             # Stamps are comparable WITHIN a labeller, not across them: the
             # production lane labels ~81% method at 97.5% self-agreement, the
             # hosted-free lane ~44% at 88.8%. An imported row was stamped on
@@ -510,11 +561,12 @@ def _print_portability(per_run: List[Dict[str, Any]]) -> None:
             # anything. Refuse the verdict rather than print a comparison the
             # stamp's own contract forbids (r3, two lenses — pack.py claimed
             # the census separated these and it did not).
-            n_imp = sum(stamped_buckets[k].get("imported", 0) for k in both)
-            print(f"     ({n_imp} evidenced stamp(s) were minted on another "
-                  f"machine by another labeller — stamps are comparable within "
-                  f"a labeller, not across them, so this pooling is not a "
-                  f"readable comparison)")
+            n_imp = sum(stamped_buckets[k].get("imported_fv", 0) for k in both)
+            print(f"     ({n_imp} of the compared buckets' stamped lesson(s) "
+                  f"were minted on another machine by another labeller and "
+                  f"their verdicts are pooled into the figures above — stamps "
+                  f"are comparable within a labeller, not across them, so this "
+                  f"is not a readable comparison)")
         elif thinnest < _SCOPE_COMPARISON_FLOOR:
             print(f"     (both buckets have evidence but the thinner one rests on "
                   f"{thinnest} verdicted citation(s), under the stated floor of "

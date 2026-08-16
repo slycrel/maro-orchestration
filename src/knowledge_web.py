@@ -63,6 +63,42 @@ _LESSON_TYPES = frozenset({"execution", "planning", "recovery", "verification", 
 _LESSON_SCOPES = frozenset({"method", "world"})
 
 
+def _coerce_int_fields(tl: "TieredLesson") -> None:
+    """Coerce every int-typed TieredLesson field in place.
+
+    r3 coerced `score`/`confidence` because a string score raised out of
+    `load_tiered_lessons`' sort — but the bug is field-generic, not
+    field-specific. `sessions_validated` is compared against
+    PROMOTE_MIN_SESSIONS inside `run_decay_cycle`'s promotion loop with no
+    enclosing try (r4 design lens, reproduced:
+    `TypeError: '>=' not supported between instances of 'str' and 'int'`),
+    which kills promotion AND GC for the tier on every cycle, forever — and
+    the row parses cleanly, so quarantine would never catch it either. Driven
+    off the dataclass annotations rather than a hand-list so a new int field
+    cannot reintroduce the same wedge silently.
+    """
+    for name, f in TieredLesson.__dataclass_fields__.items():
+        if f.type in ("int", int):
+            setattr(tl, name, int(getattr(tl, name)))
+
+
+def _scope_or_warn(raw: Any, lesson_id: str = "") -> str:
+    """coerce_scope, with the `bad` verdict actually reported.
+
+    r3 wrote `coerce_scope(...)[0]` at the mint and transport sites, throwing
+    away the flag whose whole purpose is that "corruption gets reported rather
+    than absorbed" — while the reinforce heal warned loudly on the identical
+    condition. A caller handing this function garbage is a bug in that caller,
+    and a silent "" makes it indistinguishable from an honest unstamped mint.
+    """
+    scope, bad = coerce_scope(raw)
+    if bad:
+        log.warning("lesson %s minted with an off-vocabulary scope %r — "
+                    "stored unstamped; the caller is passing something no "
+                    "extractor in this tree produces", lesson_id or "?", raw)
+    return scope
+
+
 def coerce_scope(raw: Any) -> Tuple[str, bool]:
     """Coerce any decoded-JSON value to the scope vocabulary. -> (scope, bad).
 
@@ -583,7 +619,7 @@ def record_tiered_lesson(
             acquired_for=acquired_for,
             evidence_sources=evidence_sources or [],
             lesson_type=lesson_type if lesson_type in _LESSON_TYPES else "",
-            scope=coerce_scope(scope)[0],
+            scope=_scope_or_warn(scope, lesson_id),
             novelty=round(novelty, 4),
             provisional=provisional,
             minted_from=minted_from,
@@ -796,12 +832,17 @@ def _reinforce_tiered_lesson(tl: TieredLesson, *, tier: str,
         # bare counter bump, and the heal that would clear the value is the
         # thing that crashes (r3, three lenses, reproduced).
         stored_scope, stored_bad = coerce_scope(row.scope)
-        if incoming_scope in _LESSON_SCOPES and not stored_scope:
+        # BOTH sides through the screen. r3 coerced the stored side and left
+        # the incoming one a bare `in` — eight lines under a comment saying
+        # the type check has to come first "everywhere". Latent (every
+        # in-tree caller launders scope through as_typed_lesson's str()), but
+        # record_tiered_lesson is re-exported public API (r4, two lenses).
+        if coerce_scope(incoming_scope)[0] and not stored_scope:
             if stored_bad:
                 log.warning("lesson %s carried an off-vocabulary scope %r — "
                             "healed to %r by this mint",
                             row.lesson_id, row.scope, incoming_scope)
-            row.scope = incoming_scope
+            row.scope = coerce_scope(incoming_scope)[0]
         row.times_reinforced += 1
         # Rationale erosion fix (MH, 2026-08-11): at >0.8 similarity the
         # incoming text can differ in exactly the operative clause — keep it
@@ -936,10 +977,12 @@ def load_tiered_lessons(
                 # meanwhile hid the row, so nothing ever pointed at it: the
                 # reader concealed the corruption and the writer died on it
                 # (r3 Expert QA, reproduced). A row that fails here is
-                # unparseable, and unparseable rows are preserved verbatim
-                # through rewrites — see _unparseable_lines.
+                # unparseable, and unparseable rows are moved to a
+                # quarantine sidecar rather than destroyed — see
+                # _quarantine_unparseable.
                 tl.score = float(tl.score)
                 tl.confidence = float(tl.confidence)
+                _coerce_int_fields(tl)
                 days = _days_since(tl.last_reinforced)
                 if max_age_days is not None and days > max_age_days:
                     continue  # lesson too stale
@@ -962,8 +1005,8 @@ def load_tiered_lessons(
     return results[:limit] if limit is not None else results
 
 
-def _unparseable_lines(path) -> List[str]:
-    """Store lines that do NOT survive a round trip through TieredLesson.
+def _quarantine_unparseable(path) -> int:
+    """Move store lines that fail a TieredLesson round trip to a SIDECAR.
 
     Rewrites (``_rewrite_tiered_lessons``, ``_mutate_tiered_lessons``) rebuild
     the file from the PARSED list, and ``load_tiered_lessons`` silently
@@ -971,17 +1014,31 @@ def _unparseable_lines(path) -> List[str]:
     reinforcement of any lesson permanently deleted every unparseable row,
     unarchived and uncounted. That contradicts ``_archive_lessons``' own
     decree ("decay trust, never data — GC and forget move lessons OUT but
-    never destroy them") and the standing data-retention rule.
+    never destroy them") and the standing data-retention rule. The flat store
+    got this right long ago (memory_ledger preserves unparseable lines); the
+    tiered store did not, and that inconsistency is the real finding — NOT,
+    as r3's docstring and commit message claimed, the 290-row backup file in
+    this workspace. That file is a snapshot of the FLAT store, key-for-key
+    identical to today's live flat store; it fails ``TieredLesson`` because it
+    is a different dataclass, not because of drift, and it is never read or
+    rewritten by this lane. The hazard here is real but hypothetical, and r4
+    corrected the claim rather than leave borrowed evidence standing.
 
-    Not hypothetical: this workspace holds a real backup file whose 290 rows
-    all fail today's dataclass on schema drift. Had that drift happened in
-    place, one mint would have erased all 290 with no trace.
+    SIDECAR, not carried in-file (r4, Expert QA). r3 appended these rows back
+    into the live store, which preserved them and made them immortal: no
+    code path could remove one — not ``forget_lesson``, not GC, not a
+    ``lambda L: []`` mutate — and a pre-schema shadow row sharing a
+    lesson_id with a forgotten lesson would come back to life the moment a
+    future version could parse it, inverting ``forget_lesson``'s "forgetting
+    is final". Moving them OUT is the same verb ``_archive_lessons`` uses,
+    and it keeps the live file's line count honest for the coverage census.
 
-    Returned verbatim (newline-terminated) so a rewrite can carry them
-    through byte-for-byte. Schema drift is the common case and a future
-    version may well parse them again.
+    Appended (never rewritten), so this is idempotent: once a row has moved
+    to the sidecar the live file no longer holds it, and the next rewrite
+    finds nothing to move. Returns how many rows moved.
     """
-    out: List[str] = []
+    moved: List[str] = []
+    kept: List[str] = []
     try:
         for line in path.read_text(encoding="utf-8").splitlines():
             if not line.strip():
@@ -992,16 +1049,48 @@ def _unparseable_lines(path) -> List[str]:
                                      TieredLesson.__dataclass_fields__ if k in d})
                 float(tl.score)
                 float(tl.confidence)
+                _coerce_int_fields(tl)
             except Exception:
-                out.append(line if line.endswith("\n") else line + "\n")
+                moved.append(line if line.endswith("\n") else line + "\n")
+            else:
+                kept.append(line if line.endswith("\n") else line + "\n")
     except Exception:
-        return []
-    if out:
-        log.warning("%s: %d unparseable lesson row(s) preserved verbatim "
-                    "through the rewrite (schema drift or corruption) — they "
-                    "are invisible to every reader until they parse again",
-                    path.name, len(out))
-    return out
+        return 0
+    if not moved:
+        return 0
+    from file_lock import atomic_write
+    side = path.with_suffix(path.suffix + ".unparseable")
+    try:
+        with side.open("a", encoding="utf-8") as fh:
+            fh.writelines(moved)
+        # Only shrink the live file once the sidecar copy is durable.
+        atomic_write(path, "".join(kept))
+    except Exception as exc:
+        log.warning("%s: could not quarantine %d unparseable row(s) (%s) — "
+                    "leaving them in place rather than risk losing them",
+                    path.name, len(moved), exc)
+        return 0
+    log.warning("%s: moved %d unparseable lesson row(s) to %s (schema drift "
+                "or corruption). They are out of every reader's way and NOT "
+                "destroyed; inspect or repair them by hand.",
+                path.name, len(moved), side.name)
+    return len(moved)
+
+
+def unparseable_sidecar_count(tier: str = MemoryTier.MEDIUM) -> int:
+    """How many rows are sitting in the tier's quarantine sidecar.
+
+    Exposed so the census can put the number in front of an operator — a
+    quarantined row is invisible to every reader, and invisible-and-unreported
+    is how the pre-r3 silent deletion went unnoticed for months.
+    """
+    side = _tiered_lessons_path(tier)
+    side = side.with_suffix(side.suffix + ".unparseable")
+    try:
+        return sum(1 for line in side.read_text(encoding="utf-8").splitlines()
+                   if line.strip())
+    except Exception:
+        return 0
 
 
 def _rewrite_tiered_lessons(tier: str, lessons: Optional[List[TieredLesson]] = None) -> None:
@@ -1020,10 +1109,12 @@ def _rewrite_tiered_lessons(tier: str, lessons: Optional[List[TieredLesson]] = N
         # Reload INSIDE the lock — reloading before acquisition raced a
         # concurrent writer (its lessons landed between our read and write
         # and were silently dropped).
+        # Move unparseable rows OUT before rebuilding from the parsed list —
+        # otherwise the write below deletes them (see _quarantine_unparseable).
+        _quarantine_unparseable(path)
         if lessons is None:
             lessons = load_tiered_lessons(tier=tier, min_score=0.0, limit=None, raw=True)
-        atomic_write(path, "".join(json.dumps(asdict(tl)) + "\n" for tl in lessons)
-                     + "".join(_unparseable_lines(path)))
+        atomic_write(path, "".join(json.dumps(asdict(tl)) + "\n" for tl in lessons))
 
 
 def _mutate_tiered_lessons(tier: str, mutate) -> None:
@@ -1036,14 +1127,13 @@ def _mutate_tiered_lessons(tier: str, mutate) -> None:
     path = _tiered_lessons_path(tier)
     from file_lock import locked_write, atomic_write
     with locked_write(path):
+        # Quarantine BEFORE loading, while the lock is held and the old bytes
+        # are still on disk: unparseable rows are not in `lessons` (load drops
+        # them) and the write below would otherwise delete them.
+        _quarantine_unparseable(path)
         lessons = load_tiered_lessons(tier=tier, min_score=0.0, limit=None, raw=True)
-        # Read the unparseable rows BEFORE the write, while the lock is held
-        # and the old bytes are still on disk — they are not in `lessons`
-        # (load drops them) and the write below would otherwise delete them.
-        carried = _unparseable_lines(path)
         lessons = mutate(lessons)
-        atomic_write(path, "".join(json.dumps(asdict(tl)) + "\n" for tl in lessons)
-                     + "".join(carried))
+        atomic_write(path, "".join(json.dumps(asdict(tl)) + "\n" for tl in lessons))
 
 
 # ---------------------------------------------------------------------------

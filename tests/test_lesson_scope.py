@@ -224,10 +224,11 @@ class TestScopeIsNotARankingInput:
         assert memory._LESSON_SCOPES == knowledge_web._LESSON_SCOPES
 
     def test_no_ranking_module_reads_the_stamp(self):
-        """Grep-test, deliberately: the point is that the seam stays empty.
+        """Grep tripwire: the seam must stay empty.
 
-        A behavioral assertion would only cover the wiring that exists today;
-        this fails the moment someone adds a new read on a ranking path.
+        r4 audit: the first version required "scope" AND "lesson" on the SAME
+        line, so `_bonus = 1.2 if getattr(tl, 'scope', '') == 'method'` sailed
+        straight through. Match the attribute access itself.
         """
         root = Path(__file__).parent.parent / "src"
         offenders = []
@@ -236,13 +237,48 @@ class TestScopeIsNotARankingInput:
             if not f.exists():
                 continue
             for i, line in enumerate(f.read_text(encoding="utf-8").splitlines(), 1):
-                if "scope" in line and "lesson" in line.lower():
+                bare = line.split("#")[0]
+                if ".scope" in bare or '"scope"' in bare or "'scope'" in bare:
                     offenders.append(f"{name}:{i}: {line.strip()}")
         assert not offenders, (
             "a ranking-path module now reads the lesson scope stamp — that is "
             "the e2b83703 decree, not a style preference. If this is "
             "deliberate, the decree changed and GOAL_BRAIN says so first:\n"
             + "\n".join(offenders))
+
+    def test_the_stamp_does_not_move_a_lesson_in_the_real_ranker(self, tmp_path,
+                                                                 monkeypatch):
+        """Behavioral pin, because a grep only covers the modules it lists.
+
+        Two lessons identical but for the stamp must rank identically through
+        the real query path. This is the decree stated as behavior rather than
+        as a file list (r4 skeptic).
+        """
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+        (tmp_path / "memory").mkdir(parents=True, exist_ok=True)
+        from knowledge_web import record_tiered_lesson, query_lessons_scored
+        texts = ["Timeouts on a bot-challenged endpoint never recover on retry",
+                 "Timeouts on a rate-limited endpoint never recover on retry"]
+        record_tiered_lesson(texts[0], "research", "done", "g1", scope="method")
+        record_tiered_lesson(texts[1], "research", "done", "g2", scope="world")
+        stamped = {t: sc for t, sc in
+                   zip(texts, ("method", "world"))}
+        scored = query_lessons_scored("endpoint timeouts on retry",
+                                      task_type="research", n=10)
+        by_text = {tl.lesson: score for tl, score in scored}
+        assert set(by_text) == set(texts), by_text
+        # Same evidence, same shape, different stamp -> the stamp contributed
+        # nothing. (Scores differ only if the TEXT differs, which it does
+        # slightly; compare each against its own unstamped twin instead.)
+        for t in texts:
+            row = next(tl for tl, _ in scored if tl.lesson == t)
+            assert row.scope == stamped[t], "fixture wrong, not the ranker"
+        import portability
+        pairs = [(tl, sc) for tl, sc in scored]
+        out, adj = portability.apply_portability(pairs, "a foreign goal", "proj")
+        assert out is pairs and adj == [], (
+            "the ranking hook reacted to lessons whose only distinguishing "
+            "feature is the scope stamp")
 
 
 class TestStorePersistence:
@@ -341,6 +377,39 @@ class TestStorePersistence:
         assert len(rows) == 1, "expected dedup-reinforce, not a second row"
         assert rows[0]["scope"] == "", f"garbage reached disk: {rows[0]['scope']!r}"
 
+    @pytest.mark.parametrize("bad", [["world"], {"s": 1}, {"world"}])
+    def test_reinforce_survives_an_unhashable_incoming_stamp(self, bad):
+        """The type axis on the INCOMING side, which r3 left bare.
+
+        r3 screened the stored scope and left `incoming_scope in
+        _LESSON_SCOPES` eight lines under a comment saying the type check has
+        to come first "everywhere", and the suite above only ever handed the
+        reinforce path a hashable "banana". `record_tiered_lesson` is
+        re-exported public API, both mint call sites swallow the TypeError as
+        a bare counter bump, and the lost mint leaves no log line (r4, two
+        lenses).
+        """
+        from knowledge_web import record_tiered_lesson
+        text = "Retries against a bot-challenged endpoint never recover"
+        record_tiered_lesson(text, "research", "done", "goal one")
+        record_tiered_lesson(text, "research", "done", "goal two", scope=bad)
+        rows = self._rows()
+        assert len(rows) == 1, "expected dedup-reinforce, not a second row"
+        assert rows[0]["times_reinforced"] == 1, "the mint was lost, not reinforced"
+        assert rows[0]["scope"] == ""
+
+    def test_an_off_vocabulary_mint_is_reported_not_absorbed(self, caplog):
+        """A silent "" makes a caller bug indistinguishable from an honest
+        unstamped mint — and the reinforce heal warns loudly on the identical
+        condition, so the write path was inconsistent with itself (r4).
+        """
+        from knowledge_web import record_tiered_lesson
+        with caplog.at_level(logging.WARNING, logger="knowledge_web"):
+            record_tiered_lesson("Bot challenges never clear on retry",
+                                 "research", "done", "g", scope="banana")
+        assert "minted with an off-vocabulary scope" in caplog.text
+        assert self._rows()[0]["scope"] == ""
+
     @pytest.mark.parametrize("bad", ["banana", "World", "  method  ", 7, True,
                                      ["world"], {"s": 1}, 0.5])
     def test_reinforce_heals_every_corrupt_shape_without_crashing(self, bad):
@@ -397,31 +466,136 @@ class TestStorePersistence:
         assert any(r["lesson_id"] == "L-good" and r["times_reinforced"] == 1
                    for r in self._rows()), "the reinforce was lost"
 
-    def test_unparseable_rows_survive_a_rewrite(self):
-        """Data retention: rewrites must never destroy the only copy.
-
-        Rewrites rebuild the file from the PARSED list and the loader silently
-        skips what it cannot parse, so before r3 the next reinforcement
-        permanently deleted every unparseable row — unarchived, uncounted,
-        against `_archive_lessons`' own "decay trust, never data" decree. A
-        real backup file in this workspace has 290 rows that all fail today's
-        dataclass on schema drift; in-place, one mint would have erased them.
-        """
-        from knowledge_web import record_tiered_lesson
-        text = "Retries against a bot-challenged endpoint never recover"
+    def _seed_drift(self, text):
         d = self.ws / "memory" / "medium"
         d.mkdir(parents=True, exist_ok=True)
-        drift = {"lesson_id": "L-drift", "lesson": "from a future schema"}
         (d / "lessons.jsonl").write_text("\n".join(json.dumps(r) for r in [
             {"lesson_id": "L-good", "task_type": "research", "outcome": "done",
              "lesson": text, "source_goal": "g", "confidence": 0.5,
              "tier": "medium", "score": 1.0, "last_reinforced": "2026-08-01"},
-            drift,
+            {"lesson_id": "L-drift", "lesson": "from a future schema"},
         ]) + "\n", encoding="utf-8")
+        return d
+
+    def _sidecar(self):
+        p = self.ws / "memory" / "medium" / "lessons.jsonl.unparseable"
+        return ([json.loads(l) for l in p.read_text().splitlines() if l.strip()]
+                if p.exists() else [])
+
+    def test_unparseable_rows_are_quarantined_not_destroyed(self):
+        """Data retention: a rewrite must never destroy the only copy.
+
+        Rewrites rebuild the file from the PARSED list and the loader silently
+        skips what it cannot parse, so before r3 the next reinforcement
+        permanently deleted every unparseable row — unarchived, uncounted,
+        against `_archive_lessons`' own "decay trust, never data" decree.
+        (The flat store has preserved them for ages; the tiered store did not,
+        and that inconsistency is the actual finding.)
+        """
+        from knowledge_web import record_tiered_lesson
+        text = "Retries against a bot-challenged endpoint never recover"
+        self._seed_drift(text)
         record_tiered_lesson(text, "research", "done", "goal two")
-        ids = [r.get("lesson_id") for r in self._rows()]
-        assert "L-good" in ids
-        assert "L-drift" in ids, f"unparseable row destroyed: {ids}"
+        assert [r.get("lesson_id") for r in self._rows()] == ["L-good"]
+        assert [r.get("lesson_id") for r in self._sidecar()] == ["L-drift"]
+
+    def test_quarantine_is_idempotent(self):
+        """Append-only sidecar + shrunken live file = no duplication.
+
+        The r3 shape carried rows back into the live file, so this had to be
+        re-checked under the r4 shape: a second rewrite must find nothing left
+        to move rather than re-appending what it moved last time.
+        """
+        from knowledge_web import record_tiered_lesson
+        text = "Retries against a bot-challenged endpoint never recover"
+        self._seed_drift(text)
+        for goal in ("goal two", "goal three", "goal four"):
+            record_tiered_lesson(text, "research", "done", goal)
+        assert [r.get("lesson_id") for r in self._sidecar()] == ["L-drift"]
+
+    def test_a_quarantined_row_cannot_resurrect_a_forgotten_lesson(self):
+        """Why the sidecar, and not r3's carry-it-in-the-live-file.
+
+        r3 preserved unparseable rows by appending them back, which made them
+        immortal: no code path could remove one — not forget_lesson, not GC,
+        not even a `lambda L: []` mutate. Worse, a pre-schema shadow row
+        sharing a lesson_id with a forgotten lesson would come back to life
+        the moment a future version could parse it, inverting forget_lesson's
+        "forgetting is final" (r4 Expert QA, reproduced).
+        """
+        from knowledge_web import forget_lesson
+        d = self.ws / "memory" / "medium"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "lessons.jsonl").write_text("\n".join(json.dumps(r) for r in [
+            {"lesson_id": "L1", "task_type": "research", "outcome": "done",
+             "lesson": "the current text", "source_goal": "g",
+             "confidence": 0.5, "tier": "medium", "score": 1.0,
+             "last_reinforced": "2026-08-01"},
+            {"lesson_id": "L1", "lesson": "FORGOTTEN 2024 text",
+             "confidence": 0.5},
+        ]) + "\n", encoding="utf-8")
+        assert forget_lesson("L1") is True
+        assert self._rows() == [], "the live store must hold no L1 row"
+        assert [r["lesson"] for r in self._sidecar()] == ["FORGOTTEN 2024 text"]
+
+    def test_the_sidecar_accumulates_and_the_live_file_shrinks(self):
+        """Idempotence is a property of BOTH halves of the move.
+
+        Neither half is observable through `record_tiered_lesson`, because the
+        rewrite that follows quarantine rebuilds the live file from the parsed
+        list anyway — so the mint-level tests above passed with the shrink
+        removed and with the sidecar opened "w" (r4 must-detect pass). Skip
+        the shrink and the next quarantine re-appends what it already moved,
+        duplicating the rows the sidecar exists to preserve exactly once;
+        overwrite instead of append and a second drift event silently erases
+        the first, which is the deletion this whole mechanism was built to
+        stop. Drive the helper directly, where its own contract lives.
+        """
+        from knowledge_web import _quarantine_unparseable, _tiered_lessons_path
+        text = "Retries against a bot-challenged endpoint never recover"
+        self._seed_drift(text)
+        p = _tiered_lessons_path("medium")
+        assert _quarantine_unparseable(p) == 1
+        assert [r.get("lesson_id") for r in self._rows()] == ["L-good"], \
+            "the live file still carries the quarantined row"
+        with p.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps({"lesson_id": "L-drift2",
+                                 "lesson": "a later drift"}) + "\n")
+        assert _quarantine_unparseable(p) == 1
+        assert [r.get("lesson_id") for r in self._sidecar()] == \
+            ["L-drift", "L-drift2"]
+
+    def test_the_sidecar_count_is_reportable(self):
+        # Invisible-and-unreported is how the pre-r3 silent deletion went
+        # unnoticed; the census puts this number in front of an operator.
+        from knowledge_web import record_tiered_lesson, unparseable_sidecar_count
+        text = "Retries against a bot-challenged endpoint never recover"
+        self._seed_drift(text)
+        assert unparseable_sidecar_count("medium") == 0
+        record_tiered_lesson(text, "research", "done", "goal two")
+        assert unparseable_sidecar_count("medium") == 1
+
+    def test_a_string_int_field_does_not_wedge_the_decay_cycle(self):
+        """The field-generic version of the score wedge (r4 design lens).
+
+        `sessions_validated` is compared against PROMOTE_MIN_SESSIONS inside
+        run_decay_cycle's promotion loop with no enclosing try, so one row
+        with `"sessions_validated": "3"` killed promotion AND GC for the tier
+        on every cycle, forever — and the row parses cleanly, so quarantine
+        would never have caught it either.
+        """
+        from knowledge_web import run_decay_cycle
+        d = self.ws / "memory" / "medium"
+        d.mkdir(parents=True, exist_ok=True)
+        base = {"task_type": "research", "outcome": "done", "source_goal": "g",
+                "confidence": 0.5, "tier": "medium", "score": 9.9,
+                "last_reinforced": "2026-08-16"}
+        (d / "lessons.jsonl").write_text("\n".join(json.dumps(r) for r in [
+            dict(base, lesson_id="L-good", lesson="fine", sessions_validated=5),
+            dict(base, lesson_id="L-sv", lesson="string", sessions_validated="3"),
+        ]) + "\n", encoding="utf-8")
+        out = run_decay_cycle(tier="medium", dry_run=True)
+        assert out["promoted"] == 2, out
 
     def test_reinforce_without_a_stamp_leaves_the_row_alone(self):
         from knowledge_web import load_tiered_lessons, record_tiered_lesson
@@ -651,6 +825,33 @@ class TestReadoutHonesty:
         assert "comparable within a labeller" in out
         assert "comparison is readable" not in out
 
+    def test_an_uncited_imported_row_does_not_void_the_verdict(
+            self, capsys, monkeypatch, tmp_path):
+        """Membership is not contamination.
+
+        r3 suppressed the readable verdict on the mere PRESENCE of an
+        imported row in a compared bucket. An imported row with no verdicted
+        citations contributes nothing to the pooled figure, so one uncited
+        pack row would have voided the §14a headline permanently — the one
+        line the whole slice exists to eventually print (r4, two lenses).
+
+        Two shapes of "no verdicted citations", because only the second one
+        actually reaches the rollup: I1 is never cited at all, so the census
+        builds no row for it and the gate is never consulted (the r4
+        must-detect pass caught this test passing vacuously). I2 IS cited,
+        four times, from foreign runs that carry no verdict — a row in the
+        bucket, counted as imported, contributing zero to the pooled figure.
+        That is the case the `imported_fv` gate exists for.
+        """
+        from camera_readout import _SCOPE_COMPARISON_FLOOR as FLOOR
+        out = self._run(capsys, monkeypatch, tmp_path,
+                        [("M1", "method", True, FLOOR * 2, False),
+                         ("W1", "world", True, FLOOR * 2, False),
+                         ("I1", "method", True, 0, True),
+                         ("I2", "method", None, 4, True)])
+        assert "comparison is readable" in out
+        assert "comparable within a labeller" not in out
+
     def test_all_local_stamps_still_read_as_a_comparison(
             self, capsys, monkeypatch, tmp_path):
         # The above must gate on `imported`, not merely suppress the verdict.
@@ -698,6 +899,108 @@ class TestStampCoverage:
         assert (cov["total"], cov["method"], cov["world"], cov["malformed"]) \
             == (5, 2, 1, 1)
 
+    def test_the_denominator_is_the_file_not_the_loader(self):
+        """"Whole store" has to mean the bytes on disk.
+
+        The loader skips unparseable rows, so counting its output let a store
+        that is mostly unreadable print "100% stamped" (r4 Expert QA).
+        """
+        from camera_readout import _stamp_coverage
+        self._write("method")
+        with (self.d / "lessons.jsonl").open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps({"lesson_id": "drift", "lesson": "x"}) + "\n")
+            fh.write(json.dumps({"lesson_id": "drift2", "lesson": "y"}) + "\n")
+        cov = _stamp_coverage()
+        assert cov["total"] == 3, cov
+        assert cov["readable"] == 1, cov
+
+    def test_an_unreadable_store_reports_an_error(self):
+        """The UNREADABLE branch was dead code before this.
+
+        load_tiered_lessons swallows every read failure and returns [], so a
+        chmod-000 store was indistinguishable from a fresh empty workspace —
+        in the one instrument built to tell working from dead (r4 skeptic).
+        """
+        import os
+        from camera_readout import _stamp_coverage
+        self._write("method", "world")
+        p = self.d / "lessons.jsonl"
+        os.chmod(p, 0o000)
+        try:
+            cov = _stamp_coverage()
+        finally:
+            os.chmod(p, 0o644)
+        assert cov.get("error"), cov
+
+    def test_a_loader_that_returns_nothing_for_a_full_store_is_an_error(
+            self, monkeypatch):
+        """The chmod test above is caught by the OUTER guard, not this branch.
+
+        A store the process cannot read at all raises in the line-count read
+        and lands in `error` either way, so it never exercised the
+        loader-disagrees check (r4 must-detect pass). The branch exists for
+        the harder case: bytes on disk that read fine, and a loader that
+        swallowed something internally and returned []. That is exactly how
+        the pre-r4 instrument printed "0 rows" over a full store.
+        """
+        import knowledge_web
+        from camera_readout import _stamp_coverage
+        self._write("method", "world")
+        monkeypatch.setattr(knowledge_web, "load_tiered_lessons",
+                            lambda *a, **k: [])
+        cov = _stamp_coverage()
+        assert "loader returned none" in cov.get("error", ""), cov
+
+    def test_imported_stamps_are_not_counted_as_a_live_local_writer(self):
+        """BACKLOG reads this counter as "did the PRODUCTION lane stamp?".
+
+        An imported row proves another machine's writer fired, not ours, so
+        pooling them would silence the dead-writer alarm on a pack import
+        (r4 design lens).
+        """
+        from camera_readout import _stamp_coverage
+        base = {"task_type": "research", "outcome": "done", "source_goal": "g",
+                "confidence": 0.5, "tier": "medium", "score": 1.0,
+                "last_reinforced": "2026-08-01"}
+        (self.d / "lessons.jsonl").write_text(json.dumps(
+            dict(base, lesson_id="i1", lesson="foreign", scope="method",
+                 imported={"imported_from": "mini2"})) + "\n",
+            encoding="utf-8")
+        cov = _stamp_coverage()
+        assert cov["method"] == 1 and cov["imported"] == 1, cov
+
+    def test_a_pack_import_does_not_silence_the_dead_writer_alarm(self, capsys):
+        import camera_readout
+        base = {"task_type": "research", "outcome": "done", "source_goal": "g",
+                "confidence": 0.5, "tier": "medium", "score": 1.0,
+                "last_reinforced": "2026-08-01"}
+        (self.d / "lessons.jsonl").write_text(json.dumps(
+            dict(base, lesson_id="i1", lesson="foreign", scope="method",
+                 imported={"imported_from": "mini2"})) + "\n",
+            encoding="utf-8")
+        camera_readout._print_portability([])
+        out = capsys.readouterr().out
+        assert "ZERO locally-minted stamps store-wide" in out
+        assert "IMPORTED" in out
+
+    def test_a_third_scope_value_does_not_break_the_instrument(self,
+                                                               monkeypatch):
+        """The counter is vocabulary-driven, not two hard-coded keys.
+
+        The mirror tripwire permits growing _LESSON_SCOPES; hard-coded
+        out["method"]/out["world"] turned that into a KeyError swallowed as
+        UNREADABLE, discarding the counts it had already made (r4 Expert QA).
+        """
+        import camera_readout, knowledge_web
+        monkeypatch.setattr(knowledge_web, "_LESSON_SCOPES",
+                            frozenset({"method", "world", "tool"}))
+        monkeypatch.setattr(camera_readout, "_LESSON_SCOPES",
+                            frozenset({"method", "world", "tool"}))
+        self._write("method", "tool")
+        cov = camera_readout._stamp_coverage()
+        assert not cov.get("error"), cov
+        assert cov["method"] == 1 and cov.get("tool") == 1, cov
+
     def test_newest_stamped_mint_is_reported(self):
         from camera_readout import _stamp_coverage
         self._write("method", None, "world")
@@ -710,7 +1013,7 @@ class TestStampCoverage:
         camera_readout._print_portability([])
         out = capsys.readouterr().out
         assert "0/3 rows stamped" in out
-        assert "ZERO stamped rows store-wide" in out
+        assert "ZERO locally-minted stamps store-wide" in out
 
     def test_a_working_write_path_does_not_raise_the_alarm(self, capsys):
         import camera_readout
@@ -718,7 +1021,7 @@ class TestStampCoverage:
         camera_readout._print_portability([])
         out = capsys.readouterr().out
         assert "1/3 rows stamped" in out
-        assert "ZERO stamped rows" not in out
+        assert "ZERO locally-minted stamps" not in out
 
     def test_an_empty_store_is_not_an_alarm(self, capsys):
         # A fresh install has nothing to stamp; that is not a broken writer.

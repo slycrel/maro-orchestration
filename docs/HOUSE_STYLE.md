@@ -191,7 +191,14 @@ tripwired rules fire (decree-with-tripwire, DEV_PATTERNS).
   prose-only, honestly labeled; it's a session-close habit.
 - **Data retention:** never auto-delete run/user data; archive-before-
   rewrite (playbook curation keeps `playbook_history/`); the path is
-  part of the result. *Tripwire:* prose-only; enforced by review.
+  part of the result. *Tripwire:* mostly prose — but the tiered lesson
+  store now pins it
+  (`test_lesson_scope.py::test_unparseable_rows_are_quarantined_not_destroyed`),
+  after a 2026-08-16 review found rewrites had been silently deleting
+  unparseable rows. Preserving is not enough on its own: the first fix
+  carried them back into the live file and made them undeletable, which
+  broke `forget_lesson`'s "forgetting is final". Move data OUT, don't
+  pin it in place.
 - **Declared liveness (2026-07-29 monitoring decree):** shipping a new
   dynamic process — anything that's supposed to keep firing on live
   runs after the shipping session ends (a writer at a cadence, a

@@ -103,13 +103,37 @@ Ordered open work that matters. Top of the list is next.
   dead write path printed the same reassuring "predates the stamp … by
   construction" line as a healthy one. **At r3 ship the live store read
   0/195** — the write path had not fired once in production (all rows
-  predate the 2026-08-15 20:12 MDT landing). The writer WAS live-fired
+  predate the 2026-08-15 20:12 MDT landing). Note the counter reports
+  IMPORTED stamps separately (r4): a pack import proves another
+  machine's writer fired, not this box's, and must not silence the
+  alarm. The writer WAS live-fired
   end-to-end against a real model in a temp workspace (two lessons, both
   stamped, correct types) and the full mint → store → census chain was
   walked, but that is not the same as production evidence. First
   organic run should flip this to non-zero; if it does not, the
   extraction schema is being ignored on the production lane and that is
   the bug, not the empty buckets.
+- [ ] **The imported-row refusal voids the verdict rather than
+  partitioning it.** Since r3/r4 an imported lesson that carries
+  verdicted foreign citations in either compared bucket blocks the
+  readable-comparison verdict (`camera_readout._print_portability`).
+  Correct per e2b83703 — never pool across labellers — but coarser than
+  the decision implies: the upgrade is to compute the comparison over
+  locally-minted rows only and report imported ones as their own
+  labeller cohort. r4 already narrowed the trigger from "a bucket
+  CONTAINS an imported row" to "an imported row's verdicts are IN the
+  pooled figure", so an uncited pack row no longer voids anything. Do
+  the partition if a pack import ever lands cited stamped rows; until
+  then the void is the honest reading.
+- [ ] **Numeric coercion is load-time and field-typed, not universal.**
+  `load_tiered_lessons` coerces `score`/`confidence` to float and every
+  int-annotated field via `_coerce_int_fields`, because comparisons on
+  those fields sit in code paths with no enclosing try (one string score
+  wedged every write on a tier; one string `sessions_validated` killed
+  promotion and GC every cycle). Anything comparing a NEW non-numeric
+  field — or a str field against a str constant — is outside that net.
+  The general answer would be a schema validator at the store boundary;
+  not built, deliberately, until a third instance shows up.
 - [ ] **Per-step mints (`extract_step_lessons`) stamp nothing — accepted
   v1 boundary, revisit only if the bucket stays empty.** Slice 3 covered
   the two run-level mint paths (finalize + deferred); the per-step

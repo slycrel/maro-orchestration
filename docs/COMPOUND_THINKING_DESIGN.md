@@ -1065,7 +1065,13 @@ was the distillation's, more than his.
   mint lane, ~44% on hosted-free, same runs). The cross-tab is the
   instrument that will either earn the method-vs-world axis or hand
   the contest to structural invariance; it reads empty-by-construction
-  today (BACKLOG entry carries the kill criterion).
+  today (BACKLOG entry carries the kill criterion) — and since review
+  round 3 the readout also prints a store-wide coverage line that tells
+  "empty by construction" apart from "the writer is dead", because those
+  two printed identically before. At r3 ship it read **0/195 rows
+  stamped**: no mint had run since the 2026-08-15 landing. Note also
+  that the corpus figures above come from an offline post-hoc labeller,
+  not the shipped field, which was empty on every live row.
 - The five-lens panel verdict — RESOLVED same day: **PASS**. Five
   distinct missing-concepts, unanimous reconstruct-before-build,
   contrast surfaced against both participants (Jeremy's vantage

@@ -272,8 +272,13 @@ db37d525 contamination class, reopened via transport. Both halves shipped:
   vocabulary via `knowledge_web.coerce_scope` — type first, then
   vocabulary, because untyped JSON can hand this function an unhashable
   value and `x in frozenset` RAISES rather than returning False. Anything
-  off-vocabulary lands as `""` (unstamped) and the lesson still imports;
-  before r3 it cost the whole row. Note the labeller asymmetry this
+  off-vocabulary lands as `""` (unstamped) and the lesson still imports.
+  Before r3 an off-vocabulary *string* was already fine; an unhashable
+  one (list/dict) raised into the per-row `except` and cost the whole
+  lesson. r4 extended the same coercion to `confidence` — untyped here
+  and load-fatal downstream, so a pack shipping `"confidence": "high"`
+  produced a row that imported "successfully" and was then invisible to
+  every reader, unreinforceable, and unforgettable. Note the labeller asymmetry this
   creates: an imported stamp was assigned by ANOTHER machine's model, and
   stamps are comparable within a labeller, not across them (~81% method on
   the production lane vs ~44% on hosted-free, same runs). `imported` marks

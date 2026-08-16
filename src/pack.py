@@ -61,6 +61,7 @@ import argparse
 import hashlib
 import io
 import json
+import logging
 import os
 import subprocess
 import sys
@@ -70,6 +71,8 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Dict, List, Optional
 
 from secret_scrub import scrub, scrub_identifiers
+
+log = logging.getLogger(__name__)
 
 PACK_FORMAT = 1
 SCRUBBER_VERSION = 1
@@ -726,6 +729,16 @@ def _import_lessons(content: str, *, pack_name: str, label: str, pack_tag: str,
                                 "variants_merged": len(_in_vars)})
                 continue
             original_score = float(row.get("score", 1.0))
+            # Screened here rather than inline so the corruption verdict can
+            # be reported instead of absorbed: r3 wrote `coerce_scope(...)[0]`
+            # and dropped the flag, so a pack shipping a junk stamp imported
+            # silently as unstamped while the identical shape in the local
+            # store fired the census WARNING (r4, two lenses).
+            _scope_clean, _scope_bad = coerce_scope(row.get("scope", ""))
+            if _scope_bad:
+                log.warning("pack %s: lesson %s carries an off-vocabulary "
+                            "scope %r — imported unstamped", pack_tag,
+                            original_id, row.get("scope"))
             imported = {
                 "imported_from": label, "pack": pack_tag,
                 "original_id": original_id, "original_tier": row.get("tier", ""),
@@ -762,11 +775,22 @@ def _import_lessons(content: str, *, pack_name: str, label: str, pack_tag: str,
                            else (incoming or local_class))
             tl = TieredLesson(
                 lesson_id=new_id,
-                task_type=row.get("task_type", ""),
-                outcome=row.get("outcome", ""),
                 lesson=lesson_text,
                 source_goal=row.get("source_goal", ""),
-                confidence=row.get("confidence", 0.5),
+                # float(), like `score` one field group up. r3 hardened the
+                # two enums here and left this — and then made a non-numeric
+                # confidence LOAD-FATAL in knowledge_web, so a pack shipping
+                # `"confidence": "high"` produced a row that imported
+                # "successfully", was invisible to every reader, could not be
+                # reinforced, and could not be forgotten. Coerce at the border:
+                # a junk value costs the import (reported in the results), not
+                # the store (r4, two lenses, A/B'd against the parent commit).
+                confidence=float(row.get("confidence", 0.5)),
+                # str() on the free-text fields for the same reason — they are
+                # not load-fatal today, but nothing here should be one numeric
+                # comparison away from wedging a reader.
+                task_type=str(row.get("task_type", "")),
+                outcome=str(row.get("outcome", "")),
                 tier=MemoryTier.MEDIUM,
                 score=min(original_score, 0.5),
                 # Transaction time: decay math (knowledge_web._days_since) reads
@@ -802,7 +826,7 @@ def _import_lessons(content: str, *, pack_name: str, label: str, pack_tag: str,
                 # than pooling silently with locally-minted ones. (Before r3
                 # this comment claimed a separation the census did not
                 # perform — the rows carried the flag and nothing read it.)
-                scope=coerce_scope(row.get("scope", ""))[0],
+                scope=_scope_clean,
                 provisional=bool(row.get("provisional", False)),
                 minted_from=minted_from,
                 imported=imported,

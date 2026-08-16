@@ -1006,6 +1006,40 @@ class TestProvenanceTransport:
         assert [t.lesson for t in rows] == ["a junk-typed lesson"], res
         assert rows[0].lesson_type == ""
 
+    @pytest.mark.parametrize("bad", ["0.9", "high"])
+    def test_the_border_never_writes_a_row_its_own_loader_cannot_read(
+            self, bad, tmp_path, target_ws):
+        """The composed r4 hazard: an unscreened numeric from foreign JSON.
+
+        `confidence` crossed the transport border uncoerced while r3 added
+        `float(tl.confidence)` to the loader's per-row guard. Compose the two
+        and a pack row imports "successfully", lands on disk, and is then
+        invisible to every reader — unreinforceable (dedup never matches what
+        it cannot load) and unforgettable (`forget_lesson` rewrites from the
+        parsed list). Both shapes are covered because they fail differently:
+        the numeric string survives the loader carrying the wrong TYPE, the
+        non-numeric one becomes a permanent unreadable line.
+        """
+        from knowledge_web import load_tiered_lessons, MemoryTier
+        src_ws = _make_workspace(tmp_path / "src")
+        pack_path = _export_and_seal(src_ws, tmp_path)
+        _add_artifact(pack_path, cls="lessons", relpath="memory/long/lessons.jsonl",
+                      content=json.dumps({
+                          "lesson_id": "s5", "lesson": "a junk-confidence lesson",
+                          "task_type": "ops", "outcome": "success",
+                          "source_goal": "g", "confidence": bad, "tier": "long",
+                          "score": 1.0, "last_reinforced": "2020-01-01"}) + "\n")
+        res = import_pack(pack_path, label="l", target=target_ws)
+        rows = load_tiered_lessons(tier=MemoryTier.MEDIUM, limit=None, raw=True)
+        for r in rows:
+            assert isinstance(r.confidence, float), \
+                f"the border wrote a {type(r.confidence).__name__} confidence"
+        live = target_ws / "memory" / "medium" / "lessons.jsonl"
+        on_disk = ([ln for ln in live.read_text(encoding="utf-8").splitlines()
+                    if ln.strip()] if live.exists() else [])
+        assert len(on_disk) == len(rows), (
+            f"{len(on_disk) - len(rows)} imported row(s) no reader can load", res)
+
     def test_identical_canonical_collision_unions_variants(self, tmp_path, target_ws):
         """Fixpoint review round 2: the skipped_identical early-exit lost
         foreign variants — the collision skips the ROW, not its rationale."""

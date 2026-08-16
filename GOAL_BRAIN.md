@@ -2893,10 +2893,16 @@ Dated end-of-chunk/session entries, append-only at the tail. Rotation policy (20
   and the writer died on it; (b) rewrites rebuilt the file from the
   parsed list, so the next reinforcement permanently deleted every
   unparseable row, against `_archive_lessons`' own "decay trust, never
-  data" decree — a real backup file in this workspace has 290 rows that
-  all fail today's dataclass, and in place one mint would have erased
-  them. Unparseable rows now ride through rewrites verbatim with a
-  WARNING. **Two honesty repairs:** the malformed detector was blind to
+  data" decree. Unparseable rows now move to a quarantine sidecar with a
+  WARNING. **Correction (r4):** the evidence I cited for this — "a real
+  backup file in this workspace has 290 rows that all fail today's
+  dataclass" — was wrong. That file is a snapshot of the FLAT store,
+  key-for-key identical to today's live flat store; it fails
+  `TieredLesson` because it is a different dataclass, not because of
+  drift, and this lane never reads or rewrites it. The hazard is real
+  but hypothetical; the honest supporting fact is that the flat store
+  has preserved unparseable lines for ages and the tiered store did
+  not. **Two honesty repairs:** the malformed detector was blind to
   falsy corruption (`or ""` upstream flattened False/0/[]/{} before the
   screen ran), which made r2's "0 malformed" live claim really "0 among
   the truthy shapes"; and `pack.py` claimed the census could separate
@@ -2907,7 +2913,10 @@ Dated end-of-chunk/session entries, append-only at the tail. Rotation policy (20
   because every other scope number waits on citations and a dead write
   path printed the same reassuring line as a healthy one. It reads
   **0/195 on the live store** — the write path has not fired once in
-  production. The writer was live-fired end-to-end against a real model
+  production. Expected at this hour, not yet a signal: no mint has run
+  since the landing (newest `recorded_at` is ~8h before it), so the
+  figure is a baseline. It becomes a signal if the first organic run
+  leaves it at zero. The writer was live-fired end-to-end against a real model
   in a temp workspace (two lessons, both stamped, correct types) and the
   full mint → store → census chain walked to a "readable" verdict, which
   is what r2's live-fire did not do: it confirmed the reader only.
@@ -2919,8 +2928,8 @@ Dated end-of-chunk/session entries, append-only at the tail. Rotation policy (20
   (`scope`: method | world), `TieredLesson.scope` persists it, both
   RUN-LEVEL mint paths (finalize + the deferred lane organic runs
   actually take) thread it, and `camera_readout --portability`
-  cross-tabs portability by stamp. The other four mints —
-  per-step (`extract_step_lessons`), evolver, prereq, CLI — stamp
+  cross-tabs portability by stamp. The other five mints —
+  per-step (`extract_step_lessons`), thinkback, evolver, prereq, CLI — stamp
   nothing; the per-step boundary is sized and accepted in BACKLOG
   (6/188 live rows, all provisional). No new judge — the existing extractor answers one more
   question in the same call. **Scope is deliberately NOT a ranking
@@ -3085,3 +3094,48 @@ Dated end-of-chunk/session entries, append-only at the tail. Rotation policy (20
   returned only a summary and had to be re-run), and don't start fixing
   while a reviewer's clock is still running (the re-run read WIP code
   before isolating the commit in a worktree).
+
+- **2026-08-16 (maro box)** — **§14a slice 3 review round 4 — the store
+  under the feature, and a false claim retracted.** Four lenses
+  (skeptic, test-auditor, Expert QA, design-coherence) over r3's
+  `38dd3d7`; 14 fixes. **The round's own finding is that r3's fix was
+  the r4 bug, for the second round running.** r3 stopped rewrites from
+  silently deleting unparseable store rows — correct, and required by
+  `_archive_lessons`' own "decay trust, never data" decree — by carrying
+  those rows back into the live file, which made them **immortal**: no
+  code path could remove one (not `forget_lesson`, not GC, not a
+  `lambda L: []` mutate), and a pre-schema shadow row sharing a
+  `lesson_id` with a forgotten lesson would come back to life the moment
+  a future version could parse it, inverting "forgetting is final". They
+  now move OUT to a `lessons.jsonl.unparseable` sidecar (append-only,
+  idempotent, counted by the census). Preservation was never the hard
+  part; **where** to preserve was. Also: **I retracted my own r3
+  evidence.** The "290-row backup file that all fails today's dataclass"
+  I cited in the r3 commit, GOAL_BRAIN and BACKLOG is a snapshot of the
+  FLAT store, key-for-key identical to the live flat store, failing
+  `TieredLesson` because it is a *different dataclass* — the tiered lane
+  never touches it. Expert QA refuted it, I verified the refutation, and
+  the fix stands on decree grounds with a narrower and better supporting
+  fact (the flat store has preserved unparseable lines for ages; the
+  tiered store did not). Rest of the round: `incoming_scope` still had
+  a bare membership test eight lines under the comment saying the type
+  check must come first everywhere; the mint site threw away
+  `coerce_scope`'s `bad` flag so a caller bug looked like an honest
+  unstamped mint; int coercion is now annotation-driven (a string
+  `sessions_validated` killed promotion AND GC for a tier every cycle,
+  and that row *parses*, so quarantine would never have caught it); the
+  coverage denominator now reads the FILE, not the loader (a 90%
+  unreadable store printed "100% stamped"); and the imported-row refusal
+  narrowed from "a bucket CONTAINS an imported row" to "an imported
+  row's verdicts are IN the pooled figure", so one uncited pack row no
+  longer voids the §14a headline permanently. **Must-detect: 15/15, but
+  6/15 on the first pass** — and every miss was the same shape, a test
+  that passes for a reason other than the one in its docstring (an
+  "uncited imported row" test that cited it zero times, so the census
+  built no row and the gate was never reached; a chmod-000 test caught
+  by the outer guard before the branch under test; two quarantine tests
+  driven through a caller whose own rewrite masked both mutations). One
+  mutation is recorded as EQUIVALENT rather than contorted into a
+  passing test. Suite 9063/0/1. Live readout still 0/195 with the new
+  coverage line rendering correctly. Full arc record:
+  `docs/history/2026-08-16-14a-slice3-review-arc.md`.
