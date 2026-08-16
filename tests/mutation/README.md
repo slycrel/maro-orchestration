@@ -99,6 +99,7 @@ failure the sweep exists to find.
 | `provenance_gate.json` | The db37d525 contamination gate: `lesson_provenance` classifier regexes + killswitch, the `_is_quarantined` predicate and its enforcement sites in `knowledge_web`, the `memory_ledger` mint choke point | 18 | 2026-08-16, **NOT closed** — 6 accounted for, 1 equivalent, 4 unverified leads, 6 confirmed gaps in the classifier/killswitch |
 | `path_rewrite.json` | Embedded-path rewriting on transfer: `path_rewrite` root validation + ordering + both match boundaries + skip screens + atomic swap and its post-commit half, the `maro-export import` wiring (extracted-files-only list, provenance gate, custody `transformed`), the `maro-import --source` wiring (rewrite-before-dedup, marker verbatim, per-file quarantine, dry-run honesty, unresolved-source mapping) | 39 + 2 equivalent | 2026-08-16, all accounted for (10 added after the review round, 1 after the live import) |
 | `dispatch_envelope.json` | The typed dispatch boundary: `parse_dispatch_payload` shape/version/type screens, `_safe_name`, `store_attachments` dedup + provenance sidecar, `land_in_run_dir` idempotence, `operator_block` authority label, and the extraction-exclusion decree at the `handle_queue` intake | 19 + 1 equivalent | 2026-08-16, all accounted for (12/20 on first pass, 7 gaps closed) |
+| `defaults_census.json` | The DEFAULTS.md registry tripwire itself (`tests/test_defaults_doc.py`): forward census getter set + alias resolution + rglob + dotless leg + `config.py` exemption, reverse census table-cell parse + read-evidence shapes + per-file keying, and the living-frontmatter check | 15 | 2026-08-16, all accounted for (3/14 on first pass, seam + 16 fixtures added) |
 
 Note on `path_rewrite.json`: the first sweep of it ran green at 30/30 and
 a six-lens review still found four real defects afterward, two of them
@@ -130,10 +131,34 @@ Actionable Stack: tests that claim to enforce a decree first (silent by
 construction), then data-integrity boundaries, then operator-facing
 output, then churn.
 
-Two tier-1 decree surfaces are now swept, and they came out opposite
-ways: the e2b83703 scope decree was guarded by two tests that could not
-fail, while the dispatch envelope's extraction exclusion held under both
-mutations aimed at it (leak operator prose into the goal; drop the
-operator channel). Worth keeping in view — the sweep is not a formality
-that always finds something, and a surface that passes clean is the
-result, not a failed hunt.
+Three tier-1 decree surfaces are now swept, and the spread is the point.
+The e2b83703 scope decree was guarded by two tests that could not fail.
+The dispatch envelope's extraction exclusion held under both mutations
+aimed at it (leak operator prose into the goal; drop the operator
+channel) — a surface that passes clean is the result, not a failed hunt.
+The DEFAULTS.md census scored 3/14, the worst yet. The sweep is not a
+formality that always finds something, and it is not a formality that
+never does.
+
+## Sweeping a tripwire: mutate the guard, not the guarded
+
+Two of the three tier-1 surfaces were production code; the defaults
+census is a *test*, and that changes the question. You are not asking
+"do the tests catch a change in the code" — you are asking **"can this
+guard fail at all?"**
+
+The census scored 3/14 because it had no seam: every helper reached for
+`REPO_ROOT` itself, so there was no way to hand it a known violation. It
+was untestable by construction, which is exactly why months of review
+walked past it — nothing looks wrong, and the test does pass. The three
+mutations that WERE caught fired by accident, having broken the census
+hard enough against real repo data to raise a false positive. Accidental
+detection is not coverage, and the sweep is what tells them apart.
+
+The fix generalizes to any tripwire: give the checker its inputs as
+parameters (defaulting to the live ones, so the deployed guard is
+unchanged), then add must-detect fixtures that inject one violation each
+and assert it is named. Pin the *exemptions* the same way — a quiet
+census is only trustworthy if you can show what it stays quiet about.
+**A detection shape with no fixture is a claim, not a guard**, so add
+the fixture in the same commit as the shape.

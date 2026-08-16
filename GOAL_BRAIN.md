@@ -3260,3 +3260,25 @@ Dated end-of-chunk/session entries, append-only at the tail. Rotation policy (20
   the basename call is now honestly recorded equivalent, probed across
   `../`, `..\`, `..`, `foo/..`, `/etc/passwd`, `....//` and a leading
   newline. Recorded in `tests/mutation/README.md`.
+- **2026-08-16 (box)** — **Third tier-1 mutation sweep: the DEFAULTS.md
+  census tripwire, 3/14 → 15/15** (`tests/mutation/defaults_census.json`).
+  Worst first pass of the arc, and the most important finding since the
+  e2b83703 one it rhymes with: **both censuses could be replaced by `[]`
+  with a green suite.** The tripwire that enforces "every config key the
+  code reads is documented, and every documented key has a reader" was
+  unable to fail in either direction. The three mutations it did catch
+  fired *by accident* — they broke the census hard enough against real
+  repo data to raise a false positive, which is indistinguishable from
+  real coverage in the runner output. **Cause was structural, not an
+  oversight:** every helper reached for `REPO_ROOT` itself, so there was
+  no way to hand the census a known violation. It was untestable by
+  construction, which is why two prior review rounds (chunk-8, both
+  lenses) improved its *logic* without ever noticing it had no proof.
+  Fixed with a seam — `(src_root, doc_text)` parameters defaulting to the
+  real repo, so the live tripwires read identically — plus 16 must-detect
+  fixtures covering each detection shape and each exemption. Suite +16.
+  **Standing method, now in `tests/mutation/README.md` and the file
+  itself: when the surface IS a guard, mutate the guard, and a detection
+  shape with no fixture is a claim, not a guard.** Tier-1 scoreboard now
+  reads 3 swept — one unguarded (scope decree), one genuinely enforced
+  (dispatch envelope), one unable to fail (defaults census).

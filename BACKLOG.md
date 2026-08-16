@@ -132,9 +132,25 @@ Ordered open work that matters. Top of the list is next.
   gaps fixed, one equivalent recorded with its probe. Both DECREE
   mutations (leak operator prose into the goal; drop the operator channel)
   were DETECTED, so the extraction exclusion is genuinely enforced — the
-  first tier-1 surface to hold. Remaining tier-1 candidates: the defaults
-  registry + census tripwire, the Δ-gate floors, the data-retention
-  guarantees in `memory_ledger`/`knowledge_web`.
+  first tier-1 surface to hold. `defaults_census.json` — 15 mutations,
+  CLOSED 2026-08-16 at 15/15 from **3/14**, the worst first pass yet: the
+  DEFAULTS.md tripwire could be gutted whole (forward census → `[]`,
+  reverse census → `[]`) with a green suite, because it had no seam for
+  synthetic input and so was untestable by construction. Fixed with
+  `(src_root, doc_text)` parameters defaulting to the live repo plus 16
+  must-detect fixtures. Remaining tier-1 candidates: the Δ-gate floors,
+  the data-retention guarantees in `memory_ledger`/`knowledge_web`.
+
+  **Method note for the rest of the sweep: when the surface IS a guard,
+  mutate the guard.** The question stops being "do the tests catch a
+  code change" and becomes "can this guard fail at all?" Give the checker
+  its inputs as parameters (defaulting to the live ones, so the deployed
+  guard is unchanged), then inject one violation per fixture and assert
+  it is named — and pin the exemptions too, since a quiet census is only
+  trustworthy if you can show what it stays quiet about. Watch for
+  *accidental* detection: the census's three DETECTED verdicts all came
+  from breaking hard enough on real data to raise a false positive, which
+  reads identical to real coverage in the runner output.
 
   **New defect class, from the envelope sweep: two guards, one test.**
   `_safe_name` blocks traversal twice (basename call + character
