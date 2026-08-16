@@ -126,6 +126,25 @@ Ordered open work that matters. Top of the list is next.
   `git archive` copy by default, fails on an anchor that doesn't match
   exactly once, and supports `equivalent` with a required reason.
 
+  **Tier-1 progress.** Two decree surfaces swept, opposite outcomes.
+  `provenance_gate.json` — landed red, own item below. `dispatch_envelope.json`
+  — 20 mutations, CLOSED 2026-08-16 at 20/20: 12 on the first pass, seven
+  gaps fixed, one equivalent recorded with its probe. Both DECREE
+  mutations (leak operator prose into the goal; drop the operator channel)
+  were DETECTED, so the extraction exclusion is genuinely enforced — the
+  first tier-1 surface to hold. Remaining tier-1 candidates: the defaults
+  registry + census tripwire, the Δ-gate floors, the data-retention
+  guarantees in `memory_ledger`/`knowledge_web`.
+
+  **New defect class, from the envelope sweep: two guards, one test.**
+  `_safe_name` blocks traversal twice (basename call + character
+  whitelist) and the traversal test passes with either one removed, so it
+  pinned neither. Marking both equivalent would have been the lazy read;
+  the fix is to ask what job only one guard does — here the whitelist also
+  scrubs spaces/`;`/newlines/`$(...)` out of a dispatcher-chosen filename,
+  which nothing tested. Redundancy in the code is fine; redundancy that
+  makes a test unable to distinguish its subject is not.
+
 - [ ] **`scripts/mutate.py` has no negative control — a sweep where
   pytest never RAN reports the same green as a clean one** (found
   2026-08-16 by the Experimentalist lens reviewing the path_rewrite

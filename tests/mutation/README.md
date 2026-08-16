@@ -66,6 +66,18 @@ a hole, both hit on the first sweep after the tool landed:
    defense in depth. Probe before calling it a hole: monkeypatch the one
    thing and see whether the behavior actually changes.
 
+A third shape showed up on the dispatch-envelope sweep, and it is the one
+worth arguing with: **two guards, one test.** `_safe_name` prevents
+traversal twice — a basename call and a character whitelist — and
+`test_traversal_names_are_flattened_to_basenames` passes with either one
+removed. So the test pins *neither*, and both mutations survive. The
+lazy resolution is to mark both equivalent and move on; the right one is
+to ask what job only ONE of them does. The whitelist also scrubs spaces,
+`;`, newlines and `$(...)` out of a dispatcher-chosen filename, nothing
+tested that, and pinning it turned one survivor into a real test while
+leaving the other honestly equivalent. Redundancy in the *code* is fine;
+redundancy that makes a test unable to distinguish its subject is not.
+
 Both are recorded in the spec rather than in someone's memory —
 `equivalent` for a settled one, `unverified` for a survivor that hasn't
 had the probe yet. An unprobed survivor left unmarked reads as a
@@ -79,6 +91,7 @@ failure the sweep exists to find.
 | `scope_14a.json` | §14a scope/stamp/portability: `knowledge_web` scope screens, tiered-store load/rewrite/mutate, quarantine, reinforce heal, `_tfidf_rank_scored`; `camera_readout` census, `_lesson_origins`, `_stamp_coverage`, `_scope_rollup`, `_print_portability`; `pack` lesson transport border | 34 + 1 equivalent | 2026-08-16, all accounted for |
 | `provenance_gate.json` | The db37d525 contamination gate: `lesson_provenance` classifier regexes + killswitch, the `_is_quarantined` predicate and its enforcement sites in `knowledge_web`, the `memory_ledger` mint choke point | 18 | 2026-08-16, **NOT closed** — 6 accounted for, 1 equivalent, 4 unverified leads, 6 confirmed gaps in the classifier/killswitch |
 | `path_rewrite.json` | Embedded-path rewriting on transfer: `path_rewrite` root validation + ordering + both match boundaries + skip screens + atomic swap and its post-commit half, the `maro-export import` wiring (extracted-files-only list, provenance gate, custody `transformed`), the `maro-import --source` wiring (rewrite-before-dedup, marker verbatim, per-file quarantine, dry-run honesty, unresolved-source mapping) | 38 + 2 equivalent | 2026-08-16, all accounted for (10 added after the review round below) |
+| `dispatch_envelope.json` | The typed dispatch boundary: `parse_dispatch_payload` shape/version/type screens, `_safe_name`, `store_attachments` dedup + provenance sidecar, `land_in_run_dir` idempotence, `operator_block` authority label, and the extraction-exclusion decree at the `handle_queue` intake | 19 + 1 equivalent | 2026-08-16, all accounted for (12/20 on first pass, 7 gaps closed) |
 
 Note on `path_rewrite.json`: the first sweep of it ran green at 30/30 and
 a six-lens review still found four real defects afterward, two of them
@@ -99,3 +112,11 @@ sweep. The ordered plan for covering it is the top item in the BACKLOG
 Actionable Stack: tests that claim to enforce a decree first (silent by
 construction), then data-integrity boundaries, then operator-facing
 output, then churn.
+
+Two tier-1 decree surfaces are now swept, and they came out opposite
+ways: the e2b83703 scope decree was guarded by two tests that could not
+fail, while the dispatch envelope's extraction exclusion held under both
+mutations aimed at it (leak operator prose into the goal; drop the
+operator channel). Worth keeping in view — the sweep is not a formality
+that always finds something, and a surface that passes clean is the
+result, not a failed hunt.

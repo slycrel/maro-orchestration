@@ -3233,3 +3233,30 @@ Dated end-of-chunk/session entries, append-only at the tail. Rotation policy (20
   the entry named — 30-mutation file-derived sweep, all accounted for.
   Full record: BACKLOG_DONE.md §"Path-token rewriting — SHIPPED
   2026-08-16".
+- **2026-08-16 (box)** — **Second tier-1 file-derived mutation sweep: the
+  dispatch envelope, CLOSED 20/20** (`tests/mutation/dispatch_envelope.json`,
+  20 mutations over `src/dispatch_envelope.py` + the `handle_queue.py`
+  intake, run against `tests/test_dispatch_envelope.py` +
+  `test_hermes_dispatch.py` + `test_handle.py`). 12/20 on the first pass;
+  seven gaps fixed, one equivalent recorded with its probe. +7 tests
+  (absolute suite count elided — a concurrent session landed the
+  path-rewrite arc in the same hour). **The decree held** — both mutations aimed at
+  the extraction exclusion (append `operator_block(...)` to the goal;
+  drop `_operator_ctx` on the floor) were DETECTED, the first tier-1
+  surface to come out clean where the e2b83703 scope decree came out
+  unguarded. Gaps closed: a foreign envelope version parsed with v1 field
+  meanings; a non-object artifact escaping as `AttributeError` instead of
+  the `EnvelopeError` `handle_queue` catches to refuse a job; `user_ask`
+  unstripped into the goal string; `_safe_name`'s character whitelist and
+  its `[:120]` cap (not cosmetic — the sidecar adds 16 chars, so a
+  245-char name is ENAMETOOLONG and fails the dispatch by contract);
+  same-named artifacts silently overwriting so the operator block points
+  two names at one file; and the provenance sidecar's `sha256`, the one
+  field that certifies the bytes, never asserted. **New defect class:
+  two guards, one test** — `_safe_name` blocks traversal twice and the
+  traversal test passes with either guard removed, pinning neither. The
+  resolution is not "mark both equivalent" but "find the job only one
+  guard does" (the whitelist also scrubs spaces/`;`/newlines/`$(...)`);
+  the basename call is now honestly recorded equivalent, probed across
+  `../`, `..\`, `..`, `foo/..`, `/etc/passwd`, `....//` and a leading
+  newline. Recorded in `tests/mutation/README.md`.
