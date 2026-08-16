@@ -81,7 +81,9 @@ Ordered open work that matters. Top of the list is next.
   §14a's "learning is almost entirely methodology", and the reason
   scope was deliberately kept OUT of ranking. This entry is what turns
   that into evidence instead of a prior. Kill criterion for the stamp
-  itself: if after ~30 stamped-and-cited lessons the two buckets'
+  itself: if after ~30 stamped-and-cited LESSONS (not the other "~30"
+  the readout prints above the scope table — that one is the slice-1
+  gate and counts foreign verdicted CITATIONS) the two buckets'
   pooled portability is indistinguishable, the categorical axis is not
   earning its place and slice 3 should be reconsidered against the
   contested-14a alternative (structural invariance, READING_QUEUE
@@ -93,6 +95,21 @@ Ordered open work that matters. Top of the list is next.
   itself — which is the one property the census needs. If backfill
   ever happens it must carry a per-row labeller stamp and be bucketed
   separately.
+- [ ] **Stamp coverage is now instrumented — watch it go non-zero.**
+  `camera_readout --portability` prints a store-wide, NOT citation-gated
+  coverage line (`N/M rows stamped`, method/world/malformed, newest
+  stamped mint) and shouts when it is 0 with a non-empty store. Added
+  r3 because everything else about the stamp is citation-gated, so a
+  dead write path printed the same reassuring "predates the stamp … by
+  construction" line as a healthy one. **At r3 ship the live store read
+  0/195** — the write path had not fired once in production (all rows
+  predate the 2026-08-15 20:12 MDT landing). The writer WAS live-fired
+  end-to-end against a real model in a temp workspace (two lessons, both
+  stamped, correct types) and the full mint → store → census chain was
+  walked, but that is not the same as production evidence. First
+  organic run should flip this to non-zero; if it does not, the
+  extraction schema is being ignored on the production lane and that is
+  the bug, not the empty buckets.
 - [ ] **Per-step mints (`extract_step_lessons`) stamp nothing — accepted
   v1 boundary, revisit only if the bucket stays empty.** Slice 3 covered
   the two run-level mint paths (finalize + deferred); the per-step

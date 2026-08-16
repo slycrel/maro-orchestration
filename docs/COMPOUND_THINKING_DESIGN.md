@@ -830,7 +830,9 @@ So "all-global to start" is what the data already is, and the primary
 scope axis is **method-vs-world**, not goal-vs-global. Scope should be
 evidence-derived (provenance stamped at mint, globality earned by
 foreign-context citation + judged success; chunk-4 contradiction is
-the demotion verb). But any citation-outcome join starves today: ~40
+the demotion verb). **Slices 1–3 shipped 2026-08-15 — the shipped
+record, including what the instrument can and cannot yet read, is in
+§14g.** But any citation-outcome join starves today: ~40
 judged verdicts in 1,448 outcome rows (~3%).
 
 ### 14b. Jeremy's redirect: learning-from-experience ≠ taste

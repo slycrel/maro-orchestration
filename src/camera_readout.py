@@ -138,7 +138,19 @@ def _lesson_origins(warn=print) -> Dict[str, Dict[str, str]]:
                     out[lid] = {
                         "source_goal": getattr(tl, "source_goal", "") or "",
                         "task_type": getattr(tl, "task_type", "") or "",
-                        "scope": getattr(tl, "scope", "") or "",
+                        # NO `or ""` on scope: it would flatten False/0/[]/{}
+                        # to "" before the screen ran, so falsy corruption
+                        # reported as honestly-unstamped and the malformed
+                        # WARNING could never fire for it (r3 skeptic — the
+                        # r2 "0 malformed" live claim was really "0 among the
+                        # truthy shapes"). Pass the raw value; coerce_scope
+                        # classifies it.
+                        "scope": getattr(tl, "scope", ""),
+                        # §14a: stamps are comparable WITHIN a labeller, not
+                        # across them (memory.py's scope-vocabulary note).
+                        # Imported rows were stamped on another machine by
+                        # another model; the census has to be able to say so.
+                        "imported": bool(getattr(tl, "imported", None)),
                         "preview": _clip(getattr(tl, "lesson", "") or "",
                                          60),
                     }
@@ -158,7 +170,8 @@ def _lesson_origins(warn=print) -> Dict[str, Dict[str, str]]:
                     out[lid] = {
                         "source_goal": str(row.get("source_goal") or ""),
                         "task_type": str(row.get("task_type") or ""),
-                        "scope": str(row.get("scope") or ""),
+                        "scope": row.get("scope", ""),   # raw — see above
+                        "imported": bool(row.get("imported")),
                         "preview": _clip(str(row.get("lesson") or ""), 60),
                     }
     except FileNotFoundError:
@@ -185,24 +198,14 @@ from portability import (  # noqa: E402
 # alias at 3, and apply_portability reads the global at call time). The
 # functions above are safe to alias; a rebindable scalar is not.
 import portability as _portability  # noqa: E402
-from knowledge_web import _LESSON_SCOPES  # noqa: E402
-
-
-def _clean_scope(raw: Any) -> Tuple[str, bool]:
-    """Coerce a store-read scope value to the vocabulary. -> (scope, malformed).
-
-    Store rows are JSON and nothing validates them on read, so `scope` can
-    hold any decodable type — including unhashable ones. Membership testing an
-    unhashable value against a frozenset RAISES, and formatting an int with
-    `:7s` raises too, so this has to screen on TYPE before vocabulary
-    (r2 Expert QA: forged rows with list/int/bool scopes each crashed a
-    different consumer).
-    """
-    if isinstance(raw, str) and raw in _LESSON_SCOPES:
-        return raw, False
-    if raw in (None, ""):
-        return "", False
-    return "", True
+# The scope screen lives in knowledge_web, next to the vocabulary it screens
+# against — r2 put a copy here and left three bare membership tests on the
+# write and transport paths, one of which became a crash. One screen, four
+# callers (r3 design lens). Store rows are JSON and nothing validates them on
+# read, so `scope` can hold any decodable type: `["world"] in _LESSON_SCOPES`
+# RAISES, and `format(123, ":7s")` raises too, so the type check must come
+# before the vocabulary check for the per-row print to survive at all.
+from knowledge_web import _LESSON_SCOPES, coerce_scope as _clean_scope  # noqa: E402,F401
 
 # Comparing the two stamped buckets on a handful of citations would be
 # numerology. Stated floor, per bucket, so the readout can say plainly whether
@@ -286,6 +289,7 @@ def portability_census(per_run: List[Dict[str, Any]],
             # forged row's int scope crashed the print's `:7s` format and an
             # unhashable one crashed the rollup's bucket key (r2 Expert QA).
             "scope": scope_clean,
+            "imported": bool(origins[lid].get("imported")),
             # The row carries the SANITIZED scope (see above), so the rollup
             # can no longer tell "" apart from "was corrupt" — double
             # sanitization would silently absorb exactly the corruption the
@@ -344,8 +348,11 @@ def _scope_rollup(rows: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
         malformed += bool(bad or r.get("scope_malformed"))
         b = buckets.setdefault(raw_scope or "unstamped",
                                {"lessons": 0, "cites": 0, "foreign": 0,
-                                "foreign_s": 0, "foreign_f": 0, "evidenced": 0})
+                                "foreign_s": 0, "foreign_f": 0, "evidenced": 0,
+                                "imported": 0})
+        b.setdefault("imported", 0)
         b["lessons"] += 1
+        b["imported"] += bool(r.get("imported"))
         b["cites"] += r["cites"]
         b["foreign"] += r["foreign"]
         b["foreign_s"] += r["foreign_s"]
@@ -362,9 +369,51 @@ def _scope_rollup(rows: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
         b.setdefault("malformed", 0)
     if malformed:
         # Reported on the bucket the rows actually landed in, so the count
-        # can never be mistaken for a scope category of its own.
-        buckets["unstamped"]["malformed"] = malformed
+        # can never be mistaken for a scope category of its own. setdefault,
+        # not indexing: a direct caller (this function's documented second
+        # audience) can hand in a row with a VALID scope and a truthy
+        # scope_malformed, and there would then be no "unstamped" bucket to
+        # write to — same instrument-must-never-crash class as the `both[0]`
+        # guard below (r3, two lenses).
+        buckets.setdefault("unstamped",
+                           {"lessons": 0, "cites": 0, "foreign": 0,
+                            "foreign_s": 0, "foreign_f": 0, "evidenced": 0,
+                            "imported": 0, "pooled": None,
+                            "malformed": 0})["malformed"] = malformed
     return buckets
+
+
+def _stamp_coverage() -> Dict[str, Any]:
+    """Store-wide stamp counts, read straight off the tiers — NOT the
+    citation join.
+
+    Everything else the census reports about `scope` is citation-gated, and a
+    fresh mint takes days-to-weeks to accrue foreign verdicted citations. So
+    if the extraction schema stopped emitting the slot tomorrow, the readout
+    would keep printing "every cited lesson predates the stamp … by
+    construction" — the same reassuring line it prints when the writer is
+    working perfectly. Total write-path failure and healthy-but-early were
+    indistinguishable (r3 Expert QA). This line separates them: it answers
+    "is the stamp landing at all?" without waiting on citations.
+    """
+    out = {"total": 0, "method": 0, "world": 0, "malformed": 0, "newest": ""}
+    try:
+        from knowledge_web import load_tiered_lessons, MemoryTier
+        for tier in (MemoryTier.MEDIUM, MemoryTier.LONG):
+            for tl in load_tiered_lessons(tier, limit=None, min_score=0.0,
+                                          raw=True):
+                out["total"] += 1
+                scope, bad = _clean_scope(getattr(tl, "scope", ""))
+                if bad:
+                    out["malformed"] += 1
+                elif scope:
+                    out[scope] += 1
+                    stamped_at = str(getattr(tl, "recorded_at", "") or "")
+                    if stamped_at > out["newest"]:
+                        out["newest"] = stamped_at
+    except Exception as exc:
+        out["error"] = str(exc)
+    return out
 
 
 def _print_portability(per_run: List[Dict[str, Any]]) -> None:
@@ -387,6 +436,24 @@ def _print_portability(per_run: List[Dict[str, Any]]) -> None:
     print(f"  -- foreign verdicted citations total: {total_fv} "
           f"(pre-registered gate reads at ~30)")
     print("\n  -- by mint-time scope stamp (§14a slice 3) --")
+    cov = _stamp_coverage()
+    if cov.get("error"):
+        print(f"     stamp coverage: UNREADABLE ({cov['error']}) — the "
+              f"citation-gated lines below cannot be trusted as a statement "
+              f"about the write path")
+    else:
+        stamped = cov["method"] + cov["world"]
+        print(f"     stamp coverage (whole store, not citation-gated): "
+              f"{stamped}/{cov['total']} rows stamped "
+              f"(method {cov['method']} / world {cov['world']} / malformed "
+              f"{cov['malformed']}), newest stamped mint "
+              f"{cov['newest'][:19] or 'none'}")
+        if cov["total"] and not stamped:
+            print("     ^^ ZERO stamped rows store-wide: the write path has "
+                  "not landed a single stamp. Until this is non-zero the "
+                  "lines below say nothing about method-vs-world — they only "
+                  "say the corpus predates the stamp, which is also what a "
+                  "silently broken extractor looks like.")
     by_scope = c.get("by_scope") or {}
     for name in ("method", "world", "unstamped"):
         b = by_scope.get(name)
@@ -396,7 +463,8 @@ def _print_portability(per_run: List[Dict[str, Any]]) -> None:
         pooled = "insufficient" if b["pooled"] is None else f"{b['pooled']:.2f}"
         print(f"     {name:10s} lessons={b['lessons']:3d} cites={b['cites']:4d} "
               f"foreign={b['foreign']:3d} judged(s/f)={b['foreign_s']}/{b['foreign_f']} "
-              f"pooled={pooled:12s} evidenced={b['evidenced']}")
+              f"pooled={pooled:12s} evidenced={b['evidenced']} "
+              f"imported={b.get('imported', 0)}")
     stamped_buckets = {k: v for k, v in by_scope.items() if k != "unstamped"}
     stamped = sum(v["lessons"] for v in stamped_buckets.values())
     bar = _portability.MIN_FOREIGN_EVIDENCE
@@ -433,6 +501,20 @@ def _print_portability(per_run: List[Dict[str, Any]]) -> None:
         elif len(both) < 2:
             print(f"     (only the {both[0]!r} bucket has evidence — a "
                   f"one-sided figure is not a comparison)")
+        elif any(stamped_buckets[k].get("imported") for k in both):
+            # Stamps are comparable WITHIN a labeller, not across them: the
+            # production lane labels ~81% method at 97.5% self-agreement, the
+            # hosted-free lane ~44% at 88.8%. An imported row was stamped on
+            # another machine by another model, so a bucket holding one has no
+            # single base rate and the pooled figure is not a measurement of
+            # anything. Refuse the verdict rather than print a comparison the
+            # stamp's own contract forbids (r3, two lenses — pack.py claimed
+            # the census separated these and it did not).
+            n_imp = sum(stamped_buckets[k].get("imported", 0) for k in both)
+            print(f"     ({n_imp} evidenced stamp(s) were minted on another "
+                  f"machine by another labeller — stamps are comparable within "
+                  f"a labeller, not across them, so this pooling is not a "
+                  f"readable comparison)")
         elif thinnest < _SCOPE_COMPARISON_FLOOR:
             print(f"     (both buckets have evidence but the thinner one rests on "
                   f"{thinnest} verdicted citation(s), under the stated floor of "

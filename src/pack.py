@@ -690,7 +690,7 @@ def _import_lessons(content: str, *, pack_name: str, label: str, pack_tag: str,
     an injectable one (the db37d525 contamination class, via transport)."""
     from knowledge_web import (TieredLesson, MemoryTier, load_tiered_lessons,
                                _append_tiered_lesson, _LESSON_TYPES,
-                               _LESSON_SCOPES)
+                               coerce_scope)
 
     existing = (load_tiered_lessons(tier=MemoryTier.MEDIUM, limit=None, raw=True)
                 + load_tiered_lessons(tier=MemoryTier.LONG, limit=None, raw=True))
@@ -778,8 +778,17 @@ def _import_lessons(content: str, *, pack_name: str, label: str, pack_tag: str,
                 times_reinforced=0,
                 recorded_at=now,
                 evidence_sources=row.get("evidence_sources", []),
-                lesson_type=row.get("lesson_type", "") if row.get("lesson_type") in
-                _LESSON_TYPES else "",
+                # isinstance first: this is untrusted foreign JSON, and
+                # `["planning"] in _LESSON_TYPES` raises rather than returning
+                # False — the per-row except would then drop an otherwise-valid
+                # lesson over a junk enum. §3 of PORTABLE_LEARNING_DESIGN makes
+                # this the rule for this function ("untyped JSON must not
+                # TypeError into a silent clean import"); scope broke it too
+                # and is fixed below (r3).
+                lesson_type=(row.get("lesson_type", "")
+                             if isinstance(row.get("lesson_type"), str)
+                             and row.get("lesson_type") in _LESSON_TYPES
+                             else ""),
                 # §14a scope stamp crosses the border like its sibling
                 # lesson_type: it is a fact about where the knowledge came
                 # from, and the exporter already ships it (export round-trips
@@ -787,11 +796,13 @@ def _import_lessons(content: str, *, pack_name: str, label: str, pack_tag: str,
                 # r1 review, same door merged_variants went through in the
                 # 2026-08-11 round). Mixing labellers is the standing worry
                 # with this stamp, and it is answered by construction here:
-                # `imported` is non-empty on exactly these rows, so a census
-                # can bucket foreign-minted stamps separately instead of
-                # pooling them with locally-minted ones.
-                scope=row.get("scope", "") if row.get("scope") in
-                _LESSON_SCOPES else "",
+                # `imported` is non-empty on exactly these rows, and since
+                # r3 the census reads it: foreign-minted stamps are counted
+                # per bucket and block the readable-comparison verdict, rather
+                # than pooling silently with locally-minted ones. (Before r3
+                # this comment claimed a separation the census did not
+                # perform — the rows carried the flag and nothing read it.)
+                scope=coerce_scope(row.get("scope", ""))[0],
                 provisional=bool(row.get("provisional", False)),
                 minted_from=minted_from,
                 imported=imported,

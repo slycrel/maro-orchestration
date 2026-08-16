@@ -961,6 +961,51 @@ class TestProvenanceTransport:
         tl = load_tiered_lessons(tier=MemoryTier.MEDIUM, limit=None, raw=True)[0]
         assert tl.scope == ""
 
+    @pytest.mark.parametrize("bad", [["world"], {"s": 1}, 7, True])
+    def test_a_junk_scope_does_not_cost_the_whole_lesson(self, bad, tmp_path,
+                                                         target_ws):
+        """Untyped foreign JSON must not TypeError into a dropped import.
+
+        `row.get("scope") in _LESSON_SCOPES` RAISES on an unhashable value, and
+        the per-row `except` turned that into `malformed_skipped` — an
+        otherwise-valid foreign lesson discarded over a junk stamp, inverting
+        the policy the census uses (keep the lesson, drop the stamp) and
+        breaking §3's own rule for this function ("untyped JSON must not
+        TypeError into a silent clean import"). r3, three lenses.
+        """
+        from knowledge_web import load_tiered_lessons, MemoryTier
+        src_ws = _make_workspace(tmp_path / "src")
+        pack_path = _export_and_seal(src_ws, tmp_path)
+        _add_artifact(pack_path, cls="lessons", relpath="memory/long/lessons.jsonl",
+                      content=json.dumps({
+                          "lesson_id": "s3", "lesson": "a junk-scoped lesson",
+                          "task_type": "ops", "outcome": "success",
+                          "source_goal": "g", "confidence": 0.9, "tier": "long",
+                          "score": 1.0, "last_reinforced": "2020-01-01",
+                          "scope": bad}) + "\n")
+        res = import_pack(pack_path, label="l", target=target_ws)
+        rows = load_tiered_lessons(tier=MemoryTier.MEDIUM, limit=None, raw=True)
+        assert [t.lesson for t in rows] == ["a junk-scoped lesson"], res
+        assert rows[0].scope == ""
+
+    def test_a_junk_lesson_type_does_not_cost_the_whole_lesson(self, tmp_path,
+                                                               target_ws):
+        # Same shape, same fix — the sibling enum had the hazard first.
+        from knowledge_web import load_tiered_lessons, MemoryTier
+        src_ws = _make_workspace(tmp_path / "src")
+        pack_path = _export_and_seal(src_ws, tmp_path)
+        _add_artifact(pack_path, cls="lessons", relpath="memory/long/lessons.jsonl",
+                      content=json.dumps({
+                          "lesson_id": "s4", "lesson": "a junk-typed lesson",
+                          "task_type": "ops", "outcome": "success",
+                          "source_goal": "g", "confidence": 0.9, "tier": "long",
+                          "score": 1.0, "last_reinforced": "2020-01-01",
+                          "lesson_type": ["planning"]}) + "\n")
+        res = import_pack(pack_path, label="l", target=target_ws)
+        rows = load_tiered_lessons(tier=MemoryTier.MEDIUM, limit=None, raw=True)
+        assert [t.lesson for t in rows] == ["a junk-typed lesson"], res
+        assert rows[0].lesson_type == ""
+
     def test_identical_canonical_collision_unions_variants(self, tmp_path, target_ws):
         """Fixpoint review round 2: the skipped_identical early-exit lost
         foreign variants — the collision skips the ROW, not its rationale."""

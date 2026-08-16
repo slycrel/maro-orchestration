@@ -266,6 +266,19 @@ db37d525 contamination class, reopened via transport. Both halves shipped:
   the row re-earns citizenship locally via outcome re-records.
   Quarantined arrivals report `imported_medium_quarantined`.
   `provisional` (step-verified, reduced entry score) carries through too.
+- **The §14a scope stamp crosses too** (`scope`: method | world, added
+  2026-08-15 with slice 3): it is a fact about where the knowledge came
+  from, so it travels like `lesson_type`, screened against the local
+  vocabulary via `knowledge_web.coerce_scope` — type first, then
+  vocabulary, because untyped JSON can hand this function an unhashable
+  value and `x in frozenset` RAISES rather than returning False. Anything
+  off-vocabulary lands as `""` (unstamped) and the lesson still imports;
+  before r3 it cost the whole row. Note the labeller asymmetry this
+  creates: an imported stamp was assigned by ANOTHER machine's model, and
+  stamps are comparable within a labeller, not across them (~81% method on
+  the production lane vs ~44% on hosted-free, same runs). `imported` marks
+  those rows, and the census reads it — a bucket holding imported rows is
+  refused a readable-comparison verdict rather than pooled silently.
 
 Pinned in `tests/test_pack.py::TestProvenanceTransport` (2026-08-01
 adversarial review hardened the border: stamp-enum normalization,

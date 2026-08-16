@@ -192,6 +192,58 @@ class TestAsTypedLesson:
     def test_uninterpretable_item_degrades_instead_of_raising(self):
         assert as_typed_lesson(object()) == TypedLesson("", "execution", "")
 
+    def test_an_empty_item_says_so_in_the_log(self, caplog):
+        """The sibling branch, which shipped with no test at all (r3).
+
+        Both degrade to the same empty TypedLesson, so the log line is the
+        ONLY thing that distinguishes "a lesson arrived with no text" from
+        "nothing arrived" — replacing it with `pass` survived every related
+        test file.
+        """
+        with caplog.at_level(logging.WARNING, logger="memory"):
+            assert as_typed_lesson([]) == TypedLesson("", "execution", "")
+        assert any("no lesson text to keep" in r.getMessage()
+                   for r in caplog.records), [
+                       (r.name, r.getMessage()) for r in caplog.records]
+
+
+class TestScopeIsNotARankingInput:
+    """The decree, with a tripwire under it (r3 design lens).
+
+    e2b83703 settled that the categorical stamp feeds the CENSUS ONLY and
+    ranking stays on earned globality. The design held on inspection, but
+    nothing in the suite failed if a future session wired `scope` into
+    ranking — and this file's own docstring pointed at test_portability.py,
+    which never mentions scope.
+    """
+
+    def test_the_vocabularies_do_not_drift(self):
+        # knowledge_web's copy carries a prose "Mirrors memory._LESSON_SCOPES"
+        # claim and nothing checked it.
+        import knowledge_web
+        assert memory._LESSON_SCOPES == knowledge_web._LESSON_SCOPES
+
+    def test_no_ranking_module_reads_the_stamp(self):
+        """Grep-test, deliberately: the point is that the seam stays empty.
+
+        A behavioral assertion would only cover the wiring that exists today;
+        this fails the moment someone adds a new read on a ranking path.
+        """
+        root = Path(__file__).parent.parent / "src"
+        offenders = []
+        for name in ("portability.py", "knowledge_lens.py", "recall.py"):
+            f = root / name
+            if not f.exists():
+                continue
+            for i, line in enumerate(f.read_text(encoding="utf-8").splitlines(), 1):
+                if "scope" in line and "lesson" in line.lower():
+                    offenders.append(f"{name}:{i}: {line.strip()}")
+        assert not offenders, (
+            "a ranking-path module now reads the lesson scope stamp — that is "
+            "the e2b83703 decree, not a style preference. If this is "
+            "deliberate, the decree changed and GOAL_BRAIN says so first:\n"
+            + "\n".join(offenders))
+
 
 class TestStorePersistence:
     @pytest.fixture(autouse=True)
@@ -269,6 +321,107 @@ class TestStorePersistence:
         rows = load_tiered_lessons("medium", min_score=0.0)
         assert len(rows) == 1, "expected dedup-reinforce, not a second row"
         assert rows[0].scope == "world"
+
+    def test_reinforce_rejects_an_off_vocabulary_incoming_stamp(self):
+        """`incoming_scope` is NOT filtered by the caller.
+
+        `record_tiered_lesson` screens the vocabulary only in the new-row
+        constructor; on the reinforce path it forwards `scope` raw. The one
+        thing between `scope="banana"` and a permanently corrupt store row is
+        the `incoming_scope in _LESSON_SCOPES` conjunct, and nothing tested it
+        — dropping it wrote "banana" to disk and survived the whole related
+        suite (r3 test-audit).
+        """
+        from knowledge_web import record_tiered_lesson
+        text = "Retries against a bot-challenged endpoint never recover"
+        record_tiered_lesson(text, "research", "done", "goal one")
+        record_tiered_lesson(text, "research", "done", "goal two",
+                             scope="banana")
+        rows = self._rows()
+        assert len(rows) == 1, "expected dedup-reinforce, not a second row"
+        assert rows[0]["scope"] == "", f"garbage reached disk: {rows[0]['scope']!r}"
+
+    @pytest.mark.parametrize("bad", ["banana", "World", "  method  ", 7, True,
+                                     ["world"], {"s": 1}, 0.5])
+    def test_reinforce_heals_every_corrupt_shape_without_crashing(self, bad):
+        """The type axis, applied to the WRITER this time.
+
+        r2 parametrized forged scopes over the census READER and used a single
+        string on the reinforce side — and that is exactly where the r2 fix
+        put a bare `row.scope not in _LESSON_SCOPES`, which RAISES on an
+        unhashable stored value. Both mint call sites swallow the exception as
+        a bare counter bump, so one corrupt row silently blackholed every
+        future mint matching its text, permanently: the heal that would clear
+        the value was the thing that crashed (r3, three lenses).
+        """
+        from knowledge_web import record_tiered_lesson
+        text = "Retries against a bot-challenged endpoint never recover"
+        d = self.ws / "memory" / "medium"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "lessons.jsonl").write_text(json.dumps({
+            "lesson_id": "forged1", "task_type": "research", "outcome": "done",
+            "lesson": text, "source_goal": "goal one", "confidence": 0.5,
+            "tier": "medium", "score": 1.0, "last_reinforced": "2026-08-01",
+            "scope": bad}) + "\n", encoding="utf-8")
+        record_tiered_lesson(text, "research", "done", "goal two", scope="world")
+        rows = self._rows()
+        assert len(rows) == 1, "the mint was lost, not reinforced"
+        assert rows[0]["scope"] == "world"
+        assert rows[0]["times_reinforced"] == 1
+
+    def test_a_non_numeric_score_does_not_wedge_every_write(self):
+        """One bad row must not take the tier's whole write path down.
+
+        `load_tiered_lessons` sorts by score OUTSIDE its per-row guard, so a
+        row with `"score": "high"` raised TypeError on every raw load — and
+        every read-modify-write (reinforce, promote, GC, tombstone, canon,
+        pack variant-union) loads raw. The ordinary read path hid the row, so
+        nothing pointed at it: the reader concealed it and the writer died on
+        it (r3 Expert QA). Pre-existing, found through this slice.
+        """
+        from knowledge_web import load_tiered_lessons, record_tiered_lesson
+        text = "Retries against a bot-challenged endpoint never recover"
+        d = self.ws / "memory" / "medium"
+        d.mkdir(parents=True, exist_ok=True)
+        base = {"task_type": "research", "outcome": "done", "source_goal": "g",
+                "confidence": 0.5, "tier": "medium",
+                "last_reinforced": "2026-08-01"}
+        (d / "lessons.jsonl").write_text("\n".join(json.dumps(r) for r in [
+            dict(base, lesson_id="L-good", lesson=text, score=1.0),
+            dict(base, lesson_id="L-bad", lesson="other", score="high"),
+        ]) + "\n", encoding="utf-8")
+        loaded = load_tiered_lessons("medium", min_score=0.0, limit=None,
+                                     raw=True)
+        assert [t.lesson_id for t in loaded] == ["L-good"]
+        record_tiered_lesson(text, "research", "done", "goal two")
+        assert any(r["lesson_id"] == "L-good" and r["times_reinforced"] == 1
+                   for r in self._rows()), "the reinforce was lost"
+
+    def test_unparseable_rows_survive_a_rewrite(self):
+        """Data retention: rewrites must never destroy the only copy.
+
+        Rewrites rebuild the file from the PARSED list and the loader silently
+        skips what it cannot parse, so before r3 the next reinforcement
+        permanently deleted every unparseable row — unarchived, uncounted,
+        against `_archive_lessons`' own "decay trust, never data" decree. A
+        real backup file in this workspace has 290 rows that all fail today's
+        dataclass on schema drift; in-place, one mint would have erased them.
+        """
+        from knowledge_web import record_tiered_lesson
+        text = "Retries against a bot-challenged endpoint never recover"
+        d = self.ws / "memory" / "medium"
+        d.mkdir(parents=True, exist_ok=True)
+        drift = {"lesson_id": "L-drift", "lesson": "from a future schema"}
+        (d / "lessons.jsonl").write_text("\n".join(json.dumps(r) for r in [
+            {"lesson_id": "L-good", "task_type": "research", "outcome": "done",
+             "lesson": text, "source_goal": "g", "confidence": 0.5,
+             "tier": "medium", "score": 1.0, "last_reinforced": "2026-08-01"},
+            drift,
+        ]) + "\n", encoding="utf-8")
+        record_tiered_lesson(text, "research", "done", "goal two")
+        ids = [r.get("lesson_id") for r in self._rows()]
+        assert "L-good" in ids
+        assert "L-drift" in ids, f"unparseable row destroyed: {ids}"
 
     def test_reinforce_without_a_stamp_leaves_the_row_alone(self):
         from knowledge_web import load_tiered_lessons, record_tiered_lesson
@@ -389,14 +542,17 @@ class TestReadoutHonesty:
         anything.
         """
         import camera_readout
-        origins = {lid: {"source_goal": f"origin of {lid}",
-                         "task_type": "research", "scope": scope,
-                         "preview": f"preview {lid}"}
-                   for lid, scope, _, _ in cited}
+        origins = {c[0]: {"source_goal": f"origin of {c[0]}",
+                          "task_type": "research", "scope": c[1],
+                          "preview": f"preview {c[0]}",
+                          # 5th element, optional: minted on another machine.
+                          "imported": ({"imported_from": "mini2"}
+                                       if len(c) > 4 and c[4] else {})}
+                   for c in cited}
         monkeypatch.setattr(camera_readout, "_lesson_origins",
                             lambda warn=None: origins)
         per_run = []
-        for lid, _scope, achieved, n in cited:
+        for lid, _scope, achieved, n in ((c[0], c[1], c[2], c[3]) for c in cited):
             for i in range(n):
                 d = tmp_path / f"run-{lid}-{i}"
                 d.mkdir(exist_ok=True)
@@ -453,6 +609,137 @@ class TestReadoutHonesty:
         out = self._run(capsys, monkeypatch, tmp_path, cited)
         assert "comparison is readable" in out
 
+    def test_exactly_at_the_floor_is_readable(
+            self, capsys, monkeypatch, tmp_path):
+        """The stated floor is inclusive — pin the boundary, not just the ends.
+
+        r3 test-audit: the suite exercised thinnest=4 (hint) and thinnest=40
+        (readable) and never the boundary, so `<` -> `<=` survived the whole
+        related suite while flipping the readout's own headline honesty claim
+        at exactly the number it prints.
+        """
+        from camera_readout import _SCOPE_COMPARISON_FLOOR as FLOOR
+        out = self._run(capsys, monkeypatch, tmp_path,
+                        [("M1", "method", True, FLOOR * 2),
+                         ("W1", "world", True, FLOOR)])
+        assert "comparison is readable" in out
+        assert "read as a hint" not in out
+
+    def test_one_under_the_floor_is_only_a_hint(
+            self, capsys, monkeypatch, tmp_path):
+        from camera_readout import _SCOPE_COMPARISON_FLOOR as FLOOR
+        out = self._run(capsys, monkeypatch, tmp_path,
+                        [("M1", "method", True, FLOOR * 2),
+                         ("W1", "world", True, FLOOR - 1)])
+        assert "read as a hint, not a result" in out
+        assert "comparison is readable" not in out
+
+    def test_imported_stamps_block_the_readable_verdict(
+            self, capsys, monkeypatch, tmp_path):
+        """Stamps are comparable WITHIN a labeller, not across them.
+
+        pack.py claimed the census could separate foreign-minted stamps
+        "by construction" because the rows carry `imported`. Nothing read it
+        (r3, two lenses) — so a cross-machine mixture would eventually have
+        printed "this comparison is readable" over exactly the pooling the
+        stamp's own contract forbids.
+        """
+        from camera_readout import _SCOPE_COMPARISON_FLOOR as FLOOR
+        out = self._run(capsys, monkeypatch, tmp_path,
+                        [("M1", "method", True, FLOOR * 2, False),
+                         ("W1", "world", True, FLOOR * 2, True)])
+        assert "comparable within a labeller" in out
+        assert "comparison is readable" not in out
+
+    def test_all_local_stamps_still_read_as_a_comparison(
+            self, capsys, monkeypatch, tmp_path):
+        # The above must gate on `imported`, not merely suppress the verdict.
+        from camera_readout import _SCOPE_COMPARISON_FLOOR as FLOOR
+        out = self._run(capsys, monkeypatch, tmp_path,
+                        [("M1", "method", True, FLOOR * 2, False),
+                         ("W1", "world", True, FLOOR * 2, False)])
+        assert "comparison is readable" in out
+        assert "comparable within a labeller" not in out
+
+
+class TestStampCoverage:
+    """Is the stamp landing at all? (r3 Expert QA.)
+
+    Every other scope number in the readout is citation-gated, and a fresh
+    mint needs days-to-weeks of foreign verdicted citations. So a totally
+    dead write path printed the same reassuring "predates the stamp … by
+    construction" line as a healthy one. This reads the store directly.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _ws(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+        self.d = tmp_path / "memory" / "medium"
+        self.d.mkdir(parents=True)
+
+    def _write(self, *scopes):
+        base = {"task_type": "research", "outcome": "done", "source_goal": "g",
+                "confidence": 0.5, "tier": "medium", "score": 1.0,
+                "last_reinforced": "2026-08-01"}
+        rows = []
+        for i, sc in enumerate(scopes):
+            r = dict(base, lesson_id=f"L{i}", lesson=f"lesson {i}",
+                     recorded_at=f"2026-08-1{i}T00:00:00+00:00")
+            if sc is not None:
+                r["scope"] = sc
+            rows.append(r)
+        (self.d / "lessons.jsonl").write_text(
+            "\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
+
+    def test_counts_the_whole_store_not_the_citation_join(self):
+        from camera_readout import _stamp_coverage
+        self._write("method", "method", "world", None, "banana")
+        cov = _stamp_coverage()
+        assert (cov["total"], cov["method"], cov["world"], cov["malformed"]) \
+            == (5, 2, 1, 1)
+
+    def test_newest_stamped_mint_is_reported(self):
+        from camera_readout import _stamp_coverage
+        self._write("method", None, "world")
+        assert _stamp_coverage()["newest"].startswith("2026-08-12")
+
+    def test_a_dead_write_path_says_so_in_words(self, capsys):
+        """The whole point: this must NOT read like the healthy-but-early case."""
+        import camera_readout
+        self._write(None, None, None)
+        camera_readout._print_portability([])
+        out = capsys.readouterr().out
+        assert "0/3 rows stamped" in out
+        assert "ZERO stamped rows store-wide" in out
+
+    def test_a_working_write_path_does_not_raise_the_alarm(self, capsys):
+        import camera_readout
+        self._write("method", None, None)
+        camera_readout._print_portability([])
+        out = capsys.readouterr().out
+        assert "1/3 rows stamped" in out
+        assert "ZERO stamped rows" not in out
+
+    def test_an_empty_store_is_not_an_alarm(self, capsys):
+        # A fresh install has nothing to stamp; that is not a broken writer.
+        import camera_readout
+        self._write()
+        camera_readout._print_portability([])
+        assert "ZERO stamped rows" not in capsys.readouterr().out
+
+    def test_an_unreadable_store_is_named_not_swallowed(self, capsys,
+                                                        monkeypatch):
+        import camera_readout, knowledge_web
+
+        def boom(*a, **k):
+            raise RuntimeError("tier read exploded")
+
+        monkeypatch.setattr(knowledge_web, "load_tiered_lessons", boom)
+        camera_readout._print_portability([])
+        out = capsys.readouterr().out
+        assert "stamp coverage: UNREADABLE" in out
+        assert "tier read exploded" in out
+
 
 class TestForgedStoreRows:
     """Sad paths from r2 Expert QA: the store is JSON and nothing validates it
@@ -473,6 +760,54 @@ class TestForgedStoreRows:
                               "foreign": 1, "foreign_s": 1, "foreign_f": 0}])
         assert set(out) == {"unstamped"}, f"{bad!r} minted its own bucket"
         assert out["unstamped"]["malformed"] == 1
+
+    def test_malformed_flag_beside_a_valid_scope_does_not_crash(self):
+        """The row shape the 8-case parametrize could not reach.
+
+        `scope_malformed` is read for direct callers, and a caller that sets
+        it next to a VALID scope creates no "unstamped" bucket to report it
+        on — so the report line indexed a key that wasn't there. Same
+        instrument-must-never-crash class as the `both[0]` guard.
+        """
+        from camera_readout import _scope_rollup
+        out = _scope_rollup([{"lesson_id": "x", "scope": "method",
+                              "scope_malformed": True, "cites": 1,
+                              "foreign": 1, "foreign_s": 1, "foreign_f": 0}])
+        assert out["method"]["lessons"] == 1
+        assert out["unstamped"]["malformed"] == 1
+
+    def test_falsy_corruption_is_reported_through_the_live_store(
+            self, tmp_path, monkeypatch, capsys):
+        """`or ""` upstream made the malformed detector blind to falsy junk.
+
+        The r2 tests injected past `_lesson_origins`, so they never crossed
+        the `getattr(tl, "scope", "") or ""` that flattened False/0/[]/{} to
+        "" before the screen ran. Those shapes reported as honestly-unstamped
+        and the WARNING could not fire — which made r2's "0 malformed" live
+        claim really "0 among the truthy shapes" (r3 skeptic).
+        """
+        import camera_readout
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+        mem = tmp_path / "memory" / "medium"
+        mem.mkdir(parents=True)
+        mem.joinpath("lessons.jsonl").write_text(json.dumps({
+            "lesson_id": "L1", "task_type": "research", "outcome": "done",
+            "lesson": "a lesson", "source_goal": "origin goal",
+            "confidence": 0.5, "tier": "medium", "score": 1.0,
+            "last_reinforced": "2026-08-01", "scope": []}) + "\n",
+            encoding="utf-8")
+        per_run = []
+        for i in range(4):
+            d = tmp_path / f"r{i}"
+            d.mkdir()
+            (d / "metadata.json").write_text(json.dumps(
+                {"project": "other", "prompt": f"foreign {i}",
+                 "goal_achieved": True}), encoding="utf-8")
+            per_run.append({"dir": d,
+                            "frames": [{"chosen": {"lesson_ids": ["L1"]}}]})
+        camera_readout._print_portability(per_run)
+        out = capsys.readouterr().out
+        assert "outside {method, world}" in out
 
     def test_null_scope_is_unstamped_not_malformed(self):
         from camera_readout import _scope_rollup
@@ -554,7 +889,15 @@ class TestForgedStoreRows:
         monkeypatch.setattr(camera_readout, "portability_census", boom)
         with caplog.at_level(logging.WARNING, logger="portability"):
             assert portability.refresh_cache() == -1
-        assert any(r.levelno >= logging.WARNING for r in caplog.records)
+        # Name AND message: caplog captures the whole root tree, so a bare
+        # "something warned" assertion passed with the fix reverted as soon as
+        # any unrelated logger warned on the same path (r3 test-audit).
+        assert any(r.name == "portability"
+                   and "cache refresh failed" in r.getMessage()
+                   and r.levelno >= logging.WARNING
+                   for r in caplog.records), [
+                       (r.name, r.levelname, r.getMessage())
+                       for r in caplog.records]
 
     def test_refresh_cache_survives_a_forged_row(self, tmp_path, monkeypatch):
         """The HIGH one: a single bad row stopped the RANKING cache refreshing.
@@ -591,3 +934,11 @@ class TestForgedStoreRows:
         n = portability.refresh_cache()
         assert n >= 0, "refresh returned the -1 failure sentinel"
         assert portability.cache_path().exists(), "cache never written"
+        # Read the CONTENT. `n >= 0` plus "a file exists" cannot tell a correct
+        # refresh apart from one that swallowed the census crash and wrote an
+        # empty cache — and both look identical to the operator, whose only
+        # symptom either way is weighting that stops updating (r3 test-audit
+        # demonstrated the empty-cache alternative fix passing this test).
+        cache = portability.load_cache()
+        assert cache.get("good") == {"foreign_s": 2, "foreign_f": 0}, cache
+        assert n == 2, f"expected both rows counted, got {n}: {cache}"

@@ -28,7 +28,7 @@ from collections import Counter
 from dataclasses import asdict, dataclass, field, fields, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 log = logging.getLogger(__name__)
 
@@ -61,6 +61,30 @@ _LESSON_TYPES = frozenset({"execution", "planning", "recovery", "verification", 
 # caller lands as "" (unstamped) rather than as a third category the census
 # would have to guess at.
 _LESSON_SCOPES = frozenset({"method", "world"})
+
+
+def coerce_scope(raw: Any) -> Tuple[str, bool]:
+    """Coerce any decoded-JSON value to the scope vocabulary. -> (scope, bad).
+
+    The ONE screen for this field, living next to the vocabulary it screens
+    against. Store rows are JSONL and nothing validates them on read, so
+    ``scope`` can hold any decodable type — including unhashable ones, and
+    ``["world"] in _LESSON_SCOPES`` RAISES rather than returning False. So the
+    type check has to come before the vocabulary check, everywhere, and r3
+    found that hand-rolling it per site does not hold: the r2 hardening put
+    the screen in the census reader and left three bare membership tests on
+    the write and transport paths, one of which (the reinforce heal) turned a
+    benign corrupt row into a permanent mint-losing crash.
+
+    ``bad`` distinguishes "honestly unstamped" (absent, "", None — the whole
+    pre-2026-08-15 corpus) from "carries something no write path in this tree
+    can produce", so corruption gets reported rather than absorbed.
+    """
+    if isinstance(raw, str) and raw in _LESSON_SCOPES:
+        return raw, False
+    if raw is None or raw == "":
+        return "", False
+    return "", True
 
 # Phase 60: citation enforcement — uncited lessons are gently penalised in ranking.
 # A 10% discount means a clearly-better uncited lesson still wins; this is a tie-breaker.
@@ -559,7 +583,7 @@ def record_tiered_lesson(
             acquired_for=acquired_for,
             evidence_sources=evidence_sources or [],
             lesson_type=lesson_type if lesson_type in _LESSON_TYPES else "",
-            scope=scope if scope in _LESSON_SCOPES else "",
+            scope=coerce_scope(scope)[0],
             novelty=round(novelty, 4),
             provisional=provisional,
             minted_from=minted_from,
@@ -764,8 +788,16 @@ def _reinforce_tiered_lesson(tl: TieredLesson, *, tier: str,
         # needed it most — a permanently wrong stamp that reads as confidently
         # classified everywhere downstream (r2 Expert QA, reproduced). Valid
         # stamps still never flip.
-        if incoming_scope in _LESSON_SCOPES and row.scope not in _LESSON_SCOPES:
-            if row.scope:
+        # coerce_scope, not a bare membership test: `row.scope` comes straight
+        # off disk with no coercion (TieredLesson(**{...}) below), so an
+        # unhashable stored value makes `x in _LESSON_SCOPES` RAISE. r2 wrote
+        # that bare test here and turned a benign corrupt row into a permanent
+        # mint-losing crash — both mint call sites swallow the exception as a
+        # bare counter bump, and the heal that would clear the value is the
+        # thing that crashes (r3, three lenses, reproduced).
+        stored_scope, stored_bad = coerce_scope(row.scope)
+        if incoming_scope in _LESSON_SCOPES and not stored_scope:
+            if stored_bad:
                 log.warning("lesson %s carried an off-vocabulary scope %r — "
                             "healed to %r by this mint",
                             row.lesson_id, row.scope, incoming_scope)
@@ -894,6 +926,20 @@ def load_tiered_lessons(
             try:
                 d = json.loads(line)
                 tl = TieredLesson(**{k: d[k] for k in TieredLesson.__dataclass_fields__ if k in d})
+                # Coerce the numeric fields HERE, inside the per-row guard.
+                # The sort at the bottom of this function is OUTSIDE it, so a
+                # single row with `"score": "high"` raised
+                # `'<' not supported between 'float' and 'str'` and took the
+                # whole raw load down — and with it every read-modify-write on
+                # the tier at once (reinforce, promote, GC, tombstone, canon,
+                # pack variant-union: 24 call sites). The ordinary read path
+                # meanwhile hid the row, so nothing ever pointed at it: the
+                # reader concealed the corruption and the writer died on it
+                # (r3 Expert QA, reproduced). A row that fails here is
+                # unparseable, and unparseable rows are preserved verbatim
+                # through rewrites — see _unparseable_lines.
+                tl.score = float(tl.score)
+                tl.confidence = float(tl.confidence)
                 days = _days_since(tl.last_reinforced)
                 if max_age_days is not None and days > max_age_days:
                     continue  # lesson too stale
@@ -916,6 +962,48 @@ def load_tiered_lessons(
     return results[:limit] if limit is not None else results
 
 
+def _unparseable_lines(path) -> List[str]:
+    """Store lines that do NOT survive a round trip through TieredLesson.
+
+    Rewrites (``_rewrite_tiered_lessons``, ``_mutate_tiered_lessons``) rebuild
+    the file from the PARSED list, and ``load_tiered_lessons`` silently
+    ``continue``s past anything it cannot parse — so before r3 the next
+    reinforcement of any lesson permanently deleted every unparseable row,
+    unarchived and uncounted. That contradicts ``_archive_lessons``' own
+    decree ("decay trust, never data — GC and forget move lessons OUT but
+    never destroy them") and the standing data-retention rule.
+
+    Not hypothetical: this workspace holds a real backup file whose 290 rows
+    all fail today's dataclass on schema drift. Had that drift happened in
+    place, one mint would have erased all 290 with no trace.
+
+    Returned verbatim (newline-terminated) so a rewrite can carry them
+    through byte-for-byte. Schema drift is the common case and a future
+    version may well parse them again.
+    """
+    out: List[str] = []
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            try:
+                d = json.loads(line)
+                tl = TieredLesson(**{k: d[k] for k in
+                                     TieredLesson.__dataclass_fields__ if k in d})
+                float(tl.score)
+                float(tl.confidence)
+            except Exception:
+                out.append(line if line.endswith("\n") else line + "\n")
+    except Exception:
+        return []
+    if out:
+        log.warning("%s: %d unparseable lesson row(s) preserved verbatim "
+                    "through the rewrite (schema drift or corruption) — they "
+                    "are invisible to every reader until they parse again",
+                    path.name, len(out))
+    return out
+
+
 def _rewrite_tiered_lessons(tier: str, lessons: Optional[List[TieredLesson]] = None) -> None:
     """Rewrite the tiered lessons file with the current state (after updates/GC).
 
@@ -934,7 +1022,8 @@ def _rewrite_tiered_lessons(tier: str, lessons: Optional[List[TieredLesson]] = N
         # and were silently dropped).
         if lessons is None:
             lessons = load_tiered_lessons(tier=tier, min_score=0.0, limit=None, raw=True)
-        atomic_write(path, "".join(json.dumps(asdict(tl)) + "\n" for tl in lessons))
+        atomic_write(path, "".join(json.dumps(asdict(tl)) + "\n" for tl in lessons)
+                     + "".join(_unparseable_lines(path)))
 
 
 def _mutate_tiered_lessons(tier: str, mutate) -> None:
@@ -948,8 +1037,13 @@ def _mutate_tiered_lessons(tier: str, mutate) -> None:
     from file_lock import locked_write, atomic_write
     with locked_write(path):
         lessons = load_tiered_lessons(tier=tier, min_score=0.0, limit=None, raw=True)
+        # Read the unparseable rows BEFORE the write, while the lock is held
+        # and the old bytes are still on disk — they are not in `lessons`
+        # (load drops them) and the write below would otherwise delete them.
+        carried = _unparseable_lines(path)
         lessons = mutate(lessons)
-        atomic_write(path, "".join(json.dumps(asdict(tl)) + "\n" for tl in lessons))
+        atomic_write(path, "".join(json.dumps(asdict(tl)) + "\n" for tl in lessons)
+                     + "".join(carried))
 
 
 # ---------------------------------------------------------------------------

@@ -2870,16 +2870,66 @@ Dated end-of-chunk/session entries, append-only at the tail. Rotation policy (20
   are summarized in this entry's back-fill batch above; archives remain
   the full-context source.
 
+- **2026-08-16 (§14a slice 3 review r3 — the fix round that found the
+  fix round).** Four lenses (skeptic, test-auditor, Expert QA, design
+  coherence) over the r2 diff; 19 fixes, all mutation-tested. The
+  headline is a self-inflicted one: **r2's own hardening introduced a
+  crash on the mint path.** It replaced `not row.scope` with
+  `row.scope not in _LESSON_SCOPES` — a frozenset membership test on a
+  value read straight off disk, which is exactly the pattern r2 wrote
+  `_clean_scope` to avoid, one file over. `["world"] in frozenset`
+  raises, both mint call sites swallow it as a bare counter bump, and
+  the heal that would clear the bad value is the thing that crashes, so
+  one corrupt row permanently blackholed every future mint matching its
+  text. Three lenses caught it independently. Root cause was a seam:
+  `knowledge_web` owned the vocabulary, `camera_readout` owned the only
+  type-safe reader of it, and three sites hand-rolled the check.
+  `knowledge_web.coerce_scope` is now the single screen, called from
+  all four. **Two pre-existing store bugs surfaced in the blast
+  radius and were fixed:** (a) `load_tiered_lessons` sorted by score
+  OUTSIDE its per-row guard, so one row with `"score": "high"` wedged
+  every read-modify-write on the tier at once (24 call sites) while the
+  ordinary read path hid the row — the reader concealed the corruption
+  and the writer died on it; (b) rewrites rebuilt the file from the
+  parsed list, so the next reinforcement permanently deleted every
+  unparseable row, against `_archive_lessons`' own "decay trust, never
+  data" decree — a real backup file in this workspace has 290 rows that
+  all fail today's dataclass, and in place one mint would have erased
+  them. Unparseable rows now ride through rewrites verbatim with a
+  WARNING. **Two honesty repairs:** the malformed detector was blind to
+  falsy corruption (`or ""` upstream flattened False/0/[]/{} before the
+  screen ran), which made r2's "0 malformed" live claim really "0 among
+  the truthy shapes"; and `pack.py` claimed the census could separate
+  foreign-labeller stamps "by construction" — the rows carried
+  `imported` and nothing read it. The census now reads it and REFUSES a
+  readable-comparison verdict over a cross-labeller mixture. **New
+  instrument:** a store-wide, non-citation-gated stamp-coverage line,
+  because every other scope number waits on citations and a dead write
+  path printed the same reassuring line as a healthy one. It reads
+  **0/195 on the live store** — the write path has not fired once in
+  production. The writer was live-fired end-to-end against a real model
+  in a temp workspace (two lessons, both stamped, correct types) and the
+  full mint → store → census chain walked to a "readable" verdict, which
+  is what r2's live-fire did not do: it confirmed the reader only.
+  Suite 8986 green.
+
 - **2026-08-15 (§14a slice 3 SHIPPED — mint-time method/world scope
   stamp; probe-first datapoint #3).** The arc's categorical half is in:
   `extract_lessons_via_llm`'s typed JSON now carries a third key
   (`scope`: method | world), `TieredLesson.scope` persists it, both
-  mint paths (finalize + the deferred lane organic runs actually take)
-  thread it, and `camera_readout --portability` cross-tabs portability
-  by stamp. No new judge — the existing extractor answers one more
+  RUN-LEVEL mint paths (finalize + the deferred lane organic runs
+  actually take) thread it, and `camera_readout --portability`
+  cross-tabs portability by stamp. The other four mints —
+  per-step (`extract_step_lessons`), evolver, prereq, CLI — stamp
+  nothing; the per-step boundary is sized and accepted in BACKLOG
+  (6/188 live rows, all provisional). No new judge — the existing extractor answers one more
   question in the same call. **Scope is deliberately NOT a ranking
   input**: earned globality (slice 2) keeps doing the behavioral work,
-  and the stamp's only consumer is the census. Stamp semantics:
+  and the stamp's only consumer is the census — plus transport, which
+  carries the stamp across the pack border (r3: the census now reads
+  `imported` and refuses a readable-comparison verdict over a
+  cross-labeller mixture, because stamps are comparable within a
+  labeller, not across them). Stamp semantics:
   write-once, filled from the first real mint that offers one, never
   flipped after (a re-sighting with a different label loses to the
   existing one). Suite 8908 green.
@@ -2916,7 +2966,9 @@ Dated end-of-chunk/session entries, append-only at the tail. Rotation policy (20
   lessons have any foreign citation — consistent with §14a's
   "learning is almost entirely methodology", and exactly why scope was
   kept out of ranking. BACKLOG carries the re-read trigger and the kill
-  criterion (if ~30 stamped-and-cited lessons show indistinguishable
+  criterion (if ~30 stamped-and-cited LESSONS — a different denominator
+  from the "~30" the readout prints above the scope table, which counts
+  foreign verdicted CITATIONS for the slice-1 gate — show indistinguishable
   pooled portability, the categorical axis loses to contested-14a's
   structural-invariance alternative).
 
