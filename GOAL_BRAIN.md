@@ -2930,3 +2930,24 @@ Dated end-of-chunk/session entries, append-only at the tail. Rotation policy (20
   15:19, all existing closure_verdicts rows predate it — gate correctly
   parked awaiting fresh runs; the LT-0(c) SF-13 decree pipe verified
   run (decisions.jsonl grep).
+
+- **2026-08-16 (dev Mac, cont.)** — **NODE_CANDIDATE permanence UX
+  decided (Jeremy, structured answers → Decisions entry; earned
+  promotion, notify-not-ask, bless/banish as config/debug) and
+  mint-grounding slice 2a shipped through the full loop.** Slice 2a
+  (face30b): lesson-lane stamp coverage complete (step-lessons, prereq
+  vs the sub-loop's own run, thinkback — an unstamped lane R1-3's own
+  census missed), R1-4 laundering fixed (KnowledgeNode.grounding at
+  create, mint-time semantics, promotion-judge visibility, advisory
+  per the fail-open decree). Review round (0aca9c5): 4 lenses on the
+  sonnet fallback incl. the 08-01 QA-persona TRY-ONCE — 15 findings
+  dedup 9, 0 hallucinated, 3 HIGHs confirmed+fixed (title-truncation
+  reopening R1-1 by composition; unprobed rendered as refutation to
+  the judge; world_facts.land_facts the missed CREATE sibling —
+  [[feedback_fix_every_lane_not_one]] caught by watch-list probe 2).
+  **QA persona EARNED ITS SEAT** — unique yield all four findings, zero
+  overlap; institutionalization awaits Jeremy's roster call (record:
+  docs/history/2026-08-16-mint-grounding-slice2a-review.md). Residue:
+  slice 2b skill-mint (7-site census), slice 3 republish gate,
+  Architect's LLM-prose claim-shape hit-rate question folded into the
+  >30%-unprobed falsifier census. Suite 8896/0.
