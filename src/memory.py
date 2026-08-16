@@ -41,7 +41,7 @@ from collections import Counter
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, date, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, NamedTuple, Optional
 from llm_parse import extract_json, safe_list, content_or_empty
 
 log = logging.getLogger("maro.memory")
@@ -246,13 +246,73 @@ _REFLECT_SYSTEM = (textwrap.dedent("""\
     - "verification": output quality and catching errors early
     - "cost": token spend or latency
 
-    Respond with a JSON array of 1-3 lesson objects, each with "lesson" (string) and "type" (one of the above).
-    Example: [{"lesson": "Research tasks produce better output when the goal includes success criteria", "type": "planning"},
-              {"lesson": "Stuck detection triggers prematurely on research tasks that need multiple iterations", "type": "recovery"}]
+    Each lesson also gets a "scope" — an axis INDEPENDENT of "type":
+    - "method": knowledge about how to work (process, tooling, sequencing,
+      verification, recovery). Holds whatever the next task is about.
+    - "world": knowledge about one external subject (a site, API, repo,
+      dataset, domain fact). Useful again mainly in that same subject area.
+    "type" is ALWAYS one of the five lesson types above; "scope" is ALWAYS
+    method or world. Never put a scope value in "type" or a type value in "scope".
+
+    Respond with a JSON array of 1-3 lesson objects, each with "lesson" (string), "type" (one of the five), and "scope" ("method" or "world").
+    Example: [{"lesson": "Research tasks produce better output when the goal includes success criteria", "type": "planning", "scope": "method"},
+              {"lesson": "Stuck detection triggers prematurely on research tasks that need multiple iterations", "type": "recovery", "scope": "method"},
+              {"lesson": "The pure-gas.org station list answers automated fetches with a bot challenge, so retries against it never recover", "type": "recovery", "scope": "world"}]
 """).strip())
 
 
 _LESSON_TYPES = frozenset({"execution", "planning", "recovery", "verification", "cost"})
+
+# §14a slice 3: mint-time scope stamp — provenance, a fact about where the
+# knowledge came from, stamped categorically at mint and never flipped after
+# (decision e2b83703). Deliberately NOT a ranking input: the slice-1 census
+# cross-tab is starved on the world side (of the 6 lessons carrying >=3
+# verdicted foreign citations, every resolvable one is method-scope; only 5
+# world-scope lessons have ANY foreign citation), so there is no evidence yet
+# that scope predicts portability. The stamp exists to FEED that census —
+# earned globality (portability.py) keeps doing the behavioral work.
+#
+# The stamp is one sample of an ambiguous judgement, and it is
+# LABELLER-DEPENDENT. Measured pre-ship: the production mint lane stamps ~81%
+# method and repeats itself 97.5% across two passes; hosted-free
+# (gemini-flash-lite) stamped only ~44% method on the same runs and repeated
+# itself 88.8% — it anchors on whatever subject the evidence names. So the
+# stamp is trustworthy row-by-row on the main lane, but a corpus whose rows
+# were minted by different lanes has no single base rate. Read stamps as
+# provenance, not ground truth, and never compare them across labellers.
+_LESSON_SCOPES = frozenset({"method", "world"})
+
+
+class TypedLesson(NamedTuple):
+    """One extracted lesson: text, type (S1), scope (§14a slice 3).
+
+    A tuple subclass on purpose. ``return_typed=True`` used to yield plain
+    ``(text, type)`` pairs and both in-tree callers and test fakes destructure
+    them positionally, so widening in place would have broken every two-name
+    unpack at once. Consumers that need the stamp go through
+    :func:`as_typed_lesson`, which accepts either width and defaults the stamp
+    to "" — an unstamped lesson is the honest reading of a pair that never
+    carried one.
+    """
+    lesson: str
+    lesson_type: str
+    scope: str = ""
+
+
+def as_typed_lesson(item) -> TypedLesson:
+    """Normalize a (text, type) pair or (text, type, scope) triple.
+
+    The boundary that lets the extractor widen without a flag day: legacy
+    two-element returns — including the ones tests monkeypatch in — become
+    unstamped triples rather than raising on unpack.
+    """
+    if isinstance(item, TypedLesson):
+        return item
+    parts = tuple(item)
+    text = str(parts[0]) if parts else ""
+    lesson_type = str(parts[1]) if len(parts) > 1 else "execution"
+    scope = str(parts[2]).strip().lower() if len(parts) > 2 else ""
+    return TypedLesson(text, lesson_type, scope if scope in _LESSON_SCOPES else "")
 
 
 # S2 seed-reader (NeMo steal) REMOVED 2026-08-06 after the sanctioned A/B
@@ -306,7 +366,10 @@ def extract_lessons_via_llm(
         # judged goal-not-achieved is a failure regardless of process status.
         icon = "succeeded" if (status == "done" and goal_achieved is not False) else "failed"
         lesson = f"[dry-run lesson] {task_type} task {icon}: {goal[:40]}"
-        return [(lesson, "execution")] if return_typed else [lesson]
+        # Dry-run lessons carry no scope stamp: nothing classified them, and a
+        # fabricated "method" would be indistinguishable in the census from a
+        # real mint-time judgement.
+        return [TypedLesson(lesson, "execution", "")] if return_typed else [lesson]
 
     from llm import LLMMessage
 
@@ -356,7 +419,12 @@ def extract_lessons_via_llm(
     )
 
     def _parse_typed(raw: object) -> "List[tuple]":
-        """Parse [{"lesson": ..., "type": ...}] or ["plain string", ...] — both accepted."""
+        """Parse [{"lesson":..., "type":..., "scope":...}] or ["plain string", ...].
+
+        Returns TypedLesson triples. Both older shapes still parse: a dict
+        without "scope" yields an empty stamp, a bare string stays the legacy
+        execution/unstamped fallback.
+        """
         results = []
         # element_type must admit dicts: safe_list defaults to str, which
         # silently dropped every typed lesson object — the shape the prompt
@@ -364,18 +432,40 @@ def extract_lessons_via_llm(
         # every run (found live 2026-06-11; tests only fed legacy strings).
         items = safe_list(raw, element_type=(dict, str), max_items=3)
         for item in items:
+            scope = ""
             if isinstance(item, dict):
                 lesson_text = str(item.get("lesson", "")).strip()
                 lesson_type = str(item.get("type", "execution")).strip().lower()
+                scope = str(item.get("scope", "")).strip().lower()
+                # Cross-slot recovery: asking for two categorical keys in one
+                # object makes the model occasionally answer the wrong one.
+                # Measured pre-ship on the naive schema wording: a scope value
+                # landed in "type" on 2 of 18 lessons, and the plain
+                # not-in-_LESSON_TYPES fallback below would have silently
+                # rewritten those to "execution" — a wrong lesson_type bought
+                # by adding a field. The shipped prompt drove that to 0/31
+                # across two lanes, so this is the belt to that suspenders:
+                # recover the misplaced value instead of destroying it.
+                if lesson_type in _LESSON_SCOPES:
+                    if not scope:
+                        scope = lesson_type
+                    log.debug("lesson scope value %r arrived in the type slot", lesson_type)
+                    lesson_type = ""
+                if scope in _LESSON_TYPES:
+                    if lesson_type not in _LESSON_TYPES:
+                        lesson_type = scope
+                    scope = ""
                 if lesson_type not in _LESSON_TYPES:
                     lesson_type = "execution"
+                if scope not in _LESSON_SCOPES:
+                    scope = ""
             elif isinstance(item, str):
                 lesson_text = item.strip()
                 lesson_type = "execution"  # legacy fallback
             else:
                 continue
             if lesson_text:
-                results.append((lesson_text, lesson_type))
+                results.append(TypedLesson(lesson_text, lesson_type, scope))
         return results
 
     _total_tokens_in = 0
@@ -411,10 +501,10 @@ def extract_lessons_via_llm(
     # type crowding out others (e.g., 3 "execution" lessons drowning out "recovery").
     type_seen: set = set()
     capped: list = []
-    for lesson_text, lesson_type in typed:
-        if lesson_type not in type_seen:
-            type_seen.add(lesson_type)
-            capped.append((lesson_text, lesson_type))
+    for item in typed:
+        if item.lesson_type not in type_seen:
+            type_seen.add(item.lesson_type)
+            capped.append(item)
     typed = capped
 
     # F6: Token transparency — log extraction cost so expensive paths are visible
@@ -436,7 +526,7 @@ def extract_lessons_via_llm(
 
     if return_typed:
         return typed
-    return [text for text, _ in typed]
+    return [item.lesson for item in typed]
 
 
 # ---------------------------------------------------------------------------
@@ -719,7 +809,10 @@ def reflect_and_record(
             return_typed=True,
             goal_achieved=goal_achieved,
         )
-    lessons = [text for text, _ in typed_lessons]
+    # Normalize at the boundary so a caller (or a test double) handing back
+    # legacy (text, type) pairs still flows through the scope-aware writes.
+    typed_lessons = [as_typed_lesson(t) for t in typed_lessons]
+    lessons = [t.lesson for t in typed_lessons]
     log.debug("extracted %d lessons from reflection", len(lessons))
 
     # Auto-record each typed lesson to the tiered system (MEDIUM tier, k_samples=1 → 0.5 confidence)
@@ -743,12 +836,12 @@ def reflect_and_record(
         try:
             from mint_grounding import ground_lessons_for_run
             lesson_groundings = ground_lessons_for_run(
-                [t for t, _ in typed_lessons], loop_id or handle_id)
+                [t.lesson for t in typed_lessons], loop_id or handle_id)
         except Exception:
             lesson_groundings = []
     if not dry_run and typed_lessons:
         import uuid as _uuid
-        for _l_idx, (lesson_text, lesson_type) in enumerate(typed_lessons):
+        for _l_idx, (lesson_text, lesson_type, lesson_scope) in enumerate(typed_lessons):
             _shared_id = str(_uuid.uuid4())[:8]
             try:
                 recorded = record_tiered_lesson(
@@ -769,6 +862,7 @@ def reflect_and_record(
                     # R1-5: same block extract_lessons_via_llm saw — the
                     # classifier must see what the extractor generalized from.
                     source_evidence=lesson_evidence or result_summary,
+                    scope=lesson_scope,
                 )
                 if getattr(recorded, "lesson_id", "") == "rejected":
                     tiered_failed += 1
@@ -893,6 +987,7 @@ def extract_deferred_lessons(
             error=str(exc),
         )
         raise
+    typed_lessons = [as_typed_lesson(t) for t in typed_lessons]
     if not typed_lessons:
         if not annotate_outcome_lessons(loop_id, []):
             annotate_outcome_extraction_failure(loop_id)
@@ -920,7 +1015,7 @@ def extract_deferred_lessons(
             dry_run=outcome.dry_run or dry_run,
         )
         return 0
-    lessons = [text for text, _ in typed_lessons]
+    lessons = [t.lesson for t in typed_lessons]
     log.info("extract_deferred_lessons: %d lesson(s) for loop %s (verdict=%s)",
              len(lessons), loop_id, outcome.goal_achieved)
 
@@ -961,12 +1056,12 @@ def extract_deferred_lessons(
         try:
             from mint_grounding import ground_lessons_for_run
             lesson_groundings = ground_lessons_for_run(
-                [t for t, _ in typed_lessons], loop_id)
+                [t.lesson for t in typed_lessons], loop_id)
         except Exception:
             lesson_groundings = []
     if not dry_run:
         import uuid as _uuid
-        for _l_idx, (lesson_text, lesson_type) in enumerate(typed_lessons):
+        for _l_idx, (lesson_text, lesson_type, lesson_scope) in enumerate(typed_lessons):
             _shared_id = str(_uuid.uuid4())[:8]
             try:
                 recorded = record_tiered_lesson(
@@ -983,6 +1078,7 @@ def extract_deferred_lessons(
                                if _l_idx < len(lesson_groundings) else None),
                     # R1-5: the stored summary is this path's extraction input.
                     source_evidence=outcome.summary,
+                    scope=lesson_scope,
                 )
                 if getattr(recorded, "lesson_id", "") == "rejected":
                     tiered_failed += 1

@@ -138,6 +138,7 @@ def _lesson_origins(warn=print) -> Dict[str, Dict[str, str]]:
                     out[lid] = {
                         "source_goal": getattr(tl, "source_goal", "") or "",
                         "task_type": getattr(tl, "task_type", "") or "",
+                        "scope": getattr(tl, "scope", "") or "",
                         "preview": _clip(getattr(tl, "lesson", "") or "",
                                          60),
                     }
@@ -157,6 +158,7 @@ def _lesson_origins(warn=print) -> Dict[str, Dict[str, str]]:
                     out[lid] = {
                         "source_goal": str(row.get("source_goal") or ""),
                         "task_type": str(row.get("task_type") or ""),
+                        "scope": str(row.get("scope") or ""),
                         "preview": _clip(str(row.get("lesson") or ""), 60),
                     }
     except FileNotFoundError:
@@ -175,6 +177,7 @@ from portability import (  # noqa: E402
     beta_mean as _beta_mean,
     is_home as _is_home,
     unattributable_source as _unattributable_source,
+    MIN_FOREIGN_EVIDENCE as _MIN_FOREIGN_EVIDENCE,
 )
 
 
@@ -245,6 +248,9 @@ def portability_census(per_run: List[Dict[str, Any]],
         rows.append({
             "lesson_id": lid,
             "preview": origins[lid]["preview"],
+            # §14a slice 3: mint-time method/world stamp, "" for rows minted
+            # before the stamp existed (the whole pre-2026-08-15 corpus).
+            "scope": origins[lid].get("scope", ""),
             "cites": rec["cites"],
             "runs": len(rec["runs"]),
             "home": rec["home"],
@@ -258,7 +264,45 @@ def portability_census(per_run: List[Dict[str, Any]],
     rows.sort(key=lambda r: (-(r["foreign_s"] + r["foreign_f"]),
                              -r["cites"]))
     return {"rows": rows, "unresolved": unresolved,
-            "runs_no_meta": runs_no_meta}
+            "runs_no_meta": runs_no_meta,
+            "by_scope": _scope_rollup(rows)}
+
+
+def _scope_rollup(rows: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    """Aggregate portability evidence by mint-time scope stamp (§14a slice 3).
+
+    This is the census half of the slice: the stamp exists so the
+    method-vs-world transferability claim — settled in §14a, contested by the
+    2026-08-11 panel — finally has a denominator instead of an argument. It
+    reports rather than concludes, and the honest reading today is that it
+    cannot conclude yet: at slice-3 ship the entire cited corpus was minted
+    before the stamp existed, so every row lands in "unstamped" and the
+    method/world buckets are empty by construction. They fill only as
+    newly-minted lessons accrue foreign verdicted citations.
+
+    ``pooled`` is the pooled Beta mean over the bucket's citations, NOT the
+    mean of per-lesson portabilities: one lesson with 5 foreign verdicts is
+    stronger evidence than five with one each, and averaging the per-lesson
+    figures would hand them equal weight.
+    """
+    buckets: Dict[str, Dict[str, Any]] = {}
+    for r in rows:
+        b = buckets.setdefault(r.get("scope") or "unstamped",
+                               {"lessons": 0, "cites": 0, "foreign": 0,
+                                "foreign_s": 0, "foreign_f": 0, "evidenced": 0})
+        b["lessons"] += 1
+        b["cites"] += r["cites"]
+        b["foreign"] += r["foreign"]
+        b["foreign_s"] += r["foreign_s"]
+        b["foreign_f"] += r["foreign_f"]
+        # "Evidenced" mirrors the rank-time bar (portability.MIN_FOREIGN_
+        # EVIDENCE) so the census counts what would actually be actionable.
+        if r["foreign_s"] + r["foreign_f"] >= _MIN_FOREIGN_EVIDENCE:
+            b["evidenced"] += 1
+    for b in buckets.values():
+        fv = b["foreign_s"] + b["foreign_f"]
+        b["pooled"] = _beta_mean(b["foreign_s"], b["foreign_f"]) if fv else None
+    return buckets
 
 
 def _print_portability(per_run: List[Dict[str, Any]]) -> None:
@@ -276,9 +320,28 @@ def _print_portability(per_run: List[Dict[str, Any]]) -> None:
               f"runs={r['runs']:3d} home={r['home']:3d} "
               f"foreign={r['foreign']:3d} "
               f"judged(s/f)={r['foreign_s']}/{r['foreign_f']} "
-              f"portability={port:12s} {r['preview']}")
+              f"portability={port:12s} "
+              f"scope={(r.get('scope') or '-'):7s} {r['preview']}")
     print(f"  -- foreign verdicted citations total: {total_fv} "
           f"(pre-registered gate reads at ~30)")
+    print("\n  -- by mint-time scope stamp (§14a slice 3) --")
+    by_scope = c.get("by_scope") or {}
+    for name in ("method", "world", "unstamped"):
+        b = by_scope.get(name)
+        if not b:
+            continue
+        fv = b["foreign_s"] + b["foreign_f"]
+        pooled = "insufficient" if b["pooled"] is None else f"{b['pooled']:.2f}"
+        print(f"     {name:10s} lessons={b['lessons']:3d} cites={b['cites']:4d} "
+              f"foreign={b['foreign']:3d} judged(s/f)={b['foreign_s']}/{b['foreign_f']} "
+              f"pooled={pooled:12s} evidenced={b['evidenced']}")
+    stamped = sum(v["lessons"] for k, v in by_scope.items() if k != "unstamped")
+    if not stamped:
+        print("     (every cited lesson predates the stamp — the method-vs-world "
+              "comparison has no data yet, by construction)")
+    elif not any(v["evidenced"] for k, v in by_scope.items() if k != "unstamped"):
+        print(f"     ({stamped} stamped lesson(s) cited, none yet at the "
+              f"{_MIN_FOREIGN_EVIDENCE}-verdict bar — comparison still premature)")
     n_unattr = sum(r["unattributable"] for r in rows)
     if n_unattr:
         print(f"  -- citations from sentinel/empty-source lessons "

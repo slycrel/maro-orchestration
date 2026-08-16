@@ -1154,10 +1154,11 @@ class TestTypedLessonTaxonomy:
         )
         assert isinstance(result, list)
         assert len(result) == 1
-        lesson_text, lesson_type = result[0]
+        lesson_text, lesson_type, scope = result[0]
         assert isinstance(lesson_text, str)
         assert isinstance(lesson_type, str)
         assert "execution" == lesson_type  # dry-run defaults to "execution"
+        assert scope == ""  # nothing classified it — see test_lesson_scope.py
 
     def test_extract_lessons_cross_type_cap(self, monkeypatch, tmp_path):
         """S5: Cross-type cap ensures at most 1 lesson per lesson_type."""
@@ -1178,7 +1179,7 @@ class TestTypedLessonTaxonomy:
             "goal", "done", "summary", "general",
             adapter=FakeAdapter(), return_typed=True,
         )
-        types_returned = [t for _, t in result]
+        types_returned = [t.lesson_type for t in result]
         # Only 1 "execution" allowed despite 2 in the response
         assert types_returned.count("execution") <= 1
 
@@ -1654,8 +1655,11 @@ class TestTypedLessonExtraction:
             "goal", "done", "summary", "agenda",
             adapter=self._DictAdapter(), return_typed=True,
         )
-        assert ("validate file readability before aggregation", "verification") in result
-        assert ("parallelize independent reads", "execution") in result
+        # §14a slice 3 widened the typed shape to (lesson, type, scope);
+        # these dicts carry no "scope" key, so they parse as unstamped.
+        assert ("validate file readability before aggregation",
+                "verification", "") in result
+        assert ("parallelize independent reads", "execution", "") in result
 
     def test_typed_dicts_flatten_to_strings_for_legacy_callers(self):
         from memory import extract_lessons_via_llm
@@ -1680,8 +1684,8 @@ class TestTypedLessonExtraction:
             "goal", "done", "summary", "agenda",
             adapter=MixedAdapter(), return_typed=True,
         )
-        assert ("typed one", "planning") in result
-        assert ("legacy plain string", "execution") in result
+        assert ("typed one", "planning", "") in result
+        assert ("legacy plain string", "execution", "") in result
 
     def test_unknown_type_falls_back_to_execution(self):
         from memory import extract_lessons_via_llm
@@ -1697,4 +1701,4 @@ class TestTypedLessonExtraction:
             "goal", "done", "summary", "agenda",
             adapter=WeirdTypeAdapter(), return_typed=True,
         )
-        assert result == [("odd typed", "execution")]
+        assert result == [("odd typed", "execution", "")]

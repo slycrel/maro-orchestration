@@ -1,0 +1,289 @@
+"""§14a slice 3 — mint-time method/world scope stamp.
+
+Pins the provenance contract (decision e2b83703): the stamp is categorical,
+written at mint from the extractor's typed JSON, filled once and never
+flipped, and consumed by the slice-1 census only — never by ranking, which
+stays on earned globality (test_portability.py).
+
+The cross-slot recovery tests exist because of a measured failure, not a
+hypothetical: on the naive schema wording a scope value landed in the "type"
+slot on 2 of 18 live-corpus extractions, and the pre-existing
+not-a-known-type fallback would have silently rewritten those to "execution".
+The shipped prompt drove that to 0/31 across two model lanes; the parser
+recovers anyway.
+"""
+import json
+import sys
+from pathlib import Path
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+
+import memory  # noqa: E402
+from memory import TypedLesson, as_typed_lesson  # noqa: E402
+
+
+def _parse(raw):
+    """Drive the module's real parser through its public entry point.
+
+    _parse_typed is a closure inside extract_lessons_via_llm, so the honest
+    way to reach it is the adapter seam the production path uses.
+    """
+    class _Adapter:
+        def complete(self, messages, **kw):
+            self.system = messages[0].content
+            return type("R", (), {"content": json.dumps(raw),
+                                  "input_tokens": 0, "output_tokens": 0})()
+
+    return memory.extract_lessons_via_llm(
+        goal="g", status="done", result_summary="s", task_type="research",
+        adapter=_Adapter(), return_typed=True)
+
+
+class TestParseScope:
+    def test_scope_parsed_from_typed_json(self):
+        out = _parse([{"lesson": "L1", "type": "planning", "scope": "world"}])
+        assert out == [TypedLesson("L1", "planning", "world")]
+
+    def test_missing_scope_is_unstamped(self):
+        # The pre-slice-3 wire shape. Must still parse — an old cached
+        # response or a model that ignores the new key cannot cost us lessons.
+        out = _parse([{"lesson": "L1", "type": "planning"}])
+        assert out == [TypedLesson("L1", "planning", "")]
+
+    def test_unknown_scope_value_is_dropped_not_invented(self):
+        out = _parse([{"lesson": "L1", "type": "planning", "scope": "global"}])
+        assert out[0].scope == ""
+
+    def test_legacy_bare_string_still_parses(self):
+        out = _parse(["just a string"])
+        assert out == [TypedLesson("just a string", "execution", "")]
+
+    def test_scope_value_in_type_slot_is_recovered(self):
+        # The measured 2/18 failure. Pre-fix this yielded ("L1","execution",""):
+        # a wrong lesson_type AND a lost stamp.
+        out = _parse([{"lesson": "L1", "type": "world"}])
+        assert out[0].scope == "world"
+        assert out[0].lesson_type == "execution"  # no type was actually given
+
+    def test_scope_value_in_type_slot_does_not_clobber_a_real_scope(self):
+        out = _parse([{"lesson": "L1", "type": "method", "scope": "world"}])
+        assert out[0].scope == "world"
+
+    def test_type_value_in_scope_slot_is_recovered(self):
+        out = _parse([{"lesson": "L1", "type": "", "scope": "recovery"}])
+        assert out[0].lesson_type == "recovery"
+        assert out[0].scope == ""
+
+    def test_cross_type_cap_still_applies_with_scopes(self):
+        out = _parse([
+            {"lesson": "A", "type": "planning", "scope": "method"},
+            {"lesson": "B", "type": "planning", "scope": "world"},
+            {"lesson": "C", "type": "recovery", "scope": "world"},
+        ])
+        assert [t.lesson for t in out] == ["A", "C"]
+
+    def test_dry_run_lessons_are_unstamped(self):
+        out = memory.extract_lessons_via_llm(
+            goal="g", status="done", result_summary="s", task_type="research",
+            dry_run=True, return_typed=True)
+        assert out[0].scope == ""
+
+    def test_untyped_return_is_still_plain_strings(self):
+        class _Adapter:
+            def complete(self, messages, **kw):
+                return type("R", (), {
+                    "content": json.dumps(
+                        [{"lesson": "L1", "type": "planning", "scope": "world"}]),
+                    "input_tokens": 0, "output_tokens": 0})()
+
+        assert memory.extract_lessons_via_llm(
+            goal="g", status="done", result_summary="s", task_type="research",
+            adapter=_Adapter()) == ["L1"]
+
+
+class TestPromptContract:
+    """The stamp only arrives if the prompt keeps asking for it correctly."""
+
+    def test_prompt_requests_both_keys_as_separate_axes(self):
+        p = memory._REFLECT_SYSTEM
+        assert '"scope"' in p and '"type"' in p
+        assert "method" in p and "world" in p
+
+    def test_prompt_forbids_the_measured_cross_slot_failure(self):
+        assert "Never put a scope value" in memory._REFLECT_SYSTEM
+
+    def test_examples_carry_both_keys(self):
+        # The S2 seed-reader removal (2026-08-06) is the precedent: exemplars
+        # anchor extraction. Every example must show both keys, or the model
+        # learns the stamp is optional. An earlier draft of this prompt also
+        # SWAPPED an exemplar's lesson_type and measurably shifted the type
+        # distribution — hence the second assertion.
+        import re
+        examples = memory._REFLECT_SYSTEM.split("Example:")[1]
+        assert examples.count('"scope"') == examples.count('"type"')
+        # Pin the exact multiset, not mere presence: the S2 mechanism is
+        # distributional, so swapping ONE of two same-typed exemplars is a
+        # real anchor change that a presence check sails straight past.
+        assert sorted(re.findall(r'"type": "(\w+)"', examples)) == [
+            "planning", "recovery", "recovery"]
+        assert sorted(re.findall(r'"scope": "(\w+)"', examples)) == [
+            "method", "method", "world"], (
+            "exemplars must show both scope values, or the model learns one")
+
+
+class TestAsTypedLesson:
+    def test_legacy_pair_normalizes_to_unstamped_triple(self):
+        # Test doubles across the suite return two-element pairs.
+        assert as_typed_lesson(("text", "planning")) == TypedLesson(
+            "text", "planning", "")
+
+    def test_triple_passes_through(self):
+        assert as_typed_lesson(("t", "cost", "world")).scope == "world"
+
+    def test_bad_scope_normalizes_to_unstamped(self):
+        assert as_typed_lesson(("t", "cost", "GLOBAL")).scope == ""
+
+    def test_case_is_normalized(self):
+        assert as_typed_lesson(("t", "cost", "World")).scope == "world"
+
+
+class TestStorePersistence:
+    @pytest.fixture(autouse=True)
+    def _ws(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+        (tmp_path / "memory").mkdir(parents=True, exist_ok=True)
+        self.ws = tmp_path
+
+    def _rows(self, tier="medium"):
+        p = self.ws / "memory" / tier / "lessons.jsonl"
+        return [json.loads(l) for l in p.read_text().splitlines() if l.strip()]
+
+    def test_scope_round_trips_to_disk_and_back(self):
+        from knowledge_web import load_tiered_lessons, record_tiered_lesson
+        record_tiered_lesson("a durable lesson about fetching", "research",
+                             "done", "some goal", scope="world")
+        assert self._rows()[0]["scope"] == "world"
+        assert load_tiered_lessons("medium", min_score=0.0)[0].scope == "world"
+
+    def test_unknown_scope_stored_as_unstamped(self):
+        from knowledge_web import record_tiered_lesson
+        record_tiered_lesson("another lesson", "research", "done", "g",
+                             scope="somewhere-else")
+        assert self._rows()[0]["scope"] == ""
+
+    def test_legacy_row_without_scope_loads_as_unstamped(self):
+        from knowledge_web import load_tiered_lessons
+        d = self.ws / "memory" / "medium"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "lessons.jsonl").write_text(json.dumps({
+            "lesson_id": "old1", "task_type": "research", "outcome": "done",
+            "lesson": "a lesson from before the stamp existed",
+            "source_goal": "g", "confidence": 0.5, "tier": "medium",
+            "score": 1.0, "last_reinforced": "2026-08-01"}) + "\n",
+            encoding="utf-8")
+        assert load_tiered_lessons("medium", min_score=0.0)[0].scope == ""
+
+    def test_reinforce_fills_an_empty_stamp(self):
+        from knowledge_web import load_tiered_lessons, record_tiered_lesson
+        text = "Retries against a bot-challenged endpoint never recover"
+        record_tiered_lesson(text, "research", "done", "goal one")
+        record_tiered_lesson(text, "research", "done", "goal two", scope="world")
+        rows = load_tiered_lessons("medium", min_score=0.0)
+        assert len(rows) == 1, "expected dedup-reinforce, not a second row"
+        assert rows[0].scope == "world"
+        assert rows[0].times_reinforced == 1
+
+    def test_reinforce_never_flips_an_existing_stamp(self):
+        # The never-flip invariant: the category is a fact about origin.
+        from knowledge_web import load_tiered_lessons, record_tiered_lesson
+        text = "Retries against a bot-challenged endpoint never recover"
+        record_tiered_lesson(text, "research", "done", "goal one", scope="world")
+        record_tiered_lesson(text, "research", "done", "goal two", scope="method")
+        rows = load_tiered_lessons("medium", min_score=0.0)
+        assert len(rows) == 1
+        assert rows[0].scope == "world"
+
+    def test_reinforce_without_a_stamp_leaves_the_row_alone(self):
+        from knowledge_web import load_tiered_lessons, record_tiered_lesson
+        text = "Retries against a bot-challenged endpoint never recover"
+        record_tiered_lesson(text, "research", "done", "goal one", scope="world")
+        record_tiered_lesson(text, "research", "done", "goal two")
+        assert load_tiered_lessons("medium", min_score=0.0)[0].scope == "world"
+
+
+class TestCensusRollup:
+    """The stamp's only consumer: the §14a slice-1 census cross-tab."""
+
+    def _rollup(self, rows):
+        from camera_readout import _scope_rollup
+        return _scope_rollup(rows)
+
+    def _row(self, lid, scope, s=0, f=0, cites=1, foreign=0):
+        return {"lesson_id": lid, "scope": scope, "cites": cites,
+                "foreign": foreign, "foreign_s": s, "foreign_f": f}
+
+    def test_buckets_by_stamp(self):
+        out = self._rollup([self._row("a", "method"), self._row("b", "world"),
+                            self._row("c", "method")])
+        assert out["method"]["lessons"] == 2
+        assert out["world"]["lessons"] == 1
+
+    def test_unstamped_rows_get_their_own_bucket(self):
+        out = self._rollup([self._row("a", "")])
+        assert out["unstamped"]["lessons"] == 1
+        assert "method" not in out
+
+    def test_pooled_is_pooled_not_mean_of_means(self):
+        # One lesson at 5/0 and one at 0/1 pool to beta(5,1)=0.75, whereas
+        # averaging per-lesson portabilities would give (0.857+0.333)/2=0.595.
+        # Pooling is the point: evidence weight must scale with citations.
+        out = self._rollup([self._row("a", "method", s=5),
+                            self._row("b", "method", f=1)])
+        assert out["method"]["pooled"] == pytest.approx(6 / 8)
+
+    def test_bucket_without_verdicts_reports_insufficient(self):
+        assert self._rollup([self._row("a", "world")])["world"]["pooled"] is None
+
+    def test_evidenced_counts_only_rows_at_the_rank_time_bar(self):
+        from portability import MIN_FOREIGN_EVIDENCE
+        out = self._rollup([
+            self._row("a", "method", s=MIN_FOREIGN_EVIDENCE),
+            self._row("b", "method", s=MIN_FOREIGN_EVIDENCE - 1)])
+        assert out["method"]["evidenced"] == 1
+
+    def test_archived_lessons_keep_their_stamp(self, tmp_path, monkeypatch):
+        """Archive rows must carry scope too, not just live-store rows.
+
+        Not hypothetical: in the live census 23 of 64 cited lesson ids resolve
+        only through the archive fallback, so dropping the stamp there would
+        silently unstamp a third of the evidence base.
+        """
+        monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
+        mem = tmp_path / "memory"
+        mem.mkdir(parents=True, exist_ok=True)
+        (mem / "lessons_archive.jsonl").write_text(json.dumps({
+            "lesson_id": "arch1", "source_goal": "an old goal",
+            "task_type": "research", "scope": "world",
+            "lesson": "an archived lesson"}) + "\n", encoding="utf-8")
+        import camera_readout
+        origins = camera_readout._lesson_origins(warn=lambda *a: None)
+        assert origins["arch1"]["scope"] == "world"
+
+    def test_census_row_carries_the_stamp(self, tmp_path, monkeypatch):
+        """End of the pipe: a stamped store row surfaces in census output."""
+        import camera_readout
+        monkeypatch.setattr(camera_readout, "_lesson_origins", lambda warn=None: {
+            "L1": {"source_goal": "origin goal", "task_type": "research",
+                   "scope": "world", "preview": "p"}})
+        run = tmp_path / "run1"
+        run.mkdir()
+        (run / "metadata.json").write_text(json.dumps(
+            {"project": "other-project", "prompt": "a different goal",
+             "goal_achieved": True}), encoding="utf-8")
+        c = camera_readout.portability_census(
+            [{"dir": run, "frames": [{"chosen": {"lesson_ids": ["L1"]}}]}],
+            warn=lambda *a: None)
+        assert c["rows"][0]["scope"] == "world"
+        assert c["by_scope"]["world"]["foreign_s"] == 1

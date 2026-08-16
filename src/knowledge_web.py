@@ -56,6 +56,12 @@ def ranker_name() -> str:
 
 _LESSON_TYPES = frozenset({"execution", "planning", "recovery", "verification", "cost"})
 
+# §14a slice 3: mint-time scope stamp vocabulary. Mirrors memory._LESSON_SCOPES
+# — the store validates independently of the extractor so a bad value from any
+# caller lands as "" (unstamped) rather than as a third category the census
+# would have to guess at.
+_LESSON_SCOPES = frozenset({"method", "world"})
+
 # Phase 60: citation enforcement — uncited lessons are gently penalised in ranking.
 # A 10% discount means a clearly-better uncited lesson still wins; this is a tie-breaker.
 _CITATION_PENALTY = 0.90
@@ -136,6 +142,21 @@ class TieredLesson:
     # skill-pedigree `origin` stamp. Selector for delta_replay --origin, so
     # trace mints are Δ-measurable as a class. Old rows deserialize to "".
     minted_by: str = ""
+    # §14a slice 3 (2026-08-15, decision e2b83703): mint-time scope stamp —
+    # "" (never classified: legacy rows, dry runs, non-extraction mints) |
+    # "method" (knowledge about how to work) | "world" (knowledge about one
+    # external subject). Provenance, not a verdict: it records what the
+    # extractor judged at mint from the run's own evidence, and it never
+    # flips afterwards — globality stays earned from foreign-context citation
+    # evidence (portability.py), which is what actually moves ranking. Read
+    # it as one sample of an ambiguous judgement, and a labeller-dependent
+    # one: the production mint lane stamps ~81% method and repeats itself
+    # 97.5%, while hosted-free stamped ~44% method on the same runs. Stamps
+    # are comparable within a labeller, not across them.
+    # Nothing consumes it behaviorally yet — the slice-1 census does, so the
+    # method-vs-world portability question gets a denominator. Old rows
+    # deserialize to "".
+    scope: str = ""
     # Retirement-by-contradiction (2026-08-02): empty dict = full citizen;
     # non-empty = contested ({reason, source, contested_at}) — the lesson was
     # named by contradiction adjudication or operator judgment as plausibly
@@ -352,6 +373,7 @@ def record_tiered_lesson(
     lesson_id: str = "",
     grounding: Optional[List[Dict[str, Any]]] = None,
     source_evidence: str = "",
+    scope: str = "",
 ) -> TieredLesson:
     """Record a new lesson at the given tier.
 
@@ -385,6 +407,16 @@ def record_tiered_lesson(
         Fresh mints only — the reinforce path returns the existing row
         with its original stamps, whose receipts point at the run that
         actually minted the text.
+    §14a slice 3 (2026-08-15): ``scope`` is the mint-time method/world stamp
+        (see TieredLesson.scope). Categorical and write-once — a reinforce
+        FILLS an empty stamp from the incoming mint but never overwrites an
+        existing one, so the category cannot flip under re-sighting. Both
+        writes come from the same instrument (an extractor reading a real
+        run's evidence). A post-hoc backfill over the unstamped legacy rows
+        is deliberately NOT offered: labellers disagree on the base rate by
+        ~2x (81% vs 44% method for the same task), so a column mixing two
+        instruments' labels would not be comparable to itself, which is
+        exactly what the census needs it to be.
     """
     import uuid
 
@@ -448,7 +480,8 @@ def record_tiered_lesson(
                     incoming_minted_from=minted_from,
                     incoming_evidence=evidence_sources,
                     incoming_text=lesson_text,
-                    matched_lesson_text=ex.lesson)
+                    matched_lesson_text=ex.lesson,
+                    incoming_scope=scope)
             max_sim = max(max_sim, sim)
 
     # Scan-and-append is one critical section (review finding: the dedup
@@ -471,7 +504,8 @@ def record_tiered_lesson(
                     incoming_minted_from=minted_from,
                     incoming_evidence=evidence_sources,
                     incoming_text=lesson_text,
-                    matched_lesson_text=ex.lesson)
+                    matched_lesson_text=ex.lesson,
+                    incoming_scope=scope)
             max_sim = max(max_sim, sim)
 
         # Chunk 6: novelty term — a lesson unlike anything stored starts above
@@ -525,6 +559,7 @@ def record_tiered_lesson(
             acquired_for=acquired_for,
             evidence_sources=evidence_sources or [],
             lesson_type=lesson_type if lesson_type in _LESSON_TYPES else "",
+            scope=scope if scope in _LESSON_SCOPES else "",
             novelty=round(novelty, 4),
             provisional=provisional,
             minted_from=minted_from,
@@ -615,7 +650,8 @@ def _reinforce_tiered_lesson(tl: TieredLesson, *, tier: str,
                              incoming_minted_from: str = "",
                              incoming_evidence: Optional[List[str]] = None,
                              incoming_text: str = "",
-                             matched_lesson_text: str = "") -> TieredLesson:
+                             matched_lesson_text: str = "",
+                             incoming_scope: str = "") -> TieredLesson:
     """Reinforce an existing lesson: bump score and sessions_validated, rewrite file.
 
     ``tl.score`` is expected to be the *effective* (decay-derived) score —
@@ -714,6 +750,15 @@ def _reinforce_tiered_lesson(tl: TieredLesson, *, tier: str,
             # F5: multi-session confidence promotion
             if row.sessions_validated >= 3:
                 row.confidence = max(row.confidence, _CONFIDENCE_MULTI_SESSION)
+        # §14a slice 3: fill an empty scope stamp, never overwrite one. The
+        # category is a fact about origin and must not flip under re-sighting
+        # (decision e2b83703), but a row minted before the stamp existed — or
+        # by a path that had no classification to offer — can honestly take
+        # the first one a real mint produces. Contested rows fill too: this is
+        # provenance, not trust movement, and the same reasoning that keeps
+        # their counters honest applies.
+        if incoming_scope in _LESSON_SCOPES and not row.scope:
+            row.scope = incoming_scope
         row.times_reinforced += 1
         # Rationale erosion fix (MH, 2026-08-11): at >0.8 similarity the
         # incoming text can differ in exactly the operative clause — keep it
