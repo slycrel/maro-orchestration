@@ -1,0 +1,256 @@
+[
+  {
+    "name": "floor :: promote min-delta drops from 0.30 to near-zero",
+    "file": "src/knowledge_web.py",
+    "anchor": "EFFECT_PROMOTE_MIN_DELTA = 0.30",
+    "replacement": "EFFECT_PROMOTE_MIN_DELTA = 0.02",
+    "tests": "tests/test_delta_replay.py tests/test_trace_scoring.py tests/test_tiered_memory.py"
+  },
+  {
+    "name": "floor :: promote min-calls drops from 6 to 1",
+    "file": "src/knowledge_web.py",
+    "anchor": "EFFECT_PROMOTE_MIN_CALLS = 6",
+    "replacement": "EFFECT_PROMOTE_MIN_CALLS = 1",
+    "tests": "tests/test_delta_replay.py tests/test_trace_scoring.py tests/test_tiered_memory.py"
+  },
+  {
+    "name": "floor :: demote max-delta loosens from -0.05 to -0.001",
+    "file": "src/knowledge_web.py",
+    "anchor": "EFFECT_DEMOTE_MAX_DELTA = -0.05",
+    "replacement": "EFFECT_DEMOTE_MAX_DELTA = -0.001",
+    "tests": "tests/test_delta_replay.py tests/test_trace_scoring.py tests/test_tiered_memory.py"
+  },
+  {
+    "name": "floor :: inert |delta| band widens from 0.02 to 0.5",
+    "file": "src/knowledge_web.py",
+    "anchor": "EFFECT_INERT_MAX_ABS_DELTA = 0.02",
+    "replacement": "EFFECT_INERT_MAX_ABS_DELTA = 0.5",
+    "tests": "tests/test_delta_replay.py tests/test_trace_scoring.py tests/test_tiered_memory.py"
+  },
+  {
+    "name": "floor :: inert spread band widens from 0.02 to 0.5",
+    "file": "src/knowledge_web.py",
+    "anchor": "EFFECT_INERT_MAX_SPREAD = 0.02",
+    "replacement": "EFFECT_INERT_MAX_SPREAD = 0.5",
+    "tests": "tests/test_delta_replay.py tests/test_trace_scoring.py tests/test_tiered_memory.py"
+  },
+  {
+    "name": "promote :: killswitch is ignored",
+    "file": "src/knowledge_web.py",
+    "anchor": "    if not effect_promotion_enabled():\n        log.info(\"promote_lesson_by_effect: killswitch off — not promoting\")\n        return False",
+    "replacement": "    if False:\n        return False",
+    "tests": "tests/test_delta_replay.py tests/test_trace_scoring.py tests/test_tiered_memory.py"
+  },
+  {
+    "name": "promote :: the delta floor is not applied",
+    "file": "src/knowledge_web.py",
+    "anchor": "    if not (isinstance(delta, (int, float)) and math.isfinite(delta)) \\\n            or delta < min_delta:\n        return False\n    if int(ev.get(\"n_calls\") or 0) < min_calls:\n        return False\n    spread = ev.get(\"jackknife_spread\")\n    if not (isinstance(spread, (int, float)) and math.isfinite(spread)\n            and spread >= 0) or spread >= delta:\n        return False\n    if ev.get(\"stratum\") != \"reason\":\n        return False\n\n    rows = load_tiered_lessons",
+    "replacement": "    if not (isinstance(delta, (int, float)) and math.isfinite(delta)):\n        return False\n    if int(ev.get(\"n_calls\") or 0) < min_calls:\n        return False\n    spread = ev.get(\"jackknife_spread\")\n    if not (isinstance(spread, (int, float)) and math.isfinite(spread)\n            and spread >= 0) or spread >= delta:\n        return False\n    if ev.get(\"stratum\") != \"reason\":\n        return False\n\n    rows = load_tiered_lessons",
+    "tests": "tests/test_delta_replay.py tests/test_trace_scoring.py tests/test_tiered_memory.py"
+  },
+  {
+    "name": "promote :: a NaN delta is no longer refused",
+    "file": "src/knowledge_web.py",
+    "anchor": "    # the routes are the gate that matters.\n    if not (isinstance(delta, (int, float)) and math.isfinite(delta)) \\\n            or delta < min_delta:\n        return False\n",
+    "replacement": "    # the routes are the gate that matters.\n    if not isinstance(delta, (int, float)) or delta < min_delta:\n        return False\n",
+    "tests": "tests/test_delta_replay.py tests/test_trace_scoring.py tests/test_tiered_memory.py"
+  },
+  {
+    "name": "promote :: the call floor is not applied",
+    "file": "src/knowledge_web.py",
+    "anchor": "    # the routes are the gate that matters.\n    if not (isinstance(delta, (int, float)) and math.isfinite(delta)) \\\n            or delta < min_delta:\n        return False\n    if int(ev.get(\"n_calls\") or 0) < min_calls:\n        return False\n    spread = ev.get(\"jackknife_spread\")\n",
+    "replacement": "    # the routes are the gate that matters.\n    if not (isinstance(delta, (int, float)) and math.isfinite(delta)) \\\n            or delta < min_delta:\n        return False\n    if False:\n        return False\n    spread = ev.get(\"jackknife_spread\")\n",
+    "tests": "tests/test_delta_replay.py tests/test_trace_scoring.py tests/test_tiered_memory.py"
+  },
+  {
+    "name": "promote :: one call may own the verdict (spread guard dropped)",
+    "file": "src/knowledge_web.py",
+    "anchor": "    if not (isinstance(spread, (int, float)) and math.isfinite(spread)\n            and spread >= 0) or spread >= delta:\n        return False\n    if ev.get(\"stratum\") != \"reason\":\n        return False\n\n    rows = load_tiered_lessons",
+    "replacement": "    if False:\n        return False\n    if ev.get(\"stratum\") != \"reason\":\n        return False\n\n    rows = load_tiered_lessons",
+    "tests": "tests/test_delta_replay.py tests/test_trace_scoring.py tests/test_tiered_memory.py"
+  },
+  {
+    "name": "promote :: rule-stratum lessons become promotable",
+    "file": "src/knowledge_web.py",
+    "anchor": "    if ev.get(\"stratum\") != \"reason\":\n        return False\n\n    rows = load_tiered_lessons",
+    "replacement": "    if False:\n        return False\n\n    rows = load_tiered_lessons",
+    "tests": "tests/test_delta_replay.py tests/test_trace_scoring.py tests/test_tiered_memory.py"
+  },
+  {
+    "name": "promote :: an errored measurement may promote",
+    "file": "src/knowledge_web.py",
+    "anchor": "        log.info(\"promote_lesson_by_effect: %s measurement carries %d replay \"\n                 \"errors — not promoting\", lesson_id,\n                 int(ev.get(\"replay_errors\") or 0))\n        return False",
+    "replacement": "        log.info(\"promote_lesson_by_effect: %s measurement carries %d replay \"\n                 \"errors — not promoting\", lesson_id,\n                 int(ev.get(\"replay_errors\") or 0))",
+    "tests": "tests/test_delta_replay.py tests/test_trace_scoring.py tests/test_tiered_memory.py"
+  },
+  {
+    "name": "promote :: provisional/quarantined/contested rows become promotable",
+    "file": "src/knowledge_web.py",
+    "anchor": "    if target.provisional or _is_quarantined(target) or _is_contested(target):\n        log.info(\"promote_lesson_by_effect: %s is provisional/quarantined/\"\n                 \"contested — not promoting\", lesson_id)\n        return False",
+    "replacement": "    if False:\n        return False",
+    "tests": "tests/test_delta_replay.py tests/test_trace_scoring.py tests/test_tiered_memory.py",
+    "equivalent": "Two guards, one invariant. This is the PRE-check on the unlocked snapshot; `_guards` re-checks the fresh row under the lock and refuses there. Probed 2026-08-16: removing either one alone leaves test_provisional_row_never_reaches_long green, removing BOTH fails it, so the invariant is covered and each copy is defense in depth. The job only the IN-LOCK copy can do — catching a row that changed after the snapshot — is now pinned by test_a_row_contested_between_the_snapshot_and_the_lock_is_refused. What only the pre-check does is short-circuit before taking the lock and log a distinct line: cost and legibility, not correctness."
+  },
+  {
+    "name": "demote :: killswitch is ignored",
+    "file": "src/knowledge_web.py",
+    "anchor": "    if not effect_demotion_enabled():\n        log.info(\"demote_lesson_by_effect: killswitch off — not demoting\")\n        return False",
+    "replacement": "    if False:\n        return False",
+    "tests": "tests/test_delta_replay.py tests/test_trace_scoring.py tests/test_tiered_memory.py"
+  },
+  {
+    "name": "demote :: the negative-delta floor is not applied",
+    "file": "src/knowledge_web.py",
+    "anchor": "    if not (isinstance(delta, (int, float)) and math.isfinite(delta)) \\\n            or delta > max_delta:",
+    "replacement": "    if not (isinstance(delta, (int, float)) and math.isfinite(delta)):",
+    "tests": "tests/test_delta_replay.py tests/test_trace_scoring.py tests/test_tiered_memory.py"
+  },
+  {
+    "name": "demote :: a NaN delta is no longer refused",
+    "file": "src/knowledge_web.py",
+    "anchor": "    if not (isinstance(delta, (int, float)) and math.isfinite(delta)) \\\n            or delta > max_delta:\n        return False\n    if int(ev.get(\"n_calls\") or 0) < min_calls:\n        return False\n    spread = ev.get(\"jackknife_spread\")\n    if not (isinstance(spread, (int, float)) and math.isfinite(spread)\n            and spread >= 0) or spread >= abs(delta):",
+    "replacement": "    if not isinstance(delta, (int, float)) or delta > max_delta:\n        return False\n    if int(ev.get(\"n_calls\") or 0) < min_calls:\n        return False\n    spread = ev.get(\"jackknife_spread\")\n    if not (isinstance(spread, (int, float)) and math.isfinite(spread)\n            and spread >= 0) or spread >= abs(delta):",
+    "tests": "tests/test_delta_replay.py tests/test_trace_scoring.py tests/test_tiered_memory.py"
+  },
+  {
+    "name": "demote :: the spread guard loses its abs(), so it never binds",
+    "file": "src/knowledge_web.py",
+    "anchor": "            and spread >= 0) or spread >= abs(delta):",
+    "replacement": "            and spread >= 0) or spread >= delta:",
+    "tests": "tests/test_delta_replay.py tests/test_trace_scoring.py tests/test_tiered_memory.py"
+  },
+  {
+    "name": "demote :: rule-stratum lessons become demotable",
+    "file": "src/knowledge_web.py",
+    "anchor": "    if ev.get(\"stratum\") != \"reason\":\n        return False\n    if int(ev.get(\"replay_errors\") or 0) != 0:\n        # A failed with-arm sample scores as no-match",
+    "replacement": "    if False:\n        return False\n    if int(ev.get(\"replay_errors\") or 0) != 0:\n        # A failed with-arm sample scores as no-match",
+    "tests": "tests/test_delta_replay.py tests/test_trace_scoring.py tests/test_tiered_memory.py"
+  },
+  {
+    "name": "demote :: an errored measurement may demote",
+    "file": "src/knowledge_web.py",
+    "anchor": "        log.info(\"demote_lesson_by_effect: %s measurement carries %d replay \"\n                 \"errors — not demoting\", lesson_id,\n                 int(ev.get(\"replay_errors\") or 0))\n        return False",
+    "replacement": "        log.info(\"demote_lesson_by_effect: %s measurement carries %d replay \"\n                 \"errors — not demoting\", lesson_id,\n                 int(ev.get(\"replay_errors\") or 0))",
+    "tests": "tests/test_delta_replay.py tests/test_trace_scoring.py tests/test_tiered_memory.py"
+  },
+  {
+    "name": "inert :: killswitch is ignored",
+    "file": "src/knowledge_web.py",
+    "anchor": "    if not effect_inert_enabled():\n        log.info(\"inert_lesson_by_effect: killswitch off — not stamping\")\n        return False",
+    "replacement": "    if False:\n        return False",
+    "tests": "tests/test_delta_replay.py tests/test_trace_scoring.py tests/test_tiered_memory.py"
+  },
+  {
+    "name": "inert :: the band loses abs(), so any negative delta reads inert",
+    "file": "src/knowledge_web.py",
+    "anchor": "    if not (isinstance(delta, (int, float)) and math.isfinite(delta)) \\\n            or abs(delta) > max_abs:",
+    "replacement": "    if not (isinstance(delta, (int, float)) and math.isfinite(delta)) \\\n            or delta > max_abs:",
+    "tests": "tests/test_delta_replay.py tests/test_trace_scoring.py tests/test_tiered_memory.py"
+  },
+  {
+    "name": "confirm :: killswitch is ignored",
+    "file": "src/knowledge_web.py",
+    "anchor": "    if not effect_promotion_enabled():\n        log.info(\"confirm_lesson_by_delta: killswitch off — not confirming\")\n        return False",
+    "replacement": "    if False:\n        return False",
+    "tests": "tests/test_delta_replay.py tests/test_trace_scoring.py tests/test_tiered_memory.py"
+  },
+  {
+    "name": "confirm :: the delta floor is not applied",
+    "file": "src/knowledge_web.py",
+    "anchor": "        min_delta, min_calls = EFFECT_PROMOTE_MIN_DELTA, EFFECT_PROMOTE_MIN_CALLS\n\n    ev = dict(delta_evidence or {})\n    delta = ev.get(\"delta\")\n    if not (isinstance(delta, (int, float)) and math.isfinite(delta)) \\\n            or delta < min_delta:\n        return False\n",
+    "replacement": "        min_delta, min_calls = EFFECT_PROMOTE_MIN_DELTA, EFFECT_PROMOTE_MIN_CALLS\n\n    ev = dict(delta_evidence or {})\n    delta = ev.get(\"delta\")\n    if not (isinstance(delta, (int, float)) and math.isfinite(delta)):\n        return False\n",
+    "tests": "tests/test_delta_replay.py tests/test_trace_scoring.py tests/test_tiered_memory.py"
+  },
+  {
+    "name": "confirm :: the call floor is not applied",
+    "file": "src/knowledge_web.py",
+    "anchor": "        min_delta, min_calls = EFFECT_PROMOTE_MIN_DELTA, EFFECT_PROMOTE_MIN_CALLS\n\n    ev = dict(delta_evidence or {})\n    delta = ev.get(\"delta\")\n    if not (isinstance(delta, (int, float)) and math.isfinite(delta)) \\\n            or delta < min_delta:\n        return False\n    if int(ev.get(\"n_calls\") or 0) < min_calls:\n        return False\n    spread = ev.get(\"jackknife_spread\")\n",
+    "replacement": "        min_delta, min_calls = EFFECT_PROMOTE_MIN_DELTA, EFFECT_PROMOTE_MIN_CALLS\n\n    ev = dict(delta_evidence or {})\n    delta = ev.get(\"delta\")\n    if not (isinstance(delta, (int, float)) and math.isfinite(delta)) \\\n            or delta < min_delta:\n        return False\n    if False:\n        return False\n    spread = ev.get(\"jackknife_spread\")\n",
+    "tests": "tests/test_delta_replay.py tests/test_trace_scoring.py tests/test_tiered_memory.py"
+  },
+  {
+    "name": "confirm :: an errored measurement may clear provisional",
+    "file": "src/knowledge_web.py",
+    "anchor": "    if ev.get(\"stratum\") != \"reason\":\n        return False\n    if int(ev.get(\"replay_errors\") or 0) != 0:\n        return False\n\n    hit: Dict[str, Any] = {\"tl\": None}",
+    "replacement": "    if ev.get(\"stratum\") != \"reason\":\n        return False\n\n    hit: Dict[str, Any] = {\"tl\": None}",
+    "tests": "tests/test_delta_replay.py tests/test_trace_scoring.py tests/test_tiered_memory.py"
+  },
+  {
+    "name": "inert :: the spread band is not applied",
+    "file": "src/knowledge_web.py",
+    "anchor": "    spread = ev.get(\"jackknife_spread\")\n    if not (isinstance(spread, (int, float)) and math.isfinite(spread)\n            and 0 <= spread <= max_spread):\n        return False",
+    "replacement": "    spread = ev.get(\"jackknife_spread\")\n    if not (isinstance(spread, (int, float)) and math.isfinite(spread)\n            and 0 <= spread):\n        return False",
+    "tests": "tests/test_delta_replay.py tests/test_trace_scoring.py tests/test_tiered_memory.py"
+  },
+  {
+    "name": "inert :: the call floor is not applied",
+    "file": "src/knowledge_web.py",
+    "anchor": "            or abs(delta) > max_abs:\n        return False\n    if int(ev.get(\"n_calls\") or 0) < min_calls:\n        return False",
+    "replacement": "            or abs(delta) > max_abs:\n        return False\n    if False:\n        return False",
+    "tests": "tests/test_delta_replay.py tests/test_trace_scoring.py tests/test_tiered_memory.py"
+  },
+  {
+    "name": "inert :: rule-stratum lessons become inert-stampable",
+    "file": "src/knowledge_web.py",
+    "anchor": "    if ev.get(\"stratum\") != \"reason\":\n        return False\n    if int(ev.get(\"replay_errors\") or 0) != 0:\n        log.info(\"inert_lesson_by_effect: %s measurement carries %d replay \"",
+    "replacement": "    if False:\n        return False\n    if int(ev.get(\"replay_errors\") or 0) != 0:\n        log.info(\"inert_lesson_by_effect: %s measurement carries %d replay \"",
+    "tests": "tests/test_delta_replay.py tests/test_trace_scoring.py tests/test_tiered_memory.py"
+  },
+  {
+    "name": "inert :: an errored measurement may stamp inert",
+    "file": "src/knowledge_web.py",
+    "anchor": "        log.info(\"inert_lesson_by_effect: %s measurement carries %d replay \"\n                 \"errors — not stamping\", lesson_id,\n                 int(ev.get(\"replay_errors\") or 0))\n        return False",
+    "replacement": "        log.info(\"inert_lesson_by_effect: %s measurement carries %d replay \"\n                 \"errors — not stamping\", lesson_id,\n                 int(ev.get(\"replay_errors\") or 0))",
+    "tests": "tests/test_delta_replay.py tests/test_trace_scoring.py tests/test_tiered_memory.py"
+  },
+  {
+    "name": "inert :: a concurrent revise inherits a null measured on the old text",
+    "file": "src/knowledge_web.py",
+    "anchor": "        if expected_lesson and t.lesson != expected_lesson:\n            return lessons\n        t.delta_evidence = {\n            \"delta\": float(delta),",
+    "replacement": "        if False:\n            return lessons\n        t.delta_evidence = {\n            \"delta\": float(delta),",
+    "tests": "tests/test_delta_replay.py tests/test_trace_scoring.py tests/test_tiered_memory.py"
+  },
+  {
+    "name": "watch :: an errored re-measurement may end a probation",
+    "file": "src/knowledge_web.py",
+    "anchor": "    ev = dict(delta_evidence or {})\n    if int(ev.get(\"replay_errors\") or 0) != 0:\n        return False",
+    "replacement": "    ev = dict(delta_evidence or {})\n    if False:\n        return False",
+    "tests": "tests/test_delta_replay.py tests/test_trace_scoring.py tests/test_tiered_memory.py"
+  },
+  {
+    "name": "watch :: the call floor is not applied",
+    "file": "src/knowledge_web.py",
+    "anchor": "    if int(ev.get(\"n_calls\") or 0) < min_calls:\n        return False\n    # Neutral-band check (2026-08-08 round-2 review)",
+    "replacement": "    if False:\n        return False\n    # Neutral-band check (2026-08-08 round-2 review)",
+    "tests": "tests/test_delta_replay.py tests/test_trace_scoring.py tests/test_tiered_memory.py"
+  },
+  {
+    "name": "watch :: a decisive measurement launders into route=measured",
+    "file": "src/knowledge_web.py",
+    "anchor": "    if delta <= demote_max or delta >= promote_min:\n        log.info(\"resolve_remint_watch: %s Δ=%.3f is decisive, not neutral \"",
+    "replacement": "    if False:\n        log.info(\"resolve_remint_watch: %s Δ=%.3f is decisive, not neutral \"",
+    "tests": "tests/test_delta_replay.py tests/test_trace_scoring.py tests/test_tiered_memory.py",
+    "equivalent": "Dead code, proved not asserted: the ±spread band check further down strictly subsumes this point-estimate check. For spread >= 0 (enforced by the guard above it), delta >= promote_min implies delta + spread >= promote_min, and delta <= demote_max implies delta - spread <= demote_max. Swept 2026-08-16 over delta in [-1, 1] at 0.001 and six spreads: zero cases where the point check fires and the band check would not. Kept for the clearer operator log line; a comment in the source now says so, so nobody reads it as load-bearing."
+  },
+  {
+    "name": "watch :: the band check drops to the point estimate only",
+    "file": "src/knowledge_web.py",
+    "anchor": "    if delta - spread <= demote_max or delta + spread >= promote_min:",
+    "replacement": "    if delta <= demote_max or delta >= promote_min:",
+    "tests": "tests/test_delta_replay.py tests/test_trace_scoring.py tests/test_tiered_memory.py"
+  },
+  {
+    "name": "watch :: a NaN delta ends a probation",
+    "file": "src/knowledge_web.py",
+    "anchor": "    delta = ev.get(\"delta\")\n    if not (isinstance(delta, (int, float)) and math.isfinite(delta)):\n        return False\n    # Strictly subsumed by the ±spread band check below",
+    "replacement": "    delta = ev.get(\"delta\")\n    if not isinstance(delta, (int, float)):\n        return False\n    # Strictly subsumed by the ±spread band check below",
+    "tests": "tests/test_delta_replay.py tests/test_trace_scoring.py tests/test_tiered_memory.py"
+  },
+  {
+    "name": "promote :: the IN-LOCK boundary re-validation is neutered",
+    "file": "src/knowledge_web.py",
+    "anchor": "        ok = not (t.provisional or _is_quarantined(t) or _is_contested(t))",
+    "replacement": "        ok = True",
+    "tests": "tests/test_delta_replay.py tests/test_trace_scoring.py tests/test_tiered_memory.py"
+  }
+]

@@ -1332,6 +1332,11 @@ def resolve_remint_watch(lesson_id: str, delta_evidence: Dict[str, Any]) -> bool
     delta = ev.get("delta")
     if not (isinstance(delta, (int, float)) and math.isfinite(delta)):
         return False
+    # Strictly subsumed by the ±spread band check below (proved 2026-08-16:
+    # for spread >= 0, delta >= promote_min implies delta + spread >=
+    # promote_min, and likewise on the demote side). Kept for the clearer
+    # operator log line on a point-decisive measurement, not for
+    # correctness — do not read a behavior change into removing it.
     if delta <= demote_max or delta >= promote_min:
         log.info("resolve_remint_watch: %s Δ=%.3f is decisive, not neutral "
                  "— watch stays until a route acts on it", lesson_id, delta)

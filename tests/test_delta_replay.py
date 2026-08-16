@@ -380,6 +380,42 @@ class TestEffectPromotion:
         import knowledge_web as kw
         assert kw.promote_lesson_by_effect(tl.lesson_id, GOOD_EVIDENCE) is False
 
+    def test_a_row_contested_between_the_snapshot_and_the_lock_is_refused(
+            self, monkeypatch, tmp_path):
+        """The in-lock re-validation, pinned on the job only IT can do.
+
+        The boundary guard exists twice — a pre-check on the unlocked
+        snapshot and `_guards` on the fresh row under the lock — and
+        test_provisional_row_never_reaches_long above passes with EITHER
+        one removed, so it pins neither (mutation sweep 2026-08-16; both
+        removed together does fail it, so the invariant itself is covered).
+
+        What only the in-lock copy can do is catch a row that changed
+        after the snapshot was read — review Part 1 finding 2, the reason
+        it was added. This simulates that race directly: clean at
+        pre-check time, contested by the time the lock is held.
+        """
+        tl = _seed_medium_lesson(monkeypatch, tmp_path)
+        import knowledge_web as kw
+        seen = {"n": 0}
+        real = kw._is_contested
+
+        def _contested_after_the_snapshot(row):
+            seen["n"] += 1
+            return False if seen["n"] == 1 else True
+
+        monkeypatch.setattr(kw, "_is_contested", _contested_after_the_snapshot)
+        assert kw.promote_lesson_by_effect(tl.lesson_id, GOOD_EVIDENCE) is False
+        assert seen["n"] >= 2, (
+            "the pre-check short-circuited, so the in-lock guard never ran "
+            "— this test would be vacuous")
+        # and the row is still where it was: no half-move
+        mediums = kw.load_tiered_lessons(tier=kw.MemoryTier.MEDIUM, min_score=0.0)
+        assert any(l.lesson_id == tl.lesson_id for l in mediums)
+        longs = kw.load_tiered_lessons(tier=kw.MemoryTier.LONG, min_score=0.0)
+        assert all(l.lesson_id != tl.lesson_id for l in longs)
+        assert real is not None  # the real predicate is restored by monkeypatch
+
 
 # ---------------------------------------------------------------------------
 # Effect demotion route (knowledge_web.demote_lesson_by_effect, 2026-08-08)
