@@ -22,10 +22,15 @@ _GIT_ENV_ARGS = [
 ]
 
 
-def _git(repo: Path, *args: str) -> str:
+def _git(repo: Path, *args: str, date: str | None = None) -> str:
+    env = None
+    if date is not None:
+        import os
+        env = {**os.environ,
+               "GIT_AUTHOR_DATE": date, "GIT_COMMITTER_DATE": date}
     out = subprocess.run(
         ["git", *_GIT_ENV_ARGS, *args],
-        cwd=repo, capture_output=True, text=True, check=True,
+        cwd=repo, capture_output=True, text=True, check=True, env=env,
     )
     return out.stdout
 
@@ -175,38 +180,63 @@ def test_fix_behind_restores_after_judgment(tmp_path):
         "base line\nsession B landed hunk\nsession A edit\n")
 
 
-def test_behind_blame_names_all_landing_commits_multi_hunk(tmp_path):
-    """r1: sort -u sampled an arbitrary 3-of-N of the blamed commits by
-    hash order and could drop the actual landing commit. First-appearance
-    dedup must name every landing commit when the missing lines span
-    several: tree = base + D's line only, missing B's and C's separated
-    hunks (matches no ancestor blob — only D's commit has D's line, and
-    it also has B's and C's)."""
+def test_behind_blame_keeps_first_encountered_commits_not_hash_order(
+        tmp_path):
+    """r1+r2: sort -u ordered blamed SHAs lexicographically, so head -3
+    sampled an arbitrary 3-of-N — and a 2-commit fixture can't tell the
+    difference (r2: both survive either way). This one can: FOUR landing
+    commits blame the missing range, so the head -3 cap must keep the
+    first three in file order (L1 L2 L3) and truncate L4. Commit dates
+    are pinned so SHAs — and therefore the pre-fix hash order — are
+    deterministic: under sort -u the surviving trio is the three
+    lexicographically smallest SHAs, and the test's precondition assert
+    guarantees that trio differs from {L1,L2,L3}."""
     repo = tmp_path / "repo"
     repo.mkdir()
     _git(repo, "init", "-q")
-    (repo / "doc.txt").write_text("one\ntwo\nthree\nfour\n")
+    lines = ["one\n"]
+    (repo / "doc.txt").write_text("".join(lines))
     _git(repo, "add", "doc.txt")
-    _git(repo, "commit", "-qm", "base")
-    (repo / "doc.txt").write_text("one\nfrom-B\ntwo\nthree\nfour\n")
+    _git(repo, "commit", "-qm", "base", date="2026-01-01T00:00:00 +0000")
+    landing = {}
+    for i in (1, 2, 3, 4):
+        lines.append(f"from-L{i}\n")
+        (repo / "doc.txt").write_text("".join(lines))
+        _git(repo, "add", "doc.txt")
+        # L1's trailing " a" is load-bearing: with pinned dates it sets
+        # the deterministic SHA order to L1<L4<L2<L3, so sort -u|head -3
+        # would keep L4 and drop L3 — the precondition below verifies.
+        _git(repo, "commit", "-qm",
+             "L1 lands a" if i == 1 else f"L{i} lands",
+             date=f"2026-01-0{i + 1}T00:00:00 +0000")
+        landing[f"L{i}"] = _git(repo, "rev-parse", "HEAD").strip()
+    lines.append("keeper\n")
+    (repo / "doc.txt").write_text("".join(lines))
     _git(repo, "add", "doc.txt")
-    _git(repo, "commit", "-qm", "B lands hunk one")
-    (repo / "doc.txt").write_text(
-        "one\nfrom-B\ntwo\nthree\nfrom-C\nfour\n")
-    _git(repo, "add", "doc.txt")
-    _git(repo, "commit", "-qm", "C lands hunk two")
-    (repo / "doc.txt").write_text(
-        "one\nfrom-B\ntwo\nthree\nfrom-C\nfour\nfrom-D\n")
-    _git(repo, "add", "doc.txt")
-    _git(repo, "commit", "-qm", "D lands hunk three")
-    # Stale-mix tree copy: keeps D's line (so no ancestor blob matches),
-    # missing B's and C's hunks — deletion-only vs HEAD, two commits.
-    (repo / "doc.txt").write_text("one\ntwo\nthree\nfour\nfrom-D\n")
+    _git(repo, "commit", "-qm", "E lands keeper",
+         date="2026-01-06T00:00:00 +0000")
+    # Stale-mix tree copy: base + keeper only. Matches no ancestor blob
+    # (only E has "keeper", and E also has L1-L4's lines); missing lines
+    # are one contiguous 4-line hunk blaming to four distinct commits.
+    (repo / "doc.txt").write_text("one\nkeeper\n")
+
+    # Precondition that makes this a genuine pre-fix failer: the three
+    # lexicographically smallest SHAs (what sort -u|head -3 would keep)
+    # must differ from the first-three-in-file-order set. Deterministic
+    # because commit dates are pinned. If a fixture edit ever breaks
+    # this, fail loudly rather than silently pinning nothing.
+    hash_trio = set(sorted(landing.values())[:3])
+    file_trio = {landing["L1"], landing["L2"], landing["L3"]}
+    assert hash_trio != file_trio, (
+        "fixture no longer discriminates dedup order — adjust a commit "
+        "message/date so the SHA order changes")
 
     report = _triage(repo)
     assert "BEHIND" in report
-    assert "B lands hunk one" in report
-    assert "C lands hunk two" in report
+    assert "L1 lands" in report
+    assert "L2 lands" in report
+    assert "L3 lands" in report
+    assert "L4 lands" not in report  # truncated by the head -3 cap
 
 
 def test_deletion_only_edit_reads_behind_but_survives_fix(tmp_path):
