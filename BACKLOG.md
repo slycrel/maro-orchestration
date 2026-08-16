@@ -293,6 +293,44 @@ Ordered open work that matters. Top of the list is next.
   buried in step logs. It should be a loud message at plan time —
   same class as the container verb-parity honest-absence work.
 
+### Source trust tiers, and reading the authoritative store rather than its export (Jeremy, 2026-08-16)
+
+- [ ] **Jeremy's framing, which is the durable half:** *"the link farm is
+  my curated content, so we can trust it more — in theory that won't be
+  the case for most random asks for a maro type system (but might be
+  different for my own personal use)."* A curated corpus and a fetched
+  web page are not the same kind of evidence, and today they are treated
+  identically: a run cites whatever it retrieved. A personal install's
+  own collection is closer to testimony from the operator; a random URL
+  is closer to a stranger's claim. **The design question is whether
+  trust tier is a property of the SOURCE (this path is curated) or of
+  the ASK (this user vouched for this corpus) — the second generalizes
+  to other installs, the first does not.** Decide that before building
+  anything; it changes where the tier is declared.
+- [ ] **Consume the authoritative store, not a lossy export.** Live
+  finding: the run read `link-farm/posts_final_v3.json` — a JSON export
+  — and correctly reported what it contained. But the authoritative
+  store is `db/ai_links.db`, which carries a `post_thread_segments`
+  table the export does not, plus `enrichment_status`, curator `notes`,
+  and per-post review flags. A consumer reading the export gets a
+  quieter, older, structurally thinner view and cannot tell. Where a
+  corpus offers both, prefer the store and say which one was read.
+- [ ] **Surface the corpus's own completeness signals.** The same post
+  carried `enrichment_status: ok` while holding exactly ONE thread
+  segment (`type: op`) — the linked landing-page text and the reply
+  comment that actually contained the study screenshot were never
+  captured. Corpus-wide, 234 posts DO have multiple segments, so the
+  capture machinery works; it is silent when it misses. A run treating a
+  curated corpus as primary should read and report those signals
+  (`enrichment_status`, `subject`/`notes` review flags — this record
+  said "add to review" in both) rather than inferring completeness from
+  the presence of a record. Same false-green shape as a guard that
+  cannot fail, one repo over.
+- [ ] **Not maro's bug, and worth telling the operator anyway:** the
+  capture gap is in the link-farm pipeline. The maro-side obligation is
+  to notice and SAY that a cited corpus flags itself incomplete, not to
+  fix someone else's scraper.
+
 ### Concurrent milestone-area agents — why is the path A→B→C and not all three at once? (Jeremy, 2026-08-16)
 
 - [ ] **Jeremy, verbatim:** *"why aren't we running concurrent agent

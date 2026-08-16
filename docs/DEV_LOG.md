@@ -34,27 +34,27 @@ Dev log tab at maro.feifdom.com alongside Runs and Reading.
 
 **Throughput and fan-out**
 
-- 202 commits in 7d, 635 in 30d
-- **Actionable Stack** open boxes: **61** (30d: +54)
-- net new open items per 10 commits: **+0.85** — findings are outrunning closure
+- 204 commits in 7d, 635 in 30d
+- **Actionable Stack** open boxes: **64** (30d: +57)
+- net new open items per 10 commits: **+0.90** — findings are outrunning closure
 - ⚠ this delta counts one SECTION, so an archive pass or a re-org moves it without any work changing hands. Read the rate as a coarse direction, never as a score.
 
 **Actionable Stack, by kind** — the three things it contains, which look identical on the page
 
-- 17 entries with open work (8 of them waiting on evidence, not on a person)
+- 18 entries with open work (8 of them waiting on evidence, not on a person)
 - 18 entries that are narrative records with no open checkbox — shipped work, not queue
 
-**9 live entries declare no stopping rule** — no kill criterion, falsifier, or evidence gate. These are where 0→1-approaching-1 rabbit holes live:
+**10 live entries declare no stopping rule** — no kill criterion, falsifier, or evidence gate. These are where 0→1-approaching-1 rabbit holes live:
 
   - File-derived mutation coverage — sweep the rest of the tree (Jeremy, 2
   - Reference corpora are read from stale local clones, and the container 
+  - Source trust tiers, and reading the authoritative store rather than it
   - Concurrent milestone-area agents — why is the path A→B→C and not all t
   - Live-writer census findings — one open of four decision-shaped items (
   - NOW retry rung — failure-class-routed ladder: NOW → artifact retry / s
   - Next-leap: auto persona+skill packaging (ARC OPENED 2026-07-29, first-
   - 22. Capabilities catalog — open residuals (shipped trail archived)
-  - 0. Test corpus — capture the missing layers (forward record-mode + ful
-  - … and 1 more
+  - … and 2 more
 
 <!-- /dev-status -->
 
