@@ -2637,6 +2637,37 @@ Dated end-of-chunk/session entries, append-only at the tail. Rotation policy (20
   navigator_right (cumulative 91/12; lesson-inject A/B 56% vs 41%
   agreement); coverage re-measured 80.18% → floor ratcheted 70→75
   (72752a1); test-cov.sh -n-auto footgun got throttle knobs (ff48e9f).
+- **2026-08-15 (PM, correction on Jeremy's verify-ask).** The "§10 +
+  §9.7 owed discussion" line this lane carried in MILESTONES/journal
+  entries above was STALE: that discussion happened 2026-07-30 and is
+  fully recorded (COMPOUND_THINKING §14 + raw transcript in
+  docs/conversations/). Open remnants only: §14a scope contest
+  (deferred, Jeremy re-examines when fresher; prior = probabilistic
+  scope) and §14g build threads ("can be not yet"). MILESTONES item 6
+  corrected. Nothing the treasure-map builds surfaced constitutes a
+  new §10 edge — §9.9/revisit are structure/surface work, not
+  taste/calibration.
+- **2026-08-15 (PM, §14a slice 1 SHIPPED — portability census; probe-first
+  datapoint #1 CONFIRMED).** `camera_readout --portability`: per-lesson
+  citation×verdict census (camera frames × metadata.json), home/foreign
+  via mint-cap-aware exact match + resolve_project_slug, foreign
+  verdicted citations → Beta posterior mean. INSTRUMENT ONLY.
+  Fact ledger (8 executed probes) killed the outcomes.jsonl join design
+  pre-code (lessons stored as TEXT not ids) and surfaced the archive
+  fallback need (23/79 cited ids archived since citation). Live: 79/79
+  resolve, 100 foreign verdicted citations (pre-registered gate ~30),
+  estimate DISCRIMINATES 0.25–0.86 → slice-2 gate OPEN. Review r1
+  (2 lenses, claims-audit contract): both attacked the labeled residue
+  and hit — architect HIGH: source_goal stored TRUNCATED to 120 at mint,
+  exact-match home leg dead for 121/123 verdicted citations (residue
+  note had the legs inverted; slug leg was doing the work) — fixed with
+  mint-cap-aware compare; sentinel-source finding confirmed structurally,
+  quantified ZERO live contamination; unattributable bucket added +
+  pinned. r2: QUIET with traced pre-fix test simulation. **Fixpoint in
+  2 rounds — first confirming datapoint for the experimental probe-first
+  prediction (baseline 3–4).** Landed 71c4f3e, 2592d0e. Suite 8819.
+  Next: slice 2 (mint-time method/world stamp + portability consumption
+  in injection ranking) — gate evidence cleared, held loosely per decree.
 - **2026-08-15 (late PM, §14a slice 2 SHIPPED — portability-weighted
   lesson selection; fixpoint r1→r3; probe-first datapoint #2 = 3
   rounds).** Earned globality is now BEHAVIOR: `src/portability.py`
@@ -2670,37 +2701,24 @@ Dated end-of-chunk/session entries, append-only at the tail. Rotation policy (20
   test-of-fix-coverage classes the ledger doesn't reach.** Next: §14a
   slice 3 = mint-time method/world scope stamp riding
   extract_lessons_via_llm's existing typed-JSON schema (no new judge).
-- **2026-08-15 (PM, §14a slice 1 SHIPPED — portability census; probe-first
-  datapoint #1 CONFIRMED).** `camera_readout --portability`: per-lesson
-  citation×verdict census (camera frames × metadata.json), home/foreign
-  via mint-cap-aware exact match + resolve_project_slug, foreign
-  verdicted citations → Beta posterior mean. INSTRUMENT ONLY.
-  Fact ledger (8 executed probes) killed the outcomes.jsonl join design
-  pre-code (lessons stored as TEXT not ids) and surfaced the archive
-  fallback need (23/79 cited ids archived since citation). Live: 79/79
-  resolve, 100 foreign verdicted citations (pre-registered gate ~30),
-  estimate DISCRIMINATES 0.25–0.86 → slice-2 gate OPEN. Review r1
-  (2 lenses, claims-audit contract): both attacked the labeled residue
-  and hit — architect HIGH: source_goal stored TRUNCATED to 120 at mint,
-  exact-match home leg dead for 121/123 verdicted citations (residue
-  note had the legs inverted; slug leg was doing the work) — fixed with
-  mint-cap-aware compare; sentinel-source finding confirmed structurally,
-  quantified ZERO live contamination; unattributable bucket added +
-  pinned. r2: QUIET with traced pre-fix test simulation. **Fixpoint in
-  2 rounds — first confirming datapoint for the experimental probe-first
-  prediction (baseline 3–4).** Landed 71c4f3e, 2592d0e. Suite 8819.
-  Next: slice 2 (mint-time method/world stamp + portability consumption
-  in injection ranking) — gate evidence cleared, held loosely per decree.
-- **2026-08-15 (PM, correction on Jeremy's verify-ask).** The "§10 +
-  §9.7 owed discussion" line this lane carried in MILESTONES/journal
-  entries above was STALE: that discussion happened 2026-07-30 and is
-  fully recorded (COMPOUND_THINKING §14 + raw transcript in
-  docs/conversations/). Open remnants only: §14a scope contest
-  (deferred, Jeremy re-examines when fresher; prior = probabilistic
-  scope) and §14g build threads ("can be not yet"). MILESTONES item 6
-  corrected. Nothing the treasure-map builds surfaced constitutes a
-  new §10 edge — §9.9/revisit are structure/surface work, not
-  taste/calibration.
+- **2026-08-15 (evening, tree-triage BEHIND verdict — cross-session
+  incident fix, fixpoint r1→r2+swap-proof).** Incident: land.sh's
+  rebase-replay left the shared tree's BACKLOG.md = old base + own
+  committed edit — matches NO ancestor blob, so tree-triage read
+  strictly-behind content as REAL and a Mac-session-landed hunk was
+  nearly treated as work-in-progress. The Mac session then reported the
+  classifier fixed; the report did not survive checking (nothing landed,
+  live repro still said REAL — delegated self-report, again). Fix
+  (894cc84 + 1c6aeeb + 50e5812): third verdict BEHIND (no ancestor
+  match + deletion-only diff vs HEAD) with a blame summary naming the
+  landing commits; plain --fix NEVER restores it (content can't
+  distinguish a deletion-in-progress), explicit --fix-behind does.
+  Review r1 confirmed BSD-sed hazard (the Mac runs this script) +
+  hash-ordered blame sampling; r2 caught my own pin passing under the
+  reverted fix — replaced with a deterministic-SHA 4-commit fixture
+  proven to fail pre-fix by swapping sort -u back in. 10/10 pins.
+  Jeremy's read of the day: "sounds a lot like our review runs; the fix
+  didn't quite fix things."
 - **2026-08-16 (Jeremy, decree — the meta-look at our own dev loop).**
   Verbatim core: *"our review cycle is essentially what I'd call 'naive
   development optimism'... we're making assertions on what we think
