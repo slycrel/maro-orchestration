@@ -2833,3 +2833,26 @@ Dated end-of-chunk/session entries, append-only at the tail. Rotation policy (20
   live-covered needed nothing. Audit reports: the three sweeps' outputs
   are summarized in this entry's back-fill batch above; archives remain
   the full-context source.
+
+- **2026-08-16 (dev Mac, split session)** — **BACKLOG split executed
+  (393KB → 237KB) + BACKLOG_DONE rotation (606KB → 98KB) + ci-watch
+  setsid fix.** All three landed files were past the 256KB Read limit
+  or heading there; both now under it, verbatim archives in
+  docs/history/backlog-done-2026-04-to-08-p{1,2,3,4}.md (p1-3 =
+  BACKLOG_DONE's own rotation, byte-compared, 45/45 records; p4 = the
+  26-block sweep out of BACKLOG.md, 90/90 unchecked items conserved by
+  a harness that refuses to move any open checkbox). Read-before-moving
+  honored: house-style and MH taxonomy deliberately NOT swept (standing
+  policy / mid-sentence-interleaved opens); truncation-audit,
+  LT-0(c)/LT-4 partitioned by hand with live residuals kept verbatim.
+  En-route fixes: garbled Jeremy quote (concurrent session's burn-down
+  block landed mid-word inside it), LeAct's stale "next chunk" line,
+  dangling match-tier pointer. Also this session: land.sh ci-watch
+  spawn was silently inert on the dev Mac (macOS has no setsid;
+  `( setsid ... & ) || true` ate the error while still printing
+  "spawned" — taxonomy pattern 7); fallback shipped + honesty gate +
+  3 probes (red-verified), first live dev-Mac watcher ran on its own
+  landing. Evidence-gate status checked: chunk-3 code deployed on box
+  15:19, all existing closure_verdicts rows predate it — gate correctly
+  parked awaiting fresh runs; the LT-0(c) SF-13 decree pipe verified
+  run (decisions.jsonl grep).

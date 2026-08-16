@@ -10,6 +10,42 @@ Rotation policy (2026-08-16): when this file outgrows whole-file readability (25
 
 ---
 
+## BACKLOG.md split — DONE 2026-08-16 (393KB → 237KB; archive rotated too)
+
+The overdue split, executed as two moves. (1) BACKLOG_DONE.md itself had
+grown to 606KB — past the same 256KB Read limit — so it rotated first:
+records through the 2026-08-05 archived batch moved verbatim to
+docs/history/backlog-done-2026-04-to-08-p{1,2,3}.md (byte-compared,
+45/45 records conserved). (2) The sweep proper: three read-only agents
+partitioned every large arc (exact anchors, checkbox census, Jeremy-
+quote audit); 26 long-shipped blocks (167KB) moved verbatim to segment
+p4 via a manifest harness that refuses to move any unchecked `- [ ]`
+line (90/90 open items conserved, verified against HEAD). Each arc
+keeps a live stub: open residuals verbatim + archive pointer.
+
+Deliberately NOT swept, per the read-before-moving rule: house-style
+(6 unchecked decree bullets wrap everything, incl. standing policy like
+the no-re-raising-the-rename instruction); MH taxonomy (open residuals
+interleave mid-sentence — needs a rewrite pass, not a cut); verifier
+synthesis, next-leap, NOW retry rung, subsystem liveness, container
+verb parity (2 days old), Conservative holding pen — all genuinely live.
+Also fixed in passing: a concurrent session's burn-down status block
+had been inserted mid-word inside Jeremy's truncation-audit quote
+(restored); LeAct's stale "remaining: doorless canon threshold" line
+corrected (it shipped 2026-08-13 with its own archive record); the
+Poe-steal-list "match-tier item below" pointer retargeted.
+
+## Moved from BACKLOG 2026-08-16 (the overdue split) — records in docs/history/backlog-done-2026-04-to-08-p4.md
+
+26 long-shipped arcs/records (167KB) swept out of BACKLOG.md with
+context intact — REPL-reading, LeAct, LT-5/LT-0(a,b,c)/LT-4 records,
+the arbitrary-truncation audit trail, typed dispatch envelope,
+re-run identity, async post-run tail, workspace export/import,
+closure Signal-1, session-fork, MEDIUM→LONG fix, open-thread
+structure, and smaller closed records. Stubs in BACKLOG.md point at
+this section; the verbatim blocks live in the p4 segment (dev-recall
+ingests it).
+
 ## land.sh ci-watch inert on the dev Mac — FIXED 2026-08-16
 
 Found 2026-08-16 while landing chunk 3 from the Mac: the post-land spawn
