@@ -44,6 +44,83 @@ full triage: 2026-07-04.
 
 Ordered open work that matters. Top of the list is next.
 
+### File-derived mutation coverage — sweep the rest of the tree (Jeremy, 2026-08-16)
+
+- [ ] **Run a file-derived mutation sweep over everything that hasn't
+  had one.** Method is written down in `docs/HOUSE_STYLE.md` step 3 —
+  derive the mutation list by READING THE FILE, not from your own diff.
+  A diff-derived list tests whether your fixes are pinned; a
+  file-derived list tests whether the behavior is. Jeremy called it
+  2026-08-16 off the §14a slice-3 evidence: *"sounds like we need it."*
+
+  **Why, in one number:** five adversarial review rounds (r1–r5, four
+  lenses each, ~50 fixes) walked past **12 real gaps** on one file
+  surface. Two rounds of diff-derived must-detect harnesses scored 6/15
+  and then 15/15 and *still* missed them, because they only ever aimed
+  where the fixes had been aimed. The worst find was not a bug in the
+  code at all — the e2b83703 decree ("scope is not a ranking input") had
+  two guards, a grep tripwire and a behavioral test, and a live
+  `sim *= 1.25 if lesson.scope == "method"` inside the actual ranker
+  passed both. **A guard that cannot fail is worse than no guard: it is
+  a standing claim that the rule is enforced.**
+
+  **Defect classes it finds** (all four seen in one sweep, none found by
+  review): guards that cannot fail; tests that pass for a reason other
+  than the one in their docstring (usually because the subject is
+  reached through a caller that produces the same observable on its
+  own); duplicated mirrors of a constant where fixing two of three reads
+  as done; and printed/logged fields that can be replaced by constants
+  with a green suite — which is exactly the operator-facing half of any
+  instrument.
+
+  **Already swept — name it precisely, it is a SURFACE, not whole
+  modules.** The §14a scope/stamp/portability surface only:
+  `knowledge_web.py` (scope screens, tiered-store load/rewrite/mutate,
+  quarantine, the reinforce heal, `_tfidf_rank_scored`),
+  `camera_readout.py` (portability census, `_lesson_origins`,
+  `_stamp_coverage`, `_scope_rollup`, `_print_portability`), and
+  `pack.py`'s lesson transport border. 46 mutations across five
+  harnesses, all now must-detect. Weaker/diff-derived only:
+  `memory.py`'s `as_typed_lesson`/`_parse_typed` and `portability.py`'s
+  cache-refresh logging. **Everything else in `src/` (178 modules) has
+  never had one** — including the other ~85% of `knowledge_web.py`
+  (4398 lines) and `camera_readout.py`'s frame/verdict sections, which
+  sit in files this arc only partially covered. Do not read "swept" off
+  the filename.
+
+  **Start by covering everything else** (Jeremy's framing). Not
+  178 modules of brute force — order by where a false green actually
+  costs something:
+  1. **Modules whose tests claim to enforce a decree or invariant.**
+     This is where the scope finding came from, and the failure is
+     silent by construction. Candidates: the defaults registry + census
+     tripwire, the provenance gate, the dispatch envelope's extraction
+     exclusion, `lesson_provenance`, the Δ-gate floors, the data-
+     retention guarantees in `memory_ledger`/`knowledge_web`.
+  2. **Data-integrity boundaries** — anything that parses untrusted or
+     off-disk JSON, or rewrites a file readers depend on. The store
+     wedges this arc found were all this shape.
+  3. **Operator-facing output** — readouts, captain's log, status
+     lines. Printed fields were replaceable by constants across the
+     board here; assume that generalizes until probed.
+  4. Recent heavy churn, last.
+
+  **Two riders.** (a) Build the runner ONCE. This arc produced five
+  throwaway harnesses in a scratchpad; a `scripts/mutate.py` taking a
+  spec file (anchor / replacement / test target, must-match-exactly-once)
+  is ~80 lines and makes the sweep repeatable and reviewable instead of
+  re-derived each time. Do that first, then sweep — it is the difference
+  between a session's effort and a standing capability. (b) **Record
+  EQUIVALENT mutants as equivalent** rather than contorting a test to
+  kill one; that is how a suite starts testing its own mocks. One in the
+  §14a sweep was genuinely unreachable and is documented as such.
+
+  Cost is real and worth stating: each mutation is one targeted test-file
+  run (seconds), but the sweep is only as good as the reading behind the
+  list, which is the expensive part and does not parallelize well across
+  agents that haven't read the module. Record: r4b/r5 in
+  `docs/history/2026-08-16-14a-slice3-review-arc.md`.
+
 ### Portability weighting v2 — selection-bias exploration (accepted v1 residual, 2026-08-15)
 
 - [ ] **Watch for winner-take-all entrenchment in portability-weighted

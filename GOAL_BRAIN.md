@@ -1147,6 +1147,26 @@ Sample: the 2026-05-13..17 window of `~/.maro/workspace/runs/` (478 dirs total;
   reviewer-lenses.md with the provenance note inline. Small/Medium
   rosters unchanged.
 
+- **2026-08-16 (file-derived mutation coverage — Jeremy: "sounds like we
+  need it"):** must-detect mutation lists get derived from READING THE
+  FILE, not from the diff. A diff-derived list only tests whether your
+  own fixes are pinned; a file-derived list tests whether the behavior
+  is. Called off the §14a slice-3 evidence: five adversarial review
+  rounds and two diff-derived harnesses (6/15 then 15/15) walked past 12
+  real gaps on one file surface, and the worst was not a code bug at all
+  — the e2b83703 decree had two guards and a live scope boost inside the
+  actual ranker passed both. **A guard that cannot fail is worse than no
+  guard: it is a standing claim that the rule is enforced.** Method in
+  HOUSE_STYLE step 3; the sweep of everything not yet covered is a
+  BACKLOG Actionable item, and Jeremy scoped it to START with the
+  uncovered surface. Named coverage so far is a SURFACE, not whole
+  modules: the §14a scope/stamp/portability paths in knowledge_web.py,
+  camera_readout.py and pack.py (46 mutations, all must-detect); every
+  other module in src/ has never had one. Two riders: build the runner
+  once (`scripts/mutate.py` + spec file) instead of re-deriving a
+  throwaway harness per round, and record EQUIVALENT mutants as
+  equivalent rather than contorting a test to kill one.
+
 ## Threads (system-maintained — nothing leaves this list silently)
 
 Active:
