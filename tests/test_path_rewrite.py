@@ -420,3 +420,145 @@ class TestArchiveRoundTrip:
                 tar.extractfile("meta/provenance.json").read().decode())
         assert prov["source"]["repo_root"] == str(
             Path(path_rewrite.__file__).resolve().parents[1])
+
+
+# --- review round 1 (2026-08-16, sonnet x6) ---------------------------------
+# Six lenses, four confirmed defects. Each fix gets the test that would
+# have caught it; the class each one belongs to is named, because the
+# next reader's question is "could this have come back somewhere else".
+
+class TestPostCommitFailureIsNotReportedAsNoOp:
+    """QA + Minimalist, HIGH consensus: os.utime shared os.replace's try
+    block, so a metadata failure AFTER the atomic commit returned
+    ("unreadable", 0) for a file whose bytes had already changed — and
+    the custody `transformed` stamp is computed from that count."""
+
+    def test_utime_failure_after_the_swap_still_reports_rewritten(
+            self, tmp_path, monkeypatch):
+        p = tmp_path / "f.txt"
+        p.write_text("/home/a/ws/x\n")
+        monkeypatch.setattr(os, "utime",
+                            lambda *a, **k: (_ for _ in ()).throw(OSError))
+        status, n = rewrite_file(p, _map(("/home/a/ws", "/srv/w")))
+        assert (status, n) == ("rewritten", 1)
+        assert p.read_text() == "/srv/w/x\n"
+
+    def test_the_report_counts_it_so_transformed_cannot_lie(
+            self, tmp_path, monkeypatch):
+        (tmp_path / "f.txt").write_text("/home/a/ws/x\n")
+        monkeypatch.setattr(os, "utime",
+                            lambda *a, **k: (_ for _ in ()).throw(OSError))
+        rep = rewrite_tree(tmp_path, ["f.txt"], _map(("/home/a/ws", "/srv/w")))
+        assert rep.files_rewritten == 1
+        assert rep.files == [{"path": "f.txt", "replacements": 1}]
+
+
+class TestLeftBoundary:
+    """Architect + Security, independent: the match guarded only its right
+    edge, so a root fired as a SUFFIX of a longer path — the same
+    confidently-wrong-path class the right-edge guard exists to stop."""
+
+    @pytest.mark.parametrize("text", [
+        b"backup at /mnt/backup/home/a/ws/old",     # a mirror, not the ws
+        b"see notes/home/a/ws/todo",                # a relative path
+        b"http://example.com/home/a/ws/x",          # a URL
+        b"prefix-/home/a/ws",                       # a longer token
+    ])
+    def test_a_root_that_is_only_a_suffix_does_not_fire(self, text):
+        _, n = _map(("/home/a/ws", "/srv/w")).substitute(text)
+        assert n == 0
+
+    @pytest.mark.parametrize("text", [
+        b"/home/a/ws", b" /home/a/ws", b"'/home/a/ws'", b'"/home/a/ws"',
+        b"at /home/a/ws.\n", b"(/home/a/ws)", b"root=/home/a/ws",
+        b'{"p": "/home/a/ws/x"}',
+    ])
+    def test_real_occurrences_still_fire(self, text):
+        _, n = _map(("/home/a/ws", "/srv/w")).substitute(text)
+        assert n == 1, text
+
+
+class TestSourceRootDepthUnderSharedDirectories:
+    """Architect + Security, HIGH consensus: the denylist was exact-match,
+    so /usr/lib, /var/log, /home/<user> and /Users/<user> all validated —
+    generic fragments that turn the rewrite into mass corruption."""
+
+    @pytest.mark.parametrize("bad", ["/home/clawd", "/Users/jeremy", "/usr/lib",
+                                     "/var/log", "/tmp/foo", "/opt/app",
+                                     "/root/x", "/srv/ws"])
+    def test_one_level_under_a_shared_directory_is_refused_as_a_source(
+            self, bad):
+        with pytest.raises(BadRoot, match="shared directory"):
+            validate_root(bad)
+
+    @pytest.mark.parametrize("ok", ["/home/clawd/.maro",
+                                    "/home/clawd/.maro/workspace",
+                                    "/home/clawd/claude/maro-orchestration",
+                                    "/opt/maro/workspace"])
+    def test_a_real_install_root_still_validates(self, ok):
+        assert validate_root(ok) == ok
+
+    def test_the_destination_side_is_not_held_to_it(self):
+        # Our own computed path. Refusing MARO_WORKSPACE=/srv/ws would
+        # disable the rewrite on a legitimately-configured machine to
+        # defend against an input we generated ourselves.
+        assert validate_root("/srv/ws", strict=False) == "/srv/ws"
+        m = build_map({"workspace_root": "/home/a/.maro/workspace"},
+                      {"workspace_root": "/srv/ws"})
+        assert m.pairs == (("/home/a/.maro/workspace", "/srv/ws"),)
+
+    def test_a_hostile_root_is_dropped_with_a_reason_not_applied(self):
+        m = build_map({"workspace_root": "/usr/lib"},
+                      {"workspace_root": "/home/b/.maro/workspace"})
+        assert not m
+        assert "shared directory" in m.rejected[0][2]
+        # And nothing is rewritten through it.
+        assert m.substitute(b'File "/usr/lib/python3.12/x.py"')[1] == 0
+
+    def test_relative_segments_are_refused(self):
+        with pytest.raises(BadRoot, match="relative segment"):
+            validate_root("/opt/../etc/passwd")
+
+
+class TestBinarySniffCoversTheWholeFile:
+    """Skeptic, HIGH: the NUL sniff read only the first 8 KiB, so a
+    NUL-free-header binary got a path spliced into its binary tail —
+    while the docstring claimed it caught every unknown-extension binary."""
+
+    def test_nul_beyond_the_sniff_window_still_skips(self, tmp_path):
+        p = tmp_path / "model.ckpt2"          # extension not in the denylist
+        p.write_bytes(b"A" * 9000 + b"/home/a/ws/x" + b"\x00" * 10)
+        before = p.read_bytes()
+        assert rewrite_file(p, _map(("/home/a/ws", "/srv/w"))) == ("binary", 0)
+        assert p.read_bytes() == before
+
+
+class TestFailureIsAttributable:
+    """QA, MEDIUM: skips were bare counts, so an operator asking "why does
+    this file still cite the old machine" could not find which file
+    failed. Screens stay counts; unexpected I/O failures get names."""
+
+    def test_an_unreadable_file_is_named_in_the_record(self, tmp_path,
+                                                       monkeypatch):
+        (tmp_path / "f.txt").write_text("/home/a/ws/x\n")
+        monkeypatch.setattr(os, "replace",
+                            lambda *a, **k: (_ for _ in ()).throw(OSError))
+        rep = rewrite_tree(tmp_path, ["f.txt"], _map(("/home/a/ws", "/srv/w")))
+        assert rep.failed == ["f.txt"]
+        assert rep.as_record()["failed"] == ["f.txt"]
+        assert "FAILED to rewrite" in rep.summary()
+
+    def test_deliberate_screens_stay_counts_without_paths(self, tmp_path):
+        (tmp_path / "x.db").write_text("/home/a/ws\n")
+        rep = rewrite_tree(tmp_path, ["x.db"], _map(("/home/a/ws", "/srv/w")))
+        assert rep.skipped == {"binary-suffix": 1}
+        assert rep.failed == []
+
+    def test_a_leftover_temp_file_is_never_rewritten(self, tmp_path):
+        # Killed mid-swap: retention says never delete it, so the screens
+        # must recognize it instead of treating it as ordinary text.
+        p = tmp_path / "f.txt.maro-rewrite.tmp"
+        p.write_text("/home/a/ws/x\n")
+        rep = rewrite_tree(tmp_path, [p.name], _map(("/home/a/ws", "/srv/w")))
+        assert rep.skipped == {"rewrite-leftover": 1}
+        assert p.read_text() == "/home/a/ws/x\n"

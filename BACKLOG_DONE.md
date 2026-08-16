@@ -68,13 +68,64 @@ rewrites ledger rows BEFORE the exact-line dedup — after would compare
 raw source rows against already-rewritten target rows and append a
 near-duplicate on every re-run.
 
-**Verification.** 9,131-test suite green; 30-mutation file-derived sweep
-(`tests/mutation/path_rewrite.json`), all accounted for, 1 recorded
-equivalent. The sweep earned its keep immediately: the test pinning
-"normalization runs before the denylist" could not fail, because `/usr/`
-is refused by the shallowness rule either way — a refusal-only assertion
-could not tell a working denylist from a bypassed one. Same class as the
-§14a scope finding that opened the mutation-coverage item.
+**Verification.** Suite green (9,167 after the review round); 40-mutation
+file-derived sweep (`tests/mutation/path_rewrite.json`), all accounted
+for, 2 recorded equivalents. The sweep earned its keep before the review
+even started: the test pinning "normalization runs before the denylist"
+could not fail, because `/usr/` is refused by the shallowness rule either
+way — a refusal-only assertion could not tell a working denylist from a
+bypassed one. Same class as the §14a scope finding that opened the
+mutation-coverage item.
+
+**Adversarial review 2026-08-16 — 6 lenses (Skeptic, Architect,
+Minimalist, Expert QA + Security-and-Abuse and Experimentalist as bonus
+personas), all on sonnet-medium per the 08-15 decree while codex is
+exhausted. Verdict: REJECT, 4 real defects, all fixed same session.**
+Two carried independent consensus from lenses that had not seen each
+other's work:
+1. **HIGH (QA + Minimalist) — `os.utime` shared `os.replace`'s try
+   block**, so a metadata failure AFTER the atomic commit returned
+   `("unreadable", 0)` for a file whose bytes had already changed. The
+   custody `transformed` stamp and the per-file `path-rewrite.json` are
+   both computed from that count, so the one record the design exists to
+   produce would have said *nothing happened* while disk differed from
+   the archive. The pre-existing test only exercised failure BEFORE the
+   commit point — the safe half.
+2. **HIGH (Architect + Security) — `validate_root`'s denylist was
+   exact-match**, so `/home/<user>`, `/Users/<user>`, `/usr/lib`,
+   `/var/log`, `/tmp/foo` all validated as source roots. A crafted
+   archive declaring `workspace_root: "/usr/lib"` rewrote every traceback
+   path in the imported data into the importer's own workspace — the
+   exact over-rewrite the module's stated doctrine claims to avoid.
+   Fixed with a depth-below-a-shared-directory rule applied to SOURCE
+   roots only: the destination is our own computed path, and refusing it
+   would disable the rewrite on a legitimately-configured machine to
+   defend against an input we generated ourselves.
+3. **HIGH (Architect + Security) — the match had no LEFT boundary.** A
+   root fired as a suffix of a longer path: `/mnt/backup/home/clawd/.maro/
+   workspace` (a backup mirror) and `notes/Users/jeremy/x` (a relative
+   path) were both rewritten into confidently-wrong absolute paths.
+4. **HIGH (Skeptic) — the NUL sniff read only the first 8 KiB**, so a
+   binary with a NUL-free header got a path spliced into its tail, while
+   the docstring claimed it caught every unknown-extension binary. The
+   whole file was already in memory; checking all of it costs nothing.
+
+Also fixed: `--dry-run` in the merge lane reported a partial rewrite
+count as if it were a total (3 lenses); a symlinked `--source` silently
+no-opped the whole rewrite because `run_import` resolves its arguments
+while the source's files embed the unresolved path (Experimentalist);
+`unreadable` failures were tallied without filenames, so an operator
+could not find which file still cited the old machine (QA); a leftover
+`*.maro-rewrite.tmp` from a killed process was treated as ordinary text
+by a later pass (QA); `..` segments passed validation (Minimalist).
+
+**The reusable lesson, and it is about the instrument:** the sweep was
+green at 30/30 *before* this review. A file-derived mutation sweep bounds
+what the tests pin, not what the code does — every mutation in it was
+derived from behavior the author had already thought of, which is exactly
+the blind spot a second reader is for. Neither tool substitutes for the
+other: the review found the four defects, and the sweep is what now keeps
+them fixed (10 mutations added, all detected).
 
 ---
 

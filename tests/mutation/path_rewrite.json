@@ -23,8 +23,8 @@
  {
   "name": "a one-component root is deep enough",
   "file": "src/path_rewrite.py",
-  "anchor": "    if len([p for p in root.split(\"/\") if p]) < _MIN_ROOT_COMPONENTS:",
-  "replacement": "    if len([p for p in root.split(\"/\") if p]) < 1:",
+  "anchor": "    if len(parts) < _MIN_ROOT_COMPONENTS:",
+  "replacement": "    if len(parts) < 1:",
   "tests": "tests/test_path_rewrite.py"
  },
  {
@@ -98,11 +98,12 @@
   "tests": "tests/test_path_rewrite.py"
  },
  {
-  "name": "the NUL content sniff never fires",
+  "name": "the head NUL sniff (early exit) never fires",
   "file": "src/path_rewrite.py",
   "anchor": "            if b\"\\x00\" in head:",
   "replacement": "            if False:",
-  "tests": "tests/test_path_rewrite.py tests/test_workspace_import.py"
+  "tests": "tests/test_path_rewrite.py tests/test_workspace_import.py",
+  "equivalent": "since the 2026-08-16 review fix the 8 KiB head sniff is a cheap early exit, not the screen: the whole file is checked for NUL after it is read. Blanking the head check therefore changes only how much of a binary is read before skipping it, never whether it is skipped. The screen itself is pinned by the sibling mutation 'the NUL sniff covers only the first 8 KiB again', which IS detected."
  },
  {
   "name": "the size cap never fires",
@@ -206,8 +207,78 @@
  {
   "name": "merge lane: --no-rewrite-paths still builds a live map",
   "file": "src/workspace_import.py",
-  "anchor": "        if rewrite_paths else path_rewrite.RewriteMap())",
-  "replacement": "        if True else path_rewrite.RewriteMap())",
+  "anchor": "    if rewrite_paths:\n        roots = {",
+  "replacement": "    if True:\n        roots = {",
+  "tests": "tests/test_workspace_import.py"
+ },
+ {
+  "name": "no LEFT boundary \u2014 a root fires as a suffix of a longer path",
+  "file": "src/path_rewrite.py",
+  "anchor": "_LEFT_BOUNDARY = rb\"(?<![A-Za-z0-9_./-])\"",
+  "replacement": "_LEFT_BOUNDARY = rb\"\"",
+  "tests": "tests/test_path_rewrite.py"
+ },
+ {
+  "name": "mtime preservation shares the atomic swap's failure path again",
+  "file": "src/path_rewrite.py",
+  "anchor": "    try:\n        os.utime(abs_path, (st.st_atime, st.st_mtime))\n    except OSError:\n        pass          # best-effort metadata; the content is already committed\n    return \"rewritten\", count",
+  "replacement": "    os.utime(abs_path, (st.st_atime, st.st_mtime))\n    return \"rewritten\", count",
+  "tests": "tests/test_path_rewrite.py"
+ },
+ {
+  "name": "source roots are not held to depth below a shared directory",
+  "file": "src/path_rewrite.py",
+  "anchor": "    if strict:",
+  "replacement": "    if False:",
+  "tests": "tests/test_path_rewrite.py"
+ },
+ {
+  "name": "the destination root is held to the hostile-source rule too",
+  "file": "src/path_rewrite.py",
+  "anchor": "            dst = validate_root(raw_dst, strict=False)",
+  "replacement": "            dst = validate_root(raw_dst, strict=True)",
+  "tests": "tests/test_path_rewrite.py"
+ },
+ {
+  "name": "a root containing '..' is accepted",
+  "file": "src/path_rewrite.py",
+  "anchor": "    if \"..\" in parts:",
+  "replacement": "    if False:",
+  "tests": "tests/test_path_rewrite.py"
+ },
+ {
+  "name": "the NUL sniff covers only the first 8 KiB again",
+  "file": "src/path_rewrite.py",
+  "anchor": "    if b\"\\x00\" in data:\n        return \"binary\", 0",
+  "replacement": "    if False:\n        return \"binary\", 0",
+  "tests": "tests/test_path_rewrite.py tests/test_workspace_import.py"
+ },
+ {
+  "name": "a leftover rewrite temp file is treated as ordinary text",
+  "file": "src/path_rewrite.py",
+  "anchor": "    if rel_path.endswith(_TMP_SUFFIX):",
+  "replacement": "    if False:",
+  "tests": "tests/test_path_rewrite.py"
+ },
+ {
+  "name": "an unreadable file is tallied without its name",
+  "file": "src/path_rewrite.py",
+  "anchor": "        if reason == \"unreadable\" and rel:",
+  "replacement": "        if False:",
+  "tests": "tests/test_path_rewrite.py"
+ },
+ {
+  "name": "merge lane: a dry-run report does not admit it is partial",
+  "file": "src/workspace_import.py",
+  "anchor": "        if self.dry_run:",
+  "replacement": "        if False:",
+  "tests": "tests/test_workspace_import.py"
+ },
+ {
+  "name": "merge lane: only the resolved source path is mapped",
+  "file": "src/workspace_import.py",
+  "anchor": "        if str(source_given) != str(source):\n            roots[\"workspace_root_given\"] = (str(source_given), str(target))",
+  "replacement": "        if False:\n            pass",
   "tests": "tests/test_workspace_import.py"
  }
 ]

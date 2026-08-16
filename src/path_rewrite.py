@@ -93,11 +93,21 @@ _SKIP_SUFFIXES = frozenset({
 })
 
 # A single-component root is a system directory, not an install root —
-# refuse rather than rewrite half the filesystem. Structure plus the
-# denylist below is the whole guard; a character-count minimum was tried
-# and dropped, because it adds nothing the two of them miss and it
-# rejects legitimate short roots like /srv/ws.
+# refuse rather than rewrite half the filesystem. (A character-count
+# minimum was tried and dropped: it adds nothing structure and the
+# denylist miss, and it rejects legitimate short roots like /srv/ws.)
 _MIN_ROOT_COMPONENTS = 2
+
+# Depth required BELOW a shared directory, for source roots only. The
+# denylist alone is exact-match, so `/home/clawd`, `/Users/jeremy`,
+# `/usr/lib`, `/var/log` and `/tmp/foo` all sailed through it while being
+# exactly the generic fragments that turn a rewrite into mass corruption
+# — a crafted archive declaring workspace_root `/usr/lib` rewrote every
+# traceback path in the imported data. Found by two independent review
+# lenses, 2026-08-16. None of the three ROLES is ever a bare home or a
+# system subdirectory in a real install, so requiring two components
+# below a shared root costs nothing real and closes the class.
+_MIN_DEPTH_BELOW_SHARED = 2
 _SYSTEM_ROOTS = frozenset({
     "/", "/usr", "/etc", "/var", "/tmp", "/opt", "/bin", "/sbin", "/lib",
     "/lib64", "/boot", "/dev", "/proc", "/sys", "/run", "/mnt", "/media",
@@ -105,24 +115,48 @@ _SYSTEM_ROOTS = frozenset({
     "/private", "/private/tmp", "/private/var", "/Volumes", "/srv",
 })
 
-# A match must not be followed by a character that would make it a
-# PREFIX of a different name. `/home/clawd/.maro` must not fire inside
+# A match must sit at BOTH edges of a real path, not merely end at one.
+#
+# Right: a match must not be followed by a character that would make it a
+# PREFIX of a different name — `/home/clawd/.maro` must not fire inside
 # `/home/clawd/.maro-acceptance-probe`. `.` is deliberately allowed so
-# prose like "recorded at <root>." rewrites — a trailing-dot sibling
-# directory resolves nowhere either way, while unrewritten prose is
-# exactly the reader-facing lie this module exists to fix.
+# prose like "recorded at <root>." rewrites; a trailing-dot sibling
+# resolves nowhere either way, while unrewritten prose is exactly the
+# reader-facing lie this module exists to fix.
+#
+# Left: a match must not be a SUFFIX of a longer path. Without this,
+# every root fires mid-string — `/mnt/backup/home/clawd/.maro/workspace`
+# (a backup mirror, a different directory) and `notes/Users/jeremy/x`
+# (a relative path) were both rewritten into confidently-wrong absolute
+# paths. Found by two independent review lenses, 2026-08-16. The left
+# side gets no `.`/`/` exemption: nothing legitimate precedes a root with
+# one, and under-rewriting is this module's safe direction.
 _BOUNDARY = rb"(?![A-Za-z0-9_-])"
+_LEFT_BOUNDARY = rb"(?<![A-Za-z0-9_./-])"
+
+# Suffix of the in-place rewrite's temp file. Named as a constant so the
+# skip screens can recognize a leftover from a killed process: it is
+# never deleted (retention decree), so it must never be rewritten by a
+# later pass either.
+_TMP_SUFFIX = ".maro-rewrite.tmp"
 
 
 class BadRoot(ValueError):
     """A recorded root that must never be used as a rewrite source."""
 
 
-def validate_root(value) -> str:
+def validate_root(value, *, strict: bool = True) -> str:
     """Normalize a recorded root, or raise BadRoot with the reason.
 
-    The value comes from an archive written elsewhere; treat it as
-    hostile. Fails closed — the caller drops the mapping and says so.
+    `strict` is the boundary, not a knob. A SOURCE root arrives inside an
+    archive written by another machine and possibly another person, so it
+    gets the full screen including the depth-below-a-shared-directory
+    rule. A DESTINATION root is this install's own computed path — it is
+    checked for structure, but refusing it would only disable the rewrite
+    on a legitimately-configured machine (`MARO_WORKSPACE=/srv/ws`) to
+    defend against an input we generated ourselves.
+
+    Fails closed — the caller drops the mapping and records the reason.
     """
     if not isinstance(value, str):
         raise BadRoot(f"not a string ({type(value).__name__})")
@@ -140,8 +174,20 @@ def validate_root(value) -> str:
         raise BadRoot("resolves to filesystem root")
     if root in _SYSTEM_ROOTS:
         raise BadRoot(f"system directory: {root}")
-    if len([p for p in root.split("/") if p]) < _MIN_ROOT_COMPONENTS:
+    parts = [p for p in root.split("/") if p]
+    if ".." in parts:
+        raise BadRoot(f"contains a relative segment: {root}")
+    if len(parts) < _MIN_ROOT_COMPONENTS:
         raise BadRoot(f"too shallow: {root}")
+    if strict:
+        # Walk every prefix, not just the first component: the denylist
+        # is exact-match, so `/usr/lib` clears `root in _SYSTEM_ROOTS`
+        # while being every bit as generic as `/usr`.
+        for i in range(1, len(parts)):
+            prefix = "/" + "/".join(parts[:i])
+            if prefix in _SYSTEM_ROOTS and (len(parts) - i) < _MIN_DEPTH_BELOW_SHARED:
+                raise BadRoot(
+                    f"too shallow under the shared directory {prefix}: {root}")
     return root
 
 
@@ -166,7 +212,7 @@ class RewriteMap:
         if not self.pairs:
             return None
         alt = b"|".join(re.escape(s.encode("utf-8")) for s, _ in self.pairs)
-        return re.compile(b"(?:" + alt + b")" + _BOUNDARY)
+        return re.compile(_LEFT_BOUNDARY + b"(?:" + alt + b")" + _BOUNDARY)
 
     def substitute(self, data: bytes) -> tuple:
         """(rewritten_bytes, replacements)."""
@@ -220,7 +266,7 @@ def build_map(source_roots: Mapping, dest_roots: Mapping,
             rejected.append((role, str(raw_src)[:200], f"source {exc}"))
             continue
         try:
-            dst = validate_root(raw_dst)
+            dst = validate_root(raw_dst, strict=False)
         except BadRoot as exc:
             rejected.append((role, str(raw_dst)[:200], f"destination {exc}"))
             continue
@@ -252,6 +298,11 @@ def skip_reason(rel_path: str, abs_path: Path) -> str:
     parts = Path(rel_path).parts
     if any(p in _SKIP_DIR_PARTS for p in parts):
         return "vcs-internal"
+    if rel_path.endswith(_TMP_SUFFIX):
+        # A leftover from a process killed mid-swap. It is never deleted
+        # (retention: it may hold the only copy of a partial write), so a
+        # later pass must not treat it as ordinary text and rewrite it.
+        return "rewrite-leftover"
     if Path(rel_path).suffix.lower() in _SKIP_SUFFIXES:
         return "binary-suffix"
     try:
@@ -285,29 +336,45 @@ def rewrite_file(abs_path: Path, mapping: RewriteMap, *,
         with open(abs_path, "rb") as fh:
             head = fh.read(_SNIFF_BYTES)
             if b"\x00" in head:
-                return "binary", 0
+                return "binary", 0      # cheap exit before reading the rest
             data = head + fh.read()
     except OSError:
         return "unreadable", 0
+    # The head sniff is an early exit, NOT the test. Screening on the
+    # first 8 KiB alone let a NUL-free-header binary (a checkpoint, a
+    # custom serialized format) through and spliced a path into its
+    # binary tail. The whole file is already in memory by here, so
+    # checking all of it costs nothing and makes the docstring's claim
+    # — "catches every unknown-extension binary" — actually true.
+    if b"\x00" in data:
+        return "binary", 0
 
     new, count = mapping.substitute(data)
     if not count:
         return "unchanged", 0
 
     st = abs_path.stat()
-    tmp = abs_path.with_name(abs_path.name + ".maro-rewrite.tmp")
+    tmp = abs_path.with_name(abs_path.name + _TMP_SUFFIX)
+    # os.replace is the commit point and NOTHING that can fail may share
+    # its try block. mtime preservation used to sit inside it, so a utime
+    # failure AFTER the swap reported ("unreadable", 0) for a file whose
+    # bytes had already changed — the report every audit downstream is
+    # built on, saying nothing happened when something did.
     try:
         with open(tmp, "wb") as out:
             out.write(new)
         shutil.copymode(abs_path, tmp)
         os.replace(tmp, abs_path)
-        os.utime(abs_path, (st.st_atime, st.st_mtime))
     except OSError:
         try:
             os.unlink(tmp)
         except OSError:
             pass
         return "unreadable", 0
+    try:
+        os.utime(abs_path, (st.st_atime, st.st_mtime))
+    except OSError:
+        pass          # best-effort metadata; the content is already committed
     return "rewritten", count
 
 
@@ -322,9 +389,17 @@ class RewriteReport:
     replacements: int = 0
     skipped: dict = field(default_factory=dict)
     files: list = field(default_factory=list)     # every file touched
+    failed: list = field(default_factory=list)    # every file that ERRORED
 
-    def _skip(self, reason: str) -> None:
+    def _skip(self, reason: str, rel: str = "") -> None:
         self.skipped[reason] = self.skipped.get(reason, 0) + 1
+        # The screens (binary, vcs-internal, oversize…) are deliberate and
+        # self-explaining, so a count is enough. `unreadable` is not a
+        # screen — it is an unexpected I/O failure, and an operator asking
+        # "why does this lesson still cite the old machine" needs the
+        # filename, which a bare tally cannot give them.
+        if reason == "unreadable" and rel:
+            self.failed.append(rel)
 
     def as_record(self) -> dict:
         return {
@@ -334,6 +409,7 @@ class RewriteReport:
             "files_rewritten": self.files_rewritten,
             "replacements": self.replacements,
             "skipped": dict(sorted(self.skipped.items())),
+            "failed": self.failed,
             "files": self.files,
         }
 
@@ -343,7 +419,13 @@ class RewriteReport:
         head = (f"path rewrite: {self.files_rewritten} file(s), "
                 f"{self.replacements} occurrence(s)")
         skips = ", ".join(f"{k}={v}" for k, v in sorted(self.skipped.items()))
-        return head + (f" — not rewritten: {skips}" if skips else "")
+        head += f" — not rewritten: {skips}" if skips else ""
+        if self.failed:
+            head += ("\n  FAILED to rewrite (I/O error, paths left stale): "
+                     + ", ".join(self.failed[:10])
+                     + (f" … +{len(self.failed) - 10} more"
+                        if len(self.failed) > 10 else ""))
+        return head
 
 
 def rewrite_tree(root: Path, rel_names: Iterable, mapping: RewriteMap, *,
@@ -381,5 +463,5 @@ def rewrite_tree(root: Path, rel_names: Iterable, mapping: RewriteMap, *,
             report.replacements += count
             report.files.append({"path": str(rel), "replacements": count})
         elif status != "unchanged":
-            report._skip(status)
+            report._skip(status, str(rel))
     return report

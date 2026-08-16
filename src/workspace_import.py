@@ -71,8 +71,9 @@ class _Rewrites:
     only one lane would be tested through.
     """
 
-    def __init__(self, mapping):
+    def __init__(self, mapping, dry_run: bool = False):
         self.map = mapping
+        self.dry_run = dry_run
         self.units = 0            # files + ledger rows rewritten
         self.replacements = 0
         self.skipped: Dict[str, int] = {}
@@ -111,7 +112,7 @@ class _Rewrites:
                                                self.map))
 
     def as_report(self) -> Dict:
-        return {
+        report = {
             "mapping": self.map.describe(),
             "rejected_roots": [{"role": r, "value": v, "reason": why}
                                for r, v, why in self.map.rejected],
@@ -119,6 +120,16 @@ class _Rewrites:
             "replacements": self.replacements,
             "not_rewritten": dict(sorted(self.skipped.items())),
         }
+        if self.dry_run:
+            # Under --dry-run the counts cover ledger rows and daily logs
+            # only: those are rewritten in memory so the "appended" preview
+            # stays truthful, while runs and curated files are never copied
+            # and so are never scanned. Say that, rather than letting a
+            # partial figure read as the total a real import would report.
+            report["preview_partial"] = True
+            report["preview_covers"] = ["ledgers", "daily_logs"]
+            report["preview_omits"] = ["runs", "curated"]
+        return report
 
 
 def _is_workspace(path: Path) -> bool:
@@ -273,6 +284,12 @@ def run_import(
     include_curated: bool = False,
     rewrite_paths: bool = True,
 ) -> Dict:
+    # Keep the paths AS GIVEN alongside their resolved forms: the source's
+    # files embed whatever `config.workspace_root()` returned on that
+    # machine, which is unresolved. If a symlink sits anywhere between the
+    # two (a /tmp → /private/tmp on macOS is enough), a resolved-only map
+    # matches nothing and the rewrite silently no-ops.
+    source_given, target_given = source, target
     source = source.resolve()
     target = target.resolve()
     if source == target:
@@ -282,10 +299,18 @@ def run_import(
     if not _is_workspace(target):
         raise SystemExit(f"not a maro workspace (no memory/ or runs/): {target}")
 
-    rewrites = _Rewrites(
-        path_rewrite.build_map({"workspace_root": str(source)},
-                               {"workspace_root": str(target)})
-        if rewrite_paths else path_rewrite.RewriteMap())
+    if rewrite_paths:
+        roots = {"workspace_root": (str(source), str(target))}
+        if str(source_given) != str(source):
+            roots["workspace_root_given"] = (str(source_given), str(target))
+        rw_map = path_rewrite.build_map(
+            {k: v[0] for k, v in roots.items()},
+            {k: v[1] for k, v in roots.items()},
+            roles=tuple(roots),
+        )
+    else:
+        rw_map = path_rewrite.RewriteMap()
+    rewrites = _Rewrites(rw_map, dry_run=dry_run)
 
     report = {
         "label": label,

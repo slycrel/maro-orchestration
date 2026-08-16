@@ -126,6 +126,22 @@ Ordered open work that matters. Top of the list is next.
   `git archive` copy by default, fails on an anchor that doesn't match
   exactly once, and supports `equivalent` with a required reason.
 
+- [ ] **`scripts/mutate.py` has no negative control — a sweep where
+  pytest never RAN reports the same green as a clean one** (found
+  2026-08-16 by the Experimentalist lens reviewing the path_rewrite
+  sweep, reproduced twice). The runner treats "tests failed" as DETECTED,
+  so an environment where the test command fails for an unrelated reason
+  (no `PYTHONPATH`, no pytest on the chosen interpreter, a collection
+  error) marks every mutation detected and exits 0. That is the
+  guard-that-cannot-fail shape, one level up from the code it audits: the
+  instrument built to find false confidence can manufacture it. **Fix
+  shape:** run the test target ONCE unmutated before applying anything
+  and require it to pass — a sweep whose baseline is red has nothing to
+  say. Cheap, and it makes every "N/N accounted for" mean something. (The
+  path_rewrite sweeps are not in doubt: both rounds produced SURVIVED and
+  SKIP verdicts alongside the DETECTED ones, which is the discrimination
+  a broken runner cannot show. That is luck, not a design property.)
+
 - [ ] **Close `tests/mutation/provenance_gate.json` — the contamination
   gate's enforcement is largely unpinned.** First tier-1 sweep, run
   2026-08-16, **landed deliberately red**: 6 of 18 accounted for. The
@@ -402,8 +418,11 @@ trap list and the shape comparison archived: BACKLOG_DONE.md §"Moved
 from BACKLOG 2026-08-16". Residuals, none blocking:
 - **Only recorded install roots are mapped** — workspace, `~/.maro`,
   repo. In the box copy that is ~73% of embedded occurrences plus the
-  9,242 naming the checkout; the ~2k under `.poe/`, `.openclaw/`, a
-  stale worktree and loose `$HOME` paths stay as they are, deliberately
+  9,242 naming the checkout; the rest stay as they are, deliberately —
+  2,169 under `.poe/`, 1,212 under `.openclaw/`, 1,193 naming the
+  PRE-RENAME checkout path (`claude/openclaw-orchestration`, which the
+  current `repo_root` does not match), 801 a stale worktree, and loose
+  `$HOME` paths
   (a stale path is inert, a confidently-wrong one resolves somewhere
   real). If those ever matter, the answer is more RECORDED roots at
   export, not a broader regex.

@@ -303,3 +303,38 @@ def test_databases_in_a_copied_run_are_never_rewritten(tmp_path):
 
     assert (dst / "runs" / "aaaa1111-run" / "state.db").read_bytes() == \
         b"SQLite format 3\x00" + str(src).encode() + b"/page"
+
+
+def test_dry_run_marks_its_rewrite_counts_as_partial(tmp_path):
+    # QA + Skeptic + Experimentalist: runs/ and curated files are never
+    # copied under --dry-run, so they are never scanned, while ledger rows
+    # are rewritten in memory to keep the "appended" preview truthful. The
+    # mixed total must not read as what a real import would do.
+    src = _mk_workspace(tmp_path / "src", runs=["aaaa1111-run"],
+                        ledger_rows={"events.jsonl": [{"e": 1}]})
+    (src / "runs" / "aaaa1111-run" / "artifact.md").write_text(f"{src}/x\n")
+    dst = _mk_workspace(tmp_path / "dst")
+
+    report = run_import(src, dst, "trial-x", dry_run=True)
+
+    assert report["path_rewrite"]["preview_partial"] is True
+    assert report["path_rewrite"]["preview_omits"] == ["runs", "curated"]
+    assert "preview_partial" not in run_import(src, dst, "trial-y")["path_rewrite"]
+
+
+def test_a_symlinked_source_path_still_rewrites(tmp_path):
+    # Experimentalist: run_import resolves its arguments, but the source's
+    # files embed whatever config.workspace_root() returned there — the
+    # UNRESOLVED path. A resolved-only map silently matches nothing.
+    real = _mk_workspace(tmp_path / "real-src", runs=["aaaa1111-run"])
+    link = tmp_path / "linked-src"
+    link.symlink_to(real)
+    (real / "runs" / "aaaa1111-run" / "artifact.md").write_text(
+        f"produced at {link}/runs/aaaa1111-run\n")
+    dst = _mk_workspace(tmp_path / "dst")
+
+    report = run_import(link, dst, "trial-x")
+
+    assert (dst / "runs" / "aaaa1111-run" / "artifact.md").read_text() == (
+        f"produced at {dst}/runs/aaaa1111-run\n")
+    assert report["path_rewrite"]["replacements"] == 1
