@@ -132,17 +132,62 @@ def stamped(ws: Path) -> None:
               f"{total} stamps {dict(mix)} unprobed={unprobed:.0%}")
 
 
+def recheck(ws: Path) -> int:
+    """Re-extract every STORED stamp's claim and report what no longer mints.
+
+    The audit the counts cannot do (round-1 Skeptic HIGH): "the census went
+    103→24 and nothing already stamped was lost" are two different claims,
+    and the second one needs a per-row diff. Reading a total and trusting it
+    is exactly how the landed commit came to assert 9/9 when the truth was
+    8/9 — one row's claim sat in "needed TO BE checked", which the modal
+    veto correctly refuses as policy language.
+
+    Exit 0 always: a drop is a finding to read, not a build break — some
+    drops are the point (negated and counterfactual claims SHOULD stop
+    minting). The operator judges each.
+    """
+    print(f"workspace: {ws}")
+    total = dropped = 0
+    for name in ("lessons.jsonl", "lessons_archive.jsonl",
+                 "knowledge_nodes.jsonl", "skills.jsonl"):
+        rows = [r for r in _jsonl(ws / "memory" / name) if r.get("grounding")]
+        if not rows:
+            continue
+        for r in rows:
+            text = str(r.get("lesson") or r.get("lesson_text")
+                       or r.get("description") or r.get("text") or "")
+            live = {c["claim"] for c in extract_claims(text)}
+            for g in r.get("grounding") or []:
+                if not isinstance(g, dict):
+                    continue
+                total += 1
+                claim = str(g.get("claim", ""))
+                if claim not in live:
+                    dropped += 1
+                    rid = str(r.get("lesson_id") or r.get("node_id")
+                              or r.get("id") or "?")[:8]
+                    print(f"  DROPPED {name} id={rid} "
+                          f"was={g.get('status')} :: {claim[:110]}")
+    print(f"  {total - dropped}/{total} stored stamps still mint "
+          f"({dropped} dropped)")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--show", action="store_true",
                     help="print every extracted sentence (the precision read)")
     ap.add_argument("--stamped", action="store_true",
                     help="report stamps already on the stores, not extraction")
+    ap.add_argument("--recheck", action="store_true",
+                    help="re-extract each STORED stamp's claim; list drops")
     args = ap.parse_args()
     ws = workspace_root()
     if not ws.is_dir():
         print(f"no workspace at {ws} (set MARO_WORKSPACE)", file=sys.stderr)
         return 1
+    if args.recheck:
+        return recheck(ws)
     if args.stamped:
         stamped(ws)
     else:

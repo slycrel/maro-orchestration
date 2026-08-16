@@ -139,8 +139,9 @@ class TestClaimShapeGate:
         # Auxiliary marker.
         ("The page was fetched via the CDN.", {"fetch"}),
         ("The blocks were confirmed this session.", {"probe"}),
-        ("The goal specified strict constraints before any artifact had "
-         "been confirmed to exist.", {"probe"}),
+        ("The plan assumed a fresh invocation would be needed, but the run "
+         "records showed the dispatcher had already executed this goal.",
+         {"execute"}),
         ("Cross-referencing the source against repo mechanisms did not "
          "produce uniform confidence: 12/14 ideas confirmed as matches.",
          {"probe"}),
@@ -170,8 +171,6 @@ class TestClaimShapeGate:
         # what slice 1 was minting.
         "This agenda run was interrupted before any steps executed (0/0 "
         "completed), leaving no trace of what obstacle caused the stall.",
-        "nothing in this run confirmed those artifacts actually exist or "
-        "were located, since execution never began.",
         "Architecture-doc absence of a mechanism was not treated as "
         "sufficient evidence of a real gap on its own — a follow-up "
         "source-code grep across actual repo files was run to corroborate "
@@ -179,6 +178,145 @@ class TestClaimShapeGate:
     ])
     def test_shipped_stamps_survive_the_gate(self, shipped):
         assert extract_claims(shipped) != []
+
+
+# ---------------------------------------------------------------------------
+# claim-shape gate — round-1 review findings (2026-08-16)
+# ---------------------------------------------------------------------------
+
+class TestGatePolarityAndVocabulary:
+    """Both HIGHs from the round-1 adversarial review, reproduced first.
+
+    The expert-QA HIGH is the sharper one: a retrospective marker says the
+    sentence REPORTS, not what it reports, so "The fetch was not
+    authenticated" was extracting an auth claim and grounding it
+    `supported` off an unrelated authenticated event — a receipt attached
+    to a sentence denying the event. A false affirmation is strictly worse
+    than the false doubt this gate was built to stop.
+    """
+
+    @pytest.mark.parametrize("negated", [
+        "The fetch was not authenticated.",
+        "The script was not executed.",
+        "The suite was never tested against the fixture.",
+        "the assumption of prior coverage was not checked against the "
+        "new requirement's specifics.",
+        # Live shipped row: its stamp read `unsupported`, which was right by
+        # luck — a run WITH probe events would have stamped it supported.
+        "nothing in this run confirmed those artifacts actually exist or "
+        "were located, since execution never began.",
+    ])
+    def test_negated_reports_are_not_claims(self, negated):
+        assert extract_claims(negated) == []
+
+    def test_negation_is_clause_local_not_sentence_wide(self):
+        # A negation in a DIFFERENT clause must not swallow a true claim.
+        text = ("Cross-referencing the source against repo mechanisms did "
+                "not produce uniform confidence: 12/14 ideas confirmed as "
+                "STRONG matches to real code.")
+        assert [c["family"] for c in extract_claims(text)] == ["probe"]
+
+    @pytest.mark.parametrize("hedged", [
+        "The team could have fetched the page directly instead of "
+        "scraping it.",
+        "The plan should have been verified before the run.",
+        "The artifact might have been downloaded by the earlier step.",
+    ])
+    def test_modal_perfect_hedges_are_not_claims(self, hedged):
+        assert extract_claims(hedged) == []
+
+    def test_negated_claim_cannot_ground_supported(self):
+        # End-to-end, not just extraction: the failure that mattered was a
+        # `supported` stamp carrying a real receipt.
+        events = [_ev(name="WebFetch",
+                      input_="curl -H 'Authorization: Bearer sk-abc123def' "
+                             "https://api.example.com/x")]
+        assert ground_text("The fetch was not authenticated.", events) == []
+
+    # -- must-detect fixtures for the closed vocabulary (watch-list #7) ----
+
+    @pytest.mark.parametrize("verb", [
+        # Deliberately NOT drawn from _IMPERATIVE_OPENERS' original list —
+        # "found 0" is untrusted until fixtures prove the net can catch
+        # orders whose opening verb nobody thought to enumerate. These are
+        # caught by the embedded-clause rule, which needs no verb list.
+        "Frobnicate", "Marshal", "Transpile", "Vendor", "Backfill",
+        "Download", "Draft", "Install",
+    ])
+    def test_unlisted_imperative_verbs_still_gated(self, verb):
+        text = (f"{verb} the source document from the URL and confirm it "
+                f"was retrieved in full before using it as evidence.")
+        assert extract_claims(text) == []
+
+    @pytest.mark.parametrize("text", [
+        "Log which values were tested and what output was produced",
+        "Record the date each price was checked alongside the price",
+        "Note how the answer was confirmed against the fetched text",
+    ])
+    def test_embedded_clause_reports_are_gated_without_the_verb_list(
+            self, text):
+        assert extract_claims(text) == []
+
+    def test_sequencing_adverb_does_not_evade_the_order_veto(self):
+        assert extract_claims(
+            "Then record the date each price was checked alongside the "
+            "price itself.") == []
+
+    def test_domain_noun_that_is_also_a_listed_verb_still_reports(self):
+        # "Build", "Commit", "Record" open orders AND head real subjects;
+        # an auxiliary right after the opener means it is a subject.
+        assert [c["family"] for c in
+                extract_claims("Build 42 was verified by the suite.")
+                ] == ["probe"]
+        assert [c["family"] for c in
+                extract_claims("Commit abc1234 was executed on the box.")
+                ] == ["execute"]
+
+    def test_sentence_initial_it_is_a_subject_not_a_complementizer(self):
+        assert [c["family"] for c in
+                extract_claims("It was fetched from the CDN.")] == ["fetch"]
+
+    def test_policy_phrasing_inside_a_report_is_still_policy(self):
+        # Round-1 Skeptic HIGH, and the falsifier of the landed commit's
+        # "all nine already-stamped rows survive" claim: live row 1f702cc1
+        # was stamped `supported` on a sentence whose only lexicon hit sits
+        # in "needed TO BE checked". The gate refuses it — correctly, it is
+        # policy language — so the honest count as landed was 8/9, and this
+        # is the row. `mint_grounding_census.py --recheck` is the standing
+        # instrument for that per-row diff; counts alone cannot see it.
+        text = ("the verbatim decretal-mandate text was found only in a "
+                "separate, related opinion (76NJEq607, a 1910 per curiam "
+                "order) in the same corpus, and a further related appeal "
+                "opinion (79NJEq212, 1911) existed and needed to be "
+                "checked for corroborating quotes.")
+        assert extract_claims(text) == []
+
+    @pytest.mark.parametrize("homograph", [
+        "Read the source and confirmed the total matched.",
+        "Set the flag and verified the output changed.",
+        "Split the corpus and tested each half.",
+    ])
+    def test_known_gap_present_past_homograph_openers(self, homograph):
+        """LABELED RECALL GAP, not a passing behaviour we want.
+
+        Round-1 Skeptic MEDIUM: read/set/split/put/cut/hit are their own
+        past tense, so an opener that is both a valid order and a valid
+        report is read as an order. Dropping the claim is the narrowing
+        (safe) direction, and removing these words from the opener list
+        would re-admit "Read the file and confirm it was retrieved" — a far
+        more common shape in this corpus. Pinned so the gap is visible and
+        so a future fix has a failing target instead of a silent surprise.
+        """
+        assert extract_claims(homograph) == []
+
+    def test_subordinate_absence_clause_is_not_a_report(self):
+        # A live corpus row that DID carry a stamp before this round. The
+        # report is "the goal specified constraints"; the lexicon verb sits
+        # in a `before`-clause asserting the probe had NOT yet happened —
+        # the same inversion as the negation cases, one clause deeper.
+        assert extract_claims(
+            "The goal specified strict constraints (no new web fetches) "
+            "before any artifact had been confirmed to exist.") == []
 
 
 # ---------------------------------------------------------------------------

@@ -1230,19 +1230,36 @@ capture**, which is what makes the rung amortize instead of evaporate.
   that never claimed anything. Shipped instead: a **claim-shape mood
   gate** in `extract_claims` (retro-marker requirement + imperative/
   descriptive main-clause veto + token-level tag/adjective/modal
-  vetoes, all narrowing) — corpus hits 76→1, 24→0, 103→24, 100→12;
-  all nine already-stamped live rows survive; 15 new pins in
-  tests/test_mint_grounding.py (red-verified against the pre-gate
-  module). This also answers the slice-2a review's deferred Architect
-  question (claim-shape hit rate on generalized LLM prose) with
-  numbers. **Still open, now narrowed: skill-mint stamping is the
-  skills-lite promotion lane only** (`run_curation:948` — a run's own
-  prose becoming durable injected advice; live specimen
-  `repl_reading.md`'s "Measured correction (A/B run e0bbc289…)"),
-  with the other six sites documented stampless by construction
-  (`prompt_tweak` precedent). The bare-measurement claim shape that
-  specimen uses is evidence for the §4 lexicon-widening trigger, not
-  a reason to widen now. **Also open: slice 3 republish gate** — the only
+  vetoes, all narrowing) — corpus hits 76→0, 24→0, 103→21, 100→9;
+  38 pins in tests/test_mint_grounding.py (red-verified against the
+  pre-gate module). This also answers the slice-2a review's deferred
+  Architect question (claim-shape hit rate on generalized LLM prose)
+  with numbers. **Review round 1 same day** (4 lenses, sonnet-medium
+  fallback; record `docs/history/2026-08-16-mint-grounding-gate-review.md`):
+  2 HIGHs confirmed and fixed — (a) expert-QA POLARITY: "the fetch was
+  not authenticated" ground `supported` off a real receipt, a false
+  affirmation strictly worse than the false doubt the gate targets
+  (clause-local negation veto + modal-perfect arm now pinned both
+  ways); (b) Minimalist/Skeptic/Architect CLOSED VERB LIST on an open
+  class (`download`/`draft`/`install`, "Then record…", "Retry … until
+  the page was fetched") — replaced as primary net by a
+  vocabulary-independent subordinate-clause rule, list demoted to
+  backstop, must-detect fixtures added per watch-list #7. A third HIGH
+  falsified this entry's own first draft: "all nine already-stamped
+  rows survive" was 8/9 as landed (a claim inside "needed *to be*
+  checked", correctly refused) and 6/9 after the fixes — the other two
+  drops are a negated and an absence claim that SHOULD stop minting;
+  `scripts/mint_grounding_census.py --recheck` is now the per-row
+  instrument. Labeled and not fixed: present/past homograph openers
+  (read/set/split) read as orders — pinned as a known gap.
+  **Slice 2b is DEFERRED WHOLE, not narrowed** (corrected after
+  probing the first draft's own claim): the skills-lite promotion lane
+  `run_curation:948` has fired **twice in 787 runs** — one promotion
+  (`changelog_digest.md`, claim-free) and one skip — and the specimen
+  first cited for it, `repl_reading.md`'s "Measured correction (A/B run
+  e0bbc289…)", carries no `promoted_from` and never passed a mint site.
+  The class is real but has no trafficked lane; the census script is the
+  one-command trigger to re-open. **Also open: slice 3 republish gate** — the only
   fail-closed point (`pack.py:881` import lane + warm-arm reuse;
   needs its own design pass: the reuse happens worker-side, not at a
   harness seam);

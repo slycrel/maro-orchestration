@@ -62,18 +62,37 @@ Measured over the live box corpus:
 
 | Store | lexicon-only hits | after the gate | true claims |
 |---|---|---|---|
-| skills.jsonl (398 rows) | 76 | 1 | 0 |
+| skills.jsonl (398 rows) | 76 | 0 | 0 |
 | skills-lite .md (56 files) | 24 | 0 | 0 |
-| lessons live+archive (914 rows) | 103 | 24 | ~20 |
-| knowledge nodes (1,250 rows) | 100 | 12 | ~5 |
+| lessons live+archive (914 rows) | 103 | 21 | ~19 |
+| knowledge nodes (1,250 rows) | 100 | 9 | ~5 |
 
 So the gate is a **mood test**: the sentence must report what happened
 (an auxiliary — "was fetched", "had been confirmed", "did not correlate"
-— or a past-tense verb taking an object), its main clause must not be an
-order or a third-person description of a skill, and the lexicon hit
+— or a past-tense verb taking an object), that report must sit in the
+main clause rather than a subordinate one ("confirm it *was retrieved*",
+"until the page *was fetched*"), its polarity must be positive ("the
+fetch *was not* authenticated" reports the opposite), and the lexicon hit
 itself must read as a verb rather than a tag, an adjective or a modal
-policy ("must be checked"). Every rule narrows: a gated-out claim mints
-no stamp, which is the pre-grounding status quo. The doctrine is not new
+policy ("must be checked", "could have fetched"). Every rule narrows: a
+gated-out claim mints no stamp, which is the pre-grounding status quo.
+
+The polarity and subordinate-clause rules came from **review round 1**
+(2026-08-16, 4 lenses): grounding "the fetch was not authenticated"
+returned `supported` with a real receipt — a false *affirmation*, which
+is strictly worse than the false doubt the gate was built to stop — and
+the imperative veto's closed verb list was evaded by every verb nobody
+enumerated (`download`, `draft`, `install`, and "Retry the fetch **until**
+the page was fetched"). The clause rules need no verb vocabulary, which
+is why they are the primary net and the list is the backstop. Same round
+falsified this doc's own first count: "all nine already-stamped live rows
+survive" was 8/9 as landed (one row's claim sat in "needed *to be*
+checked", correctly refused as policy), and 6/9 after the round-1 fixes —
+the two further drops are a negated claim and an absence claim, both of
+which SHOULD stop minting. `scripts/mint_grounding_census.py --recheck`
+is the per-row instrument for that audit; totals cannot see it.
+
+The doctrine is not new
 — the module always documented imperative advice as never-stamped; the
 gate is the implementation catching up, and it answers the slice-2a
 review's deferred Architect question (claim-shape hit rate on generalized
@@ -145,16 +164,24 @@ events that already happened). Shared vocabulary, different verbs.
    `skill_lifecycle` synthesis + A/B challengers, `evolver_store`
    apply) are **stampless by construction**, the same finding as the
    slice-2a `prompt_tweak` ruling and for the same reason: what they
-   write is advice, not a report. What survives the census is narrower
-   and real: the **skills-lite promotion lane** (`run_curation:948`)
-   copies a *run's own prose* into durable injected advice, and the
-   live corpus holds the specimen — `repl_reading.md` carries
-   "**Measured correction (A/B run e0bbc289, 2026-08-02)**" plus a
-   token-count measurement, an empirical claim that every future run
-   now inherits. That lane keeps the slice; the gate does not yet see
-   its claim shape (a bare measurement report with no auxiliary), so
-   the shape question is evidence for the lexicon-widening trigger in
-   §4, not a reason to widen regexes now.
+   write is advice, not a report.
+   **And the seventh site has no traffic either** (probed after the
+   first draft of this entry claimed otherwise): `run_curation:948`,
+   the skills-lite promotion lane, shipped 2026-07-09 and has fired
+   **twice in 787 recorded runs** — one promotion (`changelog_digest.md`,
+   whose only lexicon hits were fixture commit messages) and one
+   dangerous-pattern skip. The specimen this entry first cited for that
+   lane, `repl_reading.md` ("**Measured correction (A/B run e0bbc289,
+   2026-08-02)**" plus a token-count measurement), carries no
+   `promoted_from` — it was hand/evolver-authored and never passed a
+   mint site at all. It still proves the *class* is real: durable
+   injected advice can carry an empirical claim every later run
+   inherits. But the gate cannot see that shape either (a bare
+   measurement report has no auxiliary), so it is evidence for §4's
+   lexicon-widening trigger, not a lane to wire.
+   **Slice 2b is therefore deferred whole, not re-scoped.** Re-open it
+   when `scripts/mint_grounding_census.py` shows claim-bearing skill
+   prose — the census is the trigger, and it is one command.
 3. **Republish gate** — artifact-reuse and warm-arm lanes: copying a
    provenance claim forward requires `supported` or re-derivation.
    The ONLY fail-closed point.

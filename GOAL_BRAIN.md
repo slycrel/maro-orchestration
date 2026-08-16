@@ -3050,3 +3050,38 @@ Dated end-of-chunk/session entries, append-only at the tail. Rotation policy (20
   tested across 1,980 sessions") that ground `unsupported` against a
   run that never made them. Also added: a precision falsifier as the
   twin of the >30%-unprobed one.
+
+- **2026-08-16 (dev Mac, cont.)** — **Gate review round 1 (4 lenses,
+  sonnet-medium) found two real HIGHs and falsified one of my own
+  probed claims; all fixed same session** (record:
+  `docs/history/2026-08-16-mint-grounding-gate-review.md`).
+  (1) **Polarity, expert QA:** "The fetch was not authenticated"
+  extracted an auth claim and ground `supported` off a real receipt —
+  a false AFFIRMATION, strictly worse than the false doubt the gate
+  exists to stop; the modal-perfect hedge ("could have fetched") did
+  the same. Fixed with a clause-local negation veto (so
+  "did not produce uniform confidence: 12/14 ideas confirmed…" still
+  mints) plus a `have` arm on the modal veto. (2) **Closed verb list
+  on an open class, Minimalist + Skeptic + Architect independently:**
+  `download` was the undiagnosed cause of the census's one skills.jsonl
+  survivor, and "Then record…"/"Retry … until the page was fetched"
+  walked past the veto. The primary net is now vocabulary-INDEPENDENT
+  (a retro marker inside a subordinate clause is not the sentence's own
+  report); the verb list is a backstop, and must-detect fixtures probe
+  verbs deliberately outside it (watch-list #7). (3) **Skeptic
+  falsified my "all nine already-stamped rows survive"** — 8/9 as
+  landed (one claim sits in "needed *to be* checked", correctly refused
+  as policy) and 6/9 after the fixes, the other two being a negated and
+  an absence claim that should stop minting. I had read a total instead
+  of diffing per row; `mint_grounding_census.py --recheck` is now the
+  instrument. Labeled not fixed: present/past homograph openers
+  (read/set/split) read as orders — pinned as a known gap with a
+  failing-target test. Corpus after: 76→0, 24→0, 103→21, 100→9. Suite
+  9010/0. **Slice 2b is deferred WHOLE, not narrowed** — probing my own
+  re-scope found the skills-lite lane has fired twice in 787 runs, and
+  `repl_reading.md` (the specimen I cited for it) carries no
+  `promoted_from`. Process lessons for the review skill: put "your
+  final message IS the deliverable" in the prompt template (two lenses
+  returned only a summary and had to be re-run), and don't start fixing
+  while a reviewer's clock is still running (the re-run read WIP code
+  before isolating the commit in a worktree).

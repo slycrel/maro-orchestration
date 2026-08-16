@@ -46,6 +46,12 @@ the design doc is the widen trigger, not silent regex growth):
     shape is real (it sits in the live skills-lite store) and is
     evidence for the design's lexicon-widening trigger, not a licence
     to widen the regexes now.
+  - present/past homograph openers (read, set, split, put, cut, hit) are
+    read as orders, so "Read the source and confirmed the total matched"
+    mints nothing. Structural English morphology, not corpus luck —
+    dropping is the narrowing direction, and removing those words from
+    the opener list would re-admit the far more common "Read the file and
+    confirm it was retrieved". Pinned as a known gap in the tests.
   - third-party claims read as self-claims: node prose crystallized
     from an external source ("The system was tested across 1,980
     sessions") grounds against the MINTING run's events and lands
@@ -120,11 +126,32 @@ _CLAIM_FAMILIES = (
 _RE_PREFIXED = re.compile(r"\bre-$")
 # Veto 2: a modal or infinitive governs the token — "must be checked",
 # "cannot be fetched", "can each be independently checked". Policy about
-# future work, not a report of past work.
+# future work, not a report of past work. The `have` arm covers the
+# modal-perfect counterfactual ("could have fetched", "should have been
+# verified"): review round 1 found those slipping through the veto and
+# then matching _RETRO_AUX's own `have ... been` arm, so a hedge about
+# what MIGHT have happened was grounding `supported` off a real event.
 _MODAL_GOVERNS = re.compile(
     r"\b(?:can|cannot|can't|could|should|shall|must|may|might|will|won't"
     r"|would|to)\s+(?:not\s+|never\s+|each\s+|then\s+|also\s+)?"
+    r"(?:(?:have|has|had|having)\s+)?(?:not\s+)?"
     r"(?:be|been|being|get|become)?\s*(?:\w+ly\s+)?$", re.I)
+
+# Veto 3: polarity. A retrospective marker says the sentence reports; it
+# does not say WHAT it reports. "The fetch was not authenticated" is a
+# report that the method did NOT happen, and grounding it stamped
+# `supported` with a real receipt — a record that actively lies, which is
+# strictly worse than the false doubt this gate exists to stop (review
+# round 1, expert-QA HIGH; the bug predates the gate). The window is
+# clause-local on purpose: "...did not produce uniform confidence: 12/14
+# ideas confirmed as STRONG matches" and "...was not treated as evidence
+# — a grep was run to corroborate it, and in this case confirmed the
+# finding" both carry a negation that belongs to a DIFFERENT clause, and
+# both are true claims we keep.
+_NEGATOR_BEFORE = re.compile(
+    r"\b(?:not|never|no|nothing|none|neither|nor|without|n't)\b"
+    r"(?:\s+[\w'\-/%.]+){0,4}\s*$", re.I)
+_CLAUSE_BREAK = re.compile(r"[,;:()\[\]{}]|—|--| - ")
 
 # Sentence-level requirement: an explicit past-tense finite marker. Either an
 # auxiliary ("was fetched", "had been confirmed", "did not correlate") or a
@@ -149,23 +176,40 @@ _HYPOTHETICAL = re.compile(
 # bodies are written almost entirely in these two moods (imperative steps
 # and third-person descriptions of what the skill does), which is why the
 # marker test alone left every surviving skill-store hit a false positive.
-# Generic instruction vocabulary, not corpus-fitted: -s forms are included
-# only for verbs that are not also nouns in this domain (no "runs", "tests",
-# "checks", "reports" — those head real claims).
+# Generic instruction vocabulary, not corpus-fitted. Review round 1
+# (Minimalist + Skeptic HIGH) proved the obvious hazard of a closed list on
+# an open class: `download` was missing, which is the whole reason the
+# skills.jsonl census still showed one survivor ("Download a source
+# document ... and confirm it was retrieved in full"). The list is widened
+# here, but the durable answer is the vocabulary-INDEPENDENT embedded-clause
+# rule below — that one catches "Download ... confirm it was retrieved",
+# "Log which values were tested" and "Record the date each price was
+# checked" without knowing a single verb. The list stays as the second net
+# for orders whose embedded clause reads like a main one.
 _IMPERATIVE_OPENERS = frozenset("""
-add append apply avoid break capture categorize check choose compare compile
-confirm copy create define describe detect determine document embed ensure
-enumerate extract fetch flag focus follow generate give halt handle identify
-include issue keep label list load locate log make manage mark move note open
-pick place plan prefer prepare produce prove pull push query quote rank read
-reconcile record recover reject remove repeat replace report require resolve
-restrict return reuse review rewrite run sample save scan score search select
-send set ship show skip sort specify split start state stop store structure
-summarize surface switch tag take test trace track treat try turn update use
-validate verify wait walk watch weigh write
+add append apply avoid break build capture categorize check choose click
+collect commit compare compile compute confirm connect convert copy count
+create define delete deploy describe detect determine document download draft
+embed enter ensure enumerate execute extract fetch filter flag focus follow
+gather generate give halt handle identify implement include install invoke
+issue keep label list load locate log make manage mark measure move navigate
+note open parse pick place plan prefer prepare produce prove pull push query
+quote rank read reconcile record recover reject remove render repeat replace
+report require resolve restrict return reuse review rewrite run sample save
+scan score search select send set ship show skip sort specify split start
+state stop store structure submit summarize surface switch tag take test
+trace track treat try turn type update upload use validate verify wait walk
+retry poll loop continue iterate resume
+watch weigh write
 applies creates describes ensures extracts generates handles performs
 produces provides recovers works
 """.split())
+# Sequencing adverbs front an order without changing its mood: "Then record
+# the date each price was checked" (Skeptic's evasion, round 1).
+_SEQUENCERS = frozenset(
+    "then next first second third fourth finally lastly also now afterwards "
+    "afterward optionally ideally instead additionally further furthermore "
+    "always never please".split())
 # Leading subordinator: "For each question, state ..." / "Before finalizing,
 # verify ..." — the order lives after the comma.
 _SUBORDINATOR = frozenset(
@@ -188,20 +232,81 @@ def _clause_comma(body: str) -> int:
     return masked.find(",")
 
 
+def _opens_imperatively(words: List[str]) -> bool:
+    """First word is an order, not a subject.
+
+    The domain's imperative verbs double as nouns — "Build 42 was verified",
+    "Commit abc123 was executed" are reports whose subject happens to be a
+    listed verb. An auxiliary in the next few tokens means the opener is a
+    SUBJECT, so the imperative reading is dropped (round-1 guard for the
+    widened list).
+    """
+    if not words or words[0].lower() not in _IMPERATIVE_OPENERS:
+        return False
+    return not any(w.lower() in ("was", "were", "is", "are", "had", "has",
+                                 "have")
+                   for w in words[1:4])
+
+
 def _is_instruction(sentence: str) -> bool:
     """True when the sentence's main clause orders or describes, not reports."""
     body = _LEADING_TAG.sub("", sentence)
     words = _WORD.findall(body[:120])
+    while words and words[0].lower() in _SEQUENCERS:
+        words = words[1:]
     if not words:
         return False
-    if words[0].lower() in _IMPERATIVE_OPENERS:
+    if _opens_imperatively(words):
         return True
     # Subordinate clause first: check the word right after its comma.
     if words[0].lower() in _SUBORDINATOR:
         i = _clause_comma(body)
         if i >= 0:
             after = _WORD.findall(body[i + 1:i + 61])
-            if after and after[0].lower() in _IMPERATIVE_OPENERS:
+            while after and after[0].lower() in _SEQUENCERS:
+                after = after[1:]
+            if _opens_imperatively(after):
+                return True
+    return False
+
+
+# A retro marker inside a subordinate clause reports nothing about the
+# sentence's own mood: "confirm it WAS RETRIEVED in full", "log which values
+# WERE TESTED", "record the date each price WAS CHECKED". The complementizer
+# that introduces the clause is a closed word class, so this net needs no
+# verb vocabulary at all — which is the point (round 1: the verb list was
+# the finding). Sentence-initial "It was fetched from the CDN" is a real
+# subject, so position matters.
+_COMPLEMENTIZERS = frozenset(
+    "that how whether which what why who whom it each every".split())
+# Subordinating conjunctions bind a whole clause, so they count anywhere
+# between the last clause break and the marker — not just two words back.
+# Round-1 Architect: "Retry the fetch until the page was fetched
+# successfully" is an order whose marker sits four words past `until`.
+# Coordinators (and/but/yet/so) are deliberately absent: they join main
+# clauses, and "the plan allocated 7 steps BUT the goal was verified
+# achieved" is a report we keep.
+_SUBORDINATING = frozenset(
+    "until while unless once since because although though whenever "
+    "wherever before after when if as".split())
+
+
+def _marker_is_embedded(sentence: str, start: int) -> bool:
+    before = sentence[:start]
+    words = _WORD.findall(before)
+    if len(words) < 2:  # sentence-initial subject, not a complementizer
+        return False
+    if any(w.lower() in _COMPLEMENTIZERS for w in words[-2:]):
+        return True
+    return any(w.lower() in _SUBORDINATING
+               for w in _WORD.findall(_clause_tail(before)))
+
+
+def _reports_in_main_clause(sentence: str) -> bool:
+    """True when at least one retro marker sits outside a subordinate clause."""
+    for pat in (_RETRO_AUX, _RETRO_FINITE):
+        for m in pat.finditer(sentence):
+            if not _marker_is_embedded(sentence, m.start()):
                 return True
     return False
 
@@ -210,7 +315,13 @@ def _is_retrospective(sentence: str) -> bool:
     """True when the sentence reports what happened (vs. advises what to do)."""
     if _HYPOTHETICAL.search(sentence) or _is_instruction(sentence):
         return False
-    return bool(_RETRO_AUX.search(sentence) or _RETRO_FINITE.search(sentence))
+    return _reports_in_main_clause(sentence)
+
+
+def _clause_tail(before: str) -> str:
+    """The part of ``before`` inside the token's own clause."""
+    breaks = [m.end() for m in _CLAUSE_BREAK.finditer(before)]
+    return before[breaks[-1]:] if breaks else before
 
 
 def _token_asserts(sentence: str, start: int, end: int) -> bool:
@@ -220,7 +331,9 @@ def _token_asserts(sentence: str, start: int, end: int) -> bool:
         return False
     if after.startswith("-"):
         return False
-    return not _MODAL_GOVERNS.search(before[-48:])
+    if _MODAL_GOVERNS.search(before[-48:]):
+        return False
+    return not _NEGATOR_BEFORE.search(_clause_tail(before))
 
 
 _NET_CMD = re.compile(r"\bcurl\b|\bwget\b|\bhttps?://", re.I)
