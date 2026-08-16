@@ -180,6 +180,103 @@ Ordered open work that matters. Top of the list is next.
   pin something real. **Do not delete survivors to make the run green** —
   the ledger is the deliverable.
 
+### Goals cannot carry attachments — a screenshot is not an input (Jeremy, 2026-08-16: "a little concerning that maro can't ingest attachments")
+
+- [ ] **Let a goal carry files — images first.** Found live: Jeremy's
+  goal was *"find this pictured study"* with a screenshot of the paper's
+  first page. `handle` takes `message` as text only, so the operator (me,
+  this time) had to hand-transcribe the title, authors, legible abstract
+  and a prose description of Figure 1 into the goal text. That works and
+  it is also the whole problem: **the transcription becomes an
+  unattributable claim inside the goal.** The run then had to spend
+  steps deciding how much to trust it, and got that right — it flagged
+  "cosine similarity" as transcription-only after finding the term in
+  none of its six retrievals, because the term came from my description
+  of the figure, not from the paper's abstract. A correct outcome
+  reached expensively, and only because the transcriber happened to
+  label the provenance.
+- [ ] **Where it has to reach.** The dispatch envelope already carries
+  an artifact channel (`store_attachments`, provenance sidecar,
+  `land_in_run_dir` — the Poe/Hermes return path), so the *transport*
+  mostly exists; what does not exist is (a) a CLI/entry seam for
+  attaching a local file to a goal, (b) any vision-capable path in the
+  adapter suite for reading one, and (c) a provenance stance — an
+  attachment is operator-supplied, so it rides the operator/ancestry
+  channel, never the extraction lane (the 2026-07-29 envelope decree
+  applies unchanged). The named residual in that arc — a CONTAINERIZED
+  worker can read neither attachment copy — becomes load-bearing here
+  rather than evidence-gated, since the box runs `container: on`.
+- [ ] **Decide the honest degrade.** If no vision path is available for
+  the chosen model, the options are refuse, or transcribe-and-label. The
+  run above shows transcribe-and-label works IF the label survives into
+  every downstream claim. Make that structural, not a habit of whoever
+  typed the goal.
+
+### Reference corpora are read from stale local clones, and the container cannot see them at all (FOUND 2026-08-16, live run)
+
+- [ ] **Two independent blockers, one symptom.** The same run was told
+  the skill under study "can be found in the link farm". It reported the
+  path did not exist and fell back to the URL — honest, and wrong twice
+  over: (1) `~/claude/link-farm` was **20 commits behind** its GitHub
+  remote on BOTH the Mac and the box (local `2026-07-31`, remote
+  `2026-08-14`), and the missing commits included
+  `283a6e5 "Add vetted ste skill (ASD-STE100) with security audit
+  record; link to Ruben Hassid post"` — i.e. the exact artifact, with a
+  vetting record, sitting unpulled; (2) even pulled, the path is outside
+  the container write scope, so the executor gets
+  `container mount: rw root /home/clawd/claude/link-farm is outside the
+  container write scope … refused`. Jeremy's model was right — the sync
+  commits and pushes md/html/sqlite every run — the consumers just never
+  pull. Both clones are current as of 2026-08-16.
+- [ ] **The fix is not "remember to pull".** A reference corpus a goal
+  can cite needs a freshness contract: either a pull-before-read at the
+  seam that resolves it, or a staleness stamp the run can SEE and
+  report ("link farm last synced 2026-07-31, 14 days old") instead of
+  silently reading old rows. Silent staleness is the same false-green
+  shape as a guard that cannot fail — the corpus answered, it just
+  answered as of two weeks ago.
+- [ ] **Decide whether the link farm belongs in
+  `validate.write_fence_allow`** (read-only would be better if the fence
+  can express it — nothing should write there). Until then any goal
+  citing a path outside the workspace subtree is structurally unable to
+  read it under `container: on`, and that is worth a loud message at
+  plan time rather than a mount refusal buried in step logs. Related:
+  the container verb-parity entry, same class of honest-absence problem.
+
+### Concurrent milestone-area agents — why is the path A→B→C and not all three at once? (Jeremy, 2026-08-16)
+
+- [ ] **Jeremy, verbatim:** *"why aren't we running concurrent agent
+  processes (i.e. multiple map location build-outs) to speed up the
+  general run? i.e… if we think we should go A → B → C, we can probably
+  work on things in all 3 milestone areas to reach out in different
+  directions towards our pathfinding, if we're thinking about this in
+  the treasure map sense."*
+- [ ] **This is a DIFFERENT axis from the parallelization already
+  filed**, and the distinction is the whole item. "Step-skeleton
+  parallelization" (2026-07-28, below) parallelizes step-shaped chunks
+  *within one run's* skeleton. This asks for **multiple agent processes
+  fanning out across milestone AREAS at once** — pathfinding in several
+  directions to learn which direction is real, where the parallelism is
+  the search strategy rather than a throughput trick. Reaching toward B
+  and C early is how you discover that B is a dead end before A's work
+  commits to it.
+- [ ] **What already exists to build on, so this is not from zero:**
+  in-process run isolation (`c8ec0af`, concurrency phase 1), isolated
+  worktree per sub-agent, the recursion decree (sub-goal spawning is
+  never foreclosed), §13b revisitable milestones with reopen
+  conditions, and the §13d side-quest DAG proposal. The missing pieces
+  are a scheduler that decides WHICH areas are worth a concurrent
+  probe, a merge story for findings that arrive out of order, and a
+  budget model — N concurrent explorers is N× spend, so the value has
+  to come from pruning, not from doing everything.
+- [ ] **The honest open question before any build:** the treasure-map
+  framing pays only if the areas are genuinely independent. Where B's
+  shape depends on what A learns, a concurrent B is speculative work
+  that may be discarded — which is fine as PATHFINDING (cheap probes,
+  expect to throw away) and expensive as BUILD-OUT. Decide which one
+  this is, per area, and the scheduler follows. Pairs with the
+  thread-architecture arc and with "Open-thread structure".
+
 ### Portability weighting v2 — selection-bias exploration (accepted v1 residual, 2026-08-15)
 
 - [ ] **Watch for winner-take-all entrenchment in portability-weighted
