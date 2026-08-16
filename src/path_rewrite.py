@@ -131,8 +131,18 @@ _SYSTEM_ROOTS = frozenset({
 # paths. Found by two independent review lenses, 2026-08-16. The left
 # side gets no `.`/`/` exemption: nothing legitimate precedes a root with
 # one, and under-rewriting is this module's safe direction.
+#
+# …with one exception that only real data could show. A path inside a
+# JSON string is very often preceded by an ESCAPE — `"…notes.md\n\n/home/
+# clawd/.maro/workspace/projects/…"` — and at the byte level the
+# character before the root is then the `n` of `\n`, which the plain
+# lookbehind reads as an identifier character and blocks. The first live
+# box→Mac import left 5,543 occurrences of the primary root unrewritten
+# for exactly this reason, almost all of them in captured step
+# transcripts. So an escape sequence counts as a boundary too.
 _BOUNDARY = rb"(?![A-Za-z0-9_-])"
-_LEFT_BOUNDARY = rb"(?<![A-Za-z0-9_./-])"
+_LEFT_BOUNDARY = (rb"(?:(?<![A-Za-z0-9_./-])"
+                  rb"|(?<=\\n)|(?<=\\t)|(?<=\\r)|(?<=\\f)|(?<=\\v))")
 
 # Suffix of the in-place rewrite's temp file. Named as a constant so the
 # skip screens can recognize a leftover from a killed process: it is

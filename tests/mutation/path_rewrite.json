@@ -214,7 +214,7 @@
  {
   "name": "no LEFT boundary \u2014 a root fires as a suffix of a longer path",
   "file": "src/path_rewrite.py",
-  "anchor": "_LEFT_BOUNDARY = rb\"(?<![A-Za-z0-9_./-])\"",
+  "anchor": "_LEFT_BOUNDARY = (rb\"(?:(?<![A-Za-z0-9_./-])\"\n                  rb\"|(?<=\\\\n)|(?<=\\\\t)|(?<=\\\\r)|(?<=\\\\f)|(?<=\\\\v))\")",
   "replacement": "_LEFT_BOUNDARY = rb\"\"",
   "tests": "tests/test_path_rewrite.py"
  },
@@ -280,5 +280,12 @@
   "anchor": "        if str(source_given) != str(source):\n            roots[\"workspace_root_given\"] = (str(source_given), str(target))",
   "replacement": "        if False:\n            pass",
   "tests": "tests/test_workspace_import.py"
+ },
+ {
+  "name": "the left boundary treats an escape sequence as an identifier char",
+  "file": "src/path_rewrite.py",
+  "anchor": "                  rb\"|(?<=\\\\n)|(?<=\\\\t)|(?<=\\\\r)|(?<=\\\\f)|(?<=\\\\v))\")",
+  "replacement": "                  rb\")\")",
+  "tests": "tests/test_path_rewrite.py"
  }
 ]

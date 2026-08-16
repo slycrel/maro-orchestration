@@ -153,6 +153,20 @@ could not find which file still cited the old machine (QA); a leftover
 `*.maro-rewrite.tmp` from a killed process was treated as ordinary text
 by a later pass (QA); `..` segments passed validation (Minimalist).
 
+**Then real data found what neither had.** The first live box→Mac import
+(2026-08-16, 24,553 files) rewrote 4,787 files / 54,010 occurrences — and
+left **5,543 occurrences of the primary root untouched**. Cause: the
+review's new left boundary. Inside a captured step transcript a path
+almost always follows an escape (`"…notes.md\n\n/home/clawd/.maro/
+workspace/projects/…"`), so the byte before the root is the `n` of `\n`,
+which the lookbehind read as an identifier character and blocked. Fixed
+by making an escape sequence count as a boundary. No synthetic fixture in
+either the 40-mutation sweep or six review lenses produced that shape;
+one run against the real corpus did, immediately. **A transform over a
+corpus is not verified until it has run over the corpus** — Jeremy's
+instinct to regenerate the box copy rather than keep a stale one is what
+surfaced it.
+
 **The reusable lesson, and it is about the instrument:** the sweep was
 green at 30/30 *before* this review. A file-derived mutation sweep bounds
 what the tests pin, not what the code does — every mutation in it was

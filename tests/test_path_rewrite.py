@@ -562,3 +562,34 @@ class TestFailureIsAttributable:
         rep = rewrite_tree(tmp_path, [p.name], _map(("/home/a/ws", "/srv/w")))
         assert rep.skipped == {"rewrite-leftover": 1}
         assert p.read_text() == "/home/a/ws/x\n"
+
+
+class TestEscapeSequencesAreLeftBoundaries:
+    """Found by the first LIVE box→Mac import, 2026-08-16 — not by the
+    review, and not by any synthetic fixture. Inside a JSON transcript a
+    path usually follows an escape, so the byte before the root is the
+    `n` of `\\n`, which the plain lookbehind read as an identifier
+    character. 5,543 occurrences of the primary root survived the first
+    import because of it."""
+
+    @pytest.mark.parametrize("prefix", [rb"\n", rb"\t", rb"\r", rb"\n\n"])
+    def test_a_root_after_an_escape_still_rewrites(self, prefix):
+        m = _map(("/home/a/ws", "/srv/w"))
+        out, n = m.substitute(b"notes.md" + prefix + b"/home/a/ws/projects/x")
+        assert n == 1, prefix
+        assert out.endswith(b"/srv/w/projects/x")
+
+    def test_the_real_shape_from_a_captured_transcript(self):
+        m = _map(("/home/clawd/.maro/workspace", "/Users/j/box-copy/workspace"))
+        raw = (rb'{"output": "the-unix-command/artifacts/tr-examples.md\n\n'
+               rb'/home/clawd/.maro/workspace/projects/summarize-x"}')
+        out, n = m.substitute(raw)
+        assert n == 1
+        assert b"/Users/j/box-copy/workspace/projects/summarize-x" in out
+
+    def test_a_letter_that_is_not_an_escape_still_blocks(self):
+        # The exception is the escape, not the letter: `n` on its own must
+        # still block, or the suffix-of-a-longer-path bug comes right back.
+        m = _map(("/home/a/ws", "/srv/w"))
+        assert m.substitute(b"green/home/a/ws/x")[1] == 0
+        assert m.substitute(b"/mnt/backup/home/a/ws/old")[1] == 0
