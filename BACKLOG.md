@@ -228,20 +228,43 @@ Ordered open work that matters. Top of the list is next.
   container write scope … refused`. Jeremy's model was right — the sync
   commits and pushes md/html/sqlite every run — the consumers just never
   pull. Both clones are current as of 2026-08-16.
-- [ ] **The fix is not "remember to pull".** A reference corpus a goal
-  can cite needs a freshness contract: either a pull-before-read at the
-  seam that resolves it, or a staleness stamp the run can SEE and
-  report ("link farm last synced 2026-07-31, 14 days old") instead of
-  silently reading old rows. Silent staleness is the same false-green
-  shape as a guard that cannot fail — the corpus answered, it just
-  answered as of two weeks ago.
-- [ ] **Decide whether the link farm belongs in
-  `validate.write_fence_allow`** (read-only would be better if the fence
-  can express it — nothing should write there). Until then any goal
-  citing a path outside the workspace subtree is structurally unable to
-  read it under `container: on`, and that is worth a loud message at
-  plan time rather than a mount refusal buried in step logs. Related:
-  the container verb-parity entry, same class of honest-absence problem.
+- [ ] **FETCH, don't pull — Jeremy's call 2026-08-16**: *"I'm tempted to
+  say always fetch to determine staleness/availability when working with
+  an external origin repo… that would make all the content available
+  even if the current branch isn't fully up to date."* This is stronger
+  than pull-before-read for three reasons worth keeping: (a) `git fetch`
+  **mutates no working tree**, so it is safe under concurrent sessions —
+  the shared-tree rule in CLAUDE.md forbids exactly the tree-mutating ops
+  a pull performs; (b) it yields the staleness FACT (`HEAD..origin/main`
+  count and dates) which is what a run should report rather than
+  silently reading old rows; and (c) it makes **all remote content
+  readable without merging** — `git show origin/main:skills/ste/SKILL.md`
+  would have answered this run's question on a branch 20 commits behind.
+  Silent staleness is the same false-green shape as a guard that cannot
+  fail: the corpus answered, it just answered as of two weeks ago.
+- [x] **Container reachability — CLOSED 2026-08-16 by config, no code.**
+  `executor.container_extra_mounts` already existed for exactly this
+  (read-only reference mounts; `DEFAULTS.md`: "add from evidence, same
+  posture as `validate.write_fence_allow`") and already carried the maro
+  repo — Jeremy's instinct that we should treat local artifacts the way
+  we treat maro's own source was describing a mechanism that was
+  already there. `/home/clawd/claude/link-farm` added to the box's
+  workspace config (backup: `config.yml.bak-20260816`). Read-only is the
+  correct grant: nothing should ever write to a cited corpus.
+- [ ] **The two decisions interact, and the interaction is a
+  constraint:** a read-only mount means the CONTAINER cannot fetch —
+  a fetch writes to `.git`. So "always fetch" has to be a **host-side
+  pre-flight**, before the container starts, not something the worker
+  does mid-step. That is also the better place for it: one fetch per
+  run, its result reportable at plan time, rather than N workers racing
+  the same remote. Build it as a pre-flight step that fetches every
+  configured reference mount and stamps freshness into the run's
+  context.
+- [ ] **Plan-time honesty, still open.** A goal citing a path outside
+  the workspace subtree that is NOT in the mount config remains
+  structurally unreadable, and today that surfaces as a mount refusal
+  buried in step logs. It should be a loud message at plan time —
+  same class as the container verb-parity honest-absence work.
 
 ### Concurrent milestone-area agents — why is the path A→B→C and not all three at once? (Jeremy, 2026-08-16)
 
