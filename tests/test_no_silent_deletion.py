@@ -48,6 +48,9 @@ ALLOWED_DELETION_SITES = {
         "(finalize's delete-on-done removed 2026-07-10, retention decree)",
     ("file_lock.py", "atomic_write"):
         "ephemeral: temp-file swap inside the atomic-write primitive",
+    ("path_rewrite.py", "rewrite_file"):
+        "ephemeral: removes only its own .maro-rewrite.tmp when the "
+        "atomic swap fails; the file being rewritten is never unlinked",
     ("gc_memory.py", "_gc_narrative_logs"):
         "user-invoked: maro-memory gc CLI, dry-run by default",
     ("interrupt.py", "clear_loop_running"):

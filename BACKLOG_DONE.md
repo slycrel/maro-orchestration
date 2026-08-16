@@ -10,6 +10,74 @@ Rotation policy (2026-08-16): when this file outgrows whole-file readability (25
 
 ---
 
+## Path-token rewriting — SHIPPED 2026-08-16 (shape (b), both transfer lanes)
+
+Filed 2026-08-13 as a low-priority residual of the workspace
+export/import arc; built 2026-08-16 when Jeremy called the deferral
+itself: *"let's hit that path cleanup; the intent was to do it later,
+not kick it down the road perpetually."*
+
+**The problem, measured.** A workspace embeds the absolute paths of the
+machine that produced it. In the 2026-08-13 box copy: 5,841 text files,
+~62k occurrences — 44,941 naming `/home/clawd/.maro/workspace`, 9,242 the
+checkout, the rest older installs and loose `$HOME` paths. Both transfer
+lanes carried those bytes perfectly and handed over data that only made
+sense on the box.
+
+**The three shapes, and why (b).** (a) export-time rewrite of text files
+— fast import, but the archive stops matching the source and
+reconciliation against the box gets harder. (b) import-time rewrite,
+text only, recorded in custody — archive stays a faithful copy, leans on
+`source.workspace_root`/`maro_user_dir`, which provenance had recorded
+for exactly this. (c) no byte munging at all, a runtime path-alias layer
+where consumers translate — zero corruption risk but touches every
+consumer. Built (b); (c) stays the durable end-state if cross-machine
+sharing becomes routine.
+
+**The traps, pre-documented 2026-08-13 and all honored in the build:**
+- Content-addressed stores must NEVER be rewritten — archived project
+  repos carry `.git/objects/**`, where the name IS the content hash.
+  Skipped by path component, at any depth.
+- Binaries and sqlite hold paths INSIDE database pages; regexing one
+  corrupts it. Screened by suffix AND a NUL sniff over the first 8 KiB,
+  which also catches an unknown-extension database.
+- The manifest digest: rewriting at import means the digest no longer
+  describes the on-disk result. Resolved by construction — the shape
+  digest is computed from archive member sizes, so an honest archive
+  still verifies OK after a rewrite (pinned by a test), and the custody
+  event carries `transformed` so a later reader knows disk deliberately
+  differs from the archive.
+
+**Two additions the build made on top of the filed design:** bare `$HOME`
+is deliberately NOT a root (only roots the source recorded about itself
+are mapped — a stale absolute path is inert, a confidently-wrong one
+resolves somewhere real), and a recorded root is treated as hostile input
+(it arrives in someone else's archive) — validated absolute, ≥2
+components, not a system directory, so a provenance claiming
+`workspace_root: "/"` is dropped with a reason rather than rewriting the
+world. Export also began recording `repo_root`, the second-largest
+population.
+
+**Both lanes, not one** (the sibling-lane lesson, applied up front):
+`maro-export import` rewrites only the files that import extracted, so a
+merge import never touches what was already there, and writes the full
+per-file list to `path-rewrite.json` beside the staged meta; `inspect`
+previews the mapping before you commit to it. `maro-import --source`
+rewrites copied runs, quarantined curated files and daily logs, and
+rewrites ledger rows BEFORE the exact-line dedup — after would compare
+raw source rows against already-rewritten target rows and append a
+near-duplicate on every re-run.
+
+**Verification.** 9,131-test suite green; 30-mutation file-derived sweep
+(`tests/mutation/path_rewrite.json`), all accounted for, 1 recorded
+equivalent. The sweep earned its keep immediately: the test pinning
+"normalization runs before the denylist" could not fail, because `/usr/`
+is refused by the shallowness rule either way — a refusal-only assertion
+could not tell a working denylist from a bypassed one. Same class as the
+§14a scope finding that opened the mutation-coverage item.
+
+---
+
 ## BACKLOG.md split — DONE 2026-08-16 (393KB → 237KB; archive rotated too)
 
 The overdue split, executed as two moves. (1) BACKLOG_DONE.md itself had

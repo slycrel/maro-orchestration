@@ -3216,3 +3216,20 @@ Dated end-of-chunk/session entries, append-only at the tail. Rotation policy (20
   rows survive", actually 8/9) was exactly an instrument error.
   `docs/HOUSE_STYLE.md` review-mechanics row now names the canonical
   path and the two mirrors.
+- **2026-08-16 (Jeremy, on being offered the backlog's next item: "let's
+  hit that path cleanup; the intent was to do it later, not kick it down
+  the road perpetually"):** the workspace export/import arc's filed
+  path-token residual is BUILT, as shape (b) — import-time rewrite of the
+  source install's roots (workspace, `~/.maro`, repo) inside extracted
+  text files, recorded in custody, archive left byte-faithful. The decree
+  behind it is about deferral itself and outlives this item: **"low
+  priority, filed with the traps written down" is a promise to build it
+  later, not a place to park it.** An item filed with a stated worry
+  ("I'm a little concerned that's setting us up for troublesome bugs in
+  the future if we don't go there," 2026-08-13) is a scheduled build, and
+  offering it as a still-open option two sessions later is the failure
+  mode. Shipped in `src/path_rewrite.py`, wired into BOTH transfer lanes
+  (`maro-export import` and `maro-import --source`) rather than the one
+  the entry named — 30-mutation file-derived sweep, all accounted for.
+  Full record: BACKLOG_DONE.md §"Path-token rewriting — SHIPPED
+  2026-08-16".

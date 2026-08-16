@@ -219,6 +219,7 @@ py-modules = [
     "outcome_policy",
     "pack",
     "packaging_readout",
+    "path_rewrite",
     "persona",
     "persona_dispatch",
     "planner",

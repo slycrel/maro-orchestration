@@ -199,3 +199,107 @@ def test_non_workspace_rejected(tmp_path):
     empty.mkdir()
     with pytest.raises(SystemExit):
         run_import(src, empty, "x")
+
+
+# --- path rewriting (2026-08-16) -------------------------------------------
+# The merge lane's half of the embedded-path fix: data copied from another
+# install must cite files that exist HERE. Shared transform, shared
+# refusals — see tests/test_path_rewrite.py for the transform's own tests.
+
+def test_copied_run_files_are_rewritten_to_this_workspace(tmp_path):
+    src = _mk_workspace(tmp_path / "src", runs=["aaaa1111-run"])
+    dst = _mk_workspace(tmp_path / "dst")
+    art = src / "runs" / "aaaa1111-run" / "artifact.md"
+    art.write_text(f"produced at {src}/runs/aaaa1111-run/artifact.md\n")
+
+    report = run_import(src, dst, "trial-x")
+
+    copied = dst / "runs" / "aaaa1111-run" / "artifact.md"
+    assert copied.read_text() == (
+        f"produced at {dst}/runs/aaaa1111-run/artifact.md\n")
+    assert report["path_rewrite"]["replacements"] == 1
+
+
+def test_import_marker_keeps_the_source_path_verbatim(tmp_path):
+    # The marker records where the data CAME from — rewriting it would
+    # erase the provenance the marker exists to carry.
+    src = _mk_workspace(tmp_path / "src", runs=["aaaa1111-run"])
+    dst = _mk_workspace(tmp_path / "dst")
+
+    run_import(src, dst, "trial-x")
+
+    marker = json.loads(
+        (dst / "runs" / "aaaa1111-run" / "imported_from.json").read_text())
+    assert marker["source_path"] == str(src / "runs" / "aaaa1111-run")
+
+
+def test_ledger_rows_rewritten_before_dedup_so_reimport_is_a_noop(tmp_path):
+    # Rewriting AFTER the dedup would compare raw source rows against
+    # already-rewritten target rows, appending a near-duplicate every run.
+    src = _mk_workspace(tmp_path / "src",
+                        ledger_rows={"lessons.jsonl": [{"p": "SRC/x"}]})
+    dst = _mk_workspace(tmp_path / "dst")
+    (src / "memory" / "lessons.jsonl").write_text(
+        json.dumps({"p": f"{src}/x"}) + "\n")
+
+    first = run_import(src, dst, "trial-x")
+    second = run_import(src, dst, "trial-x")
+
+    rows = (dst / "memory" / "lessons.jsonl").read_text().splitlines()
+    assert rows == [json.dumps({"p": f"{dst}/x"})]
+    assert first["ledgers"]["lessons.jsonl"]["appended"] == 1
+    assert second["ledgers"]["lessons.jsonl"]["appended"] == 0
+
+
+def test_daily_logs_and_quarantine_are_rewritten(tmp_path):
+    src = _mk_workspace(tmp_path / "src", curated=True,
+                        daily={"2026-07-09.md": "see SRC/notes\n"})
+    (src / "memory" / "2026-07-09.md").write_text(f"see {src}/notes\n")
+    (src / "playbook.md").write_text(f"# playbook at {src}\n")
+    dst = _mk_workspace(tmp_path / "dst")
+
+    run_import(src, dst, "trial-x", include_curated=True)
+
+    assert f"see {dst}/notes" in (dst / "memory" / "2026-07-09.md").read_text()
+    assert (dst / "imports" / "trial-x" / "playbook.md").read_text() == (
+        f"# playbook at {dst}\n")
+
+
+def test_no_rewrite_paths_leaves_the_source_paths_intact(tmp_path):
+    src = _mk_workspace(tmp_path / "src", runs=["aaaa1111-run"])
+    (src / "runs" / "aaaa1111-run" / "artifact.md").write_text(f"{src}/x\n")
+    dst = _mk_workspace(tmp_path / "dst")
+
+    report = run_import(src, dst, "trial-x", rewrite_paths=False)
+
+    assert (dst / "runs" / "aaaa1111-run" / "artifact.md").read_text() == \
+        f"{src}/x\n"
+    assert report["path_rewrite"]["units_rewritten"] == 0
+    assert report["path_rewrite"]["mapping"] == []
+
+
+def test_audit_row_records_what_the_rewrite_touched(tmp_path):
+    src = _mk_workspace(tmp_path / "src", runs=["aaaa1111-run"])
+    (src / "runs" / "aaaa1111-run" / "artifact.md").write_text(
+        f"{src}/a and {src}/b\n")
+    dst = _mk_workspace(tmp_path / "dst")
+
+    run_import(src, dst, "trial-x")
+
+    audit = json.loads(
+        (dst / "memory" / "imports.jsonl").read_text().splitlines()[-1])
+    assert audit["path_rewrite"]["mapping"] == [
+        {"from": str(src), "to": str(dst)}]
+    assert audit["path_rewrite"]["replacements"] == 2
+
+
+def test_databases_in_a_copied_run_are_never_rewritten(tmp_path):
+    src = _mk_workspace(tmp_path / "src", runs=["aaaa1111-run"])
+    db = src / "runs" / "aaaa1111-run" / "state.db"
+    db.write_bytes(b"SQLite format 3\x00" + str(src).encode() + b"/page")
+    dst = _mk_workspace(tmp_path / "dst")
+
+    run_import(src, dst, "trial-x")
+
+    assert (dst / "runs" / "aaaa1111-run" / "state.db").read_bytes() == \
+        b"SQLite format 3\x00" + str(src).encode() + b"/page"

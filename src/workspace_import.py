@@ -23,7 +23,17 @@ Merge semantics — deliberately a whitelist, not "copy everything":
 * machine state       (config.yml, jobs.json, task store, heartbeat, secrets,
                       locks, correspondence.db) is never touched.
 
-Every import appends an audit row to ``memory/imports.jsonl`` in the target.
+Everything copied in is path-rewritten: the source workspace's absolute
+root becomes this one's, so an imported lesson cites a file that exists
+here (``src/path_rewrite.py`` — same transform the archive lane applies,
+same refusals for git objects, databases and binaries). Ledger rows are
+rewritten BEFORE the exact-line dedup, which is what keeps re-running an
+import a no-op. ``--no-rewrite-paths`` keeps the source's paths. Only the
+source workspace root is mapped here: unlike an archive, a live source
+directory carries no record of the install's other roots.
+
+Every import appends an audit row to ``memory/imports.jsonl`` in the target,
+including what the rewrite touched.
 """
 
 from __future__ import annotations
@@ -36,6 +46,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List
 
+import path_rewrite
 from file_lock import locked_append, locked_write
 
 # Ledger rows are deduped by exact line content. Files matching these names
@@ -48,6 +59,66 @@ _DAILY_MD_PREFIX = "20"  # memory/2026-07-09.md style daily logs
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+class _Rewrites:
+    """Applies the source→target root rewrite and tallies what it did.
+
+    One accumulator across all four merge paths so the audit row reports
+    a single honest total instead of four partial ones. A disabled
+    rewrite is the same object with an empty map — every call site stays
+    on one code path rather than growing an `if rewrite:` branch that
+    only one lane would be tested through.
+    """
+
+    def __init__(self, mapping):
+        self.map = mapping
+        self.units = 0            # files + ledger rows rewritten
+        self.replacements = 0
+        self.skipped: Dict[str, int] = {}
+
+    def text(self, content: str) -> str:
+        new, n = self.map.substitute_text(content)
+        if n:
+            self.units += 1
+            self.replacements += n
+        return new
+
+    def _absorb(self, rep) -> None:
+        self.units += rep.files_rewritten
+        self.replacements += rep.replacements
+        for reason, count in rep.skipped.items():
+            self.skipped[reason] = self.skipped.get(reason, 0) + count
+
+    def tree(self, root: Path) -> None:
+        """Rewrite a directory this import just created, in place."""
+        if not self.map:
+            return
+        rels = [str(p.relative_to(root))
+                for p in sorted(root.rglob("*")) if p.is_file()]
+        self._absorb(path_rewrite.rewrite_tree(root, rels, self.map))
+
+    def file(self, path: Path) -> None:
+        """Rewrite a single copied file — never its siblings.
+
+        Curated files land one at a time into a shared quarantine dir, so
+        walking the parent would re-visit (and re-count) everything an
+        earlier iteration already placed.
+        """
+        if not self.map:
+            return
+        self._absorb(path_rewrite.rewrite_tree(path.parent, [path.name],
+                                               self.map))
+
+    def as_report(self) -> Dict:
+        return {
+            "mapping": self.map.describe(),
+            "rejected_roots": [{"role": r, "value": v, "reason": why}
+                               for r, v, why in self.map.rejected],
+            "units_rewritten": self.units,
+            "replacements": self.replacements,
+            "not_rewritten": dict(sorted(self.skipped.items())),
+        }
 
 
 def _is_workspace(path: Path) -> bool:
@@ -63,7 +134,8 @@ def _iter_run_dirs(runs_dir: Path) -> List[Path]:
     )
 
 
-def import_runs(source: Path, target: Path, label: str, dry_run: bool) -> Dict:
+def import_runs(source: Path, target: Path, label: str, dry_run: bool,
+                rewrites: "_Rewrites" = None) -> Dict:
     copied, skipped = [], []
     target_runs = target / "runs"
     for run_dir in _iter_run_dirs(source / "runs"):
@@ -76,6 +148,11 @@ def import_runs(source: Path, target: Path, label: str, dry_run: bool) -> Dict:
                 run_dir, dest,
                 ignore=shutil.ignore_patterns("*.lock"),
             )
+            # Rewrite the copy before the marker is written: the marker
+            # records the SOURCE path deliberately (that is provenance,
+            # not a path to follow) and must survive verbatim.
+            if rewrites is not None:
+                rewrites.tree(dest)
             marker = {
                 "imported_from": label,
                 "source_path": str(run_dir),
@@ -92,7 +169,8 @@ def import_runs(source: Path, target: Path, label: str, dry_run: bool) -> Dict:
     return {"copied": copied, "skipped_existing": skipped}
 
 
-def import_ledgers(source: Path, target: Path, dry_run: bool) -> Dict:
+def import_ledgers(source: Path, target: Path, dry_run: bool,
+                   rewrites: "_Rewrites" = None) -> Dict:
     results = {}
     src_mem = source / "memory"
     if not src_mem.is_dir():
@@ -107,6 +185,12 @@ def import_ledgers(source: Path, target: Path, dry_run: bool) -> Dict:
         ]
         if not src_lines:
             continue
+        # Rewrite BEFORE the dedup below, never after. A row that was
+        # rewritten on a previous import is already in the target in its
+        # rewritten form; comparing raw source rows against it would find
+        # no match and append a second, near-identical copy every run.
+        if rewrites is not None:
+            src_lines = [rewrites.text(ln) for ln in src_lines]
         existing = set()
         if dest.exists():
             existing = {
@@ -126,7 +210,8 @@ def import_ledgers(source: Path, target: Path, dry_run: bool) -> Dict:
     return results
 
 
-def import_daily_logs(source: Path, target: Path, label: str, dry_run: bool) -> Dict:
+def import_daily_logs(source: Path, target: Path, label: str, dry_run: bool,
+                      rewrites: "_Rewrites" = None) -> Dict:
     copied, appended, skipped = [], [], []
     src_mem = source / "memory"
     if not src_mem.is_dir():
@@ -136,6 +221,8 @@ def import_daily_logs(source: Path, target: Path, label: str, dry_run: bool) -> 
         content = src_file.read_text()
         if not content.strip():
             continue
+        if rewrites is not None:
+            content = rewrites.text(content)
         marker = f"<!-- imported from {label} -->"
         if not dest.exists():
             if not dry_run:
@@ -153,7 +240,8 @@ def import_daily_logs(source: Path, target: Path, label: str, dry_run: bool) -> 
     return {"copied": copied, "appended": appended, "already_imported": skipped}
 
 
-def quarantine_curated(source: Path, target: Path, label: str, dry_run: bool) -> List[str]:
+def quarantine_curated(source: Path, target: Path, label: str, dry_run: bool,
+                       rewrites: "_Rewrites" = None) -> List[str]:
     saved = []
     quarantine = target / "imports" / label
     for name in _CURATED:
@@ -167,8 +255,12 @@ def quarantine_curated(source: Path, target: Path, label: str, dry_run: bool) ->
             quarantine.mkdir(parents=True, exist_ok=True)
             if src.is_dir():
                 shutil.copytree(src, dest, ignore=shutil.ignore_patterns("*.lock"))
+                if rewrites is not None:
+                    rewrites.tree(dest)
             else:
                 shutil.copy2(src, dest)
+                if rewrites is not None:
+                    rewrites.file(dest)
         saved.append(name)
     return saved
 
@@ -179,6 +271,7 @@ def run_import(
     label: str,
     dry_run: bool = False,
     include_curated: bool = False,
+    rewrite_paths: bool = True,
 ) -> Dict:
     source = source.resolve()
     target = target.resolve()
@@ -189,19 +282,26 @@ def run_import(
     if not _is_workspace(target):
         raise SystemExit(f"not a maro workspace (no memory/ or runs/): {target}")
 
+    rewrites = _Rewrites(
+        path_rewrite.build_map({"workspace_root": str(source)},
+                               {"workspace_root": str(target)})
+        if rewrite_paths else path_rewrite.RewriteMap())
+
     report = {
         "label": label,
         "source": str(source),
         "imported_at": _now_iso(),
         "dry_run": dry_run,
-        "runs": import_runs(source, target, label, dry_run),
-        "ledgers": import_ledgers(source, target, dry_run),
-        "daily_logs": import_daily_logs(source, target, label, dry_run),
+        "runs": import_runs(source, target, label, dry_run, rewrites),
+        "ledgers": import_ledgers(source, target, dry_run, rewrites),
+        "daily_logs": import_daily_logs(source, target, label, dry_run,
+                                        rewrites),
     }
     if include_curated:
         report["curated_quarantined"] = quarantine_curated(
-            source, target, label, dry_run
+            source, target, label, dry_run, rewrites
         )
+    report["path_rewrite"] = rewrites.as_report()
     if not dry_run:
         audit = target / "memory" / "imports.jsonl"
         audit.parent.mkdir(parents=True, exist_ok=True)
@@ -222,6 +322,11 @@ def main(argv=None) -> int:
                     help="provenance label, e.g. hermes-docker-trial-2026-07-09")
     ap.add_argument("--dry-run", action="store_true",
                     help="report what would be imported without writing")
+    ap.add_argument("--no-rewrite-paths", dest="rewrite_paths",
+                    action="store_false",
+                    help="keep the source workspace's absolute paths inside "
+                         "imported data (default: rewrite them to this "
+                         "workspace's root)")
     ap.add_argument("--include-curated", action="store_true",
                     help="also quarantine curated files (MEMORY.md, playbook, skills, personas) under imports/<label>/ for review")
     args = ap.parse_args(argv)
@@ -234,6 +339,7 @@ def main(argv=None) -> int:
     report = run_import(
         args.source, target, args.label,
         dry_run=args.dry_run, include_curated=args.include_curated,
+        rewrite_paths=args.rewrite_paths,
     )
     json.dump(report, sys.stdout, indent=2)
     print()

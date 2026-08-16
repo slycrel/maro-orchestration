@@ -392,36 +392,33 @@ decision) archived: BACKLOG_DONE.md §"Moved from BACKLOG 2026-08-16"
 — location gaps CLOSED as of format v2; residual gaps are semantics,
 not fidelity.
 
-**Path-token rewriting (`/home/clawd` → `${MARO_HOME}` at export,
-reverse at import) — FILED 2026-08-13, low priority by Jeremy's call,
-with his worry on record: "I'm a little concerned that's setting us up
-for troublesome bugs in the future if we don't go there." 5,401 files
-embed source-machine paths. DO NOT build this as a naive regex over
-the archive — the traps, pre-documented so future-us doesn't learn
-them live:**
-- **Content-addressed stores must NEVER be rewritten**: archived
-  project repos carry `.git/objects/**` — rewriting bytes there
-  corrupts the repo (and any hash recorded over file content breaks
-  the same way).
-- **Binaries and sqlite**: correspondence.db and friends contain paths
-  INSIDE database pages; regexing a db file corrupts it. Path fixes in
-  sqlite need SQL-level updates per known column, or exclusion.
-- **The provenance manifest digest** describes the bytes in the
-  archive — rewrite at export means digesting rewritten bytes (fine,
-  but decide explicitly); rewrite at import means the digest no longer
-  matches the on-disk result (also fine, but the custody event must
-  say transformed=true).
-- **Three candidate shapes**, roughly in order of ascending safety:
-  (a) export-time rewrite of text files only (fast import, but the
-  archive no longer matches the source — reconciliation vs the box
-  gets harder); (b) import-time rewrite, text files only, recorded in
-  custody (archive stays a faithful copy — leans on provenance's
-  `source.workspace_root`/`maro_user_dir`, which were recorded for
-  exactly this); (c) no byte munging at all — a runtime path-alias
-  layer where consumers translate via provenance source roots (zero
-  corruption risk, but touches every consumer). Lean (b) when this
-  gets built; (c) is the durable end-state if cross-machine sharing
-  becomes routine.
+**Path-token rewriting — SHIPPED 2026-08-16 as shape (b)**, on
+Jeremy's call to stop deferring it ("the intent was to do it later, not
+kick it down the road perpetually"; filed 2026-08-13 with his worry on
+record: *"I'm a little concerned that's setting us up for troublesome
+bugs in the future if we don't go there"*). `src/path_rewrite.py` is the
+shared transform, wired into BOTH transfer lanes; record with the
+trap list and the shape comparison archived: BACKLOG_DONE.md §"Moved
+from BACKLOG 2026-08-16". Residuals, none blocking:
+- **Only recorded install roots are mapped** — workspace, `~/.maro`,
+  repo. In the box copy that is ~73% of embedded occurrences plus the
+  9,242 naming the checkout; the ~2k under `.poe/`, `.openclaw/`, a
+  stale worktree and loose `$HOME` paths stay as they are, deliberately
+  (a stale path is inert, a confidently-wrong one resolves somewhere
+  real). If those ever matter, the answer is more RECORDED roots at
+  export, not a broader regex.
+- **Shape (c) — a runtime path-alias layer — is still the durable
+  end-state** if cross-machine sharing becomes routine; (b) buys the
+  working copy without touching every consumer.
+- **A digest recorded INSIDE the workspace over a rewritten file goes
+  stale.** Nothing verifies such a digest today, and the archive's own
+  shape digest reads archive member sizes, so import verification is
+  unaffected. `path-rewrite.json` names every file touched, which is
+  what makes any future staleness auditable.
+- **Existing archives predate `source.repo_root`** (added at export
+  2026-08-16). Importing `~/maro-box-export-v3.tar.gz` maps the
+  workspace and `~/.maro` but not the checkout. Re-export from the box
+  to get the third root.
 
 
 ### Session-fork lane for claude -p (Jeremy idea 2026-08-08) — **SHIPPED same day, opt-in; daemon variant = residual edge**

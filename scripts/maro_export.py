@@ -51,11 +51,19 @@ verifies the workspace-shape digest, and previews what import WOULD skip
 nothing extracted. Use it to decide whether to trust an archive from
 someone else before importing.
 
-Still not carried (inherent): machine semantics embedded IN data —
-absolute paths inside artifacts/checkpoints, CLI session ids — and file
-ownership maps to the importing user. provenance records the source
-workspace root so a future consumer can rewrite embedded paths (BACKLOG
-path-token item).
+Import rewrites the source machine's install roots (workspace, ~/.maro,
+repo) to this machine's inside the EXTRACTED text files, records every
+one in `path-rewrite.json` beside the staged meta, and stamps the custody
+event `transformed`. The archive itself is never touched, so it stays a
+byte-faithful copy of the source and `--no-rewrite-paths` reproduces the
+old behavior exactly. Content-addressed stores (`.git/**`), databases and
+binaries are never rewritten — see src/path_rewrite.py for the full trap
+list and why bare $HOME is deliberately not a root.
+
+Still not carried (inherent): machine semantics embedded IN data that
+name no recorded root — CLI session ids, absolute paths under a home
+directory Maro does not own — and file ownership maps to the importing
+user.
 """
 
 from __future__ import annotations
@@ -498,6 +506,7 @@ def _prior_custody(ws: Path) -> list:
 def export_workspace(output_path: Path = None, verbose: bool = False) -> Path:
     """Export workspace + user-tier metadata to a tar.gz archive."""
     from config import _maro_dir, _user_config_path, workspace_root
+    from orch_items import repo_root
     ws = workspace_root()
 
     if not ws.exists():
@@ -697,9 +706,15 @@ def export_workspace(output_path: Path = None, verbose: bool = False) -> Path:
             "format": ARCHIVE_FORMAT,
             "created_at": _utcnow(),
             "exporter": _identity(),
+            # The roots an importer rewrites to its own (path_rewrite.ROLES).
+            # repo_root joined in 2026-08-16: 9,242 of the box copy's
+            # embedded paths named the checkout, second only to the
+            # workspace itself. Additive — a v2 archive without it still
+            # imports, that role is simply not mapped.
             "source": {
                 "workspace_root": str(ws),
                 "maro_user_dir": str(_maro_dir()),
+                "repo_root": str(repo_root()),
             },
             "tool": {"name": "maro-export", "format_version": ARCHIVE_FORMAT,
                      "script_sha256": script_sha},
@@ -1020,10 +1035,12 @@ def import_workspace(
     clean: bool = False,
     apply_meta: bool = False,
     expect_sha256: str = "",
+    rewrite_paths: bool = True,
 ) -> int:
     """Import a Maro export archive. See module docstring for the security
     posture. Returns the number of workspace files extracted."""
-    from config import _user_config_path, workspace_root
+    from config import _maro_dir, _user_config_path, workspace_root
+    from orch_items import repo_root
     ws = workspace_root()
 
     if not archive_path.exists():
@@ -1170,6 +1187,49 @@ def import_workspace(
             else:
                 other += 1
 
+        # --- path rewrite: make the copy true on THIS machine -----------
+        # Only the files this import just wrote (a merge import must not
+        # touch what was already here), and only after extraction, so the
+        # shape digest below still reads archive member sizes rather than
+        # rewritten bytes.
+        rw_report = None
+        if rewrite_paths and prov is not None:
+            import path_rewrite
+            rw_map = path_rewrite.build_map(
+                prov["source"],
+                {"workspace_root": str(ws),
+                 "maro_user_dir": str(_maro_dir()),
+                 "repo_root": str(repo_root())},
+            )
+            for role, value, why in rw_map.rejected:
+                print(f"  path rewrite: SKIPPING role {role} — {why} "
+                      f"({_sanitize_for_terminal(value)})", file=sys.stderr)
+            if rw_map:
+                rw_report = path_rewrite.rewrite_tree(
+                    ws, [rel for m, rel in safe_members if m.isreg()], rw_map)
+                for pair in rw_report.mapping:
+                    print(f"  path rewrite: {_sanitize_for_terminal(pair['from'])}"
+                          f" → {pair['to']}", file=sys.stderr)
+                print(f"  {rw_report.summary()}", file=sys.stderr)
+                if verbose:
+                    for row in rw_report.files[:200]:
+                        print(f"    rewrote {row['path']} "
+                              f"({row['replacements']})", file=sys.stderr)
+                    if len(rw_report.files) > 200:
+                        print(f"    … {len(rw_report.files) - 200} more "
+                              f"(full list in path-rewrite.json)",
+                              file=sys.stderr)
+            else:
+                print("  path rewrite: source and destination roots match "
+                      "— nothing to rewrite", file=sys.stderr)
+        elif rewrite_paths:
+            print("  path rewrite: archive carries no provenance, so the "
+                  "source's roots are unknown — embedded paths left as they "
+                  "are", file=sys.stderr)
+        else:
+            print("  path rewrite: disabled (--no-rewrite-paths) — embedded "
+                  "paths still name the source machine", file=sys.stderr)
+
         # --- meta staging (non-destructive, fresh per import) -----------
         staged_count = 0
         this_import_dir = None
@@ -1218,10 +1278,25 @@ def import_workspace(
                     print(f"  custody: … {len(prov['custody']) - _MAX_CUSTODY_PRINT}"
                           f" earlier event(s) not shown", file=sys.stderr)
                 # Append this import to the staged chain (never the source).
-                prov["custody"].append({
+                # `transformed` is load-bearing: once paths are rewritten the
+                # workspace on disk is no longer byte-identical to the
+                # archive, and a later reader comparing the two must know
+                # that was deliberate rather than corruption.
+                event = {
                     "event": "import", "at": _utcnow(), "by": _identity(),
                     "dest": str(ws), "shape_verified": shape_ok,
-                })
+                    "transformed": bool(rw_report
+                                        and rw_report.files_rewritten),
+                }
+                if rw_report is not None:
+                    event["path_rewrite"] = {
+                        "mapping": rw_report.mapping,
+                        "files_rewritten": rw_report.files_rewritten,
+                        "replacements": rw_report.replacements,
+                    }
+                    (this_import_dir / "path-rewrite.json").write_text(
+                        json.dumps(rw_report.as_record(), indent=2))
+                prov["custody"].append(event)
                 (this_import_dir / "provenance.json").write_text(
                     json.dumps(prov, indent=2))
             else:
@@ -1404,6 +1479,28 @@ def inspect_archive(archive_path: Path, verbose: bool = False) -> int:
                   f"at {_sanitize_for_terminal(prov['created_at'])}")
             print(f"  source: "
                   f"{_sanitize_for_terminal(prov['source'].get('workspace_root', '?'))}")
+            # Look-before-you-import extends to the transform: show the
+            # root rewrites import WOULD apply on this machine. Honest
+            # about its limit — the file COUNT needs the extracted bytes.
+            from config import _maro_dir as _md, workspace_root as _wr
+            from orch_items import repo_root as _rr
+            import path_rewrite
+            rw_map = path_rewrite.build_map(
+                prov["source"], {"workspace_root": str(_wr()),
+                                 "maro_user_dir": str(_md()),
+                                 "repo_root": str(_rr())})
+            if rw_map:
+                print("  path rewrite on import (use --no-rewrite-paths "
+                      "to keep the source's paths):")
+                for pair in rw_map.describe():
+                    print(f"    {_sanitize_for_terminal(pair['from'])} "
+                          f"→ {pair['to']}")
+            else:
+                print("  path rewrite on import: none (roots match, or the "
+                      "archive recorded none usable)")
+            for role, value, why in rw_map.rejected:
+                print(f"    role {role} not mapped — {why} "
+                      f"({_sanitize_for_terminal(value)})")
             mi = prov["meta"]
             print(f"  meta: user-config={bool(mi.get('user_config'))} "
                   f"(redactions={_as_int(mi.get('user_config_redactions'))}), "
@@ -1496,6 +1593,11 @@ def main():
                      help="Refuse unless the archive's sha256 starts with "
                           "this hex prefix (>=16 chars; printed by inspect) "
                           "— binds the import to the inspected bytes")
+    imp.add_argument("--no-rewrite-paths", dest="rewrite_paths",
+                     action="store_false",
+                     help="Leave the source machine's absolute paths intact "
+                          "inside imported files (default: rewrite this "
+                          "install's roots, recorded in path-rewrite.json)")
     imp.add_argument("--verbose", "-v", action="store_true")
 
     args = parser.parse_args()
@@ -1508,7 +1610,8 @@ def main():
         import_workspace(args.archive, dry_run=args.dry_run,
                          verbose=args.verbose, clean=args.clean,
                          apply_meta=args.apply_meta,
-                         expect_sha256=args.expect_sha256)
+                         expect_sha256=args.expect_sha256,
+                         rewrite_paths=args.rewrite_paths)
     else:
         parser.print_help()
 

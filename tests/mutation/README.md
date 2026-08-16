@@ -78,6 +78,7 @@ failure the sweep exists to find.
 |---|---|---|---|
 | `scope_14a.json` | §14a scope/stamp/portability: `knowledge_web` scope screens, tiered-store load/rewrite/mutate, quarantine, reinforce heal, `_tfidf_rank_scored`; `camera_readout` census, `_lesson_origins`, `_stamp_coverage`, `_scope_rollup`, `_print_portability`; `pack` lesson transport border | 34 + 1 equivalent | 2026-08-16, all accounted for |
 | `provenance_gate.json` | The db37d525 contamination gate: `lesson_provenance` classifier regexes + killswitch, the `_is_quarantined` predicate and its enforcement sites in `knowledge_web`, the `memory_ledger` mint choke point | 18 | 2026-08-16, **NOT closed** — 6 accounted for, 1 equivalent, 4 unverified leads, 6 confirmed gaps in the classifier/killswitch |
+| `path_rewrite.json` | Embedded-path rewriting on transfer: `path_rewrite` root validation + ordering + boundary + skip screens + atomic swap, the `maro-export import` wiring (extracted-files-only list, provenance gate, custody `transformed`), the `maro-import --source` wiring (rewrite-before-dedup, marker verbatim, per-file quarantine) | 29 + 1 equivalent | 2026-08-16, all accounted for |
 
 `provenance_gate.json` is deliberately landed red. The sweep's value is
 the ledger of what is and isn't pinned; deleting the survivors to get a

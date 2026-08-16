@@ -1,0 +1,213 @@
+[
+ {
+  "name": "a recorded root need not be absolute",
+  "file": "src/path_rewrite.py",
+  "anchor": "    if not root.startswith(\"/\"):",
+  "replacement": "    if False:",
+  "tests": "tests/test_path_rewrite.py"
+ },
+ {
+  "name": "the system-root denylist is not consulted",
+  "file": "src/path_rewrite.py",
+  "anchor": "    if root in _SYSTEM_ROOTS:",
+  "replacement": "    if False:",
+  "tests": "tests/test_path_rewrite.py"
+ },
+ {
+  "name": "normalization runs AFTER the denylist, so '/usr/' ducks it",
+  "file": "src/path_rewrite.py",
+  "anchor": "    root = re.sub(r\"/+\", \"/\", root).rstrip(\"/\")",
+  "replacement": "    root = root if root in _SYSTEM_ROOTS else re.sub(r\"/+\", \"/\", root).rstrip(\"/\")",
+  "tests": "tests/test_path_rewrite.py"
+ },
+ {
+  "name": "a one-component root is deep enough",
+  "file": "src/path_rewrite.py",
+  "anchor": "    if len([p for p in root.split(\"/\") if p]) < _MIN_ROOT_COMPONENTS:",
+  "replacement": "    if len([p for p in root.split(\"/\") if p]) < 1:",
+  "tests": "tests/test_path_rewrite.py"
+ },
+ {
+  "name": "a NUL inside a recorded root is accepted",
+  "file": "src/path_rewrite.py",
+  "anchor": "    if \"\\x00\" in root:",
+  "replacement": "    if False:",
+  "tests": "tests/test_path_rewrite.py"
+ },
+ {
+  "name": "an identical source and destination still map",
+  "file": "src/path_rewrite.py",
+  "anchor": "        if src == dst:\n            continue",
+  "replacement": "        if False:\n            continue",
+  "tests": "tests/test_path_rewrite.py tests/test_conductor_export.py"
+ },
+ {
+  "name": "roots are ordered shortest-source-first",
+  "file": "src/path_rewrite.py",
+  "anchor": "    pairs.sort(key=lambda p: (-len(p[0]), p[0]))",
+  "replacement": "    pairs.sort(key=lambda p: (len(p[0]), p[0]))",
+  "tests": "tests/test_path_rewrite.py"
+ },
+ {
+  "name": "duplicate source roots are not collapsed",
+  "file": "src/path_rewrite.py",
+  "anchor": "        if src in seen:\n            continue",
+  "replacement": "        if False:\n            continue",
+  "tests": "tests/test_path_rewrite.py"
+ },
+ {
+  "name": "no boundary \u2014 a root matches inside a longer sibling name",
+  "file": "src/path_rewrite.py",
+  "anchor": "_BOUNDARY = rb\"(?![A-Za-z0-9_-])\"",
+  "replacement": "_BOUNDARY = rb\"\"",
+  "tests": "tests/test_path_rewrite.py"
+ },
+ {
+  "name": "boundary also denies '.', so prose mentions stay stale",
+  "file": "src/path_rewrite.py",
+  "anchor": "_BOUNDARY = rb\"(?![A-Za-z0-9_-])\"",
+  "replacement": "_BOUNDARY = rb\"(?![A-Za-z0-9_.-])\"",
+  "tests": "tests/test_path_rewrite.py"
+ },
+ {
+  "name": "sequential per-pair passes instead of one alternation",
+  "file": "src/path_rewrite.py",
+  "anchor": "        return pattern.sub(_repl, data), count",
+  "replacement": "        for _s, _d in self.pairs:\n            data = re.sub(re.escape(_s.encode()) + _BOUNDARY, _d.encode(), data)\n        return data, len(self.pairs)",
+  "tests": "tests/test_path_rewrite.py"
+ },
+ {
+  "name": "git internals are rewritable",
+  "file": "src/path_rewrite.py",
+  "anchor": "    if any(p in _SKIP_DIR_PARTS for p in parts):",
+  "replacement": "    if False:",
+  "tests": "tests/test_path_rewrite.py"
+ },
+ {
+  "name": "the binary suffix screen is not applied",
+  "file": "src/path_rewrite.py",
+  "anchor": "    if Path(rel_path).suffix.lower() in _SKIP_SUFFIXES:",
+  "replacement": "    if False:",
+  "tests": "tests/test_path_rewrite.py tests/test_workspace_import.py"
+ },
+ {
+  "name": "symlinks are followed and rewritten through",
+  "file": "src/path_rewrite.py",
+  "anchor": "    if os.path.islink(abs_path):",
+  "replacement": "    if False:",
+  "tests": "tests/test_path_rewrite.py"
+ },
+ {
+  "name": "the NUL content sniff never fires",
+  "file": "src/path_rewrite.py",
+  "anchor": "            if b\"\\x00\" in head:",
+  "replacement": "            if False:",
+  "tests": "tests/test_path_rewrite.py tests/test_workspace_import.py"
+ },
+ {
+  "name": "the size cap never fires",
+  "file": "src/path_rewrite.py",
+  "anchor": "    if size > max_bytes:",
+  "replacement": "    if False:",
+  "tests": "tests/test_path_rewrite.py"
+ },
+ {
+  "name": "file mode is not carried onto the rewritten copy",
+  "file": "src/path_rewrite.py",
+  "anchor": "        shutil.copymode(abs_path, tmp)",
+  "replacement": "        pass",
+  "tests": "tests/test_path_rewrite.py"
+ },
+ {
+  "name": "mtime is not preserved",
+  "file": "src/path_rewrite.py",
+  "anchor": "        os.utime(abs_path, (st.st_atime, st.st_mtime))",
+  "replacement": "        pass",
+  "tests": "tests/test_path_rewrite.py"
+ },
+ {
+  "name": "write straight over the file instead of an atomic swap",
+  "file": "src/path_rewrite.py",
+  "anchor": "        with open(tmp, \"wb\") as out:\n            out.write(new)\n        shutil.copymode(abs_path, tmp)\n        os.replace(tmp, abs_path)",
+  "replacement": "        with open(abs_path, \"wb\") as out:\n            out.write(new)",
+  "tests": "tests/test_path_rewrite.py"
+ },
+ {
+  "name": "containment of the caller's file list is not checked",
+  "file": "src/path_rewrite.py",
+  "anchor": "        try:\n            abs_path.resolve().relative_to(root_resolved)\n        except (ValueError, OSError):\n            report._skip(\"outside-root\")\n            continue",
+  "replacement": "        pass",
+  "tests": "tests/test_path_rewrite.py"
+ },
+ {
+  "name": "an empty map still walks and scans every file",
+  "file": "src/path_rewrite.py",
+  "anchor": "    if not mapping:\n        return report",
+  "replacement": "    if False:\n        return report",
+  "tests": "tests/test_path_rewrite.py"
+ },
+ {
+  "name": "import always claims it transformed the data",
+  "file": "scripts/maro_export.py",
+  "anchor": "                    \"transformed\": bool(rw_report\n                                        and rw_report.files_rewritten),",
+  "replacement": "                    \"transformed\": True,",
+  "tests": "tests/test_path_rewrite.py"
+ },
+ {
+  "name": "import rewrites without checking provenance exists",
+  "file": "scripts/maro_export.py",
+  "anchor": "        if rewrite_paths and prov is not None:",
+  "replacement": "        if rewrite_paths:",
+  "tests": "tests/test_conductor_export.py"
+ },
+ {
+  "name": "the extracted-only file list becomes a whole-workspace walk",
+  "file": "scripts/maro_export.py",
+  "anchor": "                    ws, [rel for m, rel in safe_members if m.isreg()], rw_map)",
+  "replacement": "                    ws, [str(p.relative_to(ws)) for p in ws.rglob(\"*\") if p.is_file()], rw_map)",
+  "tests": "tests/test_path_rewrite.py"
+ },
+ {
+  "name": "merge lane: ledger rows are not rewritten at all",
+  "file": "src/workspace_import.py",
+  "anchor": "            src_lines = [rewrites.text(ln) for ln in src_lines]",
+  "replacement": "            src_lines = list(src_lines)",
+  "tests": "tests/test_workspace_import.py"
+ },
+ {
+  "name": "merge lane: ledger rows are rewritten AFTER the dedup",
+  "file": "src/workspace_import.py",
+  "anchor": "        if rewrites is not None:\n            src_lines = [rewrites.text(ln) for ln in src_lines]\n        existing = set()\n        if dest.exists():\n            existing = {\n                ln for ln in dest.read_text().splitlines() if ln.strip()\n            }\n        new_lines = [ln for ln in src_lines if ln not in existing]",
+  "replacement": "        existing = set()\n        if dest.exists():\n            existing = {\n                ln for ln in dest.read_text().splitlines() if ln.strip()\n            }\n        new_lines = [ln for ln in src_lines if ln not in existing]\n        if rewrites is not None:\n            new_lines = [rewrites.text(ln) for ln in new_lines]",
+  "tests": "tests/test_workspace_import.py"
+ },
+ {
+  "name": "merge lane: copied run dirs are not rewritten",
+  "file": "src/workspace_import.py",
+  "anchor": "            if rewrites is not None:\n                rewrites.tree(dest)",
+  "replacement": "            if False:\n                rewrites.tree(dest)",
+  "tests": "tests/test_workspace_import.py"
+ },
+ {
+  "name": "merge lane: the run is rewritten AFTER the marker is written",
+  "file": "src/workspace_import.py",
+  "anchor": "            (dest / \"imported_from.json\").write_text(\n                json.dumps(marker, indent=2) + \"\\n\"\n            )",
+  "replacement": "            (dest / \"imported_from.json\").write_text(\n                json.dumps(marker, indent=2) + \"\\n\"\n            )\n            if rewrites is not None:\n                rewrites.tree(dest)",
+  "tests": "tests/test_workspace_import.py"
+ },
+ {
+  "name": "merge lane: quarantined single files re-walk their siblings",
+  "file": "src/workspace_import.py",
+  "anchor": "                    rewrites.file(dest)",
+  "replacement": "                    rewrites.tree(dest.parent)",
+  "tests": "tests/test_workspace_import.py",
+  "equivalent": "no observable difference given today's fixed _CURATED list: every entry is either a text file (already rewritten by the time a sibling's walk reaches it, so it re-scans as unchanged and is never re-counted) or a directory handled by tree() in both variants. file() is kept for the two things that WOULD diverge if a binary curated entry is ever added \u2014 an inflated not_rewritten tally in the audit row \u2014 and for the O(n^2) re-walk of a growing quarantine dir"
+ },
+ {
+  "name": "merge lane: --no-rewrite-paths still builds a live map",
+  "file": "src/workspace_import.py",
+  "anchor": "        if rewrite_paths else path_rewrite.RewriteMap())",
+  "replacement": "        if True else path_rewrite.RewriteMap())",
+  "tests": "tests/test_workspace_import.py"
+ }
+]
