@@ -34,9 +34,9 @@ Dev log tab at maro.feifdom.com alongside Runs and Reading.
 
 **Throughput and fan-out**
 
-- 201 commits in 7d, 635 in 30d
-- **Actionable Stack** open boxes: **60** (30d: +53)
-- net new open items per 10 commits: **+0.83** — findings are outrunning closure
+- 202 commits in 7d, 635 in 30d
+- **Actionable Stack** open boxes: **61** (30d: +54)
+- net new open items per 10 commits: **+0.85** — findings are outrunning closure
 - ⚠ this delta counts one SECTION, so an archive pass or a re-org moves it without any work changing hands. Read the rate as a coarse direction, never as a score.
 
 **Actionable Stack, by kind** — the three things it contains, which look identical on the page
