@@ -378,7 +378,7 @@ Ordered open work that matters. Top of the list is next.
   itself — which is the one property the census needs. If backfill
   ever happens it must carry a per-row labeller stamp and be bucketed
   separately.
-- [ ] **Stamp coverage is now instrumented — watch it go non-zero.**
+- [x] **Stamp coverage is instrumented and WENT NON-ZERO 2026-08-16** — `5/199 rows stamped (method 5 / world 0 / malformed 0)`, newest mint `2026-08-16T17:10:59`, from the first organic goal run since the stamp landed. This settles the open question the entry named: the write path fires on the production lane, so the earlier `0/195` was *no runs had happened*, not a silently ignored extraction schema. First real signal is 5 method / 0 world — small n, but pointing the same way as §14a's prior. The citation-gated comparison stays empty until stamped rows accrue foreign verdicted citations; that is the next thing to watch, not this.
   `camera_readout --portability` prints a store-wide, NOT citation-gated
   coverage line (`N/M rows stamped`, method/world/malformed, newest
   stamped mint) and shouts when it is 0 with a non-empty store. Added

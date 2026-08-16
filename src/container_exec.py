@@ -1356,10 +1356,28 @@ def build_mount_map(
         if not translated:
             continue
         if not _in_write_scope(translated):
-            log.warning("container mount: rw root %s is outside the container "
-                        "write scope (workspace subtree + validate.write_fence_allow) "
-                        "— refused; add it to validate.write_fence_allow to mount it "
-                        "(C4-BOX containment whitelist, 2026-07-15)", translated)
+            # Say WHICH of the two outcomes this is. A path already in
+            # ro_mounts is readable — reporting it the same way as an
+            # unmountable one reads as "not available", which is a
+            # different fact and the one a worker acts on. Found
+            # 2026-08-16: a reference corpus was ro-mounted and working
+            # while this line said it had been refused, and the operator
+            # believed the line.
+            _ro_real = {os.path.realpath(str(r)) for r in (ro_mounts or []) if r}
+            if translated in _ro_real:
+                log.info("container mount: %s is not writable from the "
+                         "container (outside the write scope) but IS mounted "
+                         "READ-ONLY via executor.container_extra_mounts — "
+                         "reads work, writes do not", translated)
+            else:
+                log.warning(
+                    "container mount: rw root %s is outside the container "
+                    "write scope (workspace subtree + validate.write_fence_allow) "
+                    "— refused, and it is not in executor.container_extra_mounts "
+                    "either, so the container cannot READ it at all. Add it to "
+                    "container_extra_mounts for read access, or to "
+                    "validate.write_fence_allow for write "
+                    "(C4-BOX containment whitelist, 2026-07-15)", translated)
             continue
         _rw_dirs.append(translated)
     for root in sorted(set(_rw_dirs), key=len):

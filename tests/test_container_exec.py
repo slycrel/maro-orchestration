@@ -8,6 +8,7 @@ docs/CONTAINER_EXECUTOR_DESIGN.md, C1 "no docker dependency in CI").
 
 from __future__ import annotations
 
+import logging
 import os
 import subprocess
 import sys
@@ -1560,3 +1561,42 @@ class TestEnforceBackendContainerContract:
         with pytest.raises(ce.ContainerUnavailable):
             ce.enforce_backend_container_contract(
                 SimpleNamespace(backend="mystery"), executor=True)
+
+
+class TestMountRefusalNamesTheActualOutcome:
+    """A path outside the write scope has two very different fates, and the
+    log line used to describe both the same way. Found 2026-08-16: a
+    reference corpus was ro-mounted and working while the line said it had
+    been refused — the operator believed the line, and the same text goes
+    into the worker's step context."""
+
+    def _map(self, tmp_path, ro):
+        """Drive the real write-scope knob rather than patching internals."""
+        ws = tmp_path / "ws"
+        (ws / "run").mkdir(parents=True)
+        ref = tmp_path / "ref"
+        ref.mkdir()
+        mounts = ce.build_mount_map(
+            str(ws / "run"),
+            rw_roots=[str(ref)],
+            ro_mounts=[str(ref)] if ro else [],
+            write_scope_roots=[str(ws)])
+        return ref, mounts
+
+    def test_a_readable_path_is_reported_as_readable_not_refused(
+            self, tmp_path, caplog):
+        with caplog.at_level(logging.INFO):
+            ref, mounts = self._map(tmp_path, ro=True)
+        assert (str(ref), "ro") in [(os.path.realpath(h), m) for h, m in mounts]
+        text = caplog.text
+        assert "mounted READ-ONLY" in text
+        assert "reads work, writes do not" in text
+        assert "cannot READ it at all" not in text
+
+    def test_an_unmountable_path_says_the_container_cannot_read_it(
+            self, tmp_path, caplog):
+        with caplog.at_level(logging.INFO):
+            ref, mounts = self._map(tmp_path, ro=False)
+        assert str(ref) not in [os.path.realpath(h) for h, _ in mounts]
+        assert "cannot READ it at all" in caplog.text
+        assert "container_extra_mounts for read access" in caplog.text
