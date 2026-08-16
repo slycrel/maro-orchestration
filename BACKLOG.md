@@ -1348,17 +1348,6 @@ capture**, which is what makes the rung amortize instead of evaporate.
   and recording seam can stay. Review record:
   docs/history/2026-08-16-closure-claim-coverage-review.md.
 
-- [x] **4th adversarial-review persona (expert QA) — TRIED 2026-08-16,
-  EARNED ITS SEAT.** First outing on the mint-grounding slice-2a review
-  (sonnet fallback, 4 lenses): unique yield no other lens produced — the
-  unprobed-rendered-as-refutation HIGH, the consumption-surface
-  laundering gap, the zero-logging finding, the forged-shape probe; zero
-  overlap-only findings, zero hallucinations. Record:
-  docs/history/2026-08-16-mint-grounding-slice2a-review.md.
-  **Awaiting Jeremy's ratification to institutionalize as the 4th lens
-  on LARGE reviews** (the 08-01 decree reserved the roster call; he
-  flagged maybe-scope-creep himself — the trial data says otherwise).
-
 - [ ] **NODE_CANDIDATE permanence tier — UX DECIDED 2026-08-16, ready
   to build** (GOAL_BRAIN Decisions entry has the verbatim answers; the
   2026-08-02 "another layer/process" hunch resolved to the Δ-effect

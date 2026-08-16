@@ -1135,6 +1135,18 @@ Sample: the 2026-05-13..17 window of `~/.maro/workspace/runs/` (478 dirs total;
   to be the post-08-02 Δ-effect machinery, which the permanence bar
   reuses rather than inventing its own evidence.
 
+- **2026-08-16** — **Expert-QA 4th review persona RATIFIED into the
+  /adversarial-review skill** (Jeremy: *"I do care about that persona
+  very much. Let's add it to the /adversarial-review skill."*). Closes
+  the 08-01 try-once decree on its trial evidence (four unique findings
+  incl. a HIGH, zero overlap, zero hallucinations — record:
+  docs/history/2026-08-16-mint-grounding-slice2a-review.md). Large
+  reviews now run 4 lenses: Skeptic + Architect + Minimalist + Expert
+  QA (error paths, kill paths, sad-path record loss); lens definition
+  lives in ~/.claude/skills/adversarial-review/references/
+  reviewer-lenses.md with the provenance note inline. Small/Medium
+  rosters unchanged.
+
 ## Threads (system-maintained — nothing leaves this list silently)
 
 Active:

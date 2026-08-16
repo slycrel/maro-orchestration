@@ -35,6 +35,19 @@ had been inserted mid-word inside Jeremy's truncation-audit quote
 corrected (it shipped 2026-08-13 with its own archive record); the
 Poe-steal-list "match-tier item below" pointer retargeted.
 
+## Expert-QA 4th review persona — TRIED + RATIFIED 2026-08-16
+
+The 08-01 try-once decree, closed same-day-as-trial. First outing
+(mint-grounding slice-2a review, sonnet fallback, 4 lenses): all four
+of its findings were unique — the unprobed-rendered-as-refutation HIGH,
+the consumption-surface laundering gap, the zero-logging finding, the
+forged-shape probe — zero overlap with the other lenses, zero
+hallucinations. Jeremy ratified: "I do care about that persona very
+much. Let's add it to the /adversarial-review skill." Now permanent on
+the LARGE roster (SKILL.md size table + Expert QA lens in
+reviewer-lenses.md, provenance noted inline). Trial record:
+docs/history/2026-08-16-mint-grounding-slice2a-review.md.
+
 ## Moved from BACKLOG 2026-08-16 (the overdue split) — records in docs/history/backlog-done-2026-04-to-08-p4.md
 
 26 long-shipped arcs/records (167KB) swept out of BACKLOG.md with
