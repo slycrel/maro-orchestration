@@ -1111,6 +1111,30 @@ Sample: the 2026-05-13..17 window of `~/.maro/workspace/runs/` (478 dirs total;
     institutionalizing; Jeremy flagged it maybe-scope-creep himself
     (j08a L125; filed in BACKLOG 2026-08-16).
 
+- **2026-08-16** — **NODE_CANDIDATE permanence UX decided** (the
+  conversation the 2026-08-02 decree deferred; Jeremy, structured
+  answers). Amends the shape at the user-involvement edge: permanence
+  is EARNED, not asked for. (1) Semantics: permanent = decay/demotion
+  immunity — contest can flag, never demote without the user; active
+  nodes keep the full effect-evidence lifecycle. (2) Trigger, Jeremy
+  verbatim: *"Never proactively, but maybe promoted after an abundance
+  of being proven; more of a notification of the learning/growth
+  paths... if we do our job right, this will be closer to a
+  config/debug tool than a choice in that aspect."* — the system
+  auto-promotes active → permanent at an abundance-of-proof bar
+  (Δ-effect receipts, well above the active bar); no approval queue.
+  (3) Surface, Jeremy verbatim: *"reading page, at a section at the
+  bottom. Potentially promote if there's concern judgement/taste is
+  needed from the user"* — a learning/growth notification section;
+  escalation to an actual ask only when the system flags
+  judgment/taste (contested evidence, value-laden content). (4) User
+  verbs are symmetric config/debug overrides: bless (force permanent)
+  and banish (user tombstone that re-observation cannot resurrect).
+  Build spec updated in the BACKLOG item; buildable as a solo chunk
+  now — the "another layer/process" Jeremy smelled on 08-02 turned out
+  to be the post-08-02 Δ-effect machinery, which the permanence bar
+  reuses rather than inventing its own evidence.
+
 ## Threads (system-maintained — nothing leaves this list silently)
 
 Active:

@@ -1306,13 +1306,27 @@ capture**, which is what makes the rung amortize instead of evaporate.
   the HOUSE_STYLE roster only if that review earns it. (Archive:
   goal-brain-journal-2026-08a.md L125.)
 
-- [ ] **NODE_CANDIDATE permanence gate: the user-facing half is owed.**
-  Promotion mechanism shipped 2026-08-02; Jeremy parked the gate:
-  *"up to the user to pick permanence. later we'll have to refine that
-  UX (smells like auto-mode settings for prompting)… there might be
-  another layer/process in there."* Deliberately unbuilt — needs a UX
-  conversation, not a solo chunk. (Recovered by the 2026-08-16 rotation
-  audit; archive: goal-brain-journal-2026-08a.md L512.)
+- [ ] **NODE_CANDIDATE permanence tier — UX DECIDED 2026-08-16, ready
+  to build** (GOAL_BRAIN Decisions entry has the verbatim answers; the
+  2026-08-02 "another layer/process" hunch resolved to the Δ-effect
+  machinery shipped since). Build spec:
+  - Status ladder gains `permanent` above `active`. Permanent = exempt
+    from decay/demotion/inert-lesson machinery; contest flags but never
+    demotes without the user. lf- nodes excluded as ever.
+  - Auto-promotion active → permanent at an abundance-of-proof bar:
+    Δ-effect receipts (reuse promote_lesson_by_effect-style evidence),
+    threshold well above the active bar — observational/measured, not a
+    magic number (correctness-over-frugality posture applies).
+  - Reading page: new bottom section "learning/growth" — recently
+    promoted nodes with receipts (notification, not queue); an
+    escalation sub-list for nodes the system flags as needing human
+    judgment/taste (contested evidence, value-laden content) — those
+    WAIT for the user instead of auto-promoting.
+  - CLI config/debug verbs, symmetric: bless (force permanent), banish
+    (user-authored tombstone that re-observation cannot resurrect),
+    un-bless. Rarely needed if the bar does its job.
+  - The structural tripwire pin on promotion symbols (2026-08-02)
+    still stands for this build.
 
 - [ ] **Arbitrary-truncation audit** (opened 2026-08-03; **Jeremy:** *"this
   was one of the first truncations early on and I've been uncomfortable
