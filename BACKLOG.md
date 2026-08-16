@@ -846,13 +846,30 @@ BACKLOG_DONE.md §"Moved from BACKLOG 2026-08-16".
   shape the audit lane now guards; fixing it changes long-shipped verdict
   evidence behavior (self-inspection checks legitimately reference maro
   source), so it needs its own decision, not a rider.
-- Contested/disputed neutrality is not honored by downstream consumers:
-  `strategy_evaluator` fitness scores any raw `goal_achieved=False` as
-  full failure and `recall`'s repeat-pressure counts it as a failed
-  attempt — this hole is SHARED with the 2026-08-02 provenance contested
-  lane (metadata `goal_verdict_contested` is stamped but nothing reads
-  it in learning-adjacent consumers). Wants a typed contested state in
-  the outcome model, enforced in one shared policy.
+- Contested/disputed neutrality is honored at exactly ONE seam, and the
+  entry's old headline was wrong — **re-measured 2026-08-16, correcting
+  "nothing reads it in learning-adjacent consumers".** What IS wired:
+  both contested lanes converge (`provenance.contested_by_closure` and
+  `closure.verdict_audit.disputed` → `_contested_verdict_loop_ids` in
+  `handle.py:2972,3218`) into `_dl_skip` →
+  `finalize_deferred_learning(skip_loop_ids=…)`, so a contested run does
+  NOT vote in lesson minting; `runs.stamp_run_verdict_contested`
+  persists it and `rerun_identity.py:179` reads it back. That is real
+  coverage and should not be rebuilt.
+
+  What remains is narrower and structural, so keep the prescription:
+  (1) the state is a metadata stamp plus an **ad-hoc `set[str]` local to
+  one `handle.py` function** — there is no typed contested field on the
+  outcome model, so nothing outside that function can ask "was this
+  contested?" without re-deriving it; (2) `recall.py`,
+  `outcome_policy.py` and `loop_finalize.py` contain **no reference to
+  contested at all** (grepped, empty), so a contested run's outcome
+  still counts normally wherever those compute success rates or
+  repeat-pressure — `strategy_evaluator` scoring raw
+  `goal_achieved=False` as full failure is the same shape; (3)
+  enforcement sits at one call site, so any other path that finalizes
+  learning inherits nothing. Sibling-lane shape: the fix is one typed
+  field consulted by a shared policy, not a second skip-list.
 - A deterministic downgrade on an all-passed check set can never engage
   `closure_restart` (restart requires a non-pass, audit-eligibility
   requires zero fails) — the module's "over-eager demotion costs one
