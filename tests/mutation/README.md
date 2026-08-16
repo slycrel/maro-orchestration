@@ -96,7 +96,7 @@ failure the sweep exists to find.
 | Spec | Surface | Mutations | Swept |
 |---|---|---|---|
 | `scope_14a.json` | §14a scope/stamp/portability: `knowledge_web` scope screens, tiered-store load/rewrite/mutate, quarantine, reinforce heal, `_tfidf_rank_scored`; `camera_readout` census, `_lesson_origins`, `_stamp_coverage`, `_scope_rollup`, `_print_portability`; `pack` lesson transport border | 34 + 1 equivalent | 2026-08-16, all accounted for |
-| `provenance_gate.json` | The db37d525 contamination gate: `lesson_provenance` classifier regexes + killswitch, the `_is_quarantined` predicate and its enforcement sites in `knowledge_web`, the `memory_ledger` mint choke point | 18 | 2026-08-16, **NOT closed** — 6 accounted for, 1 equivalent, 4 unverified leads, 6 confirmed gaps in the classifier/killswitch |
+| `provenance_gate.json` | The db37d525 contamination gate: `lesson_provenance` classifier sub-patterns + killswitch string/exception handling, the `_is_quarantined` predicate and its six enforcement sites in `knowledge_web` (both graveyard legs, both promote scans, effect-promotion, canon), the `memory_ledger` mint choke point | 16 + 3 equivalent | 2026-08-16, all accounted for — **CLOSED** (landed red at 6/18, reopened and closed same day) |
 | `path_rewrite.json` | Embedded-path rewriting on transfer: `path_rewrite` root validation + ordering + both match boundaries + skip screens + atomic swap and its post-commit half, the `maro-export import` wiring (extracted-files-only list, provenance gate, custody `transformed`), the `maro-import --source` wiring (rewrite-before-dedup, marker verbatim, per-file quarantine, dry-run honesty, unresolved-source mapping) | 39 + 2 equivalent | 2026-08-16, all accounted for (10 added after the review round, 1 after the live import) |
 | `dispatch_envelope.json` | The typed dispatch boundary: `parse_dispatch_payload` shape/version/type screens, `_safe_name`, `store_attachments` dedup + provenance sidecar, `land_in_run_dir` idempotence, `operator_block` authority label, and the extraction-exclusion decree at the `handle_queue` intake | 19 + 1 equivalent | 2026-08-16, all accounted for (12/20 on first pass, 7 gaps closed) |
 | `defaults_census.json` | The DEFAULTS.md registry tripwire itself (`tests/test_defaults_doc.py`): forward census getter set + alias resolution + rglob + dotless leg + `config.py` exemption, reverse census table-cell parse + read-evidence shapes + per-file keying, and the living-frontmatter check | 15 | 2026-08-16, all accounted for (3/14 on first pass, seam + 16 fixtures added) |
@@ -124,10 +124,23 @@ review, and one run against real data are three different instruments** —
 a transform over a corpus is not verified until it has run over the
 corpus.
 
-`provenance_gate.json` is deliberately landed red. The sweep's value is
-the ledger of what is and isn't pinned; deleting the survivors to get a
-green run would destroy exactly the information it produced. Closing it
-is a named BACKLOG item.
+`provenance_gate.json` was deliberately landed red at 6/18 and closed
+the same day, and the interval is the point. Its four `unverified`
+enforcement survivors split two and two under the probe: two were
+redundant guards whose removal changes nothing observable, two were real.
+Had they been reported as holes on the strength of the SURVIVED verdict,
+half the follow-up work would have been writing tests for behavior
+already enforced elsewhere — tests that pass for the wrong reason, which
+is the failure this directory exists to find.
+
+The run_decay_cycle survivor is the one worth remembering, because
+reading the code would have gotten it wrong in the *other* direction. The
+tier move IS refused downstream, so "redundant guard, mark equivalent"
+looks right — but `promoted_ids` is built from the screen and feeds the
+returned count and the change_log audit entry. Remove it and the cycle
+reports promoting lessons it did not promote: a clean store with a lying
+audit trail. **Probe behaviourally, not by reading; a guard can be
+redundant for state and load-bearing for the record of that state.**
 
 Everything else in `src/` (178 modules) has never had a file-derived
 sweep. The ordered plan for covering it is the top item in the BACKLOG

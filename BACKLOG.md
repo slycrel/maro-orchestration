@@ -127,7 +127,8 @@ Ordered open work that matters. Top of the list is next.
   exactly once, and supports `equivalent` with a required reason.
 
   **Tier-1 progress.** Two decree surfaces swept, opposite outcomes.
-  `provenance_gate.json` — landed red, own item below. `dispatch_envelope.json`
+  `provenance_gate.json` — landed red at 6/18, CLOSED same day (below).
+  `dispatch_envelope.json`
   — 20 mutations, CLOSED 2026-08-16 at 20/20: 12 on the first pass, seven
   gaps fixed, one equivalent recorded with its probe. Both DECREE
   mutations (leak operator prose into the goal; drop the operator channel)
@@ -151,8 +152,13 @@ Ordered open work that matters. Top of the list is next.
   Two survivors, both probed equivalent (a boundary pre-check redundant
   with its in-lock twin — the twin's unique TOCTOU job is now pinned;
   and a point-estimate check strictly subsumed by the ±spread band
-  below it). **Tier-1 is now clear except closing the red
-  `provenance_gate.json`.**
+  below it). `provenance_gate.json` — CLOSED 2026-08-16 at 19/19 from the
+  6/18 it landed red at; the four `unverified` enforcement survivors split
+  two equivalent / two real under the probe, and pinning one of them
+  surfaced a mirror the first spec had missed. **Tier-1 is CLEAR.** Next
+  by the stated ordering is tier 2, data-integrity boundaries: anything
+  that parses untrusted or off-disk JSON, or rewrites a file readers
+  depend on.
 
   **Three of the four surfaces swept so far were tripwires, and two could
   not fail.** The code a decree protects tends to be fine; the guard
@@ -195,27 +201,6 @@ Ordered open work that matters. Top of the list is next.
   on every refactor. (b) looks like the honest-good-enough slice. Related
   limit, no action proposed: a shell-out `rm` bypasses the AST scan
   entirely — none in src/ today, verified 2026-08-16.
-
-- [ ] **Close `tests/mutation/provenance_gate.json` — the contamination
-  gate's enforcement is largely unpinned.** First tier-1 sweep, run
-  2026-08-16, **landed deliberately red**: 6 of 18 accounted for. The
-  classifier's *behavior* is well covered against the four incident
-  lessons; what is not covered is everything around it. Confirmed gaps:
-  four of the five `_PROMPT_AUTHORITY_RE`/`_OBEDIENCE_RE` sub-patterns
-  can be deleted with a green suite (the adverb slot, `forbids|prohibits`,
-  the optional-article leg, and the pronoun-object requirement whose
-  whole job is keeping domain facts like "rate limits are a hard
-  constraint" clean), and two of three killswitch behaviors are unpinned
-  — a quoted `"false"` reading as truthy, and a config error failing
-  OPEN instead of closed. Four enforcement-site survivors are marked
-  `unverified` in the spec, not claimed as holes: the one site that WAS
-  probed (`promote_lesson`) turned out to have a redundant downstream
-  guard, so the others need the same one-line probe before anyone writes
-  a test for them. Do the probes first, then write only the tests that
-  pin something real. **Do not delete survivors to make the run green** —
-  the ledger is the deliverable.
-
-### Goals cannot carry attachments — a screenshot is not an input (Jeremy, 2026-08-16: "a little concerning that maro can't ingest attachments")
 
 - [ ] **Let a goal carry files — images first.** Found live: Jeremy's
   goal was *"find this pictured study"* with a screenshot of the paper's

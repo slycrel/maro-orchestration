@@ -3334,3 +3334,34 @@ Dated end-of-chunk/session entries, append-only at the tail. Rotation policy (20
   with review rounds behind them could not fail at all. Review works on
   features; it is enforcement-written-as-a-test that slips past it.**
   Tier-1 now clear except closing the red `provenance_gate.json`.
+- **2026-08-16 (box)** — **`provenance_gate.json` CLOSED at 19/19**, from
+  the 6/18 it deliberately landed red at earlier the same day. **Tier-1 of
+  the file-derived mutation sweep is now clear** (scope decree, provenance
+  gate, dispatch envelope, defaults census, retention decree, Δ-gate
+  floors). The closing move validated the `unverified` convention: the
+  four enforcement survivors split **two equivalent / two real** under
+  behavioural probing, so reporting them as holes off the SURVIVED verdict
+  would have spent half the follow-up writing tests for behaviour already
+  enforced elsewhere. Equivalent: `promote_lesson_by_effect`'s pre-check
+  (in-lock `_guards` refuses) and `_post_reinforce_hooks`' screen
+  (`promote_lesson()` refuses). Real: `search_graveyard`'s screen, whose
+  recovery path `resurrect_archived_lesson` has NO quarantine check at
+  all; and `run_decay_cycle`'s screen — **the finding of the session**,
+  because reading the code gets it wrong in the other direction. The tier
+  move IS refused downstream, so it looks redundant; but `promoted_ids`
+  feeds the returned count and the `change_log.jsonl` audit entry, so
+  dropping it makes the cycle report promoting lessons it did not promote
+  (probed: reported 2, moved 0). **A guard can be redundant for state and
+  load-bearing for the record of that state — probe behaviourally, never
+  by reading.** Pinning the live graveyard leg then surfaced a mirror the
+  first spec missed (the archived scan screens separately). One mutation
+  was my own error, also worth keeping: deleting the last line of the
+  prompt-authority alternation left a trailing `|`, so the group gained an
+  empty branch and the mutation WIDENED the regex — **a mutation that
+  makes code more permissive tests nothing and reads exactly like a real
+  hole.** Classifier legs closed with their own specimens (every prior
+  fixture was db37d525-shaped, so several legs matched at once); the
+  load-bearing one is negative — "treat rate limits as a hard constraint"
+  must stay clean, since widening that leg quarantines ordinary domain
+  advice and quarantine is silent. Killswitch pinned on quoted-"false"
+  YAML truthiness and fail-CLOSED on config error. Suite 9270 → 9290.

@@ -44,6 +44,63 @@ was right and the audit was worth doing anyway. Baseline cost is one
 extra pytest run per distinct target.
 
 
+**`tests/mutation/provenance_gate.json` — CLOSED 2026-08-16 at 19/19.**
+Landed deliberately red at 6/18 the same day; closing it was the named
+follow-up and it is now done.
+
+*Original entry:*
+
+Close `tests/mutation/provenance_gate.json` — the contamination
+  gate's enforcement is largely unpinned.** First tier-1 sweep, run
+  2026-08-16, **landed deliberately red**: 6 of 18 accounted for. The
+  classifier's *behavior* is well covered against the four incident
+  lessons; what is not covered is everything around it. Confirmed gaps:
+  four of the five `_PROMPT_AUTHORITY_RE`/`_OBEDIENCE_RE` sub-patterns
+  can be deleted with a green suite (the adverb slot, `forbids|prohibits`,
+  the optional-article leg, and the pronoun-object requirement whose
+  whole job is keeping domain facts like "rate limits are a hard
+  constraint" clean), and two of three killswitch behaviors are unpinned
+  — a quoted `"false"` reading as truthy, and a config error failing
+  OPEN instead of closed. Four enforcement-site survivors are marked
+  `unverified` in the spec, not claimed as holes: the one site that WAS
+  probed (`promote_lesson`) turned out to have a redundant downstream
+  guard, so the others need the same one-line probe before anyone writes
+  a test for them. Do the probes first, then write only the tests that
+  pin something real. **Do not delete survivors to make the run green** —
+  the ledger is the deliverable.
+
+### Goals cannot carry attachments — a screenshot is not an input (Jeremy, 2026-08-16: "a little concerning that maro can't ingest attachments")
+
+**How it closed.** Probing the four `unverified` enforcement survivors
+behaviourally split them two and two, which is exactly why they were
+marked rather than reported. `promote_lesson_by_effect`'s pre-check and
+`_post_reinforce_hooks`' screen are redundant — the in-lock `_guards` and
+`promote_lesson()` respectively refuse the row, nothing observable
+differs, both recorded equivalent with the probe. `search_graveyard`'s
+screen is real and has NO downstream guard (`resurrect_archived_lesson`
+carries no quarantine check). `run_decay_cycle`'s screen is real in a way
+reading would have missed: the tier move is refused, but `promoted_ids`
+feeds the returned count and the change_log audit entry, so dropping it
+makes the cycle report promoting lessons it did not promote (probed:
+reported 2, moved 0).
+
+Pinning the live graveyard leg surfaced a mirror the first spec missed —
+the archived scan screens separately — and one mutation of my own was
+badly built: deleting the last line of the prompt-authority alternation
+left a trailing `|`, giving the group an empty branch, so the mutation
+WIDENED the regex and read as a survivor. A mutation that makes code more
+permissive tests nothing and looks identical to a real hole.
+
+Classifier gaps closed with their own specimens (the verdict was well
+covered, but every fixture was db37d525-shaped so several regex legs
+matched at once). The load-bearing new test is the negative one: "treat
+rate limits as a hard constraint" must stay clean, because widening that
+leg quarantines ordinary domain advice and a quarantined lesson is
+silently invisible to every injection surface. Killswitch pinned on the
+shape it was written for: a quoted "false" from YAML is truthy, and a
+config error must fail CLOSED with the gate ON.
+
+
 ## Path-token rewriting — SHIPPED 2026-08-16 (shape (b), both transfer lanes)
 
 Filed 2026-08-13 as a low-priority residual of the workspace
