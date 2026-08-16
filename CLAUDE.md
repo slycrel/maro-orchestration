@@ -279,7 +279,10 @@ detached HEAD):
    ancestor → stale, safe to `git checkout -- <path>`; matches none →
    another session's real uncommitted work, leave it alone.
    **Run `scripts/tree-triage.sh` instead of doing that by hand** (`--fix`
-   restores only the stale paths). A dirty path is a TWO-valued signal and
+   restores only the stale paths; a third verdict BEHIND — tree copy
+   matches no ancestor but is deletion-only vs HEAD, the stale-MIX shape
+   a rebase-replay leaves — is reported with a blame summary and only
+   restored via explicit `--fix-behind`, found 2026-08-15). A dirty path is a TWO-valued signal and
    the failure mode is reading it as one-valued: 2026-08-06, a session saw
    three files dirty, correctly concluded "someone is mid-chunk, stay
    away" — and later committed them, reverting an executor tag scheme and

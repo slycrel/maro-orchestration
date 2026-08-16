@@ -116,3 +116,75 @@ def test_genuinely_edited_file_is_real(tmp_path):
 
     _triage(repo, "--fix")
     assert (repo / "a.txt").read_text() == "someone's half-written work\n"
+
+
+def _seed_stale_mix(tmp_path: Path) -> Path:
+    """The 2026-08-15 incident shape: the tree copy carries commit A's
+    edit but not commit B's, so its blob matches NO ancestor (A landed
+    interleaved with B) while being strictly behind HEAD."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    (repo / "doc.txt").write_text("base line\n")
+    _git(repo, "add", "doc.txt")
+    _git(repo, "commit", "-qm", "base")
+    # Commit B: another session's hunk, landed first. Commit A': this
+    # session's edit REPLAYED on top of B (the pre-rebase base+A blob
+    # exists only in the discarded local commit, never in ancestry).
+    (repo / "doc.txt").write_text("base line\nsession B landed hunk\n")
+    _git(repo, "add", "doc.txt")
+    _git(repo, "commit", "-qm", "B: landed from elsewhere")
+    (repo / "doc.txt").write_text(
+        "base line\nsession B landed hunk\nsession A edit\n")
+    _git(repo, "add", "doc.txt")
+    _git(repo, "commit", "-qm", "A: local edit (replayed)")
+    # Materialization gap: tree copy = pre-rebase base + A only.
+    (repo / "doc.txt").write_text("base line\nsession A edit\n")
+    return repo
+
+
+def test_stale_mix_is_behind_not_real_with_blame_evidence(tmp_path):
+    """Pre-fix, this exact shape reported REAL (0 stale, 1 real) — the
+    2026-08-15 misread. It must now surface as BEHIND with the landing
+    commit named in the blame summary."""
+    repo = _seed_stale_mix(tmp_path)
+
+    report = _triage(repo)
+    assert "BEHIND" in report
+    assert "REAL" not in report
+    assert "missing lines from" in report          # blame evidence
+    assert "B: landed from elsewhere" in report    # names the landed commit
+    assert "0 stale, 1 behind, 0 real." in report
+
+
+def test_fix_leaves_behind_paths_alone(tmp_path):
+    """Content can't distinguish stale-mix from a deletion-in-progress,
+    so plain --fix must never restore BEHIND paths."""
+    repo = _seed_stale_mix(tmp_path)
+
+    out = _triage(repo, "--fix")
+    assert "NOT restored" in out
+    assert (repo / "doc.txt").read_text() == "base line\nsession A edit\n"
+
+
+def test_fix_behind_restores_after_judgment(tmp_path):
+    repo = _seed_stale_mix(tmp_path)
+
+    _triage(repo, "--fix-behind")
+    assert (repo / "doc.txt").read_text() == (
+        "base line\nsession B landed hunk\nsession A edit\n")
+
+
+def test_deletion_only_edit_reads_behind_but_survives_fix(tmp_path):
+    """The honest ambiguity, pinned: a REAL deletion-only edit (another
+    session removing lines mid-chunk) is content-identical to stale-mix
+    and now reads BEHIND — the contract that matters is that --fix
+    leaves it untouched."""
+    repo = _seed_repo(tmp_path)
+    (repo / "a.txt").write_text("")  # deleted the only line, kept file
+
+    report = _triage(repo)
+    assert "BEHIND" in report
+
+    _triage(repo, "--fix")
+    assert (repo / "a.txt").read_text() == ""
