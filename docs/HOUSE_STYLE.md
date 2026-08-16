@@ -54,7 +54,21 @@ individual rules below exist to keep it honest.
    evidence, not discovering that the assertion was never tested. Per
    claim: the executing probe (degenerate inputs, the literal
    production path end-to-end, and must-detect for every new test —
-   stash the fix, watch it fail). A claim you could not probe ships
+   stash the fix, watch it fail). **Derive the mutation list from the
+   FILE, not from the diff** (2026-08-16, §14a slice-3 r4): a list built
+   off your own fixes tests whether the fixes are pinned; a list built
+   off reading the changed code tests whether the *behavior* is. In that
+   round the diff-derived harness scored 6/15 first pass, and a
+   file-derived sweep then found twelve more survivors — a census that
+   scanned one tier of two, a store-wide read that would page at the
+   loader's default 50, a flag every test monkeypatched away, two
+   WARNINGs deletable in silence. None were regressions; they were
+   places the fixes had simply never been aimed. Related failure to
+   watch: a test that passes for a reason other than the one in its
+   docstring — typically because its subject is reached through a caller
+   that would produce the same observable on its own. And when a mutant
+   is genuinely EQUIVALENT, record it as such; contorting a test to kill
+   it is how a suite starts testing its own mocks. A claim you could not probe ships
    HONESTLY LABELED "reasoned, not probed" in the commit message so
    review can target exactly the unproven residue — and a residue
    deferred to a named eval hook requires checking that the hook's
