@@ -77,19 +77,28 @@ n_behind=0
 # has evidence attached. Never fails the triage (blame is best-effort).
 _behind_blame_summary() {
     _path="$1"
+    # Hunk headers come out as "-N" or "-N,COUNT"; capture the whole
+    # range token and split in shell — a sed backreference into an
+    # unmatched optional group is undefined under POSIX BRE and BSD sed
+    # (macOS) has diverged from GNU on it (review r1).
     git diff --unified=0 HEAD -- "$_path" 2>/dev/null \
-      | sed -n 's/^@@ -\([0-9]*\)\(,\([0-9]*\)\)\{0,1\} .*/\1 \3/p' \
-      | while read -r _start _count; do
-            _count="${_count:-1}"
+      | sed -n 's/^@@ -\([0-9][0-9,]*\) .*/\1/p' \
+      | while read -r _range; do
+            _start="${_range%%,*}"
+            _count="${_range#*,}"
+            [ "$_count" = "$_range" ] && _count=1
             [ "$_count" -eq 0 ] && continue
             git blame -l -L "$_start,$((_start + _count - 1))" HEAD -- "$_path" 2>/dev/null \
               | awk '{print $1}'
         done \
-      | sort -u | head -3 \
+      | awk '!seen[$1]++' | head -3 \
       | while read -r _sha; do
             git log -1 --format='      missing lines from %h %ad %s' \
                 --date=format:'%m-%d' "$_sha" 2>/dev/null
         done
+    # first-appearance dedup, not sort -u: hash-lexicographic order would
+    # sample an arbitrary 3-of-N and could drop the actual landing commit
+    # on multi-commit ranges (review r1).
 }
 
 # -z: NUL-delimited, so paths with spaces/newlines survive. Tracked changes
@@ -204,7 +213,11 @@ if [ "$FIX" -eq 1 ]; then
         fi
     fi
 else
-    echo "to restore stale:   scripts/tree-triage.sh --fix"
-    [ "$n_behind" -gt 0 ] && echo "to also restore behind: scripts/tree-triage.sh --fix-behind (judge the blame lines first)"
-    echo "(a deliberate revert to older content also reads as STALE — skim the list first)"
+    if [ "$n_stale" -gt 0 ]; then
+        echo "to restore stale:   scripts/tree-triage.sh --fix"
+        echo "(a deliberate revert to older content also reads as STALE — skim the list first)"
+    fi
+    if [ "$n_behind" -gt 0 ]; then
+        echo "to restore behind:  scripts/tree-triage.sh --fix-behind (judge the blame lines first)"
+    fi
 fi

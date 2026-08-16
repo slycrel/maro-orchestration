@@ -175,6 +175,40 @@ def test_fix_behind_restores_after_judgment(tmp_path):
         "base line\nsession B landed hunk\nsession A edit\n")
 
 
+def test_behind_blame_names_all_landing_commits_multi_hunk(tmp_path):
+    """r1: sort -u sampled an arbitrary 3-of-N of the blamed commits by
+    hash order and could drop the actual landing commit. First-appearance
+    dedup must name every landing commit when the missing lines span
+    several: tree = base + D's line only, missing B's and C's separated
+    hunks (matches no ancestor blob — only D's commit has D's line, and
+    it also has B's and C's)."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    (repo / "doc.txt").write_text("one\ntwo\nthree\nfour\n")
+    _git(repo, "add", "doc.txt")
+    _git(repo, "commit", "-qm", "base")
+    (repo / "doc.txt").write_text("one\nfrom-B\ntwo\nthree\nfour\n")
+    _git(repo, "add", "doc.txt")
+    _git(repo, "commit", "-qm", "B lands hunk one")
+    (repo / "doc.txt").write_text(
+        "one\nfrom-B\ntwo\nthree\nfrom-C\nfour\n")
+    _git(repo, "add", "doc.txt")
+    _git(repo, "commit", "-qm", "C lands hunk two")
+    (repo / "doc.txt").write_text(
+        "one\nfrom-B\ntwo\nthree\nfrom-C\nfour\nfrom-D\n")
+    _git(repo, "add", "doc.txt")
+    _git(repo, "commit", "-qm", "D lands hunk three")
+    # Stale-mix tree copy: keeps D's line (so no ancestor blob matches),
+    # missing B's and C's hunks — deletion-only vs HEAD, two commits.
+    (repo / "doc.txt").write_text("one\ntwo\nthree\nfour\nfrom-D\n")
+
+    report = _triage(repo)
+    assert "BEHIND" in report
+    assert "B lands hunk one" in report
+    assert "C lands hunk two" in report
+
+
 def test_deletion_only_edit_reads_behind_but_survives_fix(tmp_path):
     """The honest ambiguity, pinned: a REAL deletion-only edit (another
     session removing lines mid-chunk) is content-identical to stale-mix
