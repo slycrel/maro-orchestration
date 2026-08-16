@@ -273,8 +273,19 @@ fi
 # for this SHA and Telegram-pings ONLY on a red conclusion (green and
 # superseded-by-newer-push runs are silent). Needs a live gh token —
 # skipped quietly without one, landing itself never depends on it.
-if gh auth status >/dev/null 2>&1; then
-    ( setsid nohup "$(git rev-parse --show-toplevel)/scripts/ci-watch.sh" "$SHA" \
-        >>/tmp/ci-watch.log 2>&1 < /dev/null & ) || true
+# macOS ships no setsid, and `( setsid ... & ) || true` swallowed the
+# command-not-found, so the spawn was silently inert on the dev Mac
+# (BACKLOG, fixed 2026-08-16): fall back to bare nohup there — the
+# double-fork subshell already detaches from job control, and losing the
+# new-session bit only matters for terminal signals nohup blocks anyway.
+WATCHER="$(git rev-parse --show-toplevel)/scripts/ci-watch.sh"
+if gh auth status >/dev/null 2>&1 && [ -x "$WATCHER" ]; then
+    if command -v setsid >/dev/null 2>&1; then
+        ( setsid nohup "$WATCHER" "$SHA" \
+            >>/tmp/ci-watch.log 2>&1 < /dev/null & ) || true
+    else
+        ( nohup "$WATCHER" "$SHA" \
+            >>/tmp/ci-watch.log 2>&1 < /dev/null & ) || true
+    fi
     echo "ci-watch: spawned for ${SHA} (log: /tmp/ci-watch.log)"
 fi

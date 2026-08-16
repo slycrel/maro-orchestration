@@ -8,6 +8,33 @@ Last split: 2026-04-16 (session 34).
 
 ---
 
+## land.sh ci-watch inert on the dev Mac — FIXED 2026-08-16
+
+Found 2026-08-16 while landing chunk 3 from the Mac: the post-land spawn
+was `( setsid nohup scripts/ci-watch.sh ... & ) || true` and macOS ships
+no `setsid`, so the subshell died while the "ci-watch: spawned" line
+still printed — a watch that reports armed but isn't (our own taxonomy
+pattern 7). Harmless on the box (setsid exists; the box is the primary
+landing host), but the dev Mac landed a full chunk sequence blind.
+
+Fix (scripts/land.sh): `command -v setsid` picks the branch — setsid
+where it exists, bare `nohup ... &` fallback where it doesn't (the
+double-fork subshell already detaches from job control; the new-session
+bit only guards terminal signals nohup blocks anyway). Bonus honesty
+fix: the spawn is now also gated on `[ -x scripts/ci-watch.sh ]`, so a
+checkout without the watcher (every test fixture, historically) no
+longer prints a false "spawned" line.
+
+Probes (tests/test_land_rebase.py, must-fail verified via stash-rerun):
+a symlink-farm PATH puts setsid's presence under the TEST's control on
+every platform — `test_ci_watch_spawn_survives_missing_setsid` (red on
+old code) proves a marker-writing stub watcher actually RUNS with no
+setsid on PATH; `test_no_spawn_claim_without_watcher` (red on old code)
+pins the honesty gate; `test_ci_watch_spawn_with_setsid` pins the
+primary branch (real setsid on Linux, pass-through stub on the Mac).
+Live fire: the landing of this very fix, from the Mac, is the first
+dev-Mac land with a real watcher — /tmp/ci-watch.log has the trail.
+
 ## Closure claimed-but-unwired probe — SHIPPED 2026-08-16 (chunk 3 of 3; sequence complete)
 
 The sanctioned 2026-08-16 sequence (author fix checklist → pre-flight

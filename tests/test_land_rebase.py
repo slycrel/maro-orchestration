@@ -10,8 +10,10 @@ never touch this repo's origin. --skip-checks keeps the gate and the
 red-main gh query out of the loop (they are not what's under test and
 the gh query would hit the real GitHub repo).
 """
+import os
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -21,8 +23,9 @@ _LAND = _REPO_ROOT / "scripts" / "land.sh"
 _TRIAGE = _REPO_ROOT / "scripts" / "tree-triage.sh"
 
 
-def _run(cwd, *cmd, check=True):
-    res = subprocess.run(list(cmd), cwd=cwd, capture_output=True, text=True)
+def _run(cwd, *cmd, check=True, env=None):
+    res = subprocess.run(list(cmd), cwd=cwd, capture_output=True, text=True,
+                         env=env)
     if check and res.returncode != 0:
         raise AssertionError(
             f"{cmd} failed ({res.returncode}):\n{res.stdout}\n{res.stderr}")
@@ -46,6 +49,54 @@ def _land(clone, *flags):
 
 def _head(clone):
     return _git(clone, "rev-parse", "HEAD").stdout.strip()
+
+
+_BASH = shutil.which("bash")
+
+
+def _spawn_env(tmp_path, with_setsid):
+    """Environment for the ci-watch spawn probes: PATH is a symlink farm
+    holding exactly what an ff-land needs (git, sed, grep, nohup) plus a
+    stub gh whose `auth status` succeeds — so setsid's presence is under
+    the TEST's control on every platform, not the host's."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    for tool in ("git", "sed", "grep", "nohup"):
+        real = shutil.which(tool)
+        assert real, f"{tool} not on PATH"
+        (bin_dir / tool).symlink_to(real)
+    (bin_dir / "gh").write_text("#!/bin/sh\nexit 0\n")
+    (bin_dir / "gh").chmod(0o755)
+    if with_setsid:
+        real = shutil.which("setsid")
+        if real:
+            (bin_dir / "setsid").symlink_to(real)
+        else:
+            # The dev Mac has no real setsid to link; a pass-through stub
+            # still pins the branch's argument wiring.
+            (bin_dir / "setsid").write_text('#!/bin/sh\nexec "$@"\n')
+            (bin_dir / "setsid").chmod(0o755)
+    env = dict(os.environ)
+    env["PATH"] = str(bin_dir)
+    return env
+
+
+def _watcher_stub(clone, marker):
+    """Install a scripts/ci-watch.sh that records its $1 and exits —
+    no polling, no network."""
+    (clone / "scripts").mkdir(exist_ok=True)
+    stub = clone / "scripts" / "ci-watch.sh"
+    stub.write_text(f'#!/bin/sh\necho "$1" > "{marker}"\n')
+    stub.chmod(0o755)
+
+
+def _wait_for(marker, timeout=10.0):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if marker.exists() and marker.read_text().strip():
+            return True
+        time.sleep(0.05)
+    return False
 
 
 @pytest.fixture
@@ -197,6 +248,53 @@ class TestAutoRebase:
         res = _land(b)  # B has no commits of its own; HEAD == seed
         assert res.returncode == 0, res.stderr
         assert "already contained" in res.stdout
+
+    def test_ci_watch_spawn_survives_missing_setsid(self, race, tmp_path):
+        """macOS ships no setsid, and `( setsid ... & ) || true` swallowed
+        the command-not-found, so the post-land watcher was silently inert
+        on the dev Mac for two weeks (BACKLOG, fixed 2026-08-16). Pin the
+        fallback: PATH is a symlink farm WITHOUT setsid — deterministic on
+        every platform, Linux included — plus a stub gh (auth ok) and a
+        marker-writing stub watcher. The land must actually START the
+        watcher, not just print that it did."""
+        _origin, _a, b = race
+        marker = tmp_path / "watch-ran.txt"
+        _watcher_stub(b, marker)
+        _commit_file(b, "mine.txt", "from b\n", "mine")
+        res = _run(b, _BASH, str(_LAND), "--skip-checks", check=False,
+                   env=_spawn_env(tmp_path, with_setsid=False))
+        assert res.returncode == 0, res.stderr
+        assert "ci-watch: spawned" in res.stdout
+        assert _wait_for(marker), "watcher never ran without setsid on PATH"
+        assert marker.read_text().strip() == _head(b)
+
+    def test_ci_watch_spawn_with_setsid(self, race, tmp_path):
+        """Behavior-preservation pin for the primary branch: with setsid
+        on PATH (the real one where the platform has it, a pass-through
+        stub on the dev Mac) the watcher still starts and still receives
+        the landed sha as $1."""
+        _origin, _a, b = race
+        marker = tmp_path / "watch-ran.txt"
+        _watcher_stub(b, marker)
+        _commit_file(b, "mine.txt", "from b\n", "mine")
+        res = _run(b, _BASH, str(_LAND), "--skip-checks", check=False,
+                   env=_spawn_env(tmp_path, with_setsid=True))
+        assert res.returncode == 0, res.stderr
+        assert "ci-watch: spawned" in res.stdout
+        assert _wait_for(marker), "watcher never ran via the setsid branch"
+        assert marker.read_text().strip() == _head(b)
+
+    def test_no_spawn_claim_without_watcher(self, race, tmp_path):
+        """Honesty pin: a checkout without scripts/ci-watch.sh (every
+        fixture land before this fix) must not print 'ci-watch: spawned' —
+        the old block claimed the spawn unconditionally, exec failure and
+        all."""
+        _origin, _a, b = race
+        _commit_file(b, "mine.txt", "from b\n", "mine")
+        res = _run(b, _BASH, str(_LAND), "--skip-checks", check=False,
+                   env=_spawn_env(tmp_path, with_setsid=False))
+        assert res.returncode == 0, res.stderr
+        assert "ci-watch: spawned" not in res.stdout
 
     def test_merge_commits_refused(self, race):
         """cherry-pick can't replay merges; the script says so instead of
