@@ -3562,10 +3562,21 @@ def _validate_node_for_promotion(d: Dict[str, Any], adapter: Any) -> Dict[str, A
         # Mint-time grounding visibility (slice-2, 2026-08-16): the judge
         # weighs receipt stamps — ADVISORY, per the fail-open decree ("no
         # new judge"; consumers weigh, nothing deterministically blocks).
-        # A node without stamps renders byte-identically to before.
-        _g = d.get("grounding") or []
-        _unsup = [s for s in _g if isinstance(s, dict)
-                  and s.get("status") == "unsupported"]
+        # A node without stamps renders byte-identically to before. Shape
+        # guard (review r1): rows are externally-shaped data — a non-list
+        # grounding (corrupt/hand-edited row) is treated as absent rather
+        # than len()'d into a fabricated ratio. Unprobed is rendered as
+        # what it is — not checked — never folded into a "0/N supported"
+        # line that reads as refutation to the judge (review r1, QA lens:
+        # the design pins unprobed as honest uncertainty, and >30% unprobed
+        # is an EXPECTED v1 regime, not an anomaly). Wording is judge-
+        # specific on purpose — grounding_marker() serves prompt-space-
+        # constrained injection surfaces; this consumer gets the weigh
+        # instruction and more claim text.
+        _g_raw = d.get("grounding")
+        _g = ([s for s in _g_raw if isinstance(s, dict)]
+              if isinstance(_g_raw, list) else [])
+        _unsup = [s for s in _g if s.get("status") == "unsupported"]
         if _unsup:
             _heads = "; ".join(
                 str(s.get("claim", ""))[:80] for s in _unsup[:3])
@@ -3576,10 +3587,20 @@ def _validate_node_for_promotion(d: Dict[str, Any], adapter: Any) -> Dict[str, A
                 f"evidence — it is not an automatic disqualifier."
             )
         elif _g:
-            _n_sup = sum(1 for s in _g if isinstance(s, dict)
-                         and s.get("status") == "supported")
-            node_text += (f"\nMint-time grounding: {_n_sup}/{len(_g)} "
-                          f"method claim(s) supported by event-log receipts.")
+            _n_sup = sum(1 for s in _g if s.get("status") == "supported")
+            _n_unp = len(_g) - _n_sup
+            if _n_sup:
+                node_text += (
+                    f"\nMint-time grounding: {_n_sup} of {len(_g)} method "
+                    f"claim(s) supported by event-log receipts"
+                    + (f" ({_n_unp} unprobed — not checked, which is "
+                       f"uncertainty, not refutation)" if _n_unp else "")
+                    + ".")
+            else:
+                node_text += (
+                    f"\nMint-time grounding: {len(_g)} method claim(s) "
+                    f"detected; none could be tied to specific events "
+                    f"(unprobed — honest uncertainty, not refutation).")
         resp = adapter.complete(
             [
                 LLMMessage("system", _NODE_VALIDATION_SYSTEM),
@@ -3969,8 +3990,15 @@ def inject_knowledge_for_goal(
     lines: List[str] = ["## Relevant Knowledge"]
     chars = 0
     applied_ids: List[str] = []
+    from mint_grounding import grounding_marker
     for node in nodes:
         entry = f"- [{node.node_type}] {node.title}: {node.description[:200]}"
+        # Slice-2a review r1 (QA lens): the lesson-injection surfaces render
+        # the unsupported-claim marker; the NODE surface was the one
+        # consumer that didn't — an advisory-promoted node with an
+        # unsupported claim reached planner context unmarked, moving the
+        # R1-4 laundering point one hop downstream. Consumers weigh it.
+        entry += grounding_marker(getattr(node, "grounding", None))
         if node.sources:
             entry += f" (source: {node.sources[0][:60]})"
         if chars + len(entry) > max_chars:

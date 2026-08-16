@@ -481,7 +481,8 @@ def _save_thinkback_lessons(goal: str, lessons: List[str], run_id: str) -> None:
         try:
             from mint_grounding import ground_lessons_for_run
             groundings = ground_lessons_for_run(texts, run_id)
-        except Exception:
+        except Exception as exc:
+            log.debug("thinkback: mint grounding unavailable: %s", exc)
             groundings = []
 
     for i, lesson_text in enumerate(texts):

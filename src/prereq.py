@@ -193,7 +193,8 @@ def _spawn_knowledge_sub_loop(
                 if _sub_loop_id:
                     _grounding = ground_lessons_for_run(
                         [f"[{topic}] {summary}"], _sub_loop_id)[0]
-            except Exception:
+            except Exception as exc:
+                log.debug("prereq: mint grounding unavailable: %s", exc)
                 _grounding = None
             record_tiered_lesson(
                 f"[{topic}] {summary}",

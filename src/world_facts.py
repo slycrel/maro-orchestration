@@ -31,8 +31,11 @@ Design notes (mirrors terrain.py deliberately — same seam, same discipline):
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Optional
+
+log = logging.getLogger("maro.world_facts")
 
 KIND_ANECDOTAL = "anecdotal"
 KIND_HYPOTHESIS = "hypothesis"
@@ -350,6 +353,18 @@ def land_facts(ledger: Optional["WorldFactLedger"], *, loop_id: str,
                 desc += f" Evidence: {f.evidence}"
             desc += (f" (declared during run {loop_id or '?'}, "
                      f"step {f.first_step}, {f.hits}×)")
+            # Mint-time grounding (slice-2a review r1, 2026-08-16: this
+            # was a missed CREATE sibling — world facts are declared
+            # method/observation claims, exactly the shape R1-4 exists to
+            # stamp, and loop_id was already in hand). Fail-open.
+            _grounding = None
+            if loop_id:
+                try:
+                    from mint_grounding import ground_lessons_for_run
+                    _grounding = ground_lessons_for_run([desc], loop_id)[0]
+                except Exception as exc:
+                    log.debug("world_facts: mint grounding unavailable: %s",
+                              exc)
             _node, _is_new = upsert_knowledge_from_candidate(
                 title=f.fact[:100],
                 description=desc,
@@ -357,6 +372,7 @@ def land_facts(ledger: Optional["WorldFactLedger"], *, loop_id: str,
                 domain=project or "orchestration",
                 sources=sources,
                 existing_nodes=load_knowledge_nodes(status=None),
+                grounding=_grounding,
             )
             counts["anecdotal"] += 1
             newly_landed.append(WorldFactLedger._key(f.kind, f.fact))

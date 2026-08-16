@@ -399,31 +399,32 @@ def outcome_to_knowledge(
         sources = [f"outcome:{outcome_id}"] if outcome_id else []
 
         # Mint-time grounding (R1-4 laundering fix, 2026-08-16): ground each
-        # candidate node's OWN text against the minting outcome's run events
+        # candidate node's OWN prose against the minting outcome's run events
         # — reusing the lesson-layer stamps would misattribute (the node's
-        # extracted prose is not the lesson's prose). One event load per
-        # outcome; fail-open (events=None → nodes mint unstamped, absent-key).
-        _events = None
-        try:
-            _run_ref = getattr(outcome, "loop_id", "") or ""
-            if _run_ref:
-                from runs import resolve_run_dir
-                from mint_grounding import collect_run_tool_events
-                _rd = resolve_run_dir(_run_ref)
-                if _rd is not None:
-                    _events = collect_run_tool_events(_rd)
-        except Exception:
-            _events = None
+        # extracted prose is not the lesson's prose). Review round r1
+        # (2026-08-16): DESCRIPTION only — grounding the title too reopened
+        # the R1-1 false-support class, because the heuristic title is a
+        # truncated prefix of the description whose dropped specifics turned
+        # specific claims generic (family-level fallback then stamped them
+        # supported off unrelated events); a title-only claim is the accepted
+        # residual. Batched through the module's own entry point rather than
+        # a hand-rolled resolve/collect (boundary discipline); fail-open.
+        _groundings: List[Any] = []
+        _run_ref = str(getattr(outcome, "loop_id", "") or "")
+        if _run_ref and candidates:
+            try:
+                from mint_grounding import ground_lessons_for_run
+                _groundings = ground_lessons_for_run(
+                    [c[1] for c in candidates], _run_ref)
+            except Exception as exc:
+                log.debug("knowledge_bridge: mint grounding unavailable: %s",
+                          exc)
+                _groundings = []
 
-        for title, description, node_type, domain in candidates:
-            _grounding = None
-            if _events is not None:
-                try:
-                    from mint_grounding import ground_text
-                    _grounding = ground_text(
-                        f"{title}. {description}", _events)
-                except Exception:
-                    _grounding = None
+        for _c_idx, (title, description, node_type, domain) in enumerate(
+                candidates):
+            _grounding = (_groundings[_c_idx]
+                          if _c_idx < len(_groundings) else None)
             try:
                 _node, is_new = upsert_knowledge_from_candidate(
                     title=title,

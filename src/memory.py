@@ -696,7 +696,9 @@ def extract_step_lessons(
             from mint_grounding import ground_lessons_for_run
             _step_groundings = ground_lessons_for_run(
                 [t for t, _ in step_items], loop_id)
-        except Exception:
+        except Exception as exc:
+            log.debug("extract_step_lessons: mint grounding unavailable: %s",
+                      exc)
             _step_groundings = []
 
     recorded = 0

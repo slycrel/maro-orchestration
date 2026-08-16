@@ -192,6 +192,105 @@ class TestKnowledgeLaunderingFix:
         assert nodes[0].grounding == before
         assert nodes[0].times_applied == 1
 
+    def test_heuristic_title_truncation_cannot_false_support(
+            self, monkeypatch, tmp_path):
+        # Review r1 HIGH (Skeptic): grounding "{title}. {description}" let
+        # the heuristic path's 8-word title prefix drop a claim's
+        # identifying specifics, turning a specific claim generic and
+        # riding the family-level fallback to a false "supported" off an
+        # unrelated event — the R1-1 class reopened by composition. Fix:
+        # description-only grounding. This exercises the REAL
+        # _extract_heuristic, no mocks on the extraction path.
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        _make_run("h-s2-title")
+        from knowledge_bridge import outcome_to_knowledge
+        lesson = ("The application successfully downloaded and validated "
+                  "the artifact package from the internal build server "
+                  "build-ci.internal.example")
+        outcome = types.SimpleNamespace(
+            goal="build artifact", status="done", outcome_id="o-title",
+            loop_id="h-s2-title", dry_run=False, summary="",
+            task_type="general", lessons=[lesson], goal_achieved=True)
+        outcome_to_knowledge(outcome, adapter=None)
+        from knowledge_web import load_knowledge_nodes
+        nodes = load_knowledge_nodes(status=None)
+        assert nodes, "heuristic path minted no node"
+        for g in nodes[0].grounding:
+            if g["family"] == "fetch":
+                # The claim names build-ci.internal.example; the run's only
+                # event fetched example.com — supported would be a false
+                # receipt.
+                assert g["status"] != "supported", g
+
+    def test_world_facts_lane_stamps(self, monkeypatch, tmp_path):
+        # Review r1 HIGH (Minimalist): land_facts minted candidate nodes
+        # with loop_id in hand and no stamps — the missed CREATE sibling.
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        _make_run("h-s2-wf")
+        from world_facts import WorldFactLedger, land_facts
+        ledger = WorldFactLedger()
+        ledger.observe("anecdotal", _CLAIM, "", 1)
+        counts = land_facts(ledger, loop_id="h-s2-wf")
+        assert counts["anecdotal"] == 1
+        from knowledge_web import load_knowledge_nodes
+        nodes = load_knowledge_nodes(status=None)
+        assert len(nodes) == 1
+        statuses = {g["family"]: g["status"] for g in nodes[0].grounding}
+        assert statuses["auth"] == "unsupported"
+
+    def test_node_injection_surface_renders_marker(self, monkeypatch,
+                                                   tmp_path):
+        # Review r1 (QA lens): the node injection surface was the one
+        # consumer not rendering the unsupported marker — an advisory-
+        # promoted node reached planner context unmarked.
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        from knowledge_web import (KnowledgeNode, NODE_ACTIVE,
+                                   append_knowledge_node,
+                                   inject_knowledge_for_goal)
+        append_knowledge_node(KnowledgeNode(
+            node_id="n-inj", node_type="insight",
+            title="Vendor data retrieval",
+            description="Data was retrieved by an authenticated fetch.",
+            status=NODE_ACTIVE, confidence=0.9,
+            grounding=[{"claim": "authenticated fetch", "family": "auth",
+                        "status": "unsupported", "receipts": []}]))
+        block = inject_knowledge_for_goal("retrieve vendor data")
+        assert "mint-grounding: 1 claim unsupported" in block
+
+    def test_grounding_call_failure_logs_and_mints_unstamped(
+            self, monkeypatch, tmp_path, caplog):
+        # Review r1 (QA lens): a real defect inside the grounding call must
+        # not be permanently invisible — the mint proceeds unstamped AND a
+        # debug line records why.
+        import logging as _logging
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        import mint_grounding
+
+        def boom(*a, **kw):
+            raise RuntimeError("synthetic grounding failure")
+
+        monkeypatch.setattr(mint_grounding, "ground_lessons_for_run", boom)
+        import memory
+        seen = []
+        monkeypatch.setattr(
+            memory, "record_tiered_lesson",
+            lambda *a, **kw: (seen.append(kw),
+                              types.SimpleNamespace(lesson_id="l1"))[1])
+
+        class FakeAdapter:
+            def complete(self, messages, **kw):
+                return types.SimpleNamespace(content=json.dumps(
+                    [{"lesson": _CLAIM, "type": "execution"}]))
+
+        steps = [types.SimpleNamespace(status="done", result="ok",
+                                       step="step 1", confidence="strong")]
+        with caplog.at_level(_logging.DEBUG, logger="maro.memory"):
+            memory.extract_step_lessons(
+                "goal", steps, adapter=FakeAdapter(), loop_id="h-s2-boom")
+        assert len(seen) == 1 and seen[0]["grounding"] is None
+        assert any("mint grounding unavailable" in r.message
+                   for r in caplog.records)
+
     def test_stampless_node_row_shape_preserved(self, monkeypatch, tmp_path):
         # Absent-key discipline: no run ground truth -> the persisted row
         # has NO grounding key at all.
@@ -245,7 +344,34 @@ class TestPromotionJudgeVisibility:
              "grounding": [{"claim": "fetched", "family": "fetch",
                             "status": "supported", "receipts": ["r"]}]}
         _validate_node_for_promotion(d, adapter)
-        assert "1/1 method claim(s) supported" in calls[0][1].content
+        assert "1 of 1 method claim(s) supported" in calls[0][1].content
+
+    def test_unprobed_only_never_reads_as_refutation(self):
+        # Review r1 (QA lens): all-unprobed used to render "0/3 method
+        # claim(s) supported" — honest uncertainty dressed as refutation.
+        # The design pins >30% unprobed as an EXPECTED v1 regime.
+        from knowledge_web import _validate_node_for_promotion
+        adapter, calls = self._judge_capture()
+        d = {"node_id": "n1", "node_type": "insight", "title": "t",
+             "description": "d", "times_applied": 3, "confidence": 0.8,
+             "grounding": [{"claim": f"c{i}", "family": "probe",
+                            "status": "unprobed", "receipts": []}
+                           for i in range(3)]}
+        _validate_node_for_promotion(d, adapter)
+        user_msg = calls[0][1].content
+        assert "not refutation" in user_msg
+        assert "supported by event-log receipts" not in user_msg
+
+    def test_forged_grounding_shape_treated_as_absent(self):
+        # Review r1: a corrupted/hand-edited row with a string-typed
+        # grounding used to len() into a fabricated "0/13 supported" ratio.
+        from knowledge_web import _validate_node_for_promotion
+        adapter, calls = self._judge_capture()
+        d = {"node_id": "n1", "node_type": "insight", "title": "t",
+             "description": "d", "times_applied": 3, "confidence": 0.8,
+             "grounding": "corrupted-row"}
+        _validate_node_for_promotion(d, adapter)
+        assert "grounding" not in calls[0][1].content.lower()
 
     def test_stampless_prompt_byte_identical(self):
         # Behavior preservation: no grounding -> the judge prompt must not
