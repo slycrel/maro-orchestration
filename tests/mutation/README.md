@@ -36,6 +36,13 @@ the answer was unrecoverable by the next session.
 
 - **One anchor, one match.** The runner refuses an anchor matching 0 or
   2+ times, because a mis-applied mutation silently reads as a pass.
+- **The baseline must be green.** Every distinct `tests` target is run
+  once unmutated before anything is applied, and a red baseline aborts
+  the sweep. DETECTED is only "pytest exited non-zero", so without this
+  a broken environment reports a perfect run — the instrument built to
+  find false confidence manufacturing it. Added 2026-08-16 after the
+  Experimentalist lens found the hole; the three green specs on record
+  were re-run under the gate and all held.
 - **A survivor is a hole in the suite**, not a mutation to delete.
   Strengthen the test.
 - **Mark genuinely equivalent mutants `equivalent`** with the reason

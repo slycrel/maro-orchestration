@@ -10,6 +10,40 @@ Rotation policy (2026-08-16): when this file outgrows whole-file readability (25
 
 ---
 
+**`scripts/mutate.py` negative control — SHIPPED 2026-08-16.**
+Filed and fixed the same day.
+
+*Original entry: the runner had no negative control — a sweep where
+pytest never RAN reported the same green as a clean one* (found
+2026-08-16 by the Experimentalist lens reviewing the path_rewrite
+sweep, reproduced twice). The runner treats "tests failed" as DETECTED,
+so an environment where the test command fails for an unrelated reason
+(no `PYTHONPATH`, no pytest on the chosen interpreter, a collection
+error) marks every mutation detected and exits 0. That is the
+guard-that-cannot-fail shape, one level up from the code it audits: the
+instrument built to find false confidence can manufacture it. **Fix
+shape:** run the test target ONCE unmutated before applying anything
+and require it to pass — a sweep whose baseline is red has nothing to
+say. Cheap, and it makes every "N/N accounted for" mean something. (The
+path_rewrite sweeps are not in doubt: both rounds produced SURVIVED and
+SKIP verdicts alongside the DETECTED ones, which is the discrimination
+a broken runner cannot show. That is luck, not a design property.)
+
+**Shipped as filed:** `_baseline_ok()` runs every distinct `tests` target
+once unmutated before any mutation is applied and refuses the sweep if it
+does not pass, printing pytest's last 15 lines so the reason is visible.
+Two negative controls run against the fix itself — a nonexistent test
+file, and a nodeid that doesn't resolve — both now abort with the reason
+instead of reporting a clean sweep; before the fix each would have
+reported 1/1 accounted for.
+
+**The three existing green specs were re-run under the gate and all
+hold**: `scope_14a` 35/35, `path_rewrite` 40/40, `dispatch_envelope`
+20/20. So the greens on record were real, not artifacts — the concern
+was right and the audit was worth doing anyway. Baseline cost is one
+extra pytest run per distinct target.
+
+
 ## Path-token rewriting — SHIPPED 2026-08-16 (shape (b), both transfer lanes)
 
 Filed 2026-08-13 as a low-priority residual of the workspace

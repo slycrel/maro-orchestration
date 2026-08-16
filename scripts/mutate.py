@@ -58,8 +58,14 @@ Usage:
     python3 scripts/mutate.py specs/scope.json --in-place
     python3 scripts/mutate.py specs/scope.json --only "quarantine"
 
-Exit status: 0 only if every non-equivalent mutation was DETECTED and
-every equivalent one SURVIVED as claimed.
+Every distinct test target is run ONCE unmutated first and must pass —
+the negative control. A DETECTED verdict is only "pytest exited
+non-zero", so without a baseline an environment where the command fails
+for an unrelated reason (no PYTHONPATH, a collection error, a typo'd
+path) reports a perfect sweep.
+
+Exit status: 0 only if the baseline passed, every non-equivalent
+mutation was DETECTED, and every equivalent one SURVIVED as claimed.
 """
 from __future__ import annotations
 
@@ -122,6 +128,34 @@ def _refuse_if_dirty(spec) -> None:
                    "yours. Commit them, or drop --in-place.")
 
 
+def _baseline_ok(spec, root: Path) -> bool:
+    """Negative control: every distinct test target must PASS unmutated.
+
+    Without this the runner has the exact flaw it exists to find. A
+    DETECTED verdict is just "pytest exited non-zero", so an environment
+    where the command fails for an unrelated reason — no PYTHONPATH, no
+    pytest on this interpreter, a collection error, a typo'd path — marks
+    every mutation detected and reports a clean sweep. The instrument
+    built to find false confidence would manufacture it (found 2026-08-16
+    by the Experimentalist lens on the path_rewrite sweep, reproduced
+    twice). A sweep whose baseline is red has nothing to say.
+    """
+    for tests in sorted({m["tests"] for m in spec}):
+        r = _sh([sys.executable, "-m", "pytest", *tests.split(),
+                 "-q", "--no-header", "-p", "no:cacheprovider"], cwd=root)
+        if r.returncode != 0:
+            print(f"BASELINE FAILED for: {tests}\n"
+                  "  The unmutated tests do not pass, so every mutation would\n"
+                  "  read as DETECTED and the sweep would mean nothing. Fix the\n"
+                  "  target (or the environment) before trusting any verdict.\n"
+                  + "\n".join(
+                      (r.stdout + r.stderr).strip().splitlines()[-15:]
+                      or [f"  (pytest printed nothing; exit {r.returncode})"]))
+            return False
+        print(f"baseline ok: {tests}")
+    return True
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("spec", type=Path)
@@ -150,6 +184,8 @@ def main() -> int:
 
     failures, results = [], []
     try:
+        if not _baseline_ok(spec, root):
+            return 1
         for m in spec:
             name, target = m["name"], root / m["file"]
             equivalent = m.get("equivalent")

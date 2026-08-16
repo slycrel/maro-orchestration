@@ -145,22 +145,6 @@ Ordered open work that matters. Top of the list is next.
   which nothing tested. Redundancy in the code is fine; redundancy that
   makes a test unable to distinguish its subject is not.
 
-- [ ] **`scripts/mutate.py` has no negative control — a sweep where
-  pytest never RAN reports the same green as a clean one** (found
-  2026-08-16 by the Experimentalist lens reviewing the path_rewrite
-  sweep, reproduced twice). The runner treats "tests failed" as DETECTED,
-  so an environment where the test command fails for an unrelated reason
-  (no `PYTHONPATH`, no pytest on the chosen interpreter, a collection
-  error) marks every mutation detected and exits 0. That is the
-  guard-that-cannot-fail shape, one level up from the code it audits: the
-  instrument built to find false confidence can manufacture it. **Fix
-  shape:** run the test target ONCE unmutated before applying anything
-  and require it to pass — a sweep whose baseline is red has nothing to
-  say. Cheap, and it makes every "N/N accounted for" mean something. (The
-  path_rewrite sweeps are not in doubt: both rounds produced SURVIVED and
-  SKIP verdicts alongside the DETECTED ones, which is the discrimination
-  a broken runner cannot show. That is luck, not a design property.)
-
 - [ ] **Close `tests/mutation/provenance_gate.json` — the contamination
   gate's enforcement is largely unpinned.** First tier-1 sweep, run
   2026-08-16, **landed deliberately red**: 6 of 18 accounted for. The
