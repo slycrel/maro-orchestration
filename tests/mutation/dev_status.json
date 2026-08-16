@@ -1,0 +1,79 @@
+[
+ {
+  "name": "capability marks are matched anywhere in a cell, not at its start",
+  "file": "src/dev_status.py",
+  "anchor": "                m = re.match(r\"^\\*{0,2}`(verified|target|aspirational)`\", cell)",
+  "replacement": "                m = re.search(r\"`(verified|target|aspirational)`\", cell)",
+  "tests": "tests/test_dev_status.py"
+ },
+ {
+  "name": "a row naming two marks counts as two capabilities",
+  "file": "src/dev_status.py",
+  "anchor": "                    break          # one mark per row, the leftmost wins",
+  "replacement": "                    continue",
+  "tests": "tests/test_dev_status.py"
+ },
+ {
+  "name": "the backlog census ignores its section filter",
+  "file": "src/dev_status.py",
+  "anchor": "            if section_filter in section:",
+  "replacement": "            if True:",
+  "tests": "tests/test_dev_status.py"
+ },
+ {
+  "name": "a declared stopping rule is not recognized",
+  "file": "src/dev_status.py",
+  "anchor": "    \"kill criterion\", \"kill-criterion\", \"falsifier\", \"stop criteria\",",
+  "replacement": "    \"kill criterion\",",
+  "tests": "tests/test_dev_status.py"
+ },
+ {
+  "name": "a stale capability ledger renders like a fresh one",
+  "file": "src/dev_status.py",
+  "anchor": "    elif age >= 14:",
+  "replacement": "    elif False:",
+  "tests": "tests/test_dev_status.py"
+ },
+ {
+  "name": "unknown ledger freshness renders as fresh",
+  "file": "src/dev_status.py",
+  "anchor": "    if age is None:",
+  "replacement": "    if False:",
+  "tests": "tests/test_dev_status.py"
+ },
+ {
+  "name": "an unknown 30d history prints a delta of zero instead of unknown",
+  "file": "src/dev_status.py",
+  "anchor": "    if then is None:\n        return \"(30d: unknown)\"",
+  "replacement": "    if then is None:\n        then = now",
+  "tests": "tests/test_dev_status.py"
+ },
+ {
+  "name": "garbage commit counts raise instead of degrading to zero",
+  "file": "src/dev_status.py",
+  "anchor": "        return int(out) if out.isdigit() else 0",
+  "replacement": "        return int(out or 0)",
+  "tests": "tests/test_dev_status.py"
+ },
+ {
+  "name": "history blobs are never read, so every delta stays unknown",
+  "file": "src/dev_status.py",
+  "anchor": "        old_bl = git([\"show\", f\"{sha}:BACKLOG.md\"])",
+  "replacement": "        old_bl = \"\"",
+  "tests": "tests/test_dev_status.py"
+ },
+ {
+  "name": "rewriting the dev log stacks blocks instead of replacing",
+  "file": "src/dev_status.py",
+  "anchor": "    if BLOCK_START in doc and BLOCK_END in doc:",
+  "replacement": "    if False:",
+  "tests": "tests/test_dev_status.py"
+ },
+ {
+  "name": "the fan-out rate ships without its re-org caveat",
+  "file": "src/dev_status.py",
+  "anchor": "        lines.append(\"- \u26a0 this delta counts one SECTION, so an archive pass \"\n                     \"or a re-org moves it without any work changing hands. \"\n                     \"Read the rate as a coarse direction, never as a score.\")",
+  "replacement": "        pass",
+  "tests": "tests/test_dev_status.py"
+ }
+]

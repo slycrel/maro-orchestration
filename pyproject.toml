@@ -140,6 +140,7 @@ py-modules = [
     "cross_ref",
     "decision_prior",
     "delta_replay",
+    "dev_status",
     "director",
     "discretion_readout",
     "dispatch_envelope",

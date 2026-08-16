@@ -289,3 +289,22 @@ if gh auth status >/dev/null 2>&1 && [ -x "$WATCHER" ]; then
     fi
     echo "ci-watch: spawned for ${SHA} (log: /tmp/ci-watch.log)"
 fi
+
+# Post-land dev-status line (2026-08-16, Jeremy: "I'm often trapped with less
+# visibility in where we actually are at the high level"). Landing is exactly
+# when project state changes, so this is the honest moment to recompute — but
+# it only PRINTS. It deliberately does not rewrite docs/DEV_LOG.md here: a
+# hook that dirties a tracked file makes a stranger appear in another
+# session's `git status`, which CLAUDE.md concurrency rule 3 exists to
+# prevent. Fold the block in on purpose with `dev-status --write` and commit
+# it with your chunk. Never fails the land — the push already succeeded.
+DS_PY="python3"
+[ -x "$REPO_DIR/.venv/bin/python" ] && DS_PY="$REPO_DIR/.venv/bin/python"
+if DS_LINE=$(cd "$REPO_DIR" && PYTHONPATH=src "$DS_PY" src/cli.py dev-status \
+        --format line 2>/dev/null) && [ -n "$DS_LINE" ]; then
+    echo "$DS_LINE"
+    # Say when the written block has drifted from what just landed, rather
+    # than letting the dev log quietly become another stale surface.
+    DS_BLOCK_AGE=$(cd "$REPO_DIR" && git log -1 --format=%cr -- docs/DEV_LOG.md 2>/dev/null)
+    [ -n "$DS_BLOCK_AGE" ] && echo "  (dev log last written ${DS_BLOCK_AGE}; refresh with: maro dev-status --write)"
+fi

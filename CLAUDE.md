@@ -307,7 +307,13 @@ detached HEAD):
 
 When a chunk of work is done (milestone delivered, bug fixed, feature shipped — not every tiny edit), always:
 
-1. **Document** — update MILESTONES.md / BACKLOG.md / relevant docs so the next session knows what changed and what's next. If a landed doc needs Jeremy's read for a decision, add a row to `docs/READING_QUEUE.md` in the same commit (it renders to the viz server's Reading tab).
+1. **Document** — update MILESTONES.md / BACKLOG.md / relevant docs so the next session knows what changed and what's next. Run
+   **`PYTHONPATH=src python3 src/cli.py dev-status --write`** and commit the
+   refreshed block at the top of `docs/DEV_LOG.md` — it is one command, and it
+   is the surface that answers "where are we?" without re-deriving it from the
+   backlog (which is a findings log and grows forever by design). `land.sh`
+   prints the same one-line summary after every push and says when the written
+   block has drifted. If a landed doc needs Jeremy's read for a decision, add a row to `docs/READING_QUEUE.md` in the same commit (it renders to the viz server's Reading tab).
 2. **Commit** — clean, scoped commit with a useful message. No "WIP" or dangling work.
 3. **Land** — get it onto `main`. On the maro box, once tests are green, land your
    directed work directly with **`bash scripts/land.sh`** (fast-forwards `main`

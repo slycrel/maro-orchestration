@@ -531,4 +531,16 @@ def build_parser() -> argparse.ArgumentParser:
     p_status = sub.add_parser("opstatus", help="Write/read operator status")
     p_status.add_argument("--format", choices=["json", "path"], default="json")
 
+    p_devstatus = sub.add_parser(
+        "dev-status",
+        help="Where the project is: capability ledger, fan-out rate, arcs "
+             "with no stopping rule")
+    p_devstatus.add_argument(
+        "--write", action="store_true",
+        help="Fold the block into the top of docs/DEV_LOG.md (between "
+             "markers; the narrative entries below are untouched)")
+    p_devstatus.add_argument(
+        "--format", choices=["text", "line"], default="text",
+        help="'line' prints the one-line summary (what land.sh shows)")
+
     return parser

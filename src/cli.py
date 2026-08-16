@@ -1527,6 +1527,28 @@ def _cmd_opstatus(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_dev_status(args: argparse.Namespace) -> int:
+    import dev_status as _ds
+    from datetime import date
+    from orch_items import repo_root
+
+    repo = repo_root()
+    today = date.today().isoformat()
+    caps, bl, tr = _ds.compute(repo, today=today)
+
+    if args.format == "line":
+        print(_ds.one_line(caps, bl, tr))
+        return 0
+
+    block = _ds.render(caps, bl, tr, today=today)
+    print(block)
+    if args.write:
+        log = repo / "docs" / "DEV_LOG.md"
+        log.write_text(_ds.splice_block(log.read_text(), block))
+        print(f"\n[maro] dev-status written to {log}", file=sys.stderr)
+    return 0
+
+
 def _cmd_mission(args: argparse.Namespace) -> int:
     import mission as _mission_mod
     goal_str = " ".join(args.goal)
@@ -2528,6 +2550,7 @@ _COMMAND_HANDLERS = {
     "knowledge": _cmd_knowledge,
     "eval": _cmd_eval,
     "opstatus": _cmd_opstatus,
+    "dev-status": _cmd_dev_status,
     "mission": _cmd_mission,
     "mission-status": _cmd_mission_status,
     "background": _cmd_background,
