@@ -3172,3 +3172,27 @@ Dated end-of-chunk/session entries, append-only at the tail. Rotation policy (20
   diff-derived list tests whether your fixes are pinned, a file-derived
   one tests whether the behavior is. And a guard that cannot fail is
   worse than no guard: it is a standing claim that the rule is enforced.
+- **2026-08-16 (dev Mac, cont.)** — Adversarial-review skill hardened
+  from this round's own process failures and **reconciled across all
+  three copies** (canonical `~/.claude/skills/adversarial-review/`,
+  dev-Mac mirror `~/claude/adversarial-review/`, box
+  `/home/clawd/.claude/skills/`; backups at
+  `/tmp/adversarial-review.pre-sync-backup-20260816` on both machines).
+  Added: **"your FINAL message IS the deliverable"** as a verbatim
+  prompt clause (both CLIs keep only the last assistant message — two of
+  four lenses lost their findings to discarded turns and had to be
+  re-run), a **freeze-the-tree rule** (don't fix while reviewers run; the
+  re-run Skeptic read WIP code before isolating the commit in a
+  worktree), a step-4 rule that a **summary-only return is a partial
+  failure** to re-run rather than synthesize from, and the codex
+  `output/` salvage path. The two copies had diverged for ~5 weeks in
+  BOTH directions: syncing forward blindly would have destroyed a
+  **Bonus Persona Pool** (Failure Operator, Security-and-Abuse Analyst,
+  Experimentalist) that survived only in the older copy, along with the
+  reviewer stderr/status artifacts and the codex stdin rule — all now
+  restored into the canonical copy. Standing pairing recorded: the
+  **Experimentalist earns a seat whenever a chunk ships a number**; this
+  round ran without it and the claim it falsified ("all nine stamped
+  rows survive", actually 8/9) was exactly an instrument error.
+  `docs/HOUSE_STYLE.md` review-mechanics row now names the canonical
+  path and the two mirrors.

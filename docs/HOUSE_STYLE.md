@@ -240,7 +240,7 @@ NOT duplicate:
 | Coding posture during iteration | `docs/CODING_NOTES.md` |
 | Session discipline, shared-tree git rules, landing policy | `CLAUDE.md` |
 | Config key census | `docs/DEFAULTS.md` |
-| Review mechanics | `.claude` adversarial-review skill; records in `docs/history/*-adversarial-review.md` |
+| Review mechanics | `~/.claude/skills/adversarial-review/` is canonical (mirrors: dev-Mac `~/claude/adversarial-review/`, box `/home/clawd/.claude/skills/`) — edit the canonical copy and rsync both, they diverged once and nearly lost three bonus personas; records in `docs/history/*-review.md` |
 | Runtime (not dev) review seats | `src/quality_gate.py` evidence-path lenses; `docs/LENSES.md` proposed registry |
 | Subsystem intent vs implementation | `skills/arch-*.md` |
 
