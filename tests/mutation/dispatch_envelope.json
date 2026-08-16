@@ -1,0 +1,143 @@
+[
+  {
+    "name": "parse :: a truncated typed dispatch runs as prose instead of failing loud",
+    "file": "src/dispatch_envelope.py",
+    "anchor": "        if ENVELOPE_VERSION in text:\n            raise EnvelopeError(",
+    "replacement": "        if False:\n            raise EnvelopeError(",
+    "tests": "tests/test_dispatch_envelope.py tests/test_hermes_dispatch.py tests/test_handle.py"
+  },
+  {
+    "name": "parse :: any envelope version is accepted",
+    "file": "src/dispatch_envelope.py",
+    "anchor": "    if not isinstance(data, dict) or data.get(\"envelope\") != ENVELOPE_VERSION:",
+    "replacement": "    if not isinstance(data, dict) or \"envelope\" not in data:",
+    "tests": "tests/test_dispatch_envelope.py tests/test_hermes_dispatch.py tests/test_handle.py"
+  },
+  {
+    "name": "parse :: an empty user_ask becomes the goal",
+    "file": "src/dispatch_envelope.py",
+    "anchor": "    if not isinstance(ask, str) or not ask.strip():",
+    "replacement": "    if not isinstance(ask, str):",
+    "tests": "tests/test_dispatch_envelope.py tests/test_hermes_dispatch.py tests/test_handle.py"
+  },
+  {
+    "name": "parse :: a non-string user_ask becomes the goal",
+    "file": "src/dispatch_envelope.py",
+    "anchor": "    if not isinstance(ask, str) or not ask.strip():",
+    "replacement": "    if not str(ask).strip():",
+    "tests": "tests/test_dispatch_envelope.py tests/test_hermes_dispatch.py tests/test_handle.py"
+  },
+  {
+    "name": "parse :: operator_context type check dropped",
+    "file": "src/dispatch_envelope.py",
+    "anchor": "    if not isinstance(context, str):\n        raise EnvelopeError(\"operator_context must be a string\")",
+    "replacement": "    context = str(context)",
+    "tests": "tests/test_dispatch_envelope.py tests/test_hermes_dispatch.py tests/test_handle.py"
+  },
+  {
+    "name": "parse :: operator_constraints element type check dropped",
+    "file": "src/dispatch_envelope.py",
+    "anchor": "    if (not isinstance(constraints, list)\n            or not all(isinstance(c, str) for c in constraints)):",
+    "replacement": "    if not isinstance(constraints, list):",
+    "tests": "tests/test_dispatch_envelope.py tests/test_hermes_dispatch.py tests/test_handle.py"
+  },
+  {
+    "name": "parse :: attached_artifacts element type check dropped",
+    "file": "src/dispatch_envelope.py",
+    "anchor": "    if (not isinstance(artifacts, list)\n            or not all(isinstance(a, dict) for a in artifacts)):",
+    "replacement": "    if not isinstance(artifacts, list):",
+    "tests": "tests/test_dispatch_envelope.py tests/test_hermes_dispatch.py tests/test_handle.py"
+  },
+  {
+    "name": "parse :: an artifact may have no name",
+    "file": "src/dispatch_envelope.py",
+    "anchor": "        if not isinstance(name, str) or not name.strip():\n            raise EnvelopeError(\"attached artifact missing a non-empty name\")",
+    "replacement": "        pass",
+    "tests": "tests/test_dispatch_envelope.py tests/test_hermes_dispatch.py tests/test_handle.py"
+  },
+  {
+    "name": "parse :: an artifact may have non-string content",
+    "file": "src/dispatch_envelope.py",
+    "anchor": "        if not isinstance(art.get(\"content\"), str):\n            raise EnvelopeError(f\"attached artifact {name!r} missing string content\")",
+    "replacement": "        pass",
+    "tests": "tests/test_dispatch_envelope.py tests/test_hermes_dispatch.py tests/test_handle.py"
+  },
+  {
+    "name": "parse :: the ask is not stripped",
+    "file": "src/dispatch_envelope.py",
+    "anchor": "        user_ask=ask.strip(),",
+    "replacement": "        user_ask=ask,",
+    "tests": "tests/test_dispatch_envelope.py tests/test_hermes_dispatch.py tests/test_handle.py"
+  },
+  {
+    "name": "safe_name :: path traversal is no longer impossible by construction",
+    "file": "src/dispatch_envelope.py",
+    "anchor": "    base = Path(name.replace(\"\\\\\", \"/\")).name",
+    "replacement": "    base = name.replace(\"\\\\\", \"/\")",
+    "tests": "tests/test_dispatch_envelope.py tests/test_hermes_dispatch.py tests/test_handle.py",
+    "equivalent": "Defense in depth, and the OTHER guard is the one that binds: the character whitelist on the next line rewrites `/` to `_`, so '../../evil.md' becomes 'evil.md' with or without the basename call. Probed 2026-08-16 across ../, ..\\, '..', 'foo/..', '/etc/passwd', '....//', and a leading newline — no input escapes the artifact dir with only the whitelist in place. Contorting a test to kill this would mean asserting on the intermediate name rather than on where the file lands."
+  },
+  {
+    "name": "safe_name :: the character whitelist is dropped",
+    "file": "src/dispatch_envelope.py",
+    "anchor": "    base = re.sub(r\"[^A-Za-z0-9._-]\", \"_\", base).strip(\"._\") or \"artifact\"",
+    "replacement": "    base = base.strip(\"._\") or \"artifact\"",
+    "tests": "tests/test_dispatch_envelope.py tests/test_hermes_dispatch.py tests/test_handle.py"
+  },
+  {
+    "name": "safe_name :: the length cap is dropped",
+    "file": "src/dispatch_envelope.py",
+    "anchor": "    return base[:120]",
+    "replacement": "    return base",
+    "tests": "tests/test_dispatch_envelope.py tests/test_hermes_dispatch.py tests/test_handle.py"
+  },
+  {
+    "name": "store :: same-named artifacts overwrite each other",
+    "file": "src/dispatch_envelope.py",
+    "anchor": "        while candidate in taken:\n            candidate = f\"{i}-{base}\"\n            i += 1",
+    "replacement": "        while False:\n            candidate = f\"{i}-{base}\"\n            i += 1",
+    "tests": "tests/test_dispatch_envelope.py tests/test_hermes_dispatch.py tests/test_handle.py"
+  },
+  {
+    "name": "store :: the provenance sha is of the claim, not what landed",
+    "file": "src/dispatch_envelope.py",
+    "anchor": "            \"sha256\": hashlib.sha256(content.encode(\"utf-8\")).hexdigest(),",
+    "replacement": "            \"sha256\": \"\",",
+    "tests": "tests/test_dispatch_envelope.py tests/test_hermes_dispatch.py tests/test_handle.py"
+  },
+  {
+    "name": "land :: the run-dir copy stops being idempotent",
+    "file": "src/dispatch_envelope.py",
+    "anchor": "            if target.exists():\n                continue",
+    "replacement": "            if False:\n                continue",
+    "tests": "tests/test_dispatch_envelope.py tests/test_hermes_dispatch.py tests/test_handle.py"
+  },
+  {
+    "name": "operator_block :: the advisory/NOT-the-ask label is dropped",
+    "file": "src/dispatch_envelope.py",
+    "anchor": "        \"== Operator dispatch context (advisory — authored by the dispatching \"\n        \"agent, NOT part of the user's ask) ==\\n\"",
+    "replacement": "        \"== Context ==\\n\"",
+    "tests": "tests/test_dispatch_envelope.py tests/test_hermes_dispatch.py tests/test_handle.py"
+  },
+  {
+    "name": "operator_block :: an empty envelope still renders a block",
+    "file": "src/dispatch_envelope.py",
+    "anchor": "    if not parts:\n        return \"\"",
+    "replacement": "    if False:\n        return \"\"",
+    "tests": "tests/test_dispatch_envelope.py tests/test_hermes_dispatch.py tests/test_handle.py"
+  },
+  {
+    "name": "DECREE :: operator prose is appended to the goal",
+    "file": "src/handle_queue.py",
+    "anchor": "            reason = _env.user_ask\n            _stored = store_attachments(_env, key=job_id)\n            _operator_ctx = operator_block(_env, _stored) or None",
+    "replacement": "            _stored = store_attachments(_env, key=job_id)\n            _operator_ctx = operator_block(_env, _stored) or None\n            reason = _env.user_ask + (\"\\n\\n\" + _operator_ctx if _operator_ctx else \"\")",
+    "tests": "tests/test_dispatch_envelope.py tests/test_hermes_dispatch.py tests/test_handle.py"
+  },
+  {
+    "name": "DECREE :: the operator channel is dropped on the floor",
+    "file": "src/handle_queue.py",
+    "anchor": "            _operator_ctx = operator_block(_env, _stored) or None",
+    "replacement": "            _operator_ctx = None",
+    "tests": "tests/test_dispatch_envelope.py tests/test_hermes_dispatch.py tests/test_handle.py"
+  }
+]

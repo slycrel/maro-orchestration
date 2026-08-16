@@ -6,7 +6,9 @@ extraction; prose dispatches keep working unchanged; a declared-but-broken
 envelope fails loud (machine-to-machine — silence would run JSON soup as
 a goal).
 """
+import hashlib
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -59,6 +61,16 @@ class TestParse:
     def test_json_array_returns_none(self):
         assert parse_dispatch_payload('["a", "b"]') is None
 
+    def test_a_different_envelope_version_is_not_parsed_as_this_one(self):
+        # The version key is a contract, not a feature flag. A v2 dispatcher
+        # sending v2 semantics must NOT be read with v1 field meanings — that
+        # is a silent misparse, the worst shape of forward-compat failure.
+        # Mutation sweep 2026-08-16: `!= ENVELOPE_VERSION` weakened to a
+        # presence check survived the whole suite.
+        assert parse_dispatch_payload(_payload(envelope="maro-dispatch/v2")) is None
+        assert parse_dispatch_payload(_payload(envelope=None)) is None
+        assert parse_dispatch_payload(_payload(envelope=7)) is None
+
     def test_non_string_returns_none(self):
         assert parse_dispatch_payload(None) is None
         assert parse_dispatch_payload(42) is None
@@ -107,6 +119,23 @@ class TestParse:
         with pytest.raises(EnvelopeError):
             parse_dispatch_payload(
                 _payload(attached_artifacts=[{"name": "a.md"}]))
+
+    def test_a_non_object_artifact_fails_as_an_envelope_error(self):
+        # Not just "it fails" — it must fail as EnvelopeError, because that
+        # is the type handle_queue catches to refuse the job cleanly before
+        # queueing. Without the element type check the loop does
+        # `"str".get(...)` and an AttributeError escapes that handler as an
+        # unhandled crash (mutation sweep 2026-08-16).
+        for bad in (["oops"], [None], [["a"]], [42]):
+            with pytest.raises(EnvelopeError):
+                parse_dispatch_payload(_payload(attached_artifacts=bad))
+
+    def test_the_goal_is_stripped_before_it_becomes_the_goal(self):
+        # user_ask goes on to be the run's goal string, which is compared,
+        # fingerprinted and logged; leading/trailing whitespace from a
+        # dispatcher's here-doc must not ride along into it.
+        env = parse_dispatch_payload(_payload(user_ask="  do the thing\n\n"))
+        assert env.user_ask == "do the thing"
 
 
 class TestOperatorBlock:
@@ -162,6 +191,70 @@ class TestStoreAttachments:
         for rec in stored:
             p = Path(rec["path"]).resolve()
             assert p.parent == root, f"{p} escaped the artifact dir"
+
+    def test_hostile_characters_are_scrubbed_out_of_the_filename(
+            self, monkeypatch, tmp_path):
+        # The traversal test above passes with EITHER guard in _safe_name
+        # (basename or whitelist) — each alone keeps the write inside the
+        # dir, so neither is pinned by it. This pins the whitelist's OTHER
+        # job: an artifact name is a label, and a dispatcher must not be able
+        # to choose the bytes of a filename we then hand to the filesystem
+        # and print into a prompt (mutation sweep 2026-08-16).
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        env = parse_dispatch_payload(_payload(attached_artifacts=[
+            {"name": "a b;rm -rf.md", "content": "x"},
+            {"name": "we\nird\t$(id).md", "content": "y"}]))
+        stored = store_attachments(env, key="job-chars")
+        for rec in stored:
+            got = Path(rec["path"]).name
+            assert re.fullmatch(r"[A-Za-z0-9._-]+", got), f"unscrubbed: {got!r}"
+
+    def test_a_very_long_artifact_name_still_lands_with_its_sidecar(
+            self, monkeypatch, tmp_path):
+        # The cap is not cosmetic: the sidecar adds ".provenance.json" (16
+        # chars) to the same name, so an uncapped 245-char name raises
+        # ENAMETOOLONG and store_attachments fails the whole dispatch by
+        # contract (mutation sweep 2026-08-16 — dropping `[:120]` survived).
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        env = parse_dispatch_payload(_payload(attached_artifacts=[
+            {"name": "n" * 245 + ".md", "content": "x"}]))
+        stored = store_attachments(env, key="job-long")
+        path = Path(stored[0]["path"])
+        assert path.read_text() == "x"
+        assert path.with_name(path.name + ".provenance.json").exists()
+
+    def test_two_artifacts_with_the_same_name_both_survive(
+            self, monkeypatch, tmp_path):
+        # A dispatch that promised two reference files must deliver two. With
+        # the dedup gone the second overwrites the first, both `stored`
+        # records point at one path, and the operator block tells the model
+        # a file is there that holds someone else's content — a silent
+        # substitution, not an error (mutation sweep 2026-08-16).
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        env = parse_dispatch_payload(_payload(attached_artifacts=[
+            {"name": "notes.md", "content": "FIRST"},
+            {"name": "notes.md", "content": "SECOND"},
+            {"name": "notes/../notes.md", "content": "THIRD"}]))
+        stored = store_attachments(env, key="job-dup")
+        paths = [Path(r["path"]) for r in stored]
+        assert len({str(p) for p in paths}) == 3, "artifacts collided on disk"
+        assert [p.read_text() for p in paths] == ["FIRST", "SECOND", "THIRD"]
+
+    def test_the_sidecar_sha_is_of_the_bytes_that_landed(
+            self, monkeypatch, tmp_path):
+        # The sidecar is the provenance record; its whole job is letting a
+        # later reader check that the file on disk is what the dispatcher
+        # sent. A blank/constant sha is a provenance record that certifies
+        # nothing, and the existing sidecar test only asserted source/bytes
+        # (mutation sweep 2026-08-16).
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        env = parse_dispatch_payload(_payload(attached_artifacts=[
+            {"name": "notes.md", "content": "hello"}]))
+        path = Path(store_attachments(env, key="job-sha")[0]["path"])
+        side = json.loads(
+            path.with_name(path.name + ".provenance.json").read_text())
+        assert side["sha256"] == hashlib.sha256(
+            path.read_bytes()).hexdigest()
 
     def test_no_artifacts_writes_nothing(self, monkeypatch, tmp_path):
         monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
