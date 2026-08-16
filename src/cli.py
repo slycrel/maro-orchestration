@@ -918,7 +918,8 @@ def _warn_legacy_loop(cmd: str) -> None:
     """
     print(
         f"warning: `maro {cmd}` is deprecated (superseded by `maro-handle` / "
-        f"`maro run`; see BACKLOG_DONE 2026-07-09) and will be removed in a "
+        f"`maro run`; see docs/history/backlog-done-2026-04-to-08-p2.md "
+        f"2026-07-09) and will be removed in a "
         f"future release.",
         file=sys.stderr,
     )

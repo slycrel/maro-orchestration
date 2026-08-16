@@ -2076,7 +2076,8 @@ def _classify_probe_modality(cmd: str) -> str:
     residual — code inspection and compile-level checks that never touch
     the running artifact.
 
-    Per-segment (Jeremy's call, 2026-07-16; measurement in BACKLOG_DONE):
+    Per-segment (Jeremy's call, 2026-07-16; measurement archived in
+    docs/history/backlog-done-2026-04-to-08-p1.md):
     the command is split on top-level shell operators and the most
     behavioral segment wins. The old whole-string pass let _STATIC_HINTS
     beat the process patterns, so the single most common probe idiom —

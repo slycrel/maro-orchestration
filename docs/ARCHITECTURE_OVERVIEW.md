@@ -297,7 +297,8 @@ thread-fork time as the Thread Architecture work lands.
 **Visibility today:** `maro ancestry <project> [--set-parent] [--format]`
 (CLI, text or JSON) is the durable surface. The `observe.py` dashboard also
 rendered an ancestry tree panel, but that dashboard was an archived
-proof-of-concept (see `archive/observe_dashboard.py` and BACKLOG_DONE.md) —
+proof-of-concept (see `archive/observe_dashboard.py`; record in
+docs/history/backlog-done-2026-04-to-08-p3.md) —
 the CLI command is what to build on, not the dashboard.
 
 **Downstream reference today:** partial. `ancestry.py`'s chain is real but

@@ -176,7 +176,8 @@ re-scoped: true dead-air kill has existed since April (liveness
 timeout, a44eb6a); the 89cb097a specimen was a worker ACTIVELY POLLING
 a background job — live-but-useless, prevented behaviorally by (a).
 The demotion-at-seam + targeted-hint pattern is now the standing
-mechanism for corpus-family guards. Archive: BACKLOG_DONE.md.
+mechanism for corpus-family guards. Archive:
+docs/history/backlog-done-2026-04-to-08-p3.md (rotated 2026-08-16).
 **Live validation same night (run 75fe8b4e-jaunty-falcon, sonnet-led,
 Jeremy-requested):** 7 steps/14min/$1.62 vs $2.00, goal_achieved=true,
 all 3 deliverables at exact named paths, 6 rate-limited fetches split

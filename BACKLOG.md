@@ -1821,8 +1821,9 @@ capture**, which is what makes the rung amortize instead of evaporate.
 
 - [x] **LT-1 — the batch: CLOSED 2026-08-02, 8/8 rows settled.** Full
   round-by-round records (registrations, predictions, retractions, all
-  verified by hand) archived to BACKLOG_DONE.md §"Archived from BACKLOG
-  2026-08-05" — dev-recall reaches them. Final scoreboard:
+  verified by hand) archived to docs/history/backlog-done-2026-04-to-08-p3.md §"Archived
+  from BACKLOG 2026-08-05" (rotated out of BACKLOG_DONE 2026-08-16) —
+  dev-recall reaches them. Final scoreboard:
 
   | # | capability | verdict |
   |---|---|---|
@@ -3682,7 +3683,7 @@ as-we-go via the census-tested Remaining-pieces ledger
 direction. Census follow-ups all closed — nothing from the census
 awaits Jeremy anymore except the ACTIVE work itself.
 
-### Standing trigger from the 2026-08-04 closed finds (records in BACKLOG_DONE §2026-08-05 + §2026-08-11)
+### Standing trigger from the 2026-08-04 closed finds (records in docs/history/backlog-done-2026-04-to-08-p3.md §2026-08-05 + BACKLOG_DONE §2026-08-11)
 
 - **Store round-trip probe** (`scripts/store_roundtrip.py`) — 18 stores,
   0 undeclared drops; the guardrail bug was isolated, not a family; two
@@ -5082,7 +5083,7 @@ wiring-inventory checks CANNOT ship the same way yet, per the checkpoint:
   that healthy. The check that catches it is *counting* — rows on disk vs
   rows the loader hands back. Shipped as a diagnostic ahead of the
   registry: `scripts/store_roundtrip.py` (its record is archived in
-  BACKLOG_DONE §2026-08-05; the wire-into-health-lane trigger is kept in
+  docs/history/backlog-done-2026-04-to-08-p3.md §2026-08-05; the wire-into-health-lane trigger is kept in
   the 2026-08-04 shipped-finds stub above). The registry still
   belongs here; when it lands, it replaces that script's hand-written
   probe table rather than adding a second thing to maintain.

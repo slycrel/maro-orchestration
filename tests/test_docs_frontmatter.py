@@ -64,9 +64,12 @@ def test_history_naming_dated_or_rolling_log():
     # rolling family: journal/decisions segments named by CONTENT range,
     # not rotation date — a new segment appears at each rotation, so the
     # family is blessed by pattern rather than by enumerating file names.
+    # backlog-done-* (2026-08-16 BACKLOG_DONE rotation) is the same deal:
+    # segments named by content span + part, new ones at each rotation.
     rolling = {"CHANGELOG.md", "ROADMAP_ARCHIVE.md", "README.md"}
     dated = re.compile(r"^\d{4}-\d{2}-\d{2}-[a-z0-9-]+\.md$")
-    rolling_family = re.compile(r"^goal-brain-(journal|decisions)-[a-z0-9-]+\.md$")
+    rolling_family = re.compile(
+        r"^(goal-brain-(journal|decisions)|backlog-done)-[a-z0-9-]+\.md$")
     stray = [
         p.name
         for p in sorted(HISTORY.glob("*.md"))
