@@ -97,7 +97,7 @@ failure the sweep exists to find.
 |---|---|---|---|
 | `scope_14a.json` | §14a scope/stamp/portability: `knowledge_web` scope screens, tiered-store load/rewrite/mutate, quarantine, reinforce heal, `_tfidf_rank_scored`; `camera_readout` census, `_lesson_origins`, `_stamp_coverage`, `_scope_rollup`, `_print_portability`; `pack` lesson transport border | 34 + 1 equivalent | 2026-08-16, all accounted for |
 | `provenance_gate.json` | The db37d525 contamination gate: `lesson_provenance` classifier regexes + killswitch, the `_is_quarantined` predicate and its enforcement sites in `knowledge_web`, the `memory_ledger` mint choke point | 18 | 2026-08-16, **NOT closed** — 6 accounted for, 1 equivalent, 4 unverified leads, 6 confirmed gaps in the classifier/killswitch |
-| `path_rewrite.json` | Embedded-path rewriting on transfer: `path_rewrite` root validation + ordering + both match boundaries + skip screens + atomic swap and its post-commit half, the `maro-export import` wiring (extracted-files-only list, provenance gate, custody `transformed`), the `maro-import --source` wiring (rewrite-before-dedup, marker verbatim, per-file quarantine, dry-run honesty, unresolved-source mapping) | 38 + 2 equivalent | 2026-08-16, all accounted for (10 added after the review round below) |
+| `path_rewrite.json` | Embedded-path rewriting on transfer: `path_rewrite` root validation + ordering + both match boundaries + skip screens + atomic swap and its post-commit half, the `maro-export import` wiring (extracted-files-only list, provenance gate, custody `transformed`), the `maro-import --source` wiring (rewrite-before-dedup, marker verbatim, per-file quarantine, dry-run honesty, unresolved-source mapping) | 39 + 2 equivalent | 2026-08-16, all accounted for (10 added after the review round, 1 after the live import) |
 | `dispatch_envelope.json` | The typed dispatch boundary: `parse_dispatch_payload` shape/version/type screens, `_safe_name`, `store_attachments` dedup + provenance sidecar, `land_in_run_dir` idempotence, `operator_block` authority label, and the extraction-exclusion decree at the `handle_queue` intake | 19 + 1 equivalent | 2026-08-16, all accounted for (12/20 on first pass, 7 gaps closed) |
 
 Note on `path_rewrite.json`: the first sweep of it ran green at 30/30 and
@@ -108,6 +108,16 @@ derived from behavior the author had already thought of, which is
 exactly the blind spot a reviewer is for. The ten mutations added after
 the review are the durable half of that round: each one now fails the
 suite if its fix is ever undone.
+
+And then the first LIVE run over the real corpus found a defect neither
+had: the review's new left boundary blocked a genuine path start whenever
+the path followed an escape inside a JSON transcript (`…notes.md\n\n/home/
+clawd/…`), leaving 5,543 occurrences unrewritten across 24,553 imported
+files. Every synthetic fixture in the sweep and in six review prompts
+wrote paths preceded by a space, a quote, or start-of-line. **Sweep,
+review, and one run against real data are three different instruments** —
+a transform over a corpus is not verified until it has run over the
+corpus.
 
 `provenance_gate.json` is deliberately landed red. The sweep's value is
 the ledger of what is and isn't pinned; deleting the survivors to get a
