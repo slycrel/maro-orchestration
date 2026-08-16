@@ -923,6 +923,44 @@ class TestProvenanceTransport:
         assert "truncated" in tl.merged_variants[0]  # marked clip
         assert all(isinstance(v, str) for v in tl.merged_variants)
 
+    def test_import_carries_the_scope_stamp(self, tmp_path, target_ws):
+        """§14a slice-3 r1 review: import dropped `scope` while export shipped
+        it — the same import-only asymmetry merged_variants went through in
+        the 2026-08-11 round, in the same hand-enumerated constructor. The
+        stamp is a fact about where the knowledge came from, so it crosses;
+        `imported` marks the row so a census can bucket foreign mints apart.
+        """
+        from knowledge_web import load_tiered_lessons, MemoryTier
+        src_ws = _make_workspace(tmp_path / "src")
+        pack_path = _export_and_seal(src_ws, tmp_path)
+        _add_artifact(pack_path, cls="lessons", relpath="memory/long/lessons.jsonl",
+                      content=json.dumps({
+                          "lesson_id": "s1", "lesson": "a world-scoped lesson",
+                          "task_type": "ops", "outcome": "success",
+                          "source_goal": "g", "confidence": 0.9, "tier": "long",
+                          "score": 1.0, "last_reinforced": "2020-01-01",
+                          "scope": "world"}) + "\n")
+        import_pack(pack_path, label="l", target=target_ws)
+        tl = load_tiered_lessons(tier=MemoryTier.MEDIUM, limit=None, raw=True)[0]
+        assert tl.scope == "world"
+        assert tl.imported, "imported rows must stay identifiable as foreign mints"
+
+    def test_import_rejects_an_off_vocabulary_scope(self, tmp_path, target_ws):
+        """A hostile or stale pack cannot invent a third category."""
+        from knowledge_web import load_tiered_lessons, MemoryTier
+        src_ws = _make_workspace(tmp_path / "src")
+        pack_path = _export_and_seal(src_ws, tmp_path)
+        _add_artifact(pack_path, cls="lessons", relpath="memory/long/lessons.jsonl",
+                      content=json.dumps({
+                          "lesson_id": "s2", "lesson": "a bogus-scoped lesson",
+                          "task_type": "ops", "outcome": "success",
+                          "source_goal": "g", "confidence": 0.9, "tier": "long",
+                          "score": 1.0, "last_reinforced": "2020-01-01",
+                          "scope": "universal"}) + "\n")
+        import_pack(pack_path, label="l", target=target_ws)
+        tl = load_tiered_lessons(tier=MemoryTier.MEDIUM, limit=None, raw=True)[0]
+        assert tl.scope == ""
+
     def test_identical_canonical_collision_unions_variants(self, tmp_path, target_ws):
         """Fixpoint review round 2: the skipped_identical early-exit lost
         foreign variants — the collision skips the ROW, not its rationale."""

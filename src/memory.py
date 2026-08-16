@@ -265,12 +265,15 @@ _LESSON_TYPES = frozenset({"execution", "planning", "recovery", "verification", 
 
 # §14a slice 3: mint-time scope stamp — provenance, a fact about where the
 # knowledge came from, stamped categorically at mint and never flipped after
-# (decision e2b83703). Deliberately NOT a ranking input: the slice-1 census
-# cross-tab is starved on the world side (of the 6 lessons carrying >=3
-# verdicted foreign citations, every resolvable one is method-scope; only 5
-# world-scope lessons have ANY foreign citation), so there is no evidence yet
-# that scope predicts portability. The stamp exists to FEED that census —
-# earned globality (portability.py) keeps doing the behavioral work.
+# (decision e2b83703). Deliberately NOT a ranking input, because the evidence
+# to rank on does not exist yet: measured PRE-SHIP with an offline post-hoc
+# labeller (NOT this field, which was empty on every live row at ship, and not
+# reproducible from the shipped code — see GOAL_BRAIN 2026-08-15), of the 6
+# lessons carrying >=3 verdicted foreign citations every resolvable one
+# classified method, and only 5 lessons classified world had ANY foreign
+# citation. The stamp exists to FEED the census that can check this properly
+# on-instrument — earned globality (portability.py) keeps doing the
+# behavioral work meanwhile.
 #
 # The stamp is one sample of an ambiguous judgement, and it is
 # LABELLER-DEPENDENT. Measured pre-ship: the production mint lane stamps ~81%
@@ -305,10 +308,28 @@ def as_typed_lesson(item) -> TypedLesson:
     The boundary that lets the extractor widen without a flag day: legacy
     two-element returns — including the ones tests monkeypatch in — become
     unstamped triples rather than raising on unpack.
+
+    Bare strings and lesson dicts are accepted too, because both are shapes
+    this module hands out elsewhere and a test double copied from either
+    would otherwise be destroyed silently rather than loudly: ``tuple()``
+    over a str yields its characters and over a dict yields its KEYS, so
+    "a lesson" normalized to ``lesson='a'`` and a dict to
+    ``lesson='lesson'`` — no exception, no log, just a shredded lesson
+    (r1 review, verified by execution).
     """
     if isinstance(item, TypedLesson):
         return item
-    parts = tuple(item)
+    if isinstance(item, str):
+        return TypedLesson(item, "execution", "")
+    if isinstance(item, dict):
+        parts = (item.get("lesson", ""), item.get("type", "execution"),
+                 item.get("scope", ""))
+    else:
+        try:
+            parts = tuple(item)
+        except TypeError:
+            log.warning("as_typed_lesson: uninterpretable item %r", type(item))
+            return TypedLesson("", "execution", "")
     text = str(parts[0]) if parts else ""
     lesson_type = str(parts[1]) if len(parts) > 1 else "execution"
     scope = str(parts[2]).strip().lower() if len(parts) > 2 else ""
@@ -446,12 +467,22 @@ def extract_lessons_via_llm(
                 # by adding a field. The shipped prompt drove that to 0/31
                 # across two lanes, so this is the belt to that suspenders:
                 # recover the misplaced value instead of destroying it.
+                # The full-swap case (each slot holding the other's value) is
+                # the one worth handling explicitly: r1 review found the
+                # sequential form dropped the recovered scope on the floor
+                # there, which is precisely the destruction this block claims
+                # to prevent.
                 if lesson_type in _LESSON_SCOPES:
-                    if not scope:
-                        scope = lesson_type
-                    log.debug("lesson scope value %r arrived in the type slot", lesson_type)
+                    crossed = lesson_type
                     lesson_type = ""
-                if scope in _LESSON_TYPES:
+                    log.debug("lesson scope value %r arrived in the type slot", crossed)
+                    if scope in _LESSON_TYPES:
+                        lesson_type, scope = scope, crossed   # both crossed
+                    elif not scope:
+                        scope = crossed
+                    # else: scope already holds a real scope value — it was
+                    # answered correctly, so the crossed copy is redundant.
+                elif scope in _LESSON_TYPES:
                     if lesson_type not in _LESSON_TYPES:
                         lesson_type = scope
                     scope = ""

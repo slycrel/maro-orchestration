@@ -177,8 +177,20 @@ from portability import (  # noqa: E402
     beta_mean as _beta_mean,
     is_home as _is_home,
     unattributable_source as _unattributable_source,
-    MIN_FOREIGN_EVIDENCE as _MIN_FOREIGN_EVIDENCE,
 )
+# The evidence bar is read through the MODULE, never aliased: `from x import
+# CONST` snapshots the value at import time, so a census claiming to "mirror
+# the rank-time bar" would keep reporting 3 while ranking used something else
+# (r1 review — verified: reassigning portability.MIN_FOREIGN_EVIDENCE left the
+# alias at 3, and apply_portability reads the global at call time). The
+# functions above are safe to alias; a rebindable scalar is not.
+import portability as _portability  # noqa: E402
+
+# Comparing the two stamped buckets on a handful of citations would be
+# numerology. Stated floor, per bucket, so the readout can say plainly whether
+# the method-vs-world question is readable yet instead of leaving a reader to
+# eyeball it (r1 review: a 1-lesson bucket printed identically to a rich one).
+_SCOPE_COMPARISON_FLOOR = 10
 
 
 def portability_census(per_run: List[Dict[str, Any]],
@@ -297,7 +309,8 @@ def _scope_rollup(rows: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
         b["foreign_f"] += r["foreign_f"]
         # "Evidenced" mirrors the rank-time bar (portability.MIN_FOREIGN_
         # EVIDENCE) so the census counts what would actually be actionable.
-        if r["foreign_s"] + r["foreign_f"] >= _MIN_FOREIGN_EVIDENCE:
+        if (r["foreign_s"] + r["foreign_f"]
+                >= _portability.MIN_FOREIGN_EVIDENCE):
             b["evidenced"] += 1
     for b in buckets.values():
         fv = b["foreign_s"] + b["foreign_f"]
@@ -335,13 +348,42 @@ def _print_portability(per_run: List[Dict[str, Any]]) -> None:
         print(f"     {name:10s} lessons={b['lessons']:3d} cites={b['cites']:4d} "
               f"foreign={b['foreign']:3d} judged(s/f)={b['foreign_s']}/{b['foreign_f']} "
               f"pooled={pooled:12s} evidenced={b['evidenced']}")
-    stamped = sum(v["lessons"] for k, v in by_scope.items() if k != "unstamped")
-    if not stamped:
+    stamped_buckets = {k: v for k, v in by_scope.items() if k != "unstamped"}
+    stamped = sum(v["lessons"] for v in stamped_buckets.values())
+    bar = _portability.MIN_FOREIGN_EVIDENCE
+    if not rows:
+        # Distinct from "nothing is stamped": an empty census means the
+        # citation→lesson resolution found nothing at all, which may be a
+        # broken lookup rather than an expected state. Claiming "every cited
+        # lesson predates the stamp" here would explain away a possible bug
+        # (r1 review, reproduced with an all-unresolved corpus).
+        print("     (no resolvable cited lessons at all — this is a resolution "
+              "result, not a statement about stamps; see the unresolved count)")
+    elif not stamped:
         print("     (every cited lesson predates the stamp — the method-vs-world "
               "comparison has no data yet, by construction)")
-    elif not any(v["evidenced"] for k, v in by_scope.items() if k != "unstamped"):
+    elif not any(v["evidenced"] for v in stamped_buckets.values()):
         print(f"     ({stamped} stamped lesson(s) cited, none yet at the "
-              f"{_MIN_FOREIGN_EVIDENCE}-verdict bar — comparison still premature)")
+              f"{bar}-verdict bar — comparison still premature)")
+    else:
+        # Some evidence exists. Say explicitly whether it is enough to read,
+        # rather than printing two pooled figures side by side and letting
+        # them imply a comparison they cannot support.
+        both = [k for k in ("method", "world")
+                if (stamped_buckets.get(k) or {}).get("evidenced")]
+        thinnest = min((stamped_buckets[k]["foreign_s"] + stamped_buckets[k]["foreign_f"]
+                        for k in both), default=0)
+        if len(both) < 2:
+            print(f"     (only the {both[0]!r} bucket has evidence — a "
+                  f"one-sided figure is not a comparison)")
+        elif thinnest < _SCOPE_COMPARISON_FLOOR:
+            print(f"     (both buckets have evidence but the thinner one rests on "
+                  f"{thinnest} verdicted citation(s), under the stated floor of "
+                  f"{_SCOPE_COMPARISON_FLOOR} — read as a hint, not a result)")
+        else:
+            print(f"     (both buckets clear the floor of "
+                  f"{_SCOPE_COMPARISON_FLOOR} verdicted citations — this "
+                  f"comparison is readable)")
     n_unattr = sum(r["unattributable"] for r in rows)
     if n_unattr:
         print(f"  -- citations from sentinel/empty-source lessons "

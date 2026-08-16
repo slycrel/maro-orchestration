@@ -76,6 +76,17 @@ class TestParseScope:
         assert out[0].lesson_type == "recovery"
         assert out[0].scope == ""
 
+    def test_both_slots_crossed_recovers_both(self):
+        """Full swap: each slot holds the other's value.
+
+        r1 review: the sequential recovery form fixed lesson_type and then
+        zeroed the scope it had just rescued — destroying the value this
+        block exists to preserve.
+        """
+        out = _parse([{"lesson": "L1", "type": "world", "scope": "planning"}])
+        assert out[0].lesson_type == "planning"
+        assert out[0].scope == "world"
+
     def test_cross_type_cap_still_applies_with_scopes(self):
         out = _parse([
             {"lesson": "A", "type": "planning", "scope": "method"},
@@ -147,6 +158,26 @@ class TestAsTypedLesson:
 
     def test_case_is_normalized(self):
         assert as_typed_lesson(("t", "cost", "World")).scope == "world"
+
+    def test_bare_string_is_not_shredded_into_characters(self):
+        # r1 review: tuple("a lesson") yields its CHARACTERS, so the
+        # normalizer silently returned lesson='a'. A bare string is a shape
+        # this module hands out (return_typed=False), so a fake copied from
+        # there lands here.
+        out = as_typed_lesson("a bare lesson string")
+        assert out.lesson == "a bare lesson string"
+        assert out.lesson_type == "execution"
+
+    def test_lesson_dict_is_not_shredded_into_keys(self):
+        # tuple(dict) yields KEYS — this returned lesson='lesson'. The dict
+        # is the exact shape the LLM wire format uses, so a double mimicking
+        # the real response hits it.
+        out = as_typed_lesson({"lesson": "Real text", "type": "planning",
+                               "scope": "world"})
+        assert out == TypedLesson("Real text", "planning", "world")
+
+    def test_uninterpretable_item_degrades_instead_of_raising(self):
+        assert as_typed_lesson(object()) == TypedLesson("", "execution", "")
 
 
 class TestStorePersistence:
@@ -256,9 +287,12 @@ class TestCensusRollup:
     def test_archived_lessons_keep_their_stamp(self, tmp_path, monkeypatch):
         """Archive rows must carry scope too, not just live-store rows.
 
-        Not hypothetical: in the live census 23 of 64 cited lesson ids resolve
-        only through the archive fallback, so dropping the stamp there would
-        silently unstamp a third of the evidence base.
+        Not hypothetical: measured 2026-08-15, 23 of the 79 resolvable cited
+        lesson ids resolved only through the archive fallback, so dropping the
+        stamp there would silently unstamp ~29% of the evidence base. (An
+        earlier draft of this docstring said "23 of 64" — 64 is the
+        portability CACHE entry count, a different denominator. Point-in-time
+        figures on a live corpus: treat as measured-then, not evergreen.)
         """
         monkeypatch.setenv("MARO_WORKSPACE", str(tmp_path))
         mem = tmp_path / "memory"
@@ -270,6 +304,20 @@ class TestCensusRollup:
         import camera_readout
         origins = camera_readout._lesson_origins(warn=lambda *a: None)
         assert origins["arch1"]["scope"] == "world"
+
+    def test_evidence_bar_follows_the_rank_time_constant(self, monkeypatch):
+        """`evidenced` must track ranking's bar, not a value frozen at import.
+
+        r1 review: the bar was aliased with `from portability import CONST`,
+        which snapshots. A census that claims to mirror ranking has to keep
+        mirroring it when ranking moves.
+        """
+        import portability
+        from camera_readout import _scope_rollup
+        row = self._row("a", "method", s=4)
+        assert _scope_rollup([row])["method"]["evidenced"] == 1
+        monkeypatch.setattr(portability, "MIN_FOREIGN_EVIDENCE", 10)
+        assert _scope_rollup([row])["method"]["evidenced"] == 0
 
     def test_census_row_carries_the_stamp(self, tmp_path, monkeypatch):
         """End of the pipe: a stamped store row surfaces in census output."""
@@ -287,3 +335,86 @@ class TestCensusRollup:
             warn=lambda *a: None)
         assert c["rows"][0]["scope"] == "world"
         assert c["by_scope"]["world"]["foreign_s"] == 1
+
+
+class TestReadoutHonesty:
+    """What the printed census SAYS about its own evidence (§14a slice 3 r1).
+
+    The rollup can be arithmetically perfect and still mislead, so the
+    messages are pinned like behavior: each state must claim only what it
+    actually knows.
+    """
+
+    def _run(self, capsys, monkeypatch, tmp_path, cited):
+        """Drive the real print path over a synthetic corpus.
+
+        `cited` is a list of (lesson_id, scope, achieved, n_citations); each
+        lesson is cited from `n_citations` distinct foreign runs, all carrying
+        verdict `achieved`. Citation COUNT is what clears the evidence bar, so
+        the helper has to model it — one citation per lesson never evidences
+        anything.
+        """
+        import camera_readout
+        origins = {lid: {"source_goal": f"origin of {lid}",
+                         "task_type": "research", "scope": scope,
+                         "preview": f"preview {lid}"}
+                   for lid, scope, _, _ in cited}
+        monkeypatch.setattr(camera_readout, "_lesson_origins",
+                            lambda warn=None: origins)
+        per_run = []
+        for lid, _scope, achieved, n in cited:
+            for i in range(n):
+                d = tmp_path / f"run-{lid}-{i}"
+                d.mkdir(exist_ok=True)
+                (d / "metadata.json").write_text(json.dumps(
+                    {"project": "a-different-project",
+                     "prompt": f"foreign goal {lid}-{i}",
+                     "goal_achieved": achieved}), encoding="utf-8")
+                per_run.append({"dir": d,
+                                "frames": [{"chosen": {"lesson_ids": [lid]}}]})
+        camera_readout._print_portability(per_run)
+        return capsys.readouterr().out
+
+    def test_unresolvable_corpus_does_not_blame_the_stamp(
+            self, capsys, monkeypatch, tmp_path):
+        # Zero resolvable rows also yields zero stamped rows, so the
+        # "predates the stamp" line used to print for what may be a
+        # resolution bug.
+        import camera_readout
+        monkeypatch.setattr(camera_readout, "_lesson_origins", lambda warn=None: {})
+        d = tmp_path / "r"
+        d.mkdir()
+        (d / "metadata.json").write_text(json.dumps(
+            {"project": "p", "prompt": "g", "goal_achieved": True}),
+            encoding="utf-8")
+        camera_readout._print_portability(
+            [{"dir": d, "frames": [{"chosen": {"lesson_ids": ["ghost"]}}]}])
+        out = capsys.readouterr().out
+        assert "predates the stamp" not in out
+        assert "no resolvable cited lessons at all" in out
+
+    def test_all_legacy_rows_says_by_construction(
+            self, capsys, monkeypatch, tmp_path):
+        out = self._run(capsys, monkeypatch, tmp_path,
+                        [("L1", "", True, 4), ("L2", "", False, 4)])
+        assert "predates the stamp" in out
+
+    def test_one_sided_evidence_is_not_called_a_comparison(
+            self, capsys, monkeypatch, tmp_path):
+        out = self._run(capsys, monkeypatch, tmp_path,
+                        [("M1", "method", True, 4), ("W1", "world", True, 1)])
+        assert "not a comparison" in out
+
+    def test_thin_two_sided_evidence_is_labelled_a_hint(
+            self, capsys, monkeypatch, tmp_path):
+        out = self._run(capsys, monkeypatch, tmp_path,
+                        [("M1", "method", True, 4), ("W1", "world", True, 4)])
+        assert "read as a hint, not a result" in out
+
+    def test_evidence_above_the_floor_is_called_readable(
+            self, capsys, monkeypatch, tmp_path):
+        from camera_readout import _SCOPE_COMPARISON_FLOOR as FLOOR
+        cited = ([(f"M{i}", "method", True, 4) for i in range(FLOOR)]
+                 + [(f"W{i}", "world", True, 4) for i in range(FLOOR)])
+        out = self._run(capsys, monkeypatch, tmp_path, cited)
+        assert "comparison is readable" in out

@@ -689,7 +689,8 @@ def _import_lessons(content: str, *, pack_name: str, label: str, pack_tag: str,
     here. Without this, export→import would launder a quarantined lesson into
     an injectable one (the db37d525 contamination class, via transport)."""
     from knowledge_web import (TieredLesson, MemoryTier, load_tiered_lessons,
-                               _append_tiered_lesson, _LESSON_TYPES)
+                               _append_tiered_lesson, _LESSON_TYPES,
+                               _LESSON_SCOPES)
 
     existing = (load_tiered_lessons(tier=MemoryTier.MEDIUM, limit=None, raw=True)
                 + load_tiered_lessons(tier=MemoryTier.LONG, limit=None, raw=True))
@@ -779,6 +780,18 @@ def _import_lessons(content: str, *, pack_name: str, label: str, pack_tag: str,
                 evidence_sources=row.get("evidence_sources", []),
                 lesson_type=row.get("lesson_type", "") if row.get("lesson_type") in
                 _LESSON_TYPES else "",
+                # §14a scope stamp crosses the border like its sibling
+                # lesson_type: it is a fact about where the knowledge came
+                # from, and the exporter already ships it (export round-trips
+                # whole JSON objects, so the asymmetry was import-only —
+                # r1 review, same door merged_variants went through in the
+                # 2026-08-11 round). Mixing labellers is the standing worry
+                # with this stamp, and it is answered by construction here:
+                # `imported` is non-empty on exactly these rows, so a census
+                # can bucket foreign-minted stamps separately instead of
+                # pooling them with locally-minted ones.
+                scope=row.get("scope", "") if row.get("scope") in
+                _LESSON_SCOPES else "",
                 provisional=bool(row.get("provisional", False)),
                 minted_from=minted_from,
                 imported=imported,
