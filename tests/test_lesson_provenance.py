@@ -474,3 +474,205 @@ def test_canon_candidates_skip_quarantined(monkeypatch, tmp_path):
                                   tier=MemoryTier.LONG) is True
     cands = get_canon_candidates(min_hits=2, min_task_types=2)
     assert not any(c["lesson_id"] == tl.lesson_id for c in cands)
+
+
+# ---------------------------------------------------------------------------
+# Enforcement sites the 2026-08-16 mutation sweep found unpinned.
+#
+# Four `_is_quarantined` call sites survived the sweep. Probing each (the
+# README's rule: a SURVIVED verdict is a lead, not a fact) split them two and
+# two. `promote_lesson_by_effect`'s pre-check and `_post_reinforce_hooks`'
+# screen are genuinely redundant — a downstream guard refuses the row and
+# nothing observable changes, so they are recorded `equivalent` in
+# tests/mutation/provenance_gate.json. The two below are real, and they fail
+# in different ways: one lets a quarantined row out onto a surface, the other
+# lets an audit trail claim something that did not happen.
+# ---------------------------------------------------------------------------
+
+def _quarantined_in_the_decay_band(monkeypatch, tmp_path, score=0.3):
+    """A prompt-minted row parked in the graveyard band [GC_THRESHOLD, 0.4)."""
+    _setup(monkeypatch, tmp_path)
+    import knowledge_web as kw
+    tl = record_tiered_lesson(DB37D525, "agenda", "done",
+                              source_goal=TIRE_GOAL[:120])
+    assert tl.minted_from == MINTED_FROM_PROMPT, "fixture is not quarantined"
+
+    def _park(rows):
+        for r in rows:
+            if r.lesson_id == tl.lesson_id:
+                r.score = score
+        return rows
+
+    kw._mutate_tiered_lessons(MemoryTier.MEDIUM, _park)
+    return tl
+
+
+def test_the_graveyard_does_not_surface_quarantined_lessons(monkeypatch, tmp_path):
+    """Unlike the promote sites, this one has NO downstream guard.
+
+    resurrect_archived_lesson carries no `_is_quarantined` check, so a
+    quarantined row returned here is one call away from being restored to
+    the live store with times_reinforced bumped — and the results are
+    operator/agent-facing before that. Probed 2026-08-16: dropping the
+    screen makes search_graveyard return the row.
+    """
+    import knowledge_web as kw
+    tl = _quarantined_in_the_decay_band(monkeypatch, tmp_path)
+    # Not vacuous: the same search finds it once the quarantine is lifted.
+    hits = kw.search_graveyard("prompt explicitly escalate")
+    assert all(h.lesson_id != tl.lesson_id for h in hits), \
+        "a quarantined lesson was offered for resurrection"
+
+    def _clean(rows):
+        for r in rows:
+            if r.lesson_id == tl.lesson_id:
+                r.minted_from = MINTED_FROM_OUTCOME
+        return rows
+
+    kw._mutate_tiered_lessons(MemoryTier.MEDIUM, _clean)
+    hits = kw.search_graveyard("prompt explicitly escalate")
+    assert any(h.lesson_id == tl.lesson_id for h in hits), \
+        "fixture never matched the search — the assertion above proved nothing"
+
+
+def test_the_decay_cycle_does_not_count_quarantined_rows_as_promoted(
+        monkeypatch, tmp_path):
+    """The tier move is refused downstream; the REPORT is not.
+
+    run_decay_cycle screens candidates, then calls promote_lesson(lid) for
+    each — and promote_lesson refuses a quarantined row, so the row never
+    moves. But promoted_ids is built from the screen, and it feeds both the
+    returned count and the change_log.jsonl audit entry. Drop the screen and
+    the cycle reports promoting lessons it did not promote: a clean tier
+    store with a lying audit trail, which is worse than an honest failure
+    because nothing looks wrong. Probed 2026-08-16 (reported 2, moved 0).
+    """
+    import knowledge_web as kw
+    _setup(monkeypatch, tmp_path)
+    tl = record_tiered_lesson(DB37D525, "agenda", "done",
+                              source_goal=TIRE_GOAL[:120])
+
+    def _make_eligible(rows):
+        for r in rows:
+            if r.lesson_id == tl.lesson_id:
+                r.score = kw.PROMOTE_MIN_SCORE + 1.0
+                r.sessions_validated = kw.PROMOTE_MIN_SESSIONS + 5
+        return rows
+
+    kw._mutate_tiered_lessons(MemoryTier.MEDIUM, _make_eligible)
+    result = kw.run_decay_cycle(tier=MemoryTier.MEDIUM, dry_run=False)
+
+    longs = load_tiered_lessons(tier=MemoryTier.LONG, min_score=0.0, limit=None)
+    assert all(l.lesson_id != tl.lesson_id for l in longs), \
+        "a quarantined row reached LONG"
+    assert result["promoted"] == 0, (
+        "run_decay_cycle counted a quarantined row as promoted — the row did "
+        "not move, so the count and the change_log entry are false")
+
+
+# ---------------------------------------------------------------------------
+# Classifier sub-patterns and killswitch legs, pinned 2026-08-16.
+#
+# The classifier's *verdict* was well covered against the four incident
+# lessons, so the sweep's finding was not that it misclassifies — it is that
+# most of the regex could be deleted with a green suite, because every test
+# drove it through db37d525-shaped text that several legs match at once.
+# Sub-patterns need their own specimens or they are decoration.
+#
+# Bias note (module docstring): a false positive sits visible but uninjected
+# and decays; a false negative contaminates future runs. So the negative
+# cases below are the load-bearing ones — they are what stops the gate being
+# widened until it quarantines ordinary domain advice.
+# ---------------------------------------------------------------------------
+
+class TestPromptAuthoritySubPatterns:
+    def test_an_adverb_between_the_noun_and_the_verb_still_matches(self):
+        # The optional (?:explicitly\s+|clearly\s+) slot. db37d525 itself is
+        # phrased this way, but so is every other fixture, so deleting the
+        # slot only failed if some test used the bare form — none did.
+        assert classify_lesson_provenance(
+            "The prompt explicitly states that retries are capped at three."
+        ) == MINTED_FROM_PROMPT
+        assert classify_lesson_provenance(
+            "The instructions clearly instruct the worker to file a report."
+        ) == MINTED_FROM_PROMPT
+
+    def test_the_prohibition_verbs_match(self):
+        assert classify_lesson_provenance(
+            "The directive forbids touching the production database."
+        ) == MINTED_FROM_PROMPT
+        assert classify_lesson_provenance(
+            "Instructions prohibit deleting the archive."
+        ) == MINTED_FROM_PROMPT
+
+    def test_the_article_is_optional(self):
+        # Lesson text is generalized prose and frequently drops the article;
+        # requiring one is a silent hole exactly where the extractor is
+        # tersest.
+        assert classify_lesson_provenance(
+            "Prompt says to summarize before acting."
+        ) == MINTED_FROM_PROMPT
+        assert classify_lesson_provenance(
+            "Instructions say the report goes to the operator."
+        ) == MINTED_FROM_PROMPT
+
+
+class TestObedienceSubPatterns:
+    def test_the_pronoun_object_is_required(self):
+        # THE false-positive guard. "treat X as a hard constraint" is
+        # ordinary domain advice; only "treat THAT/THIS/IT/THEM as a hard
+        # constraint" is elevating directive text to law. Widening this to a
+        # bare `as a hard constraint` quarantines real lessons — and a
+        # quarantined lesson is invisible to every injection surface, so the
+        # loss is silent.
+        assert classify_lesson_provenance(
+            "Treat rate limits as a hard constraint when fanning out fetches."
+        ) == MINTED_FROM_OUTCOME
+        assert classify_lesson_provenance(
+            "Treat it as a hard constraint and proceed."
+        ) == MINTED_FROM_PROMPT
+
+    def test_must_be_obeyed_is_its_own_leg(self):
+        assert classify_lesson_provenance(
+            "The ordering constraints must be obeyed regardless of cost."
+        ) == MINTED_FROM_PROMPT
+
+
+class TestTheKillswitchReadsConfigHonestly:
+    """config.get returns raw YAML nodes, so `false` in a config file arrives
+    as the STRING "false" — which is truthy. Every knowledge killswitch
+    normalizes for this; nothing tested that this one does."""
+
+    def _val(self, monkeypatch, value):
+        import config
+        real = config.get
+        monkeypatch.setattr(
+            config, "get",
+            lambda k, d=None: value if k == "knowledge.provenance_gate_enabled"
+            else real(k, d))
+        import lesson_provenance
+        return lesson_provenance.provenance_gate_enabled()
+
+    @pytest.mark.parametrize("off", ["false", "False", " FALSE ", "0", "no", "off"])
+    def test_a_quoted_falsey_string_turns_the_gate_off(self, monkeypatch, off):
+        assert self._val(monkeypatch, off) is False
+
+    @pytest.mark.parametrize("on", ["true", "yes", "on", "1"])
+    def test_a_quoted_truthy_string_leaves_the_gate_on(self, monkeypatch, on):
+        assert self._val(monkeypatch, on) is True
+
+    def test_a_real_boolean_still_works(self, monkeypatch):
+        assert self._val(monkeypatch, False) is False
+        assert self._val(monkeypatch, True) is True
+
+    def test_a_config_error_fails_CLOSED_with_the_gate_on(self, monkeypatch):
+        """Fail-closed is the decree's direction: an unreadable config must
+        not silently disable a contamination gate. Failing open here is the
+        worst case in the module — the gate is off and nothing says so."""
+        import config, lesson_provenance
+
+        def _boom(key, default=None):
+            raise RuntimeError("config unreadable")
+
+        monkeypatch.setattr(config, "get", _boom)
+        assert lesson_provenance.provenance_gate_enabled() is True

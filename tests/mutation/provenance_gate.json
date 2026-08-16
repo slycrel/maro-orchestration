@@ -88,8 +88,7 @@
     "file": "src/knowledge_web.py",
     "anchor": "            if tl.provisional or _is_quarantined(tl) or _is_contested(tl):\n                continue",
     "replacement": "            if tl.provisional or _is_contested(tl):\n                continue",
-    "tests": "tests/test_lesson_provenance.py tests/test_knowledge_web.py tests/test_delta_replay.py tests/test_recall.py tests/test_lesson_contested.py tests/test_memory_bridge.py tests/test_verdict_learning.py tests/test_trace_scoring.py",
-    "unverified": "SURVIVED against the broad set; NOT yet probed for a redundant downstream guard the way the canon site was. Treat as a lead, not a confirmed hole."
+    "tests": "tests/test_lesson_provenance.py tests/test_knowledge_web.py tests/test_delta_replay.py tests/test_recall.py tests/test_lesson_contested.py tests/test_memory_bridge.py tests/test_verdict_learning.py tests/test_trace_scoring.py"
   },
   {
     "name": "enforcement :: quarantined rows can be promoted to canon",
@@ -105,7 +104,7 @@
     "anchor": "    if target.provisional or _is_quarantined(target) or _is_contested(target):",
     "replacement": "    if target.provisional or _is_contested(target):",
     "tests": "tests/test_lesson_provenance.py tests/test_knowledge_web.py tests/test_delta_replay.py tests/test_recall.py tests/test_lesson_contested.py tests/test_memory_bridge.py tests/test_verdict_learning.py tests/test_trace_scoring.py",
-    "unverified": "SURVIVED against the broad set; NOT yet probed for a redundant downstream guard the way the canon site was. Treat as a lead, not a confirmed hole."
+    "equivalent": "Probed 2026-08-16 (behavioural, not by reading): with ONLY this pre-check's quarantine leg removed, promote_lesson_by_effect on a prompt-minted row still returns False — `_guards` re-checks _is_quarantined on the fresh row under the lock, and nothing observable differs. Same two-guards-one-invariant shape found in the Δ-gate sweep, where the in-lock copy's unique TOCTOU job got its own test. Defense in depth, not an untested guard."
   },
   {
     "name": "storage :: the mint choke point stops classifying",
@@ -120,14 +119,20 @@
     "anchor": "        # permanent without ever having been verified in a learnable run.\n        if (tl.score >= PROMOTE_MIN_SCORE\n                and tl.sessions_validated >= PROMOTE_MIN_SESSIONS\n                and not tl.provisional\n                and not _is_quarantined(tl)",
     "replacement": "        # permanent without ever having been verified in a learnable run.\n        if (tl.score >= PROMOTE_MIN_SCORE\n                and tl.sessions_validated >= PROMOTE_MIN_SESSIONS\n                and not tl.provisional",
     "tests": "tests/test_lesson_provenance.py tests/test_knowledge_web.py tests/test_delta_replay.py tests/test_recall.py tests/test_lesson_contested.py tests/test_memory_bridge.py tests/test_verdict_learning.py tests/test_trace_scoring.py",
-    "unverified": "SURVIVED against the broad set; NOT yet probed for a redundant downstream guard the way the canon site was. Treat as a lead, not a confirmed hole."
+    "equivalent": "This is the _post_reinforce_hooks screen. Probed 2026-08-16: removing it, a reinforced quarantined row still does not reach LONG, because the hook calls promote_lesson(), which refuses quarantined rows and only sets tl.tier when it returns True. No count, no log, no state differs — unlike the run_decay_cycle screen (next entry), which DOES leak into the reported promotion count and is now pinned."
   },
   {
     "name": "enforcement :: quarantined rows clear the second promote scan",
     "file": "src/knowledge_web.py",
     "anchor": "    for tl in effective:\n        if (tl.score >= PROMOTE_MIN_SCORE\n                and tl.sessions_validated >= PROMOTE_MIN_SESSIONS\n                and not tl.provisional\n                and not _is_quarantined(tl)",
     "replacement": "    for tl in effective:\n        if (tl.score >= PROMOTE_MIN_SCORE\n                and tl.sessions_validated >= PROMOTE_MIN_SESSIONS\n                and not tl.provisional",
-    "tests": "tests/test_lesson_provenance.py tests/test_knowledge_web.py tests/test_delta_replay.py tests/test_recall.py tests/test_lesson_contested.py tests/test_memory_bridge.py tests/test_verdict_learning.py tests/test_trace_scoring.py",
-    "unverified": "SURVIVED against the broad set; NOT yet probed for a redundant downstream guard the way the canon site was. Treat as a lead, not a confirmed hole."
+    "tests": "tests/test_lesson_provenance.py tests/test_knowledge_web.py tests/test_delta_replay.py tests/test_recall.py tests/test_lesson_contested.py tests/test_memory_bridge.py tests/test_verdict_learning.py tests/test_trace_scoring.py"
+  },
+  {
+    "name": "enforcement :: the graveyard's ARCHIVED scan drops its screen",
+    "file": "src/knowledge_web.py",
+    "anchor": "        if tl.provisional or _is_quarantined(tl) or _is_contested(tl):\n            continue  # same exclusion as the live scan above",
+    "replacement": "        if tl.provisional or _is_contested(tl):\n            continue  # same exclusion as the live scan above",
+    "tests": "tests/test_lesson_provenance.py tests/test_knowledge_web.py tests/test_delta_replay.py tests/test_recall.py tests/test_lesson_contested.py tests/test_memory_bridge.py tests/test_verdict_learning.py tests/test_trace_scoring.py"
   }
 ]
