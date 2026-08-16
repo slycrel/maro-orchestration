@@ -1,0 +1,107 @@
+[
+  {
+    "name": "forward :: the census reports nothing missing, ever",
+    "file": "tests/test_defaults_doc.py",
+    "anchor": "    return sorted(k for k in _keys_read_by_code(src_root)\n                  if k not in documented\n                  and not any(part in documented for part in (k,)))",
+    "replacement": "    return []",
+    "tests": "tests/test_defaults_doc.py tests/test_bootstrap_config.py"
+  },
+  {
+    "name": "forward :: config.get alias resolution is dropped",
+    "file": "tests/test_defaults_doc.py",
+    "anchor": "        file_getters = _GETTERS | _config_get_aliases(tree)",
+    "replacement": "        file_getters = _GETTERS",
+    "tests": "tests/test_defaults_doc.py tests/test_bootstrap_config.py"
+  },
+  {
+    "name": "forward :: nested packages under src/ stop being scanned",
+    "file": "tests/test_defaults_doc.py",
+    "anchor": "    for path in sorted(src_root.rglob(\"*.py\")):\n        try:\n            tree = ast.parse(path.read_text())\n        except SyntaxError:\n            continue\n        file_getters",
+    "replacement": "    for path in sorted(src_root.glob(\"*.py\")):\n        try:\n            tree = ast.parse(path.read_text())\n        except SyntaxError:\n            continue\n        file_getters",
+    "tests": "tests/test_defaults_doc.py tests/test_bootstrap_config.py"
+  },
+  {
+    "name": "forward :: the dotless-key leg is dropped",
+    "file": "tests/test_defaults_doc.py",
+    "anchor": "            elif node.func.id in _DOTLESS_GETTERS and \"_\" in key:\n                keys.add(key)",
+    "replacement": "            pass",
+    "tests": "tests/test_defaults_doc.py tests/test_bootstrap_config.py"
+  },
+  {
+    "name": "forward :: the whole getter set collapses to config.get",
+    "file": "tests/test_defaults_doc.py",
+    "anchor": "_GETTERS = {\"get\", \"_get\", \"config_get\", \"_cfg_get\", \"cfg_get\", \"_config_get\", \"cfg\"}",
+    "replacement": "_GETTERS = {\"get\"}",
+    "tests": "tests/test_defaults_doc.py tests/test_bootstrap_config.py"
+  },
+  {
+    "name": "forward :: keys are harvested from config.py's own internals too",
+    "file": "tests/test_defaults_doc.py",
+    "anchor": "            if path.name == \"config.py\":\n                continue  # docstring examples / internals, not reads",
+    "replacement": "            pass",
+    "tests": "tests/test_defaults_doc.py tests/test_bootstrap_config.py"
+  },
+  {
+    "name": "living :: DEFAULTS.md may be a record instead of a registry",
+    "file": "tests/test_defaults_doc.py",
+    "anchor": "    return text.startswith(\"---\\nstatus: living\\n---\")",
+    "replacement": "    return isinstance(text, str)",
+    "tests": "tests/test_defaults_doc.py tests/test_bootstrap_config.py"
+  },
+  {
+    "name": "reverse :: the census reports no dead rows, ever",
+    "file": "tests/test_defaults_doc.py",
+    "anchor": "    return sorted(k for k in _documented_table_keys(doc_text) if not _is_read(k))",
+    "replacement": "    return []",
+    "tests": "tests/test_defaults_doc.py tests/test_bootstrap_config.py"
+  },
+  {
+    "name": "reverse :: only the row-leading key is censused again",
+    "file": "tests/test_defaults_doc.py",
+    "anchor": "        keys |= set(re.findall(r\"`([a-z0-9_]+\\.[a-z0-9_.]+)`\", cell))",
+    "replacement": "        keys |= set(re.findall(r\"`([a-z0-9_]+\\.[a-z0-9_.]+)`\", cell)[:1])",
+    "tests": "tests/test_defaults_doc.py tests/test_bootstrap_config.py"
+  },
+  {
+    "name": "reverse :: the key cell is read from the wrong column",
+    "file": "tests/test_defaults_doc.py",
+    "anchor": "        cell = line.split(\"|\")[1]",
+    "replacement": "        cell = line.split(\"|\")[2]",
+    "tests": "tests/test_defaults_doc.py tests/test_bootstrap_config.py"
+  },
+  {
+    "name": "reverse :: everything counts as read",
+    "file": "tests/test_defaults_doc.py",
+    "anchor": "        if key in ast_read or key in literals:\n            return True",
+    "replacement": "        return True",
+    "tests": "tests/test_defaults_doc.py tests/test_bootstrap_config.py"
+  },
+  {
+    "name": "reverse :: the f-string wrapper shape stops being recognised",
+    "file": "tests/test_defaults_doc.py",
+    "anchor": "        for consts, prefixes in per_file.values():\n            for prefix in prefixes:\n                if key.startswith(prefix) and key[len(prefix):] in consts:\n                    return True",
+    "replacement": "        pass",
+    "tests": "tests/test_defaults_doc.py tests/test_bootstrap_config.py"
+  },
+  {
+    "name": "reverse :: per-file scan is keyed by basename so files shadow",
+    "file": "tests/test_defaults_doc.py",
+    "anchor": "        per_file[str(path.relative_to(src_root))] = (consts, prefixes)",
+    "replacement": "        per_file[path.name] = (consts, prefixes)",
+    "tests": "tests/test_defaults_doc.py tests/test_bootstrap_config.py"
+  },
+  {
+    "name": "reverse :: literal collection skips plain string constants",
+    "file": "tests/test_defaults_doc.py",
+    "anchor": "            if isinstance(node, ast.Constant) and isinstance(node.value, str):\n                consts.add(node.value)",
+    "replacement": "            if False:\n                consts.add(node.value)",
+    "tests": "tests/test_defaults_doc.py tests/test_bootstrap_config.py"
+  },
+  {
+    "name": "reverse :: the f-string prefix/suffix match crosses file boundaries",
+    "file": "tests/test_defaults_doc.py",
+    "anchor": "                if key.startswith(prefix) and key[len(prefix):] in consts:",
+    "replacement": "                if key.startswith(prefix) and key[len(prefix):] in literals:",
+    "tests": "tests/test_defaults_doc.py tests/test_bootstrap_config.py"
+  }
+]
