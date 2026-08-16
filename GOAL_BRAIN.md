@@ -3310,3 +3310,27 @@ Dated end-of-chunk/session entries, append-only at the tail. Rotation policy (20
   tends to be fine; the guard claiming to protect it tends not to be —
   enforcement written as a test attracts less scrutiny than enforcement
   written as a feature, because a passing test looks like evidence.**
+- **2026-08-16 (box)** — **Fifth tier-1 mutation sweep: the Δ-gate acting
+  floors, 33/35 → 36/36** (`tests/mutation/delta_gate_floors.json`). Best
+  first pass of the arc and the one that makes the arc's claim
+  falsifiable. 35 mutations over five numeric floors
+  (`EFFECT_PROMOTE_MIN_DELTA` 0.30, `MIN_CALLS` 6, `DEMOTE_MAX_DELTA`
+  −0.05, `INERT_MAX_ABS_DELTA`/`MAX_SPREAD` 0.02), five killswitches, and
+  every finite-only / call-floor / spread / stratum / replay-error /
+  boundary-flag / text-binding screen across the four parallel routes
+  (promote, confirm, demote, inert) plus `resolve_remint_watch` — **all
+  already pinned.** Two survivors, both probed, neither a hole: (1) the
+  promote route's boundary PRE-check is redundant with `_guards` under
+  the lock — two-guards-one-test again, and per the envelope rule I
+  pinned the job only the in-lock copy can do (a row that changes between
+  the unlocked snapshot and the lock; new test carries a vacuity
+  assertion), leaving the pre-check honestly equivalent; (2)
+  `resolve_remint_watch`'s point-estimate decisiveness check is DEAD CODE
+  — the ±spread band check below strictly subsumes it (proved over Δ ∈
+  [−1,1] at 0.001 × six spreads, zero cases), kept for its clearer
+  operator log line with a source comment saying so. Suite 9250 → 9270.
+  **This is the control the arc needed: production code with five
+  adversarial review rounds behind it came out clean, while two tripwires
+  with review rounds behind them could not fail at all. Review works on
+  features; it is enforcement-written-as-a-test that slips past it.**
+  Tier-1 now clear except closing the red `provenance_gate.json`.

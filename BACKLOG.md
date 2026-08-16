@@ -143,8 +143,16 @@ Ordered open work that matters. Top of the list is next.
   tripwire had the same disease, all three assertions gutted with a green
   suite, and its four DETECTED verdicts all routed through the single
   stale-entry assertion that `stale = []` removes. Fixed the same way
-  (seam + 21 fixtures), plus the latent glob→rglob gap. Remaining tier-1
-  candidate: the Δ-gate floors.
+  (seam + 21 fixtures), plus the latent glob→rglob gap.
+  `delta_gate_floors.json` — 36 mutations, CLOSED 2026-08-16 at 36/36
+  from **33/35**, the best first pass of the arc: five numeric floors,
+  five killswitches and every finite/call-floor/spread/stratum/
+  replay-error screen across four parallel routes were already pinned.
+  Two survivors, both probed equivalent (a boundary pre-check redundant
+  with its in-lock twin — the twin's unique TOCTOU job is now pinned;
+  and a point-estimate check strictly subsumed by the ±spread band
+  below it). **Tier-1 is now clear except closing the red
+  `provenance_gate.json`.**
 
   **Three of the four surfaces swept so far were tripwires, and two could
   not fail.** The code a decree protects tends to be fine; the guard

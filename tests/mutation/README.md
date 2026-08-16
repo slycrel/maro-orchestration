@@ -103,6 +103,7 @@ failure the sweep exists to find.
 | `dev_status.json` | The project-state readout: CAPABILITIES row-mark parsing (the shape that must never re-admit prose), the backlog three-way census and stop-rule detection, trend degradation to unknown, staleness rendering, and the DEV_LOG managed-block splice | 11 | 2026-08-16, all accounted for (2 gaps closed — an evasion fixture and one badly-built mutation of my own) |
 | `operator_attachments.json` | The `handle --attach` lane: local-file store (binary fidelity, refusal on missing/oversize, collision handling, basenaming), run-tree landing including the open_run wiring, and the advisory block's run-relative path + operator-supplied labeling | 7 | 2026-08-16, all accounted for |
 | `retention_decree.json` | The 2026-07-10 retention decree's tripwire (`tests/test_no_silent_deletion.py`): the AST deletion scanner's API legs + function attribution + nested-package scan, the (module, function) allowlist key, the stale-entry census, and the `delete_checkpoint` no-auto-caller pin | 15 | 2026-08-16, all accounted for (4/13 on first pass, seam + 21 fixtures added) |
+| `delta_gate_floors.json` | The Δ-gate's acting floors: `EFFECT_PROMOTE_MIN_DELTA/MIN_CALLS`, `EFFECT_DEMOTE_MAX_DELTA`, `EFFECT_INERT_MAX_ABS_DELTA/MAX_SPREAD`, and every guard in the four routes (`promote_lesson_by_effect`, `confirm_lesson_by_delta`, `demote_lesson_by_effect`, `inert_lesson_by_effect`) plus `resolve_remint_watch` — killswitches, finite-only, call floor, spread, stratum, replay-errors, boundary flags, text binding | 34 + 2 equivalent | 2026-08-16, all accounted for (33/35 on first pass — best of the arc) |
 
 Note on `path_rewrite.json`: the first sweep of it ran green at 30/30 and
 a six-lens review still found four real defects afterward, two of them
@@ -143,12 +144,18 @@ The DEFAULTS.md census scored 3/14 and the retention tripwire 4/13. The
 sweep is not a formality that always finds something, and it is not a
 formality that never does.
 
-**Three of the four were tripwires, and two of those could not fail.**
-That is the standing lesson of this arc so far: the code a decree
-protects tends to be fine, and the guard claiming to protect it tends
-not to be. Enforcement written as a test attracts less scrutiny than
-enforcement written as a feature, because a passing test looks like
-evidence.
+**Three of the five were tripwires, and two of those could not fail;
+the two production surfaces scored 12/20 and 33/35.** That is the
+standing lesson of this arc: the code a decree protects tends to be
+fine, and the guard claiming to protect it tends not to be. Enforcement
+written as a test attracts less scrutiny than enforcement written as a
+feature, because a passing test looks like evidence.
+
+The Δ-gate floors are the control that makes the claim mean something.
+Five numeric floors, five killswitches and every screen across four
+parallel routes — all already pinned, on code that had five adversarial
+review rounds. Review does work on features. It is enforcement-as-test
+that slips through it.
 
 ## Sweeping a tripwire: mutate the guard, not the guarded
 
