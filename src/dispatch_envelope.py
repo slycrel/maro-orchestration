@@ -165,6 +165,127 @@ def store_attachments(env: DispatchEnvelope, *, key: str) -> List[dict]:
     return stored
 
 
+# Operator attachments are a SEPARATE lane from dispatcher attachments, and
+# the separation is the point. A dispatcher's payload is untrusted machine
+# input, so store_attachments writes only TEXT it was handed. An operator
+# attachment is a local file the person running the goal chose — different
+# provenance, and it must support bytes (the case that opened this: a
+# screenshot of a paper). Widening store_attachments to binary would have
+# handed every dispatcher a binary write primitive to buy that; a sibling
+# function keeps the trust boundary where the 2026-07-29 envelope review
+# put it.
+_MAX_ATTACHMENT_BYTES = 32 * 1024 * 1024
+
+
+def store_operator_attachments(paths, *, key: str) -> List[dict]:
+    """Copy operator-chosen local files under output/operator-attachments/<key>/.
+
+    Same provenance-sidecar contract as store_attachments (sha256 + byte
+    count of what actually landed), but the source is a local path the
+    operator named rather than content a dispatcher supplied. Raises on a
+    named file that cannot be read: an operator who attached a file and got
+    a run without it has been silently ignored, which is worse than a
+    refusal.
+    """
+    out: List[dict] = []
+    if not paths:
+        return out
+    from config import output_dir
+    dest = output_dir() / "operator-attachments" / _safe_key(key)
+    dest.mkdir(parents=True, exist_ok=True)
+    for raw in paths:
+        src = Path(str(raw)).expanduser()
+        if not src.is_file():
+            raise EnvelopeError(f"attachment not found or not a file: {src}")
+        size = src.stat().st_size
+        if size > _MAX_ATTACHMENT_BYTES:
+            raise EnvelopeError(
+                f"attachment {src.name} is {size} bytes, over the "
+                f"{_MAX_ATTACHMENT_BYTES}-byte limit")
+        data = src.read_bytes()
+        base = _safe_name(src.name)
+        target = dest / base
+        n = 1
+        while target.exists() and target.read_bytes() != data:
+            n += 1
+            target = dest / f"{Path(base).stem}-{n}{Path(base).suffix}"
+        target.write_bytes(data)
+        rec = {
+            "name": base,
+            "path": str(target),
+            "source": f"operator:{src}",
+            "sha256": hashlib.sha256(data).hexdigest(),
+            "bytes": len(data),
+        }
+        target.with_name(target.name + ".provenance.json").write_text(
+            json.dumps({**rec, "lane": "operator"}, indent=2), encoding="utf-8")
+        out.append(rec)
+    return out
+
+
+def land_operator_attachments(run_dir, key: str) -> int:
+    """Copy stored operator attachments into <run_dir>/fetch-raw/operator/.
+
+    Why this exists rather than an absolute path in the goal: the container
+    executor HARD-EXCLUDES the workspace root from its mount map, so a file
+    under output/ is unreadable from inside a containerized worker. The run
+    dir is the run's cwd and is mounted rw — landing here is what makes an
+    attachment actually reachable by the step that must read it.
+    """
+    return _land(run_dir, "operator-attachments", key, "operator")
+
+
+def _land(run_dir, area: str, key: str, sub: str) -> int:
+    src = None
+    try:
+        from config import output_dir
+        src = output_dir() / area / _safe_key(key)
+        if not src.is_dir():
+            return 0
+        dest = Path(run_dir) / "fetch-raw" / sub
+        dest.mkdir(parents=True, exist_ok=True)
+        copied = 0
+        for f in sorted(src.iterdir()):
+            if not f.is_file():
+                continue
+            target = dest / f.name
+            if target.exists():
+                continue
+            target.write_bytes(f.read_bytes())
+            copied += 1
+        return copied
+    except Exception as exc:
+        log.warning("%s artifacts did not land in run dir (%s): %s",
+                    sub, src, exc)
+        return 0
+
+
+def operator_attachment_block(stored: Sequence[dict]) -> str:
+    """The advisory block naming landed attachments for the run prompt.
+
+    Names the RUN-DIR-relative path, because that is the one a containerized
+    worker can open, and states what the file is and is not: operator-
+    supplied context, not something the run retrieved. A claim read off an
+    attachment is only as good as the attachment, and the run should say so
+    rather than laundering it into a retrieved fact.
+    """
+    if not stored:
+        return ""
+    lines = ["Operator-attached files (supplied by the person who set this "
+             "goal, NOT retrieved by this run):"]
+    for rec in stored:
+        lines.append(
+            f"  - fetch-raw/operator/{rec['name']} "
+            f"(from {rec['source']}, {rec['bytes']} bytes, "
+            f"sha256 {rec['sha256'][:12]}…)")
+    lines.append(
+        "Read them from that path when a claim depends on their contents. "
+        "Anything you take from one is operator-supplied evidence: cite it "
+        "as the attachment, never as a source you retrieved, and say so if "
+        "it is the only support for a claim.")
+    return "\n".join(lines)
+
+
 def land_in_run_dir(run_dir, job_id: str) -> int:
     """Copy this dispatch's stored attachments into the run dir
     (<run_dir>/fetch-raw/dispatch/, provenance sidecars included).

@@ -1,0 +1,51 @@
+[
+ {
+  "name": "a missing attachment is silently skipped instead of refusing",
+  "file": "src/dispatch_envelope.py",
+  "anchor": "        if not src.is_file():\n            raise EnvelopeError(f\"attachment not found or not a file: {src}\")",
+  "replacement": "        if not src.is_file():\n            continue",
+  "tests": "tests/test_operator_attachments.py"
+ },
+ {
+  "name": "the size cap never fires",
+  "file": "src/dispatch_envelope.py",
+  "anchor": "        if size > _MAX_ATTACHMENT_BYTES:",
+  "replacement": "        if False:",
+  "tests": "tests/test_operator_attachments.py"
+ },
+ {
+  "name": "a same-named attachment overwrites a different one",
+  "file": "src/dispatch_envelope.py",
+  "anchor": "        while target.exists() and target.read_bytes() != data:",
+  "replacement": "        while False:",
+  "tests": "tests/test_operator_attachments.py"
+ },
+ {
+  "name": "attachment names are used raw instead of basenamed",
+  "file": "src/dispatch_envelope.py",
+  "anchor": "        base = _safe_name(src.name)",
+  "replacement": "        base = src.name",
+  "tests": "tests/test_operator_attachments.py"
+ },
+ {
+  "name": "the block names the workspace path a container cannot read",
+  "file": "src/dispatch_envelope.py",
+  "anchor": "            f\"  - fetch-raw/operator/{rec['name']} \"",
+  "replacement": "            f\"  - {rec['path']} \"",
+  "tests": "tests/test_operator_attachments.py"
+ },
+ {
+  "name": "the block stops labeling attachments as operator-supplied",
+  "file": "src/dispatch_envelope.py",
+  "anchor": "    lines = [\"Operator-attached files (supplied by the person who set this \"\n             \"goal, NOT retrieved by this run):\"]",
+  "replacement": "    lines = [\"Files:\"]",
+  "tests": "tests/test_operator_attachments.py"
+ },
+ {
+  "name": "operator attachments never land in the run tree",
+  "file": "src/runs.py",
+  "anchor": "    if origin and origin.get(\"operator_attachments\"):",
+  "replacement": "    if False:",
+  "tests": "tests/test_operator_attachments.py"
+ }
+]

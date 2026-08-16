@@ -34,9 +34,9 @@ Dev log tab at maro.feifdom.com alongside Runs and Reading.
 
 **Throughput and fan-out**
 
-- 204 commits in 7d, 635 in 30d
-- **Actionable Stack** open boxes: **64** (30d: +57)
-- net new open items per 10 commits: **+0.90** — findings are outrunning closure
+- 205 commits in 7d, 634 in 30d
+- **Actionable Stack** open boxes: **62** (30d: +55)
+- net new open items per 10 commits: **+0.87** — findings are outrunning closure
 - ⚠ this delta counts one SECTION, so an archive pass or a re-org moves it without any work changing hands. Read the rate as a coarse direction, never as a score.
 
 **Actionable Stack, by kind** — the three things it contains, which look identical on the page
@@ -48,7 +48,7 @@ Dev log tab at maro.feifdom.com alongside Runs and Reading.
 
   - File-derived mutation coverage — sweep the rest of the tree (Jeremy, 2
   - Reference corpora are read from stale local clones, and the container 
-  - Source trust tiers, and reading the authoritative store rather than it
+  - Reading a cited corpus: read the store, not its export (Jeremy, 2026-0
   - Concurrent milestone-area agents — why is the path A→B→C and not all t
   - Live-writer census findings — one open of four decision-shaped items (
   - NOW retry rung — failure-class-routed ladder: NOW → artifact retry / s

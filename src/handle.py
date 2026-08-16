@@ -4102,6 +4102,13 @@ def main(argv=None):
     parser.add_argument("--persona", help="Force a specific persona by name (same as a 'persona:<name>:' prefix in the message; unknown names fall back to auto-selection)")
     from ancestry import MEASUREMENT_CLASSES
     parser.add_argument("--measurement-class", choices=MEASUREMENT_CLASSES, default="organic", help="Success-measurement cohort provenance (default: organic)")
+    parser.add_argument(
+        "--attach", action="append", default=[], metavar="FILE",
+        help="Attach a local file to this goal (repeatable). It lands in the "
+             "run's own tree at fetch-raw/operator/ — reachable from a "
+             "containerized worker, which the workspace output dir is not — "
+             "and is named in the prompt as operator-supplied context, "
+             "never as something the run retrieved")
     parser.add_argument("--dry-run", action="store_true", help="Simulate without API calls")
     parser.add_argument("--verbose", "-v", action="store_true", help="Print progress")
     parser.add_argument("--format", choices=["text", "json"], default="text")
@@ -4118,6 +4125,29 @@ def main(argv=None):
         # a parameter through handle's layers.
         os.environ["MARO_ADMISSION_WAIT_S"] = str(max(0.0, args.wait))
 
+    # Operator attachments are stored BEFORE the run starts (no run dir
+    # exists yet) and linked through origin, the same way dispatch artifacts
+    # ride origin — see runs.open_run. A failure here is fatal on purpose:
+    # a run that silently drops a file the operator attached has ignored
+    # them, which is worse than refusing to start.
+    _attach_origin = None
+    _attach_ctx = None
+    if args.attach:
+        from dispatch_envelope import (EnvelopeError, operator_attachment_block,
+                                       store_operator_attachments)
+        _key = f"attach-{int(time.time())}-{os.getpid()}"
+        try:
+            _stored = store_operator_attachments(args.attach, key=_key)
+        except EnvelopeError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            return 1
+        _attach_origin = {"operator_attachments": _key}
+        _attach_ctx = operator_attachment_block(_stored)
+        if args.verbose:
+            for rec in _stored:
+                print(f"[maro] attached {rec['name']} ({rec['bytes']} bytes)",
+                      file=sys.stderr)
+
     try:
         result = handle(
             msg,
@@ -4129,6 +4159,8 @@ def main(argv=None):
             verbose=args.verbose,
             persona=args.persona,
             measurement_class=args.measurement_class,
+            operator_context=_attach_ctx,
+            origin=_attach_origin,
         )
     except RuntimeError as e:
         # build_adapter() raises RuntimeError with an actionable, human-facing

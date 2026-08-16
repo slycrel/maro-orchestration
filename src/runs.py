@@ -356,6 +356,16 @@ def create_run_dir(
         except Exception:
             pass  # fail-soft twice over — the run must start regardless
 
+    # Same rationale for operator-attached files (--attach): the workspace
+    # output dir is mount-excluded from the container, so an attachment is
+    # only reachable once it is inside the run tree.
+    if origin and origin.get("operator_attachments"):
+        try:
+            from dispatch_envelope import land_operator_attachments
+            land_operator_attachments(rd, str(origin["operator_attachments"]))
+        except Exception:
+            pass
+
     # Per-thread goal-brain — first call wins, same rule as prompt.txt.
     try:
         import thread_brain
