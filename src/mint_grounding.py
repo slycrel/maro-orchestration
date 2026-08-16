@@ -40,6 +40,17 @@ the design doc is the widen trigger, not silent regex growth):
     failure detection is out of v1.
   - the join is run-scoped: "this step" locality is not narrowed
     (run-narrative grounding is slice 4).
+  - a bare measurement report — "Measured correction (A/B run e0bbc289):
+    a separate turn per probe is the cost driver" — carries no
+    retrospective marker, so the claim-shape gate below drops it. That
+    shape is real (it sits in the live skills-lite store) and is
+    evidence for the design's lexicon-widening trigger, not a licence
+    to widen the regexes now.
+  - third-party claims read as self-claims: node prose crystallized
+    from an external source ("The system was tested across 1,980
+    sessions") grounds against the MINTING run's events and lands
+    unsupported, which reads as doubt about a claim the run never made.
+    Recorded in the design doc; no v1 discriminator.
 
 claim_probe.py stays the *contestation* lane (fresh shell probes for
 reviewer disputes); this is the *mint* lane (receipts from events that
@@ -83,6 +94,134 @@ _CLAIM_FAMILIES = (
         r"\bverified\b|\bconfirmed\b|\bprobed\b|\bvalidated\b"
         r"|\bmeasured\b|\bchecked\b", re.I)),
 )
+
+# --- claim-shape gate: retrospective mood ------------------------------------
+# The lexicon above finds the VOCABULARY of a method claim. It cannot tell an
+# assertion from advice, because English past participles double as adjectives
+# ("verified output"), as tag text ("[recovery-verified]"), and as filenames
+# ("wordfreq-verified.txt"). Measured on the box corpus 2026-08-16, the
+# lexicon alone fired on 100 sentences across the two skill stores
+# (skills.jsonl + skills-lite .md) of which ZERO were retrospective claims —
+# skill prose is prescriptive by construction — and on 103 lesson sentences
+# of which ~16 were. That precision is the blocker for the skill-mint slice:
+# stamping advice text would render "unsupported by the minting run's event
+# log" markers on instructions that never claimed anything.
+#
+# So: a MOOD test, not a grammar parse. A claim is a sentence that REPORTS
+# what happened. Two token-local vetoes plus one sentence-level requirement,
+# all of them narrowing — a gated-out claim mints no stamp, which is exactly
+# the pre-grounding status quo (the fail-open direction). The doctrine is not
+# new; the module docstring has always said imperative advice is never
+# stamped. This is the implementation catching up to it.
+
+# Veto 1: the token is welded into a hyphenated compound — a tag, a slug, or
+# a filename, never a finite verb. "re-verified" is the one real exception
+# (a genuine past-tense verb in the LT corpus), so the "re-" prefix survives.
+_RE_PREFIXED = re.compile(r"\bre-$")
+# Veto 2: a modal or infinitive governs the token — "must be checked",
+# "cannot be fetched", "can each be independently checked". Policy about
+# future work, not a report of past work.
+_MODAL_GOVERNS = re.compile(
+    r"\b(?:can|cannot|can't|could|should|shall|must|may|might|will|won't"
+    r"|would|to)\s+(?:not\s+|never\s+|each\s+|then\s+|also\s+)?"
+    r"(?:be|been|being|get|become)?\s*(?:\w+ly\s+)?$", re.I)
+
+# Sentence-level requirement: an explicit past-tense finite marker. Either an
+# auxiliary ("was fetched", "had been confirmed", "did not correlate") or a
+# past-tense verb taking an object ("supplied the data", "matched their own
+# totals") — the two shapes every logged specimen uses.
+_RETRO_AUX = re.compile(
+    r"\b(?:was|were|wasn't|weren't|did|didn't)\b"
+    r"|\b(?:had|hadn't|has|have|having)\s+(?:not\s+|already\s+|just\s+|only\s+)?"
+    r"(?:been|\w+ed)\b", re.I)
+_RETRO_FINITE = re.compile(
+    r"\b\w{3,}ed\b\s+(?:the|a|an|this|that|these|those|its|their|his|her|our"
+    r"|my|your|it|them|all|each|every|both|only|\d)\b", re.I)
+# Counterfactual/hypothetical framing reads past-tense but asserts nothing:
+# "treats a partial response as if it were a full, verified fetch".
+_HYPOTHETICAL = re.compile(
+    r"\bas if\b|\bas though\b|\bwould have\b|\bhad it\b", re.I)
+
+# An instruction can still contain a past-passive subordinate clause —
+# "Record the date each price was checked", "Log which values were tested".
+# The main clause is an order to a future agent, so the sentence reports
+# nothing; the retro marker above belongs to the embedded clause. Skill
+# bodies are written almost entirely in these two moods (imperative steps
+# and third-person descriptions of what the skill does), which is why the
+# marker test alone left every surviving skill-store hit a false positive.
+# Generic instruction vocabulary, not corpus-fitted: -s forms are included
+# only for verbs that are not also nouns in this domain (no "runs", "tests",
+# "checks", "reports" — those head real claims).
+_IMPERATIVE_OPENERS = frozenset("""
+add append apply avoid break capture categorize check choose compare compile
+confirm copy create define describe detect determine document embed ensure
+enumerate extract fetch flag focus follow generate give halt handle identify
+include issue keep label list load locate log make manage mark move note open
+pick place plan prefer prepare produce prove pull push query quote rank read
+reconcile record recover reject remove repeat replace report require resolve
+restrict return reuse review rewrite run sample save scan score search select
+send set ship show skip sort specify split start state stop store structure
+summarize surface switch tag take test trace track treat try turn update use
+validate verify wait walk watch weigh write
+applies creates describes ensures extracts generates handles performs
+produces provides recovers works
+""".split())
+# Leading subordinator: "For each question, state ..." / "Before finalizing,
+# verify ..." — the order lives after the comma.
+_SUBORDINATOR = frozenset(
+    "for before after when whenever while if once unless until since to "
+    "given during in on at by with without".split())
+_LEADING_TAG = re.compile(r"^\s*(?:[-*•]\s*|\[[^\]]{0,40}\]\s*|\d+[.)]\s*|"
+                          r"step\s+\d+\s*[:.]\s*)+", re.I)
+_WORD = re.compile(r"[A-Za-z][A-Za-z'\-]*")
+# Commas inside a quotation or a parenthetical are not clause boundaries.
+# Found while measuring: "For an agenda task scoped as 'summarize a command
+# + N worked examples, save to file', the plan allocated 7 steps but the
+# goal was verified achieved after only 6" — a true claim — was read as an
+# instruction because the first comma sat inside the quoted goal text and
+# the next word was "save".
+_QUOTED_SPAN = re.compile(r"'[^']*'|\"[^\"]*\"|\([^)]*\)|\[[^\]]*\]|`[^`]*`")
+
+
+def _clause_comma(body: str) -> int:
+    masked = _QUOTED_SPAN.sub(lambda m: " " * len(m.group(0)), body)
+    return masked.find(",")
+
+
+def _is_instruction(sentence: str) -> bool:
+    """True when the sentence's main clause orders or describes, not reports."""
+    body = _LEADING_TAG.sub("", sentence)
+    words = _WORD.findall(body[:120])
+    if not words:
+        return False
+    if words[0].lower() in _IMPERATIVE_OPENERS:
+        return True
+    # Subordinate clause first: check the word right after its comma.
+    if words[0].lower() in _SUBORDINATOR:
+        i = _clause_comma(body)
+        if i >= 0:
+            after = _WORD.findall(body[i + 1:i + 61])
+            if after and after[0].lower() in _IMPERATIVE_OPENERS:
+                return True
+    return False
+
+
+def _is_retrospective(sentence: str) -> bool:
+    """True when the sentence reports what happened (vs. advises what to do)."""
+    if _HYPOTHETICAL.search(sentence) or _is_instruction(sentence):
+        return False
+    return bool(_RETRO_AUX.search(sentence) or _RETRO_FINITE.search(sentence))
+
+
+def _token_asserts(sentence: str, start: int, end: int) -> bool:
+    """True when this lexicon hit reads as a verb, not a tag or a policy."""
+    before, after = sentence[:start], sentence[end:]
+    if before.endswith("-") and not _RE_PREFIXED.search(before):
+        return False
+    if after.startswith("-"):
+        return False
+    return not _MODAL_GOVERNS.search(before[-48:])
+
 
 _NET_CMD = re.compile(r"\bcurl\b|\bwget\b|\bhttps?://", re.I)
 # Credential-shaped markers only. Bare "token" is NOT enough: the live
@@ -216,14 +355,20 @@ def collect_run_tool_events(run_dir) -> Optional[List[Dict[str, Any]]]:
 
 
 def extract_claims(text: str) -> List[Dict[str, str]]:
-    """Past-tense method claims in ``text``, one per (sentence, family)."""
+    """Past-tense method claims in ``text``, one per (sentence, family).
+
+    Two-stage by design (see the claim-shape gate above): the sentence must
+    be retrospective at all, and the lexicon hit inside it must read as a
+    verb rather than an adjective, a tag, or a modal policy.
+    """
     claims: List[Dict[str, str]] = []
     for sentence in re.split(r"(?<=[.;!?])\s+|\n+", text or ""):
         sentence = sentence.strip()
-        if not sentence:
+        if not sentence or not _is_retrospective(sentence):
             continue
         for family, pat in _CLAIM_FAMILIES:
-            if pat.search(sentence):
+            if any(_token_asserts(sentence, m.start(), m.end())
+                   for m in pat.finditer(sentence)):
                 claims.append({"claim": sentence[:_CLAIM_EXCERPT],
                                "family": family, "_sentence": sentence})
     return claims

@@ -1199,11 +1199,33 @@ capture**, which is what makes the rung amortize instead of evaporate.
   mint-time semantics; absent-key row discipline), and the promotion
   judge now sees the stamps (unsupported claims rendered with a
   weigh-don't-auto-reject instruction — ADVISORY, per the fail-open
-  decree; a judged-valid node still promotes, pinned). **Still open:
-  slice 2b skill-mint** (census 2026-08-16: `evolver_store` ×2,
-  `loop_finalize:1072`, `run_curation:948` auto-promotion,
-  `skill_lifecycle` ×2, `skills.py:315`; frontmatter `grounding:`
-  block per design §3.2) **and slice 3 republish gate** — the only
+  decree; a judged-valid node still promotes, pinned). **Slice 2b,
+  2026-08-16 — probe-first premise correction + claim-shape gate
+  SHIPPED:** measuring the seven census sites' actual corpus BEFORE
+  wiring them found the slice's premise false as written — the bare
+  lexicon fired on 100 sentences across skills.jsonl (398 rows) +
+  skills-lite (56 .md) with **zero** retrospective claims among them
+  (skill prose is prescriptive by construction), and on lesson/node
+  prose its precision was ~19%/~5% (advice, tags like
+  `[recovery-verified]`, filenames like `wordfreq-verified.txt`,
+  modal policy "must be checked"). Stamping that would have rendered
+  "unsupported by the minting run's event log" markers on instructions
+  that never claimed anything. Shipped instead: a **claim-shape mood
+  gate** in `extract_claims` (retro-marker requirement + imperative/
+  descriptive main-clause veto + token-level tag/adjective/modal
+  vetoes, all narrowing) — corpus hits 76→1, 24→0, 103→24, 100→12;
+  all nine already-stamped live rows survive; 15 new pins in
+  tests/test_mint_grounding.py (red-verified against the pre-gate
+  module). This also answers the slice-2a review's deferred Architect
+  question (claim-shape hit rate on generalized LLM prose) with
+  numbers. **Still open, now narrowed: skill-mint stamping is the
+  skills-lite promotion lane only** (`run_curation:948` — a run's own
+  prose becoming durable injected advice; live specimen
+  `repl_reading.md`'s "Measured correction (A/B run e0bbc289…)"),
+  with the other six sites documented stampless by construction
+  (`prompt_tweak` precedent). The bare-measurement claim shape that
+  specimen uses is evidence for the §4 lexicon-widening trigger, not
+  a reason to widen now. **Also open: slice 3 republish gate** — the only
   fail-closed point (`pack.py:881` import lane + warm-arm reuse;
   needs its own design pass: the reuse happens worker-side, not at a
   harness seam);

@@ -60,6 +60,128 @@ class TestExtractClaims:
 
 
 # ---------------------------------------------------------------------------
+# claim-shape gate (retrospective mood)
+# ---------------------------------------------------------------------------
+
+class TestClaimShapeGate:
+    """Every string here is verbatim (or near-verbatim) from the box
+    corpus measured 2026-08-16, when the bare lexicon fired on 100
+    sentences across skills.jsonl + skills-lite .md — none of them a
+    retrospective claim — and on 103 lesson sentences of which ~20 were.
+    Skill prose is prescriptive by construction, so an ungated stamp lane
+    would have rendered "unsupported by the minting run's event log"
+    markers on instructions that never claimed anything.
+    """
+
+    # -- must not stamp -----------------------------------------------------
+
+    @pytest.mark.parametrize("advice", [
+        # Imperative steps — the dominant skill-store shape.
+        "Return validated data collection",
+        "Report verified output to the user",
+        "Save the verified content as a text artifact at the given path",
+        "Search the fetched text for a table of contents",
+        "Append confirmed primes until target count is reached",
+        # Imperative whose SUBORDINATE clause is past-passive: the retro
+        # marker belongs to the embedded clause, the order to the reader.
+        "Record the date each price was checked alongside the price itself",
+        "Log which values were tested and what output was produced",
+        "Report the quote alongside a citation and note how it was "
+        "confirmed against the source",
+        "For each question, state how the answer was confirmed against "
+        "the fetched text",
+        # Third-person description of what a skill does.
+        "Recovers content from an external source that resists direct "
+        "fetching, proceeding from whatever was recovered",
+    ])
+    def test_prescriptive_skill_text_is_not_a_claim(self, advice):
+        assert extract_claims(advice) == []
+
+    @pytest.mark.parametrize("tagged", [
+        # Machine-written recovery-lesson prefix: 25 of the 103 lesson-corpus
+        # hits were this one tag, not prose at all.
+        "[recovery-verified] retry-with-hint unblocked a run: step 2 blocked",
+        "Include actual runtime output as a versioned artifact "
+        "(wordfreq-verified.txt).",
+        "This pattern works better than repo-checked artifacts for "
+        "durable working data.",
+        "[execution] pytest-coverage analysis: coverage was ranked by area.",
+    ])
+    def test_hyphenated_tags_and_filenames_are_not_verbs(self, tagged):
+        assert extract_claims(tagged) == []
+
+    @pytest.mark.parametrize("policy", [
+        "If a required field can't be verified from an available source, "
+        "that item should be flagged or swapped.",
+        "Sub-claims that can each be independently checked were the plan.",
+        "A large gap between step completion and outcome means the "
+        "deliverable must be checked against the list.",
+    ])
+    def test_modal_governed_verbs_are_policy_not_report(self, policy):
+        assert extract_claims(policy) == []
+
+    def test_hypothetical_framing_asserts_nothing(self):
+        assert extract_claims(
+            "It treats a partial response as if it were a full, verified "
+            "fetch.") == []
+
+    def test_no_retro_marker_no_claim(self):
+        # Ships in the design's cuts: a claim we cannot recognize mints
+        # nothing, which is the pre-grounding status quo. This one is a
+        # real (rare) skill-prose claim we knowingly leave unstamped.
+        assert extract_claims(
+            "Measured correction (A/B run e0bbc289): a separate turn per "
+            "probe is the cost driver.") == []
+
+    # -- must still stamp ---------------------------------------------------
+
+    @pytest.mark.parametrize("text,families", [
+        # Auxiliary marker.
+        ("The page was fetched via the CDN.", {"fetch"}),
+        ("The blocks were confirmed this session.", {"probe"}),
+        ("The goal specified strict constraints before any artifact had "
+         "been confirmed to exist.", {"probe"}),
+        ("Cross-referencing the source against repo mechanisms did not "
+         "produce uniform confidence: 12/14 ideas confirmed as matches.",
+         {"probe"}),
+        # Past-tense verb taking an object, no auxiliary anywhere.
+        ("An authenticated fetch supplied the data.", {"auth"}),
+        ("Independent tallies each validated internally, and the totals "
+         "matched their own sums.", {"probe"}),
+        # "re-" is the one hyphen prefix that fronts a real verb.
+        ("The run re-verified all 13 tagged claims against the repo.",
+         {"probe"}),
+    ])
+    def test_retrospective_reports_still_mint(self, text, families):
+        assert {c["family"] for c in extract_claims(text)} == families
+
+    def test_quoted_comma_is_not_a_clause_boundary(self):
+        # Found while measuring: this true claim was read as an instruction
+        # because the first comma sat inside the quoted goal text and the
+        # word after it ("save") is an imperative opener.
+        text = ("For an agenda task scoped as 'summarize a command + N "
+                "worked examples, save to file', the plan allocated 7 "
+                "steps but the goal was verified achieved after only 6.")
+        assert [c["family"] for c in extract_claims(text)] == ["probe"]
+
+    @pytest.mark.parametrize("shipped", [
+        # Verbatim from the nine rows the live box corpus had already
+        # stamped before the gate — the gate must not silently unstamp
+        # what slice 1 was minting.
+        "This agenda run was interrupted before any steps executed (0/0 "
+        "completed), leaving no trace of what obstacle caused the stall.",
+        "nothing in this run confirmed those artifacts actually exist or "
+        "were located, since execution never began.",
+        "Architecture-doc absence of a mechanism was not treated as "
+        "sufficient evidence of a real gap on its own — a follow-up "
+        "source-code grep across actual repo files was run to corroborate "
+        "it, and in this case confirmed the doc-level finding.",
+    ])
+    def test_shipped_stamps_survive_the_gate(self, shipped):
+        assert extract_claims(shipped) != []
+
+
+# ---------------------------------------------------------------------------
 # grounding join
 # ---------------------------------------------------------------------------
 

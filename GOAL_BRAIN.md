@@ -2963,3 +2963,38 @@ Dated end-of-chunk/session entries, append-only at the tail. Rotation policy (20
   slice 2b skill-mint (7-site census), slice 3 republish gate,
   Architect's LLM-prose claim-shape hit-rate question folded into the
   >30%-unprobed falsifier census. Suite 8896/0.
+
+- **2026-08-16 (dev Mac, cont.)** — **Mint-grounding slice 2b opened by
+  measuring instead of building, and the measurement refuted the
+  slice's premise.** Before wiring the 7-site skill-mint census, ran
+  the extractor over the live box corpus: the bare lexicon fired on
+  100 sentences across skills.jsonl (398 rows) + skills-lite (56 .md)
+  and **not one was a retrospective claim** — skill prose is
+  prescriptive by construction (imperative steps, third-person
+  descriptions). Same probe on lessons (103 hits, ~20 real) and
+  knowledge nodes (100 hits, ~5 real) put shipped precision at ~19% /
+  ~5%: past participles doubling as adjectives ("verified output"),
+  tags (`[recovery-verified]` — 25 hits from one machine-written
+  prefix), filenames (`wordfreq-verified.txt`), modal policy ("must be
+  checked"). Stamping skills on that basis would have marked pure
+  advice "unsupported by the minting run's event log". Shipped the
+  prerequisite instead: a **claim-shape mood gate** in
+  `extract_claims` — sentence must report (auxiliary or past verb +
+  object), main clause must not order or describe, and the hit itself
+  must read as a verb — all rules narrowing, so a gated-out claim
+  mints nothing (the pre-grounding status quo, fail-open direction).
+  Corpus after: 76→1, 24→0, 103→24, 100→12; all nine live
+  already-stamped rows survive; 15 pins added, red-verified against
+  the pre-gate module; suite 8968/0. Slice 2b is now narrowed to the
+  one lane the evidence supports — skills-lite promotion
+  (`run_curation:948`), where a run's own prose becomes durable
+  injected advice and the corpus holds the specimen
+  (`repl_reading.md`: "Measured correction (A/B run e0bbc289,
+  2026-08-02)") — with the other six sites stampless by construction
+  per the `prompt_tweak` precedent. Two residuals recorded in the
+  design doc, labeled not fixed: bare-measurement claim shapes the
+  gate cannot see (evidence for the §4 widening trigger, not a licence
+  to widen), and third-party claims in node prose ("The system was
+  tested across 1,980 sessions") that ground `unsupported` against a
+  run that never made them. Also added: a precision falsifier as the
+  twin of the >30%-unprobed one.

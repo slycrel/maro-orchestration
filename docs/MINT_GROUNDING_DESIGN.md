@@ -53,6 +53,32 @@ weigh it. **Fail-closed at republish only:** a reuse path that would
 copy a claim forward (the B3w case) refuses `unsupported` provenance
 claims — republishing is the act that launders them into new provenance.
 
+**Claim-shape gate (measured 2026-08-16, shipped with slice 2b's
+census).** The lexicon finds the *vocabulary* of a method claim; on its
+own it cannot tell an assertion from advice, because English past
+participles double as adjectives ("verified output"), as tags
+(`[recovery-verified]`) and as filenames (`wordfreq-verified.txt`).
+Measured over the live box corpus:
+
+| Store | lexicon-only hits | after the gate | true claims |
+|---|---|---|---|
+| skills.jsonl (398 rows) | 76 | 1 | 0 |
+| skills-lite .md (56 files) | 24 | 0 | 0 |
+| lessons live+archive (914 rows) | 103 | 24 | ~20 |
+| knowledge nodes (1,250 rows) | 100 | 12 | ~5 |
+
+So the gate is a **mood test**: the sentence must report what happened
+(an auxiliary — "was fetched", "had been confirmed", "did not correlate"
+— or a past-tense verb taking an object), its main clause must not be an
+order or a third-person description of a skill, and the lexicon hit
+itself must read as a verb rather than a tag, an adjective or a modal
+policy ("must be checked"). Every rule narrows: a gated-out claim mints
+no stamp, which is the pre-grounding status quo. The doctrine is not new
+— the module always documented imperative advice as never-stamped; the
+gate is the implementation catching up, and it answers the slice-2a
+review's deferred Architect question (claim-shape hit rate on generalized
+LLM prose) with corpus numbers rather than an estimate.
+
 Zero new LLM calls in v1: claim detection is a verb-pattern lexicon over
 the observed family (fetch/auth/verify/confirm/test/run + "this
 session"/"this step" locality), joined deterministically against tool
@@ -108,6 +134,27 @@ events that already happened). Shared vocabulary, different verbs.
    Slice-2a census of the sites: `evolver_store` (×2),
    `loop_finalize:1072`, `run_curation:948` (the LT-4 finding-2
    auto-promotion lane), `skill_lifecycle` (×2), `skills.py:315`.
+   **Premise correction, 2026-08-16 (slice 2b, probe-first):** the
+   corpus says skill bodies do not carry the claims this slice was
+   written to stamp. Skill prose is prescriptive by construction —
+   imperative steps and third-person descriptions — and across all 454
+   rows of the two skill stores the gated extractor finds **one**
+   sentence, itself a false positive from a sentence-split artifact.
+   Wiring seven writers to stamp nothing is cost without traffic, so
+   the LLM-minted lanes (`skills.py:315` crystallization,
+   `skill_lifecycle` synthesis + A/B challengers, `evolver_store`
+   apply) are **stampless by construction**, the same finding as the
+   slice-2a `prompt_tweak` ruling and for the same reason: what they
+   write is advice, not a report. What survives the census is narrower
+   and real: the **skills-lite promotion lane** (`run_curation:948`)
+   copies a *run's own prose* into durable injected advice, and the
+   live corpus holds the specimen — `repl_reading.md` carries
+   "**Measured correction (A/B run e0bbc289, 2026-08-02)**" plus a
+   token-count measurement, an empirical claim that every future run
+   now inherits. That lane keeps the slice; the gate does not yet see
+   its claim shape (a bare measurement report with no auxiliary), so
+   the shape question is evidence for the lexicon-widening trigger in
+   §4, not a reason to widen regexes now.
 3. **Republish gate** — artifact-reuse and warm-arm lanes: copying a
    provenance claim forward requires `supported` or re-derivation.
    The ONLY fail-closed point.
@@ -126,6 +173,19 @@ events that already happened). Shared vocabulary, different verbs.
 - If the republish gate ever blocks a claim that manual review finds
   true-but-unlogged, log it as a counter-specimen — the LT-5 reviewer
   case warns exactly here.
+- **Precision falsifier (added 2026-08-16, the twin of the unprobed
+  rate):** if a hand-read sample of stamped rows shows most stamps
+  landing on text that asserts nothing, the extractor is mislabelling
+  advice as provenance and the stamps are noise — that is a gate
+  failure, not a widening trigger. The measured baseline to beat is in
+  §2's table; re-run it against the live stores, not against fixtures.
+- **Third-party claims are a known false-alarm class** (found in the
+  same census): node prose crystallized from external sources carries
+  claims about *someone else's* work — "The system was tested across
+  1,980 sessions" — and grounding those against the minting run's
+  events lands them `unsupported`, which reads as doubt about a claim
+  the run never made. Recorded, not fixed: self-claim vs reported-claim
+  needs a discriminator the v1 lexicon does not have.
 
 ## 5. Cuts
 
