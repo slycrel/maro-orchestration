@@ -530,10 +530,16 @@ def read(rows):
         assert _unlisted(root, {}, {("store.py", "read"): 2}) == []
 
     def test_each_parser_is_covered(self, tmp_path):
-        for module, call in (("json", "loads"), ("json", "load"),
-                             ("yaml", "safe_load"), ("yaml", "load"),
-                             ("pickle", "loads"), ("pickle", "load"),
-                             ("tomllib", "loads"), ("tomllib", "load")):
+        # Spelled as dotted strings, not as tuples: written as tuples these
+        # literals are byte-identical to lines of _PARSE_CALLS, and a
+        # mutation anchored on one of those lines matches here too and gets
+        # skipped as ambiguous — a fixture that quietly disarms its own
+        # mutation. (Cost half a sweep to find, 2026-08-16.)
+        for spec in ("json.loads", "json.load",
+                     "yaml.safe_load", "yaml.load",
+                     "pickle.loads", "pickle.load",
+                     "tomllib.loads", "tomllib.load"):
+            module, call = spec.split(".")
             root = _src(tmp_path, **{"store.py": f"""
 import {module}
 
