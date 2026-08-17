@@ -1,12 +1,13 @@
 """Tests for jsonl_utils.py — the shared JSONL-tail reader (Tier 2 consolidation)."""
 
+import logging
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 import jsonl_utils
-from jsonl_utils import read_jsonl_tail
+from jsonl_utils import read_jsonl_tail, read_jsonl_tail_counted
 
 
 def test_missing_file_returns_empty(tmp_path):
@@ -181,3 +182,141 @@ def test_undecodable_line_skipped_in_tail_scan(tmp_path, monkeypatch):
     path = tmp_path / "log.jsonl"
     path.write_bytes(b'{"n": 1}\n\xff\xfe garbage\n{"n": 2}\n')
     assert read_jsonl_tail(path, limit=5) == [{"n": 1}, {"n": 2}]
+
+
+# --- The read reports what it threw away (tier-2 silent-drop sweep) ------
+#
+# Dropping a corrupt line is right; dropping it *silently* is the defect. A
+# caller that gets 40 records back must be able to tell "the store holds 40"
+# from "the store holds 41 and one was unreadable". These pin that the drop
+# is COUNTED (returned as data) and ANNOUNCED (logged for an operator).
+
+
+class TestTheSkipReportCounts:
+
+    def test_a_clean_read_reports_no_loss(self, tmp_path):
+        path = tmp_path / "log.jsonl"
+        path.write_text('{"n": 1}\n{"n": 2}\n')
+        records, report = read_jsonl_tail_counted(path)
+        assert records == [{"n": 1}, {"n": 2}]
+        assert report.dropped == 0
+        assert not report
+        assert not report.partial
+
+    def test_each_drop_reason_is_counted_separately(self, tmp_path):
+        # Separately, not as one lump: "3 malformed" and "3 undecodable"
+        # mean different things to whoever has to go look at the file.
+        path = tmp_path / "log.jsonl"
+        path.write_bytes(
+            b'{"n": 1}\n'
+            b'nope\nalso nope\n'          # 2 malformed
+            b'\xff\xfe torn\n'            # 1 undecodable
+            b'[1, 2]\n"str"\n42\n'        # 3 non-dict
+            b'{"n": 2}\n'
+        )
+        records, report = read_jsonl_tail_counted(path)
+        assert records == [{"n": 1}, {"n": 2}]
+        assert (report.malformed, report.undecodable, report.non_dict) == (2, 1, 3)
+        assert report.dropped == 6
+        assert report
+
+    def test_blank_lines_are_not_counted_as_loss(self, tmp_path):
+        # A trailing newline must not read as a corrupt ledger, or every
+        # well-formed file on the box reports a drop.
+        path = tmp_path / "log.jsonl"
+        path.write_text('{"n": 1}\n\n   \n\n{"n": 2}\n')
+        records, report = read_jsonl_tail_counted(path)
+        assert records == [{"n": 1}, {"n": 2}]
+        assert report.dropped == 0
+        assert not report
+
+    def test_a_missing_file_is_absence_not_loss(self, tmp_path):
+        records, report = read_jsonl_tail_counted(tmp_path / "nope.jsonl")
+        assert records == []
+        assert report.missing
+        assert report.dropped == 0
+        assert not report, "no file yet is 'no data', not 'data lost'"
+
+    def test_an_unreadable_file_is_loss_even_with_nothing_to_count(self, tmp_path):
+        # The dangerous case: zero records and zero drops looks exactly like
+        # an empty ledger unless `unreadable` makes the report truthy.
+        path = tmp_path / "not_a_file"
+        path.mkdir()
+        records, report = read_jsonl_tail_counted(path)
+        assert records == []
+        assert report.unreadable
+        assert report, "an unopenable store must not read as an empty one"
+        assert "not an empty ledger" in report.summary()
+
+    def test_the_tail_path_counts_what_it_scanned_and_says_so(self, tmp_path):
+        path = tmp_path / "log.jsonl"
+        path.write_text(
+            '{"n": 1}\nbad-early\n{"n": 2}\nbad-late\n{"n": 3}\n'
+        )
+        records, report = read_jsonl_tail_counted(path, limit=2)
+        assert records == [{"n": 2}, {"n": 3}]
+        assert report.malformed == 1, "only the drop inside the scanned tail"
+        assert report.partial, "stopped at the limit — counts are a lower bound"
+        assert "in the scanned tail" in report.summary()
+
+    def test_a_tail_read_that_reaches_the_top_is_not_partial(self, tmp_path):
+        # limit larger than the file: the scan saw everything, so the counts
+        # are a whole-file total and must not be hedged as a lower bound.
+        path = tmp_path / "log.jsonl"
+        path.write_text('{"n": 1}\nbad\n{"n": 2}\n')
+        _, report = read_jsonl_tail_counted(path, limit=100)
+        assert report.malformed == 1
+        assert not report.partial
+        assert "in the scanned tail" not in report.summary()
+
+    def test_the_summary_names_every_nonzero_reason_and_no_zero_ones(self, tmp_path):
+        path = tmp_path / "log.jsonl"
+        path.write_text('{"n": 1}\nbad\n[1]\n')
+        _, report = read_jsonl_tail_counted(path)
+        summary = report.summary()
+        assert "1 malformed" in summary
+        assert "1 non-dict" in summary
+        assert "undecodable" not in summary, "don't list reasons that didn't happen"
+        assert "2" in summary
+
+    def test_counted_and_plain_return_the_same_records(self, tmp_path):
+        # The two entry points must never drift into different readers.
+        path = tmp_path / "log.jsonl"
+        path.write_bytes(b'{"n": 1}\nbad\n\xff\n[1]\n\n{"n": 2}\n{"n": 3}\n')
+        for limit in (None, 0, 1, 2, 100):
+            assert read_jsonl_tail(path, limit=limit) == \
+                read_jsonl_tail_counted(path, limit=limit)[0], f"limit={limit}"
+
+
+class TestTheDropIsAnnounced:
+
+    def test_a_dropped_line_is_logged_with_the_path(self, tmp_path, caplog):
+        path = tmp_path / "log.jsonl"
+        path.write_text('{"n": 1}\nnot json\n')
+        with caplog.at_level(logging.WARNING, logger="jsonl_utils"):
+            assert read_jsonl_tail(path) == [{"n": 1}]
+        assert len(caplog.records) == 1
+        message = caplog.records[0].getMessage()
+        assert str(path) in message, "an operator has to know WHICH store"
+        assert "1 malformed" in message
+
+    def test_a_clean_read_is_silent(self, tmp_path, caplog):
+        # A warning on every healthy read is a warning nobody reads.
+        path = tmp_path / "log.jsonl"
+        path.write_text('{"n": 1}\n\n{"n": 2}\n')
+        with caplog.at_level(logging.WARNING, logger="jsonl_utils"):
+            read_jsonl_tail(path)
+        assert caplog.records == []
+
+    def test_a_missing_file_is_silent(self, tmp_path, caplog):
+        with caplog.at_level(logging.WARNING, logger="jsonl_utils"):
+            read_jsonl_tail(tmp_path / "nope.jsonl")
+        assert caplog.records == []
+
+    def test_an_unreadable_file_is_logged(self, tmp_path, caplog):
+        path = tmp_path / "not_a_file"
+        path.mkdir()
+        with caplog.at_level(logging.WARNING, logger="jsonl_utils"):
+            assert read_jsonl_tail(path) == []
+        assert len(caplog.records) == 1
+        assert caplog.records[0].levelno == logging.WARNING

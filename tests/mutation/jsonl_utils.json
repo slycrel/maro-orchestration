@@ -1,0 +1,226 @@
+[
+  {
+    "name": "reverse :: the backwards read over-reads past the start of the file",
+    "file": "src/jsonl_utils.py",
+    "anchor": "        read_size = min(chunk_size, position)",
+    "replacement": "        read_size = chunk_size",
+    "tests": "tests/test_jsonl_utils.py"
+  },
+  {
+    "name": "reverse :: chunks are stitched in the order read, not file order",
+    "file": "src/jsonl_utils.py",
+    "anchor": "        buffer = chunk + buffer",
+    "replacement": "        buffer = buffer + chunk",
+    "tests": "tests/test_jsonl_utils.py"
+  },
+  {
+    "name": "reverse :: the held-back partial line is dropped at the top of the file",
+    "file": "src/jsonl_utils.py",
+    "anchor": "        if position > 0:\n            # parts[0] may be an incomplete line whose start lives further\n            # back in the file — hold it and prepend the next chunk to it.\n            buffer = parts[0]\n            parts = parts[1:]\n        else:\n            buffer = b\"\"",
+    "replacement": "        buffer = parts[0]\n        parts = parts[1:]",
+    "tests": "tests/test_jsonl_utils.py"
+  },
+  {
+    "name": "reverse :: lines inside a chunk come out forwards",
+    "file": "src/jsonl_utils.py",
+    "anchor": "        for part in reversed(parts):",
+    "replacement": "        for part in parts:",
+    "tests": "tests/test_jsonl_utils.py"
+  },
+  {
+    "name": "classify :: a blank line is counted as a dropped record",
+    "file": "src/jsonl_utils.py",
+    "anchor": "    if not raw_line:\n        return None                      # blank: not a record, not a loss",
+    "replacement": "    if False:\n        return None",
+    "tests": "tests/test_jsonl_utils.py"
+  },
+  {
+    "name": "classify :: the line is not stripped before the blank check",
+    "file": "src/jsonl_utils.py",
+    "anchor": "    raw_line = raw_line.strip()\n    if not raw_line:",
+    "replacement": "    if not raw_line:",
+    "tests": "tests/test_jsonl_utils.py"
+  },
+  {
+    "name": "classify :: undecodable bytes are skipped without being counted",
+    "file": "src/jsonl_utils.py",
+    "anchor": "    except UnicodeDecodeError:\n        counts[\"undecodable\"] += 1\n        return None",
+    "replacement": "    except UnicodeDecodeError:\n        return None",
+    "tests": "tests/test_jsonl_utils.py"
+  },
+  {
+    "name": "classify :: a malformed line is skipped without being counted",
+    "file": "src/jsonl_utils.py",
+    "anchor": "    except json.JSONDecodeError:\n        counts[\"malformed\"] += 1\n        return None",
+    "replacement": "    except json.JSONDecodeError:\n        return None",
+    "tests": "tests/test_jsonl_utils.py"
+  },
+  {
+    "name": "classify :: a non-dict value is skipped without being counted",
+    "file": "src/jsonl_utils.py",
+    "anchor": "    if not isinstance(item, dict):\n        counts[\"non_dict\"] += 1\n        return None",
+    "replacement": "    if not isinstance(item, dict):\n        return None",
+    "tests": "tests/test_jsonl_utils.py"
+  },
+  {
+    "name": "classify :: torn bytes are counted as malformed JSON instead",
+    "file": "src/jsonl_utils.py",
+    "anchor": "        counts[\"undecodable\"] += 1",
+    "replacement": "        counts[\"malformed\"] += 1",
+    "tests": "tests/test_jsonl_utils.py"
+  },
+  {
+    "name": "classify :: a JSON list is accepted as a record",
+    "file": "src/jsonl_utils.py",
+    "anchor": "    if not isinstance(item, dict):",
+    "replacement": "    if False:",
+    "tests": "tests/test_jsonl_utils.py"
+  },
+  {
+    "name": "read :: a missing file is not marked missing",
+    "file": "src/jsonl_utils.py",
+    "anchor": "        return [], SkipReport(missing=True)",
+    "replacement": "        return [], SkipReport()",
+    "tests": "tests/test_jsonl_utils.py"
+  },
+  {
+    "name": "read :: a file that does not exist yet is reported as data loss",
+    "file": "src/jsonl_utils.py",
+    "anchor": "        return [], SkipReport(missing=True)",
+    "replacement": "        return [], SkipReport(unreadable=True)",
+    "tests": "tests/test_jsonl_utils.py"
+  },
+  {
+    "name": "read :: an unopenable store reads as an empty one",
+    "file": "src/jsonl_utils.py",
+    "anchor": "    except OSError:\n        return [], SkipReport(unreadable=True)",
+    "replacement": "    except OSError:\n        return [], SkipReport()",
+    "tests": "tests/test_jsonl_utils.py"
+  },
+  {
+    "name": "read :: limit=0 takes the bounded-tail path",
+    "file": "src/jsonl_utils.py",
+    "anchor": "    tail = limit is not None and limit > 0",
+    "replacement": "    tail = limit is not None",
+    "tests": "tests/test_jsonl_utils.py"
+  },
+  {
+    "name": "read :: the tail read stops early without saying so",
+    "file": "src/jsonl_utils.py",
+    "anchor": "                if tail and len(results) >= limit:\n                    stopped_early = True\n                    break",
+    "replacement": "                if tail and len(results) >= limit:\n                    break",
+    "tests": "tests/test_jsonl_utils.py"
+  },
+  {
+    "name": "read :: every read claims its counts are only a lower bound",
+    "file": "src/jsonl_utils.py",
+    "anchor": "    stopped_early = False",
+    "replacement": "    stopped_early = True",
+    "tests": "tests/test_jsonl_utils.py"
+  },
+  {
+    "name": "read :: the tail returns one more record than asked for",
+    "file": "src/jsonl_utils.py",
+    "anchor": "                if tail and len(results) >= limit:",
+    "replacement": "                if tail and len(results) > limit:",
+    "tests": "tests/test_jsonl_utils.py"
+  },
+  {
+    "name": "read :: the backwards-read result is never flipped back",
+    "file": "src/jsonl_utils.py",
+    "anchor": "    if tail:\n        results.reverse()",
+    "replacement": "    pass",
+    "tests": "tests/test_jsonl_utils.py"
+  },
+  {
+    "name": "read :: the full scan is flipped too",
+    "file": "src/jsonl_utils.py",
+    "anchor": "    if tail:\n        results.reverse()",
+    "replacement": "    results.reverse()",
+    "tests": "tests/test_jsonl_utils.py"
+  },
+  {
+    "name": "read :: the counts are collected and then thrown away",
+    "file": "src/jsonl_utils.py",
+    "anchor": "    return results, SkipReport(partial=stopped_early, **counts)",
+    "replacement": "    return results, SkipReport(partial=stopped_early)",
+    "tests": "tests/test_jsonl_utils.py"
+  },
+  {
+    "name": "report :: non-dict rows do not count toward the drop total",
+    "file": "src/jsonl_utils.py",
+    "anchor": "        return self.undecodable + self.malformed + self.non_dict",
+    "replacement": "        return self.undecodable + self.malformed",
+    "tests": "tests/test_jsonl_utils.py"
+  },
+  {
+    "name": "report :: an unreadable file is not itself treated as loss",
+    "file": "src/jsonl_utils.py",
+    "anchor": "        return self.dropped > 0 or self.unreadable",
+    "replacement": "        return self.dropped > 0",
+    "tests": "tests/test_jsonl_utils.py"
+  },
+  {
+    "name": "report :: absence is treated as loss",
+    "file": "src/jsonl_utils.py",
+    "anchor": "        return self.dropped > 0 or self.unreadable",
+    "replacement": "        return self.dropped > 0 or self.unreadable or self.missing",
+    "tests": "tests/test_jsonl_utils.py"
+  },
+  {
+    "name": "report :: every read is loss (the warning nobody reads)",
+    "file": "src/jsonl_utils.py",
+    "anchor": "        return self.dropped > 0 or self.unreadable",
+    "replacement": "        return True",
+    "tests": "tests/test_jsonl_utils.py"
+  },
+  {
+    "name": "report :: the summary lists reasons that did not happen",
+    "file": "src/jsonl_utils.py",
+    "anchor": "                 (self.non_dict, \"non-dict\")) if n]",
+    "replacement": "                 (self.non_dict, \"non-dict\"))]",
+    "tests": "tests/test_jsonl_utils.py"
+  },
+  {
+    "name": "report :: a partial tail count is presented as a whole-file total",
+    "file": "src/jsonl_utils.py",
+    "anchor": "        scope = \" in the scanned tail\" if self.partial else \"\"",
+    "replacement": "        scope = \"\"",
+    "tests": "tests/test_jsonl_utils.py"
+  },
+  {
+    "name": "report :: an unreadable store summarises as a clean zero-drop read",
+    "file": "src/jsonl_utils.py",
+    "anchor": "        if self.unreadable:\n            return \"unreadable (0 records returned — not an empty ledger)\"",
+    "replacement": "        pass",
+    "tests": "tests/test_jsonl_utils.py"
+  },
+  {
+    "name": "tail :: the drop is never announced to an operator",
+    "file": "src/jsonl_utils.py",
+    "anchor": "    if report:\n        log.warning(\"read_jsonl_tail(%s): %s\", path, report.summary())",
+    "replacement": "    pass",
+    "tests": "tests/test_jsonl_utils.py"
+  },
+  {
+    "name": "tail :: the drop is announced below the level anyone runs at",
+    "file": "src/jsonl_utils.py",
+    "anchor": "        log.warning(\"read_jsonl_tail(%s): %s\", path, report.summary())",
+    "replacement": "        log.debug(\"read_jsonl_tail(%s): %s\", path, report.summary())",
+    "tests": "tests/test_jsonl_utils.py"
+  },
+  {
+    "name": "tail :: the warning does not say which store lost data",
+    "file": "src/jsonl_utils.py",
+    "anchor": "        log.warning(\"read_jsonl_tail(%s): %s\", path, report.summary())",
+    "replacement": "        log.warning(\"jsonl read: %s\", report.summary())",
+    "tests": "tests/test_jsonl_utils.py"
+  },
+  {
+    "name": "counted :: the limit is ignored on the counting entry point",
+    "file": "src/jsonl_utils.py",
+    "anchor": "    return _read(path, limit)",
+    "replacement": "    return _read(path, None)",
+    "tests": "tests/test_jsonl_utils.py"
+  }
+]
