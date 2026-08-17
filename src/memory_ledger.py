@@ -320,6 +320,54 @@ def append_task_ledger(entry: TaskLedgerEntry) -> None:
         log.debug("append_task_ledger: write failed: %s", exc)
 
 
+def _read_store(path: Path, what: str) -> List[Dict[str, Any]]:
+    """Every JSON object in a JSONL store, with any loss announced.
+
+    Goes through `jsonl_utils` so one torn byte costs one record instead of
+    the whole file. The loaders in this module used to call
+    `path.read_text()` on the entire file inside a broad `try`, which turned
+    a single non-UTF-8 byte into one of two failures, both verified by probe
+    2026-08-17 against a 41-row fixture:
+
+      * an EMPTY corpus, silently — `load_lessons`, `load_outcomes`,
+        `load_task_ledger` and `load_compressed_batches` each returned []
+        for a file holding 40 healthy rows, because `read_text` raised
+        before the loop and the outer `except Exception: pass` swallowed it;
+      * an uncaught `UnicodeDecodeError` in the CALLER —
+        `load_outcome_by_loop_id` and `outcome_row_has_step_lessons` guard
+        with `except OSError`, and a decode error is a ValueError.
+
+    Same Tier-0 #3 failure `jsonl_utils` was written to end, still live in
+    the flat lane because these loaders predate it.
+    """
+    from jsonl_utils import read_jsonl_tail_counted
+    rows, report = read_jsonl_tail_counted(path)
+    if report:
+        log.warning("%s: %s (%s)", what, report.summary(), path)
+    return rows
+
+
+def _rows_as(path: Path, what: str, build) -> list:
+    """`_read_store` plus a per-row constructor, counting schema drift.
+
+    Two different losses, reported separately on purpose: a row that is not
+    JSON is corruption, a row that is JSON but the current dataclass rejects
+    is schema drift. Collapsing them hides which one is happening, and drift
+    is the one that grows quietly as the schema moves.
+    """
+    out, drifted = [], 0
+    for d in _read_store(path, what):
+        try:
+            out.append(build(d))
+        except Exception:
+            drifted += 1
+    if drifted:
+        log.warning("%s: %d row(s) in %s are JSON but not loadable under the "
+                    "current schema — excluded from the %d returned",
+                    what, drifted, path, len(out))
+    return out
+
+
 def load_task_ledger(
     loop_id: str = "",
     limit: int = 100,
@@ -328,30 +376,18 @@ def load_task_ledger(
     path = _task_ledger_path()
     if not path.exists():
         return []
-    entries = []
-    try:
-        for line in path.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                d = json.loads(line)
-                if loop_id and d.get("loop_id", "") != loop_id:
-                    continue
-                entries.append(TaskLedgerEntry(
-                    task_id=d.get("task_id", ""),
-                    owner=d.get("owner", ""),
-                    task=d.get("task", ""),
-                    status=d.get("status", ""),
-                    loop_id=d.get("loop_id", ""),
-                    result_summary=d.get("result_summary", ""),
-                    completed_at=d.get("completed_at", ""),
-                    created_at=d.get("created_at", ""),
-                ))
-            except Exception:
-                continue
-    except Exception:
-        pass
+    entries = _rows_as(path, "load_task_ledger", lambda d: TaskLedgerEntry(
+        task_id=d.get("task_id", ""),
+        owner=d.get("owner", ""),
+        task=d.get("task", ""),
+        status=d.get("status", ""),
+        loop_id=d.get("loop_id", ""),
+        result_summary=d.get("result_summary", ""),
+        completed_at=d.get("completed_at", ""),
+        created_at=d.get("created_at", ""),
+    ))
+    if loop_id:
+        entries = [e for e in entries if e.loop_id == loop_id]
     return list(reversed(entries))[:limit]
 
 
@@ -427,19 +463,10 @@ def load_step_traces(outcome_ids: List[str]) -> Dict[str, Any]:
 
     target_ids = set(outcome_ids)
     result: Dict[str, Any] = {}
-    try:
-        for line in path.read_text(encoding="utf-8").splitlines():
-            if not line.strip():
-                continue
-            try:
-                trace = json.loads(line)
-                oid = trace.get("outcome_id", "")
-                if oid in target_ids:
-                    result[oid] = trace
-            except json.JSONDecodeError:
-                pass
-    except OSError:
-        pass
+    for trace in _read_store(path, "load_step_traces"):
+        oid = trace.get("outcome_id", "")
+        if oid in target_ids:
+            result[oid] = trace
     return result
 
 
@@ -944,19 +971,8 @@ def outcome_row_has_step_lessons(loop_id: str) -> bool:
     if not loop_id:
         return False
     path = _outcomes_path()
-    try:
-        lines = path.read_text(encoding="utf-8").splitlines()
-    except OSError:
-        return False
-    for line in reversed(lines):
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            row = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(row, dict) and row.get("loop_id") == loop_id:
+    for row in reversed(_read_store(path, "outcome_row_has_step_lessons")):
+        if row.get("loop_id") == loop_id:
             return "step_lesson_count" in row
     return False
 
@@ -1125,14 +1141,7 @@ def _maybe_record_skill_injection_outcomes(loop_id: str, row: dict) -> None:
             return
         skill_ids: list = []
         seen: set = set()
-        for line in manifest.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                rec = json.loads(line)
-            except json.JSONDecodeError:
-                continue
+        for rec in _read_store(manifest, "_maybe_record_skill_injection_outcomes"):
             for entry in rec.get("skills") or []:
                 sid = str(entry.get("id", "") or "")
                 if sid and sid not in seen:
@@ -1171,19 +1180,8 @@ def load_outcome_by_loop_id(loop_id: str) -> Optional[Outcome]:
         return None
     from dataclasses import fields as _dc_fields
     _known = {f.name for f in _dc_fields(Outcome)}
-    try:
-        lines = path.read_text(encoding="utf-8").splitlines()
-    except OSError:
-        return None
-    for line in reversed(lines):
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            row = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(row, dict) and row.get("loop_id") == loop_id:
+    for row in reversed(_read_store(path, "load_outcome_by_loop_id")):
+        if row.get("loop_id") == loop_id:
             try:
                 return Outcome(**{k: v for k, v in row.items() if k in _known})
             except TypeError:
@@ -1732,27 +1730,16 @@ def load_lessons(
         return []
 
     lessons = []
-    try:
-        for line in path.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                d = json.loads(line)
-                l = _lesson_from_row(d)
-                if task_type and l.task_type != task_type:
-                    continue
-                if outcome_filter and l.outcome != outcome_filter:
-                    continue
-                if not include_quarantined and l.minted_from == "prompt":
-                    continue
-                if not include_contested and l.contested:
-                    continue
-                lessons.append(l)
-            except Exception:
-                continue
-    except Exception:
-        pass
+    for l in _rows_as(path, "load_lessons", _lesson_from_row):
+        if task_type and l.task_type != task_type:
+            continue
+        if outcome_filter and l.outcome != outcome_filter:
+            continue
+        if not include_quarantined and l.minted_from == "prompt":
+            continue
+        if not include_contested and l.contested:
+            continue
+        lessons.append(l)
 
     # Deduplicate by lesson text
     seen: set = set()
@@ -1794,21 +1781,8 @@ def load_outcomes(limit: int = 20) -> List[Outcome]:
     if not path.exists():
         return []
 
-    outcomes = []
-    try:
-        for line in path.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                d = json.loads(line)
-                o = Outcome(**{k: d[k] for k in Outcome.__dataclass_fields__ if k in d})
-                outcomes.append(o)
-            except Exception:
-                continue
-    except Exception:
-        pass
-
+    outcomes = _rows_as(path, "load_outcomes", lambda d: Outcome(
+        **{k: d[k] for k in Outcome.__dataclass_fields__ if k in d}))
     return list(reversed(outcomes))[:limit]
 
 
@@ -2037,21 +2011,9 @@ def load_compressed_batches(limit: int = 20) -> List[CompressedBatch]:
     path = _compressed_outcomes_path()
     if not path.exists():
         return []
-    batches = []
-    try:
-        for line in path.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                d = json.loads(line)
-                batches.append(CompressedBatch(**{
-                    k: d[k] for k in CompressedBatch.__dataclass_fields__ if k in d
-                }))
-            except Exception:
-                continue
-    except Exception:
-        pass
+    batches = _rows_as(path, "load_compressed_batches", lambda d: CompressedBatch(**{
+        k: d[k] for k in CompressedBatch.__dataclass_fields__ if k in d
+    }))
     return list(reversed(batches))[:limit]
 
 

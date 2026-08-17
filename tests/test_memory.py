@@ -1971,3 +1971,118 @@ class TestTypedLessonExtraction:
             adapter=WeirdTypeAdapter(), return_typed=True,
         )
         assert result == [("odd typed", "execution", "")]
+
+
+# A line that json.loads cannot parse: truncated mid-object. Kept byte-exact
+# so the assertions below can demand it back verbatim, not merely "present".
+_TORN = '{"loop_id": "loop-1", "outcome_id": "O-torn", "goal": "half a row'
+
+
+def _outcome_row(**over):
+    row = {
+        "outcome_id": "O1", "loop_id": "loop-1", "handle_id": "H1",
+        "goal": "g", "task_type": "build", "status": "done",
+        "summary": "s", "lessons": [],
+    }
+    row.update(over)
+    return row
+
+
+def _stampers():
+    """(id, call, field the call must write onto the target row).
+
+    One entry per REVIEWED_SILENT_DROPS site in memory_ledger.py. If a
+    seventh in-place stamper is written, the census reports it as unlisted
+    and whoever lists it lands here too.
+    """
+    import memory_ledger as ml
+    return [
+        ("mark_outcomes_superseded",
+         lambda: ml.mark_outcomes_superseded("H1"), "superseded_by"),
+        ("stamp_outcome_verdict",
+         lambda: ml.stamp_outcome_verdict(
+             "loop-1", goal_achieved=True, goal_verdict_source="test"),
+         "goal_achieved"),
+        ("stamp_outcome_stop_verdict",
+         # Must be in stop_verdicts.VALID_STOP_VALUES — an off-vocabulary
+         # verdict is refused before the scan and never reaches the rewrite.
+         lambda: ml.stamp_outcome_stop_verdict("loop-1", "thesis-refuted"),
+         "stop_verdict"),
+        ("stamp_outcome_step_lessons",
+         lambda: ml.stamp_outcome_step_lessons("loop-1", 3),
+         "step_lesson_count"),
+        ("annotate_outcome_lessons",
+         lambda: ml.annotate_outcome_lessons("loop-1", ["a lesson"]),
+         "lessons"),
+        ("annotate_outcome_extraction_failure",
+         lambda: ml.annotate_outcome_extraction_failure("loop-1"),
+         "lesson_extraction_status"),
+    ]
+
+
+class TestTheStampersPreserveWhatTheyCannotParse:
+    """The six in-place stampers are REVIEWED silent drops. This is why.
+
+    Each skips a torn line while SEARCHING and re-emits it while WRITING,
+    because the rewrite rejoins the whole `lines` list rather than
+    rebuilding from parsed rows. That is the entire justification for
+    letting them stay silent — no row is lost, so there is nothing to
+    announce. Rebuilding from parsed rows instead would delete every torn
+    line in the store, which is the bug this same chunk fixed in `_dedup`
+    and `compress_old_outcomes`.
+
+    So this is not a test of the stamping. It is the load-bearing half of
+    six REVIEWED_SILENT_DROPS entries in tests/test_no_silent_drop.py, and
+    if it is ever deleted those entries become unjustified.
+    """
+
+    def _store(self, monkeypatch, tmp_path):
+        import memory_ledger as ml
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        path = ml._outcomes_path()
+        assert str(tmp_path) in str(path), f"probe escaped to the live store: {path}"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            _TORN + "\n"
+            + json.dumps(_outcome_row()) + "\n"
+            # A second row under the same handle_id: mark_outcomes_superseded
+            # needs two to have anything to supersede.
+            + json.dumps(_outcome_row(outcome_id="O2", loop_id="loop-2")) + "\n",
+            encoding="utf-8",
+        )
+        return path
+
+    @pytest.mark.parametrize(
+        "name,call,field", _stampers(), ids=[s[0] for s in _stampers()])
+    def test_the_torn_line_survives_the_rewrite(
+            self, monkeypatch, tmp_path, name, call, field):
+        path = self._store(monkeypatch, tmp_path)
+        call()
+        lines = path.read_text(encoding="utf-8").splitlines()
+        # Verbatim, and still first: the rewrite preserved position too, so a
+        # torn row is not quietly relocated to the end of the store.
+        assert lines[0] == _TORN, f"{name} destroyed the torn line"
+        assert len(lines) == 3, f"{name} changed the row count: {lines}"
+
+    @pytest.mark.parametrize(
+        "name,call,field", _stampers(), ids=[s[0] for s in _stampers()])
+    def test_the_stamp_still_lands_past_the_torn_line(
+            self, monkeypatch, tmp_path, name, call, field):
+        # The premise of the test above: if the torn line stopped the scan,
+        # the stamper would preserve it trivially by doing nothing at all.
+        path = self._store(monkeypatch, tmp_path)
+        call()
+        stamped = json.loads(path.read_text(encoding="utf-8").splitlines()[1])
+        assert field in stamped, (
+            f"{name} did not reach its target past the torn line — the "
+            f"preservation test above would pass vacuously")
+
+    def test_every_reviewed_stamper_is_covered_here(self):
+        # The census lists six. If someone adds a seventh REVIEWED stamper
+        # without a case above, its preservation is unproven and the reason
+        # string in test_no_silent_drop.py points at nothing.
+        sys.path.insert(0, str(Path(__file__).parent))
+        from test_no_silent_drop import REVIEWED_SILENT_DROPS
+        reviewed = {func.split(".")[0] for (mod, func) in REVIEWED_SILENT_DROPS
+                    if mod == "memory_ledger.py"}
+        assert reviewed == {name for name, _c, _f in _stampers()}

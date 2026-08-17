@@ -50,8 +50,16 @@ Limits, stated so nobody reads more off a green run than it carries:
   * A parse that never raises because it was pre-validated elsewhere
     still lands in the census. That is what REVIEWED is for.
 
-ON THE KEY. Entries are keyed (module, function) -> COUNT, not
-(module, function) -> bool. The retention tripwire's bool key means a
+ON THE KEY. The function half is QUALIFIED — `outer.inner` for a nested
+def, `Class.method` for a method — because bare names collide, and a
+collision merges two unrelated sites into one allowance. Two real ones
+found when this was tightened (2026-08-17): `memory_ledger.py`'s five
+distinct `_stamp` closures shared a single key, and `memory_backends.py`
+`read_all` was one entry covering both JSONLBackend and SQLiteBackend.
+Under bare names, reviewing either one would have silently blessed the
+others.
+
+Entries are keyed (module, qualified function) -> COUNT, not -> bool. The retention tripwire's bool key means a
 second deletion added inside an already-allowed function ships silently
 (named as a limit there 2026-08-16, filed as a BACKLOG decision with
 counting recommended). This is that recommendation, built: adding a
@@ -75,9 +83,32 @@ _PARSE_CALLS = {
 }
 
 # (module filename, enclosing function) -> why the silence is correct here.
-# Empty on purpose: nothing has been reviewed yet. Entries move here OUT of
-# UNREVIEWED_SILENT_DROPS, one at a time, with a reason.
-REVIEWED_SILENT_DROPS: dict[tuple[str, str], str] = {}
+# Entries move here OUT of UNREVIEWED_SILENT_DROPS, one at a time, with a
+# reason. A REVIEWED entry allows exactly one site, so a second silent drop
+# added to a reviewed function still trips the gate.
+#
+# The six below share one shape: an in-place row stamper. Each splits the
+# store into `lines`, scans for the row it wants, assigns `lines[i] = ...`,
+# and rejoins the WHOLE list. A line it cannot parse is skipped by the
+# SEARCH and re-emitted verbatim by the rewrite, so nothing is lost and
+# there is nothing to announce — the distinction this census exists to
+# draw. That property is not free, though: a rewrite built from the parsed
+# rows instead would destroy every torn line in the file, which is exactly
+# the bug fixed in `_dedup` and `compress_old_outcomes` this same chunk.
+# So it is pinned by tests (TestTheStampersPreserveWhatTheyCannotParse in
+# tests/test_memory.py) and by tests/mutation/stamp_preserve.json.
+_STAMPER = ("in-place row stamper: the rewrite rejoins all lines, so an "
+            "unparseable row is skipped by the search and preserved by the "
+            "write — no loss, nothing to announce. Pinned by "
+            "TestTheStampersPreserveWhatTheyCannotParse.")
+REVIEWED_SILENT_DROPS: dict[tuple[str, str], str] = {
+    ("memory_ledger.py", "mark_outcomes_superseded._mark"): _STAMPER,
+    ("memory_ledger.py", "stamp_outcome_verdict._stamp"): _STAMPER,
+    ("memory_ledger.py", "stamp_outcome_stop_verdict._stamp"): _STAMPER,
+    ("memory_ledger.py", "stamp_outcome_step_lessons._stamp"): _STAMPER,
+    ("memory_ledger.py", "annotate_outcome_lessons._stamp"): _STAMPER,
+    ("memory_ledger.py", "annotate_outcome_extraction_failure._stamp"): _STAMPER,
+}
 
 # The 2026-08-16 baseline: every per-record silent drop that existed when
 # this gate landed, with its count. This is DEBT, not approval — nobody has
@@ -86,8 +117,8 @@ REVIEWED_SILENT_DROPS: dict[tuple[str, str], str] = {}
 UNREVIEWED_SILENT_DROPS: dict[tuple[str, str], int] = {
     ("attribution.py", "load_attributions"): 1,
 
+    ("background.py", "_append_task_log._merge"): 1,
     ("background.py", "_load_task"): 1,
-    ("background.py", "_merge"): 1,
 
     ("camera_readout.py", "_lesson_origins"): 1,
     ("camera_readout.py", "main"): 1,
@@ -118,13 +149,13 @@ UNREVIEWED_SILENT_DROPS: dict[tuple[str, str], int] = {
     ("evolver_scans.py", "scan_calibration_log"): 1,
     ("evolver_scans.py", "scan_suggestion_outcomes"): 1,
 
-    ("evolver_store.py", "_drop_constraint"): 1,
-    ("evolver_store.py", "_merge"): 1,
     ("evolver_store.py", "_save_suggestions"): 1,
     ("evolver_store.py", "apply_suggestion"): 1,
+    ("evolver_store.py", "apply_suggestion._merge"): 1,
     ("evolver_store.py", "get_suggestion"): 1,
     ("evolver_store.py", "load_suggestions"): 1,
     ("evolver_store.py", "revert_suggestion"): 1,
+    ("evolver_store.py", "revert_suggestion._drop_constraint"): 1,
     ("evolver_store.py", "suggestion_is_applied"): 1,
 
     ("goal_map.py", "build_goal_map"): 2,
@@ -133,8 +164,8 @@ UNREVIEWED_SILENT_DROPS: dict[tuple[str, str], int] = {
     ("graduation.py", "scan_candidates"): 1,
     ("graduation.py", "verify_graduation_rules"): 1,
 
+    ("interrupt.py", "InterruptQueue.peek"): 1,
     ("interrupt.py", "acquire_project_slot"): 1,
-    ("interrupt.py", "peek"): 1,
 
     ("knowledge_bridge.py", "_extract_llm"): 1,
 
@@ -152,10 +183,10 @@ UNREVIEWED_SILENT_DROPS: dict[tuple[str, str], int] = {
     ("knowledge_web.py", "load_tiered_lessons"): 1,
     ("knowledge_web.py", "promote_knowledge_candidates"): 2,
 
-    ("llm.py", "_drain_new_events"): 1,
+    ("llm.py", "CodexCLIAdapter._stream_events"): 1,
     ("llm.py", "_is_plain_missing_session_error"): 1,
     ("llm.py", "_parse_stream_json"): 1,
-    ("llm.py", "_stream_events"): 1,
+    ("llm.py", "_run_subprocess_safe._drain_new_events"): 1,
 
     ("loop_finalize.py", "_mint_run_risks_to_project"): 1,
 
@@ -165,18 +196,8 @@ UNREVIEWED_SILENT_DROPS: dict[tuple[str, str], int] = {
     ("loop_report.py", "_too_broad_events"): 1,
     ("loop_report.py", "backfill_run_reports"): 1,
 
-    ("memory_backends.py", "read_all"): 2,
-
-    ("memory_ledger.py", "_mark"): 1,
-    ("memory_ledger.py", "_maybe_record_skill_injection_outcomes"): 1,
-    ("memory_ledger.py", "_stamp"): 5,
-    ("memory_ledger.py", "load_compressed_batches"): 1,
-    ("memory_ledger.py", "load_lessons"): 1,
-    ("memory_ledger.py", "load_outcome_by_loop_id"): 1,
-    ("memory_ledger.py", "load_outcomes"): 1,
-    ("memory_ledger.py", "load_step_traces"): 1,
-    ("memory_ledger.py", "load_task_ledger"): 1,
-    ("memory_ledger.py", "outcome_row_has_step_lessons"): 1,
+    ("memory_backends.py", "JSONLBackend.read_all"): 1,
+    ("memory_backends.py", "SQLiteBackend.read_all"): 1,
 
     ("metrics.py", "spend_for_loops"): 1,
     ("metrics.py", "spend_today"): 1,
@@ -217,7 +238,7 @@ UNREVIEWED_SILENT_DROPS: dict[tuple[str, str], int] = {
 
     ("router.py", "build_training_data"): 2,
 
-    ("rules.py", "_upsert"): 1,
+    ("rules.py", "save_rule._upsert"): 1,
 
     ("run_curation.py", "_load_loop_log"): 1,
     ("run_curation.py", "find_unconsumed_skill_candidates"): 1,
@@ -300,13 +321,43 @@ def _sites_in_scope(scope) -> list[tuple[str, int]]:
     return out
 
 
+def _child_scopes(scope) -> list:
+    """The def/class nodes this scope directly owns.
+
+    Reaches through `if`/`for`/`try` (a conditionally-defined function is
+    still this scope's child) but stops at the first def/class, whose own
+    nested scopes belong to it and are found on its own visit.
+    """
+    out = []
+    stack = list(ast.iter_child_nodes(scope))
+    while stack:
+        node = stack.pop()
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            out.append(node)
+            continue
+        stack.extend(ast.iter_child_nodes(node))
+    return out
+
+
 def _sites(py: Path) -> list[tuple[str, int]]:
-    """Every silent per-record drop in one module, as (function, lineno)."""
+    """Every silent per-record drop in one module, as (qualified name, lineno).
+
+    The name carries its enclosing defs (`outer.inner`) because bare names
+    collide: memory_ledger.py alone holds five distinct `_stamp` closures in
+    five different public functions. Under a bare key one REVIEWED entry
+    would bless all five, and reviewing one site would silently approve four
+    nobody read — a guard that cannot fail.
+    """
     tree = ast.parse(py.read_text(encoding="utf-8"))
     out: list[tuple[str, int]] = []
-    for scope in ast.walk(tree):
-        if isinstance(scope, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef)):
-            out.extend(_sites_in_scope(scope))
+
+    def visit(scope, qual: str) -> None:
+        out.extend((qual, lineno) for _name, lineno in _sites_in_scope(scope))
+        for child in _child_scopes(scope):
+            name = getattr(child, "name", "<module>")
+            visit(child, name if qual == "<module>" else f"{qual}.{name}")
+
+    visit(tree, "<module>")
     return sorted(out, key=lambda s: s[1])
 
 
@@ -469,8 +520,64 @@ def outer():
     return inner
 """})
         assert _unlisted(root, {}, {}) == [
-            "store.py:inner() has 1 silent per-record drop(s) "
+            "store.py:outer.inner() has 1 silent per-record drop(s) "
             "(allowed 0) at line(s) 9"
+        ]
+
+    def test_two_same_named_nested_defs_get_two_keys(self, tmp_path):
+        # The collision that made qualification necessary: memory_ledger.py
+        # holds five `_stamp` closures. Under a bare key they share one
+        # allowance, so reviewing one blesses the rest. Here, allowing the
+        # first must leave the second reported.
+        root = _src(tmp_path, **{"store.py": """
+import json
+
+def alpha():
+    def _stamp():
+        for line in []:
+            try:
+                json.loads(line)
+            except Exception:
+                continue
+
+def beta():
+    def _stamp():
+        for line in []:
+            try:
+                json.loads(line)
+            except Exception:
+                continue
+"""})
+        assert _unlisted(root, {}, {("store.py", "alpha._stamp"): 1}) == [
+            "store.py:beta._stamp() has 1 silent per-record drop(s) "
+            "(allowed 0) at line(s) 17"
+        ]
+
+    def test_a_method_is_keyed_under_its_class(self, tmp_path):
+        # memory_backends.py had ONE `read_all` entry covering two backend
+        # classes. Allowing one class's method must not allow the other's.
+        root = _src(tmp_path, **{"store.py": """
+import json
+
+class Jsonl:
+    def read_all(self):
+        for line in []:
+            try:
+                json.loads(line)
+            except Exception:
+                continue
+
+class Sqlite:
+    def read_all(self):
+        for line in []:
+            try:
+                json.loads(line)
+            except Exception:
+                continue
+"""})
+        assert _unlisted(root, {}, {("store.py", "Jsonl.read_all"): 1}) == [
+            "store.py:Sqlite.read_all() has 1 silent per-record drop(s) "
+            "(allowed 0) at line(s) 17"
         ]
 
     def test_an_async_reader_is_scanned_too(self, tmp_path):
@@ -693,7 +800,7 @@ def outer(rows):
     return inner
 """})
         assert _unlisted(root, {}, {}) == [
-            "store.py:inner() has 1 silent per-record drop(s) "
+            "store.py:outer.inner() has 1 silent per-record drop(s) "
             "(allowed 0) at line(s) 11"
         ]
 
