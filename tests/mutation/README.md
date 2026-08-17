@@ -114,6 +114,28 @@ failure the sweep exists to find.
 
 | `silent_drop_census.json` | The silent-drop tripwire itself (`tests/test_no_silent_drop.py`): the parse-call set and its nested-call walk, the control-flow-only silence test, scope walking (nested-def boundary, enclosing-loop requirement, loop propagation, `async for`/`while`), attribution to the owning function, rglob, the REVIEWED/UNREVIEWED allowance arithmetic, both censuses, and the SRC wiring | 32 | 2026-08-16, all accounted for (30/32 on first pass, both gaps were ambiguous anchors, not survivors) |
 
+| `lesson_sweep.json` | The flat lesson corpus's two rewriting maintenance paths: `deduplicate_lessons`' preserve-in-place rewrite, unparseable count and warning, dry-run and no-op gates, and the exact/near merge semantics (task_type scoping, reinforcement accumulation, variant absorption, the 0.8 threshold); `compress_old_outcomes`' parsed-only delete set, batch membership, and `keep_recent` floor | 24 | 2026-08-16, all accounted for (21/24 on first pass, 3 real survivors closed) |
+
+Note on `lesson_sweep.json`: this spec exists because the silent-drop
+census pointed at `memory_ledger.py` and reading the file found
+`deduplicate_lessons` **deleting rows it could not parse** — rebuilding
+`lessons.jsonl` from the parsed rows alone, with `before` already
+excluding the losses so neither the stats nor the log could show them.
+Its three sibling rewrite paths had preserved unparseable rows for
+months. The lesson for future sweeps is that **the outlier is invisible
+from inside the module**: the repo's own §14a r4 note describes the flat
+store as preserving these, which was true of three paths and false of the
+fourth, and no amount of reading that note would have found it.
+
+One survivor here also earned its keep the hard way. `gate :: the file is
+rewritten even when nothing was removed` survived a round *after* I wrote
+a test for it, because the fixture's "legacy" row omitted two required
+fields and so never parsed — it was counted as unparseable, the rewrite
+gate was never reached, and the mutation re-emitted it verbatim. **A test
+can pass for a reason unrelated to its docstring, and the sweep is what
+says so.** The fixture now asserts its own premises (`before == 1`, and
+that the round trip differs at all) before asserting the behavior.
+
 Note on `silent_drop_census.json`: the two "survivors" on the first pass
 were neither survivors nor holes — the fixture proving each parser is
 covered spelled its list as `("yaml", "safe_load"), ("yaml", "load"),`,

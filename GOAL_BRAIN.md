@@ -3424,3 +3424,56 @@ Dated end-of-chunk/session entries, append-only at the tail. Rotation policy (20
   exactly like a hole.** Also fixed `mutate.py`, which rejected
   `"replacement": ""` as a missing field — so "this guard is not there at
   all", the most direct mutation there is, could not be written. Suite +23.
+- **2026-08-16 (box)** — **Tier-2 slice 3 opened on `memory_ledger`, and the
+  census paid for itself: `deduplicate_lessons` was DELETING rows it could
+  not parse.** It rebuilt `lessons.jsonl` from the parsed rows alone, so a
+  torn append or a schema-drifted row was destroyed by the next dedup —
+  and `before` already excluded it, so the returned stats and the log
+  could not show the loss either. The flat lane is the only copy. Fixed by
+  walking entries in file order (a Lesson for rows that parsed, raw text
+  for rows that did not) and re-emitting both, preserving position so a
+  survivor is not silently re-dated to the top of an append-only ledger;
+  survivors matched by IDENTITY because the merge mutates them, so two
+  rows can compare equal while only one lived. `compress_old_outcomes` had
+  the adjacent shape — it deleted its whole compressed range including
+  lines that contributed nothing to the batch summary, destroying rather
+  than compressing them. **The generalisable finding is that the outlier
+  was invisible from inside the module**: three sibling rewrite paths have
+  preserved unparseable rows for months, `_rewrite_lessons_file` says so
+  in a comment, and this repo's own §14a r4 note therefore describes "the
+  flat store" as preserving them — true of three paths, false of the
+  fourth, and no amount of reading that note would have found it. Only the
+  mechanical census did. `lesson_sweep.json` 24/24 after closing three
+  real survivors (the 0.8 near-dup threshold had NOTHING pinning the
+  number). One of those three survived a round *after* I wrote its test,
+  because the fixture's "legacy" row omitted two required fields and so
+  never parsed — the gate under test was never reached and the mutation
+  re-emitted it verbatim. **A test can pass for a reason unrelated to its
+  docstring; the sweep is what says so.** Debt 137 → 135, and the
+  ratchet's stale check fired correctly on its first real paydown.
+  Suite 9331 → 9356.
+- **2026-08-16 (box) — INCIDENT: I destroyed the live flat lesson ledger,
+  and it was recovered.** Probing dedup behavior I set `MARO_HOME` — not a
+  variable this code reads — assumed a temp store, and `write_text`
+  overwrote `~/.maro/workspace/memory/lessons.jsonl` (466 rows back to
+  April). No local backup existed newer than 2026-07-09. Recovered whole
+  from the M1's morning export, which was faithful **because Jeremy's
+  decision that same morning was to path-rewrite at import and leave the
+  archive untouched** — the working copy had 62,116 substitutions and
+  would have been the wrong source. Restored after independent
+  verification (row count, sha256, all-parse, unique ids, keys all in the
+  flat `Lesson` dataclass, zero rewrite contamination); newest row
+  2026-08-15T17:24 with 259 rows postdating July 9, which refuted my own
+  "maybe the lane was deliberately drained, so restoring is resurrection"
+  worry — I had measured overlap against the July-9 snapshot, which
+  predates the tiered migration. Residual gap ≤7 rows minted after the
+  export, content intact in `medium/`; NOT re-derived, because
+  synthesising flat rows means defaulting `source_goal`/grounding into a
+  store with a provenance gate built to keep unattributable rows out.
+  **The correct override is `MARO_WORKSPACE`** (`MARO_USER_DIR` moves only
+  the config tier; there is no `MARO_HOME`), and the standing rule is now
+  to assert the resolved path before any store write — saved to
+  auto-memory. Jeremy's read: printing the resolved path, verifying scope
+  instead of assuming it, keeping the damaged file, staging rather than
+  restoring, and refusing to guess on the ambiguity is why it stayed
+  recoverable and why recovery was distinguishable from resurrection.

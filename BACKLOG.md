@@ -201,9 +201,32 @@ Ordered open work that matters. Top of the list is next.
     20 must-detect fixtures in both directions plus a non-vacuity check
     that SRC resolves to a real tree. `silent_drop_census.json`, 32
     mutations, 32/32.
-  - *Slice 3.* File-derived sweeps on the top stores — `memory_ledger.py`
-    (16 sites, and the only copy of the learning data), the remaining
-    ~85% of `knowledge_web.py`, `evolver_store.py`.
+  - *Slice 3 — memory_ledger STARTED 2026-08-16, two destruction bugs
+    fixed.* The census pointed here and reading the file found the
+    payload: **`deduplicate_lessons` deleted rows it could not parse.**
+    It rebuilt `lessons.jsonl` from the parsed rows alone, so a torn
+    append or a schema-drifted row was destroyed by the next dedup, and
+    `before` already excluded it so neither the stats nor the log could
+    show the loss. Its three siblings (`_rewrite_lessons_file`,
+    `_reinforce_flat_row`, the `_mark`/`_stamp` in-place edits) had
+    preserved unparseable rows for months — **the outlier was invisible
+    from inside the module**, and the repo's own §14a r4 note asserts the
+    flat store preserves them, true of three paths and false of the
+    fourth. `compress_old_outcomes` had the adjacent shape: it deleted its
+    whole compressed range including lines that contributed nothing to the
+    batch summary, destroying rather than compressing them. Both fixed
+    with counts + WARNINGs; `lesson_sweep.json`, 24 mutations, 24/24.
+    Silent-drop debt 137 → 135, and the ratchet's stale check caught both
+    cleared entries on its first real use.
+    - *Remaining in `memory_ledger.py`:* 14 sites across 10 functions, all
+      pure reads (`load_lessons`, `load_outcomes`, `load_task_ledger`,
+      `load_step_traces`, `load_compressed_batches`,
+      `load_outcome_by_loop_id`, `outcome_row_has_step_lessons`,
+      `_maybe_record_skill_injection_outcomes`) plus the six
+      `_mark`/`_stamp` rewrite scans. The rewrite scans are safe by
+      construction — they edit `lines[i]` in place — so those are
+      REVIEWED candidates, not fixes.
+    - *Then:* the remaining ~85% of `knowledge_web.py`, `evolver_store.py`.
 
   **Three of the four surfaces swept so far were tripwires, and two could
   not fail.** The code a decree protects tends to be fine; the guard
