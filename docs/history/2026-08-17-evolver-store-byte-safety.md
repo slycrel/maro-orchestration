@@ -92,6 +92,29 @@ counter, reset-is-recovery — Architect's ask); this record corrected
 from "three" to "five". Rejected: get_suggestion early-exit perf note
 (Skeptic LOW — the old code read the whole file anyway; dozens of rows).
 
+## Adversarial round 2 (fix layer; Skeptic + Expert QA + Minimalist)
+
+**PASS on the fix layer** — all three lenses independently verified the
+swaps, the preserve branches (nothing mutates `s` between parse-refusal
+and append), test non-vacuity (each traced under its mutant), anchor
+uniqueness, and re-censused the five-count. (All three disclosed they
+could not execute pytest in their sandbox — static trace only; the
+observed 16/16 sweep and green suite are this session's own runs.)
+
+Two accepted findings: (a) LOW — the preserve-class docstring said
+"covers all five" while the fifth pin lives in the torn-byte class;
+docstring corrected to say where. (b) QA MEDIUM, out of scope but real:
+`rules.py` `save_rule._upsert` and `background.py`
+`_append_task_log._merge` carry a WORSE version of the family — keyed
+JSONL rewrites that re-dump every parsed line (laundering every
+tainted-valid row, not just the matched one) and `except: continue`
+**delete** torn lines outright on every rewrite. Minimalist checked the
+same sibling space and called it clear ("all other locked_rmw callers
+are single-object files") — the disagreement was chased and **QA was
+right**: both are per-line JSONL merges. Both sites were already on the
+UNREVIEWED census, but they are the destructive subset of that debt;
+fixed as an immediate follow-on chunk (see its own record/commit).
+
 ## Lesson
 
 Mutation specs can be dry-run against the tests before the sweep: for

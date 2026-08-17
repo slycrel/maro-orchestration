@@ -111,13 +111,16 @@ class TestSuggestionRewritesPreserveWhatTheyCannotParse:
     """Keyed-merge rewrites re-emit unmatched/unparseable lines verbatim
     and a byte-tainted-but-parseable line never matches the key.
 
-    Covers all FIVE keyed rewrites in the module: apply's _merge and
-    revert's _drop_constraint (the two REVIEWED census entries — the AST
-    census can see those sites), plus dismiss_suggestion._merge,
-    stamp_verification._merge, and revert's _mark_reverted, whose except
-    bodies re-emit the line and are therefore invisible to the census —
-    these tests are their only tripwire (2026-08-17 review r1: the first
-    two shipped unconverted; all five lenses flagged it)."""
+    All FIVE keyed rewrites in the module are pinned: four here — apply's
+    _merge and revert's _drop_constraint (the two REVIEWED census entries
+    — the AST census can see those sites), plus dismiss_suggestion._merge
+    and stamp_verification._merge — and the fifth, revert's
+    _mark_reverted, in TestTheSuggestionsLedgerSurvivesATornByte::
+    test_revert_works_and_never_launders (its tainted-bystander row).
+    The dismiss/stamp/mark sites' except bodies re-emit the line and are
+    therefore invisible to the census — these tests are their only
+    tripwire (2026-08-17 review r1: dismiss/stamp shipped unconverted;
+    all five lenses flagged it)."""
 
     def test_the_apply_merge_never_launders_a_tainted_twin(self):
         # A tainted row carrying the SAME suggestion_id must not id-match:
