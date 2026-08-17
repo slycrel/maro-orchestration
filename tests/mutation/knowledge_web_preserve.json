@@ -37,8 +37,8 @@
   {
     "name": "stranded :: the mutate rebuild drops rows the quarantine could not move",
     "file": "src/knowledge_web.py",
-    "anchor": "        stranded = _quarantine_unparseable(path)\n        lessons = load_tiered_lessons(tier=tier, min_score=0.0, limit=None, raw=True)\n        lessons = mutate(lessons)",
-    "replacement": "        _quarantine_unparseable(path)\n        stranded = []\n        lessons = load_tiered_lessons(tier=tier, min_score=0.0, limit=None, raw=True)\n        lessons = mutate(lessons)",
+    "anchor": "        stranded = _quarantine_unparseable(path)\n        lessons = load_tiered_lessons(tier=tier, min_score=0.0, limit=None,\n                                      raw=True, for_rewrite=True)\n        lessons = mutate(lessons)",
+    "replacement": "        _quarantine_unparseable(path)\n        stranded = []\n        lessons = load_tiered_lessons(tier=tier, min_score=0.0, limit=None,\n                                      raw=True, for_rewrite=True)\n        lessons = mutate(lessons)",
     "tests": "tests/test_knowledge_web.py"
   },
   {
@@ -147,10 +147,17 @@
     "tests": "tests/test_knowledge_web.py"
   },
   {
-    "name": "raw :: a failed read under the rmw contract returns [] again (empty rebuild)",
+    "name": "rewrite :: a failed read under the rmw contract returns [] again (empty rebuild)",
     "file": "src/knowledge_web.py",
-    "anchor": "        if raw:\n            # raw=True is the read-modify-write contract: the caller is\n",
-    "replacement": "        if False:\n            # raw=True is the read-modify-write contract: the caller is\n",
+    "anchor": "        if for_rewrite:\n",
+    "replacement": "        if False:\n",
+    "tests": "tests/test_knowledge_web.py"
+  },
+  {
+    "name": "dedup-degrade :: an unreadable sidecar crashes the lock-held rewrite again",
+    "file": "src/knowledge_web.py",
+    "anchor": "    except OSError as exc:\n        # An unreadable-but-existing sidecar must not crash the lock-held",
+    "replacement": "    except ValueError as exc:\n        # An unreadable-but-existing sidecar must not crash the lock-held",
     "tests": "tests/test_knowledge_web.py"
   }
 ]

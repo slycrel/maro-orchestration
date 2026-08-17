@@ -939,6 +939,7 @@ def load_tiered_lessons(
     limit: Optional[int] = 50,
     max_age_days: Optional[int] = None,
     raw: bool = False,
+    for_rewrite: bool = False,
 ) -> List[TieredLesson]:
     """Load tiered lessons from disk, applying current-day decay inline.
 
@@ -958,6 +959,12 @@ def load_tiered_lessons(
                       Useful for pruning stale lessons in retrieval contexts.
         raw:          Skip decay derivation and return stored scores as-is.
                       Use for read-modify-write paths that persist records.
+        for_rewrite:  The caller is about to REBUILD the store from the
+                      returned list. Turns a failed read (OSError) into a
+                      raise instead of a warn-and-[] — an empty list from a
+                      failed read would become an empty rewrite. Only the
+                      locked rewrite paths pass this; pure readers (even
+                      raw ones) keep graceful degradation.
     """
     path = _tiered_lessons_path(tier)
     if not path.exists():
@@ -977,12 +984,15 @@ def load_tiered_lessons(
     except FileNotFoundError:
         return []
     except OSError as exc:
-        if raw:
-            # raw=True is the read-modify-write contract: the caller is
-            # about to rebuild the store from this list, and an empty list
-            # from a FAILED read becomes an empty rewrite — the tier
+        if for_rewrite:
+            # for_rewrite=True is the read-modify-write contract: the caller
+            # is about to rebuild the store from this list, and an empty
+            # list from a FAILED read becomes an empty rewrite — the tier
             # destruction this module just closed, one function downstream
-            # (Expert QA, 2026-08-17 round). Abort the rewrite instead.
+            # (Expert QA, round 1). This is its OWN flag, not overloaded
+            # onto raw (round 2, Skeptic+Architect): raw means "skip decay
+            # math" and five pure-read/append callers pass it — they keep
+            # the warn-and-empty degradation they were written against.
             raise
         log.warning("load_tiered_lessons(%s): store unreadable — treating as "
                     "empty, but it is NOT an empty ledger: %s", tier, exc)
@@ -1134,6 +1144,16 @@ def _quarantine_unparseable(path) -> List[str]:
                        if l.strip())
     except FileNotFoundError:
         have = Counter()
+    except OSError as exc:
+        # An unreadable-but-existing sidecar must not crash the lock-held
+        # rewrite that triggered quarantine (round 2, 3-lens consensus) —
+        # degrade the DEDUP, not the quarantine: proceed with an empty
+        # diff, worst case one duplicate sidecar row, which is the same
+        # documented trade the multiset diff already accepts.
+        log.warning("%s: quarantine sidecar %s unreadable (%s) — appending "
+                    "without dedup; a prior partial failure may leave one "
+                    "duplicate row there", path.name, side.name, exc)
+        have = Counter()
     to_append = list((Counter(moved) - have).elements())
     try:
         if to_append:
@@ -1213,7 +1233,8 @@ def _rewrite_tiered_lessons(tier: str, lessons: Optional[List[TieredLesson]] = N
         # skips them, so dropping the return value here deletes them.
         stranded = _quarantine_unparseable(path)
         if lessons is None:
-            lessons = load_tiered_lessons(tier=tier, min_score=0.0, limit=None, raw=True)
+            lessons = load_tiered_lessons(tier=tier, min_score=0.0, limit=None,
+                                          raw=True, for_rewrite=True)
         atomic_write(path,
                      "".join(json.dumps(asdict(tl)) + "\n" for tl in lessons)
                      + "".join(stranded),
@@ -1236,7 +1257,8 @@ def _mutate_tiered_lessons(tier: str, mutate) -> None:
         # rows (quarantine attempted but the sidecar write failed) ride the
         # rebuild verbatim for the same reason.
         stranded = _quarantine_unparseable(path)
-        lessons = load_tiered_lessons(tier=tier, min_score=0.0, limit=None, raw=True)
+        lessons = load_tiered_lessons(tier=tier, min_score=0.0, limit=None,
+                                      raw=True, for_rewrite=True)
         lessons = mutate(lessons)
         atomic_write(path,
                      "".join(json.dumps(asdict(tl)) + "\n" for tl in lessons)

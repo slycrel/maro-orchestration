@@ -9,8 +9,8 @@
   {
     "name": "knowledge_web :: unparseable rows destroyed again (no quarantine)",
     "file": "src/knowledge_web.py",
-    "anchor": "        stranded = _quarantine_unparseable(path)\n        lessons = load_tiered_lessons(tier=tier, min_score=0.0, limit=None, raw=True)\n        lessons = mutate(lessons)",
-    "replacement": "        stranded = []\n        lessons = load_tiered_lessons(tier=tier, min_score=0.0, limit=None, raw=True)\n        lessons = mutate(lessons)",
+    "anchor": "        stranded = _quarantine_unparseable(path)\n        lessons = load_tiered_lessons(tier=tier, min_score=0.0, limit=None,\n                                      raw=True, for_rewrite=True)\n        lessons = mutate(lessons)",
+    "replacement": "        stranded = []\n        lessons = load_tiered_lessons(tier=tier, min_score=0.0, limit=None,\n                                      raw=True, for_rewrite=True)\n        lessons = mutate(lessons)",
     "tests": "tests/test_lesson_scope.py"
   },
   {

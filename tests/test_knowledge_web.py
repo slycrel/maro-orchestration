@@ -2173,11 +2173,12 @@ class TestTheTierSurvivesATornByte:
         side.write_bytes(_TORN + b"\n" + b'{"plain": "drift"}\n')
         assert kw.unparseable_sidecar_count(MemoryTier.MEDIUM) == 2
 
-    def test_a_failed_raw_read_raises_instead_of_returning_empty(self, monkeypatch):
-        # raw=True is the rmw contract: [] from a FAILED read becomes an
-        # empty rebuild (Expert QA HIGH). Plain reads keep the warn-and-empty
-        # degradation.
-        import logging
+    def test_a_failed_rewrite_read_raises_instead_of_returning_empty(self, monkeypatch):
+        # for_rewrite=True is the rmw contract: [] from a FAILED read becomes
+        # an empty rebuild (Expert QA, round 1). Round 2 (Skeptic+Architect):
+        # the abort must ride its OWN flag — raw=True alone means "skip decay
+        # math" and pure readers (contested_lessons, resurrect, decay-cycle
+        # LONG reads) keep the warn-and-empty degradation.
         path = kw._tiered_lessons_path(MemoryTier.MEDIUM)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(_row_bytes(0) + b"\n")
@@ -2187,8 +2188,35 @@ class TestTheTierSurvivesATornByte:
 
         monkeypatch.setattr(kw, "_store_text", boom)
         with pytest.raises(OSError):
-            load_tiered_lessons(tier=MemoryTier.MEDIUM, raw=True)
+            load_tiered_lessons(tier=MemoryTier.MEDIUM, raw=True,
+                                for_rewrite=True)
+        assert load_tiered_lessons(tier=MemoryTier.MEDIUM, raw=True) == []
         assert load_tiered_lessons(tier=MemoryTier.MEDIUM) == []
+
+    def test_an_unreadable_sidecar_degrades_the_dedup_not_the_quarantine(self, monkeypatch, caplog):
+        # Round 2, 3-lens consensus: a transient OSError READING the sidecar
+        # (permissions, NFS blip) must not crash the lock-held rewrite — the
+        # dedup goes blind for one pass (worst case one duplicate row, the
+        # documented trade) and quarantine still moves the torn line out.
+        import logging
+        path = kw._tiered_lessons_path(MemoryTier.MEDIUM)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(_row_bytes(0) + b"\n" + _TORN + b"\n")
+        side = path.with_suffix(path.suffix + ".unparseable")
+        side.write_bytes(b"")  # exists, so FileNotFoundError never fires
+        real = kw._store_text
+
+        def deny_sidecar(p):
+            if str(p).endswith(".unparseable"):
+                raise OSError("permission denied")
+            return real(p)
+
+        monkeypatch.setattr(kw, "_store_text", deny_sidecar)
+        with caplog.at_level(logging.WARNING):
+            kw._mutate_tiered_lessons(MemoryTier.MEDIUM, lambda lessons: lessons)
+        assert _TORN in side.read_bytes()
+        assert _TORN not in path.read_bytes()
+        assert any("without dedup" in r.message for r in caplog.records)
 
     def test_an_unreadable_store_aborts_the_mutate_instead_of_wiping_it(self, monkeypatch):
         # Proceeding past a failed read means rebuilding from nothing — the
