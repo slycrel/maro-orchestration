@@ -75,5 +75,12 @@
   "anchor": "        lines.append(\"- \u26a0 this delta counts one SECTION, so an archive pass \"\n                     \"or a re-org moves it without any work changing hands. \"\n                     \"Read the rate as a coarse direction, never as a score.\")",
   "replacement": "        pass",
   "tests": "tests/test_dev_status.py"
+ },
+ {
+  "name": "the status: scan runs even when the row already claimed a mark",
+  "file": "src/dev_status.py",
+  "anchor": "        if claimed:\n            continue",
+  "replacement": "        if False:\n            continue",
+  "tests": "tests/test_dev_status.py"
  }
 ]

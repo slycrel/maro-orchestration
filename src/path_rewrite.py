@@ -142,7 +142,7 @@ _SYSTEM_ROOTS = frozenset({
 # transcripts. So an escape sequence counts as a boundary too.
 _BOUNDARY = rb"(?![A-Za-z0-9_-])"
 _LEFT_BOUNDARY = (rb"(?:(?<![A-Za-z0-9_./-])"
-                  rb"|(?<=\\n)|(?<=\\t)|(?<=\\r)|(?<=\\f)|(?<=\\v))")
+                  rb"|(?<=\\n)|(?<=\\t)|(?<=\\r)|(?<=\\f)|(?<=\\v)|(?<=\\b))")
 
 # Suffix of the in-place rewrite's temp file. Named as a constant so the
 # skip screens can recognize a leftover from a killed process: it is

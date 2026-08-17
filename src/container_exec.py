@@ -1397,18 +1397,48 @@ def attachment_ro_mounts() -> list:
     by hand. The wiring that SUPPLIES the area is the part that broke live —
     attachments landed correctly and the worker still could not see them.
 
-    Read-only is the whole grant. These directories hold exactly what a run
-    is meant to read and never meant to write, and mounting them is far
-    narrower than relaxing the workspace-root exclusion that hid them.
+    Read-only is the grant, and THIS RUN'S KEY is the scope. The first
+    version mounted the whole `operator-attachments/` and
+    `dispatch-artifacts/` areas, which handed every containerized run read
+    access to every attachment ever stored on the box — every other goal's
+    screenshots, every past dispatch's artifacts. Four review lenses found
+    it independently (2026-08-16) and a probe confirmed it: two keys
+    stored, both visible inside the single mount offered to any run. The
+    feature's own prompt block calls these files "supplied by the person
+    who set THIS goal", so area-wide reach contradicted the contract it
+    ships with. The run's key is on its metadata (origin.operator_attachments,
+    written by open_run), so scoping needs no new plumbing at the call site.
+
+    A run with no attachments mounts nothing — the absence of a key is not
+    a reason to fall back to the whole area.
     """
     out: list = []
     try:
+        import json as _json
         from config import output_dir
-        for area in ("operator-attachments", "dispatch-artifacts"):
-            p = output_dir() / area
-            if p.is_dir():
-                out.append(str(p))
-    except Exception as exc:
+        from dispatch_envelope import _safe_key
+        from runs import current_run_dir
+        rd = current_run_dir()
+        if rd is None:
+            return []                     # no run, nothing of this run's to mount
+        with open(os.path.join(str(rd), "metadata.json")) as fh:
+            meta = _json.load(fh)
+        origin = meta.get("origin") or {}
+        wanted = [("operator-attachments", origin.get("operator_attachments"))]
+        if origin.get("dispatch_envelope"):
+            wanted.append(("dispatch-artifacts", origin.get("job_id")))
+        for area, key in wanted:
+            if not key:
+                continue
+            cand = output_dir() / area / _safe_key(str(key))
+            if cand.is_dir():
+                out.append(str(cand))
+    # Deliberately NOT `except Exception`. The first version caught
+    # everything and returned [] — which silently swallowed a NameError in
+    # this very function (`Path` is not imported in this module) and made a
+    # scoped-mount bug look like "this run has no attachments". A catch wide
+    # enough to hide your own typo is not resilience.
+    except (OSError, ValueError, KeyError, TypeError, ImportError) as exc:
         log.debug("attachment mounts unavailable (non-fatal): %s", exc)
     return out
 

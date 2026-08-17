@@ -434,3 +434,11 @@ class TestWriteTargetFalsePositives:
 
     def test_a_read_step_survives_the_full_missing_check(self, tmp_path):
         assert missing_write_targets(self.LIVE, str(tmp_path)) == []
+
+
+def test_a_hyphenated_directory_does_not_supply_the_write_verb():
+    # Security lens, 2026-08-16: the verb lookbehind excluded `/` and word
+    # chars but not `-`, so "my-output/x.md" still armed the guard — the
+    # same false-demotion class the fix was written to close.
+    assert step_write_targets("Read the file my-output/data/report.md") == []
+    assert step_write_targets("check build-store/x/final.json") == []

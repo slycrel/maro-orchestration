@@ -688,7 +688,7 @@ DELIVERABLE_PATH_TAG = "[deliverable-path-miss]"
 # downstream by closure, while a false demotion blocks finished work and
 # burns retries on a step that already did its job.
 _WRITE_TARGET_RE = re.compile(
-    r"(?<![/\w])(?:write|writes|save|saves|saving|store|stores|output|"
+    r"(?<![/\w-])(?:write|writes|save|saves|saving|store|stores|output|"
     r"persist|export|append)\b[^.\n]{0,120}?"
     r"\b(?:to|into|at|as|in)(?:\s*:\s*|\s+)"
     r"[`'\"]?(/?(?:[\w.-]+/)+[\w.-]+\.\w{1,8})[`'\"]?",

@@ -233,21 +233,37 @@ class TestTheMountIsWhatMakesItReachable:
 
 class TestAttachmentMountSeam:
     """Pins the WIRING, not just build_mount_map. The live failure was not
-    a bad mount map — it was that nothing put the attachment area into it."""
+    a bad mount map — it was that nothing put the attachment area into it.
 
-    def test_the_area_is_offered_once_it_exists(self, ws, tmp_path):
+    Rewritten 2026-08-16: the first version asserted the seam offered the
+    whole `operator-attachments` AREA, which is the cross-run leak four
+    review lenses found. Those assertions were pins on the bug, so they had
+    to change with it — the seam is now scoped to the running run's key.
+    """
+
+    def _open(self, key):
+        import runs
+        return runs.open_run(f"seam-{key}", prompt="p", lane="now",
+                             origin={"operator_attachments": key})
+
+    def test_nothing_is_offered_before_anything_is_stored(self, ws):
         import container_exec as ce
-        assert ce.attachment_ro_mounts() == []          # nothing stored yet
+        assert ce.attachment_ro_mounts() == []
+
+    def test_this_runs_key_is_offered(self, ws, tmp_path):
+        import container_exec as ce
         f = tmp_path / "f.png"; f.write_bytes(b"x")
         store_operator_attachments([str(f)], key="k1")
+        self._open("k1")
         mounts = ce.attachment_ro_mounts()
-        assert any(m.endswith("operator-attachments") for m in mounts)
+        assert any(m.endswith("operator-attachments/k1") for m in mounts)
 
     def test_a_stored_attachment_is_inside_what_the_seam_offers(
             self, ws, tmp_path):
         import container_exec as ce
         f = tmp_path / "f.png"; f.write_bytes(b"x")
         [rec] = store_operator_attachments([str(f)], key="k1")
+        self._open("k1")
         assert any(rec["path"].startswith(m) for m in ce.attachment_ro_mounts())
 
     def test_the_seam_feeds_a_mount_map_that_covers_the_file(
@@ -256,8 +272,73 @@ class TestAttachmentMountSeam:
         from config import workspace_root
         f = tmp_path / "f.png"; f.write_bytes(b"x")
         [rec] = store_operator_attachments([str(f)], key="k1")
+        self._open("k1")
         project = workspace_root() / "projects" / "p3"
         project.mkdir(parents=True)
         mounts = ce.build_mount_map(str(project),
                                     ro_mounts=ce.attachment_ro_mounts())
         assert any(m == "ro" and rec["path"].startswith(h) for h, m in mounts)
+
+
+class TestMountIsScopedToThisRun:
+    """Four review lenses, independently, 2026-08-16: the first version
+    mounted the WHOLE operator-attachments/dispatch-artifacts areas, so
+    every containerized run could read every attachment ever stored — from
+    any goal, any operator, any day. The prompt block calls these files
+    "supplied by the person who set THIS goal"; area-wide reach contradicted
+    the contract shipped alongside it."""
+
+    def _run_with_key(self, key):
+        import runs
+        return runs.open_run(f"scoped-{key}", prompt="p", lane="now",
+                             origin={"operator_attachments": key})
+
+    def test_another_runs_attachments_are_not_mounted(self, ws, tmp_path,
+                                                      monkeypatch):
+        import container_exec as ce
+        mine = tmp_path / "mine.png"; mine.write_bytes(b"MINE")
+        theirs = tmp_path / "theirs.png"; theirs.write_bytes(b"THEIRS")
+        [rec_mine] = store_operator_attachments([str(mine)], key="key-mine")
+        [rec_theirs] = store_operator_attachments([str(theirs)], key="key-theirs")
+
+        self._run_with_key("key-mine")
+        mounts = ce.attachment_ro_mounts()
+        assert any(rec_mine["path"].startswith(m) for m in mounts)
+        assert not any(rec_theirs["path"].startswith(m) for m in mounts), (
+            "another run's attachment is inside this run's mount set")
+
+    def test_a_run_with_no_attachments_mounts_nothing(self, ws, tmp_path):
+        import container_exec as ce, runs
+        f = tmp_path / "x.png"; f.write_bytes(b"x")
+        store_operator_attachments([str(f)], key="somebody-elses")
+        runs.open_run("no-attach", prompt="p", lane="now")
+        assert ce.attachment_ro_mounts() == [], (
+            "absence of a key must not fall back to the whole area")
+
+    def test_no_run_context_mounts_nothing(self, ws, tmp_path):
+        import container_exec as ce
+        assert ce.attachment_ro_mounts() == []
+
+
+class TestAttachmentInputHardening:
+
+    def test_a_symlinked_attachment_is_refused_and_names_its_target(
+            self, ws, tmp_path):
+        # A symlink hides WHAT is attached: the name says one thing, the
+        # bytes come from wherever it points, and they land in an area a
+        # container mounts and a model reads.
+        secret = tmp_path / "host-secret.txt"
+        secret.write_text("private")
+        link = tmp_path / "innocent.png"
+        link.symlink_to(secret)
+        with pytest.raises(EnvelopeError, match="symlink"):
+            store_operator_attachments([str(link)], key="k1")
+
+    def test_a_dot_dot_key_cannot_address_the_parent(self, ws, tmp_path):
+        from dispatch_envelope import _safe_key
+        assert _safe_key("..") == "dispatch"
+        assert _safe_key(".") == "dispatch"
+        f = tmp_path / "f.png"; f.write_bytes(b"x")
+        [rec] = store_operator_attachments([str(f)], key="..")
+        assert "/operator-attachments/dispatch/" in rec["path"]
+        assert "/operator-attachments/../" not in rec["path"]

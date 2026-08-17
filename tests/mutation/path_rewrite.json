@@ -214,7 +214,7 @@
  {
   "name": "no LEFT boundary \u2014 a root fires as a suffix of a longer path",
   "file": "src/path_rewrite.py",
-  "anchor": "_LEFT_BOUNDARY = (rb\"(?:(?<![A-Za-z0-9_./-])\"\n                  rb\"|(?<=\\\\n)|(?<=\\\\t)|(?<=\\\\r)|(?<=\\\\f)|(?<=\\\\v))\")",
+  "anchor": "_LEFT_BOUNDARY = (rb\"(?:(?<![A-Za-z0-9_./-])\"\n                  rb\"|(?<=\\\\n)|(?<=\\\\t)|(?<=\\\\r)|(?<=\\\\f)|(?<=\\\\v)|(?<=\\\\b))\")",
   "replacement": "_LEFT_BOUNDARY = rb\"\"",
   "tests": "tests/test_path_rewrite.py"
  },
@@ -284,8 +284,15 @@
  {
   "name": "the left boundary treats an escape sequence as an identifier char",
   "file": "src/path_rewrite.py",
-  "anchor": "                  rb\"|(?<=\\\\n)|(?<=\\\\t)|(?<=\\\\r)|(?<=\\\\f)|(?<=\\\\v))\")",
+  "anchor": "                  rb\"|(?<=\\\\n)|(?<=\\\\t)|(?<=\\\\r)|(?<=\\\\f)|(?<=\\\\v)|(?<=\\\\b))\")",
   "replacement": "                  rb\")\")",
+  "tests": "tests/test_path_rewrite.py"
+ },
+ {
+  "name": "the backspace escape is not a left boundary",
+  "file": "src/path_rewrite.py",
+  "anchor": "rb\"|(?<=\\\\n)|(?<=\\\\t)|(?<=\\\\r)|(?<=\\\\f)|(?<=\\\\v)|(?<=\\\\b))\")",
+  "replacement": "rb\"|(?<=\\\\n)|(?<=\\\\t)|(?<=\\\\r)|(?<=\\\\f)|(?<=\\\\v))\")",
   "tests": "tests/test_path_rewrite.py"
  }
 ]

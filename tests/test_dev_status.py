@@ -275,3 +275,22 @@ class TestMarksMustBeTheCellsStatus:
                 "| x | see the `verified` runs |\n"
                 "| y | `verified` |\n")
         assert ds.capability_marks(text)["verified"] == 1
+
+
+class TestOneClaimPerRow:
+    """Three lenses, 2026-08-16: the `status:` scan ran unconditionally, so
+    a table row whose notes cell QUOTED a status counted twice — the same
+    over-count-from-prose class this parser exists to prevent, one level in."""
+
+    def test_a_row_quoting_a_status_still_counts_once(self):
+        text = ("| a | b | c |\n|---|---|---|\n"
+                "| x | `target` | quoting: status: `verified` was the old "
+                "call, now target |\n")
+        assert ds.capability_marks(text) == {
+            "verified": 0, "target": 1, "aspirational": 0}
+
+    def test_a_prose_status_annotation_still_counts(self):
+        # Negative control: the prose shape must keep working, or the fix
+        # has just deleted a real counting path.
+        assert ds.capability_marks(
+            "> *(from the car — status: `target`)*")["target"] == 1

@@ -593,3 +593,16 @@ class TestEscapeSequencesAreLeftBoundaries:
         m = _map(("/home/a/ws", "/srv/w"))
         assert m.substitute(b"green/home/a/ws/x")[1] == 0
         assert m.substitute(b"/mnt/backup/home/a/ws/old")[1] == 0
+
+
+class TestBackspaceEscapeIsAlsoABoundary:
+    """Skeptic + Architect, 2026-08-16: the escape fix covered \\n \\t \\r
+    \\f \\v but not \\b, a real JSON string escape — the same undercount
+    the fix exists to close, one escape over."""
+
+    @pytest.mark.parametrize("esc", [rb"\b", rb"\f", rb"\v"])
+    def test_every_listed_escape_is_a_left_boundary(self, esc):
+        m = _map(("/home/a/ws", "/srv/w"))
+        out, n = m.substitute(b"notes.md" + esc + b"/home/a/ws/x")
+        assert n == 1, esc
+        assert out.endswith(b"/srv/w/x")

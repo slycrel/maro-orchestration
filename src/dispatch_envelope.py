@@ -30,6 +30,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -120,7 +121,18 @@ def _safe_name(name: str) -> str:
 
 
 def _safe_key(key: str) -> str:
-    return re.sub(r"[^A-Za-z0-9._-]", "_", str(key)) or "dispatch"
+    """A key is a directory NAME, never a path fragment.
+
+    The substitution alone left `..` intact (`_safe_key("..") == ".."`),
+    so a key of `..` addressed the parent directory — `_safe_name` had
+    always collapsed that case and this had not (review, 2026-08-16).
+    Dot-only results are replaced rather than stripped, because stripping
+    would silently map several distinct keys onto the same directory.
+    """
+    cleaned = re.sub(r"[^A-Za-z0-9._-]", "_", str(key))
+    if not cleaned or set(cleaned) <= {"."}:
+        return "dispatch"
+    return cleaned
 
 
 def store_attachments(env: DispatchEnvelope, *, key: str) -> List[dict]:
@@ -195,6 +207,19 @@ def store_operator_attachments(paths, *, key: str) -> List[dict]:
     dest.mkdir(parents=True, exist_ok=True)
     for raw in paths:
         src = Path(str(raw)).expanduser()
+        # A symlink hides WHAT is being attached: the name says one thing
+        # and the bytes come from wherever it points — and those bytes land
+        # in an area that is bind-mounted into a container and read by a
+        # model. Refuse rather than follow, and name the target so an
+        # operator who meant it can pass the real path (review 2026-08-16).
+        if src.is_symlink():
+            try:
+                target = os.path.realpath(src)
+            except OSError:
+                target = "<unresolvable>"
+            raise EnvelopeError(
+                f"attachment is a symlink: {src} -> {target}. Pass the "
+                f"resolved path directly if that is what you meant to attach.")
         if not src.is_file():
             raise EnvelopeError(f"attachment not found or not a file: {src}")
         size = src.stat().st_size
@@ -263,9 +288,12 @@ def _land(run_dir, area: str, key: str, sub: str) -> int:
 def operator_attachment_block(stored: Sequence[dict]) -> str:
     """The advisory block naming landed attachments for the run prompt.
 
-    Names the RUN-DIR-relative path, because that is the one a containerized
-    worker can open, and states what the file is and is not: operator-
-    supplied context, not something the run retrieved. A claim read off an
+    Names the STORED ABSOLUTE path, because that is the one bind-mounted
+    (read-only, scoped to this run's key) and therefore the one that exists
+    from inside the container. An earlier version of this docstring claimed
+    run-dir-relative, which is what the code did before fff8606 and would
+    reintroduce the bug if anyone trusted it. States what the file is and
+    is not: operator-supplied context, not something the run retrieved. A claim read off an
     attachment is only as good as the attachment, and the run should say so
     rather than laundering it into a retrieved fact.
     """

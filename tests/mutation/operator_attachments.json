@@ -49,10 +49,10 @@
   "tests": "tests/test_operator_attachments.py"
  },
  {
-  "name": "the attachment areas are not mounted into the container",
+  "name": "the mount is not scoped to this run's key (cross-run leak)",
   "file": "src/container_exec.py",
-  "anchor": "            if p.is_dir():\n                out.append(str(p))",
-  "replacement": "            if False:\n                out.append(str(p))",
+  "anchor": "            cand = output_dir() / area / _safe_key(str(key))",
+  "replacement": "            cand = output_dir() / area",
   "tests": "tests/test_operator_attachments.py"
  },
  {
@@ -62,5 +62,26 @@
   "replacement": "        pass",
   "tests": "tests/test_operator_attachments.py",
   "equivalent": "the call sits inside _run_subprocess_safe's container branch, which needs a live docker daemon and a resolved container name to reach; no unit test can drive it without mocking the whole spin-up. The seam it calls IS pinned (three tests above), and the one-line call is verified by the live run instead. Recorded rather than contorting a test into mocking docker."
+ },
+ {
+  "name": "a run with no attachment key falls back to the whole area",
+  "file": "src/container_exec.py",
+  "anchor": "            if not key:\n                continue\n            cand = output_dir() / area / _safe_key(str(key))",
+  "replacement": "            cand = (output_dir() / area / _safe_key(str(key))) if key else (output_dir() / area)",
+  "tests": "tests/test_operator_attachments.py"
+ },
+ {
+  "name": "a symlinked attachment is followed instead of refused",
+  "file": "src/dispatch_envelope.py",
+  "anchor": "        if src.is_symlink():",
+  "replacement": "        if False:",
+  "tests": "tests/test_operator_attachments.py"
+ },
+ {
+  "name": "a dot-only key is not neutralized",
+  "file": "src/dispatch_envelope.py",
+  "anchor": "    if not cleaned or set(cleaned) <= {\".\"}:",
+  "replacement": "    if not cleaned:",
+  "tests": "tests/test_operator_attachments.py"
  }
 ]

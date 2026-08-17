@@ -76,12 +76,21 @@ def capability_marks(text: str) -> Dict[str, int]:
     """
     counts = {m: 0 for m in MARKS}
     for line in text.splitlines():
+        claimed = False
         if line.lstrip().startswith("|") and line.count("|") >= 3:
             for cell in (c.strip() for c in line.split("|")):
                 m = re.match(r"^\*{0,2}`(verified|target|aspirational)`", cell)
                 if m:
                     counts[m.group(1)] += 1
+                    claimed = True
                     break          # one mark per row, the leftmost wins
+        # The `status:` shape is for prose/blockquote rows. It used to run
+        # unconditionally, so a table row whose notes cell QUOTED a status
+        # ("status: `verified` was the old call, now target") counted twice —
+        # the same over-count-from-surrounding-prose class this parser was
+        # written to prevent, just one level in (review, 2026-08-16).
+        if claimed:
+            continue
         for m in re.finditer(r"status:\s*`(verified|target|aspirational)`", line):
             counts[m.group(1)] += 1
     return counts
