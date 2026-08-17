@@ -3365,3 +3365,34 @@ Dated end-of-chunk/session entries, append-only at the tail. Rotation policy (20
   must stay clean, since widening that leg quarantines ordinary domain
   advice and quarantine is silent. Killswitch pinned on quoted-"false"
   YAML truthiness and fail-CLOSED on config error. Suite 9270 → 9290.
+- **2026-08-16 (box)** — **Tier 2 opened, and scoped by census rather than
+  by intuition.** 94 modules parse off-disk structured data; **143 sites
+  across 52 modules drop a record on parse error and say nothing** —
+  `memory_ledger.py` 16, `knowledge_web.py` 9, `evolver_store.py` 8,
+  `skills.py` 7. The thesis that survived the count is narrower than the
+  one I started with: **for an append-only store the drop is usually
+  correct — one bad append must not truncate the read of everything after
+  it — and the silence is the defect.** A read returning 40 of 41 rows is
+  indistinguishable from a store holding 40, which contradicts the
+  retention decree ("the path is part of the result") and
+  artifacts-over-streams both. **Slice 1 shipped** (`240ab7f9`):
+  `src/jsonl_utils.py`, the single shared reader with 9 callers, was
+  itself one of the 143. It now carries a `SkipReport` (per-reason counts;
+  missing ≠ unreadable ≠ dropped; blanks are not loss; a `limit=N` read
+  flags its counts as a tail lower bound instead of passing them off as a
+  file total), exposed as data via `read_jsonl_tail_counted` and as a
+  WARNING naming the store from `read_jsonl_tail` — silent to the caller,
+  not to the operator. The two near-copy loops collapsed into one
+  `_classify`; they had already diverged once, over `UnicodeDecodeError`
+  escaping the full scan against its own docstring. Sweep 32/32 first
+  pass, and the ledger row says out loud that this is the **weak** kind of
+  green: tests and mutations written in one sitting from one reading of
+  the file prove the guard matches its author's list, not that the list is
+  complete. Compare 3/14 and 4/13 on surfaces written months ago. The one
+  real find came from the gap — `mutate.py` sweeps a copy of HEAD, so the
+  first run scored the *committed* reader and flagged a survivor that
+  turned out to be rescued by an `if buffer: yield buffer` block that is
+  **unreachable in unmutated code**; proved by assertion probe over chunk
+  sizes 1..63 across ten file shapes, then removed rather than left as a
+  guard that cannot fire. README gained a convention for the HEAD trap.
+  Suite +21 tests.

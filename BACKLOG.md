@@ -155,10 +155,39 @@ Ordered open work that matters. Top of the list is next.
   below it). `provenance_gate.json` — CLOSED 2026-08-16 at 19/19 from the
   6/18 it landed red at; the four `unverified` enforcement survivors split
   two equivalent / two real under the probe, and pinning one of them
-  surfaced a mirror the first spec had missed. **Tier-1 is CLEAR.** Next
-  by the stated ordering is tier 2, data-integrity boundaries: anything
-  that parses untrusted or off-disk JSON, or rewrites a file readers
-  depend on.
+  surfaced a mirror the first spec had missed. **Tier-1 is CLEAR.**
+
+  **Tier 2 — data-integrity boundaries — scoped 2026-08-16 by census, not
+  by guesswork.** 94 modules parse off-disk structured data; 143 of those
+  parse sites drop the record on error and say nothing, across 52 modules,
+  led by `memory_ledger.py` (16), `knowledge_web.py` (9),
+  `evolver_store.py` (8), `skills.py` (7), `loop_report.py` (6),
+  `run_curation.py` / `evolver_scans.py` (5 each). The thesis is narrower
+  than "these drops are bugs": **for a JSONL store the drop is usually
+  right — one bad append must not truncate the read of everything after
+  it. The silence is the defect.** A read that returns 40 of 41 rows is
+  indistinguishable from a store that holds 40, which contradicts both
+  the retention decree ("the path is part of the result") and
+  artifacts-over-streams.
+  - *Slice 1 — SHIPPED 2026-08-16 (`240ab7f9`).* `src/jsonl_utils.py`,
+    the one shared reader (9 callers), was itself one of the 143. It now
+    returns a `SkipReport` via `read_jsonl_tail_counted` and logs a
+    WARNING naming the store from `read_jsonl_tail`; missing ≠ unreadable
+    ≠ dropped, blanks are not loss, and a `limit=N` read marks its counts
+    as a lower bound rather than passing a tail total off as a file total.
+    Collapsing the two near-copy loops into one `_classify` also killed a
+    latent divergence class (they had already diverged once, over
+    `UnicodeDecodeError`). `jsonl_utils.json`, 32 mutations, 32/32 —
+    see the README note on why a co-written sweep is the weak kind of
+    green. Side-find: a `if buffer: yield buffer` block in
+    `_iter_lines_reverse` was unreachable in unmutated code and removed.
+  - *Slice 2 — NEXT.* A census tripwire for the silent-drop shape: every
+    off-disk parse site in `src/` either routes through the honest reader
+    or carries an allowlist entry with its reason. Landing it red is
+    acceptable and probably correct.
+  - *Slice 3.* File-derived sweeps on the top stores — `memory_ledger.py`
+    (16 sites, and the only copy of the learning data), the remaining
+    ~85% of `knowledge_web.py`, `evolver_store.py`.
 
   **Three of the four surfaces swept so far were tripwires, and two could
   not fail.** The code a decree protects tends to be fine; the guard
