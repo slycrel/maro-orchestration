@@ -82,6 +82,13 @@ _PARSE_CALLS = {
     ("tomllib", "loads"), ("tomllib", "load"),
 }
 
+# Local wrappers around a parse call, matched as bare names. A wrapper is
+# otherwise an evasion vector: route json.loads through a one-line helper
+# and every drop around it leaves the census. memory_ledger._loads_clean
+# (2026-08-17, byte-taint refusal) is the first; add new ones here in the
+# same diff that introduces them.
+_PARSE_WRAPPERS = {"_loads_clean"}
+
 # (module filename, enclosing function) -> why the silence is correct here.
 # Entries move here OUT of UNREVIEWED_SILENT_DROPS, one at a time, with a
 # reason. A REVIEWED entry allows exactly one site, so a second silent drop
@@ -283,12 +290,21 @@ UNREVIEWED_SILENT_DROPS: dict[tuple[str, str], int] = {
 
 
 def _parses(nodes) -> bool:
-    """True if a JSON/YAML/pickle/TOML load call appears anywhere in `nodes`."""
+    """True if a JSON/YAML/pickle/TOML load call appears anywhere in `nodes`.
+
+    Matches module.attr calls (_PARSE_CALLS) and known local wrappers by
+    bare name (_PARSE_WRAPPERS) — without the latter, wrapping json.loads
+    in a helper silently removes every drop around it from the census.
+    """
     for stmt in nodes:
         for n in ast.walk(stmt):
-            if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute):
+            if not isinstance(n, ast.Call):
+                continue
+            if isinstance(n.func, ast.Attribute):
                 if (getattr(n.func.value, "id", None), n.func.attr) in _PARSE_CALLS:
                     return True
+            elif isinstance(n.func, ast.Name) and n.func.id in _PARSE_WRAPPERS:
+                return True
     return False
 
 
@@ -591,6 +607,24 @@ class Sqlite:
         assert _unlisted(root, {}, {("store.py", "Jsonl.read_all"): 1}) == [
             "store.py:Sqlite.read_all() has 1 silent per-record drop(s) "
             "(allowed 0) at line(s) 17"
+        ]
+
+    def test_a_wrapper_parse_call_is_still_a_parse_call(self, tmp_path):
+        # Routing json.loads through a named wrapper must not remove the
+        # drop from the census — memory_ledger._loads_clean is live code,
+        # and without _PARSE_WRAPPERS its six REVIEWED sites would only be
+        # caught by the stale check, not by this scanner reading the file.
+        root = _src(tmp_path, **{"store.py": """
+def read_all():
+    for line in []:
+        try:
+            _loads_clean(line)
+        except Exception:
+            continue
+"""})
+        assert _unlisted(root, {}, {}) == [
+            "store.py:read_all() has 1 silent per-record drop(s) "
+            "(allowed 0) at line(s) 6"
         ]
 
     def test_two_same_named_modules_get_two_keys(self, tmp_path):

@@ -369,6 +369,32 @@ def _store_text(path: Path) -> str:
     return path.read_bytes().decode("utf-8", errors="surrogateescape")
 
 
+def _loads_clean(s: str):
+    """json.loads that refuses byte-tainted lines.
+
+    A line whose bytes were not valid UTF-8 reaches the per-line scanners
+    as text carrying lone surrogates (U+DC80–U+DCFF, from _store_text /
+    locked_rmw's surrogateescape decode). Such a line can still be
+    STRUCTURALLY valid JSON — `{"goal": "\\udcff"}` parses — and round 2
+    of the 2026-08-17 adversarial review showed what happens next: a
+    rewrite path that parses it re-serializes with json.dumps, which
+    emits the surrogate as a clean ASCII escape. The file decodes
+    strictly ever after, the undecodable count that announced the
+    corruption goes silent, and garbage text persists as legitimate
+    content — a lie, where the doctrine demands an announced loss.
+
+    So the scanners must treat "byte-tainted" exactly like "unparseable":
+    skip it, preserve the raw line verbatim, let the loaders keep
+    announcing it. Raising JSONDecodeError (not a bare ValueError) means
+    every existing `except json.JSONDecodeError` skip branch handles
+    taint with no new code at the call sites.
+    """
+    if any("\udc80" <= ch <= "\udcff" for ch in s):
+        raise json.JSONDecodeError("byte-tainted line (raw non-UTF-8 "
+                                   "bytes carried as surrogates)", s, 0)
+    return json.loads(s)
+
+
 def _rows_as(path: Path, what: str, build) -> list:
     """`_read_store` plus a per-row constructor, counting schema drift.
 
@@ -780,7 +806,7 @@ def mark_outcomes_superseded(handle_id: str, *, max_attempts: int = 1) -> int:
             if not line_s:
                 continue
             try:
-                row = json.loads(line_s)
+                row = _loads_clean(line_s)
             except json.JSONDecodeError:
                 continue
             if isinstance(row, dict) and str(row.get("handle_id") or "") == handle_id:
@@ -810,7 +836,7 @@ def mark_outcomes_superseded(handle_id: str, *, max_attempts: int = 1) -> int:
                     return 0
                 new = _mark(old)
                 if new != old:
-                    atomic_write(path, new)
+                    atomic_write(path, new, errors="surrogateescape")
             return marked["n"]
         except OSError:
             if attempt >= max(1, int(max_attempts)):
@@ -861,7 +887,7 @@ def stamp_outcome_verdict(
                 if not line:
                     continue
                 try:
-                    row = json.loads(line)
+                    row = _loads_clean(line)
                 except json.JSONDecodeError:
                     continue
                 if isinstance(row, dict) and row.get("loop_id") == loop_id:
@@ -920,7 +946,7 @@ def stamp_outcome_verdict(
                     )
                     return OutcomeVerdictStampResult(
                         "missing", attempts=attempt)
-                atomic_write(path, new)
+                atomic_write(path, new, errors="surrogateescape")
         except OSError as exc:
             if attempt < attempts:
                 continue
@@ -966,7 +992,7 @@ def stamp_outcome_stop_verdict(loop_id: str, stop_verdict: str,
             if not line:
                 continue
             try:
-                row = json.loads(line)
+                row = _loads_clean(line)
             except json.JSONDecodeError:
                 continue
             if isinstance(row, dict) and row.get("loop_id") == loop_id:
@@ -986,7 +1012,7 @@ def stamp_outcome_stop_verdict(loop_id: str, stop_verdict: str,
                 return False
             new = _stamp(old)
             if hit["v"]:
-                atomic_write(path, new)
+                atomic_write(path, new, errors="surrogateescape")
     except OSError as exc:
         log.warning("stamp_outcome_stop_verdict failed for loop %s: %s",
                     loop_id, exc)
@@ -1031,7 +1057,7 @@ def stamp_outcome_step_lessons(loop_id: str, count: int) -> bool:
             if not line:
                 continue
             try:
-                row = json.loads(line)
+                row = _loads_clean(line)
             except json.JSONDecodeError:
                 continue
             if isinstance(row, dict) and row.get("loop_id") == loop_id:
@@ -1049,7 +1075,7 @@ def stamp_outcome_step_lessons(loop_id: str, count: int) -> bool:
                 return False
             new = _stamp(old)
             if hit["v"]:
-                atomic_write(path, new)
+                atomic_write(path, new, errors="surrogateescape")
     except OSError as exc:
         log.warning("stamp_outcome_step_lessons failed for loop %s: %s",
                     loop_id, exc)
@@ -1245,7 +1271,7 @@ def annotate_outcome_lessons(loop_id: str, lessons: List[str]) -> bool:
             if not line:
                 continue
             try:
-                row = json.loads(line)
+                row = _loads_clean(line)
             except json.JSONDecodeError:
                 continue
             if isinstance(row, dict) and row.get("loop_id") == loop_id:
@@ -1285,7 +1311,7 @@ def annotate_outcome_extraction_failure(loop_id: str) -> bool:
         lines = old.splitlines()
         for i in range(len(lines) - 1, -1, -1):
             try:
-                row = json.loads(lines[i])
+                row = _loads_clean(lines[i])
             except (json.JSONDecodeError, TypeError):
                 continue
             if isinstance(row, dict) and row.get("loop_id") == loop_id:
@@ -1344,7 +1370,7 @@ def _reinforce_flat_row(lesson_id: str, apply) -> Optional[Lesson]:
             if not stripped:
                 continue
             try:
-                row = _lesson_from_row(json.loads(stripped))
+                row = _lesson_from_row(_loads_clean(stripped))
             except Exception:
                 entries.append(stripped)
                 continue
@@ -1526,7 +1552,7 @@ def set_flat_lesson_minted_from(lesson_id: str, minted_from: str,
             if not stripped:
                 continue
             try:
-                row = json.loads(stripped)
+                row = _loads_clean(stripped)
             except json.JSONDecodeError:
                 lines.append(line)
                 continue
@@ -1589,7 +1615,7 @@ def contest_flat_lesson(lesson_id: str, stamp: Dict[str, Any]) -> bool:
             if not stripped:
                 continue
             try:
-                row = json.loads(stripped)
+                row = _loads_clean(stripped)
             except json.JSONDecodeError:
                 lines.append(line)
                 continue
@@ -1653,7 +1679,7 @@ def uncontest_flat_lesson(lesson_id: str,
             if not stripped:
                 continue
             try:
-                row = json.loads(stripped)
+                row = _loads_clean(stripped)
             except json.JSONDecodeError:
                 lines.append(line)
                 continue
@@ -1700,7 +1726,7 @@ def _rewrite_lessons_file(task_type: str, updated_lessons: List[Lesson]) -> None
             if not line:
                 continue
             try:
-                d = json.loads(line)
+                d = _loads_clean(line)
                 lid = d.get("lesson_id", "")
                 if lid in updated_ids:
                     all_lines.append(json.dumps(_verdict_row(updated_by_id[lid])))
@@ -1904,7 +1930,7 @@ def deduplicate_lessons(*, dry_run: bool = False) -> dict:
             if not line:
                 continue
             try:
-                l = _lesson_from_row(json.loads(line))
+                l = _lesson_from_row(_loads_clean(line))
             except Exception:
                 entries.append(line)
                 stats["unparseable"] += 1
@@ -2128,7 +2154,7 @@ def compress_old_outcomes(
     unparseable = 0
     for line in to_compress_lines:
         try:
-            d = json.loads(line)
+            d = _loads_clean(line)
         except Exception:
             unparseable += 1
             continue

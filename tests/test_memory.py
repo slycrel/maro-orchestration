@@ -2223,3 +2223,78 @@ class TestTheStoreReadAnnouncesItsLoss:
         assert len(rows) == 1, "one bad row must not abort the load"
         assert any("schema" in r.getMessage() for r in caplog.records), \
             "drift was silently folded into the corruption count, or dropped"
+
+
+class TestByteTaintedRowsAreNeverLaundered:
+    """A byte-torn line can still be STRUCTURALLY valid JSON.
+
+    `{"goal": "\\udcff"}` parses (probed, round 2 of the 2026-08-17
+    adversarial review), so without a guard every rewrite path that parses
+    rows would re-serialize it via json.dumps — emitting the surrogate as
+    a clean ASCII escape. The store then decodes strictly forever after:
+    the undecodable count that announced the corruption goes silent, and
+    the garbage persists as legitimate content. A lie, not a loss.
+
+    `_loads_clean` refuses such lines with JSONDecodeError, so every
+    existing unparseable branch preserves them verbatim. These tests pin
+    both consequences: the bytes never change, and a tainted row is never
+    treated as a scan target or a dedup participant.
+    """
+
+    # Structurally valid JSON whose bytes are not valid UTF-8.
+    _TAINTED = b'{"loop_id": "loop-t", "outcome_id": "O-t", "goal": "\xff"}'
+
+    def test_a_tainted_target_is_skipped_not_stamped(self, monkeypatch, tmp_path):
+        import memory_ledger as ml
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        path = ml._outcomes_path()
+        assert str(tmp_path) in str(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        before = self._TAINTED + b"\n"
+        path.write_bytes(before)
+        # The ONLY row matching loop-t is tainted. Failing to unstamped is
+        # the documented safe direction; stamping would launder the byte.
+        assert ml.stamp_outcome_step_lessons("loop-t", 3) is False
+        assert path.read_bytes() == before, "the tainted row was rewritten"
+
+    def test_a_tainted_row_rides_through_dedup_verbatim(self, monkeypatch, tmp_path):
+        import json as _json
+        import memory_ledger as ml
+        from memory_ledger import deduplicate_lessons
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        path = tmp_path / "memory" / "lessons.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        mk = TestDeduplicateLessons._make_lesson
+        dup = mk(None, "identical lesson text", lesson_id="L1")
+        dup2 = mk(None, "identical lesson text", lesson_id="L2")
+        tainted = (b'{"lesson_id": "L-t", "task_type": "build", "outcome": "done", '
+                   b'"lesson": "\xff tainted", "source_goal": "g", "confidence": 0.7}')
+        path.write_bytes(_json.dumps(dup).encode() + b"\n"
+                         + tainted + b"\n"
+                         + _json.dumps(dup2).encode() + b"\n")
+        stats = deduplicate_lessons()
+        # Premises: the dedup actually ran (the two clean dupes merged) and
+        # the tainted row was counted, not silently ignored.
+        assert stats["removed_exact"] == 1, stats
+        assert stats["unparseable"] == 1, stats
+        data = path.read_bytes()
+        assert tainted in data, "the tainted row was laundered or destroyed"
+        # And it still fails a strict decode — the corruption signal (the
+        # loaders' undecodable count) is intact for the next read.
+        with pytest.raises(UnicodeDecodeError):
+            data.decode("utf-8")
+
+    def test_a_tainted_row_rides_through_reinforce_verbatim(self, monkeypatch, tmp_path):
+        import json as _json
+        import memory_ledger as ml
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        path = tmp_path / "memory" / "lessons.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        mk = TestDeduplicateLessons._make_lesson
+        clean = mk(None, "reinforce me", lesson_id="L1")
+        tainted = b'{"lesson_id": "L-t", "lesson": "\xff tainted"}'
+        path.write_bytes(_json.dumps(clean).encode() + b"\n" + tainted + b"\n")
+        got = ml._reinforce_flat_row("L1", lambda l: None)
+        assert got is not None, "the clean target must still be found"
+        assert tainted in path.read_bytes(), (
+            "reinforce re-serialized the tainted bystander — laundered")

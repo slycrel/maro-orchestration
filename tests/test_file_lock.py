@@ -167,15 +167,23 @@ class TestByteSafeRmw:
         locked_rmw(path, bump)
         assert path.read_bytes() == b'{"ok": 2}\n' + self._TORN + b"\n"
 
-    def test_atomic_write_encodes_lone_surrogates_back_to_bytes(self, tmp_path):
-        # The write half alone: without surrogateescape on the encoder, a
-        # rewrite that carried a torn line through the read half dies with
-        # UnicodeEncodeError at the last moment and the whole edit is lost.
+    def test_atomic_write_surrogateescape_is_opt_in(self, tmp_path):
+        # The write half alone — and its SCOPE. Opted in, a rewrite that
+        # carried a torn line through the byte-safe read half writes the
+        # original bytes back instead of dying with UnicodeEncodeError at
+        # the last moment. But the default stays strict: most callers write
+        # content they built themselves, where a lone surrogate is an
+        # upstream bug and the loud encoder error at the write site is the
+        # only signal naming it (round 2, 2026-08-17 adversarial review —
+        # a global surrogateescape default converts that signal into
+        # silently persisted mojibake for ~19 callers that never asked).
         from file_lock import atomic_write
         path = tmp_path / "store.jsonl"
         text = self._TORN.decode("utf-8", errors="surrogateescape")
-        atomic_write(path, text)
+        atomic_write(path, text, errors="surrogateescape")
         assert path.read_bytes() == self._TORN
+        with pytest.raises(UnicodeEncodeError):
+            atomic_write(tmp_path / "other.md", text)
 
     def test_valid_utf8_is_untouched(self, tmp_path):
         # surrogateescape must be a no-op for healthy stores, multibyte

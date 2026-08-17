@@ -147,10 +147,10 @@
     "tests": "tests/test_file_lock.py"
   },
   {
-    "name": "bytes :: atomic_write encodes strictly again",
+    "name": "bytes :: locked_rmw stops pairing surrogateescape on its write",
     "file": "src/file_lock.py",
-    "anchor": "        with os.fdopen(fd, \"w\", encoding=encoding,\n                       errors=\"surrogateescape\") as fh:",
-    "replacement": "        with os.fdopen(fd, \"w\", encoding=encoding) as fh:",
+    "anchor": "        atomic_write(path, new, errors=\"surrogateescape\")",
+    "replacement": "        atomic_write(path, new)",
     "tests": "tests/test_file_lock.py"
   },
   {
@@ -158,6 +158,34 @@
     "file": "tests/test_no_silent_drop.py",
     "anchor": "        mod = py.relative_to(src_root).as_posix()",
     "replacement": "        mod = py.name",
+    "tests": "tests/test_no_silent_drop.py"
+  },
+  {
+    "name": "bytes :: atomic_write defaults to surrogateescape (the round-2 scoping)",
+    "file": "src/file_lock.py",
+    "anchor": "def atomic_write(path: Path, content: str, *, encoding: str = \"utf-8\",\n                 errors: str = \"strict\") -> None:",
+    "replacement": "def atomic_write(path: Path, content: str, *, encoding: str = \"utf-8\",\n                 errors: str = \"surrogateescape\") -> None:",
+    "tests": "tests/test_file_lock.py"
+  },
+  {
+    "name": "bytes :: the rewrite scrubs surrogates instead of preserving them",
+    "file": "src/memory_ledger.py",
+    "anchor": "                row[\"step_lesson_count\"] = int(count)\n                lines[i] = json.dumps(row)\n                hit[\"v\"] = True\n                break\n        return \"\\n\".join(lines) + (\"\\n\" if lines else \"\")",
+    "replacement": "                row[\"step_lesson_count\"] = int(count)\n                lines[i] = json.dumps(row)\n                hit[\"v\"] = True\n                break\n        import re as _re\n        return _re.sub(\"[\\udc80-\\udcff]\", \"?\", \"\\n\".join(lines)) + (\"\\n\" if lines else \"\")",
+    "tests": "tests/test_memory.py"
+  },
+  {
+    "name": "taint :: the stamper scan accepts a byte-tainted target",
+    "file": "src/memory_ledger.py",
+    "anchor": "    if any(\"\\udc80\" <= ch <= \"\\udcff\" for ch in s):\n        raise json.JSONDecodeError(\"byte-tainted line (raw non-UTF-8 \"\n                                   \"bytes carried as surrogates)\", s, 0)\n    return json.loads(s)",
+    "replacement": "    return json.loads(s)",
+    "tests": "tests/test_memory.py"
+  },
+  {
+    "name": "census :: a wrapper parse call is invisible to the census",
+    "file": "tests/test_no_silent_drop.py",
+    "anchor": "            elif isinstance(n.func, ast.Name) and n.func.id in _PARSE_WRAPPERS:\n                return True",
+    "replacement": "            elif False:\n                return True",
     "tests": "tests/test_no_silent_drop.py"
   }
 ]

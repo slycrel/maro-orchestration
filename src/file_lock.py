@@ -213,18 +213,27 @@ def _report_timeout(lock_path: Path, waited: float) -> None:
         pass
 
 
-def atomic_write(path: Path, content: str, *, encoding: str = "utf-8") -> None:
+def atomic_write(path: Path, content: str, *, encoding: str = "utf-8",
+                 errors: str = "strict") -> None:
     """Crash-safe full rewrite: mkstemp in path's dir, write, fsync, os.replace.
 
     A reader (or a crash mid-write) sees either the old complete file or the
     new complete file — never a partial. Does NOT take the .lock file; pair
     with locked_write()/locked_rmw() when concurrent writers are possible.
 
-    Encodes with errors="surrogateescape", the write half of locked_rmw's
-    byte-safe read: lone surrogates produced by decoding undecodable bytes
-    are written back as the original bytes, so a rewrite that carried a torn
-    line through preserves it verbatim instead of raising UnicodeEncodeError
-    at the last moment and losing the whole rewrite. Valid text is unaffected.
+    errors="surrogateescape" is the write half of a byte-safe read (see
+    locked_rmw): lone surrogates produced by decoding undecodable bytes are
+    written back as the original bytes, so a rewrite that carried a torn
+    line through preserves it verbatim. It is OPT-IN, not the default —
+    round 2 of the 2026-08-17 adversarial review: most of this function's
+    ~25 callers write content they built themselves, which never legitimately
+    contains lone surrogates, and for them a strict encoder's
+    UnicodeEncodeError is a loud signal of an upstream bug at the write
+    site. Defaulting to surrogateescape would convert that signal into
+    silently persisted mojibake for callers that never asked for byte
+    round-tripping. Only pass it where the READ half produced the
+    surrogates (locked_rmw does this internally; memory_ledger's inline
+    stampers pass it to match _store_text).
     """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -245,8 +254,7 @@ def atomic_write(path: Path, content: str, *, encoding: str = "utf-8") -> None:
     fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=path.name + ".tmp")
     try:
         os.fchmod(fd, mode)
-        with os.fdopen(fd, "w", encoding=encoding,
-                       errors="surrogateescape") as fh:
+        with os.fdopen(fd, "w", encoding=encoding, errors=errors) as fh:
             fh.write(content)
             fh.flush()
             os.fsync(fh.fileno())
@@ -304,5 +312,5 @@ def locked_rmw(path: Path, fn, *, default: str = "") -> str:
         except FileNotFoundError:
             old = default
         new = fn(old)
-        atomic_write(path, new)
+        atomic_write(path, new, errors="surrogateescape")
         return new
