@@ -1,0 +1,170 @@
+[
+  {
+    "name": "preserve :: the sweep rebuilds from parsed rows only (the original bug)",
+    "file": "src/memory_ledger.py",
+    "anchor": "            survivors = {id(l) for l in kept}\n            out = [e if isinstance(e, str) else json.dumps(_verdict_row(e))\n                   for e in entries\n                   if isinstance(e, str) or id(e) in survivors]\n            return \"\\n\".join(out) + (\"\\n\" if out else \"\")",
+    "replacement": "            return \"\\n\".join(json.dumps(_verdict_row(l)) for l in kept) + \"\\n\"",
+    "tests": "tests/test_memory.py"
+  },
+  {
+    "name": "preserve :: unparseable rows are dropped from the entry list",
+    "file": "src/memory_ledger.py",
+    "anchor": "            except Exception:\n                entries.append(line)\n                stats[\"unparseable\"] += 1\n                continue",
+    "replacement": "            except Exception:\n                stats[\"unparseable\"] += 1\n                continue",
+    "tests": "tests/test_memory.py"
+  },
+  {
+    "name": "preserve :: unparseable rows are re-emitted at the end, not in place",
+    "file": "src/memory_ledger.py",
+    "anchor": "            out = [e if isinstance(e, str) else json.dumps(_verdict_row(e))\n                   for e in entries\n                   if isinstance(e, str) or id(e) in survivors]",
+    "replacement": "            out = [json.dumps(_verdict_row(e)) for e in entries\n                   if not isinstance(e, str) and id(e) in survivors]\n            out += [e for e in entries if isinstance(e, str)]",
+    "tests": "tests/test_memory.py"
+  },
+  {
+    "name": "preserve :: survivors are matched by equality instead of identity",
+    "file": "src/memory_ledger.py",
+    "anchor": "            survivors = {id(l) for l in kept}",
+    "replacement": "            survivors = {id(l) for l in all_lessons}",
+    "tests": "tests/test_memory.py"
+  },
+  {
+    "name": "preserve :: an all-unparseable file is truncated to empty",
+    "file": "src/memory_ledger.py",
+    "anchor": "            return \"\\n\".join(out) + (\"\\n\" if out else \"\")\n        return old  # dry-run or nothing removed — leave the file as-is",
+    "replacement": "            return \"\\n\".join(out) + \"\\n\"\n        return \"\"",
+    "tests": "tests/test_memory.py"
+  },
+  {
+    "name": "count :: unparseable rows are absorbed without being counted",
+    "file": "src/memory_ledger.py",
+    "anchor": "                entries.append(line)\n                stats[\"unparseable\"] += 1",
+    "replacement": "                entries.append(line)",
+    "tests": "tests/test_memory.py"
+  },
+  {
+    "name": "count :: unparseable rows are folded into the before count",
+    "file": "src/memory_ledger.py",
+    "anchor": "        stats[\"before\"] = len(all_lessons)",
+    "replacement": "        stats[\"before\"] = len(entries)",
+    "tests": "tests/test_memory.py"
+  },
+  {
+    "name": "count :: the unparseable count is not returned to the caller",
+    "file": "src/memory_ledger.py",
+    "anchor": "        \"removed_dry_run\": dry_run and (removed_exact + removed_near),\n        \"unparseable\": unparseable,\n    }",
+    "replacement": "        \"removed_dry_run\": dry_run and (removed_exact + removed_near),\n        \"unparseable\": 0,\n    }",
+    "tests": "tests/test_memory.py"
+  },
+  {
+    "name": "announce :: the loss is never logged",
+    "file": "src/memory_ledger.py",
+    "anchor": "    if unparseable:\n        # WARNING, not part of the info line: `before` counts only rows that\n        # parsed, so without this the caller sees a smaller corpus than the\n        # file holds and no reason for the difference.\n        log.warning(",
+    "replacement": "    if False:\n        log.warning(",
+    "tests": "tests/test_memory.py"
+  },
+  {
+    "name": "announce :: the warning does not name the store",
+    "file": "src/memory_ledger.py",
+    "anchor": "            \"deduplicate_lessons: %d row(s) in %s could not be parsed — kept \"\n            \"verbatim and excluded from the before=%d count\",\n            unparseable, path, before,",
+    "replacement": "            \"deduplicate_lessons: %d row(s) could not be parsed (before=%d)\",\n            unparseable, before,",
+    "tests": "tests/test_memory.py"
+  },
+  {
+    "name": "announce :: the loss is logged below WARNING",
+    "file": "src/memory_ledger.py",
+    "anchor": "        log.warning(\n            \"deduplicate_lessons: %d row(s) in %s could not be parsed — kept \"",
+    "replacement": "        log.info(\n            \"deduplicate_lessons: %d row(s) in %s could not be parsed — kept \"",
+    "tests": "tests/test_memory.py"
+  },
+  {
+    "name": "gate :: a dry run rewrites the file anyway",
+    "file": "src/memory_ledger.py",
+    "anchor": "        if not dry_run and stats[\"after\"] < stats[\"before\"]:",
+    "replacement": "        if stats[\"after\"] < stats[\"before\"]:",
+    "tests": "tests/test_memory.py"
+  },
+  {
+    "name": "gate :: the file is rewritten even when nothing was removed",
+    "file": "src/memory_ledger.py",
+    "anchor": "        if not dry_run and stats[\"after\"] < stats[\"before\"]:",
+    "replacement": "        if not dry_run:",
+    "tests": "tests/test_memory.py"
+  },
+  {
+    "name": "merge :: exact-duplicate detection ignores task_type",
+    "file": "src/memory_ledger.py",
+    "anchor": "                (k for k in kept\n                 if k.lesson == l.lesson and k.task_type == l.task_type),",
+    "replacement": "                (k for k in kept\n                 if k.lesson == l.lesson),",
+    "tests": "tests/test_memory.py"
+  },
+  {
+    "name": "merge :: near-duplicate detection ignores task_type",
+    "file": "src/memory_ledger.py",
+    "anchor": "                (k for k in kept\n                 if k.task_type == l.task_type\n                 and _text_similarity(k.lesson, l.lesson) > 0.8),",
+    "replacement": "                (k for k in kept\n                 if _text_similarity(k.lesson, l.lesson) > 0.8),",
+    "tests": "tests/test_memory.py"
+  },
+  {
+    "name": "merge :: an absorbed row's reinforcement history is collapsed to +1",
+    "file": "src/memory_ledger.py",
+    "anchor": "                exact_match.times_reinforced += 1 + l.times_reinforced",
+    "replacement": "                exact_match.times_reinforced += 1",
+    "tests": "tests/test_memory.py"
+  },
+  {
+    "name": "merge :: a near-dropped row's text is discarded instead of absorbed",
+    "file": "src/memory_ledger.py",
+    "anchor": "                _absorb_variant(near_match.merged_variants, l.lesson,\n                                near_match.lesson)",
+    "replacement": "                pass",
+    "tests": "tests/test_memory.py"
+  },
+  {
+    "name": "merge :: the absorbed row's own variants vanish with it (exact leg)",
+    "file": "src/memory_ledger.py",
+    "anchor": "                for _v in l.merged_variants:\n                    _absorb_variant(exact_match.merged_variants, _v,\n                                    exact_match.lesson)",
+    "replacement": "                pass",
+    "tests": "tests/test_memory.py"
+  },
+  {
+    "name": "merge :: the near-similarity threshold is dropped to zero",
+    "file": "src/memory_ledger.py",
+    "anchor": "                 and _text_similarity(k.lesson, l.lesson) > 0.8),",
+    "replacement": "                 and _text_similarity(k.lesson, l.lesson) > 0.0),",
+    "tests": "tests/test_memory.py"
+  },
+  {
+    "name": "compress :: the compressed range is deleted whole, parsed or not",
+    "file": "src/memory_ledger.py",
+    "anchor": "    _compressed_set = set(parsed_lines)",
+    "replacement": "    _compressed_set = set(to_compress_lines)",
+    "tests": "tests/test_memory.py"
+  },
+  {
+    "name": "compress :: an unparseable row still counts toward the batch",
+    "file": "src/memory_ledger.py",
+    "anchor": "        parsed.append(d)\n        parsed_lines.append(line)",
+    "replacement": "        parsed.append(d)\n        parsed_lines.append(line)\n        parsed.append(d)",
+    "tests": "tests/test_memory.py"
+  },
+  {
+    "name": "compress :: unparseable rows in the range are never counted",
+    "file": "src/memory_ledger.py",
+    "anchor": "        except Exception:\n            unparseable += 1\n            continue\n        parsed.append(d)",
+    "replacement": "        except Exception:\n            continue\n        parsed.append(d)",
+    "tests": "tests/test_memory.py"
+  },
+  {
+    "name": "compress :: the rewrite drops rows that were never in the range",
+    "file": "src/memory_ledger.py",
+    "anchor": "        kept = [l for l in old.splitlines() if l.strip() and l not in _compressed_set]",
+    "replacement": "        kept = [l for l in old.splitlines() if l.strip() and l in _compressed_set]",
+    "tests": "tests/test_memory.py"
+  },
+  {
+    "name": "compress :: keep_recent is ignored, so the newest rows compress too",
+    "file": "src/memory_ledger.py",
+    "anchor": "    compress_count = min(batch_size, max(0, total - keep_recent))",
+    "replacement": "    compress_count = batch_size",
+    "tests": "tests/test_memory.py"
+  }
+]
