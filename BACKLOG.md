@@ -252,6 +252,22 @@ Ordered open work that matters. Top of the list is next.
       `memory_backends.py`'s single `read_all` entry: it had been covering
       **both** `JSONLBackend` and `SQLiteBackend`. Two collisions in one
       50-module scan, neither visible without going looking.
+    - *Adversarial round on the closure chunk, 2026-08-17 (sonnet-medium
+      lane, codex capped): REJECT round 1, fixed same session.* Consensus
+      HIGH, probe-confirmed: all six REVIEWED stampers still whole-file
+      strict-decoded, so ONE torn byte raised UnicodeDecodeError out of
+      every stamper (`except OSError` misses a ValueError) — a permanent,
+      DEBUG-swallowed stamping outage per torn store, in the very
+      functions just marked "safe by construction." The pinning tests
+      shared the blind spot (ASCII torn lines only). Root-cause fix:
+      surrogateescape on `locked_rmw`/`atomic_write` (byte round-trip for
+      all 16 rmw-using modules) + `_store_text` for the inline reads;
+      probed clean. Also: value-diff vacuity assertions (the `lessons`
+      key was pre-seeded, so `field in stamped` couldn't fail for one
+      stamper), census module keys now relative paths (basename was the
+      function-half collision one axis over), family B was three loaders
+      not two, spec 16→23 mutations 23/23. Full record:
+      `docs/history/2026-08-17-memory-ledger-stamper-review.md`.
     - *Then:* the remaining ~85% of `knowledge_web.py`, `evolver_store.py`.
 
   **Three of the four surfaces swept so far were tripwires, and two could

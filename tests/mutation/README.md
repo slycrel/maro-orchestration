@@ -117,7 +117,7 @@ failure the sweep exists to find.
 
 | `lesson_sweep.json` | The flat lesson corpus's two rewriting maintenance paths: `deduplicate_lessons`' preserve-in-place rewrite, unparseable count and warning, dry-run and no-op gates, and the exact/near merge semantics (task_type scoping, reinforcement accumulation, variant absorption, the 0.8 threshold); `compress_old_outcomes`' parsed-only delete set, batch membership, and `keep_recent` floor | 24 | 2026-08-16, all accounted for (21/24 on first pass, 3 real survivors closed) |
 
-| `stamp_preserve.json` | The read half of the same module plus the census key: `_read_store`/`_rows_as` (loss announced, store named, corruption vs. schema drift kept apart, one bad row not aborting the load), the six in-place stampers' preserve-and-rejoin rewrite and its scan-traversal premise, the census's qualified-name walk (`_child_scopes` boundaries, `outer.inner` composition), and the REVIEWED-coverage check | 16 | 2026-08-17, all accounted for (9/15 on first pass, one fixture defect and four genuine holes closed) |
+| `stamp_preserve.json` | The read half of the same module plus the census key: `_read_store`/`_rows_as` (loss announced, store named, corruption vs. schema drift kept apart, one bad row not aborting the load), the six in-place stampers' preserve-and-rejoin rewrite and its scan-traversal premise, the byte-safety layer (`_store_text` / `locked_rmw` / `atomic_write` surrogateescape round-trip), the census's qualified-name walk (`_child_scopes` boundaries, `outer.inner` composition, relative-path module keys), and the REVIEWED-coverage check | 23 | 2026-08-17, all accounted for (9/15 on first pass — a 16th mutation was added between passes, which is why the fraction and the total differ; +7 more after the adversarial round: rebuild mutants for the two stampers the first spec skipped, a verdict-scan vacuity mutant, three byte-safety reverts, the basename-fallback census key) |
 
 Note on `stamp_preserve.json`: the highest-value sweep of the arc so far,
 and the one that most clearly paid for itself. Six of fifteen came back
@@ -139,6 +139,19 @@ also passed, because it shared the fixture's blind spot. **A premise
 assertion built from the same fixture inherits the fixture's defects.**
 The store now brackets its target with torn lines on both sides, so
 direction cannot matter.
+
+The adversarial round on this chunk then found the same lesson at a
+third depth: the torn fixtures were all **valid UTF-8** — truncated
+JSON, the failure the stampers already handled — while the failure they
+didn't handle (a torn BYTE, which kills the strict whole-file decode
+before any per-line scan runs) never appeared in any fixture. Every
+stamper raised UnicodeDecodeError on a store one crash-torn append could
+produce, and the whole pinning class was green. The fixture family is
+the test's vocabulary: **a failure shape missing from the fixtures is a
+failure the suite cannot speak about**, no matter how adversarial the
+assertions over the shapes it has. The store now carries three torn
+shapes (leading ASCII, trailing ASCII, raw bytes), and the byte-safety
+layer has its own revert mutants.
 
 Note on `lesson_sweep.json`: this spec exists because the silent-drop
 census pointed at `memory_ledger.py` and reading the file found
