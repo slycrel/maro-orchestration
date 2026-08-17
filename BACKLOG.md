@@ -330,7 +330,15 @@ Ordered open work that matters. Top of the list is next.
       (baseline now 95 unreviewed + 10 reviewed). 8 new tests,
       `evolver_store_preserve.json` 12 mutations 12/12 first pass,
       suite 9442. Record:
-      `docs/history/2026-08-17-evolver-store-byte-safety.md`.*
+      `docs/history/2026-08-17-evolver-store-byte-safety.md`.
+      Adversarial r1 same day (5 lenses, sonnet-medium): REJECT —
+      5/5-consensus HIGH, the chunk fixed three of FIVE keyed rewrites;
+      `dismiss_suggestion._merge` + `stamp_verification._merge` (the
+      unattended V2 cadence stamper) still laundered. Census-invisible
+      by construction (their except bodies re-emit the line), caught
+      only by the watch-list sibling sweep. Fixed same round:
+      loads_clean swap x2, tainted-twin pins x2, mutations 16 total,
+      record corrected. Rejected: get_suggestion early-exit perf.*
     - *Slice 3's named surfaces are DONE (memory_ledger 16,
       knowledge_web 9, evolver_store 8). Remaining census debt (95
       unreviewed sites led by skills.py 7, loop_report.py 6) is

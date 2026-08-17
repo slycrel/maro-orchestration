@@ -37,8 +37,11 @@ Same treatment as memory_ledger/knowledge_web, via the shared
   WARNING'd with the store name, corruption counted apart from schema
   drift. `get_suggestion` additionally warns when a row is JSON but
   not loadable as a Suggestion and treats it as absent.
-- The three keyed rewrites — `apply_suggestion`'s `_merge`,
-  `revert_suggestion`'s `_drop_constraint` and `_mark_reverted` — parse
+- The keyed rewrites — **five** of them, not the three the first landing
+  of this record claimed: `apply_suggestion`'s `_merge`,
+  `revert_suggestion`'s `_drop_constraint` and `_mark_reverted`, plus
+  `dismiss_suggestion`'s `_merge` and `stamp_verification`'s `_merge`
+  (the last two caught by adversarial review r1, below) — parse
   each line with `loads_clean`, which refuses byte-tainted lines. A
   tainted line therefore never key-matches and falls into the
   preserve branch, re-emitted verbatim (family C). `_mark_reverted` is
@@ -66,6 +69,28 @@ the silence is correct once the parser refuses taint).
   REVIEWED under `_SUGGESTION_STAMPER`. Baseline now 95 unreviewed +
   10 reviewed.
 - Full suite 9442 passed, 1 expected skip.
+
+## Adversarial round 1 (same day, sonnet-medium lane)
+
+Five lenses (4 core + Experimentalist for the shipped numbers), all
+returned clean. **REJECT — 5/5 consensus HIGH, verified real:** the
+chunk converted three of **five** keyed-merge rewrites.
+`dismiss_suggestion._merge` (operator CLI `--dismiss`) and
+`stamp_verification._merge` (fired *unattended* from the V2 cadence
+pass, on exactly the rows being re-examined) still parsed with plain
+`json.loads` and re-dumped the matched row — the launder shape, reopened
+in two siblings of the file the chunk was hardening. The miss was
+structural, not careless: both sites' `except` bodies re-emit the line,
+so the silent-drop census can never see them — the watch-list §2
+sibling sweep was the only tool that could catch it, and it did.
+
+Fixes (r1): `_loads_clean` swap at both sites; two tainted-twin pins
+(the class now covers all five rewrites and says so); 4 mutation-spec
+entries (launder + preserve-drop per site, 16 total); deliberate-
+exclusion comment on `evolver_cadence_tick._bump` (single-object
+counter, reset-is-recovery — Architect's ask); this record corrected
+from "three" to "five". Rejected: get_suggestion early-exit perf note
+(Skeptic LOW — the old code read the whole file anyway; dozens of rows).
 
 ## Lesson
 

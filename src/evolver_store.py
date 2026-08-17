@@ -221,6 +221,9 @@ def evolver_cadence_tick(cadence: int) -> bool:
     def _bump(old: str) -> str:
         nonlocal fired
         try:
+            # Plain json.loads is deliberate here (2026-08-17 review r1):
+            # this is a single-object counter file fully rewritten each call
+            # — a torn byte costs a counter reset, not a laundered record.
             count = int(json.loads(old).get("runs_since_evolve", 0))
         except Exception:
             count = 0
@@ -343,7 +346,9 @@ def dismiss_suggestion(suggestion_id: str, reason: str = "") -> bool:
             if not s:
                 continue
             try:
-                row = json.loads(s)
+                # loads_clean: a byte-tainted line never id-matches — it is
+                # re-emitted verbatim below, never re-dumped as clean escapes.
+                row = _loads_clean(s)
             except Exception:
                 out.append(s)
                 continue
@@ -1033,7 +1038,9 @@ def stamp_verification(
             if not s:
                 continue
             try:
-                d = json.loads(s)
+                # loads_clean: a byte-tainted line never id-matches — it is
+                # re-emitted verbatim below, never re-dumped as clean escapes.
+                d = _loads_clean(s)
             except Exception:
                 out.append(s)
                 continue

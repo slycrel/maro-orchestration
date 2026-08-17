@@ -108,9 +108,16 @@ class TestTheSuggestionsLedgerSurvivesATornByte:
 
 
 class TestSuggestionRewritesPreserveWhatTheyCannotParse:
-    """Pins the two REVIEWED census entries (_merge, _drop_constraint):
-    keyed-merge rewrites re-emit unmatched/unparseable lines verbatim and
-    a byte-tainted-but-parseable line never matches the key."""
+    """Keyed-merge rewrites re-emit unmatched/unparseable lines verbatim
+    and a byte-tainted-but-parseable line never matches the key.
+
+    Covers all FIVE keyed rewrites in the module: apply's _merge and
+    revert's _drop_constraint (the two REVIEWED census entries — the AST
+    census can see those sites), plus dismiss_suggestion._merge,
+    stamp_verification._merge, and revert's _mark_reverted, whose except
+    bodies re-emit the line and are therefore invisible to the census —
+    these tests are their only tripwire (2026-08-17 review r1: the first
+    two shipped unconverted; all five lenses flagged it)."""
 
     def test_the_apply_merge_never_launders_a_tainted_twin(self):
         # A tainted row carrying the SAME suggestion_id must not id-match:
@@ -121,6 +128,37 @@ class TestSuggestionRewritesPreserveWhatTheyCannotParse:
         p.write_bytes(json.dumps(_row("S1")).encode() + b"\n" + tainted + b"\n")
         assert ev.apply_suggestion("S1") is True
         assert tainted in p.read_bytes()
+
+    def test_the_dismiss_merge_never_launders_a_tainted_twin(self):
+        # Same shape as apply: a tainted, not-yet-applied twin of the target
+        # id must be refused by the parse, not dismissed-and-re-dumped.
+        p = ev._suggestions_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        tainted = json.dumps(_row("S1")).encode().replace(b"fp", b"\xff")
+        p.write_bytes(json.dumps(_row("S1")).encode() + b"\n"
+                      + tainted + b"\n" + _TORN + b"\n")
+        assert ev.dismiss_suggestion("S1", reason="test") is True
+        after = p.read_bytes()
+        assert tainted in after          # tainted twin re-emitted verbatim
+        assert _TORN in after            # torn tail preserved
+        assert b'"dismissed"' in after   # ...while the clean row WAS stamped
+
+    def test_the_verify_stamp_never_launders_a_tainted_twin(self):
+        # stamp_verification fires unattended from the V2 cadence pass, on
+        # exactly the rows being re-examined — the most exposed of the five.
+        p = ev._suggestions_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        tainted = json.dumps(_row("S1", applied=True)).encode().replace(
+            b"fp", b"\xff")
+        p.write_bytes(json.dumps(_row("S1", applied=True)).encode() + b"\n"
+                      + tainted + b"\n" + _TORN + b"\n")
+        assert ev.stamp_verification(
+            "S1", verdict="confirmed", verified_at="2026-08-17T00:00:00Z"
+        ) is True
+        after = p.read_bytes()
+        assert tainted in after          # tainted twin re-emitted verbatim
+        assert _TORN in after            # torn tail preserved
+        assert b'"confirmed"' in after   # ...while the clean row WAS stamped
 
     def test_the_constraint_drop_never_matches_a_tainted_row(self):
         from file_lock import locked_rmw

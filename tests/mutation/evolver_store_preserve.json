@@ -70,6 +70,34 @@
     "tests": "tests/test_evolver_store.py"
   },
   {
+    "name": "dismiss launder :: the dismiss merge id-matches a byte-tainted twin and re-dumps it",
+    "file": "src/evolver_store.py",
+    "anchor": "                row = _loads_clean(s)",
+    "replacement": "                row = json.loads(s)",
+    "tests": "tests/test_evolver_store.py"
+  },
+  {
+    "name": "dismiss dup :: the dismiss preserve branch discards the line it cannot parse",
+    "file": "src/evolver_store.py",
+    "anchor": "                row = _loads_clean(s)\n            except Exception:\n                out.append(s)\n                continue",
+    "replacement": "                row = _loads_clean(s)\n            except Exception:\n                continue",
+    "tests": "tests/test_evolver_store.py"
+  },
+  {
+    "name": "stamp launder :: the verify stamp id-matches a byte-tainted twin and re-dumps it",
+    "file": "src/evolver_store.py",
+    "anchor": "                d = _loads_clean(s)",
+    "replacement": "                d = json.loads(s)",
+    "tests": "tests/test_evolver_store.py"
+  },
+  {
+    "name": "stamp dup :: the verify stamp preserve branch discards the line it cannot parse",
+    "file": "src/evolver_store.py",
+    "anchor": "                d = _loads_clean(s)\n            except Exception:\n                out.append(s)\n                continue",
+    "replacement": "                d = _loads_clean(s)\n            except Exception:\n                continue",
+    "tests": "tests/test_evolver_store.py"
+  },
+  {
     "name": "mark launder :: _mark_reverted re-dumps a byte-tainted row as clean escapes",
     "file": "src/evolver_store.py",
     "anchor": "                        d = _loads_clean(line.strip())",
