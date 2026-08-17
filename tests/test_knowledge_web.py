@@ -2133,6 +2133,37 @@ class TestTheTierSurvivesATornByte:
         kw._mutate_tiered_lessons(MemoryTier.MEDIUM, lambda lessons: lessons)
         assert side.read_bytes().count(_TORN) == 1
 
+    def test_a_fully_failed_pass_still_converges_to_one_sidecar_copy(self, monkeypatch):
+        # Harsher interleaving (the mutation sweep found the first test
+        # never exercises the dedup): quarantine append lands, then BOTH
+        # the shrink and the caller's rebuild fail — the torn line stays in
+        # the live file while the sidecar already holds it durably. The
+        # next healthy pass must recognize that and not append a second
+        # copy (the multiset diff), then clean the live file.
+        import file_lock
+        path = kw._tiered_lessons_path(MemoryTier.MEDIUM)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(_row_bytes(0) + b"\n" + _TORN + b"\n")
+        real_aw = file_lock.atomic_write
+        calls = {"n": 0}
+
+        def dead_disk(p, content, **kw2):
+            calls["n"] += 1
+            if calls["n"] <= 2:  # quarantine shrink AND caller rebuild
+                raise OSError("disk full")
+            return real_aw(p, content, **kw2)
+
+        monkeypatch.setattr(file_lock, "atomic_write", dead_disk)
+        with pytest.raises(OSError):
+            kw._mutate_tiered_lessons(MemoryTier.MEDIUM, lambda lessons: lessons)
+        side = path.with_suffix(path.suffix + ".unparseable")
+        assert side.read_bytes().count(_TORN) == 1
+        assert _TORN in path.read_bytes()  # still live: nothing was lost
+        # Disk recovered — the pass must converge, not duplicate.
+        kw._mutate_tiered_lessons(MemoryTier.MEDIUM, lambda lessons: lessons)
+        assert side.read_bytes().count(_TORN) == 1
+        assert _TORN not in path.read_bytes()
+
     def test_the_sidecar_count_reads_its_own_bytes(self):
         # The sidecar holds raw non-UTF-8 bytes BY DESIGN; a strict count
         # reported 0 exactly when quarantine had fired (Skeptic HIGH).
