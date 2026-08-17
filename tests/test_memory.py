@@ -1769,6 +1769,42 @@ class TestDeduplicateLessonsPreservesWhatItCannotParse:
         assert stats["unparseable"] == 2
         assert self._lines(path) == ["torn one", "torn two"]
 
+    def test_a_dedup_that_removes_nothing_leaves_the_file_byte_identical(
+            self, monkeypatch, tmp_path):
+        # Not cosmetic. The rewrite re-serialises through _verdict_row, which
+        # fills in defaults, so an unconditional rewrite would quietly
+        # normalise legacy rows (and churn the file) on every dedup call —
+        # against _lesson_from_row's own "absence preserved" contract.
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        path = self._lessons_path(tmp_path)
+        legacy = {"lesson_id": "L001", "task_type": "build", "outcome": "done",
+                  "lesson": "A row from an older schema, with keys missing."}
+        self._write(path, [legacy, "torn"])
+        before = path.read_text(encoding="utf-8")
+
+        from memory_ledger import deduplicate_lessons
+        stats = deduplicate_lessons()
+        assert stats["removed_exact"] == 0 and stats["removed_near"] == 0
+        assert path.read_text(encoding="utf-8") == before
+
+    def test_lessons_that_merely_share_words_are_not_merged(
+            self, monkeypatch, tmp_path):
+        # Guards the 0.8 threshold itself. Two unrelated lessons overlap on
+        # common words (~0.1 here); a threshold that drifts toward zero
+        # collapses the corpus into one row and reads as a successful sweep.
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        path = self._lessons_path(tmp_path)
+        a = "Always validate user inputs at the system boundary before processing data."
+        b = "Always test edge cases in the parser when the input is malformed."
+        from memory_ledger import _text_similarity, deduplicate_lessons
+        assert 0 < _text_similarity(a, b) < 0.8, "fixture no longer probes the band"
+        self._write(path, [self._make_lesson(a, lesson_id="L001"),
+                           self._make_lesson(b, lesson_id="L002")])
+
+        stats = deduplicate_lessons()
+        assert stats["after"] == 2
+        assert stats["removed_near"] == 0
+
     def test_the_loss_is_announced_to_an_operator(self, monkeypatch, tmp_path, caplog):
         monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
         path = self._lessons_path(tmp_path)
@@ -1830,6 +1866,34 @@ class TestCompressOldOutcomesKeepsWhatItCannotSummarise:
         batch = compress_old_outcomes(threshold=10, batch_size=5, keep_recent=5)
         assert batch.batch_size == len(batch.outcome_ids)
         assert "O999" not in batch.outcome_ids
+
+    def test_the_skipped_row_is_announced_to_an_operator(
+            self, monkeypatch, tmp_path, caplog):
+        # A row that stays behind while its neighbours compress is an
+        # anomaly someone has to be told about — otherwise outcomes.jsonl
+        # accumulates uncompressible sediment that no readout explains.
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        path = self._outcomes_path(tmp_path)
+        self._write(path, [self._row(0), "torn"] + [self._row(i) for i in range(1, 40)])
+
+        from memory_ledger import compress_old_outcomes
+        with caplog.at_level(logging.WARNING, logger="memory_ledger"):
+            assert compress_old_outcomes(threshold=10, batch_size=5, keep_recent=5)
+        warnings = [r.getMessage() for r in caplog.records
+                    if r.levelno >= logging.WARNING]
+        assert any("could not be parsed" in m and str(path) in m for m in warnings), \
+            f"no warning naming the store: {warnings}"
+
+    def test_a_clean_range_compresses_without_a_warning(
+            self, monkeypatch, tmp_path, caplog):
+        monkeypatch.setenv("OPENCLAW_WORKSPACE", str(tmp_path))
+        path = self._outcomes_path(tmp_path)
+        self._write(path, [self._row(i) for i in range(40)])
+
+        from memory_ledger import compress_old_outcomes
+        with caplog.at_level(logging.WARNING, logger="memory_ledger"):
+            assert compress_old_outcomes(threshold=10, batch_size=5, keep_recent=5)
+        assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
 
 class TestTypedLessonExtraction:
     """The production prompt asks for [{"lesson": ..., "type": ...}] objects;
