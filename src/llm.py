@@ -1452,6 +1452,19 @@ def _run_subprocess_safe(cmd, *, input=None, timeout=600,
         if _intro:
             _ro_mounts.extend(_intro["ro_mounts"])
             _worker_env.update(_intro["env"])
+        # Attachment areas, read-only (2026-08-16). Found live: a run was
+        # given two operator-attached screenshots, they landed correctly in
+        # the run tree, and the worker's `find /` could not see them — for a
+        # PROJECT-scoped run the container's cwd is the project dir and the
+        # run dir is not mounted at all. land_in_run_dir's docstring reasons
+        # that the workspace ROOT is mount-excluded so the run-dir copy is
+        # the one that travels; true premise, wrong conclusion — the run dir
+        # sits under that same excluded root. The dispatch lane carries the
+        # identical hole. These two areas hold exactly the material a run is
+        # SUPPOSED to read (operator- and dispatcher-supplied artifacts), so
+        # they mount ro: read access, no new write surface, and far narrower
+        # than relaxing the workspace-root exclusion.
+        _ro_mounts.extend(_ce.attachment_ro_mounts())
         # realpath so a symlinked cwd resolves to the same target build_mount_map
         # binds and the exclusion filter checks (adversarial-review 2026-07-13):
         # -w must name the path that actually exists inside the container.

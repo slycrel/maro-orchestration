@@ -274,8 +274,14 @@ def operator_attachment_block(stored: Sequence[dict]) -> str:
     lines = ["Operator-attached files (supplied by the person who set this "
              "goal, NOT retrieved by this run):"]
     for rec in stored:
+        # The ABSOLUTE stored path, because that is the one bind-mounted
+        # into the container (read-only) and therefore the one that exists
+        # from inside it. A run-relative path was tried first and failed:
+        # for a project-scoped run the cwd is the project dir, so
+        # `fetch-raw/operator/...` resolved to nothing and five separate
+        # filesystem searches came back empty.
         lines.append(
-            f"  - fetch-raw/operator/{rec['name']} "
+            f"  - {rec['path']} "
             f"(from {rec['source']}, {rec['bytes']} bytes, "
             f"sha256 {rec['sha256'][:12]}…)")
     lines.append(

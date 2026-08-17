@@ -28,10 +28,10 @@
   "tests": "tests/test_operator_attachments.py"
  },
  {
-  "name": "the block names the workspace path a container cannot read",
+  "name": "the block names a run-relative path the container cannot resolve",
   "file": "src/dispatch_envelope.py",
-  "anchor": "            f\"  - fetch-raw/operator/{rec['name']} \"",
-  "replacement": "            f\"  - {rec['path']} \"",
+  "anchor": "            f\"  - {rec['path']} \"",
+  "replacement": "            f\"  - fetch-raw/operator/{rec['name']} \"",
   "tests": "tests/test_operator_attachments.py"
  },
  {
@@ -47,5 +47,20 @@
   "anchor": "    if origin and origin.get(\"operator_attachments\"):",
   "replacement": "    if False:",
   "tests": "tests/test_operator_attachments.py"
+ },
+ {
+  "name": "the attachment areas are not mounted into the container",
+  "file": "src/container_exec.py",
+  "anchor": "            if p.is_dir():\n                out.append(str(p))",
+  "replacement": "            if False:\n                out.append(str(p))",
+  "tests": "tests/test_operator_attachments.py"
+ },
+ {
+  "name": "llm.py stops feeding the attachment seam into the mount list",
+  "file": "src/llm.py",
+  "anchor": "        _ro_mounts.extend(_ce.attachment_ro_mounts())",
+  "replacement": "        pass",
+  "tests": "tests/test_operator_attachments.py",
+  "equivalent": "the call sits inside _run_subprocess_safe's container branch, which needs a live docker daemon and a resolved container name to reach; no unit test can drive it without mocking the whole spin-up. The seam it calls IS pinned (three tests above), and the one-line call is verified by the live run instead. Recorded rather than contorting a test into mocking docker."
  }
 ]

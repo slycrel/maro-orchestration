@@ -1328,12 +1328,24 @@ def test_run_subprocess_safe_symlink_disabled_by_env(tmp_path, monkeypatch):
     assert not os.path.islink(link)  # disabled → never created
 
 
-def test_run_subprocess_safe_cleans_temp_files():
-    """Merged-output temp file (and stdin temp file, if any) are deleted on completion."""
+def test_run_subprocess_safe_cleans_temp_files(tmp_path, monkeypatch):
+    """Merged-output temp file (and stdin temp file, if any) are deleted on completion.
+
+    Runs against a PRIVATE tmpdir. It used to glob the shared system temp
+    dir and assert nothing new appeared — which made it a global measurement
+    with other actors in it: under `-n auto` any concurrent worker running a
+    subprocess in the same window created a `tmp*.out` there and this test
+    attributed it to itself (intermittent failure, diagnosed 2026-08-16). A
+    test that cannot tell its own effect from a neighbour's is not testing
+    what its docstring says.
+    """
     from llm import _run_subprocess_safe
     import glob, tempfile
 
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
+    tempfile.tempdir = None          # force re-read of TMPDIR
     tmpdir = tempfile.gettempdir()
+    assert tmpdir == str(tmp_path), "temp isolation did not take"
     before = set(
         glob.glob(f"{tmpdir}/tmp*.out") + glob.glob(f"{tmpdir}/tmp*.stdin")
     )
@@ -1346,6 +1358,7 @@ def test_run_subprocess_safe_cleans_temp_files():
     )
     # No new .out/.stdin tempfiles should have been left behind by our call.
     assert not (after - before)
+    tempfile.tempdir = None          # restore global lookup for other tests
 
 
 # ---------------------------------------------------------------------------

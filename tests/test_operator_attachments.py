@@ -129,13 +129,17 @@ class TestOperatorAttachmentBlock:
         return operator_attachment_block(
             store_operator_attachments([str(f)], key="k1"))
 
-    def test_names_the_run_relative_path_not_the_workspace_one(
-            self, ws, tmp_path):
-        # An absolute output/ path is unreadable from inside the container,
-        # so naming it would send the worker somewhere it cannot go.
+    def test_names_the_mounted_absolute_path(self, ws, tmp_path):
+        # This test previously asserted the RUN-RELATIVE path, encoding the
+        # bug rather than the requirement: for a project-scoped run the
+        # container cwd is the project dir, so `fetch-raw/operator/...`
+        # resolved to nothing and a live run's five filesystem searches all
+        # came back empty. The reachable path is the stored one, which
+        # llm.py bind-mounts read-only.
         block = self._block(ws, tmp_path)
-        assert "fetch-raw/operator/figure.png" in block
-        assert "output/operator-attachments" not in block
+        assert "operator-attachments" in block
+        assert str(ws) in block or "/operator-attachments/" in block
+        assert "fetch-raw/operator/figure.png" not in block
 
     def test_labels_the_evidence_as_operator_supplied_not_retrieved(
             self, ws, tmp_path):
@@ -192,3 +196,68 @@ class TestTheProductionPath:
         import runs
         rd = runs.open_run("attachrun2", prompt="no files here", lane="now")
         assert not (Path(rd) / "fetch-raw" / "operator").exists()
+
+
+class TestTheMountIsWhatMakesItReachable:
+    """The landing and the block are both inert without the mount. A
+    project-scoped run's container cwd is the project dir; the run dir is
+    not mounted, which is why the first live attempt failed."""
+
+    def test_the_attachment_area_is_inside_a_mounted_root(self, ws, tmp_path,
+                                                          monkeypatch):
+        import container_exec as ce
+        from config import output_dir, workspace_root
+        f = tmp_path / "figure.png"
+        f.write_bytes(b"x")
+        [rec] = store_operator_attachments([str(f)], key="k1")
+
+        project = workspace_root() / "projects" / "p"
+        project.mkdir(parents=True)
+        area = str(output_dir() / "operator-attachments")
+        mounts = ce.build_mount_map(str(project), ro_mounts=[area])
+
+        assert any(m == "ro" and rec["path"].startswith(h) for h, m in mounts), \
+            "the stored attachment is not inside any mounted root"
+
+    def test_the_run_dir_is_NOT_mounted_for_a_project_run(self, ws, tmp_path):
+        # Pins the fact that caused the bug, so a future change that starts
+        # relying on run-dir reachability fails loudly here first.
+        import container_exec as ce
+        from config import workspace_root
+        project = workspace_root() / "projects" / "p2"
+        project.mkdir(parents=True)
+        run_dir = str(workspace_root() / "runs" / "abc123")
+        mounts = ce.build_mount_map(str(project))
+        assert not any(run_dir.startswith(h) for h, _ in mounts)
+
+
+class TestAttachmentMountSeam:
+    """Pins the WIRING, not just build_mount_map. The live failure was not
+    a bad mount map — it was that nothing put the attachment area into it."""
+
+    def test_the_area_is_offered_once_it_exists(self, ws, tmp_path):
+        import container_exec as ce
+        assert ce.attachment_ro_mounts() == []          # nothing stored yet
+        f = tmp_path / "f.png"; f.write_bytes(b"x")
+        store_operator_attachments([str(f)], key="k1")
+        mounts = ce.attachment_ro_mounts()
+        assert any(m.endswith("operator-attachments") for m in mounts)
+
+    def test_a_stored_attachment_is_inside_what_the_seam_offers(
+            self, ws, tmp_path):
+        import container_exec as ce
+        f = tmp_path / "f.png"; f.write_bytes(b"x")
+        [rec] = store_operator_attachments([str(f)], key="k1")
+        assert any(rec["path"].startswith(m) for m in ce.attachment_ro_mounts())
+
+    def test_the_seam_feeds_a_mount_map_that_covers_the_file(
+            self, ws, tmp_path):
+        import container_exec as ce
+        from config import workspace_root
+        f = tmp_path / "f.png"; f.write_bytes(b"x")
+        [rec] = store_operator_attachments([str(f)], key="k1")
+        project = workspace_root() / "projects" / "p3"
+        project.mkdir(parents=True)
+        mounts = ce.build_mount_map(str(project),
+                                    ro_mounts=ce.attachment_ro_mounts())
+        assert any(m == "ro" and rec["path"].startswith(h) for h, m in mounts)

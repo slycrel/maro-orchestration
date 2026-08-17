@@ -1388,6 +1388,31 @@ def build_mount_map(
     return mounts
 
 
+def attachment_ro_mounts() -> list:
+    """Read-only mounts for the areas holding operator/dispatcher artifacts.
+
+    A named function rather than three lines inline in llm.py, because the
+    inline version was untestable: a mutation deleting it survived the whole
+    suite, since the only test drove build_mount_map with the area passed in
+    by hand. The wiring that SUPPLIES the area is the part that broke live —
+    attachments landed correctly and the worker still could not see them.
+
+    Read-only is the whole grant. These directories hold exactly what a run
+    is meant to read and never meant to write, and mounting them is far
+    narrower than relaxing the workspace-root exclusion that hid them.
+    """
+    out: list = []
+    try:
+        from config import output_dir
+        for area in ("operator-attachments", "dispatch-artifacts"):
+            p = output_dir() / area
+            if p.is_dir():
+                out.append(str(p))
+    except Exception as exc:
+        log.debug("attachment mounts unavailable (non-fatal): %s", exc)
+    return out
+
+
 def run_scratch_dir() -> Optional[str]:
     """Per-run host scratch dir to bind at the container's `/tmp` so cross-step
     scratch survives within a run (C4-BOX burn-in follow-up, 2026-07-15).
