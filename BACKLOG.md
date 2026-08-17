@@ -313,8 +313,29 @@ Ordered open work that matters. Top of the list is next.
       re-ran quarantine over a dirty file) → both-writes-fail
       convergence test. Final: 23/23 + 35/35 + 27/27, suite 9434.
       Both rounds in the history record.*
-    - *Then:* `evolver_store.py` (8 sites), the last named surface of
-      slice 3.
+    - *evolver_store CLOSED 2026-08-17 — the suggestions ledger, last
+      named surface of slice 3. Probed live before the fix: one torn
+      byte emptied `load_suggestions` AND `get_suggestion` (the row the
+      V2 auto-revert authority guard re-reads just before an
+      irreversible revert — family A), raised UnicodeDecodeError from
+      `suggestion_is_applied`/`apply_suggestion`/`revert_suggestion`
+      (family B), and blinded `_save_suggestions`' dedup scan so a
+      re-derived identical suggestion duplicated — the 81-duplicate
+      calibration bug resurrected by one byte. Fix: six loaders on
+      jsonl_utils announced reads; the three keyed rewrites (apply's
+      `_merge`, revert's `_drop_constraint`/`_mark_reverted`) parse via
+      `loads_clean` so a byte-tainted line never key-matches and is
+      re-emitted verbatim (family C — `_mark_reverted` re-dumps every
+      row it parses, the launder exposure). Census 8 sites cleared
+      (baseline now 95 unreviewed + 10 reviewed). 8 new tests,
+      `evolver_store_preserve.json` 12 mutations 12/12 first pass,
+      suite 9442. Record:
+      `docs/history/2026-08-17-evolver-store-byte-safety.md`.*
+    - *Slice 3's named surfaces are DONE (memory_ledger 16,
+      knowledge_web 9, evolver_store 8). Remaining census debt (95
+      unreviewed sites led by skills.py 7, loop_report.py 6) is
+      tripwire-guarded, not scheduled — burn down opportunistically
+      when touching a file, per the census contract.*
 
   **Three of the four surfaces swept so far were tripwires, and two could
   not fail.** The code a decree protects tends to be fine; the guard
