@@ -94,3 +94,48 @@ inflated severity was an impact claim, not a code claim).
 3. The sonnet-medium fallback lane produced a REJECT-grade round: 3/5
    lenses converged on a probe-confirmed HIGH with zero hallucinated
    code claims. The lane is degraded, not decorative.
+
+## Round 2 (same lane, 3 reviewers: Skeptic, Architect, Expert QA — pointed at the fix layer)
+
+Both real findings survived verification; both fixed in `0b67dcaf`.
+
+- **All three lenses — the surrogateescape encoder was scoped at the
+  wrong altitude.** Making it `atomic_write`'s default converted "fail
+  loud" into "fail silent" for the ~19 modules that call it directly
+  with self-built content: a lone surrogate there is an upstream bug,
+  and the strict encoder's UnicodeEncodeError at the write site was the
+  only signal naming it. Fixed: strict default, explicit `errors=`
+  opt-in; `locked_rmw` pairs internally (its read makes the surrogates,
+  so its write must round-trip them); the four inline stamper writes
+  opt in to match `_store_text`.
+- **Architect + Expert QA (independent HIGHs) — the launder path.** A
+  byte-torn line can be structurally valid JSON (`{"goal": "\udcff"}`
+  parses — probed), so any rewrite that parses rows re-serializes the
+  surrogate as a clean ASCII escape: the undecodable count that
+  announced the corruption goes silent and garbage persists as
+  legitimate content. A lie, not a loss. Fixed with `_loads_clean` — a
+  json.loads that refuses surrogate-carrying lines by raising
+  JSONDecodeError — applied at all 13 per-row scan/rewrite sites, so
+  every existing unparseable branch preserves the raw line verbatim.
+  The census gained `_PARSE_WRAPPERS` in the same diff; without it the
+  wrapper would have removed all six REVIEWED sites from the census.
+- **Rejected:** first-err ordering in `_rows_as` (first exception +
+  class name is sufficient signal); the "target-row escape
+  normalization" residual (mooted — tainted targets are now skipped,
+  so no rewrite ever re-serializes one).
+
+Spec 23 → 27 mutations, 27/27. Suite 9415 green. Round 3 not run: both
+round-2 findings were about the round-1 fix, the round-2 fixes are
+narrower than round 1's, and every new surface carries its own
+must-detect mutants — the fixpoint criterion (converging to lows) is
+met.
+
+### Round-2 lesson
+
+The round-1 fix created the round-2 bug in both cases: the encoder
+default was collateral of fixing the read, and the launder path only
+became REACHABLE once surrogateescape stopped the crash that used to
+sit in front of it. **A fix that widens what survives the read widens
+what downstream code must be honest about.** Watch-list probe #1 (
+"attack the previous round's fixes first") is the whole reason round 2
+was pointed there.
