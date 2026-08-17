@@ -295,7 +295,42 @@ detached HEAD):
    commit, and don't touch shared living docs (GOAL_BRAIN.md, BACKLOG.md,
    DEV_LOG.md) in a commit while another session has them dirty — your
    staged copy would carry their half-written hunks.
-4. Landing races are fine: land.sh is ff-only, and since 2026-08-16 a
+4. **Resolving a conflict is the work. Do it; do not route around it.**
+   Jeremy, 2026-08-16: *"branch or no, a rebase + conflict resolution +
+   FF merge is the answer here. no mechanism will save you from the
+   conflict resolution work... you can mask it to pretend it doesn't
+   exist, but it's going to be there one way or another."* The sequence,
+   every time:
+
+   ```
+   git fetch
+   git rebase origin/main        # in a worktree if the shared tree is dirty
+   # resolve: read BOTH sides, keep both, then VERIFY both survive
+   git push origin HEAD:main     # ff-only (scripts/land.sh)
+   ```
+
+   **Verify, don't assume:** after resolving, grep the result for a
+   distinctive string from each side. A resolution that silently keeps
+   one side looks exactly like a clean merge in `git status`.
+
+   For GENERATED files (docs/DEV_STATUS.md, any managed block) the
+   resolution is neither side: regenerate. For narrative/ledger files
+   with two real authors, there is no shortcut — read both, keep both.
+
+   **The failure this rule is written from (2026-08-16, `fff8606`):** a
+   session squashed WIP commits with `git reset --soft <base>` + `git add
+   -A` over a working tree left stale by an earlier worktree land. No
+   conflict ever appeared — `add -A` simply staged an OLD copy of
+   `tests/mutation/README.md`, and git recorded the difference as
+   deletions of content that was in its own parent commit. Three sections
+   and two ledger rows were lost and had to be restored by another
+   session (`7a2f685`). The lesson is not "conflicts are dangerous", it
+   is that the pattern used to AVOID rebasing is what destroyed content.
+   Two habits follow: never `git add -A` (rule 3, violated repeatedly
+   that day), and never `reset --soft` to squash — land the series, or
+   make one commit to begin with.
+
+5. Landing races are fine: land.sh is ff-only, and since 2026-08-16 a
    lost race is handled for you — land.sh replays your commits onto
    fresh origin/main **in a temp worktree** (never this tree), lands
    the replayed sha, converges your ref (ref/index only), and runs
@@ -309,7 +344,7 @@ When a chunk of work is done (milestone delivered, bug fixed, feature shipped �
 
 1. **Document** — update MILESTONES.md / BACKLOG.md / relevant docs so the next session knows what changed and what's next. Run
    **`PYTHONPATH=src python3 src/cli.py dev-status --write`** and commit the
-   refreshed block at the top of `docs/DEV_LOG.md` — it is one command, and it
+   regenerated `docs/DEV_STATUS.md` — it is one command, and it
    is the surface that answers "where are we?" without re-deriving it from the
    backlog (which is a findings log and grows forever by design). `land.sh`
    prints the same one-line summary after every push and says when the written

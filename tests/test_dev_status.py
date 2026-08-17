@@ -202,53 +202,36 @@ class TestRender:
         assert "Actionable Stack** open boxes" in self._render()
 
 
-class TestSpliceBlock:
+class TestOwnsItsOwnDoc:
+    """The readout writes a FILE, not a region inside a narrative one.
 
-    DOC = ("---\nstatus: living\n---\n\n# Dev Captain's Log\n\n"
-           "Intro prose explaining the format.\n\n"
-           "## 2026-07-30\n\nAn entry.\n")
+    It began as a marker-delimited block spliced into docs/DEV_LOG.md,
+    which put generated content in the same file as hand-written session
+    entries: every regeneration collided with anyone's narrative edit,
+    three commits existed only to refresh it, and tree-triage reported it
+    as REAL uncommitted work forever, because generated content matches no
+    ancestor by construction.
+    """
 
-    def test_inserts_above_the_first_entry_keeping_the_header(self):
-        out = ds.splice_block(self.DOC, "BLOCK")
-        assert out.index("# Dev Captain's Log") < out.index("BLOCK")
-        assert out.index("BLOCK") < out.index("## 2026-07-30")
-        assert "Intro prose" in out
+    def test_the_render_is_a_standalone_document(self):
+        out = ds.render({"verified": 1, "target": 2, "aspirational": 0},
+                        ds.BacklogState(open_boxes=3), ds.Trend(),
+                        today="2026-08-17")
+        assert out.startswith("---\nstatus: living\n---")
+        assert "## Dev status — 2026-08-17" in out, (
+            "the Dev log page supplies its own h1 and its minimal "
+            "renderer drops an H1 — the heading must be ##")
+        assert "regenerate" in out, "it must say it is generated"
 
-    def test_replaces_an_existing_block_rather_than_stacking(self):
-        block = f"{ds.BLOCK_START}\nold\n{ds.BLOCK_END}"
-        once = ds.splice_block(self.DOC, block)
-        twice = ds.splice_block(once, f"{ds.BLOCK_START}\nnew\n{ds.BLOCK_END}")
-        assert twice.count(ds.BLOCK_START) == 1
-        assert "old" not in twice and "new" in twice
+    def test_it_carries_no_splice_markers(self):
+        # No markers means no shared-file region, which is the whole point.
+        out = ds.render({"verified": 1, "target": 1, "aspirational": 0},
+                        ds.BacklogState(), ds.Trend(), today="2026-08-17")
+        assert "<!--" not in out
 
-    def test_narrative_entries_below_are_untouched(self):
-        block = f"{ds.BLOCK_START}\nx\n{ds.BLOCK_END}"
-        out = ds.splice_block(ds.splice_block(self.DOC, block), block)
-        assert out.endswith("## 2026-07-30\n\nAn entry.\n")
-
-    def test_a_log_with_no_entries_yet_still_gets_the_block(self):
-        out = ds.splice_block("# Dev Captain's Log\n", "BLOCK")
-        assert "BLOCK" in out
-
-
-class TestTrendReadsHistory:
-    """The 30d comparisons come from old blobs; nothing else pins that they
-    are actually read rather than left at None."""
-
-    def _git(self, table):
-        return lambda args: table.get(" ".join(args), "")
-
-    def test_old_backlog_and_capabilities_blobs_are_parsed(self):
-        old_bl = "## Actionable Stack\n\n### T\n\n- [ ] a\n- [ ] b\n"
-        old_cap = "| a | b |\n|---|---|\n| x | `verified` |\n"
-        g = self._git({
-            "rev-list -1 --before=30 days ago HEAD": "deadbeef",
-            "show deadbeef:BACKLOG.md": old_bl,
-            "show deadbeef:docs/CAPABILITIES.md": old_cap,
-        })
-        tr = ds.gather_trend(g, today="2026-08-16")
-        assert tr.open_boxes_30d_ago == 2
-        assert tr.verified_30d_ago == 1
+    def test_the_doc_path_is_not_the_narrative_log(self):
+        assert ds.DOC.name == "DEV_STATUS.md"
+        assert "DEV_LOG" not in str(ds.DOC)
 
 
 class TestMarksMustBeTheCellsStatus:

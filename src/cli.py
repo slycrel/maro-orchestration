@@ -1543,9 +1543,8 @@ def _cmd_dev_status(args: argparse.Namespace) -> int:
     block = _ds.render(caps, bl, tr, today=today)
     print(block)
     if args.write:
-        log = repo / "docs" / "DEV_LOG.md"
-        log.write_text(_ds.splice_block(log.read_text(), block))
-        print(f"\n[maro] dev-status written to {log}", file=sys.stderr)
+        _ds.DOC.write_text(block if block.endswith("\n") else block + "\n")
+        print(f"\n[maro] dev-status written to {_ds.DOC}", file=sys.stderr)
     return 0
 
 

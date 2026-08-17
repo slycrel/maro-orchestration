@@ -63,13 +63,6 @@
   "tests": "tests/test_dev_status.py"
  },
  {
-  "name": "rewriting the dev log stacks blocks instead of replacing",
-  "file": "src/dev_status.py",
-  "anchor": "    if BLOCK_START in doc and BLOCK_END in doc:",
-  "replacement": "    if False:",
-  "tests": "tests/test_dev_status.py"
- },
- {
   "name": "the fan-out rate ships without its re-org caveat",
   "file": "src/dev_status.py",
   "anchor": "        lines.append(\"- \u26a0 this delta counts one SECTION, so an archive pass \"\n                     \"or a re-org moves it without any work changing hands. \"\n                     \"Read the rate as a coarse direction, never as a score.\")",
@@ -88,6 +81,13 @@
   "file": "src/dev_status.py",
   "anchor": "        if fenced:\n            continue",
   "replacement": "        if False:\n            continue",
+  "tests": "tests/test_dev_status.py"
+ },
+ {
+  "name": "the readout writes into the narrative log again",
+  "file": "src/dev_status.py",
+  "anchor": "DOC = Path(__file__).resolve().parent.parent / \"docs\" / \"DEV_STATUS.md\"",
+  "replacement": "DOC = Path(__file__).resolve().parent.parent / \"docs\" / \"DEV_LOG.md\"",
   "tests": "tests/test_dev_status.py"
  }
 ]

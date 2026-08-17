@@ -2190,6 +2190,7 @@ def write_reading_page(root: Optional[Path] = None,
 
 
 _DEV_LOG_DOC = Path(__file__).resolve().parent.parent / "docs" / "DEV_LOG.md"
+_DEV_STATUS_DOC = Path(__file__).resolve().parent.parent / "docs" / "DEV_STATUS.md"
 
 _MD_LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)\s]+)\)")
 _MD_BOLD_RE = re.compile(r"\*\*([^*]+)\*\*")
@@ -2285,6 +2286,15 @@ def write_devlog_page(root: Optional[Path] = None) -> Optional[str]:
             text = _DEV_LOG_DOC.read_text(encoding="utf-8")
         except OSError:
             text = ""
+        # The generated status readout lives in its own file so it stops
+        # colliding with hand-written entries, but Jeremy asked for it on
+        # THIS screen — so the page renders it above the log.
+        try:
+            status = _DEV_STATUS_DOC.read_text(encoding="utf-8")
+        except OSError:
+            status = ""
+        if status:
+            text = status.rstrip() + "\n\n---\n\n" + text
         out = root / "dev-log.html"
         _atomic_write_text(out, _render_devlog_html(text))
         return str(out)
